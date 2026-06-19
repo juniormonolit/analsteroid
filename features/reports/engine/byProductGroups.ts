@@ -1,16 +1,18 @@
 import { analyticsDb } from '@/lib/db/clients';
 import type { DateRange } from '@/lib/period';
-import type { DealScope, ReportRow } from '@/lib/metrics/types';
+import type { DealScope, ReportRow, ProductGroupMode } from '@/lib/metrics/types';
 import { addDays } from 'date-fns';
 
 export interface ByProductGroupsOptions {
   period: DateRange;
   dealScope: DealScope;
+  productGroupMode?: ProductGroupMode;
   funnelIds?: number[];
 }
 
 export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promise<ReportRow[]> {
   const db = analyticsDb();
+  const mode = opts.productGroupMode ?? 'kc';
 
   const fromIso = opts.period.from.toISOString();
   const toExclIso = addDays(opts.period.to, 1).toISOString();
@@ -22,10 +24,22 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
       ? `AND d.funnel_id NOT IN (SELECT id FROM funnels WHERE is_repeat = true)`
       : `AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)`;
 
+  // Group dimension depends on mode:
+  // kc    → product_group_id (call-center category, joined to product_groups)
+  // by_max → product_group_by_max (catalog category determined by largest product amount)
+  const groupDim = mode === 'by_max'
+    ? `COALESCE(d.product_group_by_max, 'Без группы') AS group_id,
+       COALESCE(d.product_group_by_max, 'Без группы') AS group_name,`
+    : `COALESCE(d.product_group_id::text, '__none__') AS group_id,
+       COALESCE(pg.name, 'Без группы') AS group_name,`;
+
+  const groupByClause = mode === 'by_max'
+    ? `GROUP BY d.product_group_by_max`
+    : `GROUP BY d.product_group_id, pg.name`;
+
   const sql = `
     SELECT
-      COALESCE(d.product_group_id::text, '__none__') AS group_id,
-      COALESCE(pg.name, 'Без группы') AS group_name,
+      ${groupDim}
 
       COUNT(DISTINCT CASE
         WHEN d.created_at >= $1 AND d.created_at < $2
@@ -105,7 +119,7 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
         OR (d.delivered_at >= $1 AND d.delivered_at < $2)
         OR (de.event_at >= $1 AND de.event_at < $2)
       )
-    GROUP BY d.product_group_id, pg.name
+    ${groupByClause}
     ORDER BY primary_sales_amount DESC
   `;
 

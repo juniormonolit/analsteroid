@@ -6,7 +6,7 @@ import { FilterBar } from './FilterBar';
 import { ReportToolbar } from './ReportToolbar';
 import { ReportTable } from './ReportTable';
 import { DrilldownDrawer } from './DrilldownDrawer';
-import type { DealScope, Grouping } from '@/lib/metrics/types';
+import type { DealScope, Grouping, ProductGroupMode } from '@/lib/metrics/types';
 import type { DateRange } from '@/lib/period';
 
 interface Props {
@@ -22,6 +22,7 @@ export function SalesReportPage({ reportSlug, title }: Props) {
   const [metricIds, setMetricIds] = useState<string[]>(['all_core']);
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [comparisonDisplay, setComparisonDisplay] = useState<'full' | 'current'>('full');
+  const [productGroupMode, setProductGroupMode] = useState<ProductGroupMode>('kc');
   const [drilldown, setDrilldown] = useState<{ id: string; name: string } | null>(null);
 
   const handlePeriodChange = useCallback((p: DateRange) => {
@@ -29,7 +30,7 @@ export function SalesReportPage({ reportSlug, title }: Props) {
     setComparison(recomputeComparison(p));
   }, []);
 
-  const queryKey = ['report', reportSlug, period, comparison, dealScope, grouping, metricIds, departmentIds];
+  const queryKey = ['report', reportSlug, period, comparison, dealScope, grouping, metricIds, departmentIds, productGroupMode];
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey,
@@ -45,6 +46,7 @@ export function SalesReportPage({ reportSlug, title }: Props) {
           dealScope,
           grouping,
           departmentIds: departmentIds.length ? departmentIds : undefined,
+          productGroupMode: reportSlug === 'by-product-groups' ? productGroupMode : undefined,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -83,6 +85,9 @@ export function SalesReportPage({ reportSlug, title }: Props) {
         onMetricIdsChange={setMetricIds}
         onRefresh={() => refetch()}
         isLoading={isLoading}
+        showProductGroupPicker={reportSlug === 'by-product-groups'}
+        productGroupMode={productGroupMode}
+        onProductGroupModeChange={setProductGroupMode}
       />
 
       {/* Table */}

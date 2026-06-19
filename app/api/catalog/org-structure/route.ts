@@ -37,5 +37,10 @@ export async function GET() {
     }
   }
 
-  return NextResponse.json({ tree: roots });
+  // Only expose the "Отдел продаж" subtree — exclude HR, marketing, logistics, etc.
+  const salesRoot = roots.flatMap(r => r.children).find(n => n.name === 'Отдел продаж')
+    ?? roots.find(n => n.name === 'Отдел продаж');
+  const salesTree = salesRoot ? salesRoot.children : roots;
+
+  return NextResponse.json({ tree: salesTree });
 }

@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { RefreshCw, SlidersHorizontal } from 'lucide-react';
-import type { DealScope, Grouping, Metric } from '@/lib/metrics/types';
+import type { DealScope, Grouping, Metric, ProductGroupMode } from '@/lib/metrics/types';
 
 interface Props {
   dealScope: DealScope;
@@ -10,10 +10,13 @@ interface Props {
   metricIds: string[];
   availableMetrics: Metric[];
   isLoading: boolean;
+  showProductGroupPicker?: boolean;
+  productGroupMode?: ProductGroupMode;
   onDealScopeChange: (v: DealScope) => void;
   onGroupingChange: (v: Grouping) => void;
   onComparisonDisplayChange: (v: 'full' | 'current') => void;
   onMetricIdsChange: (ids: string[]) => void;
+  onProductGroupModeChange?: (v: ProductGroupMode) => void;
   onRefresh: () => void;
 }
 
@@ -42,8 +45,9 @@ function Seg<T extends string>({
 export function ReportToolbar({
   dealScope, grouping, comparisonDisplay, metricIds,
   availableMetrics, isLoading,
+  showProductGroupPicker, productGroupMode,
   onDealScopeChange, onGroupingChange, onComparisonDisplayChange,
-  onMetricIdsChange, onRefresh,
+  onMetricIdsChange, onProductGroupModeChange, onRefresh,
 }: Props) {
   const [showMetrics, setShowMetrics] = useState(false);
 
@@ -83,6 +87,15 @@ export function ReportToolbar({
         onChange={onComparisonDisplayChange}
         labels={{ full: 'Сравнение', current: 'Только текущий' }}
       />
+
+      {showProductGroupPicker && productGroupMode && onProductGroupModeChange && (
+        <Seg
+          options={['kc', 'by_max'] as ProductGroupMode[]}
+          value={productGroupMode}
+          onChange={onProductGroupModeChange}
+          labels={{ kc: 'Категория КЦ', by_max: 'По наибольшему' }}
+        />
+      )}
 
       {/* Metric picker */}
       {availableMetrics.length > 0 && (

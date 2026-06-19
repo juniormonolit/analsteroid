@@ -5,7 +5,7 @@ import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
-import type { DealScope, Grouping, ReportRow } from '@/lib/metrics/types';
+import type { DealScope, Grouping, ReportRow, ProductGroupMode } from '@/lib/metrics/types';
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -20,6 +20,7 @@ export async function POST(req: NextRequest) {
     dealScope = 'primary' as DealScope,
     grouping = 'none' as Grouping,
     departmentIds,
+    productGroupMode = 'kc' as ProductGroupMode,
   } = body;
 
   const start = Date.now();
@@ -50,8 +51,8 @@ export async function POST(req: NextRequest) {
     ]);
   } else if (reportSlug === 'by-product-groups') {
     [currentRows, compRows] = await Promise.all([
-      fetchByProductGroups({ period: opts.period, dealScope }),
-      fetchByProductGroups({ period: compOpts.period, dealScope }),
+      fetchByProductGroups({ period: opts.period, dealScope, productGroupMode }),
+      fetchByProductGroups({ period: compOpts.period, dealScope, productGroupMode }),
     ]);
   }
 

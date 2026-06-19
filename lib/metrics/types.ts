@@ -3,6 +3,7 @@ export type DataType = 'int' | 'decimal' | 'money' | 'percent' | 'months';
 export type AggregationFn = 'sum' | 'avg' | 'none';
 export type DealScope = 'primary' | 'repeat' | 'all';
 export type Grouping = 'none' | 'team' | 'total';
+export type ProductGroupMode = 'kc' | 'by_max';
 export type ComparisonDisplay = 'full' | 'current';
 
 export interface Metric {
