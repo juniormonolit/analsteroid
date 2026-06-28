@@ -2,26 +2,128 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  BarChart3, Users, Truck, Megaphone, UserPlus,
-  ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut,
+  BarChart3, Truck, Megaphone, UserPlus,
+  ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
+  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { QueryProvider } from '@/components/providers/QueryProvider';
+import type { SavedReport } from '@/lib/saved-reports/types';
+
+function SalesSidebarSection({ collapsed, pathname }: { collapsed: boolean; pathname: string }) {
+  const [openStd, setOpenStd] = useState(true);
+  const [openFav, setOpenFav] = useState(true);
+  const qc = useQueryClient();
+
+  const { data: savedReports = [] } = useQuery<SavedReport[]>({
+    queryKey: ['saved-reports'],
+    queryFn: async () => {
+      const res = await fetch('/api/saved-reports');
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  async function deleteReport(id: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    await fetch(`/api/saved-reports/${id}`, { method: 'DELETE' });
+    qc.invalidateQueries({ queryKey: ['saved-reports'] });
+  }
+
+  const stdReports = [
+    { label: 'По менеджерам', href: '/sales/by-managers' },
+    { label: 'По товарным группам', href: '/sales/by-product-groups' },
+  ];
+
+  const linkCls = (href: string) =>
+    `flex items-center justify-between py-1.5 pr-2 text-sm rounded-md my-0.5 transition-colors group ${
+      pathname === href
+        ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-medium'
+        : 'text-[var(--color-sidebar-text)] hover:text-white'
+    }`;
+
+  if (collapsed) {
+    return (
+      <div className="flex justify-center py-1">
+        <BarChart3 size={18} className="text-[var(--color-sidebar-text)]" />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Стандартные */}
+      <button
+        onClick={() => setOpenStd(v => !v)}
+        className="w-full flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-sidebar-text)] opacity-60 hover:opacity-100 transition-opacity uppercase tracking-wider"
+      >
+        <BookOpen size={10} />
+        <span className="flex-1 text-left">Стандартные</span>
+        {openStd ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+      </button>
+      {openStd && (
+        <div className="pl-3 mb-1">
+          {stdReports.map(r => (
+            <Link key={r.href} href={r.href} className={linkCls(r.href)}>
+              <span className="truncate">{r.label}</span>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {/* Избранное */}
+      <button
+        onClick={() => setOpenFav(v => !v)}
+        className="w-full flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-sidebar-text)] opacity-60 hover:opacity-100 transition-opacity uppercase tracking-wider mt-1"
+      >
+        <Bookmark size={10} />
+        <span className="flex-1 text-left">Избранное</span>
+        {openFav ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+      </button>
+      {openFav && (
+        <div className="pl-3 mb-1">
+          {savedReports.length === 0 ? (
+            <div className="text-xs text-[var(--color-sidebar-text)] opacity-40 py-1 px-1">
+              Нет сохранённых
+            </div>
+          ) : (
+            savedReports.map(r => {
+              const href = `/sales/saved/${r.id}`;
+              return (
+                <Link key={r.id} href={href} className={linkCls(href)}>
+                  <span className="truncate flex-1">{r.name}</span>
+                  <button
+                    onClick={e => deleteReport(r.id, e)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-[var(--color-negative)]"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </Link>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface NavItem {
   label: string;
   href?: string;
   icon: React.ReactNode;
   disabled?: boolean;
+  isSales?: boolean;
   children?: { label: string; href: string }[];
 }
 
 const NAV: NavItem[] = [
-  { label: 'Продажи', icon: <BarChart3 size={18} />, children: [
-    { label: 'По менеджерам', href: '/sales/by-managers' },
-    { label: 'По товарным группам', href: '/sales/by-product-groups' },
-  ]},
+  { label: 'Продажи', icon: <BarChart3 size={18} />, isSales: true },
+  { label: 'Планы', icon: <ClipboardList size={18} />, href: '/plans' },
   { label: 'Реализация', icon: <Truck size={18} />, disabled: true },
   { label: 'Маркетинг', icon: <Megaphone size={18} />, disabled: true },
   { label: 'Найм', icon: <UserPlus size={18} />, disabled: true },
@@ -69,6 +171,24 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                     {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">{item.label}</span>}
                     {!collapsed && <span className="ml-auto text-xs text-[var(--color-sidebar-text)]">soon</span>}
                   </div>
+                ) : item.isSales ? (
+                  <>
+                    <button
+                      onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
+                      className="w-full flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors"
+                    >
+                      <span className="text-[var(--color-sidebar-text)]">{item.icon}</span>
+                      {!collapsed && <>
+                        <span className="text-sm text-[var(--color-sidebar-text)] flex-1 text-left">{item.label}</span>
+                        {expanded === item.label ? <ChevronDown size={14} className="text-[var(--color-sidebar-text)]" /> : <ChevronRight size={14} className="text-[var(--color-sidebar-text)]" />}
+                      </>}
+                    </button>
+                    {!collapsed && expanded === item.label && (
+                      <div className="pl-6 pr-2 py-1">
+                        <SalesSidebarSection collapsed={collapsed} pathname={pathname} />
+                      </div>
+                    )}
+                  </>
                 ) : item.children ? (
                   <>
                     <button
@@ -113,6 +233,30 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               </div>
             ))}
           </nav>
+
+          {/* Admin: Metrics + Settings */}
+          {user.isAdmin && (
+            <div className="border-t border-white/10 pt-1">
+              <Link
+                href="/metrics"
+                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                  pathname.startsWith('/metrics') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+                }`}
+              >
+                <span className="text-[var(--color-sidebar-text)]"><BarChart2 size={18} /></span>
+                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Метрики</span>}
+              </Link>
+              <Link
+                href="/settings"
+                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                  pathname.startsWith('/settings') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+                }`}
+              >
+                <span className="text-[var(--color-sidebar-text)]"><Settings size={18} /></span>
+                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Настройки</span>}
+              </Link>
+            </div>
+          )}
 
           {/* Footer */}
           <div className="border-t border-white/10 p-3">

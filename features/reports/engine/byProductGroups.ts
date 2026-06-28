@@ -1,150 +1,137 @@
 import { analyticsDb } from '@/lib/db/clients';
+import { loadMetrics } from '@/lib/metrics/catalog';
+import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import type { DateRange } from '@/lib/period';
-import type { DealScope, ReportRow, ProductGroupMode } from '@/lib/metrics/types';
-import { addDays } from 'date-fns';
+import type { DealScope, ClientType, ReportRow, ProductGroupMode } from '@/lib/metrics/types';
+import { addDays, startOfDay } from 'date-fns';
 
+// ── Funnel metadata ───────────────────────────────────────────────────────
+interface FunnelMeta { id: number; isRepeat: boolean }
+let _funnels: FunnelMeta[] | null = null;
+let _funnelsAt = 0;
+
+async function loadFunnels(): Promise<FunnelMeta[]> {
+  if (_funnels && Date.now() - _funnelsAt < 30 * 60 * 1000) return _funnels;
+  const res = await analyticsDb().query<{ id: number; is_repeat: boolean }>(
+    'SELECT id, is_repeat FROM funnels',
+  );
+  _funnels = res.rows.map(r => ({ id: r.id, isRepeat: r.is_repeat }));
+  _funnelsAt = Date.now();
+  return _funnels;
+}
+
+// ── Row cache (keyed by period + metrics + mode, NOT pills) ───────────────
+type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: number };
+
+const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
+const ROW_TTL = 10 * 60 * 1000; // 10 min
+
+function mkKey(from: string, toExcl: string, metricIds: string[], mode: string): string {
+  return `${from}|${toExcl}|${mode}|${[...metricIds].sort().join(',')}`;
+}
+
+// ── Pill filter + aggregation ─────────────────────────────────────────────
+function aggregate(
+  rows: FlatRow[],
+  funnels: FunnelMeta[],
+  metricIds: string[],
+  dealScope: DealScope,
+  clientType: ClientType,
+): Map<string, { name: string; metrics: Record<string, number> }> {
+  const skipFilter = dealScope === 'all' && clientType === 'all';
+
+  const allowed = skipFilter
+    ? null
+    : new Set<number>(
+        funnels
+          .filter(f => {
+            const scopeOk =
+              dealScope === 'all' ||
+              (dealScope === 'primary' ? !f.isRepeat : f.isRepeat);
+            const clientOk =
+              clientType === 'all' ||
+              (clientType === 'b2c' ? [0, 2].includes(f.id) : [1, 3].includes(f.id));
+            return scopeOk && clientOk;
+          })
+          .map(f => f.id),
+      );
+
+  const agg = new Map<string, { name: string; metrics: Record<string, number> }>();
+  for (const row of rows) {
+    if (allowed !== null && !allowed.has(row.funnel_id)) continue;
+    const dimId   = row.dimension_id as string;
+    const dimName = (row.dimension_name as string | undefined) ?? dimId;
+    if (!agg.has(dimId)) {
+      agg.set(dimId, { name: dimName, metrics: Object.fromEntries(metricIds.map(id => [id, 0])) });
+    }
+    const entry = agg.get(dimId)!;
+    for (const id of metricIds) {
+      const v = row[id];
+      if (v !== null && v !== undefined) entry.metrics[id] += Number(v);
+    }
+  }
+  return agg;
+}
+
+// ── Public API ────────────────────────────────────────────────────────────
 export interface ByProductGroupsOptions {
   period: DateRange;
-  dealScope: DealScope;
+  dealScope?: DealScope;
+  clientType?: ClientType;
   productGroupMode?: ProductGroupMode;
-  funnelIds?: number[];
 }
 
 export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promise<ReportRow[]> {
-  const db = analyticsDb();
-  const mode = opts.productGroupMode ?? 'kc';
+  const dealScope  = opts.dealScope  ?? 'all';
+  const clientType = opts.clientType ?? 'all';
+  const mode       = opts.productGroupMode ?? 'kc';
 
-  const fromIso = opts.period.from.toISOString();
-  const toExclIso = addDays(opts.period.to, 1).toISOString();
+  const fromIso   = opts.period.from.toISOString();
+  const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
 
-  const funnelFilter =
-    opts.dealScope === 'all'
-      ? ''
-      : opts.dealScope === 'primary'
-      ? `AND d.funnel_id NOT IN (SELECT id FROM funnels WHERE is_repeat = true)`
-      : `AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)`;
+  const allMetrics = await loadMetrics();
+  const collected  = allMetrics.filter(m => m.metricType === 'collected' && !m.isTest);
+  const metricIds  = collected.map(m => m.id);
 
-  // Group dimension depends on mode:
-  // kc    → product_group_id (call-center category, joined to product_groups)
-  // by_max → product_group_by_max (catalog category determined by largest product amount)
-  const groupDim = mode === 'by_max'
-    ? `COALESCE(d.product_group_by_max, 'Без группы') AS group_id,
-       COALESCE(d.product_group_by_max, 'Без группы') AS group_name,`
-    : `COALESCE(d.product_group_id::text, '__none__') AS group_id,
-       COALESCE(pg.name, 'Без группы') AS group_name,`;
+  // Analytics row cache (pills NOT in key; mode IS in key — it changes the dimension)
+  const key   = mkKey(fromIso, toExclIso, metricIds, mode);
+  let   entry = _rowCache.get(key);
 
-  const groupByClause = mode === 'by_max'
-    ? `GROUP BY d.product_group_by_max`
-    : `GROUP BY d.product_group_id, pg.name`;
+  if (!entry || Date.now() - entry.at > ROW_TTL) {
+    const dim = mode === 'by_max'
+      ? {
+          idExpr:          `COALESCE(d.head_group_name, 'Без группы')`,
+          nameExpr:        `COALESCE(d.head_group_name, 'Без группы')`,
+          groupBy:         'GROUP BY d.head_group_name, d.funnel_id',
+          funnelBreakdown: true as const,
+        }
+      : {
+          idExpr:          `COALESCE(d.product_group_id::text, '__none__')`,
+          nameExpr:        `COALESCE(pg.name, 'Без группы')`,
+          extraJoins:      'LEFT JOIN product_groups pg ON pg.id = d.product_group_id',
+          groupBy:         'GROUP BY d.product_group_id, pg.name, d.funnel_id',
+          funnelBreakdown: true as const,
+        };
 
-  const sql = `
-    SELECT
-      ${groupDim}
+    const sql = buildCollectedSQL(collected, dim);
+    if (!sql) return [];
 
-      COUNT(DISTINCT CASE
-        WHEN d.created_at >= $1 AND d.created_at < $2
-          AND d.funnel_id NOT IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.deal_id END
-      ) AS primary_deals_count,
+    const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
+    entry = { rows: res.rows, at: Date.now() };
+    _rowCache.set(key, entry);
+  }
 
-      COUNT(DISTINCT CASE
-        WHEN d.created_at >= $1 AND d.created_at < $2
-          AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.deal_id END
-      ) AS repeat_deals_count,
+  // Apply pills in memory
+  const funnels = await loadFunnels();
+  const agg     = aggregate(entry.rows, funnels, metricIds, dealScope, clientType);
 
-      COUNT(DISTINCT CASE
-        WHEN de.event_at >= $1 AND de.event_at < $2
-          AND de.stage_id IN (SELECT id FROM stages WHERE event_type = 'called')
-        THEN de.deal_id END
-      ) AS called_deals_count,
-
-      COUNT(DISTINCT CASE WHEN d.reserved_at >= $1 AND d.reserved_at < $2 THEN d.deal_id END) AS reservations_count,
-      COUNT(DISTINCT CASE WHEN d.confirmed_at >= $1 AND d.confirmed_at < $2 THEN d.deal_id END) AS confirmed_reservations_count,
-
-      COUNT(DISTINCT CASE
-        WHEN d.sold_at >= $1 AND d.sold_at < $2
-          AND d.funnel_id NOT IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.deal_id END
-      ) AS primary_sales_count,
-
-      COUNT(DISTINCT CASE
-        WHEN d.sold_at >= $1 AND d.sold_at < $2
-          AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.deal_id END
-      ) AS repeat_sales_count,
-
-      COALESCE(SUM(CASE
-        WHEN d.sold_at >= $1 AND d.sold_at < $2
-          AND d.funnel_id NOT IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.amount ELSE 0 END), 0) AS primary_sales_amount,
-
-      COALESCE(SUM(CASE
-        WHEN d.sold_at >= $1 AND d.sold_at < $2
-          AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.amount ELSE 0 END), 0) AS repeat_sales_amount,
-
-      COUNT(DISTINCT CASE
-        WHEN d.delivered_at >= $1 AND d.delivered_at < $2
-          AND d.funnel_id NOT IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.deal_id END
-      ) AS primary_shipments_count,
-
-      COUNT(DISTINCT CASE
-        WHEN d.delivered_at >= $1 AND d.delivered_at < $2
-          AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.deal_id END
-      ) AS repeat_shipments_count,
-
-      COALESCE(SUM(CASE
-        WHEN d.delivered_at >= $1 AND d.delivered_at < $2
-          AND d.funnel_id NOT IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.amount ELSE 0 END), 0) AS primary_shipments_amount,
-
-      COALESCE(SUM(CASE
-        WHEN d.delivered_at >= $1 AND d.delivered_at < $2
-          AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)
-        THEN d.amount ELSE 0 END), 0) AS repeat_shipments_amount
-
-    FROM deals d
-    LEFT JOIN product_groups pg ON pg.id = d.product_group_id
-    LEFT JOIN deal_events de ON de.deal_id = d.deal_id
-    WHERE 1=1
-      ${funnelFilter}
-      AND (
-        (d.created_at >= $1 AND d.created_at < $2)
-        OR (d.reserved_at >= $1 AND d.reserved_at < $2)
-        OR (d.confirmed_at >= $1 AND d.confirmed_at < $2)
-        OR (d.sold_at >= $1 AND d.sold_at < $2)
-        OR (d.delivered_at >= $1 AND d.delivered_at < $2)
-        OR (de.event_at >= $1 AND de.event_at < $2)
-      )
-    ${groupByClause}
-    ORDER BY primary_sales_amount DESC
-  `;
-
-  const res = await db.query(sql, [fromIso, toExclIso]);
-
-  return res.rows.map(r => ({
-    dimensionId: r.group_id,
-    dimensionName: r.group_name,
-    teamId: null,
-    teamName: null,
-    metrics: {
-      primary_deals_count: Number(r.primary_deals_count),
-      incoming_deals_count: Number(r.primary_deals_count),
-      repeat_deals_count: Number(r.repeat_deals_count),
-      called_deals_count: Number(r.called_deals_count),
-      reservations_count: Number(r.reservations_count),
-      confirmed_reservations_count: Number(r.confirmed_reservations_count),
-      primary_sales_count: Number(r.primary_sales_count),
-      repeat_sales_count: Number(r.repeat_sales_count),
-      primary_sales_amount: Number(r.primary_sales_amount),
-      repeat_sales_amount: Number(r.repeat_sales_amount),
-      primary_shipments_count: Number(r.primary_shipments_count),
-      repeat_shipments_count: Number(r.repeat_shipments_count),
-      primary_shipments_amount: Number(r.primary_shipments_amount),
-      repeat_shipments_amount: Number(r.repeat_shipments_amount),
-    },
+  return [...agg.entries()].map(([id, { name, metrics }]) => ({
+    dimensionId:   id,
+    dimensionName: name,
+    teamId:        null,
+    teamName:      null,
+    metrics: Object.fromEntries(
+      metricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null]),
+    ),
   }));
 }

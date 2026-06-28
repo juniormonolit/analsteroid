@@ -1,26 +1,44 @@
-import { analyticsDb } from '@/lib/db/clients';
+import { ycAnalyticsDb } from '@/lib/db/clients';
 import type { Metric } from './types';
 
 let _cache: Metric[] | null = null;
 let _cacheAt = 0;
 const TTL = 5 * 60 * 1000;
 
+export function invalidateMetricsCache() {
+  _cache = null;
+  _cacheAt = 0;
+}
+
 export async function loadMetrics(): Promise<Metric[]> {
   if (_cache && Date.now() - _cacheAt < TTL) return _cache;
 
-  const db = analyticsDb();
+  const db = ycAnalyticsDb();
   const res = await db.query<{
     id: string; name_ru: string; name_short_ru: string | null;
+    description: string | null; calc_ok: boolean; fill_ok: boolean;
     metric_type: string; data_type: string; formula: string | null;
     dependencies: string[] | null; decimal_places: number;
     aggregation_fn: string; category: string | null;
     sort_order: number; is_core: boolean; is_hidden_in_ui: boolean;
+    is_active: boolean; is_test: boolean;
+    source: string; agg_fn: string | null; agg_field: string | null;
+    date_field: string | null; filters: string | null; tags: string[] | null;
+    is_collect_ok: boolean; is_calc_ok: boolean;
   }>(`
-    SELECT id, name_ru, name_short_ru, metric_type, data_type, formula,
+    SELECT id, name_ru, name_short_ru, description, calc_ok, fill_ok,
+           metric_type, data_type, formula,
            dependencies, decimal_places, aggregation_fn, category,
-           sort_order, is_core, is_hidden_in_ui
+           sort_order, is_core, is_hidden_in_ui, is_active,
+           COALESCE(is_test, false) AS is_test,
+           COALESCE(source, 'deals') AS source,
+           agg_fn, agg_field, date_field,
+           filters::text AS filters,
+           tags,
+           COALESCE(is_collect_ok, false) AS is_collect_ok,
+           COALESCE(is_calc_ok, false) AS is_calc_ok
     FROM metrics
-    WHERE is_active = true
+    WHERE is_active = true OR is_hidden_in_ui = false
     ORDER BY sort_order, name_ru
   `);
 
@@ -28,6 +46,9 @@ export async function loadMetrics(): Promise<Metric[]> {
     id: r.id,
     nameRu: r.name_ru,
     nameShortRu: r.name_short_ru,
+    description: r.description,
+    calcOk: r.calc_ok ?? false,
+    fillOk: r.fill_ok ?? false,
     metricType: r.metric_type as Metric['metricType'],
     dataType: r.data_type as Metric['dataType'],
     formula: r.formula,
@@ -37,18 +58,29 @@ export async function loadMetrics(): Promise<Metric[]> {
     category: r.category,
     sortOrder: r.sort_order,
     isCore: r.is_core,
-    isActive: true,
+    isActive: r.is_active,
     isHiddenInUi: r.is_hidden_in_ui,
+    isTest: r.is_test,
+    source: (r.source ?? 'deals') as Metric['source'],
+    aggFn: (r.agg_fn ?? null) as Metric['aggFn'],
+    aggField: r.agg_field ?? null,
+    dateField: r.date_field ?? null,
+    filters: r.filters ? JSON.parse(r.filters) : [],
+    tags: r.tags ?? [],
+    isCollectOk: r.is_collect_ok,
+    isCalcOk: r.is_calc_ok,
   }));
   _cacheAt = Date.now();
   return _cache;
 }
 
 export function resolveMetricIds(ids: string[], all: Metric[]): Metric[] {
-  if (ids.includes('all_core')) {
-    return all.filter(m => m.isCore && !m.isHiddenInUi);
-  }
   const map = new Map(all.map(m => [m.id, m]));
+
+  if (ids.includes('all_core')) {
+    return all.filter(m => m.isCore && !m.isHiddenInUi && m.isActive);
+  }
+
   return ids.map(id => map.get(id)).filter(Boolean) as Metric[];
 }
 

@@ -8,12 +8,12 @@ export function formatValue(value: number | null | undefined, dataType: DataType
     case 'money':
       return new Intl.NumberFormat(ruRU, {
         style: 'currency', currency: 'RUB',
-        maximumFractionDigits: 0, minimumFractionDigits: 0,
+        maximumFractionDigits: decimalPlaces, minimumFractionDigits: decimalPlaces,
       }).format(value);
     case 'percent':
       return new Intl.NumberFormat(ruRU, {
         style: 'percent',
-        minimumFractionDigits: 1, maximumFractionDigits: 1,
+        minimumFractionDigits: decimalPlaces, maximumFractionDigits: decimalPlaces,
       }).format(value / 100);
     case 'int':
       return new Intl.NumberFormat(ruRU, { maximumFractionDigits: 0 }).format(value);

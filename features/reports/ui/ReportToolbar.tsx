@@ -1,23 +1,32 @@
 'use client';
-import { useState } from 'react';
-import { RefreshCw, SlidersHorizontal } from 'lucide-react';
-import type { DealScope, Grouping, Metric, ProductGroupMode } from '@/lib/metrics/types';
+import { SlidersHorizontal, RefreshCw, Bookmark } from 'lucide-react';
+import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay } from '@/lib/metrics/types';
+import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
+import { ViewSettings, type ViewPrefs } from './ViewSettings';
 
 interface Props {
   dealScope: DealScope;
+  clientType: ClientType;
   grouping: Grouping;
-  comparisonDisplay: 'full' | 'current';
+  comparisonDisplay: ComparisonDisplay;
+  hasMixedDisplay?: boolean;
   metricIds: string[];
   availableMetrics: Metric[];
+  highlights: Record<string, MetricHighlightConfig>;
   isLoading: boolean;
   showProductGroupPicker?: boolean;
   productGroupMode?: ProductGroupMode;
   onDealScopeChange: (v: DealScope) => void;
+  onClientTypeChange: (v: ClientType) => void;
   onGroupingChange: (v: Grouping) => void;
-  onComparisonDisplayChange: (v: 'full' | 'current') => void;
+  onComparisonDisplayChange: (v: ComparisonDisplay) => void;
   onMetricIdsChange: (ids: string[]) => void;
   onProductGroupModeChange?: (v: ProductGroupMode) => void;
   onRefresh: () => void;
+  onOpenMetricPanel: () => void;
+  onSaveReport: () => void;
+  viewPrefs: ViewPrefs;
+  onViewPrefsChange: (p: ViewPrefs) => void;
 }
 
 function Seg<T extends string>({
@@ -43,27 +52,29 @@ function Seg<T extends string>({
 }
 
 export function ReportToolbar({
-  dealScope, grouping, comparisonDisplay, metricIds,
-  availableMetrics, isLoading,
+  dealScope, clientType, grouping, comparisonDisplay, hasMixedDisplay, metricIds,
+  availableMetrics, highlights, isLoading,
   showProductGroupPicker, productGroupMode,
-  onDealScopeChange, onGroupingChange, onComparisonDisplayChange,
+  onDealScopeChange, onClientTypeChange, onGroupingChange, onComparisonDisplayChange,
   onMetricIdsChange, onProductGroupModeChange, onRefresh,
+  onOpenMetricPanel, onSaveReport,
+  viewPrefs, onViewPrefsChange,
 }: Props) {
-  const [showMetrics, setShowMetrics] = useState(false);
+  const nonDefaultCount = metricIds.includes('all_core') ? 0 : metricIds.length;
+  const highlightCount = Object.keys(highlights).length;
 
-  const allIds = availableMetrics.map(m => m.id);
-  const selectedSet = new Set(metricIds.includes('all_core') ? allIds : metricIds);
-
-  function toggleMetric(id: string) {
-    const next = new Set(selectedSet);
-    if (next.has(id)) {
-      if (next.size > 1) next.delete(id);
-    } else {
-      next.add(id);
-    }
-    if (next.size === allIds.length) onMetricIdsChange(['all_core']);
-    else onMetricIdsChange(Array.from(next));
-  }
+  // Effective display value for the pill: "mixed" when any metric overrides global
+  const displayValue = hasMixedDisplay ? 'mixed' : comparisonDisplay;
+  type DisplayOpt = ComparisonDisplay | 'mixed';
+  const displayOptions: DisplayOpt[] = hasMixedDisplay
+    ? ['full', 'current', 'compact', 'mixed']
+    : ['full', 'current', 'compact'];
+  const displayLabels: Record<DisplayOpt, string> = {
+    full: 'Сравнение',
+    current: 'Только текущий',
+    compact: 'Компактный',
+    mixed: 'Смешанный',
+  };
 
   return (
     <div className="flex items-center gap-3 px-6 py-2 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
@@ -73,21 +84,24 @@ export function ReportToolbar({
         onChange={onDealScopeChange}
         labels={{ primary: 'Первичные', repeat: 'Повторные', all: 'Все' }}
       />
-
+      <Seg
+        options={['all', 'b2c', 'b2b'] as ClientType[]}
+        value={clientType}
+        onChange={onClientTypeChange}
+        labels={{ all: 'Все', b2c: 'Физлица', b2b: 'Юрлица' }}
+      />
       <Seg
         options={['none', 'team', 'total'] as Grouping[]}
         value={grouping}
         onChange={onGroupingChange}
         labels={{ none: 'Без группировки', team: 'По отделу', total: 'Итого' }}
       />
-
       <Seg
-        options={['full', 'current'] as const}
-        value={comparisonDisplay}
-        onChange={onComparisonDisplayChange}
-        labels={{ full: 'Сравнение', current: 'Только текущий' }}
+        options={displayOptions}
+        value={displayValue}
+        onChange={v => { if (v !== 'mixed') onComparisonDisplayChange(v as ComparisonDisplay); }}
+        labels={displayLabels}
       />
-
       {showProductGroupPicker && productGroupMode && onProductGroupModeChange && (
         <Seg
           options={['kc', 'by_max'] as ProductGroupMode[]}
@@ -97,65 +111,35 @@ export function ReportToolbar({
         />
       )}
 
-      {/* Metric picker */}
-      {availableMetrics.length > 0 && (
-        <div className="relative">
-          <button
-            onClick={() => setShowMetrics(v => !v)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-          >
-            <SlidersHorizontal size={12} />
-            Метрики
-            {!metricIds.includes('all_core') && (
-              <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-white rounded-full text-[10px]">
-                {metricIds.length}
-              </span>
-            )}
-          </button>
+      <button
+        onClick={onOpenMetricPanel}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+      >
+        <SlidersHorizontal size={12} />
+        Метрики
+        {(nonDefaultCount > 0 || highlightCount > 0) && (
+          <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-white rounded-full text-[10px]">
+            {nonDefaultCount > 0 ? nonDefaultCount : highlightCount}
+          </span>
+        )}
+      </button>
 
-          {showMetrics && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setShowMetrics(false)} />
-              <div className="absolute top-full left-0 mt-1 z-20 bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg min-w-[220px] max-h-[340px] overflow-y-auto">
-                <div className="flex gap-3 px-3 py-2 border-b border-[var(--color-border)]">
-                  <button
-                    onClick={() => { onMetricIdsChange(['all_core']); setShowMetrics(false); }}
-                    className="text-xs text-[var(--color-accent)] hover:underline"
-                  >
-                    Все
-                  </button>
-                  <span className="text-[var(--color-border)]">·</span>
-                  <button
-                    onClick={() => availableMetrics.length > 0 && onMetricIdsChange([availableMetrics[0].id])}
-                    className="text-xs text-[var(--color-text-muted)] hover:underline"
-                  >
-                    Сбросить
-                  </button>
-                </div>
-                {availableMetrics.map(m => (
-                  <label
-                    key={m.id}
-                    className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-bg-hover)] cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedSet.has(m.id)}
-                      onChange={() => toggleMetric(m.id)}
-                      className="accent-[var(--color-accent)]"
-                    />
-                    <span className="text-sm text-[var(--color-text)]">{m.nameShortRu ?? m.nameRu}</span>
-                  </label>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      <button
+        onClick={onSaveReport}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+      >
+        <Bookmark size={12} />
+        Сохранить
+      </button>
+
+      <div className="ml-auto">
+        <ViewSettings prefs={viewPrefs} onChange={onViewPrefsChange} />
+      </div>
 
       <button
         onClick={onRefresh}
         disabled={isLoading}
-        className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-60"
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-60"
       >
         <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
         Обновить

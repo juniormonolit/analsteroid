@@ -20,17 +20,26 @@ export function computeCalculated(
 }
 
 function evalFormula(formula: string, values: Record<string, number | null>): number | null {
-  // Replace metric ids with their values
-  // Formula syntax: "numerator / denominator * 100" where terms are metric ids or numbers
+  // Support [metric_id] syntax (preferred) and bare metric_id syntax (legacy)
   let expr = formula;
-  const ids = Object.keys(values).sort((a, b) => b.length - a.length); // longest first to avoid partial replace
-  for (const id of ids) {
+
+  // Replace [metric_id] references
+  expr = expr.replace(/\[([^\]]+)\]/g, (_, id) => {
     const v = values[id];
-    expr = expr.replaceAll(id, v === null ? 'null' : String(v));
+    return v === null ? 'null' : String(v);
+  });
+
+  // Fallback: replace bare metric ids (longest first to avoid partial matches)
+  const ids = Object.keys(values).sort((a, b) => b.length - a.length);
+  for (const id of ids) {
+    if (expr.includes(id)) {
+      const v = values[id];
+      expr = expr.replaceAll(id, v === null ? 'null' : String(v));
+    }
   }
+
   // Safety: only allow numbers, operators, spaces, null
   if (!/^[\d\s.+\-*/()null]+$/.test(expr)) return null;
-  // null propagation
   if (expr.includes('null')) return null;
   // eslint-disable-next-line no-new-func
   const result = Function(`"use strict"; return (${expr})`)() as number;

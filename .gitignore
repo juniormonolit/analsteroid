@@ -9,3 +9,6 @@
 *.tsbuildinfo
 next-env.d.ts
 /coverage
+*.tar.gz
+migrations/*_tmp.sql
+migrations/debug_*.sql

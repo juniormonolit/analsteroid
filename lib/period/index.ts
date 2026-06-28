@@ -1,6 +1,6 @@
 import {
-  startOfMonth, endOfDay, subDays, subMonths,
-  startOfWeek, endOfWeek, startOfDay, isSameDay,
+  startOfMonth, subDays, subMonths,
+  startOfWeek, endOfWeek, startOfDay, endOfDay, isSameDay,
   differenceInCalendarDays, addDays,
 } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
@@ -77,7 +77,7 @@ export function applyPreset(key: PresetKey): DateRange {
 export function toSqlInterval(range: DateRange): { from: string; toExcl: string } {
   return {
     from: range.from.toISOString(),
-    toExcl: addDays(endOfDay(range.to), 0).toISOString(), // to+1day 00:00
+    toExcl: addDays(startOfDay(range.to), 1).toISOString(),
   };
 }
 

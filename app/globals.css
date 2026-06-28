@@ -11,6 +11,8 @@
   --color-text-inverse: #ffffff;
   --color-accent: #228be6;
   --color-accent-hover: #1c7ed6;
+  --color-accent-soft: #e7f1fb; /* opaque equivalent of accent/10 — for sticky cells */
+  --color-border-strong: #adb5bd; /* group separators */
   --color-positive: #2f9e44;
   --color-negative: #e03131;
   --color-sidebar-bg: #1a1b1e;

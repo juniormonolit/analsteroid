@@ -1,15 +1,27 @@
 export type MetricType = 'collected' | 'calculated' | 'external';
 export type DataType = 'int' | 'decimal' | 'money' | 'percent' | 'months';
 export type AggregationFn = 'sum' | 'avg' | 'none';
+export type AggFn = 'count_distinct' | 'sum' | 'avg' | 'count_all';
+export type MetricSource = 'deals' | 'deal_events';
 export type DealScope = 'primary' | 'repeat' | 'all';
+export type ClientType = 'all' | 'b2c' | 'b2b';
 export type Grouping = 'none' | 'team' | 'total';
 export type ProductGroupMode = 'kc' | 'by_max';
-export type ComparisonDisplay = 'full' | 'current';
+export type ComparisonDisplay = 'full' | 'current' | 'compact';
+
+export interface MetricFilter {
+  field: string;
+  op: 'eq' | 'neq' | 'in' | 'not_in' | 'is_null' | 'is_not_null';
+  value: string | number | string[] | number[];
+}
 
 export interface Metric {
   id: string;
   nameRu: string;
   nameShortRu: string | null;
+  description?: string | null;
+  calcOk: boolean;
+  fillOk: boolean;
   metricType: MetricType;
   dataType: DataType;
   formula: string | null;
@@ -21,11 +33,22 @@ export interface Metric {
   isCore: boolean;
   isActive: boolean;
   isHiddenInUi: boolean;
+  isTest: boolean;
+  // Constructor fields
+  source: MetricSource;
+  aggFn: AggFn | null;
+  aggField: string | null;
+  dateField: string | null;
+  filters: MetricFilter[];
+  tags: string[];
+  isCollectOk: boolean;
+  isCalcOk: boolean;
 }
 
 export interface ReportRow {
-  dimensionId: string;       // manager_id or product_group_id (string)
+  dimensionId: string;
   dimensionName: string;
+  dimensionSubtitle?: string;
   teamId: string | null;
   teamName: string | null;
   metrics: Record<string, number | null>;

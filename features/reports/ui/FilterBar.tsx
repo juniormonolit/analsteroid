@@ -1,10 +1,13 @@
 'use client';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Calendar, ChevronDown, Building2, X } from 'lucide-react';
-import { applyPreset, PRESET_LABELS, type PresetKey, type DateRange } from '@/lib/period';
+import { ChevronDown, ChevronRight, Building2, ArrowLeftRight, Search, X } from 'lucide-react';
+import type { DateRange } from '@/lib/period';
+import { recomputeComparison } from '@/lib/period';
+import { DateRangePicker } from './DateRangePicker';
 
 interface DeptNode {
   id: string;
@@ -17,121 +20,260 @@ interface Props {
   period: DateRange;
   comparison: DateRange;
   departmentIds: string[];
+  search?: string;
   onPeriodChange: (p: DateRange) => void;
   onComparisonChange: (p: DateRange) => void;
   onDepartmentIdsChange: (ids: string[]) => void;
+  onSearchChange?: (v: string) => void;
 }
-
-const PRESETS: PresetKey[] = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month'];
 
 function fmt(d: Date) {
-  return format(d, 'd MMM yyyy', { locale: ru });
+  return format(d, 'dd.MM.yyyy', { locale: ru });
 }
 
-function DeptTree({
-  nodes,
-  selected,
-  onToggle,
-  depth = 0,
-}: {
-  nodes: DeptNode[];
-  selected: Set<string>;
-  onToggle: (bitrixId: string) => void;
-  depth?: number;
-}) {
+function allIds(node: DeptNode): string[] {
+  return [node.bitrixId, ...(node.children ?? []).flatMap(allIds)];
+}
+
+type CheckState = 'none' | 'some' | 'all';
+
+function getCheckState(node: DeptNode, selected: Set<string>): CheckState {
+  const ids = allIds(node);
+  const count = ids.filter(id => selected.has(id)).length;
+  if (count === 0) return 'none';
+  if (count === ids.length) return 'all';
+  return 'some';
+}
+
+function DeptCheckbox({ state, onChange }: { state: CheckState; onChange: () => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === 'some';
+  }, [state]);
   return (
-    <>
-      {nodes.map(node => (
-        <div key={node.id}>
-          <label
-            className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--color-bg-hover)] cursor-pointer text-sm"
-            style={{ paddingLeft: `${12 + depth * 16}px` }}
-          >
-            <input
-              type="checkbox"
-              checked={selected.has(node.bitrixId)}
-              onChange={() => onToggle(node.bitrixId)}
-              className="accent-[var(--color-accent)]"
-            />
-            <span className="text-[var(--color-text)]">{node.name}</span>
-          </label>
-          {node.children && node.children.length > 0 && (
-            <DeptTree nodes={node.children} selected={selected} onToggle={onToggle} depth={depth + 1} />
-          )}
-        </div>
-      ))}
-    </>
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={state === 'all'}
+      onChange={onChange}
+      className="accent-[var(--color-accent)] w-3.5 h-3.5 flex-shrink-0 cursor-pointer"
+    />
   );
 }
 
-export function FilterBar({ period, comparison, departmentIds, onPeriodChange, onComparisonChange, onDepartmentIdsChange }: Props) {
-  const [showPresets, setShowPresets] = useState(false);
-  const [showDepts, setShowDepts] = useState(false);
+function DeptTreeNode({
+  node, selected, onToggle, depth = 0,
+}: {
+  node: DeptNode; selected: Set<string>;
+  onToggle: (ids: string[], forceOn?: boolean) => void;
+  depth?: number;
+}) {
+  const hasChildren = (node.children ?? []).length > 0;
+  const [expanded, setExpanded] = useState(false); // collapsed to first level by default
+  const state = getCheckState(node, selected);
+
+  function handleCheck() { onToggle(allIds(node), state !== 'all'); }
+
+  return (
+    <div>
+      <div
+        className="flex items-center gap-1.5 py-1.5 hover:bg-[var(--color-bg-hover)] cursor-pointer select-none"
+        style={{ paddingLeft: `${8 + depth * 16}px`, paddingRight: '8px' }}
+      >
+        <button
+          className="flex-shrink-0 text-[var(--color-text-muted)] w-4 h-4 flex items-center justify-center"
+          onClick={e => { e.stopPropagation(); if (hasChildren) setExpanded(v => !v); }}
+        >
+          {hasChildren
+            ? (expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
+            : <span className="w-3" />
+          }
+        </button>
+        <DeptCheckbox state={state} onChange={handleCheck} />
+        <span
+          className={`text-sm truncate flex-1 ${depth === 0 ? 'font-medium text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}
+          onClick={handleCheck}
+        >
+          {node.name}
+        </span>
+      </div>
+      {hasChildren && expanded && (
+        <div>
+          {node.children!.map(child => (
+            <DeptTreeNode key={child.id} node={child} selected={selected} onToggle={onToggle} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function FilterBar({ period, comparison, departmentIds, search = '', onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange }: Props) {
+  const [showPeriod, setShowPeriod] = useState(false);
+  const [showComp,   setShowComp]   = useState(false);
+  const [showDepts,  setShowDepts]  = useState(false);
+  const [deptPos, setDeptPos] = useState<{ top: number; left: number } | null>(null);
+  const deptBtnRef = useRef<HTMLButtonElement>(null);
+  const [periodPos, setPeriodPos] = useState<{ top: number; left: number } | null>(null);
+  const [compPos, setCompPos] = useState<{ top: number; left: number } | null>(null);
+  const periodBtnRef = useRef<HTMLButtonElement>(null);
+  const compBtnRef = useRef<HTMLButtonElement>(null);
+
+  function openPeriod() {
+    if (periodBtnRef.current) {
+      const r = periodBtnRef.current.getBoundingClientRect();
+      setPeriodPos({ top: r.bottom + 4, left: r.left });
+    }
+    setShowPeriod(v => !v); setShowComp(false); setShowDepts(false);
+  }
+  function openComp() {
+    if (compBtnRef.current) {
+      const r = compBtnRef.current.getBoundingClientRect();
+      setCompPos({ top: r.bottom + 4, left: r.left });
+    }
+    setShowComp(v => !v); setShowPeriod(false); setShowDepts(false);
+  }
+  const [draft, setDraft] = useState<Set<string>>(new Set(departmentIds));
 
   const { data: orgData } = useQuery({
     queryKey: ['org-structure'],
     queryFn: () => fetch('/api/catalog/org-structure').then(r => r.json()),
     staleTime: 5 * 60 * 1000,
   });
-
   const tree: DeptNode[] = orgData?.tree ?? [];
-  const selectedSet = new Set(departmentIds);
 
-  function toggleDept(bitrixId: string) {
-    const next = new Set(selectedSet);
-    if (next.has(bitrixId)) next.delete(bitrixId);
-    else next.add(bitrixId);
-    onDepartmentIdsChange(Array.from(next));
+  function handlePeriodChange(p: DateRange) {
+    onPeriodChange(p);
+    onComparisonChange(recomputeComparison(p));
+    setShowPeriod(false);
   }
 
-  const deptLabel = departmentIds.length === 0
-    ? 'Все отделы'
-    : `${departmentIds.length} отд.`;
+  function openDepts() {
+    if (deptBtnRef.current) {
+      const r = deptBtnRef.current.getBoundingClientRect();
+      const W = 280;
+      setDeptPos({ top: r.bottom + 4, left: Math.max(8, r.right - W) });
+    }
+    setDraft(new Set(departmentIds));
+    setShowDepts(true);
+    setShowPeriod(false);
+    setShowComp(false);
+  }
+  function applyDepts()  { onDepartmentIdsChange(Array.from(draft)); setShowDepts(false); }
+  function cancelDepts() { setDraft(new Set(departmentIds)); setShowDepts(false); }
+
+  function toggleIds(ids: string[], forceOn?: boolean) {
+    setDraft(prev => {
+      const next = new Set(prev);
+      if (forceOn === true)       ids.forEach(id => next.add(id));
+      else if (forceOn === false) ids.forEach(id => next.delete(id));
+      else {
+        const allSelected = ids.every(id => next.has(id));
+        if (allSelected) ids.forEach(id => next.delete(id));
+        else ids.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  }
+
+  const deptLabel = departmentIds.length === 0 ? 'Все отделы' : `${departmentIds.length} отд.`;
 
   return (
-    <div className="flex items-center gap-3 px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
-      {/* Period preset picker */}
+    <div className="flex items-center gap-2 px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
+
+      {/* ── Main period ── */}
       <div className="relative">
         <button
-          onClick={() => { setShowPresets(v => !v); setShowDepts(false); }}
-          className="flex items-center gap-2 px-3 py-1.5 border border-[var(--color-border)] rounded-lg text-sm hover:border-[var(--color-border-focus)] transition-colors"
+          ref={periodBtnRef}
+          onClick={openPeriod}
+          className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
+            showPeriod
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+              : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
+          }`}
         >
-          <Calendar size={14} className="text-[var(--color-text-muted)]" />
-          <span>{fmt(period.from)} — {fmt(period.to)}</span>
+          <span className="tabular-nums">{fmt(period.from)} — {fmt(period.to)}</span>
           <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
         </button>
-
-        {showPresets && (
+        {showPeriod && periodPos && createPortal(
           <>
-            <div className="fixed inset-0 z-10" onClick={() => setShowPresets(false)} />
-            <div className="absolute top-full left-0 mt-1 z-20 bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg py-1 min-w-[180px]">
-              {PRESETS.map(key => (
-                <button
-                  key={key}
-                  onClick={() => { onPeriodChange(applyPreset(key)); setShowPresets(false); }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-[var(--color-bg-hover)] transition-colors"
-                >
-                  {PRESET_LABELS[key]}
-                </button>
-              ))}
+            <div className="fixed inset-0 z-[999]" onClick={() => setShowPeriod(false)} />
+            <div style={{ position: 'fixed', top: periodPos.top, left: periodPos.left }} className="z-[1000]">
+              <DateRangePicker
+                value={period}
+                onChange={handlePeriodChange}
+                onClose={() => setShowPeriod(false)}
+                showPresets
+              />
             </div>
-          </>
+          </>,
+          document.body
         )}
       </div>
 
-      {/* Comparison label */}
-      <div className="text-sm text-[var(--color-text-muted)]">
-        vs {fmt(comparison.from)} — {fmt(comparison.to)}
+      {/* ── Comparison period ── */}
+      <div className="relative">
+        <button
+          ref={compBtnRef}
+          onClick={openComp}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-sm transition-colors ${
+            showComp
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-focus)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          <ArrowLeftRight size={13} className="shrink-0" />
+          <span className="tabular-nums">{fmt(comparison.from)} — {fmt(comparison.to)}</span>
+          <ChevronDown size={13} className="text-[var(--color-text-muted)]" />
+        </button>
+        {showComp && compPos && createPortal(
+          <>
+            <div className="fixed inset-0 z-[999]" onClick={() => setShowComp(false)} />
+            <div style={{ position: 'fixed', top: compPos.top, left: compPos.left }} className="z-[1000]">
+              <DateRangePicker
+                value={comparison}
+                onChange={p => { onComparisonChange(p); setShowComp(false); }}
+                onClose={() => setShowComp(false)}
+                showPresets={false}
+                title="Период сравнения"
+              />
+            </div>
+          </>,
+          document.body
+        )}
       </div>
 
-      {/* Department filter */}
-      <div className="relative ml-auto">
+      {/* ── Search ── */}
+      {onSearchChange && (
+        <div className="relative ml-auto">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => onSearchChange(e.target.value)}
+            placeholder="Поиск..."
+            className="pl-8 pr-7 py-1.5 text-sm border border-[var(--color-border)] rounded-lg bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] transition-colors w-44"
+          />
+          {search && (
+            <button
+              onClick={() => onSearchChange('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Department picker ── */}
+      <div className="relative">
         <button
-          onClick={() => { setShowDepts(v => !v); setShowPresets(false); }}
+          ref={deptBtnRef}
+          onClick={openDepts}
           className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
             departmentIds.length > 0
               ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-              : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)]'
+              : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
           }`}
         >
           <Building2 size={14} />
@@ -139,24 +281,31 @@ export function FilterBar({ period, comparison, departmentIds, onPeriodChange, o
           <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
         </button>
 
-        {showDepts && (
+        {showDepts && deptPos && createPortal(
           <>
-            <div className="fixed inset-0 z-10" onClick={() => setShowDepts(false)} />
-            <div className="absolute top-full right-0 mt-1 z-20 bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg min-w-[240px] max-h-[320px] overflow-y-auto">
-              {departmentIds.length > 0 && (
-                <div className="px-3 py-2 border-b border-[var(--color-border)]">
-                  <button
-                    onClick={() => onDepartmentIdsChange([])}
-                    className="flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors"
-                  >
-                    <X size={12} />
-                    Сбросить фильтр
-                  </button>
-                </div>
-              )}
-              <DeptTree nodes={tree} selected={selectedSet} onToggle={toggleDept} />
+            <div className="fixed inset-0 z-[999]" onClick={cancelDepts} />
+            <div
+              style={{ position: 'fixed', top: deptPos.top, left: deptPos.left, width: 280, maxHeight: '380px' }}
+              className="z-[1000] bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg flex flex-col"
+            >
+              <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
+                <span className="text-sm font-medium text-[var(--color-text)]">Отделы</span>
+                {draft.size > 0 && (
+                  <button onClick={() => setDraft(new Set())} className="text-xs text-[var(--color-accent)] hover:underline">Очистить</button>
+                )}
+              </div>
+              <div className="overflow-y-auto flex-1 py-1">
+                {tree.map(node => (
+                  <DeptTreeNode key={node.id} node={node} selected={draft} onToggle={toggleIds} depth={0} />
+                ))}
+              </div>
+              <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
+                <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
+                <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
+              </div>
             </div>
-          </>
+          </>,
+          document.body
         )}
       </div>
     </div>
