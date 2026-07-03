@@ -20,8 +20,8 @@
   --color-sidebar-active: #228be6;
   --color-sidebar-active-bg: rgba(34,139,230,0.15);
   --color-table-header: #f1f3f5;
-  --color-table-row-hover: #f8f9fa;
-  --color-table-stripe: #f8f9fa;
+  --color-table-row-hover: #dbeafe; /* accent-blue hover tint — clearly distinct from zebra */
+  --color-table-stripe: #f6f7f9;    /* gentle zebra on white rows (not = bg) */
 }
 
 :root {
@@ -40,3 +40,19 @@ body {
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+
+/* Full-row hover highlight in report tables. !important so it overrides per-cell inline
+   backgrounds (accent column / heat map) on hover. The value highlight pill and bars are
+   child elements with their own background, so they remain visible. */
+.report-row:hover > td { background-color: var(--color-table-row-hover) !important; }
+/* Hover must light the WHOLE row at once. Cells carry `transition-colors`, so without this the
+   non-hovered cells fade in and visually "lag" behind the pointer. Kill the bg transition on row
+   cells so the whole row flips instantly. */
+.report-row > td { transition-property: none !important; }
+
+/* Sub-pixel seam under the sticky header: at fractional scrollTop (we have non-integer row
+   heights from fontScale) the browser rounds the sticky <thead> and the scrolling body
+   differently, leaving a ~1px transparent line where body content peeks through. Paint a 1px
+   header-coloured box-shadow just below every header cell (moves with the sticky layer) to
+   fill that gap. Shadow sits below the cell's bottom border, so the header divider stays. */
+.report-thead th { box-shadow: 0 1px 0 0 var(--color-table-header); }

@@ -1,8 +1,9 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
+import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
 import type { DateRange } from '@/lib/period';
-import type { DealScope, ClientType, ReportRow } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ReportRow, AccountType } from '@/lib/metrics/types';
 import { addDays, startOfDay } from 'date-fns';
 
 // ── Funnel metadata ───────────────────────────────────────────────────────
@@ -26,8 +27,8 @@ type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: numb
 const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
 const ROW_TTL = 10 * 60 * 1000; // 10 min
 
-function mkKey(from: string, toExcl: string, metricIds: string[]): string {
-  return `${from}|${toExcl}|${[...metricIds].sort().join(',')}`;
+function mkKey(from: string, toExcl: string, metricIds: string[], pgId?: string, srcKey?: string): string {
+  return `${from}|${toExcl}|${pgId ?? 'all'}|${srcKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
 }
 
 // ── Pill filter + aggregation ─────────────────────────────────────────────
@@ -79,21 +80,58 @@ export interface ByManagersOptions {
   dealScope?: DealScope;
   clientType?: ClientType;
   departmentIds?: string[];
-  productGroupMode?: 'kc' | 'by_max'; // unused here, kept for API compat
+  accountType?: AccountType; // managers (bitrix_login manager*) / logists (logist*) / all
+  productGroupMode?: 'kc' | 'by_max';
+  productGroupId?: string; // drilldown: restrict to one product group
+  // Маркетинговый дрилл-даун: ограничить сделками одного значения измерения источников
+  sourceFilter?: { dimension: SourceDimension; value: string };
 }
 
 export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRow[]> {
   const dealScope  = opts.dealScope  ?? 'all';
   const clientType = opts.clientType ?? 'all';
   const deptIds    = opts.departmentIds ?? [];
+  const accountType = opts.accountType ?? 'all';
+  const pgMode     = opts.productGroupMode ?? 'kc';
+  const pgId       = opts.productGroupId;
 
   const fromIso   = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
 
+  // Marketing source filter (drilldown «Бренд → менеджеры» и т.п.)
+  // «Филиал» — менеджерское измерение: фильтруем по менеджерам филиала, не по source_id.
+  let srcWhere: string | undefined;
+  let srcKey: string | undefined;
+  if (opts.sourceFilter) {
+    srcWhere = opts.sourceFilter.dimension === 'branch'
+      ? managerIdsWhere(await resolveBranchManagerIds(opts.sourceFilter.value))
+      : sourceIdsWhere(await resolveSourceIds(opts.sourceFilter.dimension, opts.sourceFilter.value));
+    srcKey = `${opts.sourceFilter.dimension}=${opts.sourceFilter.value}`;
+  }
+
+  // Build product-group filter for drilldown (inlined into SQL like managerId in byProductGroups)
+  let pgWhere: string | undefined;
+  if (pgId !== undefined) {
+    if (pgMode === 'kc') {
+      if (pgId === '__none__') {
+        pgWhere = 'd.product_group_id IS NULL';
+      } else if (/^\d+$/.test(pgId)) {
+        pgWhere = `d.product_group_id = ${pgId}`;
+      }
+    } else {
+      // by_max: head_group_name is a string — escape single quotes (standard SQL literal escaping)
+      if (pgId === 'Без группы') {
+        pgWhere = 'd.head_group_name IS NULL';
+      } else {
+        pgWhere = `d.head_group_name = '${pgId.replace(/'/g, "''")}'`;
+      }
+    }
+  }
+
   const sysDb = systemDb();
 
   // Org hierarchy + dept filter run every request (fast, small tables)
-  const [orgRes, deptRes] = await Promise.all([
+  const [orgRes, deptRes, loginRes] = await Promise.all([
     sysDb.query<{
       bitrix_user_id: string; manager_name: string;
       department_id: string | null; department_name: string | null;
@@ -104,32 +142,46 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
          FROM org_resolved_hierarchy WHERE is_active = true`),
     deptIds.length
       ? sysDb.query<{ bitrix_user_id: string }>(
-          `SELECT e.bitrix_user_id
-             FROM employees e
-             JOIN departments d ON d.id = e.department_id
-            WHERE d.bitrix_department_id = ANY($1)`,
+          `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
+             FROM org_resolved_hierarchy orh
+            WHERE orh.department_id IN (
+              SELECT id FROM departments WHERE bitrix_department_id::text = ANY($1)
+            )
+              AND orh.is_active = true`,
           [deptIds],
+        )
+      : Promise.resolve(null),
+    // Account-type filter is by the Bitrix login prefix (manager* / logist*), which lives in
+    // employees.bitrix_login (NOT in org_resolved_hierarchy, where managers are short_login #NNNN).
+    accountType !== 'all'
+      ? sysDb.query<{ bitrix_user_id: string; bitrix_login: string | null }>(
+          `SELECT bitrix_user_id::text AS bitrix_user_id, bitrix_login FROM employees WHERE is_active = true`,
         )
       : Promise.resolve(null),
   ]);
 
   const orgMap         = new Map(orgRes.rows.map(r => [r.bitrix_user_id, r]));
   const allowedBitrix  = deptRes ? new Set(deptRes.rows.map(r => r.bitrix_user_id)) : null;
+  const loginByBitrix  = loginRes ? new Map(loginRes.rows.map(r => [r.bitrix_user_id, (r.bitrix_login ?? '').toLowerCase()])) : null;
+  const accountPrefix  = accountType === 'managers' ? 'manager' : accountType === 'logists' ? 'logist' : null;
 
   // Metrics
   const allMetrics = await loadMetrics();
   const collected  = allMetrics.filter(m => m.metricType === 'collected' && !m.isTest);
   const metricIds  = collected.map(m => m.id);
 
-  // Analytics row cache (pills are NOT part of the key)
-  const key   = mkKey(fromIso, toExclIso, metricIds);
+  // Analytics row cache (pills are NOT part of the key; pgId/srcKey ARE — they change the scope)
+  const key   = mkKey(fromIso, toExclIso, metricIds, pgId, srcKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
+    const notNullParts = ['d.current_manager_id IS NOT NULL'];
+    if (pgWhere) notNullParts.push(pgWhere);
+    if (srcWhere) notNullParts.push(srcWhere);
     const sql = buildCollectedSQL(collected, {
       idExpr:          'd.current_manager_id::text',
       groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
-      notNullWhere:    'd.current_manager_id IS NOT NULL',
+      notNullWhere:    notNullParts.join(' AND '),
       funnelBreakdown: true,
     });
     if (!sql) return [];
@@ -146,6 +198,10 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   // Map to ReportRow[]
   return [...agg.entries()]
     .filter(([id]) => !allowedBitrix || allowedBitrix.has(id))
+    .filter(([id]) => {
+      if (!accountPrefix || !loginByBitrix) return true;
+      return (loginByBitrix.get(id) ?? '').startsWith(accountPrefix);
+    })
     .map(([id, metrics]) => {
       const org = orgMap.get(id);
       return {

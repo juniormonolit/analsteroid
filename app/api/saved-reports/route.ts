@@ -24,6 +24,19 @@ export async function GET() {
             sort_by AS "sortBy",
             sort_dir AS "sortDir",
             COALESCE(column_groups, '[]'::jsonb) AS "columnGroups",
+            COALESCE(accented_metric_ids, '{}') AS "accentedMetricIds",
+            COALESCE(bar_metric_ids, '{}') AS "barMetricIds",
+            COALESCE(heatmap_metric_ids, '{}') AS "heatmapMetricIds",
+            theme_accent AS "themeAccent",
+            number_align AS "numberAlign",
+            account_type AS "accountType",
+            drilldown_duplicate_metrics AS "drilldownDuplicateMetrics",
+            COALESCE(drilldown_metric_ids, '{}') AS "drilldownMetricIds",
+            deal_fields AS "dealFields",
+            drilldown_grouped AS "drilldownGrouped",
+            source_dimension AS "sourceDimension",
+            drilldown_dimension AS "drilldownDimension",
+            is_shared AS "isShared",
             period_mode AS "periodMode",
             relative_period AS "relativePeriod",
             comparison_mode AS "comparisonMode",
@@ -31,7 +44,7 @@ export async function GET() {
             fixed_comparison AS "fixedComparison",
             created_at AS "createdAt"
      FROM saved_reports
-     WHERE user_login = $1
+     WHERE user_login = $1 OR is_shared = true
      ORDER BY created_at DESC`,
     [session.login]
   );
@@ -70,6 +83,20 @@ export async function POST(req: NextRequest) {
     body.sortBy ?? null,
     body.sortDir ?? null,
     JSON.stringify(body.columnGroups ?? []),
+    body.accentedMetricIds ?? [],
+    body.barMetricIds ?? [],
+    body.heatmapMetricIds ?? [],
+    body.themeAccent ?? null,
+    body.numberAlign ?? null,
+    body.accountType ?? null,
+    body.drilldownDuplicateMetrics ?? null,
+    body.drilldownMetricIds ?? [],
+    body.dealFields ?? null,
+    body.drilldownGrouped ?? null,
+    body.sourceDimension ?? null,
+    body.drilldownDimension ?? null,
+    // «Смекалочная» (общие отчёты) — сохранять туда может только админ
+    session.isAdmin ? (body.isShared ?? false) : false,
   ];
 
   const res = await db.query<{ id: string }>(
@@ -80,8 +107,10 @@ export async function POST(req: NextRequest) {
        metric_display_modes, comparison_threshold,
        period_mode, relative_period, comparison_mode, fixed_period, fixed_comparison,
        pinned_metric_ids, metric_decimal_overrides, metric_threshold_overrides, sort_by, sort_dir,
-       column_groups
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+       column_groups, accented_metric_ids, bar_metric_ids, heatmap_metric_ids, theme_accent,
+       number_align, account_type, drilldown_duplicate_metrics, drilldown_metric_ids, deal_fields,
+       drilldown_grouped, source_dimension, drilldown_dimension, is_shared
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)
      ON CONFLICT (user_login, name) DO UPDATE SET
        report_slug = EXCLUDED.report_slug,
        metric_ids = EXCLUDED.metric_ids,
@@ -104,7 +133,20 @@ export async function POST(req: NextRequest) {
        metric_threshold_overrides = EXCLUDED.metric_threshold_overrides,
        sort_by = EXCLUDED.sort_by,
        sort_dir = EXCLUDED.sort_dir,
-       column_groups = EXCLUDED.column_groups
+       column_groups = EXCLUDED.column_groups,
+       accented_metric_ids = EXCLUDED.accented_metric_ids,
+       bar_metric_ids = EXCLUDED.bar_metric_ids,
+       heatmap_metric_ids = EXCLUDED.heatmap_metric_ids,
+       theme_accent = EXCLUDED.theme_accent,
+       number_align = EXCLUDED.number_align,
+       account_type = EXCLUDED.account_type,
+       drilldown_duplicate_metrics = EXCLUDED.drilldown_duplicate_metrics,
+       drilldown_metric_ids = EXCLUDED.drilldown_metric_ids,
+       deal_fields = EXCLUDED.deal_fields,
+       drilldown_grouped = EXCLUDED.drilldown_grouped,
+       source_dimension = EXCLUDED.source_dimension,
+       drilldown_dimension = EXCLUDED.drilldown_dimension,
+       is_shared = EXCLUDED.is_shared
      RETURNING id`,
     vals
   );

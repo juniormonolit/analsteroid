@@ -1,28 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb } from '@/lib/db/clients';
+import { loadMetrics } from '@/lib/metrics/catalog';
+import { resolveFilterClause } from '@/lib/metrics/sqlGen';
+import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
+import type { Metric } from '@/lib/metrics/types';
 import { addDays, startOfDay } from 'date-fns';
 
-// metricId → which date field to filter and optional funnel type
-const METRIC_FILTER_MAP: Record<string, {
-  dateField?: 'created_at' | 'sold_at' | 'delivered_at' | 'reserved_at' | 'confirmed_at';
-  funnelType?: 'primary' | 'repeat';
-  called?: true;
-}> = {
-  primary_deals_count:          { dateField: 'created_at', funnelType: 'primary' },
-  incoming_deals_count:         { dateField: 'created_at' },
-  called_deals_count:           { called: true },
-  reservations_count:           { dateField: 'reserved_at' },
-  confirmed_reservations_count: { dateField: 'confirmed_at' },
-  primary_sales_count:          { dateField: 'sold_at', funnelType: 'primary' },
-  primary_sales_amount:         { dateField: 'sold_at', funnelType: 'primary' },
-  repeat_sales_count:           { dateField: 'sold_at', funnelType: 'repeat' },
-  repeat_sales_amount:          { dateField: 'sold_at', funnelType: 'repeat' },
-  primary_shipments_count:      { dateField: 'delivered_at', funnelType: 'primary' },
-  primary_shipments_amount:     { dateField: 'delivered_at', funnelType: 'primary' },
-  repeat_shipments_count:       { dateField: 'delivered_at', funnelType: 'repeat' },
-  repeat_shipments_amount:      { dateField: 'delivered_at', funnelType: 'repeat' },
-};
+// Resolve a metric id to the collected metric whose deals we can list.
+// calculated → walk dependencies (first dep = numerator by catalog convention);
+// external (plans) → no deal filter.
+function resolveToCollected(id: string, all: Metric[], depth = 0): Metric | null {
+  if (depth > 5) return null;
+  const m = all.find(x => x.id === id);
+  if (!m) return null;
+  if (m.metricType === 'collected') return m;
+  if (m.metricType === 'calculated') {
+    for (const dep of m.dependencies) {
+      const r = resolveToCollected(dep, all, depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -36,9 +36,11 @@ export async function GET(req: NextRequest) {
   const to             = sp.get('to');
   const scope          = sp.get('scope') ?? 'primary';
   const metricFilter   = sp.get('metricFilter') ?? '';
+  const sourceDim      = sp.get('sourceDim') as SourceDimension | null; // marketing dimension
+  const sourceVal      = sp.get('sourceVal');                           // its value
 
-  if ((!managerId && !productGroup) || !from || !to) {
-    return NextResponse.json({ error: 'managerId or productGroup, plus from/to required' }, { status: 400 });
+  if ((!managerId && !productGroup && !sourceDim) || !from || !to) {
+    return NextResponse.json({ error: 'managerId, productGroup or sourceDim+sourceVal, plus from/to required' }, { status: 400 });
   }
 
   const fromDate = new Date(from);
@@ -50,26 +52,44 @@ export async function GET(req: NextRequest) {
     scope === 'primary' ? `AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = false)`
                         : `AND d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)`;
 
-  // ── Metric date filter ────────────────────────────────────────────────────
-  const mf = METRIC_FILTER_MAP[metricFilter];
+  // ── Client-type filter (b2c = funnels 0,2; b2b = 1,3 — same as sqlGen) ────
+  const clientType = sp.get('clientType') ?? 'all';
+  const clientFilter =
+    clientType === 'b2c' ? 'AND d.funnel_id IN (0, 2)' :
+    clientType === 'b2b' ? 'AND d.funnel_id IN (1, 3)' : '';
+
+  // ── Metric filter (generic, from the metrics catalog) ────────────────────
+  // Default window: a deal is in scope if ANY of its stage dates falls in the period.
   let metricDateFilter = `(
     d.created_at >= $1 AND d.created_at < $2
     OR d.sold_at >= $1 AND d.sold_at < $2
     OR d.delivered_at >= $1 AND d.delivered_at < $2
     OR d.reserved_at >= $1 AND d.reserved_at < $2
+    OR d.confirmed_at >= $1 AND d.confirmed_at < $2
+    OR d.lost_at >= $1 AND d.lost_at < $2
   )`;
   let extraJoin = '';
 
-  if (mf) {
-    if (mf.called) {
-      extraJoin = `JOIN (
-        SELECT DISTINCT deal_id FROM deal_events
-        WHERE event_at >= $1 AND event_at < $2
-          AND stage_id IN (SELECT id FROM stages WHERE event_type = 'called')
-      ) _called ON _called.deal_id = d.deal_id`;
-      metricDateFilter = '1=1';
-    } else if (mf.dateField) {
-      metricDateFilter = `d.${mf.dateField} >= $1 AND d.${mf.dateField} < $2`;
+  if (metricFilter) {
+    const metric = resolveToCollected(metricFilter, await loadMetrics());
+    if (metric?.dateField) {
+      if (metric.source === 'deal_events') {
+        // Event-sourced metric (e.g. called_deals_count): deal has a matching event in period
+        const evtConds = metric.filters.map(f => resolveFilterClause(f, 'de')).filter(Boolean);
+        extraJoin = `JOIN (
+          SELECT DISTINCT de.deal_id FROM deal_events de
+          WHERE de.${metric.dateField} >= $1 AND de.${metric.dateField} < $2
+            ${evtConds.length ? 'AND ' + evtConds.join(' AND ') : ''}
+        ) _evt ON _evt.deal_id = d.deal_id`;
+        metricDateFilter = '1=1';
+      } else {
+        // Deals-sourced: same date window + filters the metric itself uses in sqlGen
+        const conds = [
+          `d.${metric.dateField} >= $1 AND d.${metric.dateField} < $2`,
+          ...metric.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
+        ];
+        metricDateFilter = conds.join(' AND ');
+      }
     }
   }
 
@@ -99,6 +119,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Marketing dimension filter. «Филиал» — менеджерское измерение (по менеджеру сделки);
+  // остальные — список source_id из system.marketing_sources.
+  // Composes with managerId (drilldown «источник → менеджеры → сделки»).
+  if (sourceDim && sourceVal !== null) {
+    if (sourceDim === 'branch') {
+      dimensionFilter += ` AND ${managerIdsWhere(await resolveBranchManagerIds(sourceVal))}`;
+    } else {
+      dimensionFilter += ` AND ${sourceIdsWhere(await resolveSourceIds(sourceDim, sourceVal))}`;
+    }
+  }
+
   const db = analyticsDb();
 
   const sql = `
@@ -111,6 +142,9 @@ export async function GET(req: NextRequest) {
       d.confirmed_at,
       d.sold_at,
       d.delivered_at,
+      d.lost_at,
+      d.expected_close_date,
+      d.source_id,
       d.current_manager_id::text AS manager_id,
       s.name  AS stage_name,
       pg.name AS product_group_name,
@@ -124,18 +158,25 @@ export async function GET(req: NextRequest) {
     WHERE ${metricDateFilter}
       ${dimensionFilter}
       ${funnelFilter}
+      ${clientFilter}
     ORDER BY COALESCE(d.sold_at, d.delivered_at, d.created_at) DESC
     LIMIT 1000
   `;
 
   const res = await db.query(sql, params);
 
+  // Обогащение из system DB (кэшированные справочники): менеджер + название источника
+  const [mgrInfo, srcMap] = await Promise.all([loadManagerInfoMap(), loadSourceMap()]);
+
   const deals = (res.rows as {
     manager_id: string;
+    source_id: string | null;
     head_group_name: string | null;
     product_group_name: string | null;
   }[]).map(r => ({
     ...r,
+    manager_name: mgrInfo.get(r.manager_id)?.name ?? (r.manager_id ? `#${r.manager_id}` : null),
+    source_name: r.source_id ? (srcMap.get(r.source_id)?.name ?? r.source_id) : null,
     product_group_display: pgMode === 'by_max'
       ? (r.head_group_name    ?? 'Без группы')
       : (r.product_group_name ?? 'Без группы'),

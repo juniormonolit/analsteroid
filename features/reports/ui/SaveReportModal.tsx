@@ -37,6 +37,18 @@ interface Props {
   pinnedMetricIds: string[];
   metricDecimalOverrides: Record<string, number>;
   metricThresholdOverrides: Record<string, number>;
+  accentedMetricIds: string[];
+  barMetricIds: string[];
+  heatmapMetricIds: string[];
+  themeAccent: string | null;
+  numberAlign: 'left' | 'center' | 'right';
+  accountType: 'managers' | 'logists' | 'all';
+  drilldownDuplicate: boolean;
+  drilldownMetricIds: string[];
+  dealFields?: string[];
+  drilldownGrouped?: boolean;
+  sourceDimension?: string;
+  drilldownDimension?: string;
   sortBy: string | null;
   sortDir: 'asc' | 'desc';
   columnGroups: { name: string; metricIds: string[] }[];
@@ -51,6 +63,9 @@ export function SaveReportModal({
   metricDisplayModes, comparisonThreshold,
   productGroupMode, departmentIds, highlights,
   pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides,
+  accentedMetricIds, barMetricIds, heatmapMetricIds, themeAccent, numberAlign, accountType,
+  drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped,
+  sourceDimension, drilldownDimension,
   sortBy, sortDir, columnGroups,
   currentPeriod, currentComparison,
   onSave, onClose,
@@ -61,16 +76,25 @@ export function SaveReportModal({
   const [unit, setUnit] = useState<PeriodUnit>('month');
   const [compMode, setCompMode] = useState<ComparisonMode>('previous_tail');
   const [saving, setSaving] = useState(false);
-  const [existingReports, setExistingReports] = useState<{ id: string; name: string }[]>([]);
+  const [existingReports, setExistingReports] = useState<{ id: string; name: string; isShared?: boolean }[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [shared, setShared] = useState(false);
 
   useEffect(() => {
     fetch('/api/saved-reports')
       .then(r => r.json())
-      .then((data: { id: string; name: string }[]) => setExistingReports(data))
+      .then((data: { id: string; name: string; isShared?: boolean }[]) => setExistingReports(data))
+      .catch(() => {});
+    fetch('/api/auth/session')
+      .then(r => r.json())
+      .then((d: { user?: { isAdmin?: boolean } }) => setIsAdmin(!!d.user?.isAdmin))
       .catch(() => {});
   }, []);
 
-  const willOverwrite = existingReports.some(r => r.name === name.trim());
+  const existing = existingReports.find(r => r.name === name.trim());
+  const willOverwrite = !!existing;
+  // При перезаписи общего отчёта галка подхватывается автоматически
+  useEffect(() => { if (existing?.isShared) setShared(true); }, [existing?.isShared]);
 
   const relativePeriod: RelativePeriod = { anchor, unit };
 
@@ -93,6 +117,19 @@ export function SaveReportModal({
       pinnedMetricIds,
       metricDecimalOverrides,
       metricThresholdOverrides,
+      accentedMetricIds,
+      barMetricIds,
+      heatmapMetricIds,
+      themeAccent,
+      numberAlign,
+      accountType,
+      drilldownDuplicateMetrics: drilldownDuplicate,
+      drilldownMetricIds,
+      dealFields,
+      drilldownGrouped,
+      sourceDimension,
+      drilldownDimension,
+      isShared: isAdmin ? shared : false,
       sortBy,
       sortDir,
       columnGroups,
@@ -141,6 +178,20 @@ export function SaveReportModal({
             <div className="text-xs text-[var(--color-warning,#f59e0b)]">
               Отчёт с таким названием уже существует — конфигурация будет перезаписана
             </div>
+          )}
+          {isAdmin && (
+            <label className="flex items-center gap-2 cursor-pointer mt-1">
+              <input
+                type="checkbox"
+                checked={shared}
+                onChange={e => setShared(e.target.checked)}
+                className="accent-[var(--color-accent)] w-4 h-4"
+              />
+              <span className="text-sm text-[var(--color-text)]">
+                В «Смекалочную»
+                <span className="text-xs text-[var(--color-text-muted)] ml-1.5">(видна всем пользователям)</span>
+              </span>
+            </label>
           )}
         </div>
 

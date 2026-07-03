@@ -8,13 +8,16 @@ echo "==> Building..."
 npm run build
 
 echo "==> Packing..."
-tar -czf /tmp/analsteroid-deploy.tar.gz \
-  .next/standalone/.next/server/ \
-  .next/standalone/.next/*.json \
-  .next/standalone/.next/BUILD_ID \
-  .next/standalone/server.js \
-  .next/static/ \
-  public/
+# public/ is optional — this project has none; only include it when present.
+PACK_PATHS=(
+  .next/standalone/.next/server/
+  .next/standalone/.next/*.json
+  .next/standalone/.next/BUILD_ID
+  .next/standalone/server.js
+  .next/static/
+)
+[ -d public ] && PACK_PATHS+=(public/)
+tar -czf /tmp/analsteroid-deploy.tar.gz "${PACK_PATHS[@]}"
 
 echo "==> Uploading..."
 scp -i "$KEY" -o StrictHostKeyChecking=no /tmp/analsteroid-deploy.tar.gz "$REMOTE:$REMOTE_DIR/deploy.tar.gz"

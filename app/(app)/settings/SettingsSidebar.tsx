@@ -6,6 +6,7 @@ const NAV = [
   { href: '/settings/tables', label: 'Таблицы' },
   { href: '/settings/metrics', label: 'Метрики' },
   { href: '/settings/working-calendar', label: 'Календарь' },
+  { href: '/settings/users', label: 'Пользователи' },
 ];
 
 export function SettingsSidebar() {

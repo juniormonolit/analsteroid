@@ -30,23 +30,31 @@ export default async function SavedReportPage({
             sort_by AS "sortBy",
             sort_dir AS "sortDir",
             COALESCE(column_groups, '[]'::jsonb) AS "columnGroups",
+            COALESCE(accented_metric_ids, '{}') AS "accentedMetricIds",
+            COALESCE(bar_metric_ids, '{}') AS "barMetricIds",
+            COALESCE(heatmap_metric_ids, '{}') AS "heatmapMetricIds",
+            theme_accent AS "themeAccent",
+            number_align AS "numberAlign",
+            account_type AS "accountType",
+            drilldown_duplicate_metrics AS "drilldownDuplicateMetrics",
+            COALESCE(drilldown_metric_ids, '{}') AS "drilldownMetricIds",
+            deal_fields AS "dealFields",
+            drilldown_grouped AS "drilldownGrouped",
+            source_dimension AS "sourceDimension",
+            drilldown_dimension AS "drilldownDimension",
+            is_shared AS "isShared",
             period_mode AS "periodMode",
             relative_period AS "relativePeriod",
             comparison_mode AS "comparisonMode",
             fixed_period AS "fixedPeriod",
             fixed_comparison AS "fixedComparison",
             created_at AS "createdAt"
-     FROM saved_reports WHERE id = $1 AND user_login = $2`,
+     FROM saved_reports WHERE id = $1 AND (user_login = $2 OR is_shared = true)`,
     [id, session.login]
   );
 
   if (!res.rows.length) return notFound();
   const preset = res.rows[0];
-
-  const slugToTitle: Record<string, string> = {
-    'by-managers': 'По менеджерам',
-    'by-product-groups': 'По товарным группам',
-  };
 
   return (
     <SalesReportPage

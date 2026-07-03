@@ -8,10 +8,12 @@ export type ClientType = 'all' | 'b2c' | 'b2b';
 export type Grouping = 'none' | 'team' | 'total';
 export type ProductGroupMode = 'kc' | 'by_max';
 export type ComparisonDisplay = 'full' | 'current' | 'compact';
+export type AccountType = 'managers' | 'logists' | 'all';
 
 export interface MetricFilter {
   field: string;
-  op: 'eq' | 'neq' | 'in' | 'not_in' | 'is_null' | 'is_not_null';
+  // gt_field: column-vs-column comparison — value is another column name (e.g. lost_at > sold_at)
+  op: 'eq' | 'neq' | 'in' | 'not_in' | 'is_null' | 'is_not_null' | 'gt_field';
   value: string | number | string[] | number[];
 }
 

@@ -5,8 +5,9 @@ import { defaultPeriod, recomputeComparison } from '@/lib/period';
 import { FilterBar } from './FilterBar';
 import { ReportToolbar } from './ReportToolbar';
 import { ReportTable } from './ReportTable';
-import { MetricPanel } from './MetricPanel';
-import { loadViewPrefs, saveViewPrefs, DEFAULT_VIEW_PREFS, type ViewPrefs } from './ViewSettings';
+import { MetricPanel, getMetricPanelWidth } from './MetricPanel';
+import { ViewSettings, loadViewPrefs, saveViewPrefs, DEFAULT_VIEW_PREFS, type ViewPrefs } from './ViewSettings';
+import { FiltersMenu } from './FiltersMenu';
 import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
 import { DrilldownDrawer } from './DrilldownDrawer';
@@ -15,6 +16,7 @@ import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDispl
 import type { DateRange } from '@/lib/period';
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
+import { type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 
 type MergedRow = {
   dimensionId: string;
@@ -77,19 +79,36 @@ interface Props {
   preset?: SavedReport | null;
 }
 
+const SOURCE_DIMENSION_LABELS: Record<string, string> = {
+  brand: 'Бренд', platform: 'Витрина', contact_type: 'Тип контакта',
+  ad_channel: 'Канал', channel_group: 'Канал (крупно)', branch: 'Филиал', source: 'Источник',
+};
+
+const DEFAULT_METRIC_IDS = [
+  'primary_deals_count',
+  'primary_reservations_count',
+  'primary_confirmed_count',
+  'primary_sales_count',
+  'primary_shipments_count',
+  'primary_reservations_amount',
+  'primary_confirmed_amount',
+  'primary_sales_amount',
+  'primary_shipments_amount',
+];
+
 export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [period, setPeriod]             = useState<DateRange>(defaultPeriod);
   const [comparison, setComparison]     = useState<DateRange>(() => recomputeComparison(defaultPeriod()));
   const [dealScope, setDealScope]       = useState<DealScope>('all');
   const [clientType, setClientType]     = useState<ClientType>('all');
   const [grouping, setGrouping]         = useState<Grouping>('none');
-  const [metricIds, setMetricIds]       = useState<string[]>(['all_core']);
-  const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(['all_core']);
+  const [metricIds, setMetricIds]       = useState<string[]>(DEFAULT_METRIC_IDS);
+  const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(DEFAULT_METRIC_IDS);
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
-  const [comparisonDisplay, setComparisonDisplay] = useState<ComparisonDisplay>('full');
+  const [comparisonDisplay, setComparisonDisplay] = useState<ComparisonDisplay>('current');
   const [metricDisplayModes, setMetricDisplayModes] = useState<Record<string, ComparisonDisplay>>({});
   const [comparisonThreshold, setComparisonThreshold] = useState<number>(5);
-  const [productGroupMode, setProductGroupMode]   = useState<ProductGroupMode>('kc');
+  const [productGroupMode, setProductGroupMode]   = useState<ProductGroupMode>('by_max');
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useState('');
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
@@ -99,6 +118,18 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [pinnedMetricIds, setPinnedMetricIds] = useState<string[]>([]);
   const [metricDecimalOverrides, setMetricDecimalOverrides] = useState<Record<string, number>>({});
   const [metricThresholdOverrides, setMetricThresholdOverrides] = useState<Record<string, number>>({});
+  const [accentedMetricIds, setAccentedMetricIds] = useState<string[]>([]);
+  const [barMetricIds, setBarMetricIds] = useState<string[]>([]);
+  const [heatmapMetricIds, setHeatmapMetricIds] = useState<string[]>([]);
+  const [themeAccent, setThemeAccent] = useState<string | null>(null);
+  const [numberAlign, setNumberAlign] = useState<'left' | 'center' | 'right'>('center');
+  const [accountType, setAccountType] = useState<'managers' | 'logists' | 'all'>('managers');
+  const [drilldownDuplicate, setDrilldownDuplicate] = useState(true);
+  const [drilldownMetricIds, setDrilldownMetricIds] = useState<string[]>([]);
+  const [dealFields, setDealFields] = useState<string[] | undefined>(undefined);
+  const [drilldownGrouped, setDrilldownGrouped] = useState(true);
+  const [sourceDimension, setSourceDimension] = useState<SourceDimension>('brand');
+  const [drilldownDimension, setDrilldownDimension] = useState<DrilldownDimension>('contact_type');
   const [sortBy, setSortBy] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [columnGroups, setColumnGroups] = useState<{ name: string; metricIds: string[] }[]>([]);
@@ -135,6 +166,18 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setPinnedMetricIds(preset.pinnedMetricIds ?? []);
     setMetricDecimalOverrides(preset.metricDecimalOverrides ?? {});
     setMetricThresholdOverrides(preset.metricThresholdOverrides ?? {});
+    setAccentedMetricIds(preset.accentedMetricIds ?? []);
+    setBarMetricIds(preset.barMetricIds ?? []);
+    setHeatmapMetricIds(preset.heatmapMetricIds ?? []);
+    setThemeAccent(preset.themeAccent ?? null);
+    setNumberAlign(preset.numberAlign ?? 'center');
+    setAccountType(preset.accountType ?? 'managers');
+    setDrilldownDuplicate(preset.drilldownDuplicateMetrics ?? true);
+    setDrilldownMetricIds(preset.drilldownMetricIds ?? []);
+    setDealFields(preset.dealFields ?? undefined);
+    setDrilldownGrouped(preset.drilldownGrouped ?? true);
+    setSourceDimension((preset.sourceDimension as SourceDimension) ?? 'brand');
+    setDrilldownDimension((preset.drilldownDimension as DrilldownDimension) ?? 'contact_type');
     setSortBy(preset.sortBy ?? null);
     setSortDir(preset.sortDir ?? 'desc');
     setColumnGroups(preset.columnGroups ?? []);
@@ -147,9 +190,10 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
 
   // fetchedMetricIds only grows — removals don't trigger re-fetch, additions do
   const metricIdsForQuery = fetchedMetricIds.includes('all_core') ? ['all_core'] : [...fetchedMetricIds].sort();
-  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode];
+  const sourceMode = reportSlug === 'by-sources';
+  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null];
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
       const res = await fetch('/api/reports/run', {
@@ -164,6 +208,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           clientType,
           departmentIds: departmentIds.length ? departmentIds : undefined,
           productGroupMode,
+          accountType,
+          sourceDimension: sourceMode ? sourceDimension : undefined,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -256,7 +302,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
       .filter(Boolean);
   }, [availableMetrics, catalogMetrics, metricIds, columnGroups]);
 
-  const dimensionType = reportSlug === 'by-product-groups' ? 'product-group' : 'manager';
+  const dimensionType = sourceMode ? 'source' : reportSlug === 'by-product-groups' ? 'product-group' : 'manager';
 
   const displayRows = useMemo(() => {
     const grouped = applyClientGrouping(data?.rows ?? [], grouping);
@@ -281,8 +327,12 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   );
 
   const handleCellClick = useCallback(
-    (id: string, name: string, metricId: string) => setDrilldown({ id, name, metricId }),
-    []
+    (id: string, name: string, metricId: string) => {
+      const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
+        ?? availableMetrics.find((x: { id: string }) => x.id === metricId);
+      setDrilldown({ id, name, metricId, metricName: m?.nameRu });
+    },
+    [catalogMetrics, availableMetrics]
   );
 
   const selectedMetricIds = metricIds.includes('all_core')
@@ -299,12 +349,15 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   function handleMetricRemove(metricId: string) {
     // Only update display list — fetchedMetricIds unchanged, no re-fetch
     const next = selectedMetricIds.filter((id: string) => id !== metricId);
-    setMetricIds(next.length === availableMetrics.length ? ['all_core'] : next);
+    setMetricIds(next);
     setMetricDisplayModes(prev => {
       const copy = { ...prev };
       delete copy[metricId];
       return copy;
     });
+    setAccentedMetricIds(prev => prev.filter(id => id !== metricId));
+    setBarMetricIds(prev => prev.filter(id => id !== metricId));
+    setHeatmapMetricIds(prev => prev.filter(id => id !== metricId));
   }
 
   function handleMetricMoveLeft(metricId: string) {
@@ -334,34 +387,42 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         comparison={comparison}
         departmentIds={departmentIds}
         search={search}
+        grouping={sourceMode ? undefined : grouping}
         onPeriodChange={handlePeriodChange}
         onComparisonChange={setComparison}
         onDepartmentIdsChange={setDepartmentIds}
         onSearchChange={setSearch}
+        onGroupingChange={sourceMode ? undefined : setGrouping}
+        showDepartments={!sourceMode}
+        sourceDimension={sourceMode ? sourceDimension : undefined}
+        onSourceDimensionChange={sourceMode ? setSourceDimension : undefined}
+        onOpenMetricPanel={() => setShowMetricPanel(true)}
+        metricsBadge={metricIds.includes('all_core') ? Object.keys(highlights).length : metricIds.length}
       />
 
       <ReportToolbar
         dealScope={dealScope}
-        grouping={grouping}
         comparisonDisplay={comparisonDisplay}
         hasMixedDisplay={hasMixedDisplay}
-        metricIds={metricIds}
-        availableMetrics={availableMetrics}
-        highlights={highlights}
         onDealScopeChange={setDealScope}
         clientType={clientType}
         onClientTypeChange={setClientType}
-        onGroupingChange={setGrouping}
         onComparisonDisplayChange={v => { setComparisonDisplay(v); setMetricDisplayModes({}); }}
-        onMetricIdsChange={(ids) => { setMetricIds(ids); setFetchedMetricIds(ids); }}
         onRefresh={() => refetch()}
-        isLoading={isLoading}
+        isLoading={isFetching}
         viewPrefs={viewPrefs}
         onViewPrefsChange={updateViewPrefs}
+        themeAccent={themeAccent}
+        onThemeAccentChange={setThemeAccent}
+        numberAlign={numberAlign}
+        onNumberAlignChange={setNumberAlign}
+        accountType={accountType}
+        onAccountTypeChange={reportSlug === 'by-managers' ? setAccountType : undefined}
+        drilldownGrouped={drilldownGrouped}
+        onDrilldownGroupedChange={setDrilldownGrouped}
         showProductGroupPicker={true}
         productGroupMode={productGroupMode}
         onProductGroupModeChange={setProductGroupMode}
-        onOpenMetricPanel={() => setShowMetricPanel(true)}
         onSaveReport={() => setShowSaveModal(true)}
       />
 
@@ -381,7 +442,9 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             isLoading={isLoading}
             grouping={grouping}
             highlights={effectiveHighlights}
-            dimensionLabel={reportSlug === 'by-product-groups' ? 'Товарная группа' : 'Менеджер'}
+            dimensionLabel={sourceMode
+              ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
+              : reportSlug === 'by-product-groups' ? 'Товарная группа' : 'Менеджер'}
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
             onMetricDisplayModeChange={handleMetricDisplayModeChange}
@@ -391,6 +454,11 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onMetricConfigure={(id) => setConfiguringMetricId(id)}
             metricDecimalOverrides={metricDecimalOverrides}
             metricThresholdOverrides={metricThresholdOverrides}
+            accentedMetricIds={accentedMetricIds}
+            barMetricIds={barMetricIds}
+            heatmapMetricIds={heatmapMetricIds}
+            themeAccent={themeAccent}
+            numberAlign={numberAlign}
             pinnedMetricIds={pinnedMetricIds}
             onMetricPinToggle={(id) => setPinnedMetricIds(prev =>
               prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
@@ -407,11 +475,48 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
 
       {drilldown && (
         <DrilldownDrawer
+          key={`${drilldown.id}:${drilldown.metricId ?? ''}`}
           target={drilldown}
           dimensionType={dimensionType}
           period={period}
           dealScope={dealScope}
+          clientType={clientType}
           productGroupMode={productGroupMode}
+          metricIds={drilldownDuplicate || drilldownMetricIds.length === 0 ? metricIds : drilldownMetricIds}
+          departmentIds={departmentIds}
+          dealFields={dealFields}
+          sortBy={sortBy}
+          sortDir={sortDir}
+          grouped={drilldownGrouped}
+          onGroupedChange={setDrilldownGrouped}
+          sourceDimension={sourceMode ? sourceDimension : undefined}
+          drilldownDimension={sourceMode ? drilldownDimension : undefined}
+          onDrilldownDimensionChange={sourceMode ? setDrilldownDimension : undefined}
+          toolbarExtras={
+            <>
+              <FiltersMenu
+                dealScope={dealScope}
+                onDealScopeChange={setDealScope}
+                clientType={clientType}
+                onClientTypeChange={setClientType}
+                productGroupMode={productGroupMode}
+                onProductGroupModeChange={setProductGroupMode}
+                showProductGroupPicker={true}
+              />
+              <ViewSettings
+                prefs={viewPrefs}
+                onChange={updateViewPrefs}
+                themeAccent={themeAccent}
+                onThemeAccentChange={setThemeAccent}
+                numberAlign={numberAlign}
+                onNumberAlignChange={setNumberAlign}
+                accountType={accountType}
+                onAccountTypeChange={reportSlug === 'by-managers' ? setAccountType : undefined}
+                drilldownGrouped={drilldownGrouped}
+                onDrilldownGroupedChange={setDrilldownGrouped}
+              />
+            </>
+          }
           onClose={() => setDrilldown(null)}
         />
       )}
@@ -422,7 +527,15 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           selectedIds={selectedMetricIds}
           highlights={highlights}
           onSelectedIdsChange={ids => {
-            setMetricIds(ids.length === availableMetrics.length ? ['all_core'] : ids);
+            // Никогда не схлопываем в all_core: эвристика «столько же, сколько пришло с
+            // сервера» ложно срабатывала (удалил 1 → добавил 1 → весь выбор заменялся core).
+            setMetricIds(ids);
+            // Добавления расширяют fetch-набор (рефетч подтянет external/план-метрики);
+            // удаления не рефетчат.
+            setFetchedMetricIds(prev => {
+              const add = ids.filter(id => !prev.includes(id));
+              return add.length ? [...prev, ...add] : prev;
+            });
           }}
           onHighlightsChange={setHighlights}
           onGlobalHighlight={handleGlobalHighlight}
@@ -430,6 +543,12 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           onMetricConfigure={(id) => setConfiguringMetricId(id)}
           columnGroups={columnGroups}
           onColumnGroupsChange={setColumnGroups}
+          drilldownDuplicate={drilldownDuplicate}
+          onDrilldownDuplicateChange={setDrilldownDuplicate}
+          drilldownMetricIds={drilldownMetricIds}
+          onDrilldownMetricIdsChange={setDrilldownMetricIds}
+          dealFields={dealFields}
+          onDealFieldsChange={setDealFields}
         />
       )}
 
@@ -438,6 +557,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           ?? availableMetrics.find((x: { id: string }) => x.id === configuringMetricId);
         return (
           <HighlightEditor
+            key={configuringMetricId}
+            anchorLeft={showMetricPanel ? 220 + getMetricPanelWidth() : undefined}
             metricName={m?.nameRu ?? configuringMetricId}
             dataType={m?.dataType}
             initial={effectiveHighlights[configuringMetricId] ?? null}
@@ -447,6 +568,18 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onDisplayModeChange={(mode) => handleMetricDisplayModeChange(configuringMetricId, mode)}
             isPinned={pinnedMetricIds.includes(configuringMetricId)}
             onPinToggle={() => setPinnedMetricIds(prev =>
+              prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
+            )}
+            isAccented={accentedMetricIds.includes(configuringMetricId)}
+            onAccentToggle={() => setAccentedMetricIds(prev =>
+              prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
+            )}
+            isBar={barMetricIds.includes(configuringMetricId)}
+            onBarToggle={() => setBarMetricIds(prev =>
+              prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
+            )}
+            isHeatmap={heatmapMetricIds.includes(configuringMetricId)}
+            onHeatmapToggle={() => setHeatmapMetricIds(prev =>
               prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
             )}
             decimalPlaces={metricDecimalOverrides[configuringMetricId] ?? m?.decimalPlaces ?? 2}
@@ -473,6 +606,18 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           pinnedMetricIds={pinnedMetricIds}
           metricDecimalOverrides={metricDecimalOverrides}
           metricThresholdOverrides={metricThresholdOverrides}
+          accentedMetricIds={accentedMetricIds}
+          barMetricIds={barMetricIds}
+          heatmapMetricIds={heatmapMetricIds}
+          themeAccent={themeAccent}
+          numberAlign={numberAlign}
+          accountType={accountType}
+          drilldownDuplicate={drilldownDuplicate}
+          drilldownMetricIds={drilldownMetricIds}
+          dealFields={dealFields}
+          drilldownGrouped={drilldownGrouped}
+          sourceDimension={sourceMode ? sourceDimension : undefined}
+          drilldownDimension={sourceMode ? drilldownDimension : undefined}
           sortBy={sortBy}
           sortDir={sortDir}
           columnGroups={columnGroups}

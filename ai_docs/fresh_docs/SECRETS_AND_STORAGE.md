@@ -33,14 +33,20 @@ ssh -i ~/.ssh/ssh-key-1777295854643 junior@62.113.100.67
 - Подключение прямое (туннель не нужен).
 
 ### БД Миши (сделки, схема `sa`) → `analyticsDb()`
-- На сервере — через env `SA_PG_HOST/PORT/USER/PASSWORD` (в серверном `.env.local`).
-- Локально — через SSH-туннель к серверу, затем подключение на localhost. Пример:
-  ```bash
-  ssh -i ~/.ssh/ssh-key-1777295854643 -L 5433:<SA_PG_HOST>:5432 -N junior@62.113.100.67
-  psql -h localhost -p 5433 -U <SA_PG_USER> -d postgres
-  SET search_path TO sa;
+- Это self-hosted **Supabase** на `62.113.100.67`, доступ через пулер **Supavisor**
+  напрямую (туннель НЕ нужен). Локальный `.env.local`:
   ```
-- **Без SA-туннеля/env локальный `next dev` не покажет сделки** — фолбэк уходит на YC analytics. Реальное тестирование — на сервере (`bash deploy.sh`).
+  SA_PG_HOST=62.113.100.67
+  SA_PG_PORT=5432                       # 5432 = session pooler, 6543 = transaction
+  SA_PG_USER=junior_user.your-tenant-id # СУФФИКС ТЕНАНТА ОБЯЗАТЕЛЕН
+  SA_PG_PASSWORD=<read-only, см. ниже>
+  ```
+- ⚠️ **`your-tenant-id` — НЕ плейсхолдер**, а дефолтный `POOLER_TENANT_ID` Supabase
+  (не меняли). Без суффикса Supavisor отвечает `Tenant or user not found`.
+- Юзер `junior_user` — READ-ONLY (public, bot, jivo, sa, sd, ut, va). db `postgres`, ssl off.
+- **На сервере `SA_PG_*` НЕ заданы** → прод `analyticsDb()` фолбэчит на YC `analytics`.
+  То есть локально сделки из Supabase, на проде — из YC analytics (разные источники).
+- Пароль read-only юзера — в `mishas.txt` (передан владельцем) / в локальном `.env.local`.
 
 ### Где взять реальные значения
 ```bash
@@ -68,6 +74,13 @@ YC_PG_SSL_CA_PATH=./certs/yandex-ca.pem
 YC_ANALYTICS_DB=analytics
 YC_SYSTEM_DB=system
 PORT=3004
+```
+⚠️ **Экранирование `$` в `YC_PG_PASSWORD`:** `@next/env` гонит значения через `dotenv-expand`,
+и `$` трактуется как подстановка переменной → пароль приходит битым. Каждый `$` писать как `\$`.
+Источник правды по паролю — Yandex Lockbox (секрет `connection-a59g5sotla4kmcv1mhbj`,
+ключ `postgresql_password`, длина 36). Проверка после правки:
+```bash
+node -e 'require("@next/env").loadEnvConfig(process.cwd()); console.log(JSON.stringify(process.env.YC_PG_PASSWORD))'
 # Для локального доступа к сделкам Миши добавить (опционально, через туннель):
 # SA_PG_HOST=127.0.0.1
 # SA_PG_PORT=5433

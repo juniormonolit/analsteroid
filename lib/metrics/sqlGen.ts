@@ -9,7 +9,7 @@ export interface DimensionConfig {
   funnelBreakdown?: boolean; // Add d.funnel_id to SELECT for pill filtering
 }
 
-function resolveFilterClause(f: MetricFilter, tableAlias: string): string {
+export function resolveFilterClause(f: MetricFilter, tableAlias: string): string {
   const a = tableAlias;
   if (f.field === '_ppp') {
     return `d.deal_id IN (
@@ -40,6 +40,13 @@ function resolveFilterClause(f: MetricFilter, tableAlias: string): string {
   }
   if (f.field === 'stage_type') {
     return `${a}.stage_id IN (SELECT id FROM stages WHERE event_type = '${f.value}')`;
+  }
+  // gt_field: column-vs-column comparison, value = other column name (e.g. lost_at > sold_at).
+  // Implies both NOT NULL (SQL comparison with NULL is never true).
+  if (f.op === 'gt_field') {
+    const other = String(f.value);
+    if (!/^[a-z_][a-z0-9_]*$/i.test(other) || !/^[a-z_][a-z0-9_]*$/i.test(f.field)) return '';
+    return `${a}.${f.field} > ${a}.${other}`;
   }
   // is_null / is_not_null: special handling for product_rows (also check empty jsonb array)
   if (f.op === 'is_null') {

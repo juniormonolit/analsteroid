@@ -1,4 +1,4 @@
-import { analyticsDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import type { DateRange } from '@/lib/period';
@@ -26,8 +26,8 @@ type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: numb
 const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
 const ROW_TTL = 10 * 60 * 1000; // 10 min
 
-function mkKey(from: string, toExcl: string, metricIds: string[], mode: string): string {
-  return `${from}|${toExcl}|${mode}|${[...metricIds].sort().join(',')}`;
+function mkKey(from: string, toExcl: string, metricIds: string[], mode: string, managerId?: string, deptKey?: string): string {
+  return `${from}|${toExcl}|${mode}|${managerId ?? 'all'}|${deptKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
 }
 
 // ── Pill filter + aggregation ─────────────────────────────────────────────
@@ -79,22 +79,51 @@ export interface ByProductGroupsOptions {
   dealScope?: DealScope;
   clientType?: ClientType;
   productGroupMode?: ProductGroupMode;
+  managerId?: string;      // drilldown: restrict to one manager's deals
+  departmentIds?: string[]; // filter to deals by managers in selected departments
 }
 
 export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promise<ReportRow[]> {
   const dealScope  = opts.dealScope  ?? 'all';
   const clientType = opts.clientType ?? 'all';
   const mode       = opts.productGroupMode ?? 'kc';
+  const deptIds    = opts.departmentIds ?? [];
+  // managerId / deptIds come from the request — validate numeric IDs before inlining into SQL.
+  const managerId  = opts.managerId && /^\d+$/.test(opts.managerId) ? opts.managerId : undefined;
 
   const fromIso   = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
+
+  // Resolve department filter → allowed manager IDs (then inline into SQL)
+  let deptManagerWhere: string | undefined;
+  const deptKey = deptIds.length ? [...deptIds].sort().join(',') : undefined;
+  if (deptIds.length > 0) {
+    const res = await systemDb().query<{ bitrix_user_id: string }>(
+      `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
+         FROM org_resolved_hierarchy orh
+        WHERE orh.department_id IN (
+          SELECT id FROM departments WHERE bitrix_department_id::text = ANY($1)
+        )
+          AND orh.is_active = true`,
+      [deptIds],
+    );
+    const ids = res.rows.map(r => r.bitrix_user_id).filter(id => /^\d+$/.test(id));
+    // If dept has no managers, return nothing rather than ignoring the filter
+    deptManagerWhere = ids.length > 0 ? `d.current_manager_id IN (${ids.join(',')})` : '1=0';
+  }
+
+  // Combine WHERE conditions (managerId for drilldown, deptManagerWhere for dept filter)
+  const whereParts: string[] = [];
+  if (managerId) whereParts.push(`d.current_manager_id = ${managerId}`);
+  if (deptManagerWhere) whereParts.push(deptManagerWhere);
+  const notNullWhere = whereParts.length > 0 ? whereParts.join(' AND ') : undefined;
 
   const allMetrics = await loadMetrics();
   const collected  = allMetrics.filter(m => m.metricType === 'collected' && !m.isTest);
   const metricIds  = collected.map(m => m.id);
 
-  // Analytics row cache (pills NOT in key; mode IS in key — it changes the dimension)
-  const key   = mkKey(fromIso, toExclIso, metricIds, mode);
+  // Analytics row cache (pills NOT in key; mode + managerId + deptKey ARE — they change the scope)
+  const key   = mkKey(fromIso, toExclIso, metricIds, mode, managerId, deptKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
@@ -103,6 +132,7 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
           idExpr:          `COALESCE(d.head_group_name, 'Без группы')`,
           nameExpr:        `COALESCE(d.head_group_name, 'Без группы')`,
           groupBy:         'GROUP BY d.head_group_name, d.funnel_id',
+          notNullWhere,
           funnelBreakdown: true as const,
         }
       : {
@@ -110,6 +140,7 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
           nameExpr:        `COALESCE(pg.name, 'Без группы')`,
           extraJoins:      'LEFT JOIN product_groups pg ON pg.id = d.product_group_id',
           groupBy:         'GROUP BY d.product_group_id, pg.name, d.funnel_id',
+          notNullWhere,
           funnelBreakdown: true as const,
         };
 

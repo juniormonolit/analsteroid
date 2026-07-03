@@ -25,7 +25,11 @@ export async function PUT(
        comparison_mode = $16, fixed_period = $17, fixed_comparison = $18,
        pinned_metric_ids = $19, metric_decimal_overrides = $20,
        metric_threshold_overrides = $21, sort_by = $22, sort_dir = $23,
-       column_groups = $24
+       column_groups = $24, accented_metric_ids = $25, bar_metric_ids = $26,
+       heatmap_metric_ids = $27, theme_accent = $28, number_align = $29, account_type = $30,
+       drilldown_duplicate_metrics = $31, drilldown_metric_ids = $32, deal_fields = $33,
+       drilldown_grouped = $34, source_dimension = $35, drilldown_dimension = $36,
+       is_shared = $37
      WHERE id = $1 AND user_login = $2`,
     [
       id, session.login,
@@ -45,6 +49,19 @@ export async function PUT(
       body.sortBy ?? null,
       body.sortDir ?? null,
       JSON.stringify(body.columnGroups ?? []),
+      body.accentedMetricIds ?? [],
+      body.barMetricIds ?? [],
+      body.heatmapMetricIds ?? [],
+      body.themeAccent ?? null,
+      body.numberAlign ?? null,
+      body.accountType ?? null,
+      body.drilldownDuplicateMetrics ?? null,
+      body.drilldownMetricIds ?? [],
+      body.dealFields ?? null,
+      body.drilldownGrouped ?? null,
+      body.sourceDimension ?? null,
+      body.drilldownDimension ?? null,
+      session.isAdmin ? (body.isShared ?? false) : false,
     ]
   );
   return NextResponse.json({ ok: true });

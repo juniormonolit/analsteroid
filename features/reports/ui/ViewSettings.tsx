@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Type } from 'lucide-react';
+import type { ComparisonDisplay, AccountType } from '@/lib/metrics/types';
 
 export type Density = 'compact' | 'normal' | 'relaxed';
 export interface ViewPrefs { density: Density; fontScale: number }
@@ -27,7 +28,64 @@ const DENSITY_LABELS: Record<Density, string> = {
   relaxed: 'Просторно',
 };
 
-export function ViewSettings({ prefs, onChange }: { prefs: ViewPrefs; onChange: (p: ViewPrefs) => void }) {
+// Report-wide accent palettes. First (null) = app default blue.
+export const THEME_PALETTES: { label: string; value: string | null }[] = [
+  { label: 'Синяя',      value: null },
+  { label: 'Бирюзовая',  value: '#0ca678' },
+  { label: 'Зелёная',    value: '#2f9e44' },
+  { label: 'Фиолетовая', value: '#7048e8' },
+  { label: 'Оранжевая',  value: '#e8590c' },
+  { label: 'Розовая',    value: '#e64980' },
+];
+const DEFAULT_ACCENT = '#228be6';
+
+export type NumberAlign = 'left' | 'center' | 'right';
+const ALIGN_LABELS: Record<NumberAlign, string> = { left: 'Лево', center: 'Центр', right: 'Право' };
+
+function Seg<T extends string>({ options, value, onChange, labels }: {
+  options: T[]; value: T | undefined; onChange: (v: T) => void; labels: Record<T, string>;
+}) {
+  return (
+    <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-[11px]">
+      {options.map(o => (
+        <button
+          key={o}
+          onClick={() => onChange(o)}
+          className={`flex-1 px-2 py-1.5 transition-colors whitespace-nowrap ${value === o ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+        >
+          {labels[o]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">{children}</div>;
+}
+
+interface ViewSettingsProps {
+  prefs: ViewPrefs;
+  onChange: (p: ViewPrefs) => void;
+  themeAccent?: string | null;
+  onThemeAccentChange?: (c: string | null) => void;
+  numberAlign?: NumberAlign;
+  onNumberAlignChange?: (a: NumberAlign) => void;
+  comparisonDisplay?: ComparisonDisplay;
+  hasMixedDisplay?: boolean;
+  onComparisonDisplayChange?: (v: ComparisonDisplay) => void;
+  accountType?: AccountType;
+  onAccountTypeChange?: (a: AccountType) => void;
+  drilldownGrouped?: boolean;
+  onDrilldownGroupedChange?: (v: boolean) => void;
+}
+
+export function ViewSettings({
+  prefs, onChange, themeAccent, onThemeAccentChange, numberAlign, onNumberAlignChange,
+  comparisonDisplay, hasMixedDisplay, onComparisonDisplayChange,
+  accountType, onAccountTypeChange,
+  drilldownGrouped, onDrilldownGroupedChange,
+}: ViewSettingsProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -47,7 +105,7 @@ export function ViewSettings({ prefs, onChange }: { prefs: ViewPrefs; onChange: 
   function toggle() {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, left: Math.max(8, r.right - 240) });
+      setPos({ top: r.bottom + 4, left: Math.max(8, r.right - 260) });
     }
     setOpen(v => !v);
   }
@@ -68,9 +126,35 @@ export function ViewSettings({ prefs, onChange }: { prefs: ViewPrefs; onChange: 
       {open && pos && createPortal(
         <div
           ref={popRef}
-          style={{ position: 'fixed', top: pos.top, left: pos.left, width: 240 }}
+          style={{ position: 'fixed', top: pos.top, left: pos.left, width: 260, maxHeight: 'calc(100vh - 80px)', overflowY: 'auto' }}
           className="z-[1000] bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg p-3 flex flex-col gap-3"
         >
+          {onAccountTypeChange && (
+            <div>
+              <SectionLabel>Тип аккаунтов</SectionLabel>
+              <Seg
+                options={['managers', 'logists', 'all'] as AccountType[]}
+                value={accountType ?? 'managers'}
+                onChange={onAccountTypeChange}
+                labels={{ managers: 'Менеджеры', logists: 'Логисты', all: 'Все' }}
+              />
+            </div>
+          )}
+
+          {onComparisonDisplayChange && (
+            <div>
+              <SectionLabel>
+                Режим колонок{hasMixedDisplay && <span className="ml-1 normal-case font-normal text-[10px] tracking-normal">· смешанный</span>}
+              </SectionLabel>
+              <Seg
+                options={['full', 'current', 'compact'] as ComparisonDisplay[]}
+                value={hasMixedDisplay ? undefined : comparisonDisplay}
+                onChange={onComparisonDisplayChange}
+                labels={{ full: 'Сравнение', current: 'Текущий', compact: 'Компактн.' }}
+              />
+            </div>
+          )}
+
           <div>
             <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Плотность строк</div>
             <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
@@ -108,6 +192,64 @@ export function ViewSettings({ prefs, onChange }: { prefs: ViewPrefs; onChange: 
               >A+</button>
             </div>
           </div>
+
+          {onNumberAlignChange && (
+            <div>
+              <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Выравнивание чисел</div>
+              <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
+                {(['left', 'center', 'right'] as NumberAlign[]).map(a => (
+                  <button
+                    key={a}
+                    onClick={() => onNumberAlignChange(a)}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(numberAlign ?? 'center') === a ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                  >
+                    {ALIGN_LABELS[a]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {onDrilldownGroupedChange && (
+            <div>
+              <SectionLabel>Группировка в drilldown</SectionLabel>
+              <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
+                {([true, false] as const).map(v => (
+                  <button
+                    key={String(v)}
+                    onClick={() => onDrilldownGroupedChange(v)}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(drilldownGrouped ?? true) === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                  >
+                    {v ? 'Да' : 'Нет'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {onThemeAccentChange && (
+            <div>
+              <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Цветовая тема отчёта</div>
+              <div className="flex gap-1.5 flex-wrap">
+                {THEME_PALETTES.map(p => {
+                  const selected = (themeAccent ?? null) === p.value;
+                  return (
+                    <button
+                      key={p.label}
+                      title={p.label}
+                      onClick={() => onThemeAccentChange(p.value)}
+                      className="w-6 h-6 rounded-full transition-transform hover:scale-110"
+                      style={{
+                        backgroundColor: p.value ?? DEFAULT_ACCENT,
+                        outline: selected ? '2px solid var(--color-text)' : '2px solid transparent',
+                        outlineOffset: 2,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <button
             onClick={() => onChange(DEFAULT_VIEW_PREFS)}

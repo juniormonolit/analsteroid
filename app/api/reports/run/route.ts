@@ -3,10 +3,11 @@ import { getSession } from '@/lib/auth/session';
 import { loadMetrics, resolveMetricIds, withDependencies } from '@/lib/metrics/catalog';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
+import { fetchBySources } from '@/features/reports/engine/bySources';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
-import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode } from '@/lib/metrics/types';
+import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType } from '@/lib/metrics/types';
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -23,6 +24,11 @@ export async function POST(req: NextRequest) {
     grouping = 'none' as Grouping,
     departmentIds,
     productGroupMode = 'kc' as ProductGroupMode,
+    accountType = 'managers' as AccountType,
+    managerId,       // drilldown: restrict by-product-groups to one manager
+    productGroupId,  // drilldown: restrict by-managers to one product group
+    sourceDimension, // by-sources: main dimension (brand/platform/contact_type/ad_channel/branch/source)
+    sourceFilter,    // drilldown: { dimension, value } — restrict deals to one dimension value
   } = body;
 
   const start = Date.now();
@@ -37,12 +43,14 @@ export async function POST(req: NextRequest) {
     dealScope,
     clientType,
     departmentIds,
+    accountType,
   };
   const compOpts = {
     period: { from: new Date(comparisonPeriod.from), to: new Date(comparisonPeriod.to) },
     dealScope,
     clientType,
     departmentIds,
+    accountType,
   };
 
   let currentRows: ReportRow[] = [];
@@ -50,13 +58,18 @@ export async function POST(req: NextRequest) {
 
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
-      fetchByManagers({ ...opts, productGroupMode }),
-      fetchByManagers({ ...compOpts, productGroupMode }),
+      fetchByManagers({ ...opts, productGroupMode, productGroupId, sourceFilter }),
+      fetchByManagers({ ...compOpts, productGroupMode, productGroupId, sourceFilter }),
     ]);
   } else if (reportSlug === 'by-product-groups') {
     [currentRows, compRows] = await Promise.all([
-      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode }),
-      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode }),
+      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, managerId, departmentIds }),
+      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, managerId, departmentIds }),
+    ]);
+  } else if (reportSlug === 'by-sources') {
+    [currentRows, compRows] = await Promise.all([
+      fetchBySources({ period: opts.period, dealScope, clientType, sourceDimension, sourceFilter }),
+      fetchBySources({ period: compOpts.period, dealScope, clientType, sourceDimension, sourceFilter }),
     ]);
   }
 

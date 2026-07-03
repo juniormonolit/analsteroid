@@ -31,7 +31,9 @@
 | **`systemDb()`** | Оргструктура, отделы, сотрудники, **сохранённые отчёты**, планы менеджеров, рабочий календарь, сессии | Yandex Cloud PostgreSQL, БД `system` |
 | **`ycAnalyticsDb()`** | Каталог метрик (`metrics`), доп. аналитика | Yandex Cloud PostgreSQL, БД `analytics` |
 
-Реализация: `lib/db/clients.ts`. `analyticsDb()` использует SA-пул, если задан `SA_PG_USER`, иначе фолбэк на YC `analytics`. **Поэтому локально без SA-туннеля сделки не подтянутся — реальное тестирование идёт на сервере через `bash deploy.sh`.**
+Реализация: `lib/db/clients.ts`. `analyticsDb()` использует SA-пул, если задан `SA_PG_USER`, иначе фолбэк на YC `analytics`.
+
+**Доступ к Мишиной БД (обновлено 2026-06-28):** это self-hosted **Supabase** на `62.113.100.67`, ходим через пулер **Supavisor** напрямую (порт 5432, ssl off) — туннель НЕ нужен. Критично: юзер пулера обязан нести суффикс тенанта `junior_user.your-tenant-id` (`your-tenant-id` — реальный дефолтный `POOLER_TENANT_ID`, не плейсхолдер). Креды — в `SECRETS_AND_STORAGE.md`. **Нюанс:** на сервере `SA_PG_*` НЕ заданы, поэтому прод читает сделки из YC `analytics`, а локально — из Supabase (разные источники). Поллеры рвут idle-коннекты — в `clients.ts` на пулах висит `pool.on('error')`.
 
 Полная схема таблиц `sa.*` и `system` — в `../../COWORK_DB_GUIDE.md` (deals, deal_events, funnels, stages, product_groups, org_resolved_hierarchy, departments, employees).
 
@@ -101,9 +103,9 @@ certs/yandex-ca.pem       — CA-сертификат YC (в .gitignore чере
 
 ### Известные незакрытые баги / TODO
 - **Sub-pixel «щель» под sticky-шапкой** при дробном вертикальном скролле — данные мелькают. Пробовали box-shadow и `top:-1px` — не помогло, **отложено** (пользователь сказал «потом поправим»).
-- Roadmap Этап 2 (продолжение): **акцент метрики** (жирный + фон колонки, в конфиге отчёта) — НЕ сделано.
-- Roadmap Этап 3: in-cell бары, тепловая карта по колонке, готовые цветовые темы.
-- Roadmap Этап 4: выравнивание чисел опцией, hover-подсветка всей строки.
+- ✅ Roadmap Этап 2 (продолжение): **акцент метрики** (жирный + фон колонки, в конфиге отчёта) — СДЕЛАНО 2026-06-28 (`accentedMetricIds`, миграция 025). См. `WORKLOG.md`.
+- ✅ Roadmap Этап 3: in-cell бары, тепловая карта по колонке, цветовые темы — СДЕЛАНО 2026-06-28 (миграции 026/027/028). См. `WORKLOG.md`.
+- ✅ Roadmap Этап 4: выравнивание чисел опцией, hover-подсветка всей строки — СДЕЛАНО 2026-06-28 (миграция 029). См. `WORKLOG.md`.
 
 ---
 
@@ -117,7 +119,7 @@ certs/yandex-ca.pem       — CA-сертификат YC (в .gitignore чере
     "cd /home/junior/analsteroid && node migrations/run_system.mjs migrations/NNN.sql"
   # run_analytics.mjs — для YC analytics (каталог metrics); run_system.mjs — для YC system
   ```
-- Последняя миграция: `024_saved_reports_column_groups.sql`.
+- Последняя миграция: `031_saved_reports_drilldown.sql` (`drilldown_duplicate_metrics`, `drilldown_metric_ids`, `deal_fields` — конфиг дрилл-дауна). Также 026–030.
 - Раннеры на сервере читают пароль из `/home/junior/anal_v2/.pg_password` (путь на СЕРВЕРЕ; это не локальная директория anal_v2).
 
 ---

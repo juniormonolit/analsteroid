@@ -1,4 +1,4 @@
-import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay } from '@/lib/metrics/types';
+import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay, AccountType } from '@/lib/metrics/types';
 
 export type PeriodAnchor = 'current' | 'previous';
 export type PeriodUnit = 'day' | 'week' | 'month' | 'quarter' | 'year';
@@ -44,6 +44,32 @@ export interface SavedReport {
   metricDecimalOverrides?: Record<string, number>;
   // Per-metric comparison threshold overrides
   metricThresholdOverrides?: Record<string, number>;
+  // Metrics rendered with accent (bold + tinted column background)
+  accentedMetricIds?: string[];
+  // Metrics rendered with an in-cell horizontal bar (proportional to column max)
+  barMetricIds?: string[];
+  // Metrics rendered with a per-column heat map (cell bg gradient min→max)
+  heatmapMetricIds?: string[];
+  // Report-wide accent color (hex). Drives accent/bars/heatmap. null/undefined = app default.
+  themeAccent?: string | null;
+  // Report-wide horizontal alignment of numeric cells. undefined = 'center' (default).
+  numberAlign?: 'left' | 'center' | 'right';
+  // Account-type filter for the manager list (by bitrix_login prefix). undefined = 'managers'.
+  accountType?: AccountType;
+  // Drilldown: reuse the main report's metrics for the per-product-group view. undefined = true.
+  drilldownDuplicateMetrics?: boolean;
+  // Drilldown: independent metric set when not duplicating the main report.
+  drilldownMetricIds?: string[];
+  // Drilldown: which deal fields show as columns in the expanded deal list. undefined = all.
+  dealFields?: string[];
+  // Drilldown: group deals by product group / manager (true, default) or flat list (false).
+  drilldownGrouped?: boolean;
+  // Marketing (by-sources): main dimension of the report. undefined = 'brand'.
+  sourceDimension?: string;
+  // Marketing: dimension used in the drilldown mini-report. undefined = 'contact_type'.
+  drilldownDimension?: string;
+  // «Смекалочная»: общий отчёт — виден всем, пересохранять может только админ.
+  isShared?: boolean;
   // Sorting state
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';

@@ -174,6 +174,11 @@ interface Props {
   onMetricPinToggle?: (metricId: string) => void;
   metricDecimalOverrides?: Record<string, number>;
   metricThresholdOverrides?: Record<string, number>;
+  accentedMetricIds?: string[];
+  barMetricIds?: string[];
+  heatmapMetricIds?: string[];
+  themeAccent?: string | null;
+  numberAlign?: 'left' | 'center' | 'right';
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
   onSortChange?: (sortBy: string | null, sortDir: 'asc' | 'desc') => void;
@@ -205,6 +210,11 @@ export function ReportTable({
   onMetricPinToggle,
   metricDecimalOverrides = {},
   metricThresholdOverrides = {},
+  accentedMetricIds = [],
+  barMetricIds = [],
+  heatmapMetricIds = [],
+  themeAccent = null,
+  numberAlign = 'center',
   sortBy: sortByProp,
   sortDir: sortDirProp,
   onSortChange,
@@ -250,6 +260,73 @@ export function ReportTable({
 
   function decFor(m: Metric): number {
     return metricDecimalOverrides[m.id] ?? m.decimalPlaces;
+  }
+
+  // Accent: bold + tinted (opaque, so it also reads correctly under sticky pins) column.
+  const accentSet = new Set(accentedMetricIds);
+  function accentStyle(metricId: string): React.CSSProperties {
+    // Opaque tint derived from --color-accent (mixed with white), so it recolors with the
+    // report theme AND stays opaque under sticky pinned columns.
+    return accentSet.has(metricId)
+      ? { backgroundColor: 'color-mix(in srgb, var(--color-accent) 14%, white)', fontWeight: 600 }
+      : {};
+  }
+
+  // Per-column stats over the visible LEAF data rows (group children when grouped, else the
+  // row itself). Used by in-cell bars (max |current|) and heat map (min/max of current).
+  const barSet = new Set(barMetricIds);
+  const heatSet = new Set(heatmapMetricIds);
+  const barMax: Record<string, number> = {};
+  const heatStats: Record<string, { min: number; max: number }> = {};
+  if (barSet.size > 0 || heatSet.size > 0) {
+    const leaves: RowDeltas[] = [];
+    for (const r of rows) {
+      if (r.isGroup && r.children?.length) leaves.push(...r.children);
+      else if (!r.isGroup) leaves.push(r);
+    }
+    for (const id of barSet) {
+      let max = 0;
+      for (const r of leaves) {
+        const v = r.deltas?.[id]?.current;
+        if (v != null && Math.abs(v) > max) max = Math.abs(v);
+      }
+      barMax[id] = max;
+    }
+    for (const id of heatSet) {
+      let min = Infinity, max = -Infinity;
+      for (const r of leaves) {
+        const v = r.deltas?.[id]?.current;
+        if (v != null) { if (v < min) min = v; if (v > max) max = v; }
+      }
+      heatStats[id] = { min, max };
+    }
+  }
+
+  // Heat map: cell bg intensity scales with the value's position between column min and max.
+  // Returns an inline backgroundColor (overrides accent's bg; bold from accent still applies).
+  function heatStyle(metricId: string, value: number | null): React.CSSProperties {
+    if (!heatSet.has(metricId) || value == null) return {};
+    const s = heatStats[metricId];
+    if (!s || !isFinite(s.min) || !isFinite(s.max)) return {};
+    const t = s.max > s.min ? (value - s.min) / (s.max - s.min) : 0;
+    const pct = Math.round(t * 45); // cap intensity so text stays readable
+    return { backgroundColor: `color-mix(in srgb, var(--color-accent) ${pct}%, transparent)` };
+  }
+
+  // Absolute bar painted behind the value. Value content must be wrapped in a positioned
+  // element so it stacks above the bar (both z auto → later DOM node wins).
+  function BarBg({ metricId, value }: { metricId: string; value: number | null }) {
+    if (!barSet.has(metricId) || value == null) return null;
+    const max = barMax[metricId] ?? 0;
+    if (max <= 0) return null;
+    const pct = Math.min(100, (Math.abs(value) / max) * 100);
+    return (
+      <span
+        className="absolute left-0 top-1 bottom-1 rounded-sm bg-[var(--color-accent)]/15 pointer-events-none"
+        style={{ width: `${pct}%` }}
+        aria-hidden
+      />
+    );
   }
 
   function resolveMode(metricId: string): ComparisonDisplay {
@@ -343,6 +420,7 @@ export function ReportTable({
   }
 
   function renderMetricCells(row: RowDeltas, clickable: boolean, stickyBg: string) {
+    const alignStyle: React.CSSProperties = { textAlign: numberAlign };
     return displayMetrics.map(m => {
       const d = row.deltas?.[m.id];
       const mode = resolveMode(m.id);
@@ -356,6 +434,8 @@ export function ReportTable({
             : 'cursor-pointer hover:bg-[var(--color-accent)]/10 hover:text-[var(--color-accent)] transition-colors')
         : '';
       const hlColor = resolveHighlightColor(d?.current ?? null, highlights[m.id]);
+      const accent = accentStyle(m.id);
+      const heat = heatStyle(m.id, d?.current ?? null);
       const sizeStyle = { minWidth: METRIC_COL_WIDTH };
 
       // Absolute right-edge separator bar for the last pinned column (border-collapse hides
@@ -370,7 +450,7 @@ export function ReportTable({
       function leafProps(subIdx: number, withShadow: boolean): { className: string; style: React.CSSProperties } {
         // Strong shadow only on the right edge of the LAST pinned column — clean separation.
         const edge = withShadow && m.id === lastPinnedId;
-        const pinnedCls = applyPin ? `sticky z-20 ${stickyBg} ${edge ? 'border-r-2 border-r-[var(--color-border-strong)]' : ''}` : '';
+        const pinnedCls = applyPin ? `sticky z-20 ${stickyBg} ${edge ? 'border-r border-r-[var(--color-border)]' : ''}` : '';
         const style: React.CSSProperties = applyPin
           ? { ...sizeStyle, left: leafLeft(m.id, subIdx) }
           : { ...sizeStyle };
@@ -382,8 +462,8 @@ export function ReportTable({
         if (!hlColor) return <>{formatted}</>;
         return (
           <span
-            className="inline-block px-1.5 py-0.5 rounded-md text-[var(--color-text)]"
-            style={{ backgroundColor: hlColor }}
+            className="inline-block px-1.5 py-0.5 rounded text-[var(--color-text)]"
+            style={{ backgroundColor: `color-mix(in srgb, ${hlColor} 68%, white)` }}
           >
             {formatted}
           </span>
@@ -395,19 +475,20 @@ export function ReportTable({
         return (
           <React.Fragment key={m.id}>
             <td
-              className={`text-center px-2 py-[var(--row-py)] border-l border-[var(--color-border)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p0.className}`}
-              style={p0.style}
+              className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p0.className}`}
+              style={{ ...p0.style, ...accent, ...heat, ...alignStyle }}
               onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
             >
-              <HlValue value={d?.current ?? null} />
+              <BarBg metricId={m.id} value={d?.current ?? null} />
+              <span className="relative"><HlValue value={d?.current ?? null} /></span>
             </td>
-            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} text-[var(--color-text-muted)] ${p1.className}`} style={p1.style}>
+            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} text-[var(--color-text-muted)] ${p1.className}`} style={{ ...p1.style, ...accent, ...alignStyle }}>
               {formatValue(d?.comparison ?? null, m.dataType, decFor(m))}
             </td>
-            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p2.className}`} style={p2.style}>
+            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p2.className}`} style={{ ...p2.style, ...accent, ...alignStyle }}>
               {formatDelta(d?.delta ?? null, m.dataType, decFor(m))}
             </td>
-            <td className={`relative text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p3.className}`} style={p3.style}>
+            <td className={`relative text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p3.className}`} style={{ ...p3.style, ...accent, ...alignStyle }}>
               {formatDeltaPct(d?.deltaPct ?? null)}{pinBar}
             </td>
           </React.Fragment>
@@ -419,12 +500,13 @@ export function ReportTable({
         return (
           <td
             key={m.id}
-            className={`relative text-center px-2 py-[var(--row-py)] border-l border-[var(--color-border)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
-            style={p.style}
+            className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
+            style={{ ...p.style, ...accent, ...heat, ...alignStyle }}
             onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
           >
             {pinBar}
-            <span className="inline-flex items-center justify-center">
+            <BarBg metricId={m.id} value={d?.current ?? null} />
+            <span className="relative inline-flex items-center justify-center">
               <HlValue value={d?.current ?? null} />
               <span className="w-4 flex-shrink-0 flex items-center justify-center">
                 <TrendArrow
@@ -444,12 +526,13 @@ export function ReportTable({
       return (
         <td
           key={m.id}
-          className={`relative text-center px-2 py-[var(--row-py)] border-l border-[var(--color-border)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
-          style={p.style}
+          className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
+          style={{ ...p.style, ...accent, ...heat, ...alignStyle }}
           onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
         >
           {pinBar}
-          <HlValue value={d?.current ?? null} />
+          <BarBg metricId={m.id} value={d?.current ?? null} />
+          <span className="relative"><HlValue value={d?.current ?? null} /></span>
         </td>
       );
     });
@@ -466,13 +549,13 @@ export function ReportTable({
       ? 'bg-[var(--color-bg-surface)]'
       : isStripe
         ? 'bg-[var(--color-table-stripe)] group-hover:bg-[var(--color-table-row-hover)]'
-        : 'bg-[var(--color-bg)] group-hover:bg-[var(--color-table-row-hover)]';
+        : 'bg-[var(--color-bg-surface)] group-hover:bg-[var(--color-table-row-hover)]';
 
     const rowCls = [
       'group border-b border-[var(--color-border)]',
       isGroupRow
         ? 'bg-[var(--color-bg-surface)] font-semibold text-[var(--color-text)]'
-        : `hover:bg-[var(--color-table-row-hover)] ${isStripe ? 'bg-[var(--color-table-stripe)]' : ''}`,
+        : `report-row ${isStripe ? 'bg-[var(--color-table-stripe)]' : ''}`,
     ].join(' ');
 
     return (
@@ -546,14 +629,17 @@ export function ReportTable({
       prevKey = key;
     }
   }
-  const sepCls = 'border-l-2 border-l-[var(--color-border-strong)]';
+  const sepCls = 'border-l border-l-[var(--color-border)]';
 
   const rowPy = density === 'compact' ? '2px' : density === 'relaxed' ? '14px' : '8px';
 
   return (
-    <div className="overflow-auto h-full">
+    <div
+      className="overflow-auto h-full bg-[var(--color-bg-surface)]"
+      style={themeAccent ? ({ ['--color-accent' as string]: themeAccent } as React.CSSProperties) : undefined}
+    >
       <table className="w-full text-sm border-collapse" style={{ fontSize: `${14 * fontScale}px`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
-        <thead className="sticky top-0 z-30 bg-[var(--color-table-header)]">
+        <thead className="report-thead sticky top-0 z-30 bg-[var(--color-table-header)]">
           {hasGroups && (
             <tr>
               <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px]" />
@@ -574,7 +660,7 @@ export function ReportTable({
                 <th
                   key={i}
                   colSpan={seg.span}
-                  className={`text-center px-2 py-1.5 text-xs font-bold uppercase tracking-wider border-b border-[var(--color-border)] bg-[var(--color-table-header)] ${seg.name ? 'text-[var(--color-text)] border-l-2 border-r-2 border-[var(--color-border-strong)]' : 'text-transparent'}`}
+                  className={`text-center px-2 py-1.5 text-xs font-bold uppercase tracking-wider border-b border-[var(--color-border)] bg-[var(--color-table-header)] ${seg.name ? 'text-[var(--color-text)] border-l border-r border-[var(--color-border)]' : 'text-transparent'}`}
                 >
                   {seg.name ?? ' '}
                 </th>
@@ -602,8 +688,8 @@ export function ReportTable({
                   key={m.id}
                   ref={mainRef}
                   colSpan={colSpanFor(m.id)}
-                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group/th ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r-2 border-r-[var(--color-border-strong)]' : ''}`}
-                  style={thSize}
+                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group/th ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''}`}
+                  style={{ ...thSize, ...accentStyle(m.id) }}
                 >
                   {m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
                   {/* Menu pinned to the top-right corner, only on hover */}
@@ -650,10 +736,10 @@ export function ReportTable({
                 const s = { minWidth: METRIC_COL_WIDTH };
                 const sub = (i: number, base: string) => {
                   const cls = `bg-[var(--color-table-header)] ${isPinned ? 'sticky z-40' : ''} ${base}`;
-                  const style = isPinned ? { ...s, left: leafLeft(m.id, i) } : s;
+                  const style = { ...(isPinned ? { ...s, left: leafLeft(m.id, i) } : s), ...accentStyle(m.id) };
                   return { cls, style };
                 };
-                const firstBase = strongLeft.has(m.id) ? sepCls : 'border-l';
+                const firstBase = strongLeft.has(m.id) ? sepCls : '';
                 if (mode === 'full') {
                   const a = sub(0, firstBase), b = sub(1, ''), c = sub(2, ''), e = sub(3, '');
                   return (
@@ -675,19 +761,23 @@ export function ReportTable({
           {sorted.map((row, i) => renderRow(row, i))}
 
           {totals && grouping === 'none' && (
-            <tr className="border-t-2 border-[var(--color-border)] bg-[var(--color-table-header)] font-medium sticky bottom-0">
-              <td className="sticky left-0 z-30 bg-[var(--color-table-header)] px-4 py-2 border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px]">
+            <tr className="border-t-2 border-[var(--color-border)] bg-[var(--color-table-header)] font-medium">
+              <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-table-header)] px-4 py-2 border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px]">
                 Итого
               </td>
               {displayMetrics.map(m => {
                 const mode = resolveMode(m.id);
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
                 const sub = (i: number, base: string) => {
-                  const cls = isPinned ? `sticky z-20 bg-[var(--color-table-header)] ${base}` : base;
-                  const style = isPinned ? { left: leafLeft(m.id, i) } : undefined;
+                  // `position: sticky` on a <tr> does NOT work with border-collapse — each cell
+                  // must be sticky individually. Pin every totals cell to the bottom edge with an
+                  // OPAQUE bg so scrolling data rows don't bleed through. Pinned (left) cells also
+                  // carry their left offset and sit above the plain ones.
+                  const cls = `sticky bottom-0 ${isPinned ? 'z-30' : 'z-20'} bg-[var(--color-table-header)] ${base}`;
+                  const style: React.CSSProperties = { ...(isPinned ? { left: leafLeft(m.id, i) } : {}), ...accentStyle(m.id), textAlign: numberAlign };
                   return { cls, style };
                 };
-                const firstBase = strongLeft.has(m.id) ? sepCls : 'border-l';
+                const firstBase = strongLeft.has(m.id) ? sepCls : '';
                 if (mode === 'full') {
                   const a = sub(0, firstBase), b = sub(1, ''), c = sub(2, ''), e = sub(3, '');
                   return (

@@ -38,13 +38,22 @@ interface Props {
   onDisplayModeChange?: (mode: ComparisonDisplay) => void;
   isPinned?: boolean;
   onPinToggle?: () => void;
+  isAccented?: boolean;
+  onAccentToggle?: () => void;
+  isBar?: boolean;
+  onBarToggle?: () => void;
+  isHeatmap?: boolean;
+  onHeatmapToggle?: () => void;
   decimalPlaces?: number;
   onDecimalPlacesChange?: (v: number) => void;
   comparisonThreshold?: number;
   onComparisonThresholdChange?: (v: number) => void;
+  // Док-режим: редактор прижимается к left=anchorLeft (справа от панели метрик),
+  // без бэкдропа — панель остаётся кликабельной (можно щёлкать шестерёнки подряд).
+  anchorLeft?: number;
 }
 
-export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange }: Props) {
+export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft }: Props) {
   const isPercent = dataType === 'percent';
   const thresholdLabel = isPercent ? 'До значения (%)' : 'До значения';
   const [enabled, setEnabled] = useState(initial?.enabled ?? false);
@@ -79,12 +88,15 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
     onSave({ enabled: true, thresholds, aboveColor }, scope);
   }
 
+  const docked = anchorLeft !== undefined;
   return (
     <>
-      {/* Backdrop */}
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      {/* Backdrop — только в режиме модалки; в док-режиме панель метрик остаётся кликабельной */}
+      {!docked && <div className="fixed inset-0 z-40" onClick={onClose} />}
       {/* Slide panel */}
-      <div className="fixed inset-y-0 right-0 z-50 w-80 bg-[var(--color-bg-surface)] shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
+      <div
+        className={`fixed inset-y-0 z-50 w-80 bg-[var(--color-bg-surface)] shadow-2xl flex flex-col animate-in duration-200 ${docked ? 'border-l border-[var(--color-border)] slide-in-from-left' : 'right-0 slide-in-from-right'}`}
+        style={docked ? { left: anchorLeft } : undefined}>
         {/* Header */}
         <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-[var(--color-border)]">
           <div>
@@ -97,7 +109,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
         <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
 
         {/* Display mode + pin */}
-        {(onDisplayModeChange || onPinToggle) && (
+        {(onDisplayModeChange || onPinToggle || onAccentToggle || onBarToggle || onHeatmapToggle) && (
           <div>
             <div className="text-xs text-[var(--color-text-muted)] mb-1.5 uppercase tracking-wide">Отображение</div>
             <div className="flex flex-col gap-1">
@@ -123,6 +135,48 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
                     className="accent-[var(--color-accent)] w-4 h-4"
                   />
                   <span className="text-sm text-[var(--color-text)]">Закрепить колонку слева</span>
+                </label>
+              )}
+              {onAccentToggle && (
+                <label className="flex items-center gap-2 cursor-pointer mt-1 pt-1 border-t border-[var(--color-border)]">
+                  <input
+                    type="checkbox"
+                    checked={isAccented ?? false}
+                    onChange={onAccentToggle}
+                    className="accent-[var(--color-accent)] w-4 h-4"
+                  />
+                  <span className="text-sm text-[var(--color-text)] flex items-center gap-1.5">
+                    Акцент колонки
+                    <span className="text-[11px] text-[var(--color-text-muted)]">(жирный + фон)</span>
+                  </span>
+                </label>
+              )}
+              {onBarToggle && (
+                <label className="flex items-center gap-2 cursor-pointer mt-1 pt-1 border-t border-[var(--color-border)]">
+                  <input
+                    type="checkbox"
+                    checked={isBar ?? false}
+                    onChange={onBarToggle}
+                    className="accent-[var(--color-accent)] w-4 h-4"
+                  />
+                  <span className="text-sm text-[var(--color-text)] flex items-center gap-1.5">
+                    Столбик в ячейке
+                    <span className="text-[11px] text-[var(--color-text-muted)]">(бар по макс. в колонке)</span>
+                  </span>
+                </label>
+              )}
+              {onHeatmapToggle && (
+                <label className="flex items-center gap-2 cursor-pointer mt-1 pt-1 border-t border-[var(--color-border)]">
+                  <input
+                    type="checkbox"
+                    checked={isHeatmap ?? false}
+                    onChange={onHeatmapToggle}
+                    className="accent-[var(--color-accent)] w-4 h-4"
+                  />
+                  <span className="text-sm text-[var(--color-text)] flex items-center gap-1.5">
+                    Тепловая карта
+                    <span className="text-[11px] text-[var(--color-text-muted)]">(фон по min→max колонки)</span>
+                  </span>
                 </label>
               )}
             </div>

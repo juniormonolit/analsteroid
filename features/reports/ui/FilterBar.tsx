@@ -4,10 +4,14 @@ import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { ChevronDown, ChevronRight, Building2, ArrowLeftRight, Search, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Building2, ArrowLeftRight, Search, X, SlidersHorizontal } from 'lucide-react';
 import type { DateRange } from '@/lib/period';
+import type { Grouping } from '@/lib/metrics/types';
+import { SOURCE_DIMENSIONS, type SourceDimension } from '@/lib/marketing/dimensions';
 import { recomputeComparison } from '@/lib/period';
 import { DateRangePicker } from './DateRangePicker';
+
+const GROUPING_LABELS: Record<Grouping, string> = { none: 'Без групп.', team: 'По отделу', total: 'Итого' };
 
 interface DeptNode {
   id: string;
@@ -21,10 +25,18 @@ interface Props {
   comparison: DateRange;
   departmentIds: string[];
   search?: string;
+  grouping?: Grouping;
   onPeriodChange: (p: DateRange) => void;
   onComparisonChange: (p: DateRange) => void;
   onDepartmentIdsChange: (ids: string[]) => void;
   onSearchChange?: (v: string) => void;
+  onGroupingChange?: (g: Grouping) => void;
+  onOpenMetricPanel?: () => void;
+  metricsBadge?: number;
+  showDepartments?: boolean; // false = скрыть выбор отделов (маркетинг)
+  // Маркетинг: селектор главной сущности (вместо «Группировки»)
+  sourceDimension?: SourceDimension;
+  onSourceDimensionChange?: (d: SourceDimension) => void;
 }
 
 function fmt(d: Date) {
@@ -108,7 +120,7 @@ function DeptTreeNode({
   );
 }
 
-export function FilterBar({ period, comparison, departmentIds, search = '', onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange }: Props) {
+export function FilterBar({ period, comparison, departmentIds, search = '', grouping, onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange, onOpenMetricPanel, metricsBadge, showDepartments = true, sourceDimension, onSourceDimensionChange }: Props) {
   const [showPeriod, setShowPeriod] = useState(false);
   const [showComp,   setShowComp]   = useState(false);
   const [showDepts,  setShowDepts]  = useState(false);
@@ -243,29 +255,8 @@ export function FilterBar({ period, comparison, departmentIds, search = '', onPe
         )}
       </div>
 
-      {/* ── Search ── */}
-      {onSearchChange && (
-        <div className="relative ml-auto">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] pointer-events-none" />
-          <input
-            type="text"
-            value={search}
-            onChange={e => onSearchChange(e.target.value)}
-            placeholder="Поиск..."
-            className="pl-8 pr-7 py-1.5 text-sm border border-[var(--color-border)] rounded-lg bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] transition-colors w-44"
-          />
-          {search && (
-            <button
-              onClick={() => onSearchChange('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-            >
-              <X size={13} />
-            </button>
-          )}
-        </div>
-      )}
-
       {/* ── Department picker ── */}
+      {showDepartments && (
       <div className="relative">
         <button
           ref={deptBtnRef}
@@ -308,6 +299,79 @@ export function FilterBar({ period, comparison, departmentIds, search = '', onPe
           document.body
         )}
       </div>
+      )}
+
+      {/* ── Metrics (legacy "Показатели") ── */}
+      {onOpenMetricPanel && (
+        <button
+          onClick={onOpenMetricPanel}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+        >
+          <SlidersHorizontal size={14} />
+          Метрики
+          {!!metricsBadge && (
+            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-white rounded-full text-[10px]">{metricsBadge}</span>
+          )}
+        </button>
+      )}
+
+      {/* ── Search ── */}
+      {onSearchChange && (
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => onSearchChange(e.target.value)}
+            placeholder="Поиск..."
+            className="pl-8 pr-7 py-1.5 text-sm border border-[var(--color-border)] rounded-lg bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] transition-colors w-44"
+          />
+          {search && (
+            <button
+              onClick={() => onSearchChange('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Source dimension (marketing reports, far right) ── */}
+      {onSourceDimensionChange && sourceDimension !== undefined && (
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-sm text-[var(--color-text-muted)]">Сущность</span>
+          <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
+            {SOURCE_DIMENSIONS.map(d => (
+              <button
+                key={d.key}
+                onClick={() => onSourceDimensionChange(d.key)}
+                className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${sourceDimension === d.key ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Grouping (far right, labeled — matches the legacy tool everyone knows) ── */}
+      {onGroupingChange && grouping !== undefined && (
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-sm text-[var(--color-text-muted)]">Группировка</span>
+          <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
+            {(['none', 'team', 'total'] as Grouping[]).map(g => (
+              <button
+                key={g}
+                onClick={() => onGroupingChange(g)}
+                className={`px-3 py-1.5 transition-colors ${grouping === g ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+              >
+                {GROUPING_LABELS[g]}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

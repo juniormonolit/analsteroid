@@ -13,6 +13,17 @@ function makeYcSslConfig() {
   }
 }
 
+// Poolers (YC odyssey, Supabase Supavisor) terminate idle server connections with a
+// FATAL message. node-pg surfaces that as an 'error' event on the idle client; without a
+// listener it bubbles to an unhandled error and crashes the process. Swallow it — the Pool
+// already evicts the dead client and opens a fresh one on the next query.
+function attachIdleErrorHandler(pool: Pool): Pool {
+  pool.on('error', (err) => {
+    console.warn('[db] idle pool connection error (ignored):', err.message);
+  });
+  return pool;
+}
+
 function makeYcPool(database: string): Pool {
   const config: PoolConfig = {
     host: process.env.YC_PG_HOST!,
@@ -25,12 +36,12 @@ function makeYcPool(database: string): Pool {
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
   };
-  return new Pool(config);
+  return attachIdleErrorHandler(new Pool(config));
 }
 
 // Misha's self-hosted Supabase, schema `sa`
 function makeSaPool(): Pool {
-  return new Pool({
+  return attachIdleErrorHandler(new Pool({
     host:     process.env.SA_PG_HOST ?? '127.0.0.1',
     port:     Number(process.env.SA_PG_PORT ?? 5432),
     user:     process.env.SA_PG_USER!,
@@ -40,7 +51,7 @@ function makeSaPool(): Pool {
     max: 5,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
-  });
+  }));
 }
 
 let _analytics: Pool | null = null;

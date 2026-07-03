@@ -1,0 +1,45 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Сочный огонь: бело-жёлтый у камня → насыщенный оранжево-красный к краю -->
+    <radialGradient id="fav-fire" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0.42" stop-color="#FEF08A"/>
+      <stop offset="0.6" stop-color="#FDE047"/>
+      <stop offset="0.78" stop-color="#FB923C"/>
+      <stop offset="1" stop-color="#EA580C"/>
+    </radialGradient>
+    <radialGradient id="fav-rock" cx="0.36" cy="0.3" r="0.85">
+      <stop offset="0" stop-color="#B8AFA6"/>
+      <stop offset="0.5" stop-color="#6B6259"/>
+      <stop offset="1" stop-color="#2E2926"/>
+    </radialGradient>
+    <!-- Язык пламени (вверх), копируется по кругу -->
+    <path id="fav-tongue" d="M16 0 C 18.4 3, 18.1 5.5, 16 6.8 C 13.9 5.5, 13.6 3, 16 0 Z" fill="#FDE047"/>
+  </defs>
+
+  <!-- Языки пламени по кромке -->
+  <use href="#fav-tongue"/>
+  <use href="#fav-tongue" transform="rotate(45 16 16)"/>
+  <use href="#fav-tongue" transform="rotate(90 16 16)"/>
+  <use href="#fav-tongue" transform="rotate(135 16 16)"/>
+  <use href="#fav-tongue" transform="rotate(180 16 16)"/>
+  <use href="#fav-tongue" transform="rotate(225 16 16)"/>
+  <use href="#fav-tongue" transform="rotate(270 16 16)"/>
+  <use href="#fav-tongue" transform="rotate(315 16 16)"/>
+
+  <!-- Огненный шар -->
+  <circle cx="16" cy="16" r="15" fill="url(#fav-fire)"/>
+
+  <!-- Искры -->
+  <circle cx="7" cy="9" r="1.3" fill="#FEF08A"/>
+  <circle cx="25" cy="8" r="1.1" fill="#FDE047"/>
+  <circle cx="26" cy="24" r="1.2" fill="#FEF08A"/>
+
+  <!-- Горящий камень -->
+  <circle cx="16" cy="16" r="8" fill="url(#fav-rock)" stroke="#1C1917" stroke-width="0.5"/>
+  <!-- Раскалённая кромка сверху -->
+  <path d="M9.5 13.5 A8 8 0 0 1 22.5 13.5" stroke="#FEF08A" stroke-width="1.2" stroke-linecap="round" opacity="0.7" fill="none"/>
+  <!-- Кратеры -->
+  <ellipse cx="13" cy="13" rx="1.8" ry="1.5" fill="#44392F" opacity="0.9"/>
+  <ellipse cx="18.5" cy="18.4" rx="2.2" ry="1.8" fill="#3A302A" opacity="0.9"/>
+  <circle cx="13.6" cy="19" r="1.2" fill="#44392F" opacity="0.85"/>
+</svg>

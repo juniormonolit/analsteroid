@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { MeteorLogo } from '@/components/layout/MeteorLogo';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -30,8 +31,9 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)]">
       <div className="w-full max-w-sm bg-[var(--color-bg-surface)] rounded-xl shadow-lg p-8">
-        <h1 className="text-xl font-semibold text-[var(--color-text)] mb-6 text-center">
-          Analsteroid
+        <h1 className="flex items-center justify-center gap-2.5 text-xl font-semibold text-[var(--color-text)] mb-6">
+          <MeteorLogo size={30} />
+          Аналстероид
         </h1>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>

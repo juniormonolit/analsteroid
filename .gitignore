@@ -12,3 +12,5 @@ next-env.d.ts
 *.tar.gz
 migrations/*_tmp.sql
 migrations/debug_*.sql
+.scratch_*.js
+/temp/
