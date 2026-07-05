@@ -136,9 +136,10 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
       bitrix_user_id: string; manager_name: string;
       department_id: string | null; department_name: string | null;
       rop_bitrix_user_id: string | null; short_login: string | null;
+      branch: string | null;
     }>(`SELECT manager_bitrix_user_id AS bitrix_user_id,
               manager_name, department_id, department_name, rop_bitrix_user_id,
-              short_login
+              short_login, branch
          FROM org_resolved_hierarchy WHERE is_active = true`),
     deptIds.length
       ? sysDb.query<{ bitrix_user_id: string }>(
@@ -210,6 +211,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
         dimensionSubtitle: org?.short_login  ?? undefined,
         teamId:            org?.department_id   ?? null,
         teamName:          org?.department_name ?? null,
+        branchName:        org?.branch ?? null,
         metrics: Object.fromEntries(
           metricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null]),
         ),

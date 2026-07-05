@@ -5,7 +5,7 @@ export type AggFn = 'count_distinct' | 'sum' | 'avg' | 'count_all';
 export type MetricSource = 'deals' | 'deal_events';
 export type DealScope = 'primary' | 'repeat' | 'all';
 export type ClientType = 'all' | 'b2c' | 'b2b';
-export type Grouping = 'none' | 'team' | 'total';
+export type Grouping = 'none' | 'team' | 'branch' | 'total';
 export type ProductGroupMode = 'kc' | 'by_max';
 export type ComparisonDisplay = 'full' | 'current' | 'compact';
 export type AccountType = 'managers' | 'logists' | 'all';
@@ -55,6 +55,7 @@ export interface ReportRow {
   dimensionSubtitle?: string;
   teamId: string | null;
   teamName: string | null;
+  branchName?: string | null;
   metrics: Record<string, number | null>;
 }
 

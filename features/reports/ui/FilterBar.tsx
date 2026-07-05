@@ -11,7 +11,7 @@ import { SOURCE_DIMENSIONS, type SourceDimension } from '@/lib/marketing/dimensi
 import { recomputeComparison } from '@/lib/period';
 import { DateRangePicker } from './DateRangePicker';
 
-const GROUPING_LABELS: Record<Grouping, string> = { none: 'Без групп.', team: 'По отделу', total: 'Итого' };
+const GROUPING_LABELS: Record<Grouping, string> = { none: 'Без групп.', team: 'По отделу', branch: 'По филиалу', total: 'Итого' };
 
 interface DeptNode {
   id: string;
@@ -360,7 +360,7 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
         <div className="ml-auto flex items-center gap-2">
           <span className="text-sm text-[var(--color-text-muted)]">Группировка</span>
           <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
-            {(['none', 'team', 'total'] as Grouping[]).map(g => (
+            {(['none', 'team', 'branch', 'total'] as Grouping[]).map(g => (
               <button
                 key={g}
                 onClick={() => onGroupingChange(g)}

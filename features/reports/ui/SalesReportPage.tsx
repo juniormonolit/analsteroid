@@ -12,11 +12,14 @@ import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
 import { DrilldownDrawer } from './DrilldownDrawer';
 import type { DrilldownTarget } from './DrilldownDrawer';
-import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay } from '@/lib/metrics/types';
+import { computeCalculated } from '@/features/reports/engine/calculated';
+import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay } from '@/lib/metrics/types';
 import type { DateRange } from '@/lib/period';
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
 import { type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+
+type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
 type MergedRow = {
   dimensionId: string;
@@ -24,52 +27,81 @@ type MergedRow = {
   dimensionSubtitle?: string;
   teamId: string | null;
   teamName: string | null;
-  deltas: Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
+  branchName?: string | null;
+  deltas: Deltas;
 };
 
 type GroupedMergedRow = MergedRow & { isGroup?: boolean; children?: MergedRow[]; };
 
-function applyClientGrouping(rows: MergedRow[], grouping: Grouping): GroupedMergedRow[] {
+// Честная агрегация группы: collected/external суммируются, calculated (конверсии,
+// средние чеки, % плана) пересчитываются по своей формуле от СУММ — отдельно для
+// текущего и сравнительного периодов. Просто складывать проценты нельзя.
+function aggregateGroupDeltas(members: MergedRow[], metrics: Metric[]): Deltas {
+  const ids = new Set<string>();
+  for (const r of members) for (const id of Object.keys(r.deltas)) ids.add(id);
+  const byId = new Map(metrics.map(m => [m.id, m]));
+
+  const sumsCur: Record<string, number | null> = {};
+  const sumsCmp: Record<string, number | null> = {};
+  for (const id of ids) {
+    if (byId.get(id)?.metricType === 'calculated') continue;
+    let cur: number | null = null, cmp: number | null = null;
+    for (const r of members) {
+      const d = r.deltas[id];
+      if (!d) continue;
+      if (d.current !== null) cur = (cur ?? 0) + d.current;
+      if (d.comparison !== null) cmp = (cmp ?? 0) + d.comparison;
+    }
+    sumsCur[id] = cur;
+    sumsCmp[id] = cmp;
+  }
+
+  const calc = metrics.filter(m => m.metricType === 'calculated' && ids.has(m.id));
+  const cur = computeCalculated(sumsCur, calc);
+  const cmp = computeCalculated(sumsCmp, calc);
+
+  const deltas: Deltas = {};
+  for (const id of ids) {
+    const c = cur[id] ?? null, p = cmp[id] ?? null;
+    const delta = c !== null && p !== null ? c - p : null;
+    const deltaPct = delta === null || p === null || p === 0 ? null : (delta / p) * 100;
+    deltas[id] = { current: c, comparison: p, delta, deltaPct };
+  }
+  return deltas;
+}
+
+function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Metric[]): GroupedMergedRow[] {
   if (grouping === 'none') return rows;
 
   if (grouping === 'total') {
-    const totalsDeltas: Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }> = {};
-    for (const row of rows) {
-      for (const [id, d] of Object.entries(row.deltas)) {
-        if (!totalsDeltas[id]) totalsDeltas[id] = { current: 0, comparison: 0, delta: null, deltaPct: null };
-        totalsDeltas[id].current = (totalsDeltas[id].current ?? 0) + (d.current ?? 0);
-        totalsDeltas[id].comparison = (totalsDeltas[id].comparison ?? 0) + (d.comparison ?? 0);
-      }
-    }
-    return [{ dimensionId: '__total__', dimensionName: 'Итого', teamId: null, teamName: null, deltas: totalsDeltas, isGroup: true, children: rows }];
+    return [{
+      dimensionId: '__total__', dimensionName: 'Итого', teamId: null, teamName: null,
+      deltas: aggregateGroupDeltas(rows, metrics), isGroup: true, children: rows,
+    }];
   }
 
+  const isBranch = grouping === 'branch';
   const order: string[] = [];
   const groups = new Map<string, MergedRow[]>();
   for (const row of rows) {
-    const key = row.teamId ?? '__no_team__';
+    const key = isBranch ? (row.branchName ?? 'Не определён') : (row.teamId ?? '__no_team__');
     if (!groups.has(key)) { groups.set(key, []); order.push(key); }
     groups.get(key)!.push(row);
   }
 
-  return order.map(teamId => {
-    const members = groups.get(teamId)!;
-    const teamName = members[0]?.teamName ?? 'Без отдела';
-    const groupDeltas: Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }> = {};
-    for (const row of members) {
-      for (const [id, d] of Object.entries(row.deltas)) {
-        if (!groupDeltas[id]) groupDeltas[id] = { current: 0, comparison: 0, delta: null, deltaPct: null };
-        groupDeltas[id].current = (groupDeltas[id].current ?? 0) + (d.current ?? 0);
-        groupDeltas[id].comparison = (groupDeltas[id].comparison ?? 0) + (d.comparison ?? 0);
-      }
-    }
-    for (const d of Object.values(groupDeltas)) {
-      if (d.current !== null && d.comparison !== null) {
-        d.delta = d.current - d.comparison;
-        d.deltaPct = d.comparison !== 0 ? (d.delta / d.comparison) * 100 : null;
-      }
-    }
-    return { dimensionId: `__team__${teamId}`, dimensionName: teamName, teamId, teamName, deltas: groupDeltas, isGroup: true, children: members };
+  return order.map(key => {
+    const members = groups.get(key)!;
+    const name = isBranch ? key : (members[0]?.teamName ?? 'Без отдела');
+    return {
+      dimensionId: isBranch ? `__branch__${key}` : `__team__${key}`,
+      dimensionName: name,
+      teamId: isBranch ? null : key,
+      teamName: isBranch ? null : name,
+      branchName: isBranch ? key : undefined,
+      deltas: aggregateGroupDeltas(members, metrics),
+      isGroup: true,
+      children: members,
+    };
   });
 }
 
@@ -309,7 +341,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const dimensionType = sourceMode ? 'source' : reportSlug === 'by-product-groups' ? 'product-group' : 'manager';
 
   const displayRows = useMemo(() => {
-    const grouped = applyClientGrouping(data?.rows ?? [], grouping);
+    const grouped = applyClientGrouping(data?.rows ?? [], grouping, catalogMetrics);
     if (!search.trim()) return grouped;
     const q = search.trim().toLowerCase();
     if (grouping === 'none') {
@@ -323,7 +355,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         return { ...r, children: filteredChildren };
       })
       .filter(Boolean) as typeof grouped;
-  }, [data?.rows, grouping, search]);
+  }, [data?.rows, grouping, search, catalogMetrics]);
 
   const handleRowClick = useCallback(
     (id: string, name: string) => setDrilldown({ id, name }),
@@ -334,10 +366,50 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     (id: string, name: string, metricId: string) => {
       const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
         ?? availableMetrics.find((x: { id: string }) => x.id === metricId);
-      setDrilldown({ id, name, metricId, metricName: m?.nameRu });
+      // Групповые строки и «Итого» открывают плоский список сделок всего среза
+      if (id === '__total__') {
+        setDrilldown({ id: '__all__', name: 'Итого', metricId, metricName: m?.nameRu, kind: 'total' });
+      } else if (id.startsWith('__team__')) {
+        setDrilldown({ id: id.slice('__team__'.length), name, metricId, metricName: m?.nameRu, kind: 'team' });
+      } else if (id.startsWith('__branch__')) {
+        setDrilldown({ id: id.slice('__branch__'.length), name, metricId, metricName: m?.nameRu, kind: 'branch' });
+      } else {
+        setDrilldown({ id, name, metricId, metricName: m?.nameRu });
+      }
     },
     [catalogMetrics, availableMetrics]
   );
+
+  // Копирование в буфер: чистый TSV для вставки в Google Таблицы — без пробелов-
+  // разделителей тысяч, ₽ и %, десятичный разделитель — запятая.
+  const dimensionColumnLabel = sourceMode
+    ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
+    : reportSlug === 'by-product-groups' ? 'Товарная группа' : 'Менеджер';
+
+  const handleCopyTable = useCallback(async () => {
+    const cols = orderedMetrics as Metric[];
+    const cell = (v: number | null | undefined, m: Metric) => {
+      if (v === null || v === undefined) return '';
+      const dec = metricDecimalOverrides[m.id] ?? m.decimalPlaces;
+      return v.toFixed(dec).replace('.', ',');
+    };
+    const clean = (s: string) => s.replace(/[\t\n]/g, ' ');
+    const lines: string[] = [];
+    lines.push([dimensionColumnLabel, ...cols.map(m => clean(m.nameRu))].join('\t'));
+    const pushRow = (r: MergedRow) => {
+      lines.push([clean(r.dimensionName), ...cols.map(m => cell(r.deltas[m.id]?.current, m))].join('\t'));
+    };
+    for (const r of displayRows) {
+      pushRow(r);
+      const children = (r as GroupedMergedRow).children;
+      if (children) for (const c of children) pushRow(c);
+    }
+    const totals: Record<string, number | null> | null = data?.totals ?? null;
+    if (totals && grouping !== 'total') {
+      lines.push(['Итого', ...cols.map(m => cell(totals[m.id], m))].join('\t'));
+    }
+    await navigator.clipboard.writeText(lines.join('\n'));
+  }, [orderedMetrics, displayRows, data?.totals, grouping, metricDecimalOverrides, dimensionColumnLabel]);
 
   const selectedMetricIds = metricIds.includes('all_core')
     ? availableMetrics.map((m: { id: string }) => m.id)
@@ -429,6 +501,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         productGroupMode={productGroupMode}
         onProductGroupModeChange={setProductGroupMode}
         onSaveReport={() => setShowSaveModal(true)}
+        onCopyTable={handleCopyTable}
       />
 
       <div className="flex-1 overflow-hidden">
@@ -447,9 +520,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             isLoading={isLoading}
             grouping={grouping}
             highlights={effectiveHighlights}
-            dimensionLabel={sourceMode
-              ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
-              : reportSlug === 'by-product-groups' ? 'Товарная группа' : 'Менеджер'}
+            dimensionLabel={dimensionColumnLabel}
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
             onMetricDisplayModeChange={handleMetricDisplayModeChange}
@@ -490,6 +561,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           productGroupMode={productGroupMode}
           metricIds={drilldownDuplicate || drilldownMetricIds.length === 0 ? metricIds : drilldownMetricIds}
           departmentIds={departmentIds}
+          accountType={accountType}
           dealFields={dealFields}
           sortBy={sortBy}
           sortDir={sortDir}

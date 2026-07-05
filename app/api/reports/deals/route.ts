@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { analyticsDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { resolveFilterClause } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
@@ -38,9 +38,13 @@ export async function GET(req: NextRequest) {
   const metricFilter   = sp.get('metricFilter') ?? '';
   const sourceDim      = sp.get('sourceDim') as SourceDimension | null; // marketing dimension
   const sourceVal      = sp.get('sourceVal');                           // its value
+  const teamId         = sp.get('teamId');          // drilldown подытога отдела
+  const all            = sp.get('all') === '1';     // drilldown строки «Итого» — весь срез
+  const departmentIds  = (sp.get('departmentIds') ?? '').split(',').filter(Boolean);
+  const accountType    = sp.get('accountType');     // managers | logists (фильтр отчёта)
 
-  if ((!managerId && !productGroup && !sourceDim) || !from || !to) {
-    return NextResponse.json({ error: 'managerId, productGroup or sourceDim+sourceVal, plus from/to required' }, { status: 400 });
+  if ((!managerId && !productGroup && !sourceDim && !teamId && !all) || !from || !to) {
+    return NextResponse.json({ error: 'managerId, productGroup, sourceDim+sourceVal, teamId or all=1, plus from/to required' }, { status: 400 });
   }
 
   const fromDate = new Date(from);
@@ -116,6 +120,44 @@ export async function GET(req: NextRequest) {
         params.push(productGroup);
         dimensionFilter = `AND d.head_group_name = $${params.length}`;
       }
+    }
+  }
+
+  // Подытог отдела: сделки менеджеров этого отдела (department_id из org_resolved_hierarchy)
+  if (teamId) {
+    const res = await systemDb().query<{ id: string }>(
+      `SELECT manager_bitrix_user_id::text AS id
+         FROM org_resolved_hierarchy
+        WHERE department_id = $1 AND is_active = true`,
+      [teamId],
+    );
+    dimensionFilter += ` AND ${managerIdsWhere(res.rows.map(r => r.id).filter(id => /^\d+$/.test(id)))}`;
+  }
+
+  // «Итого»: весь срез отчёта — уважаем фильтры по отделам и типу аккаунтов (manager*/logist*)
+  if (all && (departmentIds.length || (accountType && accountType !== 'all'))) {
+    const sysDb = systemDb();
+    let allowed: Set<string> | null = null;
+    if (departmentIds.length) {
+      const res = await sysDb.query<{ id: string }>(
+        `SELECT DISTINCT manager_bitrix_user_id::text AS id
+           FROM org_resolved_hierarchy
+          WHERE department_id IN (SELECT id FROM departments WHERE bitrix_department_id::text = ANY($1))
+            AND is_active = true`,
+        [departmentIds],
+      );
+      allowed = new Set(res.rows.map(r => r.id));
+    }
+    if (accountType && accountType !== 'all') {
+      const prefix = accountType === 'logists' ? 'logist' : 'manager';
+      const res = await sysDb.query<{ id: string; login: string | null }>(
+        `SELECT bitrix_user_id::text AS id, bitrix_login AS login FROM employees WHERE is_active = true`,
+      );
+      const byPrefix = new Set(res.rows.filter(r => (r.login ?? '').toLowerCase().startsWith(prefix)).map(r => r.id));
+      allowed = allowed ? new Set([...allowed].filter(id => byPrefix.has(id))) : byPrefix;
+    }
+    if (allowed) {
+      dimensionFilter += ` AND ${managerIdsWhere([...allowed].filter(id => /^\d+$/.test(id)))}`;
     }
   }
 

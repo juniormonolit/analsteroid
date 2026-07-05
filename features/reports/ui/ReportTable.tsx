@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, MoreVertical } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, MoreVertical } from 'lucide-react';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
@@ -231,6 +231,29 @@ export function ReportTable({
   const sortDir = controlled ? (sortDirProp ?? 'desc') : sortDirInner;
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
+  // При группировке по отделу/филиалу группы свёрнуты по умолчанию. Флаг взводится
+  // при смене группировки и гасится, когда пришли строки с группами — так дефолт
+  // срабатывает и для сохранённых отчётов (данные приходят позже маунта), а поиск
+  // и смена периода не сбрасывают раскрытое пользователем состояние.
+  const needCollapseRef = useRef(false);
+  useEffect(() => {
+    needCollapseRef.current = grouping === 'team' || grouping === 'branch';
+  }, [grouping]);
+  useEffect(() => {
+    if (!needCollapseRef.current) return;
+    const ids = rows.filter(r => r.isGroup).map(r => r.dimensionId);
+    if (!ids.length) return;
+    needCollapseRef.current = false;
+    setCollapsed(new Set(ids));
+  }, [rows, grouping]);
+
+  function collapseAll() {
+    setCollapsed(new Set(rows.filter(r => r.isGroup).map(r => r.dimensionId)));
+  }
+  function expandAll() {
+    setCollapsed(new Set());
+  }
+
   function handleSort(metricId: string) {
     const nextDir: 'asc' | 'desc' = sortBy === metricId ? (sortDir === 'desc' ? 'asc' : 'desc') : 'desc';
     const nextBy = metricId;
@@ -366,6 +389,8 @@ export function ReportTable({
 
   const DIMENSION_WIDTH = 320;
   const METRIC_COL_WIDTH = 90; // min-width per slot for non-pinned cols
+  // Итоговая строка: акцентная непрозрачная заливка (opaque — обязательна для sticky)
+  const TOTALS_BG = 'color-mix(in srgb, var(--color-accent) 8%, white)';
 
   // Sticky offsets per LEAF column. A full-mode metric has 4 leaf columns
   // (Текущий/Ср/Δ/Δ%), each needs its own sticky `left` = dimension width + sum of
@@ -570,6 +595,8 @@ export function ReportTable({
     const isCollapsed = collapsed.has(row.dimensionId);
     const hasChildren = isGroupRow && row.children && row.children.length > 0;
     const canClickRow = !isGroupRow && !!onRowClick;
+    // Групповая строка: клик по названию сворачивает/разворачивает группу
+    const canToggleRow = isGroupRow && hasChildren;
 
     const isStripe = !isGroupRow && i % 2 === 1;
     const stickyBg = isGroupRow
@@ -589,8 +616,10 @@ export function ReportTable({
       <React.Fragment key={row.dimensionId}>
         <tr className={rowCls}>
           <td
-            className={`sticky left-0 z-20 ${stickyBg} w-[320px] min-w-[320px] max-w-[320px] px-2 py-2 border-r border-[var(--color-border)] transition-colors ${canClickRow ? 'cursor-pointer' : ''}`}
-            onClick={canClickRow ? () => onRowClick!(row.dimensionId, row.dimensionName) : undefined}
+            className={`sticky left-0 z-20 ${stickyBg} w-[320px] min-w-[320px] max-w-[320px] px-2 py-2 border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
+            onClick={canClickRow
+              ? () => onRowClick!(row.dimensionId, row.dimensionName)
+              : canToggleRow ? () => toggleCollapse(row.dimensionId) : undefined}
           >
             <div className="flex items-center gap-1">
               {isGroupRow && hasChildren ? (
@@ -619,7 +648,7 @@ export function ReportTable({
               </span>
             </div>
           </td>
-          {renderMetricCells(row, !isGroupRow, stickyBg)}
+          {renderMetricCells(row, true, stickyBg)}
         </tr>
 
         {isGroupRow && hasChildren && !isCollapsed &&
@@ -693,7 +722,27 @@ export function ReportTable({
           )}
           <tr>
             <th ref={dimRef} className="sticky left-0 z-40 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px]">
-              {dimensionLabel}
+              <div className="flex items-center justify-between gap-2">
+                <span>{dimensionLabel}</span>
+                {(grouping === 'team' || grouping === 'branch') && (
+                  <span className="flex items-center gap-0.5 flex-shrink-0">
+                    <button
+                      onClick={expandAll}
+                      title="Развернуть всё"
+                      className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
+                    >
+                      <ChevronsDown size={14} />
+                    </button>
+                    <button
+                      onClick={collapseAll}
+                      title="Свернуть всё"
+                      className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
+                    >
+                      <ChevronsUp size={14} />
+                    </button>
+                  </span>
+                )}
+              </div>
             </th>
             {displayMetrics.map((m, idx) => {
               const mode = resolveMode(m.id);
@@ -785,21 +834,29 @@ export function ReportTable({
         <tbody>
           {sorted.map((row, i) => renderRow(row, i))}
 
-          {totals && grouping === 'none' && (
-            <tr className="border-t-2 border-[var(--color-border)] bg-[var(--color-table-header)] font-medium">
-              <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-table-header)] px-4 py-2 border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px]">
+          {totals && grouping !== 'total' && (
+            <tr className="border-t-2 border-t-[var(--color-accent)] font-semibold">
+              <td
+                className="sticky left-0 bottom-0 z-30 px-4 py-2.5 border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px] text-[var(--color-text)] uppercase tracking-wide"
+                style={{ backgroundColor: TOTALS_BG }}
+              >
                 Итого
               </td>
               {displayMetrics.map(m => {
                 const mode = resolveMode(m.id);
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
+                const canClick = !!onCellClick && isClickableMetric(m);
+                const clickCls = canClick
+                  ? 'cursor-pointer hover:text-[var(--color-accent)] hover:underline transition-colors'
+                  : '';
+                const handleClick = canClick ? () => onCellClick!('__total__', 'Итого', m.id) : undefined;
                 const sub = (i: number, base: string) => {
                   // `position: sticky` on a <tr> does NOT work with border-collapse — each cell
                   // must be sticky individually. Pin every totals cell to the bottom edge with an
                   // OPAQUE bg so scrolling data rows don't bleed through. Pinned (left) cells also
                   // carry their left offset and sit above the plain ones.
-                  const cls = `sticky bottom-0 ${isPinned ? 'z-30' : 'z-20'} bg-[var(--color-table-header)] ${base}`;
-                  const style: React.CSSProperties = { ...(isPinned ? { left: leafLeft(m.id, i) } : {}), ...accentStyle(m.id), textAlign: numberAlign };
+                  const cls = `sticky bottom-0 ${isPinned ? 'z-30' : 'z-20'} ${base}`;
+                  const style: React.CSSProperties = { ...(isPinned ? { left: leafLeft(m.id, i) } : {}), backgroundColor: TOTALS_BG, textAlign: numberAlign };
                   return { cls, style };
                 };
                 const firstBase = strongLeft.has(m.id) ? sepCls : '';
@@ -807,18 +864,18 @@ export function ReportTable({
                   const a = sub(0, firstBase), b = sub(1, ''), c = sub(2, ''), e = sub(3, '');
                   return (
                     <React.Fragment key={m.id}>
-                      <td className={`text-center px-2 py-2 tabular-nums ${a.cls}`} style={a.style}>
+                      <td className={`text-center px-2 py-2.5 tabular-nums ${clickCls} ${a.cls}`} style={a.style} onClick={handleClick}>
                         {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
                       </td>
-                      <td className={`text-center px-2 py-2 tabular-nums text-[var(--color-text-muted)] ${b.cls}`} style={b.style}>—</td>
-                      <td className={`text-center px-2 py-2 tabular-nums ${c.cls}`} style={c.style}>—</td>
-                      <td className={`relative text-center px-2 py-2 tabular-nums ${e.cls}`} style={e.style}>—{m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}</td>
+                      <td className={`text-center px-2 py-2.5 tabular-nums text-[var(--color-text-muted)] ${b.cls}`} style={b.style}>—</td>
+                      <td className={`text-center px-2 py-2.5 tabular-nums ${c.cls}`} style={c.style}>—</td>
+                      <td className={`relative text-center px-2 py-2.5 tabular-nums ${e.cls}`} style={e.style}>—{m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}</td>
                     </React.Fragment>
                   );
                 }
                 const one = sub(0, firstBase);
                 return (
-                  <td key={m.id} className={`relative text-center px-3 py-2 tabular-nums ${one.cls}`} style={one.style}>
+                  <td key={m.id} className={`relative text-center px-3 py-2.5 tabular-nums ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
                     {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
                     {m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
                   </td>

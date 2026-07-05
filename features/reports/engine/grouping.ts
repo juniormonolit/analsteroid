@@ -21,6 +21,29 @@ export function applyGrouping(rows: ReportRow[], grouping: Grouping, allMetrics:
     }];
   }
 
+  if (grouping === 'branch') {
+    const groups = new Map<string, ReportRow[]>();
+    for (const row of rows) {
+      const key = row.branchName ?? 'Не определён';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(row);
+    }
+    const result: GroupedRow[] = [];
+    for (const [branch, members] of groups) {
+      result.push({
+        dimensionId: `__branch__${branch}`,
+        dimensionName: branch,
+        teamId: null,
+        teamName: null,
+        branchName: branch,
+        metrics: computeTotals(members, allMetrics),
+        isGroup: true,
+        children: members,
+      });
+    }
+    return result;
+  }
+
   // grouping === 'team'
   const groups = new Map<string, ReportRow[]>();
   for (const row of rows) {

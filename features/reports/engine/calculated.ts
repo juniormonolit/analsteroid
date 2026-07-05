@@ -47,14 +47,17 @@ function evalFormula(formula: string, values: Record<string, number | null>): nu
   return result;
 }
 
-/** Compute totals row: sum collected, recompute calculated from sums */
+/** Compute totals row: sum collected + external, recompute calculated from sums */
 export function computeTotals(
   rows: Array<{ metrics: Record<string, number | null> }>,
   allMetrics: Metric[]
 ): Record<string, number | null> {
   const sums: Record<string, number | null> = {};
+  // External metrics (планы) are additive too — without them «Выполнение плана»
+  // in totals has no denominator and comes out empty.
   const collectedIds = allMetrics
-    .filter(m => m.metricType === 'collected')
+    .filter(m => m.metricType === 'collected'
+      || (m.metricType === 'external' && m.aggregationFn === 'sum'))
     .map(m => m.id);
 
   // Sum collected metrics

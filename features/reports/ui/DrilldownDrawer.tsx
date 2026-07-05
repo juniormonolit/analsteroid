@@ -36,6 +36,9 @@ export interface DrilldownTarget {
   name: string;
   metricId?: string;
   metricName?: string;
+  // Групповые цели: подытог отдела/филиала или строка «Итого» — открывают
+  // плоский список сделок всего среза (мини-отчёт по одной сущности не имеет смысла)
+  kind?: 'team' | 'branch' | 'total';
 }
 
 interface Props {
@@ -47,6 +50,7 @@ interface Props {
   productGroupMode: 'kc' | 'by_max';
   metricIds: string[];
   departmentIds?: string[];
+  accountType?: string;
   dealFields?: string[];
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
@@ -663,8 +667,8 @@ function SourceMiniReport({ target, period, dealScope, clientType, productGroupM
   );
 }
 
-// ── Flat deals view (grouping off / metric-filtered drill) ──────────────────
-function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, onDealOpen }: Props) {
+// ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
+function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen }: Props) {
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const [dealSort, setDealSort] = useState<DealSort>(null);
   function onDealSort(k: string) {
@@ -673,16 +677,27 @@ function FlatDealsView({ target, dimensionType, period, dealScope, clientType, p
 
   const fromIso = period.from.toISOString();
   const toIso   = period.to.toISOString();
+  // Групповые цели: отдел → teamId; филиал → менеджерское измерение branch;
+  // «Итого» → весь срез (с фильтрами отчёта по отделам и типу аккаунтов)
+  const dimensionParams: Record<string, string> =
+    target.kind === 'team'   ? { teamId: target.id }
+    : target.kind === 'branch' ? { sourceDim: 'branch', sourceVal: target.id }
+    : target.kind === 'total'  ? {
+        all: '1',
+        ...(departmentIds?.length ? { departmentIds: departmentIds.join(',') } : {}),
+        ...(accountType && accountType !== 'all' ? { accountType } : {}),
+      }
+    : dimensionType === 'manager' ? { managerId: target.id }
+    : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
+    : { productGroup: target.id };
   const params = new URLSearchParams({
     from: fromIso, to: toIso, scope: dealScope, productGroupMode,
     ...(clientType ? { clientType } : {}),
-    ...(dimensionType === 'manager' ? { managerId: target.id }
-      : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
-      : { productGroup: target.id }),
+    ...dimensionParams,
     ...(target.metricId ? { metricFilter: target.metricId } : {}),
   });
   const { data, isLoading } = useQuery({
-    queryKey: ['drill-deals-flat', dimensionType, sourceDimension, target.id, target.metricId, fromIso, toIso, dealScope, clientType, productGroupMode],
+    queryKey: ['drill-deals-flat', dimensionType, sourceDimension, target.kind, target.id, target.metricId, fromIso, toIso, dealScope, clientType, productGroupMode, departmentIds, accountType],
     queryFn: () => fetch(`/api/reports/deals?${params}`).then(r => r.json()),
   });
   const deals: Deal[] = data?.deals ?? [];
@@ -711,8 +726,10 @@ export function DrilldownDrawer(props: Props) {
   // Карточка сделки (клик по строке в любом списке сделок)
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   const viewProps: Props = { ...props, onDealOpen: setOpenDealId };
+  // Групповые цели (отдел/филиал/итого) всегда открываются плоским списком сделок
+  const isGroupTarget = !!target.kind;
   // Local grouping state: metric-click opens flat automatically; otherwise report setting.
-  const [localGrouped, setLocalGrouped] = useState<boolean>(target.metricId ? false : (grouped ?? true));
+  const [localGrouped, setLocalGrouped] = useState<boolean>(target.metricId || isGroupTarget ? false : (grouped ?? true));
   // Follow external changes of the report setting (e.g. from «Вид» inside the drawer),
   // without overriding the initial metric-click auto-flat.
   const prevGrouped = useRef(grouped);
@@ -766,23 +783,27 @@ export function DrilldownDrawer(props: Props) {
                 </select>
               </>
             )}
-            <span className="text-xs text-[var(--color-text-muted)]">Группировка</span>
-            <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
-              {([true, false] as const).map(v => (
-                <button
-                  key={String(v)}
-                  onClick={() => handleToggle(v)}
-                  className={`px-2.5 py-1 transition-colors ${localGrouped === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
-                >
-                  {v ? 'Да' : 'Нет'}
-                </button>
-              ))}
-            </div>
+            {!isGroupTarget && (
+              <>
+                <span className="text-xs text-[var(--color-text-muted)]">Группировка</span>
+                <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
+                  {([true, false] as const).map(v => (
+                    <button
+                      key={String(v)}
+                      onClick={() => handleToggle(v)}
+                      className={`px-2.5 py-1 transition-colors ${localGrouped === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                    >
+                      {v ? 'Да' : 'Нет'}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             <button onClick={onClose} className="p-2 hover:bg-[var(--color-bg-hover)] rounded-lg transition-colors"><X size={18} /></button>
           </div>
         </div>
         <div className="flex-1 overflow-hidden">
-          {localGrouped
+          {localGrouped && !isGroupTarget
             ? (dimensionType === 'manager' ? <ManagerMiniReport {...viewProps} />
               : dimensionType === 'source' ? <SourceMiniReport {...viewProps} />
               : <ProductGroupMiniReport {...viewProps} />)
