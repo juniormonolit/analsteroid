@@ -40,6 +40,8 @@ interface Props {
   accentedMetricIds: string[];
   barMetricIds: string[];
   heatmapMetricIds: string[];
+  heatmapInvertedIds?: string[];
+  colorizeMetrics?: boolean;
   themeAccent: string | null;
   numberAlign: 'left' | 'center' | 'right';
   accountType: 'managers' | 'logists' | 'all';
@@ -63,7 +65,7 @@ export function SaveReportModal({
   metricDisplayModes, comparisonThreshold,
   productGroupMode, departmentIds, highlights,
   pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides,
-  accentedMetricIds, barMetricIds, heatmapMetricIds, themeAccent, numberAlign, accountType,
+  accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, themeAccent, numberAlign, accountType,
   drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped,
   sourceDimension, drilldownDimension,
   sortBy, sortDir, columnGroups,
@@ -120,6 +122,8 @@ export function SaveReportModal({
       accentedMetricIds,
       barMetricIds,
       heatmapMetricIds,
+      heatmapInvertedIds,
+      colorizeMetrics,
       themeAccent,
       numberAlign,
       accountType,

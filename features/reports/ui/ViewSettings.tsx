@@ -28,17 +28,6 @@ const DENSITY_LABELS: Record<Density, string> = {
   relaxed: 'Просторно',
 };
 
-// Report-wide accent palettes. First (null) = app default blue.
-export const THEME_PALETTES: { label: string; value: string | null }[] = [
-  { label: 'Синяя',      value: null },
-  { label: 'Бирюзовая',  value: '#0ca678' },
-  { label: 'Зелёная',    value: '#2f9e44' },
-  { label: 'Фиолетовая', value: '#7048e8' },
-  { label: 'Оранжевая',  value: '#e8590c' },
-  { label: 'Розовая',    value: '#e64980' },
-];
-const DEFAULT_ACCENT = '#228be6';
-
 export type NumberAlign = 'left' | 'center' | 'right';
 const ALIGN_LABELS: Record<NumberAlign, string> = { left: 'Лево', center: 'Центр', right: 'Право' };
 
@@ -67,8 +56,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 interface ViewSettingsProps {
   prefs: ViewPrefs;
   onChange: (p: ViewPrefs) => void;
-  themeAccent?: string | null;
-  onThemeAccentChange?: (c: string | null) => void;
   numberAlign?: NumberAlign;
   onNumberAlignChange?: (a: NumberAlign) => void;
   comparisonDisplay?: ComparisonDisplay;
@@ -78,13 +65,16 @@ interface ViewSettingsProps {
   onAccountTypeChange?: (a: AccountType) => void;
   drilldownGrouped?: boolean;
   onDrilldownGroupedChange?: (v: boolean) => void;
+  colorizeMetrics?: boolean;
+  onColorizeMetricsChange?: (v: boolean) => void;
 }
 
 export function ViewSettings({
-  prefs, onChange, themeAccent, onThemeAccentChange, numberAlign, onNumberAlignChange,
+  prefs, onChange, numberAlign, onNumberAlignChange,
   comparisonDisplay, hasMixedDisplay, onComparisonDisplayChange,
   accountType, onAccountTypeChange,
   drilldownGrouped, onDrilldownGroupedChange,
+  colorizeMetrics, onColorizeMetricsChange,
 }: ViewSettingsProps) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -227,26 +217,19 @@ export function ViewSettings({
             </div>
           )}
 
-          {onThemeAccentChange && (
+          {onColorizeMetricsChange && (
             <div>
-              <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Цветовая тема отчёта</div>
-              <div className="flex gap-1.5 flex-wrap">
-                {THEME_PALETTES.map(p => {
-                  const selected = (themeAccent ?? null) === p.value;
-                  return (
-                    <button
-                      key={p.label}
-                      title={p.label}
-                      onClick={() => onThemeAccentChange(p.value)}
-                      className="w-6 h-6 rounded-full transition-transform hover:scale-110"
-                      style={{
-                        backgroundColor: p.value ?? DEFAULT_ACCENT,
-                        outline: selected ? '2px solid var(--color-text)' : '2px solid transparent',
-                        outlineOffset: 2,
-                      }}
-                    />
-                  );
-                })}
+              <SectionLabel>Выделять показатели цветом</SectionLabel>
+              <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
+                {([true, false] as const).map(v => (
+                  <button
+                    key={String(v)}
+                    onClick={() => onColorizeMetricsChange(v)}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(colorizeMetrics ?? true) === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                  >
+                    {v ? 'Да' : 'Нет'}
+                  </button>
+                ))}
               </div>
             </div>
           )}

@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 const NAV = [
   { href: '/settings/tables', label: 'Таблицы' },
   { href: '/settings/metrics', label: 'Метрики' },
+  { href: '/settings/metric-colors', label: 'Цвета метрик' },
   { href: '/settings/working-calendar', label: 'Календарь' },
   { href: '/settings/users', label: 'Пользователи' },
 ];

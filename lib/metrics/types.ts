@@ -45,6 +45,8 @@ export interface Metric {
   tags: string[];
   isCollectOk: boolean;
   isCalcOk: boolean;
+  // Цвет показателя (бейдж заголовка колонки): override по метрике > правило категории
+  color?: string | null;
 }
 
 export interface ReportRow {

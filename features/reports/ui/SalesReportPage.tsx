@@ -121,7 +121,9 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [accentedMetricIds, setAccentedMetricIds] = useState<string[]>([]);
   const [barMetricIds, setBarMetricIds] = useState<string[]>([]);
   const [heatmapMetricIds, setHeatmapMetricIds] = useState<string[]>([]);
-  const [themeAccent, setThemeAccent] = useState<string | null>(null);
+  const [heatmapInvertedIds, setHeatmapInvertedIds] = useState<string[]>([]);
+  const [colorizeMetrics, setColorizeMetrics] = useState(true);
+  const [themeAccent, setThemeAccent] = useState<string | null>(null); // legacy, UI выпилен
   const [numberAlign, setNumberAlign] = useState<'left' | 'center' | 'right'>('center');
   const [accountType, setAccountType] = useState<'managers' | 'logists' | 'all'>('managers');
   const [drilldownDuplicate, setDrilldownDuplicate] = useState(true);
@@ -169,6 +171,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setAccentedMetricIds(preset.accentedMetricIds ?? []);
     setBarMetricIds(preset.barMetricIds ?? []);
     setHeatmapMetricIds(preset.heatmapMetricIds ?? []);
+    setHeatmapInvertedIds(preset.heatmapInvertedIds ?? []);
+    setColorizeMetrics(preset.colorizeMetrics ?? true);
     setThemeAccent(preset.themeAccent ?? null);
     setNumberAlign(preset.numberAlign ?? 'center');
     setAccountType(preset.accountType ?? 'managers');
@@ -358,6 +362,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setAccentedMetricIds(prev => prev.filter(id => id !== metricId));
     setBarMetricIds(prev => prev.filter(id => id !== metricId));
     setHeatmapMetricIds(prev => prev.filter(id => id !== metricId));
+    setHeatmapInvertedIds(prev => prev.filter(id => id !== metricId));
   }
 
   function handleMetricMoveLeft(metricId: string) {
@@ -412,14 +417,14 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         isLoading={isFetching}
         viewPrefs={viewPrefs}
         onViewPrefsChange={updateViewPrefs}
-        themeAccent={themeAccent}
-        onThemeAccentChange={setThemeAccent}
         numberAlign={numberAlign}
         onNumberAlignChange={setNumberAlign}
         accountType={accountType}
         onAccountTypeChange={reportSlug === 'by-managers' ? setAccountType : undefined}
         drilldownGrouped={drilldownGrouped}
         onDrilldownGroupedChange={setDrilldownGrouped}
+        colorizeMetrics={colorizeMetrics}
+        onColorizeMetricsChange={setColorizeMetrics}
         showProductGroupPicker={true}
         productGroupMode={productGroupMode}
         onProductGroupModeChange={setProductGroupMode}
@@ -457,7 +462,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             accentedMetricIds={accentedMetricIds}
             barMetricIds={barMetricIds}
             heatmapMetricIds={heatmapMetricIds}
-            themeAccent={themeAccent}
+            heatmapInvertedIds={heatmapInvertedIds}
+            colorizeMetrics={colorizeMetrics}
             numberAlign={numberAlign}
             pinnedMetricIds={pinnedMetricIds}
             onMetricPinToggle={(id) => setPinnedMetricIds(prev =>
@@ -506,14 +512,14 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
               <ViewSettings
                 prefs={viewPrefs}
                 onChange={updateViewPrefs}
-                themeAccent={themeAccent}
-                onThemeAccentChange={setThemeAccent}
                 numberAlign={numberAlign}
                 onNumberAlignChange={setNumberAlign}
                 accountType={accountType}
                 onAccountTypeChange={reportSlug === 'by-managers' ? setAccountType : undefined}
                 drilldownGrouped={drilldownGrouped}
                 onDrilldownGroupedChange={setDrilldownGrouped}
+                colorizeMetrics={colorizeMetrics}
+                onColorizeMetricsChange={setColorizeMetrics}
               />
             </>
           }
@@ -582,6 +588,10 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onHeatmapToggle={() => setHeatmapMetricIds(prev =>
               prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
             )}
+            isHeatmapInverted={heatmapInvertedIds.includes(configuringMetricId)}
+            onHeatmapInvertToggle={() => setHeatmapInvertedIds(prev =>
+              prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
+            )}
             decimalPlaces={metricDecimalOverrides[configuringMetricId] ?? m?.decimalPlaces ?? 2}
             onDecimalPlacesChange={(v) => setMetricDecimalOverrides(prev => ({ ...prev, [configuringMetricId!]: v }))}
             comparisonThreshold={metricThresholdOverrides[configuringMetricId] ?? (m?.dataType === 'percent' ? 10 : 5)}
@@ -609,6 +619,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           accentedMetricIds={accentedMetricIds}
           barMetricIds={barMetricIds}
           heatmapMetricIds={heatmapMetricIds}
+          heatmapInvertedIds={heatmapInvertedIds}
+          colorizeMetrics={colorizeMetrics}
           themeAccent={themeAccent}
           numberAlign={numberAlign}
           accountType={accountType}

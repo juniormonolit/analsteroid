@@ -27,6 +27,8 @@ export async function GET() {
             COALESCE(accented_metric_ids, '{}') AS "accentedMetricIds",
             COALESCE(bar_metric_ids, '{}') AS "barMetricIds",
             COALESCE(heatmap_metric_ids, '{}') AS "heatmapMetricIds",
+            COALESCE(heatmap_inverted_ids, '{}') AS "heatmapInvertedIds",
+            colorize_metrics AS "colorizeMetrics",
             theme_accent AS "themeAccent",
             number_align AS "numberAlign",
             account_type AS "accountType",
@@ -97,6 +99,8 @@ export async function POST(req: NextRequest) {
     body.drilldownDimension ?? null,
     // «Смекалочная» (общие отчёты) — сохранять туда может только админ
     session.isAdmin ? (body.isShared ?? false) : false,
+    body.heatmapInvertedIds ?? [],
+    body.colorizeMetrics ?? null,
   ];
 
   const res = await db.query<{ id: string }>(
@@ -109,8 +113,9 @@ export async function POST(req: NextRequest) {
        pinned_metric_ids, metric_decimal_overrides, metric_threshold_overrides, sort_by, sort_dir,
        column_groups, accented_metric_ids, bar_metric_ids, heatmap_metric_ids, theme_accent,
        number_align, account_type, drilldown_duplicate_metrics, drilldown_metric_ids, deal_fields,
-       drilldown_grouped, source_dimension, drilldown_dimension, is_shared
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)
+       drilldown_grouped, source_dimension, drilldown_dimension, is_shared,
+       heatmap_inverted_ids, colorize_metrics
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
      ON CONFLICT (user_login, name) DO UPDATE SET
        report_slug = EXCLUDED.report_slug,
        metric_ids = EXCLUDED.metric_ids,
@@ -146,7 +151,9 @@ export async function POST(req: NextRequest) {
        drilldown_grouped = EXCLUDED.drilldown_grouped,
        source_dimension = EXCLUDED.source_dimension,
        drilldown_dimension = EXCLUDED.drilldown_dimension,
-       is_shared = EXCLUDED.is_shared
+       is_shared = EXCLUDED.is_shared,
+       heatmap_inverted_ids = EXCLUDED.heatmap_inverted_ids,
+       colorize_metrics = EXCLUDED.colorize_metrics
      RETURNING id`,
     vals
   );

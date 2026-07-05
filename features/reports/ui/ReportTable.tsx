@@ -177,7 +177,8 @@ interface Props {
   accentedMetricIds?: string[];
   barMetricIds?: string[];
   heatmapMetricIds?: string[];
-  themeAccent?: string | null;
+  heatmapInvertedIds?: string[];
+  colorizeMetrics?: boolean;
   numberAlign?: 'left' | 'center' | 'right';
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
@@ -213,7 +214,8 @@ export function ReportTable({
   accentedMetricIds = [],
   barMetricIds = [],
   heatmapMetricIds = [],
-  themeAccent = null,
+  heatmapInvertedIds = [],
+  colorizeMetrics = true,
   numberAlign = 'center',
   sortBy: sortByProp,
   sortDir: sortDirProp,
@@ -262,6 +264,19 @@ export function ReportTable({
     return metricDecimalOverrides[m.id] ?? m.decimalPlaces;
   }
 
+  // Колонки показателей: ровная заливка всей ячейки шапки цветом категории (opaque —
+  // корректно под sticky-колонками) + цветная полоска сверху. Один размер у всех ячеек,
+  // никакого «заборчика» от переносов названий.
+  function colorizeStyle(m: Metric): React.CSSProperties {
+    return colorizeMetrics && m.color
+      ? { backgroundColor: `color-mix(in srgb, ${m.color} 9%, white)` }
+      : {};
+  }
+  function colorizeBar(m: Metric) {
+    if (!colorizeMetrics || !m.color) return null;
+    return <span className="absolute top-0 left-0 right-0 h-[3px] pointer-events-none" style={{ backgroundColor: m.color }} />;
+  }
+
   // Accent: bold + tinted (opaque, so it also reads correctly under sticky pins) column.
   const accentSet = new Set(accentedMetricIds);
   function accentStyle(metricId: string): React.CSSProperties {
@@ -277,7 +292,7 @@ export function ReportTable({
   const barSet = new Set(barMetricIds);
   const heatSet = new Set(heatmapMetricIds);
   const barMax: Record<string, number> = {};
-  const heatStats: Record<string, { min: number; max: number }> = {};
+  const heatStats: Record<string, number[]> = {}; // отсортированные значения колонки (для ранговой шкалы)
   if (barSet.size > 0 || heatSet.size > 0) {
     const leaves: RowDeltas[] = [];
     for (const r of rows) {
@@ -293,24 +308,36 @@ export function ReportTable({
       barMax[id] = max;
     }
     for (const id of heatSet) {
-      let min = Infinity, max = -Infinity;
+      const vals: number[] = [];
       for (const r of leaves) {
         const v = r.deltas?.[id]?.current;
-        if (v != null) { if (v < min) min = v; if (v > max) max = v; }
+        if (v != null) vals.push(v);
       }
-      heatStats[id] = { min, max };
+      vals.sort((a, b) => a - b);
+      heatStats[id] = vals;
     }
   }
 
-  // Heat map: cell bg intensity scales with the value's position between column min and max.
-  // Returns an inline backgroundColor (overrides accent's bg; bold from accent still applies).
+  // Heat map: red → green по РАНГУ значения в колонке (перцентильная шкала), не по
+  // расстоянию до min/max. Медиана колонки — всегда середина (жёлтый); выброс (менеджер
+  // с 3/3 = 100% CR) — просто самый зелёный, остальных в красное не утаскивает.
+  // Равные значения получают одинаковый цвет (средний ранг). Инверсия — меньше = лучше.
+  const heatInvSet = new Set(heatmapInvertedIds);
   function heatStyle(metricId: string, value: number | null): React.CSSProperties {
     if (!heatSet.has(metricId) || value == null) return {};
-    const s = heatStats[metricId];
-    if (!s || !isFinite(s.min) || !isFinite(s.max)) return {};
-    const t = s.max > s.min ? (value - s.min) / (s.max - s.min) : 0;
-    const pct = Math.round(t * 45); // cap intensity so text stays readable
-    return { backgroundColor: `color-mix(in srgb, var(--color-accent) ${pct}%, transparent)` };
+    const vals = heatStats[metricId];
+    if (!vals || vals.length === 0) return {};
+    let t: number;
+    if (vals.length === 1 || vals[0] === vals[vals.length - 1]) {
+      t = 0.5;
+    } else {
+      // Средний ранг значения: (кол-во меньших + (кол-во равных − 1) / 2) / (n − 1)
+      let lo = 0; while (lo < vals.length && vals[lo] < value) lo++;
+      let hi = lo; while (hi < vals.length && vals[hi] <= value) hi++;
+      t = (lo + (hi - lo - 1) / 2) / (vals.length - 1);
+    }
+    if (heatInvSet.has(metricId)) t = 1 - t;
+    return { backgroundColor: `hsl(${Math.round(t * 120)} 78% 85%)` };
   }
 
   // Absolute bar painted behind the value. Value content must be wrapped in a positioned
@@ -634,10 +661,7 @@ export function ReportTable({
   const rowPy = density === 'compact' ? '2px' : density === 'relaxed' ? '14px' : '8px';
 
   return (
-    <div
-      className="overflow-auto h-full bg-[var(--color-bg-surface)]"
-      style={themeAccent ? ({ ['--color-accent' as string]: themeAccent } as React.CSSProperties) : undefined}
-    >
+    <div className="overflow-auto h-full bg-[var(--color-bg-surface)]">
       <table className="w-full text-sm border-collapse" style={{ fontSize: `${14 * fontScale}px`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
         <thead className="report-thead sticky top-0 z-30 bg-[var(--color-table-header)]">
           {hasGroups && (
@@ -689,8 +713,9 @@ export function ReportTable({
                   ref={mainRef}
                   colSpan={colSpanFor(m.id)}
                   className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group/th ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''}`}
-                  style={{ ...thSize, ...accentStyle(m.id) }}
+                  style={{ ...thSize, ...colorizeStyle(m), ...accentStyle(m.id) }}
                 >
+                  {colorizeBar(m)}
                   {m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
                   {/* Menu pinned to the top-right corner, only on hover */}
                   {hasMenu && (
@@ -736,7 +761,7 @@ export function ReportTable({
                 const s = { minWidth: METRIC_COL_WIDTH };
                 const sub = (i: number, base: string) => {
                   const cls = `bg-[var(--color-table-header)] ${isPinned ? 'sticky z-40' : ''} ${base}`;
-                  const style = { ...(isPinned ? { ...s, left: leafLeft(m.id, i) } : s), ...accentStyle(m.id) };
+                  const style = { ...(isPinned ? { ...s, left: leafLeft(m.id, i) } : s), ...colorizeStyle(m), ...accentStyle(m.id) };
                   return { cls, style };
                 };
                 const firstBase = strongLeft.has(m.id) ? sepCls : '';

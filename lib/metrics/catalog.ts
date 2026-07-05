@@ -14,6 +14,17 @@ export async function loadMetrics(): Promise<Metric[]> {
   if (_cache && Date.now() - _cacheAt < TTL) return _cache;
 
   const db = ycAnalyticsDb();
+
+  // Цвета метрик: правило категории + точечные переопределения (metric_colors)
+  let catColors = new Map<string, string>();
+  let metricColors = new Map<string, string>();
+  try {
+    const colRes = await db.query<{ scope: string; key: string; color: string }>(
+      'SELECT scope, key, color FROM metric_colors',
+    );
+    catColors = new Map(colRes.rows.filter(r => r.scope === 'category').map(r => [r.key, r.color]));
+    metricColors = new Map(colRes.rows.filter(r => r.scope === 'metric').map(r => [r.key, r.color]));
+  } catch { /* таблицы может не быть до миграции 043 */ }
   const res = await db.query<{
     id: string; name_ru: string; name_short_ru: string | null;
     description: string | null; calc_ok: boolean; fill_ok: boolean;
@@ -69,9 +80,14 @@ export async function loadMetrics(): Promise<Metric[]> {
     tags: r.tags ?? [],
     isCollectOk: r.is_collect_ok,
     isCalcOk: r.is_calc_ok,
+    color: metricColors.get(r.id) ?? (r.category ? catColors.get(r.category) : null) ?? null,
   }));
   _cacheAt = Date.now();
   return _cache;
+}
+
+export function invalidateMetricColors() {
+  invalidateMetricsCache();
 }
 
 export function resolveMetricIds(ids: string[], all: Metric[]): Metric[] {

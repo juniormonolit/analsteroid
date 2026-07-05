@@ -48,8 +48,12 @@ export interface SavedReport {
   accentedMetricIds?: string[];
   // Metrics rendered with an in-cell horizontal bar (proportional to column max)
   barMetricIds?: string[];
-  // Metrics rendered with a per-column heat map (cell bg gradient min→max)
+  // Metrics rendered with a per-column heat map (red→green gradient min→max)
   heatmapMetricIds?: string[];
+  // Heatmap metrics where less = better (gradient inverted: min = green)
+  heatmapInvertedIds?: string[];
+  // Colorize metric column headers by category color rules. undefined = true.
+  colorizeMetrics?: boolean;
   // Report-wide accent color (hex). Drives accent/bars/heatmap. null/undefined = app default.
   themeAccent?: string | null;
   // Report-wide horizontal alignment of numeric cells. undefined = 'center' (default).

@@ -44,6 +44,8 @@ interface Props {
   onBarToggle?: () => void;
   isHeatmap?: boolean;
   onHeatmapToggle?: () => void;
+  isHeatmapInverted?: boolean;
+  onHeatmapInvertToggle?: () => void;
   decimalPlaces?: number;
   onDecimalPlacesChange?: (v: number) => void;
   comparisonThreshold?: number;
@@ -53,10 +55,19 @@ interface Props {
   anchorLeft?: number;
 }
 
-export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft }: Props) {
+export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft }: Props) {
   const isPercent = dataType === 'percent';
   const thresholdLabel = isPercent ? 'До значения (%)' : 'До значения';
   const [enabled, setEnabled] = useState(initial?.enabled ?? false);
+  // Единая подсветка: Выкл / Градиент (авто, красный→зелёный) / Пороги (ручные)
+  type HlMode = 'off' | 'gradient' | 'thresholds';
+  const [hlMode, setHlMode] = useState<HlMode>(isHeatmap ? 'gradient' : (initial?.enabled ? 'thresholds' : 'off'));
+  function switchMode(m: HlMode) {
+    setHlMode(m);
+    if (m === 'gradient' && !isHeatmap) onHeatmapToggle?.();
+    if (m !== 'gradient' && isHeatmap) onHeatmapToggle?.();
+    setEnabled(m === 'thresholds');
+  }
   const [count, setCount] = useState(initial ? initial.thresholds.length + 1 : 2);
   const [thresholds, setThresholds] = useState<HighlightThreshold[]>(
     initial?.thresholds ?? defaultConfig(2).thresholds
@@ -165,20 +176,6 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
                   </span>
                 </label>
               )}
-              {onHeatmapToggle && (
-                <label className="flex items-center gap-2 cursor-pointer mt-1 pt-1 border-t border-[var(--color-border)]">
-                  <input
-                    type="checkbox"
-                    checked={isHeatmap ?? false}
-                    onChange={onHeatmapToggle}
-                    className="accent-[var(--color-accent)] w-4 h-4"
-                  />
-                  <span className="text-sm text-[var(--color-text)] flex items-center gap-1.5">
-                    Тепловая карта
-                    <span className="text-[11px] text-[var(--color-text-muted)]">(фон по min→max колонки)</span>
-                  </span>
-                </label>
-              )}
             </div>
           </div>
         )}
@@ -227,18 +224,47 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           </div>
         )}
 
-        {/* Enable toggle */}
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={e => setEnabled(e.target.checked)}
-            className="accent-[var(--color-accent)] w-4 h-4"
-          />
-          <span className="text-sm text-[var(--color-text)]">Подсвечивать значения</span>
-        </label>
+        {/* Единая подсветка значений */}
+        <div>
+          <div className="text-xs text-[var(--color-text-muted)] mb-1.5 uppercase tracking-wide">Подсветка значений</div>
+          <div className="flex flex-col gap-1">
+            {([
+              { v: 'off',        label: 'Выключена' },
+              { v: 'gradient',   label: 'Градиент (авто)', hint: 'красный → зелёный по min→max' },
+              { v: 'thresholds', label: 'Пороги', hint: 'свои значения и цвета' },
+            ] as { v: 'off' | 'gradient' | 'thresholds'; label: string; hint?: string }[]).map(o => (
+              <label key={o.v} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="hlMode"
+                  checked={hlMode === o.v}
+                  onChange={() => switchMode(o.v)}
+                  className="accent-[var(--color-accent)]"
+                />
+                <span className="text-sm text-[var(--color-text)]">
+                  {o.label}
+                  {o.hint && <span className="text-[11px] text-[var(--color-text-muted)] ml-1.5">({o.hint})</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+          {hlMode === 'gradient' && onHeatmapInvertToggle && (
+            <label className="flex items-center gap-2 cursor-pointer mt-2 pl-6">
+              <input
+                type="checkbox"
+                checked={isHeatmapInverted ?? false}
+                onChange={onHeatmapInvertToggle}
+                className="accent-[var(--color-accent)] w-4 h-4"
+              />
+              <span className="text-sm text-[var(--color-text)]">
+                Наоборот
+                <span className="text-[11px] text-[var(--color-text-muted)] ml-1.5">(меньше = лучше: минимум зелёный)</span>
+              </span>
+            </label>
+          )}
+        </div>
 
-        {enabled && (
+        {hlMode === 'thresholds' && (
           <>
             {/* Count */}
             <div>

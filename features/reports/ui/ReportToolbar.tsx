@@ -20,14 +20,14 @@ interface Props {
   onSaveReport: () => void;
   viewPrefs: ViewPrefs;
   onViewPrefsChange: (p: ViewPrefs) => void;
-  themeAccent?: string | null;
-  onThemeAccentChange?: (c: string | null) => void;
   numberAlign?: 'left' | 'center' | 'right';
   onNumberAlignChange?: (a: 'left' | 'center' | 'right') => void;
   accountType?: AccountType;
   onAccountTypeChange?: (a: AccountType) => void;
   drilldownGrouped?: boolean;
   onDrilldownGroupedChange?: (v: boolean) => void;
+  colorizeMetrics?: boolean;
+  onColorizeMetricsChange?: (v: boolean) => void;
 }
 
 export function ReportToolbar({
@@ -37,10 +37,10 @@ export function ReportToolbar({
   onDealScopeChange, onClientTypeChange, onComparisonDisplayChange,
   onProductGroupModeChange, onRefresh, onSaveReport,
   viewPrefs, onViewPrefsChange,
-  themeAccent, onThemeAccentChange,
   numberAlign, onNumberAlignChange,
   accountType, onAccountTypeChange,
   drilldownGrouped, onDrilldownGroupedChange,
+  colorizeMetrics, onColorizeMetricsChange,
 }: Props) {
   return (
     <div className="flex items-center gap-2 px-6 py-2 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
@@ -57,8 +57,6 @@ export function ReportToolbar({
       <ViewSettings
         prefs={viewPrefs}
         onChange={onViewPrefsChange}
-        themeAccent={themeAccent}
-        onThemeAccentChange={onThemeAccentChange}
         numberAlign={numberAlign}
         onNumberAlignChange={onNumberAlignChange}
         comparisonDisplay={comparisonDisplay}
@@ -68,6 +66,8 @@ export function ReportToolbar({
         onAccountTypeChange={onAccountTypeChange}
         drilldownGrouped={drilldownGrouped}
         onDrilldownGroupedChange={onDrilldownGroupedChange}
+        colorizeMetrics={colorizeMetrics}
+        onColorizeMetricsChange={onColorizeMetricsChange}
       />
 
       <button

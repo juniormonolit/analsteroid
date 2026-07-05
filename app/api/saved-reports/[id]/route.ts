@@ -29,7 +29,7 @@ export async function PUT(
        heatmap_metric_ids = $27, theme_accent = $28, number_align = $29, account_type = $30,
        drilldown_duplicate_metrics = $31, drilldown_metric_ids = $32, deal_fields = $33,
        drilldown_grouped = $34, source_dimension = $35, drilldown_dimension = $36,
-       is_shared = $37
+       is_shared = $37, heatmap_inverted_ids = $38, colorize_metrics = $39
      WHERE id = $1 AND user_login = $2`,
     [
       id, session.login,
@@ -62,6 +62,8 @@ export async function PUT(
       body.sourceDimension ?? null,
       body.drilldownDimension ?? null,
       session.isAdmin ? (body.isShared ?? false) : false,
+      body.heatmapInvertedIds ?? [],
+      body.colorizeMetrics ?? null,
     ]
   );
   return NextResponse.json({ ok: true });

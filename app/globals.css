@@ -19,7 +19,7 @@
   --color-sidebar-text: #c1c2c5;
   --color-sidebar-active: #228be6;
   --color-sidebar-active-bg: rgba(34,139,230,0.15);
-  --color-table-header: #f1f3f5;
+  --color-table-header: #fbfcfd; /* почти белая шапка — спокойный премиальный вид */
   --color-table-row-hover: #dbeafe; /* accent-blue hover tint — clearly distinct from zebra */
   --color-table-stripe: #f6f7f9;    /* gentle zebra on white rows (not = bg) */
 }
