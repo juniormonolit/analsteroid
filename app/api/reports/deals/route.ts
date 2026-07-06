@@ -185,7 +185,7 @@ export async function GET(req: NextRequest) {
       d.sold_at,
       d.delivered_at,
       d.lost_at,
-      d.expected_close_date,
+      NULL::timestamptz AS expected_close_date,  -- нет в sa.deals; форму ответа сохраняем
       d.source_id,
       d.current_manager_id::text AS manager_id,
       s.name  AS stage_name,

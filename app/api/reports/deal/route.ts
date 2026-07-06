@@ -18,7 +18,8 @@ export async function GET(req: NextRequest) {
     `SELECT
        d.deal_id, d.deal_name, d.amount, d.is_reserved,
        d.created_at, d.updated_at, d.reserved_at, d.confirmed_at,
-       d.sold_at, d.delivered_at, d.lost_at, d.expected_close_date,
+       d.sold_at, d.delivered_at, d.lost_at,
+       NULL::timestamptz AS expected_close_date,  -- нет в sa.deals; форму ответа сохраняем
        d.current_manager_id::text AS manager_id,
        d.lead_id, d.contact_id, d.company_id,
        d.source_id, d.products,
