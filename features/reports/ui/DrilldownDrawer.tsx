@@ -315,10 +315,15 @@ function ManagerMiniReport({ target, period, dealScope, clientType, productGroup
               </Fragment>
             );
           })}
-          <tr className="border-t-2 border-[var(--color-border)] font-medium">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-table-header)] px-4 py-2 border-r border-t-2 border-[var(--color-border)]">Итого</td>
+          <tr className="font-semibold text-white">
+            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-white/10 uppercase tracking-wider text-[12px]">
+              <span className="flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
+                Итого
+              </span>
+            </td>
             {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2 tabular-nums whitespace-nowrap bg-[var(--color-table-header)] border-t-2 border-[var(--color-border)]">
+              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)]">
                 {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
               </td>
             ))}
@@ -480,10 +485,15 @@ function ProductGroupMiniReport({ target, period, dealScope, clientType, product
               </Fragment>
             );
           })}
-          <tr className="border-t-2 border-[var(--color-border)] font-medium">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-table-header)] px-4 py-2 border-r border-t-2 border-[var(--color-border)]">Итого</td>
+          <tr className="font-semibold text-white">
+            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-white/10 uppercase tracking-wider text-[12px]">
+              <span className="flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
+                Итого
+              </span>
+            </td>
             {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2 tabular-nums whitespace-nowrap bg-[var(--color-table-header)] border-t-2 border-[var(--color-border)]">
+              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)]">
                 {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
               </td>
             ))}
@@ -653,10 +663,15 @@ function SourceMiniReport({ target, period, dealScope, clientType, productGroupM
               </Fragment>
             );
           })}
-          <tr className="border-t-2 border-[var(--color-border)] font-medium">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-table-header)] px-4 py-2 border-r border-t-2 border-[var(--color-border)]">Итого</td>
+          <tr className="font-semibold text-white">
+            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-white/10 uppercase tracking-wider text-[12px]">
+              <span className="flex items-center gap-2">
+                <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
+                Итого
+              </span>
+            </td>
             {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2 tabular-nums whitespace-nowrap bg-[var(--color-table-header)] border-t-2 border-[var(--color-border)]">
+              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)]">
                 {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
               </td>
             ))}

@@ -389,8 +389,9 @@ export function ReportTable({
 
   const DIMENSION_WIDTH = 320;
   const METRIC_COL_WIDTH = 90; // min-width per slot for non-pinned cols
-  // Итоговая строка: акцентная непрозрачная заливка (opaque — обязательна для sticky)
-  const TOTALS_BG = 'color-mix(in srgb, var(--color-accent) 8%, white)';
+  // Итоговая строка: тёмная непрозрачная плашка (opaque — обязательна для sticky),
+  // белые цифры — контрастно выделяется на любом фоне таблицы
+  const TOTALS_BG = 'var(--color-totals-bg)';
 
   // Sticky offsets per LEAF column. A full-mode metric has 4 leaf columns
   // (Текущий/Ср/Δ/Δ%), each needs its own sticky `left` = dimension width + sum of
@@ -835,19 +836,22 @@ export function ReportTable({
           {sorted.map((row, i) => renderRow(row, i))}
 
           {totals && grouping !== 'total' && (
-            <tr className="border-t-2 border-t-[var(--color-accent)] font-semibold">
+            <tr className="font-semibold text-white">
               <td
-                className="sticky left-0 bottom-0 z-30 px-4 py-2.5 border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px] text-[var(--color-text)] uppercase tracking-wide"
+                className="sticky left-0 bottom-0 z-30 px-4 py-3 border-r border-white/10 w-[320px] min-w-[320px] max-w-[320px] uppercase tracking-wider text-[12px]"
                 style={{ backgroundColor: TOTALS_BG }}
               >
-                Итого
+                <span className="flex items-center gap-2">
+                  <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
+                  Итого
+                </span>
               </td>
               {displayMetrics.map(m => {
                 const mode = resolveMode(m.id);
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
                 const canClick = !!onCellClick && isClickableMetric(m);
                 const clickCls = canClick
-                  ? 'cursor-pointer hover:text-[var(--color-accent)] hover:underline transition-colors'
+                  ? 'cursor-pointer hover:text-[var(--color-totals-hover)] hover:underline transition-colors'
                   : '';
                 const handleClick = canClick ? () => onCellClick!('__total__', 'Итого', m.id) : undefined;
                 const sub = (i: number, base: string) => {
@@ -859,25 +863,29 @@ export function ReportTable({
                   const style: React.CSSProperties = { ...(isPinned ? { left: leafLeft(m.id, i) } : {}), backgroundColor: TOTALS_BG, textAlign: numberAlign };
                   return { cls, style };
                 };
-                const firstBase = strongLeft.has(m.id) ? sepCls : '';
+                // На тёмной плашке разделители групп колонок — полупрозрачные белые
+                const firstBase = strongLeft.has(m.id) ? 'border-l border-l-white/15' : '';
+                const pinSep = m.id === lastPinnedId
+                  ? <span className="absolute top-0 bottom-0 right-0 w-px bg-white/20 pointer-events-none z-50" />
+                  : null;
                 if (mode === 'full') {
                   const a = sub(0, firstBase), b = sub(1, ''), c = sub(2, ''), e = sub(3, '');
                   return (
                     <React.Fragment key={m.id}>
-                      <td className={`text-center px-2 py-2.5 tabular-nums ${clickCls} ${a.cls}`} style={a.style} onClick={handleClick}>
+                      <td className={`text-center px-2 py-3 tabular-nums ${clickCls} ${a.cls}`} style={a.style} onClick={handleClick}>
                         {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
                       </td>
-                      <td className={`text-center px-2 py-2.5 tabular-nums text-[var(--color-text-muted)] ${b.cls}`} style={b.style}>—</td>
-                      <td className={`text-center px-2 py-2.5 tabular-nums ${c.cls}`} style={c.style}>—</td>
-                      <td className={`relative text-center px-2 py-2.5 tabular-nums ${e.cls}`} style={e.style}>—{m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}</td>
+                      <td className={`text-center px-2 py-3 tabular-nums text-[var(--color-totals-muted)] ${b.cls}`} style={b.style}>—</td>
+                      <td className={`text-center px-2 py-3 tabular-nums text-[var(--color-totals-muted)] ${c.cls}`} style={c.style}>—</td>
+                      <td className={`relative text-center px-2 py-3 tabular-nums text-[var(--color-totals-muted)] ${e.cls}`} style={e.style}>—{pinSep}</td>
                     </React.Fragment>
                   );
                 }
                 const one = sub(0, firstBase);
                 return (
-                  <td key={m.id} className={`relative text-center px-3 py-2.5 tabular-nums ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
+                  <td key={m.id} className={`relative text-center px-3 py-3 tabular-nums ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
                     {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
-                    {m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
+                    {pinSep}
                   </td>
                 );
               })}
