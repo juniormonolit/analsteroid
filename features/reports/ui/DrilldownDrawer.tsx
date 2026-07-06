@@ -315,15 +315,15 @@ function ManagerMiniReport({ target, period, dealScope, clientType, productGroup
               </Fragment>
             );
           })}
-          <tr className="font-semibold text-white">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-white/10 uppercase tracking-wider text-[12px]">
+          <tr className="font-semibold text-[var(--color-text)]">
+            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] uppercase tracking-wider text-[12px]">
               <span className="flex items-center gap-2">
                 <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
                 Итого
               </span>
             </td>
             {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)]">
+              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)] border-t-2 border-t-[var(--color-accent)]">
                 {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
               </td>
             ))}
@@ -485,15 +485,15 @@ function ProductGroupMiniReport({ target, period, dealScope, clientType, product
               </Fragment>
             );
           })}
-          <tr className="font-semibold text-white">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-white/10 uppercase tracking-wider text-[12px]">
+          <tr className="font-semibold text-[var(--color-text)]">
+            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] uppercase tracking-wider text-[12px]">
               <span className="flex items-center gap-2">
                 <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
                 Итого
               </span>
             </td>
             {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)]">
+              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)] border-t-2 border-t-[var(--color-accent)]">
                 {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
               </td>
             ))}
@@ -663,15 +663,15 @@ function SourceMiniReport({ target, period, dealScope, clientType, productGroupM
               </Fragment>
             );
           })}
-          <tr className="font-semibold text-white">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-white/10 uppercase tracking-wider text-[12px]">
+          <tr className="font-semibold text-[var(--color-text)]">
+            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] uppercase tracking-wider text-[12px]">
               <span className="flex items-center gap-2">
                 <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
                 Итого
               </span>
             </td>
             {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)]">
+              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)] border-t-2 border-t-[var(--color-accent)]">
                 {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
               </td>
             ))}

@@ -20,9 +20,7 @@
   --color-sidebar-active: #228be6;
   --color-sidebar-active-bg: rgba(34,139,230,0.15);
   --color-table-header: #fbfcfd; /* почти белая шапка — спокойный премиальный вид */
-  --color-totals-bg: #243447;    /* итоговая строка: тёмная сине-графитовая плашка */
-  --color-totals-muted: rgba(255,255,255,0.45); /* прочерки/вторичное на тёмном */
-  --color-totals-hover: #8ecbff; /* hover кликабельных цифр итога на тёмном */
+  --color-totals-bg: #d0e4fb;    /* итоговая строка: заметная светло-синяя плашка (не инверсия) */
   --color-table-row-hover: #dbeafe; /* accent-blue hover tint — clearly distinct from zebra */
   --color-table-stripe: #f6f7f9;    /* gentle zebra on white rows (not = bg) */
 }

@@ -225,7 +225,7 @@ export function ViewSettings({
                   <button
                     key={String(v)}
                     onClick={() => onColorizeMetricsChange(v)}
-                    className={`flex-1 px-2 py-1.5 transition-colors ${(colorizeMetrics ?? true) === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(colorizeMetrics ?? false) === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
                   >
                     {v ? 'Да' : 'Нет'}
                   </button>

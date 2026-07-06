@@ -200,7 +200,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [barMetricIds, setBarMetricIds] = useState<string[]>([]);
   const [heatmapMetricIds, setHeatmapMetricIds] = useState<string[]>([]);
   const [heatmapInvertedIds, setHeatmapInvertedIds] = useState<string[]>([]);
-  const [colorizeMetrics, setColorizeMetrics] = useState(true);
+  const [colorizeMetrics, setColorizeMetrics] = useState(false);
   const [themeAccent, setThemeAccent] = useState<string | null>(null); // legacy, UI выпилен
   const [numberAlign, setNumberAlign] = useState<'left' | 'center' | 'right'>('center');
   const [accountType, setAccountType] = useState<'managers' | 'logists' | 'all'>('managers');
@@ -250,7 +250,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setBarMetricIds(preset.barMetricIds ?? []);
     setHeatmapMetricIds(preset.heatmapMetricIds ?? []);
     setHeatmapInvertedIds(preset.heatmapInvertedIds ?? []);
-    setColorizeMetrics(preset.colorizeMetrics ?? true);
+    setColorizeMetrics(preset.colorizeMetrics ?? false);
     setThemeAccent(preset.themeAccent ?? null);
     setNumberAlign(preset.numberAlign ?? 'center');
     setAccountType(preset.accountType ?? 'managers');
