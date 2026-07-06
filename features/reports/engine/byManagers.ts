@@ -211,7 +211,10 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
         dimensionSubtitle: org?.short_login  ?? undefined,
         teamId:            org?.department_id   ?? null,
         teamName:          org?.department_name ?? null,
-        branchName:        org?.branch ?? null,
+        // Правило заказчика: всё, что не Москва и не Краснодар, — СПб. branch в
+        // org_resolved_hierarchy заполнен для всех активных; фолбэк — для менеджеров
+        // вне активной оргструктуры.
+        branchName:        org?.branch ?? 'СПб',
         metrics: Object.fromEntries(
           metricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null]),
         ),

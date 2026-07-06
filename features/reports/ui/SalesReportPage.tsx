@@ -80,24 +80,70 @@ function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Met
     }];
   }
 
-  const isBranch = grouping === 'branch';
+  if (grouping === 'branch') {
+    // Костыль сравнения отделов по городам: город (филиал) → АГРЕГИРОВАННЫЕ строки
+    // отделов (не менеджеры). Всё, что не Москва и не Краснодар, — СПб (правило
+    // заказчика; в byManagers оно же — фолбэк для менеджеров без филиала).
+    const order: string[] = [];
+    const groups = new Map<string, MergedRow[]>();
+    for (const row of rows) {
+      const key = row.branchName ?? 'СПб';
+      if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+      groups.get(key)!.push(row);
+    }
+
+    return order.map(branch => {
+      const members = groups.get(branch)!;
+      const teamOrder: string[] = [];
+      const byTeam = new Map<string, MergedRow[]>();
+      for (const row of members) {
+        const tk = row.teamId ?? '__no_team__';
+        if (!byTeam.has(tk)) { byTeam.set(tk, []); teamOrder.push(tk); }
+        byTeam.get(tk)!.push(row);
+      }
+      const teamRows: MergedRow[] = teamOrder.map(tk => {
+        const tm = byTeam.get(tk)!;
+        const teamName = tm[0]?.teamName ?? 'Без отдела';
+        return {
+          dimensionId: `__team__${tk}`,
+          dimensionName: teamName,
+          dimensionSubtitle: `${tm.length} чел.`,
+          teamId: tk,
+          teamName,
+          branchName: branch,
+          deltas: aggregateGroupDeltas(tm, metrics),
+        };
+      });
+      return {
+        dimensionId: `__branch__${branch}`,
+        dimensionName: branch,
+        teamId: null,
+        teamName: null,
+        branchName: branch,
+        deltas: aggregateGroupDeltas(members, metrics),
+        isGroup: true,
+        children: teamRows,
+      };
+    });
+  }
+
+  // grouping === 'team'
   const order: string[] = [];
   const groups = new Map<string, MergedRow[]>();
   for (const row of rows) {
-    const key = isBranch ? (row.branchName ?? 'Не определён') : (row.teamId ?? '__no_team__');
+    const key = row.teamId ?? '__no_team__';
     if (!groups.has(key)) { groups.set(key, []); order.push(key); }
     groups.get(key)!.push(row);
   }
 
   return order.map(key => {
     const members = groups.get(key)!;
-    const name = isBranch ? key : (members[0]?.teamName ?? 'Без отдела');
+    const name = members[0]?.teamName ?? 'Без отдела';
     return {
-      dimensionId: isBranch ? `__branch__${key}` : `__team__${key}`,
+      dimensionId: `__team__${key}`,
       dimensionName: name,
-      teamId: isBranch ? null : key,
-      teamName: isBranch ? null : name,
-      branchName: isBranch ? key : undefined,
+      teamId: key,
+      teamName: name,
       deltas: aggregateGroupDeltas(members, metrics),
       isGroup: true,
       children: members,
@@ -358,7 +404,12 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   }, [data?.rows, grouping, search, catalogMetrics]);
 
   const handleRowClick = useCallback(
-    (id: string, name: string) => setDrilldown({ id, name }),
+    (id: string, name: string) => {
+      // Агрегированные строки отделов внутри филиала → сделки отдела
+      if (id.startsWith('__team__')) setDrilldown({ id: id.slice('__team__'.length), name, kind: 'team' });
+      else if (id.startsWith('__branch__')) setDrilldown({ id: id.slice('__branch__'.length), name, kind: 'branch' });
+      else setDrilldown({ id, name });
+    },
     []
   );
 

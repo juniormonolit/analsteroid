@@ -24,7 +24,7 @@ export function applyGrouping(rows: ReportRow[], grouping: Grouping, allMetrics:
   if (grouping === 'branch') {
     const groups = new Map<string, ReportRow[]>();
     for (const row of rows) {
-      const key = row.branchName ?? 'Не определён';
+      const key = row.branchName ?? 'СПб'; // правило: не Москва и не Краснодар → СПб
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(row);
     }
