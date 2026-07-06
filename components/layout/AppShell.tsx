@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
-  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList,
+  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { QueryProvider } from '@/components/providers/QueryProvider';
@@ -282,7 +282,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             ))}
           </nav>
 
-          {/* Планы */}
+          {/* Планы + Декомпозиция */}
           <div className="border-t border-white/10 pt-1">
             <Link
               href="/plans"
@@ -292,6 +292,15 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             >
               <span className="text-[var(--color-sidebar-text)]"><ClipboardList size={18} /></span>
               {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Планы</span>}
+            </Link>
+            <Link
+              href="/decomposition"
+              className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                pathname.startsWith('/decomposition') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+              }`}
+            >
+              <span className="text-[var(--color-sidebar-text)]"><Network size={18} /></span>
+              {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Декомпозиция</span>}
             </Link>
           </div>
 
