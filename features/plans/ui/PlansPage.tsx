@@ -199,22 +199,28 @@ export function PlansPage() {
   const months = useMemo(() => buildMonthsList(plansMap), [plansMap]);
 
   async function handleSaveCell(login: string, month: string, plan_shipments: number, plan_n: number) {
-    await fetch(`/api/plans/${encodeURIComponent(login)}/${month}`, {
+    const res = await fetch(`/api/plans/${encodeURIComponent(login)}/${month}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ plan_shipments, plan_n }),
     });
+    if (!res.ok) {
+      alert('Не удалось сохранить план — значение не изменено');
+    }
     await qc.invalidateQueries({ queryKey: ['plans'] });
   }
 
   async function handleSaveN() {
     const n = parseFloat(draftN.replace(',', '.'));
     if (isNaN(n) || n <= 0) { setEditingN(false); return; }
-    await fetch('/api/plans/settings', {
+    const res = await fetch('/api/plans/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ plan_n: n }),
     });
+    if (!res.ok) {
+      alert('Не удалось сохранить коэффициент плана продаж');
+    }
     await qc.invalidateQueries({ queryKey: ['plan-settings'] });
     setEditingN(false);
   }
