@@ -30,9 +30,10 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     staleTime: 30_000,
   });
 
-  async function deleteReport(id: string, e: React.MouseEvent) {
+  async function deleteReport(id: string, name: string, e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    if (!confirm(`Удалить отчёт «${name}»?`)) return;
     await fetch(`/api/saved-reports/${id}`, { method: 'DELETE' });
     qc.invalidateQueries({ queryKey: ['saved-reports'] });
   }
@@ -101,7 +102,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
                     <span className="truncate flex-1">{r.name}</span>
                     {user.isAdmin && (
                       <button
-                        onClick={e => deleteReport(r.id, e)}
+                        onClick={e => deleteReport(r.id, r.name, e)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-[var(--color-negative)]"
                       >
                         <Trash2 size={12} />
@@ -137,7 +138,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
                 <Link key={r.id} href={href} className={linkCls(href)}>
                   <span className="truncate flex-1">{r.name}</span>
                   <button
-                    onClick={e => deleteReport(r.id, e)}
+                    onClick={e => deleteReport(r.id, r.name, e)}
                     className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-[var(--color-negative)]"
                   >
                     <Trash2 size={12} />
