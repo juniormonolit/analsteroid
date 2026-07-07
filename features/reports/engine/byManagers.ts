@@ -1,5 +1,6 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached, reportTtl } from '@/lib/cache/redis';
+import { loadOrgHierarchy } from '@/lib/org/hierarchy';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
@@ -131,17 +132,12 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
 
   const sysDb = systemDb();
 
-  // Org hierarchy + dept filter run every request (fast, small tables)
-  const [orgRes, deptRes, loginRes] = await Promise.all([
-    sysDb.query<{
-      bitrix_user_id: string; manager_name: string;
-      department_id: string | null; department_name: string | null;
-      rop_bitrix_user_id: string | null; short_login: string | null;
-      branch: string | null;
-    }>(`SELECT manager_bitrix_user_id AS bitrix_user_id,
-              manager_name, department_id, department_name, rop_bitrix_user_id,
-              short_login, branch
-         FROM org_resolved_hierarchy WHERE is_active = true`),
+  // Org hierarchy: кэшированный shared-loader (lib/org/hierarchy.ts, TTL 10 мин) —
+  // раньше этот же SELECT выполнялся заново на каждый вызов fetchByManagers (т.е.
+  // на каждый /api/reports/run), хотя справочник меняется редко.
+  // Dept filter (per-request, зависит от параметров) — как и раньше, отдельным запросом.
+  const [orgRows, deptRes, loginRes] = await Promise.all([
+    loadOrgHierarchy(),
     deptIds.length
       ? sysDb.query<{ bitrix_user_id: string }>(
           `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
@@ -162,7 +158,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
       : Promise.resolve(null),
   ]);
 
-  const orgMap         = new Map(orgRes.rows.map(r => [r.bitrix_user_id, r]));
+  const orgMap         = new Map(orgRows.map(r => [r.bitrixUserId, r]));
   const allowedBitrix  = deptRes ? new Set(deptRes.rows.map(r => r.bitrix_user_id)) : null;
   const loginByBitrix  = loginRes ? new Map(loginRes.rows.map(r => [r.bitrix_user_id, (r.bitrix_login ?? '').toLowerCase()])) : null;
   const accountPrefix  = accountType === 'managers' ? 'manager' : accountType === 'logists' ? 'logist' : null;
@@ -211,10 +207,10 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
       const org = orgMap.get(id);
       return {
         dimensionId:       id,
-        dimensionName:     org?.manager_name ?? `#${id}`,
-        dimensionSubtitle: org?.short_login  ?? undefined,
-        teamId:            org?.department_id   ?? null,
-        teamName:          org?.department_name ?? null,
+        dimensionName:     org?.managerName ?? `#${id}`,
+        dimensionSubtitle: org?.shortLogin  ?? undefined,
+        teamId:            org?.departmentId   ?? null,
+        teamName:          org?.departmentName ?? null,
         // Правило заказчика: всё, что не Москва и не Краснодар, — СПб. branch в
         // org_resolved_hierarchy заполнен для всех активных; фолбэк — для менеджеров
         // вне активной оргструктуры.

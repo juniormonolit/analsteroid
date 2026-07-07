@@ -16,18 +16,21 @@ export async function GET() {
     ORDER BY table_name
   `);
 
-  const tables: { name: string; count: number }[] = [];
-
-  for (const { table_name } of tablesRes.rows) {
-    try {
-      const countRes = await db.query<{ count: string }>(
-        `SELECT COUNT(*) AS count FROM sa."${table_name}"`
-      );
-      tables.push({ name: table_name, count: parseInt(countRes.rows[0].count, 10) });
-    } catch {
-      tables.push({ name: table_name, count: -1 });
-    }
-  }
+  // Было: await COUNT(*) на каждую таблицу по очереди (N последовательных
+  // round-trip'ов к БД, суммарная задержка = сумма всех отдельных COUNT). Таблицы
+  // независимы друг от друга — считаем их параллельно одним Promise.all.
+  const tables = await Promise.all(
+    tablesRes.rows.map(async ({ table_name }): Promise<{ name: string; count: number }> => {
+      try {
+        const countRes = await db.query<{ count: string }>(
+          `SELECT COUNT(*) AS count FROM sa."${table_name}"`
+        );
+        return { name: table_name, count: parseInt(countRes.rows[0].count, 10) };
+      } catch {
+        return { name: table_name, count: -1 };
+      }
+    }),
+  );
 
   return NextResponse.json(tables);
 }
