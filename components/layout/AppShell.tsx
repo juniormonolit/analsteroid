@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
-  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network,
+  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { QueryProvider } from '@/components/providers/QueryProvider';
@@ -282,8 +282,17 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             ))}
           </nav>
 
-          {/* Планы + Декомпозиция */}
+          {/* Сводная + Планы + Декомпозиция */}
           <div className="border-t border-white/10 pt-1">
+            <Link
+              href="/summary"
+              className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                pathname.startsWith('/summary') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+              }`}
+            >
+              <span className="text-[var(--color-sidebar-text)]"><Gauge size={18} /></span>
+              {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Сводная</span>}
+            </Link>
             <Link
               href="/plans"
               className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${

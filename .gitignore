@@ -14,3 +14,5 @@ migrations/*_tmp.sql
 migrations/debug_*.sql
 .scratch_*.js
 /temp/
+# Scriptable iPhone widget scripts — plan_widget_core.js has WIDGET_API_TOKEN hardcoded
+scripts/scriptable/
