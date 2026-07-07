@@ -9,6 +9,31 @@ export interface DimensionConfig {
   funnelBreakdown?: boolean; // Add d.funnel_id to SELECT for pill filtering
 }
 
+// All identifiers below (column names, metric ids) come from the admin-only metrics
+// catalog (metrics.filters / agg_field / date_field / id, editable via /api/admin/metrics
+// and /api/settings/metrics). They are inlined into raw SQL as column/table identifiers,
+// which can't be parameterized with $n placeholders — so we validate them against a strict
+// allowlist pattern instead. This is defense-in-depth: an admin account is not meant to be
+// equivalent to raw SQL access against the analytics DB (e.g. a stolen admin session
+// shouldn't be able to pivot into arbitrary SQL via a crafted metric definition).
+const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+export function assertIdentifier(name: string, what: string): string {
+  if (!IDENT_RE.test(name)) {
+    throw new Error(`Metric config error: invalid ${what} "${name}" (expected a plain SQL identifier)`);
+  }
+  return name;
+}
+
+/** Escape a string for use inside a single-quoted SQL text literal. */
+function sqlString(v: string): string {
+  return `'${v.replace(/'/g, "''")}'`;
+}
+
+function sqlLiteral(v: string | number): string {
+  return typeof v === 'number' ? String(v) : sqlString(String(v));
+}
+
 export function resolveFilterClause(f: MetricFilter, tableAlias: string): string {
   const a = tableAlias;
   if (f.field === '_ppp') {
@@ -36,36 +61,39 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
     return '';
   }
   if (f.field === 'event_type') {
-    return `de.stage_id IN (SELECT id FROM stages WHERE event_type = '${f.value}')`;
+    return `de.stage_id IN (SELECT id FROM stages WHERE event_type = ${sqlLiteral(String(f.value))})`;
   }
   if (f.field === 'stage_type') {
-    return `${a}.stage_id IN (SELECT id FROM stages WHERE event_type = '${f.value}')`;
+    return `${a}.stage_id IN (SELECT id FROM stages WHERE event_type = ${sqlLiteral(String(f.value))})`;
   }
   // gt_field: column-vs-column comparison, value = other column name (e.g. lost_at > sold_at).
   // Implies both NOT NULL (SQL comparison with NULL is never true).
   if (f.op === 'gt_field') {
     const other = String(f.value);
-    if (!/^[a-z_][a-z0-9_]*$/i.test(other) || !/^[a-z_][a-z0-9_]*$/i.test(f.field)) return '';
+    if (!IDENT_RE.test(other) || !IDENT_RE.test(f.field)) return '';
     return `${a}.${f.field} > ${a}.${other}`;
   }
   // is_null / is_not_null: special handling for product_rows (also check empty jsonb array)
   if (f.op === 'is_null') {
+    assertIdentifier(f.field, 'filter field');
     if (f.field === 'products') {
       return `(${a}.products IS NULL OR jsonb_array_length(${a}.products) = 0)`;
     }
     return `${a}.${f.field} IS NULL`;
   }
   if (f.op === 'is_not_null') {
+    assertIdentifier(f.field, 'filter field');
     return `${a}.${f.field} IS NOT NULL`;
   }
 
+  assertIdentifier(f.field, 'filter field');
   const vals = Array.isArray(f.value)
-    ? (f.value as (string | number)[]).map(v => typeof v === 'string' ? `'${v}'` : String(v)).join(', ')
+    ? (f.value as (string | number)[]).map(sqlLiteral).join(', ')
     : null;
 
   switch (f.op) {
-    case 'eq':      return `${a}.${f.field} = '${f.value}'`;
-    case 'neq':     return `${a}.${f.field} != '${f.value}'`;
+    case 'eq':      return `${a}.${f.field} = ${sqlLiteral(f.value as string | number)}`;
+    case 'neq':     return `${a}.${f.field} != ${sqlLiteral(f.value as string | number)}`;
     case 'in':      return vals ? `${a}.${f.field} IN (${vals})` : '';
     case 'not_in':  return vals ? `${a}.${f.field} NOT IN (${vals})` : '';
     default: return '';
@@ -73,6 +101,10 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
 }
 
 function genDealsExpr(m: Metric): string {
+  assertIdentifier(m.id, 'metric id');
+  assertIdentifier(m.dateField!, 'date field');
+  if (m.aggField) assertIdentifier(m.aggField, 'agg field');
+
   const when: string[] = [
     `d.${m.dateField} >= $1`,
     `d.${m.dateField} < $2`,
@@ -95,6 +127,10 @@ function genDealsExpr(m: Metric): string {
 }
 
 function genEventsExpr(m: Metric): string {
+  assertIdentifier(m.id, 'metric id');
+  assertIdentifier(m.dateField!, 'date field');
+  if (m.aggField) assertIdentifier(m.aggField, 'agg field');
+
   const evtWhere: string[] = [
     `de.deal_id = d.deal_id`,
     `de.${m.dateField} >= $1`,
@@ -135,10 +171,10 @@ export function buildCollectedSQL(
 
   // WHERE: a deal is in scope if any of its date fields fall in the period,
   // OR if it has any event in period (for event-sourced metrics).
-  const dateFields = [...new Set(dealsM.map(m => m.dateField!))];
+  const dateFields = [...new Set(dealsM.map(m => assertIdentifier(m.dateField!, 'date field')))];
   const dateConds  = dateFields.map(f => `(d.${f} >= $1 AND d.${f} < $2)`);
   if (eventsM.length > 0) {
-    const evtDateField = eventsM[0].dateField!;
+    const evtDateField = assertIdentifier(eventsM[0].dateField!, 'date field');
     dateConds.push(
       `EXISTS (SELECT 1 FROM deal_events _e WHERE _e.deal_id = d.deal_id AND _e.${evtDateField} >= $1 AND _e.${evtDateField} < $2)`,
     );
