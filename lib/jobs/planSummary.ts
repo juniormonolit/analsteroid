@@ -19,12 +19,101 @@ const BRANCH_LABELS: Record<string, string> = {
   'Краснодар': 'КРД',
 };
 
+// ── Категории продаж внутри филиала (для раскрытия карточки в «Сводной») ──────────
+// Резолвятся по РЕАЛЬНОЙ иерархии Bitrix-отделов (departments.parent_bitrix_department_id),
+// а не по department_name самого сотрудника — например, «Команда Осипов» попадает в «ОС»
+// только через цепочку предков (Команда Осипов < Департамент ОС < Отдел продаж).
+// Порядок важен: более специфичные узлы (ЖБИ/Металл) проверяются раньше их родителя (НЦ),
+// иначе все сотрудники «Отдел ЖБИ» попали бы в «НЦ» по совпадению с родительским узлом.
+// Соответствие подтверждено владельцем 2026-07-07 (см. migrations/047_plan_targets_department.sql).
+interface DeptAnchor { branch: string; category: string; name: string }
+
+const ANCESTOR_ANCHORS: DeptAnchor[] = [
+  { branch: 'СПБ', category: 'НЦ ЖБИ',    name: 'Отдел ЖБИ' },
+  { branch: 'СПБ', category: 'НЦ Металл', name: 'Отдел Металлопроката' },
+  { branch: 'СПБ', category: 'НЦ',        name: 'Департамент НЦ' },
+  { branch: 'СПБ', category: 'ОС',        name: 'Департамент ОС' },
+  { branch: 'СПБ', category: 'ОС',        name: 'Департамент ЮЛ' }, // «Звезды Монолита» + сам узел
+  { branch: 'МСК', category: 'ОС',        name: 'МСК ОС' },
+  { branch: 'МСК', category: 'НЦ',        name: 'МСК НЦ' },
+  { branch: 'МСК', category: 'ЖБИ',       name: 'МСК ЖБИ' },
+  { branch: 'КРД', category: 'ОС',        name: 'КРД ОС' },
+  { branch: 'КРД', category: 'НЦ',        name: 'КРД НЦ' },
+];
+
+// Голый «Отдел продаж» без своего подотдела (2 чел. по СПб) — матчится ТОЛЬКО по
+// собственному имени узла сотрудника, не по потомкам: это корень дерева продаж для
+// ВСЕХ филиалов, ancestor-match захватил бы МСК и КРД тоже.
+const EXACT_ANCHORS: DeptAnchor[] = [
+  { branch: 'СПБ', category: 'ОС', name: 'Отдел продаж' },
+];
+
+// Порядок отображения категорий внутри карточки филиала.
+const CATEGORY_ORDER = ['ОС', 'НЦ', 'НЦ ЖБИ', 'НЦ Металл', 'ЖБИ'];
+
+interface DeptRow { bitrixId: string; name: string; parentBitrixId: string | null }
+
+let _depts: Map<string, DeptRow> | null = null; // keyed by departments.id (uuid, org_resolved_hierarchy.department_id)
+let _deptsByBitrixId: Map<string, DeptRow> | null = null;
+let _deptsAt = 0;
+
+async function loadDepartments(): Promise<{ byId: Map<string, DeptRow>; byBitrixId: Map<string, DeptRow> }> {
+  if (_depts && Date.now() - _deptsAt < 30 * 60 * 1000) return { byId: _depts, byBitrixId: _deptsByBitrixId! };
+  const res = await systemDb().query<{ id: string; bitrix_department_id: string; name: string; parent_bitrix_department_id: string | null }>(
+    'SELECT id::text AS id, bitrix_department_id, name, parent_bitrix_department_id FROM departments',
+  );
+  const byId = new Map<string, DeptRow>();
+  const byBitrixId = new Map<string, DeptRow>();
+  for (const r of res.rows) {
+    const row: DeptRow = { bitrixId: r.bitrix_department_id, name: r.name, parentBitrixId: r.parent_bitrix_department_id };
+    byId.set(r.id, row);
+    byBitrixId.set(r.bitrix_department_id, row);
+  }
+  _depts = byId;
+  _deptsByBitrixId = byBitrixId;
+  _deptsAt = Date.now();
+  return { byId, byBitrixId };
+}
+
+async function getManagerDeptIds(): Promise<Map<string, string | null>> {
+  const res = await systemDb().query<{ manager_bitrix_user_id: string; department_id: string | null }>(
+    `SELECT manager_bitrix_user_id::text AS manager_bitrix_user_id, department_id::text AS department_id
+       FROM org_resolved_hierarchy WHERE is_active = true`,
+  );
+  return new Map(res.rows.map(r => [r.manager_bitrix_user_id, r.department_id]));
+}
+
+function resolveDeptCategory(
+  branchLabel: string,
+  departmentId: string | null,
+  byId: Map<string, DeptRow>,
+  byBitrixId: Map<string, DeptRow>,
+): string | null {
+  if (!departmentId) return null;
+  const own = byId.get(departmentId);
+  if (!own) return null;
+
+  for (const a of EXACT_ANCHORS) {
+    if (a.branch === branchLabel && own.name === a.name) return a.category;
+  }
+
+  let cur: DeptRow | undefined = own;
+  for (let guard = 0; cur && guard < 15; guard++) {
+    for (const a of ANCESTOR_ANCHORS) {
+      if (a.branch === branchLabel && cur.name === a.name) return a.category;
+    }
+    cur = cur.parentBitrixId ? byBitrixId.get(cur.parentBitrixId) : undefined;
+  }
+  return null;
+}
+
 interface BranchMetrics {
   name: string;
   fact_ytd: number;
   target_year: number | null;
   plan_percent_cumulative: number | null;
   plan_percent_pace: number | null;
+  departments?: BranchMetrics[];
 }
 
 export interface PlanSummary {
@@ -67,22 +156,31 @@ async function getShipmentsFactByManager(fromIso: string, toExclIso: string): Pr
 }
 
 async function getFactByBranch(fromIso: string, toExclIso: string) {
-  const [factByManager, branchByManager] = await Promise.all([
+  const [factByManager, branchByManager, managerDeptIds, { byId, byBitrixId }] = await Promise.all([
     getShipmentsFactByManager(fromIso, toExclIso),
     loadManagerBranchMap(),
+    getManagerDeptIds(),
+    loadDepartments(),
   ]);
 
   let russiaTotal = 0;
   const byBranch = new Map<string, number>();
+  const byDept = new Map<string, number>(); // key = `${branchLabel}:${category}`
 
   for (const [managerId, amount] of factByManager) {
     russiaTotal += amount;
     const rawBranch = branchByManager.get(managerId);
     const label = rawBranch ? (BRANCH_LABELS[rawBranch] ?? rawBranch) : 'СПБ';
     byBranch.set(label, (byBranch.get(label) ?? 0) + amount);
+
+    const category = resolveDeptCategory(label, managerDeptIds.get(managerId) ?? null, byId, byBitrixId);
+    if (category) {
+      const key = `${label}:${category}`;
+      byDept.set(key, (byDept.get(key) ?? 0) + amount);
+    }
   }
 
-  return { russiaTotal, byBranch };
+  return { russiaTotal, byBranch, byDept };
 }
 
 interface WorkingDayProgress {
@@ -107,19 +205,21 @@ async function getWorkingDayProgress(year: number, todayStr: string): Promise<Wo
   };
 }
 
-async function getPlanTargets(year: number): Promise<{ company: number | null; branch: Map<string, number> }> {
+async function getPlanTargets(year: number): Promise<{ company: number | null; branch: Map<string, number>; department: Map<string, number> }> {
   const res = await systemDb().query<{ scope: string; scope_name: string | null; target_amount: string }>(
     `SELECT scope, scope_name, target_amount FROM plan_targets_year WHERE year = $1`,
     [year],
   );
   let company: number | null = null;
   const branch = new Map<string, number>();
+  const department = new Map<string, number>(); // key = `${branchLabel}:${category}`
   for (const row of res.rows) {
     const amount = Number(row.target_amount);
     if (row.scope === 'company') company = amount;
     else if (row.scope === 'branch' && row.scope_name) branch.set(row.scope_name, amount);
+    else if (row.scope === 'department' && row.scope_name) department.set(row.scope_name, amount);
   }
-  return { company, branch };
+  return { company, branch, department };
 }
 
 function computeMetrics(name: string, factYtd: number, targetYear: number | null, wd: WorkingDayProgress | null): BranchMetrics {
@@ -149,7 +249,7 @@ export async function computeAndCachePlanSummary(): Promise<void> {
   const fromIso = startOfYear(now).toISOString();
   const toExclIso = addDays(startOfDay(now), 1).toISOString();
 
-  const [{ russiaTotal, byBranch }, targets, wd] = await Promise.all([
+  const [{ russiaTotal, byBranch, byDept }, targets, wd] = await Promise.all([
     getFactByBranch(fromIso, toExclIso),
     getPlanTargets(year),
     getWorkingDayProgress(year, todayStr),
@@ -162,9 +262,25 @@ export async function computeAndCachePlanSummary(): Promise<void> {
   const russia = computeMetrics('Россия', russiaTotal, targets.company, wd);
 
   const branchNames = new Set([...byBranch.keys(), ...targets.branch.keys()]);
-  const branches = [...branchNames].map(name =>
-    computeMetrics(name, byBranch.get(name) ?? 0, targets.branch.get(name) ?? null, wd),
-  );
+  const branches = [...branchNames].map(name => {
+    const metrics = computeMetrics(name, byBranch.get(name) ?? 0, targets.branch.get(name) ?? null, wd);
+
+    const prefix = `${name}:`;
+    const categories = new Set(
+      [...byDept.keys(), ...targets.department.keys()]
+        .filter(k => k.startsWith(prefix))
+        .map(k => k.slice(prefix.length)),
+    );
+    if (categories.size > 0) {
+      metrics.departments = [...categories]
+        .sort((a, b) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b))
+        .map(cat => {
+          const key = `${prefix}${cat}`;
+          return computeMetrics(cat, byDept.get(key) ?? 0, targets.department.get(key) ?? null, wd);
+        });
+    }
+    return metrics;
+  });
 
   const summary: PlanSummary = {
     updated_at: now.toISOString(),

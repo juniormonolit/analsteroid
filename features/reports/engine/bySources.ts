@@ -1,4 +1,5 @@
 import { analyticsDb } from '@/lib/db/clients';
+import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import {
@@ -49,25 +50,28 @@ async function getRows(
   const entry = _rowCache.get(key);
   if (entry && Date.now() - entry.at < ROW_TTL) return entry.rows;
 
-  const dim = groupBy === 'source'
-    ? {
-        idExpr:          `COALESCE(d.source_id, '__null__')`,
-        groupBy:         'GROUP BY d.source_id, d.funnel_id',
-        notNullWhere:    whereExtra,
-        funnelBreakdown: true as const,
-      }
-    : {
-        idExpr:          `COALESCE(d.current_manager_id::text, '__null__')`,
-        groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
-        notNullWhere:    whereExtra,
-        funnelBreakdown: true as const,
-      };
+  const rows = await cached(`rpt:src:${key}`, reportTtl(toExclIso), async () => {
+    const dim = groupBy === 'source'
+      ? {
+          idExpr:          `COALESCE(d.source_id, '__null__')`,
+          groupBy:         'GROUP BY d.source_id, d.funnel_id',
+          notNullWhere:    whereExtra,
+          funnelBreakdown: true as const,
+        }
+      : {
+          idExpr:          `COALESCE(d.current_manager_id::text, '__null__')`,
+          groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
+          notNullWhere:    whereExtra,
+          funnelBreakdown: true as const,
+        };
 
-  const sql = buildCollectedSQL(collected, dim);
-  if (!sql) return [];
-  const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
-  _rowCache.set(key, { rows: res.rows, at: Date.now() });
-  return res.rows;
+    const sql = buildCollectedSQL(collected, dim);
+    if (!sql) return [];
+    const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
+    return res.rows;
+  });
+  _rowCache.set(key, { rows, at: Date.now() });
+  return rows;
 }
 
 export interface BySourcesOptions {

@@ -1,4 +1,5 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
+import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
@@ -172,23 +173,26 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   const metricIds  = collected.map(m => m.id);
 
   // Analytics row cache (pills are NOT part of the key; pgId/srcKey ARE — they change the scope)
+  // L1: in-memory Map, per-instance, 10 min. L2: Redis, shared across instances/restarts.
   const key   = mkKey(fromIso, toExclIso, metricIds, pgId, srcKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
-    const notNullParts = ['d.current_manager_id IS NOT NULL'];
-    if (pgWhere) notNullParts.push(pgWhere);
-    if (srcWhere) notNullParts.push(srcWhere);
-    const sql = buildCollectedSQL(collected, {
-      idExpr:          'd.current_manager_id::text',
-      groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
-      notNullWhere:    notNullParts.join(' AND '),
-      funnelBreakdown: true,
+    const rows = await cached(`rpt:mgr:${key}`, reportTtl(toExclIso), async () => {
+      const notNullParts = ['d.current_manager_id IS NOT NULL'];
+      if (pgWhere) notNullParts.push(pgWhere);
+      if (srcWhere) notNullParts.push(srcWhere);
+      const sql = buildCollectedSQL(collected, {
+        idExpr:          'd.current_manager_id::text',
+        groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
+        notNullWhere:    notNullParts.join(' AND '),
+        funnelBreakdown: true,
+      });
+      if (!sql) return [];
+      const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
+      return res.rows;
     });
-    if (!sql) return [];
-
-    const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
-    entry = { rows: res.rows, at: Date.now() };
+    entry = { rows, at: Date.now() };
     _rowCache.set(key, entry);
   }
 

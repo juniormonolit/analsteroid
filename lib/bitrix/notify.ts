@@ -1,16 +1,17 @@
-// Отправка личных сообщений в Bitrix24 через инкаминг-вебхук (im.notify.personal.add).
-// Требует, чтобы у BITRIX_WEBHOOK_URL была включена группа методов "Мессенджер (im)".
+// Вызов Bitrix24 REST API через инкаминг-вебхуки. Два разных вебхука с разными
+// правами: BITRIX_WEBHOOK_URL (CRM, только чтение — см. scripts/bitrix_backfill.mjs)
+// и BITRIX_BOT_WEBHOOK_URL (создан отдельно под "Информировать сотрудников в чате",
+// права "Создание и управление Чат-ботами (imbot)").
 
-const WEBHOOK = (process.env.BITRIX_WEBHOOK_URL || '').replace(/\/+$/, '');
-
-async function bx(method: string, params: Record<string, unknown>) {
-  if (!WEBHOOK) throw new Error('BITRIX_WEBHOOK_URL не задан');
+export async function bx(webhookUrl: string, method: string, params: Record<string, unknown>) {
+  const webhook = webhookUrl.replace(/\/+$/, '');
+  if (!webhook) throw new Error('Bitrix webhook URL не задан');
 
   const MAX = 3;
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= MAX; attempt++) {
     try {
-      const res = await fetch(`${WEBHOOK}/${method}.json`, {
+      const res = await fetch(`${webhook}/${method}.json`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
@@ -22,14 +23,14 @@ async function bx(method: string, params: Record<string, unknown>) {
       const code = body?.error || `HTTP ${res.status}`;
       if (code === 'ACCESS_DENIED') {
         throw new Error(
-          `Bitrix отказал в доступе к ${method} — у вебхука BITRIX_WEBHOOK_URL нет прав на группу методов "Мессенджер (im)". Добавьте её в настройках вебхука.`
+          `Bitrix отказал в доступе к ${method} — у вебхука нет нужных прав. Проверьте настройки вебхука в Bitrix24.`
         );
       }
       const retryable = code === 'QUERY_LIMIT_EXCEEDED' || res.status >= 500;
       if (!retryable) throw new Error(`Bitrix ${method}: ${code} ${body?.error_description || ''}`);
       lastError = new Error(`Bitrix ${method}: ${code} после ${MAX} попыток`);
     } catch (e) {
-      if (e instanceof Error && (e.message.startsWith('Bitrix') || e.message.startsWith('BITRIX'))) throw e;
+      if (e instanceof Error && e.message.startsWith('Bitrix')) throw e;
       lastError = e instanceof Error ? e : new Error(String(e));
     }
     if (attempt < MAX) await new Promise((r) => setTimeout(r, 1500));
@@ -37,10 +38,17 @@ async function bx(method: string, params: Record<string, unknown>) {
   throw lastError ?? new Error(`Bitrix ${method}: не удалось выполнить запрос`);
 }
 
-export async function sendBitrixDirectMessage(bitrixUserId: string, message: string): Promise<void> {
-  await bx('im.notify.personal.add', {
-    USER_ID: bitrixUserId,
+export async function sendBitrixBotMessage(bitrixUserId: string, message: string): Promise<void> {
+  const webhook = process.env.BITRIX_BOT_WEBHOOK_URL || '';
+  const botId = process.env.BITRIX_BOT_ID || '';
+  const clientId = process.env.BITRIX_BOT_CLIENT_ID || '';
+  if (!webhook || !botId || !clientId) {
+    throw new Error('BITRIX_BOT_WEBHOOK_URL/BITRIX_BOT_ID/BITRIX_BOT_CLIENT_ID не заданы — бот "Аналитик" ещё не зарегистрирован');
+  }
+  await bx(webhook, 'imbot.message.add', {
+    CLIENT_ID: clientId,
+    BOT_ID: botId,
+    DIALOG_ID: bitrixUserId,
     MESSAGE: message,
-    TYPE: 'SYSTEM',
   });
 }

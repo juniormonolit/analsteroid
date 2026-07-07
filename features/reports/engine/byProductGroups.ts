@@ -1,4 +1,5 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
+import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import type { DateRange } from '@/lib/period';
@@ -127,28 +128,30 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
-    const dim = mode === 'by_max'
-      ? {
-          idExpr:          `COALESCE(d.head_group_name, 'Без группы')`,
-          nameExpr:        `COALESCE(d.head_group_name, 'Без группы')`,
-          groupBy:         'GROUP BY d.head_group_name, d.funnel_id',
-          notNullWhere,
-          funnelBreakdown: true as const,
-        }
-      : {
-          idExpr:          `COALESCE(d.product_group_id::text, '__none__')`,
-          nameExpr:        `COALESCE(pg.name, 'Без группы')`,
-          extraJoins:      'LEFT JOIN product_groups pg ON pg.id = d.product_group_id',
-          groupBy:         'GROUP BY d.product_group_id, pg.name, d.funnel_id',
-          notNullWhere,
-          funnelBreakdown: true as const,
-        };
+    const rows = await cached(`rpt:pg:${key}`, reportTtl(toExclIso), async () => {
+      const dim = mode === 'by_max'
+        ? {
+            idExpr:          `COALESCE(d.head_group_name, 'Без группы')`,
+            nameExpr:        `COALESCE(d.head_group_name, 'Без группы')`,
+            groupBy:         'GROUP BY d.head_group_name, d.funnel_id',
+            notNullWhere,
+            funnelBreakdown: true as const,
+          }
+        : {
+            idExpr:          `COALESCE(d.product_group_id::text, '__none__')`,
+            nameExpr:        `COALESCE(pg.name, 'Без группы')`,
+            extraJoins:      'LEFT JOIN product_groups pg ON pg.id = d.product_group_id',
+            groupBy:         'GROUP BY d.product_group_id, pg.name, d.funnel_id',
+            notNullWhere,
+            funnelBreakdown: true as const,
+          };
 
-    const sql = buildCollectedSQL(collected, dim);
-    if (!sql) return [];
-
-    const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
-    entry = { rows: res.rows, at: Date.now() };
+      const sql = buildCollectedSQL(collected, dim);
+      if (!sql) return [];
+      const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
+      return res.rows;
+    });
+    entry = { rows, at: Date.now() };
     _rowCache.set(key, entry);
   }
 

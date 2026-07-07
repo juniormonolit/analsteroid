@@ -1,5 +1,5 @@
 import { systemDb } from '@/lib/db/clients';
-import { sendBitrixDirectMessage } from '@/lib/bitrix/notify';
+import { sendBitrixBotMessage } from '@/lib/bitrix/notify';
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -18,7 +18,7 @@ export async function createAndSendInvite(
   );
 
   const link = `${origin}/invite/${token}`;
-  await sendBitrixDirectMessage(
+  await sendBitrixBotMessage(
     bitrixUserId,
     `Здравствуйте, ${displayName}! Вам открыли доступ в Analsteroid.\n` +
       `Перейдите по ссылке, чтобы задать пароль и войти: ${link}\n` +

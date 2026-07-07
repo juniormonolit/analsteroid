@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import { createAndSendInvite } from '@/lib/invites/tokens';
+import { getPublicOrigin } from '@/lib/http/publicOrigin';
 
 interface UserRow {
   id: string;
@@ -82,7 +83,7 @@ export async function POST(req: NextRequest) {
   const userId = inserted.rows[0].id;
 
   try {
-    await createAndSendInvite(userId, bitrixUserId, displayName, req.nextUrl.origin);
+    await createAndSendInvite(userId, bitrixUserId, displayName, getPublicOrigin(req));
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'Не удалось отправить приглашение в Bitrix' },

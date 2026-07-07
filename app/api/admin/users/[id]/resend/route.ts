@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import { createAndSendInvite } from '@/lib/invites/tokens';
+import { getPublicOrigin } from '@/lib/http/publicOrigin';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!user.bitrix_user_id) return NextResponse.json({ error: 'У пользователя не привязан Bitrix' }, { status: 400 });
 
   try {
-    await createAndSendInvite(id, user.bitrix_user_id, user.display_name, req.nextUrl.origin);
+    await createAndSendInvite(id, user.bitrix_user_id, user.display_name, getPublicOrigin(req));
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'Не удалось отправить приглашение в Bitrix' },

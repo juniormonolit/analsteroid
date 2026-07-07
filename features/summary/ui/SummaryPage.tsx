@@ -1,5 +1,7 @@
 'use client';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 interface BranchMetrics {
   name: string;
@@ -7,6 +9,7 @@ interface BranchMetrics {
   target_year: number | null;
   plan_percent_cumulative: number | null;
   plan_percent_pace: number | null;
+  departments?: BranchMetrics[];
 }
 
 interface PlanSummary {
@@ -51,6 +54,47 @@ function MetricPair({ metrics, size }: { metrics: BranchMetrics; size: 'lg' | 's
         </div>
         <div className={`${label} text-[var(--color-text-muted)]`}>Темп к рабочему дню</div>
       </div>
+    </div>
+  );
+}
+
+function BranchCard({ branch }: { branch: BranchMetrics }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasDepartments = (branch.departments?.length ?? 0) > 0;
+
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden">
+      <div
+        className={`px-4 py-3 ${hasDepartments ? 'cursor-pointer hover:bg-[var(--color-bg-hover)]' : ''}`}
+        onClick={hasDepartments ? () => setExpanded(v => !v) : undefined}
+      >
+        <div className="flex items-center gap-1.5 mb-1.5">
+          {hasDepartments && (
+            expanded ? <ChevronDown size={12} className="text-[var(--color-text-muted)]" /> : <ChevronRight size={12} className="text-[var(--color-text-muted)]" />
+          )}
+          <div className="text-xs font-semibold text-[var(--color-text)]">{branch.name}</div>
+        </div>
+        {branch.target_year === null ? (
+          <p className="text-xs text-[var(--color-text-muted)]">План не задан</p>
+        ) : (
+          <MetricPair metrics={branch} size="sm" />
+        )}
+      </div>
+
+      {hasDepartments && expanded && (
+        <div className="border-t border-[var(--color-border)] divide-y divide-[var(--color-border)]">
+          {branch.departments!.map(dept => (
+            <div key={dept.name} className="pl-8 pr-4 py-2.5 bg-[var(--color-bg)]">
+              <div className="text-xs font-medium text-[var(--color-text-muted)] mb-1">{dept.name}</div>
+              {dept.target_year === null ? (
+                <p className="text-xs text-[var(--color-text-muted)]">План не задан</p>
+              ) : (
+                <MetricPair metrics={dept} size="sm" />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -111,19 +155,7 @@ export function SummaryPage() {
               {data.branches
                 .slice()
                 .sort((a, b) => a.name.localeCompare(b.name, 'ru'))
-                .map(b => (
-                  <div
-                    key={b.name}
-                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-3"
-                  >
-                    <div className="text-xs font-semibold text-[var(--color-text)] mb-1.5">{b.name}</div>
-                    {b.target_year === null ? (
-                      <p className="text-xs text-[var(--color-text-muted)]">План не задан</p>
-                    ) : (
-                      <MetricPair metrics={b} size="sm" />
-                    )}
-                  </div>
-                ))}
+                .map(b => <BranchCard key={b.name} branch={b} />)}
             </div>
           </>
         )}
