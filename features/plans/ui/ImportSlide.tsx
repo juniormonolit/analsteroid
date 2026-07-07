@@ -46,21 +46,30 @@ export function ImportSlide({ currentPlanN, onClose }: Props) {
   const [conflictChoices, setConflictChoices] = useState<Map<string, 'keep' | 'overwrite'>>(new Map());
   const [saving, setSaving] = useState(false);
   const [parsing, setParsing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function handleParse() {
     if (!file || !month) return;
     setParsing(true);
+    setError(null);
     try {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('month', month);
       const res = await fetch('/api/plans/import', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        setError(text || 'Не удалось разобрать файл');
+        return;
+      }
       const data = await res.json() as ParseResult;
       setParseResult(data);
       const choices = new Map<string, 'keep' | 'overwrite'>();
       for (const c of data.conflicts) choices.set(c.login, 'keep');
       setConflictChoices(choices);
+    } catch {
+      setError('Сетевая ошибка при разборе файла');
     } finally {
       setParsing(false);
     }
@@ -69,6 +78,7 @@ export function ImportSlide({ currentPlanN, onClose }: Props) {
   async function handleApply() {
     if (!parseResult) return;
     setSaving(true);
+    setError(null);
     try {
       const items: { login: string; amount: number }[] = [
         ...parseResult.clean.map(c => ({ login: c.login, amount: c.amount })),
@@ -76,13 +86,20 @@ export function ImportSlide({ currentPlanN, onClose }: Props) {
           .filter(c => conflictChoices.get(c.login) === 'overwrite')
           .map(c => ({ login: c.login, amount: c.incoming })),
       ];
-      await fetch('/api/plans/import/confirm', {
+      const res = await fetch('/api/plans/import/confirm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ month, items, plan_n: currentPlanN }),
       });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        setError(text || 'Не удалось сохранить импорт');
+        return;
+      }
       await qc.invalidateQueries({ queryKey: ['plans'] });
       onClose();
+    } catch {
+      setError('Сетевая ошибка при сохранении импорта');
     } finally {
       setSaving(false);
     }
@@ -112,6 +129,12 @@ export function ImportSlide({ currentPlanN, onClose }: Props) {
               className="w-full px-3 py-1.5 text-sm border border-[var(--color-border)] rounded-lg bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)]"
             />
           </div>
+
+          {error && (
+            <div className="px-3 py-2 text-sm text-[var(--color-negative)] bg-[var(--color-negative)]/10 rounded-lg">
+              {error}
+            </div>
+          )}
 
           {/* File drop zone */}
           {!parseResult && (
