@@ -74,7 +74,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-const inp = 'w-full px-2.5 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-sm text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)]';
+// text-base на мобильном: <16px заставляет iOS зумить страницу при фокусе инпута
+const inp = 'w-full px-2.5 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-base sm:text-sm text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)]';
 const sel = inp;
 const chk = 'rounded border-[var(--color-border)] text-[var(--color-accent)] focus:ring-[var(--color-accent)]';
 
@@ -141,7 +142,7 @@ function FilterRow({
           />
         )}
       </div>
-      <button onClick={onRemove} className="text-[var(--color-text-muted)] hover:text-[var(--color-negative)] p-1.5 rounded hover:bg-[var(--color-border)]">
+      <button onClick={onRemove} className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-negative)] p-1.5 rounded hover:bg-[var(--color-border)]">
         <Trash2 size={14} />
       </button>
     </div>
@@ -203,7 +204,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex">
       <div className="flex-1 bg-black/40" onClick={onClose} />
-      <aside className="w-[800px] bg-[var(--color-bg-surface)] border-l border-[var(--color-border)] flex flex-col h-full overflow-hidden shadow-2xl">
+      <aside className="w-[800px] max-w-full bg-[var(--color-bg-surface)] border-l border-[var(--color-border)] flex flex-col h-full overflow-hidden shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-border)]">
           <h2 className="font-semibold text-[var(--color-text)]">
@@ -220,7 +221,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
           {/* Basic */}
           <section className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Основное</p>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field
                 label="ID (системный, уникальный)"
                 hint="Уникальный идентификатор. Используется в формулах как [id]. Латиница, подчеркивания, цифры. Не менять для существующих метрик."
@@ -249,7 +250,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
             >
               <input className={inp} value={d.name_ru} onChange={e => set('name_ru', e.target.value)} placeholder="Продажи (перв.)" />
             </Field>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field
                 label="Краткое название"
                 hint="Показывается в заголовке колонки таблицы, когда много метрик. Макс 8 символов."
@@ -277,7 +278,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
           {/* Format */}
           <section className="space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Формат вывода</p>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Field
                 label="Тип данных"
                 hint="Целое: 1234. Дробное: 1234.56. Деньги: 1,234₽. Процент: 12.34%. Месяцы: 3м."
@@ -313,7 +314,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
           {d.metric_type === 'collected' && (
             <section className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">Логика сбора</p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field
                   label="Источник"
                   hint="deals = таблица сделок (created_at, sold_at и т.д.). deal_events = события (звонки, смены статуса)."
@@ -335,7 +336,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
                   </select>
                 </Field>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field
                   label="Поле для агрегации"
                   hint="deal_id = кол-во сделок. amount = сумма денег. Используется с COUNT DISTINCT, SUM, AVG."

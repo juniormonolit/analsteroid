@@ -2,6 +2,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Popover } from '@/components/ui/Popover';
 import { PlansTable } from './PlansTable';
 import { ImportSlide } from './ImportSlide';
 import { ExportSlide } from './ExportSlide';
@@ -153,7 +154,8 @@ export function PlansPage() {
 
   const { data: plansData = [] } = useQuery<PlanRow[]>({
     queryKey: ['plans'],
-    queryFn: () => fetch('/api/plans').then(r => r.json()),
+    // 401/ошибка возвращает объект — без guard дальше падает обработка массива
+    queryFn: () => fetch('/api/plans').then(r => r.json()).then(d => (Array.isArray(d) ? d : [])),
     staleTime: 30_000,
   });
 
@@ -166,7 +168,7 @@ export function PlansPage() {
 
   const { data: employeesRaw = [] } = useQuery<EmployeeRaw[]>({
     queryKey: ['plan-employees'],
-    queryFn: () => fetch('/api/plans/employees').then(r => r.json()),
+    queryFn: () => fetch('/api/plans/employees').then(r => r.json()).then(d => (Array.isArray(d) ? d : [])),
     staleTime: 5 * 60_000,
   });
 
@@ -246,7 +248,7 @@ export function PlansPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
+      <div className="flex items-center gap-2 px-3 sm:px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
         {/* Search */}
         <div className="relative">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] pointer-events-none" />
@@ -268,40 +270,38 @@ export function PlansPage() {
         </div>
 
         {/* Dept filter */}
-        <div className="relative">
-          <button
-            onClick={openDepts}
-            className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
-              departmentIds.length > 0
-                ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
-            }`}
-          >
-            {departmentIds.length === 0 ? 'Все отделы' : `${departmentIds.length} отд.`}
-          </button>
-          {showDepts && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={cancelDepts} />
-              <div className="absolute top-full left-0 mt-1 z-20 bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg min-w-[260px] flex flex-col" style={{ maxHeight: '380px' }}>
-                <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-                  <span className="text-sm font-medium text-[var(--color-text)]">Отделы</span>
-                  {deptDraft.size > 0 && (
-                    <button onClick={() => setDeptDraft(new Set())} className="text-xs text-[var(--color-accent)] hover:underline">Очистить</button>
-                  )}
-                </div>
-                <div className="overflow-y-auto flex-1 py-1">
-                  {tree.map(node => (
-                    <DeptTreeNodeInline key={node.id} node={node} selected={deptDraft} onToggle={toggleDeptIds} depth={0} />
-                  ))}
-                </div>
-                <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
-                  <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
-                  <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
+        <Popover
+          open={showDepts}
+          onOpenChange={(o) => { if (o) openDepts(); else setShowDepts(false); }}
+          className="min-w-[260px] flex flex-col overflow-hidden"
+          trigger={
+            <button
+              className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
+                departmentIds.length > 0
+                  ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+                  : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
+              }`}
+            >
+              {departmentIds.length === 0 ? 'Все отделы' : `${departmentIds.length} отд.`}
+            </button>
+          }
+        >
+          <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
+            <span className="text-sm font-medium text-[var(--color-text)]">Отделы</span>
+            {deptDraft.size > 0 && (
+              <button onClick={() => setDeptDraft(new Set())} className="text-xs text-[var(--color-accent)] hover:underline">Очистить</button>
+            )}
+          </div>
+          <div className="overflow-y-auto flex-1 py-1 max-h-[300px]">
+            {tree.map(node => (
+              <DeptTreeNodeInline key={node.id} node={node} selected={deptDraft} onToggle={toggleDeptIds} depth={0} />
+            ))}
+          </div>
+          <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
+            <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
+            <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
+          </div>
+        </Popover>
 
         {/* Grouping */}
         <div className="flex items-center gap-0 border border-[var(--color-border)] rounded-lg overflow-hidden">

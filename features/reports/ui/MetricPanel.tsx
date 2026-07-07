@@ -98,14 +98,15 @@ function MetricSelector({
   }
 
   return (
-    <div className="flex flex-1 min-h-0">
-      <div className="flex flex-col w-[360px] shrink-0 border-r border-[var(--color-border)]">
+    // Телефон: каталог и «Выбрано» друг под другом (50/50), md+: две колонки
+    <div className="flex flex-col md:flex-row flex-1 min-h-0">
+      <div className="flex flex-col flex-1 md:flex-none min-h-0 w-full md:w-[360px] shrink-0 border-b md:border-b-0 md:border-r border-[var(--color-border)]">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)]">
           <Search size={14} className="text-[var(--color-text-muted)] shrink-0" />
           <input autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск по названию или категории"
             className="flex-1 text-sm bg-transparent outline-none text-[var(--color-text)] placeholder:text-[var(--color-text-muted)]" />
           {search && (
-            <button onClick={() => setSearch('')} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><X size={13} /></button>
+            <button onClick={() => setSearch('')} className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><X size={13} /></button>
           )}
         </div>
 
@@ -165,7 +166,7 @@ function MetricSelector({
         </div>
       </div>
 
-      <div className="flex flex-col flex-1 min-w-0">
+      <div className="flex flex-col flex-1 min-w-0 min-h-0">
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
           <div className="text-sm font-medium text-[var(--color-text)]">Выбрано</div>
           <div className="flex items-center gap-3">
@@ -187,7 +188,7 @@ function MetricSelector({
             {columnGroups.map((g, idx) => (
               <span key={idx} className="inline-flex items-center gap-1 bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-1.5 py-0.5">
                 <input value={g.name} onChange={e => renameGroup(idx, e.target.value)} className="text-xs bg-transparent outline-none text-[var(--color-text)] w-[90px]" />
-                <button onClick={() => deleteGroup(idx)} className="text-[var(--color-text-muted)] hover:text-[var(--color-negative)]"><X size={11} /></button>
+                <button onClick={() => deleteGroup(idx)} className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-negative)]"><X size={11} /></button>
               </span>
             ))}
             <button onClick={addGroup} className="text-xs px-2 py-0.5 rounded border border-dashed border-[var(--color-border)] text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">+ группа</button>
@@ -215,11 +216,11 @@ function MetricSelector({
               )}
               {onMetricConfigure && (
                 <button onClick={() => onMetricConfigure(m.id)} title="Настройки метрики"
-                  className={`p-1 rounded transition-colors ${highlights?.[m.id] ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+                  className={`tap-target p-1 rounded transition-colors ${highlights?.[m.id] ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
                   <Settings2 size={14} />
                 </button>
               )}
-              <button onClick={() => toggleMetric(m.id)} className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors"><X size={14} /></button>
+              <button onClick={() => toggleMetric(m.id)} className="tap-target p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors"><X size={14} /></button>
             </div>
           ))}
         </div>
@@ -286,17 +287,23 @@ export function MetricPanel(props: Props) {
   return (
     <>
       <div className="fixed inset-0 z-30 bg-black/30" onClick={onClose} />
-      <div className="fixed left-0 top-0 bottom-0 z-40 flex shadow-2xl" style={{ left: 220 }}>
-        <div className="flex flex-col bg-[var(--color-bg-surface)] border-r border-[var(--color-border)]" style={{ width: getMetricPanelWidth() }}>
-          {/* Tabs + close */}
+      {/* Телефон: панель на весь экран; md+: слайд-панель правее сайдбара */}
+      <div className="fixed inset-0 md:inset-y-0 md:right-auto md:left-[220px] z-40 flex shadow-2xl">
+        <div
+          className="flex flex-col bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] w-full md:w-[var(--metric-panel-w)] max-w-full"
+          style={{ '--metric-panel-w': `${getMetricPanelWidth()}px` } as React.CSSProperties}
+        >
+          {/* Tabs + close. Крестик — вне скролла табов, чтобы на телефоне не уезжал за экран */}
           <div className="flex items-center gap-1 px-3 py-2 border-b border-[var(--color-border)]">
-            {TABS.map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${tab === t.id ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
-                {t.label}
-              </button>
-            ))}
-            <button onClick={onClose} className="ml-auto text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors p-1"><X size={16} /></button>
+            <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
+              {TABS.map(t => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors whitespace-nowrap shrink-0 ${tab === t.id ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <button onClick={onClose} className="tap-target shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors p-1"><X size={16} /></button>
           </div>
 
           {tab === 'main' && (
@@ -347,7 +354,7 @@ export function MetricPanel(props: Props) {
                     className={`flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-bg-hover)] transition-colors ${fDragIdx === i ? 'opacity-40' : ''} ${fOverIdx === i && fDragIdx !== i ? 'border-t-2 border-[var(--color-accent)]' : ''}`}>
                     <GripVertical size={14} className="text-[var(--color-text-muted)] cursor-grab shrink-0" />
                     <span className="text-sm text-[var(--color-text)] flex-1">{labelOf(k)}</span>
-                    <button onClick={() => onDealFieldsChange?.(shownFields.filter(x => x !== k))} className="p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors"><X size={14} /></button>
+                    <button onClick={() => onDealFieldsChange?.(shownFields.filter(x => x !== k))} className="tap-target p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors"><X size={14} /></button>
                   </div>
                 ))}
                 {hiddenFields.length > 0 && (

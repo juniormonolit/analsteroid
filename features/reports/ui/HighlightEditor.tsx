@@ -106,7 +106,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
       {!docked && <div className="fixed inset-0 z-40" onClick={onClose} />}
       {/* Slide panel */}
       <div
-        className={`fixed inset-y-0 z-50 w-80 bg-[var(--color-bg-surface)] shadow-2xl flex flex-col animate-in duration-200 ${docked ? 'border-l border-[var(--color-border)] slide-in-from-left' : 'right-0 slide-in-from-right'}`}
+        className={`fixed inset-y-0 z-50 w-80 max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col animate-in duration-200 ${docked ? 'border-l border-[var(--color-border)] slide-in-from-left' : 'right-0 slide-in-from-right'}`}
         style={docked ? { left: anchorLeft } : undefined}>
         {/* Header */}
         <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-[var(--color-border)]">

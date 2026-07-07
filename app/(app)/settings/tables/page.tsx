@@ -132,9 +132,10 @@ export default function TablesPage() {
   }
 
   return (
-    <div className="flex h-full overflow-hidden">
+    // Телефон: список таблиц — прокручиваемый блок сверху; md+: рейл слева
+    <div className="flex flex-col md:flex-row h-full overflow-hidden">
       {/* Table list */}
-      <div className="w-56 shrink-0 border-r border-[var(--color-border)] overflow-y-auto bg-[var(--color-bg-surface)]">
+      <div className="md:w-56 shrink-0 border-b md:border-b-0 md:border-r border-[var(--color-border)] overflow-y-auto max-h-44 md:max-h-none bg-[var(--color-bg-surface)]">
         <div className="px-3 py-2.5 border-b border-[var(--color-border)]">
           <p className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wide">Таблицы SA</p>
         </div>
@@ -167,7 +168,7 @@ export default function TablesPage() {
       </div>
 
       {/* Table viewer */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {!selected ? (
           <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)] text-sm">
             Выберите таблицу

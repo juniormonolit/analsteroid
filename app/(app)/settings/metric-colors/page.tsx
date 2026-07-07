@@ -85,7 +85,7 @@ export default function MetricColorsPage() {
   const nameOf = (id: string) => metrics.find(m => m.id === id)?.nameRu ?? id;
 
   return (
-    <div className="p-6 max-w-3xl">
+    <div className="p-3 sm:p-6 max-w-3xl">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Цвета метрик</h1>
         <div className="flex items-center gap-3">
@@ -116,7 +116,7 @@ export default function MetricColorsPage() {
                 <>
                   <ColorCell value={color} onChange={c => setRule('category', cat, c)} />
                   <button onClick={() => setRule('category', cat, null)} title="Убрать цвет"
-                          className="ml-auto p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors">
+                          className="tap-target ml-auto p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors">
                     <Trash2 size={14} />
                   </button>
                 </>
@@ -145,7 +145,7 @@ export default function MetricColorsPage() {
             </span>
             <ColorCell value={r.color} onChange={c => setRule('metric', r.key, c)} />
             <button onClick={() => setRule('metric', r.key, null)} title="Удалить переопределение"
-                    className="ml-auto p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors">
+                    className="tap-target ml-auto p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors">
               <Trash2 size={14} />
             </button>
           </div>

@@ -155,15 +155,15 @@ export default function MetricsAdminPage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] flex items-center justify-between gap-4">
+      <div className="px-3 sm:px-6 pt-4 pb-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <BarChart2 size={18} className="text-[var(--color-accent)]" />
           <h1 className="text-lg font-semibold text-[var(--color-text)]">Метрики</h1>
           <span className="text-sm text-[var(--color-text-muted)] ml-1">({metrics.length})</span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <input
-            className="px-2.5 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-sm text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)] w-52"
+            className="px-2.5 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-base sm:text-sm text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)] w-52"
             placeholder="Поиск по названию, id, тегу…"
             value={search}
             onChange={e => setSearch(e.target.value)}
@@ -201,7 +201,8 @@ export default function MetricsAdminPage() {
           </div>
         )}
         {!isLoading && !error && (
-          <table className="w-full text-sm border-collapse">
+          // min-w: на телефоне таблица скроллится в overflow-auto, а не сжимает колонки в кашу
+          <table className="w-full min-w-[720px] text-sm border-collapse">
             <thead className="sticky top-0 z-10 bg-[var(--color-table-header)]">
               <tr>
                 <th className="text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-48">ID</th>
@@ -263,21 +264,21 @@ export default function MetricsAdminPage() {
                     <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => openEdit(m)}
-                        className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]"
+                        className="tap-target p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]"
                         title="Редактировать"
                       >
                         <Pencil size={13} />
                       </button>
                       <button
                         onClick={() => openDuplicate(m)}
-                        className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-border)]"
+                        className="tap-target p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-border)]"
                         title="Дублировать"
                       >
                         <Copy size={13} />
                       </button>
                       <button
                         onClick={() => handleDelete(m.id)}
-                        className="p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-negative)] hover:bg-[var(--color-border)]"
+                        className="tap-target p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-negative)] hover:bg-[var(--color-border)]"
                         title="Удалить"
                       >
                         <Trash2 size={13} />

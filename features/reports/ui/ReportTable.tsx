@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, MoreVertical } from 'lucide-react';
+import { Popover } from '@/components/ui/Popover';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
@@ -35,49 +35,25 @@ const MODE_LABELS: Record<ComparisonDisplay, string> = {
 
 function MetricMenu({ isFirst, isLast, currentMode, onModeChange, onRemove, onMoveLeft, onMoveRight, onConfigure }: MetricMenuProps) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handler(e: MouseEvent) {
-      const t = e.target as Node;
-      if (ref.current?.contains(t)) return;
-      if (menuRef.current?.contains(t)) return;
-      setOpen(false);
-    }
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  function toggle(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (!open && ref.current) {
-      const r = ref.current.getBoundingClientRect();
-      const MENU_W = 192; // w-48
-      setPos({ top: r.bottom + 4, left: Math.max(8, r.right - MENU_W) });
-    }
-    setOpen(v => !v);
-  }
 
   return (
-    <div ref={ref} className="relative inline-flex">
-      <button
-        onClick={toggle}
-        className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
-        title="Настройки метрики"
-      >
-        <MoreVertical size={13} />
-      </button>
-
-      {open && pos && createPortal(
-        <div
-          ref={menuRef}
-          style={{ position: 'fixed', top: pos.top, left: pos.left, width: 192 }}
-          className="bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg z-[1000] py-1 text-sm"
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      align="end"
+      className="w-48 py-1 text-sm"
+      trigger={
+        <button
+          // stopPropagation: клик по меню не должен триггерить сортировку в <th>
           onClick={e => e.stopPropagation()}
+          className="tap-target p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
+          title="Настройки метрики"
         >
+          <MoreVertical size={13} />
+        </button>
+      }
+    >
+        <div onClick={e => e.stopPropagation()}>
           <button
             className="w-full text-left px-3 py-1.5 hover:bg-[var(--color-bg-hover)] transition-colors"
             onClick={() => { onConfigure(); setOpen(false); }}
@@ -110,10 +86,8 @@ function MetricMenu({ isFirst, isLast, currentMode, onModeChange, onRemove, onMo
           >
             Убрать
           </button>
-        </div>,
-        document.body
-      )}
-    </div>
+        </div>
+    </Popover>
   );
 }
 
@@ -617,7 +591,7 @@ export function ReportTable({
       <React.Fragment key={row.dimensionId}>
         <tr className={rowCls}>
           <td
-            className={`sticky left-0 z-20 ${stickyBg} w-[320px] min-w-[320px] max-w-[320px] px-2 py-2 border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
+            className={`sticky left-0 z-20 ${stickyBg} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-2 py-2 border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
             onClick={canClickRow
               ? () => onRowClick!(row.dimensionId, row.dimensionName)
               : canToggleRow ? () => toggleCollapse(row.dimensionId) : undefined}
@@ -696,7 +670,7 @@ export function ReportTable({
         <thead className="report-thead sticky top-0 z-30 bg-[var(--color-table-header)]">
           {hasGroups && (
             <tr>
-              <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px]" />
+              <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" />
               {displayMetrics.filter(m => pinnedMetricIds.includes(m.id)).map(m => {
                 const pinned = isMeasured(m.id);
                 return (
@@ -722,7 +696,7 @@ export function ReportTable({
             </tr>
           )}
           <tr>
-            <th ref={dimRef} className="sticky left-0 z-40 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px]">
+            <th ref={dimRef} className="sticky left-0 z-40 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]">
               <div className="flex items-center justify-between gap-2">
                 <span>{dimensionLabel}</span>
                 {(grouping === 'team' || grouping === 'branch') && (
@@ -762,14 +736,14 @@ export function ReportTable({
                   key={m.id}
                   ref={mainRef}
                   colSpan={colSpanFor(m.id)}
-                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group/th ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''}`}
+                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''}`}
                   style={{ ...thSize, ...colorizeStyle(m), ...accentStyle(m.id) }}
                 >
                   {colorizeBar(m)}
                   {m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
-                  {/* Menu pinned to the top-right corner, only on hover */}
+                  {/* Menu pinned to the top-right corner: hover на десктопе, всегда виден на таче */}
                   {hasMenu && (
-                    <span className="absolute top-1 right-1 z-10 opacity-0 group-hover/th:opacity-100 transition-opacity">
+                    <span className="hover-reveal absolute top-1 right-1 z-10">
                       <MetricMenu
                         metricId={m.id}
                         isFirst={isFirst}
@@ -785,7 +759,7 @@ export function ReportTable({
                   )}
                   <div className="flex items-start justify-center gap-1">
                     {sortBy === m.id && (
-                      <button onClick={() => handleSort(m.id)} className="text-[var(--color-accent)] w-[14px] flex-shrink-0 mt-0.5">
+                      <button onClick={() => handleSort(m.id)} className="tap-target text-[var(--color-accent)] w-[14px] flex-shrink-0 mt-0.5">
                         {sortDir === 'desc' ? <ArrowDown size={12} /> : <ArrowUp size={12} />}
                       </button>
                     )}
@@ -804,7 +778,7 @@ export function ReportTable({
 
           {hasAnyFullMode && (
             <tr className="bg-[var(--color-table-header)]">
-              <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[320px] min-w-[320px] max-w-[320px]" />
+              <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" />
               {displayMetrics.map(m => {
                 const mode = resolveMode(m.id);
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
@@ -838,7 +812,7 @@ export function ReportTable({
           {totals && grouping !== 'total' && (
             <tr className="font-semibold text-[var(--color-text)]">
               <td
-                className="sticky left-0 bottom-0 z-30 px-4 py-3 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[320px] min-w-[320px] max-w-[320px] uppercase tracking-wider text-[12px]"
+                className="sticky left-0 bottom-0 z-30 px-4 py-3 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
                 style={{ backgroundColor: TOTALS_BG }}
               >
                 <span className="flex items-center gap-2">

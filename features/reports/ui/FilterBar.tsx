@@ -1,6 +1,5 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -9,6 +8,7 @@ import type { DateRange } from '@/lib/period';
 import type { Grouping } from '@/lib/metrics/types';
 import { SOURCE_DIMENSIONS, type SourceDimension } from '@/lib/marketing/dimensions';
 import { recomputeComparison } from '@/lib/period';
+import { Popover } from '@/components/ui/Popover';
 import { DateRangePicker } from './DateRangePicker';
 
 const GROUPING_LABELS: Record<Grouping, string> = { none: 'Без групп.', team: 'По отделу', branch: 'По филиалу', total: 'Итого' };
@@ -124,27 +124,6 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
   const [showPeriod, setShowPeriod] = useState(false);
   const [showComp,   setShowComp]   = useState(false);
   const [showDepts,  setShowDepts]  = useState(false);
-  const [deptPos, setDeptPos] = useState<{ top: number; left: number } | null>(null);
-  const deptBtnRef = useRef<HTMLButtonElement>(null);
-  const [periodPos, setPeriodPos] = useState<{ top: number; left: number } | null>(null);
-  const [compPos, setCompPos] = useState<{ top: number; left: number } | null>(null);
-  const periodBtnRef = useRef<HTMLButtonElement>(null);
-  const compBtnRef = useRef<HTMLButtonElement>(null);
-
-  function openPeriod() {
-    if (periodBtnRef.current) {
-      const r = periodBtnRef.current.getBoundingClientRect();
-      setPeriodPos({ top: r.bottom + 4, left: r.left });
-    }
-    setShowPeriod(v => !v); setShowComp(false); setShowDepts(false);
-  }
-  function openComp() {
-    if (compBtnRef.current) {
-      const r = compBtnRef.current.getBoundingClientRect();
-      setCompPos({ top: r.bottom + 4, left: r.left });
-    }
-    setShowComp(v => !v); setShowPeriod(false); setShowDepts(false);
-  }
   const [draft, setDraft] = useState<Set<string>>(new Set(departmentIds));
 
   const { data: orgData } = useQuery({
@@ -160,17 +139,6 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
     setShowPeriod(false);
   }
 
-  function openDepts() {
-    if (deptBtnRef.current) {
-      const r = deptBtnRef.current.getBoundingClientRect();
-      const W = 280;
-      setDeptPos({ top: r.bottom + 4, left: Math.max(8, r.right - W) });
-    }
-    setDraft(new Set(departmentIds));
-    setShowDepts(true);
-    setShowPeriod(false);
-    setShowComp(false);
-  }
   function applyDepts()  { onDepartmentIdsChange(Array.from(draft)); setShowDepts(false); }
   function cancelDepts() { setDraft(new Set(departmentIds)); setShowDepts(false); }
 
@@ -191,114 +159,102 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
   const deptLabel = departmentIds.length === 0 ? 'Все отделы' : `${departmentIds.length} отд.`;
 
   return (
-    <div className="flex items-center gap-2 px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
+    <div className="flex items-center gap-2 px-3 sm:px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
 
       {/* ── Main period ── */}
-      <div className="relative">
-        <button
-          ref={periodBtnRef}
-          onClick={openPeriod}
-          className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
-            showPeriod
-              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-              : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
-          }`}
-        >
-          <span className="tabular-nums">{fmt(period.from)} — {fmt(period.to)}</span>
-          <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
-        </button>
-        {showPeriod && periodPos && createPortal(
-          <>
-            <div className="fixed inset-0 z-[999]" onClick={() => setShowPeriod(false)} />
-            <div style={{ position: 'fixed', top: periodPos.top, left: periodPos.left }} className="z-[1000]">
-              <DateRangePicker
-                value={period}
-                onChange={handlePeriodChange}
-                onClose={() => setShowPeriod(false)}
-                showPresets
-              />
-            </div>
-          </>,
-          document.body
-        )}
-      </div>
+      <Popover
+        open={showPeriod}
+        onOpenChange={setShowPeriod}
+        className="rounded-xl"
+        trigger={
+          <button
+            className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
+              showPeriod
+                ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+                : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
+            }`}
+          >
+            <span className="tabular-nums">{fmt(period.from)} — {fmt(period.to)}</span>
+            <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
+          </button>
+        }
+      >
+        <DateRangePicker
+          value={period}
+          onChange={handlePeriodChange}
+          onClose={() => setShowPeriod(false)}
+          showPresets
+        />
+      </Popover>
 
       {/* ── Comparison period ── */}
-      <div className="relative">
-        <button
-          ref={compBtnRef}
-          onClick={openComp}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-sm transition-colors ${
-            showComp
-              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-              : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-focus)] hover:text-[var(--color-text)]'
-          }`}
-        >
-          <ArrowLeftRight size={13} className="shrink-0" />
-          <span className="tabular-nums">{fmt(comparison.from)} — {fmt(comparison.to)}</span>
-          <ChevronDown size={13} className="text-[var(--color-text-muted)]" />
-        </button>
-        {showComp && compPos && createPortal(
-          <>
-            <div className="fixed inset-0 z-[999]" onClick={() => setShowComp(false)} />
-            <div style={{ position: 'fixed', top: compPos.top, left: compPos.left }} className="z-[1000]">
-              <DateRangePicker
-                value={comparison}
-                onChange={p => { onComparisonChange(p); setShowComp(false); }}
-                onClose={() => setShowComp(false)}
-                showPresets={false}
-                title="Период сравнения"
-              />
-            </div>
-          </>,
-          document.body
-        )}
-      </div>
+      <Popover
+        open={showComp}
+        onOpenChange={setShowComp}
+        className="rounded-xl"
+        trigger={
+          <button
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-sm transition-colors ${
+              showComp
+                ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-focus)] hover:text-[var(--color-text)]'
+            }`}
+          >
+            <ArrowLeftRight size={13} className="shrink-0" />
+            <span className="tabular-nums">{fmt(comparison.from)} — {fmt(comparison.to)}</span>
+            <ChevronDown size={13} className="text-[var(--color-text-muted)]" />
+          </button>
+        }
+      >
+        <DateRangePicker
+          value={comparison}
+          onChange={p => { onComparisonChange(p); setShowComp(false); }}
+          onClose={() => setShowComp(false)}
+          showPresets={false}
+          title="Период сравнения"
+        />
+      </Popover>
 
       {/* ── Department picker ── */}
       {showDepartments && (
-      <div className="relative">
-        <button
-          ref={deptBtnRef}
-          onClick={openDepts}
-          className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
-            departmentIds.length > 0
-              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-              : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
-          }`}
-        >
-          <Building2 size={14} />
-          <span>{deptLabel}</span>
-          <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
-        </button>
-
-        {showDepts && deptPos && createPortal(
-          <>
-            <div className="fixed inset-0 z-[999]" onClick={cancelDepts} />
-            <div
-              style={{ position: 'fixed', top: deptPos.top, left: deptPos.left, width: 280, maxHeight: '380px' }}
-              className="z-[1000] bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg flex flex-col"
-            >
-              <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-                <span className="text-sm font-medium text-[var(--color-text)]">Отделы</span>
-                {draft.size > 0 && (
-                  <button onClick={() => setDraft(new Set())} className="text-xs text-[var(--color-accent)] hover:underline">Очистить</button>
-                )}
-              </div>
-              <div className="overflow-y-auto flex-1 py-1">
-                {tree.map(node => (
-                  <DeptTreeNode key={node.id} node={node} selected={draft} onToggle={toggleIds} depth={0} />
-                ))}
-              </div>
-              <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
-                <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
-                <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
-              </div>
-            </div>
-          </>,
-          document.body
-        )}
-      </div>
+      <Popover
+        open={showDepts}
+        onOpenChange={(o) => {
+          if (o) setDraft(new Set(departmentIds)); // свежий драфт при каждом открытии
+          setShowDepts(o);
+        }}
+        align="end"
+        className="w-[280px] flex flex-col overflow-hidden"
+        trigger={
+          <button
+            className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
+              departmentIds.length > 0
+                ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+                : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
+            }`}
+          >
+            <Building2 size={14} />
+            <span>{deptLabel}</span>
+            <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
+          </button>
+        }
+      >
+        <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
+          <span className="text-sm font-medium text-[var(--color-text)]">Отделы</span>
+          {draft.size > 0 && (
+            <button onClick={() => setDraft(new Set())} className="text-xs text-[var(--color-accent)] hover:underline">Очистить</button>
+          )}
+        </div>
+        <div className="overflow-y-auto flex-1 py-1 max-h-[300px]">
+          {tree.map(node => (
+            <DeptTreeNode key={node.id} node={node} selected={draft} onToggle={toggleIds} depth={0} />
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
+          <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
+          <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
+        </div>
+      </Popover>
       )}
 
       {/* ── Metrics (legacy "Показатели") ── */}

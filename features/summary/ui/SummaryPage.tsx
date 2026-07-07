@@ -38,10 +38,11 @@ function paceColorClass(pace: number | null) {
 }
 
 function MetricPair({ metrics, size }: { metrics: BranchMetrics; size: 'lg' | 'sm' }) {
-  const bigNum = size === 'lg' ? 'text-5xl' : 'text-2xl';
+  // на 375px два числа text-5xl в ряд не влезают — на телефоне на ступень меньше
+  const bigNum = size === 'lg' ? 'text-4xl sm:text-5xl' : 'text-2xl';
   const label = size === 'lg' ? 'text-sm' : 'text-xs';
   return (
-    <div className="flex gap-6">
+    <div className="flex flex-wrap gap-x-6 gap-y-2">
       <div>
         <div className={`${bigNum} font-bold tabular-nums text-[var(--color-text)]`}>
           {fmtPct(metrics.plan_percent_cumulative)}

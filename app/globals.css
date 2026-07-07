@@ -51,6 +51,50 @@ body {
    cells so the whole row flips instantly. */
 .report-row > td { transition-property: none !important; }
 
+/* ---------- Адаптивность / touch ---------- */
+
+/* Кнопки, которые на десктопе появляются по hover (удалить/редактировать в строках).
+   На тач-устройствах hover нет, поэтому по умолчанию элемент ВИДИМ, и только на
+   устройствах с настоящим курсором прячется до наведения на .group-родителя.
+   Использовать вместо пары opacity-0 + group-hover (она недоступна на таче). */
+@media (hover: hover) and (pointer: fine) {
+  .hover-reveal { opacity: 0; transition: opacity 0.15s; }
+  .group:hover .hover-reveal,
+  .group:focus-within .hover-reveal,
+  .hover-reveal:focus-visible { opacity: 1; }
+}
+
+/* Расширенная зона нажатия для мелких иконок-кнопок (чекбоксы, chevron, trash).
+   Визуальный размер не меняется, hit-area растёт до ~44px. Родитель должен быть
+   position: relative (у кнопок это почти всегда так и есть — иначе добавить). */
+.tap-target { position: relative; }
+.tap-target::after {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: max(100%, 40px);
+  height: max(100%, 40px);
+  transform: translate(-50%, -50%);
+}
+
+/* Инерционный горизонтальный скролл для широких таблиц на iOS */
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+/* Убрать серую вспышку при тапе на интерактивные элементы (iOS/Android) */
+button, a { -webkit-tap-highlight-color: transparent; }
+
+/* Ширина замороженной первой колонки отчётных таблиц: на десктопе 320px,
+   на телефоне уже — иначе колонка с названиями съедает почти весь экран
+   и метрики не видны. JS-измерение sticky-смещений подхватывает это само. */
+:root { --report-dim-col: 320px; }
+@media (max-width: 767px) {
+  :root { --report-dim-col: clamp(140px, 46vw, 200px); }
+}
+
 /* Sub-pixel seam under the sticky header: at fractional scrollTop (we have non-integer row
    heights from fontScale) the browser rounds the sticky <thead> and the scrolling body
    differently, leaving a ~1px transparent line where body content peeks through. Paint a 1px

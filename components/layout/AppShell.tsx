@@ -1,12 +1,12 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
-  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge,
+  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { QueryProvider } from '@/components/providers/QueryProvider';
@@ -102,7 +102,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
                     {user.isAdmin && (
                       <button
                         onClick={e => deleteReport(r.id, e)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-[var(--color-negative)]"
+                        className="hover-reveal tap-target p-0.5 rounded hover:text-[var(--color-negative)]"
                       >
                         <Trash2 size={12} />
                       </button>
@@ -138,7 +138,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
                   <span className="truncate flex-1">{r.name}</span>
                   <button
                     onClick={e => deleteReport(r.id, e)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:text-[var(--color-negative)]"
+                    className="hover-reveal tap-target p-0.5 rounded hover:text-[var(--color-negative)]"
                   >
                     <Trash2 size={12} />
                   </button>
@@ -174,41 +174,18 @@ const NAV: NavItem[] = [
   { label: 'Найм', icon: <UserPlus size={18} />, disabled: true },
 ];
 
-export function AppShell({ children, user }: { children: React.ReactNode; user: SessionUser }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [expanded, setExpanded] = useState<string>('Продажи');
-  const pathname = usePathname();
-  const router = useRouter();
-
-  async function logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/login');
-  }
-
+/* Содержимое сайдбара (nav + нижние секции + footer) — общее для десктопного
+   <aside> и мобильного off-canvas drawer, поэтому вынесено из AppShell. */
+function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout }: {
+  collapsed: boolean;
+  pathname: string;
+  user: SessionUser;
+  expanded: string;
+  setExpanded: React.Dispatch<React.SetStateAction<string>>;
+  logout: () => void;
+}) {
   return (
-    <QueryProvider>
-      <div className="flex h-screen overflow-hidden">
-        {/* Sidebar */}
-        <aside
-          className="flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] transition-all duration-200"
-          style={{ width: collapsed ? 52 : 220 }}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between px-3 h-14 border-b border-white/10">
-            {!collapsed && (
-              <span className="flex items-center gap-2 min-w-0">
-                <MeteorLogo size={24} className="shrink-0" />
-                <span className="text-white font-semibold text-sm tracking-wide truncate">Аналстероид</span>
-              </span>
-            )}
-            <button
-              onClick={() => setCollapsed(v => !v)}
-              className="text-[var(--color-sidebar-text)] hover:text-white p-1 rounded shrink-0"
-            >
-              {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
-            </button>
-          </div>
-
+    <>
           {/* Nav */}
           <nav className="flex-1 overflow-y-auto py-2">
             {NAV.map(item => (
@@ -350,12 +327,97 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               {!collapsed && 'Выйти'}
             </button>
           </div>
+    </>
+  );
+}
+
+export function AppShell({ children, user }: { children: React.ReactNode; user: SessionUser }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [expanded, setExpanded] = useState<string>('Продажи');
+  const pathname = usePathname();
+  const router = useRouter();
+
+  // Переход по ссылке из мобильного меню должен закрывать drawer
+  useEffect(() => { setMobileOpen(false); }, [pathname]);
+
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    router.push('/login');
+  }
+
+  return (
+    <QueryProvider>
+      <div className="flex h-dvh overflow-hidden">
+        {/* Desktop sidebar (на <md скрыт — вместо него drawer) */}
+        <aside
+          className="hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] transition-all duration-200"
+          style={{ width: collapsed ? 52 : 220 }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-3 h-14 border-b border-white/10">
+            {!collapsed && (
+              <span className="flex items-center gap-2 min-w-0">
+                <MeteorLogo size={24} className="shrink-0" />
+                <span className="text-white font-semibold text-sm tracking-wide truncate">Аналстероид</span>
+              </span>
+            )}
+            <button
+              onClick={() => setCollapsed(v => !v)}
+              className="text-[var(--color-sidebar-text)] hover:text-white p-1 rounded shrink-0"
+            >
+              {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+          </div>
+          <SidebarBody
+            collapsed={collapsed} pathname={pathname} user={user}
+            expanded={expanded} setExpanded={setExpanded} logout={logout}
+          />
         </aside>
 
+        {/* Mobile drawer */}
+        {mobileOpen && (
+          <div className="fixed inset-0 z-50 md:hidden">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
+            <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-xl">
+              <div className="flex items-center justify-between px-3 h-14 border-b border-white/10 shrink-0">
+                <span className="flex items-center gap-2 min-w-0">
+                  <MeteorLogo size={24} className="shrink-0" />
+                  <span className="text-white font-semibold text-sm tracking-wide truncate">Аналстероид</span>
+                </span>
+                <button
+                  onClick={() => setMobileOpen(false)}
+                  className="tap-target text-[var(--color-sidebar-text)] hover:text-white p-1 rounded shrink-0"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <SidebarBody
+                collapsed={false} pathname={pathname} user={user}
+                expanded={expanded} setExpanded={setExpanded} logout={logout}
+              />
+            </aside>
+          </div>
+        )}
+
         {/* Main */}
-        <main className="flex-1 overflow-hidden flex flex-col">
-          {children}
-        </main>
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+          {/* Mobile topbar */}
+          <div className="md:hidden flex items-center gap-1.5 h-12 px-2 bg-[var(--color-sidebar-bg)] shrink-0">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="tap-target text-[var(--color-sidebar-text)] hover:text-white p-2 rounded"
+              aria-label="Открыть меню"
+            >
+              <Menu size={20} />
+            </button>
+            <MeteorLogo size={20} className="shrink-0" />
+            <span className="text-white font-semibold text-sm tracking-wide truncate">Аналстероид</span>
+          </div>
+          <main className="flex-1 overflow-hidden flex flex-col">
+            {children}
+          </main>
+        </div>
       </div>
     </QueryProvider>
   );

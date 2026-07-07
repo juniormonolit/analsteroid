@@ -268,7 +268,7 @@ function ManagerMiniReport({ target, period, dealScope, clientType, productGroup
       <table className="w-full text-sm border-collapse">
         <thead className="sticky top-0 z-20 bg-[var(--color-table-header)]">
           <tr>
-            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[300px] min-w-[300px]">
+            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[300px] min-w-[300px] max-md:w-[var(--report-dim-col)] max-md:min-w-[var(--report-dim-col)] max-md:max-w-[var(--report-dim-col)]">
               Товарная группа
             </th>
             {metrics.map(m => (
@@ -437,7 +437,7 @@ function ProductGroupMiniReport({ target, period, dealScope, clientType, product
       <table className="w-full text-sm border-collapse">
         <thead className="sticky top-0 z-20 bg-[var(--color-table-header)]">
           <tr>
-            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[260px] min-w-[260px]">
+            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[260px] min-w-[260px] max-md:w-[var(--report-dim-col)] max-md:min-w-[var(--report-dim-col)] max-md:max-w-[var(--report-dim-col)]">
               Менеджер
             </th>
             {metrics.map(m => (
@@ -619,7 +619,7 @@ function SourceMiniReport({ target, period, dealScope, clientType, productGroupM
       <table className="w-full text-sm border-collapse">
         <thead className="sticky top-0 z-20 bg-[var(--color-table-header)]">
           <tr>
-            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[280px] min-w-[280px]">
+            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[280px] min-w-[280px] max-md:w-[var(--report-dim-col)] max-md:min-w-[var(--report-dim-col)] max-md:max-w-[var(--report-dim-col)]">
               {dimensionLabel(dim)}
             </th>
             {metrics.map(m => (
@@ -762,9 +762,10 @@ export function DrilldownDrawer(props: Props) {
   }
   return (
     <div className="fixed inset-0 z-50 flex">
-      <div className="w-[10%] shrink-0 bg-black/40 cursor-pointer" onClick={onClose} />
-      <div className="flex-1 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
+      {/* Полоска-подложка для закрытия — только там, где есть место (sm+) */}
+      <div className="hidden sm:block w-[10%] shrink-0 bg-black/40 cursor-pointer" onClick={onClose} />
+      <div className="flex-1 min-w-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between flex-wrap gap-y-2 px-3 sm:px-6 py-3 sm:py-4 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
           <div className="min-w-0 flex-1">
             <h2 className="font-semibold text-[var(--color-text)] text-base truncate">
               {target.name}
@@ -782,7 +783,7 @@ export function DrilldownDrawer(props: Props) {
               {!localGrouped && ' · все сделки'}
             </p>
           </div>
-          <div className="flex items-center gap-3 shrink-0 ml-4">
+          <div className="flex items-center flex-wrap gap-2 sm:gap-3 shrink-0 ml-auto pl-2">
             {toolbarExtras}
             {dimensionType === 'source' && onDrilldownDimensionChange && (
               <>

@@ -79,7 +79,7 @@ export default function UsersPage() {
   }
 
   return (
-    <div className="p-6">
+    <div className="p-3 sm:p-6">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Пользователи</h1>
         <button
@@ -96,8 +96,8 @@ export default function UsersPage() {
         </p>
       )}
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] scroll-x">
+        <table className="w-full min-w-[560px] text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
               <th className="px-4 py-2 font-medium">Имя</th>

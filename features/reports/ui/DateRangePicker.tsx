@@ -80,10 +80,11 @@ export function DateRangePicker({ value, onChange, onClose, showPresets = true, 
     d.getMonth() === month.getMonth() && d.getFullYear() === month.getFullYear();
 
   return (
-    <div className="flex bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-xl shadow-xl overflow-hidden">
+    // Рамку/тень даёт Popover-обёртка. На телефоне пресеты уходят под календарь.
+    <div className="flex flex-col sm:flex-row overflow-hidden">
 
       {/* Calendar */}
-      <div className="p-4 w-[300px]">
+      <div className="p-4 w-[300px] max-w-full">
         {title && (
           <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2 uppercase tracking-wide">{title}</p>
         )}
@@ -171,15 +172,15 @@ export function DateRangePicker({ value, onChange, onClose, showPresets = true, 
         </p>
       </div>
 
-      {/* Presets */}
+      {/* Presets: на sm+ — вертикальный рейл справа, на телефоне — чипы под календарём */}
       {showPresets && (
-        <div className="border-l border-[var(--color-border)] py-3 px-2 w-[168px] flex flex-col gap-0.5">
-          <p className="text-xs font-medium text-[var(--color-text-muted)] px-2 mb-1 uppercase tracking-wide">Пресеты</p>
+        <div className="border-t sm:border-t-0 sm:border-l border-[var(--color-border)] py-3 px-2 sm:w-[168px] flex flex-row flex-wrap sm:flex-col gap-0.5">
+          <p className="w-full text-xs font-medium text-[var(--color-text-muted)] px-2 mb-1 uppercase tracking-wide">Пресеты</p>
           {PRESETS.map(key => (
             <button
               key={key}
               onClick={() => handlePreset(key)}
-              className="text-left px-2 py-1.5 text-sm rounded hover:bg-[var(--color-border)] text-[var(--color-text)] transition-colors"
+              className="text-left px-2 py-1.5 text-sm rounded hover:bg-[var(--color-border)] text-[var(--color-text)] transition-colors whitespace-nowrap"
             >
               {PRESET_LABELS[key]}
             </button>

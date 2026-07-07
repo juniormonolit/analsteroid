@@ -1,7 +1,6 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { Type } from 'lucide-react';
+import { Popover } from '@/components/ui/Popover';
 import type { ComparisonDisplay, AccountType } from '@/lib/metrics/types';
 
 export type Density = 'compact' | 'normal' | 'relaxed';
@@ -76,49 +75,20 @@ export function ViewSettings({
   drilldownGrouped, onDrilldownGroupedChange,
   colorizeMetrics, onColorizeMetricsChange,
 }: ViewSettingsProps) {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const popRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handler(e: MouseEvent) {
-      const t = e.target as Node;
-      if (btnRef.current?.contains(t) || popRef.current?.contains(t)) return;
-      setOpen(false);
-    }
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  function toggle() {
-    if (!open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 4, left: Math.max(8, r.right - 260) });
-    }
-    setOpen(v => !v);
-  }
-
   const fontPct = Math.round(prefs.fontScale * 100);
 
   return (
-    <>
-      <button
-        ref={btnRef}
-        onClick={toggle}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-      >
-        <Type size={12} />
-        Вид
-      </button>
-
-      {open && pos && createPortal(
-        <div
-          ref={popRef}
-          style={{ position: 'fixed', top: pos.top, left: pos.left, width: 260, maxHeight: 'calc(100vh - 80px)', overflowY: 'auto' }}
-          className="z-[1000] bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg p-3 flex flex-col gap-3"
-        >
+    <Popover
+      align="end"
+      className="w-[260px] p-3"
+      trigger={
+        <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors">
+          <Type size={12} />
+          Вид
+        </button>
+      }
+    >
+      <div className="flex flex-col gap-3">
           {onAccountTypeChange && (
             <div>
               <SectionLabel>Тип аккаунтов</SectionLabel>
@@ -240,9 +210,7 @@ export function ViewSettings({
           >
             Сбросить
           </button>
-        </div>,
-        document.body
-      )}
-    </>
+      </div>
+    </Popover>
   );
 }

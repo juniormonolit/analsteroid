@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
-import { X } from 'lucide-react';
+import { Modal } from '@/components/ui/Modal';
 
 interface Employee {
   bitrix_user_id: string;
@@ -79,18 +79,13 @@ export function InviteUserModal({ onInvited, onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div
-        className="bg-[var(--color-bg-surface)] rounded-2xl shadow-2xl w-[440px] flex flex-col gap-5 p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between">
-          <div className="font-semibold text-[var(--color-text)] text-base">Пригласить пользователя</div>
-          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-            <X size={18} />
-          </button>
-        </div>
-
+    <Modal
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+      title="Пригласить пользователя"
+      desktopWidth="sm:max-w-[440px]"
+    >
+      <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-1.5 relative">
           <label className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
             Сотрудник (из Bitrix)
@@ -103,7 +98,7 @@ export function InviteUserModal({ onInvited, onClose }: Props) {
               setSearch(e.target.value);
               setSelected(null);
             }}
-            className="w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+            className="w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-base sm:text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
           />
           {!selected && search.trim() && filtered.length > 0 && (
             <div className="absolute top-full mt-1 left-0 right-0 z-10 max-h-56 overflow-auto bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-lg shadow-lg">
@@ -131,7 +126,7 @@ export function InviteUserModal({ onInvited, onClose }: Props) {
             <input
               value={login}
               onChange={(e) => setLogin(e.target.value)}
-              className="w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+              className="w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-base sm:text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
             />
           </div>
         )}
@@ -164,6 +159,6 @@ export function InviteUserModal({ onInvited, onClose }: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

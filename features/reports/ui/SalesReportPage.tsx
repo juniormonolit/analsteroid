@@ -18,6 +18,7 @@ import type { DateRange } from '@/lib/period';
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
 import { type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -175,6 +176,7 @@ const DEFAULT_METRIC_IDS = [
 ];
 
 export function SalesReportPage({ reportSlug, title, preset }: Props) {
+  const isMobile = useIsMobile();
   const [period, setPeriod]             = useState<DateRange>(defaultPeriod);
   const [comparison, setComparison]     = useState<DateRange>(() => recomputeComparison(defaultPeriod()));
   const [dealScope, setDealScope]       = useState<DealScope>('all');
@@ -687,7 +689,9 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         return (
           <HighlightEditor
             key={configuringMetricId}
-            anchorLeft={showMetricPanel ? 220 + getMetricPanelWidth() : undefined}
+            // Док-режим (рядом с панелью метрик) — только на десктопе: на телефоне
+            // панель метрик во весь экран, редактор выезжает поверх справа
+            anchorLeft={showMetricPanel && !isMobile ? 220 + getMetricPanelWidth() : undefined}
             metricName={m?.nameRu ?? configuringMetricId}
             dataType={m?.dataType}
             initial={effectiveHighlights[configuringMetricId] ?? null}

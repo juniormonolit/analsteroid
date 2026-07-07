@@ -19,7 +19,7 @@ export function SettingsSidebar() {
         <Link
           key={item.href}
           href={item.href}
-          className={`block px-4 py-2 text-sm rounded-md mx-2 my-0.5 transition-colors ${
+          className={`block whitespace-nowrap shrink-0 px-3 md:px-4 py-2 text-sm rounded-md mx-1 md:mx-2 my-0.5 transition-colors ${
             pathname.startsWith(item.href)
               ? 'bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-medium'
               : 'text-[var(--color-text)] hover:bg-[var(--color-border)]'

@@ -47,7 +47,7 @@ export default function WorkingCalendarPage() {
   }
 
   return (
-    <div className="p-6 max-w-xl">
+    <div className="p-3 sm:p-6 max-w-xl">
       <h1 className="text-lg font-semibold text-[var(--color-text)] mb-6">
         Производственный календарь
       </h1>

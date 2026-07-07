@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { Modal } from '@/components/ui/Modal';
 import type { SavedReportInput, RelativePeriod, ComparisonMode, PeriodMode, PeriodAnchor, PeriodUnit } from '@/lib/saved-reports/types';
 import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay } from '@/lib/metrics/types';
 import type { DateRange } from '@/lib/period';
@@ -85,7 +85,8 @@ export function SaveReportModal({
   useEffect(() => {
     fetch('/api/saved-reports')
       .then(r => r.json())
-      .then((data: { id: string; name: string; isShared?: boolean }[]) => setExistingReports(data))
+      // 401/ошибка возвращает объект, не массив — без проверки падает existingReports.find
+      .then((data: { id: string; name: string; isShared?: boolean }[]) => setExistingReports(Array.isArray(data) ? data : []))
       .catch(() => {});
     fetch('/api/auth/session')
       .then(r => r.json())
@@ -152,18 +153,13 @@ export function SaveReportModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div
-        className="bg-[var(--color-bg-surface)] rounded-2xl shadow-2xl w-[460px] flex flex-col gap-5 p-6"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between">
-          <div className="font-semibold text-[var(--color-text)] text-base">Сохранить отчёт</div>
-          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
-            <X size={18} />
-          </button>
-        </div>
-
+    <Modal
+      open
+      onOpenChange={o => { if (!o) onClose(); }}
+      title="Сохранить отчёт"
+      desktopWidth="sm:max-w-[460px]"
+    >
+      <div className="flex flex-col gap-5">
         {/* Name */}
         <div className="flex flex-col gap-1.5">
           <input
@@ -172,7 +168,7 @@ export function SaveReportModal({
             value={name}
             onChange={e => setName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSave()}
-            className="w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+            className="w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-base sm:text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
             list="existing-reports-list"
           />
           <datalist id="existing-reports-list">
@@ -219,7 +215,7 @@ export function SaveReportModal({
           </div>
 
           {periodMode === 'relative' ? (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
                 {ANCHOR_OPTIONS.map(o => (
                   <button
@@ -299,6 +295,6 @@ export function SaveReportModal({
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
