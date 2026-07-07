@@ -27,8 +27,10 @@ function fmtPct(n: number | null) {
 }
 
 function fmtUpdatedAt(iso: string) {
+  // Explicit МСК: без timeZone время рендерится в часовом поясе браузера/сервера,
+  // а руководителям здесь всегда нужно московское время (см. остальной отчёт).
   return new Date(iso).toLocaleString('ru-RU', {
-    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow',
   });
 }
 
