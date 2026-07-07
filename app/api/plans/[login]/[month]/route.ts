@@ -8,6 +8,7 @@ export async function PUT(
 ) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const { login, month } = await params;
   const body = await request.json() as { plan_shipments: number; plan_n: number };

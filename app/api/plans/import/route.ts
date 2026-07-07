@@ -19,6 +19,7 @@ interface CleanItem {
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const formData = await request.formData();
   const file = formData.get('file') as File | null;

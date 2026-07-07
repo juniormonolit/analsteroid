@@ -10,6 +10,7 @@ interface ImportItem {
 export async function POST(request: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const body = await request.json() as { month: string; items: ImportItem[]; plan_n: number };
   const { month, items, plan_n } = body;
