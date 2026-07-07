@@ -95,6 +95,7 @@ function DeptTreeNode({
 export function ExportSlide({ onClose }: Props) {
   const [selectedDeptIds, setSelectedDeptIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const { data: orgData } = useQuery({
     queryKey: ['org-structure'],
@@ -119,9 +120,14 @@ export function ExportSlide({ onClose }: Props) {
 
   async function handleDownload() {
     setLoading(true);
+    setError(null);
     try {
       const params = selectedDeptIds.size > 0 ? `?deptIds=${Array.from(selectedDeptIds).join(',')}` : '';
       const res = await fetch(`/api/plans/export${params}`);
+      if (!res.ok) {
+        setError('Не удалось сформировать файл');
+        return;
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -129,6 +135,8 @@ export function ExportSlide({ onClose }: Props) {
       a.download = 'plans_template.xlsx';
       a.click();
       URL.revokeObjectURL(url);
+    } catch {
+      setError('Сетевая ошибка при скачивании файла');
     } finally {
       setLoading(false);
     }
@@ -157,21 +165,28 @@ export function ExportSlide({ onClose }: Props) {
         </div>
 
         {/* Footer */}
-        <div className="border-t border-[var(--color-border)] p-4 flex gap-2">
-          <button
-            onClick={handleDownload}
-            disabled={loading}
-            className="flex-1 flex items-center justify-center gap-2 py-2 bg-[var(--color-accent)] text-white text-sm rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
-          >
-            <Download size={14} />
-            {loading ? 'Загрузка...' : 'Скачать xlsx'}
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-          >
-            Закрыть
-          </button>
+        <div className="border-t border-[var(--color-border)] p-4 flex flex-col gap-2">
+          {error && (
+            <div className="px-3 py-2 text-sm text-[var(--color-negative)] bg-[var(--color-negative)]/10 rounded-lg">
+              {error}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={handleDownload}
+              disabled={loading}
+              className="flex-1 flex items-center justify-center gap-2 py-2 bg-[var(--color-accent)] text-white text-sm rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              <Download size={14} />
+              {loading ? 'Загрузка...' : 'Скачать xlsx'}
+            </button>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            >
+              Закрыть
+            </button>
+          </div>
         </div>
       </div>
     </>
