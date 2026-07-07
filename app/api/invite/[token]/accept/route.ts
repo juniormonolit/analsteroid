@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { systemDb } from '@/lib/db/clients';
-import { createSession, SESSION_COOKIE, SESSION_TTL_DAYS } from '@/lib/auth/session';
+import { createSession, setSessionCookie } from '@/lib/auth/session';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
@@ -32,11 +32,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
 
   const sessionToken = await createSession(invite.user_id);
   const response = NextResponse.json({ ok: true });
-  response.cookies.set(SESSION_COOKIE, sessionToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
-    path: '/',
-  });
+  setSessionCookie(response, sessionToken);
   return response;
 }

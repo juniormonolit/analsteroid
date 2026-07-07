@@ -1,4 +1,5 @@
 import { cookies } from 'next/headers';
+import type { NextResponse } from 'next/server';
 import { systemDb } from '@/lib/db/clients';
 
 const COOKIE = 'as_session';
@@ -50,3 +51,18 @@ export async function deleteSession(token: string): Promise<void> {
 
 export const SESSION_COOKIE = COOKIE;
 export const SESSION_TTL_DAYS = 7;
+
+/**
+ * Set the session cookie with a consistent, hardened set of attributes.
+ * `secure` is forced on outside local dev — the deployed instance sits behind Caddy on
+ * HTTPS (see lib/http/publicOrigin.ts), so the cookie must never be sent over plain HTTP.
+ */
+export function setSessionCookie(response: NextResponse, token: string): void {
+  response.cookies.set(SESSION_COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
+    path: '/',
+  });
+}
