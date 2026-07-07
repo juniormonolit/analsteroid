@@ -218,7 +218,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                   <div className="flex items-center gap-3 px-3 py-2 opacity-40 cursor-not-allowed">
                     <span className="text-[var(--color-sidebar-text)]">{item.icon}</span>
                     {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">{item.label}</span>}
-                    {!collapsed && <span className="ml-auto text-xs text-[var(--color-sidebar-text)]">soon</span>}
+                    {!collapsed && <span className="ml-auto text-xs text-[var(--color-sidebar-text)]">скоро</span>}
                   </div>
                 ) : item.isSales ? (
                   <>
