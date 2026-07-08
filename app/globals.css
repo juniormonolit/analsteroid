@@ -15,10 +15,14 @@
   --color-border-strong: #adb5bd; /* group separators */
   --color-positive: #2f9e44;
   --color-negative: #e03131;
-  --color-sidebar-bg: #1a1b1e;
-  --color-sidebar-text: #c1c2c5;
-  --color-sidebar-active: #228be6;
-  --color-sidebar-active-bg: rgba(34,139,230,0.15);
+  --color-sidebar-bg: #ffffff;
+  --color-sidebar-border: var(--color-border);
+  --color-sidebar-text: var(--color-text);
+  --color-sidebar-text-muted: var(--color-text-muted);
+  --color-sidebar-hover-bg: var(--color-bg-hover);
+  --color-sidebar-active: var(--color-accent);
+  --color-sidebar-active-bg: var(--color-accent-soft);
+  --color-sidebar-guide: #dee2e6; /* направляющая вложенности — на полтона темнее --color-border */
   --color-table-header: #fbfcfd; /* почти белая шапка — спокойный премиальный вид */
   --color-totals-bg: #d0e4fb;    /* итоговая строка: заметная светло-синяя плашка (не инверсия) */
   --color-table-row-hover: #dbeafe; /* accent-blue hover tint — clearly distinct from zebra */

@@ -16,6 +16,20 @@ import { MeteorLogo } from './MeteorLogo';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import type { SavedReport } from '@/lib/saved-reports/types';
 
+/* Общий паттерн пункта 1-го уровня (NAV-блок, Сводная/Планы/Декомпозиция,
+   Метрики/Настройки) — редизайн сайдбара, итерация 3 (бриф Виктора). */
+const NAV_ITEM_BASE =
+  'flex items-start gap-2.5 px-2 py-1.5 mx-1 my-0.5 rounded-lg text-sm leading-[1.35] relative transition-colors';
+const NAV_ITEM_ACTIVE = 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)] font-semibold';
+const NAV_ITEM_INACTIVE = 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]';
+// Левая акцентная полоска активного пункта — аналог .sb-item.active::before из мока.
+const NAV_ITEM_ACTIVE_BAR =
+  "before:content-[''] before:absolute before:left-[-10px] before:top-[6px] before:bottom-[6px] before:w-[3px] before:rounded-r before:bg-[var(--color-sidebar-active)]";
+
+function navIconCls(active: boolean) {
+  return active ? 'text-[var(--color-sidebar-active)] mt-px' : 'text-[var(--color-sidebar-text-muted)] mt-px';
+}
+
 function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean; pathname: string; user: SessionUser }) {
   const [openStd, setOpenStd] = useState(true);
   const [openFav, setOpenFav] = useState(true);
@@ -51,49 +65,78 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   const ownReports = savedReports.filter(r => !r.isShared && r.userLogin === user.login);
   const canDeleteShared = user.isSuperadmin;
 
+  // Направляющая линия вложенности вокруг под-группы (Роп монитор / Смекалочная / Избранное).
+  const subgroupCls = 'ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]';
+  const subgroupLabelCls =
+    'w-full flex items-center gap-1.5 px-1 py-1 text-[10px] font-bold uppercase tracking-[0.07em] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] transition-colors';
+
   const linkCls = (href: string) =>
-    `flex items-center justify-between py-1.5 pr-2 text-sm rounded-md my-0.5 transition-colors group ${
+    `flex items-start gap-1.5 py-1 px-2 my-0.5 text-[13px] leading-[1.35] rounded-[7px] relative transition-colors group ${
       pathname === href
-        ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-medium'
-        : 'text-[var(--color-sidebar-text)] hover:text-white'
+        ? "text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold before:content-[''] before:absolute before:left-[-11px] before:top-[5px] before:bottom-[5px] before:w-[2px] before:rounded-[2px] before:bg-[var(--color-sidebar-active)]"
+        : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
     }`;
+
+  const delBtnCls =
+    'hover-reveal tap-target absolute right-1 top-1 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)]';
 
   if (collapsed) {
     return (
       <div className="flex justify-center py-1">
-        <BarChart3 size={18} className="text-[var(--color-sidebar-text)]" />
+        <BarChart3 size={18} className="text-[var(--color-sidebar-text-muted)]" />
       </div>
     );
   }
 
   return (
     <div>
-      {/* Стандартные */}
-      <button
-        onClick={() => setOpenStd(v => !v)}
-        className="w-full flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-sidebar-text)] opacity-60 hover:opacity-100 transition-opacity uppercase tracking-wider"
-      >
-        <BookOpen size={10} />
-        <span className="flex-1 text-left">Роп монитор</span>
-        {openStd ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-      </button>
-      {openStd && (
-        <div className="pl-3 mb-1">
-          {stdReports.map(r => (
-            <Link key={r.href} href={r.href} className={linkCls(r.href)}>
-              <span className="truncate">{r.label}</span>
-            </Link>
-          ))}
-          {ropMonitorShared.map(r => {
+      {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
+      <div className={subgroupCls}>
+        <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
+          <BookOpen size={11} />
+          <span className="flex-1 text-left">Роп монитор</span>
+          {openStd ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        </button>
+        {openStd && (
+          <>
+            {stdReports.map(r => (
+              <Link key={r.href} href={r.href} className={linkCls(r.href)}>
+                <span className="flex-1 min-w-0 break-words line-clamp-2">{r.label}</span>
+              </Link>
+            ))}
+            {ropMonitorShared.map(r => {
+              const href = `/sales/saved/${r.id}`;
+              return (
+                <Link key={r.id} href={href} className={linkCls(href)} title={r.name}>
+                  <span className="flex-1 min-w-0 break-words line-clamp-2">{r.name}</span>
+                  {canDeleteShared && (
+                    <button onClick={e => deleteReport(r.id, e)} className={delBtnCls}>
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </Link>
+              );
+            })}
+          </>
+        )}
+      </div>
+
+      {/* Смекалочная — общие отчёты (видны всем, сохраняет/перезаписывает админ,
+          удаляет только супер-админ) */}
+      {smekalochnayaShared.length > 0 && (
+        <div className={subgroupCls}>
+          <button onClick={() => setOpenShared(v => !v)} className={subgroupLabelCls}>
+            <BarChart2 size={11} />
+            <span className="flex-1 text-left">Смекалочная</span>
+            {openShared ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          </button>
+          {openShared && smekalochnayaShared.map(r => {
             const href = `/sales/saved/${r.id}`;
             return (
-              <Link key={r.id} href={href} className={linkCls(href)}>
-                <span className="truncate flex-1">{r.name}</span>
+              <Link key={r.id} href={href} className={linkCls(href)} title={r.name}>
+                <span className="flex-1 min-w-0 break-words line-clamp-2">{r.name}</span>
                 {canDeleteShared && (
-                  <button
-                    onClick={e => deleteReport(r.id, e)}
-                    className="hover-reveal tap-target p-0.5 rounded hover:text-[var(--color-negative)]"
-                  >
+                  <button onClick={e => deleteReport(r.id, e)} className={delBtnCls}>
                     <Trash2 size={12} />
                   </button>
                 )}
@@ -103,74 +146,33 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         </div>
       )}
 
-      {/* Смекалочная — общие отчёты (видны всем, сохраняет/перезаписывает админ,
-          удаляет только супер-админ) */}
-      {smekalochnayaShared.length > 0 && (
-        <>
-          <button
-            onClick={() => setOpenShared(v => !v)}
-            className="w-full flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-sidebar-text)] opacity-60 hover:opacity-100 transition-opacity uppercase tracking-wider mt-1"
-          >
-            <BarChart2 size={10} />
-            <span className="flex-1 text-left">Смекалочная</span>
-            {openShared ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-          </button>
-          {openShared && (
-            <div className="pl-3 mb-1">
-              {smekalochnayaShared.map(r => {
-                const href = `/sales/saved/${r.id}`;
-                return (
-                  <Link key={r.id} href={href} className={linkCls(href)}>
-                    <span className="truncate flex-1">{r.name}</span>
-                    {canDeleteShared && (
-                      <button
-                        onClick={e => deleteReport(r.id, e)}
-                        className="hover-reveal tap-target p-0.5 rounded hover:text-[var(--color-negative)]"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    )}
-                  </Link>
-                );
-              })}
-            </div>
-          )}
-        </>
-      )}
-
       {/* Избранное — личные отчёты */}
-      <button
-        onClick={() => setOpenFav(v => !v)}
-        className="w-full flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-sidebar-text)] opacity-60 hover:opacity-100 transition-opacity uppercase tracking-wider mt-1"
-      >
-        <Bookmark size={10} />
-        <span className="flex-1 text-left">Избранное</span>
-        {openFav ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-      </button>
-      {openFav && (
-        <div className="pl-3 mb-1">
-          {ownReports.length === 0 ? (
-            <div className="text-xs text-[var(--color-sidebar-text)] opacity-40 py-1 px-1">
+      <div className={subgroupCls}>
+        <button onClick={() => setOpenFav(v => !v)} className={subgroupLabelCls}>
+          <Bookmark size={11} />
+          <span className="flex-1 text-left">Избранное</span>
+          {openFav ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        </button>
+        {openFav && (
+          ownReports.length === 0 ? (
+            <div className="text-xs text-[var(--color-sidebar-text-muted)] py-1 px-1">
               Нет сохранённых
             </div>
           ) : (
             ownReports.map(r => {
               const href = `/sales/saved/${r.id}`;
               return (
-                <Link key={r.id} href={href} className={linkCls(href)}>
-                  <span className="truncate flex-1">{r.name}</span>
-                  <button
-                    onClick={e => deleteReport(r.id, e)}
-                    className="hover-reveal tap-target p-0.5 rounded hover:text-[var(--color-negative)]"
-                  >
+                <Link key={r.id} href={href} className={linkCls(href)} title={r.name}>
+                  <span className="flex-1 min-w-0 break-words line-clamp-2">{r.name}</span>
+                  <button onClick={e => deleteReport(r.id, e)} className={delBtnCls}>
                     <Trash2 size={12} />
                   </button>
                 </Link>
               );
             })
-          )}
-        </div>
-      )}
+          )
+        )}
+      </div>
     </div>
   );
 }
@@ -208,32 +210,46 @@ function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout 
   setExpanded: React.Dispatch<React.SetStateAction<string>>;
   logout: () => void;
 }) {
+  const salesActive = pathname.startsWith('/sales');
+  const showSummaryBlock = hasPerm(user, 'section.summary') || hasPerm(user, 'section.plans') || hasPerm(user, 'section.decomposition');
+  const showMetricsBlock = hasPerm(user, 'section.metrics') || hasPerm(user, 'section.settings');
+
   return (
     <>
           {/* Nav */}
-          <nav className="flex-1 overflow-y-auto py-2">
+          <nav className="flex-1 overflow-y-auto py-2 px-2">
             {NAV.filter(item => !item.perm || hasPerm(user, item.perm)).map(item => (
               <div key={item.label}>
                 {item.disabled ? (
-                  <div className="flex items-center gap-3 px-3 py-2 opacity-40 cursor-not-allowed">
-                    <span className="text-[var(--color-sidebar-text)]">{item.icon}</span>
-                    {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">{item.label}</span>}
-                    {!collapsed && <span className="ml-auto text-xs text-[var(--color-sidebar-text)]">soon</span>}
+                  <div className={`${NAV_ITEM_BASE} cursor-not-allowed`}>
+                    <span className="mt-px text-[#ced4da]">{item.icon}</span>
+                    {!collapsed && (
+                      <span className="flex-1 min-w-0 break-words line-clamp-2 text-[var(--color-sidebar-text-muted)]">
+                        {item.label}
+                      </span>
+                    )}
+                    {!collapsed && (
+                      <span className="ml-auto mt-px shrink-0 text-[10px] font-semibold text-[var(--color-sidebar-text-muted)] bg-[var(--color-bg)] border border-[var(--color-sidebar-border)] rounded-full px-2 py-0.5">
+                        Скоро
+                      </span>
+                    )}
                   </div>
                 ) : item.isSales ? (
                   <>
                     <button
                       onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                      className="w-full flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors"
+                      className={`w-full ${NAV_ITEM_BASE} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                     >
-                      <span className="text-[var(--color-sidebar-text)]">{item.icon}</span>
+                      <span className={navIconCls(salesActive)}>{item.icon}</span>
                       {!collapsed && <>
-                        <span className="text-sm text-[var(--color-sidebar-text)] flex-1 text-left">{item.label}</span>
-                        {expanded === item.label ? <ChevronDown size={14} className="text-[var(--color-sidebar-text)]" /> : <ChevronRight size={14} className="text-[var(--color-sidebar-text)]" />}
+                        <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
+                        {expanded === item.label
+                          ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
+                          : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
                       </>}
                     </button>
                     {!collapsed && expanded === item.label && (
-                      <div className="pl-6 pr-2 py-1">
+                      <div className="py-1">
                         <SalesSidebarSection collapsed={collapsed} pathname={pathname} user={user} />
                       </div>
                     )}
@@ -242,130 +258,132 @@ function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout 
                   <>
                     <button
                       onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                      className="w-full flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors"
+                      className={`w-full ${NAV_ITEM_BASE} ${NAV_ITEM_INACTIVE}`}
                     >
-                      <span className="text-[var(--color-sidebar-text)]">{item.icon}</span>
+                      <span className={navIconCls(false)}>{item.icon}</span>
                       {!collapsed && <>
-                        <span className="text-sm text-[var(--color-sidebar-text)] flex-1 text-left">{item.label}</span>
-                        {expanded === item.label ? <ChevronDown size={14} className="text-[var(--color-sidebar-text)]" /> : <ChevronRight size={14} className="text-[var(--color-sidebar-text)]" />}
+                        <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
+                        {expanded === item.label
+                          ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
+                          : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
                       </>}
                     </button>
                     {!collapsed && expanded === item.label && (
-                      <div className="pl-9">
-                        {item.children.map(child => (
-                          <Link
-                            key={child.href}
-                            href={child.href}
-                            className={`block py-1.5 pr-3 text-sm transition-colors rounded-md my-0.5 ${
-                              pathname === child.href
-                                ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-medium'
-                                : 'text-[var(--color-sidebar-text)] hover:text-white'
-                            }`}
-                          >
-                            {child.label}
-                          </Link>
-                        ))}
+                      <div className="ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]">
+                        {item.children.map(child => {
+                          const active = pathname === child.href;
+                          return (
+                            <Link
+                              key={child.href}
+                              href={child.href}
+                              className={`flex items-start gap-1.5 py-1 px-2 my-0.5 text-[13px] leading-[1.35] rounded-[7px] relative transition-colors ${
+                                active
+                                  ? "text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold before:content-[''] before:absolute before:left-[-11px] before:top-[5px] before:bottom-[5px] before:w-[2px] before:rounded-[2px] before:bg-[var(--color-sidebar-active)]"
+                                  : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
+                              }`}
+                            >
+                              <span className="flex-1 min-w-0 break-words line-clamp-2">{child.label}</span>
+                            </Link>
+                          );
+                        })}
                       </div>
                     )}
                   </>
                 ) : (
                   <Link
                     href={item.href!}
-                    className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                      pathname === item.href ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-                    }`}
+                    className={`${NAV_ITEM_BASE} ${pathname === item.href ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                   >
-                    <span className="text-[var(--color-sidebar-text)]">{item.icon}</span>
-                    {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">{item.label}</span>}
+                    <span className={navIconCls(pathname === item.href)}>{item.icon}</span>
+                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{item.label}</span>}
                   </Link>
                 )}
               </div>
             ))}
           </nav>
 
-          {/* Сводная + Планы + Декомпозиция */}
-          <div className="border-t border-white/10 pt-1">
-            {hasPerm(user, 'section.summary') && (
-              <Link
-                href="/summary"
-                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                  pathname.startsWith('/summary') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-                }`}
-              >
-                <span className="text-[var(--color-sidebar-text)]"><Gauge size={18} /></span>
-                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Сводная</span>}
-              </Link>
-            )}
-            {hasPerm(user, 'section.plans') && (
-              <Link
-                href="/plans"
-                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                  pathname.startsWith('/plans') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-                }`}
-              >
-                <span className="text-[var(--color-sidebar-text)]"><ClipboardList size={18} /></span>
-                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Планы</span>}
-              </Link>
-            )}
-            {hasPerm(user, 'section.decomposition') && (
-              <Link
-                href="/decomposition"
-                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                  pathname.startsWith('/decomposition') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-                }`}
-              >
-                <span className="text-[var(--color-sidebar-text)]"><Network size={18} /></span>
-                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Декомпозиция</span>}
-              </Link>
-            )}
-          </div>
-
-          {/* Метрики + Настройки — по правам */}
-          {(hasPerm(user, 'section.metrics') || hasPerm(user, 'section.settings')) && (
-            <div className="pt-1">
-              {hasPerm(user, 'section.metrics') && (
+          {/* Сводная + Планы + Декомпозиция — рендерим блок целиком только если
+              есть право хотя бы на один из трёх пунктов, иначе на светлой панели
+              висит одинокая линия-разделитель над футером у обычных юзеров. */}
+          {showSummaryBlock && (
+            <div className="border-t border-[var(--color-sidebar-border)] pt-1 px-2">
+              {hasPerm(user, 'section.summary') && (
                 <Link
-                  href="/metrics"
-                  className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                    pathname.startsWith('/metrics') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-                  }`}
+                  href="/summary"
+                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/summary') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                 >
-                  <span className="text-[var(--color-sidebar-text)]"><BarChart2 size={18} /></span>
-                  {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Метрики</span>}
+                  <span className={navIconCls(pathname.startsWith('/summary'))}><Gauge size={18} /></span>
+                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Сводная</span>}
                 </Link>
               )}
-              {hasPerm(user, 'section.settings') && (
+              {hasPerm(user, 'section.plans') && (
                 <Link
-                  href="/settings"
-                  className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                    pathname.startsWith('/settings') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-                  }`}
+                  href="/plans"
+                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/plans') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                 >
-                  <span className="text-[var(--color-sidebar-text)]"><Settings size={18} /></span>
-                  {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Настройки</span>}
+                  <span className={navIconCls(pathname.startsWith('/plans'))}><ClipboardList size={18} /></span>
+                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Планы</span>}
+                </Link>
+              )}
+              {hasPerm(user, 'section.decomposition') && (
+                <Link
+                  href="/decomposition"
+                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/decomposition') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                >
+                  <span className={navIconCls(pathname.startsWith('/decomposition'))}><Network size={18} /></span>
+                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Декомпозиция</span>}
                 </Link>
               )}
             </div>
           )}
 
-          {/* Footer: аватар + имя → ЛК, рядом «Выйти» */}
-          <div className="border-t border-white/10 p-3">
-            <div className={`flex items-center gap-2 ${collapsed ? 'flex-col' : ''}`}>
+          {/* Метрики + Настройки — по правам */}
+          {showMetricsBlock && (
+            <div className="pt-1 px-2">
+              {hasPerm(user, 'section.metrics') && (
+                <Link
+                  href="/metrics"
+                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/metrics') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                >
+                  <span className={navIconCls(pathname.startsWith('/metrics'))}><BarChart2 size={18} /></span>
+                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Метрики</span>}
+                </Link>
+              )}
+              {hasPerm(user, 'section.settings') && (
+                <Link
+                  href="/settings"
+                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/settings') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                >
+                  <span className={navIconCls(pathname.startsWith('/settings'))}><Settings size={18} /></span>
+                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Настройки</span>}
+                </Link>
+              )}
+            </div>
+          )}
+
+          {/* Footer: карточка юзера (аватар + имя/роль) → ЛК, рядом «Выйти» */}
+          <div className="border-t border-[var(--color-sidebar-border)] p-2">
+            <div className={`flex items-center gap-1 ${collapsed ? 'flex-col' : ''}`}>
               <Link
                 href="/profile"
-                className={`flex items-center gap-2 min-w-0 flex-1 rounded-md transition-colors ${collapsed ? 'justify-center flex-none' : '-mx-1 px-1 py-1'} ${
-                  pathname.startsWith('/profile')
-                    ? 'text-white'
-                    : 'text-[var(--color-sidebar-text)] hover:text-white'
-                }`}
+                className={`flex items-center gap-2 min-w-0 flex-1 rounded-[9px] px-1.5 py-1.5 transition-colors hover:bg-[var(--color-sidebar-hover-bg)] ${collapsed ? 'justify-center flex-none' : ''}`}
                 title="Личный кабинет"
               >
-                <Avatar name={user.displayName} url={user.avatarUrl} size={28} />
-                {!collapsed && <span className="text-xs truncate">{user.displayName}</span>}
+                <span className="rounded-full shrink-0 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.06)]">
+                  <Avatar name={user.displayName} url={user.avatarUrl} size={30} />
+                </span>
+                {!collapsed && (
+                  <span className="min-w-0 flex flex-col gap-px">
+                    <span className="text-[12.5px] font-semibold text-[var(--color-sidebar-text)] truncate">{user.displayName}</span>
+                    {user.roleName && (
+                      <span className="text-[11px] text-[var(--color-sidebar-text-muted)] truncate">{user.roleName}</span>
+                    )}
+                  </span>
+                )}
               </Link>
               <button
                 onClick={logout}
-                className="tap-target flex items-center justify-center text-[var(--color-sidebar-text)] hover:text-white shrink-0"
+                className="tap-target flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)] hover:bg-[#fcebeb] rounded-md p-1.5 shrink-0 transition-colors"
                 title="Выйти"
               >
                 <LogOut size={16} />
@@ -396,20 +414,20 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
       <div className="flex h-dvh overflow-hidden">
         {/* Desktop sidebar (на <md скрыт — вместо него drawer) */}
         <aside
-          className="hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] transition-all duration-200"
-          style={{ width: collapsed ? 52 : 220 }}
+          className="hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] border-r border-[var(--color-sidebar-border)] transition-all duration-200"
+          style={{ width: collapsed ? 52 : 260 }}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-3 h-14 border-b border-white/10">
+          <div className="flex items-center justify-between px-3 h-14 border-b border-[var(--color-sidebar-border)]">
             {!collapsed && (
               <span className="flex items-center gap-2 min-w-0">
                 <MeteorLogo size={24} className="shrink-0" />
-                <span className="text-white font-semibold text-sm tracking-wide truncate">Аналстероид</span>
+                <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Аналстероид</span>
               </span>
             )}
             <button
               onClick={() => setCollapsed(v => !v)}
-              className="text-[var(--color-sidebar-text)] hover:text-white p-1 rounded shrink-0"
+              className="text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
             >
               {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
             </button>
@@ -423,16 +441,16 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         {/* Mobile drawer */}
         {mobileOpen && (
           <div className="fixed inset-0 z-50 md:hidden">
-            <div className="absolute inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
-            <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-xl">
-              <div className="flex items-center justify-between px-3 h-14 border-b border-white/10 shrink-0">
+            <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
+            <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-[0_0_24px_rgba(0,0,0,0.12)]">
+              <div className="flex items-center justify-between px-3 h-14 border-b border-[var(--color-sidebar-border)] shrink-0">
                 <span className="flex items-center gap-2 min-w-0">
                   <MeteorLogo size={24} className="shrink-0" />
-                  <span className="text-white font-semibold text-sm tracking-wide truncate">Аналстероид</span>
+                  <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Аналстероид</span>
                 </span>
                 <button
                   onClick={() => setMobileOpen(false)}
-                  className="tap-target text-[var(--color-sidebar-text)] hover:text-white p-1 rounded shrink-0"
+                  className="tap-target text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
                 >
                   <X size={18} />
                 </button>
@@ -448,16 +466,16 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         {/* Main */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           {/* Mobile topbar */}
-          <div className="md:hidden flex items-center gap-1.5 h-12 px-2 bg-[var(--color-sidebar-bg)] shrink-0">
+          <div className="md:hidden flex items-center gap-1.5 h-12 px-2 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0">
             <button
               onClick={() => setMobileOpen(true)}
-              className="tap-target text-[var(--color-sidebar-text)] hover:text-white p-2 rounded"
+              className="tap-target text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] p-2 rounded"
               aria-label="Открыть меню"
             >
               <Menu size={20} />
             </button>
             <MeteorLogo size={20} className="shrink-0" />
-            <span className="text-white font-semibold text-sm tracking-wide truncate">Аналстероид</span>
+            <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Аналстероид</span>
           </div>
           <main className="flex-1 overflow-hidden flex flex-col">
             {children}
