@@ -667,18 +667,18 @@ export function ReportTable({
     const expandable = !isGroupRow && !!renderExpandedRow;
     const isExpanded = expandable && !!expandedRowIds?.has(row.dimensionId);
 
-    const isStripe = !isGroupRow && i % 2 === 1;
+    // Вариант C раскраски (owners-inbox/table-colors-brief.md): зебра убрана — все строки
+    // отчёта на bg-surface, разделитель — тонкая линия --color-table-row-border, акцент
+    // при наведении — box-shadow слева (.report-row:hover > td:first-child в globals.css).
     const stickyBg = isGroupRow
       ? 'bg-[var(--color-bg-surface)]'
-      : isStripe
-        ? 'bg-[var(--color-table-stripe)] group-hover:bg-[var(--color-table-row-hover)]'
-        : 'bg-[var(--color-bg-surface)] group-hover:bg-[var(--color-table-row-hover)]';
+      : 'bg-[var(--color-bg-surface)] group-hover:bg-[var(--color-table-row-hover)]';
 
     const rowCls = [
-      'group border-b border-[var(--color-border)]',
+      'group border-b',
       isGroupRow
-        ? 'bg-[var(--color-bg-surface)] font-semibold text-[var(--color-text)]'
-        : `report-row ${isStripe ? 'bg-[var(--color-table-stripe)]' : ''}`,
+        ? 'border-[var(--color-border)] bg-[var(--color-bg-surface)] font-semibold text-[var(--color-text)]'
+        : 'report-row border-[var(--color-table-row-border)] bg-[var(--color-bg-surface)]',
     ].join(' ');
 
     return (

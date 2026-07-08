@@ -25,8 +25,9 @@
   --color-sidebar-guide: #dee2e6; /* направляющая вложенности — на полтона темнее --color-border */
   --color-table-header: #fbfcfd; /* почти белая шапка — спокойный премиальный вид */
   --color-totals-bg: #d0e4fb;    /* итоговая строка: заметная светло-синяя плашка (не инверсия) */
-  --color-table-row-hover: #dbeafe; /* accent-blue hover tint — clearly distinct from zebra */
-  --color-table-stripe: #f6f7f9;    /* gentle zebra on white rows (not = bg) */
+  --color-table-row-hover: #dbe7fa; /* GS blue #4a86e8, подмес 0.8 — вариант C табл. отчёта (owners-inbox/table-colors-brief.md), общий токен для всех таблиц */
+  --color-table-stripe: #f6f7f9;    /* gentle zebra on white rows (not = bg) — зебра других таблиц (ComparisonPanel/DrilldownDrawer/settings), НЕ меняем */
+  --color-table-row-border: #efefef; /* GS grayscale — тонкий разделитель строк в таблице отчёта (без зебры), только ReportTable.tsx */
 }
 
 :root {
@@ -54,6 +55,10 @@ body {
    non-hovered cells fade in and visually "lag" behind the pointer. Kill the bg transition on row
    cells so the whole row flips instantly. */
 .report-row > td { transition-property: none !important; }
+/* Вариант C (owners-inbox/table-colors-brief.md): акцентная полоска слева у наведённой строки
+   отчёта — перекликается с active-пунктом сайдбара. Только .report-row (без зебры), группа-строки
+   без изменений. */
+.report-row:hover > td:first-child { box-shadow: inset 3px 0 0 0 var(--color-accent); }
 
 /* Быстрая кнопка «сравнение» в заголовке метрики (п. Н5б спеки analsteroid-edits-spec-
    agreed-20260708.md): плавное появление/скрытие колонок Пред./Δ/Δ% при разворачивании
