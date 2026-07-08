@@ -6,6 +6,128 @@
 
 ---
 
+## 2026-07-08 — Этап 5б: план-метрики по всем продажам, годовой темп ÷365, суффиксы «(все)»
+
+- **Задача:** три правки Серёги (08.07 16:57) поверх задачи 5 (миграция 051, коммит `8573666`):
+  1. 6 план-метрик выполнения плана (`plan_execution_pct` + `plan_execution_pct_{sales,shipments}_{day,week,month}`)
+     считают факт по ВСЕМ продажам/отгрузкам (перв.+повт.), а не только по первичным, как было
+     исторически на проде и как сознательно сохранила миграция 051.
+  2. Годовой темп Сводной (`/summary`) в режиме дневного плана «÷20»: знаменатель = годовой план
+     ÷ 365 × прошедших КАЛЕНДАРНЫХ дней с 1 января (было — рабочие дни, 12×20=240). Режим
+     «производственный календарь» (тумблер супер-админа) не тронут.
+  3. Тройки метрик каталога «X (перв.)» / «X (повт.)» / «X» (без суффикса = «все», правило
+     миграции 041) получают явный суффикс «X (все)» — семантика не меняется, только надпись
+     в UI. Одиночные метрики без парных (перв.)/(повт.) не тронуты.
+
+- **Формулы (план-метрики), migrations/053_all_sales_plan_and_triple_naming.sql:**
+  - `plan_execution_pct` («Выполнение плана продаж, % (месяц)»): было
+    `[primary_sales_amount] / [plan_sales_month] * 100` → стало
+    `([primary_sales_amount] + [repeat_sales_amount]) / [plan_sales_month] * 100`.
+    Сумма инлайнится (как в `migrations/040_avg_metrics.sql` для `all_sales_avg_amount`), а НЕ
+    ссылается на calculated-метрику `all_sales_amount` — иначе результат зависел бы от порядка
+    вычисления цепочки calculated-метрик в `computeCalculated` (там нет топологической
+    сортировки, порядок = порядок обхода `withDependencies`, вставляющий метрику ДО её
+    зависимостей — `all_sales_amount` рисковала бы вычисляться позже `plan_execution_pct`).
+  - `plan_execution_pct_shipments_month` («… отгрузок, % (месяц)»): было
+    `[primary_shipments_amount] / [plan_shipments_month] * 100` → стало
+    `[shipments_amount] / [plan_shipments_month] * 100`. `shipments_amount` — collected-метрика
+    без funnel-фильтра (введена в 041), т.е. уже сумма перв.+повт. на уровне SQL; ссылаться на
+    неё безопасно (collected-метрики всегда в `rawMetrics` до calculated-цепочки).
+  - `plan_execution_pct_sales_day/week`, `plan_execution_pct_shipments_day/week`: сами формулы
+    каталога НЕ меняются (ссылаются на скрытые external-хелперы без SQL-формулы). Источник
+    факта исправлен в коде: `app/api/reports/run/route.ts`, блок `enrichPeriodRelative` —
+    `salesFactMtd/Wtd` и `shipmentsFactMtd/Wtd` теперь `primary_* + repeat_*` вместо только
+    `primary_*` (mtd/wtd берутся из `fetchByManagers`, которая всегда отдаёт ВСЕ collected-метрики
+    независимо от запроса — `repeat_*` поля гарантированно на месте).
+  - `lib/jobs/planSummary.ts` (`/summary`, факт по филиалам/Сводной) уже считал
+    `primary_shipments_amount + repeat_shipments_amount` (`getShipmentsFactByManager`) — это уже
+    было «всё», менять не потребовалось.
+
+- **Годовой темп ÷20 (`lib/plans/dailyPlan.ts`, `getYearWorkingDays`):** новая константа
+  `FIXED_YEAR_DIVISOR = 365`, новая функция `countCalendarDaysInclusive` (все календарные дни,
+  без пропуска выходных — в отличие от `countWeekdaysInclusive`, который остаётся для
+  месяца/недели). В divide20-режиме `getYearWorkingDays` теперь возвращает
+  `{ total: 365, passed: countCalendarDaysInclusive(yearStart, capped) }` вместо
+  `{ total: 240, passed: countWeekdaysInclusive(...) }`. Проверка границ: для 08.07.2026
+  (не високосный год) — 189-й календарный день года (Jan31+Feb28+Mar31+Apr30+May31+Jun30+8=189),
+  as-of включается (как и раньше). Единственный вызывающий — `lib/jobs/planSummary.ts`
+  (`computeAndCachePlanSummary`), формула `pace = pct(factYtd, (targetYear/wd.total)*wd.passed)`
+  не менялась — меняется только источник `wd`. Режим «calendar» (working_calendar) не тронут.
+  **Вопрос владельцу (НЕ решал сам):** ÷365 применён ТОЛЬКО к divide20-режиму, как явно
+  попросил Серёга. Возможно, разумнее применить ÷365 (календарные дни) и к режиму
+  «производственный календарь» тоже (сейчас там остаётся working_calendar/рабочие дни года) —
+  но это меняло бы уже существующее поведение тумблера, не входящее в правку 08.07 16:57.
+
+- **Суффиксы «(все)» — 37 переименований (`name_ru`, `name_short_ru` где не NULL и без
+  суффикса), guard по `NOT LIKE '%(перв.)%' / '%(повт.)%' / '%(все)%'`:**
+
+  | id | было (`name_ru`) | стало |
+  |---|---|---|
+  | deals_count | Кол-во сделок | Кол-во сделок (все) |
+  | deals_amount | Сумма сделок | Сумма сделок (все) |
+  | deals_avg_amount | Ср. чек сделок | Ср. чек сделок (все) |
+  | unprocessed_count | Кол-во необраб. сделок | Кол-во необраб. сделок (все) |
+  | reservations_count | Кол-во броней | Кол-во броней (все) |
+  | reservations_amount | Сумма броней | Сумма броней (все) |
+  | confirmed_reservations_count | Кол-во подтв. броней | Кол-во подтв. броней (все) |
+  | all_confirmed_amount | Сумма подтв. броней | Сумма подтв. броней (все) |
+  | all_confirmed_avg_amount | Ср. чек подтв. броней | Ср. чек подтв. броней (все) |
+  | sales_count | Кол-во продаж | Кол-во продаж (все) |
+  | all_sales_amount | Сумма продаж | Сумма продаж (все) |
+  | all_sales_avg_amount | Ср. чек продаж | Ср. чек продаж (все) |
+  | reservation_to_sale_count | Кол-во продаж из брони | Кол-во продаж из брони (все) |
+  | reservation_to_sale_amount | Сумма продаж из брони | Сумма продаж из брони (все) |
+  | confirmed_sales_count | Кол-во продаж из подтв. брони | Кол-во продаж из подтв. брони (все) |
+  | shipments_count | Кол-во отгрузок | Кол-во отгрузок (все) |
+  | shipments_amount | Сумма отгрузок | Сумма отгрузок (все) |
+  | all_shipments_avg_amount | Ср. чек отгрузок | Ср. чек отгрузок (все) |
+  | cr_deal_to_reservation_all | CR Сделка → Бронь | CR Сделка → Бронь (все) |
+  | cr_deal_to_confirmed_all | CR Сделка → Подтв. бронь | CR Сделка → Подтв. бронь (все) |
+  | cr_deal_to_sale_all | CR Сделка → Продажа | CR Сделка → Продажа (все) |
+  | cr_deal_to_shipment_all | CR Сделка → Отгрузка | CR Сделка → Отгрузка (все) |
+  | cr_reservation_to_confirmed_all | CR Бронь → Подтв. бронь | CR Бронь → Подтв. бронь (все) |
+  | cr_reservation_to_sale_all | CR Бронь → Продажа | CR Бронь → Продажа (все) |
+  | cr_reservation_to_shipment_all | CR Бронь → Отгрузка | CR Бронь → Отгрузка (все) |
+  | cr_confirmed_to_sale_all | CR Подтв. бронь → Продажа | CR Подтв. бронь → Продажа (все) |
+  | cr_sale_to_shipment | CR Продажа → Отгрузка | CR Продажа → Отгрузка (все) |
+  | lost_deals_count | Кол-во отказов | Кол-во отказов (все) |
+  | reservation_to_lost_count | Кол-во отказов из брони | Кол-во отказов из брони (все) |
+  | reservation_to_lost_amount | Сумма отказов из брони | Сумма отказов из брони (все) |
+  | confirmed_to_lost_count | Кол-во отказов из подтв. брони | Кол-во отказов из подтв. брони (все) |
+  | confirmed_to_lost_amount | Сумма отказов из подтв. брони | Сумма отказов из подтв. брони (все) |
+  | sale_to_lost_count | Кол-во отказов из продажи | Кол-во отказов из продажи (все) |
+  | sale_to_lost_amount | Сумма отказов из продажи | Сумма отказов из продажи (все) |
+  | cr_reservation_to_lost_all | CR Бронь → Отказ | CR Бронь → Отказ (все) |
+  | cr_confirmed_to_lost_all | CR Подтв. бронь → Отказ | CR Подтв. бронь → Отказ (все) |
+  | cr_sale_to_lost_all | CR Продажа → Отказ | CR Продажа → Отказ (все) |
+
+  Список построен по истории миграций (нет прямого доступа к прод-БД из рабочей копии):
+  `034_refusal_metrics.sql` и `040_avg_metrics.sql` изначально засеяли часть этих id с суффиксом
+  «(все)» и в `name_ru`, и в `name_short_ru`; `041_metrics_naming.sql` в рамках унификации
+  нейминга убрал суффикс из `name_ru` точечными `UPDATE`, которые НЕ трогали `name_short_ru` —
+  отсюда возможный разъезд между колонками на проде. Миграция 053 гвардит по факту содержимого
+  (`NOT LIKE`), а не перезаписывает жёстко — безопасна при любом реальном состоянии колонок и
+  при повторном запуске.
+
+- **Проверка цифр (Бибиков, июнь, «все продажи» vs «первичные»):** НЕ выполнена — нет read-only
+  доступа к прод-БД (YC analytics) из рабочей копии `analsteroid-prod`, только к системной части
+  через `systemDb()`/`analyticsDb()` в рантайме приложения. Проверить при деплое (Артём —
+  сравнить `plan_execution_pct` до/после миграции 053 для менеджера Бибикова за июнь).
+
+- **Файлы:**
+  - `migrations/053_all_sales_plan_and_triple_naming.sql` (новая, **НЕ применена к проду**,
+    идемпотентна) — формулы 2 план-метрик (месяц) + 37 переименований «(все)».
+  - `app/api/reports/run/route.ts` — `enrichPeriodRelative`: факт день/неделя = primary+repeat.
+  - `lib/plans/dailyPlan.ts` — `getYearWorkingDays` (divide20): `FIXED_YEAR_DIVISOR = 365` +
+    `countCalendarDaysInclusive` вместо `countWeekdaysInclusive`/`240`.
+
+- **Для Артёма:** применить миграции **052, затем 053** (по порядку номеров) вместе с деплоем
+  этого коммита — 052 (автоцвета) была закоммичена раньше и тоже ещё не на проде.
+
+- **Build:** `npm run build` → EXIT=0.
+
+---
+
 ## 2026-07-08 — Автоцвета метрик по сущности + палитра Google Sheets — задача 6а (п.10 спеки)
 
 - **Задача:** каждая метрика каталога получает АВТОМАТИЧЕСКИЙ цвет по своей сущности (не

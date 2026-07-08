@@ -218,12 +218,15 @@ export async function POST(req: NextRequest) {
 
       const mtd = login ? mtdByLogin.get(login) : undefined;
       const wtd = login ? wtdByLogin.get(login) : undefined;
-      // Тот же источник факта, что и у существующей «Выполнение плана, %»: продажи —
-      // primary_sales_amount (sold_at), отгрузки — primary_shipments_amount (delivered_at).
-      const salesFactMtd = mtd?.primary_sales_amount ?? 0;
-      const salesFactWtd = wtd?.primary_sales_amount ?? 0;
-      const shipmentsFactMtd = mtd?.primary_shipments_amount ?? 0;
-      const shipmentsFactWtd = wtd?.primary_shipments_amount ?? 0;
+      // Факт = ВСЕ продажи/отгрузки (перв.+повт.), решение Серёги 08.07 16:57 (этап 5б,
+      // п.1). Раньше (миграция 051) считали только primary_*_amount — так исторически
+      // было на проде. mtd/wtd приходят из fetchByManagers, которая всегда отдаёт ВСЕ
+      // collected-метрики независимо от запроса (см. features/reports/engine/byManagers.ts),
+      // поэтому repeat_* поля гарантированно присутствуют в объекте.
+      const salesFactMtd = (mtd?.primary_sales_amount ?? 0) + (mtd?.repeat_sales_amount ?? 0);
+      const salesFactWtd = (wtd?.primary_sales_amount ?? 0) + (wtd?.repeat_sales_amount ?? 0);
+      const shipmentsFactMtd = (mtd?.primary_shipments_amount ?? 0) + (mtd?.repeat_shipments_amount ?? 0);
+      const shipmentsFactWtd = (wtd?.primary_shipments_amount ?? 0) + (wtd?.repeat_shipments_amount ?? 0);
 
       return {
         ...row,

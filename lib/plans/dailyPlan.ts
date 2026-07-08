@@ -6,11 +6,12 @@
 //
 // Режимы (plan_settings.daily_plan_mode, миграция 050):
 //  - 'divide20' (дефолт): дневной план = месячный план ÷ 20 — константа, НЕ зависит от
-//    фактического числа будней месяца. "Прошедшие будни" (множитель для MTD/pace-таргета)
-//    считаются пн–пт по календарным датам, БЕЗ обращения к working_calendar и БЕЗ учёта
-//    праздников РФ — иначе режим остался бы зависим от календаря, который мы как раз
-//    убираем. (Полноценная формула темпа с этой же логикой "будней" — задача №5, здесь
-//    трогаем только источник дневного плана в существующих расчётах.)
+//    фактического числа будней месяца. "Прошедшие будни" (множитель для MTD/pace-таргета
+//    месяца/недели) считаются пн–пт по календарным датам, БЕЗ обращения к working_calendar
+//    и БЕЗ учёта праздников РФ — иначе режим остался бы зависим от календаря, который мы
+//    как раз убираем. ГОДОВОЙ темп (getYearWorkingDays) — ИСКЛЮЧЕНИЕ: этап 5б п.2
+//    (решение Серёги 08.07 16:57) считает его по КАЛЕНДАРНЫМ дням (÷365), а не по будням
+//    (÷240) — см. комментарий у функции.
 //  - 'calendar': прежняя логика без изменений — оба числа (сколько рабочих дней всего /
 //    сколько уже прошло) читаются из working_calendar (учитывает праздники, isdayoff.ru).
 //    Используется, только если супер-админ явно переключил тумблер в /settings/daily-plan-mode.
@@ -25,6 +26,7 @@ export type DailyPlanMode = 'divide20' | 'calendar';
 export const DEFAULT_DAILY_PLAN_MODE: DailyPlanMode = 'divide20';
 const FIXED_MONTH_DIVISOR = 20;
 const FIXED_WEEK_DIVISOR = 5; // пн-пт константа для divide20-режима
+const FIXED_YEAR_DIVISOR = 365; // календарных дней в году, константа для divide20-режима (этап 5б, п.2)
 
 let modeCache: { value: DailyPlanMode; at: number } | null = null;
 const MODE_CACHE_TTL_MS = 60_000; // тумблер супер-админа должен подхватываться быстро, но не дёргать БД на каждый запрос
@@ -71,6 +73,17 @@ function countWeekdaysInclusive(fromStr: string, toStr: string): number {
     if (day !== 0 && day !== 6) count++;
   }
   return count;
+}
+
+/** Считает КАЛЕНДАРНЫЕ дни (все, без пропуска выходных) между from и to включительно.
+ *  Используется только годовым темпом в divide20-режиме (этап 5б, п.2) — решение Серёги
+ *  08.07 16:57: знаменатель = годовой план ÷ 365 × прошедших календарных дней с 1 января,
+ *  а не рабочие дни (12×20=240), как считалось раньше. */
+function countCalendarDaysInclusive(fromStr: string, toStr: string): number {
+  if (toStr < fromStr) return 0;
+  const from = new Date(`${fromStr}T00:00:00Z`);
+  const to = new Date(`${toStr}T00:00:00Z`);
+  return Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1;
 }
 
 function clampToMonth(dateStr: string, monthFirstDay: string): string {
@@ -167,10 +180,12 @@ export async function getWeekWorkingDays(weekStartStr: string, asOfDateStr: stri
 }
 
 /**
- * Прогресс рабочих дней ГОДА — для Сводной (годовой таргет, YTD-темп). divide20:
- * 12 месяцев × 20 = 240 (константа), прошедшие — будни с 1 января по asOf. calendar:
- * как раньше, working_calendar за календарный год; null, если календарь не заполнен
- * на этот год (сохраняет прежнее поведение "не показываем темп").
+ * Прогресс ГОДА — для Сводной (годовой таргет, YTD-темп). divide20 (этап 5б, п.2,
+ * решение Серёги 08.07 16:57): total = 365 (календарных дней, константа), passed =
+ * прошедшие КАЛЕНДАРНЫЕ дни с 1 января по asOf включительно (НЕ рабочие дни — раньше
+ * было 12×20=240 будней, но темп годового плана считаем по календарю, не по будням).
+ * calendar-режим (тумблер) — БЕЗ ИЗМЕНЕНИЙ, working_calendar за календарный год; null,
+ * если календарь не заполнен на этот год (сохраняет прежнее поведение "не показываем темп").
  */
 export async function getYearWorkingDays(year: number, asOfDateStr: string): Promise<WorkingDayProgress | null> {
   const mode = await getDailyPlanMode();
@@ -179,7 +194,7 @@ export async function getYearWorkingDays(year: number, asOfDateStr: string): Pro
     const yearStart = `${year}-01-01`;
     const yearEnd = `${year}-12-31`;
     const capped = asOfDateStr < yearStart ? yearStart : (asOfDateStr > yearEnd ? yearEnd : asOfDateStr);
-    return { total: 12 * FIXED_MONTH_DIVISOR, passed: countWeekdaysInclusive(yearStart, capped) };
+    return { total: FIXED_YEAR_DIVISOR, passed: countCalendarDaysInclusive(yearStart, capped) };
   }
 
   const res = await systemDb().query<{ total_working: string; days_passed: string }>(
