@@ -6,6 +6,40 @@
 
 ---
 
+## 2026-07-08 — Переименование ярлыка раздела сайдбара продаж: «Стандартные» → «Роп монитор»
+
+- **`components/layout/AppShell.tsx`** (`SalesSidebarSection`, строка 73): текст кнопки
+  раскрывающегося раздела сайдбара продаж `'Стандартные'` → `'Роп монитор'`. Единственное
+  UI-вхождение строки (проверено `grep -rn "Стандартные"` по всему репо, вне node_modules/.next):
+  ещё 2 совпадения — JSX-комментарий `{/* Стандартные */}` в той же строке 67 (не текст UI,
+  не менялся) и комментарий в `lib/marketing/presets.ts:1` (другой модуль, не относится
+  к сайдбару продаж, не менялся).
+- **Первый выкат на боевой прод analsteroid (порт 8100, `/home/junior/analsteroid` на
+  62.113.100.67), не на демо.** Валидация прод-пайплайна end-to-end (см. ниже, «как устроен
+  прод-деплой»):
+  - Работа велась в отдельном git-ворктри `/home/user/apps/analsteroid-prod` (ветка
+    `prod-work` от `origin/main`), демо-ворктри `/home/user/apps/analsteroid`
+    (`deploy/asteroid-demo`) не тронут.
+  - Коммит запушен в `origin/main`.
+  - Билд (`npm run build`, EXIT=0) → BUILD_ID `hfLk-n8ZcZuU73wV_CQGi`.
+  - Тарбол собран **по образцу существующего прод-`deploy.sh`** (`.next/standalone/.next/server/`,
+    `*.json`, `BUILD_ID`, `server.js`, `.next/static/` + патч NEEDED_PKGS для ioredis-стека —
+    обход известного Turbopack NFT-бага с `fs.readFileSync` в `lib/db/clients.ts`).
+  - **Уточнение по грабле `pg-<hash>` из демо-заметки:** на этом прод-каталоге
+    `.next/standalone/.next/node_modules/pg-587764f78a6c7a9c` уже существует как реальная
+    (не symlink) директория, установленная ранее вручную и не входящая в PACK_PATHS
+    `deploy.sh` — поэтому она переживает каждый `tar --overwrite` нетронутой. Для *этого*
+    прод-каталога досыпать её в тарбол не потребовалось (grabli актуальны только для
+    развёртывания с нуля на пустом каталоге, как было с demo-8102).
+  - Деплой на сервер: `scp` тарбола → `kill` по pid порта 8100 → `tar -xzf --overwrite` →
+    докопирование `.next/static` в standalone → `nohup bash start.sh >> app.log 2>&1 &`.
+    `.env.local` и `start.sh` не менялись (md5/mtime сверены до и после — идентичны).
+  - Проверки: `curl localhost:8100/login` → 200, `curl https://junior-analsteroid.dev.mlt-it.com/login`
+    → 200 (и `/` → 307 на `/login`, ожидаемо), `grep "Роп монитор" .next/standalone/.next/server/`
+    → найдено в чанке `AppShell`, старая строка `"Стандартные"` там же отсутствует.
+    PID до `3476055` → после `3877155` (рестарт подтверждён), `app.log` после рестарта
+    новых ошибок не получил (счётчик строк не вырос за минуту простоя после старта).
+
 ## 2026-07-08 — Drag-and-drop колонок метрик прямо в шапке таблицы отчёта
 
 - **`ReportTable.tsx`**: заголовок `<th>` каждой метрики (`features/reports/ui/ReportTable.tsx:735`)

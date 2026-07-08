@@ -70,7 +70,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         className="w-full flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-sidebar-text)] opacity-60 hover:opacity-100 transition-opacity uppercase tracking-wider"
       >
         <BookOpen size={10} />
-        <span className="flex-1 text-left">Стандартные</span>
+        <span className="flex-1 text-left">Роп монитор</span>
         {openStd ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
       </button>
       {openStd && (
