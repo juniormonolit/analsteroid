@@ -51,6 +51,26 @@ body {
    cells so the whole row flips instantly. */
 .report-row > td { transition-property: none !important; }
 
+/* Быстрая кнопка «сравнение» в заголовке метрики (п. Н5б спеки analsteroid-edits-spec-
+   agreed-20260708.md): плавное появление/скрытие колонок Пред./Δ/Δ% при разворачивании
+   метрики в сравнение. Данные уже загружены (см. ReportTable.tsx/SalesReportPage.tsx —
+   comparison всегда приходит вместе с current в одном фетче), переключение режима —
+   чисто клиентский re-render, без обращения к сети. Анимация только визуальная:
+   вход — обычный CSS @keyframes на mount новых колонок; выход — колонки на время
+   COMPARE_CLOSE_MS ещё рендерятся (см. closingFullIds в ReportTable.tsx), но с этим
+   классом, поэтому реальное схлопывание в 1 колонку происходит уже по прозрачным
+   ячейкам — глаз не видит рывка. */
+@keyframes metric-compare-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes metric-compare-out {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(-6px); }
+}
+.metric-compare-col-enter { animation: metric-compare-in 0.18s ease-out; }
+.metric-compare-col-exit { animation: metric-compare-out 0.18s ease-in forwards; pointer-events: none; }
+
 /* ---------- Адаптивность / touch ---------- */
 
 /* Кнопки, которые на десктопе появляются по hover (удалить/редактировать в строках).

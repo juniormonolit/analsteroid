@@ -186,6 +186,11 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [comparisonDisplay, setComparisonDisplay] = useState<ComparisonDisplay>('current');
   const [metricDisplayModes, setMetricDisplayModes] = useState<Record<string, ComparisonDisplay>>({});
+  // Быстрая кнопка «сравнение» в заголовке метрики (п. Н5б спеки): помнит, в какой
+  // немодальный (не 'full') режим метрика была ДО быстрого разворачивания, чтобы повторный
+  // клик вернул её именно туда (а не сбросил ручную настройку 'compact' из «Настроить» до
+  // общего режима отчёта). Живёт только в памяти, не сохраняется в отчёт.
+  const [quickCompareMemory, setQuickCompareMemory] = useState<Record<string, ComparisonDisplay>>({});
   const [comparisonThreshold, setComparisonThreshold] = useState<number>(5);
   const [productGroupMode, setProductGroupMode]   = useState<ProductGroupMode>('by_max');
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
@@ -474,6 +479,22 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setMetricDisplayModes(prev => ({ ...prev, [metricId]: mode }));
   }
 
+  // Быстрая кнопка «сравнение» в заголовке (п. Н5б спеки): вкл/выкл 'full' для ОДНОЙ
+  // метрики. Данные (comparison/delta/deltaPct) для всех метрик уже загружены вместе с
+  // current одним фетчем — reports/run возвращает их всегда, независимо от режима
+  // отображения (см. queryKey выше: metricDisplayModes/comparisonDisplay туда не входят).
+  // Поэтому переключение — чистый re-render, БЕЗ обращения к сети и без refetch.
+  function handleMetricQuickCompareToggle(metricId: string) {
+    const current = metricDisplayModes[metricId] ?? comparisonDisplay;
+    if (current === 'full') {
+      const restore = quickCompareMemory[metricId] ?? 'current';
+      setMetricDisplayModes(prev => ({ ...prev, [metricId]: restore }));
+    } else {
+      setQuickCompareMemory(prev => ({ ...prev, [metricId]: current }));
+      setMetricDisplayModes(prev => ({ ...prev, [metricId]: 'full' }));
+    }
+  }
+
   function handleMetricRemove(metricId: string) {
     // Only update display list — fetchedMetricIds unchanged, no re-fetch
     const next = selectedMetricIds.filter((id: string) => id !== metricId);
@@ -586,6 +607,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
             onMetricDisplayModeChange={handleMetricDisplayModeChange}
+            onMetricQuickCompareToggle={handleMetricQuickCompareToggle}
             onMetricRemove={handleMetricRemove}
             onMetricMoveLeft={handleMetricMoveLeft}
             onMetricMoveRight={handleMetricMoveRight}

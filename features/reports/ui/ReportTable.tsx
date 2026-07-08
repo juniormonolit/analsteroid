@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, MoreVertical, GripVertical } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, MoreVertical, GripVertical, Columns2 } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
@@ -156,6 +156,11 @@ interface Props {
   onRowClick?:  (dimensionId: string, dimensionName: string) => void;
   onCellClick?: (dimensionId: string, dimensionName: string, metricId: string) => void;
   onMetricDisplayModeChange?: (metricId: string, mode: ComparisonDisplay) => void;
+  // Быстрая кнопка «сравнение» в заголовке (п. Н5б спеки): включает/выключает режим
+  // 'full' для ОДНОЙ метрики без похода в «Настроить». Отдельно от onMetricDisplayModeChange,
+  // потому что владелец состояния (SalesReportPage) должен запомнить, в какой режим
+  // возвращаться при повторном клике (current/compact, если был явно настроен) — см. Н5б.
+  onMetricQuickCompareToggle?: (metricId: string) => void;
   onMetricRemove?: (metricId: string) => void;
   onMetricMoveLeft?: (metricId: string) => void;
   onMetricMoveRight?: (metricId: string) => void;
@@ -198,6 +203,7 @@ export function ReportTable({
   highlights = {},
   onRowClick, onCellClick,
   onMetricDisplayModeChange,
+  onMetricQuickCompareToggle,
   onMetricRemove,
   onMetricMoveLeft,
   onMetricMoveRight,
@@ -230,6 +236,24 @@ export function ReportTable({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [draggedMetricId, setDraggedMetricId] = useState<string | null>(null);
   const [dragOverMetricId, setDragOverMetricId] = useState<string | null>(null);
+
+  // ── Плавное сворачивание сравнения (п. Н5б спеки) ────────────────────────────
+  // Разворот в 'full' — просто mount трёх новых колонок (Пред./Δ/Δ%), CSS-анимация
+  // входа проигрывается сама (см. metric-compare-col-enter в globals.css).
+  // Сворачивание — обратная задача: реальный режим метрики уже сменился на
+  // current/compact, но колонки нужно не «выдернуть» мгновенно, а плавно погасить.
+  // closingFullIds держит id метрик, которые визуально ещё «full» (4 колонки с
+  // анимацией затухания), хотя фактический режим уже узкий — на COMPARE_CLOSE_MS.
+  // useLayoutEffect (не useEffect!) — сравнение prev/next режима и взвод closing
+  // должны случиться ДО отрисовки кадра браузером, иначе будет виден один кадр
+  // мгновенного схлопывания перед тем, как включится fade-out.
+  const COMPARE_CLOSE_MS = 180;
+  const [closingFullIds, setClosingFullIds] = useState<Set<string>>(new Set());
+  const prevFullRef = useRef<Record<string, boolean>>({});
+
+  function isEffectivelyFull(metricId: string): boolean {
+    return resolveMode(metricId) === 'full' || closingFullIds.has(metricId);
+  }
 
   // При группировке по отделу/филиалу группы свёрнуты по умолчанию. Флаг взводится
   // при смене группировки и гасится, когда пришли строки с группами — так дефолт
@@ -282,6 +306,36 @@ export function ReportTable({
     ...metrics.filter(m => pinnedMetricIds.includes(m.id)),
     ...metrics.filter(m => !pinnedMetricIds.includes(m.id)),
   ];
+
+  // Ловим переход full → узкий режим ПЕРЕД покраской кадра (useLayoutEffect), взводим
+  // closingFullIds — на этом же кадре колонки продолжат рендериться как full (см.
+  // isEffectivelyFull), но с CSS-классом затухания. Через COMPARE_CLOSE_MS снимаем
+  // флаг — к этому моменту колонки уже прозрачны, схлопывание в 1 колонку незаметно.
+  const fullModeSig = displayMetrics.map(m => `${m.id}:${resolveMode(m.id) === 'full'}`).join('|');
+  useLayoutEffect(() => {
+    const justClosed: string[] = [];
+    for (const m of displayMetrics) {
+      const isFullNow = resolveMode(m.id) === 'full';
+      const wasFull = prevFullRef.current[m.id] ?? isFullNow;
+      if (wasFull && !isFullNow) justClosed.push(m.id);
+      prevFullRef.current[m.id] = isFullNow;
+    }
+    if (!justClosed.length) return;
+    setClosingFullIds(prev => {
+      const next = new Set(prev);
+      for (const id of justClosed) next.add(id);
+      return next;
+    });
+    const timer = setTimeout(() => {
+      setClosingFullIds(prev => {
+        const next = new Set(prev);
+        for (const id of justClosed) next.delete(id);
+        return next;
+      });
+    }, COMPARE_CLOSE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fullModeSig]);
 
   function decFor(m: Metric): number {
     return metricDecimalOverrides[m.id] ?? m.decimalPlaces;
@@ -383,8 +437,10 @@ export function ReportTable({
     return metricDisplayModes[metricId] ?? comparisonDisplay;
   }
 
+  // isEffectivelyFull (не голый resolveMode) — во время плавного сворачивания
+  // (closingFullIds) колонки ещё должны занимать 4 слота, хотя реальный режим уже узкий.
   function colSpanFor(metricId: string): number {
-    return resolveMode(metricId) === 'full' ? 4 : 1;
+    return isEffectivelyFull(metricId) ? 4 : 1;
   }
 
   const DIMENSION_WIDTH = 320;
@@ -408,9 +464,11 @@ export function ReportTable({
     Array.from({ length: colSpanFor(metricId) }, (_, i) => `${metricId}:${i}`);
 
   // Signature of everything that affects column layout — effect recomputes only on change.
+  // includes isEffectivelyFull (not resolveMode) so the closing (fade-out) transient also
+  // re-measures sticky offsets — column count during that window is still 4, not 1.
   const layoutSig = [
     pinnedMetricIds.join(','),
-    displayMetrics.map(m => `${m.id}:${resolveMode(m.id)}`).join('|'),
+    displayMetrics.map(m => `${m.id}:${isEffectivelyFull(m.id) ? 'full' : resolveMode(m.id)}`).join('|'),
     rows.length,
   ].join('#');
 
@@ -449,7 +507,7 @@ export function ReportTable({
   }
 
   const isClickableMetric = (m: Metric) => m.dataType !== 'percent';
-  const hasAnyFullMode = displayMetrics.some(m => resolveMode(m.id) === 'full');
+  const hasAnyFullMode = displayMetrics.some(m => isEffectivelyFull(m.id));
   const hasMenu = !!(onMetricDisplayModeChange || onMetricRemove);
 
   if (isLoading) {
@@ -477,6 +535,11 @@ export function ReportTable({
     return displayMetrics.map(m => {
       const d = row.deltas?.[m.id];
       const mode = resolveMode(m.id);
+      // Плавное сворачивание: пока closing=true, ещё рисуем 4 колонки (showFull), но
+      // Пред./Δ/Δ% получают fade-out класс вместо обычного fade-in.
+      const closing = closingFullIds.has(m.id);
+      const showFull = mode === 'full' || closing;
+      const compareAnimCls = closing ? 'metric-compare-col-exit' : 'metric-compare-col-enter';
       const canClick = clickable && onCellClick && isClickableMetric(m);
       const isPinned = pinnedMetricIds.includes(m.id);
       const cellBase = 'tabular-nums';
@@ -523,7 +586,7 @@ export function ReportTable({
         );
       }
 
-      if (mode === 'full') {
+      if (showFull) {
         const p0 = leafProps(0, false), p1 = leafProps(1, false), p2 = leafProps(2, false), p3 = leafProps(3, true);
         return (
           <React.Fragment key={m.id}>
@@ -535,13 +598,13 @@ export function ReportTable({
               <BarBg metricId={m.id} value={d?.current ?? null} />
               <span className="relative"><HlValue value={d?.current ?? null} /></span>
             </td>
-            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} text-[var(--color-text-muted)] ${p1.className}`} style={{ ...p1.style, ...accent, ...alignStyle }}>
+            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} text-[var(--color-text-muted)] ${p1.className} ${compareAnimCls}`} style={{ ...p1.style, ...accent, ...alignStyle }}>
               {formatValue(d?.comparison ?? null, m.dataType, decFor(m))}
             </td>
-            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p2.className}`} style={{ ...p2.style, ...accent, ...alignStyle }}>
+            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p2.className} ${compareAnimCls}`} style={{ ...p2.style, ...accent, ...alignStyle }}>
               {formatDelta(d?.delta ?? null, m.dataType, decFor(m))}
             </td>
-            <td className={`relative text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p3.className}`} style={{ ...p3.style, ...accent, ...alignStyle }}>
+            <td className={`relative text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p3.className} ${compareAnimCls}`} style={{ ...p3.style, ...accent, ...alignStyle }}>
               {formatDeltaPct(d?.deltaPct ?? null)}{pinBar}
             </td>
           </React.Fragment>
@@ -794,24 +857,41 @@ export function ReportTable({
                   {colorizeBar(m)}
                   {m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
                   {onMetricReorder && (
-                    <span className="hover-reveal absolute top-1 left-1 z-10 text-[var(--color-text-muted)] cursor-grab">
+                    <span className="hover-reveal absolute top-1 left-1 z-10 text-[var(--color-text-muted)] cursor-grab" title="Перетащить для сортировки колонок">
                       <GripVertical size={12} />
                     </span>
                   )}
-                  {/* Menu pinned to the top-right corner: hover на десктопе, всегда виден на таче */}
-                  {hasMenu && (
-                    <span className="hover-reveal absolute top-1 right-1 z-10">
-                      <MetricMenu
-                        metricId={m.id}
-                        isFirst={isFirst}
-                        isLast={isLast}
-                        currentMode={mode}
-                        onModeChange={newMode => onMetricDisplayModeChange?.(m.id, newMode)}
-                        onRemove={() => onMetricRemove?.(m.id)}
-                        onMoveLeft={() => onMetricMoveLeft?.(m.id)}
-                        onMoveRight={() => onMetricMoveRight?.(m.id)}
-                        onConfigure={() => onMetricConfigure?.(m.id)}
-                      />
+                  {/* Правая группа кнопок шапки — сравнение + меню, вместе, в ряд (п. Н5б спеки):
+                      hover на десктопе, всегда видны на таче (hover-reveal). */}
+                  {(onMetricQuickCompareToggle || hasMenu) && (
+                    <span className="hover-reveal absolute top-1 right-1 z-10 flex items-center gap-0.5">
+                      {onMetricQuickCompareToggle && (
+                        <button
+                          // stopPropagation — клик не должен триггерить сортировку в <th>
+                          onClick={e => { e.stopPropagation(); onMetricQuickCompareToggle(m.id); }}
+                          className={`tap-target p-0.5 rounded transition-colors ${
+                            mode === 'full'
+                              ? 'text-[var(--color-accent)] bg-[var(--color-accent-soft)]'
+                              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]'
+                          }`}
+                          title={mode === 'full' ? 'Свернуть сравнение' : 'Сравнение: тек. / пред. / Δ / Δ%'}
+                        >
+                          <Columns2 size={12} />
+                        </button>
+                      )}
+                      {hasMenu && (
+                        <MetricMenu
+                          metricId={m.id}
+                          isFirst={isFirst}
+                          isLast={isLast}
+                          currentMode={mode}
+                          onModeChange={newMode => onMetricDisplayModeChange?.(m.id, newMode)}
+                          onRemove={() => onMetricRemove?.(m.id)}
+                          onMoveLeft={() => onMetricMoveLeft?.(m.id)}
+                          onMoveRight={() => onMetricMoveRight?.(m.id)}
+                          onConfigure={() => onMetricConfigure?.(m.id)}
+                        />
+                      )}
                     </span>
                   )}
                   <div className="flex items-start justify-center gap-1">
@@ -838,6 +918,9 @@ export function ReportTable({
               <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" />
               {displayMetrics.map(m => {
                 const mode = resolveMode(m.id);
+                const closing = closingFullIds.has(m.id);
+                const showFull = mode === 'full' || closing;
+                const compareAnimCls = closing ? 'metric-compare-col-exit' : 'metric-compare-col-enter';
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
                 const s = { minWidth: METRIC_COL_WIDTH };
                 const sub = (i: number, base: string) => {
@@ -846,14 +929,14 @@ export function ReportTable({
                   return { cls, style };
                 };
                 const firstBase = strongLeft.has(m.id) ? sepCls : '';
-                if (mode === 'full') {
+                if (showFull) {
                   const a = sub(0, firstBase), b = sub(1, ''), c = sub(2, ''), e = sub(3, '');
                   return (
                     <React.Fragment key={m.id}>
                       <th ref={setLeafRef(`${m.id}:0`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${a.cls}`} style={a.style}>Тек.</th>
-                      <th ref={setLeafRef(`${m.id}:1`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${b.cls}`} style={b.style}>Пред.</th>
-                      <th ref={setLeafRef(`${m.id}:2`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${c.cls}`} style={c.style}>Δ</th>
-                      <th ref={setLeafRef(`${m.id}:3`)} className={`relative text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${e.cls}`} style={e.style}>Δ%{m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}</th>
+                      <th ref={setLeafRef(`${m.id}:1`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${b.cls} ${compareAnimCls}`} style={b.style}>Пред.</th>
+                      <th ref={setLeafRef(`${m.id}:2`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${c.cls} ${compareAnimCls}`} style={c.style}>Δ</th>
+                      <th ref={setLeafRef(`${m.id}:3`)} className={`relative text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${e.cls} ${compareAnimCls}`} style={e.style}>Δ%{m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}</th>
                     </React.Fragment>
                   );
                 }
@@ -879,6 +962,9 @@ export function ReportTable({
               </td>
               {displayMetrics.map(m => {
                 const mode = resolveMode(m.id);
+                const closing = closingFullIds.has(m.id);
+                const showFull = mode === 'full' || closing;
+                const compareAnimCls = closing ? 'metric-compare-col-exit' : 'metric-compare-col-enter';
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
                 const canClick = !!onCellClick && isClickableMetric(m);
                 const clickCls = canClick
@@ -898,16 +984,16 @@ export function ReportTable({
                 const pinSep = m.id === lastPinnedId
                   ? <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />
                   : null;
-                if (mode === 'full') {
+                if (showFull) {
                   const a = sub(0, firstBase), b = sub(1, ''), c = sub(2, ''), e = sub(3, '');
                   return (
                     <React.Fragment key={m.id}>
                       <td className={`text-center px-2 py-3 tabular-nums ${clickCls} ${a.cls}`} style={a.style} onClick={handleClick}>
                         {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
                       </td>
-                      <td className={`text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${b.cls}`} style={b.style}>—</td>
-                      <td className={`text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${c.cls}`} style={c.style}>—</td>
-                      <td className={`relative text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${e.cls}`} style={e.style}>—{pinSep}</td>
+                      <td className={`text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${b.cls} ${compareAnimCls}`} style={b.style}>—</td>
+                      <td className={`text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${c.cls} ${compareAnimCls}`} style={c.style}>—</td>
+                      <td className={`relative text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${e.cls} ${compareAnimCls}`} style={e.style}>—{pinSep}</td>
                     </React.Fragment>
                   );
                 }
