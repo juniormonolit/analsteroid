@@ -45,6 +45,7 @@ export default async function SavedReportPage({
             source_dimension AS "sourceDimension",
             drilldown_dimension AS "drilldownDimension",
             is_shared AS "isShared",
+            shared_section AS "sharedSection",
             period_mode AS "periodMode",
             relative_period AS "relativePeriod",
             comparison_mode AS "comparisonMode",

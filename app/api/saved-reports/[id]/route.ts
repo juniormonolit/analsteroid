@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { hasPerm } from '@/lib/auth/perms';
+import { isReportAdmin, superadminError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import type { SavedReportInput } from '@/lib/saved-reports/types';
 
@@ -15,25 +15,43 @@ export async function PUT(
   const body: SavedReportInput = await req.json();
   const db = systemDb();
 
+  // Свой отчёт правит только владелец; общий («Роп монитор»/«Смекалочная») —
+  // любой админ (не только исходный автор) — п.3б спеки.
+  const existing = await db.query<{ user_login: string; is_shared: boolean }>(
+    `SELECT user_login, is_shared FROM saved_reports WHERE id = $1`,
+    [id]
+  );
+  if (!existing.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const row = existing.rows[0];
+  const isAdmin = isReportAdmin(session);
+  if (row.user_login !== session.login && !(row.is_shared && isAdmin)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  const requestedSection = body.sharedSection;
+  const sharedSection = isAdmin && (requestedSection === 'rop_monitor' || requestedSection === 'smekalochnaya')
+    ? requestedSection
+    : null;
+
   await db.query(
     `UPDATE saved_reports SET
-       name = $3, metric_ids = $4,
-       deal_scope = $5, client_type = $6, grouping = $7,
-       comparison_display = $8, product_group_mode = $9,
-       department_ids = $10, metric_highlights = $11,
-       metric_display_modes = $12, comparison_threshold = $13,
-       period_mode = $14, relative_period = $15,
-       comparison_mode = $16, fixed_period = $17, fixed_comparison = $18,
-       pinned_metric_ids = $19, metric_decimal_overrides = $20,
-       metric_threshold_overrides = $21, sort_by = $22, sort_dir = $23,
-       column_groups = $24, accented_metric_ids = $25, bar_metric_ids = $26,
-       heatmap_metric_ids = $27, theme_accent = $28, number_align = $29, account_type = $30,
-       drilldown_duplicate_metrics = $31, drilldown_metric_ids = $32, deal_fields = $33,
-       drilldown_grouped = $34, source_dimension = $35, drilldown_dimension = $36,
-       is_shared = $37, heatmap_inverted_ids = $38, colorize_metrics = $39
-     WHERE id = $1 AND user_login = $2`,
+       name = $2, metric_ids = $3,
+       deal_scope = $4, client_type = $5, grouping = $6,
+       comparison_display = $7, product_group_mode = $8,
+       department_ids = $9, metric_highlights = $10,
+       metric_display_modes = $11, comparison_threshold = $12,
+       period_mode = $13, relative_period = $14,
+       comparison_mode = $15, fixed_period = $16, fixed_comparison = $17,
+       pinned_metric_ids = $18, metric_decimal_overrides = $19,
+       metric_threshold_overrides = $20, sort_by = $21, sort_dir = $22,
+       column_groups = $23, accented_metric_ids = $24, bar_metric_ids = $25,
+       heatmap_metric_ids = $26, theme_accent = $27, number_align = $28, account_type = $29,
+       drilldown_duplicate_metrics = $30, drilldown_metric_ids = $31, deal_fields = $32,
+       drilldown_grouped = $33, source_dimension = $34, drilldown_dimension = $35,
+       is_shared = $36, shared_section = $37, heatmap_inverted_ids = $38, colorize_metrics = $39
+     WHERE id = $1`,
     [
-      id, session.login,
+      id,
       body.name, body.metricIds,
       body.dealScope, body.clientType, body.grouping,
       body.comparisonDisplay, body.productGroupMode,
@@ -62,7 +80,8 @@ export async function PUT(
       body.drilldownGrouped ?? null,
       body.sourceDimension ?? null,
       body.drilldownDimension ?? null,
-      hasPerm(session, 'action.shared_reports.manage') ? (body.isShared ?? false) : false,
+      sharedSection !== null,
+      sharedSection,
       body.heatmapInvertedIds ?? [],
       body.colorizeMetrics ?? null,
     ]
@@ -79,17 +98,25 @@ export async function DELETE(
 
   const { id } = await params;
   const db = systemDb();
-  // Свои отчёты удаляет владелец; общие («Смекалочная») — любой с правом на общие отчёты.
-  if (hasPerm(session, 'action.shared_reports.manage')) {
-    await db.query(
-      `DELETE FROM saved_reports WHERE id = $1 AND (user_login = $2 OR is_shared = true)`,
-      [id, session.login]
-    );
+
+  const existing = await db.query<{ user_login: string; is_shared: boolean }>(
+    `SELECT user_login, is_shared FROM saved_reports WHERE id = $1`,
+    [id]
+  );
+  if (!existing.rows.length) return NextResponse.json({ ok: true }); // уже удалён — идемпотентно
+
+  const row = existing.rows[0];
+  if (row.is_shared) {
+    // Общие разделы («Роп монитор»/«Смекалочная») — удалять может ТОЛЬКО супер-админ
+    // (п.3б спеки), в отличие от сохранения/перезаписи (там достаточно action.shared_reports.manage).
+    const err = superadminError(session);
+    if (err) return err;
+    await db.query(`DELETE FROM saved_reports WHERE id = $1`, [id]);
   } else {
-    await db.query(
-      `DELETE FROM saved_reports WHERE id = $1 AND user_login = $2`,
-      [id, session.login]
-    );
+    if (row.user_login !== session.login) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    await db.query(`DELETE FROM saved_reports WHERE id = $1 AND user_login = $2`, [id, session.login]);
   }
   return NextResponse.json({ ok: true });
 }

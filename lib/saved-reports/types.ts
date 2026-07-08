@@ -74,6 +74,9 @@ export interface SavedReport {
   drilldownDimension?: string;
   // «Смекалочная»: общий отчёт — виден всем, пересохранять может только админ.
   isShared?: boolean;
+  // Пункт 3б спеки: раздел общей витрины (одна механика, два раздела в сайдбаре).
+  // null/undefined = личный отчёт (не общий); при isShared=true всегда заполнено.
+  sharedSection?: 'rop_monitor' | 'smekalochnaya' | null;
   // Sorting state
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';

@@ -44,8 +44,12 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     { label: 'По товарным группам', href: '/sales/by-product-groups' },
   ];
 
-  const sharedReports = savedReports.filter(r => r.isShared);
+  // Пункт 3б спеки: две управляемые общие витрины, одна механика (is_shared),
+  // разные разделы (shared_section). Удаление из общих разделов — только супер-админ.
+  const ropMonitorShared = savedReports.filter(r => r.isShared && r.sharedSection === 'rop_monitor');
+  const smekalochnayaShared = savedReports.filter(r => r.isShared && r.sharedSection === 'smekalochnaya');
   const ownReports = savedReports.filter(r => !r.isShared && r.userLogin === user.login);
+  const canDeleteShared = user.isSuperadmin;
 
   const linkCls = (href: string) =>
     `flex items-center justify-between py-1.5 pr-2 text-sm rounded-md my-0.5 transition-colors group ${
@@ -80,11 +84,28 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
               <span className="truncate">{r.label}</span>
             </Link>
           ))}
+          {ropMonitorShared.map(r => {
+            const href = `/sales/saved/${r.id}`;
+            return (
+              <Link key={r.id} href={href} className={linkCls(href)}>
+                <span className="truncate flex-1">{r.name}</span>
+                {canDeleteShared && (
+                  <button
+                    onClick={e => deleteReport(r.id, e)}
+                    className="hover-reveal tap-target p-0.5 rounded hover:text-[var(--color-negative)]"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </Link>
+            );
+          })}
         </div>
       )}
 
-      {/* Смекалочная — общие отчёты (видны всем, правит только админ) */}
-      {sharedReports.length > 0 && (
+      {/* Смекалочная — общие отчёты (видны всем, сохраняет/перезаписывает админ,
+          удаляет только супер-админ) */}
+      {smekalochnayaShared.length > 0 && (
         <>
           <button
             onClick={() => setOpenShared(v => !v)}
@@ -96,12 +117,12 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
           </button>
           {openShared && (
             <div className="pl-3 mb-1">
-              {sharedReports.map(r => {
+              {smekalochnayaShared.map(r => {
                 const href = `/sales/saved/${r.id}`;
                 return (
                   <Link key={r.id} href={href} className={linkCls(href)}>
                     <span className="truncate flex-1">{r.name}</span>
-                    {hasPerm(user, 'action.shared_reports.manage') && (
+                    {canDeleteShared && (
                       <button
                         onClick={e => deleteReport(r.id, e)}
                         className="hover-reveal tap-target p-0.5 rounded hover:text-[var(--color-negative)]"

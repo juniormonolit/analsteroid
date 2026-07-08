@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { hasPerm } from '@/lib/auth/perms';
+import { isReportAdmin } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import type { SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 
@@ -40,6 +40,7 @@ export async function GET() {
             source_dimension AS "sourceDimension",
             drilldown_dimension AS "drilldownDimension",
             is_shared AS "isShared",
+            shared_section AS "sharedSection",
             period_mode AS "periodMode",
             relative_period AS "relativePeriod",
             comparison_mode AS "comparisonMode",
@@ -54,6 +55,86 @@ export async function GET() {
   return NextResponse.json(res.rows);
 }
 
+type SharedSection = 'rop_monitor' | 'smekalochnaya' | null;
+
+// Общие для INSERT/UPDATE колонки (без identity-полей user_login/report_slug/name,
+// которые ведут себя по-разному в личном/общем сценарии — см. POST ниже).
+function buildCommonFields(body: SavedReportInput, sharedSection: SharedSection): Record<string, unknown> {
+  return {
+    metric_ids: body.metricIds,
+    deal_scope: body.dealScope,
+    client_type: body.clientType,
+    grouping: body.grouping,
+    comparison_display: body.comparisonDisplay,
+    product_group_mode: body.productGroupMode,
+    department_ids: body.departmentIds,
+    metric_highlights: JSON.stringify(body.metricHighlights),
+    metric_display_modes: JSON.stringify(body.metricDisplayModes ?? {}),
+    comparison_threshold: body.comparisonThreshold ?? 5,
+    period_mode: body.periodMode,
+    relative_period: body.relativePeriod ? JSON.stringify(body.relativePeriod) : null,
+    comparison_mode: body.comparisonMode,
+    fixed_period: body.fixedPeriod ? JSON.stringify(body.fixedPeriod) : null,
+    fixed_comparison: body.fixedComparison ? JSON.stringify(body.fixedComparison) : null,
+    pinned_metric_ids: body.pinnedMetricIds ?? [],
+    metric_decimal_overrides: JSON.stringify(body.metricDecimalOverrides ?? {}),
+    metric_threshold_overrides: JSON.stringify(body.metricThresholdOverrides ?? {}),
+    sort_by: body.sortBy ?? null,
+    sort_dir: body.sortDir ?? null,
+    column_groups: JSON.stringify(body.columnGroups ?? []),
+    accented_metric_ids: body.accentedMetricIds ?? [],
+    bar_metric_ids: body.barMetricIds ?? [],
+    heatmap_metric_ids: body.heatmapMetricIds ?? [],
+    theme_accent: body.themeAccent ?? null,
+    number_align: body.numberAlign ?? null,
+    account_type: body.accountType ?? null,
+    drilldown_duplicate_metrics: body.drilldownDuplicateMetrics ?? null,
+    drilldown_metric_ids: body.drilldownMetricIds ?? [],
+    deal_fields: body.dealFields ?? null,
+    drilldown_grouped: body.drilldownGrouped ?? null,
+    source_dimension: body.sourceDimension ?? null,
+    drilldown_dimension: body.drilldownDimension ?? null,
+    is_shared: sharedSection !== null,
+    shared_section: sharedSection,
+    heatmap_inverted_ids: body.heatmapInvertedIds ?? [],
+    colorize_metrics: body.colorizeMetrics ?? null,
+  };
+}
+
+function buildInsert(table: string, fields: Record<string, unknown>) {
+  const cols = Object.keys(fields);
+  const placeholders = cols.map((_, i) => `$${i + 1}`);
+  const values = cols.map((c) => fields[c]);
+  return {
+    sql: `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING id`,
+    values,
+  };
+}
+
+function buildUpdateById(table: string, fields: Record<string, unknown>, id: string) {
+  const cols = Object.keys(fields);
+  const setClauses = cols.map((c, i) => `${c} = $${i + 1}`);
+  const values = cols.map((c) => fields[c]);
+  values.push(id);
+  return {
+    sql: `UPDATE ${table} SET ${setClauses.join(', ')} WHERE id = $${values.length} RETURNING id`,
+    values,
+  };
+}
+
+function buildUpsertOnConflict(table: string, fields: Record<string, unknown>, conflictCols: string[]) {
+  const cols = Object.keys(fields);
+  const placeholders = cols.map((_, i) => `$${i + 1}`);
+  const values = cols.map((c) => fields[c]);
+  const updates = cols.filter((c) => !conflictCols.includes(c)).map((c) => `${c} = EXCLUDED.${c}`);
+  return {
+    sql: `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders.join(', ')})
+          ON CONFLICT (${conflictCols.join(', ')}) DO UPDATE SET ${updates.join(', ')}
+          RETURNING id`,
+    values,
+  };
+}
+
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -61,102 +142,44 @@ export async function POST(req: NextRequest) {
   const body: SavedReportInput = await req.json();
   const db = systemDb();
 
-  const vals = [
-    session.login,
-    body.reportSlug,
-    body.name,
-    body.metricIds,
-    body.dealScope,
-    body.clientType,
-    body.grouping,
-    body.comparisonDisplay,
-    body.productGroupMode,
-    body.departmentIds,
-    JSON.stringify(body.metricHighlights),
-    JSON.stringify(body.metricDisplayModes ?? {}),
-    body.comparisonThreshold ?? 5,
-    body.periodMode,
-    body.relativePeriod ? JSON.stringify(body.relativePeriod) : null,
-    body.comparisonMode,
-    body.fixedPeriod ? JSON.stringify(body.fixedPeriod) : null,
-    body.fixedComparison ? JSON.stringify(body.fixedComparison) : null,
-    body.pinnedMetricIds ?? [],
-    JSON.stringify(body.metricDecimalOverrides ?? {}),
-    JSON.stringify(body.metricThresholdOverrides ?? {}),
-    body.sortBy ?? null,
-    body.sortDir ?? null,
-    JSON.stringify(body.columnGroups ?? []),
-    body.accentedMetricIds ?? [],
-    body.barMetricIds ?? [],
-    body.heatmapMetricIds ?? [],
-    body.themeAccent ?? null,
-    body.numberAlign ?? null,
-    body.accountType ?? null,
-    body.drilldownDuplicateMetrics ?? null,
-    body.drilldownMetricIds ?? [],
-    body.dealFields ?? null,
-    body.drilldownGrouped ?? null,
-    body.sourceDimension ?? null,
-    body.drilldownDimension ?? null,
-    // «Смекалочная» (общие отчёты) — сохранять туда можно только с правом на общие отчёты
-    hasPerm(session, 'action.shared_reports.manage') ? (body.isShared ?? false) : false,
-    body.heatmapInvertedIds ?? [],
-    body.colorizeMetrics ?? null,
-  ];
+  // Раздел общей витрины (п.3б спеки) — задать может только админ
+  // (action.shared_reports.manage); для остальных всегда null → личный отчёт.
+  const isAdmin = isReportAdmin(session);
+  const requested = body.sharedSection;
+  const sharedSection: SharedSection =
+    isAdmin && (requested === 'rop_monitor' || requested === 'smekalochnaya') ? requested : null;
 
-  const res = await db.query<{ id: string }>(
-    `INSERT INTO saved_reports (
-       user_login, report_slug, name, metric_ids,
-       deal_scope, client_type, grouping, comparison_display, product_group_mode,
-       department_ids, metric_highlights,
-       metric_display_modes, comparison_threshold,
-       period_mode, relative_period, comparison_mode, fixed_period, fixed_comparison,
-       pinned_metric_ids, metric_decimal_overrides, metric_threshold_overrides, sort_by, sort_dir,
-       column_groups, accented_metric_ids, bar_metric_ids, heatmap_metric_ids, theme_accent,
-       number_align, account_type, drilldown_duplicate_metrics, drilldown_metric_ids, deal_fields,
-       drilldown_grouped, source_dimension, drilldown_dimension, is_shared,
-       heatmap_inverted_ids, colorize_metrics
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
-     ON CONFLICT (user_login, name) DO UPDATE SET
-       report_slug = EXCLUDED.report_slug,
-       metric_ids = EXCLUDED.metric_ids,
-       deal_scope = EXCLUDED.deal_scope,
-       client_type = EXCLUDED.client_type,
-       grouping = EXCLUDED.grouping,
-       comparison_display = EXCLUDED.comparison_display,
-       product_group_mode = EXCLUDED.product_group_mode,
-       department_ids = EXCLUDED.department_ids,
-       metric_highlights = EXCLUDED.metric_highlights,
-       metric_display_modes = EXCLUDED.metric_display_modes,
-       comparison_threshold = EXCLUDED.comparison_threshold,
-       period_mode = EXCLUDED.period_mode,
-       relative_period = EXCLUDED.relative_period,
-       comparison_mode = EXCLUDED.comparison_mode,
-       fixed_period = EXCLUDED.fixed_period,
-       fixed_comparison = EXCLUDED.fixed_comparison,
-       pinned_metric_ids = EXCLUDED.pinned_metric_ids,
-       metric_decimal_overrides = EXCLUDED.metric_decimal_overrides,
-       metric_threshold_overrides = EXCLUDED.metric_threshold_overrides,
-       sort_by = EXCLUDED.sort_by,
-       sort_dir = EXCLUDED.sort_dir,
-       column_groups = EXCLUDED.column_groups,
-       accented_metric_ids = EXCLUDED.accented_metric_ids,
-       bar_metric_ids = EXCLUDED.bar_metric_ids,
-       heatmap_metric_ids = EXCLUDED.heatmap_metric_ids,
-       theme_accent = EXCLUDED.theme_accent,
-       number_align = EXCLUDED.number_align,
-       account_type = EXCLUDED.account_type,
-       drilldown_duplicate_metrics = EXCLUDED.drilldown_duplicate_metrics,
-       drilldown_metric_ids = EXCLUDED.drilldown_metric_ids,
-       deal_fields = EXCLUDED.deal_fields,
-       drilldown_grouped = EXCLUDED.drilldown_grouped,
-       source_dimension = EXCLUDED.source_dimension,
-       drilldown_dimension = EXCLUDED.drilldown_dimension,
-       is_shared = EXCLUDED.is_shared,
-       heatmap_inverted_ids = EXCLUDED.heatmap_inverted_ids,
-       colorize_metrics = EXCLUDED.colorize_metrics
-     RETURNING id`,
-    vals
+  const fields = buildCommonFields(body, sharedSection);
+
+  if (sharedSection) {
+    // Общий раздел: имя уникально ВНУТРИ раздела (частичный индекс
+    // saved_reports_shared_section_name_unique) — любой админ перезаписывает
+    // существующий отчёт того же раздела/имени, не только собственный.
+    const existing = await db.query<{ id: string }>(
+      `SELECT id FROM saved_reports WHERE is_shared = true AND shared_section = $1 AND name = $2`,
+      [sharedSection, body.name]
+    );
+    if (existing.rows.length) {
+      const { sql, values } = buildUpdateById('saved_reports', { ...fields, name: body.name, report_slug: body.reportSlug }, existing.rows[0].id);
+      await db.query(sql, values);
+      return NextResponse.json({ id: existing.rows[0].id });
+    }
+    const { sql, values } = buildInsert('saved_reports', {
+      user_login: session.login,
+      report_slug: body.reportSlug,
+      name: body.name,
+      ...fields,
+    });
+    const res = await db.query<{ id: string }>(sql, values);
+    return NextResponse.json({ id: res.rows[0].id });
+  }
+
+  // Личный отчёт: перезаписывается только свой же (user_login, name) — как раньше.
+  const { sql, values } = buildUpsertOnConflict(
+    'saved_reports',
+    { user_login: session.login, report_slug: body.reportSlug, name: body.name, ...fields },
+    ['user_login', 'name']
   );
+  const res = await db.query<{ id: string }>(sql, values);
   return NextResponse.json({ id: res.rows[0].id });
 }

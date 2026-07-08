@@ -78,16 +78,18 @@ export function SaveReportModal({
   const [unit, setUnit] = useState<PeriodUnit>('month');
   const [compMode, setCompMode] = useState<ComparisonMode>('previous_tail');
   const [saving, setSaving] = useState(false);
-  const [existingReports, setExistingReports] = useState<{ id: string; name: string; isShared?: boolean }[]>([]);
-  // Право сохранять в «Смекалочную» (общие отчёты)
+  const [existingReports, setExistingReports] = useState<{ id: string; name: string; isShared?: boolean; sharedSection?: string | null }[]>([]);
+  // Право сохранять в общие разделы («Роп монитор» / «Смекалочная»)
   const [canShare, setCanShare] = useState(false);
-  const [shared, setShared] = useState(false);
+  // Раздел сохранения (п.3б спеки): личное избранное (по умолчанию) либо один из
+  // двух управляемых общих разделов — одна механика, разные названия.
+  const [section, setSection] = useState<'personal' | 'rop_monitor' | 'smekalochnaya'>('personal');
 
   useEffect(() => {
     fetch('/api/saved-reports')
       .then(r => r.json())
       // 401/ошибка возвращает объект, не массив — без проверки падает existingReports.find
-      .then((data: { id: string; name: string; isShared?: boolean }[]) => setExistingReports(Array.isArray(data) ? data : []))
+      .then((data: { id: string; name: string; isShared?: boolean; sharedSection?: string | null }[]) => setExistingReports(Array.isArray(data) ? data : []))
       .catch(() => {});
     fetch('/api/auth/session')
       .then(r => r.json())
@@ -98,8 +100,12 @@ export function SaveReportModal({
 
   const existing = existingReports.find(r => r.name === name.trim());
   const willOverwrite = !!existing;
-  // При перезаписи общего отчёта галка подхватывается автоматически
-  useEffect(() => { if (existing?.isShared) setShared(true); }, [existing?.isShared]);
+  // При перезаписи существующего отчёта раздел подхватывается автоматически
+  useEffect(() => {
+    if (existing?.sharedSection === 'rop_monitor' || existing?.sharedSection === 'smekalochnaya') {
+      setSection(existing.sharedSection);
+    }
+  }, [existing?.sharedSection]);
 
   const relativePeriod: RelativePeriod = { anchor, unit };
 
@@ -136,7 +142,8 @@ export function SaveReportModal({
       drilldownGrouped,
       sourceDimension,
       drilldownDimension,
-      isShared: canShare ? shared : false,
+      isShared: canShare && section !== 'personal',
+      sharedSection: canShare && section !== 'personal' ? section : null,
       sortBy,
       sortDir,
       columnGroups,
@@ -182,18 +189,32 @@ export function SaveReportModal({
             </div>
           )}
           {canShare && (
-            <label className="flex items-center gap-2 cursor-pointer mt-1">
-              <input
-                type="checkbox"
-                checked={shared}
-                onChange={e => setShared(e.target.checked)}
-                className="accent-[var(--color-accent)] w-4 h-4"
-              />
-              <span className="text-sm text-[var(--color-text)]">
-                В «Смекалочную»
-                <span className="text-xs text-[var(--color-text-muted)] ml-1.5">(видна всем пользователям)</span>
-              </span>
-            </label>
+            <div className="flex flex-col gap-1.5 mt-1">
+              <span className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">Куда сохранить</span>
+              <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm w-fit">
+                {([
+                  { value: 'personal' as const, label: 'Личное' },
+                  { value: 'rop_monitor' as const, label: 'Роп монитор' },
+                  { value: 'smekalochnaya' as const, label: 'Смекалочная' },
+                ]).map(o => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => setSection(o.value)}
+                    className={`px-3 py-1.5 transition-colors whitespace-nowrap ${
+                      section === o.value ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              {section !== 'personal' && (
+                <span className="text-xs text-[var(--color-text-muted)]">
+                  Общий раздел — виден всем пользователям, перезаписывать может любой администратор
+                </span>
+              )}
+            </div>
           )}
         </div>
 
