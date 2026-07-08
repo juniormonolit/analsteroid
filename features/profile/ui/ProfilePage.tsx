@@ -1,9 +1,11 @@
 'use client';
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Bell, KeyRound } from 'lucide-react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Bell, KeyRound, LayoutGrid } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
+
+type UiMode = 'basic' | 'pro';
 
 interface Me {
   user: {
@@ -57,6 +59,28 @@ const cardCls = 'rounded-lg border border-[var(--color-border)] bg-[var(--color-
 
 export function ProfilePage() {
   const [showPassword, setShowPassword] = useState(false);
+  const qc = useQueryClient();
+
+  const { data: uiModeData } = useQuery<{ uiMode: UiMode; isOverride: boolean }>({
+    queryKey: ['ui-mode'],
+    queryFn: async () => {
+      const res = await fetch('/api/me/ui-mode');
+      if (!res.ok) throw new Error('failed');
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  async function setUiMode(mode: UiMode) {
+    // Оптимистично обновляем кэш, чтобы тумблер и отчёты (тот же queryKey) не мигали
+    qc.setQueryData(['ui-mode'], { uiMode: mode, isOverride: true });
+    await fetch('/api/me/ui-mode', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uiMode: mode }),
+    });
+    qc.invalidateQueries({ queryKey: ['ui-mode'] });
+  }
 
   const { data: me, isLoading: meLoading } = useQuery<Me>({
     queryKey: ['me'],
@@ -111,6 +135,33 @@ export function ProfilePage() {
           ) : (
             <div className="text-sm text-red-500">Не удалось загрузить профиль</div>
           )}
+        </div>
+
+        {/* Режим интерфейса: Обычная/Про (п.3а спеки) */}
+        <div className={cardCls}>
+          <div className="flex items-center gap-2 mb-2">
+            <LayoutGrid size={15} className="text-[var(--color-text-muted)]" />
+            <h2 className="text-sm font-semibold text-[var(--color-text)]">Режим интерфейса отчётов</h2>
+          </div>
+          <p className="text-sm text-[var(--color-text-muted)] mb-3">
+            «Про» — полный набор инструментов (фильтры, вид, сохранение отчётов, настройка колонок,
+            перетаскивание). «Обычная» — упрощённый вид: период, отделы, группировка, поиск.
+          </p>
+          <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm w-fit">
+            {(['basic', 'pro'] as UiMode[]).map(m => (
+              <button
+                key={m}
+                onClick={() => setUiMode(m)}
+                className={`px-4 py-1.5 transition-colors ${
+                  (uiModeData?.uiMode ?? 'pro') === m
+                    ? 'bg-[var(--color-accent)] text-white'
+                    : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                }`}
+              >
+                {m === 'basic' ? 'Обычная' : 'Про'}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Подконтрольные отделы */}

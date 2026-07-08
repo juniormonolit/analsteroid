@@ -31,6 +31,9 @@ interface Props {
   onDrilldownGroupedChange?: (v: boolean) => void;
   colorizeMetrics?: boolean;
   onColorizeMetricsChange?: (v: boolean) => void;
+  // «Обычная» (п.3а спеки): скрыть попап «Фильтры», «Вид» и кнопку «Сохранить» —
+  // остаются только «Копировать» и «Обновить».
+  basic?: boolean;
 }
 
 export function ReportToolbar({
@@ -44,6 +47,7 @@ export function ReportToolbar({
   accountType, onAccountTypeChange,
   drilldownGrouped, onDrilldownGroupedChange,
   colorizeMetrics, onColorizeMetricsChange,
+  basic = false,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -57,39 +61,45 @@ export function ReportToolbar({
 
   return (
     <div className="flex items-center gap-2 px-6 py-2 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
-      <FiltersMenu
-        dealScope={dealScope}
-        onDealScopeChange={onDealScopeChange}
-        clientType={clientType}
-        onClientTypeChange={onClientTypeChange}
-        productGroupMode={productGroupMode}
-        onProductGroupModeChange={onProductGroupModeChange}
-        showProductGroupPicker={showProductGroupPicker}
-      />
+      {!basic && (
+        <FiltersMenu
+          dealScope={dealScope}
+          onDealScopeChange={onDealScopeChange}
+          clientType={clientType}
+          onClientTypeChange={onClientTypeChange}
+          productGroupMode={productGroupMode}
+          onProductGroupModeChange={onProductGroupModeChange}
+          showProductGroupPicker={showProductGroupPicker}
+        />
+      )}
 
-      <ViewSettings
-        prefs={viewPrefs}
-        onChange={onViewPrefsChange}
-        numberAlign={numberAlign}
-        onNumberAlignChange={onNumberAlignChange}
-        comparisonDisplay={comparisonDisplay}
-        hasMixedDisplay={hasMixedDisplay}
-        onComparisonDisplayChange={onComparisonDisplayChange}
-        accountType={accountType}
-        onAccountTypeChange={onAccountTypeChange}
-        drilldownGrouped={drilldownGrouped}
-        onDrilldownGroupedChange={onDrilldownGroupedChange}
-        colorizeMetrics={colorizeMetrics}
-        onColorizeMetricsChange={onColorizeMetricsChange}
-      />
+      {!basic && (
+        <ViewSettings
+          prefs={viewPrefs}
+          onChange={onViewPrefsChange}
+          numberAlign={numberAlign}
+          onNumberAlignChange={onNumberAlignChange}
+          comparisonDisplay={comparisonDisplay}
+          hasMixedDisplay={hasMixedDisplay}
+          onComparisonDisplayChange={onComparisonDisplayChange}
+          accountType={accountType}
+          onAccountTypeChange={onAccountTypeChange}
+          drilldownGrouped={drilldownGrouped}
+          onDrilldownGroupedChange={onDrilldownGroupedChange}
+          colorizeMetrics={colorizeMetrics}
+          onColorizeMetricsChange={onColorizeMetricsChange}
+        />
+      )}
 
-      <button
-        onClick={onSaveReport}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-      >
-        <Bookmark size={12} />
-        Сохранить
-      </button>
+      {!basic && (
+        <button
+          onClick={onSaveReport}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+        >
+          <Bookmark size={12} />
+          Сохранить
+        </button>
+      )}
 
       {onCopyTable && (
         <button

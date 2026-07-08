@@ -16,7 +16,7 @@ export const PERM_SECTIONS = [
 export const PERM_ACTIONS = [
   { key: 'action.plans.edit', label: 'Редактирование планов' },
   { key: 'action.users.manage', label: 'Управление пользователями' },
-  { key: 'action.shared_reports.manage', label: 'Управление общими отчётами («Смекалочная»)' },
+  { key: 'action.shared_reports.manage', label: 'Управление общими отчётами («Роп монитор», «Смекалочная»)' },
 ] as const;
 
 export type PermKey =
@@ -53,6 +53,24 @@ export function superadminError(session: SessionUser | null): Response | null {
   if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.isSuperadmin) return Response.json({ error: 'Forbidden' }, { status: 403 });
   return null;
+}
+
+// «Админ» в контексте общих витрин отчётов (п.3б спеки) — тот же уровень, что уже
+// используется для «Смекалочной»: право action.shared_reports.manage (даёт его роль
+// «Администратор», плюс супер-админ всегда проходит через hasPerm).
+export function isReportAdmin(session: SessionUser | null): boolean {
+  return hasPerm(session, 'action.shared_reports.manage');
+}
+
+export type UiMode = 'basic' | 'pro';
+
+// Пункт 3а спеки: тумблер «Обычная/Про». session.uiMode === null означает, что
+// пользователь ещё не переключал сам — тогда дефолт по роли (администратор → pro,
+// остальные → basic). Явное значение в БД всегда побеждает дефолт.
+export function effectiveUiMode(session: SessionUser | null): UiMode {
+  if (!session) return 'basic';
+  if (session.uiMode === 'basic' || session.uiMode === 'pro') return session.uiMode;
+  return isReportAdmin(session) ? 'pro' : 'basic';
 }
 
 // Первый доступный раздел — цель redirect'а с «/» и из закрытых разделов.

@@ -6,6 +6,132 @@
 
 ---
 
+## 2026-07-08 — п.3 спеки: тумблер «Обычная/Про» + управляемые витрины «Роп монитор»/«Смекалочная»
+
+- **Задача:** п.3 `owners-inbox/analsteroid-edits-spec-agreed-20260708.md` — самый крупный пункт
+  списка, две части: (а) серверный per-user тумблер режима отчётов «Обычная/Про» с дефолтом
+  по роли; (б) вторая управляемая общая витрина «Роп монитор» (наряду со «Смекалочной»),
+  админ сохраняет/перезаписывает в общие разделы, удаление из общих — только супер-админ.
+
+- **Как было устроено до правки (разбор):**
+  - RBAC (commit `f8f5615`): `roles.permissions` (text[]), `users.role_id`/`is_superadmin`,
+    каталог прав в `lib/auth/perms.ts` (`hasPerm`/`permError`/`superadminError`). Роль
+    «Администратор» (сидовая, migration 048) уже имеет право `action.shared_reports.manage` —
+    ровно тот уровень, которым сейчас гейтится сохранение в «Смекалочную».
+  - «Смекалочная» (migration 042) = `saved_reports.is_shared boolean`. GET
+    `/api/saved-reports` отдаёт `WHERE user_login=$1 OR is_shared=true`; сохранение —
+    единственный POST с `ON CONFLICT (user_login, name) DO UPDATE` (личный апсерт), галка
+    «В Смекалочную» в `SaveReportModal` просто протаскивала `is_shared` в тот же personal-
+    scoped upsert. **Важный нюанс, который правка исправляет:** из-за `ON CONFLICT
+    (user_login, name)` перезаписать общий отчёт мог только его исходный автор (другой админ
+    с тем же именем создавал ДУБЛИКАТ, а не апдейтил) — конфликтовало с требованием спеки
+    «любой админ перезаписывает общий отчёт».
+  - «Роп монитор» (переименован п.2, коммит по списку раньше) — ДВЕ СТАТИЧНЫЕ ссылки в
+    `AppShell.tsx` (`/sales/by-managers`, `/sales/by-product-groups`), НЕ связанные с
+    `saved_reports` вообще — не управляемая витрина, просто ярлыки на страницы с хардкодным
+    дефолтным набором метрик (`DEFAULT_METRIC_IDS` в `SalesReportPage.tsx`).
+  - Тумблера режима отчётов не было вовсе — все пользователи видели один и тот же полный
+    («Про») набор инструментов тулбара.
+
+- **(а) Режим Обычная/Про:**
+  - Migration `054_ui_mode.sql`: `users.ui_mode text` (nullable + CHECK IN
+    ('basic','pro')). `NULL` = «ещё не переключал сам» → дефолт по роли.
+  - `lib/auth/session.ts`: `SessionUser.uiMode` (raw, из БД). `lib/auth/perms.ts`:
+    `effectiveUiMode(session)` — если `uiMode` явно задан, использовать его; иначе
+    `isReportAdmin(session) ? 'pro' : 'basic'` (та же роль-проверка, что и для управления
+    общими отчётами — единый источник правды на «кто админ»).
+  - `app/api/me/ui-mode/route.ts` (новый): GET — эффективный режим + `isOverride`; PATCH —
+    установить `basic`/`pro` явно (переживает смену сессии/устройства, per-user).
+  - `features/profile/ui/ProfilePage.tsx`: карточка «Режим интерфейса отчётов» — сегмент-
+    тумблер Обычная/Про, PATCH + оптимистичное обновление кэша react-query (`['ui-mode']`).
+  - `features/reports/ui/SalesReportPage.tsx`: `useQuery(['ui-mode'])` (тот же ключ, что и
+    в ЛК — общий `QueryClient`, переключение в ЛК сразу инвалидирует отчёты). Пока грузится —
+    fail-open к «Про» (не мигаем тулбаром на первом рендере). `isPro` управляет:
+    - `FilterBar.onOpenMetricPanel` → `undefined` в Обычной (кнопка «Метрики» пропадает,
+      состав метрик менять нельзя — показывается «актуальный стандартный» набор, т.е. тот же
+      `DEFAULT_METRIC_IDS`/пресет, что загрузился);
+    - `ReportTable`: `onMetricReorder/onMetricRemove/onMetricMoveLeft/onMetricMoveRight/
+      onMetricConfigure/onMetricDisplayModeChange/onMetricQuickCompareToggle` → `undefined`
+      в Обычной. `ReportTable` уже был написан так, что drag/меню-кнопки рендерятся ТОЛЬКО
+      если обработчик передан (`draggable={!!onMetricReorder}`, `hasMenu =
+      !!(onMetricDisplayModeChange || onMetricRemove)`) — не пришлось трогать сам компонент,
+      только точку вызова. Дрилл-даун использует тот же `ReportTable`, но эти пропы туда и
+      раньше не прокидывались (см. запись Н5б) — колонки дрилл-дауна drag/настройки не имели
+      никогда, значит доп. правка не нужна.
+    - `ReportToolbar` (новый проп `basic`): скрывает попап «Фильтры» (`FiltersMenu`), «Вид»
+      (`ViewSettings`) и кнопку «Сохранить»; «Копировать»/«Обновить» остаются всегда.
+  - Период/отделы/группировка/поиск (`FilterBar`) не тронуты — всегда видны в обоих режимах.
+  - **Решение по «актуальный стандартный отчёт» (спека просила «разберись»):** т.к.
+    `/sales/by-managers`/`/sales/by-product-groups` не были preset-driven и раньше, а просто
+    показывали `DEFAULT_METRIC_IDS`, метрики для Обычной = что уже загружено на странице
+    (дефолтный набор либо пресет — если открыт `/sales/saved/{id}` shared-отчёта). Никакой
+    новой синхронизации между «стандартным» и Обычным режимом строить не пришлось — раз
+    состав менять нельзя, «текущее» и есть «стандартное». Если админ захочет для Обычных
+    пользователей другой набор метрик по умолчанию — либо правка `DEFAULT_METRIC_IDS` в коде,
+    либо (после этой задачи) сохранение отдельного отчёта в «Роп монитор» и переход по ссылке.
+
+- **(б) Управляемые «Роп монитор» + «Смекалочная»:**
+  - Migration `055_saved_reports_shared_section.sql`: `saved_reports.shared_section text`
+    (nullable, CHECK IN ('rop_monitor','smekalochnaya')); бэкфилл существующих `is_shared=true`
+    строк → `'smekalochnaya'`; **партиционный уникальный индекс**
+    `(shared_section, name) WHERE is_shared=true AND shared_section IS NOT NULL` — основа для
+    «любой админ перезаписывает общий отчёт» (см. ниже).
+  - `app/api/saved-reports/route.ts` (POST) переписан: для общего раздела (`sharedSection`
+    задан, только если `isReportAdmin`) — сначала `SELECT id WHERE is_shared AND
+    shared_section=$1 AND name=$2` (поиск СРЕДИ ВСЕХ авторов раздела, не только своих),
+    найдено → `UPDATE ... WHERE id=$id`, не найдено → `INSERT`. Для личных отчётов — как
+    раньше, `ON CONFLICT (user_login, name) DO UPDATE`. Вынес построение полей/SQL в
+    хелперы (`buildCommonFields/buildInsert/buildUpdateById/buildUpsertOnConflict`) —
+    39 колонок руками синхронизировать было категорически рискованно.
+  - `app/api/saved-reports/[id]/route.ts`:
+    - `PUT` (не используется фронтом сейчас, но приведён в соответствие для консистентности
+      API): владелец правит свой; общий отчёт — любой админ, не только автор.
+    - `DELETE` — **поведенческое изменение**: раньше `is_shared` удалял любой с
+      `action.shared_reports.manage` (т.е. любой админ). Теперь по явному требованию спеки —
+      **только супер-админ** (`superadminError`), личные отчёты — как раньше, только
+      владелец.
+  - `components/layout/AppShell.tsx`: sidebar-секция «Роп монитор» = 2 статичные ссылки +
+    `savedReports.filter(sharedSection==='rop_monitor')`; «Смекалочная» — то же для
+    `'smekalochnaya'` (рендерится только если непусто, как раньше). Кнопка удаления в ОБОИХ
+    общих разделах — `user.isSuperadmin` вместо прежнего `hasPerm(...,
+    'action.shared_reports.manage')`. Личное избранное не тронуто (без гейта, уже
+    scoped по владельцу).
+  - `features/reports/ui/SaveReportModal.tsx`: чекбокс «В Смекалочную» → 3-позиционный
+    переключатель «Личное / Роп монитор / Смекалочная» (виден только `canShare`); при
+    обнаружении одноимённого существующего отчёта раздел подхватывается автоматически
+    (аналог прежнего поведения с галкой).
+  - `lib/saved-reports/types.ts`: `SavedReport.sharedSection?: 'rop_monitor' |
+    'smekalochnaya' | null`. `lib/auth/perms.ts`: `isReportAdmin()` — общий хелпер вместо
+    разбросанных `hasPerm(session, 'action.shared_reports.manage')`; обновлён label
+    `action.shared_reports.manage` (упомянуты оба раздела).
+
+- **Периметр:** `migrations/054_*.sql`, `migrations/055_*.sql`, `lib/auth/session.ts`,
+  `lib/auth/perms.ts`, `app/api/me/ui-mode/route.ts` (новый), `app/api/saved-reports/route.ts`,
+  `app/api/saved-reports/[id]/route.ts`, `app/(app)/sales/saved/[id]/page.tsx`,
+  `components/layout/AppShell.tsx`, `features/profile/ui/ProfilePage.tsx`,
+  `features/reports/ui/{SalesReportPage,ReportToolbar,SaveReportModal}.tsx`. `ReportTable.tsx`
+  и `DrilldownDrawer.tsx` НЕ трогал — существующая архитектура (рендер по наличию пропа-
+  обработчика) уже позволяла скрыть drag/меню без изменения самого компонента.
+
+- **Миграции НЕ применены** (правило воркстрима — по одному пункту на прод, применяет Артём
+  после ревью). Обе идемпотентны (`IF NOT EXISTS`/`DO $$ ... IF NOT EXISTS`).
+
+- **Проверено:** `npm run build` (EXIT=0, единственные warnings — предсуществующий NFT-шум
+  про `next.config.ts`/`lib/db/clients.ts`, не связан с этой правкой и был до неё),
+  `npm run lint:responsive` (0 нарушений), `tsc --noEmit` (чисто). Живой клик-тест не делал —
+  в этом ворктри нет `.env`/подключения к БД (только сборка+тайпчек), как и в предыдущих
+  записях этого потока. **Для Артёма при деплое:** после выкладки тарбола прогнать
+  `node migrations/run_system.mjs migrations/054_ui_mode.sql` и `... 055_saved_reports_shared_section.sql`
+  на проде, затем smoke: (1) зайти под обычным пользователем — тумблер в `/profile` должен
+  показывать «Обычная», тулбар отчёта урезан; (2) зайти под «Администратор» — по умолчанию
+  «Про»; переключить тумблер в обе стороны, проверить, что применяется НЕ мгновенно/не
+  переживает reload — обязано пережить; (3) сохранить отчёт в «Роп монитор» под одним
+  админом, перезаписать под ДРУГИМ админ-логином тем же именем — должен обновиться тот же
+  отчёт (не задвоиться); (4) удалить общий отчёт под админом без `is_superadmin` — ожидать
+  403; под супер-админом — 200.
+
+---
+
 ## 2026-07-08 — Н5б спеки: быстрая кнопка «сравнение» в заголовке метрики
 
 - **Задача:** п. Н5б `owners-inbox/analsteroid-edits-spec-agreed-20260708.md` — Серёга: нужна

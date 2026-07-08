@@ -176,6 +176,19 @@ const DEFAULT_METRIC_IDS = [
 
 export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const isMobile = useIsMobile();
+
+  // Пункт 3а спеки: тумблер «Обычная/Про» из ЛК. Пока грузится/не резолвится — не
+  // урезаем UI (fail-open к «Про»), чтобы не мигать тулбаром на первом рендере.
+  const { data: uiModeData } = useQuery<{ uiMode: 'basic' | 'pro' }>({
+    queryKey: ['ui-mode'],
+    queryFn: async () => {
+      const res = await fetch('/api/me/ui-mode');
+      if (!res.ok) throw new Error('failed');
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const isPro = uiModeData ? uiModeData.uiMode !== 'basic' : true;
   const [period, setPeriod]             = useState<DateRange>(defaultPeriod);
   const [comparison, setComparison]     = useState<DateRange>(() => recomputeComparison(defaultPeriod()));
   const [dealScope, setDealScope]       = useState<DealScope>('all');
@@ -556,7 +569,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         showDepartments={!sourceMode}
         sourceDimension={sourceMode ? sourceDimension : undefined}
         onSourceDimensionChange={sourceMode ? setSourceDimension : undefined}
-        onOpenMetricPanel={() => setShowMetricPanel(true)}
+        // «Обычная» (п.3а спеки) скрывает панель метрик — состав метрик менять нельзя
+        onOpenMetricPanel={isPro ? () => setShowMetricPanel(true) : undefined}
         metricsBadge={metricIds.includes('all_core') ? Object.keys(highlights).length : metricIds.length}
       />
 
@@ -585,6 +599,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         onProductGroupModeChange={setProductGroupMode}
         onSaveReport={() => setShowSaveModal(true)}
         onCopyTable={handleCopyTable}
+        basic={!isPro}
       />
 
       <div className="flex-1 overflow-hidden">
@@ -606,13 +621,15 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             dimensionLabel={dimensionColumnLabel}
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
-            onMetricDisplayModeChange={handleMetricDisplayModeChange}
-            onMetricQuickCompareToggle={handleMetricQuickCompareToggle}
-            onMetricRemove={handleMetricRemove}
-            onMetricMoveLeft={handleMetricMoveLeft}
-            onMetricMoveRight={handleMetricMoveRight}
-            onMetricReorder={handleMetricReorder}
-            onMetricConfigure={(id) => setConfiguringMetricId(id)}
+            // «Обычная» скрывает настройки колонок и drag-перетаскивание (п.3а спеки) —
+            // не передаём обработчики вовсе, ReportTable сам не рендерит соответствующий UI
+            onMetricDisplayModeChange={isPro ? handleMetricDisplayModeChange : undefined}
+            onMetricQuickCompareToggle={isPro ? handleMetricQuickCompareToggle : undefined}
+            onMetricRemove={isPro ? handleMetricRemove : undefined}
+            onMetricMoveLeft={isPro ? handleMetricMoveLeft : undefined}
+            onMetricMoveRight={isPro ? handleMetricMoveRight : undefined}
+            onMetricReorder={isPro ? handleMetricReorder : undefined}
+            onMetricConfigure={isPro ? (id) => setConfiguringMetricId(id) : undefined}
             metricDecimalOverrides={metricDecimalOverrides}
             metricThresholdOverrides={metricThresholdOverrides}
             accentedMetricIds={accentedMetricIds}

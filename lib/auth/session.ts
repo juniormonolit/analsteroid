@@ -14,6 +14,9 @@ export interface SessionUser {
   roleName: string | null;
   avatarUrl: string | null;
   bitrixUserId: string | null;
+  // Тумблер «Обычная/Про» (п.3а спеки): null = ещё не переключал сам, дефолт по роли
+  // считает effectiveUiMode() в lib/auth/perms.ts.
+  uiMode: 'basic' | 'pro' | null;
 }
 
 // cache(): app-layout и section-layouts зовут getSession в одном запросе — БД дёргается один раз.
@@ -30,6 +33,7 @@ export const getSession = cache(async (): Promise<SessionUser | null> => {
             r.name AS "roleName",
             u.avatar_url AS "avatarUrl",
             u.bitrix_user_id AS "bitrixUserId",
+            u.ui_mode AS "uiMode",
             s.expires_at
      FROM user_sessions s
      JOIN users u ON u.id = s.user_id
@@ -49,6 +53,7 @@ export const getSession = cache(async (): Promise<SessionUser | null> => {
     roleName: row.roleName,
     avatarUrl: row.avatarUrl,
     bitrixUserId: row.bitrixUserId,
+    uiMode: row.uiMode,
   };
 });
 
