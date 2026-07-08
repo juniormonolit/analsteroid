@@ -13,6 +13,22 @@ export function getMetricPanelWidth(): number {
   return Math.max(720, Math.min(1040, window.innerWidth - 220 - 400));
 }
 
+// Нормализация текста для поиска метрик: нижний регистр + служебные разделители
+// (стрелки любых видов →←↔, тире/дефис, слэши, скобки, кавычки, знаки препинания)
+// заменяются на пробел, лишние пробелы схлопываются. Нужно, чтобы «CR Сделка → Бронь»
+// находилось по запросу «сделка бронь» — стрелка между словами не должна мешать поиску.
+const SEARCH_SEPARATOR_RE = /[←-⇿➔➠-➿‐-―_/,;:()«»"'.\-]+/g;
+function normalizeSearchText(s: string): string {
+  return s.toLowerCase().replace(SEARCH_SEPARATOR_RE, ' ').replace(/\s+/g, ' ').trim();
+}
+// Метрика подходит под запрос, если ВСЕ токены запроса встречаются в нормализованном
+// названии (в любом порядке) — так «сделка бронь» и «бронь сделка» оба находят метрику.
+function matchesSearchTokens(text: string, tokens: string[]): boolean {
+  if (tokens.length === 0) return true;
+  const normalized = normalizeSearchText(text);
+  return tokens.every(t => normalized.includes(t));
+}
+
 // Охват метрики по названию: (перв.) / (повт.) / без суффикса = все
 type Scope = 'primary' | 'repeat' | 'total';
 function scopeOf(m: Metric): Scope {
@@ -51,11 +67,12 @@ function MetricSelector({
   const selectedSet = new Set(selectedIds);
   const selectedMetrics = selectedIds.map(id => metrics.find(m => m.id === id)).filter(Boolean) as Metric[];
 
+  const searchTokens = normalizeSearchText(search).split(' ').filter(Boolean);
   const filtered = metrics.filter(m =>
-    (!search ||
-      m.nameRu.toLowerCase().includes(search.toLowerCase()) ||
-      (m.nameShortRu ?? '').toLowerCase().includes(search.toLowerCase()) ||
-      (m.category ?? '').toLowerCase().includes(search.toLowerCase()))
+    (searchTokens.length === 0 ||
+      matchesSearchTokens(m.nameRu, searchTokens) ||
+      matchesSearchTokens(m.nameShortRu ?? '', searchTokens) ||
+      matchesSearchTokens(m.category ?? '', searchTokens))
     && (!scopeFilter || scopeOf(m) === scopeFilter)
   );
   const grouped = new Map<string, Metric[]>();
