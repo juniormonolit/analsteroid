@@ -101,3 +101,28 @@ button, a { -webkit-tap-highlight-color: transparent; }
    header-coloured box-shadow just below every header cell (moves with the sticky layer) to
    fill that gap. Shadow sits below the cell's bottom border, so the header divider stays. */
 .report-thead th { box-shadow: 0 1px 0 0 var(--color-table-header); }
+
+/* ---------- Слайд-панели (карточка сделки, дрилл-даун, настройки метрики, импорт/экспорт
+   планов) — плавное появление/закрытие (п. Н3 спеки). Раньше классы `animate-in
+   slide-in-from-*` предполагали tailwindcss-animate, которого в проекте нет — анимация
+   фактически не работала (панели появлялись мгновенно). Тут — минимальные keyframes без
+   зависимостей: полноценный слайд от края + лёгкий fade, ~240ms ease-out на входе / ~180ms
+   ease-in на выходе. translateX в % — от ширины САМОЙ панели, поэтому одинаково корректно
+   работает и для панелей фиксированной ширины (600px/384px/320px), и для дрилл-дауна
+   (flex-1, ~90% экрана) — не нужно знать точную ширину в px. */
+@keyframes slide-panel-in-right { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes slide-panel-out-right { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+@keyframes slide-panel-in-left { from { transform: translateX(-100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes slide-panel-out-left { from { transform: translateX(0); opacity: 1; } to { transform: translateX(-100%); opacity: 0; } }
+
+.slide-panel-in-right { animation: slide-panel-in-right 240ms ease-out both; }
+.slide-panel-out-right { animation: slide-panel-out-right 180ms ease-in both; }
+.slide-panel-in-left { animation: slide-panel-in-left 240ms ease-out both; }
+.slide-panel-out-left { animation: slide-panel-out-left 180ms ease-in both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .slide-panel-in-right, .slide-panel-out-right,
+  .slide-panel-in-left, .slide-panel-out-left {
+    animation: none;
+  }
+}

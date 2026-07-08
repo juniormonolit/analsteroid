@@ -11,6 +11,8 @@ import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
+import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 
 interface Deal {
   deal_id: number;
@@ -517,11 +519,19 @@ export function DrilldownDrawer(props: Props) {
     // metric-click "нет" above is transient and doesn't touch it.
     onGroupedChange?.(v);
   }
+  const { closing, requestClose } = useSlideClose(onClose);
   return (
     <div className="fixed inset-0 z-50 flex">
       {/* Полоска-подложка для закрытия — только там, где есть место (sm+) */}
-      <div className="hidden sm:block w-[10%] shrink-0 bg-black/40 cursor-pointer" onClick={onClose} />
-      <div className="flex-1 min-w-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
+      <div
+        className={`hidden sm:block w-[10%] shrink-0 bg-black/40 cursor-pointer transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
+        onClick={requestClose}
+      />
+      {/* Язычок-таб на границе подложки и панели — только там, где подложка вообще есть (sm+);
+          на мобиле панель фуллскрин (подложки нет, некуда цеплять таб) — там остаётся обычный
+          крестик в шапке (см. кнопку ниже, sm:hidden). */}
+      <PanelCloseTab onClick={requestClose} style={{ left: '10%', transform: 'translateX(-50%)' }} />
+      <div className={`flex-1 min-w-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <div className="flex items-center justify-between flex-wrap gap-y-2 px-3 sm:px-6 py-3 sm:py-4 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
           <div className="min-w-0 flex-1">
             <h2 className="font-semibold text-[var(--color-text)] text-base truncate">
@@ -572,7 +582,7 @@ export function DrilldownDrawer(props: Props) {
                 </div>
               </>
             )}
-            <button onClick={onClose} className="p-2 hover:bg-[var(--color-bg-hover)] rounded-lg transition-colors"><X size={18} /></button>
+            <button onClick={requestClose} className="sm:hidden p-2 hover:bg-[var(--color-bg-hover)] rounded-lg transition-colors"><X size={18} /></button>
           </div>
         </div>
         <div className="flex-1 overflow-hidden">

@@ -2,6 +2,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { X, ChevronDown, ChevronRight, Download } from 'lucide-react';
+import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 
 interface DeptNode {
   id: string;
@@ -102,6 +104,7 @@ export function ExportSlide({ onClose }: Props) {
     staleTime: 5 * 60 * 1000,
   });
   const tree: DeptNode[] = orgData?.tree ?? [];
+  const { closing, requestClose } = useSlideClose(onClose);
 
   function toggleIds(ids: string[], forceOn?: boolean) {
     setSelectedDeptIds(prev => {
@@ -136,12 +139,13 @@ export function ExportSlide({ onClose }: Props) {
 
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="fixed inset-y-0 right-0 z-50 w-80 max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
+      <div className={`fixed inset-0 z-40 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`} onClick={requestClose} />
+      <div className={`fixed inset-y-0 right-0 z-50 w-80 max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+        <PanelCloseTab onClick={requestClose} />
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
           <h2 className="text-base font-semibold text-[var(--color-text)]">Экспорт шаблона</h2>
-          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+          <button onClick={requestClose} className="sm:hidden text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
             <X size={18} />
           </button>
         </div>
@@ -167,7 +171,7 @@ export function ExportSlide({ onClose }: Props) {
             {loading ? 'Загрузка...' : 'Скачать xlsx'}
           </button>
           <button
-            onClick={onClose}
+            onClick={requestClose}
             className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           >
             Закрыть

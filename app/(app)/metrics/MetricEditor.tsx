@@ -1,6 +1,8 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { X, Plus, Trash2 } from 'lucide-react';
+import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 
 type AggFn = 'count_distinct' | 'sum' | 'avg' | 'count_all';
 type MetricSource = 'deals' | 'deal_events';
@@ -155,6 +157,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
   const [error, setError] = useState('');
   const [tagInput, setTagInput] = useState('');
   const isNew = !initial?.id;
+  const { closing, requestClose } = useSlideClose(onClose);
 
   useEffect(() => { setD({ ...EMPTY, ...initial }); }, [initial?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -203,14 +206,15 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex">
-      <div className="flex-1 bg-black/40" onClick={onClose} />
-      <aside className="w-[800px] max-w-full bg-[var(--color-bg-surface)] border-l border-[var(--color-border)] flex flex-col h-full overflow-hidden shadow-2xl">
+      <div className={`flex-1 bg-black/40 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`} onClick={requestClose} />
+      <aside className={`relative w-[800px] max-w-full bg-[var(--color-bg-surface)] border-l border-[var(--color-border)] flex flex-col h-full shadow-2xl ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+        <PanelCloseTab onClick={requestClose} />
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-border)]">
           <h2 className="font-semibold text-[var(--color-text)]">
             {isNew ? 'Новая метрика' : `Редактировать: ${d.name_ru}`}
           </h2>
-          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] p-1 rounded">
+          <button onClick={requestClose} className="sm:hidden text-[var(--color-text-muted)] hover:text-[var(--color-text)] p-1 rounded">
             <X size={18} />
           </button>
         </div>
@@ -512,7 +516,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
           {error && <p className="text-sm text-[var(--color-negative)]">{error}</p>}
           {!error && <span />}
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:bg-[var(--color-bg-surface)]">
+            <button onClick={requestClose} className="px-4 py-2 rounded text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] border border-[var(--color-border)] hover:bg-[var(--color-bg-surface)]">
               Отмена
             </button>
             <button

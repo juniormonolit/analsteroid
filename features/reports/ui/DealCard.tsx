@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { X, ExternalLink } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 
 interface Product {
   name: string; type?: string; price: number; quantity: number; sum: number;
@@ -75,12 +77,17 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const products = deal?.products ?? [];
   const productsTotal = products.reduce((s, p) => s + (Number(p.sum) || 0), 0);
   const isLostDeal = !!deal?.lost_at;
+  const { closing, requestClose } = useSlideClose(onClose);
 
   return (
     <>
       {/* Затемнение: клик мимо карточки закрывает её */}
-      <div className="fixed inset-0 z-[65] bg-black/30" onClick={onClose} />
-      <div className="fixed inset-y-0 right-0 z-[70] w-[600px] max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col animate-in slide-in-from-right duration-200">
+      <div
+        className={`fixed inset-0 z-[65] bg-black/30 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
+        onClick={requestClose}
+      />
+      <div className={`fixed inset-y-0 right-0 z-[70] w-[600px] max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+        <PanelCloseTab onClick={requestClose} />
         {/* Header */}
         <div className="shrink-0 border-b border-[var(--color-border)]">
           <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-4">
@@ -116,7 +123,7 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                 </div>
               )}
             </div>
-            <button onClick={onClose} className="p-2 hover:bg-[var(--color-bg-hover)] rounded-lg transition-colors shrink-0"><X size={18} /></button>
+            <button onClick={requestClose} className="sm:hidden p-2 hover:bg-[var(--color-bg-hover)] rounded-lg transition-colors shrink-0"><X size={18} /></button>
           </div>
         </div>
 

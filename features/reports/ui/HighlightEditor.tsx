@@ -4,6 +4,8 @@ import type { MetricHighlightConfig, HighlightThreshold } from '@/lib/saved-repo
 import type { ComparisonDisplay } from '@/lib/metrics/types';
 import { GsColorPickerButton } from '@/components/ui/GsColorPicker';
 import { GOOGLE_SHEETS_PALETTE_GRID, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
+import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 
 const DISPLAY_OPTIONS: { value: ComparisonDisplay; label: string }[] = [
   { value: 'full',    label: 'Полное сравнение' },
@@ -106,21 +108,32 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
   }
 
   const docked = anchorLeft !== undefined;
+  const { closing, requestClose } = useSlideClose(onClose);
+  // Докед слайдит слева направо (панель растёт вправо от якоря) — свой enter/exit;
+  // модалка (не докед) слайдит справа, как остальные слайд-панели.
+  const enterAnim = docked ? 'slide-panel-in-left' : 'slide-panel-in-right';
+  const exitAnim = docked ? 'slide-panel-out-left' : 'slide-panel-out-right';
   return (
     <>
       {/* Backdrop — только в режиме модалки; в док-режиме панель метрик остаётся кликабельной */}
-      {!docked && <div className="fixed inset-0 z-40" onClick={onClose} />}
+      {!docked && (
+        <div
+          className={`fixed inset-0 z-40 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
+          onClick={requestClose}
+        />
+      )}
       {/* Slide panel */}
       <div
-        className={`fixed inset-y-0 z-50 w-80 max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col animate-in duration-200 ${docked ? 'border-l border-[var(--color-border)] slide-in-from-left' : 'right-0 slide-in-from-right'}`}
+        className={`fixed inset-y-0 z-50 w-80 max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? exitAnim : enterAnim} ${docked ? 'border-l border-[var(--color-border)]' : 'right-0'}`}
         style={docked ? { left: anchorLeft } : undefined}>
+        {!docked && <PanelCloseTab onClick={requestClose} />}
         {/* Header */}
         <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-[var(--color-border)]">
           <div>
             <div className="font-semibold text-[var(--color-text)] text-base">Настройки метрики</div>
             <div className="text-xs text-[var(--color-text-muted)] mt-0.5">{metricName}</div>
           </div>
-          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors ml-2 mt-0.5">✕</button>
+          <button onClick={requestClose} className={`${docked ? '' : 'sm:hidden'} text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors ml-2 mt-0.5`}>✕</button>
         </div>
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
