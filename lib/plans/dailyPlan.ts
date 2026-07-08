@@ -82,6 +82,15 @@ function clampToMonth(dateStr: string, monthFirstDay: string): string {
   return dateStr;
 }
 
+function clampToWeek(dateStr: string, weekStartDay: string): string {
+  const weekEndExclusive = new Date(`${weekStartDay}T00:00:00Z`);
+  weekEndExclusive.setUTCDate(weekEndExclusive.getUTCDate() + 7);
+  const weekLastDay = new Date(weekEndExclusive.getTime() - 86_400_000).toISOString().slice(0, 10);
+  if (dateStr < weekStartDay) return weekStartDay;
+  if (dateStr > weekLastDay) return weekLastDay;
+  return dateStr;
+}
+
 /**
  * Прогресс рабочих дней МЕСЯЦА — для дневного плана (movthly plan / total * passed).
  * monthFirstDay: 'YYYY-MM-01'. asOfDateStr: 'YYYY-MM-DD' (обычно сегодня, МСК).
@@ -124,6 +133,37 @@ export async function getWeekWorkingDaysTotal(weekStartStr: string): Promise<num
     [weekStartStr, weekEndExclusive.toISOString().slice(0, 10)]
   );
   return parseInt(res.rows[0]?.in_week ?? '0', 10) || FIXED_WEEK_DIVISOR;
+}
+
+/**
+ * Прогресс рабочих дней НЕДЕЛИ (пн-старт) — для метрик «Выполнение плана ... (неделя)»
+ * (п.5+11 спеки). Симметрично getMonthWorkingDays: divide20 — total фиксирован (5, пн-пт),
+ * passed — реальные будни от weekStartStr (Пн) до asOfDateStr включительно, БЕЗ потолка
+ * (не может превысить 5 в пределах одной календарной недели, но считается тем же общим
+ * счётчиком будней, что и для месяца — единая логика). calendar — из working_calendar.
+ */
+export async function getWeekWorkingDays(weekStartStr: string, asOfDateStr: string): Promise<WorkingDayProgress> {
+  const mode = await getDailyPlanMode();
+
+  if (mode === 'divide20') {
+    const capped = clampToWeek(asOfDateStr, weekStartStr);
+    return { total: FIXED_WEEK_DIVISOR, passed: countWeekdaysInclusive(weekStartStr, capped) };
+  }
+
+  // calendar — прежняя логика (working_calendar), без изменений.
+  const weekEndExclusive = new Date(`${weekStartStr}T00:00:00Z`);
+  weekEndExclusive.setUTCDate(weekEndExclusive.getUTCDate() + 7);
+  const res = await systemDb().query<{ total_working: string; days_passed: string }>(
+    `SELECT
+       COUNT(*) FILTER (WHERE is_working) AS total_working,
+       COUNT(*) FILTER (WHERE is_working AND date <= $3::date) AS days_passed
+     FROM working_calendar
+     WHERE date >= $1::date AND date < $2::date`,
+    [weekStartStr, weekEndExclusive.toISOString().slice(0, 10), asOfDateStr]
+  );
+  const total = parseInt(res.rows[0]?.total_working ?? '0', 10);
+  const passed = parseInt(res.rows[0]?.days_passed ?? '0', 10);
+  return { total: total || FIXED_WEEK_DIVISOR, passed: passed || 0 };
 }
 
 /**

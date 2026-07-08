@@ -7,8 +7,20 @@ import { fetchBySources } from '@/features/reports/engine/bySources';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
-import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
+import { getMonthWorkingDays, getWeekWorkingDays } from '@/lib/plans/dailyPlan';
+import { toZonedTime } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType } from '@/lib/metrics/types';
+
+// Метрики «Выполнение плана ... (день)/(неделя)» (п.5+11 спеки) — period-relative,
+// as-of = конец периода отчёта (или сегодня, если период его включает). Понедельник недели,
+// в которую попадает asOf.
+function mondayOfWeek(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  const day = d.getUTCDay(); // 0=Вс..6=Сб
+  const diffFromMonday = day === 0 ? 6 : day - 1;
+  d.setUTCDate(d.getUTCDate() - diffFromMonday);
+  return d.toISOString().slice(0, 10);
+}
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -141,6 +153,95 @@ export async function POST(req: NextRequest) {
     };
     currentRows = currentRows.map(enrichRow);
     compRows = compRows.map(enrichRow);
+  }
+
+  // Метрики «Выполнение плана продаж/отгрузок, % (день)/(неделя)» — п.5+11 спеки.
+  // Period-relative: as-of = конец периода отчёта, либо сегодня, если период его включает.
+  // Работают только в отчёте «по менеджерам» (планы есть только у менеджеров/отделов, п.5).
+  const periodRelativePlanMetricIds = [
+    'plan_execution_pct_sales_day', 'plan_execution_pct_sales_week',
+    'plan_execution_pct_shipments_day', 'plan_execution_pct_shipments_week',
+  ];
+  const hasPeriodRelativePlanMetric = withDeps.some(m => periodRelativePlanMetricIds.includes(m.id));
+
+  if (hasPeriodRelativePlanMetric && reportSlug === 'by-managers') {
+    const MSK_TZ = 'Europe/Moscow';
+    const mskTodayStr = toZonedTime(new Date(), MSK_TZ).toISOString().slice(0, 10);
+    // period.from/period.to приходят уже как «MSK-псевдо-UTC» строки (см. lib/period) —
+    // берём календарную дату без повторного сдвига таймзоны.
+    const periodFromStr = new Date(period.from).toISOString().slice(0, 10);
+    const periodToStr = new Date(period.to).toISOString().slice(0, 10);
+    const asOfStr = (periodFromStr <= mskTodayStr && mskTodayStr <= periodToStr) ? mskTodayStr : periodToStr;
+    const asOfMonthFirst = `${asOfStr.slice(0, 7)}-01`;
+    const asOfMonthStr = asOfStr.slice(0, 7);
+    const asOfWeekStart = mondayOfWeek(asOfStr);
+
+    const sysDb = systemDb();
+    const [asOfPlansRes, mtdRows, wtdRows, monthWd, weekWd] = await Promise.all([
+      sysDb.query<{ manager_login: string; plan_shipments: string; plan_n: string }>(
+        `SELECT manager_login, plan_shipments, plan_n
+         FROM manager_plans WHERE to_char(month, 'YYYY-MM') = $1`,
+        [asOfMonthStr]
+      ),
+      fetchByManagers({
+        period: { from: new Date(`${asOfMonthFirst}T00:00:00Z`), to: new Date(`${asOfStr}T00:00:00Z`) },
+        dealScope, clientType, departmentIds, accountType, productGroupMode, productGroupId, sourceFilter,
+      }),
+      fetchByManagers({
+        period: { from: new Date(`${asOfWeekStart}T00:00:00Z`), to: new Date(`${asOfStr}T00:00:00Z`) },
+        dealScope, clientType, departmentIds, accountType, productGroupMode, productGroupId, sourceFilter,
+      }),
+      getMonthWorkingDays(asOfMonthFirst, asOfStr),
+      getWeekWorkingDays(asOfWeekStart, asOfStr),
+    ]);
+
+    // На месяц asOf план не суммируется по нескольким месяцам (в отличие от planByLogin
+    // выше, который берёт все месяцы ВЫБРАННОГО периода) — день/неделя всегда меряются
+    // ровно относительно одного календарного месяца, в который попадает as-of.
+    const asOfPlanByLogin = new Map<string, { plan_shipments: number; plan_n: number }>();
+    for (const row of asOfPlansRes.rows) {
+      asOfPlanByLogin.set(row.manager_login, { plan_shipments: parseFloat(row.plan_shipments), plan_n: parseFloat(row.plan_n) });
+    }
+
+    const mtdByLogin = new Map(mtdRows.map(r => [r.dimensionSubtitle, r.metrics]));
+    const wtdByLogin = new Map(wtdRows.map(r => [r.dimensionSubtitle, r.metrics]));
+
+    const enrichPeriodRelative = (row: ReportRow): ReportRow => {
+      const login = row.dimensionSubtitle;
+      const plan = login ? asOfPlanByLogin.get(login) : undefined;
+      if (!plan) return row;
+
+      const planSalesMonth = plan.plan_shipments / plan.plan_n;
+      const planShipmentsMonth = plan.plan_shipments;
+      const dailyPlanSales = planSalesMonth / monthWd.total;
+      const dailyPlanShipments = planShipmentsMonth / monthWd.total;
+
+      const mtd = login ? mtdByLogin.get(login) : undefined;
+      const wtd = login ? wtdByLogin.get(login) : undefined;
+      // Тот же источник факта, что и у существующей «Выполнение плана, %»: продажи —
+      // primary_sales_amount (sold_at), отгрузки — primary_shipments_amount (delivered_at).
+      const salesFactMtd = mtd?.primary_sales_amount ?? 0;
+      const salesFactWtd = wtd?.primary_sales_amount ?? 0;
+      const shipmentsFactMtd = mtd?.primary_shipments_amount ?? 0;
+      const shipmentsFactWtd = wtd?.primary_shipments_amount ?? 0;
+
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          sales_fact_mtd: salesFactMtd,
+          sales_fact_wtd: salesFactWtd,
+          shipments_fact_mtd: shipmentsFactMtd,
+          shipments_fact_wtd: shipmentsFactWtd,
+          plan_sales_target_mtd: dailyPlanSales * monthWd.passed,
+          plan_sales_target_wtd: dailyPlanSales * weekWd.passed,
+          plan_shipments_target_mtd: dailyPlanShipments * monthWd.passed,
+          plan_shipments_target_wtd: dailyPlanShipments * weekWd.passed,
+        },
+      };
+    };
+    currentRows = currentRows.map(enrichPeriodRelative);
+    compRows = compRows.map(enrichPeriodRelative);
   }
 
   // Add calculated metrics to each row (after plan enrichment so plan-dependent metrics work)
