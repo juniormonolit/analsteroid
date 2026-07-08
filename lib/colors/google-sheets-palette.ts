@@ -9,7 +9,9 @@
 // нигде не публикуется как спецификация), а сгенерированные подмесом к белому
 // той же ФОРМЫ: 10 базовых цветов × ступени, визуально совпадающая структура.
 
-function mixHex(hex: string, toHex: string, t: number): string {
+// Экспортирован — переиспользуется в ReportTable.tsx для градиентной интерполяции
+// ручных порогов подсветки значений (п.9 спеки), не только для подмеса тонов палитры.
+export function mixHex(hex: string, toHex: string, t: number): string {
   const a = parseInt(hex.slice(1), 16);
   const b = parseInt(toHex.slice(1), 16);
   const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;

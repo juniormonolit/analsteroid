@@ -5,11 +5,27 @@ import { Popover } from '@/components/ui/Popover';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
+import { mixHex } from '@/lib/colors/google-sheets-palette';
 
+// Ручной режим подсветки значений (п.9 спеки analsteroid-edits-spec-agreed-20260708.md):
+// пороги (значение+цвет, любое количество ≥1) + aboveColor — цвет «выше последнего порога»
+// (без верхней границы). Между СОСЕДНИМИ порогами цвет плавно интерполируется (было —
+// жёсткая ступень: цвет менялся скачком в момент пересечения порога). Ниже первого порога
+// и выше последнего — сплошной цвет крайней точки (как и раньше, там менять нечего).
+// Формат конфига (thresholds[]+aboveColor) НЕ меняется — это и есть «мягкая миграция
+// чтением»: старые сохранённые отчёты/пороги рендерятся новой (градиентной) функцией без
+// какой-либо миграции данных.
 function resolveHighlightColor(value: number | null, cfg: MetricHighlightConfig | undefined): string | undefined {
   if (!cfg?.enabled || value === null) return undefined;
-  for (const t of cfg.thresholds) {
-    if (value <= t.value) return t.color;
+  if (!cfg.thresholds.length) return cfg.aboveColor;
+  const sorted = [...cfg.thresholds].sort((a, b) => a.value - b.value);
+  if (value <= sorted[0].value) return sorted[0].color;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i], b = sorted[i + 1];
+    if (value <= b.value) {
+      const t = (value - a.value) / (b.value - a.value || 1);
+      return mixHex(a.color, b.color, t);
+    }
   }
   return cfg.aboveColor;
 }

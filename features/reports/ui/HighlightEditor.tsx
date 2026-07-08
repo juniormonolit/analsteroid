@@ -1,7 +1,9 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { MetricHighlightConfig, HighlightThreshold } from '@/lib/saved-reports/types';
 import type { ComparisonDisplay } from '@/lib/metrics/types';
+import { GsColorPickerButton } from '@/components/ui/GsColorPicker';
+import { GOOGLE_SHEETS_PALETTE_GRID, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 
 const DISPLAY_OPTIONS: { value: ComparisonDisplay; label: string }[] = [
   { value: 'full',    label: 'Полное сравнение' },
@@ -9,23 +11,25 @@ const DISPLAY_OPTIONS: { value: ComparisonDisplay; label: string }[] = [
   { value: 'compact', label: 'Компактное' },
 ];
 
-const COLORS = [
-  { label: 'Зелёный',   value: '#bbf7d0' },
-  { label: 'Жёлтый',   value: '#fef9c3' },
-  { label: 'Оранжевый', value: '#fed7aa' },
-  { label: 'Красный',   value: '#fecaca' },
-  { label: 'Синий',     value: '#bfdbfe' },
-  { label: 'Серый',     value: '#e5e7eb' },
+// Стартовые цвета для новых порогов — пастельные тона из палитры Google Sheets
+// (п.10 спеки), по кругу: красный/оранжевый/жёлтый/зелёный/синий/серый. Пользователь
+// свободно меняет любой цвет через GsColorPickerButton (вся палитра, не только эти 6).
+const DEFAULT_STOP_COLORS: readonly string[] = [
+  GS_TINT_ROWS[4][1], // красный
+  GS_TINT_ROWS[4][2], // оранжевый
+  GS_TINT_ROWS[4][3], // жёлтый
+  GS_TINT_ROWS[4][4], // зелёный
+  GS_TINT_ROWS[4][6], // синий
+  GOOGLE_SHEETS_PALETTE_GRID[0][6], // серый
 ];
-
-const DEFAULT_COLOR = COLORS[5].value;
+const DEFAULT_COLOR = GOOGLE_SHEETS_PALETTE_GRID[0][6];
 
 function defaultConfig(thresholdCount: number): MetricHighlightConfig {
   const thresholds: HighlightThreshold[] = Array.from({ length: thresholdCount - 1 }, (_, i) => ({
     value: (i + 1) * 10,
-    color: COLORS[i % COLORS.length].value,
+    color: DEFAULT_STOP_COLORS[i % DEFAULT_STOP_COLORS.length],
   }));
-  return { enabled: true, thresholds, aboveColor: COLORS[thresholdCount - 1 < COLORS.length ? thresholdCount - 1 : 0].value };
+  return { enabled: true, thresholds, aboveColor: DEFAULT_STOP_COLORS[thresholdCount - 1 < DEFAULT_STOP_COLORS.length ? thresholdCount - 1 : 0] };
 }
 
 interface Props {
@@ -68,26 +72,28 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
     if (m !== 'gradient' && isHeatmap) onHeatmapToggle?.();
     setEnabled(m === 'thresholds');
   }
-  const [count, setCount] = useState(initial ? initial.thresholds.length + 1 : 2);
   const [thresholds, setThresholds] = useState<HighlightThreshold[]>(
     initial?.thresholds ?? defaultConfig(2).thresholds
   );
-  const [aboveColor, setAboveColor] = useState(initial?.aboveColor ?? COLORS[0].value);
+  const [aboveColor, setAboveColor] = useState(initial?.aboveColor ?? DEFAULT_STOP_COLORS[0]);
   const [scope, setScope] = useState<'report' | 'global'>('report');
 
-  useEffect(() => {
-    // Adjust thresholds array when count changes
-    const needed = count - 1;
-    if (thresholds.length < needed) {
-      const extra = Array.from({ length: needed - thresholds.length }, (_, i) => ({
-        value: (thresholds[thresholds.length - 1]?.value ?? 0) + (i + 1) * 10,
-        color: COLORS[(thresholds.length + i) % COLORS.length].value,
-      }));
-      setThresholds(prev => [...prev, ...extra]);
-    } else if (thresholds.length > needed) {
-      setThresholds(prev => prev.slice(0, needed));
-    }
-  }, [count]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Произвольное число порогов (≥1, т.е. ≥2 цветовых точек вместе с aboveColor) —
+  // раньше было жёстко [2,3,4,5] кнопками. Между соседними порогами — плавный градиент
+  // (интерполяция в resolveHighlightColor/ReportTable.tsx), это не влияет на добавление/
+  // удаление точек здесь.
+  function addThreshold() {
+    setThresholds(prev => [
+      ...prev,
+      {
+        value: (prev[prev.length - 1]?.value ?? 0) + 10,
+        color: DEFAULT_STOP_COLORS[prev.length % DEFAULT_STOP_COLORS.length],
+      },
+    ]);
+  }
+  function removeThreshold(i: number) {
+    setThresholds(prev => (prev.length > 1 ? prev.filter((_, j) => j !== i) : prev));
+  }
 
   const preview = enabled && thresholds.length > 0 ? thresholds[0].value : null;
   const previewColor = preview !== null ? (
@@ -266,44 +272,45 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
 
         {hlMode === 'thresholds' && (
           <>
-            {/* Count */}
-            <div>
-              <div className="text-xs text-[var(--color-text-muted)] mb-1.5">Количество порогов</div>
-              <div className="flex gap-1.5">
-                {[2, 3, 4, 5].map(n => (
-                  <button
-                    key={n}
-                    onClick={() => setCount(n)}
-                    className={`w-8 h-8 rounded-full text-sm font-medium transition-colors ${
-                      count === n
-                        ? 'bg-[var(--color-accent)] text-white'
-                        : 'bg-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
+            {/* Thresholds — любое количество (≥1, вместе с «выше последнего» = ≥2 точки).
+                Между соседними точками цвет плавно перетекает градиентом. */}
+            <div className="text-xs text-[var(--color-text-muted)] -mb-1">
+              Пороги ({thresholds.length + 1} {thresholds.length + 1 === 1 ? 'точка' : 'точек'} на градиенте)
             </div>
-
-            {/* Thresholds */}
             {thresholds.map((t, i) => (
               <div key={i} className="border border-[var(--color-border)] rounded-lg p-3 flex flex-col gap-2">
-                <div className="text-xs text-[var(--color-text-muted)]">{thresholdLabel}</div>
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-[var(--color-text-muted)]">{thresholdLabel}</div>
+                  <button
+                    onClick={() => removeThreshold(i)}
+                    disabled={thresholds.length <= 1}
+                    title="Удалить порог"
+                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    ✕
+                  </button>
+                </div>
                 <input
                   type="number"
                   value={t.value}
                   onChange={e => setThresholds(prev => prev.map((p, j) => j === i ? { ...p, value: Number(e.target.value) } : p))}
                   className="w-full border border-[var(--color-border)] rounded px-2 py-1 text-sm bg-[var(--color-bg)] text-[var(--color-text)]"
                 />
-                <ColorPicker value={t.color} onChange={c => setThresholds(prev => prev.map((p, j) => j === i ? { ...p, color: c } : p))} />
+                <GsColorPickerButton value={t.color} onChange={c => setThresholds(prev => prev.map((p, j) => j === i ? { ...p, color: c } : p))} />
               </div>
             ))}
+
+            <button
+              onClick={addThreshold}
+              className="text-xs text-[var(--color-accent)] hover:underline self-start"
+            >
+              + Добавить порог
+            </button>
 
             {/* Above last threshold */}
             <div className="border border-[var(--color-border)] rounded-lg p-3 flex flex-col gap-2">
               <div className="text-xs text-[var(--color-accent)]">Выше последнего порога</div>
-              <ColorPicker value={aboveColor} onChange={setAboveColor} />
+              <GsColorPickerButton value={aboveColor} onChange={setAboveColor} />
             </div>
 
             {/* Preview */}
@@ -356,25 +363,5 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
         </div>
       </div>
     </>
-  );
-}
-
-function ColorPicker({ value, onChange }: { value: string; onChange: (c: string) => void }) {
-  return (
-    <div className="flex gap-1.5 flex-wrap">
-      {COLORS.map(c => (
-        <button
-          key={c.value}
-          title={c.label}
-          onClick={() => onChange(c.value)}
-          className="w-6 h-6 rounded-full transition-transform hover:scale-110"
-          style={{
-            backgroundColor: c.value,
-            outline: value === c.value ? '2px solid var(--color-accent)' : '2px solid transparent',
-            outlineOffset: 2,
-          }}
-        />
-      ))}
-    </div>
   );
 }
