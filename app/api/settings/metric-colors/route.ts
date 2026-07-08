@@ -3,8 +3,12 @@ import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { ycAnalyticsDb } from '@/lib/db/clients';
 import { invalidateMetricsCache } from '@/lib/metrics/catalog';
+import { categoryDefaultColor } from '@/lib/metrics/entity-colors';
 
 // Правила цветов метрик: категории + точечные переопределения по метрике.
+// Ручные правила (metric_colors) — приоритет; когда правила нет, действует
+// автоцвет по сущности (lib/metrics/entity-colors.ts, задача 6а, п.10 спеки
+// 2026-07-08) — autoCategoryColors ниже отдаёт превью этого автоцвета для UI.
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -14,7 +18,11 @@ export async function GET() {
     db.query<{ scope: string; key: string; color: string }>('SELECT scope, key, color FROM metric_colors ORDER BY scope, key'),
     db.query<{ category: string }>(`SELECT DISTINCT category FROM metrics WHERE category IS NOT NULL AND (is_active = true OR is_hidden_in_ui = false) ORDER BY 1`),
   ]);
-  return NextResponse.json({ rules: rules.rows, categories: cats.rows.map(r => r.category) });
+  const categories = cats.rows.map(r => r.category);
+  const autoCategoryColors = Object.fromEntries(
+    categories.map(cat => [cat, categoryDefaultColor(cat)]),
+  );
+  return NextResponse.json({ rules: rules.rows, categories, autoCategoryColors });
 }
 
 export async function PUT(req: NextRequest) {

@@ -1,5 +1,6 @@
 import { ycAnalyticsDb } from '@/lib/db/clients';
 import type { Metric } from './types';
+import { resolveAutoColor } from './entity-colors';
 
 let _cache: Metric[] | null = null;
 let _cacheAt = 0;
@@ -80,7 +81,13 @@ export async function loadMetrics(): Promise<Metric[]> {
     tags: r.tags ?? [],
     isCollectOk: r.is_collect_ok,
     isCalcOk: r.is_calc_ok,
-    color: metricColors.get(r.id) ?? (r.category ? catColors.get(r.category) : null) ?? null,
+    // Приоритет: ручное переопределение по метрике > по категории > автоцвет по
+    // сущности (lib/metrics/entity-colors.ts, задача 6а, п.10 спеки 2026-07-08).
+    // Автоцвет — код, не БД: metric_colors хранит ТОЛЬКО ручные переопределения.
+    color:
+      metricColors.get(r.id) ??
+      (r.category ? catColors.get(r.category) : null) ??
+      resolveAutoColor({ id: r.id, category: r.category, nameRu: r.name_ru }),
   }));
   _cacheAt = Date.now();
   return _cache;
