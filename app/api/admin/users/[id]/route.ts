@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
-  if (!session?.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const denied = permError(session, 'action.users.manage');
+  if (denied) return denied;
 
   const { id } = await params;
   const body = await req.json();
@@ -17,9 +19,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     fields.push(`is_active = $${i++}`);
     values.push(body.is_active);
   }
-  if (typeof body.is_admin === 'boolean') {
-    fields.push(`is_admin = $${i++}`);
-    values.push(body.is_admin);
+  // Роль. is_superadmin через API не меняется никогда — только руками в БД.
+  if (typeof body.role_id === 'string') {
+    const db = systemDb();
+    const role = await db.query(`SELECT id FROM roles WHERE id = $1`, [body.role_id]);
+    if (!role.rows.length) return NextResponse.json({ error: 'Роль не найдена' }, { status: 400 });
+    fields.push(`role_id = $${i++}`);
+    values.push(body.role_id);
   }
 
   if (!fields.length) {

@@ -98,27 +98,30 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Dimension filter ──────────────────────────────────────────────────────
+  // managerId и productGroup независимы и КОМПОЗИРУЮТСЯ (дрилл «группа × менеджер»
+  // из мини-отчёта шлёт оба).
   const params: unknown[] = [fromDate.toISOString(), toExcl.toISOString()];
   let dimensionFilter = '';
 
   if (managerId) {
     params.push(managerId);
     dimensionFilter = `AND d.current_manager_id = $${params.length}`;
-  } else if (productGroup !== null) {
+  }
+  if (productGroup !== null) {
     if (pgMode === 'kc') {
       if (productGroup === '__none__') {
-        dimensionFilter = `AND d.product_group_id IS NULL`;
+        dimensionFilter += ` AND d.product_group_id IS NULL`;
       } else {
         params.push(productGroup);
-        dimensionFilter = `AND d.product_group_id::text = $${params.length}`;
+        dimensionFilter += ` AND d.product_group_id::text = $${params.length}`;
       }
     } else {
       // by_max
       if (productGroup === 'Без группы' || productGroup === '__none__') {
-        dimensionFilter = `AND d.head_group_name IS NULL`;
+        dimensionFilter += ` AND d.head_group_name IS NULL`;
       } else {
         params.push(productGroup);
-        dimensionFilter = `AND d.head_group_name = $${params.length}`;
+        dimensionFilter += ` AND d.head_group_name = $${params.length}`;
       }
     }
   }
@@ -134,8 +137,11 @@ export async function GET(req: NextRequest) {
     dimensionFilter += ` AND ${managerIdsWhere(res.rows.map(r => r.id).filter(id => /^\d+$/.test(id)))}`;
   }
 
-  // «Итого»: весь срез отчёта — уважаем фильтры по отделам и типу аккаунтов (manager*/logist*)
-  if (all && (departmentIds.length || (accountType && accountType !== 'all'))) {
+  // Фильтры отчёта по отделам и типу аккаунтов (manager*/logist*) сужают цифры в
+  // самом отчёте, поэтому обязаны сужать и список сделок — для ЛЮБОЙ цели дрилл-дауна
+  // (раньше применялись только при all=1, из-за чего дрилл по товарной группе
+  // показывал сделки всех отделов и не сходился с цифрой).
+  if (departmentIds.length || (accountType && accountType !== 'all')) {
     const sysDb = systemDb();
     let allowed: Set<string> | null = null;
     if (departmentIds.length) {

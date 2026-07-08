@@ -9,6 +9,8 @@ import {
   Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
+import { hasPerm, type PermKey } from '@/lib/auth/perms';
+import { Avatar } from '@/components/ui/Avatar';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { MeteorLogo } from './MeteorLogo';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
@@ -99,7 +101,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
                 return (
                   <Link key={r.id} href={href} className={linkCls(href)}>
                     <span className="truncate flex-1">{r.name}</span>
-                    {user.isAdmin && (
+                    {hasPerm(user, 'action.shared_reports.manage') && (
                       <button
                         onClick={e => deleteReport(r.id, e)}
                         className="hover-reveal tap-target p-0.5 rounded hover:text-[var(--color-negative)]"
@@ -159,13 +161,14 @@ interface NavItem {
   disabled?: boolean;
   isSales?: boolean;
   children?: { label: string; href: string }[];
+  perm?: PermKey; // без права — пункт не показывается
 }
 
 const NAV: NavItem[] = [
-  { label: 'Продажи', icon: <BarChart3 size={18} />, isSales: true },
+  { label: 'Продажи', icon: <BarChart3 size={18} />, isSales: true, perm: 'section.sales' },
   { label: 'Реализация', icon: <Truck size={18} />, disabled: true },
   {
-    label: 'Маркетинг', icon: <Megaphone size={18} />,
+    label: 'Маркетинг', icon: <Megaphone size={18} />, perm: 'section.marketing',
     children: Object.entries(MARKETING_PRESETS).map(([key, p]) => ({
       label: p.title,
       href: `/marketing/${key}`,
@@ -188,7 +191,7 @@ function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout 
     <>
           {/* Nav */}
           <nav className="flex-1 overflow-y-auto py-2">
-            {NAV.map(item => (
+            {NAV.filter(item => !item.perm || hasPerm(user, item.perm)).map(item => (
               <div key={item.label}>
                 {item.disabled ? (
                   <div className="flex items-center gap-3 px-3 py-2 opacity-40 cursor-not-allowed">
@@ -261,71 +264,92 @@ function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout 
 
           {/* Сводная + Планы + Декомпозиция */}
           <div className="border-t border-white/10 pt-1">
-            <Link
-              href="/summary"
-              className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                pathname.startsWith('/summary') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-              }`}
-            >
-              <span className="text-[var(--color-sidebar-text)]"><Gauge size={18} /></span>
-              {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Сводная</span>}
-            </Link>
-            <Link
-              href="/plans"
-              className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                pathname.startsWith('/plans') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-              }`}
-            >
-              <span className="text-[var(--color-sidebar-text)]"><ClipboardList size={18} /></span>
-              {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Планы</span>}
-            </Link>
-            <Link
-              href="/decomposition"
-              className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                pathname.startsWith('/decomposition') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-              }`}
-            >
-              <span className="text-[var(--color-sidebar-text)]"><Network size={18} /></span>
-              {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Декомпозиция</span>}
-            </Link>
+            {hasPerm(user, 'section.summary') && (
+              <Link
+                href="/summary"
+                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                  pathname.startsWith('/summary') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+                }`}
+              >
+                <span className="text-[var(--color-sidebar-text)]"><Gauge size={18} /></span>
+                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Сводная</span>}
+              </Link>
+            )}
+            {hasPerm(user, 'section.plans') && (
+              <Link
+                href="/plans"
+                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                  pathname.startsWith('/plans') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+                }`}
+              >
+                <span className="text-[var(--color-sidebar-text)]"><ClipboardList size={18} /></span>
+                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Планы</span>}
+              </Link>
+            )}
+            {hasPerm(user, 'section.decomposition') && (
+              <Link
+                href="/decomposition"
+                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                  pathname.startsWith('/decomposition') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+                }`}
+              >
+                <span className="text-[var(--color-sidebar-text)]"><Network size={18} /></span>
+                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Декомпозиция</span>}
+              </Link>
+            )}
           </div>
 
-          {/* Admin: Metrics + Settings */}
-          {user.isAdmin && (
+          {/* Метрики + Настройки — по правам */}
+          {(hasPerm(user, 'section.metrics') || hasPerm(user, 'section.settings')) && (
             <div className="pt-1">
-              <Link
-                href="/metrics"
-                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                  pathname.startsWith('/metrics') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-                }`}
-              >
-                <span className="text-[var(--color-sidebar-text)]"><BarChart2 size={18} /></span>
-                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Метрики</span>}
-              </Link>
-              <Link
-                href="/settings"
-                className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
-                  pathname.startsWith('/settings') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
-                }`}
-              >
-                <span className="text-[var(--color-sidebar-text)]"><Settings size={18} /></span>
-                {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Настройки</span>}
-              </Link>
+              {hasPerm(user, 'section.metrics') && (
+                <Link
+                  href="/metrics"
+                  className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                    pathname.startsWith('/metrics') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+                  }`}
+                >
+                  <span className="text-[var(--color-sidebar-text)]"><BarChart2 size={18} /></span>
+                  {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Метрики</span>}
+                </Link>
+              )}
+              {hasPerm(user, 'section.settings') && (
+                <Link
+                  href="/settings"
+                  className={`flex items-center gap-3 px-3 py-2 hover:bg-white/5 transition-colors ${
+                    pathname.startsWith('/settings') ? 'bg-[var(--color-sidebar-active-bg)]' : ''
+                  }`}
+                >
+                  <span className="text-[var(--color-sidebar-text)]"><Settings size={18} /></span>
+                  {!collapsed && <span className="text-sm text-[var(--color-sidebar-text)]">Настройки</span>}
+                </Link>
+              )}
             </div>
           )}
 
-          {/* Footer */}
+          {/* Footer: аватар + имя → ЛК, рядом «Выйти» */}
           <div className="border-t border-white/10 p-3">
-            {!collapsed && (
-              <div className="text-xs text-[var(--color-sidebar-text)] mb-2 truncate">{user.displayName}</div>
-            )}
-            <button
-              onClick={logout}
-              className="flex items-center gap-2 text-[var(--color-sidebar-text)] hover:text-white text-xs"
-            >
-              <LogOut size={16} />
-              {!collapsed && 'Выйти'}
-            </button>
+            <div className={`flex items-center gap-2 ${collapsed ? 'flex-col' : ''}`}>
+              <Link
+                href="/profile"
+                className={`flex items-center gap-2 min-w-0 flex-1 rounded-md transition-colors ${collapsed ? 'justify-center flex-none' : '-mx-1 px-1 py-1'} ${
+                  pathname.startsWith('/profile')
+                    ? 'text-white'
+                    : 'text-[var(--color-sidebar-text)] hover:text-white'
+                }`}
+                title="Личный кабинет"
+              >
+                <Avatar name={user.displayName} url={user.avatarUrl} size={28} />
+                {!collapsed && <span className="text-xs truncate">{user.displayName}</span>}
+              </Link>
+              <button
+                onClick={logout}
+                className="tap-target flex items-center justify-center text-[var(--color-sidebar-text)] hover:text-white shrink-0"
+                title="Выйти"
+              >
+                <LogOut size={16} />
+              </button>
+            </div>
           </div>
     </>
   );

@@ -79,7 +79,8 @@ export function SaveReportModal({
   const [compMode, setCompMode] = useState<ComparisonMode>('previous_tail');
   const [saving, setSaving] = useState(false);
   const [existingReports, setExistingReports] = useState<{ id: string; name: string; isShared?: boolean }[]>([]);
-  const [isAdmin, setIsAdmin] = useState(false);
+  // Право сохранять в «Смекалочную» (общие отчёты)
+  const [canShare, setCanShare] = useState(false);
   const [shared, setShared] = useState(false);
 
   useEffect(() => {
@@ -90,7 +91,8 @@ export function SaveReportModal({
       .catch(() => {});
     fetch('/api/auth/session')
       .then(r => r.json())
-      .then((d: { user?: { isAdmin?: boolean } }) => setIsAdmin(!!d.user?.isAdmin))
+      .then((d: { user?: { isSuperadmin?: boolean; permissions?: string[] } }) =>
+        setCanShare(!!d.user?.isSuperadmin || !!d.user?.permissions?.includes('action.shared_reports.manage')))
       .catch(() => {});
   }, []);
 
@@ -134,7 +136,7 @@ export function SaveReportModal({
       drilldownGrouped,
       sourceDimension,
       drilldownDimension,
-      isShared: isAdmin ? shared : false,
+      isShared: canShare ? shared : false,
       sortBy,
       sortDir,
       columnGroups,
@@ -179,7 +181,7 @@ export function SaveReportModal({
               Отчёт с таким названием уже существует — конфигурация будет перезаписана
             </div>
           )}
-          {isAdmin && (
+          {canShare && (
             <label className="flex items-center gap-2 cursor-pointer mt-1">
               <input
                 type="checkbox"

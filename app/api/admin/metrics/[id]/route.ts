@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { ycAnalyticsDb } from '@/lib/db/clients';
 import { invalidateMetricsCache } from '@/lib/metrics/catalog';
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
-  if (!session?.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const denied = permError(session, 'section.metrics');
+  if (denied) return denied;
 
   const { id } = await params;
   const body = await req.json();
@@ -72,7 +74,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
-  if (!session?.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const denied = permError(session, 'section.metrics');
+  if (denied) return denied;
 
   const { id } = await params;
   const db = ycAnalyticsDb();

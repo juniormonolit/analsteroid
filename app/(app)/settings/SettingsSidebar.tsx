@@ -7,15 +7,26 @@ const NAV = [
   { href: '/settings/metrics', label: 'Метрики' },
   { href: '/settings/metric-colors', label: 'Цвета метрик' },
   { href: '/settings/working-calendar', label: 'Календарь' },
-  { href: '/settings/users', label: 'Пользователи' },
 ];
 
-export function SettingsSidebar() {
+export function SettingsSidebar({
+  canManageUsers,
+  isSuperadmin,
+}: {
+  canManageUsers: boolean;
+  isSuperadmin: boolean;
+}) {
   const pathname = usePathname();
+
+  const items = [
+    ...NAV,
+    ...(canManageUsers ? [{ href: '/settings/users', label: 'Пользователи' }] : []),
+    ...(isSuperadmin ? [{ href: '/settings/roles', label: 'Роли' }] : []),
+  ];
 
   return (
     <>
-      {NAV.map(item => (
+      {items.map(item => (
         <Link
           key={item.href}
           href={item.href}

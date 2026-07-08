@@ -4,13 +4,15 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { buildDailyMoscowReport, sendDailyMoscowReport } from '@/lib/jobs/dailyMoscowReport';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
-  if (!session?.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const denied = permError(session, 'section.settings');
+  if (denied) return denied;
 
   const date = req.nextUrl.searchParams.get('date') || undefined;
   if (date && !DATE_RE.test(date)) return NextResponse.json({ error: 'date: ожидается YYYY-MM-DD' }, { status: 400 });
@@ -26,7 +28,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
-  if (!session?.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const denied = permError(session, 'section.settings');
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
   const date = typeof body.date === 'string' ? body.date : undefined;

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { hasPerm } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import type { SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 
@@ -97,8 +98,8 @@ export async function POST(req: NextRequest) {
     body.drilldownGrouped ?? null,
     body.sourceDimension ?? null,
     body.drilldownDimension ?? null,
-    // «Смекалочная» (общие отчёты) — сохранять туда может только админ
-    session.isAdmin ? (body.isShared ?? false) : false,
+    // «Смекалочная» (общие отчёты) — сохранять туда можно только с правом на общие отчёты
+    hasPerm(session, 'action.shared_reports.manage') ? (body.isShared ?? false) : false,
     body.heatmapInvertedIds ?? [],
     body.colorizeMetrics ?? null,
   ];

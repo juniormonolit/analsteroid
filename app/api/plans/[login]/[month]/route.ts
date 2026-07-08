@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 
 export async function PUT(
@@ -7,7 +8,8 @@ export async function PUT(
   { params }: { params: Promise<{ login: string; month: string }> },
 ) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = permError(session, 'action.plans.edit');
+  if (denied) return denied;
 
   const { login, month } = await params;
   const body = await request.json() as { plan_shipments: number; plan_n: number };

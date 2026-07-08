@@ -506,6 +506,16 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setMetricIds(ids); // always keep explicit order, never collapse to 'all_core'
   }
 
+  function handleMetricReorder(draggedId: string, targetId: string) {
+    const ids = [...selectedMetricIds];
+    const from = ids.indexOf(draggedId);
+    const to = ids.indexOf(targetId);
+    if (from === -1 || to === -1 || from === to) return;
+    const [moved] = ids.splice(from, 1);
+    ids.splice(to, 0, moved);
+    setMetricIds(ids); // always keep explicit order, never collapse to 'all_core'
+  }
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="px-6 pt-4 pb-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
@@ -580,6 +590,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onMetricRemove={handleMetricRemove}
             onMetricMoveLeft={handleMetricMoveLeft}
             onMetricMoveRight={handleMetricMoveRight}
+            onMetricReorder={handleMetricReorder}
             onMetricConfigure={(id) => setConfiguringMetricId(id)}
             metricDecimalOverrides={metricDecimalOverrides}
             metricThresholdOverrides={metricThresholdOverrides}
@@ -609,6 +620,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           target={drilldown}
           dimensionType={dimensionType}
           period={period}
+          comparison={comparison}
           dealScope={dealScope}
           clientType={clientType}
           productGroupMode={productGroupMode}
@@ -620,6 +632,22 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           sortDir={sortDir}
           grouped={drilldownGrouped}
           onGroupedChange={setDrilldownGrouped}
+          comparisonDisplay={comparisonDisplay}
+          metricDisplayModes={metricDisplayModes}
+          comparisonThreshold={comparisonThreshold}
+          highlights={effectiveHighlights}
+          metricDecimalOverrides={metricDecimalOverrides}
+          metricThresholdOverrides={metricThresholdOverrides}
+          accentedMetricIds={accentedMetricIds}
+          barMetricIds={barMetricIds}
+          heatmapMetricIds={heatmapMetricIds}
+          heatmapInvertedIds={heatmapInvertedIds}
+          colorizeMetrics={colorizeMetrics}
+          numberAlign={numberAlign}
+          pinnedMetricIds={pinnedMetricIds}
+          columnGroups={columnGroups}
+          density={viewPrefs.density}
+          fontScale={viewPrefs.fontScale}
           sourceDimension={sourceMode ? sourceDimension : undefined}
           drilldownDimension={sourceMode ? drilldownDimension : undefined}
           onDrilldownDimensionChange={sourceMode ? setDrilldownDimension : undefined}

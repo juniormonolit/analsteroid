@@ -21,6 +21,7 @@ interface Props {
   grouping: 'none' | 'team';
   search: string;
   currentPlanN: number;
+  canEdit: boolean;
   onSaveCell: (login: string, month: string, plan_shipments: number, plan_n: number) => void;
 }
 
@@ -31,16 +32,19 @@ function fmt(n: number) {
 function EditableCell({
   value,
   planN,
+  canEdit,
   onSave,
 }: {
   value: number | undefined;
   planN: number;
+  canEdit: boolean;
   onSave: (v: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
   function startEdit() {
+    if (!canEdit) return;
     setDraft(value !== undefined ? String(value) : '');
     setEditing(true);
   }
@@ -75,7 +79,7 @@ function EditableCell({
   return (
     <div
       onClick={startEdit}
-      className="flex items-center justify-center cursor-pointer hover:text-[var(--color-accent)] transition-colors"
+      className={`flex items-center justify-center transition-colors ${canEdit ? 'cursor-pointer hover:text-[var(--color-accent)]' : ''}`}
     >
       <span className="text-xs text-[var(--color-text)]">
         {value !== undefined ? fmt(value) : '—'}
@@ -98,7 +102,7 @@ interface TeamGroup {
   members: Employee[];
 }
 
-export function PlansTable({ employees, months, plans, grouping, search, currentPlanN, onSaveCell }: Props) {
+export function PlansTable({ employees, months, plans, grouping, search, currentPlanN, canEdit, onSaveCell }: Props) {
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(new Set());
 
   const filtered = employees.filter(e => {
@@ -134,6 +138,7 @@ export function PlansTable({ employees, months, plans, grouping, search, current
               <EditableCell
                 value={planData?.plan_shipments}
                 planN={currentPlanN}
+                canEdit={canEdit}
                 onSave={v => onSaveCell(emp.login, m, v, currentPlanN)}
               />
             </td>,

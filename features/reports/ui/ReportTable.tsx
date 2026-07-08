@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, MoreVertical } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, MoreVertical, GripVertical } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
@@ -111,7 +111,7 @@ function TrendArrow({ deltaPct, delta, metric, threshold }: {
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-interface RowDeltas {
+export interface RowDeltas {
   dimensionId: string;
   dimensionName: string;
   dimensionSubtitle?: string;
@@ -143,6 +143,7 @@ interface Props {
   onMetricRemove?: (metricId: string) => void;
   onMetricMoveLeft?: (metricId: string) => void;
   onMetricMoveRight?: (metricId: string) => void;
+  onMetricReorder?: (draggedId: string, targetId: string) => void;
   onMetricConfigure?: (metricId: string) => void;
   pinnedMetricIds?: string[];
   onMetricPinToggle?: (metricId: string) => void;
@@ -160,6 +161,10 @@ interface Props {
   columnGroups?: { name: string; metricIds: string[] }[];
   density?: 'compact' | 'normal' | 'relaxed';
   fontScale?: number;
+  // Дрилл-даун: раскрытие обычной строки произвольным контентом (список сделок).
+  // Управляется снаружи: onRowClick переключает, expandedRowIds хранит открытые.
+  expandedRowIds?: Set<string>;
+  renderExpandedRow?: (row: RowDeltas) => React.ReactNode;
 }
 
 function thresholdFor(m: Metric, metricThresholdOverrides: Record<string, number>): number {
@@ -180,6 +185,7 @@ export function ReportTable({
   onMetricRemove,
   onMetricMoveLeft,
   onMetricMoveRight,
+  onMetricReorder,
   onMetricConfigure,
   pinnedMetricIds = [],
   onMetricPinToggle,
@@ -197,6 +203,8 @@ export function ReportTable({
   columnGroups = [],
   density = 'normal',
   fontScale = 1,
+  expandedRowIds,
+  renderExpandedRow,
 }: Props) {
   const [sortByInner, setSortByInner] = useState<string | null>(null);
   const [sortDirInner, setSortDirInner] = useState<'asc' | 'desc'>('desc');
@@ -204,6 +212,8 @@ export function ReportTable({
   const sortBy = controlled ? (sortByProp ?? null) : sortByInner;
   const sortDir = controlled ? (sortDirProp ?? 'desc') : sortDirInner;
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [draggedMetricId, setDraggedMetricId] = useState<string | null>(null);
+  const [dragOverMetricId, setDragOverMetricId] = useState<string | null>(null);
 
   // При группировке по отделу/филиалу группы свёрнуты по умолчанию. Флаг взводится
   // при смене группировки и гасится, когда пришли строки с группами — так дефолт
@@ -565,6 +575,9 @@ export function ReportTable({
     });
   }
 
+  // Полная ширина строки-раскрытия: колонка измерения + все листовые колонки метрик
+  const totalLeafCols = 1 + displayMetrics.reduce((s, m) => s + colSpanFor(m.id), 0);
+
   function renderRow(row: RowDeltas, i: number, isChild = false): React.ReactNode {
     const isGroupRow = row.isGroup;
     const isCollapsed = collapsed.has(row.dimensionId);
@@ -572,6 +585,8 @@ export function ReportTable({
     const canClickRow = !isGroupRow && !!onRowClick;
     // Групповая строка: клик по названию сворачивает/разворачивает группу
     const canToggleRow = isGroupRow && hasChildren;
+    const expandable = !isGroupRow && !!renderExpandedRow;
+    const isExpanded = expandable && !!expandedRowIds?.has(row.dimensionId);
 
     const isStripe = !isGroupRow && i % 2 === 1;
     const stickyBg = isGroupRow
@@ -604,6 +619,10 @@ export function ReportTable({
                 >
                   {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                 </button>
+              ) : expandable ? (
+                <span className="w-5 flex-shrink-0 text-[var(--color-text-muted)]">
+                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </span>
               ) : (
                 <span className="w-5 flex-shrink-0" />
               )}
@@ -625,6 +644,14 @@ export function ReportTable({
           </td>
           {renderMetricCells(row, true, stickyBg)}
         </tr>
+
+        {isExpanded && (
+          <tr>
+            <td colSpan={totalLeafCols} className="p-0 border-b border-[var(--color-border)]">
+              {renderExpandedRow!(row)}
+            </td>
+          </tr>
+        )}
 
         {isGroupRow && hasChildren && !isCollapsed &&
           row.children!.map((child, ci) => renderRow(child, ci, true))
@@ -736,11 +763,25 @@ export function ReportTable({
                   key={m.id}
                   ref={mainRef}
                   colSpan={colSpanFor(m.id)}
-                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''}`}
+                  draggable={!!onMetricReorder}
+                  onDragStart={onMetricReorder ? e => { setDraggedMetricId(m.id); e.dataTransfer.effectAllowed = 'move'; } : undefined}
+                  onDragOver={onMetricReorder ? e => { if (draggedMetricId && draggedMetricId !== m.id) { e.preventDefault(); setDragOverMetricId(m.id); } } : undefined}
+                  onDrop={onMetricReorder ? e => {
+                    e.preventDefault();
+                    if (draggedMetricId && draggedMetricId !== m.id) onMetricReorder(draggedMetricId, m.id);
+                    setDraggedMetricId(null); setDragOverMetricId(null);
+                  } : undefined}
+                  onDragEnd={onMetricReorder ? () => { setDraggedMetricId(null); setDragOverMetricId(null); } : undefined}
+                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''} ${onMetricReorder ? 'cursor-grab' : ''} ${draggedMetricId === m.id ? 'opacity-40' : ''} ${dragOverMetricId === m.id && draggedMetricId !== m.id ? 'border-l-2 border-l-[var(--color-accent)]' : ''}`}
                   style={{ ...thSize, ...colorizeStyle(m), ...accentStyle(m.id) }}
                 >
                   {colorizeBar(m)}
                   {m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
+                  {onMetricReorder && (
+                    <span className="hover-reveal absolute top-1 left-1 z-10 text-[var(--color-text-muted)] cursor-grab">
+                      <GripVertical size={12} />
+                    </span>
+                  )}
                   {/* Menu pinned to the top-right corner: hover на десктопе, всегда виден на таче */}
                   {hasMenu && (
                     <span className="hover-reveal absolute top-1 right-1 z-10">

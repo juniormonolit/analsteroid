@@ -2,6 +2,7 @@
  * Sync deal product rows from Bitrix for a given month.
  * Usage: node scripts/sync-product-rows.mjs [YYYY-MM]
  * Default: current month.
+ * Requires BITRIX_WEBHOOK_2_URL in .env.local (or exported in shell).
  *
  * Rate: 1 batch (50 deals) per 15 sec → ~30 min for 6000 deals.
  */
@@ -9,8 +10,15 @@
 import pg from 'pg';
 import https from 'https';
 import fs from 'fs';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+require('@next/env').loadEnvConfig(process.cwd());
 
-const BITRIX_WEBHOOK = 'https://td.monolit-crm.ru/rest/2098/m1kylfqzxkzq17mj';
+const BITRIX_WEBHOOK = (process.env.BITRIX_WEBHOOK_2_URL || '').replace(/\/+$/, '');
+if (!BITRIX_WEBHOOK) {
+  console.error('BITRIX_WEBHOOK_2_URL не задан');
+  process.exit(1);
+}
 const BATCH_SIZE = 50;
 const PAUSE_MS = 15_000;
 

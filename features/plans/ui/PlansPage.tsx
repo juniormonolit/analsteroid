@@ -133,7 +133,7 @@ function buildMonthsList(plans: Map<string, Map<string, { plan_shipments: number
   return Array.from(months).sort();
 }
 
-export function PlansPage() {
+export function PlansPage({ canEdit }: { canEdit: boolean }) {
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [grouping, setGrouping] = useState<'none' | 'team'>('none');
@@ -323,7 +323,9 @@ export function PlansPage() {
         {/* Plan N editor */}
         <div className="flex items-center gap-2 ml-2">
           <span className="text-xs text-[var(--color-text-muted)]">Коэф. план продаж:</span>
-          {editingN ? (
+          {!canEdit ? (
+            <span className="text-xs font-medium text-[var(--color-text)]">N = {planN}</span>
+          ) : editingN ? (
             <input
               autoFocus
               type="number"
@@ -344,20 +346,22 @@ export function PlansPage() {
           )}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={() => { setShowExport(true); setShowImport(false); }}
-            className="px-3 py-1.5 text-sm border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-border-focus)] transition-colors"
-          >
-            Экспорт шаблона
-          </button>
-          <button
-            onClick={() => { setShowImport(true); setShowExport(false); }}
-            className="px-3 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
-          >
-            Импортировать
-          </button>
-        </div>
+        {canEdit && (
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => { setShowExport(true); setShowImport(false); }}
+              className="px-3 py-1.5 text-sm border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-border-focus)] transition-colors"
+            >
+              Экспорт шаблона
+            </button>
+            <button
+              onClick={() => { setShowImport(true); setShowExport(false); }}
+              className="px-3 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
+            >
+              Импортировать
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -368,6 +372,7 @@ export function PlansPage() {
         grouping={grouping}
         search={search}
         currentPlanN={planN}
+        canEdit={canEdit}
         onSaveCell={handleSaveCell}
       />
 

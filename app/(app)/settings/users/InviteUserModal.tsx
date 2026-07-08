@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { Modal } from '@/components/ui/Modal';
+import type { Role } from './page';
 
 interface Employee {
   bitrix_user_id: string;
@@ -10,6 +11,7 @@ interface Employee {
 }
 
 interface Props {
+  roles: Role[];
   onInvited: () => void;
   onClose: () => void;
 }
@@ -22,12 +24,12 @@ function suggestLogin(shortLogin: string | null, name: string): string {
     .replace(/^\.+|\.+$/g, '');
 }
 
-export function InviteUserModal({ onInvited, onClose }: Props) {
+export function InviteUserModal({ roles, onInvited, onClose }: Props) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Employee | null>(null);
   const [login, setLogin] = useState('');
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [roleId, setRoleId] = useState<string>(() => roles.find((r) => r.name === 'Пользователь')?.id ?? roles[0]?.id ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,7 +64,7 @@ export function InviteUserModal({ onInvited, onClose }: Props) {
           login: login.trim(),
           display_name: selected.manager_name,
           bitrix_user_id: selected.bitrix_user_id,
-          is_admin: isAdmin,
+          role_id: roleId || null,
         }),
       });
       const data = await res.json();
@@ -131,15 +133,20 @@ export function InviteUserModal({ onInvited, onClose }: Props) {
           </div>
         )}
 
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={isAdmin}
-            onChange={(e) => setIsAdmin(e.target.checked)}
-            className="accent-[var(--color-accent)] w-4 h-4"
-          />
-          <span className="text-sm text-[var(--color-text)]">Администратор</span>
-        </label>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
+            Роль
+          </label>
+          <select
+            value={roleId}
+            onChange={(e) => setRoleId(e.target.value)}
+            className="w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-base sm:text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+          >
+            {roles.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+        </div>
 
         {error && <div className="text-sm text-red-500">{error}</div>}
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { analyticsDb } from '@/lib/db/clients';
 
 const SAFE_NAME = /^[a-zA-Z0-9_]+$/;
@@ -14,8 +15,8 @@ export async function GET(
   { params }: { params: Promise<{ name: string }> }
 ) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!session.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const denied = permError(session, 'section.settings');
+  if (denied) return denied;
 
   const { name } = await params;
   if (!SAFE_NAME.test(name)) {

@@ -63,8 +63,12 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$REMOTE" "
   mkdir -p .next/standalone/.next/static
   cp -r .next/static/* .next/standalone/.next/static/
 
-  # Copy public into standalone
-  cp -r public .next/standalone/public 2>/dev/null || true
+  # Copy public into standalone (remove stale copy first: cp -r nests into an
+  # already-existing dest dir instead of replacing it)
+  if [ -d public ]; then
+    rm -rf .next/standalone/public
+    cp -r public .next/standalone/public
+  fi
 
   # Start server
   nohup bash start.sh >> app.log 2>&1 & disown

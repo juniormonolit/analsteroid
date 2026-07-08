@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { ycAnalyticsDb } from '@/lib/db/clients';
 import { invalidateMetricsCache } from '@/lib/metrics/catalog';
 
@@ -18,8 +19,8 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!session.isAdmin) return NextResponse.json({ error: 'Только для администратора' }, { status: 403 });
+  const denied = permError(session, 'section.settings');
+  if (denied) return denied;
 
   const body: { rules: { scope: string; key: string; color: string }[] } = await req.json();
   const rules = (body.rules ?? []).filter(r =>

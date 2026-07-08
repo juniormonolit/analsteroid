@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 
 export async function GET() {
@@ -14,8 +15,8 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!session.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const denied = permError(session, 'action.plans.edit');
+  if (denied) return denied;
 
   const body = await request.json() as { plan_n: number };
   const db = systemDb();

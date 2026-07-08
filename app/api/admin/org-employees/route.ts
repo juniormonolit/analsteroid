@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 
 export async function GET() {
   const session = await getSession();
-  if (!session?.isAdmin) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const denied = permError(session, 'action.users.manage');
+  if (denied) return denied;
 
   const db = systemDb();
   const res = await db.query<{

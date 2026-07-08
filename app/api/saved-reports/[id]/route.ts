@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { hasPerm } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import type { SavedReportInput } from '@/lib/saved-reports/types';
 
@@ -61,7 +62,7 @@ export async function PUT(
       body.drilldownGrouped ?? null,
       body.sourceDimension ?? null,
       body.drilldownDimension ?? null,
-      session.isAdmin ? (body.isShared ?? false) : false,
+      hasPerm(session, 'action.shared_reports.manage') ? (body.isShared ?? false) : false,
       body.heatmapInvertedIds ?? [],
       body.colorizeMetrics ?? null,
     ]
@@ -78,9 +79,17 @@ export async function DELETE(
 
   const { id } = await params;
   const db = systemDb();
-  await db.query(
-    `DELETE FROM saved_reports WHERE id = $1 AND user_login = $2`,
-    [id, session.login]
-  );
+  // Свои отчёты удаляет владелец; общие («Смекалочная») — любой с правом на общие отчёты.
+  if (hasPerm(session, 'action.shared_reports.manage')) {
+    await db.query(
+      `DELETE FROM saved_reports WHERE id = $1 AND (user_login = $2 OR is_shared = true)`,
+      [id, session.login]
+    );
+  } else {
+    await db.query(
+      `DELETE FROM saved_reports WHERE id = $1 AND user_login = $2`,
+      [id, session.login]
+    );
+  }
   return NextResponse.json({ ok: true });
 }

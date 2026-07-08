@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import * as XLSX from 'xlsx';
 
@@ -18,7 +19,8 @@ interface CleanItem {
 
 export async function POST(request: Request) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = permError(session, 'action.plans.edit');
+  if (denied) return denied;
 
   const formData = await request.formData();
   const file = formData.get('file') as File | null;

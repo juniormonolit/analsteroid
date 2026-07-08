@@ -1,14 +1,15 @@
 'use client';
-import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, ChevronDown, ChevronRight } from 'lucide-react';
+import { X, ArrowLeft } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { formatValue } from '@/lib/format';
 import type { DateRange } from '@/lib/period';
-import type { Metric } from '@/lib/metrics/types';
+import type { Metric, ComparisonDisplay } from '@/lib/metrics/types';
+import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
 
 interface Deal {
@@ -41,10 +42,23 @@ export interface DrilldownTarget {
   kind?: 'team' | 'branch' | 'total';
 }
 
+// Суб-дрилл из мини-отчёта: клик по цифре «строка × метрика» → сделки,
+// отфильтрованные по ОБОИМ измерениям и метрике.
+interface SubDrill {
+  rowName: string;
+  metricId: string;
+  metricName?: string;
+  managerId?: string;
+  productGroup?: string;
+  sourceDim?: SourceDimension;
+  sourceVal?: string;
+}
+
 interface Props {
   target: DrilldownTarget;
   dimensionType: 'manager' | 'product-group' | 'source';
   period: DateRange;
+  comparison?: DateRange;
   dealScope: string;
   clientType?: string;
   productGroupMode: 'kc' | 'by_max';
@@ -66,6 +80,24 @@ interface Props {
   // Клик по строке сделки → карточка (проставляется обёрткой DrilldownDrawer)
   onDealOpen?: (id: number) => void;
   onClose: () => void;
+  // Настройки отображения метрик — те же, что в основном отчёте (тепловая карта,
+  // подсветки, режим сравнения и т.д.); мини-отчёт рендерится тем же ReportTable.
+  comparisonDisplay?: ComparisonDisplay;
+  metricDisplayModes?: Record<string, ComparisonDisplay>;
+  comparisonThreshold?: number;
+  highlights?: Record<string, MetricHighlightConfig>;
+  metricDecimalOverrides?: Record<string, number>;
+  metricThresholdOverrides?: Record<string, number>;
+  accentedMetricIds?: string[];
+  barMetricIds?: string[];
+  heatmapMetricIds?: string[];
+  heatmapInvertedIds?: string[];
+  colorizeMetrics?: boolean;
+  numberAlign?: 'left' | 'center' | 'right';
+  pinnedMetricIds?: string[];
+  columnGroups?: { name: string; metricIds: string[] }[];
+  density?: 'compact' | 'normal' | 'relaxed';
+  fontScale?: number;
 }
 
 function fmt(s: string | null) {
@@ -94,7 +126,7 @@ function sortDealsBy(arr: Deal[], dealSort: DealSort): Deal[] {
   });
 }
 
-// ── Deal sub-table (revealed when a product group is expanded) ──────────────
+// ── Deal sub-table (row expansion in the mini-report / flat list) ───────────
 function dealCell(deal: Deal, key: string) {
   const def = DEAL_FIELDS.find(f => f.key === key);
   const v = (deal as unknown as Record<string, unknown>)[key] as string | null;
@@ -165,555 +197,19 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
   );
 }
 
-// ── Manager drilldown = mini-report: product groups × main-report metrics ───
-function ManagerMiniReport({ target, period, dealScope, clientType, productGroupMode, metricIds, dealFields, sortBy, sortDir, onDealOpen }: Props) {
-  const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
-  const [expanded, setExpanded] = useState<Set<string>>(new Set()); // all collapsed by default
-  const [dealSort, setDealSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(null);
-  // Internal sort for the mini-report rows (overrides inherited sortBy from main report)
-  const [drillSort, setDrillSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(
-    sortBy ? { key: sortBy, dir: sortDir ?? 'desc' } : null
-  );
-  function handleDrillSort(metricId: string) {
-    setDrillSort(prev =>
-      prev?.key === metricId
-        ? { key: metricId, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
-        : { key: metricId, dir: 'desc' }
-    );
-  }
-  function onDealSort(k: string) {
-    setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
-  }
-  const sortDeals = (arr: Deal[]) => sortDealsBy(arr, dealSort);
-
-  const fromIso = period.from.toISOString();
-  const toIso   = period.to.toISOString();
-
-  const { data: groupData, isLoading: groupsLoading } = useQuery({
-    queryKey: ['drill-groups', target.id, fromIso, toIso, dealScope, clientType, productGroupMode, metricIds],
-    queryFn: async () => {
-      const res = await fetch('/api/reports/run', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reportSlug: 'by-product-groups',
-          managerId: target.id,
-          period: { from: fromIso, to: toIso },
-          comparisonPeriod: { from: fromIso, to: toIso }, // drill shows current only
-          metricIds,
-          dealScope,
-          clientType,
-          productGroupMode,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
-  });
-
-  const dealParams = new URLSearchParams({
-    from: fromIso, to: toIso, scope: dealScope, productGroupMode, managerId: target.id,
-    ...(clientType ? { clientType } : {}),
-  });
-  const { data: dealData } = useQuery({
-    queryKey: ['drill-deals', target.id, fromIso, toIso, dealScope, clientType, productGroupMode],
-    queryFn: () => fetch(`/api/reports/deals?${dealParams}`).then(r => r.json()),
-  });
-
-  const metrics: Metric[] = groupData?.metrics ?? [];
-  type GRow = { dimensionId: string; dimensionName: string; deltas: Record<string, { current: number | null }> };
-  const rawGroups: GRow[] = groupData?.rows ?? [];
-  const totals: Record<string, number | null> = groupData?.totals ?? {};
-  const deals: Deal[] = dealData?.deals ?? [];
-
-  const groups = useMemo(() => {
-    const arr = [...rawGroups];
-    const s = drillSort;
-    if (s) {
-      arr.sort((a, b) => {
-        const av = a.deltas[s.key]?.current ?? -Infinity;
-        const bv = b.deltas[s.key]?.current ?? -Infinity;
-        return (s.dir === 'asc' ? 1 : -1) * (av - bv);
-      });
-    }
-    return arr;
-  }, [rawGroups, drillSort]);
-
-  const dealsByGroup = useMemo(() => {
-    const m = new Map<string, Deal[]>();
-    for (const d of deals) {
-      const k = d.product_group_display;
-      if (!m.has(k)) m.set(k, []);
-      m.get(k)!.push(d);
-    }
-    return m;
-  }, [deals]);
-
-  function toggle(id: string) {
-    setExpanded(prev => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id); else n.add(id);
-      return n;
-    });
-  }
-
-  if (groupsLoading) {
-    return <div className="p-6 space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-10 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
-  }
-  if (groups.length === 0) {
-    return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">Нет данных за выбранный период</div>;
-  }
-
-  return (
-    <div className="overflow-auto h-full">
-      <table className="w-full text-sm border-collapse">
-        <thead className="sticky top-0 z-20 bg-[var(--color-table-header)]">
-          <tr>
-            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[300px] min-w-[300px] max-md:w-[var(--report-dim-col)] max-md:min-w-[var(--report-dim-col)] max-md:max-w-[var(--report-dim-col)]">
-              Товарная группа
-            </th>
-            {metrics.map(m => (
-              <th key={m.id}
-                  className="text-center px-3 py-2 text-xs font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] whitespace-normal leading-tight cursor-pointer hover:text-[var(--color-accent)] select-none"
-                  style={{ minWidth: 90 }}
-                  onClick={() => handleDrillSort(m.id)}>
-                {m.nameRu}
-                {drillSort?.key === m.id && <span className="ml-0.5 text-[var(--color-accent)]">{drillSort.dir === 'asc' ? '↑' : '↓'}</span>}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {groups.map((g, i) => {
-            const isOpen = expanded.has(g.dimensionId);
-            const gDeals = dealsByGroup.get(g.dimensionName) ?? [];
-            return (
-              <Fragment key={g.dimensionId}>
-                <tr
-                  className={`report-row border-b border-[var(--color-border)] cursor-pointer ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : 'bg-[var(--color-bg-surface)]'}`}
-                  onClick={() => toggle(g.dimensionId)}
-                >
-                  <td className={`sticky left-0 z-10 px-4 py-2 border-r border-[var(--color-border)] ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : 'bg-[var(--color-bg-surface)]'}`}>
-                    <span className="flex items-center gap-1.5">
-                      <span className="text-[var(--color-text-muted)] shrink-0">{isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-                      <span className="font-medium truncate">{g.dimensionName}</span>
-                      <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{gDeals.length} сд.</span>
-                    </span>
-                  </td>
-                  {metrics.map(m => (
-                    <td key={m.id} className="text-center px-3 py-2 tabular-nums whitespace-nowrap">
-                      {formatValue(g.deltas[m.id]?.current ?? null, m.dataType, m.decimalPlaces)}
-                    </td>
-                  ))}
-                </tr>
-                {isOpen && (
-                  <tr>
-                    <td colSpan={metrics.length + 1} className="p-0 border-b border-[var(--color-border)]">
-                      {gDeals.length ? <DealsTable deals={sortDeals(gDeals)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} /> : <div className="px-6 py-3 text-xs text-[var(--color-text-muted)]">Нет сделок в этой группе за период</div>}
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-          <tr className="font-semibold text-[var(--color-text)]">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] uppercase tracking-wider text-[12px]">
-              <span className="flex items-center gap-2">
-                <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
-                Итого
-              </span>
-            </td>
-            {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)] border-t-2 border-t-[var(--color-accent)]">
-                {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
-              </td>
-            ))}
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Product-group drilldown = mini-report: managers × main-report metrics ───
-function ProductGroupMiniReport({ target, period, dealScope, clientType, productGroupMode, metricIds, departmentIds, dealFields, sortBy, sortDir, onDealOpen }: Props) {
-  const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [dealSort, setDealSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(null);
-  const [drillSort, setDrillSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(
-    sortBy ? { key: sortBy, dir: sortDir ?? 'desc' } : null
-  );
-  function handleDrillSort(metricId: string) {
-    setDrillSort(prev =>
-      prev?.key === metricId
-        ? { key: metricId, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
-        : { key: metricId, dir: 'desc' }
-    );
-  }
-  function onDealSort(k: string) {
-    setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
-  }
-  const sortDeals = (arr: Deal[]) => sortDealsBy(arr, dealSort);
-
-  const fromIso = period.from.toISOString();
-  const toIso   = period.to.toISOString();
-
-  const { data: managerData, isLoading } = useQuery({
-    queryKey: ['drill-managers', target.id, fromIso, toIso, dealScope, clientType, productGroupMode, metricIds, departmentIds],
-    queryFn: async () => {
-      const res = await fetch('/api/reports/run', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reportSlug: 'by-managers',
-          productGroupId: target.id,
-          productGroupMode,
-          period: { from: fromIso, to: toIso },
-          comparisonPeriod: { from: fromIso, to: toIso },
-          metricIds,
-          dealScope,
-          clientType,
-          departmentIds: departmentIds?.length ? departmentIds : undefined,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
-  });
-
-  const dealParams = new URLSearchParams({
-    from: fromIso, to: toIso, scope: dealScope, productGroupMode, productGroup: target.id,
-    ...(clientType ? { clientType } : {}),
-  });
-  const { data: dealData } = useQuery({
-    queryKey: ['drill-deals-pg', target.id, fromIso, toIso, dealScope, clientType, productGroupMode],
-    queryFn: () => fetch(`/api/reports/deals?${dealParams}`).then(r => r.json()),
-  });
-
-  const metrics: Metric[] = managerData?.metrics ?? [];
-  type MRow = { dimensionId: string; dimensionName: string; dimensionSubtitle?: string; deltas: Record<string, { current: number | null }> };
-  const rawManagers: MRow[] = managerData?.rows ?? [];
-  const totals: Record<string, number | null> = managerData?.totals ?? {};
-  const deals: Deal[] = dealData?.deals ?? [];
-
-  const managers = useMemo(() => {
-    const arr = [...rawManagers];
-    const s = drillSort;
-    if (s) {
-      arr.sort((a, b) => {
-        const av = a.deltas[s.key]?.current ?? -Infinity;
-        const bv = b.deltas[s.key]?.current ?? -Infinity;
-        return (s.dir === 'asc' ? 1 : -1) * (av - bv);
-      });
-    }
-    return arr;
-  }, [rawManagers, drillSort]);
-
-  // Group all deals for this product group by manager_id
-  const dealsByManager = useMemo(() => {
-    const m = new Map<string, Deal[]>();
-    for (const d of deals) {
-      if (!m.has(d.manager_id)) m.set(d.manager_id, []);
-      m.get(d.manager_id)!.push(d);
-    }
-    return m;
-  }, [deals]);
-
-  function toggle(id: string) {
-    setExpanded(prev => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id); else n.add(id);
-      return n;
-    });
-  }
-
-  if (isLoading) {
-    return <div className="p-6 space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-10 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
-  }
-  if (managers.length === 0) {
-    return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">Нет данных за выбранный период</div>;
-  }
-
-  return (
-    <div className="overflow-auto h-full">
-      <table className="w-full text-sm border-collapse">
-        <thead className="sticky top-0 z-20 bg-[var(--color-table-header)]">
-          <tr>
-            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[260px] min-w-[260px] max-md:w-[var(--report-dim-col)] max-md:min-w-[var(--report-dim-col)] max-md:max-w-[var(--report-dim-col)]">
-              Менеджер
-            </th>
-            {metrics.map(m => (
-              <th key={m.id}
-                  className="text-center px-3 py-2 text-xs font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] whitespace-normal leading-tight cursor-pointer hover:text-[var(--color-accent)] select-none"
-                  style={{ minWidth: 90 }}
-                  onClick={() => handleDrillSort(m.id)}>
-                {m.nameRu}
-                {drillSort?.key === m.id && <span className="ml-0.5 text-[var(--color-accent)]">{drillSort.dir === 'asc' ? '↑' : '↓'}</span>}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {managers.map((mgr, i) => {
-            const isOpen = expanded.has(mgr.dimensionId);
-            const mgrDeals = dealsByManager.get(mgr.dimensionId) ?? [];
-            return (
-              <Fragment key={mgr.dimensionId}>
-                <tr
-                  className={`report-row border-b border-[var(--color-border)] cursor-pointer ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : 'bg-[var(--color-bg-surface)]'}`}
-                  onClick={() => toggle(mgr.dimensionId)}
-                >
-                  <td className={`sticky left-0 z-10 px-4 py-2 border-r border-[var(--color-border)] ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : 'bg-[var(--color-bg-surface)]'}`}>
-                    <span className="flex items-center gap-1.5">
-                      <span className="text-[var(--color-text-muted)] shrink-0">{isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-                      <span className="font-medium truncate">{mgr.dimensionName}</span>
-                      {mgr.dimensionSubtitle && <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{mgr.dimensionSubtitle}</span>}
-                      <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{mgrDeals.length} сд.</span>
-                    </span>
-                  </td>
-                  {metrics.map(m => (
-                    <td key={m.id} className="text-center px-3 py-2 tabular-nums whitespace-nowrap">
-                      {formatValue(mgr.deltas[m.id]?.current ?? null, m.dataType, m.decimalPlaces)}
-                    </td>
-                  ))}
-                </tr>
-                {isOpen && (
-                  <tr>
-                    <td colSpan={metrics.length + 1} className="p-0 border-b border-[var(--color-border)]">
-                      {mgrDeals.length ? <DealsTable deals={sortDeals(mgrDeals)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} /> : <div className="px-6 py-3 text-xs text-[var(--color-text-muted)]">Нет сделок в этой группе за период</div>}
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-          <tr className="font-semibold text-[var(--color-text)]">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] uppercase tracking-wider text-[12px]">
-              <span className="flex items-center gap-2">
-                <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
-                Итого
-              </span>
-            </td>
-            {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)] border-t-2 border-t-[var(--color-accent)]">
-                {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
-              </td>
-            ))}
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Source drilldown = mini-report: second dimension × main-report metrics ──
-interface SourceInfoLite { source_id: string; contact_type: string | null; branch: string | null; platform: string | null; brand: string | null; ad_channel: string | null; channel_group: string | null }
-
-function SourceMiniReport({ target, period, dealScope, clientType, productGroupMode, metricIds, dealFields, sortBy, sortDir, sourceDimension, drilldownDimension, onDealOpen }: Props) {
-  const dim: DrilldownDimension = drilldownDimension ?? 'contact_type';
-  const mainDim = sourceDimension ?? 'brand';
-  const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [dealSort, setDealSort] = useState<DealSort>(null);
-  function onDealSort(k: string) {
-    setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
-  }
-  const sortDeals = (arr: Deal[]) => sortDealsBy(arr, dealSort);
-
-  const fromIso = period.from.toISOString();
-  const toIso   = period.to.toISOString();
-
-  const { data: runData, isLoading } = useQuery({
-    queryKey: ['drill-src', mainDim, target.id, dim, fromIso, toIso, dealScope, clientType, metricIds],
-    queryFn: async () => {
-      const res = await fetch('/api/reports/run', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reportSlug: dim === 'manager' ? 'by-managers' : 'by-sources',
-          sourceDimension: dim === 'manager' ? undefined : dim,
-          sourceFilter: { dimension: mainDim, value: target.id },
-          period: { from: fromIso, to: toIso },
-          comparisonPeriod: { from: fromIso, to: toIso },
-          metricIds,
-          dealScope,
-          clientType,
-        }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
-    },
-  });
-
-  const dealParams = new URLSearchParams({
-    from: fromIso, to: toIso, scope: dealScope, productGroupMode,
-    sourceDim: mainDim, sourceVal: target.id,
-    ...(clientType ? { clientType } : {}),
-  });
-  const { data: dealData } = useQuery({
-    queryKey: ['drill-deals-src', mainDim, target.id, fromIso, toIso, dealScope, clientType],
-    queryFn: () => fetch(`/api/reports/deals?${dealParams}`).then(r => r.json()),
-  });
-
-  // Справочник источников + карта менеджер→филиал — для раскладки сделок по второй сущности
-  const { data: srcCatalog } = useQuery({
-    queryKey: ['marketing-sources'],
-    queryFn: () => fetch('/api/catalog/marketing-sources').then(r => r.json()) as Promise<{ sources: SourceInfoLite[]; managerBranches: Record<string, string> }>,
-    staleTime: 10 * 60 * 1000,
-    enabled: dim !== 'manager',
-  });
-  const srcMap = useMemo(() => new Map((srcCatalog?.sources ?? []).map(s => [s.source_id, s])), [srcCatalog]);
-  const mgrBranches = srcCatalog?.managerBranches ?? {};
-
-  const metrics: Metric[] = runData?.metrics ?? [];
-  type RRow = { dimensionId: string; dimensionName: string; dimensionSubtitle?: string; deltas: Record<string, { current: number | null }> };
-  const rawRows: RRow[] = runData?.rows ?? [];
-  const totals: Record<string, number | null> = runData?.totals ?? {};
-  const deals: Deal[] = dealData?.deals ?? [];
-
-  const rows = useMemo(() => {
-    const arr = [...rawRows];
-    if (sortBy) {
-      arr.sort((a, b) => {
-        const av = a.deltas[sortBy]?.current ?? -Infinity;
-        const bv = b.deltas[sortBy]?.current ?? -Infinity;
-        return (sortDir === 'asc' ? 1 : -1) * (av - bv);
-      });
-    }
-    return arr;
-  }, [rawRows, sortBy, sortDir]);
-
-  // Ключ бакета сделки = dimensionId строки мини-отчёта
-  const dealsByRow = useMemo(() => {
-    const m = new Map<string, Deal[]>();
-    for (const d of deals) {
-      let key: string;
-      if (dim === 'manager') key = d.manager_id;
-      else if (dim === 'branch') key = mgrBranches[d.manager_id] ?? UNDEFINED_LABEL; // филиал = по менеджеру сделки
-      else if (dim === 'source') key = d.source_id ?? '__null__';
-      else if (!d.source_id) key = NO_SOURCE_LABEL;
-      else {
-        const info = srcMap.get(d.source_id);
-        key = info ? (info[dim] ?? UNDEFINED_LABEL) : UNDEFINED_LABEL;
-      }
-      if (!m.has(key)) m.set(key, []);
-      m.get(key)!.push(d);
-    }
-    return m;
-  }, [deals, dim, srcMap, mgrBranches]);
-
-  function toggle(id: string) {
-    setExpanded(prev => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id); else n.add(id);
-      return n;
-    });
-  }
-
-  if (isLoading) {
-    return <div className="p-6 space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-10 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
-  }
-  if (rows.length === 0) {
-    return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">Нет данных за выбранный период</div>;
-  }
-
-  return (
-    <div className="overflow-auto h-full">
-      <table className="w-full text-sm border-collapse">
-        <thead className="sticky top-0 z-20 bg-[var(--color-table-header)]">
-          <tr>
-            <th className="report-thead sticky left-0 z-30 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] w-[280px] min-w-[280px] max-md:w-[var(--report-dim-col)] max-md:min-w-[var(--report-dim-col)] max-md:max-w-[var(--report-dim-col)]">
-              {dimensionLabel(dim)}
-            </th>
-            {metrics.map(m => (
-              <th key={m.id} className="text-center px-3 py-2 text-xs font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] whitespace-normal leading-tight" style={{ minWidth: 90 }}>
-                {m.nameRu}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => {
-            const isOpen = expanded.has(row.dimensionId);
-            const rowDeals = dealsByRow.get(row.dimensionId) ?? [];
-            return (
-              <Fragment key={row.dimensionId}>
-                <tr
-                  className={`report-row border-b border-[var(--color-border)] cursor-pointer ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : 'bg-[var(--color-bg-surface)]'}`}
-                  onClick={() => toggle(row.dimensionId)}
-                >
-                  <td className={`sticky left-0 z-10 px-4 py-2 border-r border-[var(--color-border)] ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : 'bg-[var(--color-bg-surface)]'}`}>
-                    <span className="flex items-center gap-1.5">
-                      <span className="text-[var(--color-text-muted)] shrink-0">{isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</span>
-                      <span className="font-medium truncate" title={row.dimensionName}>{row.dimensionName}</span>
-                      {row.dimensionSubtitle && <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{row.dimensionSubtitle}</span>}
-                      <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">{rowDeals.length} сд.</span>
-                    </span>
-                  </td>
-                  {metrics.map(m => (
-                    <td key={m.id} className="text-center px-3 py-2 tabular-nums whitespace-nowrap">
-                      {formatValue(row.deltas[m.id]?.current ?? null, m.dataType, m.decimalPlaces)}
-                    </td>
-                  ))}
-                </tr>
-                {isOpen && (
-                  <tr>
-                    <td colSpan={metrics.length + 1} className="p-0 border-b border-[var(--color-border)]">
-                      {rowDeals.length ? <DealsTable deals={sortDeals(rowDeals)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} /> : <div className="px-6 py-3 text-xs text-[var(--color-text-muted)]">Нет сделок за период</div>}
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            );
-          })}
-          <tr className="font-semibold text-[var(--color-text)]">
-            <td className="sticky left-0 bottom-0 z-30 bg-[var(--color-totals-bg)] px-4 py-2.5 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] uppercase tracking-wider text-[12px]">
-              <span className="flex items-center gap-2">
-                <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
-                Итого
-              </span>
-            </td>
-            {metrics.map(m => (
-              <td key={m.id} className="sticky bottom-0 z-20 text-center px-3 py-2.5 tabular-nums whitespace-nowrap bg-[var(--color-totals-bg)] border-t-2 border-t-[var(--color-accent)]">
-                {formatValue(totals[m.id] ?? null, m.dataType, m.decimalPlaces)}
-              </td>
-            ))}
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
-function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen }: Props) {
+// ── Плоский список сделок по готовому набору query-параметров ───────────────
+function DealsListBody({ query, dealFields, onDealOpen }: {
+  query: URLSearchParams; dealFields?: string[]; onDealOpen?: (id: number) => void;
+}) {
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const [dealSort, setDealSort] = useState<DealSort>(null);
   function onDealSort(k: string) {
     setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
   }
-
-  const fromIso = period.from.toISOString();
-  const toIso   = period.to.toISOString();
-  // Групповые цели: отдел → teamId; филиал → менеджерское измерение branch;
-  // «Итого» → весь срез (с фильтрами отчёта по отделам и типу аккаунтов)
-  const dimensionParams: Record<string, string> =
-    target.kind === 'team'   ? { teamId: target.id }
-    : target.kind === 'branch' ? { sourceDim: 'branch', sourceVal: target.id }
-    : target.kind === 'total'  ? {
-        all: '1',
-        ...(departmentIds?.length ? { departmentIds: departmentIds.join(',') } : {}),
-        ...(accountType && accountType !== 'all' ? { accountType } : {}),
-      }
-    : dimensionType === 'manager' ? { managerId: target.id }
-    : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
-    : { productGroup: target.id };
-  const params = new URLSearchParams({
-    from: fromIso, to: toIso, scope: dealScope, productGroupMode,
-    ...(clientType ? { clientType } : {}),
-    ...dimensionParams,
-    ...(target.metricId ? { metricFilter: target.metricId } : {}),
-  });
+  const qs = query.toString();
   const { data, isLoading } = useQuery({
-    queryKey: ['drill-deals-flat', dimensionType, sourceDimension, target.kind, target.id, target.metricId, fromIso, toIso, dealScope, clientType, productGroupMode, departmentIds, accountType],
-    queryFn: () => fetch(`/api/reports/deals?${params}`).then(r => r.json()),
+    queryKey: ['drill-deals-flat', qs],
+    queryFn: () => fetch(`/api/reports/deals?${qs}`).then(r => r.json()),
   });
   const deals: Deal[] = data?.deals ?? [];
   const total = deals.reduce((s, d) => s + (Number(d.amount) || 0), 0);
@@ -736,10 +232,270 @@ function FlatDealsView({ target, dimensionType, period, dealScope, clientType, p
   );
 }
 
+// Общие query-параметры дрилл-даун сделок. ВАЖНО: фильтр отделов передаётся всегда
+// (отчёт применяет его к цифрам — сделки обязаны совпадать); тип аккаунтов — только
+// для отчёта по менеджерам (в остальных отчётах движок его игнорирует).
+function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | 'productGroupMode' | 'departmentIds' | 'accountType' | 'dimensionType'>): Record<string, string> {
+  return {
+    from: p.period.from.toISOString(),
+    to: p.period.to.toISOString(),
+    scope: p.dealScope,
+    productGroupMode: p.productGroupMode,
+    ...(p.clientType ? { clientType: p.clientType } : {}),
+    ...(p.dimensionType !== 'source' && p.departmentIds?.length ? { departmentIds: p.departmentIds.join(',') } : {}),
+    ...(p.dimensionType === 'manager' && p.accountType && p.accountType !== 'all' ? { accountType: p.accountType } : {}),
+  };
+}
+
+// ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
+function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen }: Props) {
+  // Групповые цели: отдел → teamId; филиал → менеджерское измерение branch;
+  // «Итого» → весь срез (фильтры отчёта по отделам/типу аккаунтов — в baseDealParams)
+  const dimensionParams: Record<string, string> =
+    target.kind === 'team'   ? { teamId: target.id }
+    : target.kind === 'branch' ? { sourceDim: 'branch', sourceVal: target.id }
+    : target.kind === 'total'  ? { all: '1' }
+    : dimensionType === 'manager' ? { managerId: target.id }
+    : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
+    : { productGroup: target.id };
+  const params = new URLSearchParams({
+    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType }),
+    ...dimensionParams,
+    ...(target.metricId ? { metricFilter: target.metricId } : {}),
+  });
+  return <DealsListBody query={params} dealFields={dealFields} onDealOpen={onDealOpen} />;
+}
+
+// ── Суб-дрилл: сделки по паре «цель × строка мини-отчёта» + метрика ─────────
+function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
+  const { sub, onBack, period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFields, onDealOpen } = props;
+  const params = new URLSearchParams({
+    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType }),
+    ...(sub.managerId ? { managerId: sub.managerId } : {}),
+    ...(sub.productGroup !== undefined ? { productGroup: sub.productGroup } : {}),
+    ...(sub.sourceDim && sub.sourceVal !== undefined ? { sourceDim: sub.sourceDim, sourceVal: sub.sourceVal } : {}),
+    metricFilter: sub.metricId,
+  });
+  return (
+    <div className="h-full flex flex-col">
+      <div className="flex items-center gap-2 px-4 sm:px-6 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
+        <button onClick={onBack} className="tap-target flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">
+          <ArrowLeft size={14} /> Назад
+        </button>
+        <span className="text-sm font-medium text-[var(--color-text)] truncate">{sub.rowName}</span>
+        <span className="px-2 py-0.5 text-[11px] rounded-full bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] text-[var(--color-accent)] shrink-0">
+          {sub.metricName ?? sub.metricId}
+        </span>
+      </div>
+      <div className="flex-1 overflow-hidden">
+        <DealsListBody query={params} dealFields={dealFields} onDealOpen={onDealOpen} />
+      </div>
+    </div>
+  );
+}
+
+// ── Мини-отчёт дрилл-дауна ───────────────────────────────────────────────────
+// Одна таблица на все три типа цели (менеджер / товарная группа / источник):
+// рендерится тем же ReportTable, что и основной отчёт, — со всеми настройками
+// метрик (тепловая карта, подсветки, режимы сравнения, десятичные, акценты).
+interface SourceInfoLite { source_id: string; contact_type: string | null; branch: string | null; platform: string | null; brand: string | null; ad_channel: string | null; channel_group: string | null }
+
+function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
+  const {
+    target, dimensionType, period, comparison, dealScope, clientType, productGroupMode,
+    metricIds, departmentIds, dealFields, sortBy, sortDir, sourceDimension, drilldownDimension,
+    onDealOpen, onCellDrill,
+  } = props;
+  const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
+  const mainDim = sourceDimension ?? 'brand';
+  const dim: DrilldownDimension = drilldownDimension ?? 'contact_type';
+
+  const [expanded, setExpanded] = useState<Set<string>>(new Set()); // all collapsed by default
+  const [dealSort, setDealSort] = useState<DealSort>(null);
+  // Внутренняя сортировка мини-отчёта; стартует с сортировки основного отчёта
+  const [sort, setSort] = useState<{ key: string | null; dir: 'asc' | 'desc' }>({ key: sortBy ?? null, dir: sortDir ?? 'desc' });
+  function onDealSort(k: string) {
+    setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
+  }
+
+  const fromIso = period.from.toISOString();
+  const toIso   = period.to.toISOString();
+  // Реальный период сравнения — чтобы режимы сравнения (компакт/полный) показывали
+  // настоящие дельты, как в основном отчёте.
+  const cmpFromIso = (comparison ?? period).from.toISOString();
+  const cmpToIso   = (comparison ?? period).to.toISOString();
+
+  const runBody =
+    dimensionType === 'manager' ? {
+      reportSlug: 'by-product-groups',
+      managerId: target.id,
+      productGroupMode,
+    } : dimensionType === 'product-group' ? {
+      reportSlug: 'by-managers',
+      productGroupId: target.id,
+      productGroupMode,
+      departmentIds: departmentIds?.length ? departmentIds : undefined,
+    } : {
+      reportSlug: dim === 'manager' ? 'by-managers' : 'by-sources',
+      sourceDimension: dim === 'manager' ? undefined : dim,
+      sourceFilter: { dimension: mainDim, value: target.id },
+    };
+
+  const { data: runData, isLoading } = useQuery({
+    queryKey: ['drill-mini', dimensionType, dim, target.id, fromIso, toIso, cmpFromIso, cmpToIso, dealScope, clientType, productGroupMode, metricIds, departmentIds],
+    queryFn: async () => {
+      const res = await fetch('/api/reports/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...runBody,
+          period: { from: fromIso, to: toIso },
+          comparisonPeriod: { from: cmpFromIso, to: cmpToIso },
+          metricIds,
+          dealScope,
+          clientType,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+  });
+
+  // Сделки цели (без фильтра по метрике) — для раскрытия строк мини-отчёта
+  const dealParams = new URLSearchParams({
+    ...baseDealParams(props),
+    ...(dimensionType === 'manager' ? { managerId: target.id }
+      : dimensionType === 'product-group' ? { productGroup: target.id }
+      : { sourceDim: mainDim, sourceVal: target.id }),
+  });
+  const { data: dealData } = useQuery({
+    queryKey: ['drill-mini-deals', dimensionType, mainDim, target.id, fromIso, toIso, dealScope, clientType, productGroupMode, departmentIds],
+    queryFn: () => fetch(`/api/reports/deals?${dealParams}`).then(r => r.json()),
+  });
+
+  // Справочник источников + карта менеджер→филиал — раскладка сделок по второй
+  // сущности маркетингового дрилл-дауна
+  const { data: srcCatalog } = useQuery({
+    queryKey: ['marketing-sources'],
+    queryFn: () => fetch('/api/catalog/marketing-sources').then(r => r.json()) as Promise<{ sources: SourceInfoLite[]; managerBranches: Record<string, string> }>,
+    staleTime: 10 * 60 * 1000,
+    enabled: dimensionType === 'source' && dim !== 'manager',
+  });
+  const srcMap = useMemo(() => new Map((srcCatalog?.sources ?? []).map(s => [s.source_id, s])), [srcCatalog]);
+  const mgrBranches = useMemo(() => srcCatalog?.managerBranches ?? {}, [srcCatalog]);
+
+  const metrics: Metric[] = runData?.metrics ?? [];
+  const rawRows: RowDeltas[] = runData?.rows ?? [];
+  const totals: Record<string, number | null> | null = runData?.totals ?? null;
+  const deals: Deal[] = dealData?.deals ?? [];
+
+  // Ключ бакета сделки = dimensionId (или dimensionName для товарных групп) строки
+  const bucketKey = (row: { dimensionId: string; dimensionName: string }) =>
+    dimensionType === 'manager' ? row.dimensionName : row.dimensionId;
+
+  const dealsByRow = useMemo(() => {
+    const m = new Map<string, Deal[]>();
+    for (const d of deals) {
+      let key: string;
+      if (dimensionType === 'manager') key = d.product_group_display;          // строки = товарные группы
+      else if (dimensionType === 'product-group') key = d.manager_id;          // строки = менеджеры
+      else if (dim === 'manager') key = d.manager_id;
+      else if (dim === 'branch') key = mgrBranches[d.manager_id] ?? UNDEFINED_LABEL; // филиал = по менеджеру сделки
+      else if (dim === 'source') key = d.source_id ?? '__null__';
+      else if (!d.source_id) key = NO_SOURCE_LABEL;
+      else {
+        const info = srcMap.get(d.source_id);
+        key = info ? (info[dim] ?? UNDEFINED_LABEL) : UNDEFINED_LABEL;
+      }
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push(d);
+    }
+    return m;
+  }, [deals, dimensionType, dim, srcMap, mgrBranches]);
+
+  // Счётчик сделок строки — в подзаголовок измерения
+  const rows = useMemo(() => rawRows.map(r => {
+    const n = (dealsByRow.get(bucketKey(r)) ?? []).length;
+    return { ...r, dimensionSubtitle: [r.dimensionSubtitle, `${n} сд.`].filter(Boolean).join(' · ') };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [rawRows, dealsByRow, dimensionType]);
+
+  function toggle(id: string) {
+    setExpanded(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }
+
+  // Клик по цифре мини-отчёта: сделки пары «цель × строка», отфильтрованные по метрике.
+  // Для маркетингового дрилл-дауна вторая сущность фильтруема только когда это менеджер.
+  const canCellDrill = dimensionType !== 'source' || dim === 'manager';
+  function handleCellClick(dimensionId: string, dimensionName: string, metricId: string) {
+    const m = metrics.find(x => x.id === metricId);
+    const isTotal = dimensionId === '__total__';
+    const base: SubDrill = {
+      rowName: isTotal ? `${target.name} · Итого` : dimensionName,
+      metricId,
+      metricName: m?.nameRu,
+    };
+    if (dimensionType === 'manager') {
+      onCellDrill({ ...base, managerId: target.id, ...(isTotal ? {} : { productGroup: dimensionId }) });
+    } else if (dimensionType === 'product-group') {
+      onCellDrill({ ...base, productGroup: target.id, ...(isTotal ? {} : { managerId: dimensionId }) });
+    } else {
+      onCellDrill({ ...base, sourceDim: mainDim, sourceVal: target.id, ...(isTotal ? {} : { managerId: dimensionId }) });
+    }
+  }
+
+  const label = dimensionType === 'manager' ? 'Товарная группа'
+    : dimensionType === 'product-group' ? 'Менеджер'
+    : dimensionLabel(dim);
+
+  return (
+    <ReportTable
+      rows={rows}
+      totals={totals}
+      metrics={metrics}
+      comparisonDisplay={props.comparisonDisplay ?? 'current'}
+      metricDisplayModes={props.metricDisplayModes}
+      comparisonThreshold={props.comparisonThreshold}
+      isLoading={isLoading}
+      dimensionLabel={label}
+      highlights={props.highlights}
+      metricDecimalOverrides={props.metricDecimalOverrides}
+      metricThresholdOverrides={props.metricThresholdOverrides}
+      accentedMetricIds={props.accentedMetricIds}
+      barMetricIds={props.barMetricIds}
+      heatmapMetricIds={props.heatmapMetricIds}
+      heatmapInvertedIds={props.heatmapInvertedIds}
+      colorizeMetrics={props.colorizeMetrics}
+      numberAlign={props.numberAlign}
+      pinnedMetricIds={props.pinnedMetricIds}
+      columnGroups={props.columnGroups}
+      density={props.density}
+      fontScale={props.fontScale}
+      sortBy={sort.key}
+      sortDir={sort.dir}
+      onSortChange={(by, dir) => setSort({ key: by, dir })}
+      onRowClick={id => toggle(id)}
+      onCellClick={canCellDrill ? handleCellClick : undefined}
+      expandedRowIds={expanded}
+      renderExpandedRow={row => {
+        const rowDeals = dealsByRow.get(bucketKey(row)) ?? [];
+        return rowDeals.length
+          ? <DealsTable deals={sortDealsBy(rowDeals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} />
+          : <div className="px-6 py-3 text-xs text-[var(--color-text-muted)]">Нет сделок за период</div>;
+      }}
+    />
+  );
+}
+
 export function DrilldownDrawer(props: Props) {
   const { target, dimensionType, period, grouped, onGroupedChange, toolbarExtras, drilldownDimension, onDrilldownDimensionChange, onClose } = props;
   // Карточка сделки (клик по строке в любом списке сделок)
   const [openDealId, setOpenDealId] = useState<number | null>(null);
+  // Суб-дрилл из мини-отчёта (клик по цифре)
+  const [sub, setSub] = useState<SubDrill | null>(null);
   const viewProps: Props = { ...props, onDealOpen: setOpenDealId };
   // Групповые цели (отдел/филиал/итого) всегда открываются плоским списком сделок
   const isGroupTarget = !!target.kind;
@@ -756,6 +512,7 @@ export function DrilldownDrawer(props: Props) {
   }, [grouped]);
   function handleToggle(v: boolean) {
     setLocalGrouped(v);
+    setSub(null);
     // Explicit toggle is a report setting (saved with the report); the automatic
     // metric-click "нет" above is transient and doesn't touch it.
     onGroupedChange?.(v);
@@ -790,7 +547,7 @@ export function DrilldownDrawer(props: Props) {
                 <span className="text-xs text-[var(--color-text-muted)]">Разбивка</span>
                 <select
                   value={drilldownDimension ?? 'contact_type'}
-                  onChange={e => onDrilldownDimensionChange(e.target.value as DrilldownDimension)}
+                  onChange={e => { setSub(null); onDrilldownDimensionChange(e.target.value as DrilldownDimension); }}
                   className="px-2 py-1 text-xs border border-[var(--color-border)] rounded-lg bg-[var(--color-bg-surface)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
                 >
                   {DRILLDOWN_DIMENSIONS.map(d => (
@@ -820,9 +577,9 @@ export function DrilldownDrawer(props: Props) {
         </div>
         <div className="flex-1 overflow-hidden">
           {localGrouped && !isGroupTarget
-            ? (dimensionType === 'manager' ? <ManagerMiniReport {...viewProps} />
-              : dimensionType === 'source' ? <SourceMiniReport {...viewProps} />
-              : <ProductGroupMiniReport {...viewProps} />)
+            ? (sub
+                ? <SubDealsView {...viewProps} sub={sub} onBack={() => setSub(null)} />
+                : <MiniReport {...viewProps} onCellDrill={setSub} />)
             : <FlatDealsView {...viewProps} />}
         </div>
       </div>
