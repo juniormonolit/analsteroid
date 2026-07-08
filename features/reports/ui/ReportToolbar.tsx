@@ -1,6 +1,6 @@
 'use client';
 import { useRef, useState } from 'react';
-import { RefreshCw, Bookmark, Copy, Check } from 'lucide-react';
+import { RefreshCw, Bookmark, Copy, Check, Scale } from 'lucide-react';
 import type { DealScope, ClientType, ProductGroupMode, ComparisonDisplay, AccountType } from '@/lib/metrics/types';
 import { ViewSettings, type ViewPrefs } from './ViewSettings';
 import { FiltersMenu } from './FiltersMenu';
@@ -34,6 +34,10 @@ interface Props {
   // «Обычная» (п.3а спеки): скрыть попап «Фильтры», «Вид» и кнопку «Сохранить» —
   // остаются только «Копировать» и «Обновить».
   basic?: boolean;
+  // Режим «Сравнение» (п. Н2 спеки): открыть правый слайдер со сравнением сущностей
+  // отчёта. Видна и в «Обычной», и в «Про» — это просмотр, не редактирование.
+  onOpenComparison?: () => void;
+  comparisonCount?: number;
 }
 
 export function ReportToolbar({
@@ -48,6 +52,7 @@ export function ReportToolbar({
   drilldownGrouped, onDrilldownGroupedChange,
   colorizeMetrics, onColorizeMetricsChange,
   basic = false,
+  onOpenComparison, comparisonCount = 0,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -109,6 +114,20 @@ export function ReportToolbar({
         >
           {copied ? <Check size={12} className="text-[var(--color-positive)]" /> : <Copy size={12} />}
           {copied ? 'Скопировано' : 'Копировать'}
+        </button>
+      )}
+
+      {onOpenComparison && (
+        <button
+          onClick={onOpenComparison}
+          title="Сравнить сущности отчёта по текущим метрикам (как сравнение товаров в интернет-магазине)"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+        >
+          <Scale size={12} />
+          Сравнение
+          {comparisonCount > 0 && (
+            <span className="px-1.5 py-0.5 bg-[var(--color-accent)] text-white rounded-full text-[10px] leading-none">{comparisonCount}</span>
+          )}
         </button>
       )}
 

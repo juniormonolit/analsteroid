@@ -11,6 +11,7 @@ import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
 import { DrilldownDrawer } from './DrilldownDrawer';
 import type { DrilldownTarget } from './DrilldownDrawer';
+import { ComparisonPanel } from './ComparisonPanel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
 import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay } from '@/lib/metrics/types';
 import type { DateRange } from '@/lib/period';
@@ -209,6 +210,10 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useState('');
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
+  // Режим «Сравнение» (п. Н2 спеки): выбор сущностей живёт в состоянии страницы (не в
+  // БД) — так он переживает закрытие/повторное открытие слайдера в рамках сессии.
+  const [showComparison, setShowComparison] = useState(false);
+  const [compareIds, setCompareIds]     = useState<string[]>([]);
   const [showMetricPanel, setShowMetricPanel]       = useState(false);
   const [showSaveModal, setShowSaveModal]           = useState(false);
   const [configuringMetricId, setConfiguringMetricId] = useState<string | null>(null);
@@ -600,6 +605,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         onSaveReport={() => setShowSaveModal(true)}
         onCopyTable={handleCopyTable}
         basic={!isPro}
+        onOpenComparison={() => setShowComparison(true)}
+        comparisonCount={compareIds.length}
       />
 
       <div className="flex-1 overflow-hidden">
@@ -706,6 +713,18 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             />
           }
           onClose={() => setDrilldown(null)}
+        />
+      )}
+
+      {showComparison && (
+        <ComparisonPanel
+          rows={data?.rows ?? []}
+          metrics={orderedMetrics as Metric[]}
+          entityLabel={dimensionColumnLabel}
+          selectedIds={compareIds}
+          onSelectedIdsChange={setCompareIds}
+          metricDecimalOverrides={metricDecimalOverrides}
+          onClose={() => setShowComparison(false)}
         />
       )}
 
