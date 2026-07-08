@@ -7,6 +7,7 @@ import { fetchBySources } from '@/features/reports/engine/bySources';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
+import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType } from '@/lib/metrics/types';
 
 export async function POST(req: NextRequest) {
@@ -101,23 +102,11 @@ export async function POST(req: NextRequest) {
     const todayStr = today.toISOString().slice(0, 10);
     const currentMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
 
-    let workingDaysInMonth = 22;
-    let workingDayOrdinal = 15;
-
-    try {
-      const wcRes = await sysDb.query<{ total_working: string; days_passed: string }>(
-        `SELECT
-           COUNT(*) FILTER (WHERE is_working AND to_char(date, 'YYYY-MM') = $1) AS total_working,
-           COUNT(*) FILTER (WHERE is_working AND to_char(date, 'YYYY-MM') = $1 AND date <= $2::date) AS days_passed
-         FROM working_calendar
-         WHERE to_char(date, 'YYYY-MM') = $1`,
-        [currentMonthStr, todayStr]
-      );
-      if (wcRes.rows[0]?.total_working) {
-        workingDaysInMonth = parseInt(wcRes.rows[0].total_working) || 22;
-        workingDayOrdinal = parseInt(wcRes.rows[0].days_passed) || 1;
-      }
-    } catch { /* table may not exist yet */ }
+    // Источник дневного плана — общий хелпер (п.7 спеки): дефолт "месячный ÷ 20",
+    // режим "производственный календарь" — только если супер-админ включил его явно.
+    const { total: workingDaysInMonth, passed: workingDayOrdinal } = await getMonthWorkingDays(
+      `${currentMonthStr}-01`, todayStr
+    );
 
     const planByLogin = new Map<string, { plan_shipments: number; plan_n: number }>();
     for (const row of plansRes.rows) {

@@ -22,6 +22,7 @@ export function SettingsSidebar({
     ...NAV,
     ...(canManageUsers ? [{ href: '/settings/users', label: 'Пользователи' }] : []),
     ...(isSuperadmin ? [{ href: '/settings/roles', label: 'Роли' }] : []),
+    ...(isSuperadmin ? [{ href: '/settings/daily-plan-mode', label: 'Режим дневного плана' }] : []),
   ];
 
   return (

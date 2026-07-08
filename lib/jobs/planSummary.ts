@@ -10,6 +10,7 @@ import {
   getManagerDeptIds,
   resolveDeptCategory,
 } from '@/lib/org/deptCategories';
+import { getYearWorkingDays, type WorkingDayProgress } from '@/lib/plans/dailyPlan';
 import { toZonedTime } from 'date-fns-tz';
 import { startOfDay, startOfYear, addDays } from 'date-fns';
 
@@ -93,27 +94,9 @@ async function getFactByBranch(fromIso: string, toExclIso: string) {
   return { russiaTotal, byBranch, byDept };
 }
 
-interface WorkingDayProgress {
-  totalWorkingDays: number;
-  workingDayIndexToday: number;
-}
-
-async function getWorkingDayProgress(year: number, todayStr: string): Promise<WorkingDayProgress | null> {
-  const res = await systemDb().query<{ total_working: string; days_passed: string }>(
-    `SELECT
-       COUNT(*) FILTER (WHERE is_working) AS total_working,
-       COUNT(*) FILTER (WHERE is_working AND date <= $2::date) AS days_passed
-     FROM working_calendar
-     WHERE date >= $1::date AND date <= ($1::date + INTERVAL '1 year' - INTERVAL '1 day')`,
-    [`${year}-01-01`, todayStr],
-  );
-  const totalWorkingDays = parseInt(res.rows[0]?.total_working ?? '0', 10);
-  if (!totalWorkingDays) return null; // календарь на этот год не заполнен
-  return {
-    totalWorkingDays,
-    workingDayIndexToday: parseInt(res.rows[0]?.days_passed ?? '0', 10),
-  };
-}
+// Прогресс рабочих дней года — из общего хелпера lib/plans/dailyPlan (п.7 спеки):
+// дефолт "÷20" (12×20=240, будни пн-пт от 1 января), либо working_calendar, если
+// супер-админ включил режим "производственный календарь".
 
 async function getPlanTargets(year: number): Promise<{ company: number | null; branch: Map<string, number>; department: Map<string, number> }> {
   const res = await systemDb().query<{ scope: string; scope_name: string | null; target_amount: string }>(
@@ -135,7 +118,7 @@ async function getPlanTargets(year: number): Promise<{ company: number | null; b
 function computeMetrics(name: string, factYtd: number, targetYear: number | null, wd: WorkingDayProgress | null): BranchMetrics {
   const cumulative = pct(factYtd, targetYear);
   const pace = targetYear !== null && wd
-    ? pct(factYtd, (targetYear / wd.totalWorkingDays) * wd.workingDayIndexToday)
+    ? pct(factYtd, (targetYear / wd.total) * wd.passed)
     : null;
   return {
     name,
@@ -162,11 +145,11 @@ export async function computeAndCachePlanSummary(): Promise<void> {
   const [{ russiaTotal, byBranch, byDept }, targets, wd] = await Promise.all([
     getFactByBranch(fromIso, toExclIso),
     getPlanTargets(year),
-    getWorkingDayProgress(year, todayStr),
+    getYearWorkingDays(year, todayStr),
   ]);
 
   if (!wd) {
-    console.warn(`[planSummary] working_calendar пуст для ${year} года — plan_percent_pace будет null`);
+    console.warn(`[planSummary] working_calendar пуст для ${year} года (режим "календарь") — plan_percent_pace будет null`);
   }
 
   const russia = computeMetrics('Россия', russiaTotal, targets.company, wd);

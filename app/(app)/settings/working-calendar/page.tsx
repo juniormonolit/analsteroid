@@ -48,9 +48,14 @@ export default function WorkingCalendarPage() {
 
   return (
     <div className="p-3 sm:p-6 max-w-xl">
-      <h1 className="text-lg font-semibold text-[var(--color-text)] mb-6">
+      <h1 className="text-lg font-semibold text-[var(--color-text)] mb-2">
         Производственный календарь
       </h1>
+      <p className="text-sm text-[var(--color-text-muted)] mb-6">
+        Используется для расчёта дневного плана только в режиме «Производственный календарь»
+        (по умолчанию дневной план считается как месячный ÷ 20 — переключатель у супер-админа
+        в «Режим дневного плана»).
+      </p>
 
       <div className="mb-6 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
         <p className="text-sm text-[var(--color-text-secondary)] mb-1">Загруженные годы</p>

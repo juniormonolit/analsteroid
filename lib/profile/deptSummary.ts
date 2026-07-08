@@ -3,12 +3,15 @@
 // собственный отдел ИЛИ любой предок по дереву departments — среди назначенных
 // (первый совпавший предок; так дочерние отделы включаются неявно).
 // План — manager_plans через short_login (как в lib/jobs/dailyMoscowReport.ts),
-// факт — отгрузки MTD из БД (как в lib/jobs/planSummary.ts), темп — по working_calendar.
+// факт — отгрузки MTD из БД (как в lib/jobs/planSummary.ts), темп — через общий
+// хелпер lib/plans/dailyPlan (дефолт "месячный план ÷ 20", либо working_calendar,
+// если супер-админ включил режим "производственный календарь").
 
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { loadDepartments, type DeptRow } from '@/lib/org/deptCategories';
+import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 
 const TZ = 'Europe/Moscow';
@@ -114,7 +117,7 @@ export async function computeUserDeptSummary(userId: string): Promise<UserDeptSu
     if (row) assignedByBitrixId.set(row.bitrixId, uuid);
   }
 
-  const [managersRes, plansRes, factByManager, wdRes] = await Promise.all([
+  const [managersRes, plansRes, factByManager, wd] = await Promise.all([
     db.query<{ manager_id: string; department_id: string | null; short_login: string | null }>(
       `SELECT manager_bitrix_user_id::text AS manager_id, department_id::text AS department_id, short_login
          FROM org_resolved_hierarchy WHERE is_active = true`
@@ -124,17 +127,11 @@ export async function computeUserDeptSummary(userId: string): Promise<UserDeptSu
       [monthFirstDay]
     ),
     getShipmentsFactByManager(fromIso, toExclIso),
-    db.query<{ in_month: string; passed: string }>(
-      `SELECT
-         COUNT(*) FILTER (WHERE is_working AND date >= $1::date AND date < ($1::date + INTERVAL '1 month')) AS in_month,
-         COUNT(*) FILTER (WHERE is_working AND date >= $1::date AND date <= $2::date) AS passed
-       FROM working_calendar`,
-      [monthFirstDay, todayStr]
-    ),
+    getMonthWorkingDays(monthFirstDay, todayStr),
   ]);
 
-  const inMonth = parseInt(wdRes.rows[0]?.in_month ?? '0', 10) || 22;
-  const passed = parseInt(wdRes.rows[0]?.passed ?? '0', 10) || 1;
+  const inMonth = wd.total;
+  const passed = wd.passed;
 
   // Менеджер → назначенный отдел (uuid); заодно short_login → менеджер для планов
   const managerDept = new Map<string, string>(); // manager_id → dept uuid

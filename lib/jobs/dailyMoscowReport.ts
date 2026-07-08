@@ -16,6 +16,7 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { getManagerOrgMap } from '@/lib/org/deptCategories';
 import { bx, sendBitrixBotMessage } from '@/lib/bitrix/notify';
+import { getMonthWorkingDays, getWeekWorkingDaysTotal } from '@/lib/plans/dailyPlan';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 
 const TZ = 'Europe/Moscow';
@@ -245,20 +246,15 @@ async function getMonthPlans(
 
 interface WorkingDays { inMonth: number; passedInMonth: number; inWeek: number }
 
+// Источник — общий хелпер lib/plans/dailyPlan (п.7 спеки): дефолт "месячный план ÷ 20"
+// (inMonth=20, недельная константа inWeek=5), либо working_calendar, если супер-админ
+// включил режим "производственный календарь".
 async function getWorkingDays(monthFirstDay: string, reportDate: string, weekStart: string): Promise<WorkingDays> {
-  const res = await systemDb().query<{ in_month: string; passed: string; in_week: string }>(
-    `SELECT
-       COUNT(*) FILTER (WHERE is_working AND date >= $1::date AND date < ($1::date + INTERVAL '1 month')) AS in_month,
-       COUNT(*) FILTER (WHERE is_working AND date >= $1::date AND date <= $2::date) AS passed,
-       COUNT(*) FILTER (WHERE is_working AND date >= $3::date AND date < ($3::date + INTERVAL '7 days')) AS in_week
-     FROM working_calendar`,
-    [monthFirstDay, reportDate, weekStart],
-  );
-  return {
-    inMonth: parseInt(res.rows[0]?.in_month ?? '0', 10) || 22,
-    passedInMonth: parseInt(res.rows[0]?.passed ?? '0', 10) || 1,
-    inWeek: parseInt(res.rows[0]?.in_week ?? '0', 10) || 5,
-  };
+  const [month, inWeek] = await Promise.all([
+    getMonthWorkingDays(monthFirstDay, reportDate),
+    getWeekWorkingDaysTotal(weekStart),
+  ]);
+  return { inMonth: month.total, passedInMonth: month.passed, inWeek };
 }
 
 // ── Расхождения Битрикс ↔ БД ───────────────────────────────────────────────────────
