@@ -120,18 +120,15 @@ function DeptTreeNode({
   );
 }
 
-export function FilterBar({ period, comparison, departmentIds, search = '', grouping, onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange, onOpenMetricPanel, metricsBadge, showDepartments = true, sourceDimension, onSourceDimensionChange }: Props) {
+// ── Период + период сравнения — общий переиспользуемый блок ─────────────────
+// Вынесен из FilterBar, чтобы дрилл-даун (DrilldownDrawer) мог встроить тот же
+// контрол со своим (независимым от основного отчёта) состоянием периода.
+export function PeriodRangeControls({ period, comparison, onPeriodChange, onComparisonChange }: {
+  period: DateRange; comparison: DateRange;
+  onPeriodChange: (p: DateRange) => void; onComparisonChange: (p: DateRange) => void;
+}) {
   const [showPeriod, setShowPeriod] = useState(false);
   const [showComp,   setShowComp]   = useState(false);
-  const [showDepts,  setShowDepts]  = useState(false);
-  const [draft, setDraft] = useState<Set<string>>(new Set(departmentIds));
-
-  const { data: orgData } = useQuery({
-    queryKey: ['org-structure'],
-    queryFn: () => fetch('/api/catalog/org-structure').then(r => r.json()),
-    staleTime: 5 * 60 * 1000,
-  });
-  const tree: DeptNode[] = orgData?.tree ?? [];
 
   function handlePeriodChange(p: DateRange) {
     onPeriodChange(p);
@@ -139,28 +136,8 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
     setShowPeriod(false);
   }
 
-  function applyDepts()  { onDepartmentIdsChange(Array.from(draft)); setShowDepts(false); }
-  function cancelDepts() { setDraft(new Set(departmentIds)); setShowDepts(false); }
-
-  function toggleIds(ids: string[], forceOn?: boolean) {
-    setDraft(prev => {
-      const next = new Set(prev);
-      if (forceOn === true)       ids.forEach(id => next.add(id));
-      else if (forceOn === false) ids.forEach(id => next.delete(id));
-      else {
-        const allSelected = ids.every(id => next.has(id));
-        if (allSelected) ids.forEach(id => next.delete(id));
-        else ids.forEach(id => next.add(id));
-      }
-      return next;
-    });
-  }
-
-  const deptLabel = departmentIds.length === 0 ? 'Все отделы' : `${departmentIds.length} отд.`;
-
   return (
-    <div className="flex items-center gap-2 px-3 sm:px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
-
+    <>
       {/* ── Main period ── */}
       <Popover
         open={showPeriod}
@@ -214,47 +191,101 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
           title="Период сравнения"
         />
       </Popover>
+    </>
+  );
+}
+
+// ── Выбор отделов — общий переиспользуемый блок (дерево орг. структуры) ─────
+// Тоже вынесен наружу, чтобы дрилл-даун мог встроить тот же контрол со своим
+// независимым набором отделов.
+export function DepartmentPicker({ departmentIds, onDepartmentIdsChange }: {
+  departmentIds: string[]; onDepartmentIdsChange: (ids: string[]) => void;
+}) {
+  const [showDepts, setShowDepts] = useState(false);
+  const [draft, setDraft] = useState<Set<string>>(new Set(departmentIds));
+
+  const { data: orgData } = useQuery({
+    queryKey: ['org-structure'],
+    queryFn: () => fetch('/api/catalog/org-structure').then(r => r.json()),
+    staleTime: 5 * 60 * 1000,
+  });
+  const tree: DeptNode[] = orgData?.tree ?? [];
+
+  function applyDepts()  { onDepartmentIdsChange(Array.from(draft)); setShowDepts(false); }
+  function cancelDepts() { setDraft(new Set(departmentIds)); setShowDepts(false); }
+
+  function toggleIds(ids: string[], forceOn?: boolean) {
+    setDraft(prev => {
+      const next = new Set(prev);
+      if (forceOn === true)       ids.forEach(id => next.add(id));
+      else if (forceOn === false) ids.forEach(id => next.delete(id));
+      else {
+        const allSelected = ids.every(id => next.has(id));
+        if (allSelected) ids.forEach(id => next.delete(id));
+        else ids.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  }
+
+  const deptLabel = departmentIds.length === 0 ? 'Все отделы' : `${departmentIds.length} отд.`;
+
+  return (
+    <Popover
+      open={showDepts}
+      onOpenChange={(o) => {
+        if (o) setDraft(new Set(departmentIds)); // свежий драфт при каждом открытии
+        setShowDepts(o);
+      }}
+      align="end"
+      className="w-[280px] flex flex-col overflow-hidden"
+      trigger={
+        <button
+          className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
+            departmentIds.length > 0
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+              : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
+          }`}
+        >
+          <Building2 size={14} />
+          <span>{deptLabel}</span>
+          <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
+        </button>
+      }
+    >
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
+        <span className="text-sm font-medium text-[var(--color-text)]">Отделы</span>
+        {draft.size > 0 && (
+          <button onClick={() => setDraft(new Set())} className="text-xs text-[var(--color-accent)] hover:underline">Очистить</button>
+        )}
+      </div>
+      <div className="overflow-y-auto flex-1 py-1 max-h-[300px]">
+        {tree.map(node => (
+          <DeptTreeNode key={node.id} node={node} selected={draft} onToggle={toggleIds} depth={0} />
+        ))}
+      </div>
+      <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
+        <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
+        <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
+      </div>
+    </Popover>
+  );
+}
+
+export function FilterBar({ period, comparison, departmentIds, search = '', grouping, onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange, onOpenMetricPanel, metricsBadge, showDepartments = true, sourceDimension, onSourceDimensionChange }: Props) {
+  return (
+    <div className="flex items-center gap-2 px-3 sm:px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
+
+      <PeriodRangeControls
+        period={period}
+        comparison={comparison}
+        onPeriodChange={onPeriodChange}
+        onComparisonChange={onComparisonChange}
+      />
 
       {/* ── Department picker ── */}
       {showDepartments && (
-      <Popover
-        open={showDepts}
-        onOpenChange={(o) => {
-          if (o) setDraft(new Set(departmentIds)); // свежий драфт при каждом открытии
-          setShowDepts(o);
-        }}
-        align="end"
-        className="w-[280px] flex flex-col overflow-hidden"
-        trigger={
-          <button
-            className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
-              departmentIds.length > 0
-                ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
-            }`}
-          >
-            <Building2 size={14} />
-            <span>{deptLabel}</span>
-            <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
-          </button>
-        }
-      >
-        <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
-          <span className="text-sm font-medium text-[var(--color-text)]">Отделы</span>
-          {draft.size > 0 && (
-            <button onClick={() => setDraft(new Set())} className="text-xs text-[var(--color-accent)] hover:underline">Очистить</button>
-          )}
-        </div>
-        <div className="overflow-y-auto flex-1 py-1 max-h-[300px]">
-          {tree.map(node => (
-            <DeptTreeNode key={node.id} node={node} selected={draft} onToggle={toggleIds} depth={0} />
-          ))}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
-          <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
-          <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
-        </div>
-      </Popover>
+        <DepartmentPicker departmentIds={departmentIds} onDepartmentIdsChange={onDepartmentIdsChange} />
       )}
 
       {/* ── Metrics (legacy "Показатели") ── */}

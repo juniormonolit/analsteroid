@@ -7,7 +7,6 @@ import { ReportToolbar } from './ReportToolbar';
 import { ReportTable } from './ReportTable';
 import { MetricPanel, getMetricPanelWidth } from './MetricPanel';
 import { ViewSettings, loadViewPrefs, saveViewPrefs, DEFAULT_VIEW_PREFS, type ViewPrefs } from './ViewSettings';
-import { FiltersMenu } from './FiltersMenu';
 import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
 import { DrilldownDrawer } from './DrilldownDrawer';
@@ -652,29 +651,20 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           drilldownDimension={sourceMode ? drilldownDimension : undefined}
           onDrilldownDimensionChange={sourceMode ? setDrilldownDimension : undefined}
           toolbarExtras={
-            <>
-              <FiltersMenu
-                dealScope={dealScope}
-                onDealScopeChange={setDealScope}
-                clientType={clientType}
-                onClientTypeChange={setClientType}
-                productGroupMode={productGroupMode}
-                onProductGroupModeChange={setProductGroupMode}
-                showProductGroupPicker={true}
-              />
-              <ViewSettings
-                prefs={viewPrefs}
-                onChange={updateViewPrefs}
-                numberAlign={numberAlign}
-                onNumberAlignChange={setNumberAlign}
-                accountType={accountType}
-                onAccountTypeChange={reportSlug === 'by-managers' ? setAccountType : undefined}
-                drilldownGrouped={drilldownGrouped}
-                onDrilldownGroupedChange={setDrilldownGrouped}
-                colorizeMetrics={colorizeMetrics}
-                onColorizeMetricsChange={setColorizeMetrics}
-              />
-            </>
+            // Тип сделок/клиента/аккаунтов, товарные группы, период и отделы теперь —
+            // собственные (независимые от основного отчёта) фильтры дрилл-дауна,
+            // см. DrilldownDrawer. Здесь остаются только настройки ОТОБРАЖЕНИЯ,
+            // общие с основным отчётом (плотность, шрифт, режим колонок, цвет).
+            <ViewSettings
+              prefs={viewPrefs}
+              onChange={updateViewPrefs}
+              numberAlign={numberAlign}
+              onNumberAlignChange={setNumberAlign}
+              drilldownGrouped={drilldownGrouped}
+              onDrilldownGroupedChange={setDrilldownGrouped}
+              colorizeMetrics={colorizeMetrics}
+              onColorizeMetricsChange={setColorizeMetrics}
+            />
           }
           onClose={() => setDrilldown(null)}
         />

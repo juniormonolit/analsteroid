@@ -1,9 +1,9 @@
 'use client';
 import { Filter } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
-import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ProductGroupMode, AccountType } from '@/lib/metrics/types';
 
-function Seg<T extends string>({ options, value, onChange, labels }: {
+export function Seg<T extends string>({ options, value, onChange, labels }: {
   options: T[]; value: T; onChange: (v: T) => void; labels: Record<T, string>;
 }) {
   return (
@@ -29,13 +29,19 @@ interface Props {
   productGroupMode?: ProductGroupMode;
   onProductGroupModeChange?: (v: ProductGroupMode) => void;
   showProductGroupPicker?: boolean;
+  // Тип аккаунтов — актуален только для отчёта/дрилл-дауна по менеджерам
+  // (мини-отчёт с dimensionType='manager'); в основном тулбаре живёт в ViewSettings,
+  // здесь — для дрилл-дауна, где это полноценный фильтр сделок.
+  accountType?: AccountType;
+  onAccountTypeChange?: (v: AccountType) => void;
 }
 
-export function FiltersMenu({ dealScope, onDealScopeChange, clientType, onClientTypeChange, productGroupMode, onProductGroupModeChange, showProductGroupPicker }: Props) {
+export function FiltersMenu({ dealScope, onDealScopeChange, clientType, onClientTypeChange, productGroupMode, onProductGroupModeChange, showProductGroupPicker, accountType, onAccountTypeChange }: Props) {
   // Count of non-default filters → badge so the active state is visible without opening.
-  // Defaults: all deals, all clients, «По наибольшему» (by_max).
+  // Defaults: all deals, all clients, «По наибольшему» (by_max), «Менеджеры».
   const activeCount = (dealScope !== 'all' ? 1 : 0) + (clientType !== 'all' ? 1 : 0)
-    + (showProductGroupPicker && productGroupMode && productGroupMode !== 'by_max' ? 1 : 0);
+    + (showProductGroupPicker && productGroupMode && productGroupMode !== 'by_max' ? 1 : 0)
+    + (onAccountTypeChange && accountType && accountType !== 'managers' ? 1 : 0);
 
   return (
     <Popover
@@ -77,6 +83,17 @@ export function FiltersMenu({ dealScope, onDealScopeChange, clientType, onClient
               value={productGroupMode}
               onChange={onProductGroupModeChange}
               labels={{ kc: 'Категория КЦ', by_max: 'По наибольшему' }}
+            />
+          </div>
+        )}
+        {onAccountTypeChange && accountType !== undefined && (
+          <div>
+            <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип аккаунтов</div>
+            <Seg
+              options={['managers', 'logists', 'all'] as AccountType[]}
+              value={accountType}
+              onChange={onAccountTypeChange}
+              labels={{ managers: 'Менеджеры', logists: 'Логисты', all: 'Все' }}
             />
           </div>
         )}

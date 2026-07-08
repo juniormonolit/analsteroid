@@ -5,7 +5,8 @@ import { X, ArrowLeft } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { DateRange } from '@/lib/period';
-import type { Metric, ComparisonDisplay } from '@/lib/metrics/types';
+import { recomputeComparison } from '@/lib/period';
+import type { Metric, ComparisonDisplay, DealScope, ClientType, ProductGroupMode, AccountType } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
@@ -13,6 +14,8 @@ import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { PeriodRangeControls, DepartmentPicker } from './FilterBar';
+import { FiltersMenu } from './FiltersMenu';
 
 interface Deal {
   deal_id: number;
@@ -61,12 +64,12 @@ interface Props {
   dimensionType: 'manager' | 'product-group' | 'source';
   period: DateRange;
   comparison?: DateRange;
-  dealScope: string;
-  clientType?: string;
-  productGroupMode: 'kc' | 'by_max';
+  dealScope: DealScope;
+  clientType?: ClientType;
+  productGroupMode: ProductGroupMode;
   metricIds: string[];
   departmentIds?: string[];
-  accountType?: string;
+  accountType?: AccountType;
   dealFields?: string[];
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
@@ -493,12 +496,46 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
 }
 
 export function DrilldownDrawer(props: Props) {
-  const { target, dimensionType, period, grouped, onGroupedChange, toolbarExtras, drilldownDimension, onDrilldownDimensionChange, onClose } = props;
+  const { target, dimensionType, grouped, onGroupedChange, toolbarExtras, drilldownDimension, onDrilldownDimensionChange, onClose } = props;
   // Карточка сделки (клик по строке в любом списке сделок)
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   // Суб-дрилл из мини-отчёта (клик по цифре)
   const [sub, setSub] = useState<SubDrill | null>(null);
-  const viewProps: Props = { ...props, onDealOpen: setOpenDealId };
+
+  // ── Собственные фильтры дрилл-дауна (п. Н4 спеки) ──────────────────────────
+  // При открытии дрилл-даун наследует период/фильтры основного отчёта (значения
+  // props на момент монтирования — новый target всегда монтирует новый компонент,
+  // см. key={...} в SalesReportPage). Дальше пользователь может их менять здесь;
+  // это состояние ЛОКАЛЬНО и не пробрасывается обратно в основной отчёт.
+  const [localPeriod, setLocalPeriod] = useState<DateRange>(() => props.period);
+  const [localComparison, setLocalComparison] = useState<DateRange>(() => props.comparison ?? recomputeComparison(props.period));
+  const [localDepartmentIds, setLocalDepartmentIds] = useState<string[]>(() => props.departmentIds ?? []);
+  const [localDealScope, setLocalDealScope] = useState<DealScope>(() => props.dealScope);
+  const [localClientType, setLocalClientType] = useState<ClientType>(() => props.clientType ?? 'all');
+  const [localProductGroupMode, setLocalProductGroupMode] = useState<ProductGroupMode>(() => props.productGroupMode);
+  const [localAccountType, setLocalAccountType] = useState<AccountType>(() => props.accountType ?? 'managers');
+
+  // Смена любого локального фильтра сбрасывает открытый суб-дрилл (иначе он
+  // остаётся отфильтрован под уже неактуальную комбинацию «строка × метрика»).
+  function updateLocalPeriod(p: DateRange) { setSub(null); setLocalPeriod(p); }
+  function updateLocalComparison(p: DateRange) { setSub(null); setLocalComparison(p); }
+  function updateLocalDepartmentIds(ids: string[]) { setSub(null); setLocalDepartmentIds(ids); }
+  function updateLocalDealScope(v: DealScope) { setSub(null); setLocalDealScope(v); }
+  function updateLocalClientType(v: ClientType) { setSub(null); setLocalClientType(v); }
+  function updateLocalProductGroupMode(v: ProductGroupMode) { setSub(null); setLocalProductGroupMode(v); }
+  function updateLocalAccountType(v: AccountType) { setSub(null); setLocalAccountType(v); }
+
+  const viewProps: Props = {
+    ...props,
+    onDealOpen: setOpenDealId,
+    period: localPeriod,
+    comparison: localComparison,
+    departmentIds: localDepartmentIds,
+    dealScope: localDealScope,
+    clientType: localClientType,
+    productGroupMode: localProductGroupMode,
+    accountType: localAccountType,
+  };
   // Групповые цели (отдел/филиал/итого) всегда открываются плоским списком сделок
   const isGroupTarget = !!target.kind;
   // Local grouping state: metric-click opens flat automatically; otherwise report setting.
@@ -543,7 +580,7 @@ export function DrilldownDrawer(props: Props) {
               )}
             </h2>
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-              {format(period.from, 'd MMM', { locale: ru })} — {format(period.to, 'd MMM yyyy', { locale: ru })}
+              {format(localPeriod.from, 'd MMM', { locale: ru })} — {format(localPeriod.to, 'd MMM yyyy', { locale: ru })}
               {localGrouped && (dimensionType === 'manager' ? ' · по товарным группам'
                 : dimensionType === 'source' ? ` · по: ${dimensionLabel(drilldownDimension ?? 'contact_type').toLowerCase()}`
                 : ' · по менеджерам')}
@@ -584,6 +621,31 @@ export function DrilldownDrawer(props: Props) {
             )}
             <button onClick={requestClose} className="sm:hidden p-2 hover:bg-[var(--color-bg-hover)] rounded-lg transition-colors"><X size={18} /></button>
           </div>
+        </div>
+        {/* Собственные фильтры дрилл-дауна: период + весь набор фильтров основного
+            отчёта (отделы, тип сделок/клиента/аккаунтов, товарные группы). Наследуются
+            при открытии, дальше независимы от основного отчёта (см. localXxx выше). */}
+        <div className="flex items-center gap-2 px-3 sm:px-6 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0 flex-wrap">
+          <PeriodRangeControls
+            period={localPeriod}
+            comparison={localComparison}
+            onPeriodChange={updateLocalPeriod}
+            onComparisonChange={updateLocalComparison}
+          />
+          {dimensionType !== 'source' && (
+            <DepartmentPicker departmentIds={localDepartmentIds} onDepartmentIdsChange={updateLocalDepartmentIds} />
+          )}
+          <FiltersMenu
+            dealScope={localDealScope}
+            onDealScopeChange={updateLocalDealScope}
+            clientType={localClientType}
+            onClientTypeChange={updateLocalClientType}
+            productGroupMode={localProductGroupMode}
+            onProductGroupModeChange={updateLocalProductGroupMode}
+            showProductGroupPicker
+            accountType={dimensionType === 'manager' ? localAccountType : undefined}
+            onAccountTypeChange={dimensionType === 'manager' ? updateLocalAccountType : undefined}
+          />
         </div>
         <div className="flex-1 overflow-hidden">
           {localGrouped && !isGroupTarget
