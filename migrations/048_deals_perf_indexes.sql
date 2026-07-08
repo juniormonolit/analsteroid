@@ -1,49 +1,58 @@
--- Индексы производительности для sa.deals (аналитическая БД сделок).
--- БД: YC analytics (run_analytics.mjs) в проде — analyticsDb() фолбэчит на YC "analytics",
--- т.к. SA_PG_* на сервере не заданы (см. SECRETS_AND_STORAGE.md). На self-hosted Supabase
--- (dev, schema `sa`) DDL этим индексам НЕ применить — наш юзер там read-only
--- (junior_user, не supabase_admin); там эти индексы нужно ставить отдельно через
--- владельца БД (Артём/сервер), если dev-контур когда-либо станет прод-источником.
+-- Индексы производительности для sa.deals (БД сделок, self-hosted Supabase на MLT).
+-- НЕ ПРИМЕНЕНО К БАЗЕ (задача #1277): DDL в схеме sa требует supabase_admin —
+-- проверено вживую 08.07.2026: has_schema_privilege('sa','CREATE') = false у нашего
+-- пользователя. Применять — Артём/владелец сервера.
 --
--- НЕ ПРИМЕНЕНО К БАЗЕ — только файл миграции (см. задачу #1277).
+-- v2 после замера на живой базе 08.07.2026 (215 063 строки в sa.deals):
+-- из первоначального списка УБРАНЫ дубли уже существующих индексов —
+-- created_at, reserved_at, confirmed_at, sold_at, delivered_at, current_manager_id,
+-- funnel_id, product_group_id уже покрыты (deals_*_idx / idx_sa_deals_*, см. pg_indexes).
+-- Остались только 5 реально отсутствующих, каждый подтверждён EXPLAIN (ANALYZE):
+-- полный разбор в owners-inbox/analsteroid-night-db-20260708.md, раздел «Замер 08.07».
 --
--- Обоснование см. в owners-inbox/analsteroid-night-db-20260708.md.
--- Таблица боевая и предположительно большая (растёт с каждой сделкой за все годы) —
--- при реальном применении рекомендуется CREATE INDEX CONCURRENTLY по одному индексу
--- за раз (не одним batch-файлом, как остальные миграции), чтобы не блокировать
--- запись во время построения индекса.
+-- При применении на живой базе: CREATE INDEX CONCURRENTLY по одному
+-- (вне транзакции/batch-раннера), чтобы не блокировать запись.
 
--- Каждый collected-метрика фильтрует по РОВНО ОДНОЙ из этих дат через
--- `d.<dateField> >= $1 AND d.<dateField> < $2` (lib/metrics/sqlGen.ts genDealsExpr),
--- а /api/reports/deal(s) собирает OR по всем шести сразу — Postgres может покрыть
--- эту OR-комбинацию BitmapOr по отдельным индексам на каждую колонку.
-CREATE INDEX IF NOT EXISTS idx_deals_created_at   ON deals (created_at);
-CREATE INDEX IF NOT EXISTS idx_deals_reserved_at  ON deals (reserved_at);
-CREATE INDEX IF NOT EXISTS idx_deals_confirmed_at ON deals (confirmed_at);
-CREATE INDEX IF NOT EXISTS idx_deals_sold_at      ON deals (sold_at);
-CREATE INDEX IF NOT EXISTS idx_deals_delivered_at ON deals (delivered_at);
-CREATE INDEX IF NOT EXISTS idx_deals_lost_at      ON deals (lost_at);
+-- 1) lost_at — ГЛАВНЫЙ индекс этого набора. Замер показал: из шести дат сделки
+-- проиндексированы пять, и одно неиндексированное плечо `lost_at BETWEEN ...` в
+-- 6-стороннем OR (окно периода в /api/reports/run и /api/reports/deals) ломает
+-- BitmapOr-план ЦЕЛИКОМ — планировщик уходит в Parallel Seq Scan всей таблицы
+-- (~96 мс сейчас; без lost_at-плеча тот же запрос идёт по индексам за ~56 мс).
+-- Отдельно: метрики отказов (окно только по lost_at, миграция 034) — Seq Scan даже
+-- на недельном окне (~63 мс на 1 060 строк из 215 063).
+-- Частичный WHERE — в стиле существующих deals_sold_at_idx и т.п.; условие
+-- `lost_at >= X` подразумевает NOT NULL, индекс применим ко всем таким запросам.
+CREATE INDEX IF NOT EXISTS idx_sa_deals_lost_at
+  ON sa.deals (lost_at) WHERE lost_at IS NOT NULL;
 
--- Измерение отчёта «по менеджерам» — GROUP BY d.current_manager_id, WHERE в
--- drilldown (managerId=), фильтр «Итого» по списку менеджеров отдела.
-CREATE INDEX IF NOT EXISTS idx_deals_manager_id ON deals (current_manager_id);
+-- 2) source_id — отчёт «по источникам» и маркетинговый drilldown
+-- (WHERE d.source_id IN (...), lib/marketing/sources.ts::sourceIdsWhere).
+-- Замер: на широком окне (полгода) планировщик бросает индексы дат и уходит в
+-- Parallel Seq Scan (~70 мс), при том что сделок одного источника за полгода
+-- ~1 500 из 215 тысяч (483 уникальных источника — фильтр очень селективный).
+CREATE INDEX IF NOT EXISTS idx_sa_deals_source_id
+  ON sa.deals (source_id);
 
--- Измерение «по товарным группам» (режим kc) — GROUP BY / WHERE d.product_group_id.
-CREATE INDEX IF NOT EXISTS idx_deals_product_group_id ON deals (product_group_id);
+-- 3) head_group_name — режим товарных групп by_max: GROUP BY/WHERE идёт по
+-- СТРОКОВОМУ имени (features/reports/engine/byProductGroups.ts, byManagers.ts
+-- drilldown), а проиндексирован только head_group_id — код по id не фильтрует.
+-- Замер: на широком окне то же — Parallel Seq Scan ~70 мс при ~1 300 строках
+-- одной группы (51 уникальная группа).
+CREATE INDEX IF NOT EXISTS idx_sa_deals_head_group_name
+  ON sa.deals (head_group_name);
 
--- Измерение «по товарным группам» (режим by_max, каталожная категория) — строковая
--- колонка, используется в GROUP BY и WHERE d.head_group_name = '...' (drilldown).
-CREATE INDEX IF NOT EXISTS idx_deals_head_group_name ON deals (head_group_name);
+-- 4-5) Повторные покупки/отгрузки (_ppp/_ppo в lib/metrics/sqlGen.ts):
+-- ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at/delivered_at).
+-- Замер: сейчас это Seq Scan + Sort 34 821 строки (quicksort 3.1 МБ, ~180 мс
+-- суммарно) на каждый расчёт метрик ППП/ППО. Частичный составной индекс отдаёт
+-- строки уже в порядке (contact_id, sold_at) — узел Sort исчезает.
+CREATE INDEX IF NOT EXISTS idx_sa_deals_contact_sold_at
+  ON sa.deals (contact_id, sold_at) WHERE sold_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sa_deals_contact_delivered_at
+  ON sa.deals (contact_id, delivered_at) WHERE delivered_at IS NOT NULL;
 
--- Измерение «по источникам» (bySources) + WHERE d.source_id IN (...) в drilldown.
-CREATE INDEX IF NOT EXISTS idx_deals_funnel_id ON deals (funnel_id);
-CREATE INDEX IF NOT EXISTS idx_deals_source_id ON deals (source_id);
-
--- Метрики «повторная покупка» (_ppp/_ppo в lib/metrics/sqlGen.ts resolveFilterClause):
--- ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at/delivered_at) поверх
--- WHERE sold_at/delivered_at IS NOT NULL — частичный индекс покрывает и WHERE, и
--- сортировку внутри партиции без отдельного Sort-узла на всю таблицу.
-CREATE INDEX IF NOT EXISTS idx_deals_contact_sold_at
-  ON deals (contact_id, sold_at) WHERE sold_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_deals_contact_delivered_at
-  ON deals (contact_id, delivered_at) WHERE delivered_at IS NOT NULL;
+-- Попутная находка для владельца БД (НЕ входит в эту миграцию — DROP чужих
+-- индексов без владельца не делаем): на sa.deals два полных дубля —
+--   deals_created_at_idx ≡ idx_sa_deals_created_at (btree created_at),
+--   deals_current_manager_id_idx ≡ idx_sa_deals_current_manager (btree current_manager_id).
+-- По одному из каждой пары можно удалить — экономия на каждой записи в таблицу.
