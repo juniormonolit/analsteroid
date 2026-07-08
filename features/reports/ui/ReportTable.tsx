@@ -378,7 +378,7 @@ export function ReportTable({
   const TOTALS_BG = 'var(--color-totals-bg)';
 
   // Sticky offsets per LEAF column. A full-mode metric has 4 leaf columns
-  // (Текущий/Ср/Δ/Δ%), each needs its own sticky `left` = dimension width + sum of
+  // (Текущий/Пред/Δ/Δ%), each needs its own sticky `left` = dimension width + sum of
   // widths of all preceding pinned leaf columns. We measure offsetWidth (which is
   // INDEPENDENT of position:sticky and scroll, so it never oscillates), with a 90px
   // fallback so a momentarily-missing ref can't collapse everything to one column.
@@ -835,7 +835,7 @@ export function ReportTable({
                   return (
                     <React.Fragment key={m.id}>
                       <th ref={setLeafRef(`${m.id}:0`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${a.cls}`} style={a.style}>Тек.</th>
-                      <th ref={setLeafRef(`${m.id}:1`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${b.cls}`} style={b.style}>Ср.</th>
+                      <th ref={setLeafRef(`${m.id}:1`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${b.cls}`} style={b.style}>Пред.</th>
                       <th ref={setLeafRef(`${m.id}:2`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${c.cls}`} style={c.style}>Δ</th>
                       <th ref={setLeafRef(`${m.id}:3`)} className={`relative text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${e.cls}`} style={e.style}>Δ%{m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}</th>
                     </React.Fragment>
