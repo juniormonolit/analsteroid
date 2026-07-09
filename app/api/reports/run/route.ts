@@ -4,6 +4,7 @@ import { loadMetrics, resolveMetricIds, withDependencies } from '@/lib/metrics/c
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { fetchBySources } from '@/features/reports/engine/bySources';
+import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features/reports/engine/managerActivity';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
@@ -245,6 +246,46 @@ export async function POST(req: NextRequest) {
     };
     currentRows = currentRows.map(enrichPeriodRelative);
     compRows = compRows.map(enrichPeriodRelative);
+  }
+
+  // Метрики активности менеджеров «Дней в работе» / «% выхода» / «Сделок/день» —
+  // спека 09.07+допы (задача 10.07, см. features/reports/engine/managerActivity.ts).
+  // Смысл только в разрезе менеджеров — инжектим ТОЛЬКО в by-managers; для
+  // by-product-groups/by-sources ключи просто не появляются в row.metrics, и
+  // computeCalculated по цепочке зависимостей отдаёт null (это и есть «верни null»).
+  const activityMetricIds = [
+    'manager_worked_days_count', 'manager_attendance_pct', 'manager_deals_per_worked_day',
+  ];
+  const hasActivityMetric = withDeps.some(m => activityMetricIds.includes(m.id));
+
+  if (hasActivityMetric && reportSlug === 'by-managers') {
+    const [curActivity, curCalDays, compActivity, compCalDays] = await Promise.all([
+      fetchManagerActivity(opts.period),
+      getCalendarWorkingDaysInPeriod(opts.period),
+      fetchManagerActivity(compOpts.period),
+      getCalendarWorkingDaysInPeriod(compOpts.period),
+    ]);
+
+    const enrichActivity = (
+      row: ReportRow,
+      activity: Awaited<ReturnType<typeof fetchManagerActivity>>,
+      calendarDays: number | null,
+    ): ReportRow => {
+      const a = activity?.get(row.dimensionId);
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          // null только если ВЕСЬ период раньше старта сбора deal_events (03.04.2026,
+          // см. DEAL_EVENTS_DATA_START) — иначе 0 для менеджеров без рабочих дней.
+          manager_worked_days_count: activity ? (a?.workedDays ?? 0) : null,
+          manager_primary_deals_activity: activity ? (a?.primaryDealsForActivity ?? 0) : null,
+          manager_period_calendar_days: calendarDays,
+        },
+      };
+    };
+    currentRows = currentRows.map(r => enrichActivity(r, curActivity, curCalDays));
+    compRows = compRows.map(r => enrichActivity(r, compActivity, compCalDays));
   }
 
   // Add calculated metrics to each row (after plan enrichment so plan-dependent metrics work)

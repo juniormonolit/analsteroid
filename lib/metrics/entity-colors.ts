@@ -19,6 +19,7 @@ export const ENTITY_COLOR = {
   shipment: '#22c55e', // Отгрузки — зелёный
   refusal: '#ef4444', // Отказы — красный
   call: '#eab308', // Звонки — жёлтый (категории «Звонки» в каталоге пока нет — задел на будущее)
+  activity: '#8b5cf6', // Активность менеджеров (Дней в работе/% выхода/Сделок в день) — фиолетовый, отдельно от воронки
   neutral: null as string | null, // Сделки / «Необработанные» — белый, без окраски (сознательно)
   unknown: '#94a3b8', // Не удалось определить сущность — серый (нейтральный фолбэк)
 } as const;
@@ -76,6 +77,8 @@ export function resolveAutoColor(metric: AutoColorInput): string | null {
       return ENTITY_COLOR.shipment;
     case 'Звонки': // категории в каталоге пока нет — задел на будущее (см. п.10 спеки)
       return ENTITY_COLOR.call;
+    case 'Активность': // Дней в работе / % выхода / Сделок в день (спека 10.07)
+      return ENTITY_COLOR.activity;
     case 'Сделки':
       return ENTITY_COLOR.neutral;
     case 'Брони': {
