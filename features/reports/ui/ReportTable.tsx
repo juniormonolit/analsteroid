@@ -1,10 +1,11 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2 } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter } from 'lucide-react';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { mixHex } from '@/lib/colors/google-sheets-palette';
+import { matchesCondition, resolveThresholdZone, gradientZoneFromRank, type MetricFilters, type ZoneInfo } from '@/lib/reports/metricFilter';
 
 // Ручной режим подсветки значений (п.9 спеки analsteroid-edits-spec-agreed-20260708.md):
 // пороги (значение+цвет, любое количество ≥1) + aboveColor — цвет «выше последнего порога»
@@ -122,6 +123,10 @@ interface Props {
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
   onSortChange?: (sortBy: string | null, sortDir: 'asc' | 'desc') => void;
+  // Фильтр по цвету/условию + сортировка по цвету (панель настроек метрики → «Фильтр и
+  // сортировка», правка владельца 09.07). Сессионное состояние, живёт в SalesReportPage
+  // (как metricDisplayModes/highlights) — НЕ персистится в сохранённые отчёты.
+  metricFilters?: MetricFilters;
   columnGroups?: { name: string; metricIds: string[] }[];
   density?: 'compact' | 'normal' | 'relaxed';
   fontScale?: number;
@@ -162,6 +167,7 @@ export function ReportTable({
   sortBy: sortByProp,
   sortDir: sortDirProp,
   onSortChange,
+  metricFilters = {},
   columnGroups = [],
   density = 'normal',
   fontScale = 1,
@@ -258,13 +264,6 @@ export function ReportTable({
       return next;
     });
   }
-
-  const sorted = [...rows].sort((a, b) => {
-    if (!sortBy || grouping !== 'none') return 0;
-    const av = a.deltas[sortBy]?.current ?? -Infinity;
-    const bv = b.deltas[sortBy]?.current ?? -Infinity;
-    return sortDir === 'desc' ? bv - av : av - bv;
-  });
 
   // Pinned metrics float to the left
   const displayMetrics = [
@@ -375,7 +374,10 @@ export function ReportTable({
   // так, чтобы после color-mix(68%, white) в HlValue получался такой же пастельный
   // бейдж, как у ручных порогов (там исходные цвета — насыщенные тона Google Sheets).
   const heatInvSet = new Set(heatmapInvertedIds);
-  function heatColor(metricId: string, value: number | null): string | undefined {
+  // Ранговый t (0..1, УЖЕ с учётом инверсии heatmapInvertedIds) — вынесен из heatColor
+  // отдельной функцией, т.к. нужен не только для цвета бейджа, но и для зоны фильтра/
+  // сортировки по цвету (см. zoneForValue ниже, п.1/п.3 брифа «Фильтр и сортировка»).
+  function heatRankT(metricId: string, value: number | null): number | undefined {
     if (!heatSet.has(metricId) || value == null) return undefined;
     const vals = heatStats[metricId];
     if (!vals || vals.length === 0) return undefined;
@@ -389,8 +391,84 @@ export function ReportTable({
       t = (lo + (hi - lo - 1) / 2) / (vals.length - 1);
     }
     if (heatInvSet.has(metricId)) t = 1 - t;
-    return `hsl(${Math.round(t * 120)} 70% 50%)`;
+    return t;
   }
+  function heatColor(metricId: string, value: number | null): string | undefined {
+    const t = heatRankT(metricId, value);
+    return t === undefined ? undefined : `hsl(${Math.round(t * 120)} 70% 50%)`;
+  }
+
+  // Зона значения метрики (для фильтра по цвету #1 и сортировки по цвету #3): градиент —
+  // квантование рангового t к ближайшему из 3 опорных цветов (см. gradientZoneFromRank);
+  // пороги — дискретный «карман» между соседними порогами (resolveThresholdZone). Ни то,
+  // ни другое не активно (подсветка выключена) → null, фильтр по цвету для метрики
+  // недоступен (см. HighlightEditor: блок задизейблен с подсказкой).
+  function zoneForValue(metricId: string, value: number | null): ZoneInfo | null {
+    if (heatSet.has(metricId)) {
+      const t = heatRankT(metricId, value);
+      return t === undefined ? null : gradientZoneFromRank(t);
+    }
+    return resolveThresholdZone(value, highlights[metricId]);
+  }
+
+  // ── Фильтр по цвету/условию (#1/#2) + сортировка по цвету (#3) ──────────────────
+  // Клиентские, производные от rows/metricFilters — без похода на сервер. AND между
+  // всеми активными фильтрами метрик. Групповые строки: фильтруются ДЕТИ, группа
+  // остаётся видимой только если хоть один ребёнок прошёл фильтр (тот же приём, что и
+  // текстовый поиск в SalesReportPage). Итоговая строка (totals) в фильтрацию не
+  // участвует — считается по ВСЕМ строкам среза, решение владельца (проще и честнее).
+  const activeFilterEntries = Object.entries(metricFilters).filter(([, f]) => f?.colorZone || f?.condition);
+  function rowPassesFilters(row: RowDeltas): boolean {
+    for (const [metricId, f] of activeFilterEntries) {
+      const value = row.deltas?.[metricId]?.current ?? null;
+      if (f.condition && !matchesCondition(value, f.condition)) return false;
+      if (f.colorZone) {
+        const z = zoneForValue(metricId, value);
+        if (!z || z.key !== f.colorZone) return false;
+      }
+    }
+    return true;
+  }
+  const filteredRows: RowDeltas[] = activeFilterEntries.length === 0 ? rows : rows.reduce<RowDeltas[]>((acc, r) => {
+    if (r.isGroup) {
+      const children = (r.children ?? []).filter(rowPassesFilters);
+      if (children.length) acc.push({ ...r, children });
+    } else if (rowPassesFilters(r)) {
+      acc.push(r);
+    }
+    return acc;
+  }, []);
+
+  // Только одна метрика может «сортировать по цвету» одновременно (см. SalesReportPage:
+  // включение одной гасит флаг у остальных) — здесь просто берём первую активную.
+  const colorSortMetricId = Object.entries(metricFilters).find(([, f]) => f?.sortByColor)?.[0];
+
+  // При инвертированной шкале градиента (heatmapInvertedIds: «меньше = лучше») лучшая
+  // зона у МЕНЬШИХ значений — если внутри зоны сортировать строго по значению убыв.
+  // (буквально по брифу), «лучшее сверху» ломается ВНУТРИ зоны (там окажется значение,
+  // ближайшее к худшей границе зоны, а не самое лучшее). Разворачиваем тай-брейк для
+  // инвертированного градиента, чтобы «лучшее сверху» держалось и внутри зоны тоже —
+  // для порогов (aboveColor всегда «лучше» по конструкции) инверсии нет, там как в брифе.
+  const colorSortInverted = !!colorSortMetricId && heatSet.has(colorSortMetricId) && heatInvSet.has(colorSortMetricId);
+
+  const sorted = [...filteredRows].sort((a, b) => {
+    if (grouping !== 'none') return 0;
+    if (colorSortMetricId) {
+      const za = zoneForValue(colorSortMetricId, a.deltas[colorSortMetricId]?.current ?? null);
+      const zb = zoneForValue(colorSortMetricId, b.deltas[colorSortMetricId]?.current ?? null);
+      const ra = za?.rank ?? Infinity, rb = zb?.rank ?? Infinity;
+      if (ra !== rb) return ra - rb;
+      // Внутри зоны — по значению (бриф п.3: «убыв.»); при инвертированном градиенте —
+      // по возрастанию, чтобы «лучшее сверху» не нарушалось внутри зоны (см. коммент выше).
+      const av = a.deltas[colorSortMetricId]?.current ?? -Infinity;
+      const bv = b.deltas[colorSortMetricId]?.current ?? -Infinity;
+      return colorSortInverted ? (av - bv) : (bv - av);
+    }
+    if (!sortBy) return 0;
+    const av = a.deltas[sortBy]?.current ?? -Infinity;
+    const bv = b.deltas[sortBy]?.current ?? -Infinity;
+    return sortDir === 'desc' ? bv - av : av - bv;
+  });
 
   // Absolute bar painted behind the value. Value content must be wrapped in a positioned
   // element so it stacks above the bar (both z auto → later DOM node wins).
@@ -893,6 +971,16 @@ export function ReportTable({
                     >
                       {m.nameRu}
                     </button>
+                    {/* Маркер активного фильтра по цвету/условию (не сортировки — она строк не
+                        убирает) — иначе непонятно, почему в колонке/таблице вдруг мало строк. */}
+                    {(metricFilters[m.id]?.colorZone || metricFilters[m.id]?.condition) && (
+                      <span
+                        title="По этой метрике активен фильтр — часть строк скрыта"
+                        className="text-[var(--color-accent)] w-[12px] flex-shrink-0 mt-0.5"
+                      >
+                        <Filter size={11} />
+                      </span>
+                    )}
                   </div>
                   {/* Полоска-сегмент под названием метрики (metric-header-brief.md): слева —
                       циклический переключатель режима (full→partial→compact→current→full),

@@ -7,6 +7,8 @@ import { GOOGLE_SHEETS_PALETTE_GRID, GS_TINT_ROWS } from '@/lib/colors/google-sh
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
+import { CONDITION_OPTIONS, GRADIENT_ZONE_SWATCHES, thresholdZoneSwatches } from '@/lib/reports/metricFilter';
+import type { ConditionOp, MetricConditionFilter, MetricFilterState } from '@/lib/reports/metricFilter';
 
 const DISPLAY_OPTIONS: { value: ComparisonDisplay; label: string }[] = [
   { value: 'full',    label: 'Полное сравнение' },
@@ -76,9 +78,17 @@ interface Props {
   onMoveLeft?: () => void;
   onMoveRight?: () => void;
   onRemove?: () => void;
+  // Фильтр по цвету/условию + сортировка по цвету (правка владельца 09.07, «Фильтр и
+  // сортировка» под подсветкой) — сессионное состояние (SalesReportPage), применяется
+  // сразу (не гейтится «Сохранить»), как и pin/accent/bar/heatmap-тумблеры выше.
+  filterState?: MetricFilterState;
+  onColorZoneChange?: (zone: string | null) => void;
+  onConditionChange?: (cond: MetricConditionFilter | null) => void;
+  onSortByColorToggle?: () => void;
+  onFilterReset?: () => void;
 }
 
-export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, onThresholdsClear, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft, isFirst, isLast, onMoveLeft, onMoveRight, onRemove }: Props) {
+export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, onThresholdsClear, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft, isFirst, isLast, onMoveLeft, onMoveRight, onRemove, filterState, onColorZoneChange, onConditionChange, onSortByColorToggle, onFilterReset }: Props) {
   const isPercent = dataType === 'percent';
   const thresholdLabel = isPercent ? 'До значения (%)' : 'До значения';
   const [enabled, setEnabled] = useState(initial?.enabled ?? false);
@@ -98,6 +108,12 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
     if (m !== 'gradient' && isHeatmap) onHeatmapToggle?.();
     if (m !== 'thresholds') onThresholdsClear?.();
     setEnabled(m === 'thresholds');
+    // Ключи зон цвета разные в градиенте ('red'/'yellow'/'green') и порогах ('0'..'N-1'/
+    // 'above') — при смене режима старый выбор зоны либо бессмысленен, либо (что хуже)
+    // случайно совпадёт по строке с зоной из другого режима. Сбрасываем фильтр по цвету
+    // сразу, чтобы «Выключить подсветку» не оставляло фильтр, из-за которого таблица
+    // вдруг показывает 0 строк без видимой причины.
+    onColorZoneChange?.(null);
   }
   const [thresholds, setThresholds] = useState<HighlightThreshold[]>(
     initial?.thresholds ?? defaultConfig(2).thresholds
@@ -404,6 +420,130 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
     </SectionBlock>
   );
 
+  // «Фильтр и сортировка» (правка владельца 09.07): фильтр по цвету текущей подсветки
+  // (свотчи опорных цветов режима + «все»), фильтр по условию (значение метрики), и
+  // сортировка строк по цветовой зоне. Сессионное состояние — применяется сразу через
+  // колбэки, без «Сохранить» (см. filterState в SalesReportPage). Фильтр по цвету
+  // недоступен, пока подсветка выключена (hlMode === 'off') — иначе зона неопределена.
+  const zoneSwatches: { key: string; color: string; label: string }[] = hlMode === 'gradient'
+    ? GRADIENT_ZONE_SWATCHES
+    : hlMode === 'thresholds'
+      ? thresholdZoneSwatches({ thresholds, aboveColor }).map(z => ({
+          ...z,
+          label: z.key === 'above' ? 'Выше последнего порога' : `Порог #${Number(z.key) + 1}`,
+        }))
+      : [];
+  const colorFilterAvailable = hlMode !== 'off';
+  const hasFilter = onColorZoneChange || onConditionChange || onSortByColorToggle;
+
+  const filterSection = hasFilter && (
+    <SectionBlock eyebrow="Фильтр и сортировка">
+      <div className="flex flex-col gap-4">
+        {onColorZoneChange && (
+          <div>
+            <div className="text-sm font-medium text-[var(--color-text)] mb-2">Фильтр по цвету</div>
+            {!colorFilterAvailable ? (
+              <div className="text-xs text-[var(--color-text-muted)]">Включите подсветку, чтобы фильтровать по цвету</div>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => onColorZoneChange(null)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${
+                    !filterState?.colorZone
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
+                      : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'
+                  }`}
+                >
+                  Все
+                </button>
+                {zoneSwatches.map(z => (
+                  <button
+                    key={z.key}
+                    type="button"
+                    title={z.label}
+                    onClick={() => onColorZoneChange(filterState?.colorZone === z.key ? null : z.key)}
+                    className={`w-7 h-7 rounded-full border-2 transition-transform ${
+                      filterState?.colorZone === z.key ? 'border-[var(--color-accent)] scale-110' : 'border-transparent hover:scale-105'
+                    }`}
+                    style={{ backgroundColor: z.color }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {onConditionChange && (
+          <div>
+            <div className="text-sm font-medium text-[var(--color-text)] mb-2">Фильтр по условию</div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={filterState?.condition?.op ?? ''}
+                onChange={e => {
+                  const op = e.target.value as ConditionOp | '';
+                  if (!op) { onConditionChange(null); return; }
+                  onConditionChange({ op, value: filterState?.condition?.value ?? 0, value2: filterState?.condition?.value2 });
+                }}
+                className="border border-[var(--color-border)] rounded-lg px-2 py-1.5 text-sm bg-[var(--color-bg)] text-[var(--color-text)]"
+              >
+                <option value="">Без условия</option>
+                {CONDITION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              {filterState?.condition && (
+                <>
+                  <input
+                    type="number"
+                    value={filterState.condition.value}
+                    onChange={e => onConditionChange({ ...filterState.condition!, value: Number(e.target.value) })}
+                    className="w-20 border border-[var(--color-border)] rounded-lg px-2 py-1.5 text-sm bg-[var(--color-bg)] text-[var(--color-text)]"
+                  />
+                  {filterState.condition.op === 'between' && (
+                    <>
+                      <span className="text-xs text-[var(--color-text-muted)]">и</span>
+                      <input
+                        type="number"
+                        value={filterState.condition.value2 ?? filterState.condition.value}
+                        onChange={e => onConditionChange({ ...filterState.condition!, value2: Number(e.target.value) })}
+                        className="w-20 border border-[var(--color-border)] rounded-lg px-2 py-1.5 text-sm bg-[var(--color-bg)] text-[var(--color-text)]"
+                      />
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {onSortByColorToggle && (
+          <label className={`flex items-center gap-2 ${colorFilterAvailable ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+            <input
+              type="checkbox"
+              checked={filterState?.sortByColor ?? false}
+              onChange={onSortByColorToggle}
+              disabled={!colorFilterAvailable}
+              className="accent-[var(--color-accent)] w-4 h-4"
+            />
+            <span className={`text-sm ${colorFilterAvailable ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}>
+              Сортировать по цвету
+              <span className="text-[11px] text-[var(--color-text-muted)] ml-1.5">(лучшая зона сверху)</span>
+            </span>
+          </label>
+        )}
+
+        {onFilterReset && (filterState?.colorZone || filterState?.condition || filterState?.sortByColor) && (
+          <button
+            type="button"
+            onClick={onFilterReset}
+            className="text-xs font-semibold text-[var(--color-negative)] hover:underline self-start"
+          >
+            Сбросить фильтр
+          </button>
+        )}
+      </div>
+    </SectionBlock>
+  );
+
   const scopeSwitch = (
     <div className={docked ? '' : 'flex-1 min-w-0'}>
       <div className={`text-xs text-[var(--color-text-muted)] mb-2 ${docked ? 'uppercase tracking-wide' : 'font-semibold'}`}>Область применения</div>
@@ -456,6 +596,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           </div>
           <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col sm:w-1/2'}>
             {highlightSection}
+            {filterSection}
           </div>
         </div>
 

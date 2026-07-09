@@ -17,6 +17,7 @@ import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, Compari
 import type { DateRange } from '@/lib/period';
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
+import type { MetricFilters, MetricConditionFilter } from '@/lib/reports/metricFilter';
 import { type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 
@@ -234,6 +235,10 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [drilldownDimension, setDrilldownDimension] = useState<DrilldownDimension>('contact_type');
   const [sortBy, setSortBy] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  // Фильтр по цвету/условию + сортировка по цвету (правка владельца 09.07, панель
+  // настроек метрики → «Фильтр и сортировка»). Намеренно СЕССИОННОЕ состояние — не
+  // персистится в SavedReport (меньше риска на первый заход), сбрасывается сменой отчёта.
+  const [metricFilters, setMetricFilters] = useState<MetricFilters>({});
   const [columnGroups, setColumnGroups] = useState<{ name: string; metricIds: string[] }[]>([]);
   const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
 
@@ -539,6 +544,41 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setBarMetricIds(prev => prev.filter(id => id !== metricId));
     setHeatmapMetricIds(prev => prev.filter(id => id !== metricId));
     setHeatmapInvertedIds(prev => prev.filter(id => id !== metricId));
+    setMetricFilters(prev => {
+      if (!(metricId in prev)) return prev;
+      const copy = { ...prev };
+      delete copy[metricId];
+      return copy;
+    });
+  }
+
+  // «Фильтр и сортировка» (правка владельца 09.07) — применяются сразу, без «Сохранить»,
+  // как и остальные тумблеры HighlightEditor (pin/accent/bar/heatmap).
+  function handleColorZoneChange(metricId: string, zone: string | null) {
+    setMetricFilters(prev => ({ ...prev, [metricId]: { ...prev[metricId], colorZone: zone } }));
+  }
+  function handleConditionChange(metricId: string, cond: MetricConditionFilter | null) {
+    setMetricFilters(prev => ({ ...prev, [metricId]: { ...prev[metricId], condition: cond } }));
+  }
+  // Только одна метрика может «сортировать по цвету» одновременно (комбинировать с
+  // сортировкой по цвету сразу нескольких метрик бессмысленно — порядок строк один);
+  // включение для одной метрики гасит флаг у всех остальных.
+  function handleSortByColorToggle(metricId: string) {
+    setMetricFilters(prev => {
+      const turningOn = !prev[metricId]?.sortByColor;
+      const next: MetricFilters = {};
+      for (const [id, f] of Object.entries(prev)) next[id] = { ...f, sortByColor: false };
+      next[metricId] = { ...(next[metricId] ?? {}), sortByColor: turningOn };
+      return next;
+    });
+  }
+  function handleFilterReset(metricId: string) {
+    setMetricFilters(prev => {
+      if (!(metricId in prev)) return prev;
+      const next = { ...prev };
+      delete next[metricId];
+      return next;
+    });
   }
 
   function handleMetricMoveLeft(metricId: string) {
@@ -667,6 +707,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             sortBy={sortBy}
             sortDir={sortDir}
             onSortChange={(by, dir) => { setSortBy(by); setSortDir(dir); }}
+            metricFilters={metricFilters}
             columnGroups={columnGroups}
             density={viewPrefs.density}
             fontScale={viewPrefs.fontScale}
@@ -829,6 +870,11 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onMoveLeft={() => handleMetricMoveLeft(configuringMetricId!)}
             onMoveRight={() => handleMetricMoveRight(configuringMetricId!)}
             onRemove={() => { handleMetricRemove(configuringMetricId!); setConfiguringMetricId(null); }}
+            filterState={metricFilters[configuringMetricId]}
+            onColorZoneChange={(zone) => handleColorZoneChange(configuringMetricId!, zone)}
+            onConditionChange={(cond) => handleConditionChange(configuringMetricId!, cond)}
+            onSortByColorToggle={() => handleSortByColorToggle(configuringMetricId!)}
+            onFilterReset={() => handleFilterReset(configuringMetricId!)}
           />
         );
       })()}
