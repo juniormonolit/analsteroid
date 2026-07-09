@@ -7,15 +7,19 @@ interface PanelCloseTabProps {
   topClassName?: string;
   className?: string;
   /** Точечный оверрайд позиции (напр. `{ left: '10%', transform: 'translateX(-50%)' }`
-   * для дрилл-дауна, где левый край панели — не фиксированная ширина, а `10%` от экрана). */
+   * для дрилл-дауна/сравнения, где левый край панели — не фиксированная ширина, а `10%`
+   * от экрана). Если передан `left` — дефолтный `-left-[30px]` не применяется. */
   style?: React.CSSProperties;
 }
 
 /**
  * Единая кнопка закрытия для правых слайд-панелей (карточка сделки, дрилл-даун,
- * настройки метрики, импорт/экспорт планов, ченджлог — п. Н3 спеки): квадратный
- * «язычок» (лёгкое скругление внешних углов 3px, НЕ полукруг — правка владельца
- * 09.07), торчащий с ЛЕВОГО края панели наружу, синий фон, белый крупный ×.
+ * сравнение, настройки метрики, импорт/экспорт планов, ченджлог — п. Н3 спеки):
+ * КВАДРАТНЫЙ ярлычок 30×30, торчащий с ЛЕВОГО края панели НАРУЖУ (правка владельца
+ * 09.07, уточнение того же дня — вернули выступающий ярлычок вместо кнопки внутри
+ * угла панели, но сделали его настоящим квадратом вместо вытянутого 56×28). Скругление
+ * только внешних (левых) углов ~4px (`rounded-l-[4px]`), правая сторона вплотную к
+ * панели — прямая. Синий фон, белый ×, тень.
  *
  * Только для широких экранов (`hidden sm:flex`) — на мобиле панели занимают почти всю
  * ширину экрана, слева нет места для выступающего таба, там остаётся обычный крестик
@@ -33,9 +37,9 @@ export function PanelCloseTab({ onClick, topClassName = 'top-6', className = '',
       aria-label="Закрыть"
       title="Закрыть"
       style={style}
-      className={`hidden sm:flex absolute ${topClassName} ${style?.left === undefined ? '-left-7' : ''} z-10 h-14 w-7 items-center justify-center rounded-l-[3px] bg-[var(--color-accent)] text-white shadow-lg hover:bg-[var(--color-accent-hover)] transition-colors ${className}`}
+      className={`hidden sm:flex absolute ${topClassName} ${style?.left === undefined ? '-left-[30px]' : ''} z-10 h-[30px] w-[30px] items-center justify-center rounded-l-[4px] bg-[var(--color-accent)] text-white shadow-lg hover:bg-[var(--color-accent-hover)] transition-colors ${className}`}
     >
-      <X size={18} strokeWidth={2.5} />
+      <X size={17} strokeWidth={2.5} />
     </button>
   );
 }
