@@ -6,6 +6,49 @@
 
 ---
 
+## 2026-07-09 — Фича «Идеи и планы» (бэклог идей от пользователей)
+
+- **Задача владельца**: макет утверждён (`ideas-backlog-mock.html`) — новый пункт
+  сайдбара «Идеи и планы» (Lightbulb) НАД «Что изменилось?», построен по паттерну
+  ченджлога (миграция 056/features/changelog): пункт внизу сайдбара + выезжающая
+  справа панель + API.
+- **БД**: `migrations/059_ideas_backlog.sql` — таблица `ideas` (id uuid, title, body,
+  status enum-CHECK proposed/planned/in_progress/done/rejected default proposed,
+  author_login, author_name, created_at/updated_at), индексы по status и
+  created_at DESC. Идемпотентно (`IF NOT EXISTS`). Сида НЕТ — лента стартует пустой
+  (идеи должны быть настоящими). БД: YC system, катит Артём
+  (`node migrations/run_system.mjs migrations/059_ideas_backlog.sql`).
+- **API** (`app/api/ideas/route.ts`, `app/api/ideas/[id]/route.ts`) — под `getSession`,
+  401 без сессии:
+  - `GET /api/ideas` — две группы: `planned` (status IN in_progress/planned,
+    в работе выше запланированных, сорт по `updated_at DESC`) и `proposed`
+    (сорт `created_at DESC`). `done`/`rejected` НЕ показываются в основной ленте
+    (решение по простоте — история решённых идей доступна прямым запросом к БД,
+    отдельный экран не делали).
+  - `POST /api/ideas` — подать идею, автор = текущая сессия (`login`/`displayName`),
+    валидация непустых полей + лимиты длины (title ≤200, body ≤4000, см.
+    `lib/ideas/types.ts`).
+  - `PATCH /api/ideas/[id]` — смена статуса, гейт `action.shared_reports.manage`
+    (тот же уровень «админ», что для общих отчётов «Роп монитор»/«Отчёты Стаса»,
+    см. `isReportAdmin`/`permError` в `lib/auth/perms.ts`) — супер-админ проходит
+    автоматически через `hasPerm`. Допустимые статусы для PATCH: planned/in_progress/
+    done/rejected (proposed — только стартовое состояние при создании).
+- **UI** (`features/ideas/ui/IdeasPanel.tsx`, `useIdeasQuery.ts`) — 1:1 стиль с
+  `ChangelogPanel`: `SlideBackdrop` + `PanelCloseTab` + `useSlideClose`, та же ширина
+  панели (`w-full sm:w-[50vw] sm:min-w-[360px] sm:max-w-[800px]`). Два экрана внутри
+  одной панели (лента / форма подачи со стрелкой назад), возврат в ленту после отправки.
+  Для админа (проверка через `GET /api/auth/session`, тот же паттерн, что
+  `SaveReportModal.tsx`) — нативный `<select>` смены статуса прямо на карточке,
+  без отдельного экрана. `components/layout/AppShell.tsx` — новый пункт сайдбара
+  (иконка `Lightbulb`) НАД пунктом ченджлога, своё состояние `ideasOpen`, монтирование
+  `IdeasPanel` рядом с `ChangelogPanel`.
+- **Проверки**: `npm run typecheck`, `npm run build`, `npm run lint:responsive` — все
+  зелёные, 0 нарушений сверх baseline. Регрессий в ченджлоге/сайдбаре не внесено
+  (те же общие компоненты `SlideBackdrop`/`PanelCloseTab`/`useSlideClose`, ченджлог не
+  трогали кроме добавления соседнего блока в `AppShell.tsx`).
+
+---
+
 ## 2026-07-09 — Баг «не работает сохранение в Отчёты Стаса/Роп монитор» + переименование «Смекалочная» → «Отчёты Стаса»
 
 - **Жалоба владельца**: Станислав Смекалов (login `marketolog1`, роль «Администратор»,

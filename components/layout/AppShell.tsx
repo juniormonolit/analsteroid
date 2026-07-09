@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
-  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell,
+  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, Lightbulb,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, type PermKey } from '@/lib/auth/perms';
@@ -17,6 +17,7 @@ import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import type { SavedReport } from '@/lib/saved-reports/types';
 import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
 import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
+import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
 
 /* Общий паттерн пункта 1-го уровня (NAV-блок, Сводная/Планы/Декомпозиция,
    Метрики/Настройки) — редизайн сайдбара, итерация 3 (бриф Виктора). */
@@ -204,7 +205,10 @@ const NAV: NavItem[] = [
 
 /* Содержимое сайдбара (nav + нижние секции + footer) — общее для десктопного
    <aside> и мобильного off-canvas drawer, поэтому вынесено из AppShell. */
-function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout, changelogOpen, onOpenChangelog }: {
+function SidebarBody({
+  collapsed, pathname, user, expanded, setExpanded, logout,
+  changelogOpen, onOpenChangelog, ideasOpen, onOpenIdeas,
+}: {
   collapsed: boolean;
   pathname: string;
   user: SessionUser;
@@ -213,6 +217,8 @@ function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout,
   logout: () => void;
   changelogOpen: boolean;
   onOpenChangelog: () => void;
+  ideasOpen: boolean;
+  onOpenIdeas: () => void;
 }) {
   const salesActive = pathname.startsWith('/sales');
   const showSummaryBlock = hasPerm(user, 'section.summary') || hasPerm(user, 'section.plans') || hasPerm(user, 'section.decomposition');
@@ -369,6 +375,21 @@ function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout,
             </div>
           )}
 
+          {/* «Идеи и планы» — бэклог идей (макет ideas-backlog-mock.html), НАД
+              «Что изменилось?», виден всем независимо от прав, как и ченджлог. */}
+          <div className="pt-1 px-2">
+            <button
+              type="button"
+              onClick={onOpenIdeas}
+              className={`w-full ${NAV_ITEM_BASE} ${ideasOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+            >
+              <span className={navIconCls(ideasOpen)}><Lightbulb size={18} /></span>
+              {!collapsed && (
+                <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Идеи и планы</span>
+              )}
+            </button>
+          </div>
+
           {/* «Что изменилось?» — ченджлог, виден всем независимо от прав (п.4 задачи) */}
           <div className="pt-1 px-2">
             <button
@@ -431,6 +452,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<string>('Продажи');
   const [changelogOpen, setChangelogOpen] = useState(false);
+  const [ideasOpen, setIdeasOpen] = useState(false);
   const router = useRouter();
 
   // Переход по ссылке из мобильного меню должен закрывать drawer
@@ -482,6 +504,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             collapsed={collapsed} pathname={pathname} user={user}
             expanded={expanded} setExpanded={setExpanded} logout={logout}
             changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
+            ideasOpen={ideasOpen} onOpenIdeas={() => setIdeasOpen(true)}
           />
         </aside>
 
@@ -506,6 +529,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                 collapsed={false} pathname={pathname} user={user}
                 expanded={expanded} setExpanded={setExpanded} logout={logout}
                 changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
+                ideasOpen={ideasOpen} onOpenIdeas={() => setIdeasOpen(true)}
               />
             </aside>
           </div>
@@ -533,6 +557,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         </div>
       </div>
       {changelogOpen && <ChangelogPanel onClose={() => setChangelogOpen(false)} />}
+      {ideasOpen && <IdeasPanel onClose={() => setIdeasOpen(false)} />}
     </QueryProvider>
   );
 }
