@@ -13,8 +13,9 @@ interface PanelCloseTabProps {
 
 /**
  * Единая кнопка закрытия для правых слайд-панелей (карточка сделки, дрилл-даун,
- * настройки метрики, импорт/экспорт планов — п. Н3 спеки): скруглённый «язычок»,
- * торчащий с ЛЕВОГО края панели наружу, синий фон, белый крупный ×.
+ * настройки метрики, импорт/экспорт планов, ченджлог — п. Н3 спеки): квадратный
+ * «язычок» (лёгкое скругление внешних углов 3px, НЕ полукруг — правка владельца
+ * 09.07), торчащий с ЛЕВОГО края панели наружу, синий фон, белый крупный ×.
  *
  * Только для широких экранов (`hidden sm:flex`) — на мобиле панели занимают почти всю
  * ширину экрана, слева нет места для выступающего таба, там остаётся обычный крестик
@@ -32,7 +33,7 @@ export function PanelCloseTab({ onClick, topClassName = 'top-6', className = '',
       aria-label="Закрыть"
       title="Закрыть"
       style={style}
-      className={`hidden sm:flex absolute ${topClassName} ${style?.left === undefined ? '-left-7' : ''} z-10 h-14 w-7 items-center justify-center rounded-l-full bg-[var(--color-accent)] text-white shadow-lg hover:bg-[var(--color-accent-hover)] transition-colors ${className}`}
+      className={`hidden sm:flex absolute ${topClassName} ${style?.left === undefined ? '-left-7' : ''} z-10 h-14 w-7 items-center justify-center rounded-l-[3px] bg-[var(--color-accent)] text-white shadow-lg hover:bg-[var(--color-accent-hover)] transition-colors ${className}`}
     >
       <X size={18} strokeWidth={2.5} />
     </button>
