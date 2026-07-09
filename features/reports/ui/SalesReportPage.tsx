@@ -349,6 +349,22 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setConfiguringMetricId(null);
   }
 
+  // Немедленная (без «Сохранить», без закрытия панели) очистка report-scope порогового
+  // конфига метрики — вызывается HighlightEditor при переключении радиокнопки подсветки
+  // на «Выключена»/«Градиент», пока пользователь ещё может продолжать редактировать
+  // остальные настройки метрики в той же панели. Убирает старую асимметрию: heatmap-флаг
+  // гасится мгновенно (onHeatmapToggle), а пороги должны гаситься так же мгновенно, а не
+  // только по клику «Сохранить».
+  function handleThresholdsClear() {
+    if (!configuringMetricId) return;
+    setHighlights(prev => {
+      if (!(configuringMetricId in prev)) return prev;
+      const next = { ...prev };
+      delete next[configuringMetricId];
+      return next;
+    });
+  }
+
   async function handleGlobalHighlight(metricId: string, config: MetricHighlightConfig | null) {
     await fetch(`/api/user-highlights/${metricId}`, {
       method: 'PUT',
@@ -788,6 +804,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onHeatmapInvertToggle={() => setHeatmapInvertedIds(prev =>
               prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
             )}
+            onThresholdsClear={handleThresholdsClear}
             decimalPlaces={metricDecimalOverrides[configuringMetricId] ?? m?.decimalPlaces ?? 2}
             onDecimalPlacesChange={(v) => setMetricDecimalOverrides(prev => ({ ...prev, [configuringMetricId!]: v }))}
             comparisonThreshold={metricThresholdOverrides[configuringMetricId] ?? (m?.dataType === 'percent' ? 10 : 5)}

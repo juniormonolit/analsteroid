@@ -53,6 +53,12 @@ interface Props {
   onHeatmapToggle?: () => void;
   isHeatmapInverted?: boolean;
   onHeatmapInvertToggle?: () => void;
+  // Немедленная очистка сохранённого порогового конфига метрики (report-scope), в обход
+  // кнопки «Сохранить». Без этого переключение радиокнопки в «Выключена»/«Градиент» гасит
+  // heatmap-флаг мгновенно (onHeatmapToggle), а старый threshold-конфиг остаётся висеть до
+  // явного клика «Сохранить» — асимметрия, из-за которой «выключенная» подсветка на деле
+  // не выключается, пока пользователь не нажмёт Save (баг из аудита 2026-07-09).
+  onThresholdsClear?: () => void;
   decimalPlaces?: number;
   onDecimalPlacesChange?: (v: number) => void;
   comparisonThreshold?: number;
@@ -62,17 +68,25 @@ interface Props {
   anchorLeft?: number;
 }
 
-export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft }: Props) {
+export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, onThresholdsClear, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft }: Props) {
   const isPercent = dataType === 'percent';
   const thresholdLabel = isPercent ? 'До значения (%)' : 'До значения';
   const [enabled, setEnabled] = useState(initial?.enabled ?? false);
   // Единая подсветка: Выкл / Градиент (авто, красный→зелёный) / Пороги (ручные)
   type HlMode = 'off' | 'gradient' | 'thresholds';
   const [hlMode, setHlMode] = useState<HlMode>(isHeatmap ? 'gradient' : (initial?.enabled ? 'thresholds' : 'off'));
+  // Режимы взаимоисключающие (off/gradient/thresholds) — переключение ПРИМЕНЯЕТСЯ сразу,
+  // а не после «Сохранить»: heatmap-флаг и так гасился мгновенно (onHeatmapToggle), а
+  // пороговый конфиг раньше отставал до Save — отсюда «выключил подсветку, а бейдж
+  // остался цветным». Теперь при уходе из 'thresholds' сразу чистим прошлый пороговый
+  // конфиг (onThresholdsClear), при входе в 'gradient'/'thresholds' — гасим heatmap-флаг
+  // на противоположном режиме. Итог: ни одна метрика не может одновременно иметь активный
+  // heatmap-флаг И активный threshold-конфиг.
   function switchMode(m: HlMode) {
     setHlMode(m);
     if (m === 'gradient' && !isHeatmap) onHeatmapToggle?.();
     if (m !== 'gradient' && isHeatmap) onHeatmapToggle?.();
+    if (m !== 'thresholds') onThresholdsClear?.();
     setEnabled(m === 'thresholds');
   }
   const [thresholds, setThresholds] = useState<HighlightThreshold[]>(
@@ -363,7 +377,12 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
         {/* Footer */}
         <div className="px-5 py-4 border-t border-[var(--color-border)] flex justify-between items-center">
           <button
-            onClick={() => { onSave(null, scope); }}
+            onClick={() => {
+              // «Сбросить» = полностью «Выключена»: гасим оба канала подсветки, не только
+              // пороги — иначе градиент мог остаться активным после сброса порогов.
+              if (isHeatmap) onHeatmapToggle?.();
+              onSave(null, scope);
+            }}
             className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors"
           >
             Сбросить

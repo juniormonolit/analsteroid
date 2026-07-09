@@ -433,15 +433,22 @@ export function ReportTable({
     }
   }
 
-  // Heat map: red → green по РАНГУ значения в колонке (перцентильная шкала), не по
+  // Градиент: red → green по РАНГУ значения в колонке (перцентильная шкала), не по
   // расстоянию до min/max. Медиана колонки — всегда середина (жёлтый); выброс (менеджер
   // с 3/3 = 100% CR) — просто самый зелёный, остальных в красное не утаскивает.
   // Равные значения получают одинаковый цвет (средний ранг). Инверсия — меньше = лучше.
+  //
+  // Красит БЕЙДЖ вокруг значения (HlValue), тем же механизмом, что и ручные пороги —
+  // не заливает фон ячейки. Раньше заливался td.backgroundColor (heatStyle) — визуально
+  // выглядело как окраска всей ячейки, а не значения; порогово-градиентная подсветка
+  // теперь единообразна (см. hlColor ниже). Насыщенность/светлота (70%/50%) подобраны
+  // так, чтобы после color-mix(68%, white) в HlValue получался такой же пастельный
+  // бейдж, как у ручных порогов (там исходные цвета — насыщенные тона Google Sheets).
   const heatInvSet = new Set(heatmapInvertedIds);
-  function heatStyle(metricId: string, value: number | null): React.CSSProperties {
-    if (!heatSet.has(metricId) || value == null) return {};
+  function heatColor(metricId: string, value: number | null): string | undefined {
+    if (!heatSet.has(metricId) || value == null) return undefined;
     const vals = heatStats[metricId];
-    if (!vals || vals.length === 0) return {};
+    if (!vals || vals.length === 0) return undefined;
     let t: number;
     if (vals.length === 1 || vals[0] === vals[vals.length - 1]) {
       t = 0.5;
@@ -452,7 +459,7 @@ export function ReportTable({
       t = (lo + (hi - lo - 1) / 2) / (vals.length - 1);
     }
     if (heatInvSet.has(metricId)) t = 1 - t;
-    return { backgroundColor: `hsl(${Math.round(t * 120)} 78% 85%)` };
+    return `hsl(${Math.round(t * 120)} 70% 50%)`;
   }
 
   // Absolute bar painted behind the value. Value content must be wrapped in a positioned
@@ -587,9 +594,12 @@ export function ReportTable({
             ? 'cursor-pointer hover:bg-[var(--color-accent-soft)] hover:text-[var(--color-accent)] transition-colors'
             : 'cursor-pointer hover:bg-[var(--color-accent)]/10 hover:text-[var(--color-accent)] transition-colors')
         : '';
-      const hlColor = resolveHighlightColor(d?.current ?? null, highlights[m.id]);
+      // Пороги и градиент — взаимоисключающие режимы одной и той же «подсветки значений»
+      // (см. HighlightEditor: hlMode off/gradient/thresholds), поэтому для метрики активен
+      // максимум один из двух источников; на случай рассинхрона данных пороги в приоритете.
+      const hlColor = resolveHighlightColor(d?.current ?? null, highlights[m.id])
+        ?? heatColor(m.id, d?.current ?? null);
       const accent = accentStyle(m.id);
-      const heat = heatStyle(m.id, d?.current ?? null);
       const sizeStyle = { minWidth: METRIC_COL_WIDTH };
 
       // Absolute right-edge separator bar for the last pinned column (border-collapse hides
@@ -637,7 +647,7 @@ export function ReportTable({
                   <td
                     key={kind}
                     className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
-                    style={{ ...p.style, ...accent, ...heat, ...alignStyle }}
+                    style={{ ...p.style, ...accent, ...alignStyle }}
                     onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
                   >
                     <BarBg metricId={m.id} value={d?.current ?? null} />
@@ -676,7 +686,7 @@ export function ReportTable({
           <td
             key={m.id}
             className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
-            style={{ ...p.style, ...accent, ...heat, ...alignStyle }}
+            style={{ ...p.style, ...accent, ...alignStyle }}
             onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
           >
             {pinBar}
@@ -702,7 +712,7 @@ export function ReportTable({
         <td
           key={m.id}
           className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
-          style={{ ...p.style, ...accent, ...heat, ...alignStyle }}
+          style={{ ...p.style, ...accent, ...alignStyle }}
           onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
         >
           {pinBar}
