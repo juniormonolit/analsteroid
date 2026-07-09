@@ -2,6 +2,7 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { computeDelta } from '@/features/reports/engine/calculated';
+import { fetchTouchSpeedAllByManager } from '@/features/reports/engine/callsMetrics';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { toSqlInterval, type DateRange } from '@/lib/period';
 import type { ClientType, ReportRow } from '@/lib/metrics/types';
@@ -127,9 +128,12 @@ function ratingFor(axisMap: AxisMap, eligibleIds: Set<string>, managerId: string
 
 // ── va.calls (схема va, та же MLT-БД) ────────────────────────────────────────
 // Скорость первого касания: медиана (created_at сделки → первый звонок result='completed',
-// direction любой) — ОДИН агрегатный запрос по ВСЕМ менеджерам сразу (не N+1).
-// Если va.calls недоступна текущим подключением — ловим ошибку и возвращаем null
-// (ось помечается «нет данных» выше по стеку, значения не выдумываются).
+// direction любой). Расчёт вынесен в features/reports/engine/callsMetrics.ts
+// (задача КОЛСТАТ, 10.07, п.7 — используется ТАКЖЕ каталогом метрик «Звонки» с
+// разрезом перв./повт./все; карточка менеджера как и раньше берёт только «(все)»).
+// Если va.calls недоступна текущим подключением — ловим ошибку внутри
+// fetchTouchSpeedAllByManager и получаем null (ось помечается «нет данных» выше
+// по стеку, значения не выдумываются).
 //
 // Кэш (10 мин, тот же принцип, что row-кэш в byManagers.ts): результат зависит
 // ТОЛЬКО от периода, не от менеджера — открытие карточки другого менеджера за тот
@@ -144,39 +148,9 @@ async function fetchTouchSpeedByManager(period: DateRange): Promise<Map<string, 
   const cached = _touchSpeedCache.get(cacheKey);
   if (cached && Date.now() - cached.at < TOUCH_SPEED_TTL) return cached.data;
 
-  const data = await fetchTouchSpeedByManagerUncached(from, toExcl);
+  const data = await fetchTouchSpeedAllByManager(period);
   _touchSpeedCache.set(cacheKey, { data, at: Date.now() });
   return data;
-}
-
-async function fetchTouchSpeedByManagerUncached(from: string, toExcl: string): Promise<Map<string, number> | null> {
-  try {
-    const res = await analyticsDb().query<{ manager_id: string; median_minutes: string | null }>(
-      `WITH first_calls AS (
-         SELECT deal_id, MIN(called_at) AS first_call_at
-         FROM va.calls
-         WHERE result = 'completed'
-         GROUP BY deal_id
-       )
-       SELECT d.current_manager_id::text AS manager_id,
-              percentile_cont(0.5) WITHIN GROUP (
-                ORDER BY EXTRACT(EPOCH FROM (fc.first_call_at - d.created_at)) / 60
-              ) AS median_minutes
-       FROM sa.deals d
-       JOIN first_calls fc ON fc.deal_id = d.deal_id
-       WHERE d.created_at >= $1 AND d.created_at < $2
-         AND d.current_manager_id IS NOT NULL
-         AND fc.first_call_at >= d.created_at
-       GROUP BY d.current_manager_id`,
-      [from, toExcl],
-    );
-    return new Map(
-      res.rows.filter(r => r.median_minutes !== null).map(r => [r.manager_id, Number(r.median_minutes)]),
-    );
-  } catch (e) {
-    console.warn('[manager-card] va.calls (touch speed) недоступна:', e instanceof Error ? e.message : e);
-    return null;
-  }
 }
 
 interface CallsTizer { count: number; avgDurationSec: number | null }

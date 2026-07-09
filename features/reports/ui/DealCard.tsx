@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, ExternalLink } from 'lucide-react';
+import { X, ExternalLink, ArrowDownLeft, ArrowUpRight, Mic } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
@@ -29,6 +29,49 @@ interface ManagerInfo { name: string; login: string | null; branch: string; depa
 interface SourceInfo {
   name: string; category: string; contact_type: string | null; branch: string | null;
   platform: string | null; brand: string | null; ad_channel: string | null; channel_group: string | null;
+}
+
+// Таб «Звонки» (задача КОЛСТАТ, п.B, 10.07) — список звонков сделки, va.calls.
+interface DealCall {
+  id: string;
+  calledAt: string;
+  direction: 'inbound' | 'outbound';
+  result: 'completed' | 'missed' | 'voicemail' | 'operator_error';
+  durationSeconds: number | null;
+  managerId: string | null;
+  managerName: string | null;
+  hasRecording: boolean;
+}
+
+const CALL_RESULT_LABEL: Record<DealCall['result'], string> = {
+  completed: 'Разговор',
+  missed: 'Недозвон',
+  voicemail: 'Автоответчик',
+  operator_error: 'Ошибка оператора',
+};
+// Бейдж результата — зелёный (успех) / красный (недозвон, отказ) / серый (автоответчик,
+// нейтрально — звонок формально состоялся, просто без живого собеседника).
+const CALL_RESULT_CLASS: Record<DealCall['result'], string> = {
+  completed: 'bg-[color-mix(in_srgb,var(--color-positive,#2f9e44)_12%,white)] text-[var(--color-positive,#2f9e44)]',
+  missed: 'bg-[color-mix(in_srgb,var(--color-negative,#e03131)_12%,white)] text-[var(--color-negative,#e03131)]',
+  operator_error: 'bg-[color-mix(in_srgb,var(--color-negative,#e03131)_12%,white)] text-[var(--color-negative,#e03131)]',
+  voicemail: 'bg-[var(--color-bg)] text-[var(--color-text-muted)]',
+};
+
+function fmtDuration(sec: number | null): string {
+  if (sec === null || sec === undefined) return '—';
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+function fmtDateTimeMsk(iso: string): string {
+  // called_at приходит как timestamptz (UTC) из PG-драйвера в виде Date-строки;
+  // toLocaleString с явной МСК-таймзоной — тот же приём, что и остальные
+  // МСК-отображения в приложении (владелец всегда смотрит время в МСК).
+  return new Date(iso).toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
 function fmtMoney(v: number | string | null | undefined) {
@@ -74,14 +117,14 @@ const STAGES: { key: keyof DealFull; label: string }[] = [
 // карточка была одной вертикальной простынёй, при большом числе товарных позиций
 // превращавшейся в бесконечный скролл. Теперь «Основное» (хронология + товарные
 // группы + менеджер + источник + служебное, 2 колонки без вертикального скролла
-// панели) и «Товары» (список позиций + итого — единственное место, где скролл
-// вообще допустим, и то нечасто).
-type DealCardTab = 'main' | 'products';
+// панели), «Товары» (список позиций + итого) и «Звонки» (задача КОЛСТАТ, 10.07 —
+// история звонков сделки, va.calls, грузится лениво только при открытии таба).
+type DealCardTab = 'main' | 'products' | 'calls';
 
 export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['deal-card', dealId],
-    queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null }>,
+    queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null; callsCount: number }>,
     staleTime: 60_000,
   });
   const deal = data?.deal;
@@ -90,6 +133,18 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const isLostDeal = !!deal?.lost_at;
   const { closing, requestClose } = useSlideClose(onClose);
   const [tab, setTab] = useState<DealCardTab>('main');
+
+  // Список звонков — лениво, только когда таб «Звонки» реально открыт (enabled),
+  // чтобы не бить va.calls на каждое открытие карточки (счётчик N в лейбле таба
+  // приходит дёшево вместе с основным запросом, см. /api/reports/deal callsCount).
+  const { data: callsData, isLoading: callsLoading } = useQuery({
+    queryKey: ['deal-card-calls', dealId],
+    queryFn: () => fetch(`/api/reports/deal/calls?id=${dealId}`).then(r => r.json()) as Promise<{ calls: DealCall[] }>,
+    enabled: tab === 'calls',
+    staleTime: 60_000,
+  });
+  const calls = callsData?.calls ?? [];
+  const callsCount = data?.callsCount ?? 0;
 
   // Хронология — только заполненные этапы (+ ожидаемое закрытие, если сделка ещё
   // открыта), в порядке жизненного цикла. Собираем один раз здесь, чтобы вертикальная
@@ -162,15 +217,18 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
 
         {deal && (
           <>
-            {/* Табы «Основное»/«Товары» (п.1 правок 09.07/2, «как в Битриксе»): шапка
-                выше остаётся общей для обоих табов, переключатель — сразу под ней.
-                Стиль пилюль — вариант C, тот же паттерн, что и переключатель режима
-                подсветки в HighlightEditor (единый визуальный язык табов приложения). */}
+            {/* Табы «Основное»/«Товары»/«Звонки» (п.1 правок 09.07/2, «как в Битриксе» +
+                КОЛСТАТ п.B 10.07): шапка выше остаётся общей для всех табов,
+                переключатель — сразу под ней. Стиль пилюль — вариант C, тот же
+                паттерн, что и переключатель режима подсветки в HighlightEditor
+                (единый визуальный язык табов приложения). max-w-md (было max-w-xs) —
+                третья пилюля «Звонки N» иначе не помещалась на 375px без переноса. */}
             <div className="shrink-0 px-6 sm:px-9 pt-4 pb-1 border-b border-[var(--color-border)]">
-              <div className="flex bg-[var(--color-bg)] rounded-xl p-1 gap-1 max-w-xs">
+              <div className="flex bg-[var(--color-bg)] rounded-xl p-1 gap-1 max-w-md">
                 {([
                   { v: 'main', label: 'Основное' },
                   { v: 'products', label: `Товары${products.length ? ` · ${products.length}` : ''}` },
+                  { v: 'calls', label: `Звонки${callsCount ? ` · ${callsCount}` : ''}` },
                 ] as { v: DealCardTab; label: string }[]).map(o => (
                   <button
                     key={o.v}
@@ -286,6 +344,51 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                         <span className="text-sm text-[var(--color-text-muted)]">Итого по товарам</span>
                         <span className="text-sm font-bold tabular-nums text-[var(--color-accent)]">{fmtMoney(productsTotal)}</span>
                       </div>
+                    </div>
+                  )}
+                </Section>
+              </div>
+            )}
+
+            {tab === 'calls' && (
+              // «Звонки» (задача КОЛСТАТ, п.B, 10.07): плоский список, новые сверху
+              // (called_at DESC) — в отличие от «Хронологии» это НЕ связанные точки
+              // жизненного цикла сделки, а независимые события одного типа, для
+              // которых «последнее сверху» интуитивнее «по порядку с начала».
+              <div className="flex-1 overflow-y-auto px-6 sm:px-9 py-5 sm:py-7">
+                <Section title={`Звонки · ${calls.length}`}>
+                  {callsLoading ? (
+                    <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-14 bg-[var(--color-border)] rounded-xl animate-pulse" />)}</div>
+                  ) : calls.length === 0 ? (
+                    <div className="text-sm text-[var(--color-text-muted)]">Звонков по сделке нет</div>
+                  ) : (
+                    <div className="border border-[var(--color-border)] rounded-xl overflow-hidden">
+                      {calls.map((c, i) => (
+                        <div key={c.id} className={`px-4 py-2.5 flex items-center gap-3 ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`}>
+                          {c.direction === 'inbound' ? (
+                            <ArrowDownLeft size={16} className="shrink-0 text-[var(--color-accent)]" aria-label="Входящий" />
+                          ) : (
+                            <ArrowUpRight size={16} className="shrink-0 text-[var(--color-text-muted)]" aria-label="Исходящий" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-sm text-[var(--color-text)] tabular-nums">{fmtDateTimeMsk(c.calledAt)}</span>
+                              <span className="text-sm font-medium tabular-nums text-[var(--color-text)] shrink-0">{fmtDuration(c.durationSeconds)}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 mt-1">
+                              <span className="text-xs text-[var(--color-text-muted)] truncate">{c.managerName ?? '—'}</span>
+                              <span className="flex items-center gap-1.5 shrink-0">
+                                {c.hasRecording && (
+                                  <Mic size={12} className="text-[var(--color-text-muted)]" aria-label="Есть запись разговора" />
+                                )}
+                                <span className={`px-1.5 py-0.5 rounded-full text-[11px] font-medium ${CALL_RESULT_CLASS[c.result]}`}>
+                                  {CALL_RESULT_LABEL[c.result]}
+                                </span>
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </Section>

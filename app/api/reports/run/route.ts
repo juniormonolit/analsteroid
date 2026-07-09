@@ -7,6 +7,10 @@ import { fetchBySources } from '@/features/reports/engine/bySources';
 import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features/reports/engine/managerActivity';
 import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/features/reports/engine/stageConversions';
 import { fetchPriceObjectionConversion } from '@/features/reports/engine/priceObjectionConversion';
+import {
+  fetchCallsBaseMetrics, fetchDealCallAdditive, fetchTouchAndFirstCallMedians, fetchCallSilence,
+  type Bucket, type CallsBaseRow, type DealCallAdditiveRow, type TouchAndFirstCallRow,
+} from '@/features/reports/engine/callsMetrics';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
@@ -365,6 +369,140 @@ export async function POST(req: NextRequest) {
     };
     currentRows = currentRows.map(r => enrichPriceObjection(r, curPO));
     compRows = compRows.map(r => enrichPriceObjection(r, compPO));
+  }
+
+  // КОЛСТАТ — метрики каталога «Звонки» (va.calls, задача 10.07, owners-inbox) —
+  // тот же гейт, что и активность/конверсии стадий выше: только by-managers
+  // (атрибуция звонковых метрик — calls.manager_id, сделочных — d.current_manager_id,
+  // обе — менеджерские измерения, для by-product-groups/by-sources ключи просто
+  // отсутствуют → computeCalculated по цепочке зависимостей отдаёт null).
+  const callsMetricIds = [
+    'calls_count', 'calls_count_repeat', 'calls_count_all',
+    'calls_duration_out', 'calls_duration_out_repeat', 'calls_duration_out_all',
+    'calls_duration_in', 'calls_duration_in_repeat', 'calls_duration_in_all',
+    'calls_completed_duration_sum', 'calls_completed_duration_sum_repeat', 'calls_completed_duration_sum_orphan',
+    'calls_completed_count', 'calls_completed_count_repeat', 'calls_completed_count_orphan',
+    'calls_avg_duration', 'calls_avg_duration_repeat', 'calls_avg_duration_all',
+    'calls_median_duration', 'calls_median_duration_repeat', 'calls_median_duration_all',
+    'calls_first_call_duration_median', 'calls_first_call_duration_median_repeat', 'calls_first_call_duration_median_all',
+    'calls_touch_speed_median', 'calls_touch_speed_median_repeat', 'calls_touch_speed_median_all',
+    'calls_to_reservation_num', 'calls_to_reservation_num_repeat',
+    'calls_to_reservation_denom', 'calls_to_reservation_denom_repeat',
+    'calls_to_reservation_avg', 'calls_to_reservation_avg_repeat', 'calls_to_reservation_avg_all',
+    'calls_missed_outbound', 'calls_missed_outbound_repeat', 'calls_missed_outbound_orphan',
+    'calls_outbound_total', 'calls_outbound_total_repeat', 'calls_outbound_total_orphan',
+    'calls_missed_rate', 'calls_missed_rate_repeat', 'calls_missed_rate_all',
+    'calls_deals_no_call', 'calls_deals_no_call_repeat', 'calls_deals_no_call_all',
+    'calls_silence_deals', 'calls_silence_deals_repeat', 'calls_silence_deals_all',
+  ];
+  const hasCallsMetric = withDeps.some(m => callsMetricIds.includes(m.id));
+
+  if (hasCallsMetric && reportSlug === 'by-managers') {
+    const [curBase, curAdditive, curTouch, curSilence, compBase, compAdditive, compTouch, compSilence] = await Promise.all([
+      fetchCallsBaseMetrics(opts.period),
+      fetchDealCallAdditive(opts.period),
+      fetchTouchAndFirstCallMedians(opts.period),
+      fetchCallSilence(opts.period.to),
+      fetchCallsBaseMetrics(compOpts.period),
+      fetchDealCallAdditive(compOpts.period),
+      fetchTouchAndFirstCallMedians(compOpts.period),
+      fetchCallSilence(compOpts.period.to),
+    ]);
+
+    const round1 = (n: number) => Math.round(n * 10) / 10;
+    const zeroBucket: Bucket = { primary: 0, repeat: 0, all: 0 };
+    // «Сирота» (звонок без своей sa.deals) = rollup «(все)» минус перв. минус повт. —
+    // rollup строится ТЕМ ЖЕ GROUP BY, что и перв./повт. (GROUPING SETS), поэтому
+    // равенство all = primary + repeat + orphan точное. НО: округляем primary/repeat
+    // ДО вычитания (round1) — иначе плавающая ошибка деления duration_seconds/60
+    // (перв./повт. — уже округлённые видимые значения, orphan вычисляется из НИХ ЖЕ)
+    // даёт мусор вида 7.1e-15, а evalFormula (calculated.ts) не понимает
+    // экспоненциальную запись в подставленном числе → формула «(все)» молча
+    // становится null (живая проверка 10.07 поймала это на реальных цифрах).
+    const orphanOf = (b: Bucket) => round1(b.all) - round1(b.primary) - round1(b.repeat);
+
+    const enrichCalls = (
+      row: ReportRow,
+      base: Map<string, CallsBaseRow> | null,
+      additive: Map<string, DealCallAdditiveRow> | null,
+      touch: Map<string, TouchAndFirstCallRow> | null,
+      silence: Map<string, Bucket> | null,
+    ): ReportRow => {
+      const b = base?.get(row.dimensionId);
+      const bb: CallsBaseRow = b ?? {
+        count: zeroBucket, outDurationMin: zeroBucket, inDurationMin: zeroBucket,
+        completedDurationSumMin: zeroBucket, completedCount: zeroBucket, medianDurationMin: zeroBucket,
+        outboundCount: zeroBucket, missedOutboundCount: zeroBucket,
+      };
+      const a = additive?.get(row.dimensionId);
+      const aa: DealCallAdditiveRow = a ?? { dealsNoCalls: zeroBucket, dealsWithReservation: zeroBucket, callsBeforeReservationSum: zeroBucket };
+      const t = touch?.get(row.dimensionId);
+      const tt: TouchAndFirstCallRow = t ?? { medianTouchMinutes: zeroBucket, medianFirstCallDurationMin: zeroBucket };
+      const ss = silence?.get(row.dimensionId) ?? zeroBucket;
+
+      const metrics: Record<string, number | null> = {
+        // 1. Кол-во звонков — прямые external (сумма — корректно бьётся в «Итого»)
+        calls_count: base ? bb.count.primary : null,
+        calls_count_repeat: base ? bb.count.repeat : null,
+        calls_count_all: base ? bb.count.all : null,
+        // 2/3. Длительность исходящих/входящих, мин — прямые external
+        calls_duration_out: base ? round1(bb.outDurationMin.primary) : null,
+        calls_duration_out_repeat: base ? round1(bb.outDurationMin.repeat) : null,
+        calls_duration_out_all: base ? round1(bb.outDurationMin.all) : null,
+        calls_duration_in: base ? round1(bb.inDurationMin.primary) : null,
+        calls_duration_in_repeat: base ? round1(bb.inDurationMin.repeat) : null,
+        calls_duration_in_all: base ? round1(bb.inDurationMin.all) : null,
+        // Служебные (числитель/знаменатель средней длительности, метрика 4) — сумма,
+        // корректно бьётся в «Итого» → «(все)» пересчитывается из сумм, а не как
+        // среднее двух средних. round1 ОБЯЗАТЕЛЕН и здесь (не только на видимых) —
+        // без него orphan = all-primary-repeat даёт плавающий мусор вида 7.1e-15
+        // (деление duration_seconds/60), а evalFormula (calculated.ts) не понимает
+        // экспоненциальную запись в подставленном числе → вся формула «(все)» молча
+        // становится null. Живая проверка 10.07 поймала это на реальных цифрах.
+        calls_completed_duration_sum: base ? round1(bb.completedDurationSumMin.primary) : null,
+        calls_completed_duration_sum_repeat: base ? round1(bb.completedDurationSumMin.repeat) : null,
+        calls_completed_duration_sum_orphan: base ? round1(orphanOf(bb.completedDurationSumMin)) : null,
+        calls_completed_count: base ? bb.completedCount.primary : null,
+        calls_completed_count_repeat: base ? bb.completedCount.repeat : null,
+        calls_completed_count_orphan: base ? orphanOf(bb.completedCount) : null,
+        // 5. Медианная длительность — прямая (percentile_cont), не суммируется в «Итого»
+        calls_median_duration: base ? round1(bb.medianDurationMin.primary) : null,
+        calls_median_duration_repeat: base ? round1(bb.medianDurationMin.repeat) : null,
+        calls_median_duration_all: base ? round1(bb.medianDurationMin.all) : null,
+        // Служебные (недозвоны, метрика 9) — сумма
+        calls_missed_outbound: base ? bb.missedOutboundCount.primary : null,
+        calls_missed_outbound_repeat: base ? bb.missedOutboundCount.repeat : null,
+        calls_missed_outbound_orphan: base ? orphanOf(bb.missedOutboundCount) : null,
+        calls_outbound_total: base ? bb.outboundCount.primary : null,
+        calls_outbound_total_repeat: base ? bb.outboundCount.repeat : null,
+        calls_outbound_total_orphan: base ? orphanOf(bb.outboundCount) : null,
+        // 6. Длительность первого разговора сделки (медиана) — прямая, не суммируется
+        calls_first_call_duration_median: touch ? round1(tt.medianFirstCallDurationMin.primary) : null,
+        calls_first_call_duration_median_repeat: touch ? round1(tt.medianFirstCallDurationMin.repeat) : null,
+        calls_first_call_duration_median_all: touch ? round1(tt.medianFirstCallDurationMin.all) : null,
+        // 7. Скорость первого касания (медиана) — прямая, не суммируется
+        calls_touch_speed_median: touch ? round1(tt.medianTouchMinutes.primary) : null,
+        calls_touch_speed_median_repeat: touch ? round1(tt.medianTouchMinutes.repeat) : null,
+        calls_touch_speed_median_all: touch ? round1(tt.medianTouchMinutes.all) : null,
+        // Служебные (звонков до брони, метрика 8) — сумма; у сделки funnel_id
+        // резолвится всегда, «сирот» здесь нет
+        calls_to_reservation_num: additive ? aa.callsBeforeReservationSum.primary : null,
+        calls_to_reservation_num_repeat: additive ? aa.callsBeforeReservationSum.repeat : null,
+        calls_to_reservation_denom: additive ? aa.dealsWithReservation.primary : null,
+        calls_to_reservation_denom_repeat: additive ? aa.dealsWithReservation.repeat : null,
+        // 10. Сделки без звонка — прямая сумма
+        calls_deals_no_call: additive ? aa.dealsNoCalls.primary : null,
+        calls_deals_no_call_repeat: additive ? aa.dealsNoCalls.repeat : null,
+        calls_deals_no_call_all: additive ? aa.dealsNoCalls.all : null,
+        // 11. «Тишина» — снимок на period.to (см. fetchCallSilence), прямая сумма
+        calls_silence_deals: silence ? ss.primary : null,
+        calls_silence_deals_repeat: silence ? ss.repeat : null,
+        calls_silence_deals_all: silence ? ss.all : null,
+      };
+      return { ...row, metrics: { ...row.metrics, ...metrics } };
+    };
+    currentRows = currentRows.map(r => enrichCalls(r, curBase, curAdditive, curTouch, curSilence));
+    compRows = compRows.map(r => enrichCalls(r, compBase, compAdditive, compTouch, compSilence));
   }
 
   // Add calculated metrics to each row (after plan enrichment so plan-dependent metrics work)
