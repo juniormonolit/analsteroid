@@ -122,27 +122,6 @@ export function ReportToolbar({
         />
       )}
 
-      {!basic && (
-        <button
-          onClick={onSaveReport}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-        >
-          <Bookmark size={12} />
-          Сохранить
-        </button>
-      )}
-
-      {onCopyTable && (
-        <button
-          onClick={handleCopy}
-          title="Скопировать таблицу для вставки в Google Таблицы (числа без ₽, % и пробелов)"
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-        >
-          {copied ? <Check size={12} className="text-[var(--color-positive)]" /> : <Copy size={12} />}
-          {copied ? 'Скопировано' : 'Копировать'}
-        </button>
-      )}
-
       {!basic && onOpenComparison && (
         <button
           onClick={onOpenComparison}
@@ -157,14 +136,39 @@ export function ReportToolbar({
         </button>
       )}
 
-      <button
-        onClick={onRefresh}
-        disabled={isLoading}
-        className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-60"
-      >
-        <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
-        Обновить
-      </button>
+      {/* Правая группа (правка 09.07): «Сохранить»/«Копировать» переехали вплотную
+          к «Обновить» — весь блок прижат вправо через ml-auto на обёртке. */}
+      <div className="ml-auto flex items-center gap-2">
+        {!basic && (
+          <button
+            onClick={onSaveReport}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+          >
+            <Bookmark size={12} />
+            Сохранить
+          </button>
+        )}
+
+        {onCopyTable && (
+          <button
+            onClick={handleCopy}
+            title="Скопировать таблицу для вставки в Google Таблицы (числа без ₽, % и пробелов)"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+          >
+            {copied ? <Check size={12} className="text-[var(--color-positive)]" /> : <Copy size={12} />}
+            {copied ? 'Скопировано' : 'Копировать'}
+          </button>
+        )}
+
+        <button
+          onClick={onRefresh}
+          disabled={isLoading}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-60"
+        >
+          <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+          Обновить
+        </button>
+      </div>
     </div>
   );
 }
