@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
-  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X,
+  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, type PermKey } from '@/lib/auth/perms';
@@ -15,6 +15,8 @@ import { QueryProvider } from '@/components/providers/QueryProvider';
 import { MeteorLogo } from './MeteorLogo';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import type { SavedReport } from '@/lib/saved-reports/types';
+import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
+import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
 
 /* Общий паттерн пункта 1-го уровня (NAV-блок, Сводная/Планы/Декомпозиция,
    Метрики/Настройки) — редизайн сайдбара, итерация 3 (бриф Виктора). */
@@ -202,17 +204,23 @@ const NAV: NavItem[] = [
 
 /* Содержимое сайдбара (nav + нижние секции + footer) — общее для десктопного
    <aside> и мобильного off-canvas drawer, поэтому вынесено из AppShell. */
-function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout }: {
+function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout, changelogOpen, onOpenChangelog }: {
   collapsed: boolean;
   pathname: string;
   user: SessionUser;
   expanded: string;
   setExpanded: React.Dispatch<React.SetStateAction<string>>;
   logout: () => void;
+  changelogOpen: boolean;
+  onOpenChangelog: () => void;
 }) {
   const salesActive = pathname.startsWith('/sales');
   const showSummaryBlock = hasPerm(user, 'section.summary') || hasPerm(user, 'section.plans') || hasPerm(user, 'section.decomposition');
   const showMetricsBlock = hasPerm(user, 'section.metrics') || hasPerm(user, 'section.settings');
+  // «Что изменилось?» — пункт внизу сайдбара (задача владельца, макет
+  // changelog-notifications-mock.html): доступен всем, независимо от ролей/прав.
+  const { data: changelogData } = useChangelogQuery();
+  const unreadCount = changelogData?.unreadCount ?? 0;
 
   return (
     <>
@@ -361,6 +369,25 @@ function SidebarBody({ collapsed, pathname, user, expanded, setExpanded, logout 
             </div>
           )}
 
+          {/* «Что изменилось?» — ченджлог, виден всем независимо от прав (п.4 задачи) */}
+          <div className="pt-1 px-2">
+            <button
+              type="button"
+              onClick={onOpenChangelog}
+              className={`w-full ${NAV_ITEM_BASE} ${changelogOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+            >
+              <span className={navIconCls(changelogOpen)}><Bell size={18} /></span>
+              {!collapsed && (
+                <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Что изменилось?</span>
+              )}
+              {!collapsed && unreadCount > 0 && (
+                <span className="ml-auto mt-px shrink-0 min-w-[18px] h-[18px] px-1.5 rounded-full bg-[var(--color-negative)] text-white text-[10.5px] font-bold flex items-center justify-center shadow-[0_0_0_2px_var(--color-sidebar-bg)] leading-none">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </button>
+          </div>
+
           {/* Footer: карточка юзера (аватар + имя/роль) → ЛК, рядом «Выйти» */}
           <div className="border-t border-[var(--color-sidebar-border)] p-2">
             <div className={`flex items-center gap-1 ${collapsed ? 'flex-col' : ''}`}>
@@ -398,6 +425,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<string>('Продажи');
+  const [changelogOpen, setChangelogOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
 
@@ -435,6 +463,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           <SidebarBody
             collapsed={collapsed} pathname={pathname} user={user}
             expanded={expanded} setExpanded={setExpanded} logout={logout}
+            changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
           />
         </aside>
 
@@ -458,6 +487,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               <SidebarBody
                 collapsed={false} pathname={pathname} user={user}
                 expanded={expanded} setExpanded={setExpanded} logout={logout}
+                changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
               />
             </aside>
           </div>
@@ -482,6 +512,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           </main>
         </div>
       </div>
+      {changelogOpen && <ChangelogPanel onClose={() => setChangelogOpen(false)} />}
     </QueryProvider>
   );
 }
