@@ -12,7 +12,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, type PermKey } from '@/lib/auth/perms';
 import { Avatar } from '@/components/ui/Avatar';
 import { QueryProvider } from '@/components/providers/QueryProvider';
-import { MeteorLogo } from './MeteorLogo';
+import { BrandLogo } from '@/components/ui/BrandLogo';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import type { SavedReport } from '@/lib/saved-reports/types';
 import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
@@ -32,6 +32,14 @@ const NAV_ITEM_ACTIVE_BAR =
 function navIconCls(active: boolean) {
   return active ? 'text-[var(--color-sidebar-active)] mt-px' : 'text-[var(--color-sidebar-text-muted)] mt-px';
 }
+
+// Подпись под лочапом «знак + Монолитика» (бриф ребрендинга): те же ширина
+// лочапа и левый край, что у строки с названием — маленький приглушённый
+// кегль, разрядка. Только в развёрнутых состояниях (сайдбар/мобильный
+// drawer) — в свёрнутой рельсе показывается только знак, без текста.
+const BRAND_TAGLINE_CLS =
+  'block truncate text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--color-sidebar-text-muted)]';
+const BRAND_TAGLINE_TEXT = '— аналитика для монолитика'.toUpperCase();
 
 function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean; pathname: string; user: SessionUser }) {
   const [openStd, setOpenStd] = useState(true);
@@ -480,22 +488,25 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             className={
               collapsed
                 ? 'flex flex-col items-center justify-center gap-1.5 py-2.5 min-h-14 border-b border-[var(--color-sidebar-border)]'
-                : 'flex items-center justify-between px-3 h-14 border-b border-[var(--color-sidebar-border)]'
+                : 'flex items-start justify-between gap-2 px-3 py-2.5 border-b border-[var(--color-sidebar-border)]'
             }
           >
             {collapsed ? (
-              <Link href="/home" title="Аналстероид — на главную">
-                <MeteorLogo size={18} />
+              <Link href="/home" title="Монолитика — на главную">
+                <BrandLogo size={18} />
               </Link>
             ) : (
-              <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
-                <MeteorLogo size={24} className="shrink-0" />
-                <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Аналстероид</span>
-              </Link>
+              <div className="min-w-0">
+                <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
+                  <BrandLogo size={22} className="shrink-0" />
+                  <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
+                </Link>
+                <span className={BRAND_TAGLINE_CLS}>{BRAND_TAGLINE_TEXT}</span>
+              </div>
             )}
             <button
               onClick={() => setCollapsed(v => !v)}
-              className="text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
+              className="text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors mt-0.5"
             >
               {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
             </button>
@@ -513,14 +524,17 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           <div className="fixed inset-0 z-50 md:hidden">
             <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
             <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-[0_0_24px_rgba(0,0,0,0.12)]">
-              <div className="flex items-center justify-between px-3 h-14 border-b border-[var(--color-sidebar-border)] shrink-0">
-                <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
-                  <MeteorLogo size={24} className="shrink-0" />
-                  <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Аналстероид</span>
-                </Link>
+              <div className="flex items-start justify-between gap-2 px-3 py-2.5 border-b border-[var(--color-sidebar-border)] shrink-0">
+                <div className="min-w-0">
+                  <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
+                    <BrandLogo size={22} className="shrink-0" />
+                    <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
+                  </Link>
+                  <span className={BRAND_TAGLINE_CLS}>{BRAND_TAGLINE_TEXT}</span>
+                </div>
                 <button
                   onClick={() => setMobileOpen(false)}
-                  className="tap-target text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
+                  className="tap-target text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors mt-0.5"
                 >
                   <X size={18} />
                 </button>
@@ -547,8 +561,8 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               <Menu size={20} />
             </button>
             <Link href="/home" className="flex items-center gap-1.5 min-w-0" title="На главную">
-              <MeteorLogo size={20} className="shrink-0" />
-              <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Аналстероид</span>
+              <BrandLogo size={20} className="shrink-0" />
+              <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
             </Link>
           </div>
           <main className="flex-1 overflow-hidden flex flex-col">

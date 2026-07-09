@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { MeteorLogo } from '@/components/layout/MeteorLogo';
+import { BrandLogo } from '@/components/ui/BrandLogo';
 
 export function InviteAcceptClient({ token }: { token: string }) {
   const router = useRouter();
@@ -53,9 +53,14 @@ export function InviteAcceptClient({ token }: { token: string }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)]">
       <div className="w-full max-w-sm bg-[var(--color-bg-surface)] rounded-xl shadow-lg p-8">
-        <h1 className="flex items-center justify-center gap-2.5 text-xl font-semibold text-[var(--color-text)] mb-6">
-          <MeteorLogo size={30} />
-          Аналстероид
+        <h1 className="flex flex-col items-center gap-2.5 text-xl font-semibold text-[var(--color-text)] mb-6">
+          <span className="flex items-center gap-2.5">
+            <BrandLogo size={30} />
+            Монолитика
+          </span>
+          <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
+            {'— аналитика для монолитика'.toUpperCase()}
+          </span>
         </h1>
 
         {checking ? (

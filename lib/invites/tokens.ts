@@ -20,7 +20,7 @@ export async function createAndSendInvite(
   const link = `${origin}/invite/${token}`;
   await sendBitrixBotMessage(
     bitrixUserId,
-    `Здравствуйте, ${displayName}! Вам открыли доступ в Analsteroid.\n` +
+    `Здравствуйте, ${displayName}! Вам открыли доступ в Монолитику.\n` +
       `Перейдите по ссылке, чтобы задать пароль и войти: ${link}\n` +
       `Ссылка одноразовая и действует 7 дней.`
   );
