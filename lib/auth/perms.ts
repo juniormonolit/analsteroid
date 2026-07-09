@@ -16,7 +16,7 @@ export const PERM_SECTIONS = [
 export const PERM_ACTIONS = [
   { key: 'action.plans.edit', label: 'Редактирование планов' },
   { key: 'action.users.manage', label: 'Управление пользователями' },
-  { key: 'action.shared_reports.manage', label: 'Управление общими отчётами («Роп монитор», «Смекалочная»)' },
+  { key: 'action.shared_reports.manage', label: 'Управление общими отчётами («Роп монитор», «Отчёты Стаса»)' },
 ] as const;
 
 export type PermKey =

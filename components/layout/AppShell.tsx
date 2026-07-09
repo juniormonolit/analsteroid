@@ -129,7 +129,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         <div className={subgroupCls}>
           <button onClick={() => setOpenShared(v => !v)} className={subgroupLabelCls}>
             <BarChart2 size={11} />
-            <span className="flex-1 text-left">Смекалочная</span>
+            <span className="flex-1 text-left">Отчёты Стаса</span>
             {openShared ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
           </button>
           {openShared && smekalochnayaShared.map(r => {

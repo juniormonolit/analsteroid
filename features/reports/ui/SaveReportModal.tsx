@@ -57,7 +57,7 @@ interface Props {
   columnGroups: { name: string; metricIds: string[] }[];
   currentPeriod: DateRange;
   currentComparison: DateRange;
-  onSave: (name: string, input: SavedReportInput) => Promise<void>;
+  onSave: (name: string, input: SavedReportInput) => Promise<{ ok: boolean; error?: string } | void>;
   onClose: () => void;
 }
 
@@ -79,6 +79,7 @@ export function SaveReportModal({
   const [unit, setUnit] = useState<PeriodUnit>('month');
   const [compMode, setCompMode] = useState<ComparisonMode>('previous_tail');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [existingReports, setExistingReports] = useState<{ id: string; name: string; isShared?: boolean; sharedSection?: string | null }[]>([]);
   // Право сохранять в общие разделы («Роп монитор» / «Смекалочная»)
   const [canShare, setCanShare] = useState(false);
@@ -113,6 +114,7 @@ export function SaveReportModal({
   async function handleSave() {
     if (!name.trim()) return;
     setSaving(true);
+    setError(null);
     const input: SavedReportInput = {
       reportSlug,
       name: name.trim(),
@@ -159,8 +161,13 @@ export function SaveReportModal({
         ? { from: currentComparison.from.toISOString(), to: currentComparison.to.toISOString() }
         : null,
     };
-    await onSave(name.trim(), input);
+    const result = await onSave(name.trim(), input);
     setSaving(false);
+    // onSave может ничего не вернуть (старое поведение) — тогда считаем успехом,
+    // как раньше. Если вернул {ok:false}, модалку не закрываем и показываем причину.
+    if (result && result.ok === false) {
+      setError(result.error ?? 'Не удалось сохранить отчёт');
+    }
   }
 
   return (
@@ -190,6 +197,11 @@ export function SaveReportModal({
               Отчёт с таким названием уже существует — конфигурация будет перезаписана
             </div>
           )}
+          {error && (
+            <div className="text-xs text-[var(--color-error,#dc2626)]">
+              {error}
+            </div>
+          )}
           {canShare && (
             <div className="flex flex-col gap-1.5 mt-1">
               <span className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">Куда сохранить</span>
@@ -197,7 +209,7 @@ export function SaveReportModal({
                 {([
                   { value: 'personal' as const, label: 'Личное' },
                   { value: 'rop_monitor' as const, label: 'Роп монитор' },
-                  { value: 'smekalochnaya' as const, label: 'Смекалочная' },
+                  { value: 'smekalochnaya' as const, label: 'Отчёты Стаса' },
                 ]).map(o => (
                   <button
                     key={o.value}

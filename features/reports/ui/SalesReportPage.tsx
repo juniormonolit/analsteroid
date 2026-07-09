@@ -382,13 +382,27 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     });
   }
 
-  async function handleSaveReport(_name: string, input: SavedReportInput) {
-    await fetch('/api/saved-reports', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    setShowSaveModal(false);
+  // Возвращает результат вызывающей модалке — раньше ошибка (403/409/500) молча
+  // проглатывалась, модалка закрывалась как будто всё сохранилось (баг 09.07:
+  // «не работает сохранение в Отчёты Стаса/Роп монитор» — сервер падал на конфликте
+  // имён, а фронтенд об этом не узнавал). Теперь модалка сама решает, закрываться
+  // ей или показать ошибку и остаться открытой.
+  async function handleSaveReport(_name: string, input: SavedReportInput): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch('/api/saved-reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: false, error: data.error ?? 'Не удалось сохранить отчёт' };
+      }
+      setShowSaveModal(false);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Сетевая ошибка при сохранении' };
+    }
   }
 
   // Full catalog for MetricPanel (all non-hidden metrics)

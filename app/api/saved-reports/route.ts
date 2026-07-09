@@ -124,17 +124,34 @@ function buildUpdateById(table: string, fields: Record<string, unknown>, id: str
   };
 }
 
-function buildUpsertOnConflict(table: string, fields: Record<string, unknown>, conflictCols: string[]) {
+function buildUpsertOnConflict(
+  table: string,
+  fields: Record<string, unknown>,
+  conflictCols: string[],
+  conflictWhere?: string
+) {
   const cols = Object.keys(fields);
   const placeholders = cols.map((_, i) => `$${i + 1}`);
   const values = cols.map((c) => fields[c]);
   const updates = cols.filter((c) => !conflictCols.includes(c)).map((c) => `${c} = EXCLUDED.${c}`);
+  // Партиционный уникальный индекс (например saved_reports_personal_user_name_unique,
+  // migration 058) требует, чтобы ON CONFLICT указывал тот же WHERE, что и индекс —
+  // иначе Postgres не сможет сопоставить конфликт с этим индексом.
+  const conflictTarget = conflictWhere
+    ? `(${conflictCols.join(', ')}) WHERE ${conflictWhere}`
+    : `(${conflictCols.join(', ')})`;
   return {
     sql: `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders.join(', ')})
-          ON CONFLICT (${conflictCols.join(', ')}) DO UPDATE SET ${updates.join(', ')}
+          ON CONFLICT ${conflictTarget} DO UPDATE SET ${updates.join(', ')}
           RETURNING id`,
     values,
   };
+}
+
+const UNIQUE_VIOLATION = '23505';
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === UNIQUE_VIOLATION;
 }
 
 export async function POST(req: NextRequest) {
@@ -153,35 +170,56 @@ export async function POST(req: NextRequest) {
 
   const fields = buildCommonFields(body, sharedSection);
 
-  if (sharedSection) {
-    // Общий раздел: имя уникально ВНУТРИ раздела (частичный индекс
-    // saved_reports_shared_section_name_unique) — любой админ перезаписывает
-    // существующий отчёт того же раздела/имени, не только собственный.
-    const existing = await db.query<{ id: string }>(
-      `SELECT id FROM saved_reports WHERE is_shared = true AND shared_section = $1 AND name = $2`,
-      [sharedSection, body.name]
-    );
-    if (existing.rows.length) {
-      const { sql, values } = buildUpdateById('saved_reports', { ...fields, name: body.name, report_slug: body.reportSlug }, existing.rows[0].id);
-      await db.query(sql, values);
-      return NextResponse.json({ id: existing.rows[0].id });
+  try {
+    if (sharedSection) {
+      // Общий раздел: имя уникально ВНУТРИ раздела (частичный индекс
+      // saved_reports_shared_section_name_unique) — любой админ перезаписывает
+      // существующий отчёт того же раздела/имени, не только собственный.
+      const existing = await db.query<{ id: string }>(
+        `SELECT id FROM saved_reports WHERE is_shared = true AND shared_section = $1 AND name = $2`,
+        [sharedSection, body.name]
+      );
+      if (existing.rows.length) {
+        const { sql, values } = buildUpdateById('saved_reports', { ...fields, name: body.name, report_slug: body.reportSlug }, existing.rows[0].id);
+        await db.query(sql, values);
+        return NextResponse.json({ id: existing.rows[0].id });
+      }
+      // user_login здесь — только «автор записи» (для отображения), уникальность
+      // общего имени обеспечена индексом (shared_section, name) выше, а не (user_login,
+      // name) — см. migration 058: старый table-wide constraint сузили до личных
+      // отчётов, иначе INSERT падал, если у автора уже был личный отчёт с тем же именем.
+      const { sql, values } = buildInsert('saved_reports', {
+        user_login: session.login,
+        report_slug: body.reportSlug,
+        name: body.name,
+        ...fields,
+      });
+      const res = await db.query<{ id: string }>(sql, values);
+      return NextResponse.json({ id: res.rows[0].id });
     }
-    const { sql, values } = buildInsert('saved_reports', {
-      user_login: session.login,
-      report_slug: body.reportSlug,
-      name: body.name,
-      ...fields,
-    });
+
+    // Личный отчёт: перезаписывается только свой же (user_login, name) — как раньше.
+    // Партиционный индекс saved_reports_personal_user_name_unique (migration 058)
+    // ограничивает конфликт только личными (NOT is_shared) строками этого автора.
+    const { sql, values } = buildUpsertOnConflict(
+      'saved_reports',
+      { user_login: session.login, report_slug: body.reportSlug, name: body.name, ...fields },
+      ['user_login', 'name'],
+      'NOT is_shared'
+    );
     const res = await db.query<{ id: string }>(sql, values);
     return NextResponse.json({ id: res.rows[0].id });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      // Гонка (TOCTOU) между SELECT existing и INSERT в общем разделе, либо
+      // clash после старой версии constraint — отдаём понятную ошибку вместо
+      // голого 500, чтобы фронтенд не проглатывал сбой молча.
+      return NextResponse.json(
+        { error: 'Отчёт с таким названием уже существует в этом разделе — обновите страницу и попробуйте снова' },
+        { status: 409 }
+      );
+    }
+    console.error('[saved-reports] POST failed:', err);
+    return NextResponse.json({ error: 'Не удалось сохранить отчёт' }, { status: 500 });
   }
-
-  // Личный отчёт: перезаписывается только свой же (user_login, name) — как раньше.
-  const { sql, values } = buildUpsertOnConflict(
-    'saved_reports',
-    { user_login: session.login, report_slug: body.reportSlug, name: body.name, ...fields },
-    ['user_login', 'name']
-  );
-  const res = await db.query<{ id: string }>(sql, values);
-  return NextResponse.json({ id: res.rows[0].id });
 }

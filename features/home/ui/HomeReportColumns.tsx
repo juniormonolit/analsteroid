@@ -101,7 +101,7 @@ export function HomeReportColumns({ canSales, userLogin }: { canSales: boolean; 
 
       {/* Смекалочная */}
       <div>
-        <ColumnEyebrow>Смекалочная</ColumnEyebrow>
+        <ColumnEyebrow>Отчёты Стаса</ColumnEyebrow>
         {!isLoading && smekalochnayaShared.length === 0 && (
           <div className="text-[13px] text-[var(--color-text-muted)] py-1 px-1">Пока нет общих отчётов</div>
         )}
