@@ -78,7 +78,7 @@ export function ChangelogPanel({ onClose }: Props) {
         onClick={requestClose}
       />
       <div
-        className={`fixed inset-y-0 right-0 z-50 w-[380px] max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}
+        className={`fixed inset-y-0 right-0 z-50 w-full sm:w-[50vw] sm:min-w-[360px] sm:max-w-[800px] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}
       >
         <PanelCloseTab onClick={requestClose} />
 
