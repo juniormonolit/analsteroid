@@ -6,6 +6,7 @@ import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
+import { branchLabel } from '@/lib/org/branchLabel';
 
 interface Product {
   name: string; type?: string; price: number; quantity: number; sum: number;
@@ -208,7 +209,7 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                     <>
                       <Row label="Имя" value={`${data.manager.name}${data.manager.login ? ` ${data.manager.login}` : ''}`} strong />
                       <Row label="Отдел" value={data.manager.department} />
-                      <Row label="Филиал" value={data.manager.branch} />
+                      <Row label="Филиал" value={branchLabel(data.manager.branch)} />
                     </>
                   ) : (
                     <div className="text-sm text-[var(--color-text-muted)]">{deal.manager_id ? `#${deal.manager_id} (вне активной оргструктуры)` : 'Не назначен'}</div>

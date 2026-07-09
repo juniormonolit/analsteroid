@@ -10,6 +10,7 @@ import type { Metric, ComparisonDisplay, DealScope, ClientType, ProductGroupMode
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
+import { dealsCountLabel } from '@/lib/format/pluralize';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
@@ -203,6 +204,23 @@ function dealCell(deal: Deal, key: string) {
       </a>
     );
   }
+  if (key === 'stage_name') {
+    // Бейдж стадии (п.4 правок 09.07/2) — тот же цвет, что и полоска слева
+    // (dealStageColor/ENTITY_COLOR, см. ниже). «В работе» — нейтральный серый бейдж
+    // (не «голый текст»), чтобы плашка была единообразно у всех строк колонки.
+    const color = dealStageColor(deal);
+    const text = deal.stage_name ?? '—';
+    return (
+      <span
+        className="inline-block px-1.5 py-0.5 rounded whitespace-nowrap"
+        style={color
+          ? { backgroundColor: `color-mix(in srgb, ${color} 68%, white)`, color: '#000' }
+          : { backgroundColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+      >
+        {text}
+      </span>
+    );
+  }
   if (def?.kind === 'money') return fmtMoney(v);
   if (def?.kind === 'date') return fmt(v);
   return v ?? '—';
@@ -231,6 +249,9 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
       <table className="w-full text-xs border-collapse">
         <thead className={stickyHead ? 'sticky top-0 z-10 bg-[var(--color-table-header)]' : undefined}>
           <tr className="bg-[var(--color-table-header)]">
+            {/* Колонка «№» (п.6 правок 09.07/2) — порядковый номер видимой строки,
+                отдельно от ID сделки (колонка «#» ниже — реальный ID из CRM). */}
+            <th className="px-2 py-2 font-medium text-[var(--color-text-muted)] text-right whitespace-nowrap">№</th>
             <SortHead label="#" col="deal_id" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
             {cols.map(c => (
               <SortHead key={c.key} label={c.label} col={c.key} align={c.align} sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
@@ -251,6 +272,9 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
                   line-height ~16px (Tailwind --text-xs--line-height: 1/0.75), 7+16+7=30 —
                   та же высота строки, что и в основной таблице отчёта (ReportTable.tsx),
                   для единообразия между отчётом и списком сделок дрилл-дауна. */}
+              <td className="px-2 py-[7px] text-right text-[11px] text-[var(--color-text-muted)] tabular-nums whitespace-nowrap">
+                {i + 1}
+              </td>
               <td className="px-5 py-[7px] text-[var(--color-text-muted)] whitespace-nowrap">
                 {/* Полоска слева по текущей стадии сделки (тот же приём, что у строки
                     «Итого» основного отчёта — w-1 h-4 rounded-full); «в работе» — без
@@ -262,7 +286,7 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
               </td>
               {cols.map(c => (
                 <td key={c.key}
-                    className={`px-3 py-[7px] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[var(--color-text)]' : ''}`}>
+                    className={`px-3 py-[7px] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[#000]' : ''}`}>
                   {dealCell(deal, c.key)}
                 </td>
               ))}
@@ -302,7 +326,9 @@ function DealsListBody({ query, dealFields, onDealOpen }: {
   return (
     <div className="h-full flex flex-col">
       <div className="px-6 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)] shrink-0">
-        {deals.length} сд. · {fmtMoney(total)}
+        {/* «Итого: N сделок» (п.7 правок 09.07/2) вместо голого счётчика — склонение
+            см. dealsCountLabel. */}
+        {`Итого: ${dealsCountLabel(deals.length)}`} · {fmtMoney(total)}
       </div>
       <div className="flex-1 overflow-hidden">
         <DealsTable deals={sortDealsBy(deals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} />

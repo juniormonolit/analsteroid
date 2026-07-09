@@ -20,6 +20,8 @@ import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/pe
 import type { MetricFilters, MetricConditionFilter } from '@/lib/reports/metricFilter';
 import { type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { useIsMobile } from '@/lib/hooks/useMediaQuery';
+import { branchLabel } from '@/lib/org/branchLabel';
+import { isHeatmapEnabled, isRelativeDataType, toggleHeatmap } from '@/lib/metrics/heatmapDefault';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -118,7 +120,9 @@ function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Met
       });
       return {
         dimensionId: `__branch__${branch}`,
-        dimensionName: branch,
+        // Display-слой (п.5 правок 09.07/2): «СПб»→«Санкт-Петербург» и т.п. — ключ
+        // dimensionId/branchName остаётся сырым (маршрутизация дрилл-дауна/фильтры).
+        dimensionName: branchLabel(branch),
         teamId: null,
         teamName: null,
         branchName: branch,
@@ -452,13 +456,18 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     const grouped = applyClientGrouping(data?.rows ?? [], grouping, catalogMetrics);
     if (!search.trim()) return grouped;
     const q = search.trim().toLowerCase();
+    // Поиск и по короткому логину менеджера (п.3 правок 09.07/2): dimensionSubtitle
+    // хранит short_login ТОЛЬКО в отчёте по менеджерам (см. byManagers.ts) — для
+    // прочих отчётов это поле либо не задано, либо содержит другой текст, не мешает.
+    const matchesSearch = (r: { dimensionName: string; dimensionSubtitle?: string }) =>
+      r.dimensionName.toLowerCase().includes(q) || (r.dimensionSubtitle ?? '').toLowerCase().includes(q);
     if (grouping === 'none') {
-      return grouped.filter(r => r.dimensionName.toLowerCase().includes(q));
+      return grouped.filter(matchesSearch);
     }
     return grouped
       .map(r => {
-        if (!r.isGroup) return r.dimensionName.toLowerCase().includes(q) ? r : null;
-        const filteredChildren = (r.children ?? []).filter(c => c.dimensionName.toLowerCase().includes(q));
+        if (!r.isGroup) return matchesSearch(r) ? r : null;
+        const filteredChildren = (r.children ?? []).filter(matchesSearch);
         if (filteredChildren.length === 0) return null;
         return { ...r, children: filteredChildren };
       })
@@ -876,9 +885,9 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onBarToggle={() => setBarMetricIds(prev =>
               prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
             )}
-            isHeatmap={heatmapMetricIds.includes(configuringMetricId)}
+            isHeatmap={isHeatmapEnabled(configuringMetricId, isRelativeDataType(m?.dataType), heatmapMetricIds)}
             onHeatmapToggle={() => setHeatmapMetricIds(prev =>
-              prev.includes(configuringMetricId!) ? prev.filter(x => x !== configuringMetricId) : [...prev, configuringMetricId!]
+              toggleHeatmap(configuringMetricId!, isRelativeDataType(m?.dataType), prev)
             )}
             isHeatmapInverted={heatmapInvertedIds.includes(configuringMetricId)}
             onHeatmapInvertToggle={() => setHeatmapInvertedIds(prev =>
@@ -906,6 +915,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
       {showSaveModal && (
         <SaveReportModal
           reportSlug={reportSlug}
+          initialName={title}
           metricIds={selectedMetricIds}
           dealScope={dealScope}
           clientType={clientType}

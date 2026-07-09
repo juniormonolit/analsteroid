@@ -18,6 +18,7 @@ import type { SavedReport } from '@/lib/saved-reports/types';
 import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
 import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
 import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
+import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 
 /* Общий паттерн пункта 1-го уровня (NAV-блок, Сводная/Планы/Декомпозиция,
    Метрики/Настройки) — редизайн сайдбара, итерация 3 (бриф Виктора). */
@@ -40,6 +41,33 @@ function navIconCls(active: boolean) {
 const BRAND_TAGLINE_CLS =
   'block truncate text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--color-sidebar-text-muted)]';
 const BRAND_TAGLINE_TEXT = '— аналитика для монолитика'.toUpperCase();
+
+// Тумблер «Про/Лайт» под лочапом (п.1 правок 09.07/2): компактный сегмент, дёргает
+// ТОТ ЖЕ серверный ui_mode, что и тумблер в ЛК (useUiMode — общий queryKey ['ui-mode'],
+// переключение в одном месте мгновенно видно в другом). Отдельный компонент (а не
+// инлайн в AppShell) — хук использует react-query, а AppShell сам монтирует
+// QueryProvider ниже себя по дереву; хук обязан жить в компоненте-потомке провайдера
+// (тот же приём, что и у SidebarBody/SalesSidebarSection).
+function UiModeSwitch() {
+  const { uiMode, setUiMode } = useUiMode();
+  return (
+    <div className="flex border border-[var(--color-sidebar-border)] rounded-md overflow-hidden text-[11px] font-medium mt-1.5 w-fit">
+      {(['basic', 'pro'] as UiMode[]).map(m => (
+        <button
+          key={m}
+          onClick={() => setUiMode(m)}
+          className={`px-2 py-0.5 transition-colors ${
+            uiMode === m
+              ? 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)]'
+              : 'text-[var(--color-sidebar-text-muted)] hover:bg-[var(--color-sidebar-hover-bg)]'
+          }`}
+        >
+          {m === 'basic' ? 'Лайт' : 'Про'}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean; pathname: string; user: SessionUser }) {
   const [openStd, setOpenStd] = useState(true);
@@ -502,6 +530,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                   <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
                 </Link>
                 <span className={BRAND_TAGLINE_CLS}>{BRAND_TAGLINE_TEXT}</span>
+                <UiModeSwitch />
               </div>
             )}
             <button
@@ -531,6 +560,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                     <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
                   </Link>
                   <span className={BRAND_TAGLINE_CLS}>{BRAND_TAGLINE_TEXT}</span>
+                  <UiModeSwitch />
                 </div>
                 <button
                   onClick={() => setMobileOpen(false)}

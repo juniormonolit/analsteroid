@@ -58,6 +58,9 @@ interface Props {
   columnGroups: { name: string; metricIds: string[] }[];
   currentPeriod: DateRange;
   currentComparison: DateRange;
+  // Префилл имени (п.8 правок 09.07/2): название текущего отчёта — стандартного
+  // (заголовок страницы) либо открытого сохранённого (его имя). Редактируемо.
+  initialName?: string;
   onSave: (name: string, input: SavedReportInput) => Promise<{ ok: boolean; error?: string } | void>;
   onClose: () => void;
 }
@@ -72,9 +75,10 @@ export function SaveReportModal({
   sourceDimension, drilldownDimension,
   sortBy, sortDir, columnGroups,
   currentPeriod, currentComparison,
+  initialName,
   onSave, onClose,
 }: Props) {
-  const [name, setName] = useState('');
+  const [name, setName] = useState(initialName ?? '');
   const [periodMode, setPeriodMode] = useState<PeriodMode>('relative');
   const [anchor, setAnchor] = useState<PeriodAnchor>('current');
   const [unit, setUnit] = useState<PeriodUnit>('month');

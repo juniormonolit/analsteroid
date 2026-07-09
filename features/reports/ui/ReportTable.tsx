@@ -6,6 +6,8 @@ import type { Metric, Grouping, ComparisonDisplay, BorderMode } from '@/lib/metr
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { mixHex, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 import { matchesCondition, resolveThresholdZone, gradientZoneFromRank, type MetricFilters, type ZoneInfo } from '@/lib/reports/metricFilter';
+import { resolveHeatmapSet } from '@/lib/metrics/heatmapDefault';
+import { dimensionCountLabel } from '@/lib/format/pluralize';
 
 // Ручной режим подсветки значений (п.9 спеки analsteroid-edits-spec-agreed-20260708.md):
 // пороги (значение+цвет, любое количество ≥1) + aboveColor — цвет «выше последнего порога»
@@ -362,7 +364,9 @@ export function ReportTable({
   // Per-column stats over the visible LEAF data rows (group children when grouped, else the
   // row itself). Used by in-cell bars (max |current|) and heat map (min/max of current).
   const barSet = new Set(barMetricIds);
-  const heatSet = new Set(heatmapMetricIds);
+  // Градиент по умолчанию у относительных метрик (п.2 правок 09.07/2): резолв «явная
+  // настройка ?? (относительная ? вкл : выкл)» — см. lib/metrics/heatmapDefault.ts.
+  const heatSet = resolveHeatmapSet(metrics, heatmapMetricIds);
   const barMax: Record<string, number> = {};
   const heatStats: Record<string, number[]> = {}; // отсортированные значения колонки (для ранговой шкалы)
   if (barSet.size > 0 || heatSet.size > 0) {
@@ -514,6 +518,21 @@ export function ReportTable({
     return sortDir === 'desc' ? bv - av : av - bv;
   });
 
+  // Нумерация строк (п.6) + счётчик для «Итого: N ...» (п.7): считаем ТОЛЬКО обычные
+  // (не групповые) строки — групповые заголовки не входят, «Итого» без номера. Один и
+  // тот же счёт используется и для подписи «Итого», и (отдельным счётчиком по ходу
+  // рендера, см. rowNumberCounter в renderRow) для самой колонки «№» — порядок обхода
+  // идентичен (sorted.map(renderRow), рекурсия в children), поэтому числа совпадают.
+  function countLeafRows(list: RowDeltas[]): number {
+    let n = 0;
+    for (const r of list) {
+      if (r.isGroup) n += countLeafRows(r.children ?? []);
+      else n++;
+    }
+    return n;
+  }
+  const visibleRowCount = countLeafRows(sorted);
+
   // Absolute bar painted behind the value. Value content must be wrapped in a positioned
   // element so it stacks above the bar (both z auto → later DOM node wins).
   function BarBg({ metricId, value }: { metricId: string; value: number | null }) {
@@ -543,6 +562,10 @@ export function ReportTable({
 
   const DIMENSION_WIDTH = 320;
   const METRIC_COL_WIDTH = 90; // min-width per slot for non-pinned cols
+  // Колонка «№» (п.6 правок 09.07/2) — узкая sticky-колонка ПЕРЕД колонкой измерения,
+  // на позиции left:0; колонка измерения сдвигается на NUMBER_COL_WIDTH (была
+  // sticky left-0 напрямую классом — теперь left считается инлайн-стилем, см. ниже).
+  const NUMBER_COL_WIDTH = 36;
   // Итоговая строка: заметная светло-синяя непрозрачная плашка (opaque — обязательна
   // для sticky), тёмный текст, акцентная верхняя граница. Выделяется, но без инверсии.
   const TOTALS_BG = 'var(--color-totals-bg)';
@@ -576,7 +599,7 @@ export function ReportTable({
       return;
     }
     function measure() {
-      let offset = dimRef.current?.offsetWidth ?? DIMENSION_WIDTH;
+      let offset = NUMBER_COL_WIDTH + (dimRef.current?.offsetWidth ?? DIMENSION_WIDTH);
       const next: Record<string, number> = {};
       for (const pid of pinnedMetricIds) {
         for (const key of leafKeys(pid)) {
@@ -675,14 +698,17 @@ export function ReportTable({
 
       function HlValue({ value }: { value: number | null }) {
         const formatted = formatValue(value, m.dataType, decFor(m));
-        if (!hlColor) return <>{formatted}</>;
+        // Чистый чёрный #000 у числовых значений (п.9 правок 09.07/2) — только у САМОГО
+        // значения (текущий/«Итого»), не у заголовков/подписей (--color-text там не
+        // трогаем, см. остальные ячейки строки/шапки).
+        if (!hlColor) return <span className="text-[#000]">{formatted}</span>;
         // py-0 (не py-0.5, правка 09.07 «строка → 30px»): вертикальный паддинг бейджа
         // поверх паддинга самой ячейки не даёт строке уложиться в 30px — бейдж и так
         // читается как пилюля за счёт rounded + горизонтального px-1.5, вертикальный
         // «воздух» ему не нужен (высота = line-height текста, как у обычного значения).
         return (
           <span
-            className="inline-block px-1.5 py-0 rounded text-[var(--color-text)]"
+            className="inline-block px-1.5 py-0 rounded text-[#000]"
             style={{ backgroundColor: `color-mix(in srgb, ${hlColor} 68%, white)` }}
           >
             {formatted}
@@ -789,8 +815,9 @@ export function ReportTable({
     });
   }
 
-  // Полная ширина строки-раскрытия: колонка измерения + все листовые колонки метрик
-  const totalLeafCols = 1 + displayMetrics.reduce((s, m) => s + colSpanFor(m.id), 0);
+  // Полная ширина строки-раскрытия: колонка «№» + колонка измерения + все листовые
+  // колонки метрик (п.6: колонка «№» добавила ещё одну ведущую колонку).
+  const totalLeafCols = 2 + displayMetrics.reduce((s, m) => s + colSpanFor(m.id), 0);
 
   // «Зебра» (правка 09.07, opt-in): счётчик визуального порядка строк через ВЕСЬ рендер
   // таблицы (включая вложенные строки групп) — не локальный индекс map()'а, который
@@ -799,6 +826,11 @@ export function ReportTable({
   // только обычные (не групповые) строки — см. isGroupRow ниже. Объявлен здесь (а не
   // модулем/состоянием), т.к. должен просто идти по порядку одного прохода рендера.
   let zebraRowIndex = 0;
+  // Нумерация строк (п.6 правок 09.07/2): сквозной счётчик через ВЕСЬ проход рендера
+  // (включая рекурсию в children групп) — тот же приём, что и у zebraRowIndex выше.
+  // Групповые заголовки номер не получают (см. rowNumber ниже), «Итого» — своя строка,
+  // этого счётчика не касается.
+  let rowNumberCounter = 0;
 
   function renderRow(row: RowDeltas, i: number, isChild = false): React.ReactNode {
     const isGroupRow = row.isGroup;
@@ -809,6 +841,7 @@ export function ReportTable({
     const canToggleRow = isGroupRow && hasChildren;
     const expandable = !isGroupRow && !!renderExpandedRow;
     const isExpanded = expandable && !!expandedRowIds?.has(row.dimensionId);
+    const rowNumber = isGroupRow ? null : ++rowNumberCounter;
 
     // Вариант C раскраски (owners-inbox/table-colors-brief.md): по умолчанию зебра
     // убрана — все строки отчёта на bg-surface, разделитель — тонкая линия
@@ -845,8 +878,17 @@ export function ReportTable({
     return (
       <React.Fragment key={row.dimensionId}>
         <tr className={rowCls}>
+          {/* Колонка «№» (п.6): узкая, muted, только у обычных строк — групповые
+              заголовки без номера, нумерация сквозная (после сортировки/фильтра). */}
           <td
-            className={`sticky left-0 z-20 ${stickyBg} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-2 py-[var(--row-py)] border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
+            className={`sticky z-20 ${stickyBg} px-1 py-[var(--row-py)] text-right text-[11px] text-[var(--color-text-muted)] tabular-nums border-r border-[var(--color-border)]`}
+            style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }}
+          >
+            {rowNumber ?? ''}
+          </td>
+          <td
+            className={`sticky z-20 ${stickyBg} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-2 py-[var(--row-py)] border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
+            style={{ left: NUMBER_COL_WIDTH }}
             onClick={canClickRow
               ? () => onRowClick!(row.dimensionId, row.dimensionName)
               : canToggleRow ? () => toggleCollapse(row.dimensionId) : undefined}
@@ -976,7 +1018,8 @@ export function ReportTable({
         <thead className="report-thead sticky top-0 z-30 bg-[var(--color-table-header)]">
           {hasGroups && (
             <tr>
-              <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" />
+              <th className="sticky z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)]" style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }} />
+              <th className="sticky z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" style={{ left: NUMBER_COL_WIDTH }} />
               {displayMetrics.filter(m => pinnedMetricIds.includes(m.id)).map(m => {
                 const pinned = isMeasured(m.id);
                 return (
@@ -1002,7 +1045,14 @@ export function ReportTable({
             </tr>
           )}
           <tr>
-            <th ref={dimRef} className="sticky left-0 z-40 bg-[var(--color-table-header)] text-left px-2 py-2.5 font-medium text-[var(--color-text)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]">
+            {/* Заголовок колонки «№» (п.6) — узкая sticky-колонка перед измерением. */}
+            <th
+              className="sticky z-40 bg-[var(--color-table-header)] text-right px-1 py-2.5 text-[11px] font-medium text-[var(--color-text-muted)] border-b border-r border-[var(--color-border)]"
+              style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }}
+            >
+              №
+            </th>
+            <th ref={dimRef} className="sticky z-40 bg-[var(--color-table-header)] text-left px-2 py-2.5 font-medium text-[var(--color-text)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" style={{ left: NUMBER_COL_WIDTH }}>
               <div className="flex items-center justify-between gap-2">
                 {/* Левый край текста заголовка — на той же вертикали, что и значения строк:
                     px-2 (8px) + резервный слот w-5 (20px, как у спейсера/шеврона в строках)
@@ -1141,7 +1191,8 @@ export function ReportTable({
 
           {hasAnyWideMode && (
             <tr className="bg-[var(--color-table-header)]">
-              <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" />
+              <th className="sticky z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)]" style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }} />
+              <th className="sticky z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" style={{ left: NUMBER_COL_WIDTH }} />
               {displayMetrics.map((m, metricIdx) => {
                 const kinds = leafKinds(visualMode(m.id));
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
@@ -1187,17 +1238,26 @@ export function ReportTable({
 
           {totals && grouping !== 'total' && (
             <tr className="font-semibold text-[var(--color-text)]">
+              {/* Колонка «№» строки «Итого» — без номера (п.6), но ячейка нужна для
+                  сохранения сетки колонок под sticky-смещения метрик. */}
               <td
-                className="sticky left-0 bottom-0 z-30 px-2 py-[var(--row-py)] border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
-                style={{ backgroundColor: TOTALS_BG }}
+                className="sticky bottom-0 z-30 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)]"
+                style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH, backgroundColor: TOTALS_BG }}
+              />
+              <td
+                className="sticky bottom-0 z-30 px-2 py-[var(--row-py)] border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
+                style={{ left: NUMBER_COL_WIDTH, backgroundColor: TOTALS_BG }}
               >
                 {/* Тот же резервный слот (w-5) + gap-1, что у заголовка и строк данных — акцентная
-                    плашка теперь центрирована внутри слота, а не сдвигает текст «Итого». */}
+                    плашка теперь центрирована внутри слота, а не сдвигает текст «Итого». Текст
+                    строки «Итого» (п.7 правок 09.07/2): «Итого: N <измерение>» — N видимых строк
+                    (после сортировки/фильтра, без учёта групповых заголовков), склонение — см.
+                    dimensionCountLabel. */}
                 <span className="flex items-center gap-1">
                   <span className="w-5 flex-shrink-0 flex items-center justify-center">
                     <span className="w-1 h-4 rounded-full bg-[var(--color-accent)]" />
                   </span>
-                  Итого
+                  {`Итого: ${dimensionCountLabel(dimensionLabel, visibleRowCount)}`}
                 </span>
               </td>
               {displayMetrics.map((m, metricIdx) => {
@@ -1236,7 +1296,7 @@ export function ReportTable({
                         const animCls = idx === 0 ? '' : subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
                         if (kind === 'current') {
                           return (
-                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
+                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums text-[#000] ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
                               {formatValue(tv?.current ?? null, m.dataType, decFor(m))}
                             </td>
                           );
@@ -1267,7 +1327,7 @@ export function ReportTable({
                 }
                 const one = sub(0, edgeBase(0, 0));
                 return (
-                  <td key={m.id} className={`relative text-center px-3 py-[var(--row-py)] tabular-nums ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
+                  <td key={m.id} className={`relative text-center px-3 py-[var(--row-py)] tabular-nums text-[#000] ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
                     {formatValue(tv?.current ?? null, m.dataType, decFor(m))}
                     {pinSep}
                   </td>

@@ -1,5 +1,6 @@
 import type { Grouping, Metric, ReportRow } from '@/lib/metrics/types';
 import { computeTotals } from './calculated';
+import { branchLabel } from '@/lib/org/branchLabel';
 
 export interface GroupedRow extends ReportRow {
   isGroup?: boolean;
@@ -32,7 +33,9 @@ export function applyGrouping(rows: ReportRow[], grouping: Grouping, allMetrics:
     for (const [branch, members] of groups) {
       result.push({
         dimensionId: `__branch__${branch}`,
-        dimensionName: branch,
+        // Display-слой (п.5 правок 09.07/2): «СПб»→«Санкт-Петербург» и т.п. — ключ
+        // dimensionId/branchName остаётся сырым (маршрутизация дрилл-дауна/фильтры).
+        dimensionName: branchLabel(branch),
         teamId: null,
         teamName: null,
         branchName: branch,

@@ -1,11 +1,10 @@
 'use client';
 import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Bell, KeyRound, LayoutGrid } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
-
-type UiMode = 'basic' | 'pro';
+import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 
 interface Me {
   user: {
@@ -59,28 +58,11 @@ const cardCls = 'rounded-lg border border-[var(--color-border)] bg-[var(--color-
 
 export function ProfilePage() {
   const [showPassword, setShowPassword] = useState(false);
-  const qc = useQueryClient();
 
-  const { data: uiModeData } = useQuery<{ uiMode: UiMode; isOverride: boolean }>({
-    queryKey: ['ui-mode'],
-    queryFn: async () => {
-      const res = await fetch('/api/me/ui-mode');
-      if (!res.ok) throw new Error('failed');
-      return res.json();
-    },
-    staleTime: 60_000,
-  });
-
-  async function setUiMode(mode: UiMode) {
-    // Оптимистично обновляем кэш, чтобы тумблер и отчёты (тот же queryKey) не мигали
-    qc.setQueryData(['ui-mode'], { uiMode: mode, isOverride: true });
-    await fetch('/api/me/ui-mode', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uiMode: mode }),
-    });
-    qc.invalidateQueries({ queryKey: ['ui-mode'] });
-  }
+  // Тумблер «Про/Лайт» (п.3а спеки; переименование «Обычная»→«Лайт» — правка 09.07/2,
+  // п.1) — общий хук с компактным тумблером в сайдбаре (AppShell), тот же серверный
+  // ui_mode/queryKey.
+  const { uiMode, setUiMode } = useUiMode();
 
   const { data: me, isLoading: meLoading } = useQuery<Me>({
     queryKey: ['me'],
@@ -145,7 +127,7 @@ export function ProfilePage() {
           </div>
           <p className="text-sm text-[var(--color-text-muted)] mb-3">
             «Про» — полный набор инструментов (фильтры, вид, сохранение отчётов, настройка колонок,
-            перетаскивание). «Обычная» — упрощённый вид: период, отделы, группировка, поиск.
+            перетаскивание). «Лайт» — упрощённый вид: период, отделы, группировка, поиск.
           </p>
           <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm w-fit">
             {(['basic', 'pro'] as UiMode[]).map(m => (
@@ -153,12 +135,12 @@ export function ProfilePage() {
                 key={m}
                 onClick={() => setUiMode(m)}
                 className={`px-4 py-1.5 transition-colors ${
-                  (uiModeData?.uiMode ?? 'pro') === m
+                  uiMode === m
                     ? 'bg-[var(--color-accent)] text-white'
                     : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
-                {m === 'basic' ? 'Обычная' : 'Про'}
+                {m === 'basic' ? 'Лайт' : 'Про'}
               </button>
             ))}
           </div>
