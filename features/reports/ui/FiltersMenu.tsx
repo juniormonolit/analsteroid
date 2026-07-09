@@ -21,7 +21,7 @@ export function Seg<T extends string>({ options, value, onChange, labels }: {
   );
 }
 
-interface Props {
+export interface FiltersFieldsProps {
   dealScope: DealScope;
   onDealScopeChange: (v: DealScope) => void;
   clientType: ClientType;
@@ -36,12 +36,73 @@ interface Props {
   onAccountTypeChange?: (v: AccountType) => void;
 }
 
-export function FiltersMenu({ dealScope, onDealScopeChange, clientType, onClientTypeChange, productGroupMode, onProductGroupModeChange, showProductGroupPicker, accountType, onAccountTypeChange }: Props) {
-  // Count of non-default filters → badge so the active state is visible without opening.
-  // Defaults: all deals, all clients, «По наибольшему» (by_max), «Менеджеры».
-  const activeCount = (dealScope !== 'all' ? 1 : 0) + (clientType !== 'all' ? 1 : 0)
+// Кол-во нефолтовых фильтров → бейдж (виден без открытия панели). Дефолты: все сделки,
+// все клиенты, «По наибольшему» (by_max), «Менеджеры». Вынесено отдельной функцией
+// (правка 09.07, объединение «Фильтры»+«Вид» в «Настройки отчёта»), чтобы кнопка
+// объединённой панели в ReportToolbar считала бейдж тем же способом, что и раньше
+// FiltersMenu, без дублирования условий.
+export function countActiveFilters({ dealScope, clientType, showProductGroupPicker, productGroupMode, accountType, onAccountTypeChange }: FiltersFieldsProps): number {
+  return (dealScope !== 'all' ? 1 : 0) + (clientType !== 'all' ? 1 : 0)
     + (showProductGroupPicker && productGroupMode && productGroupMode !== 'by_max' ? 1 : 0)
     + (onAccountTypeChange && accountType && accountType !== 'managers' ? 1 : 0);
+}
+
+// Содержимое «Фильтры» — вынесено из-под Popover-обёртки (правка 09.07), чтобы
+// использовать И в самостоятельном дропдауне (FiltersMenu ниже, свои независимые
+// фильтры дрилл-дауна), И в объединённой панели «Настройки отчёта»
+// (ReportSettingsPanel — левая колонка основного тулбара), без дублирования разметки.
+export function FiltersFields({ dealScope, onDealScopeChange, clientType, onClientTypeChange, productGroupMode, onProductGroupModeChange, showProductGroupPicker, accountType, onAccountTypeChange }: FiltersFieldsProps) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип сделок</div>
+        <Seg
+          options={['primary', 'repeat', 'all'] as DealScope[]}
+          value={dealScope}
+          onChange={onDealScopeChange}
+          labels={{ primary: 'Первичные', repeat: 'Повторные', all: 'Все' }}
+        />
+      </div>
+      <div>
+        <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип клиента</div>
+        <Seg
+          options={['b2c', 'b2b', 'all'] as ClientType[]}
+          value={clientType}
+          onChange={onClientTypeChange}
+          labels={{ b2c: 'Физлица', b2b: 'Юрлица', all: 'Все' }}
+        />
+      </div>
+      {showProductGroupPicker && onProductGroupModeChange && productGroupMode !== undefined && (
+        <div>
+          <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Товарные группы</div>
+          <Seg
+            options={['kc', 'by_max'] as ProductGroupMode[]}
+            value={productGroupMode}
+            onChange={onProductGroupModeChange}
+            labels={{ kc: 'Категория КЦ', by_max: 'По наибольшему' }}
+          />
+        </div>
+      )}
+      {onAccountTypeChange && accountType !== undefined && (
+        <div>
+          <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип аккаунтов</div>
+          <Seg
+            options={['managers', 'logists', 'all'] as AccountType[]}
+            value={accountType}
+            onChange={onAccountTypeChange}
+            labels={{ managers: 'Менеджеры', logists: 'Логисты', all: 'Все' }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Самостоятельный дропдаун «Фильтры» — используется только там, где фильтры остаются
+// независимыми от основного отчёта (дрилл-даун, DrilldownDrawer). В основном тулбаре
+// отчёта (ReportToolbar) эта кнопка упразднена правкой 09.07 — см. FiltersFields выше.
+export function FiltersMenu(props: FiltersFieldsProps) {
+  const activeCount = countActiveFilters(props);
 
   return (
     <Popover
@@ -56,48 +117,7 @@ export function FiltersMenu({ dealScope, onDealScopeChange, clientType, onClient
         </button>
       }
     >
-      <div className="flex flex-col gap-3">
-        <div>
-          <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип сделок</div>
-          <Seg
-            options={['primary', 'repeat', 'all'] as DealScope[]}
-            value={dealScope}
-            onChange={onDealScopeChange}
-            labels={{ primary: 'Первичные', repeat: 'Повторные', all: 'Все' }}
-          />
-        </div>
-        <div>
-          <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип клиента</div>
-          <Seg
-            options={['b2c', 'b2b', 'all'] as ClientType[]}
-            value={clientType}
-            onChange={onClientTypeChange}
-            labels={{ b2c: 'Физлица', b2b: 'Юрлица', all: 'Все' }}
-          />
-        </div>
-        {showProductGroupPicker && onProductGroupModeChange && productGroupMode !== undefined && (
-          <div>
-            <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Товарные группы</div>
-            <Seg
-              options={['kc', 'by_max'] as ProductGroupMode[]}
-              value={productGroupMode}
-              onChange={onProductGroupModeChange}
-              labels={{ kc: 'Категория КЦ', by_max: 'По наибольшему' }}
-            />
-          </div>
-        )}
-        {onAccountTypeChange && accountType !== undefined && (
-          <div>
-            <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип аккаунтов</div>
-            <Seg
-              options={['managers', 'logists', 'all'] as AccountType[]}
-              value={accountType}
-              onChange={onAccountTypeChange}
-              labels={{ managers: 'Менеджеры', logists: 'Логисты', all: 'Все' }}
-            />
-          </div>
-        )}
-      </div>
+      <FiltersFields {...props} />
     </Popover>
   );
 }

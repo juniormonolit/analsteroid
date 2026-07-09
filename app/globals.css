@@ -28,6 +28,7 @@
   --color-table-row-hover: #dbe7fa; /* GS blue #4a86e8, подмес 0.8 — вариант C табл. отчёта (owners-inbox/table-colors-brief.md), общий токен для всех таблиц */
   --color-table-stripe: #f6f7f9;    /* gentle zebra on white rows (not = bg) — зебра других таблиц (ComparisonPanel/DrilldownDrawer/settings), НЕ меняем */
   --color-table-row-border: #efefef; /* GS grayscale — тонкий разделитель строк в таблице отчёта (без зебры), только ReportTable.tsx */
+  --color-report-zebra: #f8f9fa; /* «Зебра» ReportTable (правка владельца 09.07, opt-in в «Вид», по умолчанию выкл) — палитра варианта C; НЕ путать с --color-table-stripe (другие таблицы) */
 }
 
 :root {

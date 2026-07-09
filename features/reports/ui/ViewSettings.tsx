@@ -52,7 +52,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">{children}</div>;
 }
 
-interface ViewSettingsProps {
+export interface ViewSettingsFieldsProps {
   prefs: ViewPrefs;
   onChange: (p: ViewPrefs) => void;
   numberAlign?: NumberAlign;
@@ -66,28 +66,27 @@ interface ViewSettingsProps {
   onDrilldownGroupedChange?: (v: boolean) => void;
   colorizeMetrics?: boolean;
   onColorizeMetricsChange?: (v: boolean) => void;
+  // «Зебра» (правка владельца 09.07): лёгкая полосатость чётных строк ReportTable.
+  // По умолчанию выкл (undefined ⇒ false) — текущее поведение (вариант C без зебры).
+  zebra?: boolean;
+  onZebraChange?: (v: boolean) => void;
 }
 
-export function ViewSettings({
+// Содержимое «Вид» — вынесено из-под Popover-обёртки (правка 09.07), чтобы использовать
+// И в самостоятельном дропдауне (ViewSettings ниже — дрилл-даун, toolbarExtras), И в
+// объединённой панели «Настройки отчёта» (ReportSettingsPanel — правая колонка
+// основного тулбара), без дублирования разметки/логики.
+export function ViewSettingsFields({
   prefs, onChange, numberAlign, onNumberAlignChange,
   comparisonDisplay, hasMixedDisplay, onComparisonDisplayChange,
   accountType, onAccountTypeChange,
   drilldownGrouped, onDrilldownGroupedChange,
   colorizeMetrics, onColorizeMetricsChange,
-}: ViewSettingsProps) {
+  zebra, onZebraChange,
+}: ViewSettingsFieldsProps) {
   const fontPct = Math.round(prefs.fontScale * 100);
 
   return (
-    <Popover
-      align="end"
-      className="w-[260px] p-3"
-      trigger={
-        <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors">
-          <Type size={12} />
-          Вид
-        </button>
-      }
-    >
       <div className="flex flex-col gap-3">
           {onAccountTypeChange && (
             <div>
@@ -204,6 +203,23 @@ export function ViewSettings({
             </div>
           )}
 
+          {onZebraChange && (
+            <div>
+              <SectionLabel>Зебра</SectionLabel>
+              <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
+                {([true, false] as const).map(v => (
+                  <button
+                    key={String(v)}
+                    onClick={() => onZebraChange(v)}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(zebra ?? false) === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                  >
+                    {v ? 'Да' : 'Нет'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <button
             onClick={() => onChange(DEFAULT_VIEW_PREFS)}
             className="text-xs text-[var(--color-accent)] hover:underline self-start"
@@ -211,6 +227,26 @@ export function ViewSettings({
             Сбросить
           </button>
       </div>
+  );
+}
+
+// Самостоятельный дропдаун «Вид» — используется там, где нужен независимый попап (сейчас
+// это toolbarExtras дрилл-дауна, DrilldownDrawer, — там прочие настройки уже свои, а «Вид»
+// разделяется с основным отчётом). В основном тулбаре отчёта (ReportToolbar) эта кнопка
+// упразднена правкой 09.07 — см. ViewSettingsFields выше.
+export function ViewSettings(props: ViewSettingsFieldsProps) {
+  return (
+    <Popover
+      align="end"
+      className="w-[260px] p-3"
+      trigger={
+        <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors">
+          <Type size={12} />
+          Вид
+        </button>
+      }
+    >
+      <ViewSettingsFields {...props} />
     </Popover>
   );
 }

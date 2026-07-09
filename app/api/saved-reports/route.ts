@@ -30,6 +30,7 @@ export async function GET() {
             COALESCE(heatmap_metric_ids, '{}') AS "heatmapMetricIds",
             COALESCE(heatmap_inverted_ids, '{}') AS "heatmapInvertedIds",
             colorize_metrics AS "colorizeMetrics",
+            zebra AS "zebra",
             theme_accent AS "themeAccent",
             number_align AS "numberAlign",
             account_type AS "accountType",
@@ -98,6 +99,7 @@ function buildCommonFields(body: SavedReportInput, sharedSection: SharedSection)
     shared_section: sharedSection,
     heatmap_inverted_ids: body.heatmapInvertedIds ?? [],
     colorize_metrics: body.colorizeMetrics ?? null,
+    zebra: body.zebra ?? null,
   };
 }
 

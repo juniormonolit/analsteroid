@@ -54,6 +54,9 @@ export interface SavedReport {
   heatmapInvertedIds?: string[];
   // Colorize metric column headers by category color rules. undefined = true.
   colorizeMetrics?: boolean;
+  // «Зебра» (правка владельца 09.07): лёгкая полосатость чётных строк ReportTable.
+  // undefined/null = false (текущее поведение, вариант C без зебры).
+  zebra?: boolean;
   // Report-wide accent color (hex). Drives accent/bars/heatmap. null/undefined = app default.
   themeAccent?: string | null;
   // Report-wide horizontal alignment of numeric cells. undefined = 'center' (default).

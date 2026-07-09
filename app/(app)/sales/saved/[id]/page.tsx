@@ -35,6 +35,7 @@ export default async function SavedReportPage({
             COALESCE(heatmap_metric_ids, '{}') AS "heatmapMetricIds",
             COALESCE(heatmap_inverted_ids, '{}') AS "heatmapInvertedIds",
             colorize_metrics AS "colorizeMetrics",
+            zebra AS "zebra",
             theme_accent AS "themeAccent",
             number_align AS "numberAlign",
             account_type AS "accountType",

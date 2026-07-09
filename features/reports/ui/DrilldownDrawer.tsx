@@ -99,6 +99,9 @@ interface Props {
   heatmapMetricIds?: string[];
   heatmapInvertedIds?: string[];
   colorizeMetrics?: boolean;
+  // «Зебра» (правка владельца 09.07): та же настройка «Вид», что и в основном отчёте
+  // (общее состояние SalesReportPage) — мини-отчёт рендерится тем же ReportTable.
+  zebra?: boolean;
   numberAlign?: 'left' | 'center' | 'right';
   pinnedMetricIds?: string[];
   columnGroups?: { name: string; metricIds: string[] }[];
@@ -475,6 +478,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
       heatmapMetricIds={props.heatmapMetricIds}
       heatmapInvertedIds={props.heatmapInvertedIds}
       colorizeMetrics={props.colorizeMetrics}
+      zebra={props.zebra}
       numberAlign={props.numberAlign}
       pinnedMetricIds={props.pinnedMetricIds}
       columnGroups={props.columnGroups}

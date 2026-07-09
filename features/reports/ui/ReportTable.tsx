@@ -114,6 +114,10 @@ interface Props {
   heatmapMetricIds?: string[];
   heatmapInvertedIds?: string[];
   colorizeMetrics?: boolean;
+  // «Зебра» (правка владельца 09.07): лёгкая полосатость чётных строк — opt-in из панели
+  // «Настройки отчёта» → «Вид», по умолчанию выкл (см. --color-report-zebra в
+  // globals.css). Группа-строки (isGroupRow) и итоговая строка не полосатятся.
+  zebra?: boolean;
   numberAlign?: 'left' | 'center' | 'right';
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
@@ -153,6 +157,7 @@ export function ReportTable({
   heatmapMetricIds = [],
   heatmapInvertedIds = [],
   colorizeMetrics = false,
+  zebra = false,
   numberAlign = 'center',
   sortBy: sortByProp,
   sortDir: sortDirProp,
@@ -651,6 +656,14 @@ export function ReportTable({
   // Полная ширина строки-раскрытия: колонка измерения + все листовые колонки метрик
   const totalLeafCols = 1 + displayMetrics.reduce((s, m) => s + colSpanFor(m.id), 0);
 
+  // «Зебра» (правка 09.07, opt-in): счётчик визуального порядка строк через ВЕСЬ рендер
+  // таблицы (включая вложенные строки групп) — не локальный индекс map()'а, который
+  // сбрасывается для каждой группы. Считаем КАЖДУЮ отрисованную строку (включая
+  // групповые), чтобы чередование не «съезжало» вокруг заголовков групп, но красим
+  // только обычные (не групповые) строки — см. isGroupRow ниже. Объявлен здесь (а не
+  // модулем/состоянием), т.к. должен просто идти по порядку одного прохода рендера.
+  let zebraRowIndex = 0;
+
   function renderRow(row: RowDeltas, i: number, isChild = false): React.ReactNode {
     const isGroupRow = row.isGroup;
     const isCollapsed = collapsed.has(row.dimensionId);
@@ -661,18 +674,31 @@ export function ReportTable({
     const expandable = !isGroupRow && !!renderExpandedRow;
     const isExpanded = expandable && !!expandedRowIds?.has(row.dimensionId);
 
-    // Вариант C раскраски (owners-inbox/table-colors-brief.md): зебра убрана — все строки
-    // отчёта на bg-surface, разделитель — тонкая линия --color-table-row-border, акцент
-    // при наведении — box-shadow слева (.report-row:hover > td:first-child в globals.css).
+    // Вариант C раскраски (owners-inbox/table-colors-brief.md): по умолчанию зебра
+    // убрана — все строки отчёта на bg-surface, разделитель — тонкая линия
+    // --color-table-row-border, акцент при наведении — box-shadow слева
+    // (.report-row:hover > td:first-child в globals.css). «Зебра» (правка 09.07) — opt-in
+    // из панели «Настройки отчёта» → «Вид»: чётные (по счётчику zebraRowIndex) обычные
+    // строки красятся --color-report-zebra. Групповые строки (isGroupRow) никогда не
+    // полосатятся — остаются акцентной bg-surface строкой, как и раньше.
+    const isZebraStripe = zebra && !isGroupRow && zebraRowIndex % 2 === 1;
+    zebraRowIndex++;
+    const rowBaseBg = isZebraStripe ? 'bg-[var(--color-report-zebra)]' : 'bg-[var(--color-bg-surface)]';
+
+    // Закреплённые (pinned) колонки требуют НЕПРОЗРАЧНОГО фона независимо от зебры —
+    // тот же принцип, что уже применяется к hover-фону pinned-ячеек (см. комментарий
+    // «Pinned cells must use an OPAQUE hover bg» в renderMetricCells ниже): и
+    // --color-bg-surface, и --color-report-zebra — сплошные цвета, поэтому подстановка
+    // rowBaseBg вместо жёстко заданного bg-surface не ломает непрозрачность.
     const stickyBg = isGroupRow
       ? 'bg-[var(--color-bg-surface)]'
-      : 'bg-[var(--color-bg-surface)] group-hover:bg-[var(--color-table-row-hover)]';
+      : `${rowBaseBg} group-hover:bg-[var(--color-table-row-hover)]`;
 
     const rowCls = [
       'group border-b',
       isGroupRow
         ? 'border-[var(--color-border)] bg-[var(--color-bg-surface)] font-semibold text-[var(--color-text)]'
-        : 'report-row border-[var(--color-table-row-border)] bg-[var(--color-bg-surface)]',
+        : `report-row border-[var(--color-table-row-border)] ${rowBaseBg}`,
     ].join(' ');
 
     return (

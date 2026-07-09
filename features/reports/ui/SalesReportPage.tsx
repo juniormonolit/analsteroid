@@ -220,6 +220,9 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [heatmapMetricIds, setHeatmapMetricIds] = useState<string[]>([]);
   const [heatmapInvertedIds, setHeatmapInvertedIds] = useState<string[]>([]);
   const [colorizeMetrics, setColorizeMetrics] = useState(false);
+  // «Зебра» (правка владельца 09.07): лёгкая полосатость чётных строк ReportTable,
+  // по умолчанию выкл (текущее поведение, вариант C без зебры).
+  const [zebra, setZebra] = useState(false);
   const [themeAccent, setThemeAccent] = useState<string | null>(null); // legacy, UI выпилен
   const [numberAlign, setNumberAlign] = useState<'left' | 'center' | 'right'>('center');
   const [accountType, setAccountType] = useState<'managers' | 'logists' | 'all'>('managers');
@@ -270,6 +273,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setHeatmapMetricIds(preset.heatmapMetricIds ?? []);
     setHeatmapInvertedIds(preset.heatmapInvertedIds ?? []);
     setColorizeMetrics(preset.colorizeMetrics ?? false);
+    setZebra(preset.zebra ?? false);
     setThemeAccent(preset.themeAccent ?? null);
     setNumberAlign(preset.numberAlign ?? 'center');
     setAccountType(preset.accountType ?? 'managers');
@@ -608,6 +612,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         onDrilldownGroupedChange={setDrilldownGrouped}
         colorizeMetrics={colorizeMetrics}
         onColorizeMetricsChange={setColorizeMetrics}
+        zebra={zebra}
+        onZebraChange={setZebra}
         showProductGroupPicker={true}
         productGroupMode={productGroupMode}
         onProductGroupModeChange={setProductGroupMode}
@@ -652,6 +658,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             heatmapMetricIds={heatmapMetricIds}
             heatmapInvertedIds={heatmapInvertedIds}
             colorizeMetrics={colorizeMetrics}
+            zebra={zebra}
             numberAlign={numberAlign}
             pinnedMetricIds={pinnedMetricIds}
             onMetricPinToggle={(id) => setPinnedMetricIds(prev =>
@@ -696,6 +703,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           heatmapMetricIds={heatmapMetricIds}
           heatmapInvertedIds={heatmapInvertedIds}
           colorizeMetrics={colorizeMetrics}
+          zebra={zebra}
           numberAlign={numberAlign}
           pinnedMetricIds={pinnedMetricIds}
           columnGroups={columnGroups}
@@ -708,7 +716,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             // Тип сделок/клиента/аккаунтов, товарные группы, период и отделы теперь —
             // собственные (независимые от основного отчёта) фильтры дрилл-дауна,
             // см. DrilldownDrawer. Здесь остаются только настройки ОТОБРАЖЕНИЯ,
-            // общие с основным отчётом (плотность, шрифт, режим колонок, цвет).
+            // общие с основным отчётом (плотность, шрифт, режим колонок, цвет, зебра).
             <ViewSettings
               prefs={viewPrefs}
               onChange={updateViewPrefs}
@@ -718,6 +726,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
               onDrilldownGroupedChange={setDrilldownGrouped}
               colorizeMetrics={colorizeMetrics}
               onColorizeMetricsChange={setColorizeMetrics}
+              zebra={zebra}
+              onZebraChange={setZebra}
             />
           }
           onClose={() => setDrilldown(null)}
@@ -844,6 +854,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           heatmapMetricIds={heatmapMetricIds}
           heatmapInvertedIds={heatmapInvertedIds}
           colorizeMetrics={colorizeMetrics}
+          zebra={zebra}
           themeAccent={themeAccent}
           numberAlign={numberAlign}
           accountType={accountType}
