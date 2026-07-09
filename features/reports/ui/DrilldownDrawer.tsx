@@ -245,7 +245,11 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
                 onClick={onDealOpen ? () => onDealOpen(deal.deal_id) : undefined}
                 title={onDealOpen ? 'Открыть карточку сделки' : undefined}
                 className={`border-t border-[var(--color-border)] hover:bg-[var(--color-table-row-hover)] ${onDealOpen ? 'cursor-pointer' : ''} ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''}`}>
-              <td className="px-5 py-1.5 text-[var(--color-text-muted)] whitespace-nowrap">
+              {/* py-[7px] (не py-1.5=6px, правка 09.07 «строка → 30px»): text-xs (12px) даёт
+                  line-height ~16px (Tailwind --text-xs--line-height: 1/0.75), 7+16+7=30 —
+                  та же высота строки, что и в основной таблице отчёта (ReportTable.tsx),
+                  для единообразия между отчётом и списком сделок дрилл-дауна. */}
+              <td className="px-5 py-[7px] text-[var(--color-text-muted)] whitespace-nowrap">
                 {/* Полоска слева по текущей стадии сделки (тот же приём, что у строки
                     «Итого» основного отчёта — w-1 h-4 rounded-full); «в работе» — без
                     цвета, полоска прозрачна (сознательно, см. dealStageColor). */}
@@ -256,7 +260,7 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
               </td>
               {cols.map(c => (
                 <td key={c.key}
-                    className={`px-3 py-1.5 whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[var(--color-text)]' : ''}`}>
+                    className={`px-3 py-[7px] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[var(--color-text)]' : ''}`}>
                   {dealCell(deal, c.key)}
                 </td>
               ))}
@@ -631,7 +635,7 @@ export function DrilldownDrawer(props: Props) {
       {/* Полоска-подложка для закрытия — только там, где есть место (sm+). Цвет/прозрачность
           — общий эталон затемнения (SLIDE_BACKDROP_BG, правка 09.07). */}
       <div
-        className={`hidden sm:block w-[10%] shrink-0 ${SLIDE_BACKDROP_BG} cursor-pointer transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
+        className={`hidden sm:block w-[10%] shrink-0 ${SLIDE_BACKDROP_BG} cursor-pointer slide-backdrop-fade ${closing ? 'opacity-0' : 'opacity-100'}`}
         onClick={requestClose}
       />
       {/* Язычок-таб на границе подложки и панели — только там, где подложка вообще есть (sm+);

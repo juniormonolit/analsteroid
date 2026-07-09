@@ -26,7 +26,7 @@ interface SlideBackdropProps {
 export function SlideBackdrop({ closing, onClick, className = 'z-40' }: SlideBackdropProps) {
   return (
     <div
-      className={`fixed inset-0 ${SLIDE_BACKDROP_BG} transition-opacity duration-150 ${className} ${closing ? 'opacity-0' : 'opacity-100'}`}
+      className={`fixed inset-0 ${SLIDE_BACKDROP_BG} slide-backdrop-fade ${className} ${closing ? 'opacity-0' : 'opacity-100'}`}
       onClick={onClick}
     />
   );

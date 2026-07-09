@@ -207,7 +207,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex">
-      <div className={`flex-1 ${SLIDE_BACKDROP_BG} transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`} onClick={requestClose} />
+      <div className={`flex-1 ${SLIDE_BACKDROP_BG} slide-backdrop-fade ${closing ? 'opacity-0' : 'opacity-100'}`} onClick={requestClose} />
       <aside className={`relative w-[800px] max-w-full bg-[var(--color-bg-surface)] border-l border-[var(--color-border)] flex flex-col h-full shadow-2xl ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <PanelCloseTab onClick={requestClose} />
         {/* Header */}

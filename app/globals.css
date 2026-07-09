@@ -33,6 +33,18 @@
 
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* ---------- Единый стандарт анимаций (правка владельца 09.07, «как у Эпл») ------
+     ВСЕ новые анимации приложения ОБЯЗАНЫ использовать именно эти переменные (не
+     хардкодить свои мс/кривые) — см. ai_docs/fresh_docs/DESIGN_GUIDELINES.md.
+     Длительность поднята с прежних ~150-180мс до 280мс (диапазон 250-300мс) —
+     ощущается плавно, не «дёргано»; кривая — классический iOS-деселерейт для
+     панелей/шторок (быстрый старт, мягкое торможение к концу), а не линейный/
+     стандартный CSS ease. Ховеры (transition-colors на кнопках/ссылках,
+     .hover-reveal) сюда сознательно НЕ включены и остаются быстрыми — иначе
+     наведение курсора будет ощущаться заторможенным. */
+  --anim-duration: 280ms;
+  --anim-ease: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 * { box-sizing: border-box; }
@@ -78,8 +90,12 @@ body {
   from { opacity: 1; transform: translateX(0); }
   to   { opacity: 0; transform: translateX(-6px); }
 }
-.metric-compare-col-enter { animation: metric-compare-in 0.18s ease-out; }
-.metric-compare-col-exit { animation: metric-compare-out 0.18s ease-in forwards; pointer-events: none; }
+/* Тайминг/кривая — единые переменные --anim-duration/--anim-ease (правка 09.07,
+   было 0.18s ease-out/ease-in): COMPARE_CLOSE_MS в ReportTable.tsx синхронизирован
+   с --anim-duration числом (JS не читает CSS-переменные) — при изменении здесь
+   поменять и там. */
+.metric-compare-col-enter { animation: metric-compare-in var(--anim-duration) var(--anim-ease); }
+.metric-compare-col-exit { animation: metric-compare-out var(--anim-duration) var(--anim-ease) forwards; pointer-events: none; }
 
 /* ---------- Адаптивность / touch ---------- */
 
@@ -136,23 +152,33 @@ button, a { -webkit-tap-highlight-color: transparent; }
    планов) — плавное появление/закрытие (п. Н3 спеки). Раньше классы `animate-in
    slide-in-from-*` предполагали tailwindcss-animate, которого в проекте нет — анимация
    фактически не работала (панели появлялись мгновенно). Тут — минимальные keyframes без
-   зависимостей: полноценный слайд от края + лёгкий fade, ~240ms ease-out на входе / ~180ms
-   ease-in на выходе. translateX в % — от ширины САМОЙ панели, поэтому одинаково корректно
-   работает и для панелей фиксированной ширины (600px/384px/320px), и для дрилл-дауна
-   (flex-1, ~90% экрана) — не нужно знать точную ширину в px. */
+   зависимостей: полноценный слайд от края + лёгкий fade. Тайминг/кривая — единые
+   переменные --anim-duration/--anim-ease (правка владельца 09.07 «как у Эпл», было
+   ~240ms ease-out на входе / ~180ms ease-in на выходе — теперь оба направления на
+   одном «эпловском» деселерейте, см. :root выше). translateX в % — от ширины САМОЙ
+   панели, поэтому одинаково корректно работает и для панелей фиксированной ширины
+   (600px/384px/320px), и для дрилл-дауна (flex-1, ~90% экрана) — не нужно знать
+   точную ширину в px. */
 @keyframes slide-panel-in-right { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 @keyframes slide-panel-out-right { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
 @keyframes slide-panel-in-left { from { transform: translateX(-100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 @keyframes slide-panel-out-left { from { transform: translateX(0); opacity: 1; } to { transform: translateX(-100%); opacity: 0; } }
 
-.slide-panel-in-right { animation: slide-panel-in-right 240ms ease-out both; }
-.slide-panel-out-right { animation: slide-panel-out-right 180ms ease-in both; }
-.slide-panel-in-left { animation: slide-panel-in-left 240ms ease-out both; }
-.slide-panel-out-left { animation: slide-panel-out-left 180ms ease-in both; }
+.slide-panel-in-right { animation: slide-panel-in-right var(--anim-duration) var(--anim-ease) both; }
+.slide-panel-out-right { animation: slide-panel-out-right var(--anim-duration) var(--anim-ease) both; }
+.slide-panel-in-left { animation: slide-panel-in-left var(--anim-duration) var(--anim-ease) both; }
+.slide-panel-out-left { animation: slide-panel-out-left var(--anim-duration) var(--anim-ease) both; }
+
+/* Затемняющая подложка правых слайд-панелей — тот же тайминг/кривая, что и сами
+   панели (правка 09.07), вместо прежнего Tailwind `transition-opacity duration-150`,
+   разбросанного по 4 файлам (SlideBackdrop.tsx, ComparisonPanel.tsx, DrilldownDrawer.tsx,
+   MetricEditor.tsx) с рассинхроном значений. */
+.slide-backdrop-fade { transition: opacity var(--anim-duration) var(--anim-ease); }
 
 @media (prefers-reduced-motion: reduce) {
   .slide-panel-in-right, .slide-panel-out-right,
   .slide-panel-in-left, .slide-panel-out-left {
     animation: none;
   }
+  .slide-backdrop-fade { transition: none; }
 }

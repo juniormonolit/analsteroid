@@ -195,16 +195,27 @@ export function ReportTable({
   // useLayoutEffect (не useEffect!) — сравнение prev/next режима и взвод closing
   // должны случиться ДО отрисовки кадра браузером, иначе будет виден один кадр
   // мгновенного схлопывания перед тем, как включится fade-out.
-  const COMPARE_CLOSE_MS = 180;
+  // Держим тайминг СИНХРОННО с CSS-анимацией .metric-compare-col-exit (globals.css),
+  // которая теперь идёт на var(--anim-duration) — единый «эпловский» тайминг всех
+  // анимаций приложения (правка 09.07, см. ai_docs/fresh_docs/DESIGN_GUIDELINES.md).
+  // JS-таймер не умеет читать CSS-переменную напрямую — значение продублировано
+  // здесь числом; при смене --anim-duration в globals.css поменять и эту константу.
+  const COMPARE_CLOSE_MS = 280;
   const [closingModes, setClosingModes] = useState<Record<string, ComparisonDisplay>>({});
   const prevModeRef = useRef<Record<string, ComparisonDisplay>>({});
 
   // Состав «листовых» под-колонок каждого режима, в порядке отрисовки. full/partial —
   // «широкие» (>1 колонки); compact/current — одна колонка «Тек.» (у compact в ней же
   // рисуется стрелка тенденции, доп. колонки не требуется).
+  // Порядок под-колонок (правка владельца 09.07 «поменять прошлое с настоящим» —
+  // хронологично было→стало): Пред. ПЕРЕД Тек., затем Δ/Δ%. Это только порядок
+  // ОТРИСОВКИ — рендер каждой под-колонки читает своё поле (d.comparison/d.current)
+  // по значению `kind`, а не по позиции в массиве, так что перестановка не трогает
+  // расчёты/данные (см. renderMetricCells/шапку/строку «Итого» ниже — везде рендер
+  // идёт по kind, не по индексу).
   function leafKinds(mode: ComparisonDisplay): ('current' | 'comparison' | 'delta' | 'deltaPct')[] {
-    if (mode === 'full') return ['current', 'comparison', 'delta', 'deltaPct'];
-    if (mode === 'partial') return ['current', 'comparison', 'deltaPct'];
+    if (mode === 'full') return ['comparison', 'current', 'delta', 'deltaPct'];
+    if (mode === 'partial') return ['comparison', 'current', 'deltaPct'];
     return ['current'];
   }
   function leafCount(mode: ComparisonDisplay): number {
@@ -632,9 +643,13 @@ export function ReportTable({
       function HlValue({ value }: { value: number | null }) {
         const formatted = formatValue(value, m.dataType, decFor(m));
         if (!hlColor) return <>{formatted}</>;
+        // py-0 (не py-0.5, правка 09.07 «строка → 30px»): вертикальный паддинг бейджа
+        // поверх паддинга самой ячейки не даёт строке уложиться в 30px — бейдж и так
+        // читается как пилюля за счёт rounded + горизонтального px-1.5, вертикальный
+        // «воздух» ему не нужен (высота = line-height текста, как у обычного значения).
         return (
           <span
-            className="inline-block px-1.5 py-0.5 rounded text-[var(--color-text)]"
+            className="inline-block px-1.5 py-0 rounded text-[var(--color-text)]"
             style={{ backgroundColor: `color-mix(in srgb, ${hlColor} 68%, white)` }}
           >
             {formatted}
@@ -643,8 +658,9 @@ export function ReportTable({
       }
 
       if (kinds.length > 1) {
-        // full: Тек./Пред./Δ/Δ% (4); partial: Тек./Пред./Δ% (3, без абсолютной Δ) — общий
-        // рендер по составу kinds, последняя под-колонка всегда deltaPct (несёт pinBar).
+        // full: Пред./Тек./Δ/Δ% (4); partial: Пред./Тек./Δ% (3, без абсолютной Δ) — общий
+        // рендер по составу kinds (порядок задан в leafKinds), последняя под-колонка
+        // всегда deltaPct (несёт pinBar).
         const lastIdx = kinds.length - 1;
         return (
           <React.Fragment key={m.id}>
@@ -783,7 +799,7 @@ export function ReportTable({
       <React.Fragment key={row.dimensionId}>
         <tr className={rowCls}>
           <td
-            className={`sticky left-0 z-20 ${stickyBg} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-2 py-2 border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
+            className={`sticky left-0 z-20 ${stickyBg} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-2 py-[var(--row-py)] border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
             onClick={canClickRow
               ? () => onRowClick!(row.dimensionId, row.dimensionName)
               : canToggleRow ? () => toggleCollapse(row.dimensionId) : undefined}
@@ -866,7 +882,15 @@ export function ReportTable({
   }
   const sepCls = 'border-l border-l-[var(--color-border)]';
 
-  const rowPy = density === 'compact' ? '2px' : density === 'relaxed' ? '14px' : '8px';
+  // Вертикальный паддинг строки (правка владельца 09.07): «нормальная» плотность
+  // должна давать РОВНО 30px высоты строки (было выше из-за py-паддингов) — при
+  // line-height text-sm (14px × 1.42857 ≈ 20px) паддинг 5px сверху/снизу даёт
+  // 5+20+5=30. Раньше колонка измерения (первая, «сотрудник») игнорировала density
+  // и держала фикс. py-2 (16px), из-за чего реальная высота строки ВСЕГДА
+  // упиралась в неё (36px), даже в compact — теперь колонка измерения тоже на
+  // --row-py (см. renderRow), поэтому compact/relaxed стали настоящими, а не
+  // визуально одинаковыми с normal.
+  const rowPy = density === 'compact' ? '2px' : density === 'relaxed' ? '14px' : '5px';
 
   return (
     <div className="overflow-auto h-full bg-[var(--color-bg-surface)]">
@@ -1086,7 +1110,7 @@ export function ReportTable({
           {totals && grouping !== 'total' && (
             <tr className="font-semibold text-[var(--color-text)]">
               <td
-                className="sticky left-0 bottom-0 z-30 px-2 py-3 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
+                className="sticky left-0 bottom-0 z-30 px-2 py-[var(--row-py)] border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
                 style={{ backgroundColor: TOTALS_BG }}
               >
                 {/* Тот же резервный слот (w-5) + gap-1, что у заголовка и строк данных — акцентная
@@ -1128,14 +1152,14 @@ export function ReportTable({
                         const isLast = idx === lastIdx;
                         if (kind === 'current') {
                           return (
-                            <td key={kind} className={`text-center px-2 py-3 tabular-nums ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
+                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
                               {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
                             </td>
                           );
                         }
                         const animCls = subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
                         return (
-                          <td key={kind} className={`${isLast ? 'relative' : ''} text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${sb.cls} ${animCls}`} style={sb.style}>
+                          <td key={kind} className={`${isLast ? 'relative' : ''} text-center px-2 py-[var(--row-py)] tabular-nums text-[var(--color-text-muted)] ${sb.cls} ${animCls}`} style={sb.style}>
                             —{isLast ? pinSep : null}
                           </td>
                         );
@@ -1145,7 +1169,7 @@ export function ReportTable({
                 }
                 const one = sub(0, firstBase);
                 return (
-                  <td key={m.id} className={`relative text-center px-3 py-3 tabular-nums ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
+                  <td key={m.id} className={`relative text-center px-3 py-[var(--row-py)] tabular-nums ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
                     {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
                     {pinSep}
                   </td>

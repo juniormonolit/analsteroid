@@ -66,7 +66,7 @@ export function ComparisonPanel({
       {/* Полоска-подложка для закрытия — как в дрилл-дауне (п. Н3, тот же язычок-таб).
           Цвет/прозрачность — общий эталон затемнения (SLIDE_BACKDROP_BG, правка 09.07). */}
       <div
-        className={`hidden sm:block w-[10%] shrink-0 ${SLIDE_BACKDROP_BG} cursor-pointer transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
+        className={`hidden sm:block w-[10%] shrink-0 ${SLIDE_BACKDROP_BG} cursor-pointer slide-backdrop-fade ${closing ? 'opacity-0' : 'opacity-100'}`}
         onClick={requestClose}
       />
       <PanelCloseTab onClick={requestClose} style={{ left: '10%', transform: 'translateX(-100%)' }} />
