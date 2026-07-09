@@ -567,7 +567,7 @@ export function DrilldownDrawer(props: Props) {
       {/* Язычок-таб на границе подложки и панели — только там, где подложка вообще есть (sm+);
           на мобиле панель фуллскрин (подложки нет, некуда цеплять таб) — там остаётся обычный
           крестик в шапке (см. кнопку ниже, sm:hidden). */}
-      <PanelCloseTab onClick={requestClose} style={{ left: '10%', transform: 'translateX(-50%)' }} />
+      <PanelCloseTab onClick={requestClose} style={{ left: '10%', transform: 'translateX(-100%)' }} />
       <div className={`flex-1 min-w-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <div className="flex items-center justify-between flex-wrap gap-y-2 px-3 sm:px-6 py-3 sm:py-4 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
           <div className="min-w-0 flex-1">

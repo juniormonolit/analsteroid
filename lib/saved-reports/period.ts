@@ -7,8 +7,11 @@ import {
   subDays, subWeeks, subMonths, subQuarters, subYears,
   differenceInCalendarDays,
 } from 'date-fns';
+import { toZonedTime } from 'date-fns-tz';
 import type { RelativePeriod, ComparisonMode, PeriodUnit } from './types';
 import type { DateRange } from '@/lib/period';
+
+const TZ = 'Europe/Moscow';
 
 function getUnitBounds(unit: PeriodUnit, ref: Date): { from: Date; to: Date } {
   const weekOpts = { weekStartsOn: 1 as const };
@@ -32,6 +35,21 @@ function shiftBack(date: Date, unit: PeriodUnit): Date {
 }
 
 export function resolveRelativePeriod(rp: RelativePeriod, now = new Date()): DateRange {
+  if (rp.anchor === 'current' && rp.unit !== 'day') {
+    // «Текущий» период (неделя/месяц/квартал/год) не должен упираться в сегодня —
+    // тот же принцип, что и у lib/period::defaultPeriod(): конец = вчера, МСК.
+    // Без этого КАЖДОЕ открытие сохранённого/общего отчёта (например, «Смекалочная»)
+    // показывало «месяц по сегодня» с неполным текущим днём — в отличие от стандартных
+    // отчётов (by-managers/by-product-groups), которые всегда идут через
+    // lib/period::defaultPeriod() и уже упираются в вчера. unit === 'day' (явное
+    // «Сегодня») не трогаем — это осознанный выбор при сохранении отчёта, ведёт себя
+    // как раньше (живой срез по текущий момент).
+    const mskNow = toZonedTime(now, TZ);
+    const bounds = getUnitBounds(rp.unit, mskNow);
+    const cap = endOfDay(subDays(mskNow, 1));
+    const to = bounds.to > cap ? cap : bounds.to;
+    return { from: bounds.from, to };
+  }
   const ref = rp.anchor === 'previous' ? shiftBack(now, rp.unit) : now;
   const bounds = getUnitBounds(rp.unit, ref);
   // Cap 'to' at today so we don't show future dates for current periods

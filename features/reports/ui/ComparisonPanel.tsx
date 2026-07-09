@@ -67,7 +67,7 @@ export function ComparisonPanel({
         className={`hidden sm:block w-[10%] shrink-0 bg-black/40 cursor-pointer transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
         onClick={requestClose}
       />
-      <PanelCloseTab onClick={requestClose} style={{ left: '10%', transform: 'translateX(-50%)' }} />
+      <PanelCloseTab onClick={requestClose} style={{ left: '10%', transform: 'translateX(-100%)' }} />
       <div className={`flex-1 min-w-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         {/* Header */}
         <div className="flex items-center justify-between gap-2 px-3 sm:px-6 py-3 sm:py-4 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
