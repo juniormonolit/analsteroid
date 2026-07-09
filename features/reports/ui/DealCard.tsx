@@ -1,4 +1,5 @@
 'use client';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { X, ExternalLink } from 'lucide-react';
 import { format } from 'date-fns';
@@ -69,6 +70,14 @@ const STAGES: { key: keyof DealFull; label: string }[] = [
   { key: 'lost_at',      label: 'Проиграна' },
 ];
 
+// Табы карточки (правка собрания 09.07/2, п.1) — «как в Битриксе»: раньше вся
+// карточка была одной вертикальной простынёй, при большом числе товарных позиций
+// превращавшейся в бесконечный скролл. Теперь «Основное» (хронология + товарные
+// группы + менеджер + источник + служебное, 2 колонки без вертикального скролла
+// панели) и «Товары» (список позиций + итого — единственное место, где скролл
+// вообще допустим, и то нечасто).
+type DealCardTab = 'main' | 'products';
+
 export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['deal-card', dealId],
@@ -80,6 +89,7 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const productsTotal = products.reduce((s, p) => s + (Number(p.sum) || 0), 0);
   const isLostDeal = !!deal?.lost_at;
   const { closing, requestClose } = useSlideClose(onClose);
+  const [tab, setTab] = useState<DealCardTab>('main');
 
   // Хронология — только заполненные этапы (+ ожидаемое закрытие, если сделка ещё
   // открыта), в порядке жизненного цикла. Собираем один раз здесь, чтобы вертикальная
@@ -102,7 +112,10 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
       {/* Затемнение: клик мимо карточки закрывает её. z-[65] — выше z-50 дрилл-дауна
           (карточка может открываться поверх него), ниже z-[70] самой карточки. */}
       <SlideBackdrop closing={closing} onClick={requestClose} className="z-[65]" />
-      <div className={`fixed inset-y-0 right-0 z-[70] w-full sm:w-[48vw] sm:min-w-[760px] sm:max-w-[1080px] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+      {/* Ширина ~70vw (п.1 правок 09.07/2, было 48vw) — при большом числе товарных
+          позиций панели банально не хватало места по горизонтали для двух колонок
+          «Основного» без сжатия текста. */}
+      <div className={`fixed inset-y-0 right-0 z-[70] w-full sm:w-[70vw] sm:min-w-[860px] sm:max-w-[1400px] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <PanelCloseTab onClick={requestClose} />
         {/* Header — на всю ширину панели */}
         <div className="shrink-0 border-b border-[var(--color-border)]">
@@ -148,13 +161,110 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
         )}
 
         {deal && (
-          <div className="flex-1 overflow-y-auto px-6 sm:px-9 py-5 sm:py-7">
-            {/* 2 колонки (макет deal-card-redesign-mock.html): слева — Товары (главное) +
-                Хронология; справа — компактные карточки ключ→значение. На мобиле —
-                схлопывается в одну колонку (grid-cols-1 → sm:grid-cols-[1.35fr_1fr]). */}
-            <div className="grid grid-cols-1 sm:grid-cols-[1.35fr_1fr] gap-x-9 gap-y-7">
-              {/* Левая колонка */}
-              <div className="flex flex-col gap-7 min-w-0">
+          <>
+            {/* Табы «Основное»/«Товары» (п.1 правок 09.07/2, «как в Битриксе»): шапка
+                выше остаётся общей для обоих табов, переключатель — сразу под ней.
+                Стиль пилюль — вариант C, тот же паттерн, что и переключатель режима
+                подсветки в HighlightEditor (единый визуальный язык табов приложения). */}
+            <div className="shrink-0 px-6 sm:px-9 pt-4 pb-1 border-b border-[var(--color-border)]">
+              <div className="flex bg-[var(--color-bg)] rounded-xl p-1 gap-1 max-w-xs">
+                {([
+                  { v: 'main', label: 'Основное' },
+                  { v: 'products', label: `Товары${products.length ? ` · ${products.length}` : ''}` },
+                ] as { v: DealCardTab; label: string }[]).map(o => (
+                  <button
+                    key={o.v}
+                    type="button"
+                    onClick={() => setTab(o.v)}
+                    className={`flex-1 text-center px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                      tab === o.v ? 'bg-[var(--color-accent)] text-white shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {tab === 'main' && (
+              // «Основное»: хронология + товарные группы слева, менеджер + источник +
+              // служебное справа — 2 колонки специально скомпонованы так, чтобы обычная
+              // сделка помещалась БЕЗ вертикального скролла панели (скролл — только у
+              // «Товаров», см. ниже). overflow-y-auto оставлен предохранителем на случай
+              // очень маленького окна/длинных значений — не основной сценарий.
+              <div className="flex-1 overflow-y-auto px-6 sm:px-9 py-5 sm:py-7">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-9 gap-y-7">
+                  <div className="flex flex-col gap-7 min-w-0">
+                    <Section title="Хронология">
+                      <div className="border border-[var(--color-border)] rounded-xl p-4">
+                        <div className="flex flex-col">
+                          {timelineItems.map((it, i) => (
+                            <div key={it.key} className="relative flex items-center gap-3 py-1.5">
+                              {i < timelineItems.length - 1 && (
+                                <span className="absolute left-[4px] top-[18px] bottom-[-6px] w-px bg-[var(--color-border)]" />
+                              )}
+                              <span className={`relative z-[1] w-2.5 h-2.5 rounded-full shrink-0 ${
+                                it.future ? 'bg-transparent border-2 border-[var(--color-text-muted)]' : it.isLost ? 'bg-[var(--color-negative,#e03131)]' : 'bg-[var(--color-accent)]'
+                              }`} />
+                              <span className={`text-sm flex-1 ${it.future ? 'text-[var(--color-text-muted)]' : it.isLost ? 'text-[var(--color-negative,#e03131)] font-medium' : 'text-[var(--color-text)]'}`}>
+                                {it.label}
+                              </span>
+                              <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{it.date}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </Section>
+
+                    <Section title="Товарные группы">
+                      <Row label="Категория КЦ" value={deal.product_group_name ?? 'Без группы'} />
+                      <Row label="По наибольшему" value={deal.head_group_name ?? 'Без группы'} />
+                    </Section>
+                  </div>
+
+                  <div className="flex flex-col gap-7 min-w-0">
+                    <Section title="Менеджер">
+                      {data?.manager ? (
+                        <>
+                          <Row label="Имя" value={`${data.manager.name}${data.manager.login ? ` ${data.manager.login}` : ''}`} strong />
+                          <Row label="Отдел" value={data.manager.department} />
+                          <Row label="Филиал" value={branchLabel(data.manager.branch)} />
+                        </>
+                      ) : (
+                        <div className="text-sm text-[var(--color-text-muted)]">{deal.manager_id ? `#${deal.manager_id} (вне активной оргструктуры)` : 'Не назначен'}</div>
+                      )}
+                    </Section>
+
+                    <Section title="Источник">
+                      {data?.source ? (
+                        <>
+                          <Row label="Название" value={data.source.name} strong />
+                          <Row label="Тип контакта" value={data.source.contact_type} />
+                          <Row label="Канал" value={data.source.channel_group === data.source.ad_channel ? data.source.ad_channel : [data.source.channel_group, data.source.ad_channel].filter(Boolean).join(' · ')} />
+                          <Row label="Бренд" value={data.source.brand} />
+                          <Row label="Витрина" value={data.source.platform} />
+                        </>
+                      ) : (
+                        <div className="text-sm text-[var(--color-text-muted)]">{deal.source_id ? `Неизвестный источник (${deal.source_id})` : 'Без источника'}</div>
+                      )}
+                    </Section>
+
+                    <Section title="Служебное">
+                      <Row label="Лид" value={deal.lead_id ? `#${deal.lead_id}` : null} />
+                      <Row label="Контакт" value={deal.contact_id ? `#${deal.contact_id}` : null} />
+                      <Row label="Компания" value={deal.company_id ? `#${deal.company_id}` : null} />
+                      <Row label="Обновлена" value={fmtDate(deal.updated_at)} />
+                    </Section>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {tab === 'products' && (
+              // «Товары»: единственный таб, где вертикальный скролл ожидаем и допустим
+              // (список позиций может быть длинным) — итог по товарам прибит снизу
+              // контейнера секции, как и раньше.
+              <div className="flex-1 overflow-y-auto px-6 sm:px-9 py-5 sm:py-7">
                 <Section title={`Товары · ${products.length}`}>
                   {products.length === 0 ? (
                     <div className="text-sm text-[var(--color-text-muted)]">Нет позиций</div>
@@ -179,71 +289,9 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                     </div>
                   )}
                 </Section>
-
-                <Section title="Хронология">
-                  <div className="border border-[var(--color-border)] rounded-xl p-4">
-                    <div className="flex flex-col">
-                      {timelineItems.map((it, i) => (
-                        <div key={it.key} className="relative flex items-center gap-3 py-1.5">
-                          {i < timelineItems.length - 1 && (
-                            <span className="absolute left-[4px] top-[18px] bottom-[-6px] w-px bg-[var(--color-border)]" />
-                          )}
-                          <span className={`relative z-[1] w-2.5 h-2.5 rounded-full shrink-0 ${
-                            it.future ? 'bg-transparent border-2 border-[var(--color-text-muted)]' : it.isLost ? 'bg-[var(--color-negative,#e03131)]' : 'bg-[var(--color-accent)]'
-                          }`} />
-                          <span className={`text-sm flex-1 ${it.future ? 'text-[var(--color-text-muted)]' : it.isLost ? 'text-[var(--color-negative,#e03131)] font-medium' : 'text-[var(--color-text)]'}`}>
-                            {it.label}
-                          </span>
-                          <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{it.date}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </Section>
               </div>
-
-              {/* Правая колонка */}
-              <div className="flex flex-col gap-7 min-w-0">
-                <Section title="Менеджер">
-                  {data?.manager ? (
-                    <>
-                      <Row label="Имя" value={`${data.manager.name}${data.manager.login ? ` ${data.manager.login}` : ''}`} strong />
-                      <Row label="Отдел" value={data.manager.department} />
-                      <Row label="Филиал" value={branchLabel(data.manager.branch)} />
-                    </>
-                  ) : (
-                    <div className="text-sm text-[var(--color-text-muted)]">{deal.manager_id ? `#${deal.manager_id} (вне активной оргструктуры)` : 'Не назначен'}</div>
-                  )}
-                </Section>
-
-                <Section title="Товарные группы">
-                  <Row label="Категория КЦ" value={deal.product_group_name ?? 'Без группы'} />
-                  <Row label="По наибольшему" value={deal.head_group_name ?? 'Без группы'} />
-                </Section>
-
-                <Section title="Источник">
-                  {data?.source ? (
-                    <>
-                      <Row label="Название" value={data.source.name} strong />
-                      <Row label="Тип контакта" value={data.source.contact_type} />
-                      <Row label="Канал" value={data.source.channel_group === data.source.ad_channel ? data.source.ad_channel : [data.source.channel_group, data.source.ad_channel].filter(Boolean).join(' · ')} />
-                      <Row label="Бренд" value={data.source.brand} />
-                      <Row label="Витрина" value={data.source.platform} />
-                    </>
-                  ) : (
-                    <div className="text-sm text-[var(--color-text-muted)]">{deal.source_id ? `Неизвестный источник (${deal.source_id})` : 'Без источника'}</div>
-                  )}
-                </Section>
-
-                <Section title="Служебное">
-                  <Row label="Лид" value={deal.lead_id ? `#${deal.lead_id}` : null} />
-                  <Row label="Контакт" value={deal.contact_id ? `#${deal.contact_id}` : null} />
-                  <Row label="Компания" value={deal.company_id ? `#${deal.company_id}` : null} />
-                  <Row label="Обновлена" value={fmtDate(deal.updated_at)} />
-                </Section>
-              </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
       </div>
     </>

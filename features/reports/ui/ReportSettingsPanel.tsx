@@ -19,6 +19,15 @@ import { ViewSettingsFields, type ViewSettingsFieldsProps } from './ViewSettings
  * FiltersFields/ViewSettingsFields — те же компоненты, что используют самостоятельные
  * попапы FiltersMenu/ViewSettings в дрилл-дауне (DrilldownDrawer) — там независимые
  * фильтры остаются отдельным дропдауном, не затронуты этой правкой.
+ *
+ * ПРАВИЛО несохранённых изменений (п.4 правок 09.07/2, ai_docs/fresh_docs/
+ * DESIGN_GUIDELINES.md → «Панели с сохранением») здесь НЕ подключено намеренно:
+ * у этой панели нет кнопки «Сохранить» — каждый Seg/toggle в FiltersFields/
+ * ViewSettingsFields (onDealScopeChange, onClientTypeChange, density, borderMode и
+ * т.д.) применяется МГНОВЕННО через колбэки-пропсы прямо в состояние SalesReportPage,
+ * закрыть панель (мимо/крестик/Esc) в любой момент нечем «потерять» — уже сохранено.
+ * Если сюда когда-нибудь добавят поле со staging-состоянием и явным Save — тогда и
+ * подключить `useUnsavedGuard`/`UnsavedChangesDialog`, как в HighlightEditor.
  */
 interface Props extends FiltersFieldsProps, ViewSettingsFieldsProps {
   onClose: () => void;

@@ -1024,6 +1024,100 @@ export function ReportTable({
   // визуально одинаковыми с normal.
   const rowPy = density === 'compact' ? '2px' : density === 'relaxed' ? '14px' : '5px';
 
+  // ── Группировка «Итого» — вертикальная таблица (правка собрания 09.07/2) ────────
+  // Раньше «Итого» рендерился как ОДНА строка со всеми метриками во всю ширину
+  // (через обычный renderRow/renderMetricCells) — при десятках метрик строка
+  // превращалась в бесконечную горизонтальную простыню. Вместо этого: колонка
+  // «Метрика» (название целиком, без обрезки) + колонка «Значение» (или Пред./Тек./
+  // Δ/Δ% — наш порядок, если хотя бы одна метрика в режиме сравнения). Подсветка/
+  // бейджи values — тот же resolveHighlightColor/heatColor, что и в обычной таблице;
+  // сортировка и нумерация тут не нужны (сортировать/нумеровать одну сводную строку
+  // не имеет смысла — п. брифа).
+  if (grouping === 'total') {
+    const totalRow = sorted[0];
+    const hasAnyComparison = displayMetrics.some(m => leafKinds(resolveMode(m.id)).length > 1);
+    return (
+      <div className="overflow-auto h-full bg-[var(--color-bg-surface)]" style={{ fontSize: `${14 * fontScale}px` }}>
+        <div className="max-w-3xl mx-auto p-5 sm:p-7">
+          {!totalRow ? (
+            <div className="text-sm text-[var(--color-text-muted)] text-center py-10">Нет данных</div>
+          ) : (
+            <table className="w-full text-sm border border-[var(--color-border)] rounded-xl overflow-hidden border-collapse">
+              <thead>
+                <tr className="bg-[var(--color-table-header)] text-[var(--color-text-muted)] text-[11px] font-bold uppercase tracking-wide">
+                  <th className="text-left px-4 py-2.5 border-b border-[var(--color-border)]">Метрика</th>
+                  {hasAnyComparison && <th className="text-center px-3 py-2.5 border-b border-l border-[var(--color-border)] w-28">Пред.</th>}
+                  <th className="text-center px-3 py-2.5 border-b border-l border-[var(--color-border)] w-28">Тек.</th>
+                  {hasAnyComparison && <th className="text-center px-3 py-2.5 border-b border-l border-[var(--color-border)] w-24">Δ</th>}
+                  {hasAnyComparison && <th className="text-center px-3 py-2.5 border-b border-l border-[var(--color-border)] w-24">Δ%</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {displayMetrics.map((m, idx) => {
+                  const d = totalRow.deltas?.[m.id];
+                  const mode = resolveMode(m.id);
+                  const kinds = leafKinds(mode);
+                  const hlColor = resolveHighlightColor(d?.current ?? null, highlights[m.id]) ?? heatColor(m.id, d?.current ?? null);
+                  const current = formatValue(d?.current ?? null, m.dataType, decFor(m));
+                  const isLastRow = idx === displayMetrics.length - 1;
+                  const rowBorder = isLastRow ? '' : 'border-b border-[var(--color-border)]';
+                  const valueCell = (
+                    <span className="relative inline-flex items-center justify-center gap-1">
+                      {!hlColor ? (
+                        <span className="text-[#000]">{current}</span>
+                      ) : (
+                        <span
+                          className="inline-block px-1.5 py-0 rounded text-[#000]"
+                          style={{ backgroundColor: `color-mix(in srgb, ${hlColor} 68%, white)` }}
+                        >
+                          {current}
+                        </span>
+                      )}
+                      {mode === 'compact' && (
+                        <span
+                          className="w-4 flex-shrink-0 flex items-center justify-center"
+                          title={compactTooltip(d?.comparison ?? null, d?.delta ?? null, d?.deltaPct ?? null, m)}
+                        >
+                          <TrendArrow
+                            deltaPct={d?.deltaPct ?? null}
+                            delta={d?.delta ?? null}
+                            metric={m}
+                            threshold={thresholdFor(m, metricThresholdOverrides)}
+                          />
+                        </span>
+                      )}
+                    </span>
+                  );
+                  return (
+                    <tr key={m.id} className={rowBorder}>
+                      <td className="px-4 py-2.5 font-medium text-[var(--color-text)] whitespace-nowrap">{m.nameRu}</td>
+                      {hasAnyComparison && (
+                        <td className="text-center px-3 py-2.5 border-l border-[var(--color-border)] tabular-nums text-[var(--color-text-muted)]">
+                          {kinds.includes('comparison') ? formatValue(d?.comparison ?? null, m.dataType, decFor(m)) : '—'}
+                        </td>
+                      )}
+                      <td className="text-center px-3 py-2.5 border-l border-[var(--color-border)] tabular-nums">{valueCell}</td>
+                      {hasAnyComparison && (
+                        <td className={`text-center px-3 py-2.5 border-l border-[var(--color-border)] tabular-nums ${kinds.includes('delta') ? ((d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : '') : 'text-[var(--color-text-muted)]'}`}>
+                          {kinds.includes('delta') ? formatDelta(d?.delta ?? null, m.dataType, decFor(m)) : '—'}
+                        </td>
+                      )}
+                      {hasAnyComparison && (
+                        <td className={`text-center px-3 py-2.5 border-l border-[var(--color-border)] tabular-nums ${kinds.includes('deltaPct') ? ((d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : '') : 'text-[var(--color-text-muted)]'}`}>
+                            {kinds.includes('deltaPct') ? formatDeltaPct(d?.deltaPct ?? null) : '—'}
+                          </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-auto h-full bg-[var(--color-bg-surface)]">
       <table className="w-full text-sm border-collapse" style={{ fontSize: `${14 * fontScale}px`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
@@ -1248,7 +1342,8 @@ export function ReportTable({
         <tbody>
           {sorted.map((row, i) => renderRow(row, i))}
 
-          {totals && grouping !== 'total' && (
+          {/* grouping === 'total' — ранний return выше, сюда рендер не доходит */}
+          {totals && (
             <tr className="font-semibold text-[var(--color-text)]">
               {/* Колонка «№» строки «Итого» — без номера (п.6), но ячейка нужна для
                   сохранения сетки колонок под sticky-смещения метрик. */}

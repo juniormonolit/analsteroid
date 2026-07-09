@@ -1,12 +1,14 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { MetricHighlightConfig, HighlightThreshold } from '@/lib/saved-reports/types';
 import type { ComparisonDisplay } from '@/lib/metrics/types';
 import { GsColorPickerButton } from '@/components/ui/GsColorPicker';
 import { GOOGLE_SHEETS_PALETTE_GRID, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { useUnsavedGuard } from '@/lib/hooks/useUnsavedGuard';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
+import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 import { CONDITION_OPTIONS, GRADIENT_ZONE_SWATCHES, thresholdZoneSwatches } from '@/lib/reports/metricFilter';
 import type { ConditionOp, MetricConditionFilter, MetricFilterState } from '@/lib/reports/metricFilter';
 
@@ -154,6 +156,45 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
   // модалка (не докед) слайдит справа, как остальные слайд-панели.
   const enterAnim = docked ? 'slide-panel-in-left' : 'slide-panel-in-right';
   const exitAnim = docked ? 'slide-panel-out-left' : 'slide-panel-out-right';
+
+  // ── Табы (правка собрания 09.07/2, п.3): «Настройки метрики» были одной
+  // вертикальной простынёй — разбито на «Отображение» (режим сравнения + доп.
+  // опции + формат числа + порог нейтральности) / «Подсветка» (выкл-градиент-
+  // пороги + превью + пороги) / «Фильтр и сортировка» (по цвету + по условию).
+  // «Положение и удаление» и низ (Область применения + Сбросить/Сохранить) —
+  // ВСЕГДА видимы, вне табов (см. return ниже). Тот же набор табов и в доке —
+  // просто в узкой колонке.
+  type EditorTab = 'display' | 'highlight' | 'filter';
+  const [activeTab, setActiveTab] = useState<EditorTab>('display');
+
+  // ── Правило несохранённых изменений (п.4 той же правки) ─────────────────────
+  // Единственное, что реально гейтится кнопкой «Сохранить» в этой панели — пороговый
+  // конфиг подсветки (thresholds/aboveColor/режим 'thresholds'). Всё остальное здесь
+  // (pin/accent/bar/heatmap, формат числа, порог нейтральности, фильтр/сортировка,
+  // положение/удаление) применяется МГНОВЕННО через колбэки-пропсы — родитель уже
+  // держит это состояние, закрыть панель без «Сохранить» ничего не роняет. Поэтому
+  // dirty = процитаны только «Подсветка»-поля, которые ещё не совпадают с уже
+  // сохранённым конфигом (initial): либо режим «Пороги» ещё не был закоммичен вовсе,
+  // либо thresholds/aboveColor поменялись после последнего Save.
+  const isDirty = hlMode === 'thresholds' && (
+    !(initial?.enabled ?? false) ||
+    JSON.stringify(thresholds) !== JSON.stringify(initial?.thresholds ?? []) ||
+    aboveColor !== (initial?.aboveColor ?? DEFAULT_STOP_COLORS[0])
+  );
+  const { dialogOpen, requestGuardedClose, confirmDiscard, confirmSave, cancel: cancelGuard } = useUnsavedGuard();
+  function guardedClose() { requestGuardedClose(isDirty, requestClose); }
+
+  // Esc закрывает панель (п.4 брифа: «мимо/крестик/Esc» — единый список триггеров
+  // закрытия, которые обязаны идти через guardedClose). Раньше Esc тут не был
+  // подключён вовсе (закрытие только по подложке/крестику) — добавлено этой правкой.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') guardedClose();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDirty]);
 
   // Обёртка секции: в доке — компактная (как раньше, узкая колонка рядом с панелью
   // метрик), в модалке — широкая карточка с разделителем снизу (макет
@@ -564,10 +605,58 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
     </div>
   );
 
+  // Табы, которые реально есть контентом (Фильтр и сортировка — только если хотя бы
+  // один из колбэков передан, как и раньше решала переменная hasFilter).
+  const TAB_DEFS: { key: EditorTab; label: string; dockedLabel: string }[] = [
+    { key: 'display',   label: 'Отображение',        dockedLabel: 'Вид' },
+    { key: 'highlight', label: 'Подсветка',           dockedLabel: 'Цвет' },
+    { key: 'filter',    label: 'Фильтр и сортировка', dockedLabel: 'Фильтр' },
+  ];
+  const availableTabs = TAB_DEFS.filter(t => t.key !== 'filter' || hasFilter);
+  const effectiveTab: EditorTab = availableTabs.some(t => t.key === activeTab) ? activeTab : 'display';
+
+  const tabBar = (
+    <div className={`flex bg-[var(--color-bg)] rounded-xl p-1 gap-1 ${docked ? '' : 'mb-1'}`}>
+      {availableTabs.map(t => (
+        <button
+          key={t.key}
+          type="button"
+          onClick={() => setActiveTab(t.key)}
+          className={`flex-1 text-center px-2 py-2 rounded-lg font-semibold transition-colors ${docked ? 'text-[11px]' : 'text-sm'} ${
+            effectiveTab === t.key ? 'bg-[var(--color-accent)] text-white shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          {docked ? t.dockedLabel : t.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  const tabContent = (
+    <>
+      {effectiveTab === 'display' && (
+        <div className="flex flex-col">
+          {displaySection}
+          {optionsSection}
+          {formatSection}
+          {neutralitySection}
+        </div>
+      )}
+      {effectiveTab === 'highlight' && (
+        <div className="flex flex-col">{highlightSection}</div>
+      )}
+      {effectiveTab === 'filter' && hasFilter && (
+        <div className="flex flex-col">{filterSection}</div>
+      )}
+    </>
+  );
+
   return (
     <>
-      {/* Backdrop — только в режиме модалки; в док-режиме панель метрик остаётся кликабельной */}
-      {!docked && <SlideBackdrop closing={closing} onClick={requestClose} />}
+      {/* Backdrop — только в режиме модалки; в док-режиме панель метрик остаётся кликабельной.
+          Клик по подложке — один из триггеров закрытия, гейтится несохранёнными
+          изменениями (п.4 правок 09.07/2, см. useUnsavedGuard выше). */}
+      {!docked && <SlideBackdrop closing={closing} onClick={guardedClose} />}
       {/* Slide panel — доке узкая (как раньше), модалка широкая (~48vw, мин. 680px,
           макет metric-settings-redesign.html), схлопывается в одну колонку до sm:. */}
       <div
@@ -575,32 +664,34 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           docked ? 'w-80 max-w-[94vw] border-l border-[var(--color-border)]' : 'right-0 w-full sm:w-[48vw] sm:min-w-[680px] sm:max-w-[960px]'
         }`}
         style={docked ? { left: anchorLeft } : undefined}>
-        {!docked && <PanelCloseTab onClick={requestClose} />}
+        {!docked && <PanelCloseTab onClick={guardedClose} />}
         {/* Header */}
         <div className="flex items-start justify-between px-5 sm:px-8 pt-5 sm:pt-6 pb-4 sm:pb-5 border-b border-[var(--color-border)]">
           <div>
             <div className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-text-muted)] mb-0.5">Настройки метрики</div>
             <div className="font-semibold text-[var(--color-text)] text-base sm:text-lg">{metricName}</div>
           </div>
-          <button onClick={requestClose} className={`${docked ? '' : 'sm:hidden'} text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors ml-2 mt-0.5`}>✕</button>
+          <button onClick={guardedClose} className={`${docked ? '' : 'sm:hidden'} text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors ml-2 mt-0.5`}>✕</button>
         </div>
 
-        {/* Body: доке — одна узкая колонка (как раньше); модалка — 2 колонки, схлопываются в 1 на мобиле */}
-        <div className={docked ? 'flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-5' : 'flex-1 overflow-y-auto flex flex-col sm:flex-row'}>
-          <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col sm:w-1/2 sm:border-r sm:border-[var(--color-border)]'}>
-            {displaySection}
-            {optionsSection}
-            {formatSection}
-            {neutralitySection}
+        {/* Табы: заголовок вкладок — сразу под шапкой, вне скролла тела, чтобы
+            переключение было всегда доступно даже если контент вкладки проскроллен. */}
+        <div className={docked ? 'px-5 pt-3' : 'px-5 sm:px-8 pt-4'}>{tabBar}</div>
+
+        {/* Body: контент активной вкладки — доке узкая колонка, модалка на всю ширину
+            (без прежнего деления на 2 колонки — табы заменили его, п.3 правок 09.07/2) */}
+        <div className={docked ? 'flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-5' : 'flex-1 overflow-y-auto flex flex-col'}>
+          {tabContent}
+        </div>
+
+        {/* «Положение и удаление» — ВСЕГДА видимо, вне табов (п.3 брифа) */}
+        {positionSection && (
+          <div className={docked ? 'px-5 pb-3 border-t border-[var(--color-border)] pt-3' : 'border-t border-[var(--color-border)]'}>
             {positionSection}
           </div>
-          <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col sm:w-1/2'}>
-            {highlightSection}
-            {filterSection}
-          </div>
-        </div>
+        )}
 
-        {/* Footer: область применения + действия — на всю ширину */}
+        {/* Footer: область применения + действия — на всю ширину, ВСЕГДА видим (п.3 брифа) */}
         <div className="px-5 sm:px-8 py-4 sm:py-5 border-t border-[var(--color-border)] flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           {scopeSwitch}
           <div className="flex justify-end gap-2.5 shrink-0">
@@ -624,6 +715,15 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           </div>
         </div>
       </div>
+
+      {/* Диалог несохранённых изменений (п.4 правок 09.07/2) — поверх панели, при
+          любом закрытии (подложка/крестик/крестик-доке/Esc) с dirty=true. */}
+      <UnsavedChangesDialog
+        open={dialogOpen}
+        onSave={() => confirmSave(handleSave)}
+        onDiscard={confirmDiscard}
+        onCancel={cancelGuard}
+      />
     </>
   );
 }
