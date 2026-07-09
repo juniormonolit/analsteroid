@@ -108,6 +108,12 @@ interface Props {
   highlights?: Record<string, MetricHighlightConfig>;
   onRowClick?:  (dimensionId: string, dimensionName: string) => void;
   onCellClick?: (dimensionId: string, dimensionName: string, metricId: string) => void;
+  // Клик по подзаголовку измерения (dimensionSubtitle, #логин у менеджера) — открывает
+  // карточку менеджера (features/manager-card), НЕ обычный дрилл-даун onRowClick.
+  // Передаётся ТОЛЬКО из основной таблицы отчёта «по менеджерам» (SalesReportPage);
+  // мини-отчёт дрилл-дауна (MiniReport) переиспользует ReportTable, но кладёт в
+  // dimensionSubtitle «· N сд.» — там этот проп не передаётся.
+  onSubtitleClick?: (dimensionId: string, dimensionName: string) => void;
   // Быстрая кнопка «сравнение» в заголовке (п. Н5б спеки): включает/выключает режим
   // 'full' для ОДНОЙ метрики без похода в «Настроить». Владелец состояния
   // (SalesReportPage) должен запомнить, в какой режим возвращаться при повторном клике
@@ -168,7 +174,7 @@ export function ReportTable({
   grouping = 'none',
   dimensionLabel = 'Менеджер',
   highlights = {},
-  onRowClick, onCellClick,
+  onRowClick, onCellClick, onSubtitleClick,
   onMetricQuickCompareToggle,
   onMetricReorder,
   onMetricConfigure,
@@ -917,7 +923,13 @@ export function ReportTable({
                   {row.dimensionName}
                 </span>
                 {!isGroupRow && row.dimensionSubtitle && (
-                  <span className="text-[11px] text-[var(--color-text-muted)] flex-shrink-0 font-normal">
+                  <span
+                    className={`text-[11px] text-[var(--color-text-muted)] flex-shrink-0 font-normal ${
+                      onSubtitleClick ? 'hover:text-[var(--color-accent)] hover:underline transition-colors' : ''
+                    }`}
+                    onClick={onSubtitleClick ? (e) => { e.stopPropagation(); onSubtitleClick(row.dimensionId, row.dimensionName); } : undefined}
+                    title={onSubtitleClick ? 'Открыть карточку менеджера' : undefined}
+                  >
                     {row.dimensionSubtitle}
                   </span>
                 )}

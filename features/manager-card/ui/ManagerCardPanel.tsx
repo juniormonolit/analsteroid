@@ -1,0 +1,299 @@
+'use client';
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { startOfMonth } from 'date-fns';
+import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
+import type { DateRange } from '@/lib/period';
+import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
+import type { CardSegment, ManagerCardResult } from '@/features/manager-card/engine/managerCard';
+
+interface Props {
+  managerId: string;
+  managerName?: string;
+  /** Период основного отчёта — точка отсчёта чипа «Период отчёта» (дефолт). */
+  reportPeriod: DateRange;
+  onClose: () => void;
+}
+
+type PeriodChoice = 'report' | 'month' | 'all';
+
+const ALL_TIME_RANGE: DateRange = { from: new Date('2015-01-01T00:00:00Z'), to: new Date() };
+
+function fmtMoney(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `${(v / 1_000_000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} млн ₽`;
+  if (abs >= 1_000) return `${(v / 1_000).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} тыс ₽`;
+  return `${v.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
+}
+function fmtInt(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '—';
+  return v.toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+}
+function fmtDeltaPct(v: number | null | undefined): string | null {
+  if (v === null || v === undefined || !isFinite(v)) return null;
+  const rounded = Math.round(v);
+  return `${rounded >= 0 ? '↑' : '↓'} ${Math.abs(rounded)}%`;
+}
+function fmtMinutes(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '—';
+  const m = Math.round(v);
+  if (m < 60) return `${m} мин`;
+  return `${Math.floor(m / 60)} ч ${m % 60} мин`;
+}
+function fmtDuration(sec: number | null | undefined): string {
+  if (sec === null || sec === undefined) return '—';
+  const s = Math.round(sec);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase();
+}
+function fmtDateShort(d: Date): string {
+  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+}
+
+function DeltaBadge({ deltaPct }: { deltaPct: number | null | undefined }) {
+  const label = fmtDeltaPct(deltaPct);
+  if (label === null) return null;
+  const up = (deltaPct ?? 0) >= 0;
+  return (
+    <span
+      className="self-start text-[11px] font-bold px-1.5 py-0.5 rounded-full"
+      style={up
+        ? { color: 'var(--color-positive)', backgroundColor: 'color-mix(in srgb, var(--color-positive) 14%, transparent)' }
+        : { color: 'var(--color-negative)', backgroundColor: 'color-mix(in srgb, var(--color-negative) 14%, transparent)' }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function Tile({ value, label, deltaPct }: { value: string; label: string; deltaPct: number | null | undefined }) {
+  return (
+    <div className="border border-[var(--color-border)] rounded-xl px-3.5 py-3 flex flex-col gap-1.5 min-w-0">
+      <span className="text-lg font-extrabold text-[var(--color-text)] leading-tight truncate">{value}</span>
+      <span className="text-[11.5px] text-[var(--color-text-muted)]">{label}</span>
+      <DeltaBadge deltaPct={deltaPct} />
+    </div>
+  );
+}
+
+function ChipGroup<T extends string>({ value, options, onChange }: {
+  value: T; options: { key: T; label: string }[]; onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs shrink-0">
+      {options.map(opt => (
+        <button
+          key={opt.key}
+          onClick={() => onChange(opt.key)}
+          className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${
+            value === opt.key ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose }: Props) {
+  const { closing, requestClose } = useSlideClose(onClose);
+  const [periodChoice, setPeriodChoice] = useState<PeriodChoice>('report');
+  const [segment, setSegment] = useState<CardSegment>('all');
+
+  const period: DateRange = useMemo(() => {
+    if (periodChoice === 'month') return { from: startOfMonth(new Date()), to: new Date() };
+    if (periodChoice === 'all') return ALL_TIME_RANGE;
+    return reportPeriod;
+  }, [periodChoice, reportPeriod]);
+
+  const fromIso = period.from.toISOString();
+  const toIso = period.to.toISOString();
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['manager-card', managerId, fromIso, toIso, segment],
+    queryFn: async () => {
+      const res = await fetch('/api/manager-card', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ managerId, period: { from: fromIso, to: toIso }, segment }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? await res.text());
+      return res.json() as Promise<ManagerCardResult>;
+    },
+    staleTime: 60_000,
+  });
+
+  const radarAxes: RadarAxisInput[] = (data?.radar.axes ?? []).map(a => ({
+    key: a.key, label: a.label, periodValue: a.period.normalized, allTimeValue: a.allTime.normalized, dataAvailable: a.dataAvailable,
+  }));
+
+  const rating = data?.rating.value ?? null;
+  const RING_R = 33;
+  const CIRC = 2 * Math.PI * RING_R;
+  const ringOffset = rating === null ? CIRC : CIRC * (1 - rating / 10);
+
+  return (
+    <>
+      <SlideBackdrop closing={closing} onClick={requestClose} className="z-[55]" />
+      <div className={`fixed inset-y-0 right-0 z-[60] w-full sm:w-[70vw] sm:min-w-[980px] sm:max-w-[1400px] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col overflow-hidden ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+        <PanelCloseTab onClick={requestClose} />
+
+        {error ? (
+          <div className="p-6 text-sm text-[var(--color-negative)]">
+            Ошибка: {error instanceof Error ? error.message : 'Не удалось загрузить карточку менеджера'}
+          </div>
+        ) : (
+          <>
+            {/* ── Шапка ── */}
+            <div className="shrink-0 border-b border-[var(--color-border)] px-4 sm:px-9 pt-5 sm:pt-6 pb-4 sm:pb-5 flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-4 min-w-0">
+                <div
+                  className="w-14 h-14 rounded-full flex items-center justify-center text-[19px] font-extrabold shrink-0"
+                  style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 16%, transparent)', color: 'var(--color-accent)' }}
+                >
+                  {initials(data?.profile.name ?? managerName ?? '')}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <span className="text-lg font-extrabold text-[var(--color-text)] truncate">{data?.profile.name ?? managerName ?? '…'}</span>
+                    {data?.profile.login && <span className="text-[13px] font-semibold text-[var(--color-text-muted)]">{data.profile.login}</span>}
+                  </div>
+                  <div className="mt-1 text-[13px] text-[var(--color-text-muted)] flex items-center gap-2">
+                    {data?.profile.department && <span>{data.profile.department}</span>}
+                    {data?.profile.department && data?.profile.branch && <span className="text-[var(--color-text-muted)]">·</span>}
+                    {data?.profile.branch && <span>{data.profile.branch}</span>}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 shrink-0">
+                <div className="flex flex-col items-center gap-1">
+                  <div className="relative w-[78px] h-[78px]">
+                    <svg width={78} height={78} viewBox="0 0 78 78" className="-rotate-90">
+                      <circle cx={39} cy={39} r={RING_R} fill="none" stroke="var(--color-border)" strokeWidth={7} />
+                      <circle
+                        cx={39} cy={39} r={RING_R} fill="none" stroke="var(--color-accent)" strokeWidth={7}
+                        strokeLinecap="round" strokeDasharray={CIRC} strokeDashoffset={ringOffset}
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-[22px] font-extrabold text-[var(--color-text)]">{rating !== null ? rating.toFixed(1) : '—'}</span>
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--color-text-muted)]">Рейтинг</span>
+                </div>
+                <div
+                  className="flex flex-col items-center gap-0.5 rounded-2xl px-3.5 py-2"
+                  style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' }}
+                >
+                  <span className="text-[13px] font-extrabold text-[var(--color-accent)]">{data?.rating.rank ? `#${data.rating.rank}` : '—'}</span>
+                  <span className="text-[10px] text-[var(--color-text-muted)] text-center leading-tight">из {data?.rating.deptSize ?? '—'}<br />в отделе</span>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Фильтры ── */}
+            <div className="shrink-0 border-b border-[var(--color-border)] px-4 sm:px-9 py-2.5 flex items-center gap-2.5 flex-wrap">
+              <span className="text-xs font-semibold text-[var(--color-text)] px-2 py-1">
+                {fmtDateShort(period.from)} – {fmtDateShort(period.to)}
+              </span>
+              <ChipGroup
+                value={periodChoice}
+                onChange={setPeriodChoice}
+                options={[
+                  { key: 'report', label: 'Период отчёта' },
+                  { key: 'month', label: 'Этот месяц' },
+                  { key: 'all', label: 'Всё время' },
+                ]}
+              />
+              <div className="w-px h-5 bg-[var(--color-border)]" />
+              <ChipGroup
+                value={segment}
+                onChange={setSegment}
+                options={[
+                  { key: 'all', label: 'Все' },
+                  { key: 'fl', label: 'Физики' },
+                  { key: 'ul', label: 'Юрики' },
+                ]}
+              />
+            </div>
+
+            {/* ── Тело ── */}
+            <div className="flex-1 overflow-y-auto px-4 sm:px-9 py-5">
+              {isLoading ? (
+                <div className="space-y-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-8 bg-[var(--color-border)] rounded animate-pulse" />)}</div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-[1.08fr_1fr] gap-7">
+                  {/* Левая колонка — паутина */}
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] mb-2.5">
+                      Профиль эффективности · 6 метрик
+                    </div>
+                    <div className="border border-[var(--color-border)] rounded-2xl py-3 flex justify-center overflow-x-auto">
+                      <ManagerCardRadar axes={radarAxes} />
+                    </div>
+                  </div>
+
+                  {/* Правая колонка — итоги + категории */}
+                  <div className="min-w-0 flex flex-col gap-5">
+                    <div>
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] mb-2.5">
+                        Итоги за период · к прошлому периоду
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                        <Tile value={fmtInt(data?.totals.reservations.current)} label="Брони" deltaPct={data?.totals.reservations.deltaPct} />
+                        <Tile value={fmtInt(data?.totals.confirmedReservations.current)} label="Подтв. брони" deltaPct={data?.totals.confirmedReservations.deltaPct} />
+                        <Tile value={fmtInt(data?.totals.salesCount.current)} label="Продажи" deltaPct={data?.totals.salesCount.deltaPct} />
+                        <Tile value={fmtMoney(data?.totals.salesAmount.current)} label="Сумма продаж" deltaPct={data?.totals.salesAmount.deltaPct} />
+                        <Tile value={fmtInt(data?.totals.shipments.current)} label="Отгрузки" deltaPct={data?.totals.shipments.deltaPct} />
+                        <Tile value={fmtMoney(data?.totals.avgCheck.current)} label="Средний чек" deltaPct={data?.totals.avgCheck.deltaPct} />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] mb-2.5">
+                        По товарным категориям · топ-5
+                      </div>
+                      <div className="border border-[var(--color-border)] rounded-2xl px-4 py-1">
+                        {(data?.categories.length ?? 0) === 0 ? (
+                          <div className="py-3 text-sm text-[var(--color-text-muted)]">Нет продаж за период</div>
+                        ) : data!.categories.map((c, i) => (
+                          <div key={c.name} className={`flex items-center gap-2.5 py-2 ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`}>
+                            <span className="text-[12.5px] text-[var(--color-text)] w-28 shrink-0 truncate" title={c.name}>{c.name}</span>
+                            <div className="flex-1 h-2.5 rounded-full bg-[var(--color-border)] overflow-hidden">
+                              <div
+                                className="h-full rounded-full"
+                                style={{ width: `${Math.min(100, c.share)}%`, backgroundColor: 'var(--color-accent)', opacity: Math.max(0.4, 1 - i * 0.15) }}
+                              />
+                            </div>
+                            <span className="text-[12.5px] font-bold text-[var(--color-text)] w-10 text-right shrink-0">{c.share.toFixed(0)}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Тизер звонков ── */}
+            {data?.calls && (
+              <div className="shrink-0 mx-4 sm:mx-9 mb-5 rounded-xl px-4 py-3 text-[12.5px] text-[var(--color-text-muted)] flex items-center gap-2 flex-wrap"
+                   style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 8%, transparent)' }}>
+                Звонки за период: <b className="text-[var(--color-text)]">{fmtInt(data.calls.count)}</b>
+                <span>· средний разговор <b className="text-[var(--color-text)]">{fmtDuration(data.calls.avgDurationSec)}</b></span>
+                <span>· первое касание <b className="text-[var(--color-text)]">{fmtMinutes(data.calls.medianFirstTouchMinutes)}</b></span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
+}

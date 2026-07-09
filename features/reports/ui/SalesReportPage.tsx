@@ -11,6 +11,7 @@ import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
 import { DrilldownDrawer } from './DrilldownDrawer';
 import type { DrilldownTarget } from './DrilldownDrawer';
+import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 import { ComparisonPanel } from './ComparisonPanel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
 import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay, BorderMode } from '@/lib/metrics/types';
@@ -210,6 +211,9 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useState('');
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
+  // Карточка менеджера (клик по #логину в отчёте «по менеджерам», MVP экрана 1
+  // мокапа manager-card-mock.html) — независимая от drilldown правая панель.
+  const [managerCard, setManagerCard]   = useState<{ id: string; name: string } | null>(null);
   // Режим «Сравнение» (п. Н2 спеки): выбор сущностей живёт в состоянии страницы (не в
   // БД) — так он переживает закрытие/повторное открытие слайдера в рамках сессии.
   const [showComparison, setShowComparison] = useState(false);
@@ -484,6 +488,14 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     []
   );
 
+  // Клик по #логину менеджера (dimensionSubtitle) — только в отчёте «по менеджерам»
+  // (в остальных отчётах ReportTable либо не получает onSubtitleClick вовсе, либо
+  // dimensionSubtitle означает что-то другое — см. проп в ReportTable.tsx).
+  const handleSubtitleClick = useCallback(
+    (id: string, name: string) => setManagerCard({ id, name }),
+    []
+  );
+
   const handleCellClick = useCallback(
     (id: string, name: string, metricId: string) => {
       const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
@@ -712,6 +724,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             dimensionLabel={dimensionColumnLabel}
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
+            onSubtitleClick={dimensionType === 'manager' ? handleSubtitleClick : undefined}
             // «Обычная» скрывает настройки колонок и drag-перетаскивание (п.3а спеки) —
             // не передаём обработчики вовсе, ReportTable сам не рендерит соответствующий UI.
             // Перемещение (←/→) и удаление метрики (onMetricRemove/MoveLeft/MoveRight) больше
@@ -805,6 +818,16 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             />
           }
           onClose={() => setDrilldown(null)}
+        />
+      )}
+
+      {managerCard && (
+        <ManagerCardPanel
+          key={managerCard.id}
+          managerId={managerCard.id}
+          managerName={managerCard.name}
+          reportPeriod={period}
+          onClose={() => setManagerCard(null)}
         />
       )}
 
