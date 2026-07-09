@@ -11,11 +11,16 @@ export interface DimensionConfig {
 
 export function resolveFilterClause(f: MetricFilter, tableAlias: string): string {
   const a = tableAlias;
+  // _ppp/_ppo/_ppb/_pppb: "вторая по счёту" сделка/бронь клиента за ВСЮ историю
+  // (contact_id), попавшая датой в отчётный период (via date_field конкретной метрики).
+  // contact_id IS NOT NULL — без этого все NULL-контакты (312 сделок на 09.07.2026)
+  // складываются в одну общую партицию, и ROW_NUMBER() внутри неё может случайно дать
+  // rn=2 у не связанных друг с другом сделок (ложные "вторые продажи"). Баг №2, диагноз Маркуса.
   if (f.field === '_ppp') {
     return `d.deal_id IN (
       SELECT deal_id FROM (
         SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at) AS rn
-        FROM sa.deals WHERE sold_at IS NOT NULL
+        FROM sa.deals WHERE sold_at IS NOT NULL AND contact_id IS NOT NULL
       ) _ppp_ranked WHERE rn = 2
     )`;
   }
@@ -23,8 +28,26 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
     return `d.deal_id IN (
       SELECT deal_id FROM (
         SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY delivered_at) AS rn
-        FROM sa.deals WHERE delivered_at IS NOT NULL
+        FROM sa.deals WHERE delivered_at IS NOT NULL AND contact_id IS NOT NULL
       ) _ppo_ranked WHERE rn = 2
+    )`;
+  }
+  // _ppb: вторая по счёту БРОНЬ клиента (reserved_at). _pppb: вторая ПОДТВЕРЖДЁННАЯ
+  // бронь (confirmed_at). Те же правила, что у _ppp/_ppo (см. выше).
+  if (f.field === '_ppb') {
+    return `d.deal_id IN (
+      SELECT deal_id FROM (
+        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY reserved_at) AS rn
+        FROM sa.deals WHERE reserved_at IS NOT NULL AND contact_id IS NOT NULL
+      ) _ppb_ranked WHERE rn = 2
+    )`;
+  }
+  if (f.field === '_pppb') {
+    return `d.deal_id IN (
+      SELECT deal_id FROM (
+        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY confirmed_at) AS rn
+        FROM sa.deals WHERE confirmed_at IS NOT NULL AND contact_id IS NOT NULL
+      ) _pppb_ranked WHERE rn = 2
     )`;
   }
   if (f.field === 'funnel_type') {

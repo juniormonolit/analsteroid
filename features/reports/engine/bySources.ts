@@ -94,7 +94,15 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
 
   const allMetrics = await loadMetrics();
-  const metricIds  = allMetrics.filter(m => m.metricType === 'collected' && !m.isTest).map(m => m.id);
+  const collected  = allMetrics.filter(m => m.metricType === 'collected' && !m.isTest);
+  const metricIds  = collected.map(m => m.id);
+  // ППП/ППО/ППБ/ПППБ (тег 'scope_independent') — про историю клиента, а не воронку
+  // сделки в периоде; пилюля «Первичные/Повторные» их резать не должна (тот же баг,
+  // что в byManagers/byProductGroups, диагноз Маркуса 09.07). clientType (Б2Б/Б2С)
+  // по-прежнему применяется.
+  const scopeIndependentIds = new Set(
+    collected.filter(m => m.tags.includes('scope_independent')).map(m => m.id),
+  );
 
   // Фильтр противоположного типа → SQL WHERE (+ ключ кэша)
   let whereExtra: string | undefined;
@@ -122,18 +130,22 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   ]);
 
   // Funnel-пилюли
-  const skipFunnel = dealScope === 'all' && clientType === 'all';
-  const allowedFunnels = skipFunnel
-    ? null
-    : new Set<number>(
-        funnels
-          .filter(f => {
-            const scopeOk  = dealScope === 'all' || (dealScope === 'primary' ? !f.isRepeat : f.isRepeat);
-            const clientOk = clientType === 'all' || (clientType === 'b2c' ? [0, 2].includes(f.id) : [1, 3].includes(f.id));
-            return scopeOk && clientOk;
-          })
-          .map(f => f.id),
-      );
+  function computeAllowedFunnels(scope: DealScope, client: ClientType): Set<number> | null {
+    if (scope === 'all' && client === 'all') return null;
+    return new Set<number>(
+      funnels
+        .filter(f => {
+          const scopeOk  = scope === 'all' || (scope === 'primary' ? !f.isRepeat : f.isRepeat);
+          const clientOk = client === 'all' || (client === 'b2c' ? [0, 2].includes(f.id) : [1, 3].includes(f.id));
+          return scopeOk && clientOk;
+        })
+        .map(f => f.id),
+    );
+  }
+  const allowedFunnels = computeAllowedFunnels(dealScope, clientType);
+  const allowedFunnelsScopeIndep = scopeIndependentIds.size > 0
+    ? computeAllowedFunnels('all', clientType)
+    : null;
 
   // In-memory фильтр по source_id (source-измерение + source-фильтр)
   let allowedIds: Set<string> | 'null' | null = null;
@@ -145,7 +157,9 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   // Агрегация по значению измерения
   const agg = new Map<string, { name: string; metrics: Record<string, number> }>();
   for (const row of rows) {
-    if (allowedFunnels !== null && !allowedFunnels.has(row.funnel_id)) continue;
+    const passesNormal     = allowedFunnels === null || allowedFunnels.has(row.funnel_id);
+    const passesScopeIndep = allowedFunnelsScopeIndep === null || allowedFunnelsScopeIndep.has(row.funnel_id);
+    if (!passesNormal && !passesScopeIndep) continue;
     const rid = row.dimension_id;
     let groupId: string, groupName: string;
 
@@ -174,6 +188,8 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
     }
     const e = agg.get(groupId)!;
     for (const id of metricIds) {
+      const passes = scopeIndependentIds.has(id) ? passesScopeIndep : passesNormal;
+      if (!passes) continue;
       const v = row[id];
       if (v !== null && v !== undefined) e.metrics[id] += Number(v);
     }

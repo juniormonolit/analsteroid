@@ -6,6 +6,73 @@
 
 ---
 
+## 2026-07-09 — Баг ППП/ППО режется пилюлей + защита NULL contact_id + новые метрики ППБ/ПППБ
+
+Диагноз Маркуса (09.07, проверено на живых данных): ППП/ППО (`ppp_count`/`ppo_count`/
+`ppp_amount`/`ppo_amount`) — "вторая по счёту продажа/отгрузка клиента за всю
+историю" (`ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at/delivered_at)
+rn=2`) — ошибочно резались пилюлей «Первичные/Повторные» (`dealScope`): за 01-08.07
+живой отчёт давал 107 (все) / **12** (первичные) / 95 (повторные), хотя число должно
+быть одинаковым — метрика про историю клиента, а не про воронку сделки, попавшей в
+период. Исполнитель: Николай.
+
+- **Баг №1 (dealScope режет ППП/ППО).** `features/reports/engine/{byManagers,
+  byProductGroups,bySources}.ts::aggregate()` фильтровали КАЖДУЮ collected-строку по
+  `funnel_id`, если пилюля ≠ "все" — включая ППП/ППО, чья "вторая продажа" может
+  физически лежать в воронке "повторные", даже когда пилюля = "первичные". Фикс:
+  новый тег `scope_independent` в `metrics.tags` — метрики с этим тегом больше НЕ
+  фильтруются по `dealScope` (используется `computeAllowedFunnels(funnels, 'all',
+  clientType)` вместо реального `dealScope`), но по-прежнему фильтруются по
+  `clientType` (Б2Б/Б2С — ортогональный срез, его не трогаем). Логика идентична во
+  всех трёх движках (`byManagers`/`byProductGroups`/`bySources` — у `bySources` та же
+  бажная схема была инлайнена в `fetchBySources`, тоже пофикшена, хотя явно в задаче
+  упомянут не был). Тег для существующих `ppp_count`/`ppp_amount`/`ppo_count`/
+  `ppo_amount` — в `migrations/061_scope_independent_ppb_pppb_metrics.sql`.
+- **Баг №2 (NULL contact_id).** `lib/metrics/sqlGen.ts::resolveFilterClause` — подзапросы
+  ранжирования `_ppp`/`_ppo` не исключали `contact_id IS NULL` (312 сделок из 216355
+  на 09.07.2026 — все NULL-контакты попадали в одну общую партицию, `rn=2` там мог
+  случайно указать на не связанные друг с другом сделки). Добавлено `AND contact_id
+  IS NOT NULL` в обе подзапроса. Проверено на живых данных за 01-08.07 — на этом
+  окне баг не проявлялся (110 с гвардом = 110 без), но это чистая правка корректности
+  на будущее. Это правка кода (`sqlGen.ts`), НЕ формулы метрики в БД — миграция для
+  этого пункта не нужна (`filters` метрик `ppp_count`/`ppo_count` не менялись).
+- **Новые метрики: ППБ / ПППБ.** По схеме ППП/ППО, но по `reserved_at` (вторая
+  БРОНЬ клиента) и `confirmed_at` (вторая ПОДТВЕРЖДЁННАЯ бронь) — новые поля
+  фильтра `_ppb`/`_pppb` в `sqlGen.ts`, категория «Продажи» (как у ППП), тег
+  `scope_independent` сразу при создании. Определения — в
+  `migrations/061_scope_independent_ppb_pppb_metrics.sql` (`ppb_count`, `ppb_amount`,
+  `pppb_count`, `pppb_amount`).
+- **Индексы.** `sa.deals` уже имеет композитные `(contact_id, sold_at)` /
+  `(contact_id, delivered_at)` под ППП/ППО, но НЕ имеет аналогичных под
+  `reserved_at`/`confirmed_at` (только одноколоночные partial-индексы). На текущем
+  объёме (34405 строк reserved_at IS NOT NULL, 14036 confirmed_at IS NOT NULL)
+  `EXPLAIN ANALYZE` показал ~47мс — не блокер, но подготовлена миграция про запас:
+  `migrations/062_ppb_pppb_contact_indexes.sql` (`CREATE INDEX CONCURRENTLY`, целевая
+  БД — self-hosted Supabase Миши, схема `sa`, нужен `supabase_admin`).
+- **Миграции НЕ применялись мной** (`062` физически не могу — `junior_user`
+  read-only на `sa`; `061` намеренно оставлена Артёму — INSERT новых `ppb`/`pppb`
+  строк в ЖИВОЙ каталог `metrics` до деплоя нового кода мог бы сломать текущий
+  прод: старый `sqlGen.ts` не знает про `_ppb`/`_pppb` и сгенерировал бы битый SQL
+  (`d._ppb = ''`), если бы кто-то выбрал новую метрику в живом отчёте раньше деплоя).
+- **Живая проверка.** Локальный `npm run dev` (:3004) с прод-кредами (SA_PG_*/YC_PG_*
+  сняты с реального запущенного прод-процесса на этой же машине, порт 8100),
+  логин `test_alfred_user` (`owners-inbox/analsteroid-test-users.md`),
+  `POST /api/reports/run`:
+  - **"До" (живой API, каталог без тега)**: ППП за 01-08.07 — all=**107**,
+    primary=**12**, repeat=**95** — воспроизводит ровно диагноз Маркуса.
+  - **"После" (read-only харнесс: та же SQL + та же новая `aggregate()`, тег
+    смоделирован в памяти БЕЗ записи в прод-БД)**: all=primary=repeat = **110**
+    (110 vs 107 «до» — из-за accountType-фильтра в живом API по умолчанию
+    `managers`, у харнесса такого фильтра не было; сама by-account-фильтрованная
+    версия харнесса дала 66/38.3М ППБ и 63/48.0М ПППБ — тоже all=primary=repeat).
+  - Дрилл-даун (`productGroupId`/`managerId`) и «Итого» — оба движка отдали 200 OK,
+    цифры посчитались, регрессий нет (проверено `by-managers`/`by-product-groups`/
+    `by-sources`, разные `dealScope`/`clientType`/`sourceDimension`).
+- **Проверки**: `npm run typecheck` / `npm run build` / `npm run lint:responsive` —
+  зелёные (0 новых нарушений).
+
+---
+
 ## 2026-07-09 — Карточка менеджера (MVP, экран 1 мокапа) — новая правая панель по клику на #логин
 
 Мокап (утверждён владельцем): `manager-card-mock.html` (экран 1; экран 2 «ФИФА-сетка

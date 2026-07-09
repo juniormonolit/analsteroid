@@ -31,35 +31,55 @@ function mkKey(from: string, toExcl: string, metricIds: string[], mode: string, 
   return `${from}|${toExcl}|${mode}|${managerId ?? 'all'}|${deptKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
 }
 
+// dealScope/clientType match the same funnel_id logic as sqlGen.ts:
+//   primary/repeat ← funnels.is_repeat
+//   b2c ← funnel_id IN (0, 2); b2b ← funnel_id IN (1, 3)
+function computeAllowedFunnels(
+  funnels: FunnelMeta[],
+  dealScope: DealScope,
+  clientType: ClientType,
+): Set<number> | null {
+  if (dealScope === 'all' && clientType === 'all') return null;
+  return new Set<number>(
+    funnels
+      .filter(f => {
+        const scopeOk =
+          dealScope === 'all' ||
+          (dealScope === 'primary' ? !f.isRepeat : f.isRepeat);
+        const clientOk =
+          clientType === 'all' ||
+          (clientType === 'b2c' ? [0, 2].includes(f.id) : [1, 3].includes(f.id));
+        return scopeOk && clientOk;
+      })
+      .map(f => f.id),
+  );
+}
+
 // ── Pill filter + aggregation ─────────────────────────────────────────────
+// Метрики из scopeIndependentIds (ППП/ППО/ППБ/ПППБ — тег 'scope_independent' в metrics.tags)
+// считают "N-ю сделку клиента за всю историю" — они про историю клиента, а не про
+// воронку сделки, попавшей в период. Пилюля «Первичные/Повторные» (dealScope) их
+// резать не должна (тот же баг, что в byManagers.ts, диагноз Маркуса 09.07);
+// clientType (Б2Б/Б2С) по-прежнему применяется, т.к. это ортогональный срез.
 function aggregate(
   rows: FlatRow[],
   funnels: FunnelMeta[],
   metricIds: string[],
   dealScope: DealScope,
   clientType: ClientType,
+  scopeIndependentIds: Set<string>,
 ): Map<string, { name: string; metrics: Record<string, number> }> {
-  const skipFilter = dealScope === 'all' && clientType === 'all';
-
-  const allowed = skipFilter
-    ? null
-    : new Set<number>(
-        funnels
-          .filter(f => {
-            const scopeOk =
-              dealScope === 'all' ||
-              (dealScope === 'primary' ? !f.isRepeat : f.isRepeat);
-            const clientOk =
-              clientType === 'all' ||
-              (clientType === 'b2c' ? [0, 2].includes(f.id) : [1, 3].includes(f.id));
-            return scopeOk && clientOk;
-          })
-          .map(f => f.id),
-      );
+  const allowed          = computeAllowedFunnels(funnels, dealScope, clientType);
+  const allowedScopeIndep = scopeIndependentIds.size > 0
+    ? computeAllowedFunnels(funnels, 'all', clientType)
+    : null;
 
   const agg = new Map<string, { name: string; metrics: Record<string, number> }>();
   for (const row of rows) {
-    if (allowed !== null && !allowed.has(row.funnel_id)) continue;
+    const passesNormal     = allowed === null || allowed.has(row.funnel_id);
+    const passesScopeIndep = allowedScopeIndep === null || allowedScopeIndep.has(row.funnel_id);
+    if (!passesNormal && !passesScopeIndep) continue;
+
     const dimId   = row.dimension_id as string;
     const dimName = (row.dimension_name as string | undefined) ?? dimId;
     if (!agg.has(dimId)) {
@@ -67,6 +87,8 @@ function aggregate(
     }
     const entry = agg.get(dimId)!;
     for (const id of metricIds) {
+      const passes = scopeIndependentIds.has(id) ? passesScopeIndep : passesNormal;
+      if (!passes) continue;
       const v = row[id];
       if (v !== null && v !== undefined) entry.metrics[id] += Number(v);
     }
@@ -122,6 +144,9 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   const allMetrics = await loadMetrics();
   const collected  = allMetrics.filter(m => m.metricType === 'collected' && !m.isTest);
   const metricIds  = collected.map(m => m.id);
+  const scopeIndependentIds = new Set(
+    collected.filter(m => m.tags.includes('scope_independent')).map(m => m.id),
+  );
 
   // Analytics row cache (pills NOT in key; mode + managerId + deptKey ARE — they change the scope)
   const key   = mkKey(fromIso, toExclIso, metricIds, mode, managerId, deptKey);
@@ -157,7 +182,7 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
 
   // Apply pills in memory
   const funnels = await loadFunnels();
-  const agg     = aggregate(entry.rows, funnels, metricIds, dealScope, clientType);
+  const agg     = aggregate(entry.rows, funnels, metricIds, dealScope, clientType, scopeIndependentIds);
 
   return [...agg.entries()].map(([id, { name, metrics }]) => ({
     dimensionId:   id,
