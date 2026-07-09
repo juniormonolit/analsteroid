@@ -796,9 +796,15 @@ export function ReportTable({
             </tr>
           )}
           <tr>
-            <th ref={dimRef} className="sticky left-0 z-40 bg-[var(--color-table-header)] text-left px-4 py-2.5 font-medium text-[var(--color-text)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]">
+            <th ref={dimRef} className="sticky left-0 z-40 bg-[var(--color-table-header)] text-left px-2 py-2.5 font-medium text-[var(--color-text)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]">
               <div className="flex items-center justify-between gap-2">
-                <span>{dimensionLabel}</span>
+                {/* Левый край текста заголовка — на той же вертикали, что и значения строк:
+                    px-2 (8px) + резервный слот w-5 (20px, как у спейсера/шеврона в строках)
+                    + gap-1 (4px) = 32px, см. renderRow. */}
+                <span className="flex items-center gap-1">
+                  <span className="w-5 flex-shrink-0" aria-hidden />
+                  {dimensionLabel}
+                </span>
                 {(grouping === 'team' || grouping === 'branch') && (
                   <span className="flex items-center gap-0.5 flex-shrink-0">
                     <button
@@ -966,11 +972,15 @@ export function ReportTable({
           {totals && grouping !== 'total' && (
             <tr className="font-semibold text-[var(--color-text)]">
               <td
-                className="sticky left-0 bottom-0 z-30 px-4 py-3 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
+                className="sticky left-0 bottom-0 z-30 px-2 py-3 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
                 style={{ backgroundColor: TOTALS_BG }}
               >
-                <span className="flex items-center gap-2">
-                  <span className="w-1 h-4 rounded-full bg-[var(--color-accent)] flex-shrink-0" />
+                {/* Тот же резервный слот (w-5) + gap-1, что у заголовка и строк данных — акцентная
+                    плашка теперь центрирована внутри слота, а не сдвигает текст «Итого». */}
+                <span className="flex items-center gap-1">
+                  <span className="w-5 flex-shrink-0 flex items-center justify-center">
+                    <span className="w-1 h-4 rounded-full bg-[var(--color-accent)]" />
+                  </span>
                   Итого
                 </span>
               </td>
