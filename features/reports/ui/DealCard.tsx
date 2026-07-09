@@ -79,6 +79,22 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const isLostDeal = !!deal?.lost_at;
   const { closing, requestClose } = useSlideClose(onClose);
 
+  // Хронология — только заполненные этапы (+ ожидаемое закрытие, если сделка ещё
+  // открыта), в порядке жизненного цикла. Собираем один раз здесь, чтобы вертикальная
+  // соединительная линия между точками (макет deal-card-redesign-mock.html) знала,
+  // какой пункт последний, не считая null-этапы.
+  const timelineItems: { key: string; label: string; date: string; isLost?: boolean; future?: boolean }[] = [];
+  if (deal) {
+    for (const s of STAGES) {
+      const v = deal[s.key] as string | null;
+      if (!v) continue;
+      timelineItems.push({ key: s.key, label: s.label, date: fmtDate(v)!, isLost: s.key === 'lost_at' });
+    }
+    if (deal.expected_close_date && !deal.sold_at && !deal.lost_at) {
+      timelineItems.push({ key: 'expected_close_date', label: 'Ожид. закрытие', date: fmtDate(deal.expected_close_date)!, future: true });
+    }
+  }
+
   return (
     <>
       {/* Затемнение: клик мимо карточки закрывает её */}
@@ -86,11 +102,11 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
         className={`fixed inset-0 z-[65] bg-black/30 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
         onClick={requestClose}
       />
-      <div className={`fixed inset-y-0 right-0 z-[70] w-[600px] max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+      <div className={`fixed inset-y-0 right-0 z-[70] w-full sm:w-[48vw] sm:min-w-[760px] sm:max-w-[1080px] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <PanelCloseTab onClick={requestClose} />
-        {/* Header */}
+        {/* Header — на всю ширину панели */}
         <div className="shrink-0 border-b border-[var(--color-border)]">
-          <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-4">
+          <div className="flex items-start justify-between gap-3 px-6 sm:px-9 pt-5 sm:pt-6 pb-4 sm:pb-5">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
                 <span>Сделка #{dealId}</span>
@@ -132,99 +148,101 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
         )}
 
         {deal && (
-          <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-6">
-            {/* Хронология */}
-            <Section title="Хронология">
-              <div className="flex flex-col">
-                {STAGES.map(s => {
-                  const v = deal[s.key] as string | null;
-                  const isLost = s.key === 'lost_at';
-                  if (!v) return null;
-                  return (
-                    <div key={s.key} className="flex items-center gap-3 py-1">
-                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${isLost ? 'bg-[var(--color-negative,#e03131)]' : 'bg-[var(--color-accent)]'}`} />
-                      <span className={`text-sm flex-1 ${isLost ? 'text-[var(--color-negative,#e03131)] font-medium' : 'text-[var(--color-text)]'}`}>{s.label}</span>
-                      <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{fmtDate(v)}</span>
-                    </div>
-                  );
-                })}
-                {deal.expected_close_date && !deal.sold_at && !deal.lost_at && (
-                  <div className="flex items-center gap-3 py-1 opacity-70">
-                    <span className="w-2.5 h-2.5 rounded-full border-2 border-[var(--color-text-muted)] shrink-0" />
-                    <span className="text-sm flex-1 text-[var(--color-text-muted)]">Ожид. закрытие</span>
-                    <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{fmtDate(deal.expected_close_date)}</span>
-                  </div>
-                )}
-              </div>
-            </Section>
-
-            {/* Товары */}
-            <Section title={`Товары · ${products.length}`}>
-              {products.length === 0 ? (
-                <div className="text-sm text-[var(--color-text-muted)]">Нет позиций</div>
-              ) : (
-                <div className="border border-[var(--color-border)] rounded-xl overflow-hidden">
-                  {products.map((p, i) => (
-                    <div key={i} className={`px-4 py-2.5 ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`}>
-                      <div className="text-sm text-[var(--color-text)] leading-snug" title={p.name}>{p.name}</div>
-                      <div className="flex items-baseline justify-between mt-1">
-                        <span className="text-xs text-[var(--color-text-muted)]">
-                          {p.quantity} × {fmtMoney(p.price)}
-                          {p.head_group_name ? ` · ${p.head_group_name}` : ''}
-                        </span>
-                        <span className="text-sm font-medium tabular-nums text-[var(--color-text)]">{fmtMoney(p.sum)}</span>
+          <div className="flex-1 overflow-y-auto px-6 sm:px-9 py-5 sm:py-7">
+            {/* 2 колонки (макет deal-card-redesign-mock.html): слева — Товары (главное) +
+                Хронология; справа — компактные карточки ключ→значение. На мобиле —
+                схлопывается в одну колонку (grid-cols-1 → sm:grid-cols-[1.35fr_1fr]). */}
+            <div className="grid grid-cols-1 sm:grid-cols-[1.35fr_1fr] gap-x-9 gap-y-7">
+              {/* Левая колонка */}
+              <div className="flex flex-col gap-7 min-w-0">
+                <Section title={`Товары · ${products.length}`}>
+                  {products.length === 0 ? (
+                    <div className="text-sm text-[var(--color-text-muted)]">Нет позиций</div>
+                  ) : (
+                    <div className="border border-[var(--color-border)] rounded-xl overflow-hidden">
+                      {products.map((p, i) => (
+                        <div key={i} className={`px-4 py-2.5 ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`}>
+                          <div className="text-sm text-[var(--color-text)] leading-snug" title={p.name}>{p.name}</div>
+                          <div className="flex items-baseline justify-between mt-1">
+                            <span className="text-xs text-[var(--color-text-muted)]">
+                              {p.quantity} × {fmtMoney(p.price)}
+                              {p.head_group_name ? ` · ${p.head_group_name}` : ''}
+                            </span>
+                            <span className="text-sm font-medium tabular-nums text-[var(--color-text)]">{fmtMoney(p.sum)}</span>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="px-4 py-2.5 border-t border-[var(--color-border)] bg-[var(--color-bg)] flex items-baseline justify-between">
+                        <span className="text-sm text-[var(--color-text-muted)]">Итого по товарам</span>
+                        <span className="text-sm font-bold tabular-nums text-[var(--color-accent)]">{fmtMoney(productsTotal)}</span>
                       </div>
                     </div>
-                  ))}
-                  <div className="px-4 py-2.5 border-t border-[var(--color-border)] bg-[var(--color-bg)] flex items-baseline justify-between">
-                    <span className="text-sm text-[var(--color-text-muted)]">Итого по товарам</span>
-                    <span className="text-sm font-semibold tabular-nums text-[var(--color-text)]">{fmtMoney(productsTotal)}</span>
+                  )}
+                </Section>
+
+                <Section title="Хронология">
+                  <div className="border border-[var(--color-border)] rounded-xl p-4">
+                    <div className="flex flex-col">
+                      {timelineItems.map((it, i) => (
+                        <div key={it.key} className="relative flex items-center gap-3 py-1.5">
+                          {i < timelineItems.length - 1 && (
+                            <span className="absolute left-[4px] top-[18px] bottom-[-6px] w-px bg-[var(--color-border)]" />
+                          )}
+                          <span className={`relative z-[1] w-2.5 h-2.5 rounded-full shrink-0 ${
+                            it.future ? 'bg-transparent border-2 border-[var(--color-text-muted)]' : it.isLost ? 'bg-[var(--color-negative,#e03131)]' : 'bg-[var(--color-accent)]'
+                          }`} />
+                          <span className={`text-sm flex-1 ${it.future ? 'text-[var(--color-text-muted)]' : it.isLost ? 'text-[var(--color-negative,#e03131)] font-medium' : 'text-[var(--color-text)]'}`}>
+                            {it.label}
+                          </span>
+                          <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{it.date}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
-            </Section>
+                </Section>
+              </div>
 
-            {/* Товарные группы + Источник + Менеджер — в две колонки, где влезает */}
-            <div className="grid grid-cols-2 gap-x-8 gap-y-6">
-              <Section title="Товарные группы">
-                <Row label="Категория КЦ" value={deal.product_group_name ?? 'Без группы'} />
-                <Row label="По наибольшему" value={deal.head_group_name ?? 'Без группы'} />
-              </Section>
+              {/* Правая колонка */}
+              <div className="flex flex-col gap-7 min-w-0">
+                <Section title="Менеджер">
+                  {data?.manager ? (
+                    <>
+                      <Row label="Имя" value={`${data.manager.name}${data.manager.login ? ` ${data.manager.login}` : ''}`} strong />
+                      <Row label="Отдел" value={data.manager.department} />
+                      <Row label="Филиал" value={data.manager.branch} />
+                    </>
+                  ) : (
+                    <div className="text-sm text-[var(--color-text-muted)]">{deal.manager_id ? `#${deal.manager_id} (вне активной оргструктуры)` : 'Не назначен'}</div>
+                  )}
+                </Section>
 
-              <Section title="Менеджер">
-                {data?.manager ? (
-                  <>
-                    <Row label="Имя" value={`${data.manager.name}${data.manager.login ? ` ${data.manager.login}` : ''}`} strong />
-                    <Row label="Отдел" value={data.manager.department} />
-                    <Row label="Филиал" value={data.manager.branch} />
-                  </>
-                ) : (
-                  <div className="text-sm text-[var(--color-text-muted)]">{deal.manager_id ? `#${deal.manager_id} (вне активной оргструктуры)` : 'Не назначен'}</div>
-                )}
-              </Section>
+                <Section title="Товарные группы">
+                  <Row label="Категория КЦ" value={deal.product_group_name ?? 'Без группы'} />
+                  <Row label="По наибольшему" value={deal.head_group_name ?? 'Без группы'} />
+                </Section>
+
+                <Section title="Источник">
+                  {data?.source ? (
+                    <>
+                      <Row label="Название" value={data.source.name} strong />
+                      <Row label="Тип контакта" value={data.source.contact_type} />
+                      <Row label="Канал" value={data.source.channel_group === data.source.ad_channel ? data.source.ad_channel : [data.source.channel_group, data.source.ad_channel].filter(Boolean).join(' · ')} />
+                      <Row label="Бренд" value={data.source.brand} />
+                      <Row label="Витрина" value={data.source.platform} />
+                    </>
+                  ) : (
+                    <div className="text-sm text-[var(--color-text-muted)]">{deal.source_id ? `Неизвестный источник (${deal.source_id})` : 'Без источника'}</div>
+                  )}
+                </Section>
+
+                <Section title="Служебное">
+                  <Row label="Лид" value={deal.lead_id ? `#${deal.lead_id}` : null} />
+                  <Row label="Контакт" value={deal.contact_id ? `#${deal.contact_id}` : null} />
+                  <Row label="Компания" value={deal.company_id ? `#${deal.company_id}` : null} />
+                  <Row label="Обновлена" value={fmtDate(deal.updated_at)} />
+                </Section>
+              </div>
             </div>
-
-            <Section title="Источник">
-              {data?.source ? (
-                <>
-                  <Row label="Название" value={data.source.name} strong />
-                  <Row label="Тип контакта" value={data.source.contact_type} />
-                  <Row label="Канал" value={data.source.channel_group === data.source.ad_channel ? data.source.ad_channel : [data.source.channel_group, data.source.ad_channel].filter(Boolean).join(' · ')} />
-                  <Row label="Бренд" value={data.source.brand} />
-                  <Row label="Витрина" value={data.source.platform} />
-                </>
-              ) : (
-                <div className="text-sm text-[var(--color-text-muted)]">{deal.source_id ? `Неизвестный источник (${deal.source_id})` : 'Без источника'}</div>
-              )}
-            </Section>
-
-            {/* Идентификаторы */}
-            <Section title="Служебное">
-              <Row label="Лид" value={deal.lead_id ? `#${deal.lead_id}` : null} />
-              <Row label="Контакт" value={deal.contact_id ? `#${deal.contact_id}` : null} />
-              <Row label="Компания" value={deal.company_id ? `#${deal.company_id}` : null} />
-              <Row label="Обновлена" value={fmtDate(deal.updated_at)} />
-            </Section>
           </div>
         )}
       </div>

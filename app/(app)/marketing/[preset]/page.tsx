@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { SalesReportPage } from '@/features/reports/ui/SalesReportPage';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import type { SavedReport } from '@/lib/saved-reports/types';
+import { defaultPeriod, recomputeComparison } from '@/lib/period';
 
 export default async function MarketingPresetPage({
   params,
@@ -11,6 +12,17 @@ export default async function MarketingPresetPage({
   const { preset: key } = await params;
   const p = MARKETING_PRESETS[key];
   if (!p) return notFound();
+
+  // Дефолтный период для этих встроенных пресетов (не «сохранённый отчёт» пользователя,
+  // а зашитый в код дефолт) — раньше был periodMode:'relative' {current, month}, который
+  // resolveRelativePeriod() кэпает по «сейчас» (сегодня, реальное время сервера), поэтому
+  // первая загрузка любого маркетингового отчёта показывала месяц ПО СЕГОДНЯ с неполным
+  // текущим днём. Меняем на fixedPeriod = defaultPeriod() (МСК, тот же дефолт, что и у
+  // by-managers/by-product-groups без preset) — верхняя граница = вчера. НЕ трогаем
+  // resolveRelativePeriod/SaveReportModal: явные Месяц/Квартал/Год и реальные
+  // пользовательские сохранённые отчёты (saved/[id]) по-прежнему считаются как раньше.
+  const period = defaultPeriod();
+  const comparison = recomputeComparison(period);
 
   // Синтетический SavedReport: SalesReportPage подхватывает всё из preset-а.
   const preset: SavedReport = {
@@ -31,11 +43,11 @@ export default async function MarketingPresetPage({
     sourceDimension: p.sourceDimension,
     drilldownDimension: p.drilldownDimension,
     drilldownGrouped: p.drilldownGrouped ?? true,
-    periodMode: 'relative',
-    relativePeriod: { anchor: 'current', unit: 'month' },
+    periodMode: 'fixed',
+    relativePeriod: null,
     comparisonMode: 'previous_tail',
-    fixedPeriod: null,
-    fixedComparison: null,
+    fixedPeriod: { from: period.from.toISOString(), to: period.to.toISOString() },
+    fixedComparison: { from: comparison.from.toISOString(), to: comparison.to.toISOString() },
     createdAt: '',
   };
 

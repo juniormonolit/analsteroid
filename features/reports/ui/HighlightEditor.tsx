@@ -128,183 +128,176 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
   // модалка (не докед) слайдит справа, как остальные слайд-панели.
   const enterAnim = docked ? 'slide-panel-in-left' : 'slide-panel-in-right';
   const exitAnim = docked ? 'slide-panel-out-left' : 'slide-panel-out-right';
-  return (
-    <>
-      {/* Backdrop — только в режиме модалки; в док-режиме панель метрик остаётся кликабельной */}
-      {!docked && (
-        <div
-          className={`fixed inset-0 z-40 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
-          onClick={requestClose}
-        />
-      )}
-      {/* Slide panel */}
-      <div
-        className={`fixed inset-y-0 z-50 w-80 max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? exitAnim : enterAnim} ${docked ? 'border-l border-[var(--color-border)]' : 'right-0'}`}
-        style={docked ? { left: anchorLeft } : undefined}>
-        {!docked && <PanelCloseTab onClick={requestClose} />}
-        {/* Header */}
-        <div className="flex items-start justify-between px-5 pt-5 pb-4 border-b border-[var(--color-border)]">
-          <div>
-            <div className="font-semibold text-[var(--color-text)] text-base">Настройки метрики</div>
-            <div className="text-xs text-[var(--color-text-muted)] mt-0.5">{metricName}</div>
-          </div>
-          <button onClick={requestClose} className={`${docked ? '' : 'sm:hidden'} text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors ml-2 mt-0.5`}>✕</button>
-        </div>
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4">
 
-        {/* Display mode + pin */}
-        {(onDisplayModeChange || onPinToggle || onAccentToggle || onBarToggle || onHeatmapToggle) && (
-          <div>
-            <div className="text-xs text-[var(--color-text-muted)] mb-1.5 uppercase tracking-wide">Отображение</div>
-            <div className="flex flex-col gap-1">
-              {onDisplayModeChange && DISPLAY_OPTIONS.map(opt => (
-                <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="displayMode"
-                    value={opt.value}
-                    checked={displayMode === opt.value}
-                    onChange={() => onDisplayModeChange(opt.value)}
-                    className="accent-[var(--color-accent)]"
-                  />
-                  <span className="text-sm text-[var(--color-text)]">{opt.label}</span>
-                </label>
-              ))}
-              {onPinToggle && (
-                <label className="flex items-center gap-2 cursor-pointer mt-1 pt-1 border-t border-[var(--color-border)]">
-                  <input
-                    type="checkbox"
-                    checked={isPinned ?? false}
-                    onChange={onPinToggle}
-                    className="accent-[var(--color-accent)] w-4 h-4"
-                  />
-                  <span className="text-sm text-[var(--color-text)]">Закрепить колонку слева</span>
-                </label>
-              )}
-              {onAccentToggle && (
-                <label className="flex items-center gap-2 cursor-pointer mt-1 pt-1 border-t border-[var(--color-border)]">
-                  <input
-                    type="checkbox"
-                    checked={isAccented ?? false}
-                    onChange={onAccentToggle}
-                    className="accent-[var(--color-accent)] w-4 h-4"
-                  />
-                  <span className="text-sm text-[var(--color-text)] flex items-center gap-1.5">
-                    Акцент колонки
-                    <span className="text-[11px] text-[var(--color-text-muted)]">(жирный + фон)</span>
-                  </span>
-                </label>
-              )}
-              {onBarToggle && (
-                <label className="flex items-center gap-2 cursor-pointer mt-1 pt-1 border-t border-[var(--color-border)]">
-                  <input
-                    type="checkbox"
-                    checked={isBar ?? false}
-                    onChange={onBarToggle}
-                    className="accent-[var(--color-accent)] w-4 h-4"
-                  />
-                  <span className="text-sm text-[var(--color-text)] flex items-center gap-1.5">
-                    Столбик в ячейке
-                    <span className="text-[11px] text-[var(--color-text-muted)]">(бар по макс. в колонке)</span>
-                  </span>
-                </label>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Decimal places */}
-        {onDecimalPlacesChange && (
-          <div>
-            <div className="text-xs text-[var(--color-text-muted)] mb-1.5 uppercase tracking-wide">Формат числа</div>
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-[var(--color-text)]">Знаков после запятой</span>
-              <div className="flex gap-1 ml-auto">
-                {[0, 1, 2, 3].map(n => (
-                  <button
-                    key={n}
-                    onClick={() => onDecimalPlacesChange(n)}
-                    className={`w-8 h-8 rounded-full text-sm font-medium transition-colors ${
-                      (decimalPlaces ?? 2) === n
-                        ? 'bg-[var(--color-accent)] text-white'
-                        : 'bg-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Comparison threshold */}
-        {onComparisonThresholdChange && (
-          <div>
-            <div className="text-xs text-[var(--color-text-muted)] mb-1.5 uppercase tracking-wide">Порог нейтральности (~)</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={0}
-                max={100}
-                step={1}
-                value={comparisonThreshold ?? 5}
-                onChange={e => onComparisonThresholdChange(Number(e.target.value))}
-                className="w-20 border border-[var(--color-border)] rounded px-2 py-1 text-sm bg-[var(--color-bg)] text-[var(--color-text)]"
-              />
-              <span className="text-sm text-[var(--color-text-muted)]">% отклонение → ~</span>
-            </div>
-          </div>
-        )}
-
-        {/* Единая подсветка значений */}
+  // Обёртка секции: в доке — компактная (как раньше, узкая колонка рядом с панелью
+  // метрик), в модалке — широкая карточка с разделителем снизу (макет
+  // metric-settings-redesign.html, вариант C). Ширина/2-колоночность задаются
+  // контейнером ниже, эта обёртка только про паддинги/разделители одной секции.
+  function SectionBlock({ eyebrow, children }: { eyebrow: string; children: React.ReactNode }) {
+    if (docked) {
+      return (
         <div>
-          <div className="text-xs text-[var(--color-text-muted)] mb-1.5 uppercase tracking-wide">Подсветка значений</div>
-          <div className="flex flex-col gap-1">
-            {([
-              { v: 'off',        label: 'Выключена' },
-              { v: 'gradient',   label: 'Градиент (авто)', hint: 'красный → зелёный по min→max' },
-              { v: 'thresholds', label: 'Пороги', hint: 'свои значения и цвета' },
-            ] as { v: 'off' | 'gradient' | 'thresholds'; label: string; hint?: string }[]).map(o => (
-              <label key={o.v} className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="hlMode"
-                  checked={hlMode === o.v}
-                  onChange={() => switchMode(o.v)}
-                  className="accent-[var(--color-accent)]"
-                />
-                <span className="text-sm text-[var(--color-text)]">
-                  {o.label}
-                  {o.hint && <span className="text-[11px] text-[var(--color-text-muted)] ml-1.5">({o.hint})</span>}
-                </span>
-              </label>
-            ))}
-          </div>
-          {hlMode === 'gradient' && onHeatmapInvertToggle && (
-            <label className="flex items-center gap-2 cursor-pointer mt-2 pl-6">
-              <input
-                type="checkbox"
-                checked={isHeatmapInverted ?? false}
-                onChange={onHeatmapInvertToggle}
-                className="accent-[var(--color-accent)] w-4 h-4"
-              />
-              <span className="text-sm text-[var(--color-text)]">
-                Наоборот
-                <span className="text-[11px] text-[var(--color-text-muted)] ml-1.5">(меньше = лучше: минимум зелёный)</span>
-              </span>
-            </label>
-          )}
+          <div className="text-xs text-[var(--color-text-muted)] mb-1.5 uppercase tracking-wide">{eyebrow}</div>
+          {children}
         </div>
+      );
+    }
+    return (
+      <div className="px-6 sm:px-7 py-5 sm:py-6 border-b border-[var(--color-border)] last:border-b-0">
+        <div className="text-[11px] font-bold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">{eyebrow}</div>
+        {children}
+      </div>
+    );
+  }
 
-        {hlMode === 'thresholds' && (
-          <>
-            {/* Thresholds — любое количество (≥1, вместе с «выше последнего» = ≥2 точки).
-                Между соседними точками цвет плавно перетекает градиентом. */}
-            <div className="text-xs text-[var(--color-text-muted)] -mb-1">
-              Пороги ({thresholds.length + 1} {thresholds.length + 1 === 1 ? 'точка' : 'точек'} на градиенте)
-            </div>
+  const displaySection = onDisplayModeChange && (
+    <SectionBlock eyebrow="Отображение">
+      <div className="grid grid-cols-2 gap-2.5">
+        {DISPLAY_OPTIONS.map(opt => {
+          const selected = displayMode === opt.value;
+          return (
+            <label
+              key={opt.value}
+              className={`flex items-center gap-2.5 rounded-lg border px-3 py-3 cursor-pointer transition-colors ${
+                selected
+                  ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]'
+                  : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
+              }`}
+            >
+              <input
+                type="radio"
+                name="displayMode"
+                value={opt.value}
+                checked={selected}
+                onChange={() => onDisplayModeChange(opt.value)}
+                className="accent-[var(--color-accent)] shrink-0"
+              />
+              <span className="text-sm font-medium text-[var(--color-text)] leading-snug">{opt.label}</span>
+            </label>
+          );
+        })}
+      </div>
+    </SectionBlock>
+  );
+
+  const optionRows: { key: string; checked: boolean; onChange: () => void; title: string; hint: string }[] = [];
+  if (onPinToggle) optionRows.push({ key: 'pin', checked: isPinned ?? false, onChange: onPinToggle, title: 'Закрепить колонку слева', hint: 'Остаётся видимой при горизонтальной прокрутке таблицы' });
+  if (onAccentToggle) optionRows.push({ key: 'accent', checked: isAccented ?? false, onChange: onAccentToggle, title: 'Акцент колонки', hint: 'Жирный текст и выделение фоном среди остальных метрик' });
+  if (onBarToggle) optionRows.push({ key: 'bar', checked: isBar ?? false, onChange: onBarToggle, title: 'Столбик в ячейке', hint: 'Мини-диаграмма прогресса по максимуму в колонке' });
+
+  const optionsSection = optionRows.length > 0 && (
+    <SectionBlock eyebrow="Дополнительные опции">
+      <div className="flex flex-col gap-3.5">
+        {optionRows.map(row => (
+          <label key={row.key} className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={row.checked}
+              onChange={row.onChange}
+              className="accent-[var(--color-accent)] w-4 h-4 mt-0.5 shrink-0"
+            />
+            <span>
+              <span className="block text-sm font-medium text-[var(--color-text)]">{row.title}</span>
+              <span className="block text-xs text-[var(--color-text-muted)] mt-0.5 leading-snug">{row.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </SectionBlock>
+  );
+
+  const formatSection = onDecimalPlacesChange && (
+    <SectionBlock eyebrow="Формат числа">
+      <div className="text-sm font-medium text-[var(--color-text)] mb-3">Знаков после запятой</div>
+      <div className="flex gap-1.5">
+        {[0, 1, 2, 3].map(n => (
+          <button
+            key={n}
+            onClick={() => onDecimalPlacesChange(n)}
+            className={`w-9 h-9 rounded-full text-sm font-semibold transition-colors ${
+              (decimalPlaces ?? 2) === n
+                ? 'bg-[var(--color-accent)] text-white'
+                : 'bg-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+            }`}
+          >
+            {n}
+          </button>
+        ))}
+      </div>
+    </SectionBlock>
+  );
+
+  const neutralitySection = onComparisonThresholdChange && (
+    <SectionBlock eyebrow="Порог нейтральности (~)">
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1.5 border border-[var(--color-border)] rounded-lg px-3 py-2 shrink-0">
+          <input
+            type="number"
+            min={0}
+            max={100}
+            step={1}
+            value={comparisonThreshold ?? 5}
+            onChange={e => onComparisonThresholdChange(Number(e.target.value))}
+            className="w-14 text-sm font-semibold text-[var(--color-text)] bg-transparent outline-none"
+          />
+          <span className="text-sm text-[var(--color-text-muted)]">%</span>
+        </div>
+        <span className="text-xs text-[var(--color-text-muted)] leading-snug flex-1 min-w-[140px]">
+          Отклонения меньше этого% считаются нейтральными и красятся серым
+        </span>
+      </div>
+    </SectionBlock>
+  );
+
+  const highlightSection = (
+    <SectionBlock eyebrow="Подсветка значений">
+      {!docked && (
+        <p className="text-xs text-[var(--color-text-muted)] leading-relaxed mb-4 -mt-2">
+          Красит бейдж (плашку) вокруг значения — фон ячейки остаётся белым. Режимы взаимоисключающие: выбирается только один.
+        </p>
+      )}
+      <div className="flex bg-[var(--color-bg)] rounded-xl p-1 gap-1 mb-4">
+        {([
+          { v: 'off', label: 'Выключено' },
+          { v: 'gradient', label: 'Градиент' },
+          { v: 'thresholds', label: 'Пороги' },
+        ] as { v: HlMode; label: string }[]).map(o => (
+          <button
+            key={o.v}
+            type="button"
+            onClick={() => switchMode(o.v)}
+            className={`flex-1 text-center px-2 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+              hlMode === o.v ? 'bg-[var(--color-accent)] text-white shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+
+      {hlMode === 'gradient' && onHeatmapInvertToggle && (
+        <label className="flex items-center gap-2 cursor-pointer mb-1">
+          <input
+            type="checkbox"
+            checked={isHeatmapInverted ?? false}
+            onChange={onHeatmapInvertToggle}
+            className="accent-[var(--color-accent)] w-4 h-4"
+          />
+          <span className="text-sm text-[var(--color-text)]">
+            Наоборот
+            <span className="text-[11px] text-[var(--color-text-muted)] ml-1.5">(меньше = лучше: минимум зелёный)</span>
+          </span>
+        </label>
+      )}
+
+      {hlMode === 'thresholds' && (
+        <>
+          {/* Thresholds — любое количество (≥1, вместе с «выше последнего» = ≥2 точки).
+              Между соседними точками цвет плавно перетекает градиентом. */}
+          <div className="text-xs text-[var(--color-text-muted)] mb-3">
+            Пороги ({thresholds.length + 1} {thresholds.length + 1 === 1 ? 'точка' : 'точек'} на градиенте)
+          </div>
+          <div className="flex flex-col gap-2.5">
             {thresholds.map((t, i) => (
               <div key={i} className="border border-[var(--color-border)] rounded-lg p-3 flex flex-col gap-2">
                 <div className="flex items-center justify-between">
@@ -318,81 +311,128 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
                     ✕
                   </button>
                 </div>
-                <input
-                  type="number"
-                  value={t.value}
-                  onChange={e => setThresholds(prev => prev.map((p, j) => j === i ? { ...p, value: Number(e.target.value) } : p))}
-                  className="w-full border border-[var(--color-border)] rounded px-2 py-1 text-sm bg-[var(--color-bg)] text-[var(--color-text)]"
-                />
-                <GsColorPickerButton value={t.color} onChange={c => setThresholds(prev => prev.map((p, j) => j === i ? { ...p, color: c } : p))} />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={t.value}
+                    onChange={e => setThresholds(prev => prev.map((p, j) => j === i ? { ...p, value: Number(e.target.value) } : p))}
+                    className="flex-1 border border-[var(--color-border)] rounded px-2 py-1.5 text-sm bg-[var(--color-bg)] text-[var(--color-text)]"
+                  />
+                  <GsColorPickerButton value={t.color} onChange={c => setThresholds(prev => prev.map((p, j) => j === i ? { ...p, color: c } : p))} />
+                </div>
               </div>
             ))}
+          </div>
 
-            <button
-              onClick={addThreshold}
-              className="text-xs text-[var(--color-accent)] hover:underline self-start"
+          <button
+            onClick={addThreshold}
+            className="mt-2.5 text-xs font-semibold text-[var(--color-accent)] hover:underline self-start"
+          >
+            + Добавить порог
+          </button>
+
+          {/* Above last threshold */}
+          <div className="border border-[var(--color-border)] rounded-lg p-3 flex flex-col gap-2 mt-3">
+            <div className="text-xs text-[var(--color-accent)] font-medium">Выше последнего порога</div>
+            <GsColorPickerButton value={aboveColor} onChange={setAboveColor} />
+          </div>
+
+          {/* Preview */}
+          <div className="flex justify-end text-xs text-[var(--color-text-muted)] mt-3">
+            Пример:&nbsp;
+            <span
+              className="px-2 rounded"
+              style={{ backgroundColor: previewColor ?? DEFAULT_COLOR }}
             >
-              + Добавить порог
+              {preview ?? 50}
+            </span>
+          </div>
+        </>
+      )}
+    </SectionBlock>
+  );
+
+  const scopeSwitch = (
+    <div className={docked ? '' : 'flex-1 min-w-0'}>
+      <div className={`text-xs text-[var(--color-text-muted)] mb-2 ${docked ? 'uppercase tracking-wide' : 'font-semibold'}`}>Область применения</div>
+      <div className={`flex bg-[var(--color-bg)] rounded-lg p-1 gap-1 ${docked ? 'flex-col' : 'max-w-sm'}`}>
+        {(['report', 'global'] as const).map(s => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => setScope(s)}
+            className={`flex-1 text-center px-3 py-2 rounded-md text-xs font-semibold transition-colors ${
+              scope === s ? 'bg-[var(--color-bg-surface)] text-[var(--color-accent)] shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+            }`}
+          >
+            {s === 'report' ? 'Только в этом отчёте' : 'Всегда (для меня)'}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {/* Backdrop — только в режиме модалки; в док-режиме панель метрик остаётся кликабельной */}
+      {!docked && (
+        <div
+          className={`fixed inset-0 z-40 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
+          onClick={requestClose}
+        />
+      )}
+      {/* Slide panel — доке узкая (как раньше), модалка широкая (~48vw, мин. 680px,
+          макет metric-settings-redesign.html), схлопывается в одну колонку до sm:. */}
+      <div
+        className={`fixed inset-y-0 z-50 bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? exitAnim : enterAnim} ${
+          docked ? 'w-80 max-w-[94vw] border-l border-[var(--color-border)]' : 'right-0 w-full sm:w-[48vw] sm:min-w-[680px] sm:max-w-[960px]'
+        }`}
+        style={docked ? { left: anchorLeft } : undefined}>
+        {!docked && <PanelCloseTab onClick={requestClose} />}
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 sm:px-8 pt-5 sm:pt-6 pb-4 sm:pb-5 border-b border-[var(--color-border)]">
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-text-muted)] mb-0.5">Настройки метрики</div>
+            <div className="font-semibold text-[var(--color-text)] text-base sm:text-lg">{metricName}</div>
+          </div>
+          <button onClick={requestClose} className={`${docked ? '' : 'sm:hidden'} text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors ml-2 mt-0.5`}>✕</button>
+        </div>
+
+        {/* Body: доке — одна узкая колонка (как раньше); модалка — 2 колонки, схлопываются в 1 на мобиле */}
+        <div className={docked ? 'flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-5' : 'flex-1 overflow-y-auto flex flex-col sm:flex-row'}>
+          <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col sm:w-1/2 sm:border-r sm:border-[var(--color-border)]'}>
+            {displaySection}
+            {optionsSection}
+            {formatSection}
+            {neutralitySection}
+          </div>
+          <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col sm:w-1/2'}>
+            {highlightSection}
+          </div>
+        </div>
+
+        {/* Footer: область применения + действия — на всю ширину */}
+        <div className="px-5 sm:px-8 py-4 sm:py-5 border-t border-[var(--color-border)] flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          {scopeSwitch}
+          <div className="flex justify-end gap-2.5 shrink-0">
+            <button
+              onClick={() => {
+                // «Сбросить» = полностью «Выключена»: гасим оба канала подсветки, не только
+                // пороги — иначе градиент мог остаться активным после сброса порогов.
+                if (isHeatmap) onHeatmapToggle?.();
+                onSave(null, scope);
+              }}
+              className="px-4 py-2 text-sm font-medium text-[var(--color-text-muted)] hover:text-[var(--color-negative)] border border-[var(--color-border)] rounded-lg transition-colors"
+            >
+              Сбросить
             </button>
-
-            {/* Above last threshold */}
-            <div className="border border-[var(--color-border)] rounded-lg p-3 flex flex-col gap-2">
-              <div className="text-xs text-[var(--color-accent)]">Выше последнего порога</div>
-              <GsColorPickerButton value={aboveColor} onChange={setAboveColor} />
-            </div>
-
-            {/* Preview */}
-            <div className="flex justify-end text-xs text-[var(--color-text-muted)]">
-              Пример:&nbsp;
-              <span
-                className="px-2 rounded"
-                style={{ backgroundColor: previewColor ?? DEFAULT_COLOR }}
-              >
-                {preview ?? 50}
-              </span>
-            </div>
-          </>
-        )}
-
-        {/* Scope */}
-        <div className="flex flex-col gap-1">
-          {(['report', 'global'] as const).map(s => (
-            <label key={s} className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="scope"
-                value={s}
-                checked={scope === s}
-                onChange={() => setScope(s)}
-                className="accent-[var(--color-accent)]"
-              />
-              <span className="text-sm text-[var(--color-text)]">
-                {s === 'report' ? 'Только в этом отчёте' : 'Всегда (для меня)'}
-              </span>
-            </label>
-          ))}
-        </div>
-
-        </div>
-        {/* Footer */}
-        <div className="px-5 py-4 border-t border-[var(--color-border)] flex justify-between items-center">
-          <button
-            onClick={() => {
-              // «Сбросить» = полностью «Выключена»: гасим оба канала подсветки, не только
-              // пороги — иначе градиент мог остаться активным после сброса порогов.
-              if (isHeatmap) onHeatmapToggle?.();
-              onSave(null, scope);
-            }}
-            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-colors"
-          >
-            Сбросить
-          </button>
-          <button
-            onClick={handleSave}
-            className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
-          >
-            Сохранить
-          </button>
+            <button
+              onClick={handleSave}
+              className="px-4 py-2 text-sm font-semibold bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
+            >
+              Сохранить
+            </button>
+          </div>
         </div>
       </div>
     </>
