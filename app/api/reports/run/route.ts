@@ -5,6 +5,8 @@ import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { fetchBySources } from '@/features/reports/engine/bySources';
 import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features/reports/engine/managerActivity';
+import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/features/reports/engine/stageConversions';
+import { fetchPriceObjectionConversion } from '@/features/reports/engine/priceObjectionConversion';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
@@ -286,6 +288,83 @@ export async function POST(req: NextRequest) {
     };
     currentRows = currentRows.map(r => enrichActivity(r, curActivity, curCalDays));
     compRows = compRows.map(r => enrichActivity(r, compActivity, compCalDays));
+  }
+
+  // Матрица CR по основному пути ЧЛ+ЮЛ (задача 2, migrations/064) — «Новая → Взял в
+  // работу → ... → Отгрузка» + «X → Отказ». Смысл только в разрезе менеджеров
+  // (deal_events.manager_id атрибутирует переход) — инжектим ТОЛЬКО в by-managers,
+  // как и manager-activity выше; для by-product-groups/by-sources ключи просто
+  // отсутствуют → computeCalculated по цепочке зависимостей отдаёт null.
+  const stageConversionHiddenIds = [
+    ...new Set(STAGE_PAIRS.flatMap(p => [`stage_${p.from}_denom`, `stage_${p.id}_num`])),
+  ];
+  const hasStageConversionMetric = withDeps.some(m => stageConversionHiddenIds.includes(m.id));
+
+  if (hasStageConversionMetric && reportSlug === 'by-managers') {
+    const [curConv, compConv] = await Promise.all([
+      fetchStageConversions(opts.period),
+      fetchStageConversions(compOpts.period),
+    ]);
+
+    const enrichStageConv = (
+      row: ReportRow,
+      conv: Map<string, StageConversionRow> | null,
+    ): ReportRow => {
+      const c = conv?.get(row.dimensionId);
+      const metrics: Record<string, number | null> = {};
+      for (const pair of STAGE_PAIRS) {
+        const denomId = `stage_${pair.from}_denom`;
+        const numId = `stage_${pair.id}_num`;
+        // null только если ВЕСЬ период раньше DEAL_EVENTS_DATA_START — иначе 0 для
+        // менеджеров без сделок в этой стадии за период (честный ноль, не «нет данных»).
+        metrics[denomId] = conv ? (c?.denom[pair.from] ?? 0) : null;
+        metrics[numId] = conv ? (c?.num[pair.id] ?? 0) : null;
+      }
+      return { ...row, metrics: { ...row.metrics, ...metrics } };
+    };
+    currentRows = currentRows.map(r => enrichStageConv(r, curConv));
+    compRows = compRows.map(r => enrichStageConv(r, compConv));
+  }
+
+  // CR «Есть цена дешевле» → Бронь/Продажа/Отказ (задача 1, migrations/064) —
+  // тот же гейт (только by-managers), тот же приём «null только если весь период
+  // раньше старта сбора deal_events».
+  const priceObjectionHiddenIds = [
+    'stage_price_lower_denom_primary', 'stage_price_lower_denom_repeat',
+    'stage_price_lower_to_reservation_num_primary', 'stage_price_lower_to_reservation_num_repeat',
+    'stage_price_lower_to_sale_num_primary', 'stage_price_lower_to_sale_num_repeat',
+    'stage_price_lower_to_lost_num_primary', 'stage_price_lower_to_lost_num_repeat',
+  ];
+  const hasPriceObjectionMetric = withDeps.some(m => priceObjectionHiddenIds.includes(m.id));
+
+  if (hasPriceObjectionMetric && reportSlug === 'by-managers') {
+    const [curPO, compPO] = await Promise.all([
+      fetchPriceObjectionConversion(opts.period),
+      fetchPriceObjectionConversion(compOpts.period),
+    ]);
+
+    const enrichPriceObjection = (
+      row: ReportRow,
+      po: Awaited<ReturnType<typeof fetchPriceObjectionConversion>>,
+    ): ReportRow => {
+      const p = po?.get(row.dimensionId);
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          stage_price_lower_denom_primary: po ? (p?.denomPrimary ?? 0) : null,
+          stage_price_lower_denom_repeat: po ? (p?.denomRepeat ?? 0) : null,
+          stage_price_lower_to_reservation_num_primary: po ? (p?.numReservationPrimary ?? 0) : null,
+          stage_price_lower_to_reservation_num_repeat: po ? (p?.numReservationRepeat ?? 0) : null,
+          stage_price_lower_to_sale_num_primary: po ? (p?.numSalePrimary ?? 0) : null,
+          stage_price_lower_to_sale_num_repeat: po ? (p?.numSaleRepeat ?? 0) : null,
+          stage_price_lower_to_lost_num_primary: po ? (p?.numLostPrimary ?? 0) : null,
+          stage_price_lower_to_lost_num_repeat: po ? (p?.numLostRepeat ?? 0) : null,
+        },
+      };
+    };
+    currentRows = currentRows.map(r => enrichPriceObjection(r, curPO));
+    compRows = compRows.map(r => enrichPriceObjection(r, compPO));
   }
 
   // Add calculated metrics to each row (after plan enrichment so plan-dependent metrics work)

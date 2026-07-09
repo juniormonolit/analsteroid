@@ -86,8 +86,13 @@ export function resolveAutoColor(metric: AutoColorInput): string | null {
       const confirmed = /confirm|подтв/i.test(id) || /подтв/i.test(name);
       return confirmed ? ENTITY_COLOR.reservationConfirmed : ENTITY_COLOR.reservation;
     }
-    case 'Конверсии': {
+    case 'Конверсии':
+    case 'Конверсии стадий': {
       // Цвет CR — по ЧИСЛИТЕЛЮ (правая часть "X → Y" в id/названии), не по категории.
+      // «Конверсии стадий» (миграция 064, переходы по sa.deal_events) красится тем же
+      // правилом — id визуально оканчивается на "_to_<entity>[_repeat|_all]" (см.
+      // entityFromCrId); промежуточные шаги без узнаваемой сущности (taken/contacted/
+      // priced) уходят в серый фолбэк — ok, они не про Брони/Продажи/Отгрузки/Отказы.
       const key = entityFromCrId(id) ?? entityFromText(name) ?? entityFromText(id);
       return key ? ENTITY_COLOR[key] : ENTITY_COLOR.unknown;
     }
@@ -119,7 +124,7 @@ export type CategoryColorPreview =
  * в этом случае UI должен показать «авто по метрике», а не один цветной кружок.
  */
 export function categoryDefaultColor(category: string): CategoryColorPreview {
-  if (category === 'Конверсии' || category === 'Планы') return { kind: 'mixed' };
+  if (category === 'Конверсии' || category === 'Конверсии стадий' || category === 'Планы') return { kind: 'mixed' };
   const color = resolveAutoColor({ id: '', category, nameRu: '' });
   return color ? { kind: 'color', color } : { kind: 'neutral' };
 }
