@@ -107,10 +107,10 @@ export function ViewSettings({
                 Режим колонок{hasMixedDisplay && <span className="ml-1 normal-case font-normal text-[10px] tracking-normal">· смешанный</span>}
               </SectionLabel>
               <Seg
-                options={['full', 'current', 'compact'] as ComparisonDisplay[]}
+                options={['full', 'partial', 'compact', 'current'] as ComparisonDisplay[]}
                 value={hasMixedDisplay ? undefined : comparisonDisplay}
                 onChange={onComparisonDisplayChange}
-                labels={{ full: 'Сравнение', current: 'Текущий', compact: 'Компактн.' }}
+                labels={{ full: 'Сравнение', partial: 'Частичное', compact: 'Компактн.', current: 'Текущий' }}
               />
             </div>
           )}

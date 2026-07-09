@@ -2560,3 +2560,43 @@ Per-metric тумблер «Тепловая карта», в конфиге.
   стеновые» с отделом «Московский филиал» — продажи 1 → 1 сд.; суб-дрилл
   «Газобетон × Мозговая × продажи 3» → 3 сд.; «Итого × продажи 11» → 11 сд.;
   регрессия по менеджерам — ок; 375px — ок; `tsc` и `lint:responsive` чистые.
+
+## 2026-07-09 — Полоска-сегмент кнопок заголовка метрики + 4-й режим «Частичное»
+
+- **Новый режим `ComparisonDisplay = 'partial'`** (`lib/metrics/types.ts`):
+  колонки Тек./Пред./Δ% — та же «широкая» вёрстка, что у `full`, но БЕЗ абсолютной Δ.
+  `lib/marketing/presets.ts` (тип `MarketingPreset.comparisonDisplay`) переведён на
+  импорт `ComparisonDisplay` вместо инлайн-юниона; `HighlightEditor.tsx`
+  (`DISPLAY_OPTIONS`) и `ViewSettings.tsx` («Вид» → «Режим колонок») — добавлена
+  опция «Частичное». Миграция БД не нужна: `comparison_display` — `TEXT`, а
+  `metric_display_modes` — `jsonb`, оба принимают новую строку без схемных изменений.
+- **`ReportTable.tsx` — генерализация «сколько колонок сравнения показывать»** под 4
+  режима вместо бинарного full/не-full: `leafKinds(mode)` описывает состав
+  под-колонок (`full`=4, `partial`=3, `compact`/`current`=1), `colSpanFor`/`hasAnyWideMode`
+  переведены на него. Плавное сворачивание (`closingFullIds` → `closingModes`) тоже
+  обобщено: при сужении режима держим ПРЕЖНЮЮ структуру колонок
+  `COMPARE_CLOSE_MS`=180мс, но fade-out (`subColAnimCls`) получают только те
+  под-колонки, которых нет в целевом режиме (напр. full→partial гасит только Δ,
+  Пред./Δ% остаются на месте). Три места, где раньше был бинарный showFull-if
+  (тело строки, саб-шапка Тек./Пред./Δ/Δ%, строка «Итого»), переведены на общий
+  рендер по `leafKinds`.
+- **Полоска-сегмент под названием метрики** (бриф `owners-inbox/metric-header-brief.md`,
+  мокапы `metric-header-buttons.html`/`comparison-modes-mock.html`, выбор Серёги —
+  СНИЗУ): убраны старый abs-grip слева-сверху и abs-группа Columns2+⋮ справа-сверху,
+  `cursor-grab`/`draggable` со всего `<th>`. Новый элемент — `hover-reveal` полоска
+  `h-5 rounded-[7px]` из 3 сегментов под названием: слева — Columns2 (клик циклит
+  режим метрики `full→partial→compact→current→full`, подсветка accent при
+  full/partial), центр — драг-хэндл (перетащен с `<th>` сюда: `draggable`/
+  `onDragStart`/`onDragEnd`; `onDragOver`/`onDrop` остались на `<th>` как цель дропа),
+  справа — `MetricMenu` с иконкой `Settings` вместо `MoreVertical`. Ширина полоски:
+  92px по центру при 1 колонке, `w-full` при раскрытом сравнении (`colSpanFor > 1`) —
+  тянется только центральная драг-зона, боковые кнопки фикс. 24px по краям.
+- **`SalesReportPage.tsx`**: `handleMetricQuickCompareToggle` переведён с бинарного
+  toggle (full ↔ запомненный режим через `quickCompareMemory`) на жёсткий цикл по
+  `['full','partial','compact','current']`; `quickCompareMemory` (state + комментарий)
+  удалён как мёртвый код. `queryKey` (`useQuery` отчёта) как и раньше НЕ включает
+  `metricDisplayModes`/`comparisonDisplay` — переключение режима метрики остаётся
+  чистым re-render без похода на сервер и без пересчёта (проверено чтением кода,
+  дерево зависимостей запроса не тронуто).
+- `npm run typecheck` и `npm run build` — чистые (0 ошибок TypeScript, сборка
+  прошла все 54 страницы). Коммит(ы) — см. историю ветки `prod-work`/`main`.

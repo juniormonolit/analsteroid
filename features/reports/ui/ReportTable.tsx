@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, MoreVertical, GripVertical, Columns2 } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2 } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
@@ -45,11 +45,21 @@ interface MetricMenuProps {
 
 const MODE_LABELS: Record<ComparisonDisplay, string> = {
   full: 'Полное сравнение',
-  current: 'Только текущий',
+  partial: 'Частичное (без Δ)',
   compact: 'Компактное',
+  current: 'Только текущий',
 };
 
-function MetricMenu({ isFirst, isLast, currentMode, onModeChange, onRemove, onMoveLeft, onMoveRight, onConfigure }: MetricMenuProps) {
+// Цикл режимов быстрой кнопки заголовка (п. Н5б, ревизия): полное → частичное →
+// компактное → текущее → снова полное. Порядок фиксирован — задаёт «глубину» сравнения
+// от максимума к минимуму, не зависит от того, как метрика была настроена вручную.
+const QUICK_CYCLE_ORDER: ComparisonDisplay[] = ['full', 'partial', 'compact', 'current'];
+function nextQuickMode(mode: ComparisonDisplay): ComparisonDisplay {
+  const idx = QUICK_CYCLE_ORDER.indexOf(mode);
+  return QUICK_CYCLE_ORDER[(idx + 1) % QUICK_CYCLE_ORDER.length];
+}
+
+function MetricMenu({ isFirst, isLast, currentMode, onModeChange, onRemove, onMoveLeft, onMoveRight, onConfigure, className }: MetricMenuProps & { className?: string }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -62,10 +72,10 @@ function MetricMenu({ isFirst, isLast, currentMode, onModeChange, onRemove, onMo
         <button
           // stopPropagation: клик по меню не должен триггерить сортировку в <th>
           onClick={e => e.stopPropagation()}
-          className="tap-target p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
+          className={className ?? 'tap-target p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors'}
           title="Настройки метрики"
         >
-          <MoreVertical size={13} />
+          <Settings size={12} />
         </button>
       }
     >
@@ -237,22 +247,47 @@ export function ReportTable({
   const [draggedMetricId, setDraggedMetricId] = useState<string | null>(null);
   const [dragOverMetricId, setDragOverMetricId] = useState<string | null>(null);
 
-  // ── Плавное сворачивание сравнения (п. Н5б спеки) ────────────────────────────
-  // Разворот в 'full' — просто mount трёх новых колонок (Пред./Δ/Δ%), CSS-анимация
-  // входа проигрывается сама (см. metric-compare-col-enter в globals.css).
-  // Сворачивание — обратная задача: реальный режим метрики уже сменился на
-  // current/compact, но колонки нужно не «выдернуть» мгновенно, а плавно погасить.
-  // closingFullIds держит id метрик, которые визуально ещё «full» (4 колонки с
-  // анимацией затухания), хотя фактический режим уже узкий — на COMPARE_CLOSE_MS.
+  // ── Плавное сворачивание сравнения (п. Н5б спеки, ревизия — 4 режима) ────────
+  // Разворот в более «широкий» режим — просто mount новых колонок, CSS-анимация входа
+  // проигрывается сама (см. metric-compare-col-enter в globals.css).
+  // Сворачивание — обратная задача: реальный режим метрики уже сменился на более узкий
+  // (меньше колонок сравнения), но колонки нужно не «выдернуть» мгновенно, а плавно
+  // погасить. closingModes держит id метрик → режим, из которого метрика только что
+  // ушла («from»), пока идёт затухание — на этот момент рендерим ПРЕЖНЮЮ (более
+  // широкую) структуру колонок, но помечаем классом затухания только те под-колонки,
+  // которых нет в НОВОМ (целевом) режиме — см. leafKinds/subColAnimCls.
   // useLayoutEffect (не useEffect!) — сравнение prev/next режима и взвод closing
   // должны случиться ДО отрисовки кадра браузером, иначе будет виден один кадр
   // мгновенного схлопывания перед тем, как включится fade-out.
   const COMPARE_CLOSE_MS = 180;
-  const [closingFullIds, setClosingFullIds] = useState<Set<string>>(new Set());
-  const prevFullRef = useRef<Record<string, boolean>>({});
+  const [closingModes, setClosingModes] = useState<Record<string, ComparisonDisplay>>({});
+  const prevModeRef = useRef<Record<string, ComparisonDisplay>>({});
 
-  function isEffectivelyFull(metricId: string): boolean {
-    return resolveMode(metricId) === 'full' || closingFullIds.has(metricId);
+  // Состав «листовых» под-колонок каждого режима, в порядке отрисовки. full/partial —
+  // «широкие» (>1 колонки); compact/current — одна колонка «Тек.» (у compact в ней же
+  // рисуется стрелка тенденции, доп. колонки не требуется).
+  function leafKinds(mode: ComparisonDisplay): ('current' | 'comparison' | 'delta' | 'deltaPct')[] {
+    if (mode === 'full') return ['current', 'comparison', 'delta', 'deltaPct'];
+    if (mode === 'partial') return ['current', 'comparison', 'deltaPct'];
+    return ['current'];
+  }
+  function leafCount(mode: ComparisonDisplay): number {
+    return leafKinds(mode).length;
+  }
+  // Режим, который сейчас нужно рендерить структурно (может отличаться от фактического
+  // resolveMode на время COMPARE_CLOSE_MS после сужения режима — см. closingModes выше).
+  function visualMode(metricId: string): ComparisonDisplay {
+    return closingModes[metricId] ?? resolveMode(metricId);
+  }
+  // Класс CSS-анимации для под-колонки idx>0 под конкретный «kind»: если метрика сейчас
+  // закрывается (closingModes) И этого kind нет в НОВОМ (целевом) режиме — колонка гаснет
+  // (exit); иначе — обычный enter (idempotent на уже смонтированных колонках, см. коммент
+  // у объявления classов в globals.css).
+  function subColAnimCls(metricId: string, kind: 'comparison' | 'delta' | 'deltaPct'): string {
+    const fromMode = closingModes[metricId];
+    if (!fromMode) return 'metric-compare-col-enter';
+    const toMode = resolveMode(metricId);
+    return leafKinds(toMode).includes(kind) ? 'metric-compare-col-enter' : 'metric-compare-col-exit';
   }
 
   // При группировке по отделу/филиалу группы свёрнуты по умолчанию. Флаг взводится
@@ -307,35 +342,38 @@ export function ReportTable({
     ...metrics.filter(m => !pinnedMetricIds.includes(m.id)),
   ];
 
-  // Ловим переход full → узкий режим ПЕРЕД покраской кадра (useLayoutEffect), взводим
-  // closingFullIds — на этом же кадре колонки продолжат рендериться как full (см.
-  // isEffectivelyFull), но с CSS-классом затухания. Через COMPARE_CLOSE_MS снимаем
-  // флаг — к этому моменту колонки уже прозрачны, схлопывание в 1 колонку незаметно.
-  const fullModeSig = displayMetrics.map(m => `${m.id}:${resolveMode(m.id) === 'full'}`).join('|');
+  // Ловим сужение режима (меньше листовых колонок, чем было) ПЕРЕД покраской кадра
+  // (useLayoutEffect), взводим closingModes[id] = прежний (более широкий) режим — на этом
+  // же кадре колонки продолжат рендериться по прежней структуре (см. visualMode), но
+  // «лишние» под-колонки получат CSS-класс затухания (subColAnimCls). Через
+  // COMPARE_CLOSE_MS снимаем флаг — к этому моменту они уже прозрачны, схлопывание
+  // до целевого числа колонок незаметно. Расширение режима (больше колонок) в эту
+  // ветку не попадает — новые колонки просто монтируются с enter-анимацией.
+  const modeSig = displayMetrics.map(m => `${m.id}:${resolveMode(m.id)}`).join('|');
   useLayoutEffect(() => {
-    const justClosed: string[] = [];
+    const justShrunk: { id: string; from: ComparisonDisplay }[] = [];
     for (const m of displayMetrics) {
-      const isFullNow = resolveMode(m.id) === 'full';
-      const wasFull = prevFullRef.current[m.id] ?? isFullNow;
-      if (wasFull && !isFullNow) justClosed.push(m.id);
-      prevFullRef.current[m.id] = isFullNow;
+      const nowMode = resolveMode(m.id);
+      const prevMode = prevModeRef.current[m.id] ?? nowMode;
+      if (leafCount(prevMode) > leafCount(nowMode)) justShrunk.push({ id: m.id, from: prevMode });
+      prevModeRef.current[m.id] = nowMode;
     }
-    if (!justClosed.length) return;
-    setClosingFullIds(prev => {
-      const next = new Set(prev);
-      for (const id of justClosed) next.add(id);
+    if (!justShrunk.length) return;
+    setClosingModes(prev => {
+      const next = { ...prev };
+      for (const { id, from } of justShrunk) next[id] = from;
       return next;
     });
     const timer = setTimeout(() => {
-      setClosingFullIds(prev => {
-        const next = new Set(prev);
-        for (const id of justClosed) next.delete(id);
+      setClosingModes(prev => {
+        const next = { ...prev };
+        for (const { id } of justShrunk) delete next[id];
         return next;
       });
     }, COMPARE_CLOSE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullModeSig]);
+  }, [modeSig]);
 
   function decFor(m: Metric): number {
     return metricDecimalOverrides[m.id] ?? m.decimalPlaces;
@@ -437,10 +475,11 @@ export function ReportTable({
     return metricDisplayModes[metricId] ?? comparisonDisplay;
   }
 
-  // isEffectivelyFull (не голый resolveMode) — во время плавного сворачивания
-  // (closingFullIds) колонки ещё должны занимать 4 слота, хотя реальный режим уже узкий.
+  // visualMode (не голый resolveMode) — во время плавного сворачивания (closingModes)
+  // колонки ещё должны занимать столько слотов, сколько было в ПРЕЖНЕМ режиме, хотя
+  // реальный режим уже более узкий.
   function colSpanFor(metricId: string): number {
-    return isEffectivelyFull(metricId) ? 4 : 1;
+    return leafCount(visualMode(metricId));
   }
 
   const DIMENSION_WIDTH = 320;
@@ -464,11 +503,11 @@ export function ReportTable({
     Array.from({ length: colSpanFor(metricId) }, (_, i) => `${metricId}:${i}`);
 
   // Signature of everything that affects column layout — effect recomputes only on change.
-  // includes isEffectivelyFull (not resolveMode) so the closing (fade-out) transient also
-  // re-measures sticky offsets — column count during that window is still 4, not 1.
+  // includes visualMode (not resolveMode) so the closing (fade-out) transient also
+  // re-measures sticky offsets — column count during that window is still the wider one.
   const layoutSig = [
     pinnedMetricIds.join(','),
-    displayMetrics.map(m => `${m.id}:${isEffectivelyFull(m.id) ? 'full' : resolveMode(m.id)}`).join('|'),
+    displayMetrics.map(m => `${m.id}:${visualMode(m.id)}`).join('|'),
     rows.length,
   ].join('#');
 
@@ -507,7 +546,7 @@ export function ReportTable({
   }
 
   const isClickableMetric = (m: Metric) => m.dataType !== 'percent';
-  const hasAnyFullMode = displayMetrics.some(m => isEffectivelyFull(m.id));
+  const hasAnyWideMode = displayMetrics.some(m => colSpanFor(m.id) > 1);
   const hasMenu = !!(onMetricDisplayModeChange || onMetricRemove);
 
   if (isLoading) {
@@ -535,11 +574,10 @@ export function ReportTable({
     return displayMetrics.map(m => {
       const d = row.deltas?.[m.id];
       const mode = resolveMode(m.id);
-      // Плавное сворачивание: пока closing=true, ещё рисуем 4 колонки (showFull), но
-      // Пред./Δ/Δ% получают fade-out класс вместо обычного fade-in.
-      const closing = closingFullIds.has(m.id);
-      const showFull = mode === 'full' || closing;
-      const compareAnimCls = closing ? 'metric-compare-col-exit' : 'metric-compare-col-enter';
+      // Плавное сворачивание/разворачивание: vMode — структура, которую рисуем сейчас
+      // (во время закрытия — прежняя, более широкая; см. visualMode/subColAnimCls выше).
+      const vMode = visualMode(m.id);
+      const kinds = leafKinds(vMode);
       const canClick = clickable && onCellClick && isClickableMetric(m);
       const isPinned = pinnedMetricIds.includes(m.id);
       const cellBase = 'tabular-nums';
@@ -586,27 +624,48 @@ export function ReportTable({
         );
       }
 
-      if (showFull) {
-        const p0 = leafProps(0, false), p1 = leafProps(1, false), p2 = leafProps(2, false), p3 = leafProps(3, true);
+      if (kinds.length > 1) {
+        // full: Тек./Пред./Δ/Δ% (4); partial: Тек./Пред./Δ% (3, без абсолютной Δ) — общий
+        // рендер по составу kinds, последняя под-колонка всегда deltaPct (несёт pinBar).
+        const lastIdx = kinds.length - 1;
         return (
           <React.Fragment key={m.id}>
-            <td
-              className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p0.className}`}
-              style={{ ...p0.style, ...accent, ...heat, ...alignStyle }}
-              onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
-            >
-              <BarBg metricId={m.id} value={d?.current ?? null} />
-              <span className="relative"><HlValue value={d?.current ?? null} /></span>
-            </td>
-            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} text-[var(--color-text-muted)] ${p1.className} ${compareAnimCls}`} style={{ ...p1.style, ...accent, ...alignStyle }}>
-              {formatValue(d?.comparison ?? null, m.dataType, decFor(m))}
-            </td>
-            <td className={`text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p2.className} ${compareAnimCls}`} style={{ ...p2.style, ...accent, ...alignStyle }}>
-              {formatDelta(d?.delta ?? null, m.dataType, decFor(m))}
-            </td>
-            <td className={`relative text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p3.className} ${compareAnimCls}`} style={{ ...p3.style, ...accent, ...alignStyle }}>
-              {formatDeltaPct(d?.deltaPct ?? null)}{pinBar}
-            </td>
+            {kinds.map((kind, idx) => {
+              const p = leafProps(idx, idx === lastIdx);
+              if (kind === 'current') {
+                return (
+                  <td
+                    key={kind}
+                    className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
+                    style={{ ...p.style, ...accent, ...heat, ...alignStyle }}
+                    onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
+                  >
+                    <BarBg metricId={m.id} value={d?.current ?? null} />
+                    <span className="relative"><HlValue value={d?.current ?? null} /></span>
+                  </td>
+                );
+              }
+              if (kind === 'comparison') {
+                return (
+                  <td key={kind} className={`text-center px-2 py-[var(--row-py)] ${cellBase} text-[var(--color-text-muted)] ${p.className} ${subColAnimCls(m.id, 'comparison')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                    {formatValue(d?.comparison ?? null, m.dataType, decFor(m))}
+                  </td>
+                );
+              }
+              if (kind === 'delta') {
+                return (
+                  <td key={kind} className={`text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'delta')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                    {formatDelta(d?.delta ?? null, m.dataType, decFor(m))}
+                  </td>
+                );
+              }
+              // deltaPct — всегда последняя под-колонка, несёт разделитель закреплённого блока
+              return (
+                <td key={kind} className={`relative text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'deltaPct')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                  {formatDeltaPct(d?.deltaPct ?? null)}{pinBar}
+                </td>
+              );
+            })}
           </React.Fragment>
         );
       }
@@ -830,70 +889,32 @@ export function ReportTable({
               const isFirst = idx === 0;
               const isLast = idx === displayMetrics.length - 1;
               const isPinnedCol = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
-              const colW = colSpanFor(m.id) * METRIC_COL_WIDTH;
+              const span = colSpanFor(m.id);
+              const colW = span * METRIC_COL_WIDTH;
               const thSize = isPinnedCol
                 ? { minWidth: colW, left: leafLeft(m.id, 0) }
                 : { minWidth: colW };
-              // When there is no full-mode metric, no sub-header row exists, so measure
+              // When there is no wide-mode metric, no sub-header row exists, so measure
               // single-column widths from the main header cell.
-              const mainRef = !hasAnyFullMode ? setLeafRef(`${m.id}:0`) : undefined;
+              const mainRef = !hasAnyWideMode ? setLeafRef(`${m.id}:0`) : undefined;
               return (
                 <th
                   key={m.id}
                   ref={mainRef}
-                  colSpan={colSpanFor(m.id)}
-                  draggable={!!onMetricReorder}
-                  onDragStart={onMetricReorder ? e => { setDraggedMetricId(m.id); e.dataTransfer.effectAllowed = 'move'; } : undefined}
+                  colSpan={span}
+                  // Драг переехал на центральную зону полоски-сегмента (см. ниже); <th> остаётся
+                  // ТОЛЬКО целью дропа (п.7 брифа metric-header-brief.md).
                   onDragOver={onMetricReorder ? e => { if (draggedMetricId && draggedMetricId !== m.id) { e.preventDefault(); setDragOverMetricId(m.id); } } : undefined}
                   onDrop={onMetricReorder ? e => {
                     e.preventDefault();
                     if (draggedMetricId && draggedMetricId !== m.id) onMetricReorder(draggedMetricId, m.id);
                     setDraggedMetricId(null); setDragOverMetricId(null);
                   } : undefined}
-                  onDragEnd={onMetricReorder ? () => { setDraggedMetricId(null); setDragOverMetricId(null); } : undefined}
-                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''} ${onMetricReorder ? 'cursor-grab' : ''} ${draggedMetricId === m.id ? 'opacity-40' : ''} ${dragOverMetricId === m.id && draggedMetricId !== m.id ? 'border-l-2 border-l-[var(--color-accent)]' : ''}`}
+                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''} ${draggedMetricId === m.id ? 'opacity-40' : ''} ${dragOverMetricId === m.id && draggedMetricId !== m.id ? 'border-l-2 border-l-[var(--color-accent)]' : ''}`}
                   style={{ ...thSize, ...colorizeStyle(m), ...accentStyle(m.id) }}
                 >
                   {colorizeBar(m)}
                   {m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
-                  {onMetricReorder && (
-                    <span className="hover-reveal absolute top-1 left-1 z-10 text-[var(--color-text-muted)] cursor-grab" title="Перетащить для сортировки колонок">
-                      <GripVertical size={12} />
-                    </span>
-                  )}
-                  {/* Правая группа кнопок шапки — сравнение + меню, вместе, в ряд (п. Н5б спеки):
-                      hover на десктопе, всегда видны на таче (hover-reveal). */}
-                  {(onMetricQuickCompareToggle || hasMenu) && (
-                    <span className="hover-reveal absolute top-1 right-1 z-10 flex items-center gap-0.5">
-                      {onMetricQuickCompareToggle && (
-                        <button
-                          // stopPropagation — клик не должен триггерить сортировку в <th>
-                          onClick={e => { e.stopPropagation(); onMetricQuickCompareToggle(m.id); }}
-                          className={`tap-target p-0.5 rounded transition-colors ${
-                            mode === 'full'
-                              ? 'text-[var(--color-accent)] bg-[var(--color-accent-soft)]'
-                              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]'
-                          }`}
-                          title={mode === 'full' ? 'Свернуть сравнение' : 'Сравнение: тек. / пред. / Δ / Δ%'}
-                        >
-                          <Columns2 size={12} />
-                        </button>
-                      )}
-                      {hasMenu && (
-                        <MetricMenu
-                          metricId={m.id}
-                          isFirst={isFirst}
-                          isLast={isLast}
-                          currentMode={mode}
-                          onModeChange={newMode => onMetricDisplayModeChange?.(m.id, newMode)}
-                          onRemove={() => onMetricRemove?.(m.id)}
-                          onMoveLeft={() => onMetricMoveLeft?.(m.id)}
-                          onMoveRight={() => onMetricMoveRight?.(m.id)}
-                          onConfigure={() => onMetricConfigure?.(m.id)}
-                        />
-                      )}
-                    </span>
-                  )}
                   <div className="flex items-start justify-center gap-1">
                     {sortBy === m.id && (
                       <button onClick={() => handleSort(m.id)} className="tap-target text-[var(--color-accent)] w-[14px] flex-shrink-0 mt-0.5">
@@ -908,19 +929,68 @@ export function ReportTable({
                       {m.nameRu}
                     </button>
                   </div>
+                  {/* Полоска-сегмент под названием метрики (metric-header-brief.md): слева —
+                      циклический переключатель режима (full→partial→compact→current→full),
+                      по центру — драг-зона (тянется, растягивается только она при раскрытом
+                      сравнении), справа — шестерёнка настроек. Видна только по hover на <th>
+                      (класс .group уже на <th> выше), на таче — всегда (hover-reveal). */}
+                  {(onMetricQuickCompareToggle || hasMenu || onMetricReorder) && (
+                    <div
+                      className={`hover-reveal mt-1 flex items-stretch h-5 rounded-[7px] border border-[#dee2e6] bg-[var(--color-bg-surface)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)] mx-auto ${span > 1 ? 'w-full' : 'w-[92px]'}`}
+                      onClick={e => e.stopPropagation()}
+                    >
+                      {onMetricQuickCompareToggle && (
+                        <button
+                          onClick={e => { e.stopPropagation(); onMetricQuickCompareToggle(m.id); }}
+                          className={`w-6 flex-shrink-0 flex items-center justify-center border-r border-[#dee2e6] transition-colors ${
+                            mode === 'full' || mode === 'partial'
+                              ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
+                              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)]'
+                          }`}
+                          title={`${MODE_LABELS[mode]} · клик — ${MODE_LABELS[nextQuickMode(mode)]}`}
+                        >
+                          <Columns2 size={12} />
+                        </button>
+                      )}
+                      {onMetricReorder ? (
+                        <span
+                          draggable
+                          onDragStart={e => { e.stopPropagation(); setDraggedMetricId(m.id); e.dataTransfer.effectAllowed = 'move'; }}
+                          onDragEnd={() => { setDraggedMetricId(null); setDragOverMetricId(null); }}
+                          className="flex-1 min-w-[28px] flex items-center justify-center cursor-grab bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:bg-[#f1f3f5] transition-colors"
+                          title="Перетащить колонку"
+                        >
+                          <GripVertical size={12} />
+                        </span>
+                      ) : (
+                        <span className="flex-1 min-w-[28px] bg-[var(--color-bg)]" />
+                      )}
+                      {hasMenu && (
+                        <MetricMenu
+                          metricId={m.id}
+                          isFirst={isFirst}
+                          isLast={isLast}
+                          currentMode={mode}
+                          onModeChange={newMode => onMetricDisplayModeChange?.(m.id, newMode)}
+                          onRemove={() => onMetricRemove?.(m.id)}
+                          onMoveLeft={() => onMetricMoveLeft?.(m.id)}
+                          onMoveRight={() => onMetricMoveRight?.(m.id)}
+                          onConfigure={() => onMetricConfigure?.(m.id)}
+                          className="w-6 flex-shrink-0 flex items-center justify-center border-l border-[#dee2e6] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition-colors"
+                        />
+                      )}
+                    </div>
+                  )}
                 </th>
               );
             })}
           </tr>
 
-          {hasAnyFullMode && (
+          {hasAnyWideMode && (
             <tr className="bg-[var(--color-table-header)]">
               <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" />
               {displayMetrics.map(m => {
-                const mode = resolveMode(m.id);
-                const closing = closingFullIds.has(m.id);
-                const showFull = mode === 'full' || closing;
-                const compareAnimCls = closing ? 'metric-compare-col-exit' : 'metric-compare-col-enter';
+                const kinds = leafKinds(visualMode(m.id));
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
                 const s = { minWidth: METRIC_COL_WIDTH };
                 const sub = (i: number, base: string) => {
@@ -929,14 +999,27 @@ export function ReportTable({
                   return { cls, style };
                 };
                 const firstBase = strongLeft.has(m.id) ? sepCls : '';
-                if (showFull) {
-                  const a = sub(0, firstBase), b = sub(1, ''), c = sub(2, ''), e = sub(3, '');
+                if (kinds.length > 1) {
+                  const lastIdx = kinds.length - 1;
+                  const KIND_LABEL: Record<string, string> = { current: 'Тек.', comparison: 'Пред.', delta: 'Δ', deltaPct: 'Δ%' };
                   return (
                     <React.Fragment key={m.id}>
-                      <th ref={setLeafRef(`${m.id}:0`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${a.cls}`} style={a.style}>Тек.</th>
-                      <th ref={setLeafRef(`${m.id}:1`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${b.cls} ${compareAnimCls}`} style={b.style}>Пред.</th>
-                      <th ref={setLeafRef(`${m.id}:2`)} className={`text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${c.cls} ${compareAnimCls}`} style={c.style}>Δ</th>
-                      <th ref={setLeafRef(`${m.id}:3`)} className={`relative text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${e.cls} ${compareAnimCls}`} style={e.style}>Δ%{m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}</th>
+                      {kinds.map((kind, idx) => {
+                        const sb = sub(idx, idx === 0 ? firstBase : '');
+                        const animCls = idx === 0 ? '' : subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
+                        const isLast = idx === lastIdx;
+                        return (
+                          <th
+                            key={kind}
+                            ref={setLeafRef(`${m.id}:${idx}`)}
+                            className={`${isLast ? 'relative' : ''} text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${sb.cls} ${animCls}`}
+                            style={sb.style}
+                          >
+                            {KIND_LABEL[kind]}
+                            {isLast && m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
+                          </th>
+                        );
+                      })}
                     </React.Fragment>
                   );
                 }
@@ -961,10 +1044,7 @@ export function ReportTable({
                 </span>
               </td>
               {displayMetrics.map(m => {
-                const mode = resolveMode(m.id);
-                const closing = closingFullIds.has(m.id);
-                const showFull = mode === 'full' || closing;
-                const compareAnimCls = closing ? 'metric-compare-col-exit' : 'metric-compare-col-enter';
+                const kinds = leafKinds(visualMode(m.id));
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
                 const canClick = !!onCellClick && isClickableMetric(m);
                 const clickCls = canClick
@@ -984,16 +1064,27 @@ export function ReportTable({
                 const pinSep = m.id === lastPinnedId
                   ? <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />
                   : null;
-                if (showFull) {
-                  const a = sub(0, firstBase), b = sub(1, ''), c = sub(2, ''), e = sub(3, '');
+                if (kinds.length > 1) {
+                  const lastIdx = kinds.length - 1;
                   return (
                     <React.Fragment key={m.id}>
-                      <td className={`text-center px-2 py-3 tabular-nums ${clickCls} ${a.cls}`} style={a.style} onClick={handleClick}>
-                        {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
-                      </td>
-                      <td className={`text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${b.cls} ${compareAnimCls}`} style={b.style}>—</td>
-                      <td className={`text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${c.cls} ${compareAnimCls}`} style={c.style}>—</td>
-                      <td className={`relative text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${e.cls} ${compareAnimCls}`} style={e.style}>—{pinSep}</td>
+                      {kinds.map((kind, idx) => {
+                        const sb = sub(idx, idx === 0 ? firstBase : '');
+                        const isLast = idx === lastIdx;
+                        if (kind === 'current') {
+                          return (
+                            <td key={kind} className={`text-center px-2 py-3 tabular-nums ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
+                              {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
+                            </td>
+                          );
+                        }
+                        const animCls = subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
+                        return (
+                          <td key={kind} className={`${isLast ? 'relative' : ''} text-center px-2 py-3 tabular-nums text-[var(--color-text-muted)] ${sb.cls} ${animCls}`} style={sb.style}>
+                            —{isLast ? pinSep : null}
+                          </td>
+                        );
+                      })}
                     </React.Fragment>
                   );
                 }

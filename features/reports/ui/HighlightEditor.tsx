@@ -9,6 +9,7 @@ import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 
 const DISPLAY_OPTIONS: { value: ComparisonDisplay; label: string }[] = [
   { value: 'full',    label: 'Полное сравнение' },
+  { value: 'partial', label: 'Частичное (без Δ)' },
   { value: 'current', label: 'Только текущий' },
   { value: 'compact', label: 'Компактное' },
 ];

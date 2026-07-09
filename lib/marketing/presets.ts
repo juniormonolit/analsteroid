@@ -1,6 +1,8 @@
 // Стандартные маркетинговые отчёты (раздел «Маркетинг» в сайдбаре).
 // «Сущность → дрилл-даун по второй сущности»; метрики/режимы — под задачу отчёта.
 
+import type { ComparisonDisplay } from '@/lib/metrics/types';
+
 const BASE_METRICS = [
   'primary_deals_count',
   'primary_reservations_count',
@@ -45,7 +47,7 @@ export interface MarketingPreset {
   sourceDimension: string;
   drilldownDimension: string;
   metricIds: string[];
-  comparisonDisplay?: 'full' | 'current' | 'compact';
+  comparisonDisplay?: ComparisonDisplay;
   drilldownGrouped?: boolean;
 }
 

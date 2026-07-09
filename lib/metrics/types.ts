@@ -7,7 +7,7 @@ export type DealScope = 'primary' | 'repeat' | 'all';
 export type ClientType = 'all' | 'b2c' | 'b2b';
 export type Grouping = 'none' | 'team' | 'branch' | 'total';
 export type ProductGroupMode = 'kc' | 'by_max';
-export type ComparisonDisplay = 'full' | 'current' | 'compact';
+export type ComparisonDisplay = 'full' | 'partial' | 'compact' | 'current';
 export type AccountType = 'managers' | 'logists' | 'all';
 
 export interface MetricFilter {
