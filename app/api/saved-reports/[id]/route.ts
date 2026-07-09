@@ -49,7 +49,7 @@ export async function PUT(
        drilldown_duplicate_metrics = $30, drilldown_metric_ids = $31, deal_fields = $32,
        drilldown_grouped = $33, source_dimension = $34, drilldown_dimension = $35,
        is_shared = $36, shared_section = $37, heatmap_inverted_ids = $38, colorize_metrics = $39,
-       zebra = $40
+       zebra = $40, border_mode = $41
      WHERE id = $1`,
     [
       id,
@@ -86,6 +86,7 @@ export async function PUT(
       body.heatmapInvertedIds ?? [],
       body.colorizeMetrics ?? null,
       body.zebra ?? null,
+      body.borderMode ?? null,
     ]
   );
   return NextResponse.json({ ok: true });

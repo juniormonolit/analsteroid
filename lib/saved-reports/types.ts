@@ -1,4 +1,4 @@
-import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay, AccountType } from '@/lib/metrics/types';
+import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay, AccountType, BorderMode } from '@/lib/metrics/types';
 
 export type PeriodAnchor = 'current' | 'previous';
 export type PeriodUnit = 'day' | 'week' | 'month' | 'quarter' | 'year';
@@ -57,6 +57,10 @@ export interface SavedReport {
   // «Зебра» (правка владельца 09.07): лёгкая полосатость чётных строк ReportTable.
   // undefined/null = false (текущее поведение, вариант C без зебры).
   zebra?: boolean;
+  // Границы таблицы (п.4 правок 09.07, встреча вечер): grid (дефолт, полная сетка) /
+  // horizontal (только горизонтальные, старое поведение) / none. undefined/null = 'grid'
+  // — см. ReportTable/SalesReportPage (preset.borderMode ?? 'grid'), migration 060.
+  borderMode?: BorderMode;
   // Report-wide accent color (hex). Drives accent/bars/heatmap. null/undefined = app default.
   themeAccent?: string | null;
   // Report-wide horizontal alignment of numeric cells. undefined = 'center' (default).

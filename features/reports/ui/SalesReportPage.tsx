@@ -13,7 +13,7 @@ import { DrilldownDrawer } from './DrilldownDrawer';
 import type { DrilldownTarget } from './DrilldownDrawer';
 import { ComparisonPanel } from './ComparisonPanel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
-import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay } from '@/lib/metrics/types';
+import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay, BorderMode } from '@/lib/metrics/types';
 import type { DateRange } from '@/lib/period';
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
@@ -224,6 +224,9 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   // «Зебра» (правка владельца 09.07): лёгкая полосатость чётных строк ReportTable,
   // по умолчанию выкл (текущее поведение, вариант C без зебры).
   const [zebra, setZebra] = useState(false);
+  // «Границы» (п.4 правок 09.07, встреча вечер): дефолт — полная сетка (новое поведение,
+  // до этой правки вертикальных границ между метриками не было вовсе).
+  const [borderMode, setBorderMode] = useState<BorderMode>('grid');
   const [themeAccent, setThemeAccent] = useState<string | null>(null); // legacy, UI выпилен
   const [numberAlign, setNumberAlign] = useState<'left' | 'center' | 'right'>('center');
   const [accountType, setAccountType] = useState<'managers' | 'logists' | 'all'>('managers');
@@ -279,6 +282,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setHeatmapInvertedIds(preset.heatmapInvertedIds ?? []);
     setColorizeMetrics(preset.colorizeMetrics ?? false);
     setZebra(preset.zebra ?? false);
+    setBorderMode(preset.borderMode ?? 'grid');
     setThemeAccent(preset.themeAccent ?? null);
     setNumberAlign(preset.numberAlign ?? 'center');
     setAccountType(preset.accountType ?? 'managers');
@@ -513,9 +517,9 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
       const children = (r as GroupedMergedRow).children;
       if (children) for (const c of children) pushRow(c);
     }
-    const totals: Record<string, number | null> | null = data?.totals ?? null;
+    const totals: Deltas | null = data?.totals ?? null;
     if (totals && grouping !== 'total') {
-      lines.push(['Итого', ...cols.map(m => cell(totals[m.id], m))].join('\t'));
+      lines.push(['Итого', ...cols.map(m => cell(totals[m.id]?.current, m))].join('\t'));
     }
     await navigator.clipboard.writeText(lines.join('\n'));
   }, [orderedMetrics, displayRows, data?.totals, grouping, metricDecimalOverrides, dimensionColumnLabel]);
@@ -668,6 +672,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         onColorizeMetricsChange={setColorizeMetrics}
         zebra={zebra}
         onZebraChange={setZebra}
+        borderMode={borderMode}
+        onBorderModeChange={setBorderMode}
         showProductGroupPicker={true}
         productGroupMode={productGroupMode}
         onProductGroupModeChange={setProductGroupMode}
@@ -713,6 +719,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             heatmapInvertedIds={heatmapInvertedIds}
             colorizeMetrics={colorizeMetrics}
             zebra={zebra}
+            borderMode={borderMode}
             numberAlign={numberAlign}
             pinnedMetricIds={pinnedMetricIds}
             onMetricPinToggle={(id) => setPinnedMetricIds(prev =>
@@ -759,6 +766,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           heatmapInvertedIds={heatmapInvertedIds}
           colorizeMetrics={colorizeMetrics}
           zebra={zebra}
+          borderMode={borderMode}
           numberAlign={numberAlign}
           pinnedMetricIds={pinnedMetricIds}
           columnGroups={columnGroups}
@@ -783,6 +791,8 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
               onColorizeMetricsChange={setColorizeMetrics}
               zebra={zebra}
               onZebraChange={setZebra}
+              borderMode={borderMode}
+              onBorderModeChange={setBorderMode}
             />
           }
           onClose={() => setDrilldown(null)}
@@ -915,6 +925,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           heatmapInvertedIds={heatmapInvertedIds}
           colorizeMetrics={colorizeMetrics}
           zebra={zebra}
+          borderMode={borderMode}
           themeAccent={themeAccent}
           numberAlign={numberAlign}
           accountType={accountType}

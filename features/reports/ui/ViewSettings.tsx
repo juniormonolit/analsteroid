@@ -1,7 +1,7 @@
 'use client';
 import { Type } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
-import type { ComparisonDisplay, AccountType } from '@/lib/metrics/types';
+import type { ComparisonDisplay, AccountType, BorderMode } from '@/lib/metrics/types';
 
 export type Density = 'compact' | 'normal' | 'relaxed';
 export interface ViewPrefs { density: Density; fontScale: number }
@@ -70,6 +70,10 @@ export interface ViewSettingsFieldsProps {
   // По умолчанию выкл (undefined ⇒ false) — текущее поведение (вариант C без зебры).
   zebra?: boolean;
   onZebraChange?: (v: boolean) => void;
+  // «Границы» (п.4 правок 09.07, встреча вечер): grid (дефолт) / horizontal / none —
+  // см. ReportTable.borderMode. undefined ⇒ 'grid'.
+  borderMode?: BorderMode;
+  onBorderModeChange?: (v: BorderMode) => void;
 }
 
 // Содержимое «Вид» — вынесено из-под Popover-обёртки (правка 09.07), чтобы использовать
@@ -83,6 +87,7 @@ export function ViewSettingsFields({
   drilldownGrouped, onDrilldownGroupedChange,
   colorizeMetrics, onColorizeMetricsChange,
   zebra, onZebraChange,
+  borderMode, onBorderModeChange,
 }: ViewSettingsFieldsProps) {
   const fontPct = Math.round(prefs.fontScale * 100);
 
@@ -217,6 +222,18 @@ export function ViewSettingsFields({
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {onBorderModeChange && (
+            <div>
+              <SectionLabel>Границы</SectionLabel>
+              <Seg
+                options={['grid', 'horizontal', 'none'] as BorderMode[]}
+                value={borderMode ?? 'grid'}
+                onChange={onBorderModeChange}
+                labels={{ grid: 'Сетка', horizontal: 'Гориз.', none: 'Без границ' }}
+              />
             </div>
           )}
 

@@ -9,6 +9,10 @@ export type Grouping = 'none' | 'team' | 'branch' | 'total';
 export type ProductGroupMode = 'kc' | 'by_max';
 export type ComparisonDisplay = 'full' | 'partial' | 'compact' | 'current';
 export type AccountType = 'managers' | 'logists' | 'all';
+// Границы таблицы отчёта (п.4 правок 09.07, «Вид» → «Границы»): grid — полная сетка
+// (дефолт, горизонтальные + вертикальные между колонками метрик), horizontal — только
+// горизонтальные (было единственным поведением до этой правки), none — без границ.
+export type BorderMode = 'grid' | 'horizontal' | 'none';
 
 export interface MetricFilter {
   field: string;
@@ -59,9 +63,19 @@ export interface ReportRow {
   metrics: Record<string, number | null>;
 }
 
+// Итого-агрегат метрики: тот же состав полей, что и per-row deltas (current/comparison/
+// delta/deltaPct) — правка 09.07 (баг «Итого теряет прошлый период в сравнении», см.
+// app/api/reports/run/route.ts).
+export interface TotalsMetricValue {
+  current: number | null;
+  comparison: number | null;
+  delta: number | null;
+  deltaPct: number | null;
+}
+
 export interface ReportResult {
   rows: ReportRow[];
-  totals: Record<string, number | null> | null;
+  totals: Record<string, TotalsMetricValue> | null;
   meta: {
     period: { from: string; to: string };
     comparisonPeriod: { from: string; to: string };

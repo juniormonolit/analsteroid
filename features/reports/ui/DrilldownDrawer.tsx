@@ -6,7 +6,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { DateRange } from '@/lib/period';
 import { recomputeComparison } from '@/lib/period';
-import type { Metric, ComparisonDisplay, DealScope, ClientType, ProductGroupMode, AccountType } from '@/lib/metrics/types';
+import type { Metric, ComparisonDisplay, DealScope, ClientType, ProductGroupMode, AccountType, TotalsMetricValue, BorderMode } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
@@ -103,6 +103,8 @@ interface Props {
   // «Зебра» (правка владельца 09.07): та же настройка «Вид», что и в основном отчёте
   // (общее состояние SalesReportPage) — мини-отчёт рендерится тем же ReportTable.
   zebra?: boolean;
+  // «Границы» (п.4 правок 09.07) — та же общая настройка «Вид», что и в основном отчёте.
+  borderMode?: BorderMode;
   numberAlign?: 'left' | 'center' | 'right';
   pinnedMetricIds?: string[];
   columnGroups?: { name: string; metricIds: string[] }[];
@@ -462,7 +464,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
 
   const metrics: Metric[] = runData?.metrics ?? [];
   const rawRows: RowDeltas[] = runData?.rows ?? [];
-  const totals: Record<string, number | null> | null = runData?.totals ?? null;
+  const totals: Record<string, TotalsMetricValue> | null = runData?.totals ?? null;
   const deals: Deal[] = dealData?.deals ?? [];
 
   // Ключ бакета сделки = dimensionId (или dimensionName для товарных групп) строки
@@ -547,6 +549,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
       heatmapInvertedIds={props.heatmapInvertedIds}
       colorizeMetrics={props.colorizeMetrics}
       zebra={props.zebra}
+      borderMode={props.borderMode}
       numberAlign={props.numberAlign}
       pinnedMetricIds={props.pinnedMetricIds}
       columnGroups={props.columnGroups}

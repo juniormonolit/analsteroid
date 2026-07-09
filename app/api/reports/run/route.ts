@@ -274,9 +274,25 @@ export async function POST(req: NextRequest) {
   // Apply grouping
   const grouped = applyGrouping(currentRows, grouping, allMetrics);
 
-  // Totals
-  const totalsRaw = computeTotals(currentRows, allMetrics);
-  const totals = computeCalculated(totalsRaw, calculatedMetrics);
+  // Totals: агрегат текущего периода — «как раньше» (сумма collected/external, calculated
+  // пересчитан из сумм — см. computeTotals). Баг 09.07 (собрание, п.3/п.6): строка «Итого»
+  // в развёрнутом сравнении теряла «Пред.»/Δ/Δ% — потому что comparison-период вообще не
+  // агрегировался, значения неоткуда было взять. Чиним симметрично: считаем totals ТЕМ ЖЕ
+  // способом (computeTotals) по compRows, затем — тот же computeDelta, что и по строкам.
+  // Не-суммируемые метрики (проценты/CR) корректны в обеих колонках одинаково: они не
+  // усредняются построчно, а пересчитываются по формуле из суммированных компонентов
+  // (см. computeTotals → computeCalculated) — ровно так же для «Тек.» и для «Пред.».
+  const totalsCurrentRaw = computeTotals(currentRows, allMetrics);
+  const totalsCurrent = computeCalculated(totalsCurrentRaw, calculatedMetrics);
+  const totalsComparisonRaw = computeTotals(compRows, allMetrics);
+  const totalsComparison = computeCalculated(totalsComparisonRaw, calculatedMetrics);
+  const totalIds = new Set([...Object.keys(totalsCurrent), ...Object.keys(totalsComparison)]);
+  const totals: Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }> = {};
+  for (const id of totalIds) {
+    const current = totalsCurrent[id] ?? null;
+    const comparison = totalsComparison[id] ?? null;
+    totals[id] = { current, comparison, ...computeDelta(current, comparison) };
+  }
 
   return NextResponse.json({
     rows: mergedRows,

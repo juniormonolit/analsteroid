@@ -1,7 +1,7 @@
 'use client';
 import { useRef, useState } from 'react';
 import { RefreshCw, Bookmark, Copy, Check, Scale, SlidersHorizontal } from 'lucide-react';
-import type { DealScope, ClientType, ProductGroupMode, ComparisonDisplay, AccountType } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ProductGroupMode, ComparisonDisplay, AccountType, BorderMode } from '@/lib/metrics/types';
 import { type ViewPrefs } from './ViewSettings';
 import { countActiveFilters } from './FiltersMenu';
 import { ReportSettingsPanel } from './ReportSettingsPanel';
@@ -36,6 +36,9 @@ interface Props {
   // живёт в объединённой панели «Настройки отчёта» → «Вид».
   zebra?: boolean;
   onZebraChange?: (v: boolean) => void;
+  // «Границы» (п.4 правок 09.07): grid/horizontal/none — живёт в той же панели «Вид».
+  borderMode?: BorderMode;
+  onBorderModeChange?: (v: BorderMode) => void;
   // «Обычная» (п.3а спеки): скрыть попап «Фильтры», «Вид» и кнопку «Сохранить» —
   // остаются только «Копировать» и «Обновить».
   basic?: boolean;
@@ -58,6 +61,7 @@ export function ReportToolbar({
   drilldownGrouped, onDrilldownGroupedChange,
   colorizeMetrics, onColorizeMetricsChange,
   zebra, onZebraChange,
+  borderMode, onBorderModeChange,
   basic = false,
   onOpenComparison, comparisonCount = 0,
 }: Props) {
@@ -118,6 +122,8 @@ export function ReportToolbar({
           onColorizeMetricsChange={onColorizeMetricsChange}
           zebra={zebra}
           onZebraChange={onZebraChange}
+          borderMode={borderMode}
+          onBorderModeChange={onBorderModeChange}
           onClose={() => setShowSettings(false)}
         />
       )}

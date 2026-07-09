@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import type { SavedReportInput, RelativePeriod, ComparisonMode, PeriodMode, PeriodAnchor, PeriodUnit } from '@/lib/saved-reports/types';
-import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay } from '@/lib/metrics/types';
+import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay, BorderMode } from '@/lib/metrics/types';
 import type { DateRange } from '@/lib/period';
 import { format } from 'date-fns';
 
@@ -43,6 +43,7 @@ interface Props {
   heatmapInvertedIds?: string[];
   colorizeMetrics?: boolean;
   zebra?: boolean;
+  borderMode?: BorderMode;
   themeAccent: string | null;
   numberAlign: 'left' | 'center' | 'right';
   accountType: 'managers' | 'logists' | 'all';
@@ -66,7 +67,7 @@ export function SaveReportModal({
   metricDisplayModes, comparisonThreshold,
   productGroupMode, departmentIds, highlights,
   pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides,
-  accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, themeAccent, numberAlign, accountType,
+  accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, themeAccent, numberAlign, accountType,
   drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped,
   sourceDimension, drilldownDimension,
   sortBy, sortDir, columnGroups,
@@ -137,6 +138,7 @@ export function SaveReportModal({
       heatmapInvertedIds,
       colorizeMetrics,
       zebra,
+      borderMode,
       themeAccent,
       numberAlign,
       accountType,

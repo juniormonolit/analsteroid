@@ -2,9 +2,9 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter } from 'lucide-react';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
-import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
+import type { Metric, Grouping, ComparisonDisplay, BorderMode } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
-import { mixHex } from '@/lib/colors/google-sheets-palette';
+import { mixHex, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 import { matchesCondition, resolveThresholdZone, gradientZoneFromRank, type MetricFilters, type ZoneInfo } from '@/lib/reports/metricFilter';
 
 // Ручной режим подсветки значений (п.9 спеки analsteroid-edits-spec-agreed-20260708.md):
@@ -47,6 +47,10 @@ function nextQuickMode(mode: ComparisonDisplay): ComparisonDisplay {
 }
 
 // ── Compact trend arrow ───────────────────────────────────────────────────────
+// Тултип (пред./Δ/Δ%) правка 09.07: раньше title висел на самой стрелке — наводить
+// приходилось буквально на ▲/▼ (несколько пикселей). Текст тултипа теперь считает и
+// вешает вызывающая сторона (компактная ячейка, см. ниже) на весь inline-блок
+// (число + стрелка), TrendArrow — только сама иконка, без своего title.
 function TrendArrow({ deltaPct, delta, metric, threshold }: {
   deltaPct: number | null;
   delta: number | null;
@@ -54,15 +58,20 @@ function TrendArrow({ deltaPct, delta, metric, threshold }: {
   threshold: number;
 }) {
   if (deltaPct === null) return null;
-  const tooltip = `${formatDelta(delta, metric.dataType, metric.decimalPlaces)} / ${formatDeltaPct(deltaPct)}`;
-
   if (deltaPct > threshold) {
-    return <span title={tooltip}><ArrowUp size={11} className="inline text-[var(--color-positive)] flex-shrink-0" /></span>;
+    return <ArrowUp size={11} className="inline text-[var(--color-positive)] flex-shrink-0" />;
   }
   if (deltaPct < -threshold) {
-    return <span title={tooltip}><ArrowDown size={11} className="inline text-[var(--color-negative)] flex-shrink-0" /></span>;
+    return <ArrowDown size={11} className="inline text-[var(--color-negative)] flex-shrink-0" />;
   }
-  return <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0" title={tooltip}>~</span>;
+  return <span className="text-[10px] text-[var(--color-text-muted)] flex-shrink-0">~</span>;
+}
+
+// Текст тултипа компактного бейджа: пред./Δ/Δ% — вынесен из TrendArrow, чтобы вешать
+// его на весь бейдж (число + стрелка), не только на саму иконку стрелки.
+function compactTooltip(comparison: number | null, delta: number | null, deltaPct: number | null, metric: Metric): string | undefined {
+  if (deltaPct === null) return undefined;
+  return `пред. ${formatValue(comparison, metric.dataType, metric.decimalPlaces)} · ${formatDelta(delta, metric.dataType, metric.decimalPlaces)} / ${formatDeltaPct(deltaPct)}`;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -83,7 +92,10 @@ export interface RowDeltas {
 
 interface Props {
   rows: RowDeltas[];
-  totals: Record<string, number | null> | null;
+  // Итого-агрегат: та же форма, что и per-row deltas (current/comparison/delta/deltaPct) —
+  // правка 09.07 (баг «Итого теряет прошлый период в развёрнутом сравнении»,
+  // см. app/api/reports/run/route.ts).
+  totals: Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }> | null;
   metrics: Metric[];
   comparisonDisplay: ComparisonDisplay;
   metricDisplayModes?: Record<string, ComparisonDisplay>;
@@ -119,6 +131,11 @@ interface Props {
   // «Настройки отчёта» → «Вид», по умолчанию выкл (см. --color-report-zebra в
   // globals.css). Группа-строки (isGroupRow) и итоговая строка не полосатятся.
   zebra?: boolean;
+  // Границы таблицы (п.4 правок 09.07/встреча вечер): «grid» (дефолт, полная сетка —
+  // горизонтальные + вертикальные между колонками метрик) / «horizontal» (только
+  // горизонтальные — было единственным поведением до этой правки) / «none» (без границ).
+  // Persist как остальные опции вида (см. SavedReport.borderMode, migration 060).
+  borderMode?: BorderMode;
   numberAlign?: 'left' | 'center' | 'right';
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
@@ -163,6 +180,7 @@ export function ReportTable({
   heatmapInvertedIds = [],
   colorizeMetrics = false,
   zebra = false,
+  borderMode = 'grid',
   numberAlign = 'center',
   sortBy: sortByProp,
   sortDir: sortDirProp,
@@ -332,14 +350,13 @@ export function ReportTable({
     return <span className="absolute top-0 left-0 right-0 h-[3px] pointer-events-none" style={{ backgroundColor: m.color }} />;
   }
 
-  // Accent: bold + tinted (opaque, so it also reads correctly under sticky pins) column.
+  // Accent (правка 09.07, встреча): заливка убрана целиком (была color-mix-заливка
+  // ~14% accent) — «Акцент» теперь ТОЛЬКО полужирные значения + свои более толстые/
+  // тёмные вертикальные границы колонки (см. accentEdgeCls ниже), работает в любом
+  // режиме «Границ» (borderMode), не только «Сетка».
   const accentSet = new Set(accentedMetricIds);
   function accentStyle(metricId: string): React.CSSProperties {
-    // Opaque tint derived from --color-accent (mixed with white), so it recolors with the
-    // report theme AND stays opaque under sticky pinned columns.
-    return accentSet.has(metricId)
-      ? { backgroundColor: 'color-mix(in srgb, var(--color-accent) 14%, white)', fontWeight: 600 }
-      : {};
+    return accentSet.has(metricId) ? { fontWeight: 600 } : {};
   }
 
   // Per-column stats over the visible LEAF data rows (group children when grouped, else the
@@ -381,10 +398,20 @@ export function ReportTable({
   // Красит БЕЙДЖ вокруг значения (HlValue), тем же механизмом, что и ручные пороги —
   // не заливает фон ячейки. Раньше заливался td.backgroundColor (heatStyle) — визуально
   // выглядело как окраска всей ячейки, а не значения; порогово-градиентная подсветка
-  // теперь единообразна (см. hlColor ниже). Насыщенность/светлота (70%/50%) подобраны
-  // так, чтобы после color-mix(68%, white) в HlValue получался такой же пастельный
-  // бейдж, как у ручных порогов (там исходные цвета — насыщенные тона Google Sheets).
+  // теперь единообразна (см. hlColor ниже).
   const heatInvSet = new Set(heatmapInvertedIds);
+  // Опорные цвета градиента (правка 09.07, п.8 встречи): раньше здесь был насыщенный
+  // hsl(t*120, 70%, 50%) — визуально гораздо ярче/темнее ручных порогов (у тех исходный
+  // цвет уже пастельный — тон из GS_TINT_ROWS[4], подмес 80% к белому, ДО повторного
+  // color-mix(68%, white) в HlValue). Приводим градиент к ТОЙ ЖЕ гамме: интерполяция
+  // красный→жёлтый→зелёный по тем же самым опорным пастельным тонам, что и дефолтные
+  // цвета ручных порогов (см. DEFAULT_STOP_COLORS в HighlightEditor.tsx — [1]/[3]/[4] той
+  // же строки палитры). Зоны фильтра по цвету (metricFilter.gradientZoneFromRank) читают
+  // РАНГ t напрямую и этой правки не касаются — границы зон не меняются, меняется только
+  // то, каким цветом красится сам бейдж.
+  const GRADIENT_RED    = GS_TINT_ROWS[4][1];
+  const GRADIENT_YELLOW = GS_TINT_ROWS[4][3];
+  const GRADIENT_GREEN  = GS_TINT_ROWS[4][4];
   // Ранговый t (0..1, УЖЕ с учётом инверсии heatmapInvertedIds) — вынесен из heatColor
   // отдельной функцией, т.к. нужен не только для цвета бейджа, но и для зоны фильтра/
   // сортировки по цвету (см. zoneForValue ниже, п.1/п.3 брифа «Фильтр и сортировка»).
@@ -406,7 +433,13 @@ export function ReportTable({
   }
   function heatColor(metricId: string, value: number | null): string | undefined {
     const t = heatRankT(metricId, value);
-    return t === undefined ? undefined : `hsl(${Math.round(t * 120)} 70% 50%)`;
+    if (t === undefined) return undefined;
+    // Кусочная интерполяция по тем же трём опорным пастельным точкам, что и зоны
+    // фильтра (0 / 0.5 / 1 = красный/жёлтый/зелёный) — только цвет непрерывный, не
+    // квантованный, чтобы «выброс» плавно выделялся, как и раньше.
+    return t <= 0.5
+      ? mixHex(GRADIENT_RED, GRADIENT_YELLOW, t / 0.5)
+      : mixHex(GRADIENT_YELLOW, GRADIENT_GREEN, (t - 0.5) / 0.5);
   }
 
   // Зона значения метрики (для фильтра по цвету #1 и сортировки по цвету #3): градиент —
@@ -597,7 +630,7 @@ export function ReportTable({
 
   function renderMetricCells(row: RowDeltas, clickable: boolean, stickyBg: string) {
     const alignStyle: React.CSSProperties = { textAlign: numberAlign };
-    return displayMetrics.map(m => {
+    return displayMetrics.map((m, metricIdx) => {
       const d = row.deltas?.[m.id];
       const mode = resolveMode(m.id);
       // Плавное сворачивание/разворачивание: vMode — структура, которую рисуем сейчас
@@ -662,6 +695,9 @@ export function ReportTable({
         // рендер по составу kinds (порядок задан в leafKinds), последняя под-колонка
         // всегда deltaPct (несёт pinBar).
         const lastIdx = kinds.length - 1;
+        // Границы «между колонками метрик» (п.4) + акцент (п.5) — на первой/последней
+        // под-колонке метрики (не между Пред./Тек./Δ/Δ% ВНУТРИ одной метрики).
+        const edgeCls = (idx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : ''} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
         return (
           <React.Fragment key={m.id}>
             {kinds.map((kind, idx) => {
@@ -670,7 +706,7 @@ export function ReportTable({
                 return (
                   <td
                     key={kind}
-                    className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
+                    className={`relative text-center px-2 py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${clickCls} ${p.className}`}
                     style={{ ...p.style, ...accent, ...alignStyle }}
                     onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
                   >
@@ -681,21 +717,21 @@ export function ReportTable({
               }
               if (kind === 'comparison') {
                 return (
-                  <td key={kind} className={`text-center px-2 py-[var(--row-py)] ${cellBase} text-[var(--color-text-muted)] ${p.className} ${subColAnimCls(m.id, 'comparison')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                  <td key={kind} className={`text-center px-2 py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} text-[var(--color-text-muted)] ${p.className} ${subColAnimCls(m.id, 'comparison')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
                     {formatValue(d?.comparison ?? null, m.dataType, decFor(m))}
                   </td>
                 );
               }
               if (kind === 'delta') {
                 return (
-                  <td key={kind} className={`text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'delta')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                  <td key={kind} className={`text-center px-2 py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'delta')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
                     {formatDelta(d?.delta ?? null, m.dataType, decFor(m))}
                   </td>
                 );
               }
               // deltaPct — всегда последняя под-колонка, несёт разделитель закреплённого блока
               return (
-                <td key={kind} className={`relative text-center px-2 py-[var(--row-py)] ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'deltaPct')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                <td key={kind} className={`relative text-center px-2 py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'deltaPct')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
                   {formatDeltaPct(d?.deltaPct ?? null)}{pinBar}
                 </td>
               );
@@ -709,13 +745,19 @@ export function ReportTable({
         return (
           <td
             key={m.id}
-            className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
+            className={`relative text-center px-2 py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
             style={{ ...p.style, ...accent, ...alignStyle }}
             onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
           >
             {pinBar}
             <BarBg metricId={m.id} value={d?.current ?? null} />
-            <span className="relative inline-flex items-center justify-center">
+            {/* Ховер-зона тултипа (пред./Δ/Δ%) — правка 09.07: раньше title сидел только на
+                стрелке (span 11px), навести приходилось буквально в стрелку. Теперь title —
+                на всём inline-блоке (число + стрелка), наводить можно в любую точку бейджа. */}
+            <span
+              className="relative inline-flex items-center justify-center"
+              title={compactTooltip(d?.comparison ?? null, d?.delta ?? null, d?.deltaPct ?? null, m)}
+            >
               <HlValue value={d?.current ?? null} />
               <span className="w-4 flex-shrink-0 flex items-center justify-center">
                 <TrendArrow
@@ -735,7 +777,7 @@ export function ReportTable({
       return (
         <td
           key={m.id}
-          className={`relative text-center px-2 py-[var(--row-py)] ${strongLeft.has(m.id) ? sepCls : ''} ${cellBase} ${clickCls} ${p.className}`}
+          className={`relative text-center px-2 py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
           style={{ ...p.style, ...accent, ...alignStyle }}
           onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
         >
@@ -788,8 +830,13 @@ export function ReportTable({
       ? 'bg-[var(--color-bg-surface)]'
       : `${rowBaseBg} group-hover:bg-[var(--color-table-row-hover)]`;
 
+    // Горизонтальный разделитель строк — часть режима «Границ» (borderMode, п.4): виден
+    // в 'grid'/'horizontal' (последнее — «текущее поведение» до этой правки), скрыт в
+    // 'none'. Цвет/жирность строки не меняем — эти два режима и раньше были одинаковы
+    // визуально (только новый третий режим «Без границ» — новое поведение).
     const rowCls = [
-      'group border-b',
+      'group',
+      borderMode !== 'none' ? 'border-b' : '',
       isGroupRow
         ? 'border-[var(--color-border)] bg-[var(--color-bg-surface)] font-semibold text-[var(--color-text)]'
         : `report-row border-[var(--color-table-row-border)] ${rowBaseBg}`,
@@ -882,6 +929,37 @@ export function ReportTable({
   }
   const sepCls = 'border-l border-l-[var(--color-border)]';
 
+  // ── Вертикальные границы между колонками метрик (п.4 правок 09.07, «Границы» в
+  // «Вид») ─────────────────────────────────────────────────────────────────────
+  // borderMode='grid' (дефолт) — тонкая линия #efefef (--color-table-row-border) МЕЖДУ
+  // КАЖДОЙ ПАРОЙ соседних метрик («между колонками метрик» по формулировке брифа, не
+  // между Пред./Тек./Δ/Δ% внутри одной метрики). Первая метрика в displayMetrics левую
+  // границу не получает — эту роль уже играет border-r колонки измерения. На стыке
+  // pinned→scroll границу не дублируем — там уже есть persistent-разделитель
+  // (lastPinnedId, overlay-span ниже), иначе будет двойная линия.
+  function needsGridDivider(metricIdx: number): boolean {
+    if (borderMode !== 'grid' || metricIdx === 0) return false;
+    const prev = displayMetrics[metricIdx - 1];
+    const prevPinned = pinnedMetricIds.includes(prev.id);
+    const curPinned = pinnedMetricIds.includes(displayMetrics[metricIdx].id);
+    if (prevPinned && !curPinned) return false;
+    return true;
+  }
+  // Левая граница метрики: акцент (толще/темнее, РАБОТАЕТ В ЛЮБОМ borderMode — п.5
+  // правок, «Акцент колонки» по-новому) > группа (существующий sepCls/strongLeft,
+  // отдельная фича) > обычная сетка.
+  function leftEdgeCls(metricIdx: number, m: Metric): string {
+    if (accentSet.has(m.id)) return 'border-l-2 border-l-[var(--color-border-strong)]';
+    if (strongLeft.has(m.id)) return sepCls;
+    if (needsGridDivider(metricIdx)) return 'border-l border-l-[var(--color-table-row-border)]';
+    return '';
+  }
+  // Правая граница метрики: только у акцентной — своя толстая граница колонки с ОБЕИХ
+  // сторон, не зависящая от того, есть ли делитель у соседа справа (п.5).
+  function rightEdgeCls(m: Metric): string {
+    return accentSet.has(m.id) ? 'border-r-2 border-r-[var(--color-border-strong)]' : '';
+  }
+
   // Вертикальный паддинг строки (правка владельца 09.07): «нормальная» плотность
   // должна давать РОВНО 30px высоты строки (было выше из-за py-паддингов) — при
   // line-height text-sm (14px × 1.42857 ≈ 20px) паддинг 5px сверху/снизу даёт
@@ -953,7 +1031,7 @@ export function ReportTable({
                 )}
               </div>
             </th>
-            {displayMetrics.map((m) => {
+            {displayMetrics.map((m, metricIdx) => {
               const mode = resolveMode(m.id);
               const isPinnedCol = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
               const span = colSpanFor(m.id);
@@ -977,7 +1055,7 @@ export function ReportTable({
                     if (draggedMetricId && draggedMetricId !== m.id) onMetricReorder(draggedMetricId, m.id);
                     setDraggedMetricId(null); setDragOverMetricId(null);
                   } : undefined}
-                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group ${strongLeft.has(m.id) ? sepCls : ''} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''} ${draggedMetricId === m.id ? 'opacity-40' : ''} ${dragOverMetricId === m.id && draggedMetricId !== m.id ? 'border-l-2 border-l-[var(--color-accent)]' : ''}`}
+                  className={`relative text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] bg-[var(--color-table-header)] group ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${isPinnedCol ? 'sticky z-40' : ''} ${m.id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''} ${draggedMetricId === m.id ? 'opacity-40' : ''} ${dragOverMetricId === m.id && draggedMetricId !== m.id ? 'border-l-2 border-l-[var(--color-accent)]' : ''}`}
                   style={{ ...thSize, ...colorizeStyle(m), ...accentStyle(m.id) }}
                 >
                   {colorizeBar(m)}
@@ -1064,7 +1142,7 @@ export function ReportTable({
           {hasAnyWideMode && (
             <tr className="bg-[var(--color-table-header)]">
               <th className="sticky left-0 z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" />
-              {displayMetrics.map(m => {
+              {displayMetrics.map((m, metricIdx) => {
                 const kinds = leafKinds(visualMode(m.id));
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
                 const s = { minWidth: METRIC_COL_WIDTH };
@@ -1073,14 +1151,14 @@ export function ReportTable({
                   const style = { ...(isPinned ? { ...s, left: leafLeft(m.id, i) } : s), ...colorizeStyle(m), ...accentStyle(m.id) };
                   return { cls, style };
                 };
-                const firstBase = strongLeft.has(m.id) ? sepCls : '';
+                const edgeBase = (idx: number, lastIdx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : ''} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
                 if (kinds.length > 1) {
                   const lastIdx = kinds.length - 1;
                   const KIND_LABEL: Record<string, string> = { current: 'Тек.', comparison: 'Пред.', delta: 'Δ', deltaPct: 'Δ%' };
                   return (
                     <React.Fragment key={m.id}>
                       {kinds.map((kind, idx) => {
-                        const sb = sub(idx, idx === 0 ? firstBase : '');
+                        const sb = sub(idx, edgeBase(idx, lastIdx));
                         const animCls = idx === 0 ? '' : subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
                         const isLast = idx === lastIdx;
                         return (
@@ -1098,7 +1176,7 @@ export function ReportTable({
                     </React.Fragment>
                   );
                 }
-                const one = sub(0, firstBase);
+                const one = sub(0, edgeBase(0, 0));
                 return <th key={m.id} ref={setLeafRef(`${m.id}:0`)} className={`relative border-b border-[var(--color-border)] ${one.cls}`} style={one.style}>{m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}</th>;
               })}
             </tr>
@@ -1122,7 +1200,7 @@ export function ReportTable({
                   Итого
                 </span>
               </td>
-              {displayMetrics.map(m => {
+              {displayMetrics.map((m, metricIdx) => {
                 const kinds = leafKinds(visualMode(m.id));
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
                 const canClick = !!onCellClick && isClickableMetric(m);
@@ -1139,38 +1217,58 @@ export function ReportTable({
                   const style: React.CSSProperties = { ...(isPinned ? { left: leafLeft(m.id, i) } : {}), backgroundColor: TOTALS_BG, textAlign: numberAlign };
                   return { cls, style };
                 };
-                const firstBase = strongLeft.has(m.id) ? sepCls : '';
+                const edgeBase = (idx: number, lastIdx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : ''} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
                 const pinSep = m.id === lastPinnedId
                   ? <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />
                   : null;
+                // Значения «Итого» по этой метрике (правка 09.07: раньше comparison/delta/
+                // deltaPct тут были жёстко «—» — итог по прошлому периоду не агрегировался
+                // вообще, см. route.ts). Считаются тем же способом, что и «Тек.» (computeTotals),
+                // просто по comparison-строкам — корректно и для несуммируемых метрик (%/CR).
+                const tv = totals[m.id];
                 if (kinds.length > 1) {
                   const lastIdx = kinds.length - 1;
                   return (
                     <React.Fragment key={m.id}>
                       {kinds.map((kind, idx) => {
-                        const sb = sub(idx, idx === 0 ? firstBase : '');
+                        const sb = sub(idx, edgeBase(idx, lastIdx));
                         const isLast = idx === lastIdx;
+                        const animCls = idx === 0 ? '' : subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
                         if (kind === 'current') {
                           return (
                             <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
-                              {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
+                              {formatValue(tv?.current ?? null, m.dataType, decFor(m))}
                             </td>
                           );
                         }
-                        const animCls = subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
+                        if (kind === 'comparison') {
+                          return (
+                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums text-[var(--color-text-muted)] ${sb.cls} ${animCls}`} style={sb.style}>
+                              {formatValue(tv?.comparison ?? null, m.dataType, decFor(m))}
+                            </td>
+                          );
+                        }
+                        if (kind === 'delta') {
+                          return (
+                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums ${(tv?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (tv?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${sb.cls} ${animCls}`} style={sb.style}>
+                              {formatDelta(tv?.delta ?? null, m.dataType, decFor(m))}
+                            </td>
+                          );
+                        }
+                        // deltaPct — всегда последняя под-колонка, несёт разделитель pinned-блока
                         return (
-                          <td key={kind} className={`${isLast ? 'relative' : ''} text-center px-2 py-[var(--row-py)] tabular-nums text-[var(--color-text-muted)] ${sb.cls} ${animCls}`} style={sb.style}>
-                            —{isLast ? pinSep : null}
+                          <td key={kind} className={`relative text-center px-2 py-[var(--row-py)] tabular-nums ${(tv?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (tv?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${sb.cls} ${animCls}`} style={sb.style}>
+                            {formatDeltaPct(tv?.deltaPct ?? null)}{isLast ? pinSep : null}
                           </td>
                         );
                       })}
                     </React.Fragment>
                   );
                 }
-                const one = sub(0, firstBase);
+                const one = sub(0, edgeBase(0, 0));
                 return (
                   <td key={m.id} className={`relative text-center px-3 py-[var(--row-py)] tabular-nums ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
-                    {formatValue(totals[m.id] ?? null, m.dataType, decFor(m))}
+                    {formatValue(tv?.current ?? null, m.dataType, decFor(m))}
                     {pinSep}
                   </td>
                 );
