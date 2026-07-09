@@ -9,6 +9,7 @@ import { recomputeComparison } from '@/lib/period';
 import type { Metric, ComparisonDisplay, DealScope, ClientType, ProductGroupMode, AccountType } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
+import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
@@ -121,8 +122,60 @@ function fmtMoney(v: number | string | null) {
 
 type DealSort = { key: string; dir: 'asc' | 'desc' } | null;
 
+// ── Стадия сделки (полоска слева в списке + дефолтная сортировка, правка владельца) ──
+// Тип стадии, используемый И для цвета полоски, И для группировки при дефолтной
+// сортировке — источник истины один (см. dealStage ниже).
+type DealStage = 'shipment' | 'sale' | 'reservationConfirmed' | 'reservation' | 'inProgress' | 'refusal';
+
+// Определение ТЕКУЩЕЙ стадии сделки по датам milestone-колонок (Бронь/Подтв./
+// Продажа/Отгрузка/Проиграна). Решение владельца: проигрыш терминален — красится
+// красным, даже если до отказа была бронь/подтверждение, поэтому проверяется
+// первым; иначе — максимальная достигнутая milestone, сверху вниз.
+function dealStage(deal: Deal): DealStage {
+  if (deal.lost_at) return 'refusal';
+  if (deal.delivered_at) return 'shipment';
+  if (deal.sold_at) return 'sale';
+  if (deal.confirmed_at) return 'reservationConfirmed';
+  if (deal.reserved_at) return 'reservation';
+  return 'inProgress';
+}
+
+// Цвет полоски строки — та же палитра, что у автоцвета метрик (entity-colors.ts),
+// НЕ хардкодим новые оттенки. «В работе» — без цвета (null → полоска не рисуется).
+function dealStageColor(deal: Deal): string | null {
+  const stage = dealStage(deal);
+  if (stage === 'inProgress') return null;
+  return ENTITY_COLOR[stage];
+}
+
+// Порядок групп для ДЕФОЛТНОЙ сортировки списка сделок (когда сортировка по
+// колонке не выбрана юзером): Отгрузки → Продажи → Подтв. брони → Брони →
+// В работе → Отказы (отказы — в самый низ, несмотря на то что при определении
+// стадии выше «проигрыш» проверяется первым — это два разных порядка).
+const DEAL_STAGE_SORT_ORDER: Record<DealStage, number> = {
+  shipment: 0,
+  sale: 1,
+  reservationConfirmed: 2,
+  reservation: 3,
+  inProgress: 4,
+  refusal: 5,
+};
+
+// Дефолтный порядок (сортировка по колонке не выбрана): группы по стадии сверху
+// вниз, внутри группы — по сумме убыванием.
+function sortDealsDefault(arr: Deal[]): Deal[] {
+  return [...arr].sort((a, b) => {
+    const ga = DEAL_STAGE_SORT_ORDER[dealStage(a)];
+    const gb = DEAL_STAGE_SORT_ORDER[dealStage(b)];
+    if (ga !== gb) return ga - gb;
+    return (Number(b.amount) || 0) - (Number(a.amount) || 0);
+  });
+}
+
 function sortDealsBy(arr: Deal[], dealSort: DealSort): Deal[] {
-  if (!dealSort) return arr;
+  // Ручная сортировка по клику на заголовок колонки ПЕРЕКРЫВАЕТ дефолтный
+  // порядок по стадии; без неё — группировка по стадии (см. sortDealsDefault).
+  if (!dealSort) return sortDealsDefault(arr);
   const def = DEAL_FIELDS.find(f => f.key === dealSort.key);
   const m = dealSort.dir === 'asc' ? 1 : -1;
   return [...arr].sort((a, b) => {
@@ -185,12 +238,22 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
           </tr>
         </thead>
         <tbody>
-          {deals.map((deal, i) => (
+          {deals.map((deal, i) => {
+            const stageColor = dealStageColor(deal);
+            return (
             <tr key={deal.deal_id}
                 onClick={onDealOpen ? () => onDealOpen(deal.deal_id) : undefined}
                 title={onDealOpen ? 'Открыть карточку сделки' : undefined}
                 className={`border-t border-[var(--color-border)] hover:bg-[var(--color-table-row-hover)] ${onDealOpen ? 'cursor-pointer' : ''} ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''}`}>
-              <td className="px-5 py-1.5 text-[var(--color-text-muted)] whitespace-nowrap">{deal.deal_id}</td>
+              <td className="px-5 py-1.5 text-[var(--color-text-muted)] whitespace-nowrap">
+                {/* Полоска слева по текущей стадии сделки (тот же приём, что у строки
+                    «Итого» основного отчёта — w-1 h-4 rounded-full); «в работе» — без
+                    цвета, полоска прозрачна (сознательно, см. dealStageColor). */}
+                <span className="flex items-center gap-1.5">
+                  <span className="w-1 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: stageColor ?? 'transparent' }} />
+                  {deal.deal_id}
+                </span>
+              </td>
               {cols.map(c => (
                 <td key={c.key}
                     className={`px-3 py-1.5 whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[var(--color-text)]' : ''}`}>
@@ -199,7 +262,8 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
               ))}
               <td className="p-0" />
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
