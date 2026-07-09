@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { X, ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 
 interface DeptNode {
   id: string;
@@ -139,7 +140,7 @@ export function ExportSlide({ onClose }: Props) {
 
   return (
     <>
-      <div className={`fixed inset-0 z-40 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`} onClick={requestClose} />
+      <SlideBackdrop closing={closing} onClick={requestClose} />
       <div className={`fixed inset-y-0 right-0 z-50 w-80 max-w-[94vw] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <PanelCloseTab onClick={requestClose} />
         {/* Header */}

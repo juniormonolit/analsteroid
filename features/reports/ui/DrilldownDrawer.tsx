@@ -14,6 +14,7 @@ import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
 import { PeriodRangeControls, DepartmentPicker } from './FilterBar';
 import { FiltersMenu } from './FiltersMenu';
 
@@ -559,9 +560,10 @@ export function DrilldownDrawer(props: Props) {
   const { closing, requestClose } = useSlideClose(onClose);
   return (
     <div className="fixed inset-0 z-50 flex">
-      {/* Полоска-подложка для закрытия — только там, где есть место (sm+) */}
+      {/* Полоска-подложка для закрытия — только там, где есть место (sm+). Цвет/прозрачность
+          — общий эталон затемнения (SLIDE_BACKDROP_BG, правка 09.07). */}
       <div
-        className={`hidden sm:block w-[10%] shrink-0 bg-black/40 cursor-pointer transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
+        className={`hidden sm:block w-[10%] shrink-0 ${SLIDE_BACKDROP_BG} cursor-pointer transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
         onClick={requestClose}
       />
       {/* Язычок-таб на границе подложки и панели — только там, где подложка вообще есть (sm+);

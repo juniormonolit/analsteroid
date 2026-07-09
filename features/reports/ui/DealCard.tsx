@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 
 interface Product {
   name: string; type?: string; price: number; quantity: number; sum: number;
@@ -97,11 +98,9 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
 
   return (
     <>
-      {/* Затемнение: клик мимо карточки закрывает её */}
-      <div
-        className={`fixed inset-0 z-[65] bg-black/30 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
-        onClick={requestClose}
-      />
+      {/* Затемнение: клик мимо карточки закрывает её. z-[65] — выше z-50 дрилл-дауна
+          (карточка может открываться поверх него), ниже z-[70] самой карточки. */}
+      <SlideBackdrop closing={closing} onClick={requestClose} className="z-[65]" />
       <div className={`fixed inset-y-0 right-0 z-[70] w-full sm:w-[48vw] sm:min-w-[760px] sm:max-w-[1080px] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <PanelCloseTab onClick={requestClose} />
         {/* Header — на всю ширину панели */}

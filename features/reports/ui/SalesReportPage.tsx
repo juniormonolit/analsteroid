@@ -638,12 +638,11 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
             // «Обычная» скрывает настройки колонок и drag-перетаскивание (п.3а спеки) —
-            // не передаём обработчики вовсе, ReportTable сам не рендерит соответствующий UI
-            onMetricDisplayModeChange={isPro ? handleMetricDisplayModeChange : undefined}
+            // не передаём обработчики вовсе, ReportTable сам не рендерит соответствующий UI.
+            // Перемещение (←/→) и удаление метрики (onMetricRemove/MoveLeft/MoveRight) больше
+            // не идут через ReportTable — переехали в HighlightEditor вместе с упразднением
+            // MetricMenu (правка 09.07), вызываются напрямую оттуда через configuringMetricId.
             onMetricQuickCompareToggle={isPro ? handleMetricQuickCompareToggle : undefined}
-            onMetricRemove={isPro ? handleMetricRemove : undefined}
-            onMetricMoveLeft={isPro ? handleMetricMoveLeft : undefined}
-            onMetricMoveRight={isPro ? handleMetricMoveRight : undefined}
             onMetricReorder={isPro ? handleMetricReorder : undefined}
             onMetricConfigure={isPro ? (id) => setConfiguringMetricId(id) : undefined}
             metricDecimalOverrides={metricDecimalOverrides}
@@ -771,6 +770,12 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
       {configuringMetricId && (() => {
         const m = catalogMetrics.find((x: { id: string }) => x.id === configuringMetricId)
           ?? availableMetrics.find((x: { id: string }) => x.id === configuringMetricId);
+        // Положение метрики среди колонок отчёта — по тому же массиву (selectedMetricIds),
+        // которым оперируют handleMetricMoveLeft/Right (правка 09.07, упразднение MetricMenu):
+        // ←/→/«Убрать» переехали из контекстного меню шестерёнки прямо в эту панель.
+        const configuringIdx = selectedMetricIds.indexOf(configuringMetricId);
+        const configuringIsFirst = configuringIdx <= 0;
+        const configuringIsLast = configuringIdx === -1 || configuringIdx === selectedMetricIds.length - 1;
         return (
           <HighlightEditor
             key={configuringMetricId}
@@ -809,6 +814,11 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             onDecimalPlacesChange={(v) => setMetricDecimalOverrides(prev => ({ ...prev, [configuringMetricId!]: v }))}
             comparisonThreshold={metricThresholdOverrides[configuringMetricId] ?? (m?.dataType === 'percent' ? 10 : 5)}
             onComparisonThresholdChange={(v) => setMetricThresholdOverrides(prev => ({ ...prev, [configuringMetricId!]: v }))}
+            isFirst={configuringIsFirst}
+            isLast={configuringIsLast}
+            onMoveLeft={() => handleMetricMoveLeft(configuringMetricId!)}
+            onMoveRight={() => handleMetricMoveRight(configuringMetricId!)}
+            onRemove={() => { handleMetricRemove(configuringMetricId!); setConfiguringMetricId(null); }}
           />
         );
       })()}

@@ -6,6 +6,7 @@ import { GsColorPickerButton } from '@/components/ui/GsColorPicker';
 import { GOOGLE_SHEETS_PALETTE_GRID, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 
 const DISPLAY_OPTIONS: { value: ComparisonDisplay; label: string }[] = [
   { value: 'full',    label: 'Полное сравнение' },
@@ -66,9 +67,18 @@ interface Props {
   // Док-режим: редактор прижимается к left=anchorLeft (справа от панели метрик),
   // без бэкдропа — панель остаётся кликабельной (можно щёлкать шестерёнки подряд).
   anchorLeft?: number;
+  // Положение метрики среди колонок отчёта и удаление из отчёта — переехали сюда из
+  // упразднённого контекстного меню шестерёнки (MetricMenu, правка владельца 09.07):
+  // раньше «Настроить»/←/→/«Убрать» были пунктами меню, теперь шестерёнка сразу
+  // открывает эту панель, а ←/→/«Убрать» — секция «Положение и удаление» ниже.
+  isFirst?: boolean;
+  isLast?: boolean;
+  onMoveLeft?: () => void;
+  onMoveRight?: () => void;
+  onRemove?: () => void;
 }
 
-export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, onThresholdsClear, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft }: Props) {
+export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, onThresholdsClear, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft, isFirst, isLast, onMoveLeft, onMoveRight, onRemove }: Props) {
   const isPercent = dataType === 'percent';
   const thresholdLabel = isPercent ? 'До значения (%)' : 'До значения';
   const [enabled, setEnabled] = useState(initial?.enabled ?? false);
@@ -249,6 +259,48 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
     </SectionBlock>
   );
 
+  // Положение и удаление — бывшие пункты MetricMenu (←/→/«Убрать»), упразднённого
+  // 09.07: шестерёнка в заголовке метрики теперь сразу ведёт сюда, а не в промежуточное
+  // меню. Крайние метрики — стрелка к краю задизейблена (та же логика opacity-30, что
+  // была в меню).
+  const positionSection = (onMoveLeft || onMoveRight || onRemove) && (
+    <SectionBlock eyebrow="Положение и удаление">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        {(onMoveLeft || onMoveRight) && (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onMoveLeft}
+              disabled={!onMoveLeft || isFirst}
+              title="Переместить влево"
+              className={`w-9 h-9 flex items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors ${(!onMoveLeft || isFirst) ? 'opacity-30 cursor-not-allowed' : ''}`}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              onClick={onMoveRight}
+              disabled={!onMoveRight || isLast}
+              title="Переместить вправо"
+              className={`w-9 h-9 flex items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors ${(!onMoveRight || isLast) ? 'opacity-30 cursor-not-allowed' : ''}`}
+            >
+              →
+            </button>
+          </div>
+        )}
+        {onRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="text-sm font-semibold text-[var(--color-negative)] hover:underline"
+          >
+            Убрать из отчёта
+          </button>
+        )}
+      </div>
+    </SectionBlock>
+  );
+
   const highlightSection = (
     <SectionBlock eyebrow="Подсветка значений">
       {!docked && (
@@ -375,12 +427,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
   return (
     <>
       {/* Backdrop — только в режиме модалки; в док-режиме панель метрик остаётся кликабельной */}
-      {!docked && (
-        <div
-          className={`fixed inset-0 z-40 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
-          onClick={requestClose}
-        />
-      )}
+      {!docked && <SlideBackdrop closing={closing} onClick={requestClose} />}
       {/* Slide panel — доке узкая (как раньше), модалка широкая (~48vw, мин. 680px,
           макет metric-settings-redesign.html), схлопывается в одну колонку до sm:. */}
       <div
@@ -405,6 +452,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
             {optionsSection}
             {formatSection}
             {neutralitySection}
+            {positionSection}
           </div>
           <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col sm:w-1/2'}>
             {highlightSection}

@@ -1,7 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2 } from 'lucide-react';
-import { Popover } from '@/components/ui/Popover';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
@@ -30,19 +29,6 @@ function resolveHighlightColor(value: number | null, cfg: MetricHighlightConfig 
   return cfg.aboveColor;
 }
 
-// ── Three-dots context menu ───────────────────────────────────────────────────
-interface MetricMenuProps {
-  metricId: string;
-  isFirst: boolean;
-  isLast: boolean;
-  currentMode: ComparisonDisplay;
-  onModeChange: (mode: ComparisonDisplay) => void;
-  onRemove: () => void;
-  onMoveLeft: () => void;
-  onMoveRight: () => void;
-  onConfigure: () => void;
-}
-
 const MODE_LABELS: Record<ComparisonDisplay, string> = {
   full: 'Полное сравнение',
   partial: 'Частичное (без Δ)',
@@ -57,64 +43,6 @@ const QUICK_CYCLE_ORDER: ComparisonDisplay[] = ['full', 'partial', 'compact', 'c
 function nextQuickMode(mode: ComparisonDisplay): ComparisonDisplay {
   const idx = QUICK_CYCLE_ORDER.indexOf(mode);
   return QUICK_CYCLE_ORDER[(idx + 1) % QUICK_CYCLE_ORDER.length];
-}
-
-function MetricMenu({ isFirst, isLast, currentMode, onModeChange, onRemove, onMoveLeft, onMoveRight, onConfigure, className }: MetricMenuProps & { className?: string }) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <Popover
-      open={open}
-      onOpenChange={setOpen}
-      align="end"
-      className="w-48 py-1 text-sm"
-      trigger={
-        <button
-          // stopPropagation: клик по меню не должен триггерить сортировку в <th>
-          onClick={e => e.stopPropagation()}
-          className={className ?? 'tap-target p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors'}
-          title="Настройки метрики"
-        >
-          <Settings size={12} />
-        </button>
-      }
-    >
-        <div onClick={e => e.stopPropagation()}>
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-[var(--color-bg-hover)] transition-colors"
-            onClick={() => { onConfigure(); setOpen(false); }}
-          >
-            Настроить
-          </button>
-
-          <div className="border-t border-[var(--color-border)] my-1" />
-
-          <div className="flex items-center gap-1 px-3 py-1.5">
-            <button
-              className={`flex-1 flex items-center justify-center py-0.5 rounded hover:bg-[var(--color-bg-hover)] transition-colors ${isFirst ? 'opacity-30 cursor-not-allowed' : ''}`}
-              disabled={isFirst}
-              onClick={() => { if (!isFirst) { onMoveLeft(); setOpen(false); } }}
-              title="Переместить влево"
-            >←</button>
-            <button
-              className={`flex-1 flex items-center justify-center py-0.5 rounded hover:bg-[var(--color-bg-hover)] transition-colors ${isLast ? 'opacity-30 cursor-not-allowed' : ''}`}
-              disabled={isLast}
-              onClick={() => { if (!isLast) { onMoveRight(); setOpen(false); } }}
-              title="Переместить вправо"
-            >→</button>
-          </div>
-
-          <div className="border-t border-[var(--color-border)] my-1" />
-
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-[var(--color-bg-hover)] text-[var(--color-negative)] transition-colors"
-            onClick={() => { onRemove(); setOpen(false); }}
-          >
-            Убрать
-          </button>
-        </div>
-    </Popover>
-  );
 }
 
 // ── Compact trend arrow ───────────────────────────────────────────────────────
@@ -165,16 +93,17 @@ interface Props {
   highlights?: Record<string, MetricHighlightConfig>;
   onRowClick?:  (dimensionId: string, dimensionName: string) => void;
   onCellClick?: (dimensionId: string, dimensionName: string, metricId: string) => void;
-  onMetricDisplayModeChange?: (metricId: string, mode: ComparisonDisplay) => void;
   // Быстрая кнопка «сравнение» в заголовке (п. Н5б спеки): включает/выключает режим
-  // 'full' для ОДНОЙ метрики без похода в «Настроить». Отдельно от onMetricDisplayModeChange,
-  // потому что владелец состояния (SalesReportPage) должен запомнить, в какой режим
-  // возвращаться при повторном клике (current/compact, если был явно настроен) — см. Н5б.
+  // 'full' для ОДНОЙ метрики без похода в «Настроить». Владелец состояния
+  // (SalesReportPage) должен запомнить, в какой режим возвращаться при повторном клике
+  // (current/compact, если был явно настроен) — см. Н5б.
   onMetricQuickCompareToggle?: (metricId: string) => void;
-  onMetricRemove?: (metricId: string) => void;
-  onMetricMoveLeft?: (metricId: string) => void;
-  onMetricMoveRight?: (metricId: string) => void;
   onMetricReorder?: (draggedId: string, targetId: string) => void;
+  // Шестерёнка в заголовке метрики: клик СРАЗУ открывает панель настроек метрики
+  // (HighlightEditor) — раньше вела в промежуточное контекстное меню MetricMenu
+  // (Настроить/←/→/Убрать), упразднённое правкой владельца 09.07 — ←/→/«Убрать»
+  // переехали в саму панель настроек (см. HighlightEditor: isFirst/isLast/onMoveLeft/
+  // onMoveRight/onRemove).
   onMetricConfigure?: (metricId: string) => void;
   pinnedMetricIds?: string[];
   onMetricPinToggle?: (metricId: string) => void;
@@ -212,11 +141,7 @@ export function ReportTable({
   dimensionLabel = 'Менеджер',
   highlights = {},
   onRowClick, onCellClick,
-  onMetricDisplayModeChange,
   onMetricQuickCompareToggle,
-  onMetricRemove,
-  onMetricMoveLeft,
-  onMetricMoveRight,
   onMetricReorder,
   onMetricConfigure,
   pinnedMetricIds = [],
@@ -554,7 +479,7 @@ export function ReportTable({
 
   const isClickableMetric = (m: Metric) => m.dataType !== 'percent';
   const hasAnyWideMode = displayMetrics.some(m => colSpanFor(m.id) > 1);
-  const hasMenu = !!(onMetricDisplayModeChange || onMetricRemove);
+  const hasConfigureButton = !!onMetricConfigure;
 
   if (isLoading) {
     return (
@@ -894,10 +819,8 @@ export function ReportTable({
                 )}
               </div>
             </th>
-            {displayMetrics.map((m, idx) => {
+            {displayMetrics.map((m) => {
               const mode = resolveMode(m.id);
-              const isFirst = idx === 0;
-              const isLast = idx === displayMetrics.length - 1;
               const isPinnedCol = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
               const span = colSpanFor(m.id);
               const colW = span * METRIC_COL_WIDTH;
@@ -944,7 +867,7 @@ export function ReportTable({
                       по центру — драг-зона (тянется, растягивается только она при раскрытом
                       сравнении), справа — шестерёнка настроек. Видна только по hover на <th>
                       (класс .group уже на <th> выше), на таче — всегда (hover-reveal). */}
-                  {(onMetricQuickCompareToggle || hasMenu || onMetricReorder) && (
+                  {(onMetricQuickCompareToggle || hasConfigureButton || onMetricReorder) && (
                     <div
                       className={`hover-reveal mt-1 flex items-stretch h-5 rounded-[7px] border border-[#dee2e6] bg-[var(--color-bg-surface)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)] mx-auto ${span > 1 ? 'w-full' : 'w-[92px]'}`}
                       onClick={e => e.stopPropagation()}
@@ -975,19 +898,17 @@ export function ReportTable({
                       ) : (
                         <span className="flex-1 min-w-[28px] bg-[var(--color-bg)]" />
                       )}
-                      {hasMenu && (
-                        <MetricMenu
-                          metricId={m.id}
-                          isFirst={isFirst}
-                          isLast={isLast}
-                          currentMode={mode}
-                          onModeChange={newMode => onMetricDisplayModeChange?.(m.id, newMode)}
-                          onRemove={() => onMetricRemove?.(m.id)}
-                          onMoveLeft={() => onMetricMoveLeft?.(m.id)}
-                          onMoveRight={() => onMetricMoveRight?.(m.id)}
-                          onConfigure={() => onMetricConfigure?.(m.id)}
+                      {/* Шестерёнка ведёт сразу в панель настроек метрики (HighlightEditor) —
+                          промежуточное контекстное меню (MetricMenu) упразднено 09.07, ←/→/
+                          «Убрать» переехали в саму панель настроек. */}
+                      {onMetricConfigure && (
+                        <button
+                          onClick={e => { e.stopPropagation(); onMetricConfigure(m.id); }}
                           className="w-6 flex-shrink-0 flex items-center justify-center border-l border-[#dee2e6] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition-colors"
-                        />
+                          title="Настройки метрики"
+                        >
+                          <Settings size={12} />
+                        </button>
                       )}
                     </div>
                   )}

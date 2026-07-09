@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { X, Plus, Search, Scale } from 'lucide-react';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
 import { formatValue } from '@/lib/format';
 import type { Metric } from '@/lib/metrics/types';
 
@@ -62,9 +63,10 @@ export function ComparisonPanel({
 
   return (
     <div className="fixed inset-0 z-50 flex">
-      {/* Полоска-подложка для закрытия — как в дрилл-дауне (п. Н3, тот же язычок-таб) */}
+      {/* Полоска-подложка для закрытия — как в дрилл-дауне (п. Н3, тот же язычок-таб).
+          Цвет/прозрачность — общий эталон затемнения (SLIDE_BACKDROP_BG, правка 09.07). */}
       <div
-        className={`hidden sm:block w-[10%] shrink-0 bg-black/40 cursor-pointer transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
+        className={`hidden sm:block w-[10%] shrink-0 ${SLIDE_BACKDROP_BG} cursor-pointer transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
         onClick={requestClose}
       />
       <PanelCloseTab onClick={requestClose} style={{ left: '10%', transform: 'translateX(-100%)' }} />

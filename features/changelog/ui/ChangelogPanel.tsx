@@ -6,6 +6,7 @@ import { format, isToday, isYesterday } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { useChangelogQuery } from './useChangelogQuery';
 import type { ChangelogEntry, ChangelogListResponse } from '@/lib/changelog/types';
 
@@ -73,10 +74,7 @@ export function ChangelogPanel({ onClose }: Props) {
 
   return (
     <>
-      <div
-        className={`fixed inset-0 z-40 bg-black/30 transition-opacity duration-150 ${closing ? 'opacity-0' : 'opacity-100'}`}
-        onClick={requestClose}
-      />
+      <SlideBackdrop closing={closing} onClick={requestClose} />
       <div
         className={`fixed inset-y-0 right-0 z-50 w-full sm:w-[50vw] sm:min-w-[360px] sm:max-w-[800px] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}
       >
