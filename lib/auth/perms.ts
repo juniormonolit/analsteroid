@@ -73,21 +73,11 @@ export function effectiveUiMode(session: SessionUser | null): UiMode {
   return isReportAdmin(session) ? 'pro' : 'basic';
 }
 
-// Первый доступный раздел — цель redirect'а с «/» и из закрытых разделов.
-const SECTION_PATHS: Array<{ key: PermKey; path: string }> = [
-  { key: 'section.sales', path: '/sales/by-managers' },
-  { key: 'section.summary', path: '/summary' },
-  { key: 'section.plans', path: '/plans' },
-  { key: 'section.decomposition', path: '/decomposition' },
-  { key: 'section.marketing', path: '/marketing/brand-contacts' },
-  { key: 'section.metrics', path: '/metrics' },
-  { key: 'section.settings', path: '/settings' },
-];
-
+// Цель redirect'а с «/», после логина и из закрытых разделов (нет нужного
+// section.*-права). Раньше вело на первый доступный раздел по списку прав;
+// с появлением Главной (owners-inbox/home-page брифа) она сама адаптируется
+// под права пользователя (пустые колонки, если прав нет), поэтому это
+// универсальный безопасный fallback для любого залогиненного пользователя.
 export function firstAllowedPath(session: SessionUser | null): string {
-  if (!session) return '/login';
-  for (const s of SECTION_PATHS) {
-    if (hasPerm(session, s.key)) return s.path;
-  }
-  return '/profile'; // ЛК доступен любому залогиненному
+  return session ? '/home' : '/login';
 }

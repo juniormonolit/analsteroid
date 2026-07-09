@@ -20,7 +20,7 @@ export default function LoginPage() {
       body: JSON.stringify({ login, password }),
     });
     if (res.ok) {
-      router.push('/sales/by-managers');
+      router.push('/home');
     } else {
       const data = await res.json().catch(() => ({}));
       setError(data.error ?? 'Неверный логин или пароль');
