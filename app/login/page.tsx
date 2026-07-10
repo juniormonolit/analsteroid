@@ -37,7 +37,7 @@ export default function LoginPage() {
             Монолитика
           </span>
           <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-            {'— аналитика для монолитика'.toUpperCase()}
+            {'— аналитика для монолита'.toUpperCase()}
           </span>
         </h1>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">

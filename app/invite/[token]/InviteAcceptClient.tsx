@@ -59,7 +59,7 @@ export function InviteAcceptClient({ token }: { token: string }) {
             Монолитика
           </span>
           <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--color-text-muted)]">
-            {'— аналитика для монолитика'.toUpperCase()}
+            {'— аналитика для монолита'.toUpperCase()}
           </span>
         </h1>
 
