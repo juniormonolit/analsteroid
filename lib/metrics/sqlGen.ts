@@ -50,6 +50,36 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
       ) _pppb_ranked WHERE rn = 2
     )`;
   }
+  // _primary_hist/_repeat_hist: "повторность" по ИСТОРИИ КЛИЕНТА (contact_id, sold_at),
+  // а не по тому, в какую воронку Bitrix попала сделка (funnel_type/funnels.is_repeat).
+  // Баг #1556 (Серёга): ППП (_ppp, rn=2 — вторая продажа клиента) > 0, а «Доля повторных
+  // продаж» = 0 — потому что repeat_sales_count считался по funnel_type='repeat'
+  // (funnels.is_repeat), и вторая покупка клиента может пройти через ОБЫЧНУЮ воронку
+  // (ЧЛ/ЮЛ), а не через выделенную «Повторные» — тогда funnel-счётчик даёт 0, хотя
+  // клиент реально купил повторно. Воспроизведено 10.07 на прод-данных: менеджер 1868,
+  // июль 2026 — ppp_count=2, repeat_sales_count(funnel)=0, primary_sales_count=23.
+  // _primary_hist = сделка является ПЕРВОЙ по счёту продажей клиента (rn=1);
+  // _repeat_hist  = сделка НЕ первая, т.е. вторая и далее (rn>=2) — то же определение
+  // «повторности», что и в _ppp/_ppo/_ppb/_pppb. Используются ТОЛЬКО для
+  // repeat_sales_count_pct/repeat_sales_amount_pct (миграция 078) — funnel-based
+  // repeat_sales_count/primary_sales_count оставлены как есть для CR/среднего чека
+  // по воронке (это отдельный, legit процессный срез, не про историю клиента).
+  if (f.field === '_primary_hist') {
+    return `d.deal_id IN (
+      SELECT deal_id FROM (
+        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at) AS rn
+        FROM sa.deals WHERE sold_at IS NOT NULL AND contact_id IS NOT NULL
+      ) _primary_hist_ranked WHERE rn = 1
+    )`;
+  }
+  if (f.field === '_repeat_hist') {
+    return `d.deal_id IN (
+      SELECT deal_id FROM (
+        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at) AS rn
+        FROM sa.deals WHERE sold_at IS NOT NULL AND contact_id IS NOT NULL
+      ) _repeat_hist_ranked WHERE rn >= 2
+    )`;
+  }
   if (f.field === 'funnel_type') {
     const v = f.value as string;
     if (v === 'primary') return `${a}.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = false)`;
