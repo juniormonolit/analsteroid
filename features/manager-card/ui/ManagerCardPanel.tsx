@@ -15,6 +15,11 @@ interface Props {
   /** Период основного отчёта — точка отсчёта чипа «Период отчёта» (дефолт). */
   reportPeriod: DateRange;
   onClose: () => void;
+  /** Карточка менеджера v2 (бриф 10.07, п.3): «Карточка отдела» — та же панель,
+   *  но данные — агрегат отдела (/api/manager-card/department-card), а managerId
+   *  в этом режиме — id отдела (uuid) либо 'all'. Дефолт 'manager' — прежнее
+   *  поведение (клик по #логину в отчёте), не трогаем. */
+  mode?: 'manager' | 'department';
 }
 
 type PeriodChoice = 'report' | 'month' | 'all';
@@ -102,7 +107,7 @@ function ChipGroup<T extends string>({ value, options, onChange }: {
   );
 }
 
-export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose }: Props) {
+export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose, mode = 'manager' }: Props) {
   const { closing, requestClose } = useSlideClose(onClose);
   const [periodChoice, setPeriodChoice] = useState<PeriodChoice>('report');
   const [segment, setSegment] = useState<CardSegment>('all');
@@ -117,11 +122,15 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
   const toIso = period.to.toISOString();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['manager-card', managerId, fromIso, toIso, segment],
+    queryKey: ['manager-card', mode, managerId, fromIso, toIso, segment],
     queryFn: async () => {
-      const res = await fetch('/api/manager-card', {
+      const url = mode === 'department' ? '/api/manager-card/department-card' : '/api/manager-card';
+      const body = mode === 'department'
+        ? { departmentId: managerId, period: { from: fromIso, to: toIso }, segment }
+        : { managerId, period: { from: fromIso, to: toIso }, segment };
+      const res = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ managerId, period: { from: fromIso, to: toIso }, segment }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? await res.text());
       return res.json() as Promise<ManagerCardResult>;
@@ -193,7 +202,7 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                   style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' }}
                 >
                   <span className="text-[13px] font-extrabold text-[var(--color-accent)]">{data?.rating.rank ? `#${data.rating.rank}` : '—'}</span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] text-center leading-tight">из {data?.rating.deptSize ?? '—'}<br />в отделе</span>
+                  <span className="text-[10px] text-[var(--color-text-muted)] text-center leading-tight">из {data?.rating.deptSize ?? '—'}<br />{mode === 'department' ? 'среди отделов' : 'в отделе'}</span>
                 </div>
               </div>
             </div>

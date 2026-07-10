@@ -6,6 +6,7 @@ import { fetchTouchSpeedAllByManager } from '@/features/reports/engine/callsMetr
 import { branchLabel } from '@/lib/org/branchLabel';
 import { toSqlInterval, type DateRange } from '@/lib/period';
 import type { ClientType, ReportRow } from '@/lib/metrics/types';
+import { getScoringWeights, type AxisKey as WeightAxisKey, type NormalizedWeights } from '@/lib/settings/scoringWeights';
 import { differenceInCalendarDays, subDays, startOfDay } from 'date-fns';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -13,12 +14,17 @@ import { differenceInCalendarDays, subDays, startOfDay } from 'date-fns';
 // данных: профиль, 6-метричная «паутина» (период + всё время, нормировка
 // перцентилем 0-10 относительно менеджеров с продажами), рейтинг + ранг в отделе,
 // итоги периода с Δ% к прошлому такому же периоду, топ-5 товарных категорий,
-// тизер звонков (va.calls). Экран 2 (ФИФА-сетка ЛК РОПа) — итерация 2, не здесь.
+// тизер звонков (va.calls). Итерация 2 (карточка менеджера v2, бриф 10.07):
+// ФИФА-сетка «Мой отдел» + карточка отдела (features/manager-card/engine/teamCard.ts)
+// переиспользуют экспортированные отсюда AXIS_DEFS/buildAxisMap/percentileScore/
+// ratingFor/rawAxisValues — единственный источник формулы рейтинга, чтобы сетка и
+// карточка отдельного менеджера НИКОГДА не расходились в цифрах. Веса осей —
+// настройка супер-админа (lib/settings/scoringWeights.ts, миграция 068).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type CardSegment = 'all' | 'fl' | 'ul';
 
-function segmentToClientType(seg: CardSegment): ClientType {
+export function segmentToClientType(seg: CardSegment): ClientType {
   return seg === 'fl' ? 'b2c' : seg === 'ul' ? 'b2b' : 'all';
 }
 
@@ -26,7 +32,7 @@ function segmentToClientType(seg: CardSegment): ClientType {
 // принцип, что recomputeComparison (lib/period), но окно строго примыкающее, а не
 // «хвост прошлого месяца» (там своя семантика для отчёта, здесь нужен буквально
 // предыдущий период).
-function previousPeriod(period: DateRange): DateRange {
+export function previousPeriod(period: DateRange): DateRange {
   const days = differenceInCalendarDays(period.to, period.from) + 1;
   const to = startOfDay(subDays(period.from, 1));
   const from = startOfDay(subDays(to, days - 1));
@@ -34,14 +40,16 @@ function previousPeriod(period: DateRange): DateRange {
 }
 
 // «Всё время» — с заведомо ранней даты (данные компании не старше) до сейчас.
-const ALL_TIME: DateRange = { from: new Date('2015-01-01T00:00:00Z'), to: new Date() };
+export const ALL_TIME: DateRange = { from: new Date('2015-01-01T00:00:00Z'), to: new Date() };
 
 // ── 6 осей паутины ───────────────────────────────────────────────────────────
-type AxisKey = 'cr_deal_to_reservation' | 'cr_reservation_to_sale' | 'sales_amount' | 'avg_check' | 'touch_speed' | 'refusal_rate';
+// AxisKey — каноничный тип из lib/settings/scoringWeights.ts (колонки scoring_weights
+// должны совпадать буквально; там же лежит рантайм-список AXIS_KEYS для формы весов).
+export type AxisKey = WeightAxisKey;
 
-interface AxisDef { key: AxisKey; label: string; unit: 'percent' | 'money' | 'minutes'; invert: boolean }
+export interface AxisDef { key: AxisKey; label: string; unit: 'percent' | 'money' | 'minutes'; invert: boolean }
 
-const AXIS_DEFS: AxisDef[] = [
+export const AXIS_DEFS: AxisDef[] = [
   { key: 'cr_deal_to_reservation', label: 'CR Сделка → Бронь',  unit: 'percent', invert: false },
   { key: 'cr_reservation_to_sale', label: 'CR Бронь → Продажа', unit: 'percent', invert: false },
   { key: 'sales_amount',           label: 'Сумма продаж',       unit: 'money',   invert: false },
@@ -52,7 +60,7 @@ const AXIS_DEFS: AxisDef[] = [
 
 // Сырые значения 6 осей по строке отчёта (fetchByManagers всегда отдаёт ВСЕ
 // collected-метрики независимо от запроса — см. features/reports/engine/byManagers.ts).
-function rawAxisValues(metrics: Record<string, number | null>, touchMinutes: number | null): Record<AxisKey, number | null> {
+export function rawAxisValues(metrics: Record<string, number | null>, touchMinutes: number | null): Record<AxisKey, number | null> {
   const dealsCount        = metrics.deals_count ?? 0;
   const reservationsCount = metrics.reservations_count ?? 0;
   const salesCount        = metrics.sales_count ?? 0;
@@ -68,9 +76,9 @@ function rawAxisValues(metrics: Record<string, number | null>, touchMinutes: num
   };
 }
 
-type AxisMap = Map<string, Record<AxisKey, number | null>>;
+export type AxisMap = Map<string, Record<AxisKey, number | null>>;
 
-function buildAxisMap(pool: ReportRow[], touchMap: Map<string, number> | null): AxisMap {
+export function buildAxisMap(pool: ReportRow[], touchMap: Map<string, number> | null): AxisMap {
   const m: AxisMap = new Map();
   for (const row of pool) {
     const touch = touchMap?.get(row.dimensionId) ?? null;
@@ -80,11 +88,11 @@ function buildAxisMap(pool: ReportRow[], touchMap: Map<string, number> | null): 
 }
 
 // Пул нормировки (п.6 ТЗ): «ВСЕ менеджеры с продажами за тот же период».
-function salesPositiveIds(pool: ReportRow[]): Set<string> {
+export function salesPositiveIds(pool: ReportRow[]): Set<string> {
   return new Set(pool.filter(r => (r.metrics.sales_count ?? 0) > 0).map(r => r.dimensionId));
 }
 
-function poolValuesForAxis(axisMap: AxisMap, eligibleIds: Set<string>, axis: AxisKey): number[] {
+export function poolValuesForAxis(axisMap: AxisMap, eligibleIds: Set<string>, axis: AxisKey): number[] {
   const out: number[] = [];
   for (const id of eligibleIds) {
     const v = axisMap.get(id)?.[axis];
@@ -96,7 +104,7 @@ function poolValuesForAxis(axisMap: AxisMap, eligibleIds: Set<string>, axis: Axi
 // Перцентильная позиция значения в пуле → 0..10 (1 знак). Ничьи — средний ранг
 // (полусумма «меньше»/«меньше-или-равно»). invert: для метрик «меньше — лучше»
 // (скорость касания, доля отказов) переворачиваем шкалу.
-function percentileScore(raw: number | null, pool: number[], invert: boolean): number | null {
+export function percentileScore(raw: number | null, pool: number[], invert: boolean): number | null {
   if (raw === null || pool.length === 0) return null;
   let less = 0, equal = 0;
   for (const v of pool) {
@@ -108,22 +116,27 @@ function percentileScore(raw: number | null, pool: number[], invert: boolean): n
   return Math.round(frac * 100) / 10;
 }
 
-// Рейтинг менеджера = среднее нормированных (0-10) значений ДОСТУПНЫХ осей (равные
-// веса). Оси без данных (raw === null) исключаются из среднего, а не считаются
-// нулём — иначе отсутствие данных (напр. va.calls) необоснованно портило бы оценку.
-function ratingFor(axisMap: AxisMap, eligibleIds: Set<string>, managerId: string): number | null {
+// Рейтинг менеджера = взвешенное среднее нормированных (0-10) значений ДОСТУПНЫХ осей.
+// Веса — настройка супер-админа (lib/settings/scoringWeights.ts, миграция 068,
+// дефолт — равные, т.е. поведение как в v1 до появления настройки). Оси без данных
+// (raw === null) исключаются из среднего (вес перенормируется на оставшиеся оси),
+// а не считаются нулём — иначе отсутствие данных (напр. va.calls) необоснованно
+// портило бы оценку.
+export function ratingFor(axisMap: AxisMap, eligibleIds: Set<string>, managerId: string, weights: NormalizedWeights): number | null {
   const own = axisMap.get(managerId);
   if (!own) return null;
-  const scores: number[] = [];
+  const weighted: { score: number; weight: number }[] = [];
   for (const def of AXIS_DEFS) {
     const raw = own[def.key];
     if (raw === null) continue;
     const pool = poolValuesForAxis(axisMap, eligibleIds, def.key);
     const score = percentileScore(raw, pool, def.invert);
-    if (score !== null) scores.push(score);
+    if (score !== null) weighted.push({ score, weight: weights[def.key] });
   }
-  if (scores.length === 0) return null;
-  return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
+  const weightSum = weighted.reduce((s, w) => s + w.weight, 0);
+  if (weighted.length === 0 || weightSum <= 0) return null;
+  const value = weighted.reduce((s, w) => s + w.score * w.weight, 0) / weightSum;
+  return Math.round(value * 10) / 10;
 }
 
 // ── va.calls (схема va, та же MLT-БД) ────────────────────────────────────────
@@ -142,7 +155,7 @@ function ratingFor(axisMap: AxisMap, eligibleIds: Set<string>, managerId: string
 const _touchSpeedCache = new Map<string, { data: Map<string, number> | null; at: number }>();
 const TOUCH_SPEED_TTL = 10 * 60 * 1000;
 
-async function fetchTouchSpeedByManager(period: DateRange): Promise<Map<string, number> | null> {
+export async function fetchTouchSpeedByManager(period: DateRange): Promise<Map<string, number> | null> {
   const { from, toExcl } = toSqlInterval(period);
   const cacheKey = `${from}|${toExcl}`;
   const cached = _touchSpeedCache.get(cacheKey);
@@ -264,7 +277,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
 
   const managerIdNum = /^\d+$/.test(managerId) ? Number(managerId) : null;
 
-  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, deptRosterRes, callsTizer, pgRows] =
+  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, deptRosterRes, callsTizer, pgRows, weights] =
     await Promise.all([
       fetchByManagers({ period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
@@ -280,6 +293,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
         : Promise.resolve({ rows: [{ bitrix_user_id: managerId }] }),
       managerIdNum !== null ? fetchCallsTizer(managerIdNum, period) : Promise.resolve(null),
       fetchByProductGroups({ period, dealScope: 'all', clientType, productGroupMode: 'kc', managerId }),
+      getScoringWeights(),
     ]);
 
   const currentRow = periodPool.find(r => r.dimensionId === managerId);
@@ -310,12 +324,12 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
   });
 
   // ── Рейтинг + ранг в отделе ─────────────────────────────────────────────────
-  const rating = ratingFor(periodAxisMap, periodEligible, managerId);
+  const rating = ratingFor(periodAxisMap, periodEligible, managerId, weights);
   const deptMemberIds = deptRosterRes.rows.map(r => r.bitrix_user_id);
   const deptSize = deptMemberIds.length || 1;
   const deptRatings = deptMemberIds.map(id => ({
     id,
-    rating: id === managerId ? rating : ratingFor(periodAxisMap, periodEligible, id),
+    rating: id === managerId ? rating : ratingFor(periodAxisMap, periodEligible, id, weights),
   }));
   const withRating = deptRatings.filter(r => r.rating !== null).sort((a, b) => (b.rating! - a.rating!));
   const withoutRating = deptRatings.filter(r => r.rating === null);

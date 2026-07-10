@@ -29,6 +29,7 @@ export function SettingsSidebar({
     ...(isSuperadmin ? [{ href: '/settings/roles', label: 'Роли' }] : []),
     ...(isSuperadmin ? [{ href: '/settings/rights-matrix', label: 'Матрица прав' }] : []),
     ...(isSuperadmin ? [{ href: '/settings/daily-plan-mode', label: 'Режим дневного плана' }] : []),
+    ...(isSuperadmin ? [{ href: '/settings/scoring-weights', label: 'Веса скоринга' }] : []),
   ];
 
   return (

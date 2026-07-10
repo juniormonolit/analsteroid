@@ -32,6 +32,11 @@ export async function GET() {
       login: session.login,
       displayName: session.displayName,
       roleName: session.isSuperadmin ? 'Супер-админ' : (session.roleName ?? 'Без роли'),
+      // Сырое имя роли (без замены на «Супер-админ») + флаг — карточка менеджера v2
+      // (ФИФА-сетка «Мой отдел», «Моя карточка» МОП) гейтится по РОЛИ, не по
+      // display-строке выше (см. features/profile/ui/ProfilePage.tsx).
+      rawRoleName: session.roleName,
+      isSuperadmin: session.isSuperadmin,
       avatarUrl: freshUrl ?? session.avatarUrl,
       bitrixUserId: session.bitrixUserId,
     },

@@ -1,21 +1,31 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, KeyRound, LayoutGrid } from 'lucide-react';
+import { Bell, IdCard, KeyRound, LayoutGrid } from 'lucide-react';
+import { startOfMonth } from 'date-fns';
 import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
+import { DeptRosterGrid } from './DeptRosterGrid';
+import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 
 interface Me {
   user: {
     login: string;
     displayName: string;
     roleName: string;
+    rawRoleName: string | null;
+    isSuperadmin: boolean;
     avatarUrl: string | null;
     bitrixUserId: string | null;
   };
   departments: { id: string; name: string }[];
 }
+
+// Карточка менеджера v2 (бриф 10.07): роли, которым видна ФИФА-сетка «Мой отдел» —
+// РОП/Директор/Администратор + супер-админ (см. app/api/manager-card/team/route.ts —
+// та же граница проверяется и на сервере, здесь только решение не рендерить блок).
+const ROSTER_ROLES = new Set(['РОП', 'Директор', 'Администратор']);
 
 interface DeptSummary {
   month: string; // YYYY-MM-01
@@ -58,6 +68,7 @@ const cardCls = 'rounded-lg border border-[var(--color-border)] bg-[var(--color-
 
 export function ProfilePage() {
   const [showPassword, setShowPassword] = useState(false);
+  const [showMyCard, setShowMyCard] = useState(false);
 
   // Тумблер «Про/Лайт» (п.3а спеки; переименование «Обычная»→«Лайт» — правка 09.07/2,
   // п.1) — общий хук с компактным тумблером в сайдбаре (AppShell), тот же серверный
@@ -106,13 +117,28 @@ export function ProfilePage() {
                   <div className="text-xs text-[var(--color-text-muted)] mt-0.5">{me.user.roleName}</div>
                 </div>
               </div>
-              <button
-                onClick={() => setShowPassword(true)}
-                className="flex items-center justify-center gap-2 px-4 py-2 text-sm border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-border-focus)] transition-colors shrink-0"
-              >
-                <KeyRound size={15} />
-                Сменить пароль
-              </button>
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                {/* МОП: своя карточка менеджера в ЛК (карточка менеджера v2, бриф 10.07, п.2).
+                    Маппинг юзер→менеджер — users.bitrix_user_id === org_resolved_hierarchy.
+                    manager_bitrix_user_id (уже используется для аватара/сессии, отдельная
+                    таблица не заводилась — см. отчёт задачи). */}
+                {me.user.rawRoleName === 'МОП' && me.user.bitrixUserId && (
+                  <button
+                    onClick={() => setShowMyCard(true)}
+                    className="flex items-center justify-center gap-2 px-4 py-2 text-sm border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-border-focus)] transition-colors"
+                  >
+                    <IdCard size={15} />
+                    Моя карточка
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowPassword(true)}
+                  className="flex items-center justify-center gap-2 px-4 py-2 text-sm border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-border-focus)] transition-colors"
+                >
+                  <KeyRound size={15} />
+                  Сменить пароль
+                </button>
+              </div>
             </div>
           ) : (
             <div className="text-sm text-red-500">Не удалось загрузить профиль</div>
@@ -202,6 +228,13 @@ export function ProfilePage() {
           )}
         </div>
 
+        {/* ФИФА-сетка «Мой отдел» (карточка менеджера v2, п.1) — только РОП/Директор/
+            Администратор/супер-админ; для Пользователя/МОП блок не рендерится вовсе
+            (сервер /api/manager-card/team всё равно ещё раз проверяет роль). */}
+        {me && (me.user.isSuperadmin || (me.user.rawRoleName && ROSTER_ROLES.has(me.user.rawRoleName))) && (
+          <DeptRosterGrid />
+        )}
+
         {/* Уведомления — заглушка под будущий конструктор */}
         <div className={cardCls}>
           <div className="flex items-center gap-2 mb-2">
@@ -224,6 +257,14 @@ export function ProfilePage() {
       </div>
 
       {showPassword && <ChangePasswordModal onClose={() => setShowPassword(false)} />}
+      {showMyCard && me?.user.bitrixUserId && (
+        <ManagerCardPanel
+          managerId={me.user.bitrixUserId}
+          managerName={me.user.displayName}
+          reportPeriod={{ from: startOfMonth(new Date()), to: new Date() }}
+          onClose={() => setShowMyCard(false)}
+        />
+      )}
     </div>
   );
 }
