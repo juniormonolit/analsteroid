@@ -44,42 +44,52 @@ export async function POST(req: NextRequest) {
   const periodRange = { from: new Date(period.from), to: new Date(period.to) };
   const start = Date.now();
 
-  if (departmentId === 'all') {
-    if (options.length === 0) return NextResponse.json({ error: 'Отделы не назначены' }, { status: 403 });
-    const roster = await resolveManagersForDepartments(options.map(o => o.id));
+  // Живой смок деплоя 44: на отделах >5 менеджеров buildDepartmentCard валился
+  // необработанным исключением (N+1 fetchByProductGroups по менеджеру упирался в
+  // connectionTimeoutMillis пула analyticsDb) → голый 500. N+1 убран (см. teamCard.ts),
+  // но на случай ЛЮБОЙ другой неожиданной ошибки агрегата отдаём внятный 502, а не
+  // бессодержательный 500.
+  try {
+    if (departmentId === 'all') {
+      if (options.length === 0) return NextResponse.json({ error: 'Отделы не назначены' }, { status: 403 });
+      const roster = await resolveManagersForDepartments(options.map(o => o.id));
+      const result = await buildDepartmentCard({
+        deptId: 'all', deptName: `Все отделы (${options.length})`, branch: null,
+        roster,
+        peerBuckets: new Map([['all', roster]]), // сравнивать не с кем — честный прочерк
+        period: periodRange, segment,
+      });
+      return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
+    }
+
+    if (!optionIds.has(departmentId)) return NextResponse.json({ error: 'Отдел недоступен' }, { status: 403 });
+
+    const [roster, peerOptions, branchRow] = await Promise.all([
+      resolveManagersForDepartments([departmentId]),
+      getAllManagedDepartmentIds(),
+      systemDb().query<{ branch: string | null }>(
+        `SELECT branch FROM org_resolved_hierarchy
+          WHERE department_id = $1 AND is_active = true LIMIT 1`,
+        [departmentId],
+      ),
+    ]);
+
+    const peerIds = [...new Set([departmentId, ...peerOptions.map(o => o.id)])];
+    const peerBuckets = await bucketManagersByDepartments(peerIds);
+
+    const deptName = options.find(o => o.id === departmentId)?.name
+      ?? peerOptions.find(o => o.id === departmentId)?.name
+      ?? '—';
+
     const result = await buildDepartmentCard({
-      deptId: 'all', deptName: `Все отделы (${options.length})`, branch: null,
-      roster,
-      peerBuckets: new Map([['all', roster]]), // сравнивать не с кем — честный прочерк
+      deptId: departmentId, deptName, branch: branchLabel(branchRow.rows[0]?.branch ?? null) || null,
+      roster, peerBuckets,
       period: periodRange, segment,
     });
+
     return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
+  } catch (err) {
+    console.error('[department-card] build failed', { departmentId, error: err instanceof Error ? err.message : err });
+    return NextResponse.json({ error: 'Не удалось построить карточку отдела' }, { status: 502 });
   }
-
-  if (!optionIds.has(departmentId)) return NextResponse.json({ error: 'Отдел недоступен' }, { status: 403 });
-
-  const [roster, peerOptions, branchRow] = await Promise.all([
-    resolveManagersForDepartments([departmentId]),
-    getAllManagedDepartmentIds(),
-    systemDb().query<{ branch: string | null }>(
-      `SELECT branch FROM org_resolved_hierarchy
-        WHERE department_id = $1 AND is_active = true LIMIT 1`,
-      [departmentId],
-    ),
-  ]);
-
-  const peerIds = [...new Set([departmentId, ...peerOptions.map(o => o.id)])];
-  const peerBuckets = await bucketManagersByDepartments(peerIds);
-
-  const deptName = options.find(o => o.id === departmentId)?.name
-    ?? peerOptions.find(o => o.id === departmentId)?.name
-    ?? '—';
-
-  const result = await buildDepartmentCard({
-    deptId: departmentId, deptName, branch: branchLabel(branchRow.rows[0]?.branch ?? null) || null,
-    roster, peerBuckets,
-    period: periodRange, segment,
-  });
-
-  return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
 }

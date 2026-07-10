@@ -27,8 +27,8 @@ type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: numb
 const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
 const ROW_TTL = 10 * 60 * 1000; // 10 min
 
-function mkKey(from: string, toExcl: string, metricIds: string[], mode: string, managerId?: string, deptKey?: string): string {
-  return `${from}|${toExcl}|${mode}|${managerId ?? 'all'}|${deptKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
+function mkKey(from: string, toExcl: string, metricIds: string[], mode: string, managerId?: string, deptKey?: string, managerIdsKey?: string): string {
+  return `${from}|${toExcl}|${mode}|${managerId ?? 'all'}|${deptKey ?? 'all'}|${managerIdsKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
 }
 
 // dealScope/clientType match the same funnel_id logic as sqlGen.ts:
@@ -103,6 +103,7 @@ export interface ByProductGroupsOptions {
   clientType?: ClientType;
   productGroupMode?: ProductGroupMode;
   managerId?: string;      // drilldown: restrict to one manager's deals
+  managerIds?: string[];   // roster aggregate: restrict to a set of managers in ONE query (avoids N+1 per-manager calls — см. хотфикс "Дирекция" 500, задача department-card)
   departmentIds?: string[]; // filter to deals by managers in selected departments
 }
 
@@ -113,6 +114,8 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   const deptIds    = opts.departmentIds ?? [];
   // managerId / deptIds come from the request — validate numeric IDs before inlining into SQL.
   const managerId  = opts.managerId && /^\d+$/.test(opts.managerId) ? opts.managerId : undefined;
+  const managerIds = (opts.managerIds ?? []).filter(id => /^\d+$/.test(id));
+  const managerIdsKey = managerIds.length ? [...managerIds].sort().join(',') : undefined;
 
   const fromIso   = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
@@ -138,6 +141,7 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   // Combine WHERE conditions (managerId for drilldown, deptManagerWhere for dept filter)
   const whereParts: string[] = [];
   if (managerId) whereParts.push(`d.current_manager_id = ${managerId}`);
+  if (managerIds.length > 0) whereParts.push(`d.current_manager_id IN (${managerIds.join(',')})`);
   if (deptManagerWhere) whereParts.push(deptManagerWhere);
   const notNullWhere = whereParts.length > 0 ? whereParts.join(' AND ') : undefined;
 
@@ -149,7 +153,7 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   );
 
   // Analytics row cache (pills NOT in key; mode + managerId + deptKey ARE — they change the scope)
-  const key   = mkKey(fromIso, toExclIso, metricIds, mode, managerId, deptKey);
+  const key   = mkKey(fromIso, toExclIso, metricIds, mode, managerId, deptKey, managerIdsKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {

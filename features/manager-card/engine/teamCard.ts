@@ -163,7 +163,7 @@ export async function buildDepartmentCard(opts: {
   const managerIds = new Set(opts.roster.map(m => m.managerId));
   const managerIdNums = opts.roster.map(m => Number(m.managerId)).filter(n => Number.isFinite(n));
 
-  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, weights, callsTizer, pgRowsPerManager] =
+  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, weights, callsTizer, pgRows] =
     await Promise.all([
       fetchByManagers({ period: opts.period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
@@ -172,9 +172,18 @@ export async function buildDepartmentCard(opts: {
       fetchTouchSpeedByManager(ALL_TIME),
       getScoringWeights(),
       fetchCallsTizerForManagers(managerIdNums, opts.period),
-      Promise.all(opts.roster.map(m =>
-        fetchByProductGroups({ period: opts.period, dealScope: 'all', clientType, productGroupMode: 'kc', managerId: m.managerId }),
-      )),
+      // Топ-5 категорий отдела — ОДИН агрегатный запрос по всему ростеру, а не по
+      // менеджеру (хотфикс 500 на «Дирекция», 20+ чел.: Promise.all по менеджеру бил
+      // в пул analyticsDb max=5 connectionTimeoutMillis=5000, лишние запросы отваливались
+      // по таймауту необработанным исключением). fetchByProductGroups фильтрует
+      // d.current_manager_id IN (...) на уровне SQL — количество запросов не растёт
+      // с размером отдела.
+      opts.roster.length > 0
+        ? fetchByProductGroups({
+            period: opts.period, dealScope: 'all', clientType, productGroupMode: 'kc',
+            managerIds: opts.roster.map(m => m.managerId),
+          })
+        : Promise.resolve([] as ReportRow[]),
     ]);
 
   // ── Синтетические «сырые» суммы отдела (текущий период / прошлый / всё время) ──
@@ -243,12 +252,10 @@ export async function buildDepartmentCard(opts: {
   const prevSalesCount  = prevSum.sales_count ?? 0;
 
   const categoriesAgg = new Map<string, number>();
-  for (const rows of pgRowsPerManager) {
-    for (const r of rows) {
-      const amount = (r.metrics.primary_sales_amount ?? 0) + (r.metrics.repeat_sales_amount ?? 0);
-      if (amount <= 0) continue;
-      categoriesAgg.set(r.dimensionName, (categoriesAgg.get(r.dimensionName) ?? 0) + amount);
-    }
+  for (const r of pgRows) {
+    const amount = (r.metrics.primary_sales_amount ?? 0) + (r.metrics.repeat_sales_amount ?? 0);
+    if (amount <= 0) continue;
+    categoriesAgg.set(r.dimensionName, (categoriesAgg.get(r.dimensionName) ?? 0) + amount);
   }
   const categoriesAll = [...categoriesAgg.entries()].map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount);
   const totalCatAmount = categoriesAll.reduce((s, r) => s + r.amount, 0);
