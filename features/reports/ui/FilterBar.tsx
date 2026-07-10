@@ -7,9 +7,9 @@ import { ChevronDown, ChevronRight, Building2, ArrowLeftRight, Search, X, Slider
 import type { DateRange } from '@/lib/period';
 import type { Grouping } from '@/lib/metrics/types';
 import { SOURCE_DIMENSIONS, type SourceDimension } from '@/lib/marketing/dimensions';
-import { recomputeComparison } from '@/lib/period';
+import { recomputeComparison, calendarComparisonForPreset } from '@/lib/period';
 import { Popover } from '@/components/ui/Popover';
-import { DateRangePicker } from './DateRangePicker';
+import { DateRangePicker, type PeriodChangeMeta } from './DateRangePicker';
 
 const GROUPING_LABELS: Record<Grouping, string> = { none: 'Без групп.', team: 'По отделу', branch: 'По филиалу', total: 'Итого' };
 
@@ -123,16 +123,27 @@ function DeptTreeNode({
 // ── Период + период сравнения — общий переиспользуемый блок ─────────────────
 // Вынесен из FilterBar, чтобы дрилл-даун (DrilldownDrawer) мог встроить тот же
 // контрол со своим (независимым от основного отчёта) состоянием периода.
-export function PeriodRangeControls({ period, comparison, onPeriodChange, onComparisonChange }: {
+//
+// Семантика сравнения при смене ГЛАВНОГО периода (задача 10.07, дословно
+// владельца: «При выборе периода быстрыми кнопками типа "прошлый месяц"
+// сравнительный должен не хвостик подгружать, а тоже месяц»):
+//  - клик по кнопке БЫСТРОГО ПРЕСЕТА (DateRangePicker передаёт meta.presetKey) →
+//    сравнение = ТОТ ЖЕ календарный объект на шаг назад (calendarComparisonForPreset);
+//  - ручной выбор двух дней в календаре (meta отсутствует) → сравнение = хвост той
+//    же длины, как раньше — `manualComparisonFn` (дефолт recomputeComparison,
+//    поведение основного отчёта; карточка менеджера передаёт previousPeriodSameLength,
+//    сохраняя СВОЙ прежний дефолт «период сразу перед текущим»).
+export function PeriodRangeControls({ period, comparison, onPeriodChange, onComparisonChange, manualComparisonFn = recomputeComparison }: {
   period: DateRange; comparison: DateRange;
   onPeriodChange: (p: DateRange) => void; onComparisonChange: (p: DateRange) => void;
+  manualComparisonFn?: (p: DateRange) => DateRange;
 }) {
   const [showPeriod, setShowPeriod] = useState(false);
   const [showComp,   setShowComp]   = useState(false);
 
-  function handlePeriodChange(p: DateRange) {
+  function handlePeriodChange(p: DateRange, meta?: PeriodChangeMeta) {
     onPeriodChange(p);
-    onComparisonChange(recomputeComparison(p));
+    onComparisonChange(meta?.presetKey ? calendarComparisonForPreset(meta.presetKey) : manualComparisonFn(p));
     setShowPeriod(false);
   }
 

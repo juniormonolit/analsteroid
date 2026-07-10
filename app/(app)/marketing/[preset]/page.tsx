@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import { SalesReportPage } from '@/features/reports/ui/SalesReportPage';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import type { SavedReport } from '@/lib/saved-reports/types';
-import { defaultPeriod, recomputeComparison } from '@/lib/period';
+import { defaultPeriod, defaultComparison } from '@/lib/period';
 
 export default async function MarketingPresetPage({
   params,
@@ -21,8 +21,11 @@ export default async function MarketingPresetPage({
   // by-managers/by-product-groups без preset) — верхняя граница = вчера. НЕ трогаем
   // resolveRelativePeriod/SaveReportModal: явные Месяц/Квартал/Год и реальные
   // пользовательские сохранённые отчёты (saved/[id]) по-прежнему считаются как раньше.
+  // Сравнение — defaultComparison() (задача 10.07): defaultPeriod() всегда календарный
+  // объект («этот месяц»/«прошлый месяц целиком»), поэтому сравнение тоже календарное
+  // (полный предыдущий месяц), а не хвост — было recomputeComparison(period).
   const period = defaultPeriod();
-  const comparison = recomputeComparison(period);
+  const comparison = defaultComparison();
 
   // Синтетический SavedReport: SalesReportPage подхватывает всё из preset-а.
   const preset: SavedReport = {

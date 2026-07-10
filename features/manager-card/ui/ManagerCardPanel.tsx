@@ -176,9 +176,12 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
   // НЕ отображаемое имя — см. CategoryShare в managerCard.ts).
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null);
 
+  // Сравнение при смене периода теперь считает PeriodRangeControls (задача 10.07):
+  // быстрый пресет → календарный шаг назад, ручной диапазон → previousPeriodSameLength
+  // (см. manualComparisonFn ниже — прежний дефолт карточки, «период сразу перед
+  // текущим», без изменений для ручного выбора).
   function handlePeriodChange(p: DateRange) {
     setPeriod(p);
-    setComparisonPeriod(previousPeriodSameLength(p));
     setOpenCategoryId(null);
   }
   function handleComparisonChange(p: DateRange) {
@@ -295,6 +298,7 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                 comparison={comparisonPeriod}
                 onPeriodChange={handlePeriodChange}
                 onComparisonChange={handleComparisonChange}
+                manualComparisonFn={previousPeriodSameLength}
               />
               <div className="w-px h-5 bg-[var(--color-border)]" />
               <ChipGroup

@@ -1,7 +1,7 @@
 'use client';
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { defaultPeriod, recomputeComparison } from '@/lib/period';
+import { defaultPeriod, defaultComparison } from '@/lib/period';
 import { FilterBar } from './FilterBar';
 import { ReportToolbar } from './ReportToolbar';
 import { ReportTable } from './ReportTable';
@@ -198,7 +198,11 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   });
   const isPro = uiModeData ? uiModeData.uiMode !== 'basic' : true;
   const [period, setPeriod]             = useState<DateRange>(defaultPeriod);
-  const [comparison, setComparison]     = useState<DateRange>(() => recomputeComparison(defaultPeriod()));
+  // Дефолт до появления сохранённого пресета (by-managers/by-product-groups) — сам
+  // defaultPeriod() по конструкции всегда календарный объект («этот месяц»/«прошлый
+  // месяц целиком» 1-го числа), поэтому и сравнение по умолчанию календарное
+  // (задача 10.07), а не хвост — см. lib/period::defaultComparison.
+  const [comparison, setComparison]     = useState<DateRange>(defaultComparison);
   const [dealScope, setDealScope]       = useState<DealScope>('all');
   const [clientType, setClientType]     = useState<ClientType>('all');
   const [grouping, setGrouping]         = useState<Grouping>('none');
@@ -311,9 +315,11 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
     setColumnGroups(preset.columnGroups ?? []);
   }, [preset?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Сравнение при смене периода теперь считает PeriodRangeControls (FilterBar.tsx —
+  // задача 10.07: быстрый пресет → календарный шаг назад, ручной диапазон → хвост
+  // той же длины, как раньше), через onComparisonChange={setComparison} ниже.
   const handlePeriodChange = useCallback((p: DateRange) => {
     setPeriod(p);
-    setComparison(recomputeComparison(p));
   }, []);
 
   // fetchedMetricIds only grows — removals don't trigger re-fetch, additions do

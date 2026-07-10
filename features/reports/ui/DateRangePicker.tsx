@@ -14,9 +14,17 @@ import { applyPreset, PRESET_LABELS } from '@/lib/period';
 const PRESETS: PresetKey[] = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month'];
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
+// Мета о происхождении диапазона (задача 10.07: «быстрые кнопки — сравнение
+// календарное, ручной диапазон — как раньше, хвост»). presetKey задан только когда
+// onChange вызван кликом по кнопке пресета — ручной выбор двух дней в календаре
+// вызывает onChange БЕЗ второго аргумента (undefined).
+export interface PeriodChangeMeta {
+  presetKey: PresetKey;
+}
+
 interface Props {
   value: DateRange;
-  onChange: (range: DateRange) => void;
+  onChange: (range: DateRange, meta?: PeriodChangeMeta) => void;
   onClose: () => void;
   showPresets?: boolean;
   title?: string;
@@ -71,7 +79,7 @@ export function DateRangePicker({ value, onChange, onClose, showPresets = true, 
   }
 
   function handlePreset(key: PresetKey) {
-    onChange(applyPreset(key));
+    onChange(applyPreset(key), { presetKey: key });
     setAnchor(null);
     onClose();
   }

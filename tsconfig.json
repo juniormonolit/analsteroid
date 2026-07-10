@@ -36,6 +36,14 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    // Assert/CLI-скрипты (scripts/*.ts) запускаются напрямую через
+    // `node --experimental-strip-types` (Node type-stripping, без сборки) и
+    // импортируют исходники с явным расширением `.ts` (`../lib/period/index.ts`) —
+    // это требует `allowImportingTsExtensions`, который тянет за собой noEmit-only
+    // ограничения для всего проекта. Проще исключить папку из общего typecheck
+    // приложения (как и остальные scripts/*.mjs, которые тоже не тайпчекаются) —
+    // см. scripts/assert-period-comparison.ts (задача 10.07, календарное сравнение).
+    "scripts/**/*.ts"
   ]
 }
