@@ -5,6 +5,7 @@ import type { SessionUser } from './session';
 
 export const PERM_SECTIONS = [
   { key: 'section.sales', label: 'Продажи' },
+  { key: 'section.realization', label: 'Реализация' },
   { key: 'section.marketing', label: 'Маркетинг' },
   { key: 'section.summary', label: 'Сводная' },
   { key: 'section.plans', label: 'Планы' },

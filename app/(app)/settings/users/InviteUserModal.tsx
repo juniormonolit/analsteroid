@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import type { Role } from './page';
+import { resolveRoleNameByLogin } from '@/lib/auth/roleByLogin';
 
 interface Employee {
   bitrix_user_id: string;
@@ -30,6 +31,9 @@ export function InviteUserModal({ roles, onInvited, onClose }: Props) {
   const [selected, setSelected] = useState<Employee | null>(null);
   const [login, setLogin] = useState('');
   const [roleId, setRoleId] = useState<string>(() => roles.find((r) => r.name === 'Пользователь')?.id ?? roles[0]?.id ?? '');
+  // Явный выбор роли в селекте перекрывает авто-подстановку по логину:
+  // как только админ сам трогает селект — авто больше не переписывает roleId.
+  const [roleTouched, setRoleTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +43,16 @@ export function InviteUserModal({ roles, onInvited, onClose }: Props) {
       .then((d: { employees?: Employee[] }) => setEmployees(d.employees ?? []))
       .catch(() => {});
   }, []);
+
+  // Авто-роль по маске логина (owners-инструкция 10.07.2026): дефолт-подстановка
+  // в поле, пока админ не выбрал роль вручную (roleTouched). Срабатывает при
+  // выборе сотрудника (suggestLogin) и при ручном редактировании логина.
+  useEffect(() => {
+    if (roleTouched || !login.trim()) return;
+    const autoName = resolveRoleNameByLogin(login);
+    const match = roles.find((r) => r.name === autoName);
+    if (match) setRoleId(match.id);
+  }, [login, roleTouched, roles]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -139,7 +153,7 @@ export function InviteUserModal({ roles, onInvited, onClose }: Props) {
           </label>
           <select
             value={roleId}
-            onChange={(e) => setRoleId(e.target.value)}
+            onChange={(e) => { setRoleId(e.target.value); setRoleTouched(true); }}
             className="w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-base sm:text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
           >
             {roles.map((r) => (

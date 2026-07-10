@@ -5,6 +5,7 @@ import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import { createAndSendInvite } from '@/lib/invites/tokens';
 import { getPublicOrigin } from '@/lib/http/publicOrigin';
+import { resolveRoleNameByLogin } from '@/lib/auth/roleByLogin';
 
 interface UserRow {
   id: string;
@@ -92,7 +93,10 @@ export async function POST(req: NextRequest) {
     const role = await db.query(`SELECT id FROM roles WHERE id = $1`, [resolvedRoleId]);
     if (!role.rows.length) return NextResponse.json({ error: 'Роль не найдена' }, { status: 400 });
   } else {
-    const role = await db.query<{ id: string }>(`SELECT id FROM roles WHERE name = 'Пользователь'`);
+    // role_id не передан явно (например, вызов API в обход формы) — авто-роль
+    // по маске логина (owners-инструкция 10.07.2026), фолбэк на «Пользователь».
+    const autoRoleName = resolveRoleNameByLogin(login);
+    const role = await db.query<{ id: string }>(`SELECT id FROM roles WHERE name = $1`, [autoRoleName]);
     resolvedRoleId = role.rows[0]?.id ?? null;
   }
 
