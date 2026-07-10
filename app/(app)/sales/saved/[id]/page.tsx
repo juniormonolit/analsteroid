@@ -54,7 +54,8 @@ export default async function SavedReportPage({
             fixed_period AS "fixedPeriod",
             fixed_comparison AS "fixedComparison",
             created_at AS "createdAt"
-     FROM saved_reports WHERE id = $1 AND (user_login = $2 OR is_shared = true)`,
+     FROM saved_reports
+     WHERE id = $1 AND (user_login = $2 OR is_shared = true) AND deleted_at IS NULL`,
     [id, session.login]
   );
 

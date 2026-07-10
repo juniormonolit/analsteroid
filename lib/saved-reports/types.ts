@@ -95,6 +95,26 @@ export interface SavedReport {
   fixedPeriod: { from: string; to: string } | null;
   fixedComparison: { from: string; to: string } | null;
   createdAt: string;
+  // Корзина отчётов (бриф 09.07, п.2, migration 069): null/undefined = не удалён.
+  // GET /api/saved-reports (основной список) всегда отдаёт deletedAt: null (уже
+  // отфильтровано WHERE deleted_at IS NULL) — эти поля заполняются только в ответе
+  // GET /api/saved-reports/trash.
+  deletedAt?: string | null;
+  deletedBy?: string | null;
 }
 
 export type SavedReportInput = Omit<SavedReport, 'id' | 'userLogin' | 'createdAt'>;
+
+// Пункт корзины (GET /api/saved-reports/trash) — не полный SavedReport (в списке
+// корзины не нужны все настройки отображения, только идентификация + метаданные
+// удаления), но переиспользует часть общих полей для рендера ссылки/бейджа раздела.
+export interface TrashedReport {
+  id: string;
+  name: string;
+  reportSlug: string;
+  userLogin: string;
+  isShared: boolean;
+  sharedSection: 'rop_monitor' | 'smekalochnaya' | null;
+  deletedAt: string;
+  deletedBy: string | null;
+}

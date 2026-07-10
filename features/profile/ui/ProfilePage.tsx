@@ -1,11 +1,12 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, IdCard, KeyRound, LayoutGrid } from 'lucide-react';
+import { Bell, IdCard, KeyRound, LayoutGrid, Rows3 } from 'lucide-react';
 import { startOfMonth } from 'date-fns';
 import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
+import { useTableScale, type TableScalePct } from '@/lib/hooks/useTableScale';
 import { DeptRosterGrid } from './DeptRosterGrid';
 import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 
@@ -74,6 +75,10 @@ export function ProfilePage() {
   // п.1) — общий хук с компактным тумблером в сайдбаре (AppShell), тот же серверный
   // ui_mode/queryKey.
   const { uiMode, setUiMode } = useUiMode();
+  // Масштаб таблиц (бриф 09.07, п.3): персональная настройка отображения — вместе с
+  // Про/Лайт живёт в ЛК (переехало сюда из «настроек отчёта», см. WORKLOG задачи —
+  // там раньше был локальный, непер­систентный «Размер шрифта» на localStorage).
+  const { tableScalePct, setTableScale } = useTableScale();
 
   const { data: me, isLoading: meLoading } = useQuery<Me>({
     queryKey: ['me'],
@@ -167,6 +172,35 @@ export function ProfilePage() {
                 }`}
               >
                 {m === 'basic' ? 'Лайт' : 'Про'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Масштаб таблиц (бриф 09.07, п.3): применяется ко всем таблицам отчётов
+            (основная, дрилл-даун, список сделок) — кегль и высота строк масштабируются
+            пропорционально от базовых 30px/100%. Персистится на юзере (users.table_scale). */}
+        <div className={cardCls}>
+          <div className="flex items-center gap-2 mb-2">
+            <Rows3 size={15} className="text-[var(--color-text-muted)]" />
+            <h2 className="text-sm font-semibold text-[var(--color-text)]">Масштаб таблиц</h2>
+          </div>
+          <p className="text-sm text-[var(--color-text-muted)] mb-3">
+            Размер шрифта и высота строк во всех таблицах отчётов — основной, дрилл-дауне,
+            списке сделок.
+          </p>
+          <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm w-fit">
+            {([85, 100, 115] as TableScalePct[]).map(p => (
+              <button
+                key={p}
+                onClick={() => setTableScale(p)}
+                className={`px-4 py-1.5 transition-colors ${
+                  tableScalePct === p
+                    ? 'bg-[var(--color-accent)] text-white'
+                    : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                }`}
+              >
+                {p}%
               </button>
             ))}
           </div>

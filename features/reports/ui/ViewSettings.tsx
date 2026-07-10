@@ -4,9 +4,13 @@ import { Popover } from '@/components/ui/Popover';
 import type { ComparisonDisplay, AccountType, BorderMode } from '@/lib/metrics/types';
 
 export type Density = 'compact' | 'normal' | 'relaxed';
-export interface ViewPrefs { density: Density; fontScale: number }
+// fontScale убран из настроек отчёта (бриф 09.07, п.3 — «Масштаб таблиц» переехал в ЛК,
+// users.table_scale, серверный и общий для ВСЕХ отчётов — см. useTableScale/ReportTable.
+// Старое значение в localStorage (report-view-prefs.fontScale) просто игнорируется ниже
+// (loadViewPrefs больше не читает это поле).
+export interface ViewPrefs { density: Density }
 
-export const DEFAULT_VIEW_PREFS: ViewPrefs = { density: 'normal', fontScale: 1 };
+export const DEFAULT_VIEW_PREFS: ViewPrefs = { density: 'normal' };
 const LS_KEY = 'report-view-prefs';
 
 export function loadViewPrefs(): ViewPrefs {
@@ -89,8 +93,6 @@ export function ViewSettingsFields({
   zebra, onZebraChange,
   borderMode, onBorderModeChange,
 }: ViewSettingsFieldsProps) {
-  const fontPct = Math.round(prefs.fontScale * 100);
-
   return (
       <div className="flex flex-col gap-3">
           {onAccountTypeChange && (
@@ -134,28 +136,9 @@ export function ViewSettingsFields({
             </div>
           </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Размер шрифта</span>
-              <span className="text-xs text-[var(--color-text-muted)]">{fontPct}%</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => onChange({ ...prefs, fontScale: Math.max(0.8, +(prefs.fontScale - 0.1).toFixed(2)) })}
-                className="w-7 h-7 flex items-center justify-center border border-[var(--color-border)] rounded hover:bg-[var(--color-bg-hover)] text-sm"
-              >A−</button>
-              <input
-                type="range" min={0.8} max={1.5} step={0.05}
-                value={prefs.fontScale}
-                onChange={e => onChange({ ...prefs, fontScale: +e.target.value })}
-                className="flex-1 accent-[var(--color-accent)]"
-              />
-              <button
-                onClick={() => onChange({ ...prefs, fontScale: Math.min(1.5, +(prefs.fontScale + 0.1).toFixed(2)) })}
-                className="w-7 h-7 flex items-center justify-center border border-[var(--color-border)] rounded hover:bg-[var(--color-bg-hover)] text-base"
-              >A+</button>
-            </div>
-          </div>
+          {/* «Размер шрифта» убран отсюда (бриф 09.07, п.3) — теперь это «Масштаб
+              таблиц» в ЛК (users.table_scale), применяется ко ВСЕМ отчётам сразу,
+              не per-report. См. features/profile/ui/ProfilePage.tsx. */}
 
           {onNumberAlignChange && (
             <div>

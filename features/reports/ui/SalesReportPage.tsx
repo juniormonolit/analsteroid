@@ -23,6 +23,7 @@ import { type SourceDimension, type DrilldownDimension } from '@/lib/marketing/d
 import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { isHeatmapEnabled, isRelativeDataType, toggleHeatmap } from '@/lib/metrics/heatmapDefault';
+import { useTableScale } from '@/lib/hooks/useTableScale';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -255,6 +256,11 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
 
   useEffect(() => { setViewPrefs(loadViewPrefs()); }, []);
   function updateViewPrefs(p: ViewPrefs) { setViewPrefs(p); saveViewPrefs(p); }
+
+  // «Масштаб таблиц» ЛК (бриф 09.07, п.3): глобальный per-user множитель, применяется
+  // ко всем таблицам отчёта (основная/дрилл-даун/сделки) — НЕ per-report настройка,
+  // источник — users.table_scale (см. ViewSettings.tsx — «Размер шрифта» убран оттуда).
+  const { tableScaleMult } = useTableScale();
 
   useEffect(() => {
     if (!preset) return;
@@ -753,7 +759,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
             metricFilters={metricFilters}
             columnGroups={columnGroups}
             density={viewPrefs.density}
-            fontScale={viewPrefs.fontScale}
+            tableScale={tableScaleMult}
           />
         )}
       </div>
@@ -793,7 +799,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
           pinnedMetricIds={pinnedMetricIds}
           columnGroups={columnGroups}
           density={viewPrefs.density}
-          fontScale={viewPrefs.fontScale}
+          tableScale={tableScaleMult}
           sourceDimension={sourceMode ? sourceDimension : undefined}
           drilldownDimension={sourceMode ? drilldownDimension : undefined}
           onDrilldownDimensionChange={sourceMode ? setDrilldownDimension : undefined}

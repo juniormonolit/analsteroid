@@ -50,7 +50,7 @@ export async function GET() {
             fixed_comparison AS "fixedComparison",
             created_at AS "createdAt"
      FROM saved_reports
-     WHERE user_login = $1 OR is_shared = true
+     WHERE (user_login = $1 OR is_shared = true) AND deleted_at IS NULL
      ORDER BY created_at DESC`,
     [session.login]
   );
@@ -178,7 +178,7 @@ export async function POST(req: NextRequest) {
       // saved_reports_shared_section_name_unique) — любой админ перезаписывает
       // существующий отчёт того же раздела/имени, не только собственный.
       const existing = await db.query<{ id: string }>(
-        `SELECT id FROM saved_reports WHERE is_shared = true AND shared_section = $1 AND name = $2`,
+        `SELECT id FROM saved_reports WHERE is_shared = true AND shared_section = $1 AND name = $2 AND deleted_at IS NULL`,
         [sharedSection, body.name]
       );
       if (existing.rows.length) {
@@ -201,13 +201,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Личный отчёт: перезаписывается только свой же (user_login, name) — как раньше.
-    // Партиционный индекс saved_reports_personal_user_name_unique (migration 058)
-    // ограничивает конфликт только личными (NOT is_shared) строками этого автора.
+    // Партиционный индекс saved_reports_personal_user_name_unique (migration
+    // 058, сужен migration 069) ограничивает конфликт личными (NOT is_shared) И
+    // не удалёнными (deleted_at IS NULL) строками этого автора — deleted_at IS NULL
+    // ЗДЕСЬ ОБЯЗАН буквально совпадать с WHERE индекса, иначе Postgres не сопоставит
+    // ON CONFLICT с партиционным индексом (см. migration 069). Благодаря этому имя,
+    // лежащее в корзине, можно занять заново — новая строка создаётся отдельно.
     const { sql, values } = buildUpsertOnConflict(
       'saved_reports',
       { user_login: session.login, report_slug: body.reportSlug, name: body.name, ...fields },
       ['user_login', 'name'],
-      'NOT is_shared'
+      'NOT is_shared AND deleted_at IS NULL'
     );
     const res = await db.query<{ id: string }>(sql, values);
     return NextResponse.json({ id: res.rows[0].id });

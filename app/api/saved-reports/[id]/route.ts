@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isReportAdmin, superadminError } from '@/lib/auth/perms';
+import { isReportAdmin, permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import type { SavedReportInput } from '@/lib/saved-reports/types';
 
@@ -17,12 +17,18 @@ export async function PUT(
 
   // Свой отчёт правит только владелец; общий («Роп монитор»/«Смекалочная») —
   // любой админ (не только исходный автор) — п.3б спеки.
-  const existing = await db.query<{ user_login: string; is_shared: boolean }>(
-    `SELECT user_login, is_shared FROM saved_reports WHERE id = $1`,
+  const existing = await db.query<{ user_login: string; is_shared: boolean; deleted_at: Date | null }>(
+    `SELECT user_login, is_shared, deleted_at FROM saved_reports WHERE id = $1`,
     [id]
   );
   if (!existing.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   const row = existing.rows[0];
+  // Корзина (бриф 09.07, п.2): удалённый отчёт не редактируется — сначала «Восстановить»
+  // (POST .../restore), потом уже PUT. Иначе правка молча воскрешала бы контент отчёта,
+  // не снимая deleted_at, — он остался бы видимым в редакторе, но невидимым в списках.
+  if (row.deleted_at !== null) {
+    return NextResponse.json({ error: 'Отчёт в корзине — сначала восстановите' }, { status: 409 });
+  }
   const isAdmin = isReportAdmin(session);
   if (row.user_login !== session.login && !(row.is_shared && isAdmin)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
@@ -92,6 +98,10 @@ export async function PUT(
   return NextResponse.json({ ok: true });
 }
 
+// Корзина отчётов (бриф 09.07, п.2): DELETE больше не удаляет строку — проставляет
+// deleted_at/deleted_by (см. migration 069). Настоящее удаление — отдельный роут
+// .../permanent (DELETE), восстановление — .../restore (POST). Раздел корзины —
+// GET /api/saved-reports/trash.
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -102,24 +112,30 @@ export async function DELETE(
   const { id } = await params;
   const db = systemDb();
 
-  const existing = await db.query<{ user_login: string; is_shared: boolean }>(
-    `SELECT user_login, is_shared FROM saved_reports WHERE id = $1`,
+  const existing = await db.query<{ user_login: string; is_shared: boolean; deleted_at: Date | null }>(
+    `SELECT user_login, is_shared, deleted_at FROM saved_reports WHERE id = $1`,
     [id]
   );
   if (!existing.rows.length) return NextResponse.json({ ok: true }); // уже удалён — идемпотентно
-
   const row = existing.rows[0];
+  if (row.deleted_at !== null) return NextResponse.json({ ok: true }); // уже в корзине — идемпотентно
+
   if (row.is_shared) {
-    // Общие разделы («Роп монитор»/«Смекалочная») — удалять может ТОЛЬКО супер-админ
-    // (п.3б спеки), в отличие от сохранения/перезаписи (там достаточно action.shared_reports.manage).
-    const err = superadminError(session);
+    // Общие разделы («Роп монитор»/«Смекалочная») — переместить в корзину может админ
+    // (action.shared_reports.manage), тот же уровень, что и сохранение/перезапись
+    // (раньше настоящее удаление требовало супер-админа — теперь это восстановимо,
+    // планка снижена до isReportAdmin, см. отчёт задачи).
+    const err = permError(session, 'action.shared_reports.manage');
     if (err) return err;
-    await db.query(`DELETE FROM saved_reports WHERE id = $1`, [id]);
+    await db.query(`UPDATE saved_reports SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1`, [id, session.login]);
   } else {
     if (row.user_login !== session.login) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-    await db.query(`DELETE FROM saved_reports WHERE id = $1 AND user_login = $2`, [id, session.login]);
+    await db.query(
+      `UPDATE saved_reports SET deleted_at = NOW(), deleted_by = $2 WHERE id = $1 AND user_login = $2`,
+      [id, session.login]
+    );
   }
   return NextResponse.json({ ok: true });
 }

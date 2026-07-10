@@ -110,7 +110,9 @@ interface Props {
   pinnedMetricIds?: string[];
   columnGroups?: { name: string; metricIds: string[] }[];
   density?: 'compact' | 'normal' | 'relaxed';
-  fontScale?: number;
+  // «Масштаб таблиц» ЛК (бриф 09.07, п.3) — глобальный per-user множитель, применяется
+  // и к мини-отчёту (ReportTable), и к списку сделок (DealsTable) внутри дрилл-дауна.
+  tableScale?: number;
 }
 
 function fmt(s: string | null) {
@@ -238,15 +240,26 @@ function SortHead({ label, col, align, sortKey, sortDir, onSort }: {
   );
 }
 
-function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDealOpen }: {
+function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDealOpen, tableScale = 1 }: {
   deals: Deal[]; fields: string[]; sortKey?: string; sortDir?: 'asc' | 'desc'; onSort?: (k: string) => void; stickyHead?: boolean;
-  onDealOpen?: (id: number) => void;
+  onDealOpen?: (id: number) => void; tableScale?: number;
 }) {
   // Column order follows the configured `fields` order.
   const cols = fields.map(k => DEAL_FIELDS.find(f => f.key === k)).filter(Boolean) as typeof DEAL_FIELDS;
+  // «Масштаб таблиц» ЛК (бриф 09.07, п.3): базовые 7px/12px (text-xs) масштабируются
+  // ОБА на tableScale — тот же приём, что basePy/fontSize в ReportTable.tsx (line-height
+  // text-xs — унитарный множитель, значит масштабируется вместе с fontSize сам), поэтому
+  // 7px*2 + 16px(line-height) = 30px при tableScale=1 масштабируется пропорционально.
+  const rowPy = `${7 * tableScale}px`;
   return (
     <div className={`overflow-x-auto bg-[var(--color-bg)] pl-6 py-1 ${stickyHead ? 'overflow-y-auto h-full' : ''}`}>
-      <table className="w-full text-xs border-collapse">
+      {/* fontSize — инлайн-стиль НА САМОЙ <table> (не на обёртке div): именно так
+          ReportTable.tsx перебивает text-xs класс тем же приёмом (инлайн-стиль на
+          одном элементе с классом побеждает класс независимо от специфичности). */}
+      <table
+        className="w-full text-xs border-collapse"
+        style={{ fontSize: `${12 * tableScale}px`, ['--deals-row-py' as string]: rowPy } as React.CSSProperties}
+      >
         <thead className={stickyHead ? 'sticky top-0 z-10 bg-[var(--color-table-header)]' : undefined}>
           <tr className="bg-[var(--color-table-header)]">
             {/* Колонка «№» (п.6 правок 09.07/2) — порядковый номер видимой строки,
@@ -268,14 +281,15 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
                 onClick={onDealOpen ? () => onDealOpen(deal.deal_id) : undefined}
                 title={onDealOpen ? 'Открыть карточку сделки' : undefined}
                 className={`border-t border-[var(--color-border)] hover:bg-[var(--color-table-row-hover)] ${onDealOpen ? 'cursor-pointer' : ''} ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''}`}>
-              {/* py-[7px] (не py-1.5=6px, правка 09.07 «строка → 30px»): text-xs (12px) даёт
-                  line-height ~16px (Tailwind --text-xs--line-height: 1/0.75), 7+16+7=30 —
-                  та же высота строки, что и в основной таблице отчёта (ReportTable.tsx),
-                  для единообразия между отчётом и списком сделок дрилл-дауна. */}
-              <td className="px-2 py-[7px] text-right text-[11px] text-[var(--color-text-muted)] tabular-nums whitespace-nowrap">
+              {/* py-[var(--deals-row-py)] (база 7px, не py-1.5=6px, правка 09.07 «строка →
+                  30px»): text-xs (12px) даёт line-height ~16px (Tailwind
+                  --text-xs--line-height: 1/0.75), 7+16+7=30 — та же высота строки, что и в
+                  основной таблице отчёта (ReportTable.tsx). Масштабируется «Масштабом
+                  таблиц» (см. rowPy выше) вместе с fontSize контейнера. */}
+              <td className="px-2 py-[var(--deals-row-py)] text-right text-[11px] text-[var(--color-text-muted)] tabular-nums whitespace-nowrap">
                 {i + 1}
               </td>
-              <td className="px-5 py-[7px] text-[var(--color-text-muted)] whitespace-nowrap">
+              <td className="px-5 py-[var(--deals-row-py)] text-[var(--color-text-muted)] whitespace-nowrap">
                 {/* Полоска слева по текущей стадии сделки (тот же приём, что у строки
                     «Итого» основного отчёта — w-1 h-4 rounded-full); «в работе» — без
                     цвета, полоска прозрачна (сознательно, см. dealStageColor). */}
@@ -286,7 +300,7 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
               </td>
               {cols.map(c => (
                 <td key={c.key}
-                    className={`px-3 py-[7px] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[#000]' : ''}`}>
+                    className={`px-3 py-[var(--deals-row-py)] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[#000]' : ''}`}>
                   {dealCell(deal, c.key)}
                 </td>
               ))}
@@ -301,8 +315,8 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
 }
 
 // ── Плоский список сделок по готовому набору query-параметров ───────────────
-function DealsListBody({ query, dealFields, onDealOpen }: {
-  query: URLSearchParams; dealFields?: string[]; onDealOpen?: (id: number) => void;
+function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
+  query: URLSearchParams; dealFields?: string[]; onDealOpen?: (id: number) => void; tableScale?: number;
 }) {
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const [dealSort, setDealSort] = useState<DealSort>(null);
@@ -331,7 +345,7 @@ function DealsListBody({ query, dealFields, onDealOpen }: {
         {`Итого: ${dealsCountLabel(deals.length)}`} · {fmtMoney(total)}
       </div>
       <div className="flex-1 overflow-hidden">
-        <DealsTable deals={sortDealsBy(deals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} />
+        <DealsTable deals={sortDealsBy(deals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} tableScale={tableScale} />
       </div>
     </div>
   );
@@ -353,7 +367,7 @@ function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | '
 }
 
 // ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
-function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen }: Props) {
+function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen, tableScale }: Props) {
   // Групповые цели: отдел → teamId; филиал → менеджерское измерение branch;
   // «Итого» → весь срез (фильтры отчёта по отделам/типу аккаунтов — в baseDealParams)
   const dimensionParams: Record<string, string> =
@@ -368,12 +382,12 @@ function FlatDealsView({ target, dimensionType, period, dealScope, clientType, p
     ...dimensionParams,
     ...(target.metricId ? { metricFilter: target.metricId } : {}),
   });
-  return <DealsListBody query={params} dealFields={dealFields} onDealOpen={onDealOpen} />;
+  return <DealsListBody query={params} dealFields={dealFields} onDealOpen={onDealOpen} tableScale={tableScale} />;
 }
 
 // ── Суб-дрилл: сделки по паре «цель × строка мини-отчёта» + метрика ─────────
 function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
-  const { sub, onBack, period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFields, onDealOpen } = props;
+  const { sub, onBack, period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFields, onDealOpen, tableScale } = props;
   const params = new URLSearchParams({
     ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType }),
     ...(sub.managerId ? { managerId: sub.managerId } : {}),
@@ -393,7 +407,7 @@ function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
         </span>
       </div>
       <div className="flex-1 overflow-hidden">
-        <DealsListBody query={params} dealFields={dealFields} onDealOpen={onDealOpen} />
+        <DealsListBody query={params} dealFields={dealFields} onDealOpen={onDealOpen} tableScale={tableScale} />
       </div>
     </div>
   );
@@ -580,7 +594,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
       pinnedMetricIds={props.pinnedMetricIds}
       columnGroups={props.columnGroups}
       density={props.density}
-      fontScale={props.fontScale}
+      tableScale={props.tableScale}
       sortBy={sort.key}
       sortDir={sort.dir}
       onSortChange={(by, dir) => setSort({ key: by, dir })}
@@ -590,7 +604,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
       renderExpandedRow={row => {
         const rowDeals = dealsByRow.get(bucketKey(row)) ?? [];
         return rowDeals.length
-          ? <DealsTable deals={sortDealsBy(rowDeals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} />
+          ? <DealsTable deals={sortDealsBy(rowDeals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} tableScale={props.tableScale} />
           : <div className="px-6 py-3 text-xs text-[var(--color-text-muted)]">Нет сделок за период</div>;
       }}
     />

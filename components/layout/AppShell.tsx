@@ -7,14 +7,17 @@ import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
   Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, Lightbulb,
+  RotateCcw,
 } from 'lucide-react';
+import { format } from 'date-fns';
+import { ru } from 'date-fns/locale';
 import type { SessionUser } from '@/lib/auth/session';
-import { hasPerm, type PermKey } from '@/lib/auth/perms';
+import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
 import { Avatar } from '@/components/ui/Avatar';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { BrandLogo } from '@/components/ui/BrandLogo';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
-import type { SavedReport } from '@/lib/saved-reports/types';
+import type { SavedReport, TrashedReport } from '@/lib/saved-reports/types';
 import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
 import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
 import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
@@ -73,6 +76,9 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   const [openStd, setOpenStd] = useState(true);
   const [openFav, setOpenFav] = useState(true);
   const [openShared, setOpenShared] = useState(true);
+  // Корзина (бриф 09.07, п.2): ВСЕГДА свёрнута по умолчанию, даже когда «Продажи»/
+  // «Роп монитор»/«Избранное» развёрнуты — независимое состояние, не связано с ними.
+  const [openTrash, setOpenTrash] = useState(false);
   const qc = useQueryClient();
 
   const { data: savedReports = [] } = useQuery<SavedReport[]>({
@@ -85,11 +91,43 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     staleTime: 30_000,
   });
 
+  // Корзина: свои удалённые личные отчёты видит любой; удалённые витринные —
+  // только admin (action.shared_reports.manage) — сервер уже фильтрует по этому
+  // праву (GET /api/saved-reports/trash), клиент просто рендерит, что пришло.
+  const { data: trashedReports = [] } = useQuery<TrashedReport[]>({
+    queryKey: ['saved-reports-trash'],
+    queryFn: async () => {
+      const res = await fetch('/api/saved-reports/trash');
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
   async function deleteReport(id: string, e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    // Корзина (бриф 09.07, п.2): DELETE больше не стирает отчёт — переносит в
+    // корзину (deleted_at). Настоящее удаление — отдельная кнопка внутри корзины.
     await fetch(`/api/saved-reports/${id}`, { method: 'DELETE' });
     qc.invalidateQueries({ queryKey: ['saved-reports'] });
+    qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
+  }
+
+  async function restoreReport(id: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    await fetch(`/api/saved-reports/${id}/restore`, { method: 'POST' });
+    qc.invalidateQueries({ queryKey: ['saved-reports'] });
+    qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
+  }
+
+  async function permanentlyDelete(id: string, name: string, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Удалить отчёт «${name}» навсегда? Это нельзя отменить.`)) return;
+    await fetch(`/api/saved-reports/${id}/permanent`, { method: 'DELETE' });
+    qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
   }
 
   const stdReports = [
@@ -98,11 +136,13 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   ];
 
   // Пункт 3б спеки: две управляемые общие витрины, одна механика (is_shared),
-  // разные разделы (shared_section). Удаление из общих разделов — только супер-админ.
+  // разные разделы (shared_section). Перемещение в корзину — admin
+  // (action.shared_reports.manage); раньше требовался супер-админ — операция стала
+  // обратимой (корзина), планку снизили (см. app/api/saved-reports/[id]/route.ts).
   const ropMonitorShared = savedReports.filter(r => r.isShared && r.sharedSection === 'rop_monitor');
   const smekalochnayaShared = savedReports.filter(r => r.isShared && r.sharedSection === 'smekalochnaya');
   const ownReports = savedReports.filter(r => !r.isShared && r.userLogin === user.login);
-  const canDeleteShared = user.isSuperadmin;
+  const canDeleteShared = isReportAdmin(user);
 
   // Направляющая линия вложенности вокруг под-группы (Роп монитор / Смекалочная / Избранное).
   const subgroupCls = 'ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]';
@@ -209,6 +249,63 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
                 </Link>
               );
             })
+          )
+        )}
+      </div>
+
+      {/* Корзина (бриф 09.07, п.2) — ВНИЗУ списка отчётов, после витрин/избранного,
+          всегда свёрнута по умолчанию (openTrash инициализирован false, независимо
+          от остальных под-групп). Свои удалённые видит любой; удалённые витринные —
+          только admin (сервер уже отфильтровал, см. GET /api/saved-reports/trash). */}
+      <div className={subgroupCls}>
+        <button onClick={() => setOpenTrash(v => !v)} className={subgroupLabelCls}>
+          <Trash2 size={11} />
+          <span className="flex-1 text-left">Корзина</span>
+          {trashedReports.length > 0 && (
+            <span className="shrink-0 min-w-[16px] h-4 px-1 rounded-full bg-[var(--color-sidebar-border)] text-[var(--color-sidebar-text-muted)] text-[9px] font-bold flex items-center justify-center">
+              {trashedReports.length}
+            </span>
+          )}
+          {openTrash ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        </button>
+        {openTrash && (
+          trashedReports.length === 0 ? (
+            <div className="text-xs text-[var(--color-sidebar-text-muted)] py-1 px-1">
+              Корзина пуста
+            </div>
+          ) : (
+            trashedReports.map(r => (
+              <div key={r.id} className="flex flex-col gap-0.5 py-1.5 px-2 my-0.5 text-[13px] rounded-[7px]">
+                <div className="flex items-start gap-1.5">
+                  <span className="flex-1 min-w-0 break-words line-clamp-2 text-[var(--color-sidebar-text-muted)]" title={r.name}>
+                    {r.name}
+                    {r.isShared && (
+                      <span className="ml-1.5 align-middle inline-block px-1 py-px text-[9px] rounded bg-[var(--color-sidebar-border)] text-[var(--color-sidebar-text-muted)]">
+                        витрина
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div className="text-[10.5px] text-[var(--color-sidebar-text-muted)] opacity-80">
+                  {format(new Date(r.deletedAt), 'd MMM, HH:mm', { locale: ru })}
+                  {r.deletedBy && ` · ${r.deletedBy}`}
+                </div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <button
+                    onClick={e => restoreReport(r.id, e)}
+                    className="flex items-center gap-1 text-[11px] text-[var(--color-accent)] hover:underline"
+                  >
+                    <RotateCcw size={11} /> Восстановить
+                  </button>
+                  <button
+                    onClick={e => permanentlyDelete(r.id, r.name, e)}
+                    className="flex items-center gap-1 text-[11px] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)]"
+                  >
+                    <Trash2 size={11} /> Удалить навсегда
+                  </button>
+                </div>
+              </div>
+            ))
           )
         )}
       </div>

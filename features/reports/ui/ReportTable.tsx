@@ -154,7 +154,11 @@ interface Props {
   metricFilters?: MetricFilters;
   columnGroups?: { name: string; metricIds: string[] }[];
   density?: 'compact' | 'normal' | 'relaxed';
-  fontScale?: number;
+  // «Масштаб таблиц» ЛК (бриф 09.07, п.3, users.table_scale) — глобальный per-user
+  // множитель (0.85/1/1.15), НЕ per-report настройка (была per-report fontScale,
+  // упразднена — см. ViewSettings.tsx). Масштабирует и кегль, и высоту строки
+  // (rowPy) пропорционально от базовых 14px/30px — см. renderRow ниже.
+  tableScale?: number;
   // Дрилл-даун: раскрытие обычной строки произвольным контентом (список сделок).
   // Управляется снаружи: onRowClick переключает, expandedRowIds хранит открытые.
   expandedRowIds?: Set<string>;
@@ -196,7 +200,7 @@ export function ReportTable({
   metricFilters = {},
   columnGroups = [],
   density = 'normal',
-  fontScale = 1,
+  tableScale = 1,
   expandedRowIds,
   renderExpandedRow,
 }: Props) {
@@ -1022,7 +1026,15 @@ export function ReportTable({
   // упиралась в неё (36px), даже в compact — теперь колонка измерения тоже на
   // --row-py (см. renderRow), поэтому compact/relaxed стали настоящими, а не
   // визуально одинаковыми с normal.
-  const rowPy = density === 'compact' ? '2px' : density === 'relaxed' ? '14px' : '5px';
+  //
+  // «Масштаб таблиц» (бриф 09.07, п.3): basePy умножается на tableScale — line-height
+  // уже масштабируется автоматически вместе с fontSize (Tailwind text-sm задаёт его
+  // унитарным множителем, не фикс. px — см. --text-sm--line-height), поэтому умножение
+  // ОБОИХ слагаемых (fontSize и basePy) на один и тот же tableScale даёт РОВНО
+  // 30px×tableScale итоговой высоты строки — то есть настоящее пропорциональное
+  // масштабирование от базовых 30px/100%, а не только шрифта.
+  const basePy = density === 'compact' ? 2 : density === 'relaxed' ? 14 : 5;
+  const rowPy = `${basePy * tableScale}px`;
 
   // ── Группировка «Итого» — вертикальная таблица (правка собрания 09.07/2) ────────
   // Раньше «Итого» рендерился как ОДНА строка со всеми метриками во всю ширину
@@ -1037,7 +1049,7 @@ export function ReportTable({
     const totalRow = sorted[0];
     const hasAnyComparison = displayMetrics.some(m => leafKinds(resolveMode(m.id)).length > 1);
     return (
-      <div className="overflow-auto h-full bg-[var(--color-bg-surface)]" style={{ fontSize: `${14 * fontScale}px` }}>
+      <div className="overflow-auto h-full bg-[var(--color-bg-surface)]" style={{ fontSize: `${14 * tableScale}px` }}>
         <div className="max-w-3xl mx-auto p-5 sm:p-7">
           {!totalRow ? (
             <div className="text-sm text-[var(--color-text-muted)] text-center py-10">Нет данных</div>
@@ -1120,7 +1132,7 @@ export function ReportTable({
 
   return (
     <div className="overflow-auto h-full bg-[var(--color-bg-surface)]">
-      <table className="w-full text-sm border-collapse" style={{ fontSize: `${14 * fontScale}px`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
+      <table className="w-full text-sm border-collapse" style={{ fontSize: `${14 * tableScale}px`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
         <thead className="report-thead sticky top-0 z-30 bg-[var(--color-table-header)]">
           {hasGroups && (
             <tr>
