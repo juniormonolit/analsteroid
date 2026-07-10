@@ -21,6 +21,21 @@ import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, Acco
 interface PeriodPlanEntry { planSales: number; planShipments: number }
 
 /**
+ * Валидация period/comparisonPeriod (баг найден 10.07 при работе над задачей "план
+ * (на сегодня)"): при отсутствующем/битом comparisonPeriod (например, клиент не передал
+ * поле вовсе) `comparisonPeriod.from` в compOpts падал с TypeError на undefined —
+ * необработанное исключение отдавало 500 вместо честной 400-валидации. Проверяем оба
+ * периода одинаково (симметрично), т.к. `period` тоже может прийти пустым/битым.
+ */
+function isValidPeriodInput(p: unknown): p is { from: string; to: string } {
+  if (!p || typeof p !== 'object') return false;
+  const from = (p as Record<string, unknown>).from;
+  const to = (p as Record<string, unknown>).to;
+  if (typeof from !== 'string' || typeof to !== 'string') return false;
+  return !Number.isNaN(new Date(from).getTime()) && !Number.isNaN(new Date(to).getTime());
+}
+
+/**
  * Задача 10.07 (фикс «план-метрики должны считать рабочие дни ПО ВЫБРАННОМУ ПЕРИОДУ, а не
  * по "сегодня"» — owners-inbox). Раньше «План (на сегодня)» и «Выполнение плана % (день)/
  * (неделя)» считались от начала ТЕКУЩЕГО календарного месяца/недели до реального "сегодня",
@@ -107,6 +122,13 @@ export async function POST(req: NextRequest) {
     sourceDimension, // by-sources: main dimension (brand/platform/contact_type/ad_channel/branch/source)
     sourceFilter,    // drilldown: { dimension, value } — restrict deals to one dimension value
   } = body;
+
+  if (!isValidPeriodInput(period)) {
+    return NextResponse.json({ error: 'period.from и period.to обязательны и должны быть валидными датами' }, { status: 400 });
+  }
+  if (!isValidPeriodInput(comparisonPeriod)) {
+    return NextResponse.json({ error: 'comparisonPeriod.from и comparisonPeriod.to обязательны и должны быть валидными датами' }, { status: 400 });
+  }
 
   const start = Date.now();
 
