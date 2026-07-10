@@ -1,4 +1,6 @@
 import Redis from 'ioredis';
+import fs from 'fs';
+import path from 'path';
 
 // Server-side Redis cache for heavy analytics results (L2, shared across instances/restarts).
 //
@@ -8,10 +10,50 @@ import Redis from 'ioredis';
 //  - Redis unreachable / errors → fail fast and degrade to the DB producer. A request is NEVER
 //                                 rejected because of the cache; errors are logged (throttled).
 //
-// Namespace + version live in the key prefix. Bump CACHE_VERSION to invalidate everything at
+// Namespace + version live in the key prefix. Bumping CACHE_VERSION invalidates everything at
 // once (e.g. after a schema/metric change that alters cached result shapes).
+//
+// Инцидент 09-10.07 (рекомендация Артёма, деплой 51): Redis-кэш `as:v1:rpt:*` был
+// ПРИВЯЗАН К ХАРДКОДУ 'v1', не к версии кода — после деплоя с новой логикой расчёта
+// (фикс «План (месяц)» и др.) прод продолжал отдавать РЕЗУЛЬТАТЫ, посчитанные ДО
+// фикса, пока не истёк TTL (до 24ч, см. HISTORICAL_TTL_SEC) или Артём не сбрасывал
+// кэш вручную (invalidateReports()). Фикс — версия кэша теперь ЧИТАЕТСЯ из
+// `.next/BUILD_ID` (Next.js генерирует его заново на КАЖДЫЙ `next build`, см.
+// package.json::scripts.build) — новый деплой = новый BUILD_ID = новый namespace
+// автоматически, без единой ручной команды. Старые ключи не удаляются активно (никто
+// больше не пишет/не читает по старому namespace — TTL сам вычистит их из Redis).
+//
+// dev (`next dev`) не создаёт `.next/BUILD_ID` — фолбэк 'dev' (нет реального деплоя,
+// версионирование кэша не имеет смысла в watch-режиме, но код не должен падать).
+// L1 in-memory кэши (byManagers.ts/byProductGroups.ts::_rowCache, cardTemplates.ts,
+// scoringWeights.ts и т.п.) НЕ переживают деплой в принципе — процесс перезапускается
+// целиком, Map обнуляется сама. Их трогать не нужно (BUILD_ID им ничего не даёт и не
+// портит) — только L2 (Redis, переживает рестарт процесса) был уязвим к этому багу.
+// Кандидаты пути к BUILD_ID — порядок зависит от того, ОТКУДА реально запущен
+// `node server.js` (deploy.sh/start.sh — вне этого репозитория, живёт на сервере
+// Артёма, у нас нет доступа проверить cwd напрямую): официальный next.js standalone
+// паттерн — cwd ВНУТРИ `.next/standalone` (тогда `.next/BUILD_ID` рядом, 1й кандидат);
+// если start.sh вместо этого запускает `node .next/standalone/server.js` из корня
+// проекта (cwd = корень) — верный файл лежит на 2 уровня глубже (2й кандидат).
+// Пробуем оба, берём первый существующий — не падаем ни в одном из вариантов cwd.
+let _buildId: string | null = null;
+function resolveBuildId(): string {
+  if (_buildId) return _buildId;
+  const candidates = [
+    path.join(process.cwd(), '.next', 'BUILD_ID'),
+    path.join(process.cwd(), '.next', 'standalone', '.next', 'BUILD_ID'),
+  ];
+  for (const p of candidates) {
+    try {
+      const v = fs.readFileSync(p, 'utf8').trim();
+      if (v) { _buildId = v; return _buildId; }
+    } catch { /* пробуем следующий кандидат */ }
+  }
+  _buildId = 'dev'; // `next dev` или ни один путь не найден — вотч-режим/неизвестный запуск
+  return _buildId;
+}
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = resolveBuildId();
 const NS = `as:${CACHE_VERSION}:`;
 
 let _client: Redis | null = null;
