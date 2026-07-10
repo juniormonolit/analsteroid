@@ -9,7 +9,7 @@ import {
 import { ru } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { DateRange, PresetKey } from '@/lib/period';
-import { applyPreset, PRESET_LABELS } from '@/lib/period';
+import { applyPreset, defaultPeriod, PRESET_LABELS } from '@/lib/period';
 
 const PRESETS: PresetKey[] = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month'];
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -80,6 +80,20 @@ export function DateRangePicker({ value, onChange, onClose, showPresets = true, 
 
   function handlePreset(key: PresetKey) {
     onChange(applyPreset(key), { presetKey: key });
+    setAnchor(null);
+    onClose();
+  }
+
+  // Задача 1593: «По умолчанию» — воспроизводит РОВНО тот диапазон, что видит
+  // пользователь при первой загрузке любого отчёта (defaultPeriod() — с 1-го числа
+  // текущего месяца по вчера, либо, 1-го числа, весь прошлый месяц — см. lib/period,
+  // формула не дублируется). НЕ входит в PresetKey/calendarComparisonForPreset —
+  // meta.presetKey сознательно не передаётся, поэтому PeriodRangeControls.
+  // handlePeriodChange берёт ветку `manualComparisonFn(p)` (хвост той же длины,
+  // см. FilterBar.tsx), а не календарный шаг назад из недавнего коммита (задача
+  // 10.07 про «прошлый месяц» и другие быстрые пресеты — та семантика не трогается).
+  function handleDefaultPreset() {
+    onChange(defaultPeriod());
     setAnchor(null);
     onClose();
   }
@@ -184,6 +198,12 @@ export function DateRangePicker({ value, onChange, onClose, showPresets = true, 
       {showPresets && (
         <div className="border-t sm:border-t-0 sm:border-l border-[var(--color-border)] py-3 px-2 sm:w-[168px] flex flex-row flex-wrap sm:flex-col gap-0.5">
           <p className="w-full text-xs font-medium text-[var(--color-text-muted)] px-2 mb-1 uppercase tracking-wide">Пресеты</p>
+          <button
+            onClick={handleDefaultPreset}
+            className="text-left px-2 py-1.5 text-sm rounded hover:bg-[var(--color-border)] text-[var(--color-text)] transition-colors whitespace-nowrap"
+          >
+            По умолчанию
+          </button>
           {PRESETS.map(key => (
             <button
               key={key}
