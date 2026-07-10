@@ -405,19 +405,36 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   // «не работает сохранение в Отчёты Стаса/Роп монитор» — сервер падал на конфликте
   // имён, а фронтенд об этом не узнавал). Теперь модалка сама решает, закрываться
   // ей или показать ошибку и остаться открытой.
-  async function handleSaveReport(_name: string, input: SavedReportInput): Promise<{ ok: boolean; error?: string }> {
+  //
+  // Три режима (правка владельца 10.07, диалог конфликта имён в SaveReportModal):
+  // - 'create' — обычное сохранение (нет конфликта имени) — POST, как раньше.
+  // - 'update' — «Перезаписать» из диалога конфликта ИЛИ тихое пересохранение уже
+  //   открытого отчёта (currentReportId) без конфликта — PUT по id, id сохраняется.
+  // - 'copy' — «Сохранить копию» из диалога — POST с forceCopy: сервер вставляет
+  //   новую строку, при совпадении имени В ТОМ ЖЕ скоупе сам подбирает свободное имя.
+  async function handleSaveReport(
+    input: SavedReportInput,
+    opts: { mode: 'create' | 'update' | 'copy'; targetId?: string }
+  ): Promise<{ ok: boolean; error?: string; name?: string }> {
     try {
-      const res = await fetch('/api/saved-reports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
-      });
+      const res = opts.mode === 'update'
+        ? await fetch(`/api/saved-reports/${opts.targetId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(input),
+          })
+        : await fetch('/api/saved-reports', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(opts.mode === 'copy' ? { ...input, forceCopy: true } : input),
+          });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         return { ok: false, error: data.error ?? 'Не удалось сохранить отчёт' };
       }
+      const data = await res.json().catch(() => ({}));
       setShowSaveModal(false);
-      return { ok: true };
+      return { ok: true, name: data.name };
     } catch {
       return { ok: false, error: 'Сетевая ошибка при сохранении' };
     }
@@ -945,6 +962,7 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         <SaveReportModal
           reportSlug={reportSlug}
           initialName={title}
+          currentReportId={preset?.id ?? null}
           metricIds={selectedMetricIds}
           dealScope={dealScope}
           clientType={clientType}

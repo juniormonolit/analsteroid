@@ -7,7 +7,7 @@ import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
   Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, Lightbulb,
-  RotateCcw,
+  RotateCcw, Pencil, ChevronUp,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -140,6 +140,53 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
   }
 
+  // Переименование (правка владельца 10.07, п.2 «дай админам возможность
+  // переназывать отчеты во всех разделов») — инлайн-редактирование прямо в
+  // сайдбаре (проще полноценной модалки для одного поля). Права проверяет сервер
+  // (PATCH /api/saved-reports/[id]) — свой личный отчёт правит владелец, витринный —
+  // админ; см. app/api/saved-reports/[id]/route.ts::PATCH. Конфликт имени внутри
+  // раздела — простая ошибка алертом (решение по простоте, не отдельный диалог —
+  // тот же паттерн alert/confirm, что уже использует permanentlyDelete выше).
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  function startRename(r: SavedReport, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setRenamingId(r.id);
+    setRenameValue(r.name);
+  }
+
+  async function commitRename(id: string) {
+    const trimmed = renameValue.trim();
+    setRenamingId(null);
+    if (!trimmed) return;
+    const res = await fetch(`/api/saved-reports/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (res.ok) {
+      qc.invalidateQueries({ queryKey: ['saved-reports'] });
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? 'Не удалось переименовать отчёт');
+    }
+  }
+
+  // Ручной порядок (правка владельца 10.07, migration 077) — «вверх»/«вниз» меняют
+  // sort_order местами с соседом в том же скоупе (см. .../[id]/move/route.ts).
+  async function moveReport(id: string, direction: 'up' | 'down', e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    await fetch(`/api/saved-reports/${id}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ direction }),
+    });
+    qc.invalidateQueries({ queryKey: ['saved-reports'] });
+  }
+
   const stdReports = [
     { label: 'По менеджерам', href: '/sales/by-managers' },
     { label: 'По товарным группам', href: '/sales/by-product-groups' },
@@ -168,6 +215,76 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
 
   const delBtnCls =
     'hover-reveal tap-target absolute right-1 top-1 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)]';
+  const renameBtnCls =
+    'hover-reveal tap-target absolute right-6 top-1 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-accent)]';
+  const moveBtnCls =
+    'hover-reveal tap-target p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-accent)] disabled:opacity-30 disabled:hover:text-[var(--color-sidebar-text-muted)]';
+  const renameInputCls =
+    'flex-1 min-w-0 bg-[var(--color-bg)] border border-[var(--color-accent)] rounded-[5px] px-1.5 py-0.5 text-[13px] text-[var(--color-sidebar-text)] outline-none';
+
+  // Одна строка отчёта в сайдбаре (ссылка + порядок + переименование + удаление) —
+  // переиспользуется для всех трёх списков (Роп монитор / Смекалочная / Избранное),
+  // различается только правом на управление (canManage — свой отчёт или витрина, где
+  // я админ) и позицией в списке (isFirst/isLast — дизейблят край кнопок вверх/вниз;
+  // сервер (.../move) — источник правды по краю, это только UI-подсказка).
+  function renderReportRow(r: SavedReport, canManage: boolean, isFirst: boolean, isLast: boolean) {
+    const href = `/sales/saved/${r.id}`;
+    if (renamingId === r.id) {
+      return (
+        <div key={r.id} className="flex items-center gap-1.5 py-1 px-2 my-0.5">
+          <input
+            autoFocus
+            value={renameValue}
+            onChange={e => setRenameValue(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitRename(r.id);
+              if (e.key === 'Escape') setRenamingId(null);
+            }}
+            onBlur={() => commitRename(r.id)}
+            className={renameInputCls}
+          />
+        </div>
+      );
+    }
+    return (
+      <div key={r.id} className="group relative flex items-center gap-0.5">
+        {canManage && (
+          <div className="flex flex-col shrink-0 pl-1">
+            <button
+              onClick={e => moveReport(r.id, 'up', e)}
+              disabled={isFirst}
+              className={moveBtnCls}
+              title="Переместить выше"
+            >
+              <ChevronUp size={11} />
+            </button>
+            <button
+              onClick={e => moveReport(r.id, 'down', e)}
+              disabled={isLast}
+              className={moveBtnCls}
+              title="Переместить ниже"
+            >
+              <ChevronDown size={11} />
+            </button>
+          </div>
+        )}
+        <Link href={href} className={`flex-1 ${linkCls(href)}`} title={r.name}>
+          <span className="flex-1 min-w-0 break-words line-clamp-2">{r.name}</span>
+          {canManage && (
+            <>
+              <button onClick={e => startRename(r, e)} className={renameBtnCls} title="Переименовать">
+                <Pencil size={12} />
+              </button>
+              <button onClick={e => deleteReport(r.id, e)} className={delBtnCls} title="Удалить">
+                <Trash2 size={12} />
+              </button>
+            </>
+          )}
+        </Link>
+      </div>
+    );
+  }
 
   if (collapsed) {
     return (
@@ -193,19 +310,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
                 <span className="flex-1 min-w-0 break-words line-clamp-2">{r.label}</span>
               </Link>
             ))}
-            {ropMonitorShared.map(r => {
-              const href = `/sales/saved/${r.id}`;
-              return (
-                <Link key={r.id} href={href} className={linkCls(href)} title={r.name}>
-                  <span className="flex-1 min-w-0 break-words line-clamp-2">{r.name}</span>
-                  {canDeleteShared && (
-                    <button onClick={e => deleteReport(r.id, e)} className={delBtnCls}>
-                      <Trash2 size={12} />
-                    </button>
-                  )}
-                </Link>
-              );
-            })}
+            {ropMonitorShared.map((r, i) => renderReportRow(r, canDeleteShared, i === 0, i === ropMonitorShared.length - 1))}
           </>
         )}
       </div>
@@ -219,19 +324,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
             <span className="flex-1 text-left">Отчёты Стаса</span>
             {openShared ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
           </button>
-          {openShared && smekalochnayaShared.map(r => {
-            const href = `/sales/saved/${r.id}`;
-            return (
-              <Link key={r.id} href={href} className={linkCls(href)} title={r.name}>
-                <span className="flex-1 min-w-0 break-words line-clamp-2">{r.name}</span>
-                {canDeleteShared && (
-                  <button onClick={e => deleteReport(r.id, e)} className={delBtnCls}>
-                    <Trash2 size={12} />
-                  </button>
-                )}
-              </Link>
-            );
-          })}
+          {openShared && smekalochnayaShared.map((r, i) => renderReportRow(r, canDeleteShared, i === 0, i === smekalochnayaShared.length - 1))}
         </div>
       )}
 
@@ -248,17 +341,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
               Нет сохранённых
             </div>
           ) : (
-            ownReports.map(r => {
-              const href = `/sales/saved/${r.id}`;
-              return (
-                <Link key={r.id} href={href} className={linkCls(href)} title={r.name}>
-                  <span className="flex-1 min-w-0 break-words line-clamp-2">{r.name}</span>
-                  <button onClick={e => deleteReport(r.id, e)} className={delBtnCls}>
-                    <Trash2 size={12} />
-                  </button>
-                </Link>
-              );
-            })
+            ownReports.map((r, i) => renderReportRow(r, true, i === 0, i === ownReports.length - 1))
           )
         )}
       </div>

@@ -61,7 +61,19 @@ interface Props {
   // Префилл имени (п.8 правок 09.07/2): название текущего отчёта — стандартного
   // (заголовок страницы) либо открытого сохранённого (его имя). Редактируемо.
   initialName?: string;
-  onSave: (name: string, input: SavedReportInput) => Promise<{ ok: boolean; error?: string } | void>;
+  // Id отчёта, который СЕЙЧАС открыт (страница /sales/saved/[id]) — если задан и имя/
+  // раздел не сталкиваются с ЧУЖИМ отчётом, повторное «Сохранить» тихо обновляет
+  // именно эту запись (PUT по id), без диалога конфликта — обычный флоу «открыл,
+  // поправил, сохранил». undefined/null — обычный (не открытый сохранённый) отчёт.
+  currentReportId?: string | null;
+  // Правка 10.07 (см. WORKLOG): перезапись/копия — явный выбор пользователя через
+  // диалог конфликта имён, а не молчаливое поведение. targetId задан только для
+  // mode='update' (id существующей строки, которую перезаписываем — может отличаться
+  // от currentReportId, если конфликт нашёлся под другим отчётом).
+  onSave: (
+    input: SavedReportInput,
+    opts: { mode: 'create' | 'update' | 'copy'; targetId?: string }
+  ) => Promise<{ ok: boolean; error?: string; name?: string } | void>;
   onClose: () => void;
 }
 
@@ -75,7 +87,7 @@ export function SaveReportModal({
   sourceDimension, drilldownDimension,
   sortBy, sortDir, columnGroups,
   currentPeriod, currentComparison,
-  initialName,
+  initialName, currentReportId,
   onSave, onClose,
 }: Props) {
   const [name, setName] = useState(initialName ?? '');
@@ -85,29 +97,49 @@ export function SaveReportModal({
   const [compMode, setCompMode] = useState<ComparisonMode>('previous_tail');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [existingReports, setExistingReports] = useState<{ id: string; name: string; isShared?: boolean; sharedSection?: string | null }[]>([]);
+  const [existingReports, setExistingReports] = useState<{ id: string; name: string; userLogin?: string; isShared?: boolean; sharedSection?: string | null }[]>([]);
+  // Логин текущего пользователя — нужен, чтобы отличить «мой личный отчёт с таким
+  // именем» (конфликт) от «чужой личный отчёт с таким же именем» (не конфликт, я его
+  // даже не вижу в частностях — просто совпадение имени в разных приватных списках).
+  const [myLogin, setMyLogin] = useState<string | null>(null);
   // Право сохранять в общие разделы («Роп монитор» / «Смекалочная»)
   const [canShare, setCanShare] = useState(false);
   // Раздел сохранения (п.3б спеки): личное избранное (по умолчанию) либо один из
   // двух управляемых общих разделов — одна механика, разные названия.
   const [section, setSection] = useState<'personal' | 'rop_monitor' | 'smekalochnaya'>('personal');
+  // Диалог конфликта имён (правка владельца 10.07 — «сохранение отчётов работает
+  // хуево»): раньше при совпадении имени в ДРУГОМ скоупе (не там, где имя реально
+  // занято — например уже открытый отчёт «Товары» из «Смекалочной» пересохраняли в
+  // «Роп монитор») тихо создавалась вторая запись с тем же именем — выглядело как
+  // «не перезаписывает, а плодит копии». Теперь конфликт (см. computeConflict) не
+  // сохраняется молча ни в какую сторону — показываем диалог с явным выбором.
+  // pendingInput — собранный input, ждёт решения пользователя (Перезаписать/Копия/Отмена).
+  const [conflict, setConflict] = useState<{ id: string; sharedSection: string | null } | null>(null);
+  const [pendingInput, setPendingInput] = useState<SavedReportInput | null>(null);
+  const [conflictBusy, setConflictBusy] = useState(false);
 
   useEffect(() => {
     fetch('/api/saved-reports')
       .then(r => r.json())
       // 401/ошибка возвращает объект, не массив — без проверки падает existingReports.find
-      .then((data: { id: string; name: string; isShared?: boolean; sharedSection?: string | null }[]) => setExistingReports(Array.isArray(data) ? data : []))
+      .then((data: { id: string; name: string; userLogin?: string; isShared?: boolean; sharedSection?: string | null }[]) => setExistingReports(Array.isArray(data) ? data : []))
       .catch(() => {});
     fetch('/api/auth/session')
       .then(r => r.json())
-      .then((d: { user?: { isSuperadmin?: boolean; permissions?: string[] } }) =>
-        setCanShare(!!d.user?.isSuperadmin || !!d.user?.permissions?.includes('action.shared_reports.manage')))
+      .then((d: { user?: { login?: string; isSuperadmin?: boolean; permissions?: string[] } }) => {
+        setMyLogin(d.user?.login ?? null);
+        setCanShare(!!d.user?.isSuperadmin || !!d.user?.permissions?.includes('action.shared_reports.manage'));
+      })
       .catch(() => {});
   }, []);
 
+  // Подсказка у поля имени: «уже существует, повторное сохранение может
+  // потребовать выбора» — любое совпадение имени (не обязательно в целевом скоупе,
+  // достаточно намекнуть) в общем списке видимых отчётов (свои + все витринные).
   const existing = existingReports.find(r => r.name === name.trim());
   const willOverwrite = !!existing;
-  // При перезаписи существующего отчёта раздел подхватывается автоматически
+  // При обнаружении существующего ВИТРИННОГО отчёта с таким именем раздел
+  // подхватывается автоматически — просто удобство, не влияет на конфликт-логику.
   useEffect(() => {
     if (existing?.sharedSection === 'rop_monitor' || existing?.sharedSection === 'smekalochnaya') {
       setSection(existing.sharedSection);
@@ -115,14 +147,29 @@ export function SaveReportModal({
   }, [existing?.sharedSection]);
 
   const relativePeriod: RelativePeriod = { anchor, unit };
+  const effectiveSection: 'personal' | 'rop_monitor' | 'smekalochnaya' = canShare && section !== 'personal' ? section : 'personal';
 
-  async function handleSave() {
-    if (!name.trim()) return;
-    setSaving(true);
-    setError(null);
-    const input: SavedReportInput = {
+  // Ищет РЕАЛЬНЫЙ конфликт имени в целевом скоупе сохранения:
+  // - personal → мой же личный отчёт с этим именем (владелец = я);
+  // - rop_monitor/smekalochnaya → любой витринный отчёт с этим именем, В ЛЮБОМ ИЗ
+  //   ДВУХ общих разделов (не только в целевом) — иначе «переезд» отчёта между
+  //   «Роп монитор» и «Смекалочная» с тем же именем не находил бы старую запись и
+  //   плодил копию (ровно баг из жалобы владельца, воспроизведён 10.07).
+  // currentReportId (открытый сейчас отчёт) исключается — его же с самим собой не
+  // считаем конфликтом, это обычный флоу «поправил и сохранил».
+  function findConflict(trimmedName: string) {
+    if (effectiveSection === 'personal') {
+      return existingReports.find(
+        r => r.id !== currentReportId && r.name === trimmedName && !r.isShared && r.userLogin === myLogin
+      ) ?? null;
+    }
+    return existingReports.find(r => r.id !== currentReportId && r.name === trimmedName && r.isShared) ?? null;
+  }
+
+  function buildInput(trimmedName: string): SavedReportInput {
+    return {
       reportSlug,
-      name: name.trim(),
+      name: trimmedName,
       metricIds,
       dealScope,
       clientType,
@@ -152,8 +199,8 @@ export function SaveReportModal({
       drilldownGrouped,
       sourceDimension,
       drilldownDimension,
-      isShared: canShare && section !== 'personal',
-      sharedSection: canShare && section !== 'personal' ? section : null,
+      isShared: effectiveSection !== 'personal',
+      sharedSection: effectiveSection !== 'personal' ? effectiveSection : null,
       sortBy,
       sortDir,
       columnGroups,
@@ -167,13 +214,116 @@ export function SaveReportModal({
         ? { from: currentComparison.from.toISOString(), to: currentComparison.to.toISOString() }
         : null,
     };
-    const result = await onSave(name.trim(), input);
+  }
+
+  async function handleSave() {
+    if (!name.trim()) return;
+    const trimmed = name.trim();
+    const input = buildInput(trimmed);
+    const conflictRow = findConflict(trimmed);
+    if (conflictRow) {
+      // Не сохраняем молча ни в overwrite, ни в copy — ждём явного выбора.
+      setError(null);
+      setPendingInput(input);
+      setConflict({ id: conflictRow.id, sharedSection: conflictRow.sharedSection ?? null });
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const result = currentReportId
+      ? await onSave(input, { mode: 'update', targetId: currentReportId })
+      : await onSave(input, { mode: 'create' });
     setSaving(false);
     // onSave может ничего не вернуть (старое поведение) — тогда считаем успехом,
     // как раньше. Если вернул {ok:false}, модалку не закрываем и показываем причину.
     if (result && result.ok === false) {
       setError(result.error ?? 'Не удалось сохранить отчёт');
     }
+  }
+
+  function sectionLabel(s: string | null): string {
+    if (s === 'rop_monitor') return '«Роп монитор»';
+    if (s === 'smekalochnaya') return '«Отчёты Стаса»';
+    return 'в личных отчётах';
+  }
+
+  async function handleOverwrite() {
+    if (!pendingInput || !conflict) return;
+    setConflictBusy(true);
+    setError(null);
+    const result = await onSave(pendingInput, { mode: 'update', targetId: conflict.id });
+    setConflictBusy(false);
+    if (result && result.ok === false) {
+      setError(result.error ?? 'Не удалось перезаписать отчёт');
+      setConflict(null);
+    }
+  }
+
+  async function handleSaveCopy() {
+    if (!pendingInput) return;
+    setConflictBusy(true);
+    setError(null);
+    const result = await onSave(pendingInput, { mode: 'copy' });
+    setConflictBusy(false);
+    if (result && result.ok === false) {
+      setError(result.error ?? 'Не удалось сохранить копию');
+      setConflict(null);
+    }
+  }
+
+  function handleCancelConflict() {
+    setConflict(null);
+    setPendingInput(null);
+  }
+
+  // Диалог конфликта имён — заменяет форму целиком (тот же <Modal>, стилистика как
+  // у UnsavedChangesDialog: нейтральная «Отмена» / вторичная «Сохранить копию» /
+  // акцентная primary «Перезаписать»).
+  if (conflict) {
+    return (
+      <Modal
+        open
+        onOpenChange={o => { if (!o) handleCancelConflict(); }}
+        title="Отчёт с таким названием уже есть"
+        desktopWidth="sm:max-w-sm"
+      >
+        <div className="text-sm text-[var(--color-text-muted)] mb-5">
+          Отчёт «{pendingInput?.name}» уже сохранён {sectionLabel(conflict.sharedSection)}. Перезаписать его новой
+          конфигурацией (обновится у всех, кто им пользуется) или сохранить как отдельную копию?
+        </div>
+        {error && (
+          <div className="text-xs text-[var(--color-error,#dc2626)] mb-3">
+            {error}
+          </div>
+        )}
+        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+          <button
+            type="button"
+            onClick={handleCancelConflict}
+            disabled={conflictBusy}
+            className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            onClick={handleSaveCopy}
+            disabled={conflictBusy}
+            className="px-4 py-2 text-sm font-medium border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-50"
+          >
+            Сохранить копию
+          </button>
+          <button
+            type="button"
+            onClick={handleOverwrite}
+            disabled={conflictBusy}
+            className="px-5 py-2 text-sm font-semibold bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {conflictBusy ? 'Перезаписываем...' : 'Перезаписать'}
+          </button>
+        </div>
+      </Modal>
+    );
   }
 
   return (
@@ -200,7 +350,7 @@ export function SaveReportModal({
           </datalist>
           {willOverwrite && (
             <div className="text-xs text-[var(--color-warning,#f59e0b)]">
-              Отчёт с таким названием уже существует — конфигурация будет перезаписана
+              Отчёт с таким названием уже есть — при сохранении будет предложено перезаписать или сохранить копию
             </div>
           )}
           {error && (
@@ -334,7 +484,7 @@ export function SaveReportModal({
             disabled={!name.trim() || saving}
             className="px-5 py-2 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
           >
-            {saving ? 'Сохранение...' : willOverwrite ? 'Перезаписать' : 'Сохранить'}
+            {saving ? 'Сохранение...' : 'Сохранить'}
           </button>
         </div>
       </div>
