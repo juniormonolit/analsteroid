@@ -25,6 +25,10 @@ interface DealFull {
   head_group_id: number | null; head_group_name: string | null;
   stage_name: string | null; funnel_name: string | null; funnel_is_repeat: boolean | null;
 }
+// LTV карточки сделки (задача 1561, владелец приложения Серёга): А — «LTV клиента»
+// (вся история продаж клиента), Б — «LTV от этой сделки» (эта продажа + все
+// последующие). null — у сделки нет contact_id (блок скрывается, не ошибка).
+interface LtvInfo { customerLtv: number; dealLtv: number }
 interface ManagerInfo { name: string; login: string | null; branch: string; department: string | null }
 interface SourceInfo {
   name: string; category: string; contact_type: string | null; branch: string | null;
@@ -93,11 +97,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function Row({ label, value, strong }: { label: string; value: React.ReactNode; strong?: boolean }) {
+function Row({ label, value, strong, title }: { label: string; value: React.ReactNode; strong?: boolean; title?: string }) {
   if (value === null || value === undefined || value === '—') return null;
   return (
     <div className="flex items-baseline justify-between gap-4 py-1">
-      <span className="text-sm text-[var(--color-text-muted)] shrink-0">{label}</span>
+      {/* title — нативный тултип с расшифровкой формулы, тот же паттерн, что и
+          title={p.name}/compactTooltip(...) в остальной карточке/ReportTable
+          (в проекте нет реально используемого Radix Tooltip, только native title). */}
+      <span className="text-sm text-[var(--color-text-muted)] shrink-0" title={title}>{label}</span>
       <span className={`text-sm text-right text-[var(--color-text)] ${strong ? 'font-semibold' : ''}`}>{value}</span>
     </div>
   );
@@ -124,7 +131,7 @@ type DealCardTab = 'main' | 'products' | 'calls';
 export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['deal-card', dealId],
-    queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null; callsCount: number }>,
+    queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null; callsCount: number; ltv: LtvInfo | null }>,
     staleTime: 60_000,
   });
   const deal = data?.deal;
@@ -313,6 +320,30 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                       <Row label="Компания" value={deal.company_id ? `#${deal.company_id}` : null} />
                       <Row label="Обновлена" value={fmtDate(deal.updated_at)} />
                     </Section>
+
+                    {/* LTV клиента (задача 1561, владелец приложения Серёга) — только если
+                        у сделки есть contact_id, иначе блок целиком скрыт (не ошибка, просто
+                        нет клиента для сопоставления). Обе суммы — по тому же предикату
+                        «продажи» (sold_at IS NOT NULL, сумма = amount), что и остальные
+                        отчётные движки приложения (см. app/api/reports/deal/route.ts). */}
+                    {deal.contact_id && data?.ltv && (
+                      <Section title="LTV клиента">
+                        <Row
+                          label="LTV клиента (вся история)"
+                          value={fmtMoney(data.ltv.customerLtv)}
+                          strong
+                          title="Сумма всех продаж клиента (contact_id) по всем его сделкам, включая эту, если она продана"
+                        />
+                        <Row
+                          label="LTV от этой сделки"
+                          value={fmtMoney(data.ltv.dealLtv)}
+                          strong
+                          title={deal.sold_at
+                            ? 'Продажа этой сделки + все последующие продажи этому же клиенту после неё (по дате продажи)'
+                            : 'Сделка ещё не продана: продажи этому же клиенту после даты создания этой сделки'}
+                        />
+                      </Section>
+                    )}
                   </div>
                 </div>
               </div>
