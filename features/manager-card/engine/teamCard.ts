@@ -27,14 +27,16 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
-import { computeDelta } from '@/features/reports/engine/calculated';
+import { computeDelta, computeTotals } from '@/features/reports/engine/calculated';
+import { enrichManagerRowsForMetrics } from '@/features/reports/engine/enrichManagerRows';
+import { loadMetrics } from '@/lib/metrics/catalog';
 import {
   buildAxisMap, salesPositiveIds, poolValuesForAxis,
   percentileScore, ratingFor, rawAxisValues, segmentToClientType, previousPeriod,
   fetchTouchSpeedByManager, resolveTemplateAxes, type CardSegment, type CategoryShare, type ManagerCardResult,
 } from './managerCard';
 import { getRawScoringWeights } from '@/lib/settings/scoringWeights';
-import { getCardTemplate } from '@/lib/settings/cardTemplates';
+import { getCardTemplate, type LegacyAxisKey } from '@/lib/settings/cardTemplates';
 import type { RosterManager } from '@/lib/org/teamRoster';
 import { toSqlInterval, type DateRange } from '@/lib/period';
 import type { ReportRow, ProductGroupMode } from '@/lib/metrics/types';
@@ -69,25 +71,35 @@ export async function buildTeamRoster(opts: {
 }): Promise<TeamRosterResult> {
   const clientType = segmentToClientType(opts.segment);
 
-  const [periodPool, touchPeriodMap, rawWeights, template] = await Promise.all([
+  const [periodPoolRaw, touchPeriodMap, rawWeights, template, allMetrics] = await Promise.all([
     fetchByManagers({ period: opts.period, dealScope: 'all', clientType, accountType: 'managers' }),
     fetchTouchSpeedByManager(opts.period),
     getRawScoringWeights(),
     getCardTemplate('manager'),
+    loadMetrics(),
   ]);
 
+  // Задача 10.07, п.2: оси шаблона могут быть ЛЮБОЙ метрикой каталога, не только
+  // legacy-8 — если шаблон 'manager' содержит catalog-оси, пул нужно обогатить ТЕМИ
+  // ЖЕ функциями движка отчётов, что и managerCard.ts (реюз, не параллельный расчёт).
+  // Каждая карточка сетки — ОДИН менеджер (не агрегат), поэтому здесь НЕТ проблемы
+  // «медиана не аддитивна» из buildDepartmentCard ниже — просто читаем значение
+  // конкретного менеджера из уже посчитанной ReportRow.metrics.
+  const templateAxes = resolveTemplateAxes(template.axes, allMetrics);
+  const catalogAxisKeys = [...new Set(templateAxes.filter(d => d.source === 'catalog').map(d => d.bareKey))];
+  const periodPool = await enrichManagerRowsForMetrics(periodPoolRaw, opts.period, catalogAxisKeys);
+
   // Пул нормировки — ВСЯ компания (как в managerCard.ts), не только этот отдел.
-  const axisMap  = buildAxisMap(periodPool, touchPeriodMap);
+  const axisMap  = buildAxisMap(periodPool, touchPeriodMap, templateAxes);
   const eligible = salesPositiveIds(periodPool);
   const rowById  = new Map(periodPool.map(r => [r.dimensionId, r]));
-  const templateAxes = resolveTemplateAxes(template.axes);
 
   const managers: TeamRosterEntry[] = opts.roster.map(m => {
     const row = rowById.get(m.managerId);
     const rating = ratingFor(axisMap, eligible, m.managerId, rawWeights, templateAxes);
     const own = axisMap.get(m.managerId);
     const radar = templateAxes.map(def => {
-      const raw = own?.[def.key] ?? null;
+      const raw = own?.get(def.key) ?? null;
       if (raw === null) return 0;
       const pool = poolValuesForAxis(axisMap, eligible, def.key);
       return percentileScore(raw, pool, def.invert) ?? 0;
@@ -174,7 +186,7 @@ export async function buildDepartmentCard(opts: {
   const managerIds = new Set(opts.roster.map(m => m.managerId));
   const managerIdNums = opts.roster.map(m => Number(m.managerId)).filter(n => Number.isFinite(n));
 
-  const [periodPool, prevPool, touchPeriodMap, touchCompMap, rawWeights, template, callsTizer, pgRows] =
+  const [periodPoolRaw, prevPoolRaw, touchPeriodMap, touchCompMap, rawWeights, template, callsTizer, pgRows, allMetrics] =
     await Promise.all([
       fetchByManagers({ period: opts.period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
@@ -195,7 +207,17 @@ export async function buildDepartmentCard(opts: {
             managerIds: opts.roster.map(m => m.managerId),
           })
         : Promise.resolve([] as ReportRow[]),
+      loadMetrics(),
     ]);
+
+  // Задача 10.07, п.2: catalog-оси отдела обогащаются ТЕМИ ЖЕ функциями движка
+  // отчётов (реюз, как и managerCard.ts/buildTeamRoster выше).
+  const templateAxes = resolveTemplateAxes(template.axes, allMetrics);
+  const catalogAxisKeys = [...new Set(templateAxes.filter(d => d.source === 'catalog').map(d => d.bareKey))];
+  const [periodPool, prevPool] = await Promise.all([
+    enrichManagerRowsForMetrics(periodPoolRaw, opts.period, catalogAxisKeys),
+    enrichManagerRowsForMetrics(prevPoolRaw, prevPeriod, catalogAxisKeys),
+  ]);
 
   // ── Синтетические «сырые» суммы отдела (текущий период / период сравнения) ──
   // Задача 10.07, п.3: полупрозрачный слой паутины теперь = период сравнения
@@ -205,33 +227,60 @@ export async function buildDepartmentCard(opts: {
   const touchCur  = avgTouch(touchPeriodMap, managerIds);
   const touchComp = avgTouch(touchCompMap, managerIds);
 
-  const curAxisRaw  = rawAxisValues(curSum, touchCur);
-  const compAxisRaw = rawAxisValues(prevSum, touchComp);
+  // Агрегат отдела для catalog-осей (задача 10.07, п.2): computeTotals() — тот же
+  // приём, что «Итого» отчёта (calculated.ts) — сумма collected/external(sum) +
+  // calculated ПЕРЕСЧИТАН из сумм. ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ (см. отчёт задачи): для
+  // внешних медианных метрик (aggregation_fn='none', calls_median_duration и т.п.)
+  // computeTotals НЕ суммирует (медиана не аддитивна, как и «Итого» п.7) — их
+  // агрегат на уровне ОТДЕЛА честно null. Карточка ОДНОГО менеджера и ФИФА-сетка
+  // (buildTeamRoster выше) этого ограничения не имеют — там ось = значение
+  // конкретного менеджера, не агрегат группы.
+  function catalogAggregateFor(pool: ReportRow[], memberIds: Set<string>): Record<string, number | null> {
+    if (catalogAxisKeys.length === 0) return {};
+    return computeTotals(pool.filter(r => memberIds.has(r.dimensionId)), allMetrics);
+  }
+
+  function axisValuesFor(legacySum: Record<string, number | null>, touch: number | null, catalogAgg: Record<string, number | null>): Map<string, number | null> {
+    const legacyVals = rawAxisValues(legacySum, touch);
+    const out = new Map<string, number | null>();
+    for (const def of templateAxes) {
+      out.set(def.key, def.source === 'legacy' ? legacyVals[def.bareKey as LegacyAxisKey] : (catalogAgg[def.bareKey] ?? null));
+    }
+    return out;
+  }
+
+  const curCatalog  = catalogAggregateFor(periodPool, managerIds);
+  const prevCatalog = catalogAggregateFor(prevPool, managerIds);
+  const ownAxisMapCur  = axisValuesFor(curSum, touchCur, curCatalog);
+  const ownAxisMapComp = axisValuesFor(prevSum, touchComp, prevCatalog);
 
   // ── Пиры: все department_id, назначенные хоть кому-то (+ корневые), включая нас ──
   // Строим axisMap+eligibility пиров для ЛЮБОГО пула (период / период сравнения) —
   // общий хелпер, чтобы не дублировать цикл по peerBuckets дважды (сравнение тоже
   // должно быть посчитано, а не заглушкой — иначе серый слой паутины схлопывается
   // в точку, т.к. ManagerCardRadar трактует null как 0).
-  function buildPeerAxisMap(pool: ReportRow[], touchMap: Map<string, number> | null, ownSum: Record<string, number | null>, ownTouch: number | null) {
-    const sums = new Map<string, Record<string, number | null>>();
+  function buildPeerAxisMap(pool: ReportRow[], touchMap: Map<string, number> | null, ownAxisMap: Map<string, number | null>) {
+    const axisMap = new Map<string, Map<string, number | null>>();
+    const eligibleIds: string[] = [];
     for (const [deptId, members] of opts.peerBuckets) {
-      sums.set(deptId, deptId === opts.deptId ? ownSum : sumRows(pool, new Set(members.map(m => m.managerId))));
+      const memberIds = new Set(members.map(m => m.managerId));
+      if (deptId === opts.deptId) {
+        axisMap.set(deptId, ownAxisMap);
+      } else {
+        const sum = sumRows(pool, memberIds);
+        const touch = avgTouch(touchMap, memberIds);
+        axisMap.set(deptId, axisValuesFor(sum, touch, catalogAggregateFor(pool, memberIds)));
+      }
+      const salesCount = deptId === opts.deptId ? (curSum.sales_count ?? 0) : sumRows(pool, memberIds).sales_count ?? 0;
+      if (salesCount > 0) eligibleIds.push(deptId);
     }
-    const axisMap = new Map<string, ReturnType<typeof rawAxisValues>>();
-    for (const [deptId, members] of opts.peerBuckets) {
-      const touch = deptId === opts.deptId ? ownTouch : avgTouch(touchMap, new Set(members.map(m => m.managerId)));
-      axisMap.set(deptId, rawAxisValues(sums.get(deptId)!, touch));
-    }
-    const eligible = new Set([...sums.entries()].filter(([, s]) => (s.sales_count ?? 0) > 0).map(([id]) => id));
-    return { axisMap, eligible };
+    return { axisMap, eligible: new Set(eligibleIds) };
   }
 
   const peerIds = [...opts.peerBuckets.keys()];
   const insufficientPeers = peerIds.length < 2;
-  const templateAxes = resolveTemplateAxes(template.axes);
 
-  const { axisMap: deptAxisMap, eligible: deptEligible } = buildPeerAxisMap(periodPool, touchPeriodMap, curSum, touchCur);
+  const { axisMap: deptAxisMap, eligible: deptEligible } = buildPeerAxisMap(periodPool, touchPeriodMap, ownAxisMapCur);
   const rating = insufficientPeers ? null : ratingFor(deptAxisMap, deptEligible, opts.deptId, rawWeights, templateAxes);
   const orderedByRating = [...deptAxisMap.keys()]
     .map(id => ({ id, r: id === opts.deptId ? rating : (deptEligible.has(id) ? ratingFor(deptAxisMap, deptEligible, id, rawWeights, templateAxes) : null) }))
@@ -241,19 +290,19 @@ export async function buildDepartmentCard(opts: {
 
   const { axisMap: compDeptAxisMap, eligible: compDeptEligible } = insufficientPeers
     ? { axisMap: new Map(), eligible: new Set<string>() }
-    : buildPeerAxisMap(prevPool, touchCompMap, prevSum, touchComp);
+    : buildPeerAxisMap(prevPool, touchCompMap, ownAxisMapComp);
 
   const axes = templateAxes.map(def => ({
     key: def.key, label: def.label, unit: def.unit, invert: def.invert,
     period: {
-      raw: curAxisRaw[def.key],
-      normalized: insufficientPeers ? null : percentileScore(curAxisRaw[def.key], poolValuesForAxis(deptAxisMap, deptEligible, def.key), def.invert),
+      raw: ownAxisMapCur.get(def.key) ?? null,
+      normalized: insufficientPeers ? null : percentileScore(ownAxisMapCur.get(def.key) ?? null, poolValuesForAxis(deptAxisMap, deptEligible, def.key), def.invert),
     },
     comparison: {
-      raw: compAxisRaw[def.key],
-      normalized: insufficientPeers ? null : percentileScore(compAxisRaw[def.key], poolValuesForAxis(compDeptAxisMap, compDeptEligible, def.key), def.invert),
+      raw: ownAxisMapComp.get(def.key) ?? null,
+      normalized: insufficientPeers ? null : percentileScore(ownAxisMapComp.get(def.key) ?? null, poolValuesForAxis(compDeptAxisMap, compDeptEligible, def.key), def.invert),
     },
-    dataAvailable: def.key === 'touch_speed' ? touchCur !== null : true,
+    dataAvailable: def.source === 'legacy' ? (def.bareKey === 'touch_speed' ? touchCur !== null : true) : true,
   }));
 
   function tile(cur: number, prev: number) {

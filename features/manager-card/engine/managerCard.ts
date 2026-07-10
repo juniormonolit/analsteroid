@@ -3,11 +3,16 @@ import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { computeDelta } from '@/features/reports/engine/calculated';
 import { fetchTouchSpeedAllByManager } from '@/features/reports/engine/callsMetrics';
+import { enrichManagerRowsForMetrics } from '@/features/reports/engine/enrichManagerRows';
+import { loadMetrics } from '@/lib/metrics/catalog';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { toSqlInterval, previousPeriodSameLength, type DateRange } from '@/lib/period';
-import type { ClientType, ReportRow, ProductGroupMode } from '@/lib/metrics/types';
+import type { ClientType, ReportRow, ProductGroupMode, DataType } from '@/lib/metrics/types';
 import { getRawScoringWeights, AXIS_KEYS as WEIGHTED_AXIS_KEYS, type AxisKey as WeightAxisKey } from '@/lib/settings/scoringWeights';
-import { getCardTemplate, type CatalogAxisKey, type TileKey } from '@/lib/settings/cardTemplates';
+import {
+  getCardTemplate, isLegacyStorageKey, stripLegacyPrefix, DEFAULT_AXES,
+  type TileKey, type AxisConfig, type LegacyAxisKey,
+} from '@/lib/settings/cardTemplates';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Карточка менеджера (MVP, экран 1 мокапа manager-card-mock.html) — движок сборки
@@ -34,63 +39,100 @@ export function segmentToClientType(seg: CardSegment): ClientType {
 // сравнения сам, не импортируя серверный движок с systemDb/analyticsDb).
 export const previousPeriod = previousPeriodSameLength;
 
-// ── Каталог осей паутины ─────────────────────────────────────────────────────
-// AxisKey — СВОЙ (более широкий) тип, а не WeightAxisKey напрямую: шаблоны карточек
-// (бриф 10.07, lib/settings/cardTemplates.ts::AXIS_CATALOG_KEYS) расширили каталог до
-// 8 осей, а scoring_weights (миграция 068) остаётся ЗАФИКСИРОВАН на исходных 6 —
-// колонки таблицы менять не нужно (веса для 2 новых осей — дефолт 5, см. ratingFor).
-export type AxisKey = CatalogAxisKey;
+// ── Каталог осей паутины (задача 10.07, п.2: «из ВСЕХ метрик каталога») ─────────
+// AxisDef.key — СЫРОЙ ключ хранения (card_templates.axes[].metricKey): «legacy:<8
+// исходных ключей>» ИЛИ голый id ЛЮБОЙ метрики полного каталога (lib/metrics/
+// catalog.ts::loadMetrics()). source различает, ЧЕМ считать значение оси:
+//  - 'legacy'  → rawAxisValues() (бесплатные формулы из ReportRow.metrics collected-
+//                полей, ноль новых запросов — так же, как v1/v2 до этой задачи);
+//  - 'catalog' → просто row.metrics[bareKey] ПОСЛЕ enrichManagerRowsForMetrics()
+//                (движок отчётов — реюз byManagers/managerActivity/callsMetrics/
+//                stageConversions, см. features/reports/engine/enrichManagerRows.ts).
+// invert теперь ВСЕГДА из шаблона (card_templates), а не хардкод здесь — админ
+// может переключить «меньше — лучше» на любой оси (задача 10.07, п.2).
+export type AxisUnit = 'percent' | 'money' | 'minutes' | 'count' | 'decimal';
 
-export interface AxisDef { key: AxisKey; label: string; unit: 'percent' | 'money' | 'minutes'; invert: boolean }
-
-// AXIS_DEFS — ПОЛНЫЙ каталог (8), единственный источник правды на порядок/подписи/
-// unit/invert. Какие ИЗ НИХ реально показывать и в каком порядке — решает шаблон
-// карточки (card_templates, до 6 осей); см. resolveTemplateAxes ниже. Первые 6 —
-// исходные оси v1/v2 (не переставлять — совпадают с колонками scoring_weights).
-// Последние 2 — расширение каталога (бриф 10.07, п.2б): считаются из ТЕХ ЖЕ
-// ReportRow.metrics, что уже загружены остальными 6 — ноль новых запросов к БД.
-export const AXIS_DEFS: AxisDef[] = [
-  { key: 'cr_deal_to_reservation',      label: 'CR Сделка → Бронь',        unit: 'percent', invert: false },
-  { key: 'cr_reservation_to_sale',      label: 'CR Бронь → Продажа',       unit: 'percent', invert: false },
-  { key: 'sales_amount',                label: 'Сумма продаж',             unit: 'money',   invert: false },
-  { key: 'avg_check',                   label: 'Средний чек',              unit: 'money',   invert: false },
-  { key: 'touch_speed',                 label: 'Скорость касания',         unit: 'minutes', invert: true }, // меньше — лучше
-  { key: 'refusal_rate',                label: 'Доля отказов',             unit: 'percent', invert: true }, // меньше — лучше
-  { key: 'cr_reservation_to_confirmed', label: 'CR Бронь → Подтверждена',  unit: 'percent', invert: false },
-  { key: 'shipment_rate',               label: 'Доля отгруженного от проданного', unit: 'percent', invert: false },
-];
-
-const AXIS_DEF_BY_KEY = new Map(AXIS_DEFS.map(d => [d.key, d]));
-
-/** Ключи шаблона (до 6, из card_templates) → реальные AxisDef в ТОМ ЖЕ порядке,
- *  что задан в шаблоне. Неизвестные ключи (устаревший каталог) молча отбрасываются;
- *  пустой результат — фолбэк на дефолтные 6 (санитайзер cardTemplates уже это
- *  гарантирует на чтении, здесь — дополнительная защита на случай гонки каталога). */
-export function resolveTemplateAxes(axisKeys: readonly AxisKey[]): AxisDef[] {
-  const resolved = axisKeys.map(k => AXIS_DEF_BY_KEY.get(k)).filter((d): d is AxisDef => d !== undefined);
-  return resolved.length > 0 ? resolved : AXIS_DEFS.slice(0, 6);
+export interface AxisDef {
+  key: string;       // storage key (legacy:xxx или голый id каталога)
+  bareKey: string;   // ключ БЕЗ префикса legacy: — то, чем реально индексируется значение
+  label: string;
+  unit: AxisUnit;
+  invert: boolean;
+  source: 'legacy' | 'catalog';
 }
 
-/** Веса скоринга по оси: исходные 6 — из scoring_weights (сырые 0-10, дефолт 5 —
- *  см. lib/settings/scoringWeights.ts); 2 новые оси каталога — ВНЕ таблицы
- *  scoring_weights, дефолт-вес 5 (та же шкала 0-10, эквивалент «важность как у
- *  остальных при равных весах») — связка отмечена в отчёте задачи. ratingFor сам
- *  renормирует по сумме ФАКТИЧЕСКИ использованных осей (weightSum), поэтому именно
- *  СЫРАЯ (не нормированная на 1) шкала здесь корректна — иначе доминировал бы дефолт. */
-function weightForAxis(raw: Partial<Record<WeightAxisKey, number>>, key: AxisKey): number {
-  if ((WEIGHTED_AXIS_KEYS as readonly string[]).includes(key)) {
-    const v = raw[key as WeightAxisKey];
+// Подписи/unit исходных 8 — короткие (для радара самой карточки; для страницы
+// настроек — см. LEGACY_AXIS_LABELS в cardTemplates.ts, там подписи длиннее,
+// disambiguated от одноимённых метрик каталога).
+const LEGACY_AXIS_META: Record<LegacyAxisKey, { label: string; unit: AxisUnit }> = {
+  cr_deal_to_reservation:      { label: 'CR Сделка → Бронь',        unit: 'percent' },
+  cr_reservation_to_sale:      { label: 'CR Бронь → Продажа',       unit: 'percent' },
+  sales_amount:                { label: 'Сумма продаж',             unit: 'money' },
+  avg_check:                   { label: 'Средний чек',              unit: 'money' },
+  touch_speed:                 { label: 'Скорость касания',         unit: 'minutes' },
+  refusal_rate:                { label: 'Доля отказов',             unit: 'percent' },
+  cr_reservation_to_confirmed: { label: 'CR Бронь → Подтверждена',  unit: 'percent' },
+  shipment_rate:                { label: 'Доля отгруженного от проданного', unit: 'percent' },
+};
+
+function catalogUnitFor(dataType: DataType): AxisUnit {
+  if (dataType === 'money') return 'money';
+  if (dataType === 'percent') return 'percent';
+  if (dataType === 'int') return 'count';
+  return 'decimal'; // decimal/months
+}
+
+/** Дефолтные 6 осей (DEFAULT_AXES из cardTemplates.ts), уже резолвленные — чистая
+ *  функция без БД, для фолбэка при пустом/битом шаблоне (не должно случаться —
+ *  sanitizeAxes уже гарантирует дефолт на чтении, здесь доп. защита). */
+export const DEFAULT_RESOLVED_AXES: AxisDef[] = DEFAULT_AXES.map(cfg => {
+  const bare = stripLegacyPrefix(cfg.metricKey);
+  const meta = LEGACY_AXIS_META[bare];
+  return { key: cfg.metricKey, bareKey: bare, label: meta.label, unit: meta.unit, invert: cfg.invert, source: 'legacy' as const };
+});
+
+/** Оси шаблона (до 6, {metricKey, invert} из card_templates) → реальные AxisDef,
+ *  в ТОМ ЖЕ порядке. allMetrics — живой каталог (loadMetrics()), нужен для
+ *  label/unit catalog-осей. Неизвестные/удалённые из каталога id молча
+ *  отбрасываются (как раньше); пустой результат — фолбэк на дефолтные 6. */
+export function resolveTemplateAxes(axisConfigs: readonly AxisConfig[], allMetrics: { id: string; nameRu: string; dataType: DataType }[]): AxisDef[] {
+  const metricById = new Map(allMetrics.map(m => [m.id, m]));
+  const resolved: AxisDef[] = [];
+  for (const cfg of axisConfigs) {
+    if (isLegacyStorageKey(cfg.metricKey)) {
+      const bare = stripLegacyPrefix(cfg.metricKey);
+      const meta = LEGACY_AXIS_META[bare];
+      if (!meta) continue;
+      resolved.push({ key: cfg.metricKey, bareKey: bare, label: meta.label, unit: meta.unit, invert: cfg.invert, source: 'legacy' });
+    } else {
+      const m = metricById.get(cfg.metricKey);
+      if (!m) continue;
+      resolved.push({ key: cfg.metricKey, bareKey: cfg.metricKey, label: m.nameRu, unit: catalogUnitFor(m.dataType), invert: cfg.invert, source: 'catalog' });
+    }
+  }
+  return resolved.length > 0 ? resolved : DEFAULT_RESOLVED_AXES;
+}
+
+/** Веса скоринга по оси: legacy-оси из ИСХОДНЫХ 6 (совпадающих со столбцами
+ *  scoring_weights, миграция 068) — сырые 0-10 из lib/settings/scoringWeights.ts;
+ *  ЛЮБАЯ другая ось (2 «бонусных» legacy + ЛЮБАЯ ось полного каталога) — вне
+ *  таблицы весов, дефолт-вес 5 (эквивалент «важность как у остальных при равных
+ *  весах»). ratingFor сам renормирует по сумме ФАКТИЧЕСКИ использованных осей
+ *  (weightSum), поэтому именно СЫРАЯ (не нормированная на 1) шкала здесь корректна. */
+function weightForAxis(raw: Partial<Record<WeightAxisKey, number>>, def: AxisDef): number {
+  if (def.source === 'legacy' && (WEIGHTED_AXIS_KEYS as readonly string[]).includes(def.bareKey)) {
+    const v = raw[def.bareKey as WeightAxisKey];
     return typeof v === 'number' ? v : 5;
   }
   return 5;
 }
 
-// Сырые значения каталога осей по строке отчёта (fetchByManagers всегда отдаёт ВСЕ
-// collected-метрики независимо от запроса — см. features/reports/engine/byManagers.ts).
-// 2 оси расширения каталога (cr_reservation_to_confirmed/shipment_rate) — из ТЕХ ЖЕ
-// полей metrics, что уже используются плитками итогов (confirmed_reservations_count/
-// shipments_count, см. tileRaw ниже) — без единого нового запроса.
-export function rawAxisValues(metrics: Record<string, number | null>, touchMinutes: number | null): Record<AxisKey, number | null> {
+// Сырые значения ИСХОДНЫХ 8 legacy-осей по строке отчёта (fetchByManagers всегда
+// отдаёт ВСЕ collected-метрики независимо от запроса — см. byManagers.ts). Не
+// переименовано/не расширено этой задачей — единственный источник правды для
+// legacy-осей, СОВПАДАЕТ буквально с поведением v1/v2 (инвариант «миграция не
+// меняет цифр» из 073/075).
+function rawLegacyAxisValues(metrics: Record<string, number | null>, touchMinutes: number | null): Record<LegacyAxisKey, number | null> {
   const dealsCount               = metrics.deals_count ?? 0;
   const reservationsCount        = metrics.reservations_count ?? 0;
   const confirmedReservationsCnt = metrics.confirmed_reservations_count ?? 0;
@@ -109,14 +151,26 @@ export function rawAxisValues(metrics: Record<string, number | null>, touchMinut
     shipment_rate:                salesCount > 0 ? (shipmentsCount / salesCount) * 100 : null,
   };
 }
+// Публичный алиас — использовался teamCard.ts/managerCard.ts под этим именем до
+// задачи 10.07 (оставлен для меньшего дифа/понятности вызывающего кода).
+export const rawAxisValues = rawLegacyAxisValues;
 
-export type AxisMap = Map<string, Record<AxisKey, number | null>>;
+export type AxisMap = Map<string, Map<string, number | null>>;
 
-export function buildAxisMap(pool: ReportRow[], touchMap: Map<string, number> | null): AxisMap {
+/** Строит по строке отчёта значения ВСЕХ переданных осей (и legacy, и catalog).
+ *  Для catalog-осей ПРЕДПОЛАГАЕТСЯ, что `pool` уже прогнан через
+ *  enrichManagerRowsForMetrics() для нужных bareKey (см. buildManagerCard/teamCard.ts) —
+ *  buildAxisMap сам НЕ делает запросов к БД, только читает row.metrics. */
+export function buildAxisMap(pool: ReportRow[], touchMap: Map<string, number> | null, axisDefs: readonly AxisDef[]): AxisMap {
   const m: AxisMap = new Map();
   for (const row of pool) {
     const touch = touchMap?.get(row.dimensionId) ?? null;
-    m.set(row.dimensionId, rawAxisValues(row.metrics, touch));
+    const legacyVals = rawLegacyAxisValues(row.metrics, touch);
+    const perAxis = new Map<string, number | null>();
+    for (const def of axisDefs) {
+      perAxis.set(def.key, def.source === 'legacy' ? legacyVals[def.bareKey as LegacyAxisKey] : (row.metrics[def.bareKey] ?? null));
+    }
+    m.set(row.dimensionId, perAxis);
   }
   return m;
 }
@@ -126,10 +180,10 @@ export function salesPositiveIds(pool: ReportRow[]): Set<string> {
   return new Set(pool.filter(r => (r.metrics.sales_count ?? 0) > 0).map(r => r.dimensionId));
 }
 
-export function poolValuesForAxis(axisMap: AxisMap, eligibleIds: Set<string>, axis: AxisKey): number[] {
+export function poolValuesForAxis(axisMap: AxisMap, eligibleIds: Set<string>, axisKey: string): number[] {
   const out: number[] = [];
   for (const id of eligibleIds) {
-    const v = axisMap.get(id)?.[axis];
+    const v = axisMap.get(id)?.get(axisKey);
     if (v !== null && v !== undefined) out.push(v);
   }
   return out;
@@ -137,7 +191,8 @@ export function poolValuesForAxis(axisMap: AxisMap, eligibleIds: Set<string>, ax
 
 // Перцентильная позиция значения в пуле → 0..10 (1 знак). Ничьи — средний ранг
 // (полусумма «меньше»/«меньше-или-равно»). invert: для метрик «меньше — лучше»
-// (скорость касания, доля отказов) переворачиваем шкалу.
+// (скорость касания, доля отказов и т.п. — теперь настраивается на любой оси)
+// переворачиваем шкалу.
 export function percentileScore(raw: number | null, pool: number[], invert: boolean): number | null {
   if (raw === null || pool.length === 0) return null;
   let less = 0, equal = 0;
@@ -151,33 +206,30 @@ export function percentileScore(raw: number | null, pool: number[], invert: bool
 }
 
 // Рейтинг менеджера = взвешенное среднее нормированных (0-10) значений ДОСТУПНЫХ осей
-// ШАБЛОНА карточки (бриф 10.07: до 6 осей из card_templates, см. resolveTemplateAxes;
-// по умолчанию — исходные 6, поведение как в v1/v2 до появления шаблонов). Веса — сырые
-// (0-10, НЕ нормированные на сумму=1): функция сама renормирует делением на weightSum
-// ФАКТИЧЕСКИ использованных осей, поэтому смешивать «нормированное» (scoring_weights)
-// и «дефолт 5 для новых осей вне таблицы» на разных шкалах было бы некорректно —
-// весь расчёт всегда идёт в сырой 0-10 шкале (см. weightForAxis). Оси без данных
-// (raw === null) исключаются из среднего (вес перенормируется на оставшиеся оси),
-// а не считаются нулём — иначе отсутствие данных (напр. va.calls) необоснованно
-// портило бы оценку. Если веса ВСЕХ фактически использованных осей — 0 (админ явно
-// обнулил) — фолбэк на простое среднее (эквивалент равных долей, как было до весов),
-// а не null — деградация мягкая, а не «рейтинг пропал».
+// ШАБЛОНА карточки (до 6 из card_templates, см. resolveTemplateAxes; по умолчанию —
+// исходные 6, поведение как в v1/v2 до появления шаблонов). Веса — сырые (0-10, НЕ
+// нормированные на сумму=1): функция сама renормирует делением на weightSum
+// ФАКТИЧЕСКИ использованных осей. Оси без данных (raw === null) исключаются из
+// среднего (вес перенормируется на оставшиеся оси), а не считаются нулём — иначе
+// отсутствие данных (напр. va.calls) необоснованно портило бы оценку. Если веса
+// ВСЕХ фактически использованных осей — 0 (админ явно обнулил) — фолбэк на простое
+// среднее (эквивалент равных долей, как было до весов), а не null.
 export function ratingFor(
   axisMap: AxisMap,
   eligibleIds: Set<string>,
   managerId: string,
   rawWeights: Partial<Record<WeightAxisKey, number>>,
-  axes: AxisDef[] = AXIS_DEFS.slice(0, 6),
+  axes: AxisDef[] = DEFAULT_RESOLVED_AXES,
 ): number | null {
   const own = axisMap.get(managerId);
   if (!own) return null;
   const weighted: { score: number; weight: number }[] = [];
   for (const def of axes) {
-    const raw = own[def.key];
+    const raw = own.get(def.key) ?? null;
     if (raw === null) continue;
     const pool = poolValuesForAxis(axisMap, eligibleIds, def.key);
     const score = percentileScore(raw, pool, def.invert);
-    if (score !== null) weighted.push({ score, weight: weightForAxis(rawWeights, def.key) });
+    if (score !== null) weighted.push({ score, weight: weightForAxis(rawWeights, def) });
   }
   if (weighted.length === 0) return null;
   const weightSum = weighted.reduce((s, w) => s + w.weight, 0);
@@ -286,9 +338,9 @@ export interface ManagerCardOptions {
 }
 
 export interface AxisResult {
-  key: AxisKey;
+  key: string;
   label: string;
-  unit: 'percent' | 'money' | 'minutes';
+  unit: AxisUnit;
   invert: boolean;
   period:  { raw: number | null; normalized: number | null };
   /** Полупрозрачный слой паутины (задача 10.07, п.3): период СРАВНЕНИЯ (тот же,
@@ -352,7 +404,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
 
   const managerIdNum = /^\d+$/.test(managerId) ? Number(managerId) : null;
 
-  const [periodPool, prevPool, touchPeriodMap, touchCompMap, deptRosterRes, callsTizer, pgRows, rawWeights, template] =
+  const [periodPoolRaw, prevPoolRaw, touchPeriodMap, touchCompMap, deptRosterRes, callsTizer, pgRows, rawWeights, template, allMetrics] =
     await Promise.all([
       fetchByManagers({ period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
@@ -369,23 +421,45 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
       fetchByProductGroups({ period, dealScope: 'all', clientType, productGroupMode, managerId }),
       getRawScoringWeights(),
       getCardTemplate('manager'),
+      loadMetrics(),
     ]);
 
-  const currentRow = periodPool.find(r => r.dimensionId === managerId);
-  const prevRow    = prevPool.find(r => r.dimensionId === managerId);
+  const currentRow = periodPoolRaw.find(r => r.dimensionId === managerId);
+  const prevRow    = prevPoolRaw.find(r => r.dimensionId === managerId);
 
-  // ── Паутина: оси шаблона (до 6, бриф 10.07), период + период сравнения (задача
-  // 10.07, п.3 — было «всё время», теперь полупрозрачный слой = период сравнения,
-  // тот же, что и колонка «к прошлому периоду»), перцентильная нормировка ──────
-  const periodAxisMap = buildAxisMap(periodPool, touchPeriodMap);
-  const compAxisMap   = buildAxisMap(prevPool, touchCompMap);
+  // ── Паутина: оси шаблона (до 6, задача 10.07 п.2 — из ВСЕХ метрик каталога),
+  // период + период сравнения (п.3 — было «всё время», теперь полупрозрачный слой
+  // = период сравнения, тот же, что и колонка «к прошлому периоду»), перцентильная
+  // нормировка. Catalog-оси (НЕ legacy) требуют enrichManagerRowsForMetrics() —
+  // реюз byManagers/managerActivity/callsMetrics/stageConversions (см. отчёт
+  // задачи п.2) — ДЛЯ ОБОИХ пулов (период и сравнение), т.к. полупрозрачный слой
+  // радара тоже читает эти же оси. Если шаблон — только legacy-оси (обычный
+  // случай, дефолт), enrichManagerRowsForMetrics([]) — no-op, ноль лишних запросов. ─
+  const templateAxes = resolveTemplateAxes(template.axes, allMetrics);
+  const catalogAxisKeys = [...new Set(templateAxes.filter(d => d.source === 'catalog').map(d => d.bareKey))];
+  const [periodPool, prevPool] = await Promise.all([
+    enrichManagerRowsForMetrics(periodPoolRaw, period, catalogAxisKeys),
+    enrichManagerRowsForMetrics(prevPoolRaw, prevPeriod, catalogAxisKeys),
+  ]);
+
+  const periodAxisMap = buildAxisMap(periodPool, touchPeriodMap, templateAxes);
+  const compAxisMap   = buildAxisMap(prevPool, touchCompMap, templateAxes);
   const periodEligible = salesPositiveIds(periodPool);
   const compEligible   = salesPositiveIds(prevPool);
-  const templateAxes = resolveTemplateAxes(template.axes);
 
   const axes: AxisResult[] = templateAxes.map(def => {
-    const periodOwn = periodAxisMap.get(managerId)?.[def.key] ?? null;
-    const compOwn   = compAxisMap.get(managerId)?.[def.key] ?? null;
+    const periodOwn = periodAxisMap.get(managerId)?.get(def.key) ?? null;
+    const compOwn   = compAxisMap.get(managerId)?.get(def.key) ?? null;
+    // dataAvailable: legacy touch_speed зависит от va.calls (проверено флагом
+    // touchPeriodMap !== null, как раньше); остальные legacy — от sa.deals, всегда
+    // доступны. Catalog-оси: источник (va.calls/deal_events) может быть недоступен
+    // ЦЕЛИКОМ (период раньше начала сбора — см. CALLS_DATA_START/DEAL_EVENTS_DATA_START
+    // в движке) — тогда ВСЕ строки пула получают null одинаково; эвристика «хотя бы
+    // у одного менеджера есть значение» отличает «источник недоступен» от «честный
+    // ноль/нет данных у ЭТОГО менеджера» (обычный случай — не пятнает asterisk).
+    const dataAvailable = def.source === 'legacy'
+      ? (def.bareKey === 'touch_speed' ? touchPeriodMap !== null : true)
+      : periodPool.some(r => r.metrics[def.bareKey] !== null && r.metrics[def.bareKey] !== undefined);
     return {
       key: def.key, label: def.label, unit: def.unit, invert: def.invert,
       period: {
@@ -396,8 +470,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
         raw: compOwn,
         normalized: percentileScore(compOwn, poolValuesForAxis(compAxisMap, compEligible, def.key), def.invert),
       },
-      // Скорость касания зависит от va.calls; остальные — от sa.deals (всегда доступна).
-      dataAvailable: def.key === 'touch_speed' ? touchPeriodMap !== null : true,
+      dataAvailable,
     };
   });
 
