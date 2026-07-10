@@ -1,5 +1,5 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
-import { toSqlInterval, type DateRange } from '@/lib/period';
+import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { differenceInCalendarDays } from 'date-fns';
 
 // Метрики активности менеджеров (спека owners-inbox/analsteroid-edits-spec-20260709.md,
@@ -46,7 +46,10 @@ export interface ManagerActivityRow {
  * корректно (не нужно обнулять весь период).
  */
 export async function fetchManagerActivity(period: DateRange): Promise<Map<string, ManagerActivityRow> | null> {
-  const periodToStr = period.to.toISOString().slice(0, 10);
+  // periodDateStrFromInstant вместо голого .toISOString().slice(0,10) — задача 1610,
+  // тот же UTC-сдвиг, что чинили в план-метриках (8a4ab37, задача 1595): MSK-таймстемп
+  // от браузера иначе даёт календарную дату на день раньше.
+  const periodToStr = periodDateStrFromInstant(period.to, 'to');
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
   const { from, toExcl } = toSqlInterval(period);
@@ -115,8 +118,14 @@ FULL OUTER JOIN primary_deals p ON p.manager_id = w.manager_id
  * числами — честный null, симметрично требованию про deal_events).
  */
 export async function getCalendarWorkingDaysInPeriod(period: DateRange): Promise<number | null> {
-  const fromStr = period.from.toISOString().slice(0, 10);
-  const toStr = period.to.toISOString().slice(0, 10);
+  // Задача 1610 (баг из WORKLOG 8a4ab37/1595, найден и не тронут тогда сознательно):
+  // голый period.from/.to.toISOString().slice(0,10) съедал MSK-таймстемп от браузера
+  // на день назад (полночь МСК = T21:00Z ПРЕДЫДУЩЕГО дня) — «дней в работе» (делитель
+  // «% выхода») уезжал на день. periodDateStrFromInstant — тот же «полуденный» приём,
+  // что и periodDateStr в app/api/reports/run/route.ts, для уже сконвертированного в
+  // Date периода (см. lib/period::periodDateStrFromInstant).
+  const fromStr = periodDateStrFromInstant(period.from, 'from');
+  const toStr = periodDateStrFromInstant(period.to, 'to');
   const totalCalendarDays = differenceInCalendarDays(period.to, period.from) + 1;
 
   const res = await systemDb().query<{ total_working: string; covered: string }>(

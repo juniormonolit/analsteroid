@@ -193,6 +193,57 @@ export function toSqlInterval(range: DateRange): { from: string; toExcl: string 
   };
 }
 
+/**
+ * Календарная дата (YYYY-MM-DD) периода из СЫРОЙ ВХОДНОЙ СТРОКИ (body.period.from/to,
+ * ДО Date-конверсии) — «полуденный» приём (задача 1595, коммит 8a4ab37, вынесено сюда
+ * из app/api/reports/run/route.ts задачей 1610, чтобы не дублировать при повторном
+ * использовании). UI шлёт период как Date.toISOString(): для браузера в МСК полночь
+ * 01.07 МСК — это 2026-06-30T21:00:00.000Z, и голый new Date(v).toISOString().slice(0,10)
+ * давал бы календарную дату на день раньше. date-only строка («2026-07-01», curl/API) —
+ * берётся буквально, без Date-роундтрипа (иначе полночь UTC при сдвиге «to» на −12ч
+ * тоже уехала бы на день назад). Таймстемп: from+12ч/to−12ч — обе семьи клиентов
+ * (реальный UTC-инстант из МСК-браузера И «псевдо-UTC» любого другого пояса, см. msk()
+ * выше) при этом попадают внутрь нужных суток (пояс клиента из (-12..+12], экзотика
+ * +13/+14 — вне зоны пользователей).
+ */
+export function periodDateStr(v: string, edge: 'from' | 'to'): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v; // date-only — буквально
+  const noon = new Date(new Date(v).getTime() + (edge === 'from' ? 12 : -12) * 3_600_000);
+  return noon.toISOString().slice(0, 10);
+}
+
+/**
+ * Тот же «полуденный» приём (см. periodDateStr выше), но для уже готового Date-
+ * инстанта DateRange.from/to (задача 1610) — движки отчётов (managerActivity.ts,
+ * stageConversions.ts, callsMetrics.ts, priceObjectionConversion.ts) получают period
+ * уже сконвертированным в Date (см. opts.period в route.ts) — исходная строка тела
+ * запроса к этому моменту потеряна, буквальный date-only-детект (regex по строке)
+ * недоступен.
+ *
+ * Guard на РОВНО полночь UTC (00:00:00.000): это ЕДИНСТВЕННЫЙ практический случай,
+ * когда голый date-only вход («2026-07-07») даёт такой Date (`new Date('2026-07-07')`
+ * === 2026-07-07T00:00:00.000Z) — реальный браузерный таймстемп (от/до дня в ЛЮБОМ
+ * поясе клиента) на ровно полночь UTC не попадает НИКОГДА (см. periodDateStr выше:
+ * границы дня в другом поясе — это полночь/конец дня ЭТОГО пояса, сдвинутая на его
+ * offset, а не 00:00:00.000Z буквально). Для такого Date возвращаем календарную дату
+ * БЕЗ сдвига (совпадает с тем, что реально включает toSqlInterval для «to» — там
+ * startOfDay() на MSK-хосте разворачивает 00:00Z вперёд, в тот же календарный день
+ * MSK, а не назад). Без guard'а «полуденный» сдвиг «to» на −12ч возвращал бы
+ * ПРЕДЫДУЩИЙ день для date-only «to» — регрессия относительно старого поведения
+ * (голый slice без сдвига, ранее случайно верный для date-only входа).
+ *
+ * Для остальных (реальных таймстемпов, единственный практический источник Date с
+ * ненулевым временем на проде) арифметика идентична periodDateStr — тот же UTC-slice
+ * баг иначе съедал календарную дату на день назад при MSK-таймстемпах браузера.
+ */
+export function periodDateStrFromInstant(date: Date, edge: 'from' | 'to'): string {
+  const isExactUtcMidnight = date.getUTCHours() === 0 && date.getUTCMinutes() === 0
+    && date.getUTCSeconds() === 0 && date.getUTCMilliseconds() === 0;
+  if (isExactUtcMidnight) return date.toISOString().slice(0, 10);
+  const noon = new Date(date.getTime() + (edge === 'from' ? 12 : -12) * 3_600_000);
+  return noon.toISOString().slice(0, 10);
+}
+
 export const PRESET_LABELS: Record<PresetKey, string> = {
   today: 'Сегодня',
   yesterday: 'Вчера',

@@ -16,6 +16,7 @@ import { computeCalculated, computeTotals, computeDelta } from '@/features/repor
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
 import { getWorkingDaysByMonthInRange } from '@/lib/plans/dailyPlan';
+import { periodDateStr } from '@/lib/period';
 import { formatInTimeZone } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 
@@ -183,16 +184,13 @@ export async function POST(req: NextRequest) {
   // from + 12ч и to − 12ч попадают внутрь нужных суток при любом поясе клиента из
   // (-12..+12] (экзотика +13/+14 — Кирибати/NZDT — вне зоны пользователей). Голая
   // date-only строка (API-клиенты, curl) берётся буквально, без Date-роундтрипа.
+  // periodDateStr вынесен в lib/period (задача 1610) — используется и здесь, и в
+  // движках отчётов (managerActivity.ts и др., через Date-вариант periodDateStrFromInstant).
   const MSK_TZ = 'Europe/Moscow';
   // formatInTimeZone вместо toZonedTime().toISOString(): прод-хост живёт в MSK, а
   // toZonedTime сдвигает дату в расчёте на чтение ЛОКАЛЬНЫМИ геттерами — .toISOString()
   // (UTC-геттеры) на не-UTC хосте возвращал СЫРУЮ UTC-дату (в 00:00–02:59 МСК — вчерашнюю).
   const mskTodayStr = formatInTimeZone(new Date(), MSK_TZ, 'yyyy-MM-dd');
-  const periodDateStr = (v: string, edge: 'from' | 'to'): string => {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v; // date-only — буквально
-    const noon = new Date(new Date(v).getTime() + (edge === 'from' ? 12 : -12) * 3_600_000);
-    return noon.toISOString().slice(0, 10);
-  };
   const periodFromStr = periodDateStr(period.from, 'from');
   const periodToStr = periodDateStr(period.to, 'to');
   const compPeriodFromStr = periodDateStr(comparisonPeriod.from, 'from');

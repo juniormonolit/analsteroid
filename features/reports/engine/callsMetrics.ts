@@ -1,5 +1,5 @@
 import { analyticsDb } from '@/lib/db/clients';
-import { toSqlInterval, type DateRange } from '@/lib/period';
+import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { subDays, startOfDay, addDays } from 'date-fns';
 
 // КОЛСТАТ — метрики каталога категории «Звонки» (va.calls, та же MLT-БД, что
@@ -121,7 +121,9 @@ export async function fetchCallsBaseMetrics(
   period: DateRange,
   managerIds?: string[],
 ): Promise<Map<string, CallsBaseRow> | null> {
-  const periodToStr = period.to.toISOString().slice(0, 10);
+  // periodDateStrFromInstant — тот же UTC-сдвиг, что чинили в план-метриках (8a4ab37,
+  // задача 1595) и managerActivity.ts (задача 1610).
+  const periodToStr = periodDateStrFromInstant(period.to, 'to');
   if (periodToStr < CALLS_DATA_START) return null;
 
   const { from, toExcl } = toSqlInterval(period);
@@ -237,7 +239,9 @@ export interface DealCallAdditiveRow {
  * 10.07: 42+13=55 и т.п.).
  */
 export async function fetchDealCallAdditive(period: DateRange): Promise<Map<string, DealCallAdditiveRow> | null> {
-  const periodToStr = period.to.toISOString().slice(0, 10);
+  // periodDateStrFromInstant — тот же UTC-сдвиг, что чинили в план-метриках (8a4ab37,
+  // задача 1595) и managerActivity.ts (задача 1610).
+  const periodToStr = periodDateStrFromInstant(period.to, 'to');
   if (periodToStr < CALLS_DATA_START) return null; // честный null — va.calls ещё не собиралась
 
   const { from, toExcl } = toSqlInterval(period);
@@ -326,7 +330,9 @@ export async function fetchTouchAndFirstCallMedians(
   period: DateRange,
   managerIds?: string[],
 ): Promise<Map<string, TouchAndFirstCallRow> | null> {
-  const periodToStr = period.to.toISOString().slice(0, 10);
+  // periodDateStrFromInstant — тот же UTC-сдвиг, что чинили в план-метриках (8a4ab37,
+  // задача 1595) и managerActivity.ts (задача 1610).
+  const periodToStr = periodDateStrFromInstant(period.to, 'to');
   if (periodToStr < CALLS_DATA_START) return null; // честный null — va.calls ещё не собиралась
 
   const { from, toExcl } = toSqlInterval(period);

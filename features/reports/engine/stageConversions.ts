@@ -1,5 +1,5 @@
 import { analyticsDb } from '@/lib/db/clients';
-import { toSqlInterval, type DateRange } from '@/lib/period';
+import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { DEAL_EVENTS_DATA_START } from './managerActivity';
 
 // Матрица CR по основному пути ЧЛ+ЮЛ (задача 2, owners-inbox, 10.07): «Новая →
@@ -83,7 +83,9 @@ export interface StageConversionRow {
  * как и в managerActivity.ts).
  */
 export async function fetchStageConversions(period: DateRange): Promise<Map<string, StageConversionRow> | null> {
-  const periodToStr = period.to.toISOString().slice(0, 10);
+  // periodDateStrFromInstant — тот же UTC-сдвиг, что чинили в план-метриках (8a4ab37,
+  // задача 1595) и managerActivity.ts (задача 1610).
+  const periodToStr = periodDateStrFromInstant(period.to, 'to');
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
   const { from, toExcl } = toSqlInterval(period);

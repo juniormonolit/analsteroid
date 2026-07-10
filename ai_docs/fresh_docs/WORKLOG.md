@@ -96,6 +96,88 @@
 после ревью — rebase на актуальный `origin/main` и
 `git push origin HEAD:main`, ворктри `analsteroid-icons` удалить.
 
+---
+
+## 2026-07-10 — Задача 1610: «Дней в работе»/«% выхода» съезжает на день — тот же UTC-сдвиг, что в план-метриках (8a4ab37/1595) (Николай)
+
+### Что было
+
+В коммите 8a4ab37 (задача 1595) починили UTC/МСК-сдвиг границ периода в план-метриках
+(`app/api/reports/run/route.ts`), но сознательно НЕ тронули смежный баг, отмеченный в
+том же WORKLOG: тот же `.toISOString().slice(0,10)`-паттерн для `period.from`/`period.to`
+остался в `features/reports/engine/managerActivity.ts:118` (делитель «% выхода» —
+`getCalendarWorkingDaysInPeriod`). При UI-таймстемпах (браузер шлёт период как
+`Date.toISOString()`, полночь МСК = `T21:00:00.000Z` ПРЕДЫДУЩЕГО дня) диапазон запроса
+к `working_calendar` расширялся на день назад — денежный пример из 1595 не повторяю
+(здесь это не деньги, а количество рабочих дней), но механизм идентичен: `from`
+съедал один лишний день.
+
+### Фикс
+
+`periodDateStr` (голый «полуденный» приём: date-only строка — буквально, таймстемп —
+from+12ч/to−12ч) вынесен из `route.ts` в общий модуль `lib/period/index.ts` и
+экспортирован — `route.ts` теперь импортирует его оттуда вместо локального определения.
+
+Движки отчётов (`managerActivity.ts`, `stageConversions.ts`, `priceObjectionConversion.ts`,
+`callsMetrics.ts`) получают `period` УЖЕ сконвертированным в `Date` (см. `opts.period` в
+`route.ts`) — исходная строка тела запроса к этому моменту потеряна, буквальный
+date-only-детект по regex недоступен. Для них добавлен Date-инстанс-вариант
+`periodDateStrFromInstant(date, edge)` (тот же ±12ч приём) — НО с guard'ом на РОВНО
+полночь UTC (`00:00:00.000`): единственный практический случай такого Date — это
+date-only вход (`new Date('2026-07-07')`), и без guard'а «полуденный» сдвиг `to` на −12ч
+откатывал бы такую дату на день назад (регрессия относительно старого поведения,
+которое для date-only «to» было случайно верным). Guard возвращает дату без сдвига —
+поймано и исправлено ДО прод-раскатки живым прогоном тестов, реальные браузерные
+таймстемпы на ровно полночь UTC не попадают никогда (граница дня в любом поясе клиента
+— это полночь/конец дня ЭТОГО пояса со сдвигом на его offset, не 00:00:00.000Z буквально).
+
+Заменены все найденные по грепу `.toISOString().slice(0,10)` вызовы, применённые
+буквально к `period.from`/`period.to` (расчётные пути, не UI-форматирование):
+- `features/reports/engine/managerActivity.ts` — `getCalendarWorkingDaysInPeriod`
+  (fromStr/toStr, ОСНОВНОЙ репро задачи, единственное место, где баг реально двигает
+  цифру «% выхода» для МСК-браузеров) и `fetchManagerActivity` (periodToStr-гейт
+  `DEAL_EVENTS_DATA_START`).
+- `features/reports/engine/priceObjectionConversion.ts`, `stageConversions.ts`,
+  `callsMetrics.ts` (×3: `fetchCallsBaseMetrics`, `fetchDealCallAdditive`,
+  `fetchTouchAndFirstCallMedians`) — тот же `periodToStr < DATA_START`-гейт (честный
+  null при периоде целиком раньше сбора данных). Для этих гейтов бэкворд-сдвиг `to`
+  алгебраически невозможен при РЕАЛЬНЫХ end-of-day таймстемпах (23:59:59.999 местного
+  пояса минус ≤12ч не пересекает полночь назад ни для одного разумного офсета) — фикс
+  здесь консистентности/на будущее ради единого приёма, не подтверждённый живой баг с
+  конкретными цифрами (в отличие от `getCalendarWorkingDaysInPeriod`).
+- Прогреп остальной код (`lib/plans/dailyPlan.ts`, `lib/jobs/planSummary.ts`,
+  `lib/jobs/dailyMoscowReport.ts`, `lib/profile/deptSummary.ts`,
+  `app/api/settings/working-calendar/route.ts`) — паттерн `.toISOString().slice(0,10)`
+  там тоже встречается, но НЕ применительно к `period.from`/`period.to` отчёта (внутренняя
+  дата-арифметика cron/job-скриптов) — не трогал, вне рамок задачи.
+
+### Проверка
+
+`npm run typecheck` — 0; `npm run build` — ок; `npm run lint:responsive` — 0 новых сверх
+baseline (1 в baseline, как и раньше).
+
+Живой прогон (tsx, read-only): YC `systemDb()` (working_calendar, задействован именно в
+`getCalendarWorkingDaysInPeriod`) недоступен из этой песочницы — `password authentication
+failed` при валидных на вид кредах из `.env.local` (SA `analyticsDb()` при этом подключается
+нормально, значит это именно ограничение доступа к YC-инстансу из песочницы, а не баг
+кода/кредов проекта). Поэтому проверка:
+- Чистая функция `periodDateStrFromInstant`/`periodDateStr` — весь набор edge-кейсов
+  (основной репро 01.07 МСК таймстемпом, МСК/не-МСК браузер, date-only-derived Date,
+  date-only строка) — все проходят, включая пойманную и исправленную date-only-регрессию.
+- `getCalendarWorkingDaysInPeriod`'s `fromStr` на основном репро (from=
+  `2026-06-30T21:00:00.000Z`, «01.07 МСК»): ДО фикса голый slice давал `fromStr =
+  "2026-06-30"` (на день раньше, лишний будний день в SQL-диапазоне); ПОСЛЕ —
+  `periodDateStrFromInstant` даёт `"2026-07-01"` (совпадает с date-only эталоном).
+- `fetchManagerActivity` (analyticsDb/SA, реальная БД, read-only) — живой прогон после
+  рефакторинга: код компилируется, работает, детерминирован (359 = 359 на одном и том же
+  периоде двумя независимыми вызовами) — сам расчёт `workedDays` использует
+  `toSqlInterval` (полная точность инстанта, не затронут этим багом), фикс здесь —
+  только `DEAL_EVENTS_DATA_START`-гейт.
+
+НЕ задеплоено (деплой 60 пакетом, отдельно). Данные не менялись, ничего не вставлял.
+
+---
+
 ## 2026-07-10 — Задача 1595: «План продаж (на сегодня)» 812 500 у Гулькина при верных 656 250 у Высоцкого — UTC/МСК-сдвиг границ периода (Николай)
 
 ### Жалоба и данные
