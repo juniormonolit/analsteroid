@@ -16,12 +16,14 @@ interface UserRow {
   role_id: string | null;
   role_name: string | null;
   department_count: string;
+  override_count: string;
   invite_expires_at: string | null;
   invite_used_at: string | null;
 }
 
 export async function GET() {
   const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const denied = permError(session, 'action.users.manage');
   if (denied) return denied;
 
@@ -30,6 +32,7 @@ export async function GET() {
     SELECT u.id, u.login, u.display_name, u.is_superadmin, u.is_active, u.bitrix_user_id,
            u.role_id, r.name AS role_name,
            (SELECT COUNT(*) FROM user_departments ud WHERE ud.user_id = u.id) AS department_count,
+           cardinality(u.section_overrides) AS override_count,
            it.expires_at AS invite_expires_at, it.used_at AS invite_used_at
     FROM users u
     LEFT JOIN roles r ON r.id = u.role_id
@@ -56,11 +59,15 @@ export async function GET() {
       roleId: r.role_id,
       roleName: r.role_name,
       departmentCount: parseInt(r.department_count, 10) || 0,
+      overrideCount: parseInt(r.override_count, 10) || 0,
       status,
     };
   });
 
-  return NextResponse.json({ users });
+  // Разделы «Руководит» (супер-админ) и «Права» (личные исключения) в UI
+  // рендерятся по-разному в зависимости от того, кто смотрит — отдаём флаг,
+  // чтобы клиентский компонент не дёргал /api/me отдельным запросом.
+  return NextResponse.json({ users, viewerIsSuperadmin: session.isSuperadmin });
 }
 
 export async function POST(req: NextRequest) {

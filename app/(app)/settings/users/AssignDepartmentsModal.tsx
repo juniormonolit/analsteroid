@@ -2,9 +2,11 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Modal } from '@/components/ui/Modal';
 
-// Назначение подконтрольных отделов пользователю (сводка в его ЛК).
+// Раздел «Руководит» (Права v2): подконтрольные отделы пользователя (сводка в
+// его ЛК; использование для карточек отдела РОПа — следующая итерация).
 // Храним только явно отмеченные узлы; потомки отмеченного включаются неявно
-// (в UI показываются заблокированной галкой).
+// (в UI показываются заблокированной галкой). Назначает ТОЛЬКО супер-админ
+// (см. app/api/admin/users/[id]/departments/route.ts).
 
 interface DeptNode {
   id: string; // uuid departments.id — его и храним в user_departments
@@ -119,7 +121,7 @@ export function AssignDepartmentsModal({ userId, userName, onClose, onSaved }: P
     <Modal
       open
       onOpenChange={(o) => { if (!o) onClose(); }}
-      title={`Отделы — ${userName}`}
+      title={`Руководит — ${userName}`}
       desktopWidth="sm:max-w-[440px]"
     >
       <div className="flex flex-col gap-4">

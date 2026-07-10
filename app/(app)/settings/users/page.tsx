@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { InviteUserModal } from './InviteUserModal';
 import { AssignDepartmentsModal } from './AssignDepartmentsModal';
+import { PersonalOverridesModal } from './PersonalOverridesModal';
 
 interface AppUser {
   id: string;
@@ -13,6 +14,7 @@ interface AppUser {
   roleId: string | null;
   roleName: string | null;
   departmentCount: number;
+  overrideCount: number;
   status: 'active' | 'pending' | 'expired' | 'no_invite';
 }
 
@@ -42,9 +44,11 @@ const STATUS_CLASS: Record<AppUser['status'], string> = {
 export default function UsersPage() {
   const [users, setUsers] = useState<AppUser[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [viewerIsSuperadmin, setViewerIsSuperadmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showInvite, setShowInvite] = useState(false);
   const [deptUser, setDeptUser] = useState<AppUser | null>(null);
+  const [overridesUser, setOverridesUser] = useState<AppUser | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -54,8 +58,9 @@ export default function UsersPage() {
       fetch('/api/admin/users').then((r) => r.json()),
       fetch('/api/admin/roles').then((r) => r.json()),
     ])
-      .then(([u, r]: [{ users?: AppUser[] }, { roles?: Role[] }]) => {
+      .then(([u, r]: [{ users?: AppUser[]; viewerIsSuperadmin?: boolean }, { roles?: Role[] }]) => {
         setUsers(u.users ?? []);
+        setViewerIsSuperadmin(u.viewerIsSuperadmin ?? false);
         setRoles(r.roles ?? []);
       })
       .catch(() => {})
@@ -160,12 +165,21 @@ export default function UsersPage() {
                   <td className={`px-4 py-2 ${STATUS_CLASS[u.status]}`}>{STATUS_LABEL[u.status]}</td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">
                     <button
-                      onClick={() => setDeptUser(u)}
+                      onClick={() => setOverridesUser(u)}
                       className="text-xs text-[var(--color-accent)] hover:underline mr-3"
-                      title="Подконтрольные отделы (сводка в ЛК)"
+                      title="Личные исключения видимости разделов (союз с ролью)"
                     >
-                      Отделы{u.departmentCount > 0 ? ` (${u.departmentCount})` : ''}
+                      Права{u.overrideCount > 0 ? ` (${u.overrideCount})` : ''}
                     </button>
+                    {viewerIsSuperadmin && (
+                      <button
+                        onClick={() => setDeptUser(u)}
+                        className="text-xs text-[var(--color-accent)] hover:underline mr-3"
+                        title="Руководит: подконтрольные отделы (сводка в ЛК)"
+                      >
+                        Руководит{u.departmentCount > 0 ? ` (${u.departmentCount})` : ''}
+                      </button>
+                    )}
                     {(u.status === 'pending' || u.status === 'expired') && (
                       <button
                         onClick={() => resend(u.id)}
@@ -204,6 +218,16 @@ export default function UsersPage() {
           userName={deptUser.displayName}
           onClose={() => setDeptUser(null)}
           onSaved={() => { setDeptUser(null); setMessage({ type: 'success', text: 'Отделы сохранены' }); load(); }}
+        />
+      )}
+
+      {overridesUser && (
+        <PersonalOverridesModal
+          userId={overridesUser.id}
+          userName={overridesUser.displayName}
+          rolePermissions={roles.find((r) => r.id === overridesUser.roleId)?.permissions ?? []}
+          onClose={() => setOverridesUser(null)}
+          onSaved={() => { setOverridesUser(null); setMessage({ type: 'success', text: 'Права сохранены' }); load(); }}
         />
       )}
     </div>

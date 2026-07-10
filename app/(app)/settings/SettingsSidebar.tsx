@@ -10,18 +10,24 @@ const NAV = [
 ];
 
 export function SettingsSidebar({
+  canViewSettings,
   canManageUsers,
   isSuperadmin,
 }: {
+  // section.settings — «Настройки» в узком смысле (Таблицы/Метрики/Цвета/Календарь).
+  // Права v2: раздел /settings стал доступен и без него (см. layout.tsx) — тем, у
+  // кого есть только action.users.manage, чтобы не терять «Пользователи».
+  canViewSettings: boolean;
   canManageUsers: boolean;
   isSuperadmin: boolean;
 }) {
   const pathname = usePathname();
 
   const items = [
-    ...NAV,
+    ...(canViewSettings ? NAV : []),
     ...(canManageUsers ? [{ href: '/settings/users', label: 'Пользователи' }] : []),
     ...(isSuperadmin ? [{ href: '/settings/roles', label: 'Роли' }] : []),
+    ...(isSuperadmin ? [{ href: '/settings/rights-matrix', label: 'Матрица прав' }] : []),
     ...(isSuperadmin ? [{ href: '/settings/daily-plan-mode', label: 'Режим дневного плана' }] : []),
   ];
 

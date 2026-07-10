@@ -35,6 +35,17 @@ export function sanitizePermissions(raw: unknown): PermKey[] {
   return [...new Set(raw.filter((k): k is PermKey => typeof k === 'string' && valid.has(k)))];
 }
 
+export type SectionKey = (typeof PERM_SECTIONS)[number]['key'];
+
+// Права v2: персональные исключения (users.section_overrides, миграция 067) —
+// только section.* ключи, action.* сюда не допускаются (действия остаются
+// исключительно правом роли, не персональным исключением).
+export function sanitizeSectionOverrides(raw: unknown): SectionKey[] {
+  if (!Array.isArray(raw)) return [];
+  const valid = new Set<string>(PERM_SECTIONS.map((p) => p.key));
+  return [...new Set(raw.filter((k): k is SectionKey => typeof k === 'string' && valid.has(k)))];
+}
+
 export function hasPerm(session: SessionUser | null, key: PermKey): boolean {
   if (!session) return false;
   if (session.isSuperadmin) return true; // супер-админ не может залочить сам себя

@@ -10,7 +10,13 @@ export interface SessionUser {
   login: string;
   displayName: string;
   isSuperadmin: boolean;
-  permissions: string[]; // из роли (roles.permissions); [] если роль не назначена
+  // Эффективные права = роль ∪ персональные исключения (Права v2, users.section_overrides,
+  // миграция 067). hasPerm() и весь остальной код гейтинга не меняются — union уже
+  // посчитан здесь, в единственном SELECT на реквест.
+  permissions: string[];
+  // Сырые персональные исключения отдельно — нужны только UI управления
+  // пользователями (показать, что выдано лично, а не ролью).
+  sectionOverrides: string[];
   roleName: string | null;
   avatarUrl: string | null;
   bitrixUserId: string | null;
@@ -29,7 +35,10 @@ export const getSession = cache(async (): Promise<SessionUser | null> => {
   const res = await db.query<SessionUser & { expires_at: Date }>(
     `SELECT u.id, u.login, u.display_name AS "displayName",
             u.is_superadmin AS "isSuperadmin",
-            COALESCE(r.permissions, '{}') AS "permissions",
+            (SELECT COALESCE(array_agg(DISTINCT perm), '{}')
+               FROM unnest(COALESCE(r.permissions, '{}') || COALESCE(u.section_overrides, '{}')) AS perm
+            ) AS "permissions",
+            COALESCE(u.section_overrides, '{}') AS "sectionOverrides",
             r.name AS "roleName",
             u.avatar_url AS "avatarUrl",
             u.bitrix_user_id AS "bitrixUserId",
@@ -50,6 +59,7 @@ export const getSession = cache(async (): Promise<SessionUser | null> => {
     displayName: row.displayName,
     isSuperadmin: row.isSuperadmin,
     permissions: row.permissions ?? [],
+    sectionOverrides: row.sectionOverrides ?? [],
     roleName: row.roleName,
     avatarUrl: row.avatarUrl,
     bitrixUserId: row.bitrixUserId,

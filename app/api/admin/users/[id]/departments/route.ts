@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { permError } from '@/lib/auth/perms';
+import { superadminError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 
-// Подконтрольные отделы пользователя (для сводки в его ЛК).
-// Храним только явно отмеченные узлы — дочерние включаются по дереву в коде.
+// Раздел «Руководит» (Права v2): подконтрольные отделы пользователя (сводка
+// в его ЛК, в следующей итерации — карточки отдела РОПа). Храним только явно
+// отмеченные узлы — дочерние включаются по дереву в коде (user_departments,
+// таблица от миграции 049 — переиспользуем, отдельная user_managed_departments
+// не заводилась, см. отчёт задачи).
+//
+// Назначает ТОЛЬКО супер-админ (было action.users.manage — доступно и
+// обычным Админам; сужено по спеке Прав v2).
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
-  const denied = permError(session, 'action.users.manage');
+  const denied = superadminError(session);
   if (denied) return denied;
 
   const { id } = await params;
@@ -21,7 +27,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
-  const denied = permError(session, 'action.users.manage');
+  const denied = superadminError(session);
   if (denied) return denied;
 
   const { id } = await params;

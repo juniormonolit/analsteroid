@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 
+// Найдено при работе над Правами v2: в отличие от соседних /api/settings/*
+// (tables, metrics, metric-colors — все гейтят section.settings), этот роут
+// проверял только факт логина — любая роль (включая «Пользователь») могла
+// дёрнуть POST и перезаписать working_calendar на весь год. Гейт вернули в
+// соответствие с остальными /api/settings/* (см. отчёт задачи).
 export async function GET() {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = permError(session, 'section.settings');
+  if (denied) return denied;
 
   const db = systemDb();
   const res = await db.query<{ year: number }>(
@@ -21,7 +28,8 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const denied = permError(session, 'section.settings');
+  if (denied) return denied;
 
   const body = await req.json();
   const { year } = body as { year: number };

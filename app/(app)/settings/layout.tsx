@@ -6,7 +6,16 @@ import { SettingsSidebar } from './SettingsSidebar';
 export default async function SettingsLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/login');
-  if (!hasPerm(session, 'section.settings')) redirect(firstAllowedPath(session));
+
+  const canViewSettings = hasPerm(session, 'section.settings');
+  const canManageUsers = hasPerm(session, 'action.users.manage');
+  // Права v2: вход в /settings — section.settings ИЛИ action.users.manage.
+  // Раньше был единственный гейт section.settings, из-за чего «Настройки» и
+  // «Пользователи» были неразделимы: убрать у роли section.settings означало
+  // потерять и управление пользователями. Теперь это два независимых входа —
+  // конкретные вкладки (Таблицы/Метрики/...) внутри всё равно требуют
+  // section.settings отдельно (см. их собственные layout.tsx и API-роуты).
+  if (!canViewSettings && !canManageUsers && !session.isSuperadmin) redirect(firstAllowedPath(session));
 
   return (
     // Телефон: навигация настроек — горизонтальные табы над контентом; md+: сайдбар слева
@@ -17,7 +26,8 @@ export default async function SettingsLayout({ children }: { children: React.Rea
         </div>
         <nav className="flex md:flex-col md:flex-1 py-1.5 md:py-2 overflow-x-auto">
           <SettingsSidebar
-            canManageUsers={hasPerm(session, 'action.users.manage')}
+            canViewSettings={canViewSettings}
+            canManageUsers={canManageUsers}
             isSuperadmin={session.isSuperadmin}
           />
         </nav>
