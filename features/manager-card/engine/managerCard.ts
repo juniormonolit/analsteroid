@@ -4,11 +4,10 @@ import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups'
 import { computeDelta } from '@/features/reports/engine/calculated';
 import { fetchTouchSpeedAllByManager } from '@/features/reports/engine/callsMetrics';
 import { branchLabel } from '@/lib/org/branchLabel';
-import { toSqlInterval, type DateRange } from '@/lib/period';
-import type { ClientType, ReportRow } from '@/lib/metrics/types';
+import { toSqlInterval, previousPeriodSameLength, type DateRange } from '@/lib/period';
+import type { ClientType, ReportRow, ProductGroupMode } from '@/lib/metrics/types';
 import { getRawScoringWeights, AXIS_KEYS as WEIGHTED_AXIS_KEYS, type AxisKey as WeightAxisKey } from '@/lib/settings/scoringWeights';
 import { getCardTemplate, type CatalogAxisKey, type TileKey } from '@/lib/settings/cardTemplates';
-import { differenceInCalendarDays, subDays, startOfDay } from 'date-fns';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Карточка менеджера (MVP, экран 1 мокапа manager-card-mock.html) — движок сборки
@@ -29,19 +28,11 @@ export function segmentToClientType(seg: CardSegment): ClientType {
   return seg === 'fl' ? 'b2c' : seg === 'ul' ? 'b2b' : 'all';
 }
 
-// Период той же длины, непосредственно предшествующий текущему (для Δ%) — тот же
-// принцип, что recomputeComparison (lib/period), но окно строго примыкающее, а не
-// «хвост прошлого месяца» (там своя семантика для отчёта, здесь нужен буквально
-// предыдущий период).
-export function previousPeriod(period: DateRange): DateRange {
-  const days = differenceInCalendarDays(period.to, period.from) + 1;
-  const to = startOfDay(subDays(period.from, 1));
-  const from = startOfDay(subDays(to, days - 1));
-  return { from, to };
-}
-
-// «Всё время» — с заведомо ранней даты (данные компании не старше) до сейчас.
-export const ALL_TIME: DateRange = { from: new Date('2015-01-01T00:00:00Z'), to: new Date() };
+// Период той же длины, непосредственно предшествующий текущему (для Δ%) — тонкий
+// реэкспорт lib/period::previousPeriodSameLength (вынесена задачей 10.07, п.3,
+// чтобы клиентский ManagerCardPanel.tsx мог посчитать ТОТ ЖЕ дефолт периода
+// сравнения сам, не импортируя серверный движок с systemDb/analyticsDb).
+export const previousPeriod = previousPeriodSameLength;
 
 // ── Каталог осей паутины ─────────────────────────────────────────────────────
 // AxisKey — СВОЙ (более широкий) тип, а не WeightAxisKey напрямую: шаблоны карточек
@@ -271,13 +262,27 @@ function tileValue(current: number | null, comparison: number | null): TileMetri
 }
 
 // ── Категории (топ-5 по доле суммы продаж) ───────────────────────────────────
-export interface CategoryShare { name: string; amount: number; share: number }
+// `id` — dimensionId из fetchByProductGroups (задача 10.07, п.4/5): для kc —
+// numeric product_group_id (строкой) либо '__none__'; для by_max — САМО имя
+// head_group_name (в этом режиме id и name совпадают, см. byProductGroups.ts).
+// Нужен клиенту для дрилл-дауна «клик по группе → список сделок» (/api/reports/deals
+// ?productGroup=<id>&productGroupMode=<mode>) — по одному только name kc-группу не
+// восстановить однозначно (name — человекочитаемое, id — то, что реально в WHERE).
+export interface CategoryShare { id: string; name: string; amount: number; share: number }
 
 // ── Публичный контракт ───────────────────────────────────────────────────────
 export interface ManagerCardOptions {
   managerId: string;
   period: DateRange;
+  /** Период сравнения (задача 10.07, п.3 — «фильтры как в отчёте»): произвольный,
+   *  явно задаваемый пользователем; дефолт (не передан) — previousPeriod(period),
+   *  тот же период той же длины непосредственно перед текущим, что и раньше. */
+  comparisonPeriod?: DateRange;
   segment: CardSegment;
+  /** Система товарных категорий (задача 10.07, п.4): 'kc' — «Категория КЦ»
+   *  (product_group_id, ~96), 'by_max' — «По наибольшему» (head_group_name, ~57).
+   *  Дефолт 'kc' — прежнее поведение (было зашито жёстко). */
+  productGroupMode?: ProductGroupMode;
 }
 
 export interface AxisResult {
@@ -286,7 +291,13 @@ export interface AxisResult {
   unit: 'percent' | 'money' | 'minutes';
   invert: boolean;
   period:  { raw: number | null; normalized: number | null };
-  allTime: { raw: number | null; normalized: number | null };
+  /** Полупрозрачный слой паутины (задача 10.07, п.3): период СРАВНЕНИЯ (тот же,
+   *  что и колонка «к прошлому периоду» в итогах) — БЫЛО «всё время» (ALL_TIME),
+   *  переименовано вслед за сменой семантики (владелец подтвердил: сравнение с
+   *  прошлым периодом полезнее фиксированного «всё время» теперь, когда период
+   *  сравнения сам настраивается). Имя поля переименовано (allTime → comparison)
+   *  — обновить ВСЕХ потребителей (ManagerCardPanel.tsx/ManagerCardRadar.tsx). */
+  comparison: { raw: number | null; normalized: number | null };
   dataAvailable: boolean;
 }
 
@@ -320,7 +331,10 @@ export interface ManagerCardResult {
 export async function buildManagerCard(opts: ManagerCardOptions): Promise<ManagerCardResult | { error: string }> {
   const { managerId, period, segment } = opts;
   const clientType = segmentToClientType(segment);
-  const prevPeriod = previousPeriod(period);
+  // Период сравнения (задача 10.07, п.3): явный из настроек панели, дефолт — тот же
+  // «предыдущий период той же длины», что и раньше (previousPeriod).
+  const prevPeriod = opts.comparisonPeriod ?? previousPeriod(period);
+  const productGroupMode: ProductGroupMode = opts.productGroupMode ?? 'kc';
 
   const sysDb = systemDb();
   const orgRes = await sysDb.query<{
@@ -338,13 +352,12 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
 
   const managerIdNum = /^\d+$/.test(managerId) ? Number(managerId) : null;
 
-  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, deptRosterRes, callsTizer, pgRows, rawWeights, template] =
+  const [periodPool, prevPool, touchPeriodMap, touchCompMap, deptRosterRes, callsTizer, pgRows, rawWeights, template] =
     await Promise.all([
       fetchByManagers({ period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
-      fetchByManagers({ period: ALL_TIME, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchTouchSpeedByManager(period),
-      fetchTouchSpeedByManager(ALL_TIME),
+      fetchTouchSpeedByManager(prevPeriod),
       org.department_id
         ? sysDb.query<{ bitrix_user_id: string }>(
             `SELECT manager_bitrix_user_id::text AS bitrix_user_id
@@ -353,7 +366,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
           )
         : Promise.resolve({ rows: [{ bitrix_user_id: managerId }] }),
       managerIdNum !== null ? fetchCallsTizer(managerIdNum, period) : Promise.resolve(null),
-      fetchByProductGroups({ period, dealScope: 'all', clientType, productGroupMode: 'kc', managerId }),
+      fetchByProductGroups({ period, dealScope: 'all', clientType, productGroupMode, managerId }),
       getRawScoringWeights(),
       getCardTemplate('manager'),
     ]);
@@ -361,25 +374,27 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
   const currentRow = periodPool.find(r => r.dimensionId === managerId);
   const prevRow    = prevPool.find(r => r.dimensionId === managerId);
 
-  // ── Паутина: оси шаблона (до 6, бриф 10.07), период + всё время, перцентильная нормировка ──
-  const periodAxisMap  = buildAxisMap(periodPool, touchPeriodMap);
-  const allTimeAxisMap = buildAxisMap(allTimePool, touchAllTimeMap);
-  const periodEligible  = salesPositiveIds(periodPool);
-  const allTimeEligible = salesPositiveIds(allTimePool);
+  // ── Паутина: оси шаблона (до 6, бриф 10.07), период + период сравнения (задача
+  // 10.07, п.3 — было «всё время», теперь полупрозрачный слой = период сравнения,
+  // тот же, что и колонка «к прошлому периоду»), перцентильная нормировка ──────
+  const periodAxisMap = buildAxisMap(periodPool, touchPeriodMap);
+  const compAxisMap   = buildAxisMap(prevPool, touchCompMap);
+  const periodEligible = salesPositiveIds(periodPool);
+  const compEligible   = salesPositiveIds(prevPool);
   const templateAxes = resolveTemplateAxes(template.axes);
 
   const axes: AxisResult[] = templateAxes.map(def => {
-    const periodOwn  = periodAxisMap.get(managerId)?.[def.key] ?? null;
-    const allTimeOwn = allTimeAxisMap.get(managerId)?.[def.key] ?? null;
+    const periodOwn = periodAxisMap.get(managerId)?.[def.key] ?? null;
+    const compOwn   = compAxisMap.get(managerId)?.[def.key] ?? null;
     return {
       key: def.key, label: def.label, unit: def.unit, invert: def.invert,
       period: {
         raw: periodOwn,
         normalized: percentileScore(periodOwn, poolValuesForAxis(periodAxisMap, periodEligible, def.key), def.invert),
       },
-      allTime: {
-        raw: allTimeOwn,
-        normalized: percentileScore(allTimeOwn, poolValuesForAxis(allTimeAxisMap, allTimeEligible, def.key), def.invert),
+      comparison: {
+        raw: compOwn,
+        normalized: percentileScore(compOwn, poolValuesForAxis(compAxisMap, compEligible, def.key), def.invert),
       },
       // Скорость касания зависит от va.calls; остальные — от sa.deals (всегда доступна).
       dataAvailable: def.key === 'touch_speed' ? touchPeriodMap !== null : true,
@@ -414,12 +429,12 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
 
   // ── Топ-5 товарных категорий по доле суммы продаж ───────────────────────────
   const categoriesAll = pgRows
-    .map(r => ({ name: r.dimensionName, amount: (r.metrics.primary_sales_amount ?? 0) + (r.metrics.repeat_sales_amount ?? 0) }))
+    .map(r => ({ id: r.dimensionId, name: r.dimensionName, amount: (r.metrics.primary_sales_amount ?? 0) + (r.metrics.repeat_sales_amount ?? 0) }))
     .filter(r => r.amount > 0)
     .sort((a, b) => b.amount - a.amount);
   const totalAmount = categoriesAll.reduce((s, r) => s + r.amount, 0);
   const categories: CategoryShare[] = categoriesAll.slice(0, 5).map(r => ({
-    name: r.name, amount: r.amount, share: totalAmount > 0 ? Math.round((r.amount / totalAmount) * 1000) / 10 : 0,
+    id: r.id, name: r.name, amount: r.amount, share: totalAmount > 0 ? Math.round((r.amount / totalAmount) * 1000) / 10 : 0,
   }));
 
   const touchPeriodOwn = touchPeriodMap?.get(managerId) ?? null;

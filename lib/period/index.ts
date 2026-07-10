@@ -45,6 +45,23 @@ export function recomputeComparison(current: DateRange): DateRange {
   return { from: startOfDay(compFrom), to: endOfDay(compTo) };
 }
 
+/**
+ * Период той же длины, НЕПОСРЕДСТВЕННО предшествующий текущему — карточка
+ * менеджера (задача 10.07, п.3: «фильтры как в отчёте», дефолт периода сравнения
+ * = «предыдущий период той же длины»). НЕ путать с recomputeComparison выше
+ * («хвост предыдущего МЕСЯЦА» — семантика основного отчёта, другая): здесь окно
+ * строго примыкающее, без привязки к границе месяца. Извлечено из
+ * features/manager-card/engine/managerCard.ts::previousPeriod (сервер) — общий
+ * pure-хелпер, чтобы клиентский ManagerCardPanel.tsx мог посчитать ТОТ ЖЕ дефолт
+ * сам (без импорта серверного движка с systemDb/analyticsDb в клиентский бандл).
+ */
+export function previousPeriodSameLength(current: DateRange): DateRange {
+  const days = differenceInCalendarDays(current.to, current.from) + 1;
+  const to = startOfDay(subDays(current.from, 1));
+  const from = startOfDay(subDays(to, days - 1));
+  return { from, to };
+}
+
 export type PresetKey =
   | 'today' | 'yesterday' | 'this_week' | 'last_week'
   | 'this_month' | 'last_month';

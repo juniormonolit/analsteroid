@@ -29,7 +29,7 @@ import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { computeDelta } from '@/features/reports/engine/calculated';
 import {
-  ALL_TIME, buildAxisMap, salesPositiveIds, poolValuesForAxis,
+  buildAxisMap, salesPositiveIds, poolValuesForAxis,
   percentileScore, ratingFor, rawAxisValues, segmentToClientType, previousPeriod,
   fetchTouchSpeedByManager, resolveTemplateAxes, type CardSegment, type CategoryShare, type ManagerCardResult,
 } from './managerCard';
@@ -37,7 +37,7 @@ import { getRawScoringWeights } from '@/lib/settings/scoringWeights';
 import { getCardTemplate } from '@/lib/settings/cardTemplates';
 import type { RosterManager } from '@/lib/org/teamRoster';
 import { toSqlInterval, type DateRange } from '@/lib/period';
-import type { ReportRow } from '@/lib/metrics/types';
+import type { ReportRow, ProductGroupMode } from '@/lib/metrics/types';
 
 // ── Сетка «Мой отдел» ─────────────────────────────────────────────────────────
 
@@ -162,20 +162,24 @@ export async function buildDepartmentCard(opts: {
   roster: RosterManager[];
   peerBuckets: Map<string, RosterManager[]>; // deptId → менеджеры (включая сам deptId), из bucketManagersByDepartments
   period: DateRange;
+  /** Период сравнения (задача 10.07, п.3): явный, дефолт — previousPeriod(period). */
+  comparisonPeriod?: DateRange;
   segment: CardSegment;
+  /** Система товарных категорий (задача 10.07, п.4): дефолт 'kc' — прежнее поведение. */
+  productGroupMode?: ProductGroupMode;
 }): Promise<DepartmentCardResult> {
   const clientType = segmentToClientType(opts.segment);
-  const prevPeriod = previousPeriod(opts.period);
+  const prevPeriod = opts.comparisonPeriod ?? previousPeriod(opts.period);
+  const productGroupMode: ProductGroupMode = opts.productGroupMode ?? 'kc';
   const managerIds = new Set(opts.roster.map(m => m.managerId));
   const managerIdNums = opts.roster.map(m => Number(m.managerId)).filter(n => Number.isFinite(n));
 
-  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, rawWeights, template, callsTizer, pgRows] =
+  const [periodPool, prevPool, touchPeriodMap, touchCompMap, rawWeights, template, callsTizer, pgRows] =
     await Promise.all([
       fetchByManagers({ period: opts.period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
-      fetchByManagers({ period: ALL_TIME, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchTouchSpeedByManager(opts.period),
-      fetchTouchSpeedByManager(ALL_TIME),
+      fetchTouchSpeedByManager(prevPeriod),
       getRawScoringWeights(),
       getCardTemplate('department'),
       fetchCallsTizerForManagers(managerIdNums, opts.period),
@@ -187,26 +191,27 @@ export async function buildDepartmentCard(opts: {
       // с размером отдела.
       opts.roster.length > 0
         ? fetchByProductGroups({
-            period: opts.period, dealScope: 'all', clientType, productGroupMode: 'kc',
+            period: opts.period, dealScope: 'all', clientType, productGroupMode,
             managerIds: opts.roster.map(m => m.managerId),
           })
         : Promise.resolve([] as ReportRow[]),
     ]);
 
-  // ── Синтетические «сырые» суммы отдела (текущий период / прошлый / всё время) ──
+  // ── Синтетические «сырые» суммы отдела (текущий период / период сравнения) ──
+  // Задача 10.07, п.3: полупрозрачный слой паутины теперь = период сравнения
+  // (было «всё время», см. managerCard.ts::buildManagerCard — тот же приём).
   const curSum = sumRows(periodPool, managerIds);
   const prevSum = sumRows(prevPool, managerIds);
-  const allTimeSum = sumRows(allTimePool, managerIds);
-  const touchCur = avgTouch(touchPeriodMap, managerIds);
-  const touchAll = avgTouch(touchAllTimeMap, managerIds);
+  const touchCur  = avgTouch(touchPeriodMap, managerIds);
+  const touchComp = avgTouch(touchCompMap, managerIds);
 
-  const curAxisRaw     = rawAxisValues(curSum, touchCur);
-  const allTimeAxisRaw = rawAxisValues(allTimeSum, touchAll);
+  const curAxisRaw  = rawAxisValues(curSum, touchCur);
+  const compAxisRaw = rawAxisValues(prevSum, touchComp);
 
   // ── Пиры: все department_id, назначенные хоть кому-то (+ корневые), включая нас ──
-  // Строим axisMap+eligibility пиров для ЛЮБОГО пула (период / всё время) — общий
-  // хелпер, чтобы не дублировать цикл по peerBuckets дважды (п.3 брифа: «всё время»
-  // тоже должно быть посчитано, а не заглушкой — иначе серый слой паутины схлопывается
+  // Строим axisMap+eligibility пиров для ЛЮБОГО пула (период / период сравнения) —
+  // общий хелпер, чтобы не дублировать цикл по peerBuckets дважды (сравнение тоже
+  // должно быть посчитано, а не заглушкой — иначе серый слой паутины схлопывается
   // в точку, т.к. ManagerCardRadar трактует null как 0).
   function buildPeerAxisMap(pool: ReportRow[], touchMap: Map<string, number> | null, ownSum: Record<string, number | null>, ownTouch: number | null) {
     const sums = new Map<string, Record<string, number | null>>();
@@ -234,9 +239,9 @@ export async function buildDepartmentCard(opts: {
     .sort((a, b) => b.r! - a.r!);
   const rank = insufficientPeers ? null : (orderedByRating.findIndex(x => x.id === opts.deptId) + 1 || null);
 
-  const { axisMap: allTimeDeptAxisMap, eligible: allTimeDeptEligible } = insufficientPeers
+  const { axisMap: compDeptAxisMap, eligible: compDeptEligible } = insufficientPeers
     ? { axisMap: new Map(), eligible: new Set<string>() }
-    : buildPeerAxisMap(allTimePool, touchAllTimeMap, allTimeSum, touchAll);
+    : buildPeerAxisMap(prevPool, touchCompMap, prevSum, touchComp);
 
   const axes = templateAxes.map(def => ({
     key: def.key, label: def.label, unit: def.unit, invert: def.invert,
@@ -244,9 +249,9 @@ export async function buildDepartmentCard(opts: {
       raw: curAxisRaw[def.key],
       normalized: insufficientPeers ? null : percentileScore(curAxisRaw[def.key], poolValuesForAxis(deptAxisMap, deptEligible, def.key), def.invert),
     },
-    allTime: {
-      raw: allTimeAxisRaw[def.key],
-      normalized: insufficientPeers ? null : percentileScore(allTimeAxisRaw[def.key], poolValuesForAxis(allTimeDeptAxisMap, allTimeDeptEligible, def.key), def.invert),
+    comparison: {
+      raw: compAxisRaw[def.key],
+      normalized: insufficientPeers ? null : percentileScore(compAxisRaw[def.key], poolValuesForAxis(compDeptAxisMap, compDeptEligible, def.key), def.invert),
     },
     dataAvailable: def.key === 'touch_speed' ? touchCur !== null : true,
   }));
@@ -259,16 +264,17 @@ export async function buildDepartmentCard(opts: {
   const curSalesCount   = curSum.sales_count ?? 0;
   const prevSalesCount  = prevSum.sales_count ?? 0;
 
-  const categoriesAgg = new Map<string, number>();
-  for (const r of pgRows) {
-    const amount = (r.metrics.primary_sales_amount ?? 0) + (r.metrics.repeat_sales_amount ?? 0);
-    if (amount <= 0) continue;
-    categoriesAgg.set(r.dimensionName, (categoriesAgg.get(r.dimensionName) ?? 0) + amount);
-  }
-  const categoriesAll = [...categoriesAgg.entries()].map(([name, amount]) => ({ name, amount })).sort((a, b) => b.amount - a.amount);
+  // pgRows уже сгруппирован по dimensionId (product_group_id/head_group_name) —
+  // fetchByProductGroups с managerIds фильтрует SQL на роster ДО группировки, так что
+  // здесь одна строка = одна категория, сумма УЖЕ по всем менеджерам отдела (доп.
+  // ре-агрегация по имени была избыточна и теряла id, нужный дрилл-дауну п.5).
+  const categoriesAll = pgRows
+    .map(r => ({ id: r.dimensionId, name: r.dimensionName, amount: (r.metrics.primary_sales_amount ?? 0) + (r.metrics.repeat_sales_amount ?? 0) }))
+    .filter(r => r.amount > 0)
+    .sort((a, b) => b.amount - a.amount);
   const totalCatAmount = categoriesAll.reduce((s, r) => s + r.amount, 0);
   const categories: CategoryShare[] = categoriesAll.slice(0, 5).map(r => ({
-    name: r.name, amount: r.amount, share: totalCatAmount > 0 ? Math.round((r.amount / totalCatAmount) * 1000) / 10 : 0,
+    id: r.id, name: r.name, amount: r.amount, share: totalCatAmount > 0 ? Math.round((r.amount / totalCatAmount) * 1000) / 10 : 0,
   }));
 
   return {

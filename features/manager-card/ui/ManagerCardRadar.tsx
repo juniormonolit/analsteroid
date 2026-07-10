@@ -1,15 +1,18 @@
 'use client';
 
-// SVG-«паутина» 6 метрик карточки менеджера (см. мокап manager-card-mock.html,
-// экран 1): 2 слоя — выбранный период (синий) и всё время (серый пунктир).
-// Порядок осей ФИКСИРОВАН и совпадает с порядком AXIS_DEFS в движке
-// (features/manager-card/engine/managerCard.ts): верх → по часовой стрелке.
+// SVG-«паутина» метрик карточки менеджера (см. мокап manager-card-mock.html,
+// экран 1): 2 слоя — выбранный период (синий) и период СРАВНЕНИЯ (серый пунктир,
+// задача 10.07 п.3 — было «всё время», переименовано вслед за сменой семантики:
+// полупрозрачный слой = тот же период, что и колонка «к прошлому периоду»).
+// Порядок осей = порядок выбранных осей шаблона карточки (card_templates,
+// задача 10.07 п.2) — до 6 из полного каталога метрик, задаётся в
+// /settings/card-templates, верх → по часовой стрелке.
 
 export interface RadarAxisInput {
   key: string;
   label: string;
-  periodValue: number | null;   // 0..10, нормировано перцентилем
-  allTimeValue: number | null;  // 0..10
+  periodValue: number | null;      // 0..10, нормировано перцентилем
+  comparisonValue: number | null;  // 0..10, период сравнения
   dataAvailable: boolean;
 }
 
@@ -41,8 +44,8 @@ function labelAnchor(x: number): 'start' | 'middle' | 'end' {
 
 export function ManagerCardRadar({ axes }: { axes: RadarAxisInput[] }) {
   const n = axes.length;
-  const periodValues  = axes.map(a => a.dataAvailable ? (a.periodValue ?? 0) : 0);
-  const allTimeValues = axes.map(a => a.dataAvailable ? (a.allTimeValue ?? 0) : 0);
+  const periodValues     = axes.map(a => a.dataAvailable ? (a.periodValue ?? 0) : 0);
+  const comparisonValues = axes.map(a => a.dataAvailable ? (a.comparisonValue ?? 0) : 0);
   const anyMissing = axes.some(a => !a.dataAvailable);
 
   return (
@@ -64,9 +67,9 @@ export function ManagerCardRadar({ axes }: { axes: RadarAxisInput[] }) {
           return <line key={i} x1={CENTER.x} y1={CENTER.y} x2={p.x} y2={p.y} stroke="var(--color-border)" strokeWidth={1} />;
         })}
 
-        {/* Слой «за всё время» (серый пунктир) */}
+        {/* Слой «период сравнения» (серый пунктир) — задача 10.07, п.3 */}
         <polygon
-          points={polygonPoints(allTimeValues)}
+          points={polygonPoints(comparisonValues)}
           fill="#94a3b8" fillOpacity={0.22} stroke="#94a3b8" strokeWidth={1.6} strokeOpacity={0.7} strokeDasharray="4 3"
         />
 
@@ -107,7 +110,7 @@ export function ManagerCardRadar({ axes }: { axes: RadarAxisInput[] }) {
         </span>
         <span className="flex items-center gap-1.5">
           <span className="w-3.5 h-3.5 rounded-[4px]" style={{ backgroundColor: '#94a3b8', opacity: 0.55 }} />
-          За всё время
+          Период сравнения
         </span>
       </div>
       {anyMissing && (

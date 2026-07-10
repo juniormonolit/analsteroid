@@ -1,18 +1,19 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { startOfMonth } from 'date-fns';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
-import type { DateRange } from '@/lib/period';
+import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
+import { previousPeriodSameLength, type DateRange } from '@/lib/period';
+import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
 import type { CardSegment, ManagerCardResult } from '@/features/manager-card/engine/managerCard';
 
 interface Props {
   managerId: string;
   managerName?: string;
-  /** Период основного отчёта — точка отсчёта чипа «Период отчёта» (дефолт). */
+  /** Период основного отчёта — начальное значение периода карточки (дефолт). */
   reportPeriod: DateRange;
   onClose: () => void;
   /** Карточка менеджера v2 (бриф 10.07, п.3): «Карточка отдела» — та же панель,
@@ -21,10 +22,6 @@ interface Props {
    *  поведение (клик по #логину в отчёте), не трогаем. */
   mode?: 'manager' | 'department';
 }
-
-type PeriodChoice = 'report' | 'month' | 'all';
-
-const ALL_TIME_RANGE: DateRange = { from: new Date('2015-01-01T00:00:00Z'), to: new Date() };
 
 function fmtMoney(v: number | null | undefined): string {
   if (v === null || v === undefined) return '—';
@@ -107,27 +104,104 @@ function ChipGroup<T extends string>({ value, options, onChange }: {
   );
 }
 
+// ── Дрилл-даун «клик по товарной группе» (задача 10.07, п.5) ────────────────
+// Компактный список сделок-отгрузок группы за период карточки (дата, клиент/
+// сделка, сумма) — переиспользует существующий /api/reports/deals (тот же
+// эндпоинт, что и дрилл-даун основного отчёта), без параллельного SQL.
+interface CategoryDeal {
+  deal_id: number;
+  deal_name: string;
+  amount: string;
+  created_at: string;
+  sold_at: string | null;
+  delivered_at: string | null;
+}
+
+function CategoryDealsList({ managerId, mode, categoryId, productGroupMode, period, segment }: {
+  managerId: string; mode: 'manager' | 'department'; categoryId: string;
+  productGroupMode: ProductGroupMode; period: DateRange; segment: CardSegment;
+}) {
+  const clientType = segment === 'fl' ? 'b2c' : segment === 'ul' ? 'b2b' : 'all';
+  const fromIso = period.from.toISOString();
+  const toIso = period.to.toISOString();
+  const params = new URLSearchParams({
+    from: fromIso, to: toIso, scope: 'all', productGroupMode, productGroup: categoryId, clientType,
+    ...(mode === 'manager' ? { managerId } : { teamId: managerId }),
+  });
+  const qs = params.toString();
+  const { data, isLoading } = useQuery({
+    queryKey: ['manager-card-category-deals', mode, managerId, categoryId, productGroupMode, fromIso, toIso, segment],
+    queryFn: () => fetch(`/api/reports/deals?${qs}`).then(r => r.json()),
+  });
+  const deals: CategoryDeal[] = data?.deals ?? [];
+
+  if (isLoading) {
+    return <div className="px-4 py-2.5 text-xs text-[var(--color-text-muted)]">Загрузка…</div>;
+  }
+  if (deals.length === 0) {
+    return <div className="px-4 py-2.5 text-xs text-[var(--color-text-muted)]">Нет сделок-отгрузок за период</div>;
+  }
+  const shown = deals.slice(0, 50);
+  return (
+    <div className="border-t border-[var(--color-border)] bg-[var(--color-bg)] max-h-56 overflow-y-auto">
+      {shown.map(d => (
+        <div key={d.deal_id} className="flex items-center gap-2.5 px-4 py-1.5 text-[11.5px] border-b border-[var(--color-border)] last:border-b-0">
+          <span className="text-[var(--color-text-muted)] tabular-nums w-11 shrink-0">
+            {fmtDateShort(new Date(d.sold_at ?? d.delivered_at ?? d.created_at))}
+          </span>
+          <span className="flex-1 truncate text-[var(--color-text)]" title={d.deal_name}>{d.deal_name || '—'}</span>
+          <span className="tabular-nums font-medium text-[var(--color-text)] shrink-0">{fmtMoney(Number(d.amount))}</span>
+        </div>
+      ))}
+      {deals.length > 50 && (
+        <div className="px-4 py-1.5 text-[11px] text-[var(--color-text-muted)]">Показаны первые 50 из {deals.length}</div>
+      )}
+    </div>
+  );
+}
+
 export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose, mode = 'manager' }: Props) {
   const { closing, requestClose } = useSlideClose(onClose);
-  const [periodChoice, setPeriodChoice] = useState<PeriodChoice>('report');
-  const [segment, setSegment] = useState<CardSegment>('all');
 
-  const period: DateRange = useMemo(() => {
-    if (periodChoice === 'month') return { from: startOfMonth(new Date()), to: new Date() };
-    if (periodChoice === 'all') return ALL_TIME_RANGE;
-    return reportPeriod;
-  }, [periodChoice, reportPeriod]);
+  // ── Фильтры (задача 10.07, п.3): произвольный период + отдельный период
+  // сравнения (дефолт — предыдущий период той же длины), пресет «Всё время»
+  // убран. Физики/Юрики — как раньше. ────────────────────────────────────────
+  const [period, setPeriod] = useState<DateRange>(reportPeriod);
+  const [comparisonPeriod, setComparisonPeriod] = useState<DateRange>(() => previousPeriodSameLength(reportPeriod));
+  const [segment, setSegment] = useState<CardSegment>('all');
+  // Система товарных категорий (задача 10.07, п.4): переключатель ровно с такими
+  // подписями, как согласовано с Серёгой.
+  const [productGroupMode, setProductGroupMode] = useState<ProductGroupMode>('kc');
+  // Раскрытый дрилл-даун сделок (задача 10.07, п.5) — id категории (dimensionId,
+  // НЕ отображаемое имя — см. CategoryShare в managerCard.ts).
+  const [openCategoryId, setOpenCategoryId] = useState<string | null>(null);
+
+  function handlePeriodChange(p: DateRange) {
+    setPeriod(p);
+    setComparisonPeriod(previousPeriodSameLength(p));
+    setOpenCategoryId(null);
+  }
+  function handleComparisonChange(p: DateRange) {
+    setComparisonPeriod(p);
+    setOpenCategoryId(null);
+  }
+  // Смена системы категорий/сегмента меняет весь список категорий — открытый
+  // дрилл-даун привязан к id ПРЕДЫДУЩЕЙ категории (kc/by_max — разные шкалы id,
+  // см. AXIS_CATALOG в cardTemplates.ts), закрываем, чтобы не показать стейл-данные.
+  useEffect(() => { setOpenCategoryId(null); }, [productGroupMode, segment]);
 
   const fromIso = period.from.toISOString();
   const toIso = period.to.toISOString();
+  const cmpFromIso = comparisonPeriod.from.toISOString();
+  const cmpToIso = comparisonPeriod.to.toISOString();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['manager-card', mode, managerId, fromIso, toIso, segment],
+    queryKey: ['manager-card', mode, managerId, fromIso, toIso, cmpFromIso, cmpToIso, segment, productGroupMode],
     queryFn: async () => {
       const url = mode === 'department' ? '/api/manager-card/department-card' : '/api/manager-card';
       const body = mode === 'department'
-        ? { departmentId: managerId, period: { from: fromIso, to: toIso }, segment }
-        : { managerId, period: { from: fromIso, to: toIso }, segment };
+        ? { departmentId: managerId, period: { from: fromIso, to: toIso }, comparisonPeriod: { from: cmpFromIso, to: cmpToIso }, segment, productGroupMode }
+        : { managerId, period: { from: fromIso, to: toIso }, comparisonPeriod: { from: cmpFromIso, to: cmpToIso }, segment, productGroupMode };
       const res = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -139,7 +213,7 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
   });
 
   const radarAxes: RadarAxisInput[] = (data?.radar.axes ?? []).map(a => ({
-    key: a.key, label: a.label, periodValue: a.period.normalized, allTimeValue: a.allTime.normalized, dataAvailable: a.dataAvailable,
+    key: a.key, label: a.label, periodValue: a.period.normalized, comparisonValue: a.comparison.normalized, dataAvailable: a.dataAvailable,
   }));
 
   // Плитки итогов — какие показывать решает шаблон карточки (/settings/card-templates,
@@ -216,17 +290,11 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
 
             {/* ── Фильтры ── */}
             <div className="shrink-0 border-b border-[var(--color-border)] px-4 sm:px-9 py-2.5 flex items-center gap-2.5 flex-wrap">
-              <span className="text-xs font-semibold text-[var(--color-text)] px-2 py-1">
-                {fmtDateShort(period.from)} – {fmtDateShort(period.to)}
-              </span>
-              <ChipGroup
-                value={periodChoice}
-                onChange={setPeriodChoice}
-                options={[
-                  { key: 'report', label: 'Период отчёта' },
-                  { key: 'month', label: 'Этот месяц' },
-                  { key: 'all', label: 'Всё время' },
-                ]}
+              <PeriodRangeControls
+                period={period}
+                comparison={comparisonPeriod}
+                onPeriodChange={handlePeriodChange}
+                onComparisonChange={handleComparisonChange}
               />
               <div className="w-px h-5 bg-[var(--color-border)]" />
               <ChipGroup
@@ -236,6 +304,15 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                   { key: 'all', label: 'Все' },
                   { key: 'fl', label: 'Физики' },
                   { key: 'ul', label: 'Юрики' },
+                ]}
+              />
+              <div className="w-px h-5 bg-[var(--color-border)]" />
+              <ChipGroup
+                value={productGroupMode}
+                onChange={setProductGroupMode}
+                options={[
+                  { key: 'kc', label: 'Категория КЦ' },
+                  { key: 'by_max', label: 'По наибольшему' },
                 ]}
               />
             </div>
@@ -288,21 +365,40 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                       <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] mb-2.5">
                         По товарным категориям · топ-5
                       </div>
-                      <div className="border border-[var(--color-border)] rounded-2xl px-4 py-1">
+                      <div className="border border-[var(--color-border)] rounded-2xl px-4 py-1 overflow-hidden">
                         {(data?.categories.length ?? 0) === 0 ? (
                           <div className="py-3 text-sm text-[var(--color-text-muted)]">Нет продаж за период</div>
-                        ) : data!.categories.map((c, i) => (
-                          <div key={c.name} className={`flex items-center gap-2.5 py-2 ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`}>
-                            <span className="text-[12.5px] text-[var(--color-text)] w-28 shrink-0 truncate" title={c.name}>{c.name}</span>
-                            <div className="flex-1 h-2.5 rounded-full bg-[var(--color-border)] overflow-hidden">
-                              <div
-                                className="h-full rounded-full"
-                                style={{ width: `${Math.min(100, c.share)}%`, backgroundColor: 'var(--color-accent)', opacity: Math.max(0.4, 1 - i * 0.15) }}
-                              />
+                        ) : data!.categories.map((c, i) => {
+                          const isOpen = openCategoryId === c.id;
+                          return (
+                            <div key={c.id} className={i > 0 ? 'border-t border-[var(--color-border)]' : ''}>
+                              {/* Клик по группе — дрилл-даун сделок-отгрузок (задача 10.07, п.5) */}
+                              <button
+                                type="button"
+                                onClick={() => setOpenCategoryId(isOpen ? null : c.id)}
+                                className="w-full flex items-center gap-2.5 py-2 text-left hover:bg-[var(--color-bg-hover)] transition-colors -mx-4 px-4"
+                                title="Показать сделки-отгрузки этой группы за период"
+                              >
+                                <span className="text-[12.5px] text-[var(--color-text)] w-28 shrink-0 truncate" title={c.name}>{c.name}</span>
+                                <div className="flex-1 h-2.5 rounded-full bg-[var(--color-border)] overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full"
+                                    style={{ width: `${Math.min(100, c.share)}%`, backgroundColor: 'var(--color-accent)', opacity: Math.max(0.4, 1 - i * 0.15) }}
+                                  />
+                                </div>
+                                <span className="text-[12.5px] font-bold text-[var(--color-text)] w-10 text-right shrink-0">{c.share.toFixed(0)}%</span>
+                              </button>
+                              {isOpen && (
+                                <div className="-mx-4">
+                                  <CategoryDealsList
+                                    managerId={managerId} mode={mode} categoryId={c.id}
+                                    productGroupMode={productGroupMode} period={period} segment={segment}
+                                  />
+                                </div>
+                              )}
                             </div>
-                            <span className="text-[12.5px] font-bold text-[var(--color-text)] w-10 text-right shrink-0">{c.share.toFixed(0)}%</span>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   </div>

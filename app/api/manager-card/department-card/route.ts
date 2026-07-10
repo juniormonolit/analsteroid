@@ -8,6 +8,7 @@ import {
   getAllManagedDepartmentIds, bucketManagersByDepartments,
 } from '@/lib/org/teamRoster';
 import { branchLabel } from '@/lib/org/branchLabel';
+import type { ProductGroupMode } from '@/lib/metrics/types';
 
 // «Карточка отдела» (карточка менеджера v2, бриф 10.07, п.3) — та же форма, что
 // карточка одного менеджера (ManagerCardPanel переиспользуется на клиенте один в
@@ -30,11 +31,17 @@ export async function POST(req: NextRequest) {
   if (!allowedRole) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
-  const { period, segment = 'all' as CardSegment, departmentId } = body;
+  const { period, comparisonPeriod, segment = 'all' as CardSegment, departmentId, productGroupMode } = body;
   if (!period?.from || !period?.to) {
     return NextResponse.json({ error: 'period.from/period.to обязательны' }, { status: 400 });
   }
+  if (comparisonPeriod !== undefined && (!comparisonPeriod?.from || !comparisonPeriod?.to)) {
+    return NextResponse.json({ error: 'comparisonPeriod, если передан, должен содержать from/to' }, { status: 400 });
+  }
   if (!departmentId) return NextResponse.json({ error: 'departmentId обязателен' }, { status: 400 });
+  if (productGroupMode !== undefined && !['kc', 'by_max'].includes(productGroupMode)) {
+    return NextResponse.json({ error: 'productGroupMode должен быть kc/by_max' }, { status: 400 });
+  }
 
   let options = await getUserDepartmentOptions(session.id);
   const isElevated = session.isSuperadmin || session.roleName === 'Директор' || session.roleName === 'Администратор';
@@ -42,6 +49,8 @@ export async function POST(req: NextRequest) {
   const optionIds = new Set(options.map(o => o.id));
 
   const periodRange = { from: new Date(period.from), to: new Date(period.to) };
+  const comparisonRange = comparisonPeriod ? { from: new Date(comparisonPeriod.from), to: new Date(comparisonPeriod.to) } : undefined;
+  const pgMode = productGroupMode as ProductGroupMode | undefined;
   const start = Date.now();
 
   // Живой смок деплоя 44: на отделах >5 менеджеров buildDepartmentCard валился
@@ -57,7 +66,7 @@ export async function POST(req: NextRequest) {
         deptId: 'all', deptName: `Все отделы (${options.length})`, branch: null,
         roster,
         peerBuckets: new Map([['all', roster]]), // сравнивать не с кем — честный прочерк
-        period: periodRange, segment,
+        period: periodRange, comparisonPeriod: comparisonRange, segment, productGroupMode: pgMode,
       });
       return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
     }
@@ -84,7 +93,7 @@ export async function POST(req: NextRequest) {
     const result = await buildDepartmentCard({
       deptId: departmentId, deptName, branch: branchLabel(branchRow.rows[0]?.branch ?? null) || null,
       roster, peerBuckets,
-      period: periodRange, segment,
+      period: periodRange, comparisonPeriod: comparisonRange, segment, productGroupMode: pgMode,
     });
 
     return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
