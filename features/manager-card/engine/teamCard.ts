@@ -27,13 +27,14 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
-import { computeDelta, computeTotals } from '@/features/reports/engine/calculated';
+import { computeTotals } from '@/features/reports/engine/calculated';
 import { enrichManagerRowsForMetrics } from '@/features/reports/engine/enrichManagerRows';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import {
   buildAxisMap, salesPositiveIds, poolValuesForAxis,
   percentileScore, ratingFor, rawAxisValues, segmentToClientType, previousPeriod,
-  fetchTouchSpeedByManager, resolveTemplateAxes, type CardSegment, type CategoryShare, type ManagerCardResult,
+  fetchTouchSpeedByManager, resolveTemplateAxes, resolveTemplateTiles, buildTileResults,
+  type CardSegment, type CategoryShare, type ManagerCardResult,
 } from './managerCard';
 import { getRawScoringWeights } from '@/lib/settings/scoringWeights';
 import { getCardTemplate, type LegacyAxisKey } from '@/lib/settings/cardTemplates';
@@ -211,12 +212,18 @@ export async function buildDepartmentCard(opts: {
     ]);
 
   // Задача 10.07, п.2: catalog-оси отдела обогащаются ТЕМИ ЖЕ функциями движка
-  // отчётов (реюз, как и managerCard.ts/buildTeamRoster выше).
+  // отчётов (реюз, как и managerCard.ts/buildTeamRoster выше). Карточка v4, п.1:
+  // catalog-плитки отдела нуждаются в ТОМ ЖЕ обогащении — мёржим оба списка в
+  // ОДИН вызов enrichManagerRowsForMetrics (см. managerCard.ts::buildManagerCard,
+  // тот же приём).
   const templateAxes = resolveTemplateAxes(template.axes, allMetrics);
-  const catalogAxisKeys = [...new Set(templateAxes.filter(d => d.source === 'catalog').map(d => d.bareKey))];
+  const catalogAxisKeys = templateAxes.filter(d => d.source === 'catalog').map(d => d.bareKey);
+  const templateTiles = resolveTemplateTiles(template.tiles, allMetrics);
+  const catalogTileKeys = templateTiles.filter(d => d.source === 'catalog').map(d => d.bareKey);
+  const mergedCatalogKeys = [...new Set([...catalogAxisKeys, ...catalogTileKeys])];
   const [periodPool, prevPool] = await Promise.all([
-    enrichManagerRowsForMetrics(periodPoolRaw, opts.period, catalogAxisKeys),
-    enrichManagerRowsForMetrics(prevPoolRaw, prevPeriod, catalogAxisKeys),
+    enrichManagerRowsForMetrics(periodPoolRaw, opts.period, mergedCatalogKeys),
+    enrichManagerRowsForMetrics(prevPoolRaw, prevPeriod, mergedCatalogKeys),
   ]);
 
   // ── Синтетические «сырые» суммы отдела (текущий период / период сравнения) ──
@@ -236,7 +243,7 @@ export async function buildDepartmentCard(opts: {
   // (buildTeamRoster выше) этого ограничения не имеют — там ось = значение
   // конкретного менеджера, не агрегат группы.
   function catalogAggregateFor(pool: ReportRow[], memberIds: Set<string>): Record<string, number | null> {
-    if (catalogAxisKeys.length === 0) return {};
+    if (mergedCatalogKeys.length === 0) return {};
     return computeTotals(pool.filter(r => memberIds.has(r.dimensionId)), allMetrics);
   }
 
@@ -305,13 +312,15 @@ export async function buildDepartmentCard(opts: {
     dataAvailable: def.source === 'legacy' ? (def.bareKey === 'touch_speed' ? touchCur !== null : true) : true,
   }));
 
-  function tile(cur: number, prev: number) {
-    return { current: cur, comparison: prev, ...computeDelta(cur, prev) };
-  }
-  const curSalesAmount  = (curSum.primary_sales_amount ?? 0) + (curSum.repeat_sales_amount ?? 0);
-  const prevSalesAmount = (prevSum.primary_sales_amount ?? 0) + (prevSum.repeat_sales_amount ?? 0);
-  const curSalesCount   = curSum.sales_count ?? 0;
-  const prevSalesCount  = prevSum.sales_count ?? 0;
+  // Плитки итогов отдела (задача 10.07 карточка v4, п.1 — тот же произвольный
+  // набор из card_templates.tiles, что и у карточки одного менеджера): «синтетическая
+  // строка» отдела — merge сырых сумм (tileRaw читает reservations_count/sales_count/
+  // primary+repeat_sales_amount/...) и catalog-агрегата (computeTotals, для
+  // catalog-плиток) — ОДНА и та же buildTileResults, что managerCard.ts::
+  // buildManagerCard, никакого параллельного расчёта.
+  const curTileMetrics  = { ...curSum, ...curCatalog };
+  const prevTileMetrics = { ...prevSum, ...prevCatalog };
+  const tiles = buildTileResults(templateTiles, curTileMetrics, prevTileMetrics);
 
   // pgRows уже сгруппирован по dimensionId (product_group_id/head_group_name) —
   // fetchByProductGroups с managerIds фильтрует SQL на роster ДО группировки, так что
@@ -336,14 +345,7 @@ export async function buildDepartmentCard(opts: {
     },
     rating: { value: rating, rank, deptSize: peerIds.length || 1 },
     radar: { axes },
-    totals: {
-      reservations:          tile(curSum.reservations_count ?? 0, prevSum.reservations_count ?? 0),
-      confirmedReservations: tile(curSum.confirmed_reservations_count ?? 0, prevSum.confirmed_reservations_count ?? 0),
-      salesCount:            tile(curSalesCount, prevSalesCount),
-      salesAmount:           tile(curSalesAmount, prevSalesAmount),
-      shipments:             tile(curSum.shipments_count ?? 0, prevSum.shipments_count ?? 0),
-      avgCheck:              tile(curSalesCount > 0 ? curSalesAmount / curSalesCount : 0, prevSalesCount > 0 ? prevSalesAmount / prevSalesCount : 0),
-    },
+    tiles,
     categories,
     calls: { count: callsTizer.count, avgDurationSec: callsTizer.avgDurationSec, medianFirstTouchMinutes: touchCur },
     meta: {
@@ -351,7 +353,6 @@ export async function buildDepartmentCard(opts: {
       comparisonPeriod: { from: prevPeriod.from.toISOString(), to: prevPeriod.to.toISOString() },
       touchSpeedAvailable: touchPeriodMap !== null,
     },
-    visibleTiles: template.tiles,
     deptComparison: { peerCount: peerIds.length, insufficientPeers },
   };
 }

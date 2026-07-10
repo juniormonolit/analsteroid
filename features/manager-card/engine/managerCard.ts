@@ -11,7 +11,8 @@ import type { ClientType, ReportRow, ProductGroupMode, DataType } from '@/lib/me
 import { getRawScoringWeights, AXIS_KEYS as WEIGHTED_AXIS_KEYS, type AxisKey as WeightAxisKey } from '@/lib/settings/scoringWeights';
 import {
   getCardTemplate, isLegacyStorageKey, stripLegacyPrefix, DEFAULT_AXES,
-  type TileKey, type AxisConfig, type LegacyAxisKey,
+  isLegacyTileStorageKey, stripLegacyTilePrefix, DEFAULT_TILES,
+  type AxisConfig, type LegacyAxisKey, type LegacyTileKey,
 } from '@/lib/settings/cardTemplates';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -292,11 +293,75 @@ async function fetchCallsTizer(managerIdNum: number, period: DateRange): Promise
   }
 }
 
-// ── Итоги периода (плитки) ───────────────────────────────────────────────────
+// ── Итоги периода (плитки) — задача 10.07 (карточка v4), п.1: «плитки из ВСЕХ
+// метрик каталога», тот же приём, что оси паутины (resolveTemplateAxes выше):
+// плитка — {key, bareKey, label, unit, source}, source различает ЧЕМ считать
+// значение — 'legacy' (tileRaw(), 6 исходных бесплатных формул из ReportRow.metrics,
+// ноль новых запросов — БЕЗ изменений в цифрах после наката 083) или 'catalog'
+// (голое row.metrics[bareKey] ПОСЛЕ enrichManagerRowsForMetrics(), реюз того же
+// enrich-вызова, что и catalog-оси — см. buildManagerCard/buildDepartmentCard,
+// мёржат catalogAxisKeys+catalogTileKeys в ОДИН запрос обогащения). ────────────
 interface TileMetricValue { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }
 
-function tileRaw(row: ReportRow | undefined) {
-  const m = row?.metrics ?? {};
+export interface TileDef {
+  key: string;       // storage key (legacy:xxx или голый id каталога)
+  bareKey: string;   // ключ БЕЗ префикса legacy: — то, чем реально индексируется значение
+  label: string;
+  unit: AxisUnit;
+  source: 'legacy' | 'catalog';
+}
+
+export interface TileResult extends TileMetricValue {
+  key: string;
+  label: string;
+  unit: AxisUnit;
+}
+
+const LEGACY_TILE_META: Record<LegacyTileKey, { label: string; unit: AxisUnit }> = {
+  reservations:          { label: 'Брони',           unit: 'count' },
+  confirmedReservations: { label: 'Подтв. брони',    unit: 'count' },
+  salesCount:            { label: 'Продажи',         unit: 'count' },
+  salesAmount:           { label: 'Сумма продаж',    unit: 'money' },
+  shipments:             { label: 'Отгрузки',        unit: 'count' },
+  avgCheck:              { label: 'Средний чек',     unit: 'money' },
+};
+
+/** Дефолтные 6 плиток (DEFAULT_TILES из cardTemplates.ts), уже резолвленные — чистая
+ *  функция без БД, для фолбэка при пустом/битом шаблоне. */
+export const DEFAULT_RESOLVED_TILES: TileDef[] = DEFAULT_TILES.map(key => {
+  const bare = stripLegacyTilePrefix(key);
+  const meta = LEGACY_TILE_META[bare];
+  return { key, bareKey: bare, label: meta.label, unit: meta.unit, source: 'legacy' as const };
+});
+
+/** Плитки шаблона (произвольная длина, {tiles: string[]} из card_templates) →
+ *  реальные TileDef, в ТОМ ЖЕ порядке. allMetrics — живой каталог (loadMetrics()),
+ *  нужен для label/unit catalog-плиток. Неизвестные/удалённые из каталога id
+ *  молча отбрасываются; пустой результат — фолбэк на дефолтные 6. */
+export function resolveTemplateTiles(tileKeys: readonly string[], allMetrics: { id: string; nameRu: string; dataType: DataType }[]): TileDef[] {
+  const metricById = new Map(allMetrics.map(m => [m.id, m]));
+  const resolved: TileDef[] = [];
+  for (const key of tileKeys) {
+    if (isLegacyTileStorageKey(key)) {
+      const bare = stripLegacyTilePrefix(key);
+      const meta = LEGACY_TILE_META[bare];
+      if (!meta) continue;
+      resolved.push({ key, bareKey: bare, label: meta.label, unit: meta.unit, source: 'legacy' });
+    } else {
+      const m = metricById.get(key);
+      if (!m) continue;
+      resolved.push({ key, bareKey: key, label: m.nameRu, unit: catalogUnitFor(m.dataType), source: 'catalog' });
+    }
+  }
+  return resolved.length > 0 ? resolved : DEFAULT_RESOLVED_TILES;
+}
+
+// Сырые значения ИСХОДНЫХ 6 legacy-плиток по метрикам строки отчёта (либо
+// синтетической суммы отдела, см. teamCard.ts::buildDepartmentCard) — принимает
+// ГОЛЫЕ metrics (не ReportRow), чтобы одинаково работать и для одного менеджера
+// (row.metrics), и для агрегата отдела (sumRows()+catalogAggregateFor() merge).
+function tileRaw(metrics: Record<string, number | null> | undefined) {
+  const m = metrics ?? {};
   const salesAmount = (m.primary_sales_amount ?? 0) + (m.repeat_sales_amount ?? 0);
   const salesCount  = m.sales_count ?? 0;
   return {
@@ -311,6 +376,29 @@ function tileRaw(row: ReportRow | undefined) {
 
 function tileValue(current: number | null, comparison: number | null): TileMetricValue {
   return { current, comparison, ...computeDelta(current, comparison) };
+}
+
+/** Значение ОДНОЙ плитки по её определению — 'legacy' считает tileRaw() (6 бесплатных
+ *  формул), 'catalog' — голое metrics[bareKey] (уже обогащено enrichManagerRowsForMetrics
+ *  для catalog-плиток — см. вызовы buildManagerCard/buildDepartmentCard). */
+export function tileRawValue(def: TileDef, metrics: Record<string, number | null> | undefined): number | null {
+  if (def.source === 'legacy') return tileRaw(metrics)[def.bareKey as LegacyTileKey];
+  return metrics?.[def.bareKey] ?? null;
+}
+
+/** Итоговый список плиток (значение+Δ% к периоду сравнения) по резолвленным
+ *  TileDef — единственная точка сборки, переиспользуется buildManagerCard
+ *  (per-manager metrics) и buildDepartmentCard (synthetic сумма отдела). */
+export function buildTileResults(
+  templateTiles: readonly TileDef[],
+  currentMetrics: Record<string, number | null> | undefined,
+  comparisonMetrics: Record<string, number | null> | undefined,
+): TileResult[] {
+  return templateTiles.map(def => {
+    const current = tileRawValue(def, currentMetrics);
+    const comparison = tileRawValue(def, comparisonMetrics);
+    return { key: def.key, label: def.label, unit: def.unit, ...tileValue(current, comparison) };
+  });
 }
 
 // ── Категории (топ-5 по доле суммы продаж) ───────────────────────────────────
@@ -363,21 +451,14 @@ export interface ManagerCardResult {
   };
   rating: { value: number | null; rank: number | null; deptSize: number };
   radar: { axes: AxisResult[] };
-  totals: {
-    reservations: TileMetricValue;
-    confirmedReservations: TileMetricValue;
-    salesCount: TileMetricValue;
-    salesAmount: TileMetricValue;
-    shipments: TileMetricValue;
-    avgCheck: TileMetricValue;
-  };
+  /** Плитки итогов (задача 10.07 карточка v4, п.1) — набор И порядок из шаблона
+   *  карточки (card_templates.tiles, произвольные метрики полного каталога, без
+   *  ограничения количества); UI (ManagerCardPanel) рендерит ровно этот массив,
+   *  без отдельного фильтра видимости — выбор в настройках УЖЕ и есть видимость. */
+  tiles: TileResult[];
   categories: CategoryShare[];
   calls: (CallsTizer & { medianFirstTouchMinutes: number | null }) | null;
   meta: { period: { from: string; to: string }; comparisonPeriod: { from: string; to: string }; touchSpeedAvailable: boolean };
-  /** Плитки итогов, которые ДОЛЖНЫ отображаться (шаблон карточки, бриф 10.07) —
-   *  totals по-прежнему считает ВСЕ 6 (дёшево, из уже загруженных данных), UI
-   *  (ManagerCardPanel) фильтрует рендер по этому списку. */
-  visibleTiles: TileKey[];
 }
 
 export async function buildManagerCard(opts: ManagerCardOptions): Promise<ManagerCardResult | { error: string }> {
@@ -424,9 +505,6 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
       loadMetrics(),
     ]);
 
-  const currentRow = periodPoolRaw.find(r => r.dimensionId === managerId);
-  const prevRow    = prevPoolRaw.find(r => r.dimensionId === managerId);
-
   // ── Паутина: оси шаблона (до 6, задача 10.07 п.2 — из ВСЕХ метрик каталога),
   // период + период сравнения (п.3 — было «всё время», теперь полупрозрачный слой
   // = период сравнения, тот же, что и колонка «к прошлому периоду»), перцентильная
@@ -436,11 +514,25 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
   // радара тоже читает эти же оси. Если шаблон — только legacy-оси (обычный
   // случай, дефолт), enrichManagerRowsForMetrics([]) — no-op, ноль лишних запросов. ─
   const templateAxes = resolveTemplateAxes(template.axes, allMetrics);
-  const catalogAxisKeys = [...new Set(templateAxes.filter(d => d.source === 'catalog').map(d => d.bareKey))];
+  const catalogAxisKeys = templateAxes.filter(d => d.source === 'catalog').map(d => d.bareKey);
+  // Плитки итогов (задача 10.07 карточка v4, п.1 — «из ВСЕХ метрик каталога») —
+  // catalog-плитки нуждаются в ТОМ ЖЕ обогащении, что и catalog-оси; мёржим оба
+  // списка в ОДИН вызов enrichManagerRowsForMetrics (не два похода за одними и
+  // теми же calls/activity/stage-conversion данными).
+  const templateTiles = resolveTemplateTiles(template.tiles, allMetrics);
+  const catalogTileKeys = templateTiles.filter(d => d.source === 'catalog').map(d => d.bareKey);
+  const mergedCatalogKeys = [...new Set([...catalogAxisKeys, ...catalogTileKeys])];
   const [periodPool, prevPool] = await Promise.all([
-    enrichManagerRowsForMetrics(periodPoolRaw, period, catalogAxisKeys),
-    enrichManagerRowsForMetrics(prevPoolRaw, prevPeriod, catalogAxisKeys),
+    enrichManagerRowsForMetrics(periodPoolRaw, period, mergedCatalogKeys),
+    enrichManagerRowsForMetrics(prevPoolRaw, prevPeriod, mergedCatalogKeys),
   ]);
+
+  // currentRow/prevRow — ПОСЛЕ enrich (не periodPoolRaw/prevPoolRaw): catalog-
+  // плитки читают bareKey из обогащённых metrics; legacy-плитки (tileRaw) читают
+  // те же «сырые» поля, что были в *Raw-пуле — enrich мёржит их через {...row.metrics,
+  // ...новые поля}, так что они остаются нетронутыми в periodPool/prevPool.
+  const currentRow = periodPool.find(r => r.dimensionId === managerId);
+  const prevRow    = prevPool.find(r => r.dimensionId === managerId);
 
   const periodAxisMap = buildAxisMap(periodPool, touchPeriodMap, templateAxes);
   const compAxisMap   = buildAxisMap(prevPool, touchCompMap, templateAxes);
@@ -488,17 +580,9 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
   const rankIdx = orderedIds.indexOf(managerId);
   const rank = rankIdx >= 0 ? rankIdx + 1 : null;
 
-  // ── Итоги периода (плитки) с Δ% к прошлому такому же периоду ────────────────
-  const cur  = tileRaw(currentRow);
-  const prev = tileRaw(prevRow);
-  const totals = {
-    reservations:          tileValue(cur.reservations, prev.reservations),
-    confirmedReservations: tileValue(cur.confirmedReservations, prev.confirmedReservations),
-    salesCount:            tileValue(cur.salesCount, prev.salesCount),
-    salesAmount:           tileValue(cur.salesAmount, prev.salesAmount),
-    shipments:             tileValue(cur.shipments, prev.shipments),
-    avgCheck:              tileValue(cur.avgCheck, prev.avgCheck),
-  };
+  // ── Итоги периода (плитки) с Δ% к прошлому такому же периоду (задача 10.07
+  // карточка v4, п.1 — произвольный набор плиток шаблона, не 6 зашитых) ───────
+  const tiles = buildTileResults(templateTiles, currentRow?.metrics, prevRow?.metrics);
 
   // ── Топ-5 товарных категорий по доле суммы продаж ───────────────────────────
   const categoriesAll = pgRows
@@ -522,7 +606,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
     },
     rating: { value: rating, rank, deptSize },
     radar: { axes },
-    totals,
+    tiles,
     categories,
     calls: callsTizer ? { ...callsTizer, medianFirstTouchMinutes: touchPeriodOwn } : null,
     meta: {
@@ -530,6 +614,5 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
       comparisonPeriod: { from: prevPeriod.from.toISOString(), to: prevPeriod.to.toISOString() },
       touchSpeedAvailable: touchPeriodMap !== null,
     },
-    visibleTiles: template.tiles,
   };
 }

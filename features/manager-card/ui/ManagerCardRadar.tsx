@@ -16,10 +16,15 @@ export interface RadarAxisInput {
   dataAvailable: boolean;
 }
 
-const WIDTH = 360;
-const HEIGHT = 268;
-const CENTER = { x: 172, y: 122 };
-const RADIUS = 84;
+// Карточка v4 (задача 10.07, п.3): паутина «заметно крупнее и выразительнее» —
+// было 360×268/RADIUS 84 (владелец: «мелко, много пустого места под ней»).
+// Увеличены холст, радиус, толщина линий/маркеров и размер подписей осей —
+// пропорции (углы/раскладка) не менялись, только масштаб (см. axisAngle/pointAt
+// ниже — те же формулы, просто больше константы).
+const WIDTH = 480;
+const HEIGHT = 420;
+const CENTER = { x: 232, y: 200 };
+const RADIUS = 152;
 const RINGS = [2, 4, 6, 8, 10];
 
 function axisAngle(i: number, n: number): number {
@@ -51,42 +56,44 @@ export function ManagerCardRadar({ axes }: { axes: RadarAxisInput[] }) {
   return (
     <div className="flex flex-col items-center">
       <svg width={WIDTH} height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`}>
-        {/* Сетка колец */}
+        {/* Сетка колец — толщина увеличена вместе с холстом (карточка v4, п.3) */}
         {RINGS.map(ring => (
           <polygon
             key={ring}
             points={polygonPoints(Array(n).fill(ring))}
             fill="none"
             stroke="var(--color-border)"
-            strokeWidth={ring === 10 ? 1.2 : 1}
+            strokeWidth={ring === 10 ? 1.6 : 1.2}
           />
         ))}
         {/* Оси */}
         {axes.map((_, i) => {
           const p = pointAt(i, n, 10);
-          return <line key={i} x1={CENTER.x} y1={CENTER.y} x2={p.x} y2={p.y} stroke="var(--color-border)" strokeWidth={1} />;
+          return <line key={i} x1={CENTER.x} y1={CENTER.y} x2={p.x} y2={p.y} stroke="var(--color-border)" strokeWidth={1.2} />;
         })}
 
         {/* Слой «период сравнения» (серый пунктир) — задача 10.07, п.3 */}
         <polygon
           points={polygonPoints(comparisonValues)}
-          fill="#94a3b8" fillOpacity={0.22} stroke="#94a3b8" strokeWidth={1.6} strokeOpacity={0.7} strokeDasharray="4 3"
+          fill="#94a3b8" fillOpacity={0.22} stroke="#94a3b8" strokeWidth={2.2} strokeOpacity={0.7} strokeDasharray="5 4"
         />
 
-        {/* Слой «выбранный период» (синий) */}
+        {/* Слой «выбранный период» (синий) — карточка v4: толще (было 2) для
+            выразительности на увеличенном холсте */}
         <polygon
           points={polygonPoints(periodValues)}
-          fill="var(--color-accent)" fillOpacity={0.22} stroke="var(--color-accent)" strokeWidth={2}
+          fill="var(--color-accent)" fillOpacity={0.22} stroke="var(--color-accent)" strokeWidth={3}
         />
         {axes.map((ax, i) => {
           if (!ax.dataAvailable) return null;
           const p = pointAt(i, n, periodValues[i]);
-          return <circle key={ax.key} cx={p.x} cy={p.y} r={3.2} fill="var(--color-accent)" />;
+          return <circle key={ax.key} cx={p.x} cy={p.y} r={4.6} fill="var(--color-accent)" />;
         })}
 
-        {/* Подписи осей */}
+        {/* Подписи осей — карточка v4, п.3: крупнее и читаемее (было 10.5px,
+            владелец: «мелко») */}
         {axes.map((ax, i) => {
-          const p = pointAt(i, n, 12.4);
+          const p = pointAt(i, n, 13.2);
           const anchor = labelAnchor(p.x);
           const dy = i === 0 ? 2 : Math.abs(p.y - CENTER.y) < 4 ? 4 : 0;
           return (
@@ -94,7 +101,7 @@ export function ManagerCardRadar({ axes }: { axes: RadarAxisInput[] }) {
               key={ax.key}
               x={p.x} y={p.y + dy}
               textAnchor={anchor}
-              fontSize={10.5} fontWeight={700}
+              fontSize={13.5} fontWeight={700}
               fill="var(--color-text-muted)"
               fontFamily="-apple-system, Arial, sans-serif"
             >

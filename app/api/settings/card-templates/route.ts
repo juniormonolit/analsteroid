@@ -4,21 +4,25 @@ import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import {
-  TILE_CATALOG_KEYS, MAX_AXES, LEGACY_AXIS_KEYS, LEGACY_AXIS_LABELS, LEGACY_AXIS_DEFAULT_INVERT,
+  MAX_AXES, LEGACY_AXIS_KEYS, LEGACY_AXIS_LABELS, LEGACY_AXIS_DEFAULT_INVERT,
+  LEGACY_TILE_KEYS, LEGACY_TILE_LABELS,
   legacyStorageKey, isLegacyStorageKey,
+  legacyTileStorageKey, isLegacyTileStorageKey,
   sanitizeAxes, sanitizeTiles, invalidateCardTemplatesCache,
-  type TemplateKey, type AxisConfig, type TileKey,
+  type TemplateKey, type AxisConfig,
 } from '@/lib/settings/cardTemplates';
 
-// Шаблоны карточек (owners-inbox бриф 10.07, задача 10.07 п.2 «оси из ВСЕХ метрик») —
-// «Карточка менеджера» и «Карточка отдела (РОП)»: до 6 осей паутины ИЗ ПОЛНОГО
-// каталога метрик (не 8 зашитых, как раньше) + какие плитки итогов показывать.
-// Хранится в card_templates (миграция 073, расширена данными миграцией 075 —
-// axes из массива строк в массив {metricKey, invert}), singleton-по-ключу.
+// Шаблоны карточек (owners-inbox бриф 10.07, задача 10.07 п.2 «оси из ВСЕХ метрик»,
+// карточка v4 п.1 «плитки из ВСЕХ метрик») — «Карточка менеджера» и «Карточка
+// отдела (РОП)»: до 6 осей паутины ИЗ ПОЛНОГО каталога метрик (не 8 зашитых) +
+// плитки итогов ИЗ ПОЛНОГО каталога метрик (не 6 зашитых чекбоксов, без
+// ограничения количества, порядок настраивается). Хранится в card_templates
+// (миграция 073, оси расширены 075, плитки расширены 083), singleton-по-ключу.
 //
 // Гейт — section.settings, БЕЗ superadmin-only (явное решение владельца 10.07:
-// «админ должен видеть и менять»). Если миграция 073 ещё не накатана — GET отдаёт
-// дефолты (см. getCardTemplate), PUT вернёт 500 при попытке записи (ожидаемо).
+// «админ должен видеть и менять»). Если миграции ещё не накатаны — GET отдаёт
+// дефолты (см. getCardTemplate/sanitizeAxes/sanitizeTiles), PUT вернёт 500 при
+// попытке записи (ожидаемо).
 
 function isTemplateKey(v: string | null): v is TemplateKey {
   return v === 'manager' || v === 'department';
@@ -44,11 +48,13 @@ export async function GET(req: NextRequest) {
 
   const row = res.rows[0];
 
-  // Полный каталог для UI-пикера (задача 10.07, п.2): legacy-«бонусные» оси (те же
-  // 8, что были зашиты раньше — для совместимости и знакомого набора по умолчанию)
-  // + ВСЕ видимые метрики каталога, сгруппированные по категории. Только видимые
-  // (!isHiddenInUi && isActive) — служебные/скрытые компоненты формул выбрать
-  // осью нельзя (как и раньше молчаливо не показывались).
+  // Полный каталог для UI-пикера (задача 10.07, п.2 + карточка v4 п.1): legacy-
+  // «бонусные» оси/плитки (те же исходные ключи, что были зашиты раньше — для
+  // совместимости и знакомого набора по умолчанию) + ВСЕ видимые метрики каталога,
+  // сгруппированные по категории. Только видимые (!isHiddenInUi && isActive) —
+  // служебные/скрытые компоненты формул выбрать осью/плиткой нельзя (как и раньше
+  // молчаливо не показывались). Оси и плитки используют ОДИН и тот же список
+  // metrics — пикер на странице настроек переиспользует один каталог для обоих.
   const visibleMetrics = allMetrics.filter(m => !m.isHiddenInUi && m.isActive);
   const catalog = {
     legacyAxes: LEGACY_AXIS_KEYS.map(k => ({
@@ -56,19 +62,23 @@ export async function GET(req: NextRequest) {
       label: LEGACY_AXIS_LABELS[k],
       defaultInvert: LEGACY_AXIS_DEFAULT_INVERT[k],
     })),
+    legacyTiles: LEGACY_TILE_KEYS.map(k => ({
+      metricKey: legacyTileStorageKey(k),
+      label: LEGACY_TILE_LABELS[k],
+    })),
     metrics: visibleMetrics.map(m => ({ id: m.id, nameRu: m.nameRu, category: m.category, dataType: m.dataType })),
-    tiles: TILE_CATALOG_KEYS,
     maxAxes: MAX_AXES,
+    // Плитки — без maxTiles (задача 10.07 карточка v4, п.1: «количество НЕ ограничено»).
   };
 
   // Всегда отдаём санитайзенные оси/плитки (даже без строки в БД — sanitizeAxes/
-  // sanitizeTiles сами фолбэчат на дефолтные 6/все 6 при !Array.isArray) — раньше
-  // GET отдавал undefined без строки, клиент сам подставлял дефолт; теперь дефолт
+  // sanitizeTiles сами фолбэчат на дефолтные 6 при !Array.isArray) — раньше GET
+  // отдавал undefined без строки, клиент сам подставлял дефолт; теперь дефолт
   // единый источник правды (cardTemplates.ts), не дублируется в клиентском коде.
   return NextResponse.json({
     key,
     axes: await sanitizeAxes(row?.axes),
-    tiles: sanitizeTiles(row?.tiles),
+    tiles: await sanitizeTiles(row?.tiles),
     catalog,
   });
 }
@@ -91,9 +101,9 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: `Максимум ${MAX_AXES} осей` }, { status: 400 });
   }
 
-  // Строгая валидация КАЖДОЙ оси против живого каталога (в отличие от sanitizeAxes,
-  // которая молча отбрасывает мусор при ЧТЕНИИ — здесь на ЗАПИСИ хотим внятную
-  // ошибку с конкретным неверным id, а не тихую подмену дефолтом).
+  // Строгая валидация КАЖДОЙ оси/плитки против живого каталога (в отличие от
+  // sanitizeAxes/sanitizeTiles, которые молча отбрасывают мусор при ЧТЕНИИ —
+  // здесь на ЗАПИСИ хотим внятную ошибку с конкретным неверным id).
   const allMetrics = await loadMetrics();
   const validCatalogIds = new Set(allMetrics.filter(m => !m.isHiddenInUi && m.isActive).map(m => m.id));
 
@@ -122,22 +132,35 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: 'Выберите хотя бы одну ось' }, { status: 400 });
   }
 
+  // Плитки итогов (задача 10.07 карточка v4, п.1): произвольная длина (без MAX,
+  // в отличие от осей), каждая — «legacy:<один из 6 исходных>» либо голый id
+  // живого каталога метрик; порядок = порядок в присланном массиве.
   if (!Array.isArray(body.tiles) || body.tiles.length === 0) {
     return NextResponse.json({ error: 'tiles обязателен (непустой массив ключей плиток)' }, { status: 400 });
   }
-  const invalidTile = (body.tiles as unknown[]).find(t => !(TILE_CATALOG_KEYS as readonly string[]).includes(t as string));
-  if (invalidTile !== undefined) {
-    return NextResponse.json({ error: `Неизвестная плитка: ${String(invalidTile)}` }, { status: 400 });
+  const tiles: string[] = [];
+  for (const entry of body.tiles as unknown[]) {
+    if (typeof entry !== 'string' || !entry) {
+      return NextResponse.json({ error: `Некорректная плитка: ${JSON.stringify(entry)}` }, { status: 400 });
+    }
+    if (isLegacyTileStorageKey(entry) || validCatalogIds.has(entry)) {
+      tiles.push(entry);
+    } else {
+      return NextResponse.json({ error: `Неизвестная плитка: ${entry}` }, { status: 400 });
+    }
   }
-
-  const tiles = sanitizeTiles(body.tiles) as TileKey[];
+  const seenTiles = new Set<string>();
+  const dedupTiles = tiles.filter(t => (seenTiles.has(t) ? false : (seenTiles.add(t), true)));
+  if (dedupTiles.length === 0) {
+    return NextResponse.json({ error: 'Выберите хотя бы одну плитку' }, { status: 400 });
+  }
 
   await systemDb().query(
     `INSERT INTO card_templates (template_key, axes, tiles, updated_at)
      VALUES ($1, $2::jsonb, $3::jsonb, NOW())
      ON CONFLICT (template_key) DO UPDATE SET axes = $2::jsonb, tiles = $3::jsonb, updated_at = NOW()`,
-    [key, JSON.stringify(dedupAxes), JSON.stringify(tiles)],
+    [key, JSON.stringify(dedupAxes), JSON.stringify(dedupTiles)],
   );
   invalidateCardTemplatesCache(key);
-  return NextResponse.json({ ok: true, key, axes: dedupAxes, tiles });
+  return NextResponse.json({ ok: true, key, axes: dedupAxes, tiles: dedupTiles });
 }

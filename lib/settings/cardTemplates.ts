@@ -30,6 +30,19 @@
 // считаются ДРУГОЙ формулой (по ВСЕМ сделкам, не только первичным, см. managerCard.ts::
 // rawAxisValues) — без префикса это была бы неустранимая коллизия имён с другим
 // значением при выборе из каталога.
+//
+// ── Задача 10.07 (карточка v4), п.1: «плитки итогов из ВСЕХ метрик» ──────────────
+// БЫЛО: 6 зашитых ключей (TILE_CATALOG_KEYS), чекбокс-список «показывать/нет»,
+// ПОРЯДОК фиксирован (порядок массива TILE_CATALOG_KEYS). СТАЛО: плитка — ЛЮБАЯ
+// метрика полного каталога, точно тот же паттерн хранения/UI, что и оси (п.2 выше) —
+// «legacy:<6 исходных>» ИЛИ голый id каталога, порядок = порядок в массиве tiles
+// (тот же приём переупорядочивания, что у осей). Инверсия («меньше — лучше») плиткам
+// НЕ нужна (они не участвуют в скоринге/перцентиле — просто значение + Δ% к периоду
+// сравнения, см. managerCard.ts::buildTileResults), поэтому tiles — ПРОСТОЙ массив
+// строк (не {metricKey,invert}[], как у axes) и БЕЗ ограничения количества (в отличие
+// от MAX_AXES=6 — «сетка растёт», см. отчёт задачи п.2 ТЗ). Миграция 083 переводит
+// существующие 6 голых camelCase-ключей в «legacy:»-префиксные строки (тот же приём
+// идемпотентного WHERE-guard, что и 075).
 
 import { systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
@@ -80,7 +93,14 @@ export const LEGACY_AXIS_DEFAULT_INVERT: Record<LegacyAxisKey, boolean> = {
   shipment_rate: false,
 };
 
-export const TILE_CATALOG_KEYS = [
+// Исходные 6 плиток (карточка v1/v2/v3, до задачи 10.07 п.1 «плитки из ВСЕХ метрик»).
+// Значения — camelCase (НЕ id каталога метрик) — своя формула в managerCard.ts::
+// tileRaw (напр. salesAmount = primary_sales_amount + repeat_sales_amount, суммарно
+// по всем сделкам — как и раньше, «Продажи» отчёта считают только PRIMARY-scope,
+// поэтому это НЕ то же самое число, что одноимённая метрика каталога, если такая
+// появится). Префикс «legacy:» (см. LEGACY_TILE_PREFIX ниже) отделяет эти 6 формул
+// от id каталога, даже без буквального совпадения имён — единообразно с осями (п.2).
+export const LEGACY_TILE_KEYS = [
   'reservations',
   'confirmedReservations',
   'salesCount',
@@ -88,7 +108,29 @@ export const TILE_CATALOG_KEYS = [
   'shipments',
   'avgCheck',
 ] as const;
-export type TileKey = (typeof TILE_CATALOG_KEYS)[number];
+export type LegacyTileKey = (typeof LEGACY_TILE_KEYS)[number];
+
+export function legacyTileStorageKey(k: LegacyTileKey): string { return `${LEGACY_PREFIX}${k}`; }
+export function isLegacyTileStorageKey(k: string): boolean {
+  return k.startsWith(LEGACY_PREFIX) && (LEGACY_TILE_KEYS as readonly string[]).includes(k.slice(LEGACY_PREFIX.length));
+}
+export function stripLegacyTilePrefix(k: string): LegacyTileKey {
+  return k.slice(LEGACY_PREFIX.length) as LegacyTileKey;
+}
+
+export const LEGACY_TILE_LABELS: Record<LegacyTileKey, string> = {
+  reservations: 'Брони',
+  confirmedReservations: 'Подтв. брони',
+  salesCount: 'Продажи, шт',
+  salesAmount: 'Продажи, ₽',
+  shipments: 'Отгрузки',
+  avgCheck: 'Средний чек',
+};
+
+// Оставлено для обратной совместимости импортов (старое имя до задачи 10.07 п.1) —
+// новый код должен использовать LEGACY_TILE_KEYS.
+export const TILE_CATALOG_KEYS = LEGACY_TILE_KEYS;
+export type TileKey = LegacyTileKey;
 
 export interface AxisConfig {
   /** «legacy:<key>» — один из LEGACY_AXIS_KEYS, ИЛИ голый id метрики полного
@@ -107,19 +149,18 @@ export const DEFAULT_AXES: AxisConfig[] = [
   { metricKey: legacyStorageKey('touch_speed'), invert: LEGACY_AXIS_DEFAULT_INVERT.touch_speed },
   { metricKey: legacyStorageKey('refusal_rate'), invert: LEGACY_AXIS_DEFAULT_INVERT.refusal_rate },
 ];
-export const DEFAULT_TILES: TileKey[] = [...TILE_CATALOG_KEYS];
+// Плитки — простой массив storage-ключей («legacy:<6 исходных>» ИЛИ голый id
+// каталога), порядок = порядок рендера, БЕЗ ограничения количества (задача 10.07,
+// п.1 — «сетка растёт», в отличие от MAX_AXES=6 у осей паутины).
+export const DEFAULT_TILES: string[] = LEGACY_TILE_KEYS.map(legacyTileStorageKey);
 export const MAX_AXES = 6;
 
 export interface CardTemplate {
   axes: AxisConfig[]; // порядок = порядок осей в паутине, до MAX_AXES
-  tiles: TileKey[];
+  tiles: string[];    // порядок = порядок плиток итогов, без ограничения количества
 }
 
 const DEFAULT_TEMPLATE: CardTemplate = { axes: DEFAULT_AXES, tiles: DEFAULT_TILES };
-
-function isTileKey(v: unknown): v is TileKey {
-  return typeof v === 'string' && (TILE_CATALOG_KEYS as readonly string[]).includes(v);
-}
 
 /**
  * Санитайзер осей для API PUT / чтения из БД. Валидирует metricKey ПРОТИВ живого
@@ -176,9 +217,35 @@ export async function sanitizeAxes(raw: unknown): Promise<AxisConfig[]> {
   return clean.length > 0 ? clean : DEFAULT_AXES;
 }
 
-export function sanitizeTiles(raw: unknown): TileKey[] {
+/**
+ * Санитайзер плиток итогов (задача 10.07, п.1 — «плитки из ВСЕХ метрик каталога»,
+ * тот же приём валидации, что и sanitizeAxes, но без invert и без MAX — плитка
+ * либо «legacy:<один из 6 исходных>», либо голый id живого каталога метрик.
+ * Поддерживает старый формат (голая camelCase-строка БЕЗ префикса, данные до
+ * миграции 083) — трактуется как legacy-ключ, фолбэк аналогично sanitizeAxes/075.
+ */
+export async function sanitizeTiles(raw: unknown): Promise<string[]> {
   if (!Array.isArray(raw)) return DEFAULT_TILES;
-  const clean = [...new Set(raw.filter(isTileKey))];
+
+  const allMetrics = await loadMetrics();
+  const validCatalogIds = new Set(allMetrics.filter(m => !m.isHiddenInUi && m.isActive).map(m => m.id));
+
+  const parsed: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'string' || !entry) continue;
+    if (isLegacyTileStorageKey(entry)) {
+      parsed.push(entry);
+    } else if ((LEGACY_TILE_KEYS as readonly string[]).includes(entry)) {
+      // Голая строка исходного ключа БЕЗ префикса (данные до миграции 083)
+      parsed.push(legacyTileStorageKey(entry as LegacyTileKey));
+    } else if (validCatalogIds.has(entry)) {
+      parsed.push(entry);
+    }
+    // иначе — неизвестный/удалённый из каталога id, молча отбрасываем
+  }
+
+  const seen = new Set<string>();
+  const clean = parsed.filter(t => (seen.has(t) ? false : (seen.add(t), true)));
   return clean.length > 0 ? clean : DEFAULT_TILES;
 }
 
@@ -197,7 +264,7 @@ export async function getCardTemplate(key: TemplateKey): Promise<CardTemplate> {
     );
     const row = res.rows[0];
     if (row) {
-      value = { axes: await sanitizeAxes(row.axes), tiles: sanitizeTiles(row.tiles) };
+      value = { axes: await sanitizeAxes(row.axes), tiles: await sanitizeTiles(row.tiles) };
     }
   } catch {
     /* таблица/миграция ещё не накатана — дефолт = поведение как в v1/v2 до шаблонов */
