@@ -90,17 +90,16 @@ export function HomeReportColumns({ canSales, userLogin }: { canSales: boolean; 
       />
 
       <div className="w-full grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-11 items-start">
-      {/* Роп монитор · Продажи */}
+      {/* Роп монитор · Продажи. Доработка задачи 1572: стартовые заглушки
+          «По менеджерам»/«По товарным группам» убраны и отсюда (владелец —
+          «из списка ВООБЩЕ», фокус на подготовленных отчётах) — остаются
+          только витринные отчёты раздела; старт пустого отчёта — через
+          «Создать отчёт» выше. Роуты по-прежнему живы (прямые URL работают). */}
       <div>
         <ColumnEyebrow>Роп монитор · Продажи</ColumnEyebrow>
-        <Row
-          href="/sales/by-managers"
-          title="По менеджерам" subtitle="Выручка и динамика по менеджерам"
-        />
-        <Row
-          href="/sales/by-product-groups"
-          title="По товарным группам" subtitle="Показатели по категориям товаров"
-        />
+        {!isLoading && ropMonitorShared.length === 0 && (
+          <div className="text-[13px] text-[var(--color-text-muted)] py-1 px-1">Пока нет общих отчётов</div>
+        )}
         {ropMonitorShared.map(r => (
           <Row
             key={r.id} href={`/sales/saved/${r.id}`}
