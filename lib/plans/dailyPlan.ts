@@ -131,6 +131,75 @@ export async function getMonthWorkingDays(monthFirstDay: string, asOfDateStr: st
   return { total: total || 22, passed: passed || 1 };
 }
 
+export interface PeriodMonthChunk {
+  /** 'YYYY-MM' месяца, к которому относится этот кусок периода. */
+  month: string;
+  /** Делитель дневного плана — рабочих дней ВСЕГО в этом месяце (как getMonthWorkingDays.total). */
+  workingDaysInMonth: number;
+  /** Будних дней ВНУТРИ пересечения [rangeFromStr, rangeToStr] и этого месяца (не обязательно с 1-го числа). */
+  workingDaysInRange: number;
+}
+
+/**
+ * Задача 10.07 (фикс «план-метрики должны считать рабочие дни ПО ВЫБРАННОМУ ПЕРИОДУ,
+ * а не по "сегодня"», owners-inbox): разбивает диапазон [rangeFromStr, rangeToStr]
+ * (включительно, обычно rangeToStr = min(period.to, сегодня МСК)) по календарным месяцам.
+ * Для КАЖДОГО месяца отдаёт делитель (рабочих дней всего в месяце — divide20: константа 20;
+ * calendar: из working_calendar) и числитель (будних дней ИМЕННО внутри диапазона,
+ * пересечённого с этим месяцем — НЕ обязательно от 1-го числа, если rangeFromStr позже).
+ * Это позволяет корректно считать план на период, пересекающий границу месяца: дни каждого
+ * месяца берут дневной план ИМЕННО своего месяца (см. app/api/reports/run).
+ */
+export async function getWorkingDaysByMonthInRange(
+  rangeFromStr: string,
+  rangeToStr: string,
+): Promise<PeriodMonthChunk[]> {
+  if (rangeToStr < rangeFromStr) return [];
+  const mode = await getDailyPlanMode();
+  const chunks: PeriodMonthChunk[] = [];
+
+  let curMonthFirst = `${rangeFromStr.slice(0, 7)}-01`;
+  const lastMonthFirst = `${rangeToStr.slice(0, 7)}-01`;
+
+  while (curMonthFirst <= lastMonthFirst) {
+    const monthEndExclusive = new Date(`${curMonthFirst}T00:00:00Z`);
+    monthEndExclusive.setUTCMonth(monthEndExclusive.getUTCMonth() + 1);
+    const monthLastDay = new Date(monthEndExclusive.getTime() - 86_400_000).toISOString().slice(0, 10);
+
+    const chunkFrom = rangeFromStr > curMonthFirst ? rangeFromStr : curMonthFirst;
+    const chunkTo = rangeToStr < monthLastDay ? rangeToStr : monthLastDay;
+
+    if (chunkFrom <= chunkTo) {
+      if (mode === 'divide20') {
+        chunks.push({
+          month: curMonthFirst.slice(0, 7),
+          workingDaysInMonth: FIXED_MONTH_DIVISOR,
+          workingDaysInRange: countWeekdaysInclusive(chunkFrom, chunkTo),
+        });
+      } else {
+        // calendar — прежняя логика (working_calendar), без изменений режима.
+        const res = await systemDb().query<{ total_working: string; in_range: string }>(
+          `SELECT
+             COUNT(*) FILTER (WHERE is_working) AS total_working,
+             COUNT(*) FILTER (WHERE is_working AND date >= $2::date AND date <= $3::date) AS in_range
+           FROM working_calendar
+           WHERE to_char(date, 'YYYY-MM') = $1`,
+          [curMonthFirst.slice(0, 7), chunkFrom, chunkTo],
+        );
+        const total = parseInt(res.rows[0]?.total_working ?? '0', 10) || 22; // фолбэк как в getMonthWorkingDays
+        const inRange = parseInt(res.rows[0]?.in_range ?? '0', 10);
+        chunks.push({ month: curMonthFirst.slice(0, 7), workingDaysInMonth: total, workingDaysInRange: inRange });
+      }
+    }
+
+    const next = new Date(`${curMonthFirst}T00:00:00Z`);
+    next.setUTCMonth(next.getUTCMonth() + 1);
+    curMonthFirst = next.toISOString().slice(0, 10);
+  }
+
+  return chunks;
+}
+
 /** Рабочих дней в НЕДЕЛЕ, начинающейся с weekStartStr (Пн), для недельного плана
  *  (ежедневный Bitrix-отчёт). divide20 — константа 5 (пн-пт); calendar — как раньше,
  *  из working_calendar (учитывает праздники). */

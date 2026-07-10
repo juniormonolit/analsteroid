@@ -14,19 +14,76 @@ import {
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
-import { getMonthWorkingDays, getWeekWorkingDays } from '@/lib/plans/dailyPlan';
+import { getWorkingDaysByMonthInRange } from '@/lib/plans/dailyPlan';
 import { toZonedTime } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType } from '@/lib/metrics/types';
 
-// Метрики «Выполнение плана ... (день)/(неделя)» (п.5+11 спеки) — period-relative,
-// as-of = конец периода отчёта (или сегодня, если период его включает). Понедельник недели,
-// в которую попадает asOf.
-function mondayOfWeek(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00Z`);
-  const day = d.getUTCDay(); // 0=Вс..6=Сб
-  const diffFromMonday = day === 0 ? 6 : day - 1;
-  d.setUTCDate(d.getUTCDate() - diffFromMonday);
-  return d.toISOString().slice(0, 10);
+interface PeriodPlanEntry { planSales: number; planShipments: number }
+
+/**
+ * Задача 10.07 (фикс «план-метрики должны считать рабочие дни ПО ВЫБРАННОМУ ПЕРИОДУ, а не
+ * по "сегодня"» — owners-inbox). Раньше «План (на сегодня)» и «Выполнение плана % (день)/
+ * (неделя)» считались от начала ТЕКУЩЕГО календарного месяца/недели до реального "сегодня",
+ * полностью игнорируя выбранный период отчёта (баг: период 01-08.07 при сегодня=10.07 давал
+ * план за 8 будней вместо 6-в-периоде).
+ *
+ * Новая семантика: рабочие дни = будни (пн-пт) в пересечении
+ * [periodFromStr, min(periodToStrRaw, сегодня МСК)]. План = дневной_план (месячный ÷ 20,
+ * режим как есть, см. lib/plans/dailyPlan) × эти дни, отдельно по КАЖДОМУ месяцу периода —
+ * если период переходит границу месяца, дни каждого месяца берут дневной план ИМЕННО
+ * своего месяца (план месяца из manager_plans этого месяца). Если плана на какой-то месяц
+ * периода нет — этот месяц просто пропускается (план по имеющимся месяцам), а не обнуляет
+ * весь расчёт.
+ */
+async function computePeriodPlanByLogin(
+  periodFromStr: string,
+  periodToStrRaw: string,
+  mskTodayStr: string,
+): Promise<{ byLogin: Map<string, PeriodPlanEntry>; rangeToStr: string }> {
+  const rangeToStr = periodToStrRaw < mskTodayStr ? periodToStrRaw : mskTodayStr;
+  if (rangeToStr < periodFromStr) {
+    // Период целиком в будущем (ещё не начался к "сегодня") — рабочих дней 0, план 0 у всех.
+    return { byLogin: new Map(), rangeToStr };
+  }
+
+  const chunks = await getWorkingDaysByMonthInRange(periodFromStr, rangeToStr);
+  if (chunks.length === 0) return { byLogin: new Map(), rangeToStr };
+
+  const months = chunks.map(c => c.month);
+  const sysDb = systemDb();
+  const plansRes = await sysDb.query<{ manager_login: string; month: string; plan_shipments: string; plan_n: string }>(
+    `SELECT manager_login, to_char(month, 'YYYY-MM') as month, plan_shipments, plan_n
+     FROM manager_plans WHERE to_char(month, 'YYYY-MM') = ANY($1)`,
+    [months],
+  );
+
+  const planByLoginMonth = new Map<string, Map<string, { plan_shipments: number; plan_n: number }>>();
+  for (const row of plansRes.rows) {
+    if (!planByLoginMonth.has(row.manager_login)) planByLoginMonth.set(row.manager_login, new Map());
+    planByLoginMonth.get(row.manager_login)!.set(row.month, {
+      plan_shipments: parseFloat(row.plan_shipments),
+      plan_n: parseFloat(row.plan_n),
+    });
+  }
+
+  const byLogin = new Map<string, PeriodPlanEntry>();
+  for (const [login, monthMap] of planByLoginMonth) {
+    let planSales = 0;
+    let planShipments = 0;
+    let any = false;
+    for (const chunk of chunks) {
+      const mp = monthMap.get(chunk.month);
+      if (!mp) continue; // плана на этот месяц периода нет — считаем по имеющимся
+      any = true;
+      const dailySales = (mp.plan_shipments / mp.plan_n) / chunk.workingDaysInMonth;
+      const dailyShipments = mp.plan_shipments / chunk.workingDaysInMonth;
+      planSales += dailySales * chunk.workingDaysInRange;
+      planShipments += dailyShipments * chunk.workingDaysInRange;
+    }
+    if (any) byLogin.set(login, { planSales, planShipments });
+  }
+
+  return { byLogin, rangeToStr };
 }
 
 export async function POST(req: NextRequest) {
@@ -73,6 +130,17 @@ export async function POST(req: NextRequest) {
     accountType,
   };
 
+  // Задача 10.07: общие для обеих групп план-метрик даты — "сегодня" МСК и календарные
+  // границы текущего/сравнительного периода. period.from/period.to приходят уже как
+  // «MSK-псевдо-UTC» строки (см. lib/period) — берём календарную дату без повторного
+  // сдвига таймзоны.
+  const MSK_TZ = 'Europe/Moscow';
+  const mskTodayStr = toZonedTime(new Date(), MSK_TZ).toISOString().slice(0, 10);
+  const periodFromStr = new Date(period.from).toISOString().slice(0, 10);
+  const periodToStr = new Date(period.to).toISOString().slice(0, 10);
+  const compPeriodFromStr = new Date(comparisonPeriod.from).toISOString().slice(0, 10);
+  const compPeriodToStr = new Date(comparisonPeriod.to).toISOString().slice(0, 10);
+
   let currentRows: ReportRow[] = [];
   let compRows: ReportRow[] = [];
 
@@ -111,20 +179,12 @@ export async function POST(req: NextRequest) {
 
     const sysDb = systemDb();
 
+    // planByLogin — «План (месяц)»: сумма месячных планов ВСЕХ месяцев, затронутых
+    // ВЫБРАННЫМ ПЕРИОДОМ (period.from..period.to). Задачей 10.07 НЕ затронута — как было.
     const plansRes = await sysDb.query<{ manager_login: string; month: string; plan_shipments: string; plan_n: string }>(
       `SELECT manager_login, to_char(month, 'YYYY-MM') as month, plan_shipments, plan_n
        FROM manager_plans WHERE to_char(month, 'YYYY-MM') = ANY($1)`,
       [months]
-    );
-
-    const today = new Date();
-    const todayStr = today.toISOString().slice(0, 10);
-    const currentMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-
-    // Источник дневного плана — общий хелпер (п.7 спеки): дефолт "месячный ÷ 20",
-    // режим "производственный календарь" — только если супер-админ включил его явно.
-    const { total: workingDaysInMonth, passed: workingDayOrdinal } = await getMonthWorkingDays(
-      `${currentMonthStr}-01`, todayStr
     );
 
     const planByLogin = new Map<string, { plan_shipments: number; plan_n: number }>();
@@ -139,32 +199,56 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const enrichRow = (row: ReportRow): ReportRow => {
+    // «План (на сегодня)» — задача 10.07: считается ПО ВЫБРАННОМУ ПЕРИОДУ (у currentRows —
+    // opts.period, у compRows — compOpts.period, каждый по СВОЕМУ, симметрично тому, как
+    // ниже считаются totals current/comparison), а не по реальному "сегодня" как раньше.
+    // См. computePeriodPlanByLogin выше.
+    const [periodPlanCurrent, periodPlanComp] = await Promise.all([
+      computePeriodPlanByLogin(periodFromStr, periodToStr, mskTodayStr),
+      computePeriodPlanByLogin(compPeriodFromStr, compPeriodToStr, mskTodayStr),
+    ]);
+
+    const enrichRow = (row: ReportRow, periodPlan: Map<string, PeriodPlanEntry>): ReportRow => {
       const login = row.dimensionSubtitle;
       const plan = login ? planByLogin.get(login) : undefined;
       if (!plan) return row;
       const planSalesMonth = plan.plan_shipments / plan.plan_n;
       const planShipmentsMonth = plan.plan_shipments;
-      const planSalesToday = (planSalesMonth / workingDaysInMonth) * workingDayOrdinal;
-      const planShipmentsToday = (planShipmentsMonth / workingDaysInMonth) * workingDayOrdinal;
+      const periodPlanEntry = login ? periodPlan.get(login) : undefined;
       return {
         ...row,
         metrics: {
           ...row.metrics,
           plan_sales_month: planSalesMonth,
           plan_shipments_month: planShipmentsMonth,
-          plan_sales_today: planSalesToday,
-          plan_shipments_today: planShipmentsToday,
+          plan_sales_today: periodPlanEntry ? periodPlanEntry.planSales : null,
+          plan_shipments_today: periodPlanEntry ? periodPlanEntry.planShipments : null,
         }
       };
     };
-    currentRows = currentRows.map(enrichRow);
-    compRows = compRows.map(enrichRow);
+    currentRows = currentRows.map(r => enrichRow(r, periodPlanCurrent.byLogin));
+    compRows = compRows.map(r => enrichRow(r, periodPlanComp.byLogin));
   }
 
-  // Метрики «Выполнение плана продаж/отгрузок, % (день)/(неделя)» — п.5+11 спеки.
-  // Period-relative: as-of = конец периода отчёта, либо сегодня, если период его включает.
-  // Работают только в отчёте «по менеджерам» (планы есть только у менеджеров/отделов, п.5).
+  // Метрики «Выполнение плана продаж/отгрузок, % (день)/(неделя)» — задача 10.07 (фикс
+  // «план по периоду, не по сегодня»). Работают только в отчёте «по менеджерам» (планы
+  // есть только у менеджеров/отделов).
+  //
+  // НОВАЯ семантика (было MTD/WTD от начала календарного месяца/недели до "сегодня",
+  // игнорируя период отчёта):
+  //   факт = факт ЗА ВЕСЬ ВЫБРАННЫЙ ПЕРИОД этой строки (currentRows уже посчитаны по
+  //   opts.period, compRows — по compOpts.period; те же primary+repeat суммы уже лежат
+  //   в row.metrics — дополнительный запрос не нужен);
+  //   план = тот же «план на период» (рабочие дни периода∩сегодня × дневной план своего
+  //   месяца), что и у «План (на сегодня)» выше (computePeriodPlanByLogin), — свой у
+  //   current, свой у comparison.
+  // Побочный эффект фикса: «день» и «неделя» после этого математически СОВПАДАЮТ (оба =
+  // факт периода / план периода) — раньше отличались, т.к. один мерил MTD, другой WTD
+  // (разные окна). Владелец просил день = факт/план периода, неделю — "аналогично, по
+  // буднями недель внутри периода"; при суммировании по дням план не зависит от того,
+  // группируем мы дни по месяцам или по неделям (сумма одна и та же) — оставляем оба ID
+  // метрик (обратная совместимость сохранённых отчётов), они просто дают одно число.
+  // Решение зафиксировано явно (см. отчёт по задаче 10.07), не скрытая ошибка.
   const periodRelativePlanMetricIds = [
     'plan_execution_pct_sales_day', 'plan_execution_pct_sales_week',
     'plan_execution_pct_shipments_day', 'plan_execution_pct_shipments_week',
@@ -172,86 +256,40 @@ export async function POST(req: NextRequest) {
   const hasPeriodRelativePlanMetric = withDeps.some(m => periodRelativePlanMetricIds.includes(m.id));
 
   if (hasPeriodRelativePlanMetric && reportSlug === 'by-managers') {
-    const MSK_TZ = 'Europe/Moscow';
-    const mskTodayStr = toZonedTime(new Date(), MSK_TZ).toISOString().slice(0, 10);
-    // period.from/period.to приходят уже как «MSK-псевдо-UTC» строки (см. lib/period) —
-    // берём календарную дату без повторного сдвига таймзоны.
-    const periodFromStr = new Date(period.from).toISOString().slice(0, 10);
-    const periodToStr = new Date(period.to).toISOString().slice(0, 10);
-    const asOfStr = (periodFromStr <= mskTodayStr && mskTodayStr <= periodToStr) ? mskTodayStr : periodToStr;
-    const asOfMonthFirst = `${asOfStr.slice(0, 7)}-01`;
-    const asOfMonthStr = asOfStr.slice(0, 7);
-    const asOfWeekStart = mondayOfWeek(asOfStr);
-
-    const sysDb = systemDb();
-    const [asOfPlansRes, mtdRows, wtdRows, monthWd, weekWd] = await Promise.all([
-      sysDb.query<{ manager_login: string; plan_shipments: string; plan_n: string }>(
-        `SELECT manager_login, plan_shipments, plan_n
-         FROM manager_plans WHERE to_char(month, 'YYYY-MM') = $1`,
-        [asOfMonthStr]
-      ),
-      fetchByManagers({
-        period: { from: new Date(`${asOfMonthFirst}T00:00:00Z`), to: new Date(`${asOfStr}T00:00:00Z`) },
-        dealScope, clientType, departmentIds, accountType, productGroupMode, productGroupId, sourceFilter,
-      }),
-      fetchByManagers({
-        period: { from: new Date(`${asOfWeekStart}T00:00:00Z`), to: new Date(`${asOfStr}T00:00:00Z`) },
-        dealScope, clientType, departmentIds, accountType, productGroupMode, productGroupId, sourceFilter,
-      }),
-      getMonthWorkingDays(asOfMonthFirst, asOfStr),
-      getWeekWorkingDays(asOfWeekStart, asOfStr),
+    const [periodPlanCurrentPct, periodPlanCompPct] = await Promise.all([
+      computePeriodPlanByLogin(periodFromStr, periodToStr, mskTodayStr),
+      computePeriodPlanByLogin(compPeriodFromStr, compPeriodToStr, mskTodayStr),
     ]);
 
-    // На месяц asOf план не суммируется по нескольким месяцам (в отличие от planByLogin
-    // выше, который берёт все месяцы ВЫБРАННОГО периода) — день/неделя всегда меряются
-    // ровно относительно одного календарного месяца, в который попадает as-of.
-    const asOfPlanByLogin = new Map<string, { plan_shipments: number; plan_n: number }>();
-    for (const row of asOfPlansRes.rows) {
-      asOfPlanByLogin.set(row.manager_login, { plan_shipments: parseFloat(row.plan_shipments), plan_n: parseFloat(row.plan_n) });
-    }
-
-    const mtdByLogin = new Map(mtdRows.map(r => [r.dimensionSubtitle, r.metrics]));
-    const wtdByLogin = new Map(wtdRows.map(r => [r.dimensionSubtitle, r.metrics]));
-
-    const enrichPeriodRelative = (row: ReportRow): ReportRow => {
+    const enrichPeriodRelative = (row: ReportRow, periodPlan: Map<string, PeriodPlanEntry>): ReportRow => {
       const login = row.dimensionSubtitle;
-      const plan = login ? asOfPlanByLogin.get(login) : undefined;
-      if (!plan) return row;
+      const plan = login ? periodPlan.get(login) : undefined;
+      if (!plan) return row; // плана на месяцы диапазона нет вообще — как и раньше, не трогаем строку
 
-      const planSalesMonth = plan.plan_shipments / plan.plan_n;
-      const planShipmentsMonth = plan.plan_shipments;
-      const dailyPlanSales = planSalesMonth / monthWd.total;
-      const dailyPlanShipments = planShipmentsMonth / monthWd.total;
-
-      const mtd = login ? mtdByLogin.get(login) : undefined;
-      const wtd = login ? wtdByLogin.get(login) : undefined;
-      // Факт = ВСЕ продажи/отгрузки (перв.+повт.), решение Серёги 08.07 16:57 (этап 5б,
-      // п.1). Раньше (миграция 051) считали только primary_*_amount — так исторически
-      // было на проде. mtd/wtd приходят из fetchByManagers, которая всегда отдаёт ВСЕ
-      // collected-метрики независимо от запроса (см. features/reports/engine/byManagers.ts),
-      // поэтому repeat_* поля гарантированно присутствуют в объекте.
-      const salesFactMtd = (mtd?.primary_sales_amount ?? 0) + (mtd?.repeat_sales_amount ?? 0);
-      const salesFactWtd = (wtd?.primary_sales_amount ?? 0) + (wtd?.repeat_sales_amount ?? 0);
-      const shipmentsFactMtd = (mtd?.primary_shipments_amount ?? 0) + (mtd?.repeat_shipments_amount ?? 0);
-      const shipmentsFactWtd = (wtd?.primary_shipments_amount ?? 0) + (wtd?.repeat_shipments_amount ?? 0);
+      // Факт = ВСЕ продажи/отгрузки (перв.+повт.) ЗА ПЕРИОД ЭТОЙ строки, решение Серёги
+      // 08.07 16:57 (этап 5б, п.1) сохранено. primary_*/repeat_*_amount — collected-метрики,
+      // всегда присутствуют в row.metrics независимо от запрошенных metricIds (см.
+      // features/reports/engine/byManagers.ts).
+      const salesFact = (row.metrics.primary_sales_amount ?? 0) + (row.metrics.repeat_sales_amount ?? 0);
+      const shipmentsFact = (row.metrics.primary_shipments_amount ?? 0) + (row.metrics.repeat_shipments_amount ?? 0);
 
       return {
         ...row,
         metrics: {
           ...row.metrics,
-          sales_fact_mtd: salesFactMtd,
-          sales_fact_wtd: salesFactWtd,
-          shipments_fact_mtd: shipmentsFactMtd,
-          shipments_fact_wtd: shipmentsFactWtd,
-          plan_sales_target_mtd: dailyPlanSales * monthWd.passed,
-          plan_sales_target_wtd: dailyPlanSales * weekWd.passed,
-          plan_shipments_target_mtd: dailyPlanShipments * monthWd.passed,
-          plan_shipments_target_wtd: dailyPlanShipments * weekWd.passed,
+          sales_fact_mtd: salesFact,
+          sales_fact_wtd: salesFact,
+          shipments_fact_mtd: shipmentsFact,
+          shipments_fact_wtd: shipmentsFact,
+          plan_sales_target_mtd: plan.planSales,
+          plan_sales_target_wtd: plan.planSales,
+          plan_shipments_target_mtd: plan.planShipments,
+          plan_shipments_target_wtd: plan.planShipments,
         },
       };
     };
-    currentRows = currentRows.map(enrichPeriodRelative);
-    compRows = compRows.map(enrichPeriodRelative);
+    currentRows = currentRows.map(r => enrichPeriodRelative(r, periodPlanCurrentPct.byLogin));
+    compRows = compRows.map(r => enrichPeriodRelative(r, periodPlanCompPct.byLogin));
   }
 
   // Метрики активности менеджеров «Дней в работе» / «% выхода» / «Сделок/день» —
