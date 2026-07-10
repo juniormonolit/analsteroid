@@ -987,14 +987,32 @@ export function ReportTable({
   }
   const sepCls = 'border-l border-l-[var(--color-border)]';
 
+  // Категория метрики из каталога (Metric.category) — правка владельца 10.07:
+  // трёхуровневая иерархия толщины границ — (1) внутри метрики (Пред./Тек./Δ/Δ%) без
+  // границы вовсе, (2) между соседними метриками одной категории — 2px (см.
+  // needsGridDivider ниже), (3) между метриками РАЗНЫХ категорий каталога («Звонки»,
+  // «Планы» и т.п. — та же категория, что красит заголовок в MetricPanel/каталоге) —
+  // самая жирная, 3px. Колонки без категории (null) до этого уровня не поднимаются —
+  // остаются обычным разделителем метрик (уровень 2), чтобы не городить границу там,
+  // где категория неизвестна хотя бы с одной стороны.
+  const categoryOf = new Map<string, string | null>();
+  for (const m of displayMetrics) categoryOf.set(m.id, m.category ?? null);
+
   // ── Вертикальные границы между колонками метрик (п.4 правок 09.07, «Границы» в
-  // «Вид») ─────────────────────────────────────────────────────────────────────
-  // borderMode='grid' (дефолт) — тонкая линия #efefef (--color-table-row-border) МЕЖДУ
-  // КАЖДОЙ ПАРОЙ соседних метрик («между колонками метрик» по формулировке брифа, не
-  // между Пред./Тек./Δ/Δ% внутри одной метрики). Первая метрика в displayMetrics левую
-  // границу не получает — эту роль уже играет border-r колонки измерения. На стыке
-  // pinned→scroll границу не дублируем — там уже есть persistent-разделитель
-  // (lastPinnedId, overlay-span ниже), иначе будет двойная линия.
+  // «Вид»; усилено правкой владельца 10.07 — «пожирнее между метриками») ──────────
+  // borderMode='grid' (дефолт) — граница МЕЖДУ КАЖДОЙ ПАРОЙ соседних метрик
+  // («между колонками метрик» по формулировке брифа, не между Пред./Тек./Δ/Δ%
+  // внутри одной метрики — те у сабколонок ВООБЩЕ без границы, см. edgeCls в
+  // renderMetricCells). Раньше это была тонкая линия #efefef
+  // (--color-table-row-border, тот же вес, что у горизонтальных разделителей строк) —
+  // визуально не отличалась от «границы внутри группы» (которой не было вовсе) и
+  // метрики не читались как отдельные блоки. Теперь — 2px --color-border-strong
+  // (тот же токен и вес, что уже использует акцент колонки, комментарий в globals.css
+  // прямо называет его «group separators»), консистентно со strongLeft/sepCls
+  // (пользовательские column-groups) и с акцентом ниже. Первая метрика в
+  // displayMetrics левую границу не получает — эту роль уже играет border-r
+  // колонки измерения. На стыке pinned→scroll границу не дублируем — там уже есть
+  // persistent-разделитель (lastPinnedId, overlay-span ниже), иначе будет двойная линия.
   function needsGridDivider(metricIdx: number): boolean {
     if (borderMode !== 'grid' || metricIdx === 0) return false;
     const prev = displayMetrics[metricIdx - 1];
@@ -1003,13 +1021,26 @@ export function ReportTable({
     if (prevPinned && !curPinned) return false;
     return true;
   }
+  // Уровень 3 (самый жирный): граница между метриками РАЗНЫХ категорий каталога.
+  // Место то же, где вообще уместен разделитель метрик (needsGridDivider) — здесь
+  // только повышаем толщину/вес, когда категории по обе стороны заданы и различны.
+  function needsCategoryDivider(metricIdx: number): boolean {
+    if (!needsGridDivider(metricIdx)) return false;
+    const prevCat = categoryOf.get(displayMetrics[metricIdx - 1].id);
+    const curCat = categoryOf.get(displayMetrics[metricIdx].id);
+    if (!prevCat || !curCat) return false;
+    return prevCat !== curCat;
+  }
   // Левая граница метрики: акцент (толще/темнее, РАБОТАЕТ В ЛЮБОМ borderMode — п.5
   // правок, «Акцент колонки» по-новому) > группа (существующий sepCls/strongLeft,
-  // отдельная фича) > обычная сетка.
+  // отдельная фича) > граница между категориями каталога (3px, уровень 3) > обычная
+  // граница между метриками одной категории (2px, уровень 2) — оба border-strong,
+  // разница только в толщине.
   function leftEdgeCls(metricIdx: number, m: Metric): string {
     if (accentSet.has(m.id)) return 'border-l-2 border-l-[var(--color-border-strong)]';
     if (strongLeft.has(m.id)) return sepCls;
-    if (needsGridDivider(metricIdx)) return 'border-l border-l-[var(--color-table-row-border)]';
+    if (needsCategoryDivider(metricIdx)) return 'border-l-[3px] border-l-[var(--color-border-strong)]';
+    if (needsGridDivider(metricIdx)) return 'border-l-2 border-l-[var(--color-border-strong)]';
     return '';
   }
   // Правая граница метрики: только у акцентной — своя толстая граница колонки с ОБЕИХ
