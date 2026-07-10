@@ -695,8 +695,10 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         showDepartments={!sourceMode}
         sourceDimension={sourceMode ? sourceDimension : undefined}
         onSourceDimensionChange={sourceMode ? setSourceDimension : undefined}
-        // «Обычная» (п.3а спеки) скрывает панель метрик — состав метрик менять нельзя
-        onOpenMetricPanel={isPro ? () => setShowMetricPanel(true) : undefined}
+        // Кнопка настройки метрик доступна в обоих режимах (задача 1564: вернуть в
+        // «Обычной» — раньше скрывалась вместе с остальными pro-only элементами по
+        // п.3а спеки, но состав/подсветку метрик нужно менять и без Pro).
+        onOpenMetricPanel={() => setShowMetricPanel(true)}
         metricsBadge={metricIds.includes('all_core') ? Object.keys(highlights).length : metricIds.length}
       />
 
