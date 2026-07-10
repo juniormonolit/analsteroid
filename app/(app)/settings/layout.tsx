@@ -20,7 +20,10 @@ export default async function SettingsLayout({ children }: { children: React.Rea
   return (
     // Телефон: навигация настроек — горизонтальные табы над контентом; md+: сайдбар слева
     <div className="flex flex-col md:flex-row h-full overflow-hidden">
-      <aside className="md:w-48 shrink-0 border-b md:border-b-0 md:border-r border-[var(--color-border)] bg-[var(--color-bg-surface)] flex flex-col">
+      {/* md:w-48→md:w-60 (правка 10.07, msg 500): «Режим дневного плана» и другие
+          длинные названия разделов еле влезали в 192px, обрезаясь/переносясь.
+          Контентная часть (flex-1 справа) не тронута — растёт колонка НАВИГАЦИИ. */}
+      <aside className="md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-[var(--color-border)] bg-[var(--color-bg-surface)] flex flex-col">
         <div className="px-4 py-3 border-b border-[var(--color-border)] hidden md:block">
           <h2 className="text-sm font-semibold text-[var(--color-text)]">Настройки</h2>
         </div>
