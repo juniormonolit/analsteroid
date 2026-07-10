@@ -509,8 +509,17 @@ export function ReportTable({
   // для порогов (aboveColor всегда «лучше» по конструкции) инверсии нет, там как в брифе.
   const colorSortInverted = !!colorSortMetricId && heatSet.has(colorSortMetricId) && heatInvSet.has(colorSortMetricId);
 
-  const sorted = [...filteredRows].sort((a, b) => {
-    if (grouping !== 'none') return 0;
+  // Компаратор активной сортировки (метрика-колонка ИЛИ сортировка по цвету) —
+  // переиспользуется на ОБОИХ уровнях группировки (задача 1566): между собой группы
+  // (отделы/филиалы) сортируются по своему АГРЕГАТУ (у group-строки deltas — это и есть
+  // aggregateGroupDeltas, см. applyClientGrouping в SalesReportPage), а строки внутри
+  // каждой раскрытой группы — по своим значениям ТОЙ ЖЕ колонки в том же направлении (см.
+  // sortGroupChildren ниже). Раньше при grouping !== 'none' компаратор был жёстко
+  // no-op (return 0) — ни группы, ни тем более строки внутри группы не переупорядочивались
+  // при клике на колонку.
+  // null/прочерк (нет данных по метрике) — всегда в КОНЕЦ списка, независимо от
+  // направления asc/desc (иначе при asc «нет данных» всплывало бы наверх).
+  function compareRows(a: RowDeltas, b: RowDeltas): number {
     if (colorSortMetricId) {
       const za = zoneForValue(colorSortMetricId, a.deltas[colorSortMetricId]?.current ?? null);
       const zb = zoneForValue(colorSortMetricId, b.deltas[colorSortMetricId]?.current ?? null);
@@ -523,10 +532,27 @@ export function ReportTable({
       return colorSortInverted ? (av - bv) : (bv - av);
     }
     if (!sortBy) return 0;
-    const av = a.deltas[sortBy]?.current ?? -Infinity;
-    const bv = b.deltas[sortBy]?.current ?? -Infinity;
+    const av = a.deltas[sortBy]?.current ?? null;
+    const bv = b.deltas[sortBy]?.current ?? null;
+    if (av === null && bv === null) return 0;
+    if (av === null) return 1;
+    if (bv === null) return -1;
     return sortDir === 'desc' ? bv - av : av - bv;
-  });
+  }
+
+  // Рекурсивно сортирует children каждой группы ТЕМ ЖЕ компаратором/направлением, что и
+  // верхний уровень — «раскрытый отдел» показывает менеджеров в том же порядке метрики.
+  // «Без сортировки» (!sortBy && нет сортировки по цвету) — compareRows везде возвращает 0,
+  // Array.prototype.sort стабилен (ES2019+), поэтому дефолтный порядок (из
+  // applyClientGrouping) не меняется ни на одном уровне.
+  function sortGroupChildren(list: RowDeltas[]): RowDeltas[] {
+    return list.map(r => (r.isGroup && r.children && r.children.length > 0)
+      ? { ...r, children: sortGroupChildren([...r.children].sort(compareRows)) }
+      : r
+    );
+  }
+
+  const sorted = sortGroupChildren([...filteredRows].sort(compareRows));
 
   // Нумерация строк (п.6) + счётчик для «Итого: N ...» (п.7): считаем ТОЛЬКО обычные
   // (не групповые) строки — групповые заголовки не входят, «Итого» без номера. Один и
