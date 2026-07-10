@@ -7,6 +7,8 @@ interface BranchMetrics {
   name: string;
   fact_ytd: number;
   target_year: number | null;
+  // Цель «на сегодня» (помесячная, не годовая) — знаменатель Темпа (см. lib/jobs/planSummary.ts).
+  target_to_date: number | null;
   plan_percent_cumulative: number | null;
   plan_percent_pace: number | null;
   departments?: BranchMetrics[];
@@ -53,7 +55,7 @@ function MetricPair({ metrics, size }: { metrics: BranchMetrics; size: 'lg' | 's
         <div className={`${bigNum} font-bold tabular-nums ${paceColorClass(metrics.plan_percent_pace)}`}>
           {fmtPct(metrics.plan_percent_pace)}
         </div>
-        <div className={`${label} text-[var(--color-text-muted)]`}>Темп к рабочему дню</div>
+        <div className={`${label} text-[var(--color-text-muted)]`}>Темп к плану на сегодня</div>
       </div>
     </div>
   );

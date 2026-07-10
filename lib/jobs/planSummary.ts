@@ -10,7 +10,7 @@ import {
   getManagerDeptIds,
   resolveDeptCategory,
 } from '@/lib/org/deptCategories';
-import { getYearWorkingDays, type WorkingDayProgress } from '@/lib/plans/dailyPlan';
+import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
 import { toZonedTime } from 'date-fns-tz';
 import { startOfDay, startOfYear, addDays } from 'date-fns';
 
@@ -22,6 +22,10 @@ interface BranchMetrics {
   name: string;
   fact_ytd: number;
   target_year: number | null;
+  /** Цель «на сегодня» (не годовая!) — знаменатель темпа (п.10.07, см. computeAndCachePlanSummary):
+   *  сумма месячных планов ЗАВЕРШЁННЫХ месяцев года + план текущего месяца × доля прошедших
+   *  рабочих дней. null, если планов на эти месяцы вообще нет в manager_plans. */
+  target_to_date: number | null;
   plan_percent_cumulative: number | null;
   plan_percent_pace: number | null;
   departments?: BranchMetrics[];
@@ -94,10 +98,6 @@ async function getFactByBranch(fromIso: string, toExclIso: string) {
   return { russiaTotal, byBranch, byDept };
 }
 
-// Прогресс рабочих дней года — из общего хелпера lib/plans/dailyPlan (п.7 спеки):
-// дефолт "÷20" (12×20=240, будни пн-пт от 1 января), либо working_calendar, если
-// супер-админ включил режим "производственный календарь".
-
 async function getPlanTargets(year: number): Promise<{ company: number | null; branch: Map<string, number>; department: Map<string, number> }> {
   const res = await systemDb().query<{ scope: string; scope_name: string | null; target_amount: string }>(
     `SELECT scope, scope_name, target_amount FROM plan_targets_year WHERE year = $1`,
@@ -115,17 +115,105 @@ async function getPlanTargets(year: number): Promise<{ company: number | null; b
   return { company, branch, department };
 }
 
-function computeMetrics(name: string, factYtd: number, targetYear: number | null, wd: WorkingDayProgress | null): BranchMetrics {
-  const cumulative = pct(factYtd, targetYear);
-  const pace = targetYear !== null && wd
-    ? pct(factYtd, (targetYear / wd.total) * wd.passed)
-    : null;
+// short_login ('#8') → manager_bitrix_user_id — тот же маппинг, что уже собирают
+// вручную lib/profile/deptSummary.ts и lib/jobs/dailyMoscowReport.ts для чтения
+// manager_plans; здесь нужен, чтобы посчитанные по менеджеру месячные планы разложить
+// по филиалу/категории тем же способом, что и факт (getFactByBranch выше).
+async function loadShortLoginToManagerId(): Promise<Map<string, string>> {
+  const res = await systemDb().query<{ manager_id: string; short_login: string }>(
+    `SELECT manager_bitrix_user_id::text AS manager_id, short_login
+       FROM org_resolved_hierarchy WHERE is_active = true AND short_login IS NOT NULL`,
+  );
+  return new Map(res.rows.map(r => [r.short_login, r.manager_id]));
+}
+
+interface YtdPlanTargets {
+  company: number;
+  branch: Map<string, number>;
+  department: Map<string, number>;
+  /** Месяцы года (YYYY-MM-01) по текущий включительно, для которых в manager_plans
+   *  вообще НЕТ ни одной строки — цель по ним честно посчитана как 0, план не выдуман. */
+  missingMonths: string[];
+}
+
+/**
+ * Решение владельца 10.07 (ОТМЕНЯЕТ ÷365-календарный темп от 08.07, см. WORKLOG):
+ * «темп» на Сводной должен считаться помесячно — цель на сегодня = сумма месячных
+ * планов ВСЕХ ЗАВЕРШЁННЫХ месяцев года + план ТЕКУЩЕГО месяца, взятый с весом
+ * "прошедшие рабочие дни ÷ рабочих дней в месяце" (тот же режим "÷20"/working_calendar,
+ * что и везде в приложении — lib/plans/dailyPlan::getMonthWorkingDays).
+ *
+ * Источник месячных планов — manager_plans (та же таблица, что ЛК/дневной Bitrix-отчёт),
+ * агрегированная до компании/филиала/категории через branch+dept-маппинг менеджера.
+ * Это ДРУГОЙ источник данных, чем годовой plan_targets_year (тот — top-down цифры из
+ * /decomposition, эта — bottom-up по менеджерам); суммы за них НЕ обязаны совпадать
+ * (проверено 10.07: полугодовая сумма manager_plans меньше половины годового target_year —
+ * см. отчёт задачи), это ожидаемо и не является багом.
+ */
+async function getYtdPlanTargets(
+  yearStart: string,
+  currentMonthFirst: string,
+  currentMonthWeight: number,
+): Promise<YtdPlanTargets> {
+  const [plansRes, shortLoginMap, branchByManager, managerDeptIds, { byId, byBitrixId }] = await Promise.all([
+    systemDb().query<{ manager_login: string; month: string; plan_shipments: string }>(
+      `SELECT manager_login, to_char(month, 'YYYY-MM-DD') AS month, plan_shipments
+         FROM manager_plans WHERE month >= $1::date AND month <= $2::date`,
+      [yearStart, currentMonthFirst],
+    ),
+    loadShortLoginToManagerId(),
+    loadManagerBranchMap(),
+    getManagerDeptIds(),
+    loadDepartments(),
+  ]);
+
+  let company = 0;
+  const branch = new Map<string, number>();
+  const department = new Map<string, number>();
+  const monthsWithData = new Set<string>();
+
+  for (const row of plansRes.rows) {
+    const amount = Number(row.plan_shipments) || 0;
+    if (amount !== 0) monthsWithData.add(row.month);
+
+    const managerId = shortLoginMap.get(row.manager_login);
+    if (!managerId) continue; // менеджер уволен/переименован — как и в deptSummary.ts, тихо пропускаем
+
+    const weight = row.month === currentMonthFirst ? currentMonthWeight : 1;
+    const contribution = amount * weight;
+
+    company += contribution;
+    const rawBranch = branchByManager.get(managerId);
+    const label = rawBranch ? (BRANCH_LABELS[rawBranch] ?? rawBranch) : 'СПБ';
+    branch.set(label, (branch.get(label) ?? 0) + contribution);
+
+    const category = resolveDeptCategory(label, managerDeptIds.get(managerId) ?? null, byId, byBitrixId);
+    if (category) {
+      const key = `${label}:${category}`;
+      department.set(key, (department.get(key) ?? 0) + contribution);
+    }
+  }
+
+  const expectedMonths: string[] = [];
+  for (let cur = yearStart; cur <= currentMonthFirst; ) {
+    expectedMonths.push(cur);
+    const d = new Date(`${cur}T00:00:00Z`);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+    cur = d.toISOString().slice(0, 10);
+  }
+  const missingMonths = expectedMonths.filter(m => !monthsWithData.has(m));
+
+  return { company, branch, department, missingMonths };
+}
+
+function computeMetrics(name: string, factYtd: number, targetYear: number | null, targetToDate: number | null): BranchMetrics {
   return {
     name,
     fact_ytd: factYtd,
     target_year: targetYear,
-    plan_percent_cumulative: cumulative,
-    plan_percent_pace: pace,
+    target_to_date: targetToDate,
+    plan_percent_cumulative: pct(factYtd, targetYear),
+    plan_percent_pace: pct(factYtd, targetToDate),
   };
 }
 
@@ -139,28 +227,33 @@ export async function computeAndCachePlanSummary(): Promise<void> {
   const now = toZonedTime(new Date(), TZ);
   const year = now.getFullYear();
   const todayStr = now.toISOString().slice(0, 10);
+  const yearStart = `${year}-01-01`;
+  const currentMonthFirst = `${todayStr.slice(0, 7)}-01`;
   const fromIso = startOfYear(now).toISOString();
   const toExclIso = addDays(startOfDay(now), 1).toISOString();
 
-  const [{ russiaTotal, byBranch, byDept }, targets, wd] = await Promise.all([
+  const [{ russiaTotal, byBranch, byDept }, targets, monthWd] = await Promise.all([
     getFactByBranch(fromIso, toExclIso),
     getPlanTargets(year),
-    getYearWorkingDays(year, todayStr),
+    getMonthWorkingDays(currentMonthFirst, todayStr),
   ]);
 
-  if (!wd) {
-    console.warn(`[planSummary] working_calendar пуст для ${year} года (режим "календарь") — plan_percent_pace будет null`);
+  const currentMonthWeight = monthWd.total > 0 ? monthWd.passed / monthWd.total : 0;
+  const ytd = await getYtdPlanTargets(yearStart, currentMonthFirst, currentMonthWeight);
+
+  if (ytd.missingMonths.length > 0) {
+    console.warn(`[planSummary] нет планов в manager_plans за месяцы: ${ytd.missingMonths.join(', ')} — цель на сегодня по ним = 0`);
   }
 
-  const russia = computeMetrics('Россия', russiaTotal, targets.company, wd);
+  const russia = computeMetrics('Россия', russiaTotal, targets.company, ytd.company);
 
-  const branchNames = new Set([...byBranch.keys(), ...targets.branch.keys()]);
+  const branchNames = new Set([...byBranch.keys(), ...targets.branch.keys(), ...ytd.branch.keys()]);
   const branches = [...branchNames].map(name => {
-    const metrics = computeMetrics(name, byBranch.get(name) ?? 0, targets.branch.get(name) ?? null, wd);
+    const metrics = computeMetrics(name, byBranch.get(name) ?? 0, targets.branch.get(name) ?? null, ytd.branch.get(name) ?? null);
 
     const prefix = `${name}:`;
     const categories = new Set(
-      [...byDept.keys(), ...targets.department.keys()]
+      [...byDept.keys(), ...targets.department.keys(), ...ytd.department.keys()]
         .filter(k => k.startsWith(prefix))
         .map(k => k.slice(prefix.length)),
     );
@@ -169,7 +262,7 @@ export async function computeAndCachePlanSummary(): Promise<void> {
         .sort((a, b) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b))
         .map(cat => {
           const key = `${prefix}${cat}`;
-          return computeMetrics(cat, byDept.get(key) ?? 0, targets.department.get(key) ?? null, wd);
+          return computeMetrics(cat, byDept.get(key) ?? 0, targets.department.get(key) ?? null, ytd.department.get(key) ?? null);
         });
     }
     return metrics;
