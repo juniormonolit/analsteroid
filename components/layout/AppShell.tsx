@@ -25,6 +25,17 @@ import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 import { useTheme } from '@/lib/hooks/useTheme';
 import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 
+// Ширина развёрнутого сайдбара (задача 1575, полировка шапки/меню): было 260 —
+// «Менеджеры - Повторные» / «Товары - Сравнительный» и другие длинные имена
+// сохранённых отчётов переносились на 2 строки, слоган под лого не помещался
+// целиком. +17% (не «гигантизм», как просил владелец) убирает перенос у типичных
+// имён отчётов и даёт слогану место — см. BRAND_TAGLINE_CLS ниже, там же кегль/
+// трекинг слогана уменьшены как вторая линия защиты. Основная область отчётов
+// пересчитывается сама (flex-1 у контейнера main, см. AppShell) — доп. правок
+// раскладки контента не требуется, проверено на 1366px (WORKLOG 10.07).
+const SIDEBAR_WIDTH_EXPANDED = 305;
+const SIDEBAR_WIDTH_COLLAPSED = 52;
+
 /* Общий паттерн пункта 1-го уровня (NAV-блок, Сводная/Планы/Декомпозиция,
    Метрики/Настройки) — редизайн сайдбара, итерация 3 (бриф Виктора). */
 const NAV_ITEM_BASE =
@@ -43,8 +54,17 @@ function navIconCls(active: boolean) {
 // лочапа и левый край, что у строки с названием — маленький приглушённый
 // кегль, разрядка. Только в развёрнутых состояниях (сайдбар/мобильный
 // drawer) — в свёрнутой рельсе показывается только знак, без текста.
+//
+// Правка задачи 1575: раньше `truncate` резал слоган («...ДЛЯ МОНОЛИТИ…») —
+// владелец попросил помещать целиком, не резать. С уширением сайдбара до
+// SIDEBAR_WIDTH_EXPANDED слоган уже влезает при исходном кегле/трекинге, но
+// кегль (10px→9.5px) и трекинг (0.1em→0.04em) всё равно чуть уменьшены —
+// вторая линия защиты на случай узких десктопных вьюпортов (owner: «если
+// всё равно тесно — уменьшить кегль/трекинг, не резать»). `whitespace-nowrap`
+// вместо `truncate` — при нехватке места слоган должен остаться читаемым
+// целиком, а не обрезаться многоточием.
 const BRAND_TAGLINE_CLS =
-  'block truncate text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--color-sidebar-text-muted)]';
+  'block whitespace-nowrap text-[9.5px] font-medium uppercase tracking-[0.04em] text-[var(--color-sidebar-text-muted)]';
 const BRAND_TAGLINE_TEXT = '— аналитика для монолитика'.toUpperCase();
 
 // Тумблер «Про/Лайт» под лочапом (п.1 правок 09.07/2): компактный сегмент, дёргает
@@ -64,8 +84,13 @@ function ThemeSync() {
 
 function UiModeSwitch() {
   const { uiMode, setUiMode } = useUiMode();
+  // Задача 1575: раньше был `mt-1.5 w-fit` и рендерился внутри узкой колонки
+  // лого+название — визуально прижат к левому краю сайдбара. Ширина (`w-fit`)
+  // и верхний отступ теперь задаются местом использования (обёрткой
+  // `flex justify-center`), сам переключатель — просто содержимое по центру
+  // своей ширины, без внешних отступов/позиционирования.
   return (
-    <div className="flex border border-[var(--color-sidebar-border)] rounded-md overflow-hidden text-[11px] font-medium mt-1.5 w-fit">
+    <div className="flex border border-[var(--color-sidebar-border)] rounded-md overflow-hidden text-[11px] font-medium w-fit">
       {(['basic', 'pro'] as UiMode[]).map(m => (
         <button
           key={m}
@@ -248,10 +273,17 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
     }`;
 
+  // Задача 1575, п.3: `top-1` фиксировал верхний край кнопки в пикселях от
+  // верха строки — карандаш/корзинка визуально стояли ниже базовой линии
+  // текста названия отчёта (текст в `.leading-[1.35]` центрируется иначе, чем
+  // фиксированный отступ сверху). `top-1/2 -translate-y-1/2` центрирует кнопку
+  // по вертикали относительно всей высоты строки (`relative` родитель — сам
+  // `<Link>`, см. linkCls выше) независимо от того, однострочное имя отчёта
+  // или обёрнутое на 2 строки (`line-clamp-2`) — работает в обоих случаях.
   const delBtnCls =
-    'hover-reveal tap-target absolute right-1 top-1 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)]';
+    'hover-reveal tap-target absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)]';
   const renameBtnCls =
-    'hover-reveal tap-target absolute right-6 top-1 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-accent)]';
+    'hover-reveal tap-target absolute right-6 top-1/2 -translate-y-1/2 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-accent)]';
   const renameInputCls =
     'flex-1 min-w-0 bg-[var(--color-bg)] border border-[var(--color-accent)] rounded-[5px] px-1.5 py-0.5 text-[13px] text-[var(--color-sidebar-text)] outline-none';
 
@@ -786,40 +818,65 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         {/* Desktop sidebar (на <md скрыт — вместо него drawer) */}
         <aside
           className="hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] border-r border-[var(--color-sidebar-border)] transition-all duration-200"
-          style={{ width: collapsed ? 52 : 260 }}
+          style={{ width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED }}
         >
           {/* Header — клик по лого/названию ведёт на Главную (бриф Главной).
               Свёрнутая рельса (52px) слишком узкая для лого+кнопки в один ряд —
               складываем в две строки, как rail-logo/rail-expand в утверждённом
               макете (analsteroid-home-mock.html), но toggle оставлен наверху,
-              а не внизу у аватара — не переносим существующий механизм. */}
+              а не внизу у аватара — не переносим существующий механизм.
+              Развёрнутое состояние (задача 1575, полировка): раньше был один
+              общий flex-row (лого+название | тумблер Лайт/Про) versus крестик
+              справа — тумблер жался к левому краю под лого, слоган резался
+              truncate. Теперь три отдельных ряда: 1) лого+название+кнопка
+              сворачивания в одну строку, 2) слоган на всю ширину (не режется —
+              см. BRAND_TAGLINE_CLS), 3) тумблер Лайт/Про центрирован по ширине
+              ВСЕЙ шапки (`flex justify-center`), а не только колонки лого. */}
           <div
             className={
               collapsed
                 ? 'flex flex-col items-center justify-center gap-1.5 py-2.5 min-h-14 border-b border-[var(--color-sidebar-border)]'
-                : 'flex items-start justify-between gap-2 px-3 py-2.5 border-b border-[var(--color-sidebar-border)]'
+                : 'flex flex-col border-b border-[var(--color-sidebar-border)]'
             }
           >
             {collapsed ? (
-              <Link href="/home" title="Монолитика — на главную">
-                <BrandLogo size={18} />
-              </Link>
-            ) : (
-              <div className="min-w-0">
-                <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
-                  <BrandLogo size={22} className="shrink-0" />
-                  <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
+              <>
+                <Link href="/home" title="Монолитика — на главную">
+                  <BrandLogo size={18} />
                 </Link>
-                <span className={BRAND_TAGLINE_CLS}>{BRAND_TAGLINE_TEXT}</span>
-                <UiModeSwitch />
-              </div>
+                <button
+                  onClick={() => setCollapsed(v => !v)}
+                  className="text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
+                >
+                  <PanelLeft size={18} />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
+                  {/* items-center + leading-none на названии — раньше базовая линия
+                      текста визуально «плавала» относительно центра знака лого
+                      (line-height шрифта давал текстовому блоку лишнюю высоту сверху/
+                      снизу центра); leading-none убирает этот зазор, gap-2 остаётся
+                      единым интервалом лого↔название для всех мест лочапа (шапка/
+                      мобильный drawer/топбар). */}
+                  <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
+                    <BrandLogo size={22} className="shrink-0" />
+                    <span className="text-[var(--color-sidebar-text)] font-semibold text-sm leading-none tracking-wide truncate">Монолитика</span>
+                  </Link>
+                  <button
+                    onClick={() => setCollapsed(v => !v)}
+                    className="text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
+                  >
+                    <PanelLeftClose size={18} />
+                  </button>
+                </div>
+                <span className={`px-3 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
+                <div className="flex justify-center px-3 pt-1.5 pb-2.5">
+                  <UiModeSwitch />
+                </div>
+              </>
             )}
-            <button
-              onClick={() => setCollapsed(v => !v)}
-              className="text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors mt-0.5"
-            >
-              {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
-            </button>
           </div>
           <SidebarBody
             collapsed={collapsed} pathname={pathname} user={user}
@@ -834,21 +891,25 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           <div className="fixed inset-0 z-50 md:hidden">
             <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
             <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-[0_0_24px_rgba(0,0,0,0.12)]">
-              <div className="flex items-start justify-between gap-2 px-3 py-2.5 border-b border-[var(--color-sidebar-border)] shrink-0">
-                <div className="min-w-0">
+              {/* Тот же трёхрядный header, что у десктопного сайдбара (задача 1575) —
+                  слоган не режется, тумблер Лайт/Про центрирован по ширине шапки. */}
+              <div className="flex flex-col border-b border-[var(--color-sidebar-border)] shrink-0">
+                <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
                   <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
                     <BrandLogo size={22} className="shrink-0" />
-                    <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
+                    <span className="text-[var(--color-sidebar-text)] font-semibold text-sm leading-none tracking-wide truncate">Монолитика</span>
                   </Link>
-                  <span className={BRAND_TAGLINE_CLS}>{BRAND_TAGLINE_TEXT}</span>
+                  <button
+                    onClick={() => setMobileOpen(false)}
+                    className="tap-target text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <span className={`px-3 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
+                <div className="flex justify-center px-3 pt-1.5 pb-2.5">
                   <UiModeSwitch />
                 </div>
-                <button
-                  onClick={() => setMobileOpen(false)}
-                  className="tap-target text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors mt-0.5"
-                >
-                  <X size={18} />
-                </button>
               </div>
               <SidebarBody
                 collapsed={false} pathname={pathname} user={user}

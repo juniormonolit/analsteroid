@@ -234,7 +234,17 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
   return (
     <>
       <SlideBackdrop closing={closing} onClick={requestClose} className="z-[55]" />
-      <div className={`fixed inset-y-0 right-0 z-[60] w-full sm:w-[70vw] sm:min-w-[980px] sm:max-w-[1400px] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col overflow-hidden ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+      {/* Задача 1575, п.4: `overflow-hidden` здесь клипало `PanelCloseTab` —
+          крестик-ярлык позиционируется `-left-[30px]` (см.
+          components/ui/PanelCloseTab.tsx), т.е. за пределами собственного бокса
+          этого div, и `overflow-hidden` на родителе обрезал его невидимым. Ни
+          у одной другой панели с тем же паттерном (DealCard — идентичная
+          структура `fixed ... flex flex-col` без overflow, ChangelogPanel,
+          IdeasPanel, ReportSettingsPanel) такого класса нет — прокрутку
+          содержимого даёт свой `flex-1 overflow-y-auto` блок ниже (шапка/
+          фильтры — `shrink-0`), внешний overflow-hidden был не нужен и
+          добавлен по невнимательности при создании файла (см. git blame). */}
+      <div className={`fixed inset-y-0 right-0 z-[60] w-full sm:w-[70vw] sm:min-w-[980px] sm:max-w-[1400px] bg-[var(--color-bg-surface)] shadow-2xl border-l border-[var(--color-border)] flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <PanelCloseTab onClick={requestClose} />
 
         {error ? (
