@@ -731,9 +731,12 @@ export function ReportTable({
         // рендер по составу kinds (порядок задан в leafKinds), последняя под-колонка
         // всегда deltaPct (несёт pinBar).
         const lastIdx = kinds.length - 1;
-        // Границы «между колонками метрик» (п.4) + акцент (п.5) — на первой/последней
-        // под-колонке метрики (не между Пред./Тек./Δ/Δ% ВНУТРИ одной метрики).
-        const edgeCls = (idx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : ''} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
+        // Границы «между колонками метрик» (п.4) + акцент (п.5) — на первой под-колонке
+        // (граница с соседней метрикой слева, уровень 1/2/3 — leftEdgeCls) и последней
+        // (акцент справа — rightEdgeCls). Между Пред./Тек./Δ/Δ% ВНУТРИ одной метрики
+        // (idx > 0) — обычная тонкая граница (уровень 1, sepCls), правка владельца 10.07:
+        // раньше её не было вовсе, теперь она есть, но не толще обычной.
+        const edgeCls = (idx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : sepCls} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
         return (
           <React.Fragment key={m.id}>
             {kinds.map((kind, idx) => {
@@ -999,20 +1002,24 @@ export function ReportTable({
   for (const m of displayMetrics) categoryOf.set(m.id, m.category ?? null);
 
   // ── Вертикальные границы между колонками метрик (п.4 правок 09.07, «Границы» в
-  // «Вид»; усилено правкой владельца 10.07 — «пожирнее между метриками») ──────────
-  // borderMode='grid' (дефолт) — граница МЕЖДУ КАЖДОЙ ПАРОЙ соседних метрик
-  // («между колонками метрик» по формулировке брифа, не между Пред./Тек./Δ/Δ%
-  // внутри одной метрики — те у сабколонок ВООБЩЕ без границы, см. edgeCls в
-  // renderMetricCells). Раньше это была тонкая линия #efefef
-  // (--color-table-row-border, тот же вес, что у горизонтальных разделителей строк) —
-  // визуально не отличалась от «границы внутри группы» (которой не было вовсе) и
-  // метрики не читались как отдельные блоки. Теперь — 2px --color-border-strong
-  // (тот же токен и вес, что уже использует акцент колонки, комментарий в globals.css
-  // прямо называет его «group separators»), консистентно со strongLeft/sepCls
-  // (пользовательские column-groups) и с акцентом ниже. Первая метрика в
-  // displayMetrics левую границу не получает — эту роль уже играет border-r
-  // колонки измерения. На стыке pinned→scroll границу не дублируем — там уже есть
-  // persistent-разделитель (lastPinnedId, overlay-span ниже), иначе будет двойная линия.
+  // «Вид»; пересмотрено правкой владельца 10.07 — «по сути все вертикальные границы
+  // жирные», прежняя версия делала border-strong МЕЖДУ ЛЮБЫМИ соседними метриками
+  // всегда, из-за чего толщина не отличалась от границ категорий) ───────────────────
+  // Три уровня толщины, от тонкого к жирному:
+  //   1. Обычная тонкая — между обычными метриками (каждая в 1 столбец) И ВНУТРИ
+  //      развёрнутой метрики между её под-колонками (Пред./Тек./Δ/Δ%, см. edgeCls в
+  //      renderMetricCells) — тот же sepCls/--color-border, что и остальная сетка.
+  //   2. Чуть жирней (2px --color-border-strong) — ТОЛЬКО у краёв метрики,
+  //      развёрнутой больше чем на 1 столбец (режим сравнения, colSpanFor > 1): блок
+  //      её под-колонок должен читаться как единое целое. Граница между двумя
+  //      метриками, каждая из которых в 1 столбец, толще не становится — это
+  //      обычная граница уровня 1 (см. needsStrongGridDivider ниже).
+  //   3. Жирненькая (3px) — только на границе категорий каталога (needsCategoryDivider),
+  //      не зависит от того, развёрнута ли метрика.
+  // Первая метрика в displayMetrics левую границу не получает — эту роль уже играет
+  // border-r колонки измерения. На стыке pinned→scroll границу не дублируем — там уже
+  // есть persistent-разделитель (lastPinnedId, overlay-span ниже), иначе будет
+  // двойная линия.
   function needsGridDivider(metricIdx: number): boolean {
     if (borderMode !== 'grid' || metricIdx === 0) return false;
     const prev = displayMetrics[metricIdx - 1];
@@ -1021,9 +1028,19 @@ export function ReportTable({
     if (prevPinned && !curPinned) return false;
     return true;
   }
+  // Уровень 2: граница жирнее ТОЛЬКО когда хотя бы одна из двух соседних метрик
+  // развёрнута больше чем на 1 столбец (сравнение) — это её собственный внешний
+  // край, отделяющий блок Пред./Тек./Δ/Δ% от соседей.
+  function needsStrongGridDivider(metricIdx: number): boolean {
+    if (!needsGridDivider(metricIdx)) return false;
+    const prev = displayMetrics[metricIdx - 1];
+    const cur = displayMetrics[metricIdx];
+    return colSpanFor(prev.id) > 1 || colSpanFor(cur.id) > 1;
+  }
   // Уровень 3 (самый жирный): граница между метриками РАЗНЫХ категорий каталога.
   // Место то же, где вообще уместен разделитель метрик (needsGridDivider) — здесь
   // только повышаем толщину/вес, когда категории по обе стороны заданы и различны.
+  // Не зависит от colSpanFor — категория главнее режима сравнения.
   function needsCategoryDivider(metricIdx: number): boolean {
     if (!needsGridDivider(metricIdx)) return false;
     const prevCat = categoryOf.get(displayMetrics[metricIdx - 1].id);
@@ -1032,15 +1049,16 @@ export function ReportTable({
     return prevCat !== curCat;
   }
   // Левая граница метрики: акцент (толще/темнее, РАБОТАЕТ В ЛЮБОМ borderMode — п.5
-  // правок, «Акцент колонки» по-новому) > группа (существующий sepCls/strongLeft,
-  // отдельная фича) > граница между категориями каталога (3px, уровень 3) > обычная
-  // граница между метриками одной категории (2px, уровень 2) — оба border-strong,
-  // разница только в толщине.
+  // правок, «Акцент колонки» по-новому, не часть трёхуровневой иерархии) > группа
+  // (существующий sepCls/strongLeft, отдельная фича) > граница между категориями
+  // каталога (3px, уровень 3) > край развёрнутой метрики (2px, уровень 2) > обычная
+  // тонкая граница между метриками (уровень 1).
   function leftEdgeCls(metricIdx: number, m: Metric): string {
     if (accentSet.has(m.id)) return 'border-l-2 border-l-[var(--color-border-strong)]';
     if (strongLeft.has(m.id)) return sepCls;
     if (needsCategoryDivider(metricIdx)) return 'border-l-[3px] border-l-[var(--color-border-strong)]';
-    if (needsGridDivider(metricIdx)) return 'border-l-2 border-l-[var(--color-border-strong)]';
+    if (needsStrongGridDivider(metricIdx)) return 'border-l-2 border-l-[var(--color-border-strong)]';
+    if (needsGridDivider(metricIdx)) return sepCls;
     return '';
   }
   // Правая граница метрики: только у акцентной — своя толстая граница колонки с ОБЕИХ
@@ -1351,7 +1369,7 @@ export function ReportTable({
                   const style = { ...(isPinned ? { ...s, left: leafLeft(m.id, i) } : s), ...colorizeStyle(m), ...accentStyle(m.id) };
                   return { cls, style };
                 };
-                const edgeBase = (idx: number, lastIdx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : ''} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
+                const edgeBase = (idx: number, lastIdx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : sepCls} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
                 if (kinds.length > 1) {
                   const lastIdx = kinds.length - 1;
                   const KIND_LABEL: Record<string, string> = { current: 'Тек.', comparison: 'Пред.', delta: 'Δ', deltaPct: 'Δ%' };
@@ -1427,7 +1445,7 @@ export function ReportTable({
                   const style: React.CSSProperties = { ...(isPinned ? { left: leafLeft(m.id, i) } : {}), backgroundColor: TOTALS_BG, textAlign: numberAlign };
                   return { cls, style };
                 };
-                const edgeBase = (idx: number, lastIdx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : ''} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
+                const edgeBase = (idx: number, lastIdx: number) => `${idx === 0 ? leftEdgeCls(metricIdx, m) : sepCls} ${idx === lastIdx ? rightEdgeCls(m) : ''}`;
                 const pinSep = m.id === lastPinnedId
                   ? <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />
                   : null;
