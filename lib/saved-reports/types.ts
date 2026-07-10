@@ -95,6 +95,10 @@ export interface SavedReport {
   fixedPeriod: { from: string; to: string } | null;
   fixedComparison: { from: string; to: string } | null;
   createdAt: string;
+  // Ручной порядок в сайдбаре (правка владельца 10.07, migration 077) — меньше =
+  // выше в списке; свой скоуп для каждой витрины и для личного списка каждого
+  // пользователя. См. app/api/saved-reports/[id]/move/route.ts.
+  sortOrder?: number;
   // Корзина отчётов (бриф 09.07, п.2, migration 069): null/undefined = не удалён.
   // GET /api/saved-reports (основной список) всегда отдаёт deletedAt: null (уже
   // отфильтровано WHERE deleted_at IS NULL) — эти поля заполняются только в ответе

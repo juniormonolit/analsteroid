@@ -98,6 +98,52 @@ export async function PUT(
   return NextResponse.json({ ok: true });
 }
 
+// Переименование (правка владельца 10.07, п.2 «дай админам возможность
+// переназывать отчеты во всех разделов»): единственное поле, не весь
+// SavedReportInput, как в PUT выше — используется из сайдбара (AppShell.tsx,
+// инлайн-редактирование), где нет полного набора настроек отчёта под рукой.
+// Права те же, что у PUT/DELETE: свой личный отчёт — владелец, витринный
+// («Роп монитор»/«Смекалочная») — любой админ (action.shared_reports.manage),
+// не только исходный автор.
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { id } = await params;
+  const body: { name?: string } = await req.json();
+  const name = body.name?.trim();
+  if (!name) return NextResponse.json({ error: 'Название не может быть пустым' }, { status: 400 });
+
+  const db = systemDb();
+  const existing = await db.query<{ user_login: string; is_shared: boolean; deleted_at: Date | null }>(
+    `SELECT user_login, is_shared, deleted_at FROM saved_reports WHERE id = $1`,
+    [id]
+  );
+  if (!existing.rows.length) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const row = existing.rows[0];
+  if (row.deleted_at !== null) {
+    return NextResponse.json({ error: 'Отчёт в корзине — сначала восстановите' }, { status: 409 });
+  }
+  const isAdmin = isReportAdmin(session);
+  if (row.user_login !== session.login && !(row.is_shared && isAdmin)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  try {
+    await db.query(`UPDATE saved_reports SET name = $2 WHERE id = $1`, [id, name]);
+    return NextResponse.json({ ok: true, name });
+  } catch (err) {
+    if (typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505') {
+      return NextResponse.json({ error: 'Отчёт с таким именем уже есть в этом разделе' }, { status: 409 });
+    }
+    console.error('[saved-reports/[id]] PATCH failed:', err);
+    return NextResponse.json({ error: 'Не удалось переименовать отчёт' }, { status: 500 });
+  }
+}
+
 // Корзина отчётов (бриф 09.07, п.2): DELETE больше не удаляет строку — проставляет
 // deleted_at/deleted_by (см. migration 069). Настоящее удаление — отдельный роут
 // .../permanent (DELETE), восстановление — .../restore (POST). Раздел корзины —

@@ -48,10 +48,11 @@ export async function GET() {
             comparison_mode AS "comparisonMode",
             fixed_period AS "fixedPeriod",
             fixed_comparison AS "fixedComparison",
-            created_at AS "createdAt"
+            created_at AS "createdAt",
+            sort_order AS "sortOrder"
      FROM saved_reports
      WHERE (user_login = $1 OR is_shared = true) AND deleted_at IS NULL
-     ORDER BY created_at DESC`,
+     ORDER BY sort_order ASC, created_at DESC`,
     [session.login]
   );
   return NextResponse.json(res.rows);
@@ -130,12 +131,18 @@ function buildUpsertOnConflict(
   table: string,
   fields: Record<string, unknown>,
   conflictCols: string[],
-  conflictWhere?: string
+  conflictWhere?: string,
+  // Колонки, которые нужны в INSERT (VALUES), но НЕ должны трогаться при апдейте по
+  // конфликту — сейчас только sort_order (migration 077): при пересохранении
+  // существующего отчёта позиция в ручном порядке должна сохраняться, а не
+  // прыгать в конец на каждый Save.
+  updateExcludeCols: string[] = []
 ) {
   const cols = Object.keys(fields);
   const placeholders = cols.map((_, i) => `$${i + 1}`);
   const values = cols.map((c) => fields[c]);
-  const updates = cols.filter((c) => !conflictCols.includes(c)).map((c) => `${c} = EXCLUDED.${c}`);
+  const excluded = new Set([...conflictCols, ...updateExcludeCols]);
+  const updates = cols.filter((c) => !excluded.has(c)).map((c) => `${c} = EXCLUDED.${c}`);
   // Партиционный уникальный индекс (например saved_reports_personal_user_name_unique,
   // migration 058) требует, чтобы ON CONFLICT указывал тот же WHERE, что и индекс —
   // иначе Postgres не сможет сопоставить конфликт с этим индексом.
@@ -156,11 +163,39 @@ function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === UNIQUE_VIOLATION;
 }
 
+// Новый отчёт всегда встаёт В КОНЕЦ своего раздела (migration 077, п. брифа «новые
+// отчёты — в конец раздела»): витрина — свой независимый порядок на секцию
+// (rop_monitor/smekalochnaya), личное — свой порядок на пользователя.
+async function nextSortOrder(
+  db: ReturnType<typeof systemDb>,
+  sharedSection: SharedSection,
+  userLogin: string
+): Promise<number> {
+  const res = await db.query<{ next: number }>(
+    sharedSection
+      ? `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM saved_reports
+         WHERE deleted_at IS NULL AND is_shared = true AND shared_section = $1`
+      : `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM saved_reports
+         WHERE deleted_at IS NULL AND NOT is_shared AND user_login = $1`,
+    [sharedSection ?? userLogin]
+  );
+  return res.rows[0]?.next ?? 1;
+}
+
+// Правка владельца 10.07 («сохранение отчётов работает хуево» — диалог конфликта
+// имён в SaveReportModal): тело POST может нести один из двух явных флагов выбора
+// пользователя из этого диалога — overwriteId (id СУЩЕСТВУЮЩЕЙ строки, которую
+// перезаписываем; может лежать в другом разделе — «переезд» отчёта) или forceCopy
+// (всегда вставить новую строку, даже если имя совпадает с уже существующей).
+// Без обоих флагов — старое поведение (найти по имени в целевом скоупе и
+// обновить/создать), не трогаем.
+type PostBody = SavedReportInput & { overwriteId?: string; forceCopy?: boolean };
+
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body: SavedReportInput = await req.json();
+  const body: PostBody = await req.json();
   const db = systemDb();
 
   // Раздел общей витрины (п.3б спеки) — задать может только админ
@@ -173,6 +208,61 @@ export async function POST(req: NextRequest) {
   const fields = buildCommonFields(body, sharedSection);
 
   try {
+    // «Перезаписать» из диалога конфликта — обновить КОНКРЕТНУЮ строку по id, а не
+    // искать по (скоуп, имя). Права те же, что у PUT /api/saved-reports/[id]: свой
+    // личный отчёт — только владелец, витринный — любой админ (не только автор).
+    if (body.overwriteId) {
+      const existing = await db.query<{ user_login: string; is_shared: boolean; deleted_at: Date | null }>(
+        `SELECT user_login, is_shared, deleted_at FROM saved_reports WHERE id = $1`,
+        [body.overwriteId]
+      );
+      if (!existing.rows.length) return NextResponse.json({ error: 'Отчёт не найден' }, { status: 404 });
+      const row = existing.rows[0];
+      if (row.deleted_at !== null) {
+        return NextResponse.json({ error: 'Отчёт в корзине — сначала восстановите' }, { status: 409 });
+      }
+      if (row.user_login !== session.login && !(row.is_shared && isAdmin)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+      const { sql, values } = buildUpdateById(
+        'saved_reports',
+        { ...fields, name: body.name, report_slug: body.reportSlug },
+        body.overwriteId
+      );
+      await db.query(sql, values);
+      return NextResponse.json({ id: body.overwriteId });
+    }
+
+    // «Сохранить копию» — всегда INSERT, даже если имя совпадает с существующим
+    // отчётом. Если совпадение в ТОМ ЖЕ скоупе (партиционный unique-индекс 058/055) —
+    // подбираем свободное имя суффиксом «(2)», «(3)»...; в другом скоупе имя не
+    // конфликтует на уровне БД и вставится как есть (это уже осознанный выбор
+    // пользователя, а не тихий баг, как раньше).
+    if (body.forceCopy) {
+      const baseName = body.name;
+      let attemptName = baseName;
+      const copySortOrder = await nextSortOrder(db, sharedSection, session.login);
+      for (let n = 1; n <= 30; n++) {
+        try {
+          const { sql, values } = buildInsert('saved_reports', {
+            user_login: session.login,
+            report_slug: body.reportSlug,
+            name: attemptName,
+            sort_order: copySortOrder,
+            ...fields,
+          });
+          const res = await db.query<{ id: string }>(sql, values);
+          return NextResponse.json({ id: res.rows[0].id, name: attemptName });
+        } catch (err) {
+          if (isUniqueViolation(err) && n < 30) {
+            attemptName = `${baseName} (${n + 1})`;
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
+
     if (sharedSection) {
       // Общий раздел: имя уникально ВНУТРИ раздела (частичный индекс
       // saved_reports_shared_section_name_unique) — любой админ перезаписывает
@@ -194,6 +284,7 @@ export async function POST(req: NextRequest) {
         user_login: session.login,
         report_slug: body.reportSlug,
         name: body.name,
+        sort_order: await nextSortOrder(db, sharedSection, session.login),
         ...fields,
       });
       const res = await db.query<{ id: string }>(sql, values);
@@ -209,9 +300,16 @@ export async function POST(req: NextRequest) {
     // лежащее в корзине, можно занять заново — новая строка создаётся отдельно.
     const { sql, values } = buildUpsertOnConflict(
       'saved_reports',
-      { user_login: session.login, report_slug: body.reportSlug, name: body.name, ...fields },
+      {
+        user_login: session.login,
+        report_slug: body.reportSlug,
+        name: body.name,
+        sort_order: await nextSortOrder(db, null, session.login),
+        ...fields,
+      },
       ['user_login', 'name'],
-      'NOT is_shared AND deleted_at IS NULL'
+      'NOT is_shared AND deleted_at IS NULL',
+      ['sort_order']
     );
     const res = await db.query<{ id: string }>(sql, values);
     return NextResponse.json({ id: res.rows[0].id });
