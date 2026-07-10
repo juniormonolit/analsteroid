@@ -1,1 +1,3 @@
-{}
+{
+  "components/layout/AppShell.tsx::manual-popover-positioning": 1
+}

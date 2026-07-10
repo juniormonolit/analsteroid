@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -7,7 +7,7 @@ import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
   Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, Lightbulb,
-  RotateCcw, Pencil, ChevronUp,
+  RotateCcw, Pencil,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -174,24 +174,15 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     }
   }
 
-  // Ручной порядок (правка владельца 10.07, migration 077) — «вверх»/«вниз» меняют
-  // sort_order местами с соседом в том же скоупе (см. .../[id]/move/route.ts).
-  async function moveReport(id: string, direction: 'up' | 'down', e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    await fetch(`/api/saved-reports/${id}/move`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ direction }),
-    });
-    qc.invalidateQueries({ queryKey: ['saved-reports'] });
-  }
-
-  // ── Drag-and-drop порядка (правка владельца 10.07/2) ────────────────────────
+  // ── Drag-and-drop порядка (правка владельца 10.07/2, стрелки убраны 10.07/3 —
+  // просьба Серёги «насрать на функционал на планшете, он не нужен там такой») ──
   // Строку можно перетащить мышью в любую позицию СВОЕГО раздела — один POST
   // {beforeId} на дроп, сервер перенумеровывает весь скоуп одним UPDATE (см.
-  // .../[id]/move/route.ts, режим 2). Стрелки «вверх»/«вниз» остаются — фолбэк
-  // для тача (HTML5 DnD не работает на телефонах) и для доступности.
+  // .../[id]/move/route.ts, режим 2). Кнопки «вверх»/«вниз» (client-side
+  // moveReport + режим direction на том же эндпоинте) полностью убраны из UI на
+  // всех платформах — остаётся только DnD (сознательно НЕ работает тачем/
+  // клавиатурой, решение владельца). Сам режим direction на сервере оставлен —
+  // не мешает, вдруг ещё понадобится.
   // dragId — что тащим; dragOverId — строка, над которой курсор (подсветка вставки).
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -257,22 +248,16 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     'hover-reveal tap-target absolute right-1 top-1 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)]';
   const renameBtnCls =
     'hover-reveal tap-target absolute right-6 top-1 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-accent)]';
-  const moveBtnCls =
-    'hover-reveal tap-target p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-accent)] disabled:opacity-30 disabled:hover:text-[var(--color-sidebar-text-muted)]';
   const renameInputCls =
     'flex-1 min-w-0 bg-[var(--color-bg)] border border-[var(--color-accent)] rounded-[5px] px-1.5 py-0.5 text-[13px] text-[var(--color-sidebar-text)] outline-none';
 
   // Одна строка отчёта в сайдбаре (ссылка + порядок + переименование + удаление) —
   // переиспользуется для всех трёх списков (Роп монитор / Смекалочная / Избранное),
   // различается только правом на управление (canManage — свой отчёт или витрина, где
-  // я админ) и списком своего раздела (list — для DnD и позиции; isFirst/isLast
-  // дизейблят край кнопок вверх/вниз; сервер (.../move) — источник правды по краю,
-  // это только UI-подсказка).
+  // я админ) и списком своего раздела (list — для DnD и позиции индикатора вставки).
   function renderReportRow(r: SavedReport, canManage: boolean, list: SavedReport[]) {
     const href = `/sales/saved/${r.id}`;
     const idx = list.findIndex(x => x.id === r.id);
-    const isFirst = idx === 0;
-    const isLast = idx === list.length - 1;
     if (renamingId === r.id) {
       return (
         <div key={r.id} className="flex items-center gap-1.5 py-1 px-2 my-0.5">
@@ -326,26 +311,6 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
           setDragOverId(null);
         } : undefined}
       >
-        {canManage && (
-          <div className="flex flex-col shrink-0 pl-1">
-            <button
-              onClick={e => moveReport(r.id, 'up', e)}
-              disabled={isFirst}
-              className={moveBtnCls}
-              title="Переместить выше"
-            >
-              <ChevronUp size={11} />
-            </button>
-            <button
-              onClick={e => moveReport(r.id, 'down', e)}
-              disabled={isLast}
-              className={moveBtnCls}
-              title="Переместить ниже"
-            >
-              <ChevronDown size={11} />
-            </button>
-          </div>
-        )}
         {/* draggable={false} — иначе браузер тащит САМУ ссылку (нативный drag <a>),
             перебивая наш DnD строки (drag начинался бы с "призраком" URL). */}
         <Link href={href} className={`flex-1 ${linkCls(href)}`} title={r.name} draggable={false}>
@@ -533,10 +498,42 @@ function SidebarBody({
   const { data: changelogData } = useChangelogQuery();
   const unreadCount = changelogData?.unreadCount ?? 0;
 
+  // Хотфикс 10.07/3 (баг-репорт владельца «точно не работает драг энд дроп
+  // порядка отчётов»): причина — этот <nav> скроллируемый (overflow-y-auto), а
+  // при заметном количестве строк (витрины Роп монитор/Отчёты Стаса + личное
+  // Избранное) нижние строки списка частично/полностью ОБРЕЗАНЫ границей
+  // скролла. Курсор при drop визуально ещё «над» строкой, но фактическая точка
+  // за пределами видимой/hit-testable области nav — там браузер видит уже
+  // СЛЕДУЮЩИЙ блок сайдбара (Сводная/Метрики и т.п.), preventDefault для
+  // валидной цели не вызывается, drop молча не срабатывает (подтверждено
+  // репродукцией в браузере — воспроизвести/починить, WORKLOG 10.07). Фикс —
+  // автоскролл nav у верхнего/нижнего края во время drag (та же логика, что у
+  // любого DnD-списка длиннее вьюпорта): dragover бывает только во время
+  // активного HTML5-драга, поэтому условие на dragId не нужно — событие само по
+  // себе означает «идёт перетаскивание».
+  const navRef = useRef<HTMLElement | null>(null);
+  const navAutoScrollEdge = 48; // px от края nav, где начинается автоскролл
+  const navAutoScrollStep = 16; // px за один dragover (событие бьётся часто — плавно)
+  function handleNavDragOverAutoScroll(e: React.DragEvent<HTMLElement>) {
+    const el = navRef.current;
+    if (!el) return;
+    // getBoundingClientRect ЗДЕСЬ — не позиционирование поповера (правило 4/
+    // scripts/check-responsive.mjs его не различает, ловит по имени метода): это
+    // граница viewport'а самого скроллируемого nav для авто-скролла во время
+    // drag. Осознанно добавлено в baseline (--update-baseline), см. WORKLOG
+    // 10.07 и коммит фикса DnD.
+    const rect = el.getBoundingClientRect();
+    if (e.clientY < rect.top + navAutoScrollEdge) {
+      el.scrollTop = Math.max(0, el.scrollTop - navAutoScrollStep);
+    } else if (e.clientY > rect.bottom - navAutoScrollEdge) {
+      el.scrollTop = Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + navAutoScrollStep);
+    }
+  }
+
   return (
     <>
           {/* Nav */}
-          <nav className="flex-1 overflow-y-auto py-2 px-2">
+          <nav ref={navRef} onDragOver={handleNavDragOverAutoScroll} className="flex-1 overflow-y-auto py-2 px-2">
             {NAV.filter(item => !item.perm || hasPerm(user, item.perm)).map(item => (
               <div key={item.label}>
                 {item.disabled ? (
