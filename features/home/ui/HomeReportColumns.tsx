@@ -22,11 +22,11 @@ function Row({ href, title, subtitle }: { href: string; title: string; subtitle?
       href={href}
       className="group block px-3 py-2 my-0.5 rounded-[9px] text-left transition-colors hover:bg-[var(--color-table-row-hover)]"
     >
-      <span className="block text-sm font-medium text-[var(--color-text)] truncate group-hover:text-[#1a3f9e]">
+      <span className="block text-sm font-medium text-[var(--color-text)] truncate group-hover:text-[var(--color-accent-hover)]">
         {title}
       </span>
       {subtitle && (
-        <span className="block text-[11.5px] text-[#a6acb8] truncate">{subtitle}</span>
+        <span className="block text-[11.5px] text-[var(--color-text-muted)] truncate">{subtitle}</span>
       )}
     </Link>
   );
@@ -34,7 +34,7 @@ function Row({ href, title, subtitle }: { href: string; title: string; subtitle?
 
 function ColumnEyebrow({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-[11.5px] font-bold uppercase tracking-[0.08em] text-[#a6acb8] pb-2.5 mb-2 border-b border-[var(--color-border)]">
+    <div className="text-[11.5px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)] pb-2.5 mb-2 border-b border-[var(--color-border)]">
       {children}
     </div>
   );
@@ -123,11 +123,11 @@ export function HomeReportColumns({ canSales, userLogin }: { canSales: boolean; 
           />
         ))}
         {!isLoading && ownReports.length === 0 && (
-          <div className="border border-dashed border-[#dfe2e8] rounded-[10px] bg-[var(--color-bg)] px-3.5 py-4 mt-0.5">
+          <div className="border border-dashed border-[var(--color-border)] rounded-[10px] bg-[var(--color-bg)] px-3.5 py-4 mt-0.5">
             <div className="text-[13.5px] font-semibold text-[var(--color-text-muted)] mb-1">
               Добавьте ещё
             </div>
-            <div className="text-[11.5px] text-[#a6acb8] leading-relaxed">
+            <div className="text-[11.5px] text-[var(--color-text-muted)] leading-relaxed">
               Отметьте отчёт звёздочкой — он появится здесь для быстрого доступа
             </div>
           </div>

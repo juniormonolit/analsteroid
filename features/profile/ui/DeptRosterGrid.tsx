@@ -125,7 +125,7 @@ export function DeptRosterGrid() {
               <button
                 key={p}
                 onClick={() => setPeriodChoice(p)}
-                className={`px-2.5 py-1.5 transition-colors ${periodChoice === p ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                className={`px-2.5 py-1.5 transition-colors ${periodChoice === p ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
               >
                 {p === 'month' ? 'Этот месяц' : 'Всё время'}
               </button>
@@ -136,7 +136,7 @@ export function DeptRosterGrid() {
               <button
                 key={opt.k}
                 onClick={() => setSegment(opt.k)}
-                className={`px-2.5 py-1.5 transition-colors ${segment === opt.k ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                className={`px-2.5 py-1.5 transition-colors ${segment === opt.k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
               >
                 {opt.l}
               </button>
@@ -175,12 +175,12 @@ export function DeptRosterGrid() {
               className={`relative flex flex-col items-center text-center gap-0.5 bg-[var(--color-bg-surface)] border rounded-2xl px-3.5 py-4 hover:border-[var(--color-border-focus)] transition-colors ${
                 m.isTop1 ? 'border-2' : 'border-[var(--color-border)]'
               }`}
-              style={m.isTop1 ? { borderColor: '#e8c974', boxShadow: '0 0 0 4px #fbf3dd33' } : undefined}
+              style={m.isTop1 ? { borderColor: 'var(--color-top1-border)', boxShadow: '0 0 0 4px var(--color-top1-glow)' } : undefined}
             >
               <span
                 className="absolute top-2.5 right-2.5 text-[13px] font-extrabold rounded-lg px-2 py-0.5"
                 style={m.isTop1
-                  ? { backgroundColor: '#fbf3dd', color: '#a3781f' }
+                  ? { backgroundColor: 'var(--color-top1-bg)', color: 'var(--color-top1-text)' }
                   : { backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)', color: 'var(--color-accent)' }}
               >
                 {m.rating !== null ? m.rating.toFixed(1) : '—'}

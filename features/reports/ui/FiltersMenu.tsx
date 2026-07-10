@@ -12,7 +12,7 @@ export function Seg<T extends string>({ options, value, onChange, labels }: {
         <button
           key={o}
           onClick={() => onChange(o)}
-          className={`flex-1 px-2 py-1.5 transition-colors whitespace-nowrap ${value === o ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+          className={`flex-1 px-2 py-1.5 transition-colors whitespace-nowrap ${value === o ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
         >
           {labels[o]}
         </button>
@@ -112,7 +112,7 @@ export function FiltersMenu(props: FiltersFieldsProps) {
           <Filter size={12} />
           Фильтры
           {activeCount > 0 && (
-            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-white rounded-full text-[10px]">{activeCount}</span>
+            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px]">{activeCount}</span>
           )}
         </button>
       }

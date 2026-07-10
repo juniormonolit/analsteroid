@@ -19,7 +19,7 @@ export function GsSwatch({ color, selected, onClick }: { color: string; selected
       className="relative w-[22px] h-[22px] rounded-md shrink-0 transition-transform hover:scale-110"
       style={{
         backgroundColor: color,
-        border: selected ? '2px solid var(--color-text)' : '1px solid rgba(15,23,42,.16)',
+        border: selected ? '2px solid var(--color-text)' : '1px solid var(--color-swatch-border)',
         boxShadow: selected
           ? '0 0 0 2px rgba(91,141,239,.28), 0 1px 3px rgba(0,0,0,.15)'
           : 'inset 0 0 0 1px rgba(255,255,255,.4)',

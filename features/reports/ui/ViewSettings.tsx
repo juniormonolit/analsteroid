@@ -43,7 +43,7 @@ function Seg<T extends string>({ options, value, onChange, labels }: {
         <button
           key={o}
           onClick={() => onChange(o)}
-          className={`flex-1 px-2 py-1.5 transition-colors whitespace-nowrap ${value === o ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+          className={`flex-1 px-2 py-1.5 transition-colors whitespace-nowrap ${value === o ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
         >
           {labels[o]}
         </button>
@@ -128,7 +128,7 @@ export function ViewSettingsFields({
                 <button
                   key={d}
                   onClick={() => onChange({ ...prefs, density: d })}
-                  className={`flex-1 px-2 py-1.5 transition-colors ${prefs.density === d ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                  className={`flex-1 px-2 py-1.5 transition-colors ${prefs.density === d ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
                 >
                   {DENSITY_LABELS[d]}
                 </button>
@@ -148,7 +148,7 @@ export function ViewSettingsFields({
                   <button
                     key={a}
                     onClick={() => onNumberAlignChange(a)}
-                    className={`flex-1 px-2 py-1.5 transition-colors ${(numberAlign ?? 'center') === a ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(numberAlign ?? 'center') === a ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
                   >
                     {ALIGN_LABELS[a]}
                   </button>
@@ -165,7 +165,7 @@ export function ViewSettingsFields({
                   <button
                     key={String(v)}
                     onClick={() => onDrilldownGroupedChange(v)}
-                    className={`flex-1 px-2 py-1.5 transition-colors ${(drilldownGrouped ?? true) === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(drilldownGrouped ?? true) === v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
                   >
                     {v ? 'Да' : 'Нет'}
                   </button>
@@ -182,7 +182,7 @@ export function ViewSettingsFields({
                   <button
                     key={String(v)}
                     onClick={() => onColorizeMetricsChange(v)}
-                    className={`flex-1 px-2 py-1.5 transition-colors ${(colorizeMetrics ?? false) === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(colorizeMetrics ?? false) === v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
                   >
                     {v ? 'Да' : 'Нет'}
                   </button>
@@ -199,7 +199,7 @@ export function ViewSettingsFields({
                   <button
                     key={String(v)}
                     onClick={() => onZebraChange(v)}
-                    className={`flex-1 px-2 py-1.5 transition-colors ${(zebra ?? false) === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(zebra ?? false) === v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
                   >
                     {v ? 'Да' : 'Нет'}
                   </button>

@@ -80,7 +80,7 @@ export default function WorkingCalendarPage() {
           <button
             onClick={handleLoad}
             disabled={loading}
-            className="px-4 py-1.5 text-sm rounded bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="px-4 py-1.5 text-sm rounded bg-[var(--color-accent)] text-[var(--color-text-inverse)] hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             {loading ? 'Загрузка...' : 'Загрузить / обновить'}
           </button>

@@ -142,7 +142,7 @@ export function DateRangePicker({ value, onChange, onClose, showPresets = true, 
 
             let innerCls = 'w-7 h-7 flex items-center justify-center rounded-full text-sm font-medium z-10 ';
             if (start || end) {
-              innerCls += 'bg-[var(--color-accent)] text-white ';
+              innerCls += 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] ';
             } else if (isToday) {
               innerCls += 'border border-[var(--color-accent)] text-[var(--color-accent)] ';
             } else if (!inCur) {

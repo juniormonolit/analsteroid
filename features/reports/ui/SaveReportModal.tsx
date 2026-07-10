@@ -222,7 +222,7 @@ export function SaveReportModal({
                     type="button"
                     onClick={() => setSection(o.value)}
                     className={`px-3 py-1.5 transition-colors whitespace-nowrap ${
-                      section === o.value ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                      section === o.value ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                     }`}
                   >
                     {o.label}
@@ -248,7 +248,7 @@ export function SaveReportModal({
                 onClick={() => setPeriodMode(m)}
                 className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
                   periodMode === m
-                    ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]'
+                    ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] border-[var(--color-accent)]'
                     : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
@@ -265,7 +265,7 @@ export function SaveReportModal({
                     key={o.value}
                     onClick={() => setAnchor(o.value)}
                     className={`px-3 py-1.5 transition-colors ${
-                      anchor === o.value ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                      anchor === o.value ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                     }`}
                   >
                     {o.label}
@@ -278,7 +278,7 @@ export function SaveReportModal({
                     key={o.value}
                     onClick={() => setUnit(o.value)}
                     className={`px-3 py-1.5 transition-colors ${
-                      unit === o.value ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                      unit === o.value ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                     }`}
                   >
                     {o.label}
@@ -332,7 +332,7 @@ export function SaveReportModal({
           <button
             onClick={handleSave}
             disabled={!name.trim() || saving}
-            className="px-5 py-2 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+            className="px-5 py-2 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
           >
             {saving ? 'Сохранение...' : willOverwrite ? 'Перезаписать' : 'Сохранить'}
           </button>

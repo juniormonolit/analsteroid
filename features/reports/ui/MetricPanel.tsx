@@ -136,7 +136,7 @@ function MetricSelector({
               title={s.title}
               onClick={() => setScopeFilter(prev => prev === s.key ? null : s.key)}
               className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${scopeFilter === s.key
-                ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]'
+                ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] border-[var(--color-accent)]'
                 : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
             >
               {s.label}
@@ -315,7 +315,7 @@ export function MetricPanel(props: Props) {
             <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto">
               {TABS.map(t => (
                 <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors whitespace-nowrap shrink-0 ${tab === t.id ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors whitespace-nowrap shrink-0 ${tab === t.id ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
                   {t.label}
                 </button>
               ))}

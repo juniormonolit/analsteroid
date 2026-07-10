@@ -1,12 +1,13 @@
 'use client';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, IdCard, KeyRound, LayoutGrid, Rows3 } from 'lucide-react';
+import { Bell, IdCard, KeyRound, LayoutGrid, Moon, Rows3 } from 'lucide-react';
 import { startOfMonth } from 'date-fns';
 import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 import { useTableScale, type TableScalePct } from '@/lib/hooks/useTableScale';
+import { useTheme, type Theme } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
 import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 
@@ -79,6 +80,10 @@ export function ProfilePage() {
   // Про/Лайт живёт в ЛК (переехало сюда из «настроек отчёта», см. WORKLOG задачи —
   // там раньше был локальный, непер­систентный «Размер шрифта» на localStorage).
   const { tableScalePct, setTableScale } = useTableScale();
+  // Тёмная тема (макет owners-inbox/analsteroid-dark-theme-mock.html, утверждён
+  // владельцем) — тот же серверный паттерн, что и масштаб таблиц (users.theme,
+  // migration 070). Анти-вспышка при загрузке — инлайн-скрипт в app/layout.tsx.
+  const { theme, setTheme } = useTheme();
 
   const { data: me, isLoading: meLoading } = useQuery<Me>({
     queryKey: ['me'],
@@ -167,7 +172,7 @@ export function ProfilePage() {
                 onClick={() => setUiMode(m)}
                 className={`px-4 py-1.5 transition-colors ${
                   uiMode === m
-                    ? 'bg-[var(--color-accent)] text-white'
+                    ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
                     : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
@@ -196,11 +201,37 @@ export function ProfilePage() {
                 onClick={() => setTableScale(p)}
                 className={`px-4 py-1.5 transition-colors ${
                   tableScalePct === p
-                    ? 'bg-[var(--color-accent)] text-white'
+                    ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
                     : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
                 {p}%
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Тема оформления (макет утверждён владельцем, дефолт — светлая) */}
+        <div className={cardCls}>
+          <div className="flex items-center gap-2 mb-2">
+            <Moon size={15} className="text-[var(--color-text-muted)]" />
+            <h2 className="text-sm font-semibold text-[var(--color-text)]">Тема оформления</h2>
+          </div>
+          <p className="text-sm text-[var(--color-text-muted)] mb-3">
+            Применяется сразу и запоминается на этом аккаунте.
+          </p>
+          <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm w-fit">
+            {(['light', 'dark'] as Theme[]).map(t => (
+              <button
+                key={t}
+                onClick={() => setTheme(t)}
+                className={`px-4 py-1.5 transition-colors ${
+                  theme === t
+                    ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                    : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                }`}
+              >
+                {t === 'light' ? 'Светлая' : 'Тёмная'}
               </button>
             ))}
           </div>

@@ -93,7 +93,7 @@ export function ReportToolbar({
           <SlidersHorizontal size={12} />
           Настройки отчёта
           {activeFiltersCount > 0 && (
-            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-white rounded-full text-[10px]">{activeFiltersCount}</span>
+            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px]">{activeFiltersCount}</span>
           )}
         </button>
       )}
@@ -137,7 +137,7 @@ export function ReportToolbar({
           <Scale size={12} />
           Сравнение
           {comparisonCount > 0 && (
-            <span className="px-1.5 py-0.5 bg-[var(--color-accent)] text-white rounded-full text-[10px] leading-none">{comparisonCount}</span>
+            <span className="px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px] leading-none">{comparisonCount}</span>
           )}
         </button>
       )}

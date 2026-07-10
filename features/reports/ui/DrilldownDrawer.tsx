@@ -216,7 +216,7 @@ function dealCell(deal: Deal, key: string) {
       <span
         className="inline-block px-1.5 py-0.5 rounded whitespace-nowrap"
         style={color
-          ? { backgroundColor: `color-mix(in srgb, ${color} 68%, white)`, color: '#000' }
+          ? { backgroundColor: `color-mix(in srgb, ${color} var(--color-highlight-pct, 68%), var(--color-mix-base, white))`, color: 'var(--color-num, #000)' }
           : { backgroundColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
       >
         {text}
@@ -300,7 +300,7 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
               </td>
               {cols.map(c => (
                 <td key={c.key}
-                    className={`px-3 py-[var(--deals-row-py)] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[#000]' : ''}`}>
+                    className={`px-3 py-[var(--deals-row-py)] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[var(--color-num,#000)]' : ''}`}>
                   {dealCell(deal, c.key)}
                 </td>
               ))}
@@ -728,7 +728,7 @@ export function DrilldownDrawer(props: Props) {
                     <button
                       key={String(v)}
                       onClick={() => handleToggle(v)}
-                      className={`px-2.5 py-1 transition-colors ${localGrouped === v ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                      className={`px-2.5 py-1 transition-colors ${localGrouped === v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
                     >
                       {v ? 'Да' : 'Нет'}
                     </button>

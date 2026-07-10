@@ -156,7 +156,7 @@ export function AssignDepartmentsModal({ userId, userName, onClose, onSaved }: P
             <button
               onClick={handleSave}
               disabled={loading || saving}
-              className="px-5 py-2 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+              className="px-5 py-2 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               {saving ? 'Сохранение...' : 'Сохранить'}
             </button>

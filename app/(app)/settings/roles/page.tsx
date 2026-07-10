@@ -48,7 +48,7 @@ export default function RolesPage() {
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Роли</h1>
         <button
           onClick={() => setCreating(true)}
-          className="px-4 py-1.5 text-sm rounded bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity"
+          className="px-4 py-1.5 text-sm rounded bg-[var(--color-accent)] text-[var(--color-text-inverse)] hover:opacity-90 transition-opacity"
         >
           Создать роль
         </button>

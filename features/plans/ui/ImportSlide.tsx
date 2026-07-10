@@ -216,7 +216,7 @@ export function ImportSlide({ currentPlanN, onClose }: Props) {
             <button
               onClick={handleParse}
               disabled={!file || !month || parsing}
-              className="flex-1 py-2 bg-[var(--color-accent)] text-white text-sm rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="flex-1 py-2 bg-[var(--color-accent)] text-[var(--color-text-inverse)] text-sm rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
               {parsing ? 'Разбор...' : 'Разобрать файл'}
             </button>
@@ -224,7 +224,7 @@ export function ImportSlide({ currentPlanN, onClose }: Props) {
             <button
               onClick={handleApply}
               disabled={saving}
-              className="flex-1 py-2 bg-[var(--color-accent)] text-white text-sm rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="flex-1 py-2 bg-[var(--color-accent)] text-[var(--color-text-inverse)] text-sm rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
               {saving ? 'Сохранение...' : 'Применить'}
             </button>

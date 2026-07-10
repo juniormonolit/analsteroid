@@ -266,7 +266,7 @@ export function DepartmentPicker({ departmentIds, onDepartmentIdsChange }: {
       </div>
       <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
         <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
-        <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
+        <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity">Применить</button>
       </div>
     </Popover>
   );
@@ -297,7 +297,7 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
           <SlidersHorizontal size={14} />
           Метрики
           {!!metricsBadge && (
-            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-white rounded-full text-[10px]">{metricsBadge}</span>
+            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px]">{metricsBadge}</span>
           )}
         </button>
       )}
@@ -333,7 +333,7 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
               <button
                 key={d.key}
                 onClick={() => onSourceDimensionChange(d.key)}
-                className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${sourceDimension === d.key ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${sourceDimension === d.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
               >
                 {d.label}
               </button>
@@ -351,7 +351,7 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
               <button
                 key={g}
                 onClick={() => onGroupingChange(g)}
-                className={`px-3 py-1.5 transition-colors ${grouping === g ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                className={`px-3 py-1.5 transition-colors ${grouping === g ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
               >
                 {GROUPING_LABELS[g]}
               </button>

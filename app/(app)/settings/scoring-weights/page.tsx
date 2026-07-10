@@ -97,7 +97,7 @@ export default function ScoringWeightsPage() {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-4 py-2 text-sm rounded-lg bg-[var(--color-accent)] text-white disabled:opacity-50"
+              className="px-4 py-2 text-sm rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] disabled:opacity-50"
             >
               {saving ? 'Сохранение...' : 'Сохранить'}
             </button>

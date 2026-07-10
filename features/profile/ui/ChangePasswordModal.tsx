@@ -52,7 +52,7 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
           <div className="flex justify-end">
             <button
               onClick={onClose}
-              className="px-5 py-2 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
+              className="px-5 py-2 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity"
             >
               Готово
             </button>
@@ -93,7 +93,7 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
             <button
               onClick={handleSave}
               disabled={!canSave}
-              className="px-5 py-2 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+              className="px-5 py-2 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               {saving ? 'Сохранение...' : 'Сменить'}
             </button>

@@ -299,7 +299,7 @@ export function PlansPage({ canEdit }: { canEdit: boolean }) {
           </div>
           <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
             <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
-            <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity">Применить</button>
+            <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity">Применить</button>
           </div>
         </Popover>
 
@@ -311,7 +311,7 @@ export function PlansPage({ canEdit }: { canEdit: boolean }) {
               onClick={() => setGrouping(g)}
               className={`px-3 py-1.5 text-xs transition-colors ${
                 grouping === g
-                  ? 'bg-[var(--color-accent)] text-white'
+                  ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
               }`}
             >
@@ -356,7 +356,7 @@ export function PlansPage({ canEdit }: { canEdit: boolean }) {
             </button>
             <button
               onClick={() => { setShowImport(true); setShowExport(false); }}
-              className="px-3 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
+              className="px-3 py-1.5 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity"
             >
               Импортировать
             </button>

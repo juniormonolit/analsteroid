@@ -52,9 +52,9 @@ const CALL_RESULT_LABEL: Record<DealCall['result'], string> = {
 // Бейдж результата — зелёный (успех) / красный (недозвон, отказ) / серый (автоответчик,
 // нейтрально — звонок формально состоялся, просто без живого собеседника).
 const CALL_RESULT_CLASS: Record<DealCall['result'], string> = {
-  completed: 'bg-[color-mix(in_srgb,var(--color-positive,#2f9e44)_12%,white)] text-[var(--color-positive,#2f9e44)]',
-  missed: 'bg-[color-mix(in_srgb,var(--color-negative,#e03131)_12%,white)] text-[var(--color-negative,#e03131)]',
-  operator_error: 'bg-[color-mix(in_srgb,var(--color-negative,#e03131)_12%,white)] text-[var(--color-negative,#e03131)]',
+  completed: 'bg-[color-mix(in_srgb,var(--color-positive,#2f9e44)_12%,var(--color-mix-base,white))] text-[var(--color-positive,#2f9e44)]',
+  missed: 'bg-[color-mix(in_srgb,var(--color-negative,#e03131)_12%,var(--color-mix-base,white))] text-[var(--color-negative,#e03131)]',
+  operator_error: 'bg-[color-mix(in_srgb,var(--color-negative,#e03131)_12%,var(--color-mix-base,white))] text-[var(--color-negative,#e03131)]',
   voicemail: 'bg-[var(--color-bg)] text-[var(--color-text-muted)]',
 };
 
@@ -199,8 +199,8 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                   <span className="text-2xl font-bold tabular-nums text-[var(--color-text)]">{fmtMoney(deal.amount)}</span>
                   {deal.stage_name && (
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${isLostDeal
-                      ? 'bg-[color-mix(in_srgb,var(--color-negative,#e03131)_12%,white)] text-[var(--color-negative,#e03131)]'
-                      : 'bg-[color-mix(in_srgb,var(--color-accent)_12%,white)] text-[var(--color-accent)]'}`}>
+                      ? 'bg-[color-mix(in_srgb,var(--color-negative,#e03131)_12%,var(--color-mix-base,white))] text-[var(--color-negative,#e03131)]'
+                      : 'bg-[color-mix(in_srgb,var(--color-accent)_12%,var(--color-mix-base,white))] text-[var(--color-accent)]'}`}>
                       {deal.stage_name}
                     </span>
                   )}
@@ -235,7 +235,7 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                     type="button"
                     onClick={() => setTab(o.v)}
                     className={`flex-1 text-center px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
-                      tab === o.v ? 'bg-[var(--color-accent)] text-white shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                      tab === o.v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
                     }`}
                   >
                     {o.label}

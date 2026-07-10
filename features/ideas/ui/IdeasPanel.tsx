@@ -153,7 +153,7 @@ function ListView({ data, isAdmin, onChangeStatus, onPropose, onCloseMobile }: {
         <h2 className="text-[17px] font-bold text-[var(--color-text)] m-0">Идеи и планы</h2>
         <button
           onClick={onPropose}
-          className="ml-auto text-[12.5px] font-bold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-3.5 py-2 rounded-lg shadow-sm shrink-0 whitespace-nowrap"
+          className="ml-auto text-[12.5px] font-bold text-[var(--color-text-inverse)] bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-3.5 py-2 rounded-lg shadow-sm shrink-0 whitespace-nowrap"
         >
           + Предложить идею
         </button>
@@ -281,7 +281,7 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
         <button
           onClick={submit}
           disabled={!canSubmit}
-          className="w-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-white text-[13.5px] font-bold py-3 rounded-[9px] shadow-sm mb-2.5"
+          className="w-full bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50 text-[var(--color-text-inverse)] text-[13.5px] font-bold py-3 rounded-[9px] shadow-sm mb-2.5"
         >
           {saving ? 'Отправляем…' : 'Отправить'}
         </button>

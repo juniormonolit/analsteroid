@@ -22,6 +22,7 @@ import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
 import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
 import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
+import { useTheme } from '@/lib/hooks/useTheme';
 
 /* Общий паттерн пункта 1-го уровня (NAV-блок, Сводная/Планы/Декомпозиция,
    Метрики/Настройки) — редизайн сайдбара, итерация 3 (бриф Виктора). */
@@ -51,6 +52,15 @@ const BRAND_TAGLINE_TEXT = '— аналитика для монолитика'.
 // инлайн в AppShell) — хук использует react-query, а AppShell сам монтирует
 // QueryProvider ниже себя по дереву; хук обязан жить в компоненте-потомке провайдера
 // (тот же приём, что и у SidebarBody/SalesSidebarSection).
+// Досинхронизация зеркала localStorage.theme с серверным users.theme (переключатель —
+// в ЛК, ProfilePage) — сам компонент ничего не рендерит, только держит хук живым в
+// дереве всех авторизованных страниц (тот же приём, что и UiModeSwitch ниже: хук на
+// react-query обязан жить ПОД QueryProvider, который монтирует сам AppShell).
+function ThemeSync() {
+  useTheme();
+  return null;
+}
+
 function UiModeSwitch() {
   const { uiMode, setUiMode } = useUiMode();
   return (
@@ -369,7 +379,7 @@ function SidebarBody({
               <div key={item.label}>
                 {item.disabled ? (
                   <div className={`${NAV_ITEM_BASE} cursor-not-allowed`}>
-                    <span className="mt-px text-[#ced4da]">{item.icon}</span>
+                    <span className="mt-px text-[var(--color-sidebar-guide)]">{item.icon}</span>
                     {!collapsed && (
                       <span className="flex-1 min-w-0 break-words line-clamp-2 text-[var(--color-sidebar-text-muted)]">
                         {item.label}
@@ -535,7 +545,7 @@ function SidebarBody({
                 <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Что изменилось?</span>
               )}
               {!collapsed && unreadCount > 0 && (
-                <span className="ml-auto mt-px shrink-0 min-w-[18px] h-[18px] px-1.5 rounded-full bg-[var(--color-negative)] text-white text-[10.5px] font-bold flex items-center justify-center shadow-[0_0_0_2px_var(--color-sidebar-bg)] leading-none">
+                <span className="ml-auto mt-px shrink-0 min-w-[18px] h-[18px] px-1.5 rounded-full bg-[var(--color-negative)] text-[var(--color-text-inverse)] text-[10.5px] font-bold flex items-center justify-center shadow-[0_0_0_2px_var(--color-sidebar-bg)] leading-none">
                   {unreadCount > 99 ? '99+' : unreadCount}
                 </span>
               )}
@@ -564,7 +574,7 @@ function SidebarBody({
               </Link>
               <button
                 onClick={logout}
-                className="tap-target flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)] hover:bg-[#fcebeb] rounded-md p-1.5 shrink-0 transition-colors"
+                className="tap-target flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)] hover:bg-[var(--color-negative-soft)] rounded-md p-1.5 shrink-0 transition-colors"
                 title="Выйти"
               >
                 <LogOut size={16} />
@@ -598,6 +608,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
 
   return (
     <QueryProvider>
+      <ThemeSync />
       <div className="flex h-dvh overflow-hidden">
         {/* Desktop sidebar (на <md скрыт — вместо него drawer) */}
         <aside

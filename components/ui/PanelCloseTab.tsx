@@ -37,7 +37,7 @@ export function PanelCloseTab({ onClick, topClassName = 'top-6', className = '',
       aria-label="Закрыть"
       title="Закрыть"
       style={style}
-      className={`hidden sm:flex absolute ${topClassName} ${style?.left === undefined ? '-left-[30px]' : ''} z-10 h-[30px] w-[30px] items-center justify-center rounded-l-[4px] bg-[var(--color-accent)] text-white shadow-lg hover:bg-[var(--color-accent-hover)] transition-colors ${className}`}
+      className={`hidden sm:flex absolute ${topClassName} ${style?.left === undefined ? '-left-[30px]' : ''} z-10 h-[30px] w-[30px] items-center justify-center rounded-l-[4px] bg-[var(--color-accent)] text-[var(--color-text-inverse)] shadow-lg hover:bg-[var(--color-accent-hover)] transition-colors ${className}`}
     >
       <X size={17} strokeWidth={2.5} />
     </button>

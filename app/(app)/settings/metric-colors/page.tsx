@@ -101,7 +101,7 @@ export default function MetricColorsPage() {
         <div className="flex items-center gap-3">
           {savedAt && !dirty && <span className="text-xs text-[var(--color-positive,#16a34a)]">Сохранено</span>}
           <button onClick={save} disabled={!dirty || saving}
-                  className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40">
+                  className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40">
             {saving ? 'Сохранение…' : 'Сохранить'}
           </button>
         </div>

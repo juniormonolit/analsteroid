@@ -52,7 +52,7 @@ export function UnsavedChangesDialog({ open, onSave, onDiscard, onCancel }: Prop
         <button
           type="button"
           onClick={onSave}
-          className="px-5 py-2 text-sm font-semibold bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
+          className="px-5 py-2 text-sm font-semibold bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity"
         >
           Сохранить
         </button>

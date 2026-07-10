@@ -97,7 +97,7 @@ function ChipGroup<T extends string>({ value, options, onChange }: {
           key={opt.key}
           onClick={() => onChange(opt.key)}
           className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${
-            value === opt.key ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+            value === opt.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
           }`}
         >
           {opt.label}

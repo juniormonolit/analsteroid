@@ -179,7 +179,7 @@ export default function MetricsAdminPage() {
           </select>
           <button
             onClick={openNew}
-            className="flex items-center gap-2 px-3 py-1.5 rounded bg-[var(--color-accent)] text-white text-sm hover:opacity-90"
+            className="flex items-center gap-2 px-3 py-1.5 rounded bg-[var(--color-accent)] text-[var(--color-text-inverse)] text-sm hover:opacity-90"
           >
             <Plus size={14} /> Новая метрика
           </button>

@@ -97,7 +97,7 @@ export function InviteAcceptClient({ token }: { token: string }) {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
+              className="w-full py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-text-inverse)] rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
             >
               {loading ? 'Сохранение...' : 'Войти'}
             </button>

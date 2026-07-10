@@ -354,7 +354,7 @@ export function ReportTable({
   // никакого «заборчика» от переносов названий.
   function colorizeStyle(m: Metric): React.CSSProperties {
     return colorizeMetrics && m.color
-      ? { backgroundColor: `color-mix(in srgb, ${m.color} 9%, white)` }
+      ? { backgroundColor: `color-mix(in srgb, ${m.color} 9%, var(--color-mix-base, white))` }
       : {};
   }
   function colorizeBar(m: Metric) {
@@ -711,15 +711,15 @@ export function ReportTable({
         // Чистый чёрный #000 у числовых значений (п.9 правок 09.07/2) — только у САМОГО
         // значения (текущий/«Итого»), не у заголовков/подписей (--color-text там не
         // трогаем, см. остальные ячейки строки/шапки).
-        if (!hlColor) return <span className="text-[#000]">{formatted}</span>;
+        if (!hlColor) return <span className="text-[var(--color-num,#000)]">{formatted}</span>;
         // py-0 (не py-0.5, правка 09.07 «строка → 30px»): вертикальный паддинг бейджа
         // поверх паддинга самой ячейки не даёт строке уложиться в 30px — бейдж и так
         // читается как пилюля за счёт rounded + горизонтального px-1.5, вертикальный
         // «воздух» ему не нужен (высота = line-height текста, как у обычного значения).
         return (
           <span
-            className="inline-block px-1.5 py-0 rounded text-[#000]"
-            style={{ backgroundColor: `color-mix(in srgb, ${hlColor} 68%, white)` }}
+            className="inline-block px-1.5 py-0 rounded text-[var(--color-num,#000)]"
+            style={{ backgroundColor: `color-mix(in srgb, ${hlColor} var(--color-highlight-pct, 68%), var(--color-mix-base, white))` }}
           >
             {formatted}
           </span>
@@ -1076,11 +1076,11 @@ export function ReportTable({
                   const valueCell = (
                     <span className="relative inline-flex items-center justify-center gap-1">
                       {!hlColor ? (
-                        <span className="text-[#000]">{current}</span>
+                        <span className="text-[var(--color-num,#000)]">{current}</span>
                       ) : (
                         <span
-                          className="inline-block px-1.5 py-0 rounded text-[#000]"
-                          style={{ backgroundColor: `color-mix(in srgb, ${hlColor} 68%, white)` }}
+                          className="inline-block px-1.5 py-0 rounded text-[var(--color-num,#000)]"
+                          style={{ backgroundColor: `color-mix(in srgb, ${hlColor} var(--color-highlight-pct, 68%), var(--color-mix-base, white))` }}
                         >
                           {current}
                         </span>
@@ -1259,13 +1259,13 @@ export function ReportTable({
                       (класс .group уже на <th> выше), на таче — всегда (hover-reveal). */}
                   {(onMetricQuickCompareToggle || hasConfigureButton || onMetricReorder) && (
                     <div
-                      className={`hover-reveal mt-1 flex items-stretch h-5 rounded-[7px] border border-[#dee2e6] bg-[var(--color-bg-surface)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)] mx-auto ${span > 1 ? 'w-full' : 'w-[92px]'}`}
+                      className={`hover-reveal mt-1 flex items-stretch h-5 rounded-[7px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)] mx-auto ${span > 1 ? 'w-full' : 'w-[92px]'}`}
                       onClick={e => e.stopPropagation()}
                     >
                       {onMetricQuickCompareToggle && (
                         <button
                           onClick={e => { e.stopPropagation(); onMetricQuickCompareToggle(m.id); }}
-                          className={`w-6 flex-shrink-0 flex items-center justify-center border-r border-[#dee2e6] transition-colors ${
+                          className={`w-6 flex-shrink-0 flex items-center justify-center border-r border-[var(--color-border)] transition-colors ${
                             mode === 'full' || mode === 'partial'
                               ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'
                               : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)]'
@@ -1280,7 +1280,7 @@ export function ReportTable({
                           draggable
                           onDragStart={e => { e.stopPropagation(); setDraggedMetricId(m.id); e.dataTransfer.effectAllowed = 'move'; }}
                           onDragEnd={() => { setDraggedMetricId(null); setDragOverMetricId(null); }}
-                          className="flex-1 min-w-[28px] flex items-center justify-center cursor-grab bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:bg-[#f1f3f5] transition-colors"
+                          className="flex-1 min-w-[28px] flex items-center justify-center cursor-grab bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] transition-colors"
                           title="Перетащить колонку"
                         >
                           <GripVertical size={12} />
@@ -1294,7 +1294,7 @@ export function ReportTable({
                       {onMetricConfigure && (
                         <button
                           onClick={e => { e.stopPropagation(); onMetricConfigure(m.id); }}
-                          className="w-6 flex-shrink-0 flex items-center justify-center border-l border-[#dee2e6] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition-colors"
+                          className="w-6 flex-shrink-0 flex items-center justify-center border-l border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-text)] transition-colors"
                           title="Настройки метрики"
                         >
                           <Settings size={12} />
@@ -1415,7 +1415,7 @@ export function ReportTable({
                         const animCls = idx === 0 ? '' : subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
                         if (kind === 'current') {
                           return (
-                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums text-[#000] ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
+                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums text-[var(--color-num,#000)] ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
                               {formatValue(tv?.current ?? null, m.dataType, decFor(m))}
                             </td>
                           );
@@ -1446,7 +1446,7 @@ export function ReportTable({
                 }
                 const one = sub(0, edgeBase(0, 0));
                 return (
-                  <td key={m.id} className={`relative text-center px-3 py-[var(--row-py)] tabular-nums text-[#000] ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
+                  <td key={m.id} className={`relative text-center px-3 py-[var(--row-py)] tabular-nums text-[var(--color-num,#000)] ${clickCls} ${one.cls}`} style={one.style} onClick={handleClick}>
                     {formatValue(tv?.current ?? null, m.dataType, decFor(m))}
                     {pinSep}
                   </td>

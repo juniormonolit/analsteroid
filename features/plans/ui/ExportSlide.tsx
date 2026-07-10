@@ -166,7 +166,7 @@ export function ExportSlide({ onClose }: Props) {
           <button
             onClick={handleDownload}
             disabled={loading}
-            className="flex-1 flex items-center justify-center gap-2 py-2 bg-[var(--color-accent)] text-white text-sm rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="flex-1 flex items-center justify-center gap-2 py-2 bg-[var(--color-accent)] text-[var(--color-text-inverse)] text-sm rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             <Download size={14} />
             {loading ? 'Загрузка...' : 'Скачать xlsx'}

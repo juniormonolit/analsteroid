@@ -283,7 +283,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
             onClick={() => onDecimalPlacesChange(n)}
             className={`w-9 h-9 rounded-full text-sm font-semibold transition-colors ${
               (decimalPlaces ?? 2) === n
-                ? 'bg-[var(--color-accent)] text-white'
+                ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
                 : 'bg-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
             }`}
           >
@@ -376,7 +376,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
             type="button"
             onClick={() => switchMode(o.v)}
             className={`flex-1 text-center px-2 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-              hlMode === o.v ? 'bg-[var(--color-accent)] text-white shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+              hlMode === o.v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
             }`}
           >
             {o.label}
@@ -623,7 +623,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           type="button"
           onClick={() => setActiveTab(t.key)}
           className={`flex-1 text-center px-2 py-2 rounded-lg font-semibold transition-colors ${docked ? 'text-[11px]' : 'text-sm'} ${
-            effectiveTab === t.key ? 'bg-[var(--color-accent)] text-white shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+            effectiveTab === t.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
           }`}
         >
           {docked ? t.dockedLabel : t.label}
@@ -708,7 +708,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
             </button>
             <button
               onClick={handleSave}
-              className="px-4 py-2 text-sm font-semibold bg-[var(--color-accent)] text-white rounded-lg hover:opacity-90 transition-opacity"
+              className="px-4 py-2 text-sm font-semibold bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity"
             >
               Сохранить
             </button>

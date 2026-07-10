@@ -523,7 +523,7 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-4 py-2 rounded text-sm bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-50"
+              className="px-4 py-2 rounded text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] hover:opacity-90 disabled:opacity-50"
             >
               {saving ? 'Сохраняю…' : 'Сохранить'}
             </button>

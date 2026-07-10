@@ -29,6 +29,85 @@
   --color-table-stripe: #f6f7f9;    /* gentle zebra on white rows (not = bg) — зебра других таблиц (ComparisonPanel/DrilldownDrawer/settings), НЕ меняем */
   --color-table-row-border: #efefef; /* GS grayscale — тонкий разделитель строк в таблице отчёта (без зебры), только ReportTable.tsx */
   --color-report-zebra: #f8f9fa; /* «Зебра» ReportTable (правка владельца 09.07, opt-in в «Вид», по умолчанию выкл) — палитра варианта C; НЕ путать с --color-table-stripe (другие таблицы) */
+
+  /* Токены, которых не было в @theme (использовались только через var(...,fallback) в
+     коде или не были заданы вовсе) — заводим здесь явно теми же значениями, чтобы
+     тёмная тема могла их переопределить (см. блок [data-theme="dark"] ниже). Светлая
+     тема визуально не меняется — значения совпадают с прежними fallback/дефолтами. */
+  --color-text-secondary: var(--color-text-muted); /* алиас — working-calendar, был не определён вовсе */
+  --color-warning: #f59e0b;  /* было только var(--color-warning,#f59e0b) в SaveReportModal */
+  --color-error: #dc2626;    /* было только var(--color-error,#dc2626) в SaveReportModal */
+
+  /* Тёмная тема (owners-inbox/analsteroid-dark-theme-mock.html, утверждённый макет) —
+     цифры/бейджи таблицы отчёта используют color-mix(), поэтому база подмеса и текст
+     значения тоже вынесены в токены (см. ReportTable.tsx/DrilldownDrawer.tsx):
+       --color-num             — цвет «голых» и подсвеченных числовых значений (было
+                                  хардкод text-[#000] в нескольких местах)
+       --color-mix-base        — база color-mix() для лёгких тинтов (white в светлой)
+       --color-highlight-pct   — доля подмеса hlColor в HlValue/бейдже стадии (68% даёт
+                                  светлый пастель на белой базе; та же доля на тёмной
+                                  базе давала бы слишком яркий/непастельный результат —
+                                  в тёмной теме доля меньше, см. переопределение) */
+  --color-num: #000;
+  --color-mix-base: #fff;
+  --color-highlight-pct: 68%;
+  --color-negative-soft: #fcebeb; /* hover-фон опасных кнопок (удалить) — было хардкод в AppShell.tsx */
+
+  /* «Топ-1» карточка менеджера (DeptRosterGrid) — золотая рамка/бейдж лидера */
+  --color-top1-border: #e8c974;
+  --color-top1-glow: #fbf3dd33;
+  --color-top1-bg: #fbf3dd;
+  --color-top1-text: #a3781f;
+
+  /* Обводка свотча в GsColorPicker — тёмная, чтобы светлые тона не терялись на
+     светлом фоне попапа; в тёмной теме должна стать светлой (иначе тёмные свотчи
+     сливаются с тёмным фоном попапа, границы не видно вовсе). */
+  --color-swatch-border: rgba(15, 23, 42, .16);
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #14161b;
+  --color-bg-surface: #212530;      /* карточка/панель/модалка/таблица-контейнер */
+  --color-bg-hover: #262b38;        /* «второй слой карточки» из макета — hover/инпуты внутри карточек */
+  --color-border: #2c313c;
+  --color-border-focus: #3b82f6;
+  --color-border-strong: #3a4152;
+  --color-text: #e6e8ec;
+  --color-text-muted: #9aa1ad;
+  --color-text-secondary: #9aa1ad;
+  --color-text-inverse: #eaf1ff;
+  --color-accent: #3b82f6;
+  --color-accent-hover: #5b9dff;
+  --color-accent-soft: #1c2c46;
+  --color-positive: #7fd9a8;
+  --color-negative: #f0a3ab;
+  --color-warning: #eece8a;
+  --color-error: #f0a3ab;
+
+  --color-sidebar-bg: #1a1d23;      /* поверхность (сайдбар/шапка) из макета */
+  /* --color-sidebar-border/text/text-muted/hover-bg/active/active-bg — уже алиасы на
+     --color-border/--color-text/--color-text-muted/--color-bg-hover/--color-accent/
+     --color-accent-soft выше, переопределять их отдельно не нужно */
+  --color-sidebar-guide: #23272f;
+
+  --color-table-header: #1a1d23;    /* та же «поверхность», что и сайдбар — на ступень темнее карточки */
+  --color-totals-bg: #1f2f4d;
+  --color-table-row-hover: #1e2a45;
+  --color-table-stripe: #262b38;
+  --color-table-row-border: #23272f;
+  --color-report-zebra: #14161b;    /* = --color-bg, тот же приём, что в светлой теме */
+
+  --color-num: #e6e8ec;
+  --color-mix-base: #212530;        /* карточка/панель — вместо white */
+  --color-highlight-pct: 32%;       /* приглушённый пастель на тёмной базе (см. комментарий в :root) */
+  --color-negative-soft: #3a2024;   /* негатив bg из макета */
+
+  --color-top1-border: #d9a441;    /* стадии приглушённые — жёлтый, из макета */
+  --color-top1-glow: #3a331d80;
+  --color-top1-bg: #3a331d;        /* внимание bg из макета */
+  --color-top1-text: #eece8a;      /* внимание text из макета */
+
+  --color-swatch-border: rgba(255, 255, 255, .18);
 }
 
 :root {

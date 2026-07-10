@@ -36,7 +36,7 @@ export default async function HomePage() {
                 className="absolute right-full top-1/2 -translate-y-1/2 mr-3 text-[var(--color-accent)] shrink-0"
                 aria-hidden="true"
               />
-              <h1 className="text-[28px] sm:text-[32px] lg:text-[38px] font-semibold tracking-tight text-[#141922] text-center">
+              <h1 className="text-[28px] sm:text-[32px] lg:text-[38px] font-semibold tracking-tight text-[var(--color-text)] text-center">
                 {greeting}, {firstName}
               </h1>
             </div>
