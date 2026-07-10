@@ -7,7 +7,7 @@ import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
   Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, Lightbulb,
-  RotateCcw, Pencil,
+  RotateCcw,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -145,21 +145,6 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     staleTime: 30_000,
   });
 
-  async function deleteReport(id: string, name: string, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    // Задача 1605, доп. владельца: клик по корзинке не должен удалять сразу —
-    // тот же лёгкий паттерн confirm(), что уже используется в permanentlyDelete
-    // ниже (единственный существующий UI-паттерн подтверждения в этом файле для
-    // одиночного деструктивного действия — полноценная модалка тут избыточна).
-    if (!confirm(`Удалить отчёт «${name}»? Он переместится в корзину — оттуда можно восстановить.`)) return;
-    // Корзина (бриф 09.07, п.2): DELETE больше не стирает отчёт — переносит в
-    // корзину (deleted_at). Настоящее удаление — отдельная кнопка внутри корзины.
-    await fetch(`/api/saved-reports/${id}`, { method: 'DELETE' });
-    qc.invalidateQueries({ queryKey: ['saved-reports'] });
-    qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
-  }
-
   async function restoreReport(id: string, e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -176,39 +161,13 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
   }
 
-  // Переименование (правка владельца 10.07, п.2 «дай админам возможность
-  // переназывать отчеты во всех разделов») — инлайн-редактирование прямо в
-  // сайдбаре (проще полноценной модалки для одного поля). Права проверяет сервер
-  // (PATCH /api/saved-reports/[id]) — свой личный отчёт правит владелец, витринный —
-  // админ; см. app/api/saved-reports/[id]/route.ts::PATCH. Конфликт имени внутри
-  // раздела — простая ошибка алертом (решение по простоте, не отдельный диалог —
-  // тот же паттерн alert/confirm, что уже использует permanentlyDelete выше).
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
-
-  function startRename(r: SavedReport, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    setRenamingId(r.id);
-    setRenameValue(r.name);
-  }
-
-  async function commitRename(id: string) {
-    const trimmed = renameValue.trim();
-    setRenamingId(null);
-    if (!trimmed) return;
-    const res = await fetch(`/api/saved-reports/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: trimmed }),
-    });
-    if (res.ok) {
-      qc.invalidateQueries({ queryKey: ['saved-reports'] });
-    } else {
-      const data = await res.json().catch(() => ({}));
-      alert(data.error ?? 'Не удалось переименовать отчёт');
-    }
-  }
+  // Переименование/удаление отчёта (задача 1605, финальное решение владельца
+  // 10.07/3): раньше карандаш+корзинка жили тут, в строке сайдбара — владелец
+  // забраковал ПОСЛЕ трёх раундов вёрстки («туда просто так мышкой никто не
+  // лазит») и перенёс их в заголовок ОТКРЫТОГО отчёта (см. h1 в
+  // SalesReportPage.tsx) — там же теперь inline-переименование и confirm()
+  // перед удалением. Сайдбар — только ссылка на отчёт + drag-and-drop порядка,
+  // без управляющих кнопок в принципе.
 
   // ── Drag-and-drop порядка (правка владельца 10.07/2, стрелки убраны 10.07/3 —
   // просьба Серёги «насрать на функционал на планшете, он не нужен там такой») ──
@@ -283,55 +242,15 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
     }`;
 
-  // Задача 1605, 3-я итерация фидбека владельца (после 1589/1575): карандаш за
-  // текстом и одиночная корзинка-оверлей выше линии текста забракованы — образец
-  // от Серёги = кнопки-иконки шапки колонок таблицы отчётов (ReportTable.tsx,
-  // сегменты «полоски-настроек» метрики: `rounded-[7px] border`, сегменты
-  // `w-6`/`h-5` с общим бордером). Теперь ОБЕ иконки — один `absolute`-«пилл»
-  // у правого края строки (группа из двух квадратных сегментов с общей рамкой,
-  // как в шапке), а не одна в потоке текста и одна отдельно:
-  // - pillCls — сама группа, `top-1/2 -translate-y-1/2` центрирует её по
-  //   вертикали относительно всей высоты строки (`relative` родитель — сам
-  //   `<Link>`, см. linkCls ниже) — для однострочного названия (эталонный
-  //   случай) это ровно центр строки текста;
-  // - renameBtnCls/delBtnCls — сегменты внутри пилла, общая рамка между ними
-  //   даёт `border-r` только у первого (карандаш), совпадает с паттерном
-  //   ReportTable.tsx (там же между сегментами `border-l`/`border-r`, не у
-  //   каждого свой квадрат по отдельности).
-  const pillCls =
-    'hover-reveal absolute right-1 top-1/2 -translate-y-1/2 flex items-stretch h-5 rounded-[7px] border border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-bg)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)]';
-  const renameBtnCls =
-    'w-6 flex-shrink-0 flex items-center justify-center border-r border-[var(--color-sidebar-border)] text-[var(--color-sidebar-text-muted)] hover:bg-[var(--color-sidebar-hover-bg)] hover:text-[var(--color-accent)] transition-colors';
-  const delBtnCls =
-    'w-6 flex-shrink-0 flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:bg-[var(--color-sidebar-hover-bg)] hover:text-[var(--color-negative)] transition-colors';
-  const renameInputCls =
-    'flex-1 min-w-0 bg-[var(--color-bg)] border border-[var(--color-accent)] rounded-[5px] px-1.5 py-0.5 text-[13px] text-[var(--color-sidebar-text)] outline-none';
-
-  // Одна строка отчёта в сайдбаре (ссылка + порядок + переименование + удаление) —
-  // переиспользуется для всех трёх списков (Роп монитор / Смекалочная / Избранное),
-  // различается только правом на управление (canManage — свой отчёт или витрина, где
-  // я админ) и списком своего раздела (list — для DnD и позиции индикатора вставки).
+  // Одна строка отчёта в сайдбаре (ссылка + порядок drag-and-drop) — переиспользуется
+  // для всех трёх списков (Роп монитор / Смекалочная / Избранное), различается только
+  // правом на управление (canManage — свой отчёт или витрина, где я админ, нужно
+  // только для DnD теперь) и списком своего раздела (list — позиция индикатора
+  // вставки). Переименование/удаление — задача 1605, финальное решение владельца:
+  // никаких кнопок в строке сайдбара, см. заголовок открытого отчёта (SalesReportPage.tsx).
   function renderReportRow(r: SavedReport, canManage: boolean, list: SavedReport[]) {
     const href = `/sales/saved/${r.id}`;
     const idx = list.findIndex(x => x.id === r.id);
-    if (renamingId === r.id) {
-      return (
-        <div key={r.id} className="flex items-center gap-1.5 py-1 px-2 my-0.5">
-          <input
-            autoFocus
-            value={renameValue}
-            onChange={e => setRenameValue(e.target.value)}
-            onClick={e => e.stopPropagation()}
-            onKeyDown={e => {
-              if (e.key === 'Enter') commitRename(r.id);
-              if (e.key === 'Escape') setRenamingId(null);
-            }}
-            onBlur={() => commitRename(r.id)}
-            className={renameInputCls}
-          />
-        </div>
-      );
-    }
     // DnD-индикатор места вставки: тащим вниз → строка встанет ПОСЛЕ подсвеченной
     // (линия снизу), вверх → ПЕРЕД (линия сверху) — та же логика beforeId в dropReport.
     const dragFromIdx = dragId ? list.findIndex(x => x.id === dragId) : -1;
@@ -344,7 +263,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     return (
       <div
         key={r.id}
-        className={`group relative flex items-center gap-0.5${dropIndicatorCls}${dragId === r.id ? ' opacity-40' : ''}`}
+        className={`relative flex items-center gap-0.5${dropIndicatorCls}${dragId === r.id ? ' opacity-40' : ''}`}
         draggable={canManage}
         onDragStart={canManage ? e => {
           setDragId(r.id);
@@ -370,22 +289,9 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         {/* draggable={false} — иначе браузер тащит САМУ ссылку (нативный drag <a>),
             перебивая наш DnD строки (drag начинался бы с "призраком" URL). */}
         <Link href={href} className={`flex-1 ${linkCls(href)}`} title={r.name} draggable={false}>
-          {/* pr-14 резервирует место под пилл из двух иконок (absolute справа,
-              ~48px + отступ) — иначе на обёрнутом на 2 строки названии текст
-              мог бы уйти под кнопки. */}
-          <span className="flex-1 min-w-0 break-words line-clamp-2 pr-14">
+          <span className="flex-1 min-w-0 break-words line-clamp-2">
             {r.name}
           </span>
-          {canManage && (
-            <div className={pillCls}>
-              <button onClick={e => startRename(r, e)} className={renameBtnCls} title="Переименовать">
-                <Pencil size={12} />
-              </button>
-              <button onClick={e => deleteReport(r.id, r.name, e)} className={delBtnCls} title="Удалить">
-                <Trash2 size={12} />
-              </button>
-            </div>
-          )}
         </Link>
       </div>
     );

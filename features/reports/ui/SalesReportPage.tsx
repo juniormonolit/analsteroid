@@ -1,6 +1,10 @@
 'use client';
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'next/navigation';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Pencil, Trash2 } from 'lucide-react';
+import { hasPerm } from '@/lib/auth/perms';
+import type { SessionUser } from '@/lib/auth/session';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
 import { FilterBar } from './FilterBar';
 import { ReportToolbar } from './ReportToolbar';
@@ -192,6 +196,8 @@ const DEFAULT_METRIC_IDS = [
 
 export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Props) {
   const isMobile = useIsMobile();
+  const router = useRouter();
+  const qc = useQueryClient();
 
   // Пункт 3а спеки: тумблер «Обычная/Про» из ЛК. Пока грузится/не резолвится — не
   // урезаем UI (fail-open к «Про»), чтобы не мигать тулбаром на первом рендере.
@@ -205,6 +211,63 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     staleTime: 60_000,
   });
   const isPro = uiModeData ? uiModeData.uiMode !== 'basic' : true;
+
+  // Переименование/удаление отчёта из заголовка (задача 1605, финальное решение
+  // владельца 10.07/3): раньше карандаш+корзинка стояли в строке сайдбара — три
+  // раунда правок владелец забраковал каждый вариант компоновки там и решил
+  // убрать их из сайдбара насовсем, перенеся в заголовок ОТКРЫТОГО отчёта
+  // (по hover на title, «туда просто так мышкой никто не лазит»). Права те же,
+  // что были в AppShell.tsx: свой личный отчёт правит владелец, витринный —
+  // admin (action.shared_reports.manage) — то же правило, что canDeleteShared/
+  // ownReports там же. currentUser грузится тем же эндпоинтом, что и в
+  // SaveReportModal.tsx (единственный источник сессии на клиенте).
+  const { data: currentUser } = useQuery<SessionUser | null>({
+    queryKey: ['auth-session'],
+    queryFn: async () => {
+      const res = await fetch('/api/auth/session');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.user ?? null;
+    },
+    staleTime: 60_000,
+  });
+  const canManageReport = !!preset && !!currentUser && (
+    preset.isShared ? hasPerm(currentUser, 'action.shared_reports.manage') : preset.userLogin === currentUser.login
+  );
+  const [renamingTitle, setRenamingTitle] = useState(false);
+  const [titleValue, setTitleValue] = useState(title);
+  useEffect(() => { setTitleValue(title); }, [title]);
+
+  async function commitTitleRename() {
+    setRenamingTitle(false);
+    const trimmed = titleValue.trim();
+    if (!preset || !trimmed || trimmed === preset.name) { setTitleValue(title); return; }
+    const res = await fetch(`/api/saved-reports/${preset.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (res.ok) {
+      qc.invalidateQueries({ queryKey: ['saved-reports'] });
+      router.refresh();
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error ?? 'Не удалось переименовать отчёт');
+      setTitleValue(title);
+    }
+  }
+
+  async function handleDeleteReport() {
+    if (!preset) return;
+    // Требование владельца (та же формулировка, что раньше была в сайдбаре):
+    // подтверждение обязательно — кнопки рядом, промахнуться легко. Удаление
+    // мягкое (уходит в корзину, откуда можно восстановить) — уточняем в тексте.
+    if (!confirm(`Удалить отчёт «${preset.name}»? Он переместится в корзину — оттуда можно восстановить.`)) return;
+    await fetch(`/api/saved-reports/${preset.id}`, { method: 'DELETE' });
+    qc.invalidateQueries({ queryKey: ['saved-reports'] });
+    qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
+    router.push('/home');
+  }
   const [period, setPeriod]             = useState<DateRange>(defaultPeriod);
   // Дефолт до появления сохранённого пресета (by-managers/by-product-groups) — сам
   // defaultPeriod() по конструкции всегда календарный объект («этот месяц»/«прошлый
@@ -701,7 +764,47 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="px-6 pt-4 pb-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-        <h1 className="text-lg font-semibold text-[var(--color-text)]">{title}</h1>
+        {renamingTitle ? (
+          <input
+            autoFocus
+            value={titleValue}
+            onChange={e => setTitleValue(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') commitTitleRename();
+              if (e.key === 'Escape') { setRenamingTitle(false); setTitleValue(title); }
+            }}
+            onBlur={commitTitleRename}
+            className="text-lg font-semibold text-[var(--color-text)] bg-[var(--color-bg)] border border-[var(--color-accent)] rounded-[7px] px-2 py-0.5 outline-none w-full max-w-md"
+          />
+        ) : (
+          <div className="group inline-flex items-center gap-2">
+            <h1 className="text-lg font-semibold text-[var(--color-text)]">{title}</h1>
+            {/* Кнопки переименования/удаления — задача 1605, финальное решение
+                владельца: карандаш+корзинка убраны из сайдбара, живут тут, по
+                hover на заголовок открытого отчёта. Стиль — квадратные кнопки
+                с рамкой из шапки колонок таблицы (ReportTable.tsx, полоска
+                настроек метрики: rounded-[7px] border, сегменты с общим
+                бордером) — тот же паттерн, что раньше применялся в сайдбаре. */}
+            {canManageReport && (
+              <div className="hover-reveal flex items-stretch h-6 rounded-[7px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)]">
+                <button
+                  onClick={() => setRenamingTitle(true)}
+                  className="w-7 flex-shrink-0 flex items-center justify-center border-r border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-accent)] transition-colors"
+                  title="Переименовать"
+                >
+                  <Pencil size={13} />
+                </button>
+                <button
+                  onClick={handleDeleteReport}
+                  className="w-7 flex-shrink-0 flex items-center justify-center text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-negative)] transition-colors"
+                  title="Удалить"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <FilterBar
