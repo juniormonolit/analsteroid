@@ -48,3 +48,10 @@ Dev-стенд (8102) использует **отдельную** системн
 `owners-inbox/monolitika-dev-stand-2026-07-10.md` в life-os владельца.
 
 **Никогда не переключайте dev-стенд на `YC_SYSTEM_DB=system`** — это боевая БД.
+
+## Процесс на сервере
+
+Приложение на dev-стенде живёт как systemd `--user` юнит `analsteroid-dev.service`
+(не разовый nohup) — переживает завершение автодеплой-скрипта и сам
+перезапускается при падении (`Restart=always`). Автодеплой обновляет сборку и
+делает `systemctl --user restart analsteroid-dev.service`.
