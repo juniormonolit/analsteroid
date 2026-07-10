@@ -9,6 +9,7 @@ import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/f
 import { fetchPriceObjectionConversion } from '@/features/reports/engine/priceObjectionConversion';
 import {
   fetchCallsBaseMetrics, fetchDealCallAdditive, fetchTouchAndFirstCallMedians, fetchCallSilence,
+  GRAND_TOTAL_KEY,
   type Bucket, type CallsBaseRow, type DealCallAdditiveRow, type TouchAndFirstCallRow,
 } from '@/features/reports/engine/callsMetrics';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
@@ -165,6 +166,16 @@ export async function POST(req: NextRequest) {
 
   let currentRows: ReportRow[] = [];
   let compRows: ReportRow[] = [];
+
+  // «Итого» для медианных метрик звонков (задача 10.07, п.7) — заполняется внутри
+  // блока КОЛСТАТ ниже (если запрошены), читается при сборке totals в самом конце.
+  // Значение — уже НАСТОЯЩАЯ медиана по всей видимой совокупности (GRAND_TOTAL_KEY
+  // из callsMetrics.ts), не сумма/среднее по строкам — computeTotals() эти метрики
+  // сознательно пропускает (aggregation_fn='none', не аддитивны).
+  let callsMedianGrandTotals: {
+    curBase?: CallsBaseRow; compBase?: CallsBaseRow;
+    curTouch?: TouchAndFirstCallRow; compTouch?: TouchAndFirstCallRow;
+  } | null = null;
 
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
@@ -494,16 +505,28 @@ export async function POST(req: NextRequest) {
   const hasCallsMetric = withDeps.some(m => callsMetricIds.includes(m.id));
 
   if (hasCallsMetric && reportSlug === 'by-managers') {
+    // Скоуп «Итого» медианных метрик (задача 10.07, п.7) — те же менеджеры, что уже
+    // прошли фильтры отчёта (отдел/тип аккаунтов — applied внутри fetchByManagers,
+    // currentRows/compRows их уже отражают): передаём dimensionId-список в фетчеры,
+    // чтобы GRAND_TOTAL-ветка SQL считала медиану ТОЛЬКО по видимой совокупности
+    // звонков/сделок, а не по всей компании целиком.
+    const curManagerIds = currentRows.map(r => r.dimensionId);
+    const compManagerIds = compRows.map(r => r.dimensionId);
     const [curBase, curAdditive, curTouch, curSilence, compBase, compAdditive, compTouch, compSilence] = await Promise.all([
-      fetchCallsBaseMetrics(opts.period),
+      fetchCallsBaseMetrics(opts.period, curManagerIds),
       fetchDealCallAdditive(opts.period),
-      fetchTouchAndFirstCallMedians(opts.period),
+      fetchTouchAndFirstCallMedians(opts.period, curManagerIds),
       fetchCallSilence(opts.period.to),
-      fetchCallsBaseMetrics(compOpts.period),
+      fetchCallsBaseMetrics(compOpts.period, compManagerIds),
       fetchDealCallAdditive(compOpts.period),
-      fetchTouchAndFirstCallMedians(compOpts.period),
+      fetchTouchAndFirstCallMedians(compOpts.period, compManagerIds),
       fetchCallSilence(compOpts.period.to),
     ]);
+
+    callsMedianGrandTotals = {
+      curBase: curBase?.get(GRAND_TOTAL_KEY), compBase: compBase?.get(GRAND_TOTAL_KEY),
+      curTouch: curTouch?.get(GRAND_TOTAL_KEY), compTouch: compTouch?.get(GRAND_TOTAL_KEY),
+    };
 
     const round1 = (n: number) => Math.round(n * 10) / 10;
     const zeroBucket: Bucket = { primary: 0, repeat: 0, all: 0 };
@@ -646,6 +669,35 @@ export async function POST(req: NextRequest) {
     const current = totalsCurrent[id] ?? null;
     const comparison = totalsComparison[id] ?? null;
     totals[id] = { current, comparison, ...computeDelta(current, comparison) };
+  }
+
+  // «Итого» для медианных метрик звонков (задача 10.07, п.7): computeTotals() их
+  // сознательно НЕ считает (aggregation_fn='none' — не сумма, а percentile_cont не
+  // аддитивен — среднее/сумма построчных медиан была бы математически неверна).
+  // Раньше эти 9 id просто отсутствовали в totals (пустая строка «Итого» в UI).
+  // Правильное значение — НАСТОЯЩАЯ медиана по ВСЕЙ совокупности звонков/сделок,
+  // попавших в отчёт с его фильтрами (отдел/период/скоуп) — уже посчитана одним
+  // агрегатным запросом (GROUPING SETS, см. GRAND_TOTAL_KEY в callsMetrics.ts) и
+  // передана сюда через callsMedianGrandTotals, без единого дополнительного запроса.
+  if (callsMedianGrandTotals) {
+    const { curBase, compBase, curTouch, compTouch } = callsMedianGrandTotals;
+    const medianTotalDefs: { id: string; bucket: keyof Bucket; cur?: Bucket; comp?: Bucket }[] = [
+      { id: 'calls_median_duration',        bucket: 'primary', cur: curBase?.medianDurationMin,  comp: compBase?.medianDurationMin },
+      { id: 'calls_median_duration_repeat', bucket: 'repeat',  cur: curBase?.medianDurationMin,  comp: compBase?.medianDurationMin },
+      { id: 'calls_median_duration_all',    bucket: 'all',     cur: curBase?.medianDurationMin,  comp: compBase?.medianDurationMin },
+      { id: 'calls_touch_speed_median',        bucket: 'primary', cur: curTouch?.medianTouchMinutes, comp: compTouch?.medianTouchMinutes },
+      { id: 'calls_touch_speed_median_repeat', bucket: 'repeat',  cur: curTouch?.medianTouchMinutes, comp: compTouch?.medianTouchMinutes },
+      { id: 'calls_touch_speed_median_all',    bucket: 'all',     cur: curTouch?.medianTouchMinutes, comp: compTouch?.medianTouchMinutes },
+      { id: 'calls_first_call_duration_median',        bucket: 'primary', cur: curTouch?.medianFirstCallDurationMin, comp: compTouch?.medianFirstCallDurationMin },
+      { id: 'calls_first_call_duration_median_repeat', bucket: 'repeat',  cur: curTouch?.medianFirstCallDurationMin, comp: compTouch?.medianFirstCallDurationMin },
+      { id: 'calls_first_call_duration_median_all',    bucket: 'all',     cur: curTouch?.medianFirstCallDurationMin, comp: compTouch?.medianFirstCallDurationMin },
+    ];
+    for (const def of medianTotalDefs) {
+      if (!withDeps.some(m => m.id === def.id)) continue; // метрика не запрошена в этом вызове
+      const current = def.cur ? def.cur[def.bucket] : null;
+      const comparison = def.comp ? def.comp[def.bucket] : null;
+      totals[def.id] = { current, comparison, ...computeDelta(current, comparison) };
+    }
   }
 
   return NextResponse.json({

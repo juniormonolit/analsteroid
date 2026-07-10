@@ -19,6 +19,12 @@ export const CALLS_DATA_START = '2026-03-30';
 // («7 — дефолт»); при необходимости менять в одном месте.
 export const SILENCE_WINDOW_DAYS = 7;
 
+// «Итого» для медианных метрик (задача 10.07, п.7): ключ-сентинел, под которым в
+// возвращаемой Map лежит НАСТОЯЩАЯ медиана по ВСЕЙ совокупности (не сумма и не
+// медиана медиан) — см. assignGrandBucket ниже. Не валидный manager_id (va.calls/
+// deals используют числовой bitrix_user_id) — коллизий с реальными менеджерами нет.
+export const GRAND_TOTAL_KEY = '__grand_total__';
+
 // ── Троица (перв.)/(повт.)/(все) ─────────────────────────────────────────────
 // «Перв.»/«Повт.» — по funnels.is_repeat СВЯЗАННОЙ СДЕЛКИ звонка (не по адресату
 // звонка). «Все» — сумма/медиана/среднее по ВСЕМ звонкам, включая «сироты» (звонок,
@@ -38,7 +44,7 @@ function emptyBucket(): Bucket {
 // is_all=0 И is_repeat IS NULL → «сирота» (не показывается отдельно, уже включён
 // в (все) через rollup-строку).
 interface GroupingRow {
-  manager_id: string;
+  manager_id: string | null;
   is_repeat: boolean | null;
   is_all: number;
 }
@@ -48,6 +54,7 @@ function assignBucket<T extends GroupingRow>(
   row: T,
   valueOf: (r: T) => number,
 ) {
+  if (row.manager_id === null) return; // строка «общего итога» — не сюда, см. assignGrandBucket
   let b = map.get(row.manager_id);
   if (!b) { b = emptyBucket(); map.set(row.manager_id, b); }
   const v = valueOf(row);
@@ -56,6 +63,30 @@ function assignBucket<T extends GroupingRow>(
   else if (row.is_repeat === true) b.repeat = v;
   // is_repeat === null && is_all === 0 → «сирота» — не показываем отдельной веткой,
   // уже учтена в rollup-строке (b.all) сверху.
+}
+
+// «Общий итог» (задача 10.07, п.7 — «Итого» для медианных метрик): строки, где
+// manager_id ГРУППИРОВКОЙ убран (GROUPING SETS-уровни (is_repeat) и () — см.
+// GRAND_TOTAL_GROUPING_SETS_SQL ниже) — медиана/итог по ВСЕЙ совокупности звонков/
+// сделок, попавших в фильтр $3 (managerIds, если передан — тот же список менеджеров,
+// что уже прошёл фильтры отчёта отдел/тип аккаунтов, см. вызов из route.ts), а НЕ
+// сумма и НЕ медиана медиан по менеджерам. Тот же общий агрегатный запрос — ноль
+// дополнительных проходов по va.calls/deals.
+interface GrandRow extends GroupingRow { is_grand: number }
+
+function assignGrandBucket<T extends GrandRow>(bucket: Bucket, row: T, valueOf: (r: T) => number) {
+  if (row.manager_id !== null || row.is_grand !== 1) return;
+  const v = valueOf(row);
+  if (row.is_all === 1) bucket.all = v;
+  else if (row.is_repeat === false) bucket.primary = v;
+  else if (row.is_repeat === true) bucket.repeat = v;
+}
+
+/** SQL-фрагмент фильтра по менеджерам (department/accountType скоуп отчёта) —
+ *  общий для обеих функций ниже. undefined/пустой массив → без фильтра. */
+function managerScopeSql(managerIds: string[] | undefined, column: string, paramIndex: number): string {
+  if (!managerIds || managerIds.length === 0) return '';
+  return `AND ${column}::text = ANY($${paramIndex})`;
 }
 
 // ── Метрики 1-5, 9: разрез по va.calls (called_at в периоде), атрибуция —
@@ -86,24 +117,40 @@ export interface CallsBaseRow {
  *
  * Возвращает null, если ВЕСЬ период раньше CALLS_DATA_START (честный null).
  */
-export async function fetchCallsBaseMetrics(period: DateRange): Promise<Map<string, CallsBaseRow> | null> {
+export async function fetchCallsBaseMetrics(
+  period: DateRange,
+  managerIds?: string[],
+): Promise<Map<string, CallsBaseRow> | null> {
   const periodToStr = period.to.toISOString().slice(0, 10);
   if (periodToStr < CALLS_DATA_START) return null;
 
   const { from, toExcl } = toSqlInterval(period);
+  const params: unknown[] = [from, toExcl];
+  let scopeWhere = '';
+  if (managerIds && managerIds.length > 0) {
+    params.push(managerIds);
+    scopeWhere = managerScopeSql(managerIds, 'c.manager_id', params.length);
+  }
 
+  // GROUPING SETS расширены на 2 уровня (задача 10.07, п.7 — «Итого» для медианных
+  // метрик): (is_repeat) и () — то же самое, что и раньше, но БЕЗ manager_id в группе,
+  // т.е. «медиана/сумма по ВСЕМ звонкам, попавшим в scopeWhere» — единственный
+  // способ получить НАСТОЯЩУЮ медиану по совокупности, а не среднее/медиану медиан
+  // по менеджерам (percentile_cont не аддитивен). Один и тот же скан va.calls — не
+  // второй проход, просто дополнительные строки в результате той же группировки.
   const sql = `
 WITH call_deals AS (
   SELECT c.manager_id, c.direction, c.result, c.duration_seconds, f.is_repeat
   FROM va.calls c
   LEFT JOIN deals d ON d.deal_id = c.deal_id
   LEFT JOIN funnels f ON f.id = d.funnel_id
-  WHERE c.called_at >= $1 AND c.called_at < $2
+  WHERE c.called_at >= $1 AND c.called_at < $2 ${scopeWhere}
 )
 SELECT
   manager_id::text AS manager_id,
   is_repeat,
   GROUPING(is_repeat) AS is_all,
+  GROUPING(manager_id) AS is_grand,
   count(*) AS calls_count,
   COALESCE(sum(duration_seconds) FILTER (WHERE direction = 'outbound' AND result = 'completed'), 0) AS out_duration_sum,
   COALESCE(sum(duration_seconds) FILTER (WHERE direction = 'inbound' AND result = 'completed'), 0) AS in_duration_sum,
@@ -113,15 +160,15 @@ SELECT
   count(*) FILTER (WHERE direction = 'outbound') AS outbound_count,
   count(*) FILTER (WHERE direction = 'outbound' AND result = 'missed') AS missed_outbound_count
 FROM call_deals
-GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id))
+GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id), (is_repeat), ())
   `.trim();
 
   const res = await analyticsDb().query<{
-    manager_id: string; is_repeat: boolean | null; is_all: number;
+    manager_id: string | null; is_repeat: boolean | null; is_all: number; is_grand: number;
     calls_count: string; out_duration_sum: string; in_duration_sum: string;
     completed_duration_sum: string; completed_count: string;
     median_duration: string | null; outbound_count: string; missed_outbound_count: string;
-  }>(sql, [from, toExcl]);
+  }>(sql, params);
 
   const count = new Map<string, Bucket>();
   const outMin = new Map<string, Bucket>();
@@ -131,6 +178,7 @@ GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id))
   const medianMin = new Map<string, Bucket>();
   const outboundCount = new Map<string, Bucket>();
   const missedOutbound = new Map<string, Bucket>();
+  const grandMedianMin = emptyBucket();
 
   for (const r of res.rows) {
     assignBucket(count, r, x => Number(x.calls_count));
@@ -141,11 +189,14 @@ GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id))
     assignBucket(medianMin, r, x => x.median_duration !== null ? Number(x.median_duration) / 60 : 0);
     assignBucket(outboundCount, r, x => Number(x.outbound_count));
     assignBucket(missedOutbound, r, x => Number(x.missed_outbound_count));
+    // «Итого» нас интересует ТОЛЬКО для медианной метрики (5) — остальные (суммы)
+    // уже корректно бьются в «Итого» через computeTotals (aggregation_fn=sum).
+    assignGrandBucket(grandMedianMin, r, x => x.median_duration !== null ? Number(x.median_duration) / 60 : 0);
   }
 
-  const managerIds = new Set(res.rows.map(r => r.manager_id));
+  const managerIdsOut = new Set(res.rows.map(r => r.manager_id).filter((id): id is string => id !== null));
   const out = new Map<string, CallsBaseRow>();
-  for (const id of managerIds) {
+  for (const id of managerIdsOut) {
     out.set(id, {
       count: count.get(id) ?? emptyBucket(),
       outDurationMin: outMin.get(id) ?? emptyBucket(),
@@ -157,6 +208,12 @@ GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id))
       missedOutboundCount: missedOutbound.get(id) ?? emptyBucket(),
     });
   }
+  out.set(GRAND_TOTAL_KEY, {
+    count: emptyBucket(), outDurationMin: emptyBucket(), inDurationMin: emptyBucket(),
+    completedDurationSumMin: emptyBucket(), completedCount: emptyBucket(),
+    medianDurationMin: grandMedianMin,
+    outboundCount: emptyBucket(), missedOutboundCount: emptyBucket(),
+  });
   return out;
 }
 
@@ -265,11 +322,20 @@ export interface TouchAndFirstCallRow {
  * fc.first_call_at >= d.created_at — тот же фильтр «звонок не раньше создания
  * сделки», что был в исходном managerCard.ts (защита от рассинхрона часов/дублей).
  */
-export async function fetchTouchAndFirstCallMedians(period: DateRange): Promise<Map<string, TouchAndFirstCallRow> | null> {
+export async function fetchTouchAndFirstCallMedians(
+  period: DateRange,
+  managerIds?: string[],
+): Promise<Map<string, TouchAndFirstCallRow> | null> {
   const periodToStr = period.to.toISOString().slice(0, 10);
   if (periodToStr < CALLS_DATA_START) return null; // честный null — va.calls ещё не собиралась
 
   const { from, toExcl } = toSqlInterval(period);
+  const params: unknown[] = [from, toExcl];
+  let scopeWhere = '';
+  if (managerIds && managerIds.length > 0) {
+    params.push(managerIds);
+    scopeWhere = managerScopeSql(managerIds, 'd.current_manager_id', params.length);
+  }
 
   const sql = `
 WITH period_deals AS (
@@ -277,7 +343,7 @@ WITH period_deals AS (
   FROM deals d
   JOIN funnels f ON f.id = d.funnel_id
   WHERE d.created_at >= $1 AND d.created_at < $2
-    AND d.current_manager_id IS NOT NULL
+    AND d.current_manager_id IS NOT NULL ${scopeWhere}
 ),
 first_completed AS (
   SELECT deal_id, MIN(called_at) AS first_call_at
@@ -300,32 +366,38 @@ SELECT
   manager_id::text AS manager_id,
   is_repeat,
   GROUPING(is_repeat) AS is_all,
+  GROUPING(manager_id) AS is_grand,
   percentile_cont(0.5) WITHIN GROUP (ORDER BY touch_minutes) AS median_touch_minutes,
   percentile_cont(0.5) WITHIN GROUP (ORDER BY first_call_duration_sec) AS median_first_call_duration_sec
 FROM joined
-GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id))
+GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id), (is_repeat), ())
   `.trim();
 
   const res = await analyticsDb().query<{
-    manager_id: string; is_repeat: boolean | null; is_all: number;
+    manager_id: string | null; is_repeat: boolean | null; is_all: number; is_grand: number;
     median_touch_minutes: string | null; median_first_call_duration_sec: string | null;
-  }>(sql, [from, toExcl]);
+  }>(sql, params);
 
   const touch = new Map<string, Bucket>();
   const firstCallDur = new Map<string, Bucket>();
+  const grandTouch = emptyBucket();
+  const grandFirstCallDur = emptyBucket();
   for (const r of res.rows) {
     assignBucket(touch, r, x => x.median_touch_minutes !== null ? Number(x.median_touch_minutes) : 0);
     assignBucket(firstCallDur, r, x => x.median_first_call_duration_sec !== null ? Number(x.median_first_call_duration_sec) / 60 : 0);
+    assignGrandBucket(grandTouch, r, x => x.median_touch_minutes !== null ? Number(x.median_touch_minutes) : 0);
+    assignGrandBucket(grandFirstCallDur, r, x => x.median_first_call_duration_sec !== null ? Number(x.median_first_call_duration_sec) / 60 : 0);
   }
 
-  const managerIds = new Set(res.rows.map(r => r.manager_id));
+  const managerIdsOut = new Set(res.rows.map(r => r.manager_id).filter((id): id is string => id !== null));
   const out = new Map<string, TouchAndFirstCallRow>();
-  for (const id of managerIds) {
+  for (const id of managerIdsOut) {
     out.set(id, {
       medianTouchMinutes: touch.get(id) ?? emptyBucket(),
       medianFirstCallDurationMin: firstCallDur.get(id) ?? emptyBucket(),
     });
   }
+  out.set(GRAND_TOTAL_KEY, { medianTouchMinutes: grandTouch, medianFirstCallDurationMin: grandFirstCallDur });
   return out;
 }
 
@@ -344,7 +416,10 @@ export async function fetchTouchSpeedAllByManager(period: DateRange): Promise<Ma
     // — признак «есть данные» (значение 0 мин теоретически валидно, не путать
     // с «нет данных»).
     const out = new Map<string, number>();
-    for (const [id, row] of rows) out.set(id, row.medianTouchMinutes.all);
+    for (const [id, row] of rows) {
+      if (id === GRAND_TOTAL_KEY) continue; // не менеджер — общий итог, сюда не подмешиваем
+      out.set(id, row.medianTouchMinutes.all);
+    }
     return out;
   } catch (e) {
     console.warn('[calls-metrics] va.calls (touch speed) недоступна:', e instanceof Error ? e.message : e);
