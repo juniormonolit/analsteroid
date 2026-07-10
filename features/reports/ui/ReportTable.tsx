@@ -920,7 +920,7 @@ export function ReportTable({
           {/* Колонка «№» (п.6): узкая, muted, только у обычных строк — групповые
               заголовки без номера, нумерация сквозная (после сортировки/фильтра). */}
           <td
-            className={`sticky z-20 ${stickyBg} px-1 py-[var(--row-py)] text-right text-[11px] text-[var(--color-text-muted)] tabular-nums border-r border-[var(--color-border)]`}
+            className={`sticky z-20 ${stickyBg} px-1 py-[var(--row-py)] text-center text-[11px] text-[var(--color-text-muted)] tabular-nums border-r border-[var(--color-border)]`}
             style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }}
           >
             {rowNumber ?? ''}
@@ -1238,7 +1238,7 @@ export function ReportTable({
           <tr>
             {/* Заголовок колонки «№» (п.6) — узкая sticky-колонка перед измерением. */}
             <th
-              className="sticky z-40 bg-[var(--color-table-header)] text-right px-1 py-2.5 text-[11px] font-medium text-[var(--color-text-muted)] border-b border-r border-[var(--color-border)]"
+              className="sticky z-40 bg-[var(--color-table-header)] text-center px-1 py-2.5 text-[11px] font-medium text-[var(--color-text-muted)] border-b border-r border-[var(--color-border)]"
               style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }}
             >
               №

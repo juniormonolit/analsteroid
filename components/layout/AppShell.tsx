@@ -145,9 +145,14 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     staleTime: 30_000,
   });
 
-  async function deleteReport(id: string, e: React.MouseEvent) {
+  async function deleteReport(id: string, name: string, e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    // Задача 1605, доп. владельца: клик по корзинке не должен удалять сразу —
+    // тот же лёгкий паттерн confirm(), что уже используется в permanentlyDelete
+    // ниже (единственный существующий UI-паттерн подтверждения в этом файле для
+    // одиночного деструктивного действия — полноценная модалка тут избыточна).
+    if (!confirm(`Удалить отчёт «${name}»? Он переместится в корзину — оттуда можно восстановить.`)) return;
     // Корзина (бриф 09.07, п.2): DELETE больше не стирает отчёт — переносит в
     // корзину (deleted_at). Настоящее удаление — отдельная кнопка внутри корзины.
     await fetch(`/api/saved-reports/${id}`, { method: 'DELETE' });
@@ -278,22 +283,27 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
     }`;
 
-  // Задача 1589, фидбек владельца: раньше карандаш и корзинка стояли парой
-  // `absolute` кнопок у правого края строки (задача 1575, п.3) — визуально
-  // «блок» иконок, оторванный от названия отчёта. Теперь:
-  // - корзинка (delBtnCls) остаётся `absolute` у правого края строки,
-  //   `top-1/2 -translate-y-1/2` центрирует её по вертикали относительно всей
-  //   высоты строки (`relative` родитель — сам `<Link>`, см. linkCls выше) —
-  //   работает и для однострочного, и для обёрнутого на 2 строки названия;
-  // - карандаш (renameBtnCls) больше не `absolute` — рендерится ВНУТРИ span
-  //   с названием отчёта, сразу за последним символом текста (inline-flex
-  //   в общем потоке текста), поэтому двигается вместе с длиной названия и
-  //   переносится вместе с текстом на следующую строку, если имя длинное.
-  //   `align-middle` держит иконку на одной линии с текстом строки.
-  const delBtnCls =
-    'hover-reveal tap-target absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)]';
+  // Задача 1605, 3-я итерация фидбека владельца (после 1589/1575): карандаш за
+  // текстом и одиночная корзинка-оверлей выше линии текста забракованы — образец
+  // от Серёги = кнопки-иконки шапки колонок таблицы отчётов (ReportTable.tsx,
+  // сегменты «полоски-настроек» метрики: `rounded-[7px] border`, сегменты
+  // `w-6`/`h-5` с общим бордером). Теперь ОБЕ иконки — один `absolute`-«пилл»
+  // у правого края строки (группа из двух квадратных сегментов с общей рамкой,
+  // как в шапке), а не одна в потоке текста и одна отдельно:
+  // - pillCls — сама группа, `top-1/2 -translate-y-1/2` центрирует её по
+  //   вертикали относительно всей высоты строки (`relative` родитель — сам
+  //   `<Link>`, см. linkCls ниже) — для однострочного названия (эталонный
+  //   случай) это ровно центр строки текста;
+  // - renameBtnCls/delBtnCls — сегменты внутри пилла, общая рамка между ними
+  //   даёт `border-r` только у первого (карандаш), совпадает с паттерном
+  //   ReportTable.tsx (там же между сегментами `border-l`/`border-r`, не у
+  //   каждого свой квадрат по отдельности).
+  const pillCls =
+    'hover-reveal absolute right-1 top-1/2 -translate-y-1/2 flex items-stretch h-5 rounded-[7px] border border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-bg)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)]';
   const renameBtnCls =
-    'hover-reveal tap-target inline-flex align-middle ml-1.5 p-0.5 rounded-[5px] bg-[var(--color-sidebar-hover-bg)] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-accent)]';
+    'w-6 flex-shrink-0 flex items-center justify-center border-r border-[var(--color-sidebar-border)] text-[var(--color-sidebar-text-muted)] hover:bg-[var(--color-sidebar-hover-bg)] hover:text-[var(--color-accent)] transition-colors';
+  const delBtnCls =
+    'w-6 flex-shrink-0 flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:bg-[var(--color-sidebar-hover-bg)] hover:text-[var(--color-negative)] transition-colors';
   const renameInputCls =
     'flex-1 min-w-0 bg-[var(--color-bg)] border border-[var(--color-accent)] rounded-[5px] px-1.5 py-0.5 text-[13px] text-[var(--color-sidebar-text)] outline-none';
 
@@ -360,20 +370,21 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         {/* draggable={false} — иначе браузер тащит САМУ ссылку (нативный drag <a>),
             перебивая наш DnD строки (drag начинался бы с "призраком" URL). */}
         <Link href={href} className={`flex-1 ${linkCls(href)}`} title={r.name} draggable={false}>
-          {/* pr-5 резервирует место под корзинку (absolute справа) — иначе на
-              обёрнутом на 2 строки названии текст мог бы уйти под иконку. */}
-          <span className="flex-1 min-w-0 break-words line-clamp-2 pr-5">
+          {/* pr-14 резервирует место под пилл из двух иконок (absolute справа,
+              ~48px + отступ) — иначе на обёрнутом на 2 строки названии текст
+              мог бы уйти под кнопки. */}
+          <span className="flex-1 min-w-0 break-words line-clamp-2 pr-14">
             {r.name}
-            {canManage && (
+          </span>
+          {canManage && (
+            <div className={pillCls}>
               <button onClick={e => startRename(r, e)} className={renameBtnCls} title="Переименовать">
                 <Pencil size={12} />
               </button>
-            )}
-          </span>
-          {canManage && (
-            <button onClick={e => deleteReport(r.id, e)} className={delBtnCls} title="Удалить">
-              <Trash2 size={12} />
-            </button>
+              <button onClick={e => deleteReport(r.id, r.name, e)} className={delBtnCls} title="Удалить">
+                <Trash2 size={12} />
+              </button>
+            </div>
           )}
         </Link>
       </div>
