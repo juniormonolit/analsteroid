@@ -188,55 +188,91 @@ export async function POST(req: NextRequest) {
   const hasAnyPlanMetric = withDeps.some(m => planMetricIds.includes(m.id));
 
   if (hasAnyPlanMetric) {
-    const periodStart = new Date(period.from);
-    const periodEnd = new Date(period.to);
-
-    const months: string[] = [];
-    const cur = new Date(periodStart.getFullYear(), periodStart.getMonth(), 1);
-    const end = new Date(periodEnd.getFullYear(), periodEnd.getMonth(), 1);
-    while (cur <= end) {
-      months.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`);
-      cur.setMonth(cur.getMonth() + 1);
-    }
+    const monthsOf = (fromStr: string, toStr: string): string[] => {
+      const months: string[] = [];
+      const from = new Date(fromStr);
+      const to = new Date(toStr);
+      const cur = new Date(from.getFullYear(), from.getMonth(), 1);
+      const end = new Date(to.getFullYear(), to.getMonth(), 1);
+      while (cur <= end) {
+        months.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`);
+        cur.setMonth(cur.getMonth() + 1);
+      }
+      return months;
+    };
 
     const sysDb = systemDb();
 
-    // planByLogin — «План (месяц)»: сумма месячных планов ВСЕХ месяцев, затронутых
-    // ВЫБРАННЫМ ПЕРИОДОМ (period.from..period.to). Задачей 10.07 НЕ затронута — как было.
-    const plansRes = await sysDb.query<{ manager_login: string; month: string; plan_shipments: string; plan_n: string }>(
-      `SELECT manager_login, to_char(month, 'YYYY-MM') as month, plan_shipments, plan_n
-       FROM manager_plans WHERE to_char(month, 'YYYY-MM') = ANY($1)`,
-      [months]
-    );
-
-    const planByLogin = new Map<string, { plan_shipments: number; plan_n: number }>();
-    for (const row of plansRes.rows) {
-      const existing = planByLogin.get(row.manager_login);
-      const ps = parseFloat(row.plan_shipments);
-      const pn = parseFloat(row.plan_n);
-      if (existing) {
-        existing.plan_shipments += ps;
-      } else {
-        planByLogin.set(row.manager_login, { plan_shipments: ps, plan_n: pn });
+    // planByLoginFor(months) — «План (месяц)»: сумма месячных планов ВСЕХ месяцев,
+    // затронутых периодом. БАГ, найден 10.07 (см. отчёт задачи «план на сегодня»):
+    // раньше planByLogin строился ОДИН РАЗ из months текущего периода (period.from..to)
+    // и переиспользовался ДЛЯ ОБОИХ enrichRow(currentRows) И enrichRow(compRows) — если
+    // comparisonPeriod попадал в ДРУГОЙ календарный месяц (обычный случай — сравнение с
+    // «хвостом прошлого месяца», см. lib/period::recomputeComparison), «План (месяц)»
+    // и всё, что от него считается (calculated-метрики вида «% выполнения плана
+    // (месяц)»), в КОЛОНКЕ СРАВНЕНИЯ показывали план ТЕКУЩЕГО месяца вместо месяца
+    // сравниваемого периода. Живая проверка: период 01–09.07 (план июля 1 875 000) vs
+    // авто-сравнение 22–30.06 (план июня 3 125 000) — plan_sales_month.comparison
+    // ошибочно показывал 1 875 000 вместо 3 125 000. Фикс — строить planByLogin
+    // ОТДЕЛЬНО для месяцев текущего периода и ОТДЕЛЬНО для месяцев периода сравнения
+    // (симметрично тому, как уже сделано ниже для periodPlanCurrent/periodPlanComp).
+    const loadPlanByLogin = async (fromStr: string, toStr: string): Promise<Map<string, { plan_shipments: number; plan_n: number }>> => {
+      const months = monthsOf(fromStr, toStr);
+      if (months.length === 0) return new Map();
+      const plansRes = await sysDb.query<{ manager_login: string; month: string; plan_shipments: string; plan_n: string }>(
+        `SELECT manager_login, to_char(month, 'YYYY-MM') as month, plan_shipments, plan_n
+         FROM manager_plans WHERE to_char(month, 'YYYY-MM') = ANY($1)`,
+        [months]
+      );
+      const planByLogin = new Map<string, { plan_shipments: number; plan_n: number }>();
+      for (const row of plansRes.rows) {
+        const existing = planByLogin.get(row.manager_login);
+        const ps = parseFloat(row.plan_shipments);
+        const pn = parseFloat(row.plan_n);
+        if (existing) {
+          existing.plan_shipments += ps;
+        } else {
+          planByLogin.set(row.manager_login, { plan_shipments: ps, plan_n: pn });
+        }
       }
-    }
+      return planByLogin;
+    };
 
     // «План (на сегодня)» — задача 10.07: считается ПО ВЫБРАННОМУ ПЕРИОДУ (у currentRows —
     // opts.period, у compRows — compOpts.period, каждый по СВОЕМУ, симметрично тому, как
     // ниже считаются totals current/comparison), а не по реальному "сегодня" как раньше.
     // См. computePeriodPlanByLogin выше.
-    const [periodPlanCurrent, periodPlanComp] = await Promise.all([
+    const [planByLoginCurrent, planByLoginComp, periodPlanCurrent, periodPlanComp] = await Promise.all([
+      loadPlanByLogin(periodFromStr, periodToStr),
+      loadPlanByLogin(compPeriodFromStr, compPeriodToStr),
       computePeriodPlanByLogin(periodFromStr, periodToStr, mskTodayStr),
       computePeriodPlanByLogin(compPeriodFromStr, compPeriodToStr, mskTodayStr),
     ]);
 
-    const enrichRow = (row: ReportRow, periodPlan: Map<string, PeriodPlanEntry>): ReportRow => {
+    const enrichRow = (
+      row: ReportRow,
+      planByLogin: Map<string, { plan_shipments: number; plan_n: number }>,
+      periodPlan: Map<string, PeriodPlanEntry>,
+    ): ReportRow => {
       const login = row.dimensionSubtitle;
       const plan = login ? planByLogin.get(login) : undefined;
-      if (!plan) return row;
+      const periodPlanEntry = login ? periodPlan.get(login) : undefined;
+      if (!plan) {
+        // «План (месяц)» на месяцы ЭТОГО периода нет — но «План (на сегодня)» может
+        // всё равно быть (разные наборы месяцев, см. computePeriodPlanByLogin) —
+        // не выходим раньше времени, как было (потеряло бы plan_sales_today).
+        if (!periodPlanEntry) return row;
+        return {
+          ...row,
+          metrics: {
+            ...row.metrics,
+            plan_sales_today: periodPlanEntry.planSales,
+            plan_shipments_today: periodPlanEntry.planShipments,
+          },
+        };
+      }
       const planSalesMonth = plan.plan_shipments / plan.plan_n;
       const planShipmentsMonth = plan.plan_shipments;
-      const periodPlanEntry = login ? periodPlan.get(login) : undefined;
       return {
         ...row,
         metrics: {
@@ -248,8 +284,8 @@ export async function POST(req: NextRequest) {
         }
       };
     };
-    currentRows = currentRows.map(r => enrichRow(r, periodPlanCurrent.byLogin));
-    compRows = compRows.map(r => enrichRow(r, periodPlanComp.byLogin));
+    currentRows = currentRows.map(r => enrichRow(r, planByLoginCurrent, periodPlanCurrent.byLogin));
+    compRows = compRows.map(r => enrichRow(r, planByLoginComp, periodPlanComp.byLogin));
   }
 
   // Метрики «Выполнение плана продаж/отгрузок, % (день)/(неделя)» — задача 10.07 (фикс
