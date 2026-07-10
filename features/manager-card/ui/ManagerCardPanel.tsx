@@ -142,6 +142,13 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
     key: a.key, label: a.label, periodValue: a.period.normalized, allTimeValue: a.allTime.normalized, dataAvailable: a.dataAvailable,
   }));
 
+  // Плитки итогов — какие показывать решает шаблон карточки (/settings/card-templates,
+  // бриф 10.07). totals в API всегда считает все 6 (дёшево, из уже загруженных данных),
+  // здесь — только фильтр рендера. Пока данные не загружены — показываем все 6 (как
+  // было до появления шаблонов), чтобы skeleton не «прыгал» при подгрузке.
+  const ALL_TILE_KEYS = ['reservations', 'confirmedReservations', 'salesCount', 'salesAmount', 'shipments', 'avgCheck'] as const;
+  const visibleTiles: readonly string[] = data?.visibleTiles ?? ALL_TILE_KEYS;
+
   const rating = data?.rating.value ?? null;
   const RING_R = 33;
   const CIRC = 2 * Math.PI * RING_R;
@@ -242,7 +249,7 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                   {/* Левая колонка — паутина */}
                   <div className="min-w-0">
                     <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] mb-2.5">
-                      Профиль эффективности · 6 метрик
+                      Профиль эффективности · {radarAxes.length || 6} метрик
                     </div>
                     <div className="border border-[var(--color-border)] rounded-2xl py-3 flex justify-center overflow-x-auto">
                       <ManagerCardRadar axes={radarAxes} />
@@ -256,12 +263,24 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                         Итоги за период · к прошлому периоду
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                        <Tile value={fmtInt(data?.totals.reservations.current)} label="Брони" deltaPct={data?.totals.reservations.deltaPct} />
-                        <Tile value={fmtInt(data?.totals.confirmedReservations.current)} label="Подтв. брони" deltaPct={data?.totals.confirmedReservations.deltaPct} />
-                        <Tile value={fmtInt(data?.totals.salesCount.current)} label="Продажи" deltaPct={data?.totals.salesCount.deltaPct} />
-                        <Tile value={fmtMoney(data?.totals.salesAmount.current)} label="Сумма продаж" deltaPct={data?.totals.salesAmount.deltaPct} />
-                        <Tile value={fmtInt(data?.totals.shipments.current)} label="Отгрузки" deltaPct={data?.totals.shipments.deltaPct} />
-                        <Tile value={fmtMoney(data?.totals.avgCheck.current)} label="Средний чек" deltaPct={data?.totals.avgCheck.deltaPct} />
+                        {visibleTiles.includes('reservations') && (
+                          <Tile value={fmtInt(data?.totals.reservations.current)} label="Брони" deltaPct={data?.totals.reservations.deltaPct} />
+                        )}
+                        {visibleTiles.includes('confirmedReservations') && (
+                          <Tile value={fmtInt(data?.totals.confirmedReservations.current)} label="Подтв. брони" deltaPct={data?.totals.confirmedReservations.deltaPct} />
+                        )}
+                        {visibleTiles.includes('salesCount') && (
+                          <Tile value={fmtInt(data?.totals.salesCount.current)} label="Продажи" deltaPct={data?.totals.salesCount.deltaPct} />
+                        )}
+                        {visibleTiles.includes('salesAmount') && (
+                          <Tile value={fmtMoney(data?.totals.salesAmount.current)} label="Сумма продаж" deltaPct={data?.totals.salesAmount.deltaPct} />
+                        )}
+                        {visibleTiles.includes('shipments') && (
+                          <Tile value={fmtInt(data?.totals.shipments.current)} label="Отгрузки" deltaPct={data?.totals.shipments.deltaPct} />
+                        )}
+                        {visibleTiles.includes('avgCheck') && (
+                          <Tile value={fmtMoney(data?.totals.avgCheck.current)} label="Средний чек" deltaPct={data?.totals.avgCheck.deltaPct} />
+                        )}
                       </div>
                     </div>
 

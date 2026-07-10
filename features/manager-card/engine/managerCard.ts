@@ -6,7 +6,8 @@ import { fetchTouchSpeedAllByManager } from '@/features/reports/engine/callsMetr
 import { branchLabel } from '@/lib/org/branchLabel';
 import { toSqlInterval, type DateRange } from '@/lib/period';
 import type { ClientType, ReportRow } from '@/lib/metrics/types';
-import { getScoringWeights, type AxisKey as WeightAxisKey, type NormalizedWeights } from '@/lib/settings/scoringWeights';
+import { getRawScoringWeights, AXIS_KEYS as WEIGHTED_AXIS_KEYS, type AxisKey as WeightAxisKey } from '@/lib/settings/scoringWeights';
+import { getCardTemplate, type CatalogAxisKey, type TileKey } from '@/lib/settings/cardTemplates';
 import { differenceInCalendarDays, subDays, startOfDay } from 'date-fns';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,37 +43,79 @@ export function previousPeriod(period: DateRange): DateRange {
 // «Всё время» — с заведомо ранней даты (данные компании не старше) до сейчас.
 export const ALL_TIME: DateRange = { from: new Date('2015-01-01T00:00:00Z'), to: new Date() };
 
-// ── 6 осей паутины ───────────────────────────────────────────────────────────
-// AxisKey — каноничный тип из lib/settings/scoringWeights.ts (колонки scoring_weights
-// должны совпадать буквально; там же лежит рантайм-список AXIS_KEYS для формы весов).
-export type AxisKey = WeightAxisKey;
+// ── Каталог осей паутины ─────────────────────────────────────────────────────
+// AxisKey — СВОЙ (более широкий) тип, а не WeightAxisKey напрямую: шаблоны карточек
+// (бриф 10.07, lib/settings/cardTemplates.ts::AXIS_CATALOG_KEYS) расширили каталог до
+// 8 осей, а scoring_weights (миграция 068) остаётся ЗАФИКСИРОВАН на исходных 6 —
+// колонки таблицы менять не нужно (веса для 2 новых осей — дефолт 5, см. ratingFor).
+export type AxisKey = CatalogAxisKey;
 
 export interface AxisDef { key: AxisKey; label: string; unit: 'percent' | 'money' | 'minutes'; invert: boolean }
 
+// AXIS_DEFS — ПОЛНЫЙ каталог (8), единственный источник правды на порядок/подписи/
+// unit/invert. Какие ИЗ НИХ реально показывать и в каком порядке — решает шаблон
+// карточки (card_templates, до 6 осей); см. resolveTemplateAxes ниже. Первые 6 —
+// исходные оси v1/v2 (не переставлять — совпадают с колонками scoring_weights).
+// Последние 2 — расширение каталога (бриф 10.07, п.2б): считаются из ТЕХ ЖЕ
+// ReportRow.metrics, что уже загружены остальными 6 — ноль новых запросов к БД.
 export const AXIS_DEFS: AxisDef[] = [
-  { key: 'cr_deal_to_reservation', label: 'CR Сделка → Бронь',  unit: 'percent', invert: false },
-  { key: 'cr_reservation_to_sale', label: 'CR Бронь → Продажа', unit: 'percent', invert: false },
-  { key: 'sales_amount',           label: 'Сумма продаж',       unit: 'money',   invert: false },
-  { key: 'avg_check',              label: 'Средний чек',        unit: 'money',   invert: false },
-  { key: 'touch_speed',            label: 'Скорость касания',   unit: 'minutes', invert: true }, // меньше — лучше
-  { key: 'refusal_rate',           label: 'Доля отказов',       unit: 'percent', invert: true }, // меньше — лучше
+  { key: 'cr_deal_to_reservation',      label: 'CR Сделка → Бронь',        unit: 'percent', invert: false },
+  { key: 'cr_reservation_to_sale',      label: 'CR Бронь → Продажа',       unit: 'percent', invert: false },
+  { key: 'sales_amount',                label: 'Сумма продаж',             unit: 'money',   invert: false },
+  { key: 'avg_check',                   label: 'Средний чек',              unit: 'money',   invert: false },
+  { key: 'touch_speed',                 label: 'Скорость касания',         unit: 'minutes', invert: true }, // меньше — лучше
+  { key: 'refusal_rate',                label: 'Доля отказов',             unit: 'percent', invert: true }, // меньше — лучше
+  { key: 'cr_reservation_to_confirmed', label: 'CR Бронь → Подтверждена',  unit: 'percent', invert: false },
+  { key: 'shipment_rate',               label: 'Доля отгруженного от проданного', unit: 'percent', invert: false },
 ];
 
-// Сырые значения 6 осей по строке отчёта (fetchByManagers всегда отдаёт ВСЕ
+const AXIS_DEF_BY_KEY = new Map(AXIS_DEFS.map(d => [d.key, d]));
+
+/** Ключи шаблона (до 6, из card_templates) → реальные AxisDef в ТОМ ЖЕ порядке,
+ *  что задан в шаблоне. Неизвестные ключи (устаревший каталог) молча отбрасываются;
+ *  пустой результат — фолбэк на дефолтные 6 (санитайзер cardTemplates уже это
+ *  гарантирует на чтении, здесь — дополнительная защита на случай гонки каталога). */
+export function resolveTemplateAxes(axisKeys: readonly AxisKey[]): AxisDef[] {
+  const resolved = axisKeys.map(k => AXIS_DEF_BY_KEY.get(k)).filter((d): d is AxisDef => d !== undefined);
+  return resolved.length > 0 ? resolved : AXIS_DEFS.slice(0, 6);
+}
+
+/** Веса скоринга по оси: исходные 6 — из scoring_weights (сырые 0-10, дефолт 5 —
+ *  см. lib/settings/scoringWeights.ts); 2 новые оси каталога — ВНЕ таблицы
+ *  scoring_weights, дефолт-вес 5 (та же шкала 0-10, эквивалент «важность как у
+ *  остальных при равных весах») — связка отмечена в отчёте задачи. ratingFor сам
+ *  renормирует по сумме ФАКТИЧЕСКИ использованных осей (weightSum), поэтому именно
+ *  СЫРАЯ (не нормированная на 1) шкала здесь корректна — иначе доминировал бы дефолт. */
+function weightForAxis(raw: Partial<Record<WeightAxisKey, number>>, key: AxisKey): number {
+  if ((WEIGHTED_AXIS_KEYS as readonly string[]).includes(key)) {
+    const v = raw[key as WeightAxisKey];
+    return typeof v === 'number' ? v : 5;
+  }
+  return 5;
+}
+
+// Сырые значения каталога осей по строке отчёта (fetchByManagers всегда отдаёт ВСЕ
 // collected-метрики независимо от запроса — см. features/reports/engine/byManagers.ts).
+// 2 оси расширения каталога (cr_reservation_to_confirmed/shipment_rate) — из ТЕХ ЖЕ
+// полей metrics, что уже используются плитками итогов (confirmed_reservations_count/
+// shipments_count, см. tileRaw ниже) — без единого нового запроса.
 export function rawAxisValues(metrics: Record<string, number | null>, touchMinutes: number | null): Record<AxisKey, number | null> {
-  const dealsCount        = metrics.deals_count ?? 0;
-  const reservationsCount = metrics.reservations_count ?? 0;
-  const salesCount        = metrics.sales_count ?? 0;
-  const salesAmount       = (metrics.primary_sales_amount ?? 0) + (metrics.repeat_sales_amount ?? 0);
-  const lostCount         = metrics.lost_deals_count ?? 0;
+  const dealsCount               = metrics.deals_count ?? 0;
+  const reservationsCount        = metrics.reservations_count ?? 0;
+  const confirmedReservationsCnt = metrics.confirmed_reservations_count ?? 0;
+  const salesCount                = metrics.sales_count ?? 0;
+  const salesAmount               = (metrics.primary_sales_amount ?? 0) + (metrics.repeat_sales_amount ?? 0);
+  const lostCount                 = metrics.lost_deals_count ?? 0;
+  const shipmentsCount            = metrics.shipments_count ?? 0;
   return {
-    cr_deal_to_reservation: dealsCount > 0 ? (reservationsCount / dealsCount) * 100 : null,
-    cr_reservation_to_sale: reservationsCount > 0 ? (salesCount / reservationsCount) * 100 : null,
-    sales_amount:           salesAmount,
-    avg_check:              salesCount > 0 ? salesAmount / salesCount : null,
-    touch_speed:            touchMinutes,
-    refusal_rate:           dealsCount > 0 ? (lostCount / dealsCount) * 100 : null,
+    cr_deal_to_reservation:       dealsCount > 0 ? (reservationsCount / dealsCount) * 100 : null,
+    cr_reservation_to_sale:       reservationsCount > 0 ? (salesCount / reservationsCount) * 100 : null,
+    sales_amount:                 salesAmount,
+    avg_check:                    salesCount > 0 ? salesAmount / salesCount : null,
+    touch_speed:                  touchMinutes,
+    refusal_rate:                 dealsCount > 0 ? (lostCount / dealsCount) * 100 : null,
+    cr_reservation_to_confirmed:  reservationsCount > 0 ? (confirmedReservationsCnt / reservationsCount) * 100 : null,
+    shipment_rate:                salesCount > 0 ? (shipmentsCount / salesCount) * 100 : null,
   };
 }
 
@@ -116,26 +159,40 @@ export function percentileScore(raw: number | null, pool: number[], invert: bool
   return Math.round(frac * 100) / 10;
 }
 
-// Рейтинг менеджера = взвешенное среднее нормированных (0-10) значений ДОСТУПНЫХ осей.
-// Веса — настройка супер-админа (lib/settings/scoringWeights.ts, миграция 068,
-// дефолт — равные, т.е. поведение как в v1 до появления настройки). Оси без данных
+// Рейтинг менеджера = взвешенное среднее нормированных (0-10) значений ДОСТУПНЫХ осей
+// ШАБЛОНА карточки (бриф 10.07: до 6 осей из card_templates, см. resolveTemplateAxes;
+// по умолчанию — исходные 6, поведение как в v1/v2 до появления шаблонов). Веса — сырые
+// (0-10, НЕ нормированные на сумму=1): функция сама renормирует делением на weightSum
+// ФАКТИЧЕСКИ использованных осей, поэтому смешивать «нормированное» (scoring_weights)
+// и «дефолт 5 для новых осей вне таблицы» на разных шкалах было бы некорректно —
+// весь расчёт всегда идёт в сырой 0-10 шкале (см. weightForAxis). Оси без данных
 // (raw === null) исключаются из среднего (вес перенормируется на оставшиеся оси),
 // а не считаются нулём — иначе отсутствие данных (напр. va.calls) необоснованно
-// портило бы оценку.
-export function ratingFor(axisMap: AxisMap, eligibleIds: Set<string>, managerId: string, weights: NormalizedWeights): number | null {
+// портило бы оценку. Если веса ВСЕХ фактически использованных осей — 0 (админ явно
+// обнулил) — фолбэк на простое среднее (эквивалент равных долей, как было до весов),
+// а не null — деградация мягкая, а не «рейтинг пропал».
+export function ratingFor(
+  axisMap: AxisMap,
+  eligibleIds: Set<string>,
+  managerId: string,
+  rawWeights: Partial<Record<WeightAxisKey, number>>,
+  axes: AxisDef[] = AXIS_DEFS.slice(0, 6),
+): number | null {
   const own = axisMap.get(managerId);
   if (!own) return null;
   const weighted: { score: number; weight: number }[] = [];
-  for (const def of AXIS_DEFS) {
+  for (const def of axes) {
     const raw = own[def.key];
     if (raw === null) continue;
     const pool = poolValuesForAxis(axisMap, eligibleIds, def.key);
     const score = percentileScore(raw, pool, def.invert);
-    if (score !== null) weighted.push({ score, weight: weights[def.key] });
+    if (score !== null) weighted.push({ score, weight: weightForAxis(rawWeights, def.key) });
   }
+  if (weighted.length === 0) return null;
   const weightSum = weighted.reduce((s, w) => s + w.weight, 0);
-  if (weighted.length === 0 || weightSum <= 0) return null;
-  const value = weighted.reduce((s, w) => s + w.score * w.weight, 0) / weightSum;
+  const value = weightSum > 0
+    ? weighted.reduce((s, w) => s + w.score * w.weight, 0) / weightSum
+    : weighted.reduce((s, w) => s + w.score, 0) / weighted.length;
   return Math.round(value * 10) / 10;
 }
 
@@ -254,6 +311,10 @@ export interface ManagerCardResult {
   categories: CategoryShare[];
   calls: (CallsTizer & { medianFirstTouchMinutes: number | null }) | null;
   meta: { period: { from: string; to: string }; comparisonPeriod: { from: string; to: string }; touchSpeedAvailable: boolean };
+  /** Плитки итогов, которые ДОЛЖНЫ отображаться (шаблон карточки, бриф 10.07) —
+   *  totals по-прежнему считает ВСЕ 6 (дёшево, из уже загруженных данных), UI
+   *  (ManagerCardPanel) фильтрует рендер по этому списку. */
+  visibleTiles: TileKey[];
 }
 
 export async function buildManagerCard(opts: ManagerCardOptions): Promise<ManagerCardResult | { error: string }> {
@@ -277,7 +338,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
 
   const managerIdNum = /^\d+$/.test(managerId) ? Number(managerId) : null;
 
-  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, deptRosterRes, callsTizer, pgRows, weights] =
+  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, deptRosterRes, callsTizer, pgRows, rawWeights, template] =
     await Promise.all([
       fetchByManagers({ period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
@@ -293,19 +354,21 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
         : Promise.resolve({ rows: [{ bitrix_user_id: managerId }] }),
       managerIdNum !== null ? fetchCallsTizer(managerIdNum, period) : Promise.resolve(null),
       fetchByProductGroups({ period, dealScope: 'all', clientType, productGroupMode: 'kc', managerId }),
-      getScoringWeights(),
+      getRawScoringWeights(),
+      getCardTemplate('manager'),
     ]);
 
   const currentRow = periodPool.find(r => r.dimensionId === managerId);
   const prevRow    = prevPool.find(r => r.dimensionId === managerId);
 
-  // ── Паутина: 6 осей, период + всё время, перцентильная нормировка ─────────
+  // ── Паутина: оси шаблона (до 6, бриф 10.07), период + всё время, перцентильная нормировка ──
   const periodAxisMap  = buildAxisMap(periodPool, touchPeriodMap);
   const allTimeAxisMap = buildAxisMap(allTimePool, touchAllTimeMap);
   const periodEligible  = salesPositiveIds(periodPool);
   const allTimeEligible = salesPositiveIds(allTimePool);
+  const templateAxes = resolveTemplateAxes(template.axes);
 
-  const axes: AxisResult[] = AXIS_DEFS.map(def => {
+  const axes: AxisResult[] = templateAxes.map(def => {
     const periodOwn  = periodAxisMap.get(managerId)?.[def.key] ?? null;
     const allTimeOwn = allTimeAxisMap.get(managerId)?.[def.key] ?? null;
     return {
@@ -318,18 +381,18 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
         raw: allTimeOwn,
         normalized: percentileScore(allTimeOwn, poolValuesForAxis(allTimeAxisMap, allTimeEligible, def.key), def.invert),
       },
-      // Скорость касания зависит от va.calls; остальные 5 — от sa.deals (всегда доступна).
+      // Скорость касания зависит от va.calls; остальные — от sa.deals (всегда доступна).
       dataAvailable: def.key === 'touch_speed' ? touchPeriodMap !== null : true,
     };
   });
 
   // ── Рейтинг + ранг в отделе ─────────────────────────────────────────────────
-  const rating = ratingFor(periodAxisMap, periodEligible, managerId, weights);
+  const rating = ratingFor(periodAxisMap, periodEligible, managerId, rawWeights, templateAxes);
   const deptMemberIds = deptRosterRes.rows.map(r => r.bitrix_user_id);
   const deptSize = deptMemberIds.length || 1;
   const deptRatings = deptMemberIds.map(id => ({
     id,
-    rating: id === managerId ? rating : ratingFor(periodAxisMap, periodEligible, id, weights),
+    rating: id === managerId ? rating : ratingFor(periodAxisMap, periodEligible, id, rawWeights, templateAxes),
   }));
   const withRating = deptRatings.filter(r => r.rating !== null).sort((a, b) => (b.rating! - a.rating!));
   const withoutRating = deptRatings.filter(r => r.rating === null);
@@ -379,5 +442,6 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
       comparisonPeriod: { from: prevPeriod.from.toISOString(), to: prevPeriod.to.toISOString() },
       touchSpeedAvailable: touchPeriodMap !== null,
     },
+    visibleTiles: template.tiles,
   };
 }

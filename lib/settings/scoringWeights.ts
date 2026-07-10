@@ -4,9 +4,15 @@
 // (TTL 60с — тумблер должен подхватываться быстро, но не дёргать БД на каждый запрос
 // рейтинга карточки/сетки/агрегата отдела).
 //
-// Ключи ДОЛЖНЫ буквально совпадать с AxisKey (features/manager-card/engine/managerCard.ts)
-// и с колонками таблицы — заводить синхронизацию тут, а не там, единственный источник
-// правды на порядок/состав осей остаётся managerCard.ts (AXIS_DEFS).
+// Ключи ДОЛЖНЫ буквально совпадать с колонками таблицы — заводить синхронизацию тут,
+// а не там; единственный источник правды на порядок/СОСТАВ осей — managerCard.ts
+// (AXIS_DEFS, полный каталог 8 осей после card_templates, бриф 10.07); эти 6 —
+// подмножество каталога, для которого ЕСТЬ настраиваемый вес (остальные 2 — дефолт-вес
+// 5, см. weightForAxis в managerCard.ts).
+//
+// getRawScoringWeights() — то, что реально читает движок (managerCard.ts::ratingFor
+// принимает СЫРЫЕ веса 0-10 и сам renормирует по факту использованных осей шаблона,
+// см. комментарий у ratingFor) — нормировка «сумма=1» движку больше не нужна.
 
 import { systemDb } from '@/lib/db/clients';
 
@@ -24,23 +30,11 @@ export const AXIS_KEYS: AxisKey[] = [
 ];
 
 export type RawWeights = Record<AxisKey, number>;
-/** Нормированные веса — сумма ровно 1 (или равные доли при вырожденном вводе). */
-export type NormalizedWeights = Record<AxisKey, number>;
 
 const EQUAL_RAW: RawWeights = {
   cr_deal_to_reservation: 5, cr_reservation_to_sale: 5, sales_amount: 5,
   avg_check: 5, touch_speed: 5, refusal_rate: 5,
 };
-
-function normalize(raw: RawWeights): NormalizedWeights {
-  const sum = AXIS_KEYS.reduce((s, k) => s + Math.max(0, raw[k] ?? 0), 0);
-  if (sum <= 0) {
-    // Вырожденный случай (все 0 или мусор) — равные доли, как и было до весов.
-    const eq = 1 / AXIS_KEYS.length;
-    return Object.fromEntries(AXIS_KEYS.map(k => [k, eq])) as NormalizedWeights;
-  }
-  return Object.fromEntries(AXIS_KEYS.map(k => [k, Math.max(0, raw[k] ?? 0) / sum])) as NormalizedWeights;
-}
 
 let _cache: { raw: RawWeights; at: number } | null = null;
 const TTL_MS = 60_000;
@@ -64,11 +58,6 @@ export async function getRawScoringWeights(): Promise<RawWeights> {
   }
   _cache = { raw, at: Date.now() };
   return raw;
-}
-
-/** Нормированные веса (сумма = 1) — то, что реально используется в формуле рейтинга. */
-export async function getScoringWeights(): Promise<NormalizedWeights> {
-  return normalize(await getRawScoringWeights());
 }
 
 export function invalidateScoringWeightsCache(): void {

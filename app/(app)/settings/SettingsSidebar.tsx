@@ -40,6 +40,10 @@ export function SettingsSidebar({
       items: [
         { href: '/settings/scoring-weights', label: 'Веса скоринга', visible: isSuperadmin },
         { href: '/settings/daily-plan-mode', label: 'Режим дневного плана', visible: isSuperadmin },
+        // Шаблоны карточек (бриф 10.07) — единственный пункт этой группы БЕЗ
+        // superadmin-only: явное решение владельца «админ должен видеть и менять»
+        // (в отличие от весов/режима плана рядом — те остаются супер-админ-only).
+        { href: '/settings/card-templates', label: 'Шаблоны карточек', visible: canViewSettings },
       ],
     },
     {

@@ -29,11 +29,12 @@ import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { computeDelta } from '@/features/reports/engine/calculated';
 import {
-  AXIS_DEFS, ALL_TIME, buildAxisMap, salesPositiveIds, poolValuesForAxis,
+  ALL_TIME, buildAxisMap, salesPositiveIds, poolValuesForAxis,
   percentileScore, ratingFor, rawAxisValues, segmentToClientType, previousPeriod,
-  fetchTouchSpeedByManager, type CardSegment, type CategoryShare, type ManagerCardResult,
+  fetchTouchSpeedByManager, resolveTemplateAxes, type CardSegment, type CategoryShare, type ManagerCardResult,
 } from './managerCard';
-import { getScoringWeights } from '@/lib/settings/scoringWeights';
+import { getRawScoringWeights } from '@/lib/settings/scoringWeights';
+import { getCardTemplate } from '@/lib/settings/cardTemplates';
 import type { RosterManager } from '@/lib/org/teamRoster';
 import { toSqlInterval, type DateRange } from '@/lib/period';
 import type { ReportRow } from '@/lib/metrics/types';
@@ -45,8 +46,11 @@ export interface TeamRosterEntry {
   name: string;
   login: string | null;
   rating: number | null;
-  /** 6 значений 0-10 (уже с fallback на 0 для недоступных осей — как в ManagerCardRadar),
-   *  порядок совпадает с AXIS_DEFS. Подписи не нужны — сетка рисует мини-радар без них. */
+  /** До 6 значений 0-10 (уже с fallback на 0 для недоступных осей — как в ManagerCardRadar),
+   *  порядок совпадает с осями шаблона 'manager' (card_templates, бриф 10.07) — тот
+   *  же шаблон, что и большая карточка менеджера, поэтому мини-радар в сетке НИКОГДА
+   *  не расходится по составу осей с ManagerCardPanel. Подписи не нужны — сетка
+   *  рисует мини-радар без них. */
   radar: number[];
   salesAmount: number;
   /** Общий CR Сделка→Продажа (для бейджа «CR» под мини-радаром в бейдже сетки). */
@@ -65,22 +69,24 @@ export async function buildTeamRoster(opts: {
 }): Promise<TeamRosterResult> {
   const clientType = segmentToClientType(opts.segment);
 
-  const [periodPool, touchPeriodMap, weights] = await Promise.all([
+  const [periodPool, touchPeriodMap, rawWeights, template] = await Promise.all([
     fetchByManagers({ period: opts.period, dealScope: 'all', clientType, accountType: 'managers' }),
     fetchTouchSpeedByManager(opts.period),
-    getScoringWeights(),
+    getRawScoringWeights(),
+    getCardTemplate('manager'),
   ]);
 
   // Пул нормировки — ВСЯ компания (как в managerCard.ts), не только этот отдел.
   const axisMap  = buildAxisMap(periodPool, touchPeriodMap);
   const eligible = salesPositiveIds(periodPool);
   const rowById  = new Map(periodPool.map(r => [r.dimensionId, r]));
+  const templateAxes = resolveTemplateAxes(template.axes);
 
   const managers: TeamRosterEntry[] = opts.roster.map(m => {
     const row = rowById.get(m.managerId);
-    const rating = ratingFor(axisMap, eligible, m.managerId, weights);
+    const rating = ratingFor(axisMap, eligible, m.managerId, rawWeights, templateAxes);
     const own = axisMap.get(m.managerId);
-    const radar = AXIS_DEFS.map(def => {
+    const radar = templateAxes.map(def => {
       const raw = own?.[def.key] ?? null;
       if (raw === null) return 0;
       const pool = poolValuesForAxis(axisMap, eligible, def.key);
@@ -163,14 +169,15 @@ export async function buildDepartmentCard(opts: {
   const managerIds = new Set(opts.roster.map(m => m.managerId));
   const managerIdNums = opts.roster.map(m => Number(m.managerId)).filter(n => Number.isFinite(n));
 
-  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, weights, callsTizer, pgRows] =
+  const [periodPool, prevPool, allTimePool, touchPeriodMap, touchAllTimeMap, rawWeights, template, callsTizer, pgRows] =
     await Promise.all([
       fetchByManagers({ period: opts.period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: ALL_TIME, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchTouchSpeedByManager(opts.period),
       fetchTouchSpeedByManager(ALL_TIME),
-      getScoringWeights(),
+      getRawScoringWeights(),
+      getCardTemplate('department'),
       fetchCallsTizerForManagers(managerIdNums, opts.period),
       // Топ-5 категорий отдела — ОДИН агрегатный запрос по всему ростеру, а не по
       // менеджеру (хотфикс 500 на «Дирекция», 20+ чел.: Promise.all по менеджеру бил
@@ -217,11 +224,12 @@ export async function buildDepartmentCard(opts: {
 
   const peerIds = [...opts.peerBuckets.keys()];
   const insufficientPeers = peerIds.length < 2;
+  const templateAxes = resolveTemplateAxes(template.axes);
 
   const { axisMap: deptAxisMap, eligible: deptEligible } = buildPeerAxisMap(periodPool, touchPeriodMap, curSum, touchCur);
-  const rating = insufficientPeers ? null : ratingFor(deptAxisMap, deptEligible, opts.deptId, weights);
+  const rating = insufficientPeers ? null : ratingFor(deptAxisMap, deptEligible, opts.deptId, rawWeights, templateAxes);
   const orderedByRating = [...deptAxisMap.keys()]
-    .map(id => ({ id, r: id === opts.deptId ? rating : (deptEligible.has(id) ? ratingFor(deptAxisMap, deptEligible, id, weights) : null) }))
+    .map(id => ({ id, r: id === opts.deptId ? rating : (deptEligible.has(id) ? ratingFor(deptAxisMap, deptEligible, id, rawWeights, templateAxes) : null) }))
     .filter(x => x.r !== null)
     .sort((a, b) => b.r! - a.r!);
   const rank = insufficientPeers ? null : (orderedByRating.findIndex(x => x.id === opts.deptId) + 1 || null);
@@ -230,7 +238,7 @@ export async function buildDepartmentCard(opts: {
     ? { axisMap: new Map(), eligible: new Set<string>() }
     : buildPeerAxisMap(allTimePool, touchAllTimeMap, allTimeSum, touchAll);
 
-  const axes = AXIS_DEFS.map(def => ({
+  const axes = templateAxes.map(def => ({
     key: def.key, label: def.label, unit: def.unit, invert: def.invert,
     period: {
       raw: curAxisRaw[def.key],
@@ -288,6 +296,7 @@ export async function buildDepartmentCard(opts: {
       comparisonPeriod: { from: prevPeriod.from.toISOString(), to: prevPeriod.to.toISOString() },
       touchSpeedAvailable: touchPeriodMap !== null,
     },
+    visibleTiles: template.tiles,
     deptComparison: { peerCount: peerIds.length, insufficientPeers },
   };
 }
