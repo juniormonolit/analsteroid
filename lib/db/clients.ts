@@ -32,9 +32,9 @@ function makeYcPool(database: string): Pool {
     password: process.env.YC_PG_PASSWORD!,
     database,
     ssl: makeYcSslConfig(),
-    max: 5,
+    max: 15,
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: 10_000,
   };
   return attachIdleErrorHandler(new Pool(config));
 }
@@ -48,9 +48,9 @@ function makeSaPool(): Pool {
     password: process.env.SA_PG_PASSWORD!,
     database: 'postgres',
     ssl:      false,
-    max: 5,
+    max: 15,
     idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
+    connectionTimeoutMillis: 10_000,
   }));
 }
 
