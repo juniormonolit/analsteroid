@@ -163,6 +163,14 @@ interface Props {
   reportSlug: string;
   title: string;
   preset?: SavedReport | null;
+  // «Создать отчёт» (задача 1572): страница открыта как /sales/{slug}?new=1 —
+  // пустой отчёт выбранной сущности в режиме редактирования. Влияет на:
+  // (1) стартовый набор метрик — пустой, а не DEFAULT_METRIC_IDS;
+  // (2) подсказку «Добавьте метрики», пока метрик нет;
+  // (3) точечное разрешение кнопки «Сохранить» в Лайте ТОЛЬКО для этого
+  //     флоу — общий Лайт-гейт (basic) на «Сохранить» в остальных местах не
+  //     трогаем, см. ReportToolbar.tsx forceShowSave.
+  isNew?: boolean;
 }
 
 const SOURCE_DIMENSION_LABELS: Record<string, string> = {
@@ -182,7 +190,7 @@ const DEFAULT_METRIC_IDS = [
   'primary_shipments_amount',
 ];
 
-export function SalesReportPage({ reportSlug, title, preset }: Props) {
+export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Props) {
   const isMobile = useIsMobile();
 
   // Пункт 3а спеки: тумблер «Обычная/Про» из ЛК. Пока грузится/не резолвится — не
@@ -206,8 +214,12 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
   const [dealScope, setDealScope]       = useState<DealScope>('all');
   const [clientType, setClientType]     = useState<ClientType>('all');
   const [grouping, setGrouping]         = useState<Grouping>('none');
-  const [metricIds, setMetricIds]       = useState<string[]>(DEFAULT_METRIC_IDS);
-  const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(DEFAULT_METRIC_IDS);
+  // «Создать отчёт» (задача 1572): новый отчёт стартует БЕЗ метрик (пустая
+  // колонка сущности + подсказка ниже) — preset (если он всё же передан,
+  // например прямой заход на /sales/saved/[id]) всегда выигрывает у isNew
+  // через useEffect ниже, так что порядок приоритета верный.
+  const [metricIds, setMetricIds]       = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
+  const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [comparisonDisplay, setComparisonDisplay] = useState<ComparisonDisplay>('current');
   const [metricDisplayModes, setMetricDisplayModes] = useState<Record<string, ComparisonDisplay>>({});
@@ -732,9 +744,32 @@ export function SalesReportPage({ reportSlug, title, preset }: Props) {
         onSaveReport={() => setShowSaveModal(true)}
         onCopyTable={handleCopyTable}
         basic={!isPro}
+        // Пункт 5 задачи 1572: в Лайте «Сохранить» обычно скрыта (basic=true).
+        // Точечное исключение — только для отчёта, открытого через «Создать
+        // отчёт» (isNew) — иначе там нечем закрепить результат. Остальные
+        // pro-only элементы тулбара (basic) не трогаем.
+        forceShowSave={isNew}
         onOpenComparison={() => setShowComparison(true)}
         comparisonCount={compareIds.length}
       />
+
+      {isNew && selectedMetricIds.length === 0 && (
+        <div className="mx-6 mt-3 flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 rounded-lg border border-dashed border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-4 py-3">
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold text-[var(--color-text)]">Добавьте метрики</div>
+            <div className="text-xs text-[var(--color-text-muted)]">
+              Отчёт пока пустой — сейчас видна только колонка «{dimensionColumnLabel}». Выберите показатели через «Метрики» выше.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowMetricPanel(true)}
+            className="tap-target shrink-0 px-3.5 py-1.5 text-xs font-medium rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] hover:opacity-90 transition-opacity"
+          >
+            Добавить метрики
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-hidden">
         {error ? (

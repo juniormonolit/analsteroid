@@ -42,6 +42,11 @@ interface Props {
   // «Обычная» (п.3а спеки): скрыть попап «Фильтры», «Вид» и кнопку «Сохранить» —
   // остаются только «Копировать» и «Обновить».
   basic?: boolean;
+  // Точечное исключение из Лайт-гейта на «Сохранить» (задача 1572, п.5): отчёт,
+  // открытый через «Создать отчёт», должен уметь сохраниться и в Лайте — иначе
+  // фича там бессмысленна (построил и потерял). Остальные basic-ограничения
+  // (панель настроек, «Сравнение») это НЕ снимает — только саму кнопку «Сохранить».
+  forceShowSave?: boolean;
   // Режим «Сравнение» (п. Н2 спеки): открыть правый слайдер со сравнением сущностей
   // отчёта. Про-функция — скрыта в «Обычной» (basic), видна только в «Про» (уточнение
   // Серёги после смока 07.07: по умолчанию решили показывать всегда, но это pro-контрол).
@@ -63,6 +68,7 @@ export function ReportToolbar({
   zebra, onZebraChange,
   borderMode, onBorderModeChange,
   basic = false,
+  forceShowSave = false,
   onOpenComparison, comparisonCount = 0,
 }: Props) {
   const [copied, setCopied] = useState(false);
@@ -145,7 +151,7 @@ export function ReportToolbar({
       {/* Правая группа (правка 09.07): «Сохранить»/«Копировать» переехали вплотную
           к «Обновить» — весь блок прижат вправо через ml-auto на обёртке. */}
       <div className="ml-auto flex items-center gap-2">
-        {!basic && (
+        {(!basic || forceShowSave) && (
           <button
             onClick={onSaveReport}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"

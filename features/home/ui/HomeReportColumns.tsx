@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import type { SavedReport } from '@/lib/saved-reports/types';
+import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 
 // Дружественная подпись типа отчёта под именем сохранённого/общего отчёта —
 // подпись генерится из report_slug (данных о содержимом самого фильтра на
@@ -79,7 +80,16 @@ export function HomeReportColumns({ canSales, userLogin }: { canSales: boolean; 
   const ownReports = savedReports.filter(r => !r.isShared && r.userLogin === userLogin);
 
   return (
-    <div className="w-full grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-11 items-start">
+    <div className="w-full flex flex-col items-center gap-8 md:gap-11">
+      {/* «Создать отчёт» (задача 1572): видна ВСЕМ, включая Лайт — та же кнопка,
+          что и в сайдбаре (features/reports/ui/CreateReportButton.tsx). */}
+      <CreateReportButton
+        label="Создать отчёт"
+        iconSize={16}
+        className="tap-target flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] hover:opacity-90 transition-opacity shadow-sm"
+      />
+
+      <div className="w-full grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-11 items-start">
       {/* Роп монитор · Продажи */}
       <div>
         <ColumnEyebrow>Роп монитор · Продажи</ColumnEyebrow>
@@ -132,6 +142,7 @@ export function HomeReportColumns({ canSales, userLogin }: { canSales: boolean; 
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

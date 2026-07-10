@@ -23,6 +23,7 @@ import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
 import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 import { useTheme } from '@/lib/hooks/useTheme';
+import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 
 /* Общий паттерн пункта 1-го уровня (NAV-блок, Сводная/Планы/Декомпозиция,
    Метрики/Настройки) — редизайн сайдбара, итерация 3 (бриф Виктора). */
@@ -218,10 +219,13 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     qc.invalidateQueries({ queryKey: ['saved-reports'] });
   }
 
-  const stdReports = [
-    { label: 'По менеджерам', href: '/sales/by-managers' },
-    { label: 'По товарным группам', href: '/sales/by-product-groups' },
-  ];
+  // Задача 1572 (Серёга): «По менеджерам»/«По товарным группам» убраны из
+  // сайдбара как отдельные пункты меню — фокус на «Роп монитор»/«Отчёты
+  // Стаса» (общие витрины). Сами роуты/страницы/движок НЕ трогаем — прямые
+  // URL (/sales/by-managers, /sales/by-product-groups) и уже сохранённые
+  // отчёты (saved/[id], которые их используют как reportSlug) продолжают
+  // работать как раньше, см. app/(app)/sales/*. Старт нового отчёта этих же
+  // сущностей — через кнопку «Создать отчёт» ниже (CreateReportButton).
 
   // Пункт 3б спеки: две управляемые общие витрины, одна механика (is_shared),
   // разные разделы (shared_section). Перемещение в корзину — admin
@@ -340,6 +344,16 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
 
   return (
     <div>
+      {/* «Создать отчёт» (задача 1572): видна ВСЕМ, включая Лайт — не завязана
+          на isReportAdmin/canManage, только на то, что раздел «Продажи» вообще
+          открыт (section.sales, уже проверено выше по дереву в NAV.filter). */}
+      <div className="mx-1 mb-2">
+        <CreateReportButton
+          label="Создать отчёт"
+          className="tap-target w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[12.5px] font-medium rounded-lg border border-dashed border-[var(--color-sidebar-border)] text-[var(--color-sidebar-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] hover:bg-[var(--color-sidebar-hover-bg)] transition-colors"
+        />
+      </div>
+
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
@@ -349,11 +363,11 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         </button>
         {openStd && (
           <>
-            {stdReports.map(r => (
-              <Link key={r.href} href={r.href} className={linkCls(r.href)}>
-                <span className="flex-1 min-w-0 break-words line-clamp-2">{r.label}</span>
-              </Link>
-            ))}
+            {ropMonitorShared.length === 0 && (
+              <div className="text-xs text-[var(--color-sidebar-text-muted)] py-1 px-1">
+                Нет общих отчётов
+              </div>
+            )}
             {ropMonitorShared.map(r => renderReportRow(r, canDeleteShared, ropMonitorShared))}
           </>
         )}
