@@ -1005,43 +1005,54 @@ export function ReportTable({
   const lastPinnedId = [...displayMetrics].reverse().find(m => pinnedMetricIds.includes(m.id))?.id;
 
   // Metric ids that start a new group block — get a strong vertical separator on their left edge.
+  // На стыке pinned→scroll границу не добавляем (симметрично needsGridDivider ниже) —
+  // там уже есть свой persistent-разделитель (lastPinnedId, overlay-span в шапке/теле),
+  // иначе после усиления strongLeft до 3px (правка 10.07, задача 1591) на этом стыке
+  // получились бы две параллельные линии разной толщины/цвета.
   const strongLeft = new Set<string>();
   if (hasGroups) {
     let prevKey: string | undefined;
     for (const m of displayMetrics) {
       const key = pinnedMetricIds.includes(m.id) ? '__pinned__' : (groupOf.get(m.id) ?? '__ungrouped__');
-      if (prevKey !== undefined && key !== prevKey && key !== '__pinned__') strongLeft.add(m.id);
+      if (prevKey !== undefined && key !== prevKey && key !== '__pinned__' && prevKey !== '__pinned__') strongLeft.add(m.id);
       prevKey = key;
     }
   }
   const sepCls = 'border-l border-l-[var(--color-border)]';
-
-  // Категория метрики из каталога (Metric.category) — правка владельца 10.07:
-  // трёхуровневая иерархия толщины границ — (1) внутри метрики (Пред./Тек./Δ/Δ%) без
-  // границы вовсе, (2) между соседними метриками одной категории — 2px (см.
-  // needsGridDivider ниже), (3) между метриками РАЗНЫХ категорий каталога («Звонки»,
-  // «Планы» и т.п. — та же категория, что красит заголовок в MetricPanel/каталоге) —
-  // самая жирная, 3px. Колонки без категории (null) до этого уровня не поднимаются —
-  // остаются обычным разделителем метрик (уровень 2), чтобы не городить границу там,
-  // где категория неизвестна хотя бы с одной стороны.
-  const categoryOf = new Map<string, string | null>();
-  for (const m of displayMetrics) categoryOf.set(m.id, m.category ?? null);
+  const strongGroupCls = 'border-l-[3px] border-l-[var(--color-border-strong)]';
 
   // ── Вертикальные границы между колонками метрик (п.4 правок 09.07, «Границы» в
   // «Вид»; пересмотрено правкой владельца 10.07 — «по сути все вертикальные границы
-  // жирные», прежняя версия делала border-strong МЕЖДУ ЛЮБЫМИ соседними метриками
-  // всегда, из-за чего толщина не отличалась от границ категорий) ───────────────────
-  // Три уровня толщины, от тонкого к жирному:
-  //   1. Обычная тонкая — между обычными метриками (каждая в 1 столбец) И ВНУТРИ
-  //      развёрнутой метрики между её под-колонками (Пред./Тек./Δ/Δ%, см. edgeCls в
-  //      renderMetricCells) — тот же sepCls/--color-border, что и остальная сетка.
+  // жирные»; ТРЕТЬЯ итерация 10.07 — жалоба на прод-скрин БЕЗ сравнения, где всё
+  // равно полно жирных вертикалей: причиной был уровень «границы категорий каталога
+  // метрик» (needsCategoryDivider/categoryOf, коммит 11cfcfd/0c0e9bb) — категория
+  // (Metric.category) это внутренняя классификация справочника метрик (красит
+  // заголовки в MetricPanel), у нее нет ни заголовка, ни какого-либо визуального
+  // смысла ДЛЯ ПОЛЬЗОВАТЕЛЯ в самой таблице отчёта, поэтому почти каждая соседняя
+  // пара метрик оказывалась «жирной» без всякой причины, которую видно на экране.
+  // Уровень удалён целиком (categoryOf/needsCategoryDivider), category нигде больше
+  // в ReportTable не участвует — только в MetricPanel/каталоге, структуру шапки не
+  // затрагивает. Финальная (зафиксированная владельцем, msg 566/601) иерархия
+  // толщины, от тонкого к жирному:
+  //   1. Обычная тонкая — ВЕЗДЕ по умолчанию: между обычными метриками (каждая в 1
+  //      столбец) И ВНУТРИ развёрнутой метрики между её под-колонками (Пред./Тек./
+  //      Δ/Δ%, см. edgeCls в renderMetricCells) — тот же sepCls/--color-border, что
+  //      и остальная сетка.
   //   2. Чуть жирней (2px --color-border-strong) — ТОЛЬКО у краёв метрики,
   //      развёрнутой больше чем на 1 столбец (режим сравнения, colSpanFor > 1): блок
   //      её под-колонок должен читаться как единое целое. Граница между двумя
   //      метриками, каждая из которых в 1 столбец, толще не становится — это
-  //      обычная граница уровня 1 (см. needsStrongGridDivider ниже).
-  //   3. Жирненькая (3px) — только на границе категорий каталога (needsCategoryDivider),
-  //      не зависит от того, развёрнута ли метрика.
+  //      обычная граница уровня 1 (см. needsStrongGridDivider ниже, логика не
+  //      менялась в этой итерации).
+  //   3. Жирная (3px --color-border-strong, strongGroupCls) — ТОЛЬКО края ВИДИМЫХ
+  //      пользовательских групп колонок с заголовком в шапке (`columnGroups`, тип
+  //      «БРОНИ И ПРОДАЖИ» — см. superSegments/hasGroups выше): это единственная
+  //      группировка, у которой есть подпись в шапке и реальный смысл для
+  //      пользователя. Раньше (см. WORKLOG 2026-06-29 «Облегчение таблицы») этот
+  //      край, наоборот, был намеренно приглушён до hairline (sepCls) — правка
+  //      владельца 10.07 отменяет то решение для этого конкретного случая.
+  // Итого: в отчёте БЕЗ сравнения и БЕЗ пользовательских групп все вертикали —
+  // обычные тонкие, без исключений.
   // Первая метрика в displayMetrics левую границу не получает — эту роль уже играет
   // border-r колонки измерения. На стыке pinned→scroll границу не дублируем — там уже
   // есть persistent-разделитель (lastPinnedId, overlay-span ниже), иначе будет
@@ -1056,33 +1067,20 @@ export function ReportTable({
   }
   // Уровень 2: граница жирнее ТОЛЬКО когда хотя бы одна из двух соседних метрик
   // развёрнута больше чем на 1 столбец (сравнение) — это её собственный внешний
-  // край, отделяющий блок Пред./Тек./Δ/Δ% от соседей.
+  // край, отделяющий блок Пред./Тек./Δ/Δ% от соседей. Не трогали в 3-й итерации.
   function needsStrongGridDivider(metricIdx: number): boolean {
     if (!needsGridDivider(metricIdx)) return false;
     const prev = displayMetrics[metricIdx - 1];
     const cur = displayMetrics[metricIdx];
     return colSpanFor(prev.id) > 1 || colSpanFor(cur.id) > 1;
   }
-  // Уровень 3 (самый жирный): граница между метриками РАЗНЫХ категорий каталога.
-  // Место то же, где вообще уместен разделитель метрик (needsGridDivider) — здесь
-  // только повышаем толщину/вес, когда категории по обе стороны заданы и различны.
-  // Не зависит от colSpanFor — категория главнее режима сравнения.
-  function needsCategoryDivider(metricIdx: number): boolean {
-    if (!needsGridDivider(metricIdx)) return false;
-    const prevCat = categoryOf.get(displayMetrics[metricIdx - 1].id);
-    const curCat = categoryOf.get(displayMetrics[metricIdx].id);
-    if (!prevCat || !curCat) return false;
-    return prevCat !== curCat;
-  }
   // Левая граница метрики: акцент (толще/темнее, РАБОТАЕТ В ЛЮБОМ borderMode — п.5
-  // правок, «Акцент колонки» по-новому, не часть трёхуровневой иерархии) > группа
-  // (существующий sepCls/strongLeft, отдельная фича) > граница между категориями
-  // каталога (3px, уровень 3) > край развёрнутой метрики (2px, уровень 2) > обычная
-  // тонкая граница между метриками (уровень 1).
+  // правок, «Акцент колонки» по-новому, не часть иерархии) > край пользовательской
+  // группы колонок (strongLeft, 3px, уровень 3) > край развёрнутой метрики (2px,
+  // уровень 2) > обычная тонкая граница между метриками (уровень 1).
   function leftEdgeCls(metricIdx: number, m: Metric): string {
     if (accentSet.has(m.id)) return 'border-l-2 border-l-[var(--color-border-strong)]';
-    if (strongLeft.has(m.id)) return sepCls;
-    if (needsCategoryDivider(metricIdx)) return 'border-l-[3px] border-l-[var(--color-border-strong)]';
+    if (strongLeft.has(m.id)) return strongGroupCls;
     if (needsStrongGridDivider(metricIdx)) return 'border-l-2 border-l-[var(--color-border-strong)]';
     if (needsGridDivider(metricIdx)) return sepCls;
     return '';
@@ -1230,7 +1228,7 @@ export function ReportTable({
                 <th
                   key={i}
                   colSpan={seg.span}
-                  className={`text-center px-2 py-1.5 text-xs font-bold uppercase tracking-wider border-b border-[var(--color-border)] bg-[var(--color-table-header)] ${seg.name ? 'text-[var(--color-text)] border-l border-r border-[var(--color-border)]' : 'text-transparent'}`}
+                  className={`text-center px-2 py-1.5 text-xs font-bold uppercase tracking-wider border-b border-[var(--color-border)] bg-[var(--color-table-header)] ${seg.name ? 'text-[var(--color-text)] border-l-[3px] border-l-[var(--color-border-strong)] border-r-[3px] border-r-[var(--color-border-strong)]' : 'text-transparent'}`}
                 >
                   {seg.name ?? ' '}
                 </th>
