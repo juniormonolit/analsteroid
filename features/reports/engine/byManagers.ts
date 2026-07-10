@@ -4,7 +4,8 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
 import type { DateRange } from '@/lib/period';
-import type { DealScope, ClientType, ReportRow, AccountType } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ReportRow, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
+import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
 import { addDays, startOfDay } from 'date-fns';
 
 // ── Funnel metadata ───────────────────────────────────────────────────────
@@ -28,8 +29,8 @@ type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: numb
 const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
 const ROW_TTL = 10 * 60 * 1000; // 10 min
 
-function mkKey(from: string, toExcl: string, metricIds: string[], pgId?: string, srcKey?: string): string {
-  return `${from}|${toExcl}|${pgId ?? 'all'}|${srcKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
+function mkKey(from: string, toExcl: string, metricIds: string[], pgId?: string, srcKey?: string, offhKey?: string): string {
+  return `${from}|${toExcl}|${pgId ?? 'all'}|${srcKey ?? 'all'}|${offhKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
 }
 
 // dealScope/clientType match the same funnel_id logic as sqlGen.ts:
@@ -105,6 +106,11 @@ export interface ByManagersOptions {
   productGroupId?: string; // drilldown: restrict to one product group
   // Маркетинговый дрилл-даун: ограничить сделками одного значения измерения источников
   sourceFilter?: { dimension: SourceDimension; value: string };
+  // Задача 1569: экспериментальные фильтры по нерабочему времени (см.
+  // lib/metrics/offHoursFilters.ts) — НЕ funnel-based, поэтому баковаются прямо в
+  // SQL WHERE (как pgWhere/srcWhere), а не в память вместе с dealScope/clientType.
+  createdTimeFilter?: CreatedTimeFilter;
+  firstTouchFilter?: FirstTouchFilter;
 }
 
 export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRow[]> {
@@ -114,6 +120,8 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   const accountType = opts.accountType ?? 'all';
   const pgMode     = opts.productGroupMode ?? 'kc';
   const pgId       = opts.productGroupId;
+  const createdTimeFilter = opts.createdTimeFilter ?? 'all';
+  const firstTouchFilter  = opts.firstTouchFilter  ?? 'all';
 
   const fromIso   = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
@@ -194,9 +202,16 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
     collected.filter(m => m.tags.includes('scope_independent')).map(m => m.id),
   );
 
-  // Analytics row cache (pills are NOT part of the key; pgId/srcKey ARE — they change the scope)
+  // Задача 1569: фильтры по нерабочему времени НЕ funnel-based (в отличие от
+  // dealScope/clientType ниже) — режут конкретные сделки, значит идут прямо в SQL
+  // WHERE (как pgWhere/srcWhere) и обязаны быть частью ключа кэша строк.
+  const offhWhere = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter)]
+    .filter(Boolean).join(' AND ');
+  const offhKey = `${createdTimeFilter}:${firstTouchFilter}`;
+
+  // Analytics row cache (pills are NOT part of the key; pgId/srcKey/offhKey ARE — they change the scope)
   // L1: in-memory Map, per-instance, 10 min. L2: Redis, shared across instances/restarts.
-  const key   = mkKey(fromIso, toExclIso, metricIds, pgId, srcKey);
+  const key   = mkKey(fromIso, toExclIso, metricIds, pgId, srcKey, offhKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
@@ -204,6 +219,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
       const notNullParts = ['d.current_manager_id IS NOT NULL'];
       if (pgWhere) notNullParts.push(pgWhere);
       if (srcWhere) notNullParts.push(srcWhere);
+      if (offhWhere) notNullParts.push(offhWhere);
       const sql = buildCollectedSQL(collected, {
         idExpr:          'd.current_manager_id::text',
         groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',

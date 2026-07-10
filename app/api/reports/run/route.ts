@@ -17,7 +17,7 @@ import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
 import { getWorkingDaysByMonthInRange } from '@/lib/plans/dailyPlan';
 import { toZonedTime } from 'date-fns-tz';
-import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType } from '@/lib/metrics/types';
+import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 
 interface PeriodPlanEntry { planSales: number; planShipments: number }
 
@@ -122,6 +122,10 @@ export async function POST(req: NextRequest) {
     productGroupId,  // drilldown: restrict by-managers to one product group
     sourceDimension, // by-sources: main dimension (brand/platform/contact_type/ad_channel/branch/source)
     sourceFilter,    // drilldown: { dimension, value } — restrict deals to one dimension value
+    // Задача 1569: экспериментальные фильтры по нерабочему времени (сегментация,
+    // НЕ персистится в SavedReport — см. FiltersMenu.tsx/SalesReportPage.tsx).
+    createdTimeFilter = 'all' as CreatedTimeFilter,
+    firstTouchFilter = 'all' as FirstTouchFilter,
   } = body;
 
   if (!isValidPeriodInput(period)) {
@@ -144,6 +148,8 @@ export async function POST(req: NextRequest) {
     clientType,
     departmentIds,
     accountType,
+    createdTimeFilter,
+    firstTouchFilter,
   };
   const compOpts = {
     period: { from: new Date(comparisonPeriod.from), to: new Date(comparisonPeriod.to) },
@@ -151,6 +157,8 @@ export async function POST(req: NextRequest) {
     clientType,
     departmentIds,
     accountType,
+    createdTimeFilter,
+    firstTouchFilter,
   };
 
   // Задача 10.07: общие для обеих групп план-метрик даты — "сегодня" МСК и календарные
@@ -184,13 +192,13 @@ export async function POST(req: NextRequest) {
     ]);
   } else if (reportSlug === 'by-product-groups') {
     [currentRows, compRows] = await Promise.all([
-      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, managerId, departmentIds }),
-      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, managerId, departmentIds }),
+      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
+      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
     ]);
   } else if (reportSlug === 'by-sources') {
     [currentRows, compRows] = await Promise.all([
-      fetchBySources({ period: opts.period, dealScope, clientType, sourceDimension, sourceFilter }),
-      fetchBySources({ period: compOpts.period, dealScope, clientType, sourceDimension, sourceFilter }),
+      fetchBySources({ period: opts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter }),
+      fetchBySources({ period: compOpts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter }),
     ]);
   }
 

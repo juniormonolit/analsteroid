@@ -9,6 +9,17 @@ export type Grouping = 'none' | 'team' | 'branch' | 'total';
 export type ProductGroupMode = 'kc' | 'by_max';
 export type ComparisonDisplay = 'full' | 'partial' | 'compact' | 'current';
 export type AccountType = 'managers' | 'logists' | 'all';
+// Задача 1569 (владелец, «побаловаться» — экспериментальная сегментация по
+// нерабочему времени, НЕ персистится в SavedReport, см. lib/metrics/offHoursFilters.ts):
+// «Создана» — время МСК СОЗДАНИЯ сделки: будни 09:00-18:00 / будни вне этого окна
+// (вечер/ночь) / выходные (сб-вс, весь день).
+export type CreatedTimeFilter = 'all' | 'business_hours' | 'weekday_after_hours' | 'weekend';
+// «Первая обработка» — время ПЕРВОГО события sa.deal_events по сделке относительно
+// ближайшего открытия (09:00 МСК буднего дня) от момента создания: off_hours —
+// дежурный обработал ДО открытия (то же нерабочее окно), business_hours — обработка
+// сдвинулась на/после открытия. Сделки без единого deal_events (история с 03.04.2026)
+// под непустым вариантом не попадают ни в одну корзину (честно исключаются).
+export type FirstTouchFilter = 'all' | 'off_hours' | 'business_hours';
 // Границы таблицы отчёта (п.4 правок 09.07, «Вид» → «Границы»): grid — полная сетка
 // (дефолт, горизонтальные + вертикальные между колонками метрик), horizontal — только
 // горизонтальные (было единственным поведением до этой правки), none — без границ.

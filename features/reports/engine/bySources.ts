@@ -8,7 +8,8 @@ import {
   NO_SOURCE_LABEL, UNDEFINED_LABEL, type SourceDimension,
 } from '@/lib/marketing/sources';
 import type { DateRange } from '@/lib/period';
-import type { DealScope, ClientType, ReportRow } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ReportRow, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
+import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
 import { addDays, startOfDay } from 'date-fns';
 
 // ── Funnel metadata (та же схема, что в byManagers/byProductGroups) ─────────
@@ -81,6 +82,10 @@ export interface BySourcesOptions {
   sourceDimension?: SourceDimension;
   // Дрилл-даун: ограничить сделками одного значения другого измерения
   sourceFilter?: { dimension: SourceDimension; value: string };
+  // Задача 1569: экспериментальные фильтры по нерабочему времени (см.
+  // lib/metrics/offHoursFilters.ts) — не funnel-based, идут прямо в SQL WHERE.
+  createdTimeFilter?: CreatedTimeFilter;
+  firstTouchFilter?: FirstTouchFilter;
 }
 
 export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[]> {
@@ -89,6 +94,8 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   const dim        = opts.sourceDimension ?? 'brand';
   const filter     = opts.sourceFilter;
   const isBranchDim = dim === 'branch';
+  const createdTimeFilter = opts.createdTimeFilter ?? 'all';
+  const firstTouchFilter  = opts.firstTouchFilter  ?? 'all';
 
   const fromIso   = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
@@ -105,21 +112,28 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   );
 
   // Фильтр противоположного типа → SQL WHERE (+ ключ кэша)
-  let whereExtra: string | undefined;
+  const whereParts: string[] = [];
   let cacheSuffix = '';
   if (filter) {
     if (filter.dimension === 'branch') {
       // дрилл из филиала: режем по менеджерам филиала
-      whereExtra = managerIdsWhere(await resolveBranchManagerIds(filter.value));
+      whereParts.push(managerIdsWhere(await resolveBranchManagerIds(filter.value)));
       cacheSuffix = `|mgr:${filter.value}`;
     } else if (isBranchDim) {
       // дрилл в филиалы из source-сущности: режем по source_id
       const ids = await resolveSourceIds(filter.dimension, filter.value);
-      whereExtra = sourceIdsWhere(ids);
+      whereParts.push(sourceIdsWhere(ids));
       cacheSuffix = `|src:${filter.dimension}=${filter.value}`;
     }
     // source-измерение + source-фильтр → в памяти, SQL не трогаем
   }
+  // Задача 1569: фильтры по нерабочему времени — не funnel-based, идут в SQL WHERE
+  // (как фильтр противоположного типа выше), а не в постфактум-фильтр по funnel_id.
+  const offhWhereStr = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter)]
+    .filter(Boolean).join(' AND ');
+  if (offhWhereStr) whereParts.push(offhWhereStr);
+  cacheSuffix += `|offh:${createdTimeFilter}:${firstTouchFilter}`;
+  const whereExtra = whereParts.length > 0 ? whereParts.join(' AND ') : undefined;
 
   const rows = await getRows(isBranchDim ? 'manager' : 'source', fromIso, toExclIso, whereExtra, cacheSuffix);
 

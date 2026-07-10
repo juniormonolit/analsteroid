@@ -3,7 +3,8 @@ import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import type { DateRange } from '@/lib/period';
-import type { DealScope, ClientType, ReportRow, ProductGroupMode } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ReportRow, ProductGroupMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
+import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
 import { addDays, startOfDay } from 'date-fns';
 
 // ── Funnel metadata ───────────────────────────────────────────────────────
@@ -27,8 +28,8 @@ type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: numb
 const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
 const ROW_TTL = 10 * 60 * 1000; // 10 min
 
-function mkKey(from: string, toExcl: string, metricIds: string[], mode: string, managerId?: string, deptKey?: string, managerIdsKey?: string): string {
-  return `${from}|${toExcl}|${mode}|${managerId ?? 'all'}|${deptKey ?? 'all'}|${managerIdsKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
+function mkKey(from: string, toExcl: string, metricIds: string[], mode: string, managerId?: string, deptKey?: string, managerIdsKey?: string, offhKey?: string): string {
+  return `${from}|${toExcl}|${mode}|${managerId ?? 'all'}|${deptKey ?? 'all'}|${managerIdsKey ?? 'all'}|${offhKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
 }
 
 // dealScope/clientType match the same funnel_id logic as sqlGen.ts:
@@ -105,6 +106,10 @@ export interface ByProductGroupsOptions {
   managerId?: string;      // drilldown: restrict to one manager's deals
   managerIds?: string[];   // roster aggregate: restrict to a set of managers in ONE query (avoids N+1 per-manager calls — см. хотфикс "Дирекция" 500, задача department-card)
   departmentIds?: string[]; // filter to deals by managers in selected departments
+  // Задача 1569: экспериментальные фильтры по нерабочему времени (см.
+  // lib/metrics/offHoursFilters.ts) — не funnel-based, идут прямо в SQL WHERE.
+  createdTimeFilter?: CreatedTimeFilter;
+  firstTouchFilter?: FirstTouchFilter;
 }
 
 export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promise<ReportRow[]> {
@@ -112,6 +117,8 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   const clientType = opts.clientType ?? 'all';
   const mode       = opts.productGroupMode ?? 'kc';
   const deptIds    = opts.departmentIds ?? [];
+  const createdTimeFilter = opts.createdTimeFilter ?? 'all';
+  const firstTouchFilter  = opts.firstTouchFilter  ?? 'all';
   // managerId / deptIds come from the request — validate numeric IDs before inlining into SQL.
   const managerId  = opts.managerId && /^\d+$/.test(opts.managerId) ? opts.managerId : undefined;
   const managerIds = (opts.managerIds ?? []).filter(id => /^\d+$/.test(id));
@@ -143,7 +150,13 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   if (managerId) whereParts.push(`d.current_manager_id = ${managerId}`);
   if (managerIds.length > 0) whereParts.push(`d.current_manager_id IN (${managerIds.join(',')})`);
   if (deptManagerWhere) whereParts.push(deptManagerWhere);
+  // Задача 1569: фильтры по нерабочему времени — не funnel-based, идут в WHERE
+  // (как managerId/deptManagerWhere), а не в постфактум-фильтр по funnel_id ниже.
+  const offhWhereStr = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter)]
+    .filter(Boolean).join(' AND ');
+  if (offhWhereStr) whereParts.push(offhWhereStr);
   const notNullWhere = whereParts.length > 0 ? whereParts.join(' AND ') : undefined;
+  const offhKey = `${createdTimeFilter}:${firstTouchFilter}`;
 
   const allMetrics = await loadMetrics();
   const collected  = allMetrics.filter(m => m.metricType === 'collected' && !m.isTest);
@@ -152,8 +165,8 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
     collected.filter(m => m.tags.includes('scope_independent')).map(m => m.id),
   );
 
-  // Analytics row cache (pills NOT in key; mode + managerId + deptKey ARE — they change the scope)
-  const key   = mkKey(fromIso, toExclIso, metricIds, mode, managerId, deptKey, managerIdsKey);
+  // Analytics row cache (pills NOT in key; mode + managerId + deptKey + offhKey ARE — they change the scope)
+  const key   = mkKey(fromIso, toExclIso, metricIds, mode, managerId, deptKey, managerIdsKey, offhKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {

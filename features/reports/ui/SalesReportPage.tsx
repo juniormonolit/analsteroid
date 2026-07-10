@@ -14,7 +14,7 @@ import type { DrilldownTarget } from './DrilldownDrawer';
 import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 import { ComparisonPanel } from './ComparisonPanel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
-import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay, BorderMode } from '@/lib/metrics/types';
+import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay, BorderMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import type { DateRange } from '@/lib/period';
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
@@ -267,6 +267,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // настроек метрики → «Фильтр и сортировка»). Намеренно СЕССИОННОЕ состояние — не
   // персистится в SavedReport (меньше риска на первый заход), сбрасывается сменой отчёта.
   const [metricFilters, setMetricFilters] = useState<MetricFilters>({});
+  // Задача 1569 (владелец, «побаловаться») — экспериментальные фильтры сегментации
+  // по нерабочему времени («Создана» / «Первая обработка», см. FiltersMenu.tsx +
+  // lib/metrics/offHoursFilters.ts). Тем же паттерном, что metricFilters выше:
+  // намеренно СЕССИОННОЕ состояние, НЕ персистится в SavedReport — добавление
+  // персистентности потребовало бы миграции БД (saved_reports — типизированная
+  // таблица без catch-all JSON-колонки, см. отчёт задачи), что вне разрешённых
+  // правок этой задачи; сбрасывается сменой отчёта, как metricFilters.
+  const [createdTimeFilter, setCreatedTimeFilter] = useState<CreatedTimeFilter>('all');
+  const [firstTouchFilter, setFirstTouchFilter] = useState<FirstTouchFilter>('all');
   const [columnGroups, setColumnGroups] = useState<{ name: string; metricIds: string[] }[]>([]);
   const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
 
@@ -337,7 +346,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // fetchedMetricIds only grows — removals don't trigger re-fetch, additions do
   const metricIdsForQuery = fetchedMetricIds.includes('all_core') ? ['all_core'] : [...fetchedMetricIds].sort();
   const sourceMode = reportSlug === 'by-sources';
-  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null];
+  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter];
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey,
@@ -356,6 +365,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           productGroupMode,
           accountType,
           sourceDimension: sourceMode ? sourceDimension : undefined,
+          createdTimeFilter,
+          firstTouchFilter,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -741,6 +752,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         showProductGroupPicker={true}
         productGroupMode={productGroupMode}
         onProductGroupModeChange={setProductGroupMode}
+        createdTimeFilter={createdTimeFilter}
+        onCreatedTimeFilterChange={setCreatedTimeFilter}
+        firstTouchFilter={firstTouchFilter}
+        onFirstTouchFilterChange={setFirstTouchFilter}
         onSaveReport={() => setShowSaveModal(true)}
         onCopyTable={handleCopyTable}
         basic={!isPro}

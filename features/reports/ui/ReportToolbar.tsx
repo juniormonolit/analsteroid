@@ -1,7 +1,7 @@
 'use client';
 import { useRef, useState } from 'react';
 import { RefreshCw, Bookmark, Copy, Check, Scale, SlidersHorizontal } from 'lucide-react';
-import type { DealScope, ClientType, ProductGroupMode, ComparisonDisplay, AccountType, BorderMode } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ProductGroupMode, ComparisonDisplay, AccountType, BorderMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { type ViewPrefs } from './ViewSettings';
 import { countActiveFilters } from './FiltersMenu';
 import { ReportSettingsPanel } from './ReportSettingsPanel';
@@ -52,6 +52,12 @@ interface Props {
   // Серёги после смока 07.07: по умолчанию решили показывать всегда, но это pro-контрол).
   onOpenComparison?: () => void;
   comparisonCount?: number;
+  // Задача 1569: экспериментальные фильтры по нерабочему времени — сессионные, не
+  // персистятся в SavedReport (см. FiltersMenu.tsx). Опциональны, как accountType.
+  createdTimeFilter?: CreatedTimeFilter;
+  onCreatedTimeFilterChange?: (v: CreatedTimeFilter) => void;
+  firstTouchFilter?: FirstTouchFilter;
+  onFirstTouchFilterChange?: (v: FirstTouchFilter) => void;
 }
 
 export function ReportToolbar({
@@ -70,6 +76,7 @@ export function ReportToolbar({
   basic = false,
   forceShowSave = false,
   onOpenComparison, comparisonCount = 0,
+  createdTimeFilter, onCreatedTimeFilterChange, firstTouchFilter, onFirstTouchFilterChange,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,6 +94,7 @@ export function ReportToolbar({
   const activeFiltersCount = countActiveFilters({
     dealScope, onDealScopeChange, clientType, onClientTypeChange,
     productGroupMode, onProductGroupModeChange, showProductGroupPicker,
+    createdTimeFilter, onCreatedTimeFilterChange, firstTouchFilter, onFirstTouchFilterChange,
   });
 
   return (
@@ -130,6 +138,10 @@ export function ReportToolbar({
           onZebraChange={onZebraChange}
           borderMode={borderMode}
           onBorderModeChange={onBorderModeChange}
+          createdTimeFilter={createdTimeFilter}
+          onCreatedTimeFilterChange={onCreatedTimeFilterChange}
+          firstTouchFilter={firstTouchFilter}
+          onFirstTouchFilterChange={onFirstTouchFilterChange}
           onClose={() => setShowSettings(false)}
         />
       )}
