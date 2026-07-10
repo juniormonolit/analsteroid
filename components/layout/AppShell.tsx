@@ -187,6 +187,46 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     qc.invalidateQueries({ queryKey: ['saved-reports'] });
   }
 
+  // ── Drag-and-drop порядка (правка владельца 10.07/2) ────────────────────────
+  // Строку можно перетащить мышью в любую позицию СВОЕГО раздела — один POST
+  // {beforeId} на дроп, сервер перенумеровывает весь скоуп одним UPDATE (см.
+  // .../[id]/move/route.ts, режим 2). Стрелки «вверх»/«вниз» остаются — фолбэк
+  // для тача (HTML5 DnD не работает на телефонах) и для доступности.
+  // dragId — что тащим; dragOverId — строка, над которой курсор (подсветка вставки).
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  async function dropReport(draggedId: string, target: SavedReport, list: SavedReport[]) {
+    const ids = list.map(x => x.id);
+    const from = ids.indexOf(draggedId);
+    const to = ids.indexOf(target.id);
+    if (from === -1 || to === -1 || from === to) return; // кросс-раздел/дроп на себя — игнор
+    // Тащим ВНИЗ — встаём ПОСЛЕ цели (beforeId = следующий за целью, null = в конец);
+    // тащим ВВЕРХ — ПЕРЕД целью. Ровно так же рисуется линия-индикатор в renderReportRow.
+    const beforeId = from < to ? (ids[to + 1] ?? null) : target.id;
+
+    // Оптимистичная перестановка в кэше (кэш — общий список всех разделов; рендер
+    // читает только относительный порядок внутри раздела) — сайдбар не мигает;
+    // invalidate после ответа сверяет с сервером (источник правды).
+    qc.setQueryData<SavedReport[]>(['saved-reports'], old => {
+      if (!old) return old;
+      const dragged = old.find(x => x.id === draggedId);
+      if (!dragged) return old;
+      const without = old.filter(x => x.id !== draggedId);
+      const targetIdx = without.findIndex(x => x.id === target.id);
+      if (targetIdx === -1) return old;
+      without.splice(from < to ? targetIdx + 1 : targetIdx, 0, dragged);
+      return without;
+    });
+
+    await fetch(`/api/saved-reports/${draggedId}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ beforeId }),
+    });
+    qc.invalidateQueries({ queryKey: ['saved-reports'] });
+  }
+
   const stdReports = [
     { label: 'По менеджерам', href: '/sales/by-managers' },
     { label: 'По товарным группам', href: '/sales/by-product-groups' },
@@ -225,10 +265,14 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   // Одна строка отчёта в сайдбаре (ссылка + порядок + переименование + удаление) —
   // переиспользуется для всех трёх списков (Роп монитор / Смекалочная / Избранное),
   // различается только правом на управление (canManage — свой отчёт или витрина, где
-  // я админ) и позицией в списке (isFirst/isLast — дизейблят край кнопок вверх/вниз;
-  // сервер (.../move) — источник правды по краю, это только UI-подсказка).
-  function renderReportRow(r: SavedReport, canManage: boolean, isFirst: boolean, isLast: boolean) {
+  // я админ) и списком своего раздела (list — для DnD и позиции; isFirst/isLast
+  // дизейблят край кнопок вверх/вниз; сервер (.../move) — источник правды по краю,
+  // это только UI-подсказка).
+  function renderReportRow(r: SavedReport, canManage: boolean, list: SavedReport[]) {
     const href = `/sales/saved/${r.id}`;
+    const idx = list.findIndex(x => x.id === r.id);
+    const isFirst = idx === 0;
+    const isLast = idx === list.length - 1;
     if (renamingId === r.id) {
       return (
         <div key={r.id} className="flex items-center gap-1.5 py-1 px-2 my-0.5">
@@ -247,8 +291,41 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         </div>
       );
     }
+    // DnD-индикатор места вставки: тащим вниз → строка встанет ПОСЛЕ подсвеченной
+    // (линия снизу), вверх → ПЕРЕД (линия сверху) — та же логика beforeId в dropReport.
+    const dragFromIdx = dragId ? list.findIndex(x => x.id === dragId) : -1;
+    const isDropTarget = dragOverId === r.id && dragId !== null && dragId !== r.id && dragFromIdx !== -1;
+    const dropIndicatorCls = isDropTarget
+      ? (dragFromIdx < idx
+          ? ' shadow-[inset_0_-2px_0_0_var(--color-accent)]'
+          : ' shadow-[inset_0_2px_0_0_var(--color-accent)]')
+      : '';
     return (
-      <div key={r.id} className="group relative flex items-center gap-0.5">
+      <div
+        key={r.id}
+        className={`group relative flex items-center gap-0.5${dropIndicatorCls}${dragId === r.id ? ' opacity-40' : ''}`}
+        draggable={canManage}
+        onDragStart={canManage ? e => {
+          setDragId(r.id);
+          e.dataTransfer.effectAllowed = 'move';
+        } : undefined}
+        onDragEnd={canManage ? () => { setDragId(null); setDragOverId(null); } : undefined}
+        onDragOver={canManage ? e => {
+          // Принимаем дроп только внутри СВОЕГО раздела (dragId есть в list)
+          if (dragId && dragId !== r.id && dragFromIdx !== -1) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (dragOverId !== r.id) setDragOverId(r.id);
+          }
+        } : undefined}
+        onDragLeave={canManage ? () => setDragOverId(prev => (prev === r.id ? null : prev)) : undefined}
+        onDrop={canManage ? e => {
+          e.preventDefault();
+          if (dragId) dropReport(dragId, r, list);
+          setDragId(null);
+          setDragOverId(null);
+        } : undefined}
+      >
         {canManage && (
           <div className="flex flex-col shrink-0 pl-1">
             <button
@@ -269,7 +346,9 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
             </button>
           </div>
         )}
-        <Link href={href} className={`flex-1 ${linkCls(href)}`} title={r.name}>
+        {/* draggable={false} — иначе браузер тащит САМУ ссылку (нативный drag <a>),
+            перебивая наш DnD строки (drag начинался бы с "призраком" URL). */}
+        <Link href={href} className={`flex-1 ${linkCls(href)}`} title={r.name} draggable={false}>
           <span className="flex-1 min-w-0 break-words line-clamp-2">{r.name}</span>
           {canManage && (
             <>
@@ -310,7 +389,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
                 <span className="flex-1 min-w-0 break-words line-clamp-2">{r.label}</span>
               </Link>
             ))}
-            {ropMonitorShared.map((r, i) => renderReportRow(r, canDeleteShared, i === 0, i === ropMonitorShared.length - 1))}
+            {ropMonitorShared.map(r => renderReportRow(r, canDeleteShared, ropMonitorShared))}
           </>
         )}
       </div>
@@ -324,7 +403,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
             <span className="flex-1 text-left">Отчёты Стаса</span>
             {openShared ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
           </button>
-          {openShared && smekalochnayaShared.map((r, i) => renderReportRow(r, canDeleteShared, i === 0, i === smekalochnayaShared.length - 1))}
+          {openShared && smekalochnayaShared.map(r => renderReportRow(r, canDeleteShared, smekalochnayaShared))}
         </div>
       )}
 
@@ -341,7 +420,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
               Нет сохранённых
             </div>
           ) : (
-            ownReports.map((r, i) => renderReportRow(r, true, i === 0, i === ownReports.length - 1))
+            ownReports.map(r => renderReportRow(r, true, ownReports))
           )
         )}
       </div>
