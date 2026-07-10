@@ -16,7 +16,7 @@ import { computeCalculated, computeTotals, computeDelta } from '@/features/repor
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { systemDb } from '@/lib/db/clients';
 import { getWorkingDaysByMonthInRange } from '@/lib/plans/dailyPlan';
-import { toZonedTime } from 'date-fns-tz';
+import { formatInTimeZone } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 
 interface PeriodPlanEntry { planSales: number; planShipments: number }
@@ -161,16 +161,42 @@ export async function POST(req: NextRequest) {
     firstTouchFilter,
   };
 
-  // Задача 10.07: общие для обеих групп план-метрик даты — "сегодня" МСК и календарные
-  // границы текущего/сравнительного периода. period.from/period.to приходят уже как
-  // «MSK-псевдо-UTC» строки (см. lib/period) — берём календарную дату без повторного
-  // сдвига таймзоны.
+  // Задача 10.07/1595: общие для обеих групп план-метрик даты — "сегодня" МСК и
+  // календарные границы текущего/сравнительного периода.
+  //
+  // БАГ (найден по скрину владельца, «План (на сегодня)» = 812 500 у #2001 при верных
+  // 656 250 у #2002 в ТОМ ЖЕ отчёте): UI (SalesReportPage) сериализует period как
+  // `Date.toISOString()`. Для браузера в МСК полночь 01.07 МСК — это
+  // `2026-06-30T21:00:00.000Z`, и прежний `new Date(...).toISOString().slice(0,10)`
+  // давал «2026-06-30» — период планов расширялся на 30.06 (будний день!), и менеджеры,
+  // у которых ЕСТЬ план на июнь, получали лишний июньский день (156 250 у #2001 →
+  // 656 250 + 156 250 = 812 500), а у кого июньского плана нет (#2002) — число «случайно»
+  // оставалось верным. Прямые curl-репродукции бага не ловили: они слали date-only
+  // строки («2026-07-01»), у которых UTC-дата совпадает с календарной.
+  //
+  // Однако «просто конвертировать в МСК» тоже нельзя: браузер НЕ в МСК шлёт
+  // «MSK-псевдо-UTC» (локальная полночь его пояса, see lib/period::msk()) — для него
+  // конец дня приходит как `...T23:59:59.999Z`, и МСК-конвертация сдвинула бы `to` на
+  // день ВПЕРЁД. Обе семьи клиентов (настоящий UTC-инстант из МСК-браузера и псевдо-UTC
+  // из любого другого пояса) объединяет одно: `from` — это полночь НУЖНОЙ календарной
+  // даты в каком-то поясе, `to` — конец дня нужной даты. Поэтому «полуденный» приём:
+  // from + 12ч и to − 12ч попадают внутрь нужных суток при любом поясе клиента из
+  // (-12..+12] (экзотика +13/+14 — Кирибати/NZDT — вне зоны пользователей). Голая
+  // date-only строка (API-клиенты, curl) берётся буквально, без Date-роундтрипа.
   const MSK_TZ = 'Europe/Moscow';
-  const mskTodayStr = toZonedTime(new Date(), MSK_TZ).toISOString().slice(0, 10);
-  const periodFromStr = new Date(period.from).toISOString().slice(0, 10);
-  const periodToStr = new Date(period.to).toISOString().slice(0, 10);
-  const compPeriodFromStr = new Date(comparisonPeriod.from).toISOString().slice(0, 10);
-  const compPeriodToStr = new Date(comparisonPeriod.to).toISOString().slice(0, 10);
+  // formatInTimeZone вместо toZonedTime().toISOString(): прод-хост живёт в MSK, а
+  // toZonedTime сдвигает дату в расчёте на чтение ЛОКАЛЬНЫМИ геттерами — .toISOString()
+  // (UTC-геттеры) на не-UTC хосте возвращал СЫРУЮ UTC-дату (в 00:00–02:59 МСК — вчерашнюю).
+  const mskTodayStr = formatInTimeZone(new Date(), MSK_TZ, 'yyyy-MM-dd');
+  const periodDateStr = (v: string, edge: 'from' | 'to'): string => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v; // date-only — буквально
+    const noon = new Date(new Date(v).getTime() + (edge === 'from' ? 12 : -12) * 3_600_000);
+    return noon.toISOString().slice(0, 10);
+  };
+  const periodFromStr = periodDateStr(period.from, 'from');
+  const periodToStr = periodDateStr(period.to, 'to');
+  const compPeriodFromStr = periodDateStr(comparisonPeriod.from, 'from');
+  const compPeriodToStr = periodDateStr(comparisonPeriod.to, 'to');
 
   let currentRows: ReportRow[] = [];
   let compRows: ReportRow[] = [];
