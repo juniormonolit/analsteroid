@@ -88,11 +88,17 @@ function DeltaBadge({ deltaPct }: { deltaPct: number | null | undefined }) {
   );
 }
 
+// Плитка «Итогов за период» — вариант Б аудита UI/UX Монолитики (задача 1662,
+// кейс 2Б, зафиксировано владельцем): подпись мелким серым СВЕРХУ, значение
+// крупным жирным под ней в одну строку без truncate/обрезки (сетка плиток
+// grid-cols-2 ниже даёт достаточно ширины — замерено на мокапе Виктора,
+// «1,5 млн ₽» при 20px влезает с запасом). Раньше было наоборот (значение
+// сверху, обрезалось многоточием при длинных суммах) — см. git blame.
 function Tile({ value, label, deltaPct }: { value: string; label: string; deltaPct: number | null | undefined }) {
   return (
     <div className="border border-[var(--color-border)] rounded-xl px-3.5 py-3 flex flex-col gap-1.5 min-w-0">
-      <span className="text-lg font-extrabold text-[var(--color-text)] leading-tight truncate">{value}</span>
-      <span className="text-[11.5px] text-[var(--color-text-muted)]">{label}</span>
+      <span className="text-[11px] text-[var(--color-text-muted)]">{label}</span>
+      <span className="text-xl font-extrabold text-[var(--color-text)] leading-tight whitespace-nowrap">{value}</span>
       <DeltaBadge deltaPct={deltaPct} />
     </div>
   );
@@ -394,7 +400,9 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                       Итоги за период · к прошлому периоду
                     </div>
                     <div className="overflow-x-auto">
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 min-w-[260px]">
+                      {/* grid-cols-3 → grid-cols-2 (задача 1662, кейс 2Б): плитки шире —
+                          значение в 20px («1,5 млн ₽») помещается без truncate. */}
+                      <div className="grid grid-cols-2 gap-2.5 min-w-[260px]">
                         {tiles.length === 0 ? (
                           <div className="col-span-full text-sm text-[var(--color-text-muted)] py-2">Плитки не выбраны в шаблоне карточки</div>
                         ) : tiles.map(t => (
