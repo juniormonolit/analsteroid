@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Trash2 } from 'lucide-react';
@@ -28,6 +28,11 @@ import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { isHeatmapEnabled, isRelativeDataType, toggleHeatmap } from '@/lib/metrics/heatmapDefault';
 import { useTableScale } from '@/lib/hooks/useTableScale';
+import { buildExportTable, tableToTsv, type ExportSourceRow, type ExportTotals } from '@/features/reports/lib/tableExport';
+import { buildExportFilename } from '@/features/reports/lib/exportFilename';
+import { exportTableToExcel } from '@/features/reports/lib/exportExcel';
+import { exportNodeToPng } from '@/features/reports/lib/exportImage';
+import { exportNodeToPdf } from '@/features/reports/lib/exportPdf';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -661,36 +666,58 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     [catalogMetrics, availableMetrics]
   );
 
-  // Копирование в буфер: чистый TSV для вставки в Google Таблицы — без пробелов-
-  // разделителей тысяч, ₽ и %, десятичный разделитель — запятая.
+  // Экспорт отчёта (задача 1706): буфер (TSV)/Excel/PDF/PNG — единый снимок таблицы
+  // (buildExportTable, features/reports/lib/tableExport.ts) форматирует значения ПО ТИПУ
+  // МЕТРИКИ (percent/money/...), один источник форматирования на все 4 способа
+  // экспорта — раньше «Копировать» форматировал проценты как «человеческое» число
+  // (14.5), из-за чего в Excel с процентным форматом ячейки оно домножалось ещё раз на
+  // 100 (1450%). Теперь проценты — доля (0.145) везде.
   const dimensionColumnLabel = sourceMode
     ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
     : reportSlug === 'by-product-groups' ? 'Товарная группа' : 'Менеджер';
 
+  // Ref на корневой прокручиваемый div таблицы (ReportTable.tsx) — нужен PNG/PDF-снимку
+  // (captureTableNode временно разворачивает его в overflow:visible на время снимка,
+  // чтобы захватить ВЕСЬ скроллируемый контент длинного отчёта, не только вьюпорт).
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  const buildCurrentExportTable = useCallback(() => {
+    return buildExportTable({
+      dimensionLabel: dimensionColumnLabel,
+      metrics: orderedMetrics as Metric[],
+      rows: displayRows as unknown as ExportSourceRow[],
+      totals: (data?.totals ?? null) as ExportTotals | null,
+      grouping,
+      metricDecimalOverrides,
+    });
+  }, [dimensionColumnLabel, orderedMetrics, displayRows, data?.totals, grouping, metricDecimalOverrides]);
+
+  const exportFilenameBase = useMemo(
+    () => buildExportFilename(title, period),
+    [title, period]
+  );
+
   const handleCopyTable = useCallback(async () => {
-    const cols = orderedMetrics as Metric[];
-    const cell = (v: number | null | undefined, m: Metric) => {
-      if (v === null || v === undefined) return '';
-      const dec = metricDecimalOverrides[m.id] ?? m.decimalPlaces;
-      return v.toFixed(dec).replace('.', ',');
-    };
-    const clean = (s: string) => s.replace(/[\t\n]/g, ' ');
-    const lines: string[] = [];
-    lines.push([dimensionColumnLabel, ...cols.map(m => clean(m.nameRu))].join('\t'));
-    const pushRow = (r: MergedRow) => {
-      lines.push([clean(r.dimensionName), ...cols.map(m => cell(r.deltas[m.id]?.current, m))].join('\t'));
-    };
-    for (const r of displayRows) {
-      pushRow(r);
-      const children = (r as GroupedMergedRow).children;
-      if (children) for (const c of children) pushRow(c);
-    }
-    const totals: Deltas | null = data?.totals ?? null;
-    if (totals && grouping !== 'total') {
-      lines.push(['Итого', ...cols.map(m => cell(totals[m.id]?.current, m))].join('\t'));
-    }
-    await navigator.clipboard.writeText(lines.join('\n'));
-  }, [orderedMetrics, displayRows, data?.totals, grouping, metricDecimalOverrides, dimensionColumnLabel]);
+    const table = buildCurrentExportTable();
+    await navigator.clipboard.writeText(tableToTsv(table));
+  }, [buildCurrentExportTable]);
+
+  const handleExportExcel = useCallback(async () => {
+    const table = buildCurrentExportTable();
+    await exportTableToExcel(table, exportFilenameBase);
+  }, [buildCurrentExportTable, exportFilenameBase]);
+
+  const handleExportPng = useCallback(async () => {
+    const node = tableContainerRef.current;
+    if (!node) throw new Error('Таблица ещё не отрисована');
+    await exportNodeToPng(node, exportFilenameBase);
+  }, [exportFilenameBase]);
+
+  const handleExportPdf = useCallback(async () => {
+    const node = tableContainerRef.current;
+    if (!node) throw new Error('Таблица ещё не отрисована');
+    await exportNodeToPdf(node, exportFilenameBase);
+  }, [exportFilenameBase]);
 
   const selectedMetricIds = metricIds.includes('all_core')
     ? availableMetrics.map((m: { id: string }) => m.id)
@@ -893,6 +920,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         onFirstTouchFilterChange={setFirstTouchFilter}
         onSaveReport={() => setShowSaveModal(true)}
         onCopyTable={handleCopyTable}
+        onExportExcel={handleExportExcel}
+        onExportPdf={handleExportPdf}
+        onExportPng={handleExportPng}
         basic={!isPro}
         // Пункт 5 задачи 1572: в Лайте «Сохранить» обычно скрыта (basic=true).
         // Точечное исключение — только для отчёта, открытого через «Создать
@@ -928,6 +958,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           </div>
         ) : (
           <ReportTable
+            containerRef={tableContainerRef}
             rows={displayRows}
             totals={data?.totals ?? null}
             metrics={orderedMetrics}

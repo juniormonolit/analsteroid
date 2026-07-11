@@ -1,10 +1,11 @@
 'use client';
-import { useRef, useState } from 'react';
-import { RefreshCw, Bookmark, Copy, Check, Scale, SlidersHorizontal } from 'lucide-react';
+import { useState } from 'react';
+import { RefreshCw, Bookmark, Scale, SlidersHorizontal } from 'lucide-react';
 import type { DealScope, ClientType, ProductGroupMode, ComparisonDisplay, AccountType, BorderMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { type ViewPrefs } from './ViewSettings';
 import { countActiveFilters } from './FiltersMenu';
 import { ReportSettingsPanel } from './ReportSettingsPanel';
+import { ExportMenu } from './ExportMenu';
 
 interface Props {
   dealScope: DealScope;
@@ -20,8 +21,13 @@ interface Props {
   onProductGroupModeChange?: (v: ProductGroupMode) => void;
   onRefresh: () => void;
   onSaveReport: () => void;
-  // Копирование таблицы в буфер (чистый TSV для Google Таблиц)
+  // «Скачать» (задача 1706, заменил одиночную «Копировать»): дропдаун из 4 пунктов —
+  // копирование в буфер (TSV) + скачивание Excel/PDF/PNG. Опционален как и раньше
+  // onCopyTable — если родитель не передал ни одного обработчика, кнопка не рендерится.
   onCopyTable?: () => Promise<void>;
+  onExportExcel?: () => Promise<void>;
+  onExportPdf?: () => Promise<void>;
+  onExportPng?: () => Promise<void>;
   viewPrefs: ViewPrefs;
   onViewPrefsChange: (p: ViewPrefs) => void;
   numberAlign?: 'left' | 'center' | 'right';
@@ -65,7 +71,7 @@ export function ReportToolbar({
   isLoading,
   showProductGroupPicker, productGroupMode,
   onDealScopeChange, onClientTypeChange, onComparisonDisplayChange,
-  onProductGroupModeChange, onRefresh, onSaveReport, onCopyTable,
+  onProductGroupModeChange, onRefresh, onSaveReport, onCopyTable, onExportExcel, onExportPdf, onExportPng,
   viewPrefs, onViewPrefsChange,
   numberAlign, onNumberAlignChange,
   accountType, onAccountTypeChange,
@@ -78,16 +84,6 @@ export function ReportToolbar({
   onOpenComparison, comparisonCount = 0,
   createdTimeFilter, onCreatedTimeFilterChange, firstTouchFilter, onFirstTouchFilterChange,
 }: Props) {
-  const [copied, setCopied] = useState(false);
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  async function handleCopy() {
-    if (!onCopyTable) return;
-    await onCopyTable();
-    setCopied(true);
-    if (copyTimer.current) clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(false), 1500);
-  }
-
   // Объединённая панель «Настройки отчёта» (правка 09.07) — раньше здесь были две
   // отдельные кнопки-дропдауна («Фильтры» + «Вид»), см. FiltersMenu/ViewSettings.
   const [showSettings, setShowSettings] = useState(false);
@@ -173,15 +169,14 @@ export function ReportToolbar({
           </button>
         )}
 
-        {onCopyTable && (
-          <button
-            onClick={handleCopy}
-            title="Скопировать таблицу для вставки в Google Таблицы (числа без ₽, % и пробелов)"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-          >
-            {copied ? <Check size={12} className="text-[var(--color-positive)]" /> : <Copy size={12} />}
-            {copied ? 'Скопировано' : 'Копировать'}
-          </button>
+        {onCopyTable && onExportExcel && onExportPdf && onExportPng && (
+          <ExportMenu
+            onCopyTable={onCopyTable}
+            onExportExcel={onExportExcel}
+            onExportPdf={onExportPdf}
+            onExportPng={onExportPng}
+            disabled={isLoading}
+          />
         )}
 
         <button

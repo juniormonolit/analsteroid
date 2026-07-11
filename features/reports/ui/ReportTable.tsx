@@ -182,6 +182,11 @@ interface Props {
     totalDepartments?: number;
     onResetFilters: () => void;
   };
+  // Экспорт отчёта (задача 1706, PNG/PDF): ref на корневой прокручиваемый div таблицы —
+  // тот же узел, что `captureTableNode` временно разворачивает в overflow:visible на
+  // время снимка (features/reports/lib/exportImage.ts). Опционален — обычный рендер
+  // таблицы (ReportTable в дрилл-дауне и т.п.) его не передаёт.
+  containerRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 function fmtEmptyStateDate(d: Date): string {
@@ -269,6 +274,7 @@ export function ReportTable({
   expandedRowIds,
   renderExpandedRow,
   emptyStateInfo,
+  containerRef,
 }: Props) {
   const [sortByInner, setSortByInner] = useState<string | null>(null);
   const [sortDirInner, setSortDirInner] = useState<'asc' | 'desc'>('desc');
@@ -1232,7 +1238,7 @@ export function ReportTable({
     const totalRow = sorted[0];
     const hasAnyComparison = displayMetrics.some(m => leafKinds(resolveMode(m.id)).length > 1);
     return (
-      <div className="overflow-auto h-full bg-[var(--color-bg-surface)]" style={{ fontSize: `${14 * tableScale}px` }}>
+      <div ref={containerRef} className="overflow-auto h-full bg-[var(--color-bg-surface)]" style={{ fontSize: `${14 * tableScale}px` }}>
         <div className="max-w-3xl mx-auto p-5 sm:p-7">
           {!totalRow ? (
             <div className="text-sm text-[var(--color-text-muted)] text-center py-10">Нет данных</div>
@@ -1314,7 +1320,7 @@ export function ReportTable({
   }
 
   return (
-    <div className="overflow-auto h-full bg-[var(--color-bg-surface)]">
+    <div ref={containerRef} className="overflow-auto h-full bg-[var(--color-bg-surface)]">
       <table className="w-full text-sm border-collapse" style={{ fontSize: `calc(${14 * tableScale}px * var(--report-mobile-scale, 1))`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
         <thead className="report-thead sticky top-0 z-30 bg-[var(--color-table-header)]">
           {hasGroups && (
