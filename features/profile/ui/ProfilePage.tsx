@@ -110,7 +110,13 @@ export function ProfilePage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="p-3 sm:p-6 max-w-3xl flex flex-col gap-4">
+      {/* Ширина колонки — задача 1681 (аудит широких экранов): было max-w-3xl
+          (768px, фиксированный px, без центрирования) — контент прижимало к
+          левому краю, на 2560px пустовало 66% рабочей зоны. Теперь клампованная
+          центрированная колонка (--content-col, app/globals.css), активна с md
+          (768px) — ниже сайдбар скрыт (drawer), контейнер и так занимает всю
+          доступную ширину, поведение на мобильном не меняется. */}
+      <div className="p-3 sm:p-6 md:mx-auto md:w-[var(--content-col)] flex flex-col gap-4">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Личный кабинет</h1>
 
         {/* Профиль */}
