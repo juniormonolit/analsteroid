@@ -42,8 +42,9 @@ export default function LoginPage() {
         </h1>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="block text-sm text-[var(--color-text-muted)] mb-1">Логин</label>
+            <label htmlFor="login" className="block text-sm text-[var(--color-text-muted)] mb-1">Логин</label>
             <input
+              id="login"
               type="text"
               value={login}
               onChange={e => setLogin(e.target.value)}
@@ -53,8 +54,9 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="block text-sm text-[var(--color-text-muted)] mb-1">Пароль</label>
+            <label htmlFor="password" className="block text-sm text-[var(--color-text-muted)] mb-1">Пароль</label>
             <input
+              id="password"
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
@@ -62,7 +64,7 @@ export default function LoginPage() {
               required
             />
           </div>
-          {error && <p className="text-sm text-[var(--color-negative)]">{error}</p>}
+          {error && <p role="alert" className="text-sm text-[var(--color-negative)]">{error}</p>}
           <button
             type="submit"
             disabled={loading}

@@ -7470,3 +7470,38 @@ scripts/assert-period-comparison.ts` — 51 passed, 0 failed.
 касается.
 
 **Не задеплоено** (батч Артёма).
+
+## 2026-07-11 — задача 1685 (Серёга, UI/UX-аудит кейс 5): доступность формы логина
+
+### Находка (аудит, `app/login/page.tsx`)
+`<label>` «Логин»/«Пароль» не связаны с `<input>` через `for`/`id` — клик по
+подписи не фокусирует поле, скринридер не объявляет пару «подпись → поле»
+(WCAG 4.1.2/3.3.2). Ошибка входа рендерилась обычным `<p>` без
+`role="alert"`/`aria-live` — скринридер не узнавал о неверном пароле
+(WCAG 4.1.3).
+
+### Фикс (`app/login/page.tsx`)
+- `<label htmlFor="login">` + `id="login"` на инпуте логина.
+- `<label htmlFor="password">` + `id="password"` на инпуте пароля.
+- `<p role="alert">` для строки ошибки входа.
+
+Только атрибуты доступности, классы/разметка/стили не тронуты — визуально
+страница идентична.
+
+### Проверка (standalone, порт 8111, puppeteer, chromium snap)
+- Клик по `<label>` «Логин» → `document.activeElement.id === 'login'`,
+  `tagName === 'INPUT'` — OK.
+- Клик по `<label>` «Пароль» → `document.activeElement.id === 'password'`,
+  `tagName === 'INPUT'` — OK.
+- Отправка формы с неверными данными → в DOM появляется
+  `[role="alert"]` с текстом «Неверный логин или пароль» — OK.
+- Скриншот 1440×900 (`login-a11y-visual-check.png`) визуально идентичен
+  `owners-inbox/monolitika-uiux-audit-screens/01-login-before.png` (сверено
+  глазами, единственная разница — мигающий курсор в поле на «before»).
+
+### Проверки
+`npm run typecheck` — 0 ошибок. `npm run build` — все страницы, 0 ошибок.
+`npm run lint:responsive` — 0 новых нарушений сверх baseline (1
+предсуществующее, не моё).
+
+**Не задеплоено.**
