@@ -35,8 +35,9 @@ const RINGS = [2, 4, 6, 8, 10];
 // Фикс — три части:
 //  (а) подписи считаются от LABEL_RADIUS (кольцо 10 + небольшой зазор), не от
 //      клампнутого pointAt — см. axisAngle/LABEL_RADIUS ниже;
-//  (б) длинные подписи (>WRAP_THRESHOLD символов) переносятся на 2 строки
-//      (tspan), перенос — сбалансированный по словам (wrapLabel);
+//  (б) подписи, которым не хватает места по факту ширины (см. ниже), —
+//      переносятся на 2 строки (tspan), перенос — сбалансированный по словам
+//      (wrapLabel);
 //  (в) итоговые width/height/CENTER холста считаются ДИНАМИЧЕСКИ по
 //      фактическим подписям текущей карточки (computeLayout) — короткие
 //      подписи (обычный случай) дают холст как раньше (480×420, floor-константы
@@ -46,10 +47,31 @@ const RINGS = [2, 4, 6, 8, 10];
 //      если когда-нибудь в каталоге появится метрика длиннее — контейнер
 //      ManagerCardPanel.tsx уже рендерит паутину в блоке с overflow-x-auto,
 //      так что вместо обрезки текста будет горизонтальный скролл.
+//
+// Задача 1692 (Серёга, кейс 7Б аудита): на 1440px правая колонка панели
+// (`ManagerCardPanel.tsx`, grid-колонка ~520px) оказалась уже, чем
+// однострочные подписи «Сумма продаж»/«Средний чек» требовали от canvas
+// (272/263px против FLOOR_RIGHT=248) — сам SVG их не обрезал (computeLayout
+// динамически раздвигал canvas), но панель-контейнер (`overflow-x-auto` +
+// `flex justify-center`) при переполнении центрирует лишнюю ширину поровну
+// на обе стороны, и «вылезающий» кусок справа зрительно обрезался (виден не
+// весь SVG, а окно контейнера — воспроизведено пуппетером, замер
+// `outerBox.clientWidth` vs `svg width`, см. WORKLOG). До этой задачи
+// решался только один частный случай — перенос
+// по числу символов (`length > 22`), поэтому «Сумма продаж»/«Средний чек»
+// (12/11 симв.) его не проходили и оставались в одну строку.
+//
+// Критерий переноса ПЕРЕРАБОТАН на факт: не число символов, а оценка
+// ширины строки БЕЗ переноса плюс её позиция на паутине (та же формула,
+// что computeLayout использует для роста canvas — dx/anchor/SIDE_BUFFER)
+// сравнивается с "полом" канвы на соответствующей стороне (FLOOR_LEFT/
+// FLOOR_RIGHT — исходный бюджет 480×420, рассчитанный на короткие подписи).
+// Если однострочный вариант этот бюджет превышает — подпись переносится на
+// 2 строки, вне зависимости от того, как называется ось: работает для ЛЮБОЙ
+// из ~195 метрик каталога card_templates, а не для конкретных строк.
 const LABEL_RADIUS = RADIUS + 18;
 const CHAR_PX = 8.9;      // эмпирика: bold 13.5px "-apple-system, Arial, sans-serif", кириллица (puppeteer getBBox по каталогу метрик, см. WORKLOG задача 1608)
 const LINE_HEIGHT = 15.5;
-const WRAP_THRESHOLD = 22; // символов — короче не переносим (перенос короткой подписи выглядит нелепо)
 const SIDE_BUFFER = 18;
 const TOP_BUFFER = 10;
 // Floor'ы холста — РАВНЫ исходным WIDTH/HEIGHT/CENTER (480×420, центр 232×200):
@@ -70,9 +92,10 @@ function axisAngle(i: number, n: number): number {
 // словам, выбирает ту, что минимизирует длину ДЛИННЕЙШЕЙ из двух строк
 // (а не просто "жадно заполнить первую строку") — так «Длительность первого
 // разговора сделки, мин, медиана (повт.)» (59 симв.) не превращается в одну
-// длинную и один короткий хвост, а делится ~30/29.
+// длинную и один короткий хвост, а делится ~30/29. Решение О ТОМ, переносить
+// ли вообще, — за пределами этой функции (см. needsWrap ниже); сама
+// wrapLabel просто строит лучший 2-строчный вариант для переданной строки.
 function wrapLabel(label: string): string[] {
-  if (label.length <= WRAP_THRESHOLD) return [label];
   const words = label.split(' ');
   if (words.length < 2) return [label]; // одно длинное слово — переносить некуда
   let best: { l1: string; l2: string; maxLen: number } | null = null;
@@ -87,6 +110,30 @@ function wrapLabel(label: string): string[] {
 
 function estWidth(text: string): number {
   return text.length * CHAR_PX;
+}
+
+// Сколько половины canvas ("пола") реально нужно ОДНОЙ строке текста на этой
+// позиции — та же формула, что computeLayout ниже применяет к готовым lines,
+// только для гипотетического однострочного варианта. anchor 'middle'
+// (верх/низ паутины) тратит на каждую сторону только половину своей ширины
+// (текст центрирован на оси), start/end (боковые оси) — dx + ПОЛНУЮ ширину
+// (текст растёт в одну сторону от точки привязки).
+function singleLineHalfNeed(width: number, dx: number, anchor: LabelGeo['anchor']): number {
+  return anchor === 'middle' ? width / 2 + SIDE_BUFFER : Math.abs(dx) + width + SIDE_BUFFER;
+}
+
+// Критерий переноса (задача 1692, кейс 7Б) — по фактической ширине/позиции,
+// не по списку названий: если однострочный вариант этой подписи ТРЕБУЕТ от
+// canvas больше, чем "пол" (FLOOR_LEFT/FLOOR_RIGHT — бюджет, рассчитанный на
+// короткие подписи и совпадающий с реальной шириной панели на 1440px, см.
+// комментарий выше), — переносим. Работает одинаково для «Сумма продаж»
+// (12 симв., раньше не переносилось — не хватало ДЛИНЫ строки) и для
+// «Длительность первого разговора...» (59 симв.) — критерий один.
+function needsWrap(label: string, dx: number, anchor: LabelGeo['anchor'], suffixWidth: number): boolean {
+  if (label.split(' ').length < 2) return false; // переносить некуда
+  const need = singleLineHalfNeed(estWidth(label) + suffixWidth, dx, anchor);
+  const floorBudget = dx > 0 ? FLOOR_RIGHT : dx < 0 ? FLOOR_LEFT : Math.min(FLOOR_LEFT, FLOOR_RIGHT);
+  return need > floorBudget;
 }
 
 interface LabelGeo {
@@ -109,7 +156,7 @@ function buildLabelGeo(axes: RadarAxisInput[]): LabelGeo[] {
     const dy0 = LABEL_RADIUS * sin;
     const anchor: LabelGeo['anchor'] = dx > 6 ? 'start' : dx < -6 ? 'end' : 'middle';
     const suffix = ax.dataAvailable ? '' : '*';
-    const rawLines = wrapLabel(ax.label);
+    const rawLines = needsWrap(ax.label, dx, anchor, estWidth(suffix)) ? wrapLabel(ax.label) : [ax.label];
     const lines = rawLines.map((l, li) => (li === rawLines.length - 1 ? l + suffix : l));
     const lineWidth = Math.max(...lines.map(estWidth));
     return { key: ax.key, dx, dy0, anchor, lines, lineWidth, extremity: Math.min(1, Math.abs(cos)) };
