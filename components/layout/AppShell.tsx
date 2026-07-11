@@ -14,6 +14,7 @@ import { ru } from 'date-fns/locale';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
 import { Avatar } from '@/components/ui/Avatar';
+import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { BrandLogo } from '@/components/ui/BrandLogo';
 import { MARKETING_PRESETS } from '@/lib/marketing/presets';
@@ -48,6 +49,24 @@ const NAV_ITEM_ACTIVE_BAR =
 
 function navIconCls(active: boolean) {
   return active ? 'text-[var(--color-sidebar-active)] mt-px' : 'text-[var(--color-sidebar-text-muted)] mt-px';
+}
+
+// Тултип пункта навигации на свёрнутой рельсе (задача 1688, кейс 6 UI/UX-
+// аудита, макет case6-sidebar-variant-b-rail-tooltip.png) — обёртка
+// components/ui/Tooltip.tsx (Radix, портал в body + collision detection), а
+// НЕ самописный getBoundingClientRect/CSS group-hover: пункты «Продажи/
+// Реализация/Маркетинг/Найм» лежат внутри скроллируемого <nav
+// overflow-y-auto> (автоскролл при DnD, см. выше в файле) — по спецификации
+// CSS overflow-y отличный от visible вынуждает браузер вычислить overflow-x
+// как auto, то есть <nav> обрезал бы любой absolute-тултип, торчащий за
+// пределы 52px рельсы. Radix Tooltip рендерит контент через портал с
+// position:fixed, что не подчиняется этому клиппингу.
+function RailTooltip({ collapsed, label, children }: { collapsed: boolean; label: string; children: React.ReactNode }) {
+  return (
+    <Tooltip content={label} side="right" disabled={!collapsed}>
+      {children}
+    </Tooltip>
+  );
 }
 
 // Подпись под лочапом «знак + Монолитика» (бриф ребрендинга): та же ширина
@@ -514,33 +533,37 @@ function SidebarBody({
             {NAV.filter(item => !item.perm || hasPerm(user, item.perm)).map(item => (
               <div key={item.label}>
                 {item.disabled ? (
-                  <div className={`${NAV_ITEM_BASE} cursor-not-allowed`}>
-                    <span className="mt-px text-[var(--color-sidebar-guide)]">{item.icon}</span>
-                    {!collapsed && (
-                      <span className="flex-1 min-w-0 break-words line-clamp-2 text-[var(--color-sidebar-text-muted)]">
-                        {item.label}
-                      </span>
-                    )}
-                    {!collapsed && (
-                      <span className="ml-auto mt-px shrink-0 text-[10px] font-semibold text-[var(--color-sidebar-text-muted)] bg-[var(--color-bg)] border border-[var(--color-sidebar-border)] rounded-full px-2 py-0.5">
-                        Скоро
-                      </span>
-                    )}
-                  </div>
+                  <RailTooltip collapsed={collapsed} label={`${item.label} · скоро`}>
+                    <div className={`${NAV_ITEM_BASE} cursor-not-allowed`}>
+                      <span className="mt-px text-[var(--color-sidebar-guide)]">{item.icon}</span>
+                      {!collapsed && (
+                        <span className="flex-1 min-w-0 break-words line-clamp-2 text-[var(--color-sidebar-text-muted)]">
+                          {item.label}
+                        </span>
+                      )}
+                      {!collapsed && (
+                        <span className="ml-auto mt-px shrink-0 text-[10px] font-semibold text-[var(--color-sidebar-text-muted)] bg-[var(--color-bg)] border border-[var(--color-sidebar-border)] rounded-full px-2 py-0.5">
+                          Скоро
+                        </span>
+                      )}
+                    </div>
+                  </RailTooltip>
                 ) : item.isSales ? (
                   <>
-                    <button
-                      onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                      className={`w-full ${NAV_ITEM_BASE} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                    >
-                      <span className={navIconCls(salesActive)}>{item.icon}</span>
-                      {!collapsed && <>
-                        <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
-                        {expanded === item.label
-                          ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
-                          : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
-                      </>}
-                    </button>
+                    <RailTooltip collapsed={collapsed} label={item.label}>
+                      <button
+                        onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
+                        className={`w-full ${NAV_ITEM_BASE} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                      >
+                        <span className={navIconCls(salesActive)}>{item.icon}</span>
+                        {!collapsed && <>
+                          <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
+                          {expanded === item.label
+                            ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
+                            : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
+                        </>}
+                      </button>
+                    </RailTooltip>
                     {!collapsed && expanded === item.label && (
                       <div className="py-1">
                         <SalesSidebarSection collapsed={collapsed} pathname={pathname} user={user} />
@@ -549,18 +572,20 @@ function SidebarBody({
                   </>
                 ) : item.children ? (
                   <>
-                    <button
-                      onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                      className={`w-full ${NAV_ITEM_BASE} ${NAV_ITEM_INACTIVE}`}
-                    >
-                      <span className={navIconCls(false)}>{item.icon}</span>
-                      {!collapsed && <>
-                        <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
-                        {expanded === item.label
-                          ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
-                          : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
-                      </>}
-                    </button>
+                    <RailTooltip collapsed={collapsed} label={item.label}>
+                      <button
+                        onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
+                        className={`w-full ${NAV_ITEM_BASE} ${NAV_ITEM_INACTIVE}`}
+                      >
+                        <span className={navIconCls(false)}>{item.icon}</span>
+                        {!collapsed && <>
+                          <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
+                          {expanded === item.label
+                            ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
+                            : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
+                        </>}
+                      </button>
+                    </RailTooltip>
                     {!collapsed && expanded === item.label && (
                       <div className="ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]">
                         {item.children.map(child => {
@@ -583,13 +608,15 @@ function SidebarBody({
                     )}
                   </>
                 ) : (
-                  <Link
-                    href={item.href!}
-                    className={`${NAV_ITEM_BASE} ${pathname === item.href ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                  >
-                    <span className={navIconCls(pathname === item.href)}>{item.icon}</span>
-                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{item.label}</span>}
-                  </Link>
+                  <RailTooltip collapsed={collapsed} label={item.label}>
+                    <Link
+                      href={item.href!}
+                      className={`${NAV_ITEM_BASE} ${pathname === item.href ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                    >
+                      <span className={navIconCls(pathname === item.href)}>{item.icon}</span>
+                      {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{item.label}</span>}
+                    </Link>
+                  </RailTooltip>
                 )}
               </div>
             ))}
@@ -601,31 +628,37 @@ function SidebarBody({
           {showSummaryBlock && (
             <div className="border-t border-[var(--color-sidebar-border)] pt-1 px-2">
               {hasPerm(user, 'section.summary') && (
-                <Link
-                  href="/summary"
-                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/summary') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                >
-                  <span className={navIconCls(pathname.startsWith('/summary'))}><Gauge size={18} /></span>
-                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Сводная</span>}
-                </Link>
+                <RailTooltip collapsed={collapsed} label="Сводная">
+                  <Link
+                    href="/summary"
+                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/summary') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                  >
+                    <span className={navIconCls(pathname.startsWith('/summary'))}><Gauge size={18} /></span>
+                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Сводная</span>}
+                  </Link>
+                </RailTooltip>
               )}
               {hasPerm(user, 'section.plans') && (
-                <Link
-                  href="/plans"
-                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/plans') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                >
-                  <span className={navIconCls(pathname.startsWith('/plans'))}><ClipboardList size={18} /></span>
-                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Планы</span>}
-                </Link>
+                <RailTooltip collapsed={collapsed} label="Планы">
+                  <Link
+                    href="/plans"
+                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/plans') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                  >
+                    <span className={navIconCls(pathname.startsWith('/plans'))}><ClipboardList size={18} /></span>
+                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Планы</span>}
+                  </Link>
+                </RailTooltip>
               )}
               {hasPerm(user, 'section.decomposition') && (
-                <Link
-                  href="/decomposition"
-                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/decomposition') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                >
-                  <span className={navIconCls(pathname.startsWith('/decomposition'))}><Network size={18} /></span>
-                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Декомпозиция</span>}
-                </Link>
+                <RailTooltip collapsed={collapsed} label="Декомпозиция">
+                  <Link
+                    href="/decomposition"
+                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/decomposition') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                  >
+                    <span className={navIconCls(pathname.startsWith('/decomposition'))}><Network size={18} /></span>
+                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Декомпозиция</span>}
+                  </Link>
+                </RailTooltip>
               )}
             </div>
           )}
@@ -634,22 +667,26 @@ function SidebarBody({
           {showMetricsBlock && (
             <div className="pt-1 px-2">
               {hasPerm(user, 'section.metrics') && (
-                <Link
-                  href="/metrics"
-                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/metrics') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                >
-                  <span className={navIconCls(pathname.startsWith('/metrics'))}><BarChart2 size={18} /></span>
-                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Метрики</span>}
-                </Link>
+                <RailTooltip collapsed={collapsed} label="Метрики">
+                  <Link
+                    href="/metrics"
+                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/metrics') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                  >
+                    <span className={navIconCls(pathname.startsWith('/metrics'))}><BarChart2 size={18} /></span>
+                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Метрики</span>}
+                  </Link>
+                </RailTooltip>
               )}
               {hasPerm(user, 'section.settings') && (
-                <Link
-                  href="/settings"
-                  className={`${NAV_ITEM_BASE} ${pathname.startsWith('/settings') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                >
-                  <span className={navIconCls(pathname.startsWith('/settings'))}><Settings size={18} /></span>
-                  {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Настройки</span>}
-                </Link>
+                <RailTooltip collapsed={collapsed} label="Настройки">
+                  <Link
+                    href="/settings"
+                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/settings') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                  >
+                    <span className={navIconCls(pathname.startsWith('/settings'))}><Settings size={18} /></span>
+                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Настройки</span>}
+                  </Link>
+                </RailTooltip>
               )}
             </div>
           )}
@@ -657,35 +694,42 @@ function SidebarBody({
           {/* «Идеи и планы» — бэклог идей (макет ideas-backlog-mock.html), НАД
               «Что изменилось?», виден всем независимо от прав, как и ченджлог. */}
           <div className="pt-1 px-2">
-            <button
-              type="button"
-              onClick={onOpenIdeas}
-              className={`w-full ${NAV_ITEM_BASE} ${ideasOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-            >
-              <span className={navIconCls(ideasOpen)}><Lightbulb size={18} /></span>
-              {!collapsed && (
-                <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Идеи и планы</span>
-              )}
-            </button>
+            <RailTooltip collapsed={collapsed} label="Идеи и планы">
+              <button
+                type="button"
+                onClick={onOpenIdeas}
+                className={`w-full ${NAV_ITEM_BASE} ${ideasOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+              >
+                <span className={navIconCls(ideasOpen)}><Lightbulb size={18} /></span>
+                {!collapsed && (
+                  <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Идеи и планы</span>
+                )}
+              </button>
+            </RailTooltip>
           </div>
 
           {/* «Что изменилось?» — ченджлог, виден всем независимо от прав (п.4 задачи) */}
           <div className="pt-1 px-2">
-            <button
-              type="button"
-              onClick={onOpenChangelog}
-              className={`w-full ${NAV_ITEM_BASE} ${changelogOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+            <RailTooltip
+              collapsed={collapsed}
+              label={unreadCount > 0 ? `Что изменилось? · ${unreadCount > 99 ? '99+' : unreadCount}` : 'Что изменилось?'}
             >
-              <span className={navIconCls(changelogOpen)}><Bell size={18} /></span>
-              {!collapsed && (
-                <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Что изменилось?</span>
-              )}
-              {!collapsed && unreadCount > 0 && (
-                <span className="ml-auto mt-px shrink-0 min-w-[18px] h-[18px] px-1.5 rounded-full bg-[var(--color-negative)] text-[var(--color-text-inverse)] text-[10.5px] font-bold flex items-center justify-center shadow-[0_0_0_2px_var(--color-sidebar-bg)] leading-none">
-                  {unreadCount > 99 ? '99+' : unreadCount}
-                </span>
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={onOpenChangelog}
+                className={`w-full ${NAV_ITEM_BASE} ${changelogOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+              >
+                <span className={navIconCls(changelogOpen)}><Bell size={18} /></span>
+                {!collapsed && (
+                  <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Что изменилось?</span>
+                )}
+                {!collapsed && unreadCount > 0 && (
+                  <span className="ml-auto mt-px shrink-0 min-w-[18px] h-[18px] px-1.5 rounded-full bg-[var(--color-negative)] text-[var(--color-text-inverse)] text-[10.5px] font-bold flex items-center justify-center shadow-[0_0_0_2px_var(--color-sidebar-bg)] leading-none">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
+              </button>
+            </RailTooltip>
           </div>
 
           {/* Footer: карточка юзера (аватар + имя/роль) → ЛК, рядом «Выйти» */}
@@ -723,11 +767,11 @@ function SidebarBody({
 
 export function AppShell({ children, user }: { children: React.ReactNode; user: SessionUser }) {
   const pathname = usePathname();
-  // Главная открывается со свёрнутой рельсой-сайдбаром (бриф Главной,
-  // analsteroid-home-mock.html) — только дефолт первого рендера; дальше
-  // пользователь разворачивает/сворачивает вручную как обычно, и это не
-  // перетирается при последующих клиентских переходах на/с главной.
-  const [collapsed, setCollapsed] = useState(() => pathname === '/home');
+  // Дефолт — сайдбар всегда развёрнут, включая Главную (задача 1688, кейс 6
+  // UI/UX-аудита: владелец отменил спецкейс «Главная — свёрнутая рельса» из
+  // брифа Главной, чтобы поведение было одинаковым на всех страницах). Ручной
+  // тоггл сворачивания (кнопка PanelLeft/PanelLeftClose) не трогаем.
+  const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<string>('Продажи');
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -744,6 +788,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
 
   return (
     <QueryProvider>
+      <TooltipProvider>
       <ThemeSync />
       <div className="flex h-dvh overflow-hidden">
         {/* Desktop sidebar (на <md скрыт — вместо него drawer) */}
@@ -876,6 +921,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
       </div>
       {changelogOpen && <ChangelogPanel onClose={() => setChangelogOpen(false)} />}
       {ideasOpen && <IdeasPanel onClose={() => setIdeasOpen(false)} />}
+      </TooltipProvider>
     </QueryProvider>
   );
 }
