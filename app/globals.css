@@ -7,7 +7,9 @@
   --color-border: #e9ecef;
   --color-border-focus: #228be6;
   --color-text: #212529;
-  --color-text-muted: #868e96;
+  --color-text-muted: #5f6b76; /* было #868e96 (3.15:1) — контраст к --color-bg #f8f9fa не проходил WCAG AA;
+     #5f6b76 даёт 5.17:1 (задача 1694, кейс 8А UI/UX-аудита). Тёмная тема ниже переопределяет
+     --color-text-muted отдельно (#9aa1ad) — этой правкой не затронута. */
   --color-text-inverse: #ffffff;
   --color-accent: #228be6;
   --color-accent-hover: #1c7ed6;
