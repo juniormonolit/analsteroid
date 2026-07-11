@@ -268,15 +268,21 @@ function expectCalendar(unit: CalendarUnit, anchor: Date): DateRange {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// E. defaultComparison() консистентен с defaultPeriod() (both всегда календарные)
+// E. defaultComparison() — дефолт НОВОГО отчёта (задача 1666, регрессия f9d69d4):
+//    предыдущий период ТОЙ ЖЕ ДЛИНЫ, вплотную к началу period, а НЕ календарный
+//    «весь предыдущий месяц» (это семантика явного клика по пресету, см. блок B —
+//    calendarComparisonForPreset намеренно НЕ трогаем и не путаем с дефолтом).
 // ─────────────────────────────────────────────────────────────────────────────
 {
   const period = defaultPeriod();
   const comparison = defaultComparison();
-  const expectedUnit: CalendarUnit = 'month';
-  // Сравнение должно быть ПОЛНЫМ месяцем, непосредственно предшествующим месяцу period.from
-  const expected = previousCalendarUnitBounds(expectedUnit, period.from);
-  eqRange(comparison, expected, 'defaultComparison(): полный месяц перед месяцем period.from');
+  const expected = recomputeComparison(period);
+  eqRange(comparison, expected, 'defaultComparison() === recomputeComparison(defaultPeriod()) — та же длина, не календарный месяц');
+
+  const days = differenceInCalendarDays(period.to, period.from) + 1;
+  const compDays = differenceInCalendarDays(comparison.to, comparison.from) + 1;
+  check(compDays === days, `defaultComparison(): длина сравнения (${compDays}) равна длине периода (${days})`);
+  check(isSameDay(comparison.to, subDays(period.from, 1)), 'defaultComparison(): сравнение заканчивается вплотную перед началом периода');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

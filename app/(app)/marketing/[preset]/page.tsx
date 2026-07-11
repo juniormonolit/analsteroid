@@ -21,9 +21,11 @@ export default async function MarketingPresetPage({
   // by-managers/by-product-groups без preset) — верхняя граница = вчера. НЕ трогаем
   // resolveRelativePeriod/SaveReportModal: явные Месяц/Квартал/Год и реальные
   // пользовательские сохранённые отчёты (saved/[id]) по-прежнему считаются как раньше.
-  // Сравнение — defaultComparison() (задача 10.07): defaultPeriod() всегда календарный
-  // объект («этот месяц»/«прошлый месяц целиком»), поэтому сравнение тоже календарное
-  // (полный предыдущий месяц), а не хвост — было recomputeComparison(period).
+  // Сравнение — defaultComparison() = recomputeComparison(period): предыдущий период
+  // той же длины (задача 1666 — до этого здесь была регрессия f9d69d4, вставлявшая
+  // календарный «весь предыдущий месяц», что расходилось с comparisonMode:
+  // 'previous_tail' ниже). Календарная семантика (calendarComparisonForPreset)
+  // остаётся только для явного клика по быстрой кнопке-пресету в FilterBar.tsx.
   const period = defaultPeriod();
   const comparison = defaultComparison();
 

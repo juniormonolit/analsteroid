@@ -39,19 +39,21 @@ export function defaultPeriod(): DateRange {
 }
 
 /**
- * Дефолтный период СРАВНЕНИЯ для defaultPeriod() (первая загрузка отчёта без
- * сохранённого пресета — by-managers/by-product-groups/marketing). defaultPeriod()
- * по конструкции ВСЕГДА календарный объект — «этот месяц» (обрезан по вчера) либо,
- * 1-го числа, «прошлый месяц целиком» — поэтому сравнение тоже должно быть
- * календарным (задача 10.07), а не хвостом (см. calendarComparisonForPreset). Не
- * принимает DateRange (в отличие от recomputeComparison/previousPeriodSameLength) —
- * специально пересчитывает «какой сейчас день» сама, той же веткой, что и
- * defaultPeriod(), чтобы не расходиться при вызове порознь.
+ * Дефолтный период СРАВНЕНИЯ для defaultPeriod() (первая загрузка НОВОГО отчёта без
+ * сохранённого пресета — by-managers/by-product-groups/marketing). Регрессия
+ * (задача 1666, коммит f9d69d4, 10.07): здесь раньше стоял calendarComparisonForPreset
+ * («весь предыдущий месяц») по ошибочной логике «defaultPeriod() выглядит как
+ * календарный объект → и сравнение календарное». Это спутало ДВЕ разные вещи:
+ * calendarComparisonForPreset — семантика ЯВНОГО клика по быстрой кнопке «месяц»
+ * (day/week/month presets, см. PeriodRangeControls в FilterBar.tsx — та логика
+ * НЕ трогается, остаётся календарной по требованию владельца). Дефолт НОВОГО
+ * отчёта — не клик по пресету, а обычный «предыдущий период той же длины» (как у
+ * ручного выбора диапазона и как было ДО f9d69d4) — тот же recomputeComparison,
+ * что использует manualComparisonFn по умолчанию в FilterBar.tsx, чтобы не
+ * дублировать формулу.
  */
 export function defaultComparison(): DateRange {
-  const today = msk();
-  const isFirst = today.getDate() === 1;
-  return calendarComparisonForPreset(isFirst ? 'last_month' : 'this_month');
+  return recomputeComparison(defaultPeriod());
 }
 
 /** Same-length tail of the previous month */

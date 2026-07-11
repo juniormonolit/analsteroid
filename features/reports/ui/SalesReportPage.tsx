@@ -269,10 +269,11 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     router.push('/home');
   }
   const [period, setPeriod]             = useState<DateRange>(defaultPeriod);
-  // Дефолт до появления сохранённого пресета (by-managers/by-product-groups) — сам
-  // defaultPeriod() по конструкции всегда календарный объект («этот месяц»/«прошлый
-  // месяц целиком» 1-го числа), поэтому и сравнение по умолчанию календарное
-  // (задача 10.07), а не хвост — см. lib/period::defaultComparison.
+  // Дефолт НОВОГО отчёта (без сохранённого пресета) — предыдущий период ТОЙ ЖЕ
+  // длины, вплотную к началу основного (задача 1666: регрессия f9d69d4 подставляла
+  // сюда календарный «весь предыдущий месяц» — это семантика ЯВНОГО клика по
+  // быстрой кнопке-пресету, см. calendarComparisonForPreset в lib/period, а не
+  // дефолта конструктора). См. lib/period::defaultComparison.
   const [comparison, setComparison]     = useState<DateRange>(defaultComparison);
   const [dealScope, setDealScope]       = useState<DealScope>('all');
   const [clientType, setClientType]     = useState<ClientType>('all');
