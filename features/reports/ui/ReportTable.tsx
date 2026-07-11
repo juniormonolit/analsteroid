@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard } from 'lucide-react';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay, BorderMode } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
@@ -963,14 +963,44 @@ export function ReportTable({
                   {row.dimensionName}
                 </span>
                 {!isGroupRow && row.dimensionSubtitle && (
-                  <span
-                    className={`text-[10px] leading-tight md:text-[11px] md:leading-normal text-[var(--color-text-muted)] flex-shrink-0 font-normal ${
-                      onSubtitleClick ? 'hover:text-[var(--color-accent)] hover:underline transition-colors' : ''
-                    }`}
-                    onClick={onSubtitleClick ? (e) => { e.stopPropagation(); onSubtitleClick(row.dimensionId, row.dimensionName); } : undefined}
-                    title={onSubtitleClick ? 'Открыть карточку менеджера' : undefined}
-                  >
-                    {row.dimensionSubtitle}
+                  // Обёртка #id + иконка карточки (задача 1679, case 4В аудита): общий
+                  // inline-flex, чтобы центрировать иконку по вертикали относительно СВОЕЙ
+                  // строки текста, а не полагаться на baseline-выравнивание внешнего
+                  // flex-контейнера (имя/#id) — на десктопе внешний контейнер выровнен по
+                  // items-baseline (см. родительский span выше), у baseline своя логика для
+                  // вложенных flex-контейнеров и иконка «плыла» (замечание владельца на
+                  // CSS-мокапе). md:self-center выключает baseline ИМЕННО для этой обёртки,
+                  // прижимая её (а значит и иконку) к центру линии имени; на мобильном
+                  // (flex-col) self-* не участвует в горизонтальном позиционировании текста
+                  // внутри строки — оставляем как было (без self-center) до md:.
+                  <span className="inline-flex items-center gap-1 flex-shrink-0 md:self-center">
+                    <span
+                      className={`text-[10px] leading-tight md:text-[11px] md:leading-normal text-[var(--color-text-muted)] font-normal ${
+                        onSubtitleClick ? 'hover:text-[var(--color-accent)] hover:underline transition-colors' : ''
+                      }`}
+                      onClick={onSubtitleClick ? (e) => { e.stopPropagation(); onSubtitleClick(row.dimensionId, row.dimensionName); } : undefined}
+                      title={onSubtitleClick ? 'Открыть карточку менеджера' : undefined}
+                    >
+                      {row.dimensionSubtitle}
+                    </span>
+                    {/* Иконка «открыть карточку менеджера» — третья, ВИДИМАЯ цель клика в
+                        дополнение к имени (дрилл-даун) и #id (карточка, обработчик тот же
+                        onSubtitleClick). Только там, где сам onSubtitleClick передан
+                        (отчёты «по менеджерам» — SalesReportPage; в отчётах по товарным
+                        группам проп не передаётся, иконки не будет). В покое скрыта
+                        (.hover-reveal, globals.css) — появляется по hover строки (класс
+                        .group на <tr>) или фокусе; на тач/мобильном (<768px, объективно нет
+                        курсорного hover) видна всегда — см. .report-card-icon override там же. */}
+                    {onSubtitleClick && (
+                      <button
+                        onClick={e => { e.stopPropagation(); onSubtitleClick(row.dimensionId, row.dimensionName); }}
+                        title="Открыть карточку менеджера"
+                        aria-label="Открыть карточку менеджера"
+                        className="hover-reveal report-card-icon flex-shrink-0 inline-flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors"
+                      >
+                        <IdCard size={18} />
+                      </button>
+                    )}
                   </span>
                 )}
               </span>
