@@ -8,6 +8,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
 import { FilterBar, countAllDepartmentIds } from './FilterBar';
 import { ReportToolbar } from './ReportToolbar';
+import { MobileReportBar } from './MobileReportBar';
 import { ReportTable } from './ReportTable';
 import { MetricPanel, getMetricPanelWidth } from './MetricPanel';
 import { ViewSettings, loadViewPrefs, saveViewPrefs, DEFAULT_VIEW_PREFS, type ViewPrefs } from './ViewSettings';
@@ -866,72 +867,86 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         )}
       </div>
 
-      <FilterBar
-        period={period}
-        comparison={comparison}
-        departmentIds={departmentIds}
-        search={search}
-        grouping={sourceMode ? undefined : grouping}
-        onPeriodChange={handlePeriodChange}
-        onComparisonChange={setComparison}
-        onDepartmentIdsChange={setDepartmentIds}
-        onSearchChange={setSearch}
-        onGroupingChange={sourceMode ? undefined : setGrouping}
-        showDepartments={!sourceMode}
-        sourceDimension={sourceMode ? sourceDimension : undefined}
-        onSourceDimensionChange={sourceMode ? setSourceDimension : undefined}
-        // Кнопка настройки метрик доступна в обоих режимах (задача 1564: вернуть в
-        // «Обычной» — раньше скрывалась вместе с остальными pro-only элементами по
-        // п.3а спеки, но состав/подсветку метрик нужно менять и без Pro).
-        onOpenMetricPanel={() => setShowMetricPanel(true)}
-        metricsBadge={metricIds.includes('all_core') ? Object.keys(highlights).length : metricIds.length}
-      />
+      {(() => {
+        const filterBarProps = {
+          period, comparison, departmentIds, search,
+          grouping: sourceMode ? undefined : grouping,
+          onPeriodChange: handlePeriodChange,
+          onComparisonChange: setComparison,
+          onDepartmentIdsChange: setDepartmentIds,
+          onSearchChange: setSearch,
+          onGroupingChange: sourceMode ? undefined : setGrouping,
+          showDepartments: !sourceMode,
+          sourceDimension: sourceMode ? sourceDimension : undefined,
+          onSourceDimensionChange: sourceMode ? setSourceDimension : undefined,
+          // Кнопка настройки метрик доступна в обоих режимах (задача 1564: вернуть в
+          // «Обычной» — раньше скрывалась вместе с остальными pro-only элементами по
+          // п.3а спеки, но состав/подсветку метрик нужно менять и без Pro).
+          onOpenMetricPanel: () => setShowMetricPanel(true),
+          metricsBadge: metricIds.includes('all_core') ? Object.keys(highlights).length : metricIds.length,
+        };
 
-      <ReportToolbar
-        dealScope={dealScope}
-        comparisonDisplay={comparisonDisplay}
-        hasMixedDisplay={hasMixedDisplay}
-        onDealScopeChange={setDealScope}
-        clientType={clientType}
-        onClientTypeChange={setClientType}
-        onComparisonDisplayChange={v => { setComparisonDisplay(v); setMetricDisplayModes({}); }}
-        onRefresh={() => refetch()}
-        isLoading={isFetching}
-        viewPrefs={viewPrefs}
-        onViewPrefsChange={updateViewPrefs}
-        numberAlign={numberAlign}
-        onNumberAlignChange={setNumberAlign}
-        accountType={accountType}
-        onAccountTypeChange={reportSlug === 'by-managers' ? setAccountType : undefined}
-        drilldownGrouped={drilldownGrouped}
-        onDrilldownGroupedChange={setDrilldownGrouped}
-        colorizeMetrics={colorizeMetrics}
-        onColorizeMetricsChange={setColorizeMetrics}
-        zebra={zebra}
-        onZebraChange={setZebra}
-        borderMode={borderMode}
-        onBorderModeChange={setBorderMode}
-        showProductGroupPicker={true}
-        productGroupMode={productGroupMode}
-        onProductGroupModeChange={setProductGroupMode}
-        createdTimeFilter={createdTimeFilter}
-        onCreatedTimeFilterChange={setCreatedTimeFilter}
-        firstTouchFilter={firstTouchFilter}
-        onFirstTouchFilterChange={setFirstTouchFilter}
-        onSaveReport={() => setShowSaveModal(true)}
-        onCopyTable={handleCopyTable}
-        onExportExcel={handleExportExcel}
-        onExportPdf={handleExportPdf}
-        onExportPng={handleExportPng}
-        basic={!isPro}
-        // Пункт 5 задачи 1572: в Лайте «Сохранить» обычно скрыта (basic=true).
-        // Точечное исключение — только для отчёта, открытого через «Создать
-        // отчёт» (isNew) — иначе там нечем закрепить результат. Остальные
-        // pro-only элементы тулбара (basic) не трогаем.
-        forceShowSave={isNew}
-        onOpenComparison={() => setShowComparison(true)}
-        comparisonCount={compareIds.length}
-      />
+        const reportToolbarProps = {
+          dealScope,
+          comparisonDisplay,
+          hasMixedDisplay,
+          onDealScopeChange: setDealScope,
+          clientType,
+          onClientTypeChange: setClientType,
+          onComparisonDisplayChange: (v: ComparisonDisplay) => { setComparisonDisplay(v); setMetricDisplayModes({}); },
+          onRefresh: () => refetch(),
+          isLoading: isFetching,
+          viewPrefs,
+          onViewPrefsChange: updateViewPrefs,
+          numberAlign,
+          onNumberAlignChange: setNumberAlign,
+          accountType,
+          onAccountTypeChange: reportSlug === 'by-managers' ? setAccountType : undefined,
+          drilldownGrouped,
+          onDrilldownGroupedChange: setDrilldownGrouped,
+          colorizeMetrics,
+          onColorizeMetricsChange: setColorizeMetrics,
+          zebra,
+          onZebraChange: setZebra,
+          borderMode,
+          onBorderModeChange: setBorderMode,
+          showProductGroupPicker: true,
+          productGroupMode,
+          onProductGroupModeChange: setProductGroupMode,
+          createdTimeFilter,
+          onCreatedTimeFilterChange: setCreatedTimeFilter,
+          firstTouchFilter,
+          onFirstTouchFilterChange: setFirstTouchFilter,
+          onSaveReport: () => setShowSaveModal(true),
+          onCopyTable: handleCopyTable,
+          onExportExcel: handleExportExcel,
+          onExportPdf: handleExportPdf,
+          onExportPng: handleExportPng,
+          basic: !isPro,
+          // Пункт 5 задачи 1572: в Лайте «Сохранить» обычно скрыта (basic=true).
+          // Точечное исключение — только для отчёта, открытого через «Создать
+          // отчёт» (isNew) — иначе там нечем закрепить результат. Остальные
+          // pro-only элементы тулбара (basic) не трогаем.
+          forceShowSave: isNew,
+          onOpenComparison: () => setShowComparison(true),
+          comparisonCount: compareIds.length,
+        };
+
+        // Задача 1714 (мобильный тулбар, <768px): владелец прислал скрин — управление
+        // отчётом занимало ~75% высоты экрана на телефоне, таблице оставалось 2 строки.
+        // На мобиле FilterBar+ReportToolbar (две строки контролов) заменяются ОДНИМ
+        // компактным MobileReportBar (период + «Фильтры» с бейджем, остальное — в
+        // выдвижной панели) — те же пропсы, тот же state в SalesReportPage, десктоп
+        // (≥768px) рендерит прежние FilterBar+ReportToolbar без изменений.
+        return isMobile ? (
+          <MobileReportBar {...filterBarProps} {...reportToolbarProps} />
+        ) : (
+          <>
+            <FilterBar {...filterBarProps} />
+            <ReportToolbar {...reportToolbarProps} />
+          </>
+        );
+      })()}
 
       {isNew && selectedMetricIds.length === 0 && (
         <div className="mx-6 mt-3 flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 rounded-lg border border-dashed border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-4 py-3">

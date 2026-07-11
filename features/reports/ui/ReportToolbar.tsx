@@ -3,11 +3,16 @@ import { useState } from 'react';
 import { RefreshCw, Bookmark, Scale, SlidersHorizontal } from 'lucide-react';
 import type { DealScope, ClientType, ProductGroupMode, ComparisonDisplay, AccountType, BorderMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { type ViewPrefs } from './ViewSettings';
-import { countActiveFilters } from './FiltersMenu';
+import { type FiltersFieldsProps, countActiveFilters } from './FiltersMenu';
+import { type ViewSettingsFieldsProps } from './ViewSettings';
 import { ReportSettingsPanel } from './ReportSettingsPanel';
 import { ExportMenu } from './ExportMenu';
 
-interface Props {
+// Экспортируется как ReportToolbarProps (задача 1714, мобильный тулбар) — MobileReportBar
+// компонует те же поля через переиспользуемые куски (SettingsPanelButton,
+// ComparisonTriggerButton, SaveButton, RefreshButton, ExportMenu) в выдвижной панели,
+// без второй копии состояния/типов.
+export interface ReportToolbarProps {
   dealScope: DealScope;
   clientType: ClientType;
   comparisonDisplay: ComparisonDisplay;
@@ -65,6 +70,85 @@ interface Props {
   firstTouchFilter?: FirstTouchFilter;
   onFirstTouchFilterChange?: (v: FirstTouchFilter) => void;
 }
+type Props = ReportToolbarProps;
+
+// ── «Настройки отчёта» — кнопка + бейдж + сама панель (ReportSettingsPanel), вынесены
+// отдельным компонентом (задача 1714): используются и в десктопной строке ReportToolbar,
+// и внутри мобильной панели «Фильтры» (MobileReportBar) — то же локальное состояние
+// открытия/закрытия, та же панель, без второй копии. Видимость по Лайт-режиму (`basic`)
+// остаётся на вызывающей стороне (`{!basic && <SettingsPanelButton .../>}`), как и раньше.
+export function SettingsPanelButton(props: FiltersFieldsProps & ViewSettingsFieldsProps) {
+  const [showSettings, setShowSettings] = useState(false);
+  const activeFiltersCount = countActiveFilters(props);
+
+  return (
+    <>
+      <button
+        onClick={() => setShowSettings(true)}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+      >
+        <SlidersHorizontal size={12} />
+        Настройки отчёта
+        {activeFiltersCount > 0 && (
+          <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px]">{activeFiltersCount}</span>
+        )}
+      </button>
+      {showSettings && (
+        <ReportSettingsPanel {...props} onClose={() => setShowSettings(false)} />
+      )}
+    </>
+  );
+}
+
+// ── «Сравнение» — кнопка-триггер, вынесена отдельным компонентом (задача 1714) для
+// переиспользования в мобильной панели. Сама панель (ComparisonPanel) остаётся на
+// уровне SalesReportPage (её open-состояние там же) — тут только кнопка с бейджем.
+export function ComparisonTriggerButton({ onOpenComparison, comparisonCount = 0 }: {
+  onOpenComparison: () => void; comparisonCount?: number;
+}) {
+  return (
+    <button
+      onClick={onOpenComparison}
+      title="Сравнить сущности отчёта по текущим метрикам (как сравнение товаров в интернет-магазине)"
+      className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+    >
+      <Scale size={12} />
+      Сравнение
+      {comparisonCount > 0 && (
+        <span className="px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px] leading-none">{comparisonCount}</span>
+      )}
+    </button>
+  );
+}
+
+// ── «Сохранить» — вынесена отдельным компонентом (задача 1714) для переиспользования
+// в мобильной панели. Панель (SaveReportModal) остаётся на уровне SalesReportPage.
+export function SaveButton({ onSaveReport }: { onSaveReport: () => void }) {
+  return (
+    <button
+      onClick={onSaveReport}
+      className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+    >
+      <Bookmark size={12} />
+      Сохранить
+    </button>
+  );
+}
+
+// ── «Обновить» — вынесена отдельным компонентом (задача 1714) для переиспользования
+// в мобильной панели.
+export function RefreshButton({ onRefresh, isLoading }: { onRefresh: () => void; isLoading: boolean }) {
+  return (
+    <button
+      onClick={onRefresh}
+      disabled={isLoading}
+      className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-60"
+    >
+      <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+      Обновить
+    </button>
+  );
+}
 
 export function ReportToolbar({
   dealScope, clientType, comparisonDisplay, hasMixedDisplay,
@@ -86,88 +170,34 @@ export function ReportToolbar({
 }: Props) {
   // Объединённая панель «Настройки отчёта» (правка 09.07) — раньше здесь были две
   // отдельные кнопки-дропдауна («Фильтры» + «Вид»), см. FiltersMenu/ViewSettings.
-  const [showSettings, setShowSettings] = useState(false);
-  const activeFiltersCount = countActiveFilters({
+  // Кнопка+панель, «Сравнение», «Сохранить», «Обновить» вынесены компонентами выше
+  // (задача 1714) — здесь только композиция в прежней раскладке, вывод не меняется.
+  const settingsProps: FiltersFieldsProps & ViewSettingsFieldsProps = {
     dealScope, onDealScopeChange, clientType, onClientTypeChange,
     productGroupMode, onProductGroupModeChange, showProductGroupPicker,
+    prefs: viewPrefs, onChange: onViewPrefsChange,
+    numberAlign, onNumberAlignChange,
+    comparisonDisplay, hasMixedDisplay, onComparisonDisplayChange,
+    accountType, onAccountTypeChange,
+    drilldownGrouped, onDrilldownGroupedChange,
+    colorizeMetrics, onColorizeMetricsChange,
+    zebra, onZebraChange,
+    borderMode, onBorderModeChange,
     createdTimeFilter, onCreatedTimeFilterChange, firstTouchFilter, onFirstTouchFilterChange,
-  });
+  };
 
   return (
     <div className="flex items-center gap-2 px-6 py-2 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
-      {!basic && (
-        <button
-          onClick={() => setShowSettings(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-        >
-          <SlidersHorizontal size={12} />
-          Настройки отчёта
-          {activeFiltersCount > 0 && (
-            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px]">{activeFiltersCount}</span>
-          )}
-        </button>
-      )}
-
-      {!basic && showSettings && (
-        <ReportSettingsPanel
-          dealScope={dealScope}
-          onDealScopeChange={onDealScopeChange}
-          clientType={clientType}
-          onClientTypeChange={onClientTypeChange}
-          productGroupMode={productGroupMode}
-          onProductGroupModeChange={onProductGroupModeChange}
-          showProductGroupPicker={showProductGroupPicker}
-          prefs={viewPrefs}
-          onChange={onViewPrefsChange}
-          numberAlign={numberAlign}
-          onNumberAlignChange={onNumberAlignChange}
-          comparisonDisplay={comparisonDisplay}
-          hasMixedDisplay={hasMixedDisplay}
-          onComparisonDisplayChange={onComparisonDisplayChange}
-          accountType={accountType}
-          onAccountTypeChange={onAccountTypeChange}
-          drilldownGrouped={drilldownGrouped}
-          onDrilldownGroupedChange={onDrilldownGroupedChange}
-          colorizeMetrics={colorizeMetrics}
-          onColorizeMetricsChange={onColorizeMetricsChange}
-          zebra={zebra}
-          onZebraChange={onZebraChange}
-          borderMode={borderMode}
-          onBorderModeChange={onBorderModeChange}
-          createdTimeFilter={createdTimeFilter}
-          onCreatedTimeFilterChange={onCreatedTimeFilterChange}
-          firstTouchFilter={firstTouchFilter}
-          onFirstTouchFilterChange={onFirstTouchFilterChange}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
+      {!basic && <SettingsPanelButton {...settingsProps} />}
 
       {!basic && onOpenComparison && (
-        <button
-          onClick={onOpenComparison}
-          title="Сравнить сущности отчёта по текущим метрикам (как сравнение товаров в интернет-магазине)"
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-        >
-          <Scale size={12} />
-          Сравнение
-          {comparisonCount > 0 && (
-            <span className="px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px] leading-none">{comparisonCount}</span>
-          )}
-        </button>
+        <ComparisonTriggerButton onOpenComparison={onOpenComparison} comparisonCount={comparisonCount} />
       )}
 
       {/* Правая группа (правка 09.07): «Сохранить»/«Копировать» переехали вплотную
           к «Обновить» — весь блок прижат вправо через ml-auto на обёртке. */}
       <div className="ml-auto flex items-center gap-2">
-        {(!basic || forceShowSave) && (
-          <button
-            onClick={onSaveReport}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-          >
-            <Bookmark size={12} />
-            Сохранить
-          </button>
-        )}
+        {(!basic || forceShowSave) && <SaveButton onSaveReport={onSaveReport} />}
 
         {onCopyTable && onExportExcel && onExportPdf && onExportPng && (
           <ExportMenu
@@ -179,14 +209,7 @@ export function ReportToolbar({
           />
         )}
 
-        <button
-          onClick={onRefresh}
-          disabled={isLoading}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-60"
-        >
-          <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
-          Обновить
-        </button>
+        <RefreshButton onRefresh={onRefresh} isLoading={isLoading} />
       </div>
     </div>
   );

@@ -20,7 +20,11 @@ interface DeptNode {
   children?: DeptNode[];
 }
 
-interface Props {
+// Экспортируется как FilterBarProps (задача 1714, мобильный тулбар) — MobileReportBar
+// компонует те же поля через переиспользуемые куски (MainPeriodControl,
+// ComparisonPeriodControl, MetricsButton, SearchField, GroupingSelector,
+// SourceDimensionSelector) в выдвижной панели, без второй копии состояния/типов.
+export interface FilterBarProps {
   period: DateRange;
   comparison: DateRange;
   departmentIds: string[];
@@ -38,6 +42,7 @@ interface Props {
   sourceDimension?: SourceDimension;
   onSourceDimensionChange?: (d: SourceDimension) => void;
 }
+type Props = FilterBarProps;
 
 function fmt(d: Date) {
   return format(d, 'dd.MM.yyyy', { locale: ru });
@@ -144,13 +149,20 @@ function DeptTreeNode({
 //    же длины, как раньше — `manualComparisonFn` (дефолт recomputeComparison,
 //    поведение основного отчёта; карточка менеджера передаёт previousPeriodSameLength,
 //    сохраняя СВОЙ прежний дефолт «период сразу перед текущим»).
-export function PeriodRangeControls({ period, comparison, onPeriodChange, onComparisonChange, manualComparisonFn = recomputeComparison }: {
-  period: DateRange; comparison: DateRange;
+// ── Основной период — вынесен отдельно от периода сравнения (задача 1714, мобильный
+// тулбар): снаружи над таблицей на мобиле остаётся ТОЛЬКО этот компактный пикер,
+// период сравнения переезжает в панель «Фильтры» (см. ComparisonPeriodControl ниже).
+// На десктопе PeriodRangeControls по-прежнему рендерит оба вместе — вывод идентичен
+// прежнему (просто собран из двух кусков вместо одного блока JSX).
+export function MainPeriodControl({ period, onPeriodChange, onComparisonChange, manualComparisonFn = recomputeComparison, compact = false }: {
+  period: DateRange;
   onPeriodChange: (p: DateRange) => void; onComparisonChange: (p: DateRange) => void;
   manualComparisonFn?: (p: DateRange) => DateRange;
+  // compact — мобильная кнопка снаружи панели: короче дата (без года, «7 июл – 11 июл»)
+  // и меньше паддинг/шрифт, иначе не помещается рядом с кнопкой «Фильтры» на 375px.
+  compact?: boolean;
 }) {
   const [showPeriod, setShowPeriod] = useState(false);
-  const [showComp,   setShowComp]   = useState(false);
 
   function handlePeriodChange(p: DateRange, meta?: PeriodChangeMeta) {
     onPeriodChange(p);
@@ -159,60 +171,93 @@ export function PeriodRangeControls({ period, comparison, onPeriodChange, onComp
   }
 
   return (
-    <>
-      {/* ── Main period ── */}
-      <Popover
-        open={showPeriod}
-        onOpenChange={setShowPeriod}
-        className="rounded-xl"
-        trigger={
-          <button
-            className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
-              showPeriod
-                ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
-            }`}
-          >
-            <span className="tabular-nums">{fmt(period.from)} — {fmt(period.to)}</span>
-            <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
-          </button>
-        }
-      >
-        <DateRangePicker
-          value={period}
-          onChange={handlePeriodChange}
-          onClose={() => setShowPeriod(false)}
-          showPresets
-        />
-      </Popover>
+    <Popover
+      open={showPeriod}
+      onOpenChange={setShowPeriod}
+      className="rounded-xl"
+      trigger={
+        <button
+          className={`flex items-center border rounded-lg transition-colors ${
+            compact ? 'gap-1 px-2.5 py-1.5 text-xs' : 'gap-2 px-3 py-1.5 text-sm'
+          } ${
+            showPeriod
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+              : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
+          }`}
+        >
+          <span className={`tabular-nums ${compact ? 'whitespace-nowrap' : ''}`}>
+            {compact
+              ? `${format(period.from, 'd MMM', { locale: ru })} – ${format(period.to, 'd MMM', { locale: ru })}`
+              : `${fmt(period.from)} — ${fmt(period.to)}`}
+          </span>
+          <ChevronDown size={compact ? 12 : 14} className="text-[var(--color-text-muted)]" />
+        </button>
+      }
+    >
+      <DateRangePicker
+        value={period}
+        onChange={handlePeriodChange}
+        onClose={() => setShowPeriod(false)}
+        showPresets
+      />
+    </Popover>
+  );
+}
 
-      {/* ── Comparison period ── */}
-      <Popover
-        open={showComp}
-        onOpenChange={setShowComp}
-        className="rounded-xl"
-        trigger={
-          <button
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-sm transition-colors ${
-              showComp
-                ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-focus)] hover:text-[var(--color-text)]'
-            }`}
-          >
-            <ArrowLeftRight size={13} className="shrink-0" />
-            <span className="tabular-nums">{fmt(comparison.from)} — {fmt(comparison.to)}</span>
-            <ChevronDown size={13} className="text-[var(--color-text-muted)]" />
-          </button>
-        }
-      >
-        <DateRangePicker
-          value={comparison}
-          onChange={p => { onComparisonChange(p); setShowComp(false); }}
-          onClose={() => setShowComp(false)}
-          showPresets={false}
-          title="Период сравнения"
-        />
-      </Popover>
+// ── Период сравнения — самостоятельный кусок (задача 1714): на десктопе живёт рядом
+// с MainPeriodControl (см. PeriodRangeControls), на мобиле переезжает внутрь панели
+// «Фильтры» (MobileReportBar), тот же компонент — без второй копии Popover/состояния.
+export function ComparisonPeriodControl({ comparison, onComparisonChange }: {
+  comparison: DateRange; onComparisonChange: (p: DateRange) => void;
+}) {
+  const [showComp, setShowComp] = useState(false);
+  return (
+    <Popover
+      open={showComp}
+      onOpenChange={setShowComp}
+      className="rounded-xl"
+      trigger={
+        <button
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 border rounded-lg text-sm transition-colors ${
+            showComp
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-focus)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          <ArrowLeftRight size={13} className="shrink-0" />
+          <span className="tabular-nums">{fmt(comparison.from)} — {fmt(comparison.to)}</span>
+          <ChevronDown size={13} className="text-[var(--color-text-muted)]" />
+        </button>
+      }
+    >
+      <DateRangePicker
+        value={comparison}
+        onChange={p => { onComparisonChange(p); setShowComp(false); }}
+        onClose={() => setShowComp(false)}
+        showPresets={false}
+        title="Период сравнения"
+      />
+    </Popover>
+  );
+}
+
+// ── Период + период сравнения вместе — используется там, где оба живут рядом в одной
+// строке (десктоп FilterBar, ManagerCardPanel, DrilldownDrawer): просто композиция двух
+// кусков выше, поведение и разметка не изменились относительно прежней версии.
+export function PeriodRangeControls({ period, comparison, onPeriodChange, onComparisonChange, manualComparisonFn = recomputeComparison }: {
+  period: DateRange; comparison: DateRange;
+  onPeriodChange: (p: DateRange) => void; onComparisonChange: (p: DateRange) => void;
+  manualComparisonFn?: (p: DateRange) => DateRange;
+}) {
+  return (
+    <>
+      <MainPeriodControl
+        period={period}
+        onPeriodChange={onPeriodChange}
+        onComparisonChange={onComparisonChange}
+        manualComparisonFn={manualComparisonFn}
+      />
+      <ComparisonPeriodControl comparison={comparison} onComparisonChange={onComparisonChange} />
     </>
   );
 }
@@ -294,6 +339,123 @@ export function DepartmentPicker({ departmentIds, onDepartmentIdsChange }: {
   );
 }
 
+// ── «Метрики» — вынесено отдельным компонентом (задача 1714): используется и в
+// десктопной строке FilterBar, и внутри мобильной панели «Фильтры» (MobileReportBar),
+// без второй копии разметки/бейджа.
+export function MetricsButton({ onOpenMetricPanel, metricsBadge }: {
+  onOpenMetricPanel: () => void; metricsBadge?: number;
+}) {
+  return (
+    <button
+      onClick={onOpenMetricPanel}
+      className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+    >
+      <SlidersHorizontal size={14} />
+      Метрики
+      {!!metricsBadge && (
+        <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px]">{metricsBadge}</span>
+      )}
+    </button>
+  );
+}
+
+// ── Поиск — вынесено отдельным компонентом (задача 1714): ширина настраивается
+// (`widthClassName`), чтобы в мобильной панели поле растягивалось на всю ширину
+// (`w-full`), а в десктопной строке оставалось прежним `w-44`.
+export function SearchField({ search, onSearchChange, widthClassName = 'w-44' }: {
+  search: string; onSearchChange: (v: string) => void; widthClassName?: string;
+}) {
+  return (
+    <div className={`relative ${widthClassName}`}>
+      <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] pointer-events-none" />
+      <input
+        type="text"
+        value={search}
+        onChange={e => onSearchChange(e.target.value)}
+        placeholder="Поиск..."
+        className="pl-8 pr-7 py-1.5 text-sm border border-[var(--color-border)] rounded-lg bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] transition-colors w-full"
+      />
+      {search && (
+        <button
+          onClick={() => onSearchChange('')}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+        >
+          <X size={13} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Селектор сущности (маркетинговые отчёты) — вынесен отдельным компонентом
+// (задача 1714). `stacked` — вариант для мобильной панели: подпись сверху, полоса
+// сегментов на всю ширину вместо строки «подпись + контрол» справа в тулбаре.
+export function SourceDimensionSelector({ sourceDimension, onSourceDimensionChange, stacked = false }: {
+  sourceDimension: SourceDimension; onSourceDimensionChange: (d: SourceDimension) => void; stacked?: boolean;
+}) {
+  const segs = (
+    <div className={`flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm ${stacked ? 'w-full' : ''}`}>
+      {SOURCE_DIMENSIONS.map(d => (
+        <button
+          key={d.key}
+          onClick={() => onSourceDimensionChange(d.key)}
+          className={`${stacked ? 'flex-1' : 'px-2.5'} py-1.5 transition-colors whitespace-nowrap ${sourceDimension === d.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+        >
+          {d.label}
+        </button>
+      ))}
+    </div>
+  );
+  if (stacked) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="text-[11px] font-bold text-[var(--color-text-muted)] uppercase tracking-wide">Сущность</div>
+        {segs}
+      </div>
+    );
+  }
+  return (
+    <div className="ml-auto flex items-center gap-2">
+      <span className="text-sm text-[var(--color-text-muted)]">Сущность</span>
+      {segs}
+    </div>
+  );
+}
+
+// ── Группировка — вынесена отдельным компонентом (задача 1714). `stacked` — вариант
+// для мобильной панели «Фильтры» (подпись сверху, сегменты растянуты на всю ширину).
+export function GroupingSelector({ grouping, onGroupingChange, stacked = false }: {
+  grouping: Grouping; onGroupingChange: (g: Grouping) => void; stacked?: boolean;
+}) {
+  const segs = (
+    <div className={`flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm ${stacked ? 'w-full' : ''}`}>
+      {(['none', 'team', 'branch', 'total'] as Grouping[]).map(g => (
+        <button
+          key={g}
+          onClick={() => onGroupingChange(g)}
+          className={`${stacked ? 'flex-1' : 'px-3'} py-1.5 transition-colors ${grouping === g ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+        >
+          {GROUPING_LABELS[g]}
+        </button>
+      ))}
+    </div>
+  );
+  if (stacked) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="text-[11px] font-bold text-[var(--color-text-muted)] uppercase tracking-wide">Группировка</div>
+        {segs}
+      </div>
+    );
+  }
+  return (
+    <div className="ml-auto flex items-center gap-2">
+      <span className="text-sm text-[var(--color-text-muted)]">Группировка</span>
+      {segs}
+    </div>
+  );
+}
+
 export function FilterBar({ period, comparison, departmentIds, search = '', grouping, onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange, onOpenMetricPanel, metricsBadge, showDepartments = true, sourceDimension, onSourceDimensionChange }: Props) {
   return (
     <div className="flex items-center gap-2 px-3 sm:px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
@@ -312,74 +474,22 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
 
       {/* ── Metrics (legacy "Показатели") ── */}
       {onOpenMetricPanel && (
-        <button
-          onClick={onOpenMetricPanel}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-        >
-          <SlidersHorizontal size={14} />
-          Метрики
-          {!!metricsBadge && (
-            <span className="ml-1 px-1.5 py-0.5 bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-full text-[10px]">{metricsBadge}</span>
-          )}
-        </button>
+        <MetricsButton onOpenMetricPanel={onOpenMetricPanel} metricsBadge={metricsBadge} />
       )}
 
       {/* ── Search ── */}
       {onSearchChange && (
-        <div className="relative">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] pointer-events-none" />
-          <input
-            type="text"
-            value={search}
-            onChange={e => onSearchChange(e.target.value)}
-            placeholder="Поиск..."
-            className="pl-8 pr-7 py-1.5 text-sm border border-[var(--color-border)] rounded-lg bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] transition-colors w-44"
-          />
-          {search && (
-            <button
-              onClick={() => onSearchChange('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-            >
-              <X size={13} />
-            </button>
-          )}
-        </div>
+        <SearchField search={search} onSearchChange={onSearchChange} widthClassName="w-44" />
       )}
 
       {/* ── Source dimension (marketing reports, far right) ── */}
       {onSourceDimensionChange && sourceDimension !== undefined && (
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-[var(--color-text-muted)]">Сущность</span>
-          <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
-            {SOURCE_DIMENSIONS.map(d => (
-              <button
-                key={d.key}
-                onClick={() => onSourceDimensionChange(d.key)}
-                className={`px-2.5 py-1.5 transition-colors whitespace-nowrap ${sourceDimension === d.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <SourceDimensionSelector sourceDimension={sourceDimension} onSourceDimensionChange={onSourceDimensionChange} />
       )}
 
       {/* ── Grouping (far right, labeled — matches the legacy tool everyone knows) ── */}
       {onGroupingChange && grouping !== undefined && (
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-sm text-[var(--color-text-muted)]">Группировка</span>
-          <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
-            {(['none', 'team', 'branch', 'total'] as Grouping[]).map(g => (
-              <button
-                key={g}
-                onClick={() => onGroupingChange(g)}
-                className={`px-3 py-1.5 transition-colors ${grouping === g ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
-              >
-                {GROUPING_LABELS[g]}
-              </button>
-            ))}
-          </div>
-        </div>
+        <GroupingSelector grouping={grouping} onGroupingChange={onGroupingChange} />
       )}
     </div>
   );

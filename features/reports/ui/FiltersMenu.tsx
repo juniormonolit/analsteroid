@@ -1,7 +1,7 @@
 'use client';
 import { Filter } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
-import type { DealScope, ClientType, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter, Grouping, ComparisonDisplay } from '@/lib/metrics/types';
 
 export function Seg<T extends string>({ options, value, onChange, labels }: {
   options: T[]; value: T; onChange: (v: T) => void; labels: Record<T, string>;
@@ -50,15 +50,25 @@ export interface FiltersFieldsProps {
 // (правка 09.07, объединение «Фильтры»+«Вид» в «Настройки отчёта»), чтобы кнопка
 // объединённой панели в ReportToolbar считала бейдж тем же способом, что и раньше
 // FiltersMenu, без дублирования условий.
+//
+// Задача 1714 (мобильный тулбар): бейдж кнопки «Фильтры» снаружи мобильной панели шире
+// прежнего — владелец: «активные фильтры + поиск + сравнение вкл + группировка
+// не-дефолтная». Расширяем ЭТУ ЖЕ функцию тремя опциональными полями вместо копии —
+// десктопный вызов в ReportToolbar их не передаёт (undefined ⇒ 0), поэтому его бейдж
+// не меняется; MobileReportBar передаёт все три.
 export function countActiveFilters({
   dealScope, clientType, showProductGroupPicker, productGroupMode, accountType, onAccountTypeChange,
   createdTimeFilter, onCreatedTimeFilterChange, firstTouchFilter, onFirstTouchFilterChange,
-}: FiltersFieldsProps): number {
+  search, grouping, comparisonDisplay,
+}: FiltersFieldsProps & { search?: string; grouping?: Grouping; comparisonDisplay?: ComparisonDisplay }): number {
   return (dealScope !== 'all' ? 1 : 0) + (clientType !== 'all' ? 1 : 0)
     + (showProductGroupPicker && productGroupMode && productGroupMode !== 'by_max' ? 1 : 0)
     + (onAccountTypeChange && accountType && accountType !== 'managers' ? 1 : 0)
     + (onCreatedTimeFilterChange && createdTimeFilter && createdTimeFilter !== 'all' ? 1 : 0)
-    + (onFirstTouchFilterChange && firstTouchFilter && firstTouchFilter !== 'all' ? 1 : 0);
+    + (onFirstTouchFilterChange && firstTouchFilter && firstTouchFilter !== 'all' ? 1 : 0)
+    + (search && search.trim() ? 1 : 0)
+    + (grouping && grouping !== 'none' ? 1 : 0)
+    + (comparisonDisplay && comparisonDisplay !== 'current' ? 1 : 0);
 }
 
 // Содержимое «Фильтры» — вынесено из-под Popover-обёртки (правка 09.07), чтобы
