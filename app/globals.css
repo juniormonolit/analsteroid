@@ -220,6 +220,24 @@ button, a { -webkit-tap-highlight-color: transparent; }
   :root { --report-dim-col: clamp(140px, 46vw, 200px); }
 }
 
+/* Компактные ячейки таблиц отчётов на мобильном (задача 1659, case 1A UI/UX-аудита):
+   доп. множитель шрифта/вертикального паддинга поверх пользовательского «Масштаба
+   таблиц» (tableScale, ReportTable.tsx: --row-py, fontSize) + меньший горизонтальный
+   паддинг ячеек метрик/измерения — чтобы под узкий вьюпорт влезало больше метрик за
+   один экран. На десктопе (≥768px) обе переменные равны исходным значениям (1 / 8px)
+   — вёрстка там не меняется вообще, см. ReportTable.tsx: calc(...px * var(...)).
+   Итоговый шрифт на мобильном: 14px(база) × 0.82 ≈ 11.5px (диапазон 11-12px из ТЗ). */
+:root {
+  --report-mobile-scale: 1;
+  --report-cell-px: 8px; /* совпадает с исходным px-2 (Tailwind: 0.5rem) */
+}
+@media (max-width: 767px) {
+  :root {
+    --report-mobile-scale: 0.82;
+    --report-cell-px: 5px;
+  }
+}
+
 /* Sub-pixel seam under the sticky header: at fractional scrollTop (we have non-integer row
    heights from fontScale) the browser rounds the sticky <thead> and the scrolling body
    differently, leaving a ~1px transparent line where body content peeks through. Paint a 1px

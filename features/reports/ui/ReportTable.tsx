@@ -771,7 +771,7 @@ export function ReportTable({
                 return (
                   <td
                     key={kind}
-                    className={`relative text-center px-2 py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${clickCls} ${p.className}`}
+                    className={`relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${clickCls} ${p.className}`}
                     style={{ ...p.style, ...accent, ...alignStyle }}
                     onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
                   >
@@ -782,21 +782,21 @@ export function ReportTable({
               }
               if (kind === 'comparison') {
                 return (
-                  <td key={kind} className={`text-center px-2 py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} text-[var(--color-text-muted)] ${p.className} ${subColAnimCls(m.id, 'comparison')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                  <td key={kind} className={`text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} text-[var(--color-text-muted)] ${p.className} ${subColAnimCls(m.id, 'comparison')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
                     {formatValue(d?.comparison ?? null, m.dataType, decFor(m))}
                   </td>
                 );
               }
               if (kind === 'delta') {
                 return (
-                  <td key={kind} className={`text-center px-2 py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'delta')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                  <td key={kind} className={`text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${(d?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'delta')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
                     {formatDelta(d?.delta ?? null, m.dataType, decFor(m))}
                   </td>
                 );
               }
               // deltaPct — всегда последняя под-колонка, несёт разделитель закреплённого блока
               return (
-                <td key={kind} className={`relative text-center px-2 py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'deltaPct')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
+                <td key={kind} className={`relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${(d?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (d?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${p.className} ${subColAnimCls(m.id, 'deltaPct')}`} style={{ ...p.style, ...accent, ...alignStyle }}>
                   {formatDeltaPct(d?.deltaPct ?? null)}{pinBar}
                 </td>
               );
@@ -810,7 +810,7 @@ export function ReportTable({
         return (
           <td
             key={m.id}
-            className={`relative text-center px-2 py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
+            className={`relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
             style={{ ...p.style, ...accent, ...alignStyle }}
             onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
           >
@@ -842,7 +842,7 @@ export function ReportTable({
       return (
         <td
           key={m.id}
-          className={`relative text-center px-2 py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
+          className={`relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
           style={{ ...p.style, ...accent, ...alignStyle }}
           onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
         >
@@ -926,7 +926,7 @@ export function ReportTable({
             {rowNumber ?? ''}
           </td>
           <td
-            className={`sticky z-20 ${stickyBg} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-2 py-[var(--row-py)] border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
+            className={`sticky z-20 ${stickyBg} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-[length:var(--report-cell-px)] py-[var(--row-py)] border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
             style={{ left: NUMBER_COL_WIDTH }}
             onClick={canClickRow
               ? () => onRowClick!(row.dimensionId, row.dimensionName)
@@ -948,16 +948,23 @@ export function ReportTable({
                 <span className="w-5 flex-shrink-0" />
               )}
               {isChild && <span className="w-4 flex-shrink-0 border-l-2 border-[var(--color-border)] self-stretch mr-1" />}
-              <span className="min-w-0 flex-1 flex items-baseline gap-1.5 truncate">
+              {/* Имя + #id (задача 1659, case 1A аудита): на мобильном (<768px, брейкпоинт
+                  соответствует --report-dim-col выше) колонка измерения узкая
+                  (clamp(140px,46vw,200px)) — раньше имя и #id стояли в один ряд и id
+                  «отъедал» ширину у имени, из-за чего имя обрезалось truncate. Теперь на
+                  мобильном — flex-col (имя жирным первой строкой, #id мельче серым под
+                  ним), на десктопе (md:) поведение НЕ меняется: та же однострочная
+                  раскладка item-baseline+gap, что была всегда. */}
+              <span className="min-w-0 flex-1 flex flex-col md:flex-row md:items-baseline md:gap-1.5 md:truncate">
                 <span
-                  className={`truncate ${isGroupRow ? 'font-semibold' : 'font-normal'} ${canClickRow ? 'hover:text-[var(--color-accent)] hover:underline transition-colors' : ''}`}
+                  className={`truncate ${isGroupRow ? 'font-semibold' : 'font-semibold md:font-normal'} ${canClickRow ? 'hover:text-[var(--color-accent)] hover:underline transition-colors' : ''}`}
                   title={row.dimensionName}
                 >
                   {row.dimensionName}
                 </span>
                 {!isGroupRow && row.dimensionSubtitle && (
                   <span
-                    className={`text-[11px] text-[var(--color-text-muted)] flex-shrink-0 font-normal ${
+                    className={`text-[10px] leading-tight md:text-[11px] md:leading-normal text-[var(--color-text-muted)] flex-shrink-0 font-normal ${
                       onSubtitleClick ? 'hover:text-[var(--color-accent)] hover:underline transition-colors' : ''
                     }`}
                     onClick={onSubtitleClick ? (e) => { e.stopPropagation(); onSubtitleClick(row.dimensionId, row.dimensionName); } : undefined}
@@ -1107,7 +1114,11 @@ export function ReportTable({
   // 30px×tableScale итоговой высоты строки — то есть настоящее пропорциональное
   // масштабирование от базовых 30px/100%, а не только шрифта.
   const basePy = density === 'compact' ? 2 : density === 'relaxed' ? 14 : 5;
-  const rowPy = `${basePy * tableScale}px`;
+  // Мобильный доп.-множитель (задача 1659, case 1A аудита): --report-mobile-scale = 1 на
+  // десктопе (≥768px, globals.css) — calc() схлопывается к прежнему значению, на
+  // мобильном ужимает паддинг ПОВЕРХ пользовательского tableScale (тот же приём, что и
+  // у fontSize таблицы ниже — см. рендер <table>).
+  const rowPy = `calc(${basePy * tableScale}px * var(--report-mobile-scale, 1))`;
 
   // ── Группировка «Итого» — вертикальная таблица (правка собрания 09.07/2) ────────
   // Раньше «Итого» рендерился как ОДНА строка со всеми метриками во всю ширину
@@ -1205,7 +1216,7 @@ export function ReportTable({
 
   return (
     <div className="overflow-auto h-full bg-[var(--color-bg-surface)]">
-      <table className="w-full text-sm border-collapse" style={{ fontSize: `${14 * tableScale}px`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
+      <table className="w-full text-sm border-collapse" style={{ fontSize: `calc(${14 * tableScale}px * var(--report-mobile-scale, 1))`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
         <thead className="report-thead sticky top-0 z-30 bg-[var(--color-table-header)]">
           {hasGroups && (
             <tr>
@@ -1437,7 +1448,7 @@ export function ReportTable({
                 style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH, backgroundColor: TOTALS_BG }}
               />
               <td
-                className="sticky bottom-0 z-30 px-2 py-[var(--row-py)] border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
+                className="sticky bottom-0 z-30 px-[length:var(--report-cell-px)] py-[var(--row-py)] border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] uppercase tracking-wider text-[12px]"
                 style={{ left: NUMBER_COL_WIDTH, backgroundColor: TOTALS_BG }}
               >
                 {/* Тот же резервный слот (w-5) + gap-1, что у заголовка и строк данных — акцентная
@@ -1488,28 +1499,28 @@ export function ReportTable({
                         const animCls = idx === 0 ? '' : subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
                         if (kind === 'current') {
                           return (
-                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums text-[var(--color-num,#000)] ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
+                            <td key={kind} className={`text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] tabular-nums text-[var(--color-num,#000)] ${clickCls} ${sb.cls}`} style={sb.style} onClick={handleClick}>
                               {formatValue(tv?.current ?? null, m.dataType, decFor(m))}
                             </td>
                           );
                         }
                         if (kind === 'comparison') {
                           return (
-                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums text-[var(--color-text-muted)] ${sb.cls} ${animCls}`} style={sb.style}>
+                            <td key={kind} className={`text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] tabular-nums text-[var(--color-text-muted)] ${sb.cls} ${animCls}`} style={sb.style}>
                               {formatValue(tv?.comparison ?? null, m.dataType, decFor(m))}
                             </td>
                           );
                         }
                         if (kind === 'delta') {
                           return (
-                            <td key={kind} className={`text-center px-2 py-[var(--row-py)] tabular-nums ${(tv?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (tv?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${sb.cls} ${animCls}`} style={sb.style}>
+                            <td key={kind} className={`text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] tabular-nums ${(tv?.delta ?? 0) > 0 ? 'text-[var(--color-positive)]' : (tv?.delta ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${sb.cls} ${animCls}`} style={sb.style}>
                               {formatDelta(tv?.delta ?? null, m.dataType, decFor(m))}
                             </td>
                           );
                         }
                         // deltaPct — всегда последняя под-колонка, несёт разделитель pinned-блока
                         return (
-                          <td key={kind} className={`relative text-center px-2 py-[var(--row-py)] tabular-nums ${(tv?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (tv?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${sb.cls} ${animCls}`} style={sb.style}>
+                          <td key={kind} className={`relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] tabular-nums ${(tv?.deltaPct ?? 0) > 0 ? 'text-[var(--color-positive)]' : (tv?.deltaPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''} ${sb.cls} ${animCls}`} style={sb.style}>
                             {formatDeltaPct(tv?.deltaPct ?? null)}{isLast ? pinSep : null}
                           </td>
                         );
