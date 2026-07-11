@@ -1,9 +1,12 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, Search } from 'lucide-react';
+import { format } from 'date-fns';
+import { ru } from 'date-fns/locale';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
 import type { Metric, Grouping, ComparisonDisplay, BorderMode } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
+import type { DateRange } from '@/lib/period';
 import { mixHex, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 import { matchesCondition, resolveThresholdZone, gradientZoneFromRank, type MetricFilters, type ZoneInfo } from '@/lib/reports/metricFilter';
 import { resolveHeatmapSet } from '@/lib/metrics/heatmapDefault';
@@ -163,6 +166,68 @@ interface Props {
   // Управляется снаружи: onRowClick переключает, expandedRowIds хранит открытые.
   expandedRowIds?: Set<string>;
   renderExpandedRow?: (row: RowDeltas) => React.ReactNode;
+  // Составной empty state (задача 1698, кейс 10Б UI/UX-аудита): контекст для «диагноз»-
+  // пилюли под кнопкой «Сбросить фильтры» + сам сброс. Передаётся ТОЛЬКО из основной
+  // страницы отчёта (SalesReportPage) — там же живёт состояние периода/поиска/отделов.
+  // Мини-отчёт дрилл-дауна (DrilldownDrawer) этот проп не передаёт — там остаётся
+  // прежняя короткая надпись (см. фолбэк ниже), т.к. своего «Сбросить фильтры» у
+  // мини-отчёта нет и заводить его — отдельная задача.
+  emptyStateInfo?: {
+    period: DateRange;
+    search: string;
+    departmentIds: string[];
+    // Общее число отделов в оргструктуре — известно, только если родитель уже
+    // подгрузил /api/catalog/org-structure (тот же React Query кэш, что у
+    // DepartmentPicker). Если нет — пилюля просто не показывает «(N)».
+    totalDepartments?: number;
+    onResetFilters: () => void;
+  };
+}
+
+function fmtEmptyStateDate(d: Date): string {
+  return format(d, 'dd.MM.yyyy', { locale: ru });
+}
+
+// «Отделы: …» в диагноз-пилюле empty state: если ничего не выбрано — значит выбраны
+// ВСЕ (departmentIds пуст = запрос без фильтра по отделам), показываем «все (N)» при
+// известном общем числе. Если выбрано подмножество, но оно фактически покрывает все
+// известные отделы — тоже «все (N)» (тот же смысл, что и пустой выбор). Иначе — «M из N»
+// (или просто «M», если общее число не подгрузилось).
+function emptyStateDepartmentsLabel(departmentIds: string[], totalDepartments?: number): string {
+  if (departmentIds.length === 0) {
+    return totalDepartments ? `все (${totalDepartments})` : 'все';
+  }
+  if (totalDepartments && departmentIds.length >= totalDepartments) {
+    return `все (${totalDepartments})`;
+  }
+  return totalDepartments ? `${departmentIds.length} из ${totalDepartments}` : `${departmentIds.length}`;
+}
+
+function ReportEmptyState({ info }: { info: NonNullable<Props['emptyStateInfo']> }) {
+  const { period, search, departmentIds, totalDepartments, onResetFilters } = info;
+  const diagnosisParts = [
+    `Период: ${fmtEmptyStateDate(period.from)} — ${fmtEmptyStateDate(period.to)}`,
+    search.trim() ? `Поиск: «${search.trim()}»` : null,
+    `Отделы: ${emptyStateDepartmentsLabel(departmentIds, totalDepartments)}`,
+  ].filter((p): p is string => Boolean(p));
+
+  return (
+    <div className="p-10 flex flex-col items-center text-center gap-1">
+      <Search size={48} strokeWidth={1.5} className="text-[var(--color-text-muted)] opacity-50 mb-2" />
+      <div className="text-sm text-[var(--color-text)]">Нет данных за выбранный период</div>
+      <div className="text-xs text-[var(--color-text-muted)]">Попробуйте расширить период или сбросить поиск</div>
+      <button
+        type="button"
+        onClick={onResetFilters}
+        className="mt-1.5 text-xs text-[var(--color-accent)] hover:underline"
+      >
+        Сбросить фильтры
+      </button>
+      <div className="mt-3 px-3 py-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] text-[var(--color-text-muted)]">
+        {diagnosisParts.join(' · ')}
+      </div>
+    </div>
+  );
 }
 
 function thresholdFor(m: Metric, metricThresholdOverrides: Record<string, number>): number {
@@ -203,6 +268,7 @@ export function ReportTable({
   tableScale = 1,
   expandedRowIds,
   renderExpandedRow,
+  emptyStateInfo,
 }: Props) {
   const [sortByInner, setSortByInner] = useState<string | null>(null);
   const [sortDirInner, setSortDirInner] = useState<'asc' | 'desc'>('desc');
@@ -680,6 +746,9 @@ export function ReportTable({
   }
 
   if (!rows.length) {
+    if (emptyStateInfo) {
+      return <ReportEmptyState info={emptyStateInfo} />;
+    }
     return (
       <div className="p-6 text-center text-[var(--color-text-muted)] text-sm">
         Нет данных за выбранный период

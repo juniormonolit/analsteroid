@@ -47,6 +47,17 @@ function allIds(node: DeptNode): string[] {
   return [node.bitrixId, ...(node.children ?? []).flatMap(allIds)];
 }
 
+// Общее число отделов в оргструктуре (все узлы дерева, включая промежуточные группы —
+// та же единица счёта, что и у deptLabel/departmentIds ниже). Используется в диагноз-
+// пилюле составного empty state отчёта (задача 1698, кейс 10Б) — там нужно показать
+// «Отделы: все (N)», а не просто «выбрано M», поэтому SalesReportPage тоже подписывается
+// на тот же React Query кэш ['org-structure'] и считает total этой функцией.
+export function countAllDepartmentIds(tree: DeptNode[]): number {
+  const ids = new Set<string>();
+  tree.forEach(node => allIds(node).forEach(id => ids.add(id)));
+  return ids.size;
+}
+
 type CheckState = 'none' | 'some' | 'all';
 
 function getCheckState(node: DeptNode, selected: Set<string>): CheckState {

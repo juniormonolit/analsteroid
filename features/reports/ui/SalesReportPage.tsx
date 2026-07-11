@@ -6,7 +6,7 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { hasPerm } from '@/lib/auth/perms';
 import type { SessionUser } from '@/lib/auth/session';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
-import { FilterBar } from './FilterBar';
+import { FilterBar, countAllDepartmentIds } from './FilterBar';
 import { ReportToolbar } from './ReportToolbar';
 import { ReportTable } from './ReportTable';
 import { MetricPanel, getMetricPanelWidth } from './MetricPanel';
@@ -594,6 +594,37 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       .filter(Boolean) as typeof grouped;
   }, [data?.rows, grouping, search, catalogMetrics]);
 
+  // Общее число отделов — только для диагноз-пилюли составного empty state (задача
+  // 1698, кейс 10Б). Тот же queryKey, что у DepartmentPicker внутри FilterBar — React
+  // Query дедуплицирует запрос, второго похода в сеть не будет.
+  const { data: orgStructureData } = useQuery({
+    queryKey: ['org-structure'],
+    queryFn: () => fetch('/api/catalog/org-structure').then(r => r.json()),
+    staleTime: 5 * 60 * 1000,
+  });
+  const totalDepartments = useMemo(
+    () => orgStructureData?.tree ? countAllDepartmentIds(orgStructureData.tree) : undefined,
+    [orgStructureData]
+  );
+
+  // «Сбросить фильтры» из empty state (задача 1698, кейс 10Б): сбрасывает поиск —
+  // это обязательный минимум (именно поиск обычно и даёт 0 строк, см. мокап) — и
+  // фильтры сделок, которые реально отсекают строки (тип сделки/клиента,
+  // «нерабочее время», цветовой фильтр метрики). НЕ трогает период и выбранные
+  // метрики (явно запрещено брифом) и НЕ трогает departmentIds — отделы спорно
+  // считать «фильтром отчёта» (это скорее срез, чем фильтр очистки; сброс молча
+  // расширил бы выборку на отделы, которые пользователь мог убрать намеренно) —
+  // решение отмечено в отчёте задачи, при необходимости расширить это отдельная
+  // правка с явным подтверждением владельца.
+  const handleResetReportFilters = useCallback(() => {
+    setSearch('');
+    setDealScope('all');
+    setClientType('all');
+    setCreatedTimeFilter('all');
+    setFirstTouchFilter('all');
+    setMetricFilters({});
+  }, []);
+
   const handleRowClick = useCallback(
     (id: string, name: string) => {
       // Агрегированные строки отделов внутри филиала → сделки отдела
@@ -939,6 +970,13 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             columnGroups={columnGroups}
             density={viewPrefs.density}
             tableScale={tableScaleMult}
+            emptyStateInfo={{
+              period,
+              search,
+              departmentIds,
+              totalDepartments,
+              onResetFilters: handleResetReportFilters,
+            }}
           />
         )}
       </div>
