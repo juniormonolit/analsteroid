@@ -217,8 +217,53 @@ export function ManagerCardRadar({ axes }: { axes: RadarAxisInput[] }) {
   const { width, height, center } = computeLayout(labelGeo);
 
   return (
-    <div className="flex flex-col items-center">
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+    <div className="flex flex-col items-center w-full min-w-0">
+      {/* Задача 1702 (Серёга, кейс 12А аудита, вариант А): на мобильном (375px)
+          холст растёт до десктопной ширины (7Б, computeLayout) и обрезался
+          краем карточки — крайние подписи уходили за экран без скролла.
+
+          ВАЖНО (проверено пуппетером до этого фикса): контейнер панели
+          (`ManagerCardPanel.tsx`, `.overflow-x-auto`) УЖЕ канвы даже на
+          1440px — это и есть штатный вид 7Б (замер: outerBox.clientWidth
+          ≈521px vs svg width=573px, `flex justify-center` центрирует
+          излишек, левая подпись «висит» на 0.7px за левым краем — owner-
+          approved остаточный кейс, не регрессия). Поэтому «width:100% +
+          max-width» БЕЗ брейкпоинта здесь не работает — на десктопе он бы
+          тоже ужал canvas до ~521px, уменьшив паутину против 7Б-вида.
+
+          Фикс — CSS-переменные + медиа-запрос на реальных 768px (см. <style>
+          ниже): на мобильном (<768px) — width:100%/height:auto с потолком
+          max-width: canvas-px (не даёт УВЕЛИЧИТЬ паутину сверх штатного
+          размера, если контейнер вдруг шире канвы); на ≥768px — жёстко
+          canvas-px×canvas-px, как было (никакого CSS-влияния на размер,
+          «висящий» излишек и overflow-x-auto — тот же вид, что в 7Б).
+          intrinsic width/height/viewBox — как считает computeLayout (полный
+          bbox контента, раскладку/перенос не трогаем). min-w-0 — иначе
+          flex-item автоминимум (по intrinsic content) не даёт сжаться ниже
+          канвы на мобильном. */}
+      <style>{`
+        .manager-card-radar-svg {
+          width: 100%;
+          height: auto;
+          min-width: 0;
+          display: block;
+          max-width: var(--radar-canvas-w);
+        }
+        @media (min-width: 768px) {
+          .manager-card-radar-svg {
+            width: var(--radar-canvas-w);
+            height: var(--radar-canvas-h);
+            max-width: none;
+          }
+        }
+      `}</style>
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        className="manager-card-radar-svg"
+        style={{ '--radar-canvas-w': `${width}px`, '--radar-canvas-h': `${height}px` } as React.CSSProperties}
+      >
         {/* Сетка колец — толщина увеличена вместе с холстом (карточка v4, п.3) */}
         {RINGS.map(ring => (
           <polygon
