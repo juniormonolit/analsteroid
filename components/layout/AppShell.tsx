@@ -904,7 +904,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           <div className="md:hidden flex items-center gap-1.5 h-12 px-2 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0">
             <button
               onClick={() => setMobileOpen(true)}
-              className="tap-target text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] p-2 rounded"
+              className="tap-target min-w-11 min-h-11 flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] rounded"
               aria-label="Открыть меню"
             >
               <Menu size={20} />
