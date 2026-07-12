@@ -336,6 +336,15 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         />
       </div>
 
+      {/* «Повторные» (#1725) — фиксированный раздел отчётов по повторным продажам
+          (Repeat Rate, комплексность, время до/между заказами, касания). Не завязан
+          на saved_reports — собственная страница /sales/repeat. */}
+      <div className="mx-1 mb-2">
+        <Link href="/sales/repeat" className={linkCls('/sales/repeat')} draggable={false}>
+          <span className="flex-1 min-w-0 break-words line-clamp-2">Повторные</span>
+        </Link>
+      </div>
+
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
