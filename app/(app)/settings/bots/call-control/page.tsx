@@ -357,10 +357,21 @@ export default function CallControlBotPage() {
             <Plus size={14} /> Добавить
           </button>
         </div>
-        <p className="text-xs text-[var(--color-text-muted)] mb-2">Плейсхолдеры: <code className="text-[11px]">{PLACEHOLDERS}</code></p>
+        <p className="text-xs text-[var(--color-text-muted)] mb-2">
+          Плейсхолдеры: <code className="text-[11px]">{PLACEHOLDERS}</code>. Названия шаблонов —
+          просто ярлыки: кому и когда уходит шаблон, задаётся в правилах эскалации выше
+          (колонка «Шаблон»).
+        </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {templates.map(t => (
-            <TemplateCard key={t.id} template={t} inputCls={inputCls} onSave={saveTemplate} onDelete={deleteTemplate} />
+            <TemplateCard
+              key={t.id}
+              template={t}
+              usedIn={rules.filter(r => r.template_id === t.id).map(r => r.name || `правило #${r.id}`)}
+              inputCls={inputCls}
+              onSave={saveTemplate}
+              onDelete={deleteTemplate}
+            />
           ))}
         </div>
       </section>
@@ -487,8 +498,9 @@ function RecipientCell({ autoName, autoId, overrideName, overrideId, onPick, inp
   );
 }
 
-function TemplateCard({ template, inputCls, onSave, onDelete }: {
+function TemplateCard({ template, usedIn, inputCls, onSave, onDelete }: {
   template: Template;
+  usedIn: string[];
   inputCls: string;
   onSave: (t: Template) => void;
   onDelete: (id: number) => void;
@@ -510,6 +522,11 @@ function TemplateCard({ template, inputCls, onSave, onDelete }: {
         value={body}
         onChange={e => setBody(e.target.value)}
       />
+      <p className="text-[11px] text-[var(--color-text-muted)]">
+        {usedIn.length > 0
+          ? <>Используется в правилах: {usedIn.join('; ')}</>
+          : <span className="text-amber-600">Не привязан ни к одному правилу — никуда не отправляется. Выберите его в колонке «Шаблон» нужного правила.</span>}
+      </p>
       <button
         disabled={!dirty}
         onClick={() => onSave({ id: template.id, name, body })}
