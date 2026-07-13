@@ -1,5 +1,8 @@
-// Валидация тел запросов админки бота «Контроль звонков» (правила/шаблоны).
-// Вынесено из route.ts: Next разрешает экспортировать из роутов только хендлеры.
+// Клиент-безопасные хелперы/константы бота «Контроль звонков» (без pg/fs — модуль
+// импортируется и клиентскими страницами) + валидация тел запросов админки
+// (вынесена из route.ts: Next разрешает экспортировать из роутов только хендлеры).
+
+export const DEAL_URL_PREFIX = 'https://td.monolit-crm.ru/crm/deal/details/';
 
 export const CALL_CONTROL_RECIPIENTS = ['manager', 'rop', 'department_director', 'company_director', 'fixed'] as const;
 export type CallControlRecipient = (typeof CALL_CONTROL_RECIPIENTS)[number];

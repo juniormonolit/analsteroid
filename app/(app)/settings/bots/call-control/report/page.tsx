@@ -17,8 +17,7 @@ import { Popover } from '@/components/ui/Popover';
 import { Modal } from '@/components/ui/Modal';
 import { defaultPeriod, type DateRange } from '@/lib/period';
 import type { Metric } from '@/lib/metrics/types';
-import { DEAL_URL_PREFIX } from '@/lib/bots/callControl';
-import { formatDuration } from '@/lib/bots/callControlAdmin';
+import { DEAL_URL_PREFIX, formatDuration } from '@/lib/bots/callControlAdmin';
 
 interface ReportRow {
   manager_bitrix_user_id: string;

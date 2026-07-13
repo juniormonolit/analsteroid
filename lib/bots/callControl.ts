@@ -17,8 +17,11 @@
 
 import { systemDb, analyticsDb } from '@/lib/db/clients';
 import { sendCallControlBotMessage } from '@/lib/bitrix/notify';
+// DEAL_URL_PREFIX живёт в callControlAdmin (клиент-безопасный модуль): страница
+// отчёта импортирует его в браузерный бандл, а этот файл тянет pg/fs.
+import { DEAL_URL_PREFIX } from '@/lib/bots/callControlAdmin';
 
-export const DEAL_URL_PREFIX = 'https://td.monolit-crm.ru/crm/deal/details/';
+export { DEAL_URL_PREFIX };
 
 export interface CallControlSettings {
   enabled: boolean;
