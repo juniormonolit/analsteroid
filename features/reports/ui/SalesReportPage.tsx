@@ -294,7 +294,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const [comparisonDisplay, setComparisonDisplay] = useState<ComparisonDisplay>('current');
   const [metricDisplayModes, setMetricDisplayModes] = useState<Record<string, ComparisonDisplay>>({});
   const [comparisonThreshold, setComparisonThreshold] = useState<number>(5);
-  const [productGroupMode, setProductGroupMode]   = useState<ProductGroupMode>('by_max');
+  // Дефолт группировки по товарам для НОВОГО отчёта — «Категория КЦ» (kc), правка
+  // владельца (Серёга, 13.07): во всех отчётах товары по умолчанию считаются по
+  // системе «Категория КЦ», а не «По наибольшему» (by_max).
+  const [productGroupMode, setProductGroupMode]   = useState<ProductGroupMode>('kc');
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useState('');
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
