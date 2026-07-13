@@ -159,10 +159,10 @@ export default function CallControlBotPage() {
             </label>
             <label className="flex items-center gap-2 text-sm text-[var(--color-text)] cursor-pointer">
               <input type="checkbox" checked={status.dryRun} onChange={e => saveSettings({ dryRun: e.target.checked })} />
-              Dry run (не слать получателям, только фиксировать и дублировать в зеркало)
+              Dry run — получателям НЕ шлём (обкатка)
             </label>
             <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
-              Зеркало (Bitrix ID):
+              Зеркало-дубль (Bitrix ID):
               <input
                 className={`${inputCls} w-24`}
                 defaultValue={status.mirrorBitrixUserId}
@@ -171,6 +171,10 @@ export default function CallControlBotPage() {
               />
             </label>
           </div>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Зеркало-дубль шлётся ВСЕГДА, пока заполнен ID — и в dry run (с пометкой), и в
+            боевом режиме. Боевой режим с дублем себе = снять dry run и оставить зеркало.
+          </p>
         </section>
       )}
 
