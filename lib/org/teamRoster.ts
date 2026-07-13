@@ -10,7 +10,9 @@
 // потомок оба назначены разным людям) не дублируют менеджера — приоритет у более
 // специфичного (ближайшего) узла.
 
-import { systemDb } from '@/lib/db/clients';
+// Оргструктура в схеме sa (Мишина БД, задача Серёги 13.07): все org-таблицы
+// (org_resolved_hierarchy, user_departments, departments) читаем через analyticsDb().
+import { analyticsDb } from '@/lib/db/clients';
 import { loadDepartments, type DeptRow } from '@/lib/org/deptCategories';
 
 export interface RosterManager {
@@ -46,11 +48,11 @@ function resolveAssignedDept(
  *  переданных uuid. Один SQL-запрос по org_resolved_hierarchy (без N+1). */
 export async function resolveManagersForDepartments(deptUuids: string[]): Promise<RosterManager[]> {
   if (deptUuids.length === 0) return [];
-  const db = systemDb();
+  const db = analyticsDb();
   const [managersRes, { byId, byBitrixId }] = await Promise.all([
     db.query<{ manager_id: string; manager_name: string; department_id: string | null; short_login: string | null }>(
       `SELECT manager_bitrix_user_id::text AS manager_id, manager_name, department_id::text AS department_id, short_login
-         FROM org_resolved_hierarchy WHERE is_active = true`,
+         FROM sa.org_resolved_hierarchy WHERE is_active = true`,
     ),
     loadDepartments(),
   ]);
@@ -79,11 +81,11 @@ export async function resolveManagersForDepartments(deptUuids: string[]): Promis
 export async function bucketManagersByDepartments(deptUuids: string[]): Promise<Map<string, RosterManager[]>> {
   const out = new Map<string, RosterManager[]>(deptUuids.map(id => [id, []]));
   if (deptUuids.length === 0) return out;
-  const db = systemDb();
+  const db = analyticsDb();
   const [managersRes, { byId, byBitrixId }] = await Promise.all([
     db.query<{ manager_id: string; manager_name: string; department_id: string | null; short_login: string | null }>(
       `SELECT manager_bitrix_user_id::text AS manager_id, manager_name, department_id::text AS department_id, short_login
-         FROM org_resolved_hierarchy WHERE is_active = true`,
+         FROM sa.org_resolved_hierarchy WHERE is_active = true`,
     ),
     loadDepartments(),
   ]);
@@ -107,20 +109,20 @@ export async function bucketManagersByDepartments(deptUuids: string[]): Promise<
  *  текущему пользователю) — peer-набор для нормировки рейтинга отдела. Плюс
  *  корневые узлы (фолбэк, если назначений в user_departments вообще ещё нет). */
 export async function getAllManagedDepartmentIds(): Promise<DeptOption[]> {
-  const res = await systemDb().query<{ id: string; name: string }>(
+  const res = await analyticsDb().query<{ id: string; name: string }>(
     `SELECT DISTINCT d.id::text AS id, d.name
-       FROM user_departments ud JOIN departments d ON d.id = ud.department_id
+       FROM sa.user_departments ud JOIN sa.departments d ON d.id = ud.department_id
       UNION
-     SELECT id::text AS id, name FROM departments WHERE parent_bitrix_department_id IS NULL`,
+     SELECT id::text AS id, name FROM sa.departments WHERE parent_bitrix_department_id IS NULL`,
   );
   return res.rows;
 }
 
 /** Отделы, назначенные пользователю («Руководит», user_departments). */
 export async function getUserDepartmentOptions(userId: string): Promise<DeptOption[]> {
-  const res = await systemDb().query<{ id: string; name: string }>(
+  const res = await analyticsDb().query<{ id: string; name: string }>(
     `SELECT d.id::text AS id, d.name
-       FROM user_departments ud JOIN departments d ON d.id = ud.department_id
+       FROM sa.user_departments ud JOIN sa.departments d ON d.id = ud.department_id
       WHERE ud.user_id = $1
       ORDER BY d.name`,
     [userId],
@@ -131,8 +133,8 @@ export async function getUserDepartmentOptions(userId: string): Promise<DeptOpti
 /** Фолбэк для супер-админа/Директора без явных назначений в user_departments —
  *  корневые узлы дерева отделов (без родителя), чтобы селектор не был пустым. */
 export async function getRootDepartmentOptions(): Promise<DeptOption[]> {
-  const res = await systemDb().query<{ id: string; name: string }>(
-    `SELECT id::text AS id, name FROM departments WHERE parent_bitrix_department_id IS NULL ORDER BY name`,
+  const res = await analyticsDb().query<{ id: string; name: string }>(
+    `SELECT id::text AS id, name FROM sa.departments WHERE parent_bitrix_department_id IS NULL ORDER BY name`,
   );
   return res.rows;
 }

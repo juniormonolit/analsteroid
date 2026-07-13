@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { ensureAvatar } from '@/lib/bitrix/avatar';
 
 // Профиль текущего пользователя для ЛК (/profile).
@@ -8,16 +8,16 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const db = systemDb();
+  // users — в system; user_departments/departments переехали в sa (задача Серёги 13.07).
   const [meta, deps] = await Promise.all([
-    db.query<{ avatar_synced_at: Date | null }>(
+    systemDb().query<{ avatar_synced_at: Date | null }>(
       `SELECT avatar_synced_at FROM users WHERE id = $1`,
       [session.id]
     ),
-    db.query<{ id: string; name: string }>(
+    analyticsDb().query<{ id: string; name: string }>(
       `SELECT d.id::text AS id, d.name
-         FROM user_departments ud
-         JOIN departments d ON d.id = ud.department_id
+         FROM sa.user_departments ud
+         JOIN sa.departments d ON d.id = ud.department_id
         WHERE ud.user_id = $1
         ORDER BY d.name`,
       [session.id]

@@ -1,4 +1,4 @@
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension } from './dimensions';
 
 export { UNDEFINED_LABEL, NO_SOURCE_LABEL };
@@ -83,9 +83,10 @@ let _mgrInfoAt = 0;
 
 export async function loadManagerInfoMap(): Promise<Map<string, ManagerInfo>> {
   if (_mgrInfo && Date.now() - _mgrInfoAt < TTL) return _mgrInfo;
-  const res = await systemDb().query<{ id: string; name: string; branch: string | null; short_login: string | null; department_name: string | null }>(
+  // Оргструктура переехала в sa (задача Серёги 13.07): читаем из analyticsDb.
+  const res = await analyticsDb().query<{ id: string; name: string; branch: string | null; short_login: string | null; department_name: string | null }>(
     `SELECT manager_bitrix_user_id::text AS id, manager_name AS name, branch, short_login, department_name
-       FROM org_resolved_hierarchy WHERE is_active = true`,
+       FROM sa.org_resolved_hierarchy WHERE is_active = true`,
   );
   _mgrInfo = new Map(res.rows.map(r => [r.id, {
     name: r.name,

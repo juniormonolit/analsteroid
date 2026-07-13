@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb } from '@/lib/db/clients';
 import * as XLSX from 'xlsx';
 
 export async function GET(request: Request) {
@@ -11,14 +11,15 @@ export async function GET(request: Request) {
   const deptIdsParam = searchParams.get('deptIds');
   const deptIds = deptIdsParam ? deptIdsParam.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-  const db = systemDb();
+  // Оргструктура переехала в sa (задача Серёги 13.07): читаем из analyticsDb.
+  const db = analyticsDb();
 
   let rows: { short_login: string; manager_name: string }[];
   if (deptIds.length > 0) {
     const res = await db.query<{ short_login: string; manager_name: string }>(
       `SELECT orh.short_login, orh.manager_name
-       FROM org_resolved_hierarchy orh
-       LEFT JOIN departments d ON d.id::text = orh.department_id::text
+       FROM sa.org_resolved_hierarchy orh
+       LEFT JOIN sa.departments d ON d.id::text = orh.department_id::text
        WHERE orh.is_active = true AND d.bitrix_department_id = ANY($1)
        ORDER BY orh.manager_name`,
       [deptIds],
@@ -26,7 +27,7 @@ export async function GET(request: Request) {
     rows = res.rows;
   } else {
     const res = await db.query<{ short_login: string; manager_name: string }>(
-      `SELECT short_login, manager_name FROM org_resolved_hierarchy WHERE is_active = true ORDER BY manager_name`,
+      `SELECT short_login, manager_name FROM sa.org_resolved_hierarchy WHERE is_active = true ORDER BY manager_name`,
     );
     rows = res.rows;
   }

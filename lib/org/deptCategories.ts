@@ -2,7 +2,9 @@
 // иерархии Bitrix-отделов. Вынесен из lib/jobs/planSummary.ts, чтобы ежедневный
 // отчёт бота и «Сводная» считали принадлежность менеджеров одинаково.
 
-import { systemDb } from '@/lib/db/clients';
+// Оргструктура переехала в схему sa (Мишина БД, задача Серёги 13.07): читаем
+// departments/org_resolved_hierarchy через analyticsDb() (пул sa), а не systemDb().
+import { analyticsDb } from '@/lib/db/clients';
 import { loadManagerBranchMap } from '@/lib/marketing/sources';
 
 // org_resolved_hierarchy.branch → метки филиалов из decomposition/plan_targets_year.
@@ -54,8 +56,8 @@ let _deptsAt = 0;
 
 export async function loadDepartments(): Promise<{ byId: Map<string, DeptRow>; byBitrixId: Map<string, DeptRow> }> {
   if (_depts && Date.now() - _deptsAt < 30 * 60 * 1000) return { byId: _depts, byBitrixId: _deptsByBitrixId! };
-  const res = await systemDb().query<{ id: string; bitrix_department_id: string; name: string; parent_bitrix_department_id: string | null }>(
-    'SELECT id::text AS id, bitrix_department_id, name, parent_bitrix_department_id FROM departments',
+  const res = await analyticsDb().query<{ id: string; bitrix_department_id: string; name: string; parent_bitrix_department_id: string | null }>(
+    'SELECT id::text AS id, bitrix_department_id, name, parent_bitrix_department_id FROM sa.departments',
   );
   const byId = new Map<string, DeptRow>();
   const byBitrixId = new Map<string, DeptRow>();
@@ -71,9 +73,9 @@ export async function loadDepartments(): Promise<{ byId: Map<string, DeptRow>; b
 }
 
 export async function getManagerDeptIds(): Promise<Map<string, string | null>> {
-  const res = await systemDb().query<{ manager_bitrix_user_id: string; department_id: string | null }>(
+  const res = await analyticsDb().query<{ manager_bitrix_user_id: string; department_id: string | null }>(
     `SELECT manager_bitrix_user_id::text AS manager_bitrix_user_id, department_id::text AS department_id
-       FROM org_resolved_hierarchy WHERE is_active = true`,
+       FROM sa.org_resolved_hierarchy WHERE is_active = true`,
   );
   return new Map(res.rows.map(r => [r.manager_bitrix_user_id, r.department_id]));
 }

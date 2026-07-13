@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb } from '@/lib/db/clients';
 import { buildDepartmentCard } from '@/features/manager-card/engine/teamCard';
 import type { CardSegment } from '@/features/manager-card/engine/managerCard';
 import {
@@ -76,8 +76,8 @@ export async function POST(req: NextRequest) {
     const [roster, peerOptions, branchRow] = await Promise.all([
       resolveManagersForDepartments([departmentId]),
       getAllManagedDepartmentIds(),
-      systemDb().query<{ branch: string | null }>(
-        `SELECT branch FROM org_resolved_hierarchy
+      analyticsDb().query<{ branch: string | null }>(
+        `SELECT branch FROM sa.org_resolved_hierarchy
           WHERE department_id = $1 AND is_active = true LIMIT 1`,
         [departmentId],
       ),

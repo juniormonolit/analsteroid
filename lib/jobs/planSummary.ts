@@ -120,9 +120,10 @@ async function getPlanTargets(year: number): Promise<{ company: number | null; b
 // manager_plans; здесь нужен, чтобы посчитанные по менеджеру месячные планы разложить
 // по филиалу/категории тем же способом, что и факт (getFactByBranch выше).
 async function loadShortLoginToManagerId(): Promise<Map<string, string>> {
-  const res = await systemDb().query<{ manager_id: string; short_login: string }>(
+  // Оргструктура переехала в sa (задача Серёги 13.07): читаем из analyticsDb.
+  const res = await analyticsDb().query<{ manager_id: string; short_login: string }>(
     `SELECT manager_bitrix_user_id::text AS manager_id, short_login
-       FROM org_resolved_hierarchy WHERE is_active = true AND short_login IS NOT NULL`,
+       FROM sa.org_resolved_hierarchy WHERE is_active = true AND short_login IS NOT NULL`,
   );
   return new Map(res.rows.map(r => [r.short_login, r.manager_id]));
 }

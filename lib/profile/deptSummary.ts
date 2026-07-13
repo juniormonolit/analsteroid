@@ -79,7 +79,11 @@ function resolveAssignedDept(
 }
 
 export async function computeUserDeptSummary(userId: string): Promise<UserDeptSummary> {
-  const db = systemDb();
+  // Оргструктура переехала в sa (задача Серёги 13.07): user_departments и
+  // org_resolved_hierarchy читаем из analyticsDb (пул sa); manager_plans остаётся
+  // в system (не org-таблица, синхронизируется отдельно) — читаем из systemDb.
+  const org = analyticsDb();
+  const sys = systemDb();
   const now = toZonedTime(new Date(), TZ);
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
@@ -91,8 +95,8 @@ export async function computeUserDeptSummary(userId: string): Promise<UserDeptSu
   const toExclIso = fromZonedTime(`${tomorrow.toISOString().slice(0, 10)} 00:00:00`, TZ).toISOString();
 
   const [assignedRes, { byId, byBitrixId }] = await Promise.all([
-    db.query<{ department_id: string }>(
-      `SELECT department_id::text AS department_id FROM user_departments WHERE user_id = $1`,
+    org.query<{ department_id: string }>(
+      `SELECT department_id::text AS department_id FROM sa.user_departments WHERE user_id = $1`,
       [userId]
     ),
     loadDepartments(),
@@ -118,11 +122,11 @@ export async function computeUserDeptSummary(userId: string): Promise<UserDeptSu
   }
 
   const [managersRes, plansRes, factByManager, wd] = await Promise.all([
-    db.query<{ manager_id: string; department_id: string | null; short_login: string | null }>(
+    org.query<{ manager_id: string; department_id: string | null; short_login: string | null }>(
       `SELECT manager_bitrix_user_id::text AS manager_id, department_id::text AS department_id, short_login
-         FROM org_resolved_hierarchy WHERE is_active = true`
+         FROM sa.org_resolved_hierarchy WHERE is_active = true`
     ),
-    db.query<{ manager_login: string; plan_shipments: string }>(
+    sys.query<{ manager_login: string; plan_shipments: string }>(
       `SELECT manager_login, plan_shipments FROM manager_plans WHERE month = $1::date`,
       [monthFirstDay]
     ),

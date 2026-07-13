@@ -128,9 +128,9 @@ export async function GET(req: NextRequest) {
 
   // Подытог отдела: сделки менеджеров этого отдела (department_id из org_resolved_hierarchy)
   if (teamId) {
-    const res = await systemDb().query<{ id: string }>(
+    const res = await analyticsDb().query<{ id: string }>(
       `SELECT manager_bitrix_user_id::text AS id
-         FROM org_resolved_hierarchy
+         FROM sa.org_resolved_hierarchy
         WHERE department_id = $1 AND is_active = true`,
       [teamId],
     );
@@ -142,13 +142,14 @@ export async function GET(req: NextRequest) {
   // (раньше применялись только при all=1, из-за чего дрилл по товарной группе
   // показывал сделки всех отделов и не сходился с цифрой).
   if (departmentIds.length || (accountType && accountType !== 'all')) {
-    const sysDb = systemDb();
+    // Оргструктура (org_resolved_hierarchy/departments) переехала в sa (задача Серёги
+    // 13.07) → читаем из analyticsDb; employees остаётся в system → systemDb.
     let allowed: Set<string> | null = null;
     if (departmentIds.length) {
-      const res = await sysDb.query<{ id: string }>(
+      const res = await analyticsDb().query<{ id: string }>(
         `SELECT DISTINCT manager_bitrix_user_id::text AS id
-           FROM org_resolved_hierarchy
-          WHERE department_id IN (SELECT id FROM departments WHERE bitrix_department_id::text = ANY($1))
+           FROM sa.org_resolved_hierarchy
+          WHERE department_id IN (SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1))
             AND is_active = true`,
         [departmentIds],
       );
@@ -156,7 +157,7 @@ export async function GET(req: NextRequest) {
     }
     if (accountType && accountType !== 'all') {
       const prefix = accountType === 'logists' ? 'logist' : 'manager';
-      const res = await sysDb.query<{ id: string; login: string | null }>(
+      const res = await systemDb().query<{ id: string; login: string | null }>(
         `SELECT bitrix_user_id::text AS id, bitrix_login AS login FROM employees WHERE is_active = true`,
       );
       const byPrefix = new Set(res.rows.filter(r => (r.login ?? '').toLowerCase().startsWith(prefix)).map(r => r.id));

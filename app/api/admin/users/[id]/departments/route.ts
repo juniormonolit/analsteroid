@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { superadminError } from '@/lib/auth/perms';
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 
 // Раздел «Руководит» (Права v2): подконтрольные отделы пользователя (сводка
 // в его ЛК, в следующей итерации — карточки отдела РОПа). Храним только явно
@@ -18,8 +18,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   if (denied) return denied;
 
   const { id } = await params;
-  const res = await systemDb().query<{ department_id: string }>(
-    `SELECT department_id::text AS department_id FROM user_departments WHERE user_id = $1`,
+  // user_departments переехала в sa (задача Серёги 13.07).
+  const res = await analyticsDb().query<{ department_id: string }>(
+    `SELECT department_id::text AS department_id FROM sa.user_departments WHERE user_id = $1`,
     [id]
   );
   return NextResponse.json({ departmentIds: res.rows.map((r) => r.department_id) });
@@ -35,19 +36,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const rawIds: unknown[] = Array.isArray(body.departmentIds) ? body.departmentIds : [];
   const departmentIds = [...new Set(rawIds.filter((d): d is string => typeof d === 'string'))];
 
-  const db = systemDb();
-  const user = await db.query(`SELECT id FROM users WHERE id = $1`, [id]);
+  // users — в system; user_departments/departments переехали в sa (задача Серёги 13.07).
+  // Проверка существования пользователя остаётся в system, запись назначений — в sa.
+  const user = await systemDb().query(`SELECT id FROM users WHERE id = $1`, [id]);
   if (!user.rows.length) return NextResponse.json({ error: 'Пользователь не найден' }, { status: 404 });
 
-  // Полная замена набора в одной транзакции
-  const client = await db.connect();
+  // Полная замена набора в одной транзакции (пул sa)
+  const client = await analyticsDb().connect();
   try {
     await client.query('BEGIN');
-    await client.query(`DELETE FROM user_departments WHERE user_id = $1`, [id]);
+    await client.query(`DELETE FROM sa.user_departments WHERE user_id = $1`, [id]);
     if (departmentIds.length) {
       await client.query(
-        `INSERT INTO user_departments (user_id, department_id)
-         SELECT $1, d.id FROM departments d WHERE d.id = ANY($2::uuid[])`,
+        `INSERT INTO sa.user_departments (user_id, department_id)
+         SELECT $1, d.id FROM sa.departments d WHERE d.id = ANY($2::uuid[])`,
         [id, departmentIds]
       );
     }

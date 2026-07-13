@@ -220,16 +220,27 @@ async function getMonthPlans(
 ): Promise<DeptPlans> {
   // manager_plans.manager_login — это short_login ('#8' из bitrix_login 'manager8'),
   // НЕ bitrix user id; связь с менеджером только через org_resolved_hierarchy.
-  const res = await systemDb().query<{ manager_id: string; plan_shipments: string; plan_n: string }>(
-    `SELECT orh.manager_bitrix_user_id::text AS manager_id, mp.plan_shipments, mp.plan_n
-       FROM manager_plans mp
-       JOIN org_resolved_hierarchy orh ON orh.short_login = mp.manager_login AND orh.is_active
-      WHERE mp.month = $1::date`,
-    [monthFirstDay],
-  );
+  // Оргструктура переехала в sa (задача Серёги 13.07), а manager_plans осталась в
+  // system → кросс-БД JOIN невозможен: тянем обе стороны отдельными пулами и
+  // джойним в коде по short_login (семантика INNER JOIN — строки без совпадения
+  // отбрасываются, как и раньше).
+  const [plansRes, orhRes] = await Promise.all([
+    systemDb().query<{ manager_login: string; plan_shipments: string; plan_n: string }>(
+      `SELECT manager_login, plan_shipments, plan_n FROM manager_plans WHERE month = $1::date`,
+      [monthFirstDay],
+    ),
+    analyticsDb().query<{ manager_id: string; short_login: string }>(
+      `SELECT manager_bitrix_user_id::text AS manager_id, short_login
+         FROM sa.org_resolved_hierarchy WHERE is_active = true AND short_login IS NOT NULL`,
+    ),
+  ]);
+  const managerIdByShortLogin = new Map(orhRes.rows.map(r => [r.short_login, r.manager_id]));
+
   const plans: DeptPlans = { sales: zeroSums(), shipments: zeroSums() };
-  for (const row of res.rows) {
-    const org = orgMap.get(row.manager_id);
+  for (const row of plansRes.rows) {
+    const managerId = managerIdByShortLogin.get(row.manager_login);
+    if (!managerId) continue; // нет активного менеджера с таким short_login — как INNER JOIN
+    const org = orgMap.get(managerId);
     if (!org || org.branch !== BRANCH) continue;
     const cat = org.category as Dept | null;
     if (!cat || !DEPTS.includes(cat)) continue;

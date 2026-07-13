@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { createAndSendInvite } from '@/lib/invites/tokens';
 import { getPublicOrigin } from '@/lib/http/publicOrigin';
 import { resolveRoleNameByLogin } from '@/lib/auth/roleByLogin';
@@ -16,7 +16,6 @@ interface UserRow {
   bitrix_user_id: string | null;
   role_id: string | null;
   role_name: string | null;
-  department_count: string;
   override_count: string;
   invite_expires_at: string | null;
   invite_used_at: string | null;
@@ -28,21 +27,28 @@ export async function GET() {
   const denied = permError(session, 'action.users.manage');
   if (denied) return denied;
 
-  const db = systemDb();
-  const res = await db.query<UserRow>(`
-    SELECT u.id, u.login, u.display_name, u.is_superadmin, u.is_active, u.bitrix_user_id,
-           u.role_id, r.name AS role_name,
-           (SELECT COUNT(*) FROM user_departments ud WHERE ud.user_id = u.id) AS department_count,
-           cardinality(u.section_overrides) AS override_count,
-           it.expires_at AS invite_expires_at, it.used_at AS invite_used_at
-    FROM users u
-    LEFT JOIN roles r ON r.id = u.role_id
-    LEFT JOIN LATERAL (
-      SELECT expires_at, used_at FROM invite_tokens
-      WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1
-    ) it ON true
-    ORDER BY u.display_name
-  `);
+  // users/roles/invite_tokens — в system; user_departments переехала в sa
+  // (задача Серёги 13.07) → счётчик «Руководит» считаем отдельным запросом к sa
+  // и мержим по user_id (кросс-БД коррелированный подзапрос невозможен).
+  const [res, deptCountRes] = await Promise.all([
+    systemDb().query<UserRow>(`
+      SELECT u.id, u.login, u.display_name, u.is_superadmin, u.is_active, u.bitrix_user_id,
+             u.role_id, r.name AS role_name,
+             cardinality(u.section_overrides) AS override_count,
+             it.expires_at AS invite_expires_at, it.used_at AS invite_used_at
+      FROM users u
+      LEFT JOIN roles r ON r.id = u.role_id
+      LEFT JOIN LATERAL (
+        SELECT expires_at, used_at FROM invite_tokens
+        WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1
+      ) it ON true
+      ORDER BY u.display_name
+    `),
+    analyticsDb().query<{ user_id: string; cnt: string }>(
+      `SELECT user_id::text AS user_id, COUNT(*)::text AS cnt FROM sa.user_departments GROUP BY user_id`,
+    ),
+  ]);
+  const deptCountByUser = new Map(deptCountRes.rows.map((r) => [r.user_id, parseInt(r.cnt, 10) || 0]));
 
   const users = res.rows.map((r) => {
     let status: 'active' | 'pending' | 'expired' | 'no_invite' = 'no_invite';
@@ -59,7 +65,7 @@ export async function GET() {
       bitrixUserId: r.bitrix_user_id,
       roleId: r.role_id,
       roleName: r.role_name,
-      departmentCount: parseInt(r.department_count, 10) || 0,
+      departmentCount: deptCountByUser.get(r.id) ?? 0,
       overrideCount: parseInt(r.override_count, 10) || 0,
       status,
     };
