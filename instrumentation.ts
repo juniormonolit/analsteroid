@@ -13,6 +13,40 @@ export async function register() {
   setInterval(run, 10 * 60 * 1000);
 
   scheduleDailyMoscowReport();
+  scheduleCallControl();
+}
+
+// Бот «Контроль звонков»: тик раз в минуту, движок в lib/bots/callControl.ts.
+// Гейт — НЕ env, а call_control_settings.enabled в БД (правится в /settings/bots):
+// на dev-стенде своя системная БД (junibaseone) со своим выключателем, дублей не будет.
+// Redis-замок на тик — на случай перекрытия соседних инстансов одной БД.
+function scheduleCallControl() {
+  let running = false; // защита от наложения тиков внутри процесса
+
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      try {
+        const { getRedis } = await import('./lib/cache/redis');
+        const redis = getRedis();
+        if (redis) {
+          const acquired = await redis.set('call-control:tick', '1', 'EX', 55, 'NX');
+          if (acquired !== 'OK') return;
+        }
+      } catch { /* без Redis — полагаемся на in-process флаг */ }
+
+      const { runCallControlCycle } = await import('./lib/bots/callControl');
+      const summary = await runCallControlCycle();
+      if (summary !== 'disabled') console.log(`[callControl] ${summary}`);
+    } catch (err) {
+      console.error('[callControl] цикл упал:', err);
+    } finally {
+      running = false;
+    }
+  };
+
+  setInterval(() => { void tick(); }, 60 * 1000);
 }
 
 // Ежедневный отчёт «МОСКВА» в личку владельца через бота «Аналитик» в 18:00 МСК.

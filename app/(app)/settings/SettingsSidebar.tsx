@@ -47,6 +47,13 @@ export function SettingsSidebar({
       ],
     },
     {
+      label: 'Боты',
+      items: [
+        // Гейт как у «Шаблонов карточек»: админ (section.settings), без superadmin-only.
+        { href: '/settings/bots', label: 'Боты', visible: canViewSettings },
+      ],
+    },
+    {
       label: 'Справочники',
       items: [
         { href: '/settings/tables', label: 'Таблицы', visible: canViewSettings },

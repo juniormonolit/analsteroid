@@ -52,3 +52,21 @@ export async function sendBitrixBotMessage(bitrixUserId: string, message: string
     MESSAGE: message,
   });
 }
+
+// Бот «Контроль звонков» (BOT_ID 15010) — отдельный, давно зарегистрированный бот
+// missedcalls-робота. Свой вебхук/CLIENT_ID (env CALL_CONTROL_*), НЕ переиспользует
+// креды «Аналитика»: у ботов разные владельцы-вебхуки и разные аватары/имена в чате.
+export async function sendCallControlBotMessage(bitrixUserId: string, message: string): Promise<void> {
+  const webhook = process.env.CALL_CONTROL_WEBHOOK_URL || '';
+  const botId = process.env.CALL_CONTROL_BOT_ID || '';
+  const clientId = process.env.CALL_CONTROL_CLIENT_ID || '';
+  if (!webhook || !botId || !clientId) {
+    throw new Error('CALL_CONTROL_WEBHOOK_URL/CALL_CONTROL_BOT_ID/CALL_CONTROL_CLIENT_ID не заданы — см. start.sh на сервере');
+  }
+  await bx(webhook, 'imbot.message.add', {
+    CLIENT_ID: clientId,
+    BOT_ID: botId,
+    DIALOG_ID: bitrixUserId,
+    MESSAGE: message,
+  });
+}
