@@ -54,8 +54,11 @@ interface CaseRow {
 interface OrgRow {
   manager_name: string | null;
   department_id: string | null;
+  department_name: string | null;
   rop_bitrix_user_id: string | null;
+  rop_name: string | null;
   department_director_bitrix_user_id: string | null;
+  department_director_name: string | null;
   company_director_bitrix_user_id: string | null;
 }
 
@@ -326,8 +329,10 @@ export async function runCallControlCycle(): Promise<string> {
   const orgByManager = new Map<string, OrgRow>();
   if (managerIds.length > 0) {
     const org = await db.query(
-      `SELECT manager_bitrix_user_id, manager_name, department_id, rop_bitrix_user_id,
-              department_director_bitrix_user_id, company_director_bitrix_user_id
+      `SELECT manager_bitrix_user_id, manager_name, department_id, department_name,
+              rop_bitrix_user_id, rop_name,
+              department_director_bitrix_user_id, department_director_name,
+              company_director_bitrix_user_id
        FROM org_resolved_hierarchy
        WHERE manager_bitrix_user_id = ANY($1) AND is_active`,
       [managerIds]
@@ -370,6 +375,20 @@ export async function runCallControlCycle(): Promise<string> {
     const org = c.manager_bitrix_user_id ? orgByManager.get(c.manager_bitrix_user_id) : undefined;
     const minutesSince = c.last_missed_at ? minutesBetween(c.last_missed_at, now) : 0;
 
+    // Эффективные РОП/директор отдела менеджера: ручное назначение по отделу
+    // (миграция 100) имеет приоритет НАД оргструктурой — и для маршрутизации,
+    // и для плейсхолдеров {rop_name}/{director_name} (решение Иосифа 14.07).
+    const deptOverride = (role: 'rop' | 'department_director') =>
+      (org?.department_id && overrideByDeptRole.get(`${org.department_id}:${role}`)) || null;
+    const effRopId = deptOverride('rop') ?? org?.rop_bitrix_user_id ?? null;
+    const effRopName = deptOverride('rop')
+      ? (nameByUserId.get(deptOverride('rop')!) ?? deptOverride('rop')!)
+      : org?.rop_name ?? null;
+    const effDirectorId = deptOverride('department_director') ?? org?.department_director_bitrix_user_id ?? null;
+    const effDirectorName = deptOverride('department_director')
+      ? (nameByUserId.get(deptOverride('department_director')!) ?? deptOverride('department_director')!)
+      : org?.department_director_name ?? null;
+
     for (const rule of rulesRes.rows as Array<Record<string, unknown>>) {
       const missedGte = rule.missed_count_gte as number | null;
       const minutesGte = rule.minutes_without_callback as number | null;
@@ -381,15 +400,12 @@ export async function runCallControlCycle(): Promise<string> {
       const fired = rule.operator === 'or' ? conds.some(Boolean) : conds.every(Boolean);
       if (!fired) continue;
 
-      // Получатель по уровню правила. Для РОПа/директора департамента сначала
-      // ручное переопределение по отделу (миграция 100), затем оргструктура.
+      // Получатель по уровню правила (эффективные РОП/директор — см. выше).
       const kind = rule.recipient as CallControlRule['recipient'];
-      const deptOverride = (role: 'rop' | 'department_director') =>
-        (org?.department_id && overrideByDeptRole.get(`${org.department_id}:${role}`)) || null;
       let recipientId: string | null = null;
       if (kind === 'manager') recipientId = c.manager_bitrix_user_id;
-      else if (kind === 'rop') recipientId = deptOverride('rop') ?? org?.rop_bitrix_user_id ?? null;
-      else if (kind === 'department_director') recipientId = deptOverride('department_director') ?? org?.department_director_bitrix_user_id ?? null;
+      else if (kind === 'rop') recipientId = effRopId;
+      else if (kind === 'department_director') recipientId = effDirectorId;
       else if (kind === 'company_director') recipientId = org?.company_director_bitrix_user_id ?? null;
       else if (kind === 'fixed') recipientId = (rule.fixed_bitrix_user_id as string | null) ?? null;
 
@@ -401,6 +417,9 @@ export async function runCallControlCycle(): Promise<string> {
       const body = templateById.get(rule.template_id as number) ?? '';
       const message = renderTemplate(body, {
         manager_name: org?.manager_name ?? c.manager_bitrix_user_id ?? '—',
+        department: org?.department_name ?? '—',
+        rop_name: effRopName ?? '—',
+        director_name: effDirectorName ?? '—',
         phone: formatPhoneDisplay(c.phone_normalized),
         deal_url: c.deal_id ? `${DEAL_URL_PREFIX}${c.deal_id}/` : '—',
         missed_count: String(c.missed_count),

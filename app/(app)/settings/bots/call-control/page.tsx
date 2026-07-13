@@ -60,7 +60,7 @@ interface DeptRow {
 
 interface Employee { id: string; name: string | null; department_name: string | null; short_login: string | null }
 
-const PLACEHOLDERS = '{manager_name} {phone} {deal_url} {missed_count} {minutes} {case_id} {recipient_name}';
+const PLACEHOLDERS = '{manager_name} {department} {rop_name} {director_name} {phone} {deal_url} {missed_count} {minutes} {case_id} {recipient_name}';
 
 export default function CallControlBotPage() {
   const [status, setStatus] = useState<BotStatus | null>(null);
