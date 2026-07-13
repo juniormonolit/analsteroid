@@ -30,6 +30,13 @@ export function validateRule(b: RuleBody): string | null {
   return null;
 }
 
+// «2ч 05м» для отчёта/топа безответственных (чистая, используется и в client-коде).
+export function formatDuration(totalSeconds: number): string {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.round((totalSeconds % 3600) / 60);
+  return h > 0 ? `${h}ч ${m}м` : `${m}м`;
+}
+
 export interface TemplateBody {
   name?: string;
   body?: string;

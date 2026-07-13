@@ -1,8 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import Link from 'next/link';
+import { format } from 'date-fns';
+import { Plus, Trash2, BarChart3 } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
+import { defaultPeriod } from '@/lib/period';
+import { formatDuration } from '@/lib/bots/callControlAdmin';
 
 // Настройки бота «Контроль звонков»: тумблеры (вкл/dry-run/зеркало), конструктор
 // правил эскалации (N пропущенных подряд <И|ИЛИ> M минут без перезвона → получатель
@@ -60,6 +64,13 @@ interface DeptRow {
 
 interface Employee { id: string; name: string | null; department_name: string | null; short_login: string | null }
 
+interface TopRow {
+  manager_bitrix_user_id: string;
+  manager_name: string | null;
+  total: string;
+  seconds: string | null;
+}
+
 const PLACEHOLDERS = '{manager_name} {department} {rop_name} {director_name} {phone} {deal_url} {missed_count} {minutes} {case_id} {recipient_name}';
 
 export default function CallControlBotPage() {
@@ -68,6 +79,7 @@ export default function CallControlBotPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [departments, setDepartments] = useState<DeptRow[]>([]);
+  const [topRows, setTopRows] = useState<TopRow[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const flash = (type: 'success' | 'error', text: string) => {
@@ -88,6 +100,12 @@ export default function CallControlBotPage() {
     setTemplates(Array.isArray(t.templates) ? t.templates : []);
     setDeliveries(Array.isArray(d.deliveries) ? d.deliveries : []);
     setDepartments(Array.isArray(dep.departments) ? dep.departments : []);
+    // Топ-5 безответственных за стандартный период (с начала месяца по вчера).
+    const p = defaultPeriod();
+    fetch(`/api/settings/bots/call-control/report?from=${format(p.from, 'yyyy-MM-dd')}&to=${format(p.to, 'yyyy-MM-dd')}`)
+      .then(x => x.json())
+      .then(x => setTopRows(Array.isArray(x.rows) ? x.rows.slice(0, 5) : []))
+      .catch(() => setTopRows([]));
   }, []);
 
   useEffect(() => { reload().catch(() => flash('error', 'Не удалось загрузить настройки')); }, [reload]);
@@ -374,6 +392,31 @@ export default function CallControlBotPage() {
             />
           ))}
         </div>
+      </section>
+
+      {/* Топ-5 безответственных (стандартный период: с начала месяца по вчера) */}
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">Топ-5 безответственных за месяц</h2>
+          <Link href="/settings/bots/call-control/report" className="flex items-center gap-1 text-sm text-[var(--color-accent)] hover:underline">
+            <BarChart3 size={14} /> Полный отчёт по менеджерам
+          </Link>
+        </div>
+        {topRows.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-muted)]">Сработавших кейсов за период нет — все молодцы.</p>
+        ) : (
+          <ol className="border border-[var(--color-border)] rounded-lg divide-y divide-[var(--color-border)]">
+            {topRows.map((r, i) => (
+              <li key={r.manager_bitrix_user_id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                <span className={`w-5 text-center font-semibold ${i === 0 ? 'text-[var(--color-error)]' : 'text-[var(--color-text-muted)]'}`}>{i + 1}</span>
+                <span className="flex-1 text-[var(--color-text)]">{r.manager_name ?? r.manager_bitrix_user_id}</span>
+                <span className="text-[var(--color-text-muted)] text-xs whitespace-nowrap">
+                  {formatDuration(Number(r.seconds ?? 0))} без перезвона · {r.total} кейс(ов)
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
       </section>
 
       {/* Последние доставки */}
