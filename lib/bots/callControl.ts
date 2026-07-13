@@ -53,6 +53,7 @@ interface CaseRow {
 
 interface OrgRow {
   manager_name: string | null;
+  department_id: string | null;
   rop_bitrix_user_id: string | null;
   department_director_bitrix_user_id: string | null;
   company_director_bitrix_user_id: string | null;
@@ -325,7 +326,7 @@ export async function runCallControlCycle(): Promise<string> {
   const orgByManager = new Map<string, OrgRow>();
   if (managerIds.length > 0) {
     const org = await db.query(
-      `SELECT manager_bitrix_user_id, manager_name, rop_bitrix_user_id,
+      `SELECT manager_bitrix_user_id, manager_name, department_id, rop_bitrix_user_id,
               department_director_bitrix_user_id, company_director_bitrix_user_id
        FROM org_resolved_hierarchy
        WHERE manager_bitrix_user_id = ANY($1) AND is_active`,
@@ -333,6 +334,15 @@ export async function runCallControlCycle(): Promise<string> {
     );
     for (const row of org.rows) orgByManager.set(row.manager_bitrix_user_id, row);
   }
+
+  // Ручные переопределения получателей по отделам (миграция 100): если для
+  // (отдел менеджера, роль) назначен человек — шлём ему в обход оргструктуры.
+  const overrides = await db.query(
+    `SELECT department_id, role, bitrix_user_id FROM call_control_recipient_overrides`
+  );
+  const overrideByDeptRole = new Map<string, string>(
+    overrides.rows.map((r) => [`${r.department_id}:${r.role}`, r.bitrix_user_id])
+  );
   // Имена получателей для зеркала/доставок — тоже из org_resolved_hierarchy.
   const nameByUserId = new Map<string, string>();
   {
@@ -342,6 +352,7 @@ export async function runCallControlCycle(): Promise<string> {
         if (id) ids.add(id);
       }
     }
+    for (const id of overrideByDeptRole.values()) ids.add(id);
     for (const r of rulesRes.rows) if (r.fixed_bitrix_user_id) ids.add(r.fixed_bitrix_user_id);
     if (ids.size > 0) {
       const res = await db.query(
@@ -370,12 +381,15 @@ export async function runCallControlCycle(): Promise<string> {
       const fired = rule.operator === 'or' ? conds.some(Boolean) : conds.every(Boolean);
       if (!fired) continue;
 
-      // Получатель по уровню правила.
+      // Получатель по уровню правила. Для РОПа/директора департамента сначала
+      // ручное переопределение по отделу (миграция 100), затем оргструктура.
       const kind = rule.recipient as CallControlRule['recipient'];
+      const deptOverride = (role: 'rop' | 'department_director') =>
+        (org?.department_id && overrideByDeptRole.get(`${org.department_id}:${role}`)) || null;
       let recipientId: string | null = null;
       if (kind === 'manager') recipientId = c.manager_bitrix_user_id;
-      else if (kind === 'rop') recipientId = org?.rop_bitrix_user_id ?? null;
-      else if (kind === 'department_director') recipientId = org?.department_director_bitrix_user_id ?? null;
+      else if (kind === 'rop') recipientId = deptOverride('rop') ?? org?.rop_bitrix_user_id ?? null;
+      else if (kind === 'department_director') recipientId = deptOverride('department_director') ?? org?.department_director_bitrix_user_id ?? null;
       else if (kind === 'company_director') recipientId = org?.company_director_bitrix_user_id ?? null;
       else if (kind === 'fixed') recipientId = (rule.fixed_bitrix_user_id as string | null) ?? null;
 

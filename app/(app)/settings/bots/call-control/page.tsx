@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { Popover } from '@/components/ui/Popover';
 
 // Настройки бота «Контроль звонков»: тумблеры (вкл/dry-run/зеркало), конструктор
 // правил эскалации (N пропущенных подряд <И|ИЛИ> M минут без перезвона → получатель
@@ -44,6 +45,21 @@ interface BotStatus {
   eventsLast24h: number; lastEventAt: string | null; openCases: number;
 }
 
+interface DeptRow {
+  department_id: string;
+  department_name: string;
+  rop_bitrix_user_id: string | null;
+  rop_name: string | null;
+  department_director_bitrix_user_id: string | null;
+  department_director_name: string | null;
+  rop_override_id: string | null;
+  rop_override_name: string | null;
+  director_override_id: string | null;
+  director_override_name: string | null;
+}
+
+interface Employee { id: string; name: string | null; department_name: string | null; short_login: string | null }
+
 const PLACEHOLDERS = '{manager_name} {phone} {deal_url} {missed_count} {minutes} {case_id} {recipient_name}';
 
 export default function CallControlBotPage() {
@@ -51,6 +67,7 @@ export default function CallControlBotPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
+  const [departments, setDepartments] = useState<DeptRow[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const flash = (type: 'success' | 'error', text: string) => {
@@ -59,16 +76,18 @@ export default function CallControlBotPage() {
   };
 
   const reload = useCallback(async () => {
-    const [s, r, t, d] = await Promise.all([
+    const [s, r, t, d, dep] = await Promise.all([
       fetch('/api/settings/bots/call-control').then(x => x.json()),
       fetch('/api/settings/bots/call-control/rules').then(x => x.json()),
       fetch('/api/settings/bots/call-control/templates').then(x => x.json()),
       fetch('/api/settings/bots/call-control/deliveries').then(x => x.json()),
+      fetch('/api/settings/bots/call-control/departments').then(x => x.json()),
     ]);
     setStatus(s);
     setRules(Array.isArray(r.rules) ? r.rules : []);
     setTemplates(Array.isArray(t.templates) ? t.templates : []);
     setDeliveries(Array.isArray(d.deliveries) ? d.deliveries : []);
+    setDepartments(Array.isArray(dep.departments) ? dep.departments : []);
   }, []);
 
   useEffect(() => { reload().catch(() => flash('error', 'Не удалось загрузить настройки')); }, [reload]);
@@ -129,6 +148,17 @@ export default function CallControlBotPage() {
   async function deleteTemplate(id: number) {
     if (!confirm('Удалить шаблон? Правила, где он выбран, останутся без шаблона.')) return;
     await fetch(`/api/settings/bots/call-control/templates/${id}`, { method: 'DELETE' });
+    await reload();
+  }
+
+  async function setOverride(departmentId: string, role: 'rop' | 'department_director', bitrixUserId: string | null) {
+    const res = await fetch('/api/settings/bots/call-control/departments', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ departmentId, role, bitrixUserId }),
+    });
+    const data = await res.json();
+    if (!res.ok) { flash('error', data.error ?? 'Ошибка'); return; }
+    flash('success', bitrixUserId ? 'Получатель назначен вручную' : 'Сброшено на оргструктуру');
     await reload();
   }
 
@@ -272,6 +302,53 @@ export default function CallControlBotPage() {
         </p>
       </section>
 
+      {/* Получатели по отделам */}
+      <section>
+        <h2 className="text-sm font-semibold text-[var(--color-text)] mb-2">Получатели по отделам</h2>
+        <p className="text-xs text-[var(--color-text-muted)] mb-2">
+          Кому уходят эскалации уровней «РОПу» и «Директору департамента» для менеджеров
+          каждого отдела. По умолчанию — по оргструктуре («авто»), клик по ячейке —
+          назначить любого сотрудника вручную в обход оргструктуры.
+        </p>
+        <div className="scroll-x border border-[var(--color-border)] rounded-lg">
+          <table className="w-full text-sm min-w-[640px]">
+            <thead>
+              <tr className="text-left text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+                <th className="px-3 py-2 font-medium">Отдел</th>
+                <th className="px-3 py-2 font-medium">РОП</th>
+                <th className="px-3 py-2 font-medium">Директор департамента</th>
+              </tr>
+            </thead>
+            <tbody>
+              {departments.map(d => (
+                <tr key={d.department_id} className="border-b border-[var(--color-border)] last:border-b-0">
+                  <td className="px-3 py-2 text-[var(--color-text)]">{d.department_name}</td>
+                  <td className="px-3 py-2">
+                    <RecipientCell
+                      autoName={d.rop_name} autoId={d.rop_bitrix_user_id}
+                      overrideName={d.rop_override_name} overrideId={d.rop_override_id}
+                      onPick={id => setOverride(d.department_id, 'rop', id)}
+                      inputCls={inputCls}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <RecipientCell
+                      autoName={d.department_director_name} autoId={d.department_director_bitrix_user_id}
+                      overrideName={d.director_override_name} overrideId={d.director_override_id}
+                      onPick={id => setOverride(d.department_id, 'department_director', id)}
+                      inputCls={inputCls}
+                    />
+                  </td>
+                </tr>
+              ))}
+              {departments.length === 0 && (
+                <tr><td colSpan={3} className="px-3 py-6 text-center text-sm text-[var(--color-text-muted)]">Оргструктура пуста (на dev-стенде это норма).</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       {/* Шаблоны */}
       <section>
         <div className="flex items-center justify-between mb-2">
@@ -320,6 +397,93 @@ export default function CallControlBotPage() {
         </p>
       )}
     </div>
+  );
+}
+
+// Ячейка получателя: эффективное значение (ручное ИЛИ оргструктура) + бейдж
+// «вручную»/«авто». Клик — поповер с поиском по всем сотрудникам и сбросом на авто.
+function RecipientCell({ autoName, autoId, overrideName, overrideId, onPick, inputCls }: {
+  autoName: string | null;
+  autoId: string | null;
+  overrideName: string | null;
+  overrideId: string | null;
+  onPick: (bitrixUserId: string | null) => void;
+  inputCls: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState<Employee[]>([]);
+
+  const isOverride = overrideId != null;
+  const effectiveName = isOverride ? (overrideName ?? overrideId) : (autoName ?? autoId);
+
+  useEffect(() => {
+    if (!open || q.trim().length < 2) { setResults([]); return; }
+    const ctrl = new AbortController();
+    const t = setTimeout(() => {
+      fetch(`/api/settings/bots/call-control/employees?q=${encodeURIComponent(q.trim())}`, { signal: ctrl.signal })
+        .then(r => r.json())
+        .then(d => setResults(Array.isArray(d.employees) ? d.employees : []))
+        .catch(() => {});
+    }, 250);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [q, open]);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={o => { setOpen(o); if (!o) { setQ(''); setResults([]); } }}
+      className="w-[300px] p-2"
+      trigger={
+        <button className="tap-target flex items-center gap-1.5 text-left hover:underline decoration-dotted underline-offset-2">
+          <span className={effectiveName ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}>
+            {effectiveName ?? 'не назначен'}
+          </span>
+          <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+            isOverride
+              ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)] font-medium'
+              : 'bg-[var(--color-border)] text-[var(--color-text-muted)]'
+          }`}>
+            {isOverride ? 'вручную' : 'авто'}
+          </span>
+        </button>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        <input
+          autoFocus
+          className={`${inputCls} w-full`}
+          placeholder="Поиск: имя, Bitrix ID, #логин…"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+        />
+        <div className="max-h-56 overflow-y-auto flex flex-col">
+          {results.map(emp => (
+            <button
+              key={emp.id}
+              onClick={() => { onPick(emp.id); setOpen(false); }}
+              className="text-left px-2 py-1.5 rounded hover:bg-[var(--color-bg-hover)] text-sm text-[var(--color-text)]"
+            >
+              {emp.name ?? emp.id}
+              <span className="block text-[11px] text-[var(--color-text-muted)]">
+                {[emp.short_login, emp.department_name].filter(Boolean).join(' · ')}
+              </span>
+            </button>
+          ))}
+          {q.trim().length >= 2 && results.length === 0 && (
+            <span className="px-2 py-1.5 text-xs text-[var(--color-text-muted)]">Не найдено</span>
+          )}
+        </div>
+        {isOverride && (
+          <button
+            onClick={() => { onPick(null); setOpen(false); }}
+            className="self-start text-xs text-[var(--color-accent)] hover:underline px-2 py-1"
+          >
+            Сбросить на авто ({autoName ?? autoId ?? 'по оргструктуре'})
+          </button>
+        )}
+      </div>
+    </Popover>
   );
 }
 
