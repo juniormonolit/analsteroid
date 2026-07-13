@@ -31,6 +31,7 @@ export function SettingsSidebar({
       label: 'Пользователи и права',
       items: [
         { href: '/settings/users', label: 'Пользователи', visible: canManageUsers },
+        { href: '/settings/org-structure', label: 'Оргструктура', visible: canManageUsers },
         { href: '/settings/roles', label: 'Роли', visible: isSuperadmin },
         { href: '/settings/rights-matrix', label: 'Матрица прав', visible: isSuperadmin },
       ],
