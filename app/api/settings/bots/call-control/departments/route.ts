@@ -13,14 +13,28 @@ export async function GET() {
   if (denied) return denied;
 
   const db = systemDb();
+  // Только поддерево «Отдел продаж» (правка Иосифа 14.07): HR/маркетинг/логистика
+  // и прочие ветки в таблицу получателей не попадают. Тот же принцип, что в
+  // app/api/catalog/org-structure (там поддерево режется в JS, здесь — рекурсивным CTE).
   const res = await db.query(
-    `WITH depts AS (
+    `WITH RECURSIVE sales_tree AS (
+       SELECT id, bitrix_department_id
+       FROM departments
+       WHERE name = 'Отдел продаж' AND is_active
+       UNION ALL
+       SELECT d.id, d.bitrix_department_id
+       FROM departments d
+       JOIN sales_tree s ON d.parent_bitrix_department_id = s.bitrix_department_id
+       WHERE d.is_active
+     ),
+     depts AS (
        SELECT DISTINCT ON (department_id)
          department_id, department_name,
          rop_bitrix_user_id, rop_name,
          department_director_bitrix_user_id, department_director_name
        FROM org_resolved_hierarchy
        WHERE is_active AND department_id IS NOT NULL
+         AND department_id IN (SELECT id FROM sales_tree)
        ORDER BY department_id, rop_bitrix_user_id NULLS LAST, department_director_bitrix_user_id NULLS LAST
      ),
      names AS (
