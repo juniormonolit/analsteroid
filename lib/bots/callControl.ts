@@ -1,9 +1,17 @@
 // Бот «Контроль звонков» — порт missedcalls-робота в Монолитику (задача Иосифа, 13.07).
-// Данные: call_events (наш приём исходящего вебхука Bitrix, /api/telephony/webhook),
-// НЕ va.calls — Мишин пайплайн наполняет её с многочасовым лагом, а SLA здесь минутные.
+// ИСТОЧНИК ДАННЫХ (решение Иосифа 13.07 вечером, после сверки): Мишина va.calls.
+// Сверка показала: va.calls получает те же звонки, что и наш вебхук, НО только
+// связанные со сделкой (n8n резолвит сделку сразу), лаг p50 ~0 мин / p90 ~11 мин.
+// Звонок без сделки (жена/спамер/8800) в va.calls не попадает — и по бизнес-правилу
+// такие пропущенные игнорируются. Синк перекладывает новые строки va.calls в наш
+// call_events (event_name='VA_CALLS_SYNC', дедуп по (bitrix_call_id, event_name),
+// TTL 7 дней) — вся механика курсора/кейсов переиспользуется. События вебхука
+// (/api/telephony/webhook) движок ИГНОРИРУЕТ — приём оставлен как запасной канал.
+// Риск: пайплайн n8n может встать на часы (наблюдали 5-часовой разрыв) — за этим
+// следит сторожок свежести (warn в зеркало раз в час в рабочее время).
 // Цикл (тик раз в минуту из instrumentation.ts, Redis-замок):
-//   новые события → кейсы (телефон+менеджер) → резолв успешным исходящим →
-//   оценка правил (кол-во пропущенных / минуты без перезвона / И-ИЛИ) →
+//   синк va.calls → новые события → кейсы (телефон+менеджер) → резолв успешным
+//   исходящим → оценка правил (кол-во пропущенных / минуты без перезвона / И-ИЛИ) →
 //   рендер кастомного шаблона → отправка ботом Bitrix «Контроль звонков» (BOT_ID 15010).
 // Гардрейлы: enabled (выкл из коробки), dry_run (по умолчанию), зеркало-дубль.
 
@@ -96,6 +104,92 @@ function minutesBetween(from: Date, to: Date): number {
 // мгновенные сбросы, которые АТС всё равно репортит с duration 1-2с.
 const SUCCESS_MIN_DURATION_SEC = 5;
 
+// --- Синк из va.calls ---
+const VA_EVENT_NAME = 'VA_CALLS_SYNC';
+// Перекрытие окна курсора: строки с одинаковым created_at на границе не теряются,
+// дубли отсекает unique (bitrix_call_id, event_name).
+const VA_SYNC_OVERLAP_MS = 60_000;
+// Сторожок свежести: порог отставания и рабочее окно МСК.
+const VA_STALE_MINUTES = 60;
+const WORK_HOURS_MSK: [number, number] = [9, 21];
+let lastStaleWarnAt = 0; // in-memory антиспам (процесс на инстанс один)
+
+function mskHour(): number {
+  const msk = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+  return parseInt(msk.slice(11, 13), 10);
+}
+
+/** Перекладывает новые строки va.calls в call_events. Возвращает max(created_at) va. */
+async function syncFromVaCalls(db: ReturnType<typeof systemDb>): Promise<Date | null> {
+  const an = analyticsDb();
+  const cur = await db.query(`SELECT va_sync_cursor FROM call_control_settings WHERE id = 1`);
+  // Первый запуск: берём с текущего момента (историю не превращаем в эскалации).
+  const cursor: Date = cur.rows[0]?.va_sync_cursor ?? new Date();
+
+  const rows = await an.query(
+    `SELECT bitrix_call_id, deal_id, manager_id, direction::text AS direction,
+            result::text AS result, phone_number, duration_seconds, called_at, created_at
+     FROM va.calls
+     WHERE created_at > $1
+     ORDER BY created_at
+     LIMIT 2000`,
+    [new Date(cursor.getTime() - VA_SYNC_OVERLAP_MS)]
+  );
+
+  let maxCreated: Date | null = null;
+  for (const r of rows.rows) {
+    const direction = r.direction === 'inbound' ? 'inbound' : r.direction === 'outbound' ? 'outbound' : null;
+    // Правило «без сделки — игнор» здесь избыточно (в va.calls без сделки не бывает),
+    // но подстрахуемся: пропущенным считаем только missed-входящий СО сделкой.
+    const isMissed = direction === 'inbound' && r.result === 'missed' && r.deal_id != null;
+    await db.query(
+      `INSERT INTO call_events
+         (event_name, bitrix_call_id, direction, call_type_raw, phone_normalized, phone_raw,
+          manager_bitrix_user_id, duration_seconds, failed_code, is_missed_inbound,
+          crm_deal_id, call_started_at, raw)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (bitrix_call_id, event_name) WHERE bitrix_call_id IS NOT NULL DO NOTHING`,
+      [
+        VA_EVENT_NAME, r.bitrix_call_id, direction, null,
+        normalizePhone(r.phone_number), r.phone_number,
+        r.manager_id != null ? String(r.manager_id) : null,
+        r.duration_seconds, r.result, isMissed, r.deal_id, r.called_at,
+        JSON.stringify({ source: 'va.calls', result: r.result }),
+      ]
+    );
+    maxCreated = r.created_at;
+  }
+  if (maxCreated) {
+    await db.query(`UPDATE call_control_settings SET va_sync_cursor = $1, updated_at = now() WHERE id = 1`, [maxCreated]);
+  }
+  return maxCreated;
+}
+
+/** Сторожок: va.calls отстаёт > часа в рабочее время → warn в зеркало (раз в час). */
+async function warnIfVaStale(mirrorBitrixUserId: string | null): Promise<void> {
+  const h = mskHour();
+  if (h < WORK_HOURS_MSK[0] || h >= WORK_HOURS_MSK[1]) return;
+  if (Date.now() - lastStaleWarnAt < 60 * 60 * 1000) return;
+  try {
+    const an = analyticsDb();
+    const res = await an.query(`SELECT max(created_at) AS last FROM va.calls`);
+    const last: Date | null = res.rows[0]?.last ?? null;
+    const staleMin = last ? Math.round((Date.now() - last.getTime()) / 60_000) : Infinity;
+    if (staleMin <= VA_STALE_MINUTES) return;
+    lastStaleWarnAt = Date.now();
+    console.warn(`[callControl] va.calls отстаёт на ${staleMin} мин — бот слеп до восстановления пайплайна`);
+    if (mirrorBitrixUserId) {
+      await sendCallControlBotMessage(
+        mirrorBitrixUserId,
+        `[СТОРОЖОК] va.calls не обновлялась ${staleMin} мин (рабочее время). ` +
+          `Пайплайн n8n, похоже, стоит — бот «Контроль звонков» не видит новые звонки, пропущенные копятся без уведомлений.`
+      );
+    }
+  } catch (e) {
+    console.warn('[callControl] сторожок свежести не отработал:', e instanceof Error ? e.message : e);
+  }
+}
+
 // TTL сырых событий: вебхук может лить и лишние типы (CALLINIT/CALLSTART, CRM-события),
 // БД system не должна расти бесконтрольно (требование Иосифа, 13.07). Кейсы/доставки
 // не трогаем — это рабочая история бота, она на порядки меньше.
@@ -111,12 +205,23 @@ export async function runCallControlCycle(): Promise<string> {
   const settings = await loadCallControlSettings();
   if (!settings.enabled) return 'disabled';
 
-  // --- 1. Обработка новых событий (по курсору, в порядке id) ---
+  // --- 0. Синк источника: va.calls → call_events. Падение Мишиной БД не роняет
+  // цикл (уже принятые события продолжают эскалироваться), но сторожок доложит.
+  try {
+    await syncFromVaCalls(db);
+  } catch (e) {
+    console.warn('[callControl] синк va.calls не удался:', e instanceof Error ? e.message : e);
+  }
+  await warnIfVaStale(settings.mirrorBitrixUserId);
+
+  // --- 1. Обработка новых событий (по курсору, в порядке id). Источник — ТОЛЬКО
+  // синк va.calls; сырые вебхук-события лежат рядом как запасной канал и в кейсы
+  // не попадают (иначе задвоение: один звонок = две записи с разными event_name).
   const events = await db.query(
     `SELECT id, direction, phone_normalized, manager_bitrix_user_id, duration_seconds,
             is_missed_inbound, crm_deal_id, call_started_at, received_at
      FROM call_events
-     WHERE id > $1 AND phone_normalized IS NOT NULL
+     WHERE id > $1 AND event_name = '${VA_EVENT_NAME}' AND phone_normalized IS NOT NULL
      ORDER BY id
      LIMIT 2000`,
     [settings.lastProcessedEventId]
