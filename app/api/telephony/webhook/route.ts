@@ -78,8 +78,12 @@ export async function POST(req: NextRequest) {
   const direction = directionFromCallType(callType);
   const duration = durationRaw != null && /^\d+$/.test(durationRaw) ? parseInt(durationRaw, 10) : null;
   // Пропущенный входящий: код 304 (классика Bitrix) либо входящий с нулевой длительностью.
+  // ТОЛЬКО на событии ЗАВЕРШЕНИЯ звонка: владелец подписал вебхук и на CALLINIT/CALLSTART —
+  // у тех нет длительности, и без этого гейта каждый ОТВЕЧЕННЫЙ входящий считался бы
+  // пропущенным по (duration ?? 0) === 0.
+  const isCallEnd = eventName.includes('CALLEND');
   const isMissedInbound =
-    direction === 'inbound' && (failedCode === '304' || (failedCode == null && (duration ?? 0) === 0));
+    isCallEnd && direction === 'inbound' && (failedCode === '304' || (failedCode == null && (duration ?? 0) === 0));
   const dealId = crmEntityType === 'DEAL' && crmEntityId && /^\d+$/.test(crmEntityId) ? crmEntityId : null;
   const startedAt = startRaw ? new Date(startRaw) : null;
 

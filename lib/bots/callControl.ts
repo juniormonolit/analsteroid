@@ -87,9 +87,18 @@ function minutesBetween(from: Date, to: Date): number {
 // мгновенные сбросы, которые АТС всё равно репортит с duration 1-2с.
 const SUCCESS_MIN_DURATION_SEC = 5;
 
+// TTL сырых событий: вебхук может лить и лишние типы (CALLINIT/CALLSTART, CRM-события),
+// БД system не должна расти бесконтрольно (требование Иосифа, 13.07). Кейсы/доставки
+// не трогаем — это рабочая история бота, она на порядки меньше.
+const EVENTS_TTL_DAYS = 7;
+
 /** Полный цикл. Возвращает краткую сводку для лога. */
 export async function runCallControlCycle(): Promise<string> {
   const db = systemDb();
+
+  // Чистка ДО гейта enabled: события копятся вебхуком независимо от того, включён ли бот.
+  await db.query(`DELETE FROM call_events WHERE received_at < now() - interval '${EVENTS_TTL_DAYS} days'`);
+
   const settings = await loadCallControlSettings();
   if (!settings.enabled) return 'disabled';
 
