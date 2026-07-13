@@ -7,7 +7,7 @@
 //   рендер кастомного шаблона → отправка ботом Bitrix «Контроль звонков» (BOT_ID 15010).
 // Гардрейлы: enabled (выкл из коробки), dry_run (по умолчанию), зеркало-дубль.
 
-import { systemDb } from '@/lib/db/clients';
+import { systemDb, analyticsDb } from '@/lib/db/clients';
 import { sendCallControlBotMessage } from '@/lib/bitrix/notify';
 
 export const DEAL_URL_PREFIX = 'https://td.monolit-crm.ru/crm/deal/details/';
@@ -50,14 +50,23 @@ interface OrgRow {
   company_director_bitrix_user_id: string | null;
 }
 
-// Телефон к каноническому виду: только цифры, 8XXXXXXXXXX → 7XXXXXXXXXX, префикс '+'.
+// Телефон к каноническому виду: только цифры, ПОСЛЕДНИЕ 11 (АТС дописывает мусорные
+// префиксы линий, реальный номер — хвост: жалоба Иосифа на «+024789111500177»),
+// 8XXXXXXXXXX → 7XXXXXXXXXX, префикс '+'. Совпадает с форматом va.calls.phone_number.
 export function normalizePhone(raw: string | null | undefined): string | null {
   if (!raw) return null;
   let digits = String(raw).replace(/\D/g, '');
   if (!digits) return null;
+  if (digits.length > 11) digits = digits.slice(-11);
   if (digits.length === 11 && digits.startsWith('8')) digits = `7${digits.slice(1)}`;
   if (digits.length === 10) digits = `7${digits}`;
   return `+${digits}`;
+}
+
+// Для сообщений: +79181286521 → «+7 (918) 128-65-21» (формат старого missedcalls-бота).
+export function formatPhoneDisplay(phone: string | null | undefined): string {
+  const m = /^\+7(\d{3})(\d{3})(\d{2})(\d{2})$/.exec(phone ?? '');
+  return m ? `+7 (${m[1]}) ${m[2]}-${m[3]}-${m[4]}` : (phone ?? '—');
 }
 
 export async function loadCallControlSettings(): Promise<CallControlSettings> {
@@ -178,6 +187,34 @@ export async function runCallControlCycle(): Promise<string> {
   const cases: CaseRow[] = casesRes.rows;
   if (cases.length === 0) return `events=${events.rows.length} opened+=${opened} resolved=${resolved} cases=0`;
 
+  // Обогащение сделкой из Мишиной va.calls по номеру телефона (Bitrix-вебхук ссылку
+  // на сделку не шлёт, а дёргать Bitrix REST запрещено — решение Иосифа 13.07).
+  // va.calls наполняется с лагом в часы, поэтому: в первом уведомлении (30 мин)
+  // сделки может не быть — она подтянется к моменту следующих эскалаций.
+  const needDeal = cases.filter((c) => !c.deal_id);
+  if (needDeal.length > 0) {
+    try {
+      const an = analyticsDb();
+      const found = await an.query(
+        `SELECT DISTINCT ON (phone_number) phone_number, deal_id
+         FROM va.calls
+         WHERE phone_number = ANY($1) AND deal_id IS NOT NULL
+         ORDER BY phone_number, called_at DESC`,
+        [needDeal.map((c) => c.phone_normalized)]
+      );
+      const dealByPhone = new Map<string, string>(found.rows.map((r) => [r.phone_number, String(r.deal_id)]));
+      for (const c of needDeal) {
+        const dealId = dealByPhone.get(c.phone_normalized);
+        if (!dealId) continue;
+        c.deal_id = dealId;
+        await db.query(`UPDATE call_control_cases SET deal_id = $2, updated_at = now() WHERE id = $1`, [c.id, dealId]);
+      }
+    } catch (e) {
+      // Недоступность Мишиной БД не должна останавливать эскалацию — шлём без сделки.
+      console.warn('[callControl] обогащение сделкой из va.calls не удалось:', e instanceof Error ? e.message : e);
+    }
+  }
+
   // Оргиерархия одним запросом по всем менеджерам открытых кейсов.
   const managerIds = [...new Set(cases.map((c) => c.manager_bitrix_user_id).filter(Boolean))] as string[];
   const orgByManager = new Map<string, OrgRow>();
@@ -245,7 +282,7 @@ export async function runCallControlCycle(): Promise<string> {
       const body = templateById.get(rule.template_id as number) ?? '';
       const message = renderTemplate(body, {
         manager_name: org?.manager_name ?? c.manager_bitrix_user_id ?? '—',
-        phone: c.phone_normalized,
+        phone: formatPhoneDisplay(c.phone_normalized),
         deal_url: c.deal_id ? `${DEAL_URL_PREFIX}${c.deal_id}/` : '—',
         missed_count: String(c.missed_count),
         minutes: String(minutesSince),
