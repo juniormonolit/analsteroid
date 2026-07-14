@@ -6,6 +6,51 @@
 
 ---
 
+## 2026-07-14 — Добор фикса 42703: 8-е виртуальное поле `_complex_client` (SEV2, отчёты не открывались)
+
+### Симптом (после выката 3fd1c30)
+
+Фикс `_repeat_deliv_hist` выкачен, но отчёты по-прежнему 500 — теперь падало 8-е
+виртуальное поле `_complex_client` (метрика `complex_clients` = «Кол-во (Повторные
+разных категорий товаров)», категория «Повторные», тег `scope_independent` →
+считается для КАЖДОГО отчёта безусловно). Guard из первого фикса ловил его явной
+ошибкой (в app.log ~20 бросков по `_complex_client`), но пользователю всё равно 500.
+
+### Восстановление семантики (из прод-определения метрики, НЕ угадано)
+
+Прочитал строку метрики из прод-БД (YC analytics, таблица `metrics`, через живой env
+процесса). Определение `complex_clients`: `source=deals`, `count_distinct` по
+`contact_id`, `date_field=delivered_at`, фильтры
+`[{_complex_client,eq}, {funnel_id, not_in, [4,7]}]`, описание:
+«Уникальные клиенты (contact_id) с 2+ разными товарными группами (**head_group_name**,
+шкала by_max) за всю историю отгрузок (delivered_at), с отгрузкой в периоде. Числитель
+% комплексных, ТЗ #1725». То есть `_complex_client` — НЕ ROW_NUMBER-по-дате, а логика
+по DISTINCT-категориям.
+
+### Фикс (`lib/metrics/sqlGen.ts`)
+
+Добавил `complexClientSubquery()` и ветку `_complex_client` в тот же блок перевода
+виртуальных полей (перед guard), чтобы все пути строили SQL одинаково:
+```sql
+d.contact_id IN (
+  SELECT contact_id FROM sa.deals
+  WHERE delivered_at IS NOT NULL AND contact_id IS NOT NULL AND head_group_name IS NOT NULL
+  GROUP BY contact_id HAVING COUNT(DISTINCT head_group_name) >= 2)
+```
+Фильтр `funnel_id NOT IN (4,7)` метрика несёт отдельно — он и так корректно
+обрабатывается общим путём `not_in` (funnel_id — реальная колонка).
+
+Проверка на ПРОДЕ (read-only): отчётный SQL по `complex_clients` за июль 2026,
+сгруппированный по менеджеру+воронке, выполняется БЕЗ ошибки (был 42703) и даёт
+осмысленные числа (топ-менеджер 1899 → 12 комплексных клиентов; всего комплексных
+контактов по истории — 2270). `tsc --noEmit` и `next build` зелёные. Деплой — Артём.
+
+Все 9 виртуальных полей (`_ppp/_ppo/_ppb/_pppb/_primary_hist/_repeat_hist/
+_primary_deliv_hist/_repeat_deliv_hist/_complex_client`) теперь переводятся в подзапрос
+единой точкой; любое незарегистрированное `_`-поле ловит guard.
+
+---
+
 ## 2026-07-14 — Фикс боевой регрессии: отчёты 500 (`column d._repeat_deliv_hist does not exist`, 42703)
 
 ### Симптом

@@ -38,6 +38,23 @@ function clientHistorySubquery(field: string, cfg: { orderBy: string; rn: string
     )`;
 }
 
+// _complex_client — виртуальное поле «комплексного» клиента: contact_id, у которого
+// за ВСЮ историю отгрузок (delivered_at) есть 2+ РАЗНЫЕ товарные группы head_group_name
+// (шкала by_max). Не про дату/порядок сделки, поэтому НЕ ложится в шаблон ROW_NUMBER
+// выше — отдельная логика по DISTINCT-категориям. Семантика восстановлена из
+// прод-определения метрики complex_clients («Кол-во (Повторные разных категорий
+// товаров)», категория «Повторные», count_distinct contact_id по delivered_at,
+// числитель «% комплексных клиентов», ТЗ #1725). Фильтр по воронкам (funnel_id NOT IN
+// (4,7)) метрика несёт ОТДЕЛЬНЫМ фильтром — он обрабатывается общим путём not_in ниже.
+function complexClientSubquery(): string {
+  return `d.contact_id IN (
+      SELECT contact_id FROM sa.deals
+      WHERE delivered_at IS NOT NULL AND contact_id IS NOT NULL AND head_group_name IS NOT NULL
+      GROUP BY contact_id
+      HAVING COUNT(DISTINCT head_group_name) >= 2
+    )`;
+}
+
 export interface DimensionConfig {
   idExpr: string;           // SQL expr for the ID column, e.g. "d.current_manager_id::text"
   nameExpr?: string;        // SQL expr for name (optional, e.g. for product groups)
@@ -55,6 +72,9 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   // ОБЯЗАН стоять первым — чтобы виртуальное поле не провалилось в generic switch внизу.
   const chCfg = CLIENT_HISTORY_FIELDS[f.field];
   if (chCfg) return clientHistorySubquery(f.field, chCfg);
+  // «Комплексный» клиент (2+ товарных группы за историю отгрузок) — своя логика по
+  // DISTINCT-категориям, тоже через подзапрос (см. complexClientSubquery).
+  if (f.field === '_complex_client') return complexClientSubquery();
   // Защита: любое иное поле с ведущим «_» — тоже виртуальное и НЕ является колонкой БД.
   // Если оно дошло сюда — его забыли добавить в CLIENT_HISTORY_FIELDS. Бросаем явную
   // ошибку вместо тихого битого SQL «d.<field>» (регрессия #repeat_deliv: 42703 без
