@@ -635,7 +635,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
   const tabContent = (
     <>
       {effectiveTab === 'display' && (
-        <div className="flex flex-col">
+        <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col'}>
           {displaySection}
           {optionsSection}
           {formatSection}
@@ -643,10 +643,10 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
         </div>
       )}
       {effectiveTab === 'highlight' && (
-        <div className="flex flex-col">{highlightSection}</div>
+        <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col'}>{highlightSection}</div>
       )}
       {effectiveTab === 'filter' && hasFilter && (
-        <div className="flex flex-col">{filterSection}</div>
+        <div className={docked ? 'flex flex-col gap-5' : 'flex flex-col'}>{filterSection}</div>
       )}
     </>
   );
@@ -657,13 +657,17 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           Клик по подложке — один из триггеров закрытия, гейтится несохранёнными
           изменениями (п.4 правок 09.07/2, см. useUnsavedGuard выше). */}
       {!docked && <SlideBackdrop closing={closing} onClick={guardedClose} />}
-      {/* Slide panel — доке узкая (как раньше), модалка широкая (~48vw, мин. 680px,
-          макет metric-settings-redesign.html), схлопывается в одну колонку до sm:. */}
+      {/* Slide panel — доке до 480px (модалка широкая ~48vw, мин. 680px,
+          макет metric-settings-redesign.html), схлопывается в одну колонку до sm:.
+          В доке базовая ширина 480px, но inline max-width = остаток места справа от
+          якоря (100vw − anchorLeft − 16px поле): на 1440+ раскрывается на полные 480,
+          на 1366/1280 мягко ужимается под остаток, а не вылезает за край экрана
+          (панель метрик занимает слева, floor её ширины — 720px). */}
       <div
         className={`fixed inset-y-0 z-50 bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? exitAnim : enterAnim} ${
-          docked ? 'w-80 max-w-[94vw] border-l border-[var(--color-border)]' : 'right-0 w-full sm:w-[48vw] sm:min-w-[680px] sm:max-w-[960px]'
+          docked ? 'w-[480px] max-w-[94vw] border-l border-[var(--color-border)]' : 'right-0 w-full sm:w-[48vw] sm:min-w-[680px] sm:max-w-[960px]'
         }`}
-        style={docked ? { left: anchorLeft } : undefined}>
+        style={docked ? { left: anchorLeft, maxWidth: `calc(100vw - ${anchorLeft ?? 0}px - 16px)` } : undefined}>
         {!docked && <PanelCloseTab onClick={guardedClose} />}
         {/* Header */}
         <div className="flex items-start justify-between px-5 sm:px-8 pt-5 sm:pt-6 pb-4 sm:pb-5 border-b border-[var(--color-border)]">
@@ -691,8 +695,14 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           </div>
         )}
 
-        {/* Footer: область применения + действия — на всю ширину, ВСЕГДА видим (п.3 брифа) */}
-        <div className="px-5 sm:px-8 py-4 sm:py-5 border-t border-[var(--color-border)] flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        {/* Footer: область применения + действия — ВСЕГДА видим (п.3 брифа).
+            В доке (узкая колонка ~400px) НЕ раскладываем в строку: «Область применения»
+            во всю ширину сверху, кнопки Сбросить/Сохранить строкой под ней — иначе scope-
+            боксы сжимаются в узкие квадраты с уродливым переносом (баг из скрина владельца).
+            В модалке (широкая) — прежняя строка с justify-between. */}
+        <div className={`border-t border-[var(--color-border)] flex flex-col gap-3 ${
+          docked ? 'px-5 py-4' : 'px-5 sm:px-8 py-4 sm:py-5 sm:flex-row sm:items-end sm:justify-between'
+        }`}>
           {scopeSwitch}
           <div className="flex justify-end gap-2.5 shrink-0">
             <button
