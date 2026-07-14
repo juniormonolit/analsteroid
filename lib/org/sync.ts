@@ -22,10 +22,10 @@ const DIRECTORATE_DEPT = '1';   // Дирекция — выше неё rop не
 interface BxDept { ID: string | number; NAME: string; PARENT?: string | number; UF_HEAD?: string | number }
 interface BxManager {
   ID: string | number; NAME?: string; LAST_NAME?: string; LOGIN?: string;
-  ACTIVE?: string | boolean; UF_DEPARTMENT?: (string | number)[];
+  ACTIVE?: string | boolean; UF_DEPARTMENT?: (string | number)[]; WORK_POSITION?: string;
 }
 
-export interface OrgSyncResult { ok: true; departments: number; managers: number; renamed: number; ms: number }
+export interface OrgSyncResult { ok: true; departments: number; managers: number; backfilledHeads: number; renamed: number; ms: number }
 
 function webhookBase(): string {
   const bx = process.env.BITRIX_ORG_WEBHOOK;
@@ -52,6 +52,29 @@ async function bxAll(method: string): Promise<BxDept[]> {
     start = d.next;
   }
   return out;
+}
+
+/**
+ * user.get?ID=<id> → одна запись в форме BxManager (или null, если пусто).
+ * Нужен для добора глав отделов, которых mlt.managers.list не возвращает
+ * (владельцы/системные исключены из выгрузки, но остаются главами по UF_HEAD).
+ */
+async function bxUser(id: string): Promise<BxManager | null> {
+  const d = await bxCall('user.get', { ID: id });
+  if (d.error) throw new Error(`user.get ID=${id}: ${d.error_description ?? d.error}`);
+  const arr = (d.result as Record<string, unknown>[]) ?? [];
+  const u = arr[0];
+  if (!u) return null;
+  const dept = u.UF_DEPARTMENT;
+  return {
+    ID: u.ID as string | number,
+    NAME: u.NAME as string | undefined,
+    LAST_NAME: u.LAST_NAME as string | undefined,
+    LOGIN: u.LOGIN as string | undefined,
+    ACTIVE: u.ACTIVE as string | boolean | undefined,
+    UF_DEPARTMENT: Array.isArray(dept) ? (dept as (string | number)[]) : (dept != null ? [dept as string | number] : undefined),
+    WORK_POSITION: u.WORK_POSITION as string | undefined,
+  };
 }
 
 const shortLogin = (l?: string): string | null => {
@@ -93,6 +116,32 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
     const mgrRes = await bxCall('mlt.managers.list');
     if (mgrRes.error) throw new Error(`mlt.managers.list: ${mgrRes.error_description ?? mgrRes.error}`);
     const mgr = (mgrRes.result as BxManager[]) ?? [];
+
+    // 1b. Добор глав отделов, отсутствующих в mlt.managers.list.
+    // Кейс: глава отдела (UF_HEAD в дереве) исключён из выгрузки как владелец/системный
+    // (напр. Bitrix ID 6 — Авдейчик, глава отдела 34 «МСК НЦ»). Без него отдел теряет
+    // главу и в sa.org_resolved_hierarchy для него не появляется строка. Добираем
+    // отдельными user.get и вливаем в mgr ПЕРЕД циклом резолва (дедуп по ID).
+    const mgrIds = new Set(mgr.map(m => String(m.ID)));
+    const headIds = new Set<string>();
+    for (const d of bxdep) {
+      const h = d.UF_HEAD ? String(d.UF_HEAD) : '';
+      if (h && h !== '0') headIds.add(h);
+    }
+    const missingHeads = [...headIds].filter(id => !mgrIds.has(id));
+    let backfilledHeads = 0;
+    for (const id of missingHeads) {
+      try {
+        const u = await bxUser(id);
+        if (!u) { console.warn(`[org-sync] глава ${id}: user.get вернул пусто — пропуск`); continue; }
+        if (mgrIds.has(String(u.ID))) continue; // дедуп (на всякий случай)
+        mgr.push(u);
+        mgrIds.add(String(u.ID));
+        backfilledHeads++;
+      } catch (e) {
+        console.warn(`[org-sync] глава ${id}: user.get ошибка — пропуск:`, e instanceof Error ? e.message : e);
+      }
+    }
 
     const bxById = new Map(bxdep.map(d => [String(d.ID), d]));
     const chainOf = (id: string | number): BxDept[] => {
@@ -185,7 +234,7 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
     await client.query('UPDATE sa.org_resolved_hierarchy SET is_active=false WHERE NOT (manager_bitrix_user_id = ANY($1))', [seen]);
 
     await client.query('COMMIT');
-    return { ok: true, departments: bxdep.length, managers: mgr.length, renamed, ms: Date.now() - t0 };
+    return { ok: true, departments: bxdep.length, managers: mgr.length, backfilledHeads, renamed, ms: Date.now() - t0 };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;
