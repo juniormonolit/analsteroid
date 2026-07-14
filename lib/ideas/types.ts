@@ -3,6 +3,15 @@
 
 export type IdeaStatus = 'proposed' | 'planned' | 'in_progress' | 'done' | 'rejected';
 
+export interface IdeaAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  uploadedBy: string;
+  createdAt: string; // ISO
+}
+
 export interface Idea {
   id: string;
   title: string;
@@ -12,6 +21,7 @@ export interface Idea {
   authorName: string | null;
   createdAt: string; // ISO
   updatedAt: string; // ISO
+  attachments: IdeaAttachment[]; // скриншоты, миграция 101
 }
 
 export interface IdeasListResponse {
@@ -28,3 +38,8 @@ export const IDEA_TITLE_MAX_LEN = 200;
 export const IDEA_BODY_MAX_LEN = 4000;
 
 export const IDEA_ADMIN_STATUSES: IdeaStatus[] = ['planned', 'in_progress', 'done', 'rejected'];
+
+// Ограничения вложений-скриншотов (MVP): только картинки, до 8 МБ каждая, до 6 на идею.
+export const IDEA_ATTACH_MAX_BYTES = 8 * 1024 * 1024;
+export const IDEA_ATTACH_MAX_COUNT = 6;
+export const IDEA_ATTACH_ALLOWED_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];

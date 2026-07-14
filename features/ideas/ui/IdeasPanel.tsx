@@ -1,13 +1,19 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, X } from 'lucide-react';
+import { ArrowLeft, X, ImagePlus, Trash2 } from 'lucide-react';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { useIdeasQuery } from './useIdeasQuery';
-import type { Idea, IdeaStatus } from '@/lib/ideas/types';
-import { IDEA_TITLE_MAX_LEN, IDEA_BODY_MAX_LEN } from '@/lib/ideas/types';
+import type { Idea, IdeaAttachment, IdeaStatus } from '@/lib/ideas/types';
+import {
+  IDEA_TITLE_MAX_LEN,
+  IDEA_BODY_MAX_LEN,
+  IDEA_ATTACH_MAX_BYTES,
+  IDEA_ATTACH_MAX_COUNT,
+  IDEA_ATTACH_ALLOWED_MIME,
+} from '@/lib/ideas/types';
 
 interface Props {
   onClose: () => void;
@@ -31,6 +37,29 @@ const ADMIN_STATUS_OPTIONS: { value: IdeaStatus; label: string }[] = [
   { value: 'rejected', label: 'Отклонить' },
 ];
 
+// Клиентская валидация набора картинок перед отправкой (сервер валидирует повторно).
+function validateFiles(files: File[], alreadyHas: number): string | null {
+  if (alreadyHas + files.length > IDEA_ATTACH_MAX_COUNT) {
+    return `Максимум ${IDEA_ATTACH_MAX_COUNT} скриншотов на идею`;
+  }
+  for (const f of files) {
+    if (!IDEA_ATTACH_ALLOWED_MIME.includes(f.type)) return `Только картинки (png, jpg, gif, webp): ${f.name}`;
+    if (f.size > IDEA_ATTACH_MAX_BYTES) return `Файл больше 8 МБ: ${f.name}`;
+  }
+  return null;
+}
+
+async function uploadAttachments(ideaId: string, files: File[]): Promise<string | null> {
+  const fd = new FormData();
+  files.forEach(f => fd.append('files', f));
+  const res = await fetch(`/api/ideas/${ideaId}/attachments`, { method: 'POST', body: fd });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    return d.error ?? 'Не удалось загрузить скриншоты';
+  }
+  return null;
+}
+
 /**
  * Выезжающая справа панель «Идеи и планы» (макет владельца, ideas-backlog-mock.html) —
  * построена по паттерну ChangelogPanel (features/changelog/ui/ChangelogPanel.tsx):
@@ -43,14 +72,19 @@ export function IdeasPanel({ onClose }: Props) {
   const { closing, requestClose } = useSlideClose(onClose);
   const [view, setView] = useState<'list' | 'form'>('list');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [myLogin, setMyLogin] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
 
   // Право менять статус идеи — тот же гейт, что «управление общими отчётами»
-  // (action.shared_reports.manage), см. app/api/ideas/[id]/route.ts.
+  // (action.shared_reports.manage), см. app/api/ideas/[id]/route.ts. Заодно берём
+  // login — по нему решаем, может ли пользователь удалить своё вложение.
   useEffect(() => {
     fetch('/api/auth/session')
       .then(r => (r.ok ? r.json() : null))
-      .then((d: { user?: { isSuperadmin?: boolean; permissions?: string[] } } | null) =>
-        setIsAdmin(!!d?.user?.isSuperadmin || !!d?.user?.permissions?.includes('action.shared_reports.manage')))
+      .then((d: { user?: { login?: string; isSuperadmin?: boolean; permissions?: string[] } } | null) => {
+        setIsAdmin(!!d?.user?.isSuperadmin || !!d?.user?.permissions?.includes('action.shared_reports.manage'));
+        setMyLogin(d?.user?.login ?? null);
+      })
       .catch(() => {});
   }, []);
 
@@ -64,6 +98,8 @@ export function IdeasPanel({ onClose }: Props) {
       .catch(() => {});
   }
 
+  const refetch = () => qc.invalidateQueries({ queryKey: ['ideas'] });
+
   return (
     <>
       <SlideBackdrop closing={closing} onClick={requestClose} />
@@ -76,31 +112,162 @@ export function IdeasPanel({ onClose }: Props) {
           <ListView
             data={data}
             isAdmin={isAdmin}
+            myLogin={myLogin}
             onChangeStatus={changeStatus}
             onPropose={() => setView('form')}
             onCloseMobile={requestClose}
+            onView={setLightbox}
+            onAttachmentsChanged={refetch}
           />
         ) : (
           <FormView
             onBack={() => setView('list')}
             onSubmitted={() => {
-              qc.invalidateQueries({ queryKey: ['ideas'] });
+              refetch();
               setView('list');
             }}
             onCloseMobile={requestClose}
           />
         )}
       </div>
+
+      {lightbox && <Lightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />}
     </>
   );
 }
 
-function IdeaCard({ idea, isAdmin, onChangeStatus }: {
+// Полноразмерный просмотр скриншота по клику на миниатюру.
+function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 cursor-zoom-out"
+      onClick={onClose}
+    >
+      <button className="absolute top-4 right-4 text-white/80 hover:text-white" onClick={onClose}>
+        <X size={26} />
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={alt} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
+    </div>
+  );
+}
+
+// Миниатюры вложений идеи + удаление (для загрузившего/админа) + открытие в полный размер.
+function AttachmentThumbs({ idea, canDelete, onView, onChanged }: {
+  idea: Idea;
+  canDelete: (a: IdeaAttachment) => boolean;
+  onView: (v: { src: string; alt: string }) => void;
+  onChanged: () => void;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  if (!idea.attachments.length) return null;
+
+  async function remove(attId: string) {
+    setBusyId(attId);
+    try {
+      await fetch(`/api/ideas/${idea.id}/attachments/${attId}`, { method: 'DELETE' });
+      onChanged();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5 mb-1.5">
+      {idea.attachments.map(a => {
+        const src = `/api/ideas/${idea.id}/attachments/${a.id}`;
+        return (
+          <div key={a.id} className="relative group">
+            <button
+              onClick={() => onView({ src, alt: a.filename })}
+              className="block h-16 w-16 rounded-md overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg-hover)] cursor-zoom-in"
+              title={a.filename}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={src} alt={a.filename} loading="lazy" className="h-full w-full object-cover" />
+            </button>
+            {canDelete(a) && (
+              <button
+                onClick={() => remove(a.id)}
+                disabled={busyId === a.id}
+                className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm disabled:opacity-40"
+                title="Удалить скриншот"
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Кнопка «добавить скриншот» к уже существующей идее (скрытый file input).
+function AddScreenshotButton({ idea, onChanged }: { idea: Idea; onChanged: () => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const remaining = IDEA_ATTACH_MAX_COUNT - idea.attachments.length;
+  if (remaining <= 0) return null;
+
+  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (!files.length) return;
+    const vErr = validateFiles(files, idea.attachments.length);
+    if (vErr) {
+      setError(vErr);
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const upErr = await uploadAttachments(idea.id, files);
+      if (upErr) setError(upErr);
+      else onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        className="inline-flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] disabled:opacity-50"
+      >
+        <ImagePlus size={13} /> {busy ? 'Загрузка…' : 'Скриншот'}
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={IDEA_ATTACH_ALLOWED_MIME.join(',')}
+        multiple
+        hidden
+        onChange={onPick}
+      />
+      {error && <div className="text-[11px] text-[var(--color-negative)] mt-1 basis-full">{error}</div>}
+    </>
+  );
+}
+
+function IdeaCard({ idea, isAdmin, myLogin, onChangeStatus, onView, onAttachmentsChanged }: {
   idea: Idea;
   isAdmin: boolean;
+  myLogin: string | null;
   onChangeStatus: (id: string, status: IdeaStatus) => void;
+  onView: (v: { src: string; alt: string }) => void;
+  onAttachmentsChanged: () => void;
 }) {
   const badge = STATUS_BADGE[idea.status];
+  const canDelete = (a: IdeaAttachment) => isAdmin || (!!myLogin && a.uploadedBy === myLogin);
   return (
     <div className="px-3.5 py-3 rounded-[10px] mb-1.5 border border-[var(--color-border)]">
       <div className="flex items-start justify-between gap-2.5 mb-1">
@@ -112,40 +279,51 @@ function IdeaCard({ idea, isAdmin, onChangeStatus }: {
       <div className="text-[12.5px] leading-[1.45] text-[var(--color-text-muted)] mb-1.5 whitespace-pre-wrap">
         {idea.body}
       </div>
-      <div className="flex items-center justify-between gap-2">
+
+      <AttachmentThumbs idea={idea} canDelete={canDelete} onView={onView} onChanged={onAttachmentsChanged} />
+
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         {idea.authorName && (
           <div className="text-[11.5px] text-[var(--color-text-muted)]">предложил: {idea.authorName}</div>
         )}
-        {isAdmin && (
-          <select
-            value=""
-            onChange={e => {
-              const status = e.target.value as IdeaStatus;
-              if (status) onChangeStatus(idea.id, status);
-            }}
-            className="ml-auto text-[11px] border border-[var(--color-border)] rounded-md px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]"
-          >
-            <option value="">Изменить статус…</option>
-            {ADMIN_STATUS_OPTIONS.filter(o => o.value !== idea.status).map(o => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        )}
+        <div className="flex items-center gap-3 ml-auto">
+          <AddScreenshotButton idea={idea} onChanged={onAttachmentsChanged} />
+          {isAdmin && (
+            <select
+              value=""
+              onChange={e => {
+                const status = e.target.value as IdeaStatus;
+                if (status) onChangeStatus(idea.id, status);
+              }}
+              className="text-[11px] border border-[var(--color-border)] rounded-md px-1.5 py-0.5 bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]"
+            >
+              <option value="">Изменить статус…</option>
+              {ADMIN_STATUS_OPTIONS.filter(o => o.value !== idea.status).map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function ListView({ data, isAdmin, onChangeStatus, onPropose, onCloseMobile }: {
+function ListView({ data, isAdmin, myLogin, onChangeStatus, onPropose, onCloseMobile, onView, onAttachmentsChanged }: {
   data: { planned: Idea[]; proposed: Idea[] } | undefined;
   isAdmin: boolean;
+  myLogin: string | null;
   onChangeStatus: (id: string, status: IdeaStatus) => void;
   onPropose: () => void;
   onCloseMobile: () => void;
+  onView: (v: { src: string; alt: string }) => void;
+  onAttachmentsChanged: () => void;
 }) {
   const planned = data?.planned ?? [];
   const proposed = data?.proposed ?? [];
   const empty = planned.length === 0 && proposed.length === 0;
+
+  const cardProps = { isAdmin, myLogin, onChangeStatus, onView, onAttachmentsChanged };
 
   return (
     <>
@@ -178,7 +356,7 @@ function ListView({ data, isAdmin, onChangeStatus, onPropose, onCloseMobile }: {
               Запланировано
             </div>
             {planned.map(idea => (
-              <IdeaCard key={idea.id} idea={idea} isAdmin={isAdmin} onChangeStatus={onChangeStatus} />
+              <IdeaCard key={idea.id} idea={idea} {...cardProps} />
             ))}
           </div>
         )}
@@ -189,7 +367,7 @@ function ListView({ data, isAdmin, onChangeStatus, onPropose, onCloseMobile }: {
               Предложено
             </div>
             {proposed.map(idea => (
-              <IdeaCard key={idea.id} idea={idea} isAdmin={isAdmin} onChangeStatus={onChangeStatus} />
+              <IdeaCard key={idea.id} idea={idea} {...cardProps} />
             ))}
           </div>
         )}
@@ -205,10 +383,38 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
 }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
+  const [previews, setPreviews] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // object-URL превью выбранных, но ещё не загруженных картинок.
+  useEffect(() => {
+    const urls = files.map(f => URL.createObjectURL(f));
+    setPreviews(urls);
+    return () => urls.forEach(u => URL.revokeObjectURL(u));
+  }, [files]);
 
   const canSubmit = title.trim().length > 0 && body.trim().length > 0 && !saving;
+
+  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (!picked.length) return;
+    const next = [...files, ...picked];
+    const vErr = validateFiles(next, 0);
+    if (vErr) {
+      setError(vErr);
+      return;
+    }
+    setError(null);
+    setFiles(next);
+  }
+
+  function removeFile(i: number) {
+    setFiles(files.filter((_, idx) => idx !== i));
+  }
 
   async function submit() {
     if (!canSubmit) return;
@@ -224,6 +430,16 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
         const data = await res.json().catch(() => ({}));
         setError(data.error ?? 'Не удалось отправить идею');
         return;
+      }
+      const { id } = (await res.json().catch(() => ({}))) as { id?: string };
+      if (id && files.length) {
+        const upErr = await uploadAttachments(id, files);
+        if (upErr) {
+          // идея создана, но часть скринов не прикрепилась — не теряем идею, сообщаем.
+          setError(`Идея создана, но скриншоты не загрузились: ${upErr}`);
+          onSubmitted();
+          return;
+        }
       }
       onSubmitted();
     } catch {
@@ -273,6 +489,44 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
             maxLength={IDEA_BODY_MAX_LEN}
             placeholder="Что именно нужно и зачем — чем подробнее, тем быстрее решим"
             className="w-full h-[110px] resize-none border border-[var(--color-border)] rounded-[9px] px-3 py-2.5 text-[13px] leading-[1.5] text-[var(--color-text)] bg-[var(--color-bg-hover)] placeholder:text-[var(--color-text-muted)]"
+          />
+        </div>
+
+        <div className="mb-4">
+          <label className="block text-xs font-bold text-[var(--color-text)] mb-1.5">
+            Скриншоты <span className="font-normal text-[var(--color-text-muted)]">(необязательно, до {IDEA_ATTACH_MAX_COUNT})</span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {previews.map((src, i) => (
+              <div key={src} className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={src} alt="" className="h-16 w-16 object-cover rounded-md border border-[var(--color-border)]" />
+                <button
+                  onClick={() => removeFile(i)}
+                  className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm"
+                  title="Убрать"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+            {files.length < IDEA_ATTACH_MAX_COUNT && (
+              <button
+                onClick={() => inputRef.current?.click()}
+                className="h-16 w-16 rounded-md border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center justify-center"
+                title="Добавить скриншот"
+              >
+                <ImagePlus size={18} />
+              </button>
+            )}
+          </div>
+          <input
+            ref={inputRef}
+            type="file"
+            accept={IDEA_ATTACH_ALLOWED_MIME.join(',')}
+            multiple
+            hidden
+            onChange={onPick}
           />
         </div>
 
