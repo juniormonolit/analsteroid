@@ -103,8 +103,10 @@ export function renderTemplate(body: string, vars: Record<string, string>): stri
   return body.replace(/\{(\w+)\}/g, (_, key: string) => vars[key] ?? '—');
 }
 
+// floor, не round: 19м31с — это ЕЩЁ НЕ 20 минут (инцидент 14.07 — правило «≥20»
+// сработало на 19-й минуте из-за округления вверх).
 function minutesBetween(from: Date, to: Date): number {
-  return Math.max(0, Math.round((to.getTime() - from.getTime()) / 60_000));
+  return Math.max(0, Math.floor((to.getTime() - from.getTime()) / 60_000));
 }
 
 // Успешный исходящий = дозвонились (для резолва кейса). Порог 5с отсекает
@@ -221,14 +223,18 @@ export async function runCallControlCycle(): Promise<string> {
   }
   await warnIfVaStale(settings.mirrorBitrixUserId);
 
-  // --- 1. Обработка новых событий (по курсору, в порядке id). Источник — ТОЛЬКО
-  // синк va.calls; сырые вебхук-события лежат рядом как запасной канал и в кейсы
-  // не попадают (иначе задвоение: один звонок = две записи с разными event_name).
+  // --- 1. Обработка новых событий (по курсору, в порядке id). ГИБРИД (инцидент
+  // 14.07, ложное уведомление успевшему менеджеру): ПРОПУЩЕННЫЕ — только из синка
+  // va.calls (фильтр «со сделкой» + deal_id), а ИСХОДЯЩИЕ — из ОБОИХ источников:
+  // вебхук Bitrix даёт реалтайм (INIT приходит через секунду после набора), va —
+  // дублирует с лагом. Дубль-обработка одного звонка безопасна: таймер — GREATEST,
+  // резолв идемпотентен. Прочие вебхук-события (входящие) в кейсы не попадают.
   const events = await db.query(
-    `SELECT id, direction, phone_normalized, manager_bitrix_user_id, duration_seconds,
-            is_missed_inbound, crm_deal_id, call_started_at, received_at
+    `SELECT id, event_name, direction, phone_normalized, manager_bitrix_user_id,
+            duration_seconds, is_missed_inbound, crm_deal_id, call_started_at, received_at
      FROM call_events
-     WHERE id > $1 AND event_name = '${VA_EVENT_NAME}' AND phone_normalized IS NOT NULL
+     WHERE id > $1 AND phone_normalized IS NOT NULL
+       AND (event_name = '${VA_EVENT_NAME}' OR direction = 'outbound')
      ORDER BY id
      LIMIT 2000`,
     [settings.lastProcessedEventId]
@@ -238,7 +244,7 @@ export async function runCallControlCycle(): Promise<string> {
   let resolved = 0;
   for (const ev of events.rows) {
     const at: Date = ev.call_started_at ?? ev.received_at;
-    if (ev.is_missed_inbound) {
+    if (ev.is_missed_inbound && ev.event_name === VA_EVENT_NAME) {
       // Пропущенный входящий: открыть/пополнить кейс (телефон+менеджер).
       await db.query(
         `INSERT INTO call_control_cases
@@ -373,6 +379,22 @@ export async function runCallControlCycle(): Promise<string> {
   }
 
   const now = new Date();
+
+  // Гейт данных для МИНУТНЫХ правил (гонка 14.07: перезвон был, но данные о нём
+  // опоздали). «Не перезвонил» можно утверждать, если: вебхук жив (события идут —
+  // попытка исходящего была бы видна через секунды) ИЛИ va-фронтир (max время
+  // звонка в синке) перевалил за дедлайн — все звонки до дедлайна уже в базе.
+  // Ночью оба источника молчат → минутные правила ждут утра (и это правильно).
+  const [webhookLast, vaFrontierRes] = await Promise.all([
+    db.query(`SELECT max(received_at) AS last FROM call_events WHERE event_name <> '${VA_EVENT_NAME}'`),
+    db.query(`SELECT max(call_started_at) AS frontier FROM call_events WHERE event_name = '${VA_EVENT_NAME}'`),
+  ]);
+  const WEBHOOK_FRESH_MS = 15 * 60 * 1000;
+  const webhookFresh =
+    webhookLast.rows[0]?.last != null &&
+    now.getTime() - new Date(webhookLast.rows[0].last).getTime() < WEBHOOK_FRESH_MS;
+  const vaFrontier: Date | null = vaFrontierRes.rows[0]?.frontier ?? null;
+
   let sent = 0;
   for (const c of cases) {
     const org = c.manager_bitrix_user_id ? orgByManager.get(c.manager_bitrix_user_id) : undefined;
@@ -398,7 +420,21 @@ export async function runCallControlCycle(): Promise<string> {
       if (missedGte == null && minutesGte == null) continue; // пустое правило
 
       const condCount = missedGte == null ? null : c.missed_count >= missedGte;
-      const condTime = minutesGte == null ? null : minutesSince >= minutesGte;
+      // Минутное условие (семантика старого missedcalls-бота): N минут без исходящей
+      // ПОПЫТКИ после пропуска. Менеджер набрал клиента — правило молчит (кейс при
+      // этом закрывается только УСПЕШНЫМ дозвоном ≥5с). Плюс гейт данных: шлём,
+      // только когда источники позволяют утверждать «не перезвонил» (см. выше).
+      let condTime: boolean | null = null;
+      if (minutesGte != null) {
+        const noAttemptSinceMiss =
+          c.last_outgoing_at == null ||
+          (c.last_missed_at != null && c.last_outgoing_at < c.last_missed_at);
+        const deadline = c.last_missed_at
+          ? new Date(c.last_missed_at.getTime() + minutesGte * 60_000)
+          : null;
+        const dataGateOk = webhookFresh || (vaFrontier != null && deadline != null && vaFrontier >= deadline);
+        condTime = minutesSince >= minutesGte && noAttemptSinceMiss && dataGateOk;
+      }
       const conds = [condCount, condTime].filter((v): v is boolean => v !== null);
       const fired = rule.operator === 'or' ? conds.some(Boolean) : conds.every(Boolean);
       if (!fired) continue;
