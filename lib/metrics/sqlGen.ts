@@ -1,5 +1,43 @@
 import type { Metric, MetricFilter } from './types';
 
+// ── Реестр «виртуальных» полей повторности / n-й сделки клиента ──────────────
+// Ключ — имя поля в фильтре метрики (по конвенции с ведущим «_»). Значение —
+// как развернуть это поле в подзапрос по ИСТОРИИ КЛИЕНТА (PARTITION BY contact_id
+// + порядковая дата). Эти поля НЕ являются колонками таблицы deals: их НЕЛЬЗЯ
+// клеить как d.<field> (Postgres даст 42703 «column does not exist»). ЕДИНАЯ
+// точка перевода — resolveFilterClause ниже сверяется с этим реестром ПЕРВЫМ
+// делом, поэтому ни один путь построения SQL не эмитит голое d.<виртуальное_поле>.
+//
+// contact_id IS NOT NULL обязателен: без него все NULL-контакты падают в одну
+// партицию и ROW_NUMBER() внутри неё даёт ложные «вторые» сделки (баг №2, Маркус).
+//
+// _ppp/_ppo/_ppb/_pppb — ВТОРАЯ по счёту (rn=2) продажа/отгрузка/бронь/подтв.бронь.
+// _primary_hist/_repeat_hist — первая (rn=1) / повторная (rn>=2) ПРОДАЖА клиента
+//   по истории (sold_at), а не по воронке Bitrix (funnels.is_repeat). Повторная
+//   покупка может пройти через обычную воронку — funnel-счётчик её теряет (#1556).
+// _primary_deliv_hist/_repeat_deliv_hist — то же для ОТГРУЗОК (delivered_at):
+//   первая / повторная отгрузка клиента по истории доставок.
+const CLIENT_HISTORY_FIELDS: Record<string, { orderBy: string; rn: string }> = {
+  _ppp:                { orderBy: 'sold_at',      rn: '= 2'  },
+  _ppo:                { orderBy: 'delivered_at', rn: '= 2'  },
+  _ppb:                { orderBy: 'reserved_at',  rn: '= 2'  },
+  _pppb:               { orderBy: 'confirmed_at', rn: '= 2'  },
+  _primary_hist:       { orderBy: 'sold_at',      rn: '= 1'  },
+  _repeat_hist:        { orderBy: 'sold_at',      rn: '>= 2' },
+  _primary_deliv_hist: { orderBy: 'delivered_at', rn: '= 1'  },
+  _repeat_deliv_hist:  { orderBy: 'delivered_at', rn: '>= 2' },
+};
+
+function clientHistorySubquery(field: string, cfg: { orderBy: string; rn: string }): string {
+  const col = cfg.orderBy;
+  return `d.deal_id IN (
+      SELECT deal_id FROM (
+        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY ${col}) AS rn
+        FROM sa.deals WHERE ${col} IS NOT NULL AND contact_id IS NOT NULL
+      ) ${field}_ranked WHERE rn ${cfg.rn}
+    )`;
+}
+
 export interface DimensionConfig {
   idExpr: string;           // SQL expr for the ID column, e.g. "d.current_manager_id::text"
   nameExpr?: string;        // SQL expr for name (optional, e.g. for product groups)
@@ -11,74 +49,21 @@ export interface DimensionConfig {
 
 export function resolveFilterClause(f: MetricFilter, tableAlias: string): string {
   const a = tableAlias;
-  // _ppp/_ppo/_ppb/_pppb: "вторая по счёту" сделка/бронь клиента за ВСЮ историю
-  // (contact_id), попавшая датой в отчётный период (via date_field конкретной метрики).
-  // contact_id IS NOT NULL — без этого все NULL-контакты (312 сделок на 09.07.2026)
-  // складываются в одну общую партицию, и ROW_NUMBER() внутри неё может случайно дать
-  // rn=2 у не связанных друг с другом сделок (ложные "вторые продажи"). Баг №2, диагноз Маркуса.
-  if (f.field === '_ppp') {
-    return `d.deal_id IN (
-      SELECT deal_id FROM (
-        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at) AS rn
-        FROM sa.deals WHERE sold_at IS NOT NULL AND contact_id IS NOT NULL
-      ) _ppp_ranked WHERE rn = 2
-    )`;
-  }
-  if (f.field === '_ppo') {
-    return `d.deal_id IN (
-      SELECT deal_id FROM (
-        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY delivered_at) AS rn
-        FROM sa.deals WHERE delivered_at IS NOT NULL AND contact_id IS NOT NULL
-      ) _ppo_ranked WHERE rn = 2
-    )`;
-  }
-  // _ppb: вторая по счёту БРОНЬ клиента (reserved_at). _pppb: вторая ПОДТВЕРЖДЁННАЯ
-  // бронь (confirmed_at). Те же правила, что у _ppp/_ppo (см. выше).
-  if (f.field === '_ppb') {
-    return `d.deal_id IN (
-      SELECT deal_id FROM (
-        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY reserved_at) AS rn
-        FROM sa.deals WHERE reserved_at IS NOT NULL AND contact_id IS NOT NULL
-      ) _ppb_ranked WHERE rn = 2
-    )`;
-  }
-  if (f.field === '_pppb') {
-    return `d.deal_id IN (
-      SELECT deal_id FROM (
-        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY confirmed_at) AS rn
-        FROM sa.deals WHERE confirmed_at IS NOT NULL AND contact_id IS NOT NULL
-      ) _pppb_ranked WHERE rn = 2
-    )`;
-  }
-  // _primary_hist/_repeat_hist: "повторность" по ИСТОРИИ КЛИЕНТА (contact_id, sold_at),
-  // а не по тому, в какую воронку Bitrix попала сделка (funnel_type/funnels.is_repeat).
-  // Баг #1556 (Серёга): ППП (_ppp, rn=2 — вторая продажа клиента) > 0, а «Доля повторных
-  // продаж» = 0 — потому что repeat_sales_count считался по funnel_type='repeat'
-  // (funnels.is_repeat), и вторая покупка клиента может пройти через ОБЫЧНУЮ воронку
-  // (ЧЛ/ЮЛ), а не через выделенную «Повторные» — тогда funnel-счётчик даёт 0, хотя
-  // клиент реально купил повторно. Воспроизведено 10.07 на прод-данных: менеджер 1868,
-  // июль 2026 — ppp_count=2, repeat_sales_count(funnel)=0, primary_sales_count=23.
-  // _primary_hist = сделка является ПЕРВОЙ по счёту продажей клиента (rn=1);
-  // _repeat_hist  = сделка НЕ первая, т.е. вторая и далее (rn>=2) — то же определение
-  // «повторности», что и в _ppp/_ppo/_ppb/_pppb. Используются ТОЛЬКО для
-  // repeat_sales_count_pct/repeat_sales_amount_pct (миграция 078) — funnel-based
-  // repeat_sales_count/primary_sales_count оставлены как есть для CR/среднего чека
-  // по воронке (это отдельный, legit процессный срез, не про историю клиента).
-  if (f.field === '_primary_hist') {
-    return `d.deal_id IN (
-      SELECT deal_id FROM (
-        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at) AS rn
-        FROM sa.deals WHERE sold_at IS NOT NULL AND contact_id IS NOT NULL
-      ) _primary_hist_ranked WHERE rn = 1
-    )`;
-  }
-  if (f.field === '_repeat_hist') {
-    return `d.deal_id IN (
-      SELECT deal_id FROM (
-        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY sold_at) AS rn
-        FROM sa.deals WHERE sold_at IS NOT NULL AND contact_id IS NOT NULL
-      ) _repeat_hist_ranked WHERE rn >= 2
-    )`;
+  // Виртуальные поля повторности / n-й сделки клиента (см. CLIENT_HISTORY_FIELDS выше).
+  // ЕДИНАЯ точка перевода: любое такое поле разворачивается в подзапрос по истории
+  // клиента, а НЕ клеится как колонка d.<field> (иначе Postgres 42703). Этот блок
+  // ОБЯЗАН стоять первым — чтобы виртуальное поле не провалилось в generic switch внизу.
+  const chCfg = CLIENT_HISTORY_FIELDS[f.field];
+  if (chCfg) return clientHistorySubquery(f.field, chCfg);
+  // Защита: любое иное поле с ведущим «_» — тоже виртуальное и НЕ является колонкой БД.
+  // Если оно дошло сюда — его забыли добавить в CLIENT_HISTORY_FIELDS. Бросаем явную
+  // ошибку вместо тихого битого SQL «d.<field>» (регрессия #repeat_deliv: 42703 без
+  // сообщения). Так пробел в реестре виден сразу, а не как загадочный 500 на проде.
+  if (f.field.startsWith('_')) {
+    throw new Error(
+      `resolveFilterClause: незарегистрированное виртуальное поле «${f.field}» — ` +
+      `добавьте его в CLIENT_HISTORY_FIELDS; эмитить как колонку d.${f.field} нельзя (42703)`,
+    );
   }
   if (f.field === 'funnel_type') {
     const v = f.value as string;
