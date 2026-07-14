@@ -259,6 +259,17 @@ export async function runCallControlCycle(): Promise<string> {
         [ev.phone_normalized, ev.manager_bitrix_user_id ?? '', ev.crm_deal_id, at]
       );
       opened++;
+    } else if (ev.direction === 'inbound' && !ev.is_missed_inbound && (ev.duration_seconds ?? 0) >= SUCCESS_MIN_DURATION_SEC) {
+      // Клиент сам дозвонился и поговорил — контакт состоялся, кейсы закрываются
+      // (кейс 1782db96, 14.07: клиент дозвонился в 10:01, а бот в 10:28 всё равно
+      // отправил «срочно перезвони»).
+      const r = await db.query(
+        `UPDATE call_control_cases
+         SET status = 'resolved', resolved_at = $2, resolved_call_event_id = $3, updated_at = now()
+         WHERE phone_normalized = $1 AND status = 'open'`,
+        [ev.phone_normalized, at, ev.id]
+      );
+      resolved += r.rowCount ?? 0;
     } else if (ev.direction === 'outbound') {
       // Любая попытка исходящего — обновляет таймер «без исходящего» по всем
       // открытым кейсам этого телефона (перезвонить может и коллега).
@@ -286,6 +297,44 @@ export async function runCallControlCycle(): Promise<string> {
       [events.rows[events.rows.length - 1].id]
     );
   }
+
+  // --- 1б. Сверка-ретроспектива (кейс 1782db96, 14.07): события приходят в
+  // ПРОИЗВОЛЬНОМ порядке (va отдала перезвон РАНЬШЕ самого пропущенного, лаг 31 мин)
+  // — последовательный курсор такое не ловит: перезвон обработан, когда кейса ещё
+  // не было. Поэтому каждый тик, ДО оценки правил, идемпотентная сверка по всей
+  // недавней истории call_events (оба источника): состоявшийся контакт (исходящий
+  // ≥5с ИЛИ отвеченный входящий ≥5с) после последнего пропуска → кейс резолвится;
+  // любая исходящая попытка после пропуска → обновляет last_outgoing_at.
+  const reconciled = await db.query(
+    `WITH contacts AS (
+       SELECT phone_normalized, max(COALESCE(call_started_at, received_at)) AS at
+       FROM call_events
+       WHERE received_at > now() - interval '48 hours'
+         AND duration_seconds >= ${SUCCESS_MIN_DURATION_SEC}
+         AND (direction = 'outbound' OR (direction = 'inbound' AND NOT is_missed_inbound))
+       GROUP BY phone_normalized
+     )
+     UPDATE call_control_cases c
+     SET status = 'resolved', resolved_at = s.at, updated_at = now()
+     FROM contacts s
+     WHERE c.status = 'open' AND c.phone_normalized = s.phone_normalized
+       AND s.at >= c.last_missed_at`
+  );
+  resolved += reconciled.rowCount ?? 0;
+  await db.query(
+    `WITH attempts AS (
+       SELECT phone_normalized, max(COALESCE(call_started_at, received_at)) AS at
+       FROM call_events
+       WHERE received_at > now() - interval '48 hours' AND direction = 'outbound'
+       GROUP BY phone_normalized
+     )
+     UPDATE call_control_cases c
+     SET last_outgoing_at = s.at, updated_at = now()
+     FROM attempts s
+     WHERE c.status = 'open' AND c.phone_normalized = s.phone_normalized
+       AND s.at >= c.last_missed_at
+       AND (c.last_outgoing_at IS NULL OR s.at > c.last_outgoing_at)`
+  );
 
   // --- 2. Оценка правил по открытым кейсам ---
   const [rulesRes, templatesRes, casesRes] = await Promise.all([
