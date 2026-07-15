@@ -227,7 +227,11 @@ export async function POST(req: NextRequest) {
   }
 
   // Fetch plan data for external metrics
-  const planMetricIds = ['plan_sales_month', 'plan_shipments_month', 'plan_sales_today', 'plan_shipments_today'];
+  const planMetricIds = [
+    'plan_sales_month', 'plan_shipments_month',
+    'plan_sales_today', 'plan_shipments_today',
+    'plan_sales_current_day', 'plan_shipments_current_day',
+  ];
   const hasAnyPlanMetric = withDeps.some(m => planMetricIds.includes(m.id));
 
   if (hasAnyPlanMetric) {
@@ -281,54 +285,53 @@ export async function POST(req: NextRequest) {
       return planByLogin;
     };
 
-    // «План (на сегодня)» — задача 10.07: считается ПО ВЫБРАННОМУ ПЕРИОДУ (у currentRows —
-    // opts.period, у compRows — compOpts.period, каждый по СВОЕМУ, симметрично тому, как
-    // ниже считаются totals current/comparison), а не по реальному "сегодня" как раньше.
-    // См. computePeriodPlanByLogin выше.
-    const [planByLoginCurrent, planByLoginComp, periodPlanCurrent, periodPlanComp] = await Promise.all([
+    // ПЕРЕОПРЕДЕЛЕНИЕ 14.07 (задача Иосифа): «План (на сегодня)» = «План (месяц)» ÷ 20 —
+    // константный дневной план, БЕЗ накопления по периоду (прежняя период-накопительная
+    // семантика жила здесь с задачи 10.07; computePeriodPlanByLogin ниже сохраняется —
+    // на нём по-прежнему считаются «Выполнение плана % (день)/(неделя)»).
+    // Новые «План (на тек. день)» = дневной × порядковый номер рабочего дня СЕГОДНЯ
+    // (МСК) в текущем месяце ПО ПРОИЗВОДСТВЕННОМУ КАЛЕНДАРЮ (working_calendar,
+    // getCalendarWorkingDaysInPeriod — не зависит от режима ÷20). В нерабочий день
+    // номер = числу прошедших рабочих дней месяца.
+    // DateRange для getCalendarWorkingDaysInPeriod: полночь/конец дня UTC — тогда
+    // «полуденный» приём periodDateStrFromInstant внутри вернёт ровно эти даты.
+    // null (календарь не заполнен на месяц) → «(на тек. день)» честно null.
+    const mskMonthStartStr = `${mskTodayStr.slice(0, 7)}-01`;
+    const [planByLoginCurrent, planByLoginComp, workdayNum] = await Promise.all([
       loadPlanByLogin(periodFromStr, periodToStr),
       loadPlanByLogin(compPeriodFromStr, compPeriodToStr),
-      computePeriodPlanByLogin(periodFromStr, periodToStr, mskTodayStr),
-      computePeriodPlanByLogin(compPeriodFromStr, compPeriodToStr, mskTodayStr),
+      getCalendarWorkingDaysInPeriod({
+        from: new Date(`${mskMonthStartStr}T00:00:00.000Z`),
+        to: new Date(`${mskTodayStr}T23:59:59.999Z`),
+      }),
     ]);
 
     const enrichRow = (
       row: ReportRow,
       planByLogin: Map<string, { plan_shipments: number; plan_n: number }>,
-      periodPlan: Map<string, PeriodPlanEntry>,
     ): ReportRow => {
       const login = row.dimensionSubtitle;
       const plan = login ? planByLogin.get(login) : undefined;
-      const periodPlanEntry = login ? periodPlan.get(login) : undefined;
-      if (!plan) {
-        // «План (месяц)» на месяцы ЭТОГО периода нет — но «План (на сегодня)» может
-        // всё равно быть (разные наборы месяцев, см. computePeriodPlanByLogin) —
-        // не выходим раньше времени, как было (потеряло бы plan_sales_today).
-        if (!periodPlanEntry) return row;
-        return {
-          ...row,
-          metrics: {
-            ...row.metrics,
-            plan_sales_today: periodPlanEntry.planSales,
-            plan_shipments_today: periodPlanEntry.planShipments,
-          },
-        };
-      }
+      if (!plan) return row;
       const planSalesMonth = plan.plan_shipments / plan.plan_n;
       const planShipmentsMonth = plan.plan_shipments;
+      const dailySales = planSalesMonth / 20;
+      const dailyShipments = planShipmentsMonth / 20;
       return {
         ...row,
         metrics: {
           ...row.metrics,
           plan_sales_month: planSalesMonth,
           plan_shipments_month: planShipmentsMonth,
-          plan_sales_today: periodPlanEntry ? periodPlanEntry.planSales : null,
-          plan_shipments_today: periodPlanEntry ? periodPlanEntry.planShipments : null,
+          plan_sales_today: dailySales,
+          plan_shipments_today: dailyShipments,
+          plan_sales_current_day: workdayNum == null ? null : dailySales * workdayNum,
+          plan_shipments_current_day: workdayNum == null ? null : dailyShipments * workdayNum,
         }
       };
     };
-    currentRows = currentRows.map(r => enrichRow(r, planByLoginCurrent, periodPlanCurrent.byLogin));
-    compRows = compRows.map(r => enrichRow(r, planByLoginComp, periodPlanComp.byLogin));
+    currentRows = currentRows.map(r => enrichRow(r, planByLoginCurrent));
+    compRows = compRows.map(r => enrichRow(r, planByLoginComp));
   }
 
   // Метрики «Выполнение плана продаж/отгрузок, % (день)/(неделя)» — задача 10.07 (фикс
