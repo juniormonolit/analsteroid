@@ -330,6 +330,65 @@ export async function POST(req: NextRequest) {
         }
       };
     };
+    // Дорисовка строк (баг 15.07, скрин Иосифа: «Итого План (на сегодня)» менялось от
+    // периода — 9 218 750 за 01–14.07 против 7 750 000 за 15.07): строки отчёта
+    // «по менеджерам» строятся ИЗ СДЕЛОК периода, и менеджер с планом, но без сделок,
+    // выпадал из таблицы вместе со своим планом. Теперь при запрошенных план-метриках
+    // такие менеджеры добавляются пустыми строками (план-метрики заполнит enrichRow
+    // ниже, остальное — null). Фильтры отделов/типа аккаунтов уважаются — той же
+    // логикой, что в fetchByManagers (org_resolved_hierarchy + departments + employees).
+    if (reportSlug === 'by-managers') {
+      const appendPlanOnlyRows = async (rows: ReportRow[], planByLogin: Map<string, { plan_shipments: number; plan_n: number }>) => {
+        const present = new Set(rows.map(r => r.dimensionSubtitle).filter(Boolean));
+        const missing = [...planByLogin.keys()].filter(l => !present.has(l));
+        if (missing.length === 0) return rows;
+        const [org, allowed, logins] = await Promise.all([
+          sysDb.query<{ short_login: string; bitrix_user_id: string; manager_name: string; department_id: string | null; department_name: string | null; branch: string | null }>(
+            `SELECT short_login, manager_bitrix_user_id AS bitrix_user_id, manager_name,
+                    department_id, department_name, branch
+             FROM org_resolved_hierarchy WHERE is_active AND short_login = ANY($1)`,
+            [missing]
+          ),
+          (departmentIds?.length
+            ? sysDb.query<{ bitrix_user_id: string }>(
+                `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
+                 FROM org_resolved_hierarchy orh
+                 WHERE orh.department_id IN (
+                   SELECT id FROM departments WHERE bitrix_department_id::text = ANY($1)
+                 ) AND orh.is_active`,
+                [departmentIds]
+              )
+            : Promise.resolve(null)),
+          (accountType !== 'all'
+            ? sysDb.query<{ bitrix_user_id: string; bitrix_login: string | null }>(
+                `SELECT bitrix_user_id::text AS bitrix_user_id, bitrix_login FROM employees WHERE is_active = true`
+              )
+            : Promise.resolve(null)),
+        ]);
+        const allowedSet = allowed ? new Set(allowed.rows.map(r => r.bitrix_user_id)) : null;
+        const loginByBitrix = logins ? new Map(logins.rows.map(r => [r.bitrix_user_id, (r.bitrix_login ?? '').toLowerCase()])) : null;
+        const accountPrefix = accountType === 'managers' ? 'manager' : accountType === 'logists' ? 'logist' : null;
+        for (const o of org.rows) {
+          if (allowedSet && !allowedSet.has(o.bitrix_user_id)) continue;
+          if (accountPrefix && loginByBitrix && !(loginByBitrix.get(o.bitrix_user_id) ?? '').startsWith(accountPrefix)) continue;
+          rows.push({
+            dimensionId: o.bitrix_user_id,
+            dimensionName: o.manager_name ?? o.short_login,
+            dimensionSubtitle: o.short_login,
+            teamId: o.department_id,
+            teamName: o.department_name,
+            branchName: o.branch ?? 'СПб',
+            metrics: {},
+          });
+        }
+        return rows;
+      };
+      [currentRows, compRows] = await Promise.all([
+        appendPlanOnlyRows(currentRows, planByLoginCurrent),
+        appendPlanOnlyRows(compRows, planByLoginComp),
+      ]);
+    }
+
     currentRows = currentRows.map(r => enrichRow(r, planByLoginCurrent));
     compRows = compRows.map(r => enrichRow(r, planByLoginComp));
   }
