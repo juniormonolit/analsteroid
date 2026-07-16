@@ -6,6 +6,7 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { hasPerm } from '@/lib/auth/perms';
 import type { SessionUser } from '@/lib/auth/session';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
+import { useAccountDepartments } from '@/lib/hooks/useAccountDepartments';
 import { FilterBar, countAllDepartmentIds } from './FilterBar';
 import { ReportToolbar } from './ReportToolbar';
 import { MobileReportBar } from './MobileReportBar';
@@ -290,7 +291,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // через useEffect ниже, так что порядок приоритета верный.
   const [metricIds, setMetricIds]       = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
   const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
-  const [departmentIds, setDepartmentIds] = useState<string[]>([]);
+  // Выбор отделов — настройка АККАУНТА, не отчёта (задача Иосифа 15.07, миграция 102):
+  // одно значение на пользователя для всех отчётов; из конфигов сохранённых отчётов
+  // departmentIds больше не применяется (см. пропуск в useEffect preset ниже).
+  const { departmentIds, ready: departmentsReady, setDepartmentIds } = useAccountDepartments();
   const [comparisonDisplay, setComparisonDisplay] = useState<ComparisonDisplay>('current');
   const [metricDisplayModes, setMetricDisplayModes] = useState<Record<string, ComparisonDisplay>>({});
   const [comparisonThreshold, setComparisonThreshold] = useState<number>(5);
@@ -380,7 +384,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     setMetricDisplayModes(preset.metricDisplayModes ?? {});
     setComparisonThreshold(preset.comparisonThreshold ?? 5);
     setProductGroupMode(preset.productGroupMode);
-    setDepartmentIds(preset.departmentIds);
+    // preset.departmentIds сознательно НЕ применяется: выбор отделов — настройка
+    // аккаунта (useAccountDepartments), сохранённый отчёт её не перетирает.
     const ids = preset.metricIds.length ? preset.metricIds : ['all_core'];
     setMetricIds(ids);
     setFetchedMetricIds(ids);
@@ -447,6 +452,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     },
     staleTime: 2 * 60 * 1000, // 2 min — prevent silent refetch on window focus
     refetchOnWindowFocus: false,
+    // Не стартуем, пока не загрузился аккаунтный выбор отделов — иначе первый запрос
+    // ушёл бы без фильтра и отчёт мигал нефильтрованными данными.
+    enabled: departmentsReady,
   });
 
   const { data: globalHighlights } = useQuery({
