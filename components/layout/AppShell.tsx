@@ -6,11 +6,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3, Truck, Megaphone, UserPlus,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
-  Bookmark, BookOpen, Trash2, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, Lightbulb,
-  RotateCcw,
+  Bookmark, BookOpen, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid,
 } from 'lucide-react';
-import { format } from 'date-fns';
-import { ru } from 'date-fns/locale';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
 import { Avatar } from '@/components/ui/Avatar';
@@ -37,10 +34,12 @@ import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 const SIDEBAR_WIDTH_EXPANDED = 305;
 const SIDEBAR_WIDTH_COLLAPSED = 52;
 
-/* Общий паттерн пункта 1-го уровня (NAV-блок, Сводная/Планы/Декомпозиция,
-   Метрики/Настройки) — редизайн сайдбара, итерация 3 (бриф Виктора). */
+/* Общий паттерн пункта 1-го уровня — дизайн-проход 16.07 (задача Иосифа
+   «пункты должны читаться»): чуть выше строка (py-2), крупнее межиконный зазор,
+   font-medium у неактивных (не полужирный — контраст с активным сохраняется),
+   иконка подсвечивается на hover всей строки (group). */
 const NAV_ITEM_BASE =
-  'flex items-start gap-2.5 px-2 py-1.5 mx-1 my-0.5 rounded-lg text-sm leading-[1.35] relative transition-colors';
+  'group flex items-start gap-3 px-2.5 py-2 mx-1 my-0.5 rounded-[10px] text-[13.5px] font-medium leading-[1.35] relative transition-colors';
 const NAV_ITEM_ACTIVE = 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)] font-semibold';
 const NAV_ITEM_INACTIVE = 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]';
 // Левая акцентная полоска активного пункта — аналог .sb-item.active::before из мока.
@@ -48,7 +47,9 @@ const NAV_ITEM_ACTIVE_BAR =
   "before:content-[''] before:absolute before:left-[-10px] before:top-[6px] before:bottom-[6px] before:w-[3px] before:rounded-r before:bg-[var(--color-sidebar-active)]";
 
 function navIconCls(active: boolean) {
-  return active ? 'text-[var(--color-sidebar-active)] mt-px' : 'text-[var(--color-sidebar-text-muted)] mt-px';
+  return active
+    ? 'text-[var(--color-sidebar-active)] mt-px'
+    : 'text-[var(--color-sidebar-text-muted)] mt-px transition-colors group-hover:text-[var(--color-sidebar-active)]';
 }
 
 // Тултип пункта навигации на свёрнутой рельсе (задача 1688, кейс 6 UI/UX-
@@ -136,9 +137,6 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   const [openStd, setOpenStd] = useState(true);
   const [openFav, setOpenFav] = useState(true);
   const [openShared, setOpenShared] = useState(true);
-  // Корзина (бриф 09.07, п.2): ВСЕГДА свёрнута по умолчанию, даже когда «Продажи»/
-  // «Роп монитор»/«Избранное» развёрнуты — независимое состояние, не связано с ними.
-  const [openTrash, setOpenTrash] = useState(false);
   const qc = useQueryClient();
 
   const { data: savedReports = [] } = useQuery<SavedReport[]>({
@@ -151,34 +149,8 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
     staleTime: 30_000,
   });
 
-  // Корзина: свои удалённые личные отчёты видит любой; удалённые витринные —
-  // только admin (action.shared_reports.manage) — сервер уже фильтрует по этому
-  // праву (GET /api/saved-reports/trash), клиент просто рендерит, что пришло.
-  const { data: trashedReports = [] } = useQuery<TrashedReport[]>({
-    queryKey: ['saved-reports-trash'],
-    queryFn: async () => {
-      const res = await fetch('/api/saved-reports/trash');
-      if (!res.ok) return [];
-      return res.json();
-    },
-    staleTime: 30_000,
-  });
-
-  async function restoreReport(id: string, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    await fetch(`/api/saved-reports/${id}/restore`, { method: 'POST' });
-    qc.invalidateQueries({ queryKey: ['saved-reports'] });
-    qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
-  }
-
-  async function permanentlyDelete(id: string, name: string, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!confirm(`Удалить отчёт «${name}» навсегда? Это нельзя отменить.`)) return;
-    await fetch(`/api/saved-reports/${id}/permanent`, { method: 'DELETE' });
-    qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
-  }
+  // Корзина отчётов переехала в ЛК (ReportsTrashCard, задача Иосифа 16.07 —
+  // оптимизация меню): здесь остался только список живых отчётов.
 
   // Переименование/удаление отчёта (задача 1605, финальное решение владельца
   // 10.07/3): раньше карандаш+корзинка жили тут, в строке сайдбара — владелец
@@ -386,62 +358,6 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         )}
       </div>
 
-      {/* Корзина (бриф 09.07, п.2) — ВНИЗУ списка отчётов, после витрин/избранного,
-          всегда свёрнута по умолчанию (openTrash инициализирован false, независимо
-          от остальных под-групп). Свои удалённые видит любой; удалённые витринные —
-          только admin (сервер уже отфильтровал, см. GET /api/saved-reports/trash). */}
-      <div className={subgroupCls}>
-        <button onClick={() => setOpenTrash(v => !v)} className={subgroupLabelCls}>
-          <Trash2 size={11} />
-          <span className="flex-1 text-left">Корзина</span>
-          {trashedReports.length > 0 && (
-            <span className="shrink-0 min-w-[16px] h-4 px-1 rounded-full bg-[var(--color-sidebar-border)] text-[var(--color-sidebar-text-muted)] text-[9px] font-bold flex items-center justify-center">
-              {trashedReports.length}
-            </span>
-          )}
-          {openTrash ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        </button>
-        {openTrash && (
-          trashedReports.length === 0 ? (
-            <div className="text-xs text-[var(--color-sidebar-text-muted)] py-1 px-1">
-              Корзина пуста
-            </div>
-          ) : (
-            trashedReports.map(r => (
-              <div key={r.id} className="flex flex-col gap-0.5 py-1.5 px-2 my-0.5 text-[13px] rounded-[7px]">
-                <div className="flex items-start gap-1.5">
-                  <span className="flex-1 min-w-0 break-words line-clamp-2 text-[var(--color-sidebar-text-muted)]" title={r.name}>
-                    {r.name}
-                    {r.isShared && (
-                      <span className="ml-1.5 align-middle inline-block px-1 py-px text-[9px] rounded bg-[var(--color-sidebar-border)] text-[var(--color-sidebar-text-muted)]">
-                        витрина
-                      </span>
-                    )}
-                  </span>
-                </div>
-                <div className="text-[10.5px] text-[var(--color-sidebar-text-muted)] opacity-80">
-                  {format(new Date(r.deletedAt), 'd MMM, HH:mm', { locale: ru })}
-                  {r.deletedBy && ` · ${r.deletedBy}`}
-                </div>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <button
-                    onClick={e => restoreReport(r.id, e)}
-                    className="flex items-center gap-1 text-[11px] text-[var(--color-accent)] hover:underline"
-                  >
-                    <RotateCcw size={11} /> Восстановить
-                  </button>
-                  <button
-                    onClick={e => permanentlyDelete(r.id, r.name, e)}
-                    className="flex items-center gap-1 text-[11px] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-negative)]"
-                  >
-                    <Trash2 size={11} /> Удалить навсегда
-                  </button>
-                </div>
-              </div>
-            ))
-          )
-        )}
-      </div>
     </div>
   );
 }
@@ -473,7 +389,7 @@ const NAV: NavItem[] = [
    <aside> и мобильного off-canvas drawer, поэтому вынесено из AppShell. */
 function SidebarBody({
   collapsed, pathname, user, expanded, setExpanded, logout,
-  changelogOpen, onOpenChangelog, ideasOpen, onOpenIdeas,
+  changelogOpen, onOpenChangelog,
 }: {
   collapsed: boolean;
   pathname: string;
@@ -483,12 +399,27 @@ function SidebarBody({
   logout: () => void;
   changelogOpen: boolean;
   onOpenChangelog: () => void;
-  ideasOpen: boolean;
-  onOpenIdeas: () => void;
 }) {
   const salesActive = pathname.startsWith('/sales');
   const showSummaryBlock = hasPerm(user, 'section.summary') || hasPerm(user, 'section.plans') || hasPerm(user, 'section.decomposition');
   const showMetricsBlock = hasPerm(user, 'section.metrics') || hasPerm(user, 'section.settings');
+
+  // «Ещё ▸» (оптимизация 16.07): второстепенные разделы одним свёрнутым пунктом.
+  const moreItems = [
+    { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: hasPerm(user, 'section.summary') },
+    { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
+    { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },
+    { href: '/metrics', label: 'Метрики', icon: <BarChart2 size={18} />, ok: hasPerm(user, 'section.metrics') },
+  ].filter(i => i.ok);
+  const moreActive = moreItems.some(i => pathname.startsWith(i.href));
+  // Авто-раскрытие, когда пользователь В одном из спрятанных разделов — активный
+  // пункт не должен быть невидимым (и при навигации туда извне, поэтому effect,
+  // а не только начальное значение). Закрыть руками можно в любой момент.
+  const [moreOpen, setMoreOpen] = useState(moreActive);
+  useEffect(() => {
+    if (moreActive) setMoreOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
   // «Что изменилось?» — пункт внизу сайдбара (задача владельца, макет
   // changelog-notifications-mock.html): доступен всем, независимо от ролей/прав.
   const { data: changelogData } = useChangelogQuery();
@@ -622,60 +553,46 @@ function SidebarBody({
             ))}
           </nav>
 
-          {/* Сводная + Планы + Декомпозиция — рендерим блок целиком только если
-              есть право хотя бы на один из трёх пунктов, иначе на светлой панели
-              висит одинокая линия-разделитель над футером у обычных юзеров. */}
-          {showSummaryBlock && (
+          {/* ── Нижняя зона (оптимизация 16.07, задача Иосифа «без вертикального
+              скролла»): Сводная/Планы/Декомпозиция/Метрики свёрнуты в «Ещё ▸»
+              (авто-раскрыт, когда открыт один из его разделов), видимыми остались
+              только «Настройки» и «Что изменилось?». «Идеи и планы» переехали
+              кнопкой в шапку панели ченджлога, «Корзина» — в ЛК. */}
+          {(showSummaryBlock || showMetricsBlock) && (
             <div className="border-t border-[var(--color-sidebar-border)] pt-1 px-2">
-              {hasPerm(user, 'section.summary') && (
-                <RailTooltip collapsed={collapsed} label="Сводная">
-                  <Link
-                    href="/summary"
-                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/summary') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                  >
-                    <span className={navIconCls(pathname.startsWith('/summary'))}><Gauge size={18} /></span>
-                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Сводная</span>}
-                  </Link>
-                </RailTooltip>
-              )}
-              {hasPerm(user, 'section.plans') && (
-                <RailTooltip collapsed={collapsed} label="Планы">
-                  <Link
-                    href="/plans"
-                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/plans') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                  >
-                    <span className={navIconCls(pathname.startsWith('/plans'))}><ClipboardList size={18} /></span>
-                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Планы</span>}
-                  </Link>
-                </RailTooltip>
-              )}
-              {hasPerm(user, 'section.decomposition') && (
-                <RailTooltip collapsed={collapsed} label="Декомпозиция">
-                  <Link
-                    href="/decomposition"
-                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/decomposition') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                  >
-                    <span className={navIconCls(pathname.startsWith('/decomposition'))}><Network size={18} /></span>
-                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Декомпозиция</span>}
-                  </Link>
-                </RailTooltip>
-              )}
-            </div>
-          )}
-
-          {/* Метрики + Настройки — по правам */}
-          {showMetricsBlock && (
-            <div className="pt-1 px-2">
-              {hasPerm(user, 'section.metrics') && (
-                <RailTooltip collapsed={collapsed} label="Метрики">
-                  <Link
-                    href="/metrics"
-                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/metrics') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                  >
-                    <span className={navIconCls(pathname.startsWith('/metrics'))}><BarChart2 size={18} /></span>
-                    {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Метрики</span>}
-                  </Link>
-                </RailTooltip>
+              {moreItems.length > 0 && (
+                <>
+                  <RailTooltip collapsed={collapsed} label="Ещё">
+                    <button
+                      type="button"
+                      onClick={() => setMoreOpen(v => !v)}
+                      className={`w-full ${NAV_ITEM_BASE} ${moreActive && !moreOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                    >
+                      <span className={navIconCls(moreActive && !moreOpen)}><LayoutGrid size={18} /></span>
+                      {!collapsed && <>
+                        <span className="flex-1 min-w-0 text-left">Ещё</span>
+                        <ChevronRight
+                          size={14}
+                          className={`text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0 transition-transform duration-200 ${moreOpen ? 'rotate-90' : ''}`}
+                        />
+                      </>}
+                    </button>
+                  </RailTooltip>
+                  {moreOpen && moreItems.map(mi => {
+                    const active = pathname.startsWith(mi.href);
+                    return (
+                      <RailTooltip key={mi.href} collapsed={collapsed} label={mi.label}>
+                        <Link
+                          href={mi.href}
+                          className={`${NAV_ITEM_BASE} ${collapsed ? '' : 'ml-4'} ${active ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                        >
+                          <span className={navIconCls(active)}>{mi.icon}</span>
+                          {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{mi.label}</span>}
+                        </Link>
+                      </RailTooltip>
+                    );
+                  })}
+                </>
               )}
               {hasPerm(user, 'section.settings') && (
                 <RailTooltip collapsed={collapsed} label="Настройки">
@@ -691,25 +608,9 @@ function SidebarBody({
             </div>
           )}
 
-          {/* «Идеи и планы» — бэклог идей (макет ideas-backlog-mock.html), НАД
-              «Что изменилось?», виден всем независимо от прав, как и ченджлог. */}
-          <div className="pt-1 px-2">
-            <RailTooltip collapsed={collapsed} label="Идеи и планы">
-              <button
-                type="button"
-                onClick={onOpenIdeas}
-                className={`w-full ${NAV_ITEM_BASE} ${ideasOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-              >
-                <span className={navIconCls(ideasOpen)}><Lightbulb size={18} /></span>
-                {!collapsed && (
-                  <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Идеи и планы</span>
-                )}
-              </button>
-            </RailTooltip>
-          </div>
-
-          {/* «Что изменилось?» — ченджлог, виден всем независимо от прав (п.4 задачи) */}
-          <div className="pt-1 px-2">
+          {/* «Что изменилось?» — ченджлог, виден всем независимо от прав (п.4 задачи);
+              «Есть идея?» живёт в шапке его панели (оптимизация 16.07). */}
+          <div className="pb-1 px-2">
             <RailTooltip
               collapsed={collapsed}
               label={unreadCount > 0 ? `Что изменилось? · ${unreadCount > 99 ? '99+' : unreadCount}` : 'Что изменилось?'}
@@ -859,7 +760,6 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             collapsed={collapsed} pathname={pathname} user={user}
             expanded={expanded} setExpanded={setExpanded} logout={logout}
             changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
-            ideasOpen={ideasOpen} onOpenIdeas={() => setIdeasOpen(true)}
           />
         </aside>
 
@@ -892,7 +792,6 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                 collapsed={false} pathname={pathname} user={user}
                 expanded={expanded} setExpanded={setExpanded} logout={logout}
                 changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
-                ideasOpen={ideasOpen} onOpenIdeas={() => setIdeasOpen(true)}
               />
             </aside>
           </div>
@@ -919,7 +818,12 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           </main>
         </div>
       </div>
-      {changelogOpen && <ChangelogPanel onClose={() => setChangelogOpen(false)} />}
+      {changelogOpen && (
+        <ChangelogPanel
+          onClose={() => setChangelogOpen(false)}
+          onOpenIdeas={() => setIdeasOpen(true)}
+        />
+      )}
       {ideasOpen && <IdeasPanel onClose={() => setIdeasOpen(false)} />}
       </TooltipProvider>
     </QueryProvider>

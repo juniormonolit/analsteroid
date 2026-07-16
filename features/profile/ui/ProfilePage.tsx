@@ -9,6 +9,7 @@ import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 import { useTableScale, type TableScalePct } from '@/lib/hooks/useTableScale';
 import { useTheme, type Theme } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
+import { ReportsTrashCard } from './ReportsTrashCard';
 import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 
 interface Me {
@@ -305,6 +306,9 @@ export function ProfilePage() {
         {me && (me.user.isSuperadmin || (me.user.rawRoleName && ROSTER_ROLES.has(me.user.rawRoleName))) && (
           <DeptRosterGrid />
         )}
+
+        {/* Корзина отчётов — переехала из сайдбара (оптимизация меню, 16.07) */}
+        <ReportsTrashCard />
 
         {/* Уведомления — заглушка под будущий конструктор */}
         <div className={cardCls}>

@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { X, Bell } from 'lucide-react';
+import { X, Bell, Lightbulb } from 'lucide-react';
 import { format, isToday, isYesterday } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
@@ -18,6 +18,9 @@ function dateLabel(d: Date): string {
 
 interface Props {
   onClose: () => void;
+  /** «Есть идея?» — переехала сюда из отдельного пункта сайдбара (оптимизация
+   *  меню 16.07): кнопка в шапке открывает IdeasPanel поверх. */
+  onOpenIdeas?: () => void;
 }
 
 /**
@@ -26,7 +29,7 @@ interface Props {
  * немодальном (не docked) режиме: fixed-бэкдроп + fixed-панель справа,
  * PanelCloseTab первым ребёнком, useSlideClose для плавного закрытия (п. Н3 спеки).
  */
-export function ChangelogPanel({ onClose }: Props) {
+export function ChangelogPanel({ onClose, onOpenIdeas }: Props) {
   const { data } = useChangelogQuery();
   const qc = useQueryClient();
   const { closing, requestClose } = useSlideClose(onClose);
@@ -86,9 +89,17 @@ export function ChangelogPanel({ onClose }: Props) {
             <Bell size={16} className="text-[var(--color-accent)]" />
             Что изменилось?
           </h2>
+          {onOpenIdeas && (
+            <button
+              onClick={onOpenIdeas}
+              className="ml-auto flex items-center gap-1 text-xs font-semibold text-[var(--color-accent)] shrink-0 self-center rounded-lg px-2 py-1 transition-colors hover:bg-[var(--color-accent-soft)]"
+            >
+              <Lightbulb size={13} /> Есть идея?
+            </button>
+          )}
           <button
             onClick={markAllRead}
-            className="ml-auto text-xs font-semibold text-[var(--color-accent)] hover:underline shrink-0 self-center"
+            className={`${onOpenIdeas ? '' : 'ml-auto '}text-xs font-semibold text-[var(--color-accent)] hover:underline shrink-0 self-center`}
           >
             Отметить всё прочитанным
           </button>
