@@ -6,6 +6,7 @@ import { fetchTouchSpeedAllByManager } from '@/features/reports/engine/callsMetr
 import { enrichManagerRowsForMetrics } from '@/features/reports/engine/enrichManagerRows';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { branchLabel } from '@/lib/org/branchLabel';
+import { loadDepartments, type DeptRow } from '@/lib/org/deptCategories';
 import { toSqlInterval, previousPeriodSameLength, type DateRange } from '@/lib/period';
 import type { ClientType, ReportRow, ProductGroupMode, DataType } from '@/lib/metrics/types';
 import { getRawScoringWeights, AXIS_KEYS as WEIGHTED_AXIS_KEYS, type AxisKey as WeightAxisKey } from '@/lib/settings/scoringWeights';
@@ -450,6 +451,12 @@ export interface ManagerCardResult {
     branch: string | null;
   };
   rating: { value: number | null; rank: number | null; deptSize: number };
+  /** Лесенка мест (задача Иосифа 16.07): отдел → департамент (ближайший предок
+   *  «Департамент …»; у Москвы/Краснодара/стажировки его нет — уровень пропускается,
+   *  «показываем филиал») → филиал → страна (все активные менеджеры). Ранжирование —
+   *  тем же ratingFor по общему пулу нормировки, что и рейтинг. Отсутствует у
+   *  карточки ОТДЕЛА (buildDepartmentCard — там прежний «#N среди отделов»). */
+  ranks?: RankEntry[];
   radar: { axes: AxisResult[] };
   /** Плитки итогов (задача 10.07 карточка v4, п.1) — набор И порядок из шаблона
    *  карточки (card_templates.tiles, произвольные метрики полного каталога, без
@@ -461,6 +468,13 @@ export interface ManagerCardResult {
   meta: { period: { from: string; to: string }; comparisonPeriod: { from: string; to: string }; touchSpeedAvailable: boolean };
 }
 
+export interface RankEntry {
+  key: 'department' | 'division' | 'branch' | 'country';
+  label: string;
+  rank: number | null;
+  size: number;
+}
+
 export async function buildManagerCard(opts: ManagerCardOptions): Promise<ManagerCardResult | { error: string }> {
   const { managerId, period, segment } = opts;
   const clientType = segmentToClientType(segment);
@@ -469,14 +483,16 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
   const prevPeriod = opts.comparisonPeriod ?? previousPeriod(period);
   const productGroupMode: ProductGroupMode = opts.productGroupMode ?? 'kc';
 
-  const sysDb = systemDb();
-  const orgRes = await sysDb.query<{
+  // Оргструктура — из ЖИВОЙ sa (переезд 13.07, задача Серёги); system(YC) заморожен.
+  // teamRoster/DeptRosterGrid уже читают sa — карточка теперь консистентна с сеткой.
+  const saDb = analyticsDb();
+  const orgRes = await saDb.query<{
     bitrix_user_id: string; manager_name: string; department_id: string | null;
     department_name: string | null; branch: string | null; short_login: string | null;
   }>(
-    `SELECT manager_bitrix_user_id::text AS bitrix_user_id, manager_name, department_id,
+    `SELECT manager_bitrix_user_id::text AS bitrix_user_id, manager_name, department_id::text AS department_id,
             department_name, branch, short_login
-       FROM org_resolved_hierarchy
+       FROM sa.org_resolved_hierarchy
       WHERE manager_bitrix_user_id::text = $1 AND is_active = true`,
     [managerId],
   );
@@ -485,19 +501,20 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
 
   const managerIdNum = /^\d+$/.test(managerId) ? Number(managerId) : null;
 
-  const [periodPoolRaw, prevPoolRaw, touchPeriodMap, touchCompMap, deptRosterRes, callsTizer, pgRows, rawWeights, template, allMetrics] =
+  const [periodPoolRaw, prevPoolRaw, touchPeriodMap, touchCompMap, allOrgRes, deptTree, callsTizer, pgRows, rawWeights, template, allMetrics] =
     await Promise.all([
       fetchByManagers({ period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchTouchSpeedByManager(period),
       fetchTouchSpeedByManager(prevPeriod),
-      org.department_id
-        ? sysDb.query<{ bitrix_user_id: string }>(
-            `SELECT manager_bitrix_user_id::text AS bitrix_user_id
-               FROM org_resolved_hierarchy WHERE department_id = $1 AND is_active = true`,
-            [org.department_id],
-          )
-        : Promise.resolve({ rows: [{ bitrix_user_id: managerId }] }),
+      // Все активные менеджеры с отделом/филиалом — для лесенки мест (отдел /
+      // департамент / филиал / страна). Заменил прежний точечный запрос членов
+      // одного отдела: те же данные — подмножество этого.
+      saDb.query<{ bitrix_user_id: string; department_id: string | null; branch: string | null }>(
+        `SELECT manager_bitrix_user_id::text AS bitrix_user_id, department_id::text AS department_id, branch
+           FROM sa.org_resolved_hierarchy WHERE is_active = true`,
+      ),
+      loadDepartments(),
       managerIdNum !== null ? fetchCallsTizer(managerIdNum, period) : Promise.resolve(null),
       fetchByProductGroups({ period, dealScope: 'all', clientType, productGroupMode, managerId }),
       getRawScoringWeights(),
@@ -566,19 +583,81 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
     };
   });
 
-  // ── Рейтинг + ранг в отделе ─────────────────────────────────────────────────
+  // ── Рейтинг + лесенка мест: отдел / департамент / филиал / страна ───────────
+  // (задача Иосифа 16.07). Ранжирование на всех уровнях — тем же ratingFor по
+  // общему пулу нормировки; рейтинги мемоизируются, «страна» считает всех один раз,
+  // остальные уровни переиспользуют кэш.
   const rating = ratingFor(periodAxisMap, periodEligible, managerId, rawWeights, templateAxes);
-  const deptMemberIds = deptRosterRes.rows.map(r => r.bitrix_user_id);
-  const deptSize = deptMemberIds.length || 1;
-  const deptRatings = deptMemberIds.map(id => ({
-    id,
-    rating: id === managerId ? rating : ratingFor(periodAxisMap, periodEligible, id, rawWeights, templateAxes),
-  }));
-  const withRating = deptRatings.filter(r => r.rating !== null).sort((a, b) => (b.rating! - a.rating!));
-  const withoutRating = deptRatings.filter(r => r.rating === null);
-  const orderedIds = [...withRating.map(r => r.id), ...withoutRating.map(r => r.id)];
-  const rankIdx = orderedIds.indexOf(managerId);
-  const rank = rankIdx >= 0 ? rankIdx + 1 : null;
+  const ratingCache = new Map<string, number | null>([[managerId, rating]]);
+  const ratingOf = (id: string): number | null => {
+    if (!ratingCache.has(id)) {
+      ratingCache.set(id, ratingFor(periodAxisMap, periodEligible, id, rawWeights, templateAxes));
+    }
+    return ratingCache.get(id)!;
+  };
+  const rankAmong = (ids: string[]): { rank: number | null; size: number } => {
+    const withRating: string[] = [];
+    const withoutRating: string[] = [];
+    for (const id of ids) (ratingOf(id) !== null ? withRating : withoutRating).push(id);
+    withRating.sort((a, b) => ratingOf(b)! - ratingOf(a)!);
+    const idx = [...withRating, ...withoutRating].indexOf(managerId);
+    return { rank: idx >= 0 ? idx + 1 : null, size: ids.length || 1 };
+  };
+
+  const allOrg = allOrgRes.rows;
+  // Департамент = ближайший предок отдела (включая сам отдел) с именем «Департамент …».
+  // У Москвы/Краснодара/стажировки такого нет → уровень пропускается («показываем филиал»).
+  const uuidByBitrixId = new Map<string, string>();
+  for (const [uuid, row] of deptTree.byId) uuidByBitrixId.set(row.bitrixId, uuid);
+  const childrenByBitrixId = new Map<string, DeptRow[]>();
+  for (const row of deptTree.byBitrixId.values()) {
+    if (!row.parentBitrixId) continue;
+    if (!childrenByBitrixId.has(row.parentBitrixId)) childrenByBitrixId.set(row.parentBitrixId, []);
+    childrenByBitrixId.get(row.parentBitrixId)!.push(row);
+  }
+  let divisionNode: DeptRow | null = null;
+  {
+    let cur: DeptRow | null = org.department_id ? deptTree.byId.get(org.department_id) ?? null : null;
+    while (cur) {
+      if (/^департамент/i.test(cur.name.trim())) { divisionNode = cur; break; }
+      cur = cur.parentBitrixId ? deptTree.byBitrixId.get(cur.parentBitrixId) ?? null : null;
+    }
+  }
+  let divisionDeptUuids: Set<string> | null = null;
+  if (divisionNode) {
+    divisionDeptUuids = new Set();
+    const queue: DeptRow[] = [divisionNode];
+    while (queue.length) {
+      const node = queue.pop()!;
+      const uuid = uuidByBitrixId.get(node.bitrixId);
+      if (uuid) divisionDeptUuids.add(uuid);
+      queue.push(...(childrenByBitrixId.get(node.bitrixId) ?? []));
+    }
+  }
+
+  const deptStats = rankAmong(
+    org.department_id
+      ? allOrg.filter(r => r.department_id === org.department_id).map(r => r.bitrix_user_id)
+      : [managerId],
+  );
+  const rank = deptStats.rank;
+  const deptSize = deptStats.size;
+
+  const ranks: RankEntry[] = [];
+  if (org.department_id) ranks.push({ key: 'department', label: 'в отделе', ...deptStats });
+  if (divisionDeptUuids && divisionNode && divisionNode.name !== org.department_name) {
+    ranks.push({
+      key: 'division', label: 'в департаменте',
+      ...rankAmong(allOrg.filter(r => r.department_id && divisionDeptUuids!.has(r.department_id)).map(r => r.bitrix_user_id)),
+    });
+  }
+  if (org.branch) {
+    ranks.push({
+      key: 'branch', label: 'в филиале',
+      ...rankAmong(allOrg.filter(r => r.branch === org.branch).map(r => r.bitrix_user_id)),
+    });
+  }
+  ranks.push({ key: 'country', label: 'в стране', ...rankAmong(allOrg.map(r => r.bitrix_user_id)) });
 
   // ── Итоги периода (плитки) с Δ% к прошлому такому же периоду (задача 10.07
   // карточка v4, п.1 — произвольный набор плиток шаблона, не 6 зашитых) ───────
@@ -605,6 +684,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
       branch: branchLabel(org.branch),
     },
     rating: { value: rating, rank, deptSize },
+    ranks,
     radar: { axes },
     tiles,
     categories,

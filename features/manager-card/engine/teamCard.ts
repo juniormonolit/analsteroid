@@ -48,6 +48,9 @@ export interface TeamRosterEntry {
   managerId: string;
   name: string;
   login: string | null;
+  /** Отдел менеджера (uuid из roster) — для группировки сетки по отделам в ЛК
+   *  руководителя нескольких подразделений (задача Иосифа 16.07). */
+  deptUuid: string;
   rating: number | null;
   /** До 6 значений 0-10 (уже с fallback на 0 для недоступных осей — как в ManagerCardRadar),
    *  порядок совпадает с осями шаблона 'manager' (card_templates, бриф 10.07) — тот
@@ -109,7 +112,7 @@ export async function buildTeamRoster(opts: {
     const salesCount  = row?.metrics.sales_count ?? 0;
     const salesAmount = (row?.metrics.primary_sales_amount ?? 0) + (row?.metrics.repeat_sales_amount ?? 0);
     return {
-      managerId: m.managerId, name: m.name, login: m.login,
+      managerId: m.managerId, name: m.name, login: m.login, deptUuid: m.deptUuid,
       rating, radar, salesAmount,
       crOverall: dealsCount > 0 ? Math.round((salesCount / dealsCount) * 1000) / 10 : null,
     };

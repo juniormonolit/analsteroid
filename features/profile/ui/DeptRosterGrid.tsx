@@ -16,6 +16,7 @@ interface TeamManager {
   managerId: string;
   name: string;
   login: string | null;
+  deptUuid: string;
   rating: number | null;
   radar: number[];
   salesAmount: number;
@@ -44,6 +45,25 @@ function fmtMoney(v: number): string {
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase();
+}
+
+/** Секции сетки: при нескольких отделах — по отделам (порядок: по имени отдела,
+ *  внутри — глобальная сортировка по рейтингу сохранена). Один отдел — одна
+ *  секция без заголовка. */
+function groupManagers(
+  managers: TeamManager[],
+  options: { id: string; name: string }[],
+): { id: string; name: string | null; managers: TeamManager[] }[] {
+  const deptIds = [...new Set(managers.map(m => m.deptUuid))];
+  if (deptIds.length <= 1) return [{ id: deptIds[0] ?? 'single', name: null, managers }];
+  const nameById = new Map(options.map(o => [o.id, o.name]));
+  return deptIds
+    .map(id => ({
+      id,
+      name: nameById.get(id) ?? 'Без отдела',
+      managers: managers.filter(m => m.deptUuid === id),
+    }))
+    .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'ru'));
 }
 
 /** Мини-радар без подписей (мокап: .mgr-radar) — 6 осей, только слой периода. */
@@ -167,38 +187,54 @@ export function DeptRosterGrid() {
       ) : (data?.managers.length ?? 0) === 0 ? (
         <p className="text-sm text-[var(--color-text-muted)]">Отделы не назначены. Обратитесь к администратору.</p>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          {data!.managers.map(m => (
-            <button
-              key={m.managerId}
-              onClick={() => setOpenManagerId({ id: m.managerId, name: m.name })}
-              className={`relative flex flex-col items-center text-center gap-0.5 bg-[var(--color-bg-surface)] border rounded-2xl px-3.5 py-4 hover:border-[var(--color-border-focus)] transition-colors ${
-                m.isTop1 ? 'border-2' : 'border-[var(--color-border)]'
-              }`}
-              style={m.isTop1 ? { borderColor: 'var(--color-top1-border)', boxShadow: '0 0 0 4px var(--color-top1-glow)' } : undefined}
-            >
-              <span
-                className="absolute top-2.5 right-2.5 text-[13px] font-extrabold rounded-lg px-2 py-0.5"
-                style={m.isTop1
-                  ? { backgroundColor: 'var(--color-top1-bg)', color: 'var(--color-top1-text)' }
-                  : { backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)', color: 'var(--color-accent)' }}
-              >
-                {m.rating !== null ? m.rating.toFixed(1) : '—'}
-              </span>
-              <div
-                className="w-11 h-11 rounded-full flex items-center justify-center text-[15px] font-extrabold mb-1.5"
-                style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 16%, transparent)', color: 'var(--color-accent)' }}
-              >
-                {initials(m.name)}
+        /* Режим «Все отделы» у руководителя нескольких подразделений (задача Иосифа
+           16.07): карточки группируются по отделам с заголовками-секциями, а не
+           валятся одной кучей. Внутри секции — прежняя сортировка по рейтингу
+           (глобальный порядок сохранён фильтрацией). Один отдел — как раньше. */
+        <div className="flex flex-col gap-5">
+          {groupManagers(data!.managers, data!.departmentOptions).map(group => (
+            <div key={group.id}>
+              {group.name && (
+                <div className="flex items-baseline gap-2 mb-2">
+                  <h3 className="text-[13px] font-bold text-[var(--color-text)]">{group.name}</h3>
+                  <span className="text-[11px] text-[var(--color-text-muted)]">{group.managers.length} чел.</span>
+                </div>
+              )}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                {group.managers.map(m => (
+                  <button
+                    key={m.managerId}
+                    onClick={() => setOpenManagerId({ id: m.managerId, name: m.name })}
+                    className={`relative flex flex-col items-center text-center gap-0.5 bg-[var(--color-bg-surface)] border rounded-2xl px-3.5 py-4 hover:border-[var(--color-border-focus)] transition-colors ${
+                      m.isTop1 ? 'border-2' : 'border-[var(--color-border)]'
+                    }`}
+                    style={m.isTop1 ? { borderColor: 'var(--color-top1-border)', boxShadow: '0 0 0 4px var(--color-top1-glow)' } : undefined}
+                  >
+                    <span
+                      className="absolute top-2.5 right-2.5 text-[13px] font-extrabold rounded-lg px-2 py-0.5"
+                      style={m.isTop1
+                        ? { backgroundColor: 'var(--color-top1-bg)', color: 'var(--color-top1-text)' }
+                        : { backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)', color: 'var(--color-accent)' }}
+                    >
+                      {m.rating !== null ? m.rating.toFixed(1) : '—'}
+                    </span>
+                    <div
+                      className="w-11 h-11 rounded-full flex items-center justify-center text-[15px] font-extrabold mb-1.5"
+                      style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 16%, transparent)', color: 'var(--color-accent)' }}
+                    >
+                      {initials(m.name)}
+                    </div>
+                    <div className="text-[13px] font-bold text-[var(--color-text)] leading-tight">{m.name}</div>
+                    {m.login && <div className="text-[11px] text-[var(--color-text-muted)] mb-0.5">{m.login}</div>}
+                    <MiniRadar values={m.radar} />
+                    <div className="flex flex-col gap-0.5 text-[11.5px] text-[var(--color-text-muted)] border-t border-[var(--color-border)] pt-2 mt-1 w-full">
+                      <span>Продажи <b className="text-[var(--color-text)]">{fmtMoney(m.salesAmount)}</b></span>
+                      <span>CR <b className="text-[var(--color-text)]">{m.crOverall !== null ? `${m.crOverall.toFixed(0)}%` : '—'}</b></span>
+                    </div>
+                  </button>
+                ))}
               </div>
-              <div className="text-[13px] font-bold text-[var(--color-text)] leading-tight">{m.name}</div>
-              {m.login && <div className="text-[11px] text-[var(--color-text-muted)] mb-0.5">{m.login}</div>}
-              <MiniRadar values={m.radar} />
-              <div className="flex flex-col gap-0.5 text-[11.5px] text-[var(--color-text-muted)] border-t border-[var(--color-border)] pt-2 mt-1 w-full">
-                <span>Продажи <b className="text-[var(--color-text)]">{fmtMoney(m.salesAmount)}</b></span>
-                <span>CR <b className="text-[var(--color-text)]">{m.crOverall !== null ? `${m.crOverall.toFixed(0)}%` : '—'}</b></span>
-              </div>
-            </button>
+            </div>
           ))}
         </div>
       )}

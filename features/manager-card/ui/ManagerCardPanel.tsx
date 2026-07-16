@@ -314,13 +314,30 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                   </div>
                   <span className="text-[11px] font-bold tracking-wide uppercase text-[var(--color-text-muted)]">Рейтинг</span>
                 </div>
-                <div
-                  className="flex flex-col items-center gap-0.5 rounded-2xl px-3.5 py-2"
-                  style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' }}
-                >
-                  <span className="text-[13px] font-extrabold text-[var(--color-accent)]">{data?.rating.rank ? `#${data.rating.rank}` : '—'}</span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] text-center leading-tight">из {data?.rating.deptSize ?? '—'}<br />{mode === 'department' ? 'среди отделов' : 'в отделе'}</span>
-                </div>
+                {data?.ranks?.length ? (
+                  /* Лесенка мест (задача 16.07): отдел / департамент / филиал / страна.
+                     Уровня «департамент» у Москвы/Краснодара/стажировки нет — движок
+                     его пропускает, остаётся филиал (правило владельца). */
+                  <div
+                    className="flex flex-col gap-1 rounded-2xl px-3 py-2"
+                    style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' }}
+                  >
+                    {data.ranks.map(r => (
+                      <div key={r.key} className="flex items-baseline gap-1.5 whitespace-nowrap">
+                        <span className="text-[12px] font-extrabold text-[var(--color-accent)] min-w-[30px] text-right">{r.rank ? `#${r.rank}` : '—'}</span>
+                        <span className="text-[10px] text-[var(--color-text-muted)]">из {r.size} {r.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    className="flex flex-col items-center gap-0.5 rounded-2xl px-3.5 py-2"
+                    style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' }}
+                  >
+                    <span className="text-[13px] font-extrabold text-[var(--color-accent)]">{data?.rating.rank ? `#${data.rating.rank}` : '—'}</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)] text-center leading-tight">из {data?.rating.deptSize ?? '—'}<br />{mode === 'department' ? 'среди отделов' : 'в отделе'}</span>
+                  </div>
+                )}
               </div>
             </div>
 
