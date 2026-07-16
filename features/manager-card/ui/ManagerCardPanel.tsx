@@ -5,6 +5,7 @@ import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
+import { ManagerActivityTab } from './ManagerActivityTab';
 import { previousPeriodSameLength, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
@@ -198,7 +199,7 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
   // Табы (карточка v4, задача 10.07, п.3): «Профиль эффективности» (паутина+плитки)
   // и «По товарным категориям» (топ-5 + тумблер KC/по наибольшему + дрилл-даун —
   // переехали сюда целиком, раньше жили во второй колонке первого экрана).
-  const [activeTab, setActiveTab] = useState<'main' | 'categories'>('main');
+  const [activeTab, setActiveTab] = useState<'main' | 'categories' | 'activity'>('main');
 
   // Сравнение при смене периода теперь считает PeriodRangeControls (задача 10.07):
   // быстрый пресет → календарный шаг назад, ручной диапазон → previousPeriodSameLength
@@ -374,7 +375,11 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                 {([
                   { v: 'main', label: 'Профиль эффективности' },
                   { v: 'categories', label: `Товарные категории${data?.categories.length ? ` · ${data.categories.length}` : ''}` },
-                ] as { v: 'main' | 'categories'; label: string }[]).map(o => (
+                  // «График работы» (задача 16.07) — только у менеджера: у отдела
+                  // нет единого va.calls/deal_events-профиля, агрегат вводил бы в
+                  // заблуждение.
+                  ...(mode !== 'department' ? [{ v: 'activity' as const, label: 'График работы' }] : []),
+                ] as { v: 'main' | 'categories' | 'activity'; label: string }[]).map(o => (
                   <button
                     key={o.v}
                     type="button"
@@ -428,6 +433,10 @@ export function ManagerCardPanel({ managerId, managerName, reportPeriod, onClose
                       </div>
                     </div>
                   </div>
+                </div>
+              ) : activeTab === 'activity' ? (
+                <div className="max-w-2xl">
+                  <ManagerActivityTab managerId={managerId} />
                 </div>
               ) : (
                 <div className="max-w-2xl">
