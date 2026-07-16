@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  BarChart3, Truck, Megaphone, UserPlus,
+  BarChart3,
   ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
   Bookmark, BookOpen, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid,
 } from 'lucide-react';
@@ -14,12 +14,10 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { BrandLogo } from '@/components/ui/BrandLogo';
-import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import type { SavedReport, TrashedReport } from '@/lib/saved-reports/types';
 import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
 import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
 import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
-import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 import { useTheme } from '@/lib/hooks/useTheme';
 import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 
@@ -84,53 +82,23 @@ function RailTooltip({ collapsed, label, children }: { collapsed: boolean; label
 // вместо `truncate` — при нехватке места слоган должен остаться читаемым
 // целиком, а не обрезаться многоточием.
 //
-// Правка задачи 1599: слоган выровнен по правому краю (`text-right`) —
+// Правка Иосифа 16.07: слоган по ЛЕВОМУ краю (отменяет правое выравнивание 1599) —
 // раньше был прижат к левому краю/растянут на всю ширину (`block` без
 // text-align). Текст «...для монолитика» исправлен на «...для монолита»
 // (опечатка в брифе ребрендинга).
 const BRAND_TAGLINE_CLS =
-  'block whitespace-nowrap text-right text-[9.5px] font-medium uppercase tracking-[0.04em] text-[var(--color-sidebar-text-muted)]';
+  'block whitespace-nowrap text-left text-[9.5px] font-medium uppercase tracking-[0.04em] text-[var(--color-sidebar-text-muted)]';
 const BRAND_TAGLINE_TEXT = '— аналитика для монолита'.toUpperCase();
 
-// Тумблер «Про/Лайт» под лочапом (п.1 правок 09.07/2): компактный сегмент, дёргает
-// ТОТ ЖЕ серверный ui_mode, что и тумблер в ЛК (useUiMode — общий queryKey ['ui-mode'],
-// переключение в одном месте мгновенно видно в другом). Отдельный компонент (а не
-// инлайн в AppShell) — хук использует react-query, а AppShell сам монтирует
-// QueryProvider ниже себя по дереву; хук обязан жить в компоненте-потомке провайдера
-// (тот же приём, что и у SidebarBody/SalesSidebarSection).
-// Досинхронизация зеркала localStorage.theme с серверным users.theme (переключатель —
-// в ЛК, ProfilePage) — сам компонент ничего не рендерит, только держит хук живым в
-// дереве всех авторизованных страниц (тот же приём, что и UiModeSwitch ниже: хук на
-// react-query обязан жить ПОД QueryProvider, который монтирует сам AppShell).
+// Тумблер «Про/Лайт» из сайдбара убран целиком (правка Иосифа 16.07) — остался
+// только в ЛК (ProfilePage). Ниже ThemeSync: досинхронизация зеркала
+// localStorage.theme с серверным users.theme (переключатель — в ЛК) — компонент
+// ничего не рендерит, только держит хук живым в дереве всех авторизованных
+// страниц (хук на react-query обязан жить ПОД QueryProvider, который монтирует
+// сам AppShell).
 function ThemeSync() {
   useTheme();
   return null;
-}
-
-function UiModeSwitch() {
-  const { uiMode, setUiMode } = useUiMode();
-  // Задача 1575: раньше был `mt-1.5 w-fit` и рендерился внутри узкой колонки
-  // лого+название — визуально прижат к левому краю сайдбара. Ширина (`w-fit`)
-  // и верхний отступ теперь задаются местом использования (обёрткой
-  // `flex justify-center`), сам переключатель — просто содержимое по центру
-  // своей ширины, без внешних отступов/позиционирования.
-  return (
-    <div className="flex border border-[var(--color-sidebar-border)] rounded-md overflow-hidden text-[11px] font-medium w-fit">
-      {(['basic', 'pro'] as UiMode[]).map(m => (
-        <button
-          key={m}
-          onClick={() => setUiMode(m)}
-          className={`px-2 py-0.5 transition-colors ${
-            uiMode === m
-              ? 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)]'
-              : 'text-[var(--color-sidebar-text-muted)] hover:bg-[var(--color-sidebar-hover-bg)]'
-          }`}
-        >
-          {m === 'basic' ? 'Лайт' : 'Про'}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean; pathname: string; user: SessionUser }) {
@@ -372,17 +340,11 @@ interface NavItem {
   perm?: PermKey; // без права — пункт не показывается
 }
 
+// «Реализация»/«Маркетинг»/«Найм» спрятаны «до востребования» (правка Иосифа
+// 16.07, оптимизация меню): Реализация и Найм были заглушками «Скоро», маркетинг-
+// пресеты живут по прямым URL (/marketing/*) и вернутся в меню, когда попросят.
 const NAV: NavItem[] = [
   { label: 'Продажи', icon: <BarChart3 size={18} />, isSales: true, perm: 'section.sales' },
-  { label: 'Реализация', icon: <Truck size={18} />, disabled: true },
-  {
-    label: 'Маркетинг', icon: <Megaphone size={18} />, perm: 'section.marketing',
-    children: Object.entries(MARKETING_PRESETS).map(([key, p]) => ({
-      label: p.title,
-      href: `/marketing/${key}`,
-    })),
-  },
-  { label: 'Найм', icon: <UserPlus size={18} />, disabled: true },
 ];
 
 /* Содержимое сайдбара (nav + нижние секции + footer) — общее для десктопного
@@ -749,10 +711,9 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                     <PanelLeftClose size={18} />
                   </button>
                 </div>
-                <span className={`px-3 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
-                <div className="flex justify-center px-3 pt-1.5 pb-2.5">
-                  <UiModeSwitch />
-                </div>
+                {/* Тумблер Лайт/Про из шапки убран (правка Иосифа 16.07) —
+                    остался только в ЛК (ProfilePage). pb-2.5 переехал на слоган. */}
+                <span className={`px-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
               </>
             )}
           </div>
@@ -768,8 +729,8 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           <div className="fixed inset-0 z-50 md:hidden">
             <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
             <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-[0_0_24px_rgba(0,0,0,0.12)]">
-              {/* Тот же трёхрядный header, что у десктопного сайдбара (задача 1575) —
-                  слоган не режется, тумблер Лайт/Про центрирован по ширине шапки. */}
+              {/* Тот же двухрядный header, что у десктопного сайдбара — тумблер
+                  Лайт/Про убран и здесь (правка Иосифа 16.07, остался в ЛК). */}
               <div className="flex flex-col border-b border-[var(--color-sidebar-border)] shrink-0">
                 <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
                   <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
@@ -783,10 +744,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                     <X size={18} />
                   </button>
                 </div>
-                <span className={`px-3 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
-                <div className="flex justify-center px-3 pt-1.5 pb-2.5">
-                  <UiModeSwitch />
-                </div>
+                <span className={`px-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
               </div>
               <SidebarBody
                 collapsed={false} pathname={pathname} user={user}
