@@ -161,7 +161,9 @@ export async function buildManagerActivity(managerId: string, windowDays: number
 
   const topCategory = pgRows
     .map(r => ({ name: r.dimensionName, amount: (r.metrics.primary_sales_amount ?? 0) + (r.metrics.repeat_sales_amount ?? 0) }))
-    .filter(r => r.amount > 0)
+    // «Без группы» — техническая корзина нераспределённых товаров, «любимой
+    // категорией» быть не может (у #63 она была топ-1 — вылезло на живой проверке).
+    .filter(r => r.amount > 0 && r.name && !/^без групп/i.test(r.name))
     .sort((a, b) => b.amount - a.amount)[0];
 
   // ── Разбивка (аналог списка моделей) ────────────────────────────────────────
