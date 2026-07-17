@@ -762,7 +762,9 @@ export function ReportTable({
     );
   }
 
-  function renderMetricCells(row: RowDeltas, clickable: boolean, stickyBg: string) {
+  // rowBorderCls (задача 2056): нижняя граница строки на каждой ячейке — в
+  // border-separate границы <tr> не рисуются, см. rowCls/rowBorderCls в renderRow.
+  function renderMetricCells(row: RowDeltas, clickable: boolean, stickyBg: string, rowBorderCls = '') {
     const alignStyle: React.CSSProperties = { textAlign: numberAlign };
     return displayMetrics.map((m, metricIdx) => {
       const d = row.deltas?.[m.id];
@@ -773,7 +775,7 @@ export function ReportTable({
       const kinds = leafKinds(vMode);
       const canClick = clickable && onCellClick && isClickableMetric(m);
       const isPinned = pinnedMetricIds.includes(m.id);
-      const cellBase = 'tabular-nums';
+      const cellBase = `tabular-nums ${rowBorderCls}`;
       // Pinned cells must use an OPAQUE hover bg, otherwise the scrolled-under column shows through.
       const clickCls = canClick
         ? (isPinned
@@ -981,12 +983,18 @@ export function ReportTable({
     // в 'grid'/'horizontal' (последнее — «текущее поведение» до этой правки), скрыт в
     // 'none'. Цвет/жирность строки не меняем — эти два режима и раньше были одинаковы
     // визуально (только новый третий режим «Без границ» — новое поведение).
+    // Задача 2056: разделитель переехал с <tr> на КАЖДУЮ ячейку (rowBorderCls) — в
+    // border-separate границы табличных строк по спецификации не рисуются вовсе.
+    const rowBorderCls = borderMode !== 'none'
+      ? (isGroupRow
+          ? 'border-b border-b-[var(--color-border)]'
+          : 'border-b border-b-[var(--color-table-row-border)]')
+      : '';
     const rowCls = [
       'group',
-      borderMode !== 'none' ? 'border-b' : '',
       isGroupRow
-        ? 'border-[var(--color-border)] bg-[var(--color-bg-surface)] font-semibold text-[var(--color-text)]'
-        : `report-row border-[var(--color-table-row-border)] ${rowBaseBg}`,
+        ? 'bg-[var(--color-bg-surface)] font-semibold text-[var(--color-text)]'
+        : `report-row ${rowBaseBg}`,
     ].join(' ');
 
     return (
@@ -995,13 +1003,13 @@ export function ReportTable({
           {/* Колонка «№» (п.6): узкая, muted, только у обычных строк — групповые
               заголовки без номера, нумерация сквозная (после сортировки/фильтра). */}
           <td
-            className={`sticky z-20 ${stickyBg} px-1 py-[var(--row-py)] text-center text-[11px] text-[var(--color-text-muted)] tabular-nums border-r border-[var(--color-border)]`}
+            className={`sticky z-20 ${stickyBg} ${rowBorderCls} px-1 py-[var(--row-py)] text-center text-[11px] text-[var(--color-text-muted)] tabular-nums border-r border-r-[var(--color-border)]`}
             style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }}
           >
             {rowNumber ?? ''}
           </td>
           <td
-            className={`sticky z-20 ${stickyBg} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-[length:var(--report-cell-px)] py-[var(--row-py)] border-r border-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
+            className={`sticky z-20 ${stickyBg} ${rowBorderCls} w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)] px-[length:var(--report-cell-px)] py-[var(--row-py)] border-r border-r-[var(--color-border)] transition-colors ${canClickRow || canToggleRow ? 'cursor-pointer' : ''}`}
             style={{ left: NUMBER_COL_WIDTH }}
             onClick={canClickRow
               ? () => onRowClick!(row.dimensionId, row.dimensionName)
@@ -1081,7 +1089,7 @@ export function ReportTable({
               </span>
             </div>
           </td>
-          {renderMetricCells(row, true, stickyBg)}
+          {renderMetricCells(row, true, stickyBg, rowBorderCls)}
         </tr>
 
         {isExpanded && (
@@ -1321,7 +1329,16 @@ export function ReportTable({
 
   return (
     <div ref={containerRef} className="overflow-auto h-full bg-[var(--color-bg-surface)]">
-      <table className="w-full text-sm border-collapse" style={{ fontSize: `calc(${14 * tableScale}px * var(--report-mobile-scale, 1))`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
+      {/* border-separate + border-spacing-0 ВМЕСТО border-collapse (задача 2056, баг
+          Серёги «контент видно через щель»): в Chromium collapsed-границы таблицы НЕ
+          участвуют в position:sticky-смещении (рисуются слоем сетки на исходном месте),
+          поэтому при скролле между строками sticky-шапки открывался просвет с контентом,
+          а вертикальная 3px граница группы обрывалась «кусочком». В separate-режиме
+          границы принадлежат ячейкам и скроллятся вместе с ними. Следствия учтены:
+          границы строк перенесены с <tr> на ячейки (в separate границы tr не рисуются,
+          см. rowBorderCls), у полосы групп убран border-r (иначе с border-l соседней
+          группы получалась бы двойная линия — в collapse они сливались). */}
+      <table className="w-full text-sm border-separate border-spacing-0" style={{ fontSize: `calc(${14 * tableScale}px * var(--report-mobile-scale, 1))`, ['--row-py' as string]: rowPy } as React.CSSProperties}>
         <thead className="report-thead sticky top-0 z-30 bg-[var(--color-table-header)]">
           {hasGroups && (
             <tr>
@@ -1340,11 +1357,17 @@ export function ReportTable({
                   </th>
                 );
               })}
+              {/* Границы полосы групп (задача 2056): зеркалим strongLeft из шапки/тела —
+                  3px строго МЕЖДУ сегментами (border-l у правого), а не border-l+border-r
+                  у каждой именованной группы: в border-separate смежные l+r дали бы
+                  двойную 6px линию, а border-l первого сегмента на стыке с pinned/
+                  измерением — «кусочек» без продолжения снизу (жалоба Серёги: граница
+                  «начинается кусочком сверху потом становится тоньше»). */}
               {superSegments.map((seg, i) => (
                 <th
                   key={i}
                   colSpan={seg.span}
-                  className={`text-center px-2 py-1.5 text-xs font-bold uppercase tracking-wider border-b border-[var(--color-border)] bg-[var(--color-table-header)] ${seg.name ? 'text-[var(--color-text)] border-l-[3px] border-l-[var(--color-border-strong)] border-r-[3px] border-r-[var(--color-border-strong)]' : 'text-transparent'}`}
+                  className={`text-center px-2 py-1.5 text-xs font-bold uppercase tracking-wider border-b border-b-[var(--color-border)] bg-[var(--color-table-header)] ${i > 0 ? strongGroupCls : ''} ${seg.name ? 'text-[var(--color-text)]' : 'text-transparent'}`}
                 >
                   {seg.name ?? ' '}
                 </th>
