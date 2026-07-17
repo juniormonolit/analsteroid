@@ -2,6 +2,7 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
+import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ReportRow, ProductGroupMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
@@ -28,8 +29,16 @@ type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: numb
 const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
 const ROW_TTL = 10 * 60 * 1000; // 10 min
 
+// Снимок «Стадии (сейчас)» — период-независим, свой кэш (см. byManagers.ts).
+const _snapshotCache = new Map<string, { snap: Awaited<ReturnType<typeof fetchStageSnapshot>>; at: number }>();
+const SNAPSHOT_TTL = 2 * 60 * 1000; // 2 min
+
 function mkKey(from: string, toExcl: string, metricIds: string[], mode: string, managerId?: string, deptKey?: string, managerIdsKey?: string, offhKey?: string): string {
   return `${from}|${toExcl}|${mode}|${managerId ?? 'all'}|${deptKey ?? 'all'}|${managerIdsKey ?? 'all'}|${offhKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
+}
+
+function mkSnapshotKey(mode: string, managerId?: string, deptKey?: string, managerIdsKey?: string, offhKey?: string): string {
+  return `${mode}|${managerId ?? 'all'}|${deptKey ?? 'all'}|${managerIdsKey ?? 'all'}|${offhKey ?? 'all'}`;
 }
 
 // dealScope/clientType match the same funnel_id logic as sqlGen.ts:
@@ -165,29 +174,29 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
     collected.filter(m => m.tags.includes('scope_independent')).map(m => m.id),
   );
 
+  const dim = mode === 'by_max'
+    ? {
+        idExpr:          `COALESCE(d.head_group_name, 'Без группы')`,
+        nameExpr:        `COALESCE(d.head_group_name, 'Без группы')`,
+        groupBy:         'GROUP BY d.head_group_name, d.funnel_id',
+        notNullWhere,
+        funnelBreakdown: true as const,
+      }
+    : {
+        idExpr:          `COALESCE(d.product_group_id::text, '__none__')`,
+        nameExpr:        `COALESCE(pg.name, 'Без группы')`,
+        extraJoins:      'LEFT JOIN product_groups pg ON pg.id = d.product_group_id',
+        groupBy:         'GROUP BY d.product_group_id, pg.name, d.funnel_id',
+        notNullWhere,
+        funnelBreakdown: true as const,
+      };
+
   // Analytics row cache (pills NOT in key; mode + managerId + deptKey + offhKey ARE — they change the scope)
   const key   = mkKey(fromIso, toExclIso, metricIds, mode, managerId, deptKey, managerIdsKey, offhKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
     const rows = await cached(`rpt:pg:${key}`, reportTtl(toExclIso), async () => {
-      const dim = mode === 'by_max'
-        ? {
-            idExpr:          `COALESCE(d.head_group_name, 'Без группы')`,
-            nameExpr:        `COALESCE(d.head_group_name, 'Без группы')`,
-            groupBy:         'GROUP BY d.head_group_name, d.funnel_id',
-            notNullWhere,
-            funnelBreakdown: true as const,
-          }
-        : {
-            idExpr:          `COALESCE(d.product_group_id::text, '__none__')`,
-            nameExpr:        `COALESCE(pg.name, 'Без группы')`,
-            extraJoins:      'LEFT JOIN product_groups pg ON pg.id = d.product_group_id',
-            groupBy:         'GROUP BY d.product_group_id, pg.name, d.funnel_id',
-            notNullWhere,
-            funnelBreakdown: true as const,
-          };
-
       const sql = buildCollectedSQL(collected, dim);
       if (!sql) return [];
       const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
@@ -197,17 +206,39 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
     _rowCache.set(key, entry);
   }
 
-  // Apply pills in memory
-  const funnels = await loadFunnels();
-  const agg     = aggregate(entry.rows, funnels, metricIds, dealScope, clientType, scopeIndependentIds);
+  // Снимок «Стадии (сейчас)» (задача 2059) — БЕЗ периода, свой кэш (см. byManagers.ts).
+  const snapKey   = mkSnapshotKey(mode, managerId, deptKey, managerIdsKey, offhKey);
+  let   snapEntry = _snapshotCache.get(snapKey);
+  if (!snapEntry || Date.now() - snapEntry.at > SNAPSHOT_TTL) {
+    const snap = await fetchStageSnapshot(dim);
+    snapEntry = { snap, at: Date.now() };
+    _snapshotCache.set(snapKey, snapEntry);
+  }
+  const { pillRows, workByDim } = snapEntry.snap;
 
-  return [...agg.entries()].map(([id, { name, metrics }]) => ({
-    dimensionId:   id,
-    dimensionName: name,
-    teamId:        null,
-    teamName:      null,
-    metrics: Object.fromEntries(
-      metricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null]),
-    ),
-  }));
+  // Apply pills in memory
+  const funnels      = await loadFunnels();
+  const allMetricIds = [...metricIds, ...STAGE_SNAPSHOT_METRIC_IDS];
+  const agg = aggregate(
+    [...entry.rows, ...pillRows] as FlatRow[],
+    funnels, allMetricIds, dealScope, clientType, scopeIndependentIds,
+  );
+
+  return [...agg.entries()].map(([id, { name, metrics }]) => {
+    const work = workByDim.get(id);
+    return {
+      dimensionId:   id,
+      dimensionName: name,
+      teamId:        null,
+      teamName:      null,
+      metrics: {
+        ...Object.fromEntries(
+          allMetricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null]),
+        ),
+        [DEALS_IN_WORK_METRIC_IDS[0]]: work ? work.primary : 0,
+        [DEALS_IN_WORK_METRIC_IDS[1]]: work ? work.repeat  : 0,
+        [DEALS_IN_WORK_METRIC_IDS[2]]: work ? work.all     : 0,
+      },
+    };
+  });
 }

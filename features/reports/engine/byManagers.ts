@@ -3,6 +3,7 @@ import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
+import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ReportRow, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
@@ -29,8 +30,19 @@ type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: numb
 const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
 const ROW_TTL = 10 * 60 * 1000; // 10 min
 
+// Снимок «Стадии (сейчас)» (stageSnapshot.ts) НЕ зависит от периода — свой кэш,
+// БЕЗ from/toExcl в ключе (иначе current+comparison запросы с разными периодами
+// зря дублировали бы один и тот же снимок). TTL короче обычного rowCache — это
+// «сейчас», должно обновляться чаще, чем период-зависимые метрики.
+const _snapshotCache = new Map<string, { snap: Awaited<ReturnType<typeof fetchStageSnapshot>>; at: number }>();
+const SNAPSHOT_TTL = 2 * 60 * 1000; // 2 min
+
 function mkKey(from: string, toExcl: string, metricIds: string[], pgId?: string, srcKey?: string, offhKey?: string): string {
   return `${from}|${toExcl}|${pgId ?? 'all'}|${srcKey ?? 'all'}|${offhKey ?? 'all'}|${[...metricIds].sort().join(',')}`;
+}
+
+function mkSnapshotKey(pgId?: string, srcKey?: string, offhKey?: string): string {
+  return `${pgId ?? 'all'}|${srcKey ?? 'all'}|${offhKey ?? 'all'}`;
 }
 
 // dealScope/clientType match the same funnel_id logic as sqlGen.ts:
@@ -209,6 +221,20 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
     .filter(Boolean).join(' AND ');
   const offhKey = `${createdTimeFilter}:${firstTouchFilter}`;
 
+  // Общий WHERE для сделок этого разреза (менеджер IS NOT NULL + пг/источник/
+  // нерабочее время) — переиспользуется И обычным collected-запросом, И снимком
+  // «Стадии (сейчас)» (stageSnapshot.ts), чтобы фильтры отчёта резали оба одинаково.
+  const notNullParts = ['d.current_manager_id IS NOT NULL'];
+  if (pgWhere) notNullParts.push(pgWhere);
+  if (srcWhere) notNullParts.push(srcWhere);
+  if (offhWhere) notNullParts.push(offhWhere);
+  const dimConfig = {
+    idExpr:          'd.current_manager_id::text',
+    groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
+    notNullWhere:    notNullParts.join(' AND '),
+    funnelBreakdown: true as const,
+  };
+
   // Analytics row cache (pills are NOT part of the key; pgId/srcKey/offhKey ARE — they change the scope)
   // L1: in-memory Map, per-instance, 10 min. L2: Redis, shared across instances/restarts.
   const key   = mkKey(fromIso, toExclIso, metricIds, pgId, srcKey, offhKey);
@@ -216,16 +242,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
     const rows = await cached(`rpt:mgr:${key}`, reportTtl(toExclIso), async () => {
-      const notNullParts = ['d.current_manager_id IS NOT NULL'];
-      if (pgWhere) notNullParts.push(pgWhere);
-      if (srcWhere) notNullParts.push(srcWhere);
-      if (offhWhere) notNullParts.push(offhWhere);
-      const sql = buildCollectedSQL(collected, {
-        idExpr:          'd.current_manager_id::text',
-        groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
-        notNullWhere:    notNullParts.join(' AND '),
-        funnelBreakdown: true,
-      });
+      const sql = buildCollectedSQL(collected, dimConfig);
       if (!sql) return [];
       const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
       return res.rows;
@@ -234,9 +251,29 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
     _rowCache.set(key, entry);
   }
 
-  // Apply pills in memory
-  const funnels = await loadFunnels();
-  const agg     = aggregate(entry.rows, funnels, metricIds, dealScope, clientType, scopeIndependentIds);
+  // Снимок «Стадии (сейчас)» (задача 2059) — БЕЗ периода вообще, свой кэш (2 мин,
+  // короче обычного rowCache — «сейчас» должно обновляться чаще). current+
+  // comparison зовут fetchByManagers с РАЗНЫМ period, но снимок один и тот же —
+  // кэш по (pgId/srcKey/offhKey) экономит второй одинаковый запрос.
+  const snapKey   = mkSnapshotKey(pgId, srcKey, offhKey);
+  let   snapEntry = _snapshotCache.get(snapKey);
+  if (!snapEntry || Date.now() - snapEntry.at > SNAPSHOT_TTL) {
+    const snap = await fetchStageSnapshot(dimConfig);
+    snapEntry = { snap, at: Date.now() };
+    _snapshotCache.set(snapKey, snapEntry);
+  }
+  const { pillRows, workByDim } = snapEntry.snap;
+
+  // Apply pills in memory — снимочные per-stage метрики идут ЧЕРЕЗ ТУ ЖЕ pill-
+  // агрегацию, что и обычные collected (funnel_id — реальное измерение сделки,
+  // funnel-пилюля Первичные/Повторные/Все режет их как обычно, БЕЗ scope_independent
+  // обхода).
+  const funnels     = await loadFunnels();
+  const allMetricIds = [...metricIds, ...STAGE_SNAPSHOT_METRIC_IDS];
+  const agg = aggregate(
+    [...entry.rows, ...pillRows] as FlatRow[],
+    funnels, allMetricIds, dealScope, clientType, scopeIndependentIds,
+  );
 
   // Map to ReportRow[]
   return [...agg.entries()]
@@ -247,6 +284,9 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
     })
     .map(([id, metrics]) => {
       const org = orgMap.get(id);
+      // «Сделок в работе» (перв./повт./все) — троица напрямую из снимка, НЕ через
+      // funnel-пилюлю (тот же паттерн, что calls_count/_repeat/_all).
+      const work = workByDim.get(id);
       return {
         dimensionId:       id,
         dimensionName:     org?.manager_name ?? `#${id}`,
@@ -257,9 +297,14 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
         // org_resolved_hierarchy заполнен для всех активных; фолбэк — для менеджеров
         // вне активной оргструктуры.
         branchName:        org?.branch ?? 'СПб',
-        metrics: Object.fromEntries(
-          metricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null]),
-        ),
+        metrics: {
+          ...Object.fromEntries(
+            allMetricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null]),
+          ),
+          [DEALS_IN_WORK_METRIC_IDS[0]]: work ? work.primary : 0,
+          [DEALS_IN_WORK_METRIC_IDS[1]]: work ? work.repeat  : 0,
+          [DEALS_IN_WORK_METRIC_IDS[2]]: work ? work.all     : 0,
+        },
       };
     });
 }
