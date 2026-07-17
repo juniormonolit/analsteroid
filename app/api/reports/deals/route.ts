@@ -4,8 +4,16 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { resolveFilterClause } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
+import { STAGE_SNAPSHOT_GROUPS, DEALS_IN_WORK_METRIC_IDS } from '@/features/reports/engine/stageSnapshot';
 import type { Metric } from '@/lib/metrics/types';
 import { addDays, startOfDay } from 'date-fns';
+
+// Снимок «Стадии (сейчас)» (задача 2059) — metricId → stage_id этой группы.
+// Драйв-даун этих метрик игнорирует период (см. stageSnapshot.ts: снимок текущего
+// stage_id, а не «сделки, созданные/проданные в периоде»).
+const STAGE_NOW_STAGE_IDS = new Map(
+  Object.values(STAGE_SNAPSHOT_GROUPS).map(g => [g.metricId, g.stageIds]),
+);
 
 // Resolve a metric id to the collected metric whose deals we can list.
 // calculated → walk dependencies (first dep = numerator by catalog convention);
@@ -74,7 +82,20 @@ export async function GET(req: NextRequest) {
   )`;
   let extraJoin = '';
 
-  if (metricFilter) {
+  if (metricFilter && STAGE_NOW_STAGE_IDS.has(metricFilter)) {
+    // Снимок «Стадии (сейчас)» — период игнорируется целиком, фильтр — ТЕКУЩИЙ
+    // d.stage_id этой группы (список ids — наши же константы, не пользовательский
+    // ввод, инлайним напрямую вместо позиционного параметра, чтобы не сдвигать
+    // нумерацию $1/$2 ниже).
+    const ids = STAGE_NOW_STAGE_IDS.get(metricFilter)!;
+    metricDateFilter = `d.stage_id IN (${ids.map(id => `'${id.replace(/'/g, "''")}'`).join(',')})`;
+  } else if (metricFilter && DEALS_IN_WORK_METRIC_IDS.includes(metricFilter)) {
+    // «Сделок в работе» (перв./повт./все) — период игнорируется, фильтр — семантика
+    // sa.stages.stage_type = 'WORK' (см. stageSnapshot.ts); перв./повт./все уже
+    // разруливает funnelFilter (scope=primary/repeat/all) выше.
+    extraJoin = `JOIN stages _s_work ON _s_work.id = d.stage_id`;
+    metricDateFilter = `_s_work.stage_type = 'WORK'`;
+  } else if (metricFilter) {
     const metric = resolveToCollected(metricFilter, await loadMetrics());
     if (metric?.dateField) {
       if (metric.source === 'deal_events') {
