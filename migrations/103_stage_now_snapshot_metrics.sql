@@ -4,15 +4,17 @@
 -- проде (или сам код-агент, additive INSERT ... ON CONFLICT, как и 077).
 --
 -- Задача 2059 (Серёга 17.07) + доп. в тот же день. Новая категория каталога
--- «Стадии (сейчас)» — 9 метрик: 6 «снимок по конкретной рабочей стадии» +
+-- «Стадии (сейчас)» — 10 метрик: 7 «снимок по конкретной рабочей стадии» +
 -- 3 «Сделок в работе» (классическая троица перв./повт./все).
 --
--- ПРАВКА 17.07 (вторая итерация, решение Серёги «лид не нужен»): метрика
--- «Лид (сейчас)» (stage_now_new_count) УДАЛЕНА из семейства. INSERT заменён на
--- DELETE (внизу файла), чтобы повторный прогон миграции её не воскресил — она
--- успела попасть в живой каталог первым прогоном.
+-- ИСТОРИЯ ПРАВОК 17.07 (три итерации Серёги по метрике стадии NEW):
+--   v1: «Лид (сейчас)», id stage_now_new_count (первый прогон миграции);
+--   v2: удалена («лид не нужен») — DELETE старого id остаётся ниже как cleanup;
+--   v3: возвращена под display-именем «Необработанные» (дословное требование),
+--       id переименован в stage_now_unprocessed_count (говорящий; на старый id
+--       никто не ссылался — до прода метрики скрыты).
 --
--- ВСЕ 9 — metric_type='external': считает СЕРВЕР ОТЧЁТОВ
+-- ВСЕ 10 — metric_type='external': считает СЕРВЕР ОТЧЁТОВ
 -- (features/reports/engine/stageSnapshot.ts + гейты в byManagers.ts/
 -- byProductGroups.ts/bySources.ts), НЕ generic buildCollectedSQL. Это
 -- ПРИНЦИПИАЛЬНОЕ архитектурное решение: buildCollectedSQL жёстко бьёт период
@@ -33,26 +35,34 @@
 -- сигнал для пользователя: суффикс «(сейчас)» в name_ru/name_short_ru каждой
 -- метрики (тот же приём, что «План (на сегодня)» и т.п.).
 --
--- Группы 1-5 — переиспользование STAGE_GROUPS (тот же словарь, что и конверсии
+-- Группы 1-6 — переиспользование STAGE_GROUPS (тот же словарь, что и конверсии
 -- стадий, stageConversions.ts), funnels 0(ЧЛ)/1(ЮЛ). Терминальные (продажа/
--- отгрузка/отказ) исключены по заданию; «Лид» удалён решением Серёги. 6 — «Есть
--- цена дешевле, запросил предложение лучше» (UC_PU4HM2/C1:11), рабочая, но вне
--- STAGE_GROUPS.
+-- отгрузка/отказ) исключены по заданию. 7 — «Есть цена дешевле, запросил
+-- предложение лучше» (UC_PU4HM2/C1:11), рабочая, но вне STAGE_GROUPS.
 --
 -- ОТКРЫТО (Серёге, НЕ блокирует): funnels 2/3 (Повторные Б2C/Б2Б) и 4/7
 -- (Холодные звонки/Тендеры) НЕ покрыты per-stage метриками — их stage_id не
 -- совпадают со схемой ЧЛ/ЮЛ, канонической группировки для них ещё нет. «Сделок в
--- работе» (7-9) — ПОКРЫВАЕТ все воронки разом (stage_type='WORK', семантическое
+-- работе» (8-10) — ПОКРЫВАЕТ все воронки разом (stage_type='WORK', семантическое
 -- поле sa.stages, живая проверка 17.07: stage_type ∈ {NEW, WORK, WON, LOSS}).
 --
 -- СВЕРКА (запрошена явно): «Сделок в работе (все)» НЕ равно сумме per-stage
 -- метрик выше — ожидаемо, см. финальный отчёт задачи (funnel-покрытие +
--- stage_type='sold' тоже считается WORK + стадии «Лид» в WORK не входят и своей
--- метрики больше не имеют).
+-- stage_type='sold' тоже считается WORK + стадии «Необработанных» NEW/C1:NEW
+-- имеют stage_type='NEW' и в WORK не входят).
 
--- «Лид (сейчас)» (stage_now_new_count): УДАЛЕНА по решению Серёги 17.07 (вторая
--- итерация). DELETE идемпотентен; убирает строку, оставшуюся от первого прогона.
+-- Cleanup первой итерации: старый id stage_now_new_count («Лид (сейчас)») жил
+-- только в первом прогоне миграции; метрика возвращена под новым id ниже.
+-- DELETE идемпотентен.
 DELETE FROM metrics WHERE id = 'stage_now_new_count';
+
+-- 1. «Необработанные» — снимок по стадиям NEW/C1:NEW «Срочно обработать»
+--    (display-имя — дословное требование Серёги, итерация v3). НЕ путать с
+--    unprocessed_count/unprocessed_primary_count (те — за период, эта — снимок).
+INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
+VALUES ('stage_now_unprocessed_count', 'Необработанные', 'Необработанные', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1300,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии «Срочно обработать» (funnels ЧЛ/ЮЛ). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент.')
+ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
 VALUES ('stage_now_taken_count', 'Взято в работу (сейчас)', 'Взято в работу', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1301,

@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-07-17 — #2059, итерация 4: метрика стадии NEW возвращена как «Необработанные»
+
+Серёга передумал (дословно: «Называться она должна "Необработанные" верни в
+таком случае»). Возвращена с НОВЫМ id `stage_now_unprocessed_count` (говорящий;
+на старый `stage_now_new_count` никто не ссылался — до прода семейство скрыто):
+(1) в реестр `STAGE_SNAPSHOT_GROUPS` (`stageSnapshot.ts`, группа `unprocessed`,
+stageIds = STAGE_GROUPS.new); (2) в живой каталог YC analytics — INSERT с
+display-именем «Необработанные», флаги скрытия те же, что у остальных 9
+(`is_test=true, is_hidden_in_ui=true` до прод-выката), sort_order 1300;
+(3) в миграции 103 — идемпотентный INSERT нового id (DELETE старого id остаётся
+как cleanup первого прогона). Семейство снова 10 метрик. НЕ путать с каталожными
+`unprocessed_count`/`unprocessed_primary_count` — те за период, эта — снимок.
+Разворотный SQL прод-деплоя обновить: id `stage_now_new_count` → 
+`stage_now_unprocessed_count`.
+
+---
+
 ## 2026-07-17 — #2059, итерация 3: «Лид (сейчас)» удалена (решение Серёги «лид не нужен»)
 
 `stage_now_new_count` удалена: (1) из живого YC analytics каталога (DELETE,
