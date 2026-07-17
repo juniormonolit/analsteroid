@@ -1,8 +1,7 @@
 import { analyticsDb } from '@/lib/db/clients';
 import type { DimensionConfig } from '@/lib/metrics/sqlGen';
-import { STAGE_GROUPS } from './stageConversions';
 
-// ── Каталог «Стадии (сейчас)» (задача 2059, Серёга 17.07 + доп. в тот же день) ──
+// ── Каталог «Стадии (сейчас)» (задачи 2059+2063, Серёга 17.07) ──────────────────
 //
 // СНИМОК текущего состояния sa.deals — «сколько сделок ПРЯМО СЕЙЧАС стоит в
 // стадии X» — сознательно НЕ идёт через buildCollectedSQL/genDealsExpr (там период
@@ -10,42 +9,68 @@ import { STAGE_GROUPS } from './stageConversions';
 // см. lib/metrics/sqlGen.ts). Этот движок вообще не принимает период: один SELECT
 // по ЖИВОМУ d.stage_id, без единой даты. Дублировать resolveFilterClause/
 // CLIENT_HISTORY_FIELDS тоже не нужно — метрики здесь metric_type='external'
-// (не 'collected'), поэтому инцидент 14.07 [[reference_analsteroid_reports_
-// virtual_fields_incident]] (виртуальные scope_independent-поля ломали базовый SQL
-// ЛЮБОГО отчёта) структурно не может повториться: этот код не трогает
-// resolveFilterClause и не эмитит d.<виртуальное_поле> вообще.
+// (не 'collected'), поэтому инцидент 14.07 (виртуальные scope_independent-поля
+// ломали базовый SQL ЛЮБОГО отчёта) структурно не может повториться.
 //
-// Группы стадий (7 метрик, funnels 0=ЧЛ/1=ЮЛ) — переиспользование STAGE_GROUPS,
-// того же канонического словаря, что уже используют конверсии стадий
-// (stageConversions.ts). Bitrix stage_id НЕ параллельны между воронками — вне
-// funnels 0/1 (2/3=Повторные Б2C/Б2Б, 4=Холодные звонки, 7=Тендеры) канонической
-// группировки такого же вида ещё нет (см. WORKLOG/финальный отчёт задачи —
-// открытый вопрос Серёге, не блокирует).
+// ПРАВИЛА СЕМЕЙСТВА (решения Серёги 17.07, задача 2063, дословно: «пер-стадийные
+// в повторных должны быть. … Называться они должны ТОЧЬ-В-ТОЧЬ как стадии.»):
+//  1. Одна метрика = одно ТОЧНОЕ название стадии портала (суффикс воронки
+//     «(ЧЛ)/(ЮЛ)/(B2C)/(B2B)» отброшен — это маркер воронки, не имя стадии).
+//     Одноимённые стадии разных воронок агрегируются в одну метрику. Из-за этого
+//     правила прежние 2059-группы, склеивавшие РАЗНОимённые стадии (например
+//     «Взято в работу» = «Не дозвонился»+«Взял в работу»), РАСЩЕПЛЕНЫ.
+//  2. Покрытие: funnels 0 (ЧЛ), 1 (ЮЛ), 2 (Повторные B2C), 3 (Повторные B2B).
+//     Funnels 4 (Холодные звонки) и 7 (Тендеры) НЕ включены (Серёга про них не
+//     говорил) — их сделки видны только в «Сделок в работе» (stage_type='WORK').
+//  3. ИСКЛЮЧЕНИЕ из «точь-в-точь»: «Необработанные» — персональное переименование
+//     Серёги (итерации 2059: «Лид (сейчас)» → удалена → возвращена как
+//     «Необработанные»). В неё же по СМЫСЛУ (входная created-стадия) сложены
+//     C2:NEW/C3:NEW «Сделка (B2C/B2B)» повторных воронок — отдельной метрики
+//     «Сделка» сознательно нет (см. финальный отчёт 2063, решение согласовано).
+//  4. Рабочие стадии = event_type IN (created, called, reserved, confirmed).
+//     Терминальные sold/shipped/lost исключены по исходному ТЗ (в т.ч. «Заказ в
+//     работе (B2C)» и «Счет оплачен (B2B)» — event_type='sold').
 //
-// unprocessed — снимок по STAGE_GROUPS.new (NEW/C1:NEW «Срочно обработать»).
-// История имени (итерации Серёги 17.07): «Лид (сейчас)» → удалена («лид не
-// нужен») → возвращена под display-именем «Необработанные» (дословное
-// требование Серёги). Id при возврате переименован в stage_now_unprocessed_count
-// (говорящий; старый stage_now_new_count жил только в первом прогоне миграции —
-// добивается DELETE'ом в 103). НЕ путать с каталожными
-// unprocessed_count/unprocessed_primary_count — те считают ЗА ПЕРИОД, эта —
-// снимок «сейчас».
-//
-// + price_objection — стадия «Есть цена дешевле, запросил предложение лучше»
-// (UC_PU4HM2 ЧЛ / C1:11 ЮЛ) — рабочая (event_type='called'), но НЕ входит ни в
-// одну из групп STAGE_GROUPS (тот же список ID, что и priceObjectionConversion.ts,
-// живая проверка 10.07/17.07).
-//
-// Терминальные (sale/shipped — «Продажа»/«Отгрузка») и «Отказ» — исключены по
-// заданию (только рабочие статусы).
+// Все stage_id и написания имён сверены с ЖИВЫМ sa.stages 17.07 (funnels 0-3,
+// event_type IN (created,called,reserved,confirmed) — 29 стадий, все покрыты
+// ниже, кроме sold-стадий). НЕ путать stage_now_unprocessed_count с каталожными
+// unprocessed_count/unprocessed_primary_count — те за ПЕРИОД, эта — снимок.
 export const STAGE_SNAPSHOT_GROUPS: Record<string, { metricId: string; stageIds: string[] }> = {
-  unprocessed:     { metricId: 'stage_now_unprocessed_count',      stageIds: STAGE_GROUPS.new },
-  taken:           { metricId: 'stage_now_taken_count',            stageIds: STAGE_GROUPS.taken },
-  contacted:       { metricId: 'stage_now_contacted_count',        stageIds: STAGE_GROUPS.contacted },
-  priced:          { metricId: 'stage_now_priced_count',           stageIds: STAGE_GROUPS.priced },
-  reservation:     { metricId: 'stage_now_reservation_count',      stageIds: STAGE_GROUPS.reservation },
-  confirmed:       { metricId: 'stage_now_confirmed_count',        stageIds: STAGE_GROUPS.confirmed },
-  price_objection: { metricId: 'stage_now_price_objection_count',  stageIds: ['UC_PU4HM2', 'C1:11'] },
+  // «Необработанные» (исключение из «точь-в-точь»): NEW/C1:NEW «Срочно
+  // обработать» + C2:NEW/C3:NEW «Сделка» — все входные created-стадии.
+  unprocessed:        { metricId: 'stage_now_unprocessed_count',         stageIds: ['NEW', 'C1:NEW', 'C2:NEW', 'C3:NEW'] },
+  // «Не дозвонился» — расщеплено из прежней 2059-группы taken.
+  no_answer:          { metricId: 'stage_now_no_answer_count',           stageIds: ['PREPARATION', 'C1:PREPARATION'] },
+  // «Взял в работу» — прежняя taken минус «Не дозвонился».
+  taken:              { metricId: 'stage_now_taken_count',               stageIds: ['PREPAYMENT_INVOICE', 'C1:PREPAYMENT_INVOICE'] },
+  // «Сделал запрос снабженцу, созвонился с заказчиком» — одноимённые стадии всех
+  // 4 воронок (в повторных это C2:PREPARATION/C3:PREPARATION — id обманчив,
+  // название точь-в-точь совпадает, live-проверка 17.07).
+  contacted:          { metricId: 'stage_now_contacted_count',           stageIds: ['EXECUTING', 'C1:EXECUTING', 'C2:PREPARATION', 'C3:PREPARATION'] },
+  // «Созвонился и озвучил цены» — только ЧЛ (в ЮЛ одноимённой стадии НЕТ —
+  // прежняя 2059-группа priced склеивала сюда C1:FINAL_INVOICE «Отправил КП и
+  // позвонил», теперь это отдельная метрика kp_sent).
+  priced:             { metricId: 'stage_now_priced_count',              stageIds: ['FINAL_INVOICE'] },
+  // «Отправил КП и позвонил» — ЮЛ (C1:FINAL_INVOICE) + B2B (C3:PREPAYMENT_INVOICE),
+  // названия совпадают точь-в-точь.
+  kp_sent:            { metricId: 'stage_now_kp_sent_count',             stageIds: ['C1:FINAL_INVOICE', 'C3:PREPAYMENT_INVOICE'] },
+  // «Созвонился и уточнил следующие материалы» — только повторные (B2C/B2B).
+  next_materials:     { metricId: 'stage_now_next_materials_count',      stageIds: ['C2:3', 'C3:3'] },
+  // «Заполнил все материалы и запланировал звонок» — только B2C.
+  filled_planned:     { metricId: 'stage_now_filled_planned_call_count', stageIds: ['C2:PREPAYMENT_INVOICE'] },
+  // «Есть цена дешевле, запросил предложение лучше» — все 4 воронки (тот же
+  // смысл, что стадия в priceObjectionConversion.ts, но теперь + C2:4/C3:4).
+  price_objection:    { metricId: 'stage_now_price_objection_count',     stageIds: ['UC_PU4HM2', 'C1:11', 'C2:4', 'C3:4'] },
+  // «Забронировано» — ЧЛ + B2C (C2:EXECUTING — id обманчив, название совпадает).
+  reservation:        { metricId: 'stage_now_reservation_count',         stageIds: ['UC_SQEHTU', 'C2:EXECUTING'] },
+  // «Отправил счет и договор (Бронь)» — только ЮЛ; «(Бронь)» — часть имени стадии.
+  invoice_contract:   { metricId: 'stage_now_invoice_contract_count',    stageIds: ['C1:1'] },
+  // «Подтвержденная бронь» — ЧЛ + B2C.
+  confirmed:          { metricId: 'stage_now_confirmed_count',           stageIds: ['1', 'C2:5'] },
+  // «Наша цена лучшая, ждем оплату (Подтв.бронь)» — только ЮЛ.
+  best_price_wait:    { metricId: 'stage_now_best_price_wait_count',     stageIds: ['C1:2'] },
+  // «Отправил счет» — только B2B (C3:EXECUTING, event_type='confirmed').
+  invoice_sent:       { metricId: 'stage_now_invoice_sent_count',        stageIds: ['C3:EXECUTING'] },
 };
 
 export const STAGE_SNAPSHOT_METRIC_IDS = Object.values(STAGE_SNAPSHOT_GROUPS).map(g => g.metricId);

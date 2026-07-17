@@ -1,110 +1,130 @@
--- БД: YC analytics (таблица metrics, run_analytics.mjs). Проверено на сервере
--- 17.07: занято по 102 включительно (в т.ч. ad-hoc changelog-файлы вне репо,
--- 057-088/096-097) — 103 свободен. НЕ применять локально — накатывает Артём на
--- проде (или сам код-агент, additive INSERT ... ON CONFLICT, как и 077).
+-- БД: YC analytics (таблица metrics, run_analytics.mjs). Номер 103 проверен на
+-- сервере 17.07 (занято по 102 включительно, в т.ч. ad-hoc ченджлоги вне репо).
 --
--- Задача 2059 (Серёга 17.07) + доп. в тот же день. Новая категория каталога
--- «Стадии (сейчас)» — 10 метрик: 7 «снимок по конкретной рабочей стадии» +
--- 3 «Сделок в работе» (классическая троица перв./повт./все).
+-- Задачи 2059 + 2063 (Серёга, 17.07, несколько итераций за день). Категория
+-- каталога «Стадии (сейчас)»: 14 per-stage метрик-снимков + 3 «Сделок в работе»
+-- (перв./повт./все) = 17 метрик. ВСЕ — metric_type='external': считает движок
+-- features/reports/engine/stageSnapshot.ts (+ byManagers/byProductGroups/
+-- bySources), НЕ generic buildCollectedSQL — период не участвует НИГДЕ (снимок).
 --
--- ИСТОРИЯ ПРАВОК 17.07 (три итерации Серёги по метрике стадии NEW):
---   v1: «Лид (сейчас)», id stage_now_new_count (первый прогон миграции);
---   v2: удалена («лид не нужен») — DELETE старого id остаётся ниже как cleanup;
---   v3: возвращена под display-именем «Необработанные» (дословное требование),
---       id переименован в stage_now_unprocessed_count (говорящий; на старый id
---       никто не ссылался — до прода метрики скрыты).
+-- ПРАВИЛА 2063 (дословно Серёга: «пер-стадийные в повторных должны быть. …
+-- Называться они должны ТОЧЬ-В-ТОЧЬ как стадии.»):
+--   * имя метрики = ТОЧНОЕ имя стадии портала без суффикса воронки; одноимённые
+--     стадии funnels 0/1/2/3 агрегируются в одну метрику;
+--   * funnels 4 (Холодные звонки) / 7 (Тендеры) НЕ включены — видны только в
+--     «Сделок в работе» (stage_type='WORK');
+--   * исключение: «Необработанные» — персональное имя Серёги для входных
+--     created-стадий (NEW/C1:NEW «Срочно обработать» + C2:NEW/C3:NEW «Сделка»);
+--   * охват стадий задаётся В КОДЕ (stageSnapshot.ts) — каталог хранит только
+--     имена/флаги, цифры меняются только с деплоем кода.
 --
--- ВСЕ 10 — metric_type='external': считает СЕРВЕР ОТЧЁТОВ
--- (features/reports/engine/stageSnapshot.ts + гейты в byManagers.ts/
--- byProductGroups.ts/bySources.ts), НЕ generic buildCollectedSQL. Это
--- ПРИНЦИПИАЛЬНОЕ архитектурное решение: buildCollectedSQL жёстко бьёт период
--- ($1/$2) в базовый SQL КАЖДОЙ collected-метрики разом — для «снимка текущего
--- состояния» это в принципе неприменимо (период здесь не участвует вообще, ни
--- одной даты). Отдельный путь также структурно исключает повтор инцидента 14.07
--- (виртуальные scope_independent-поля ронили ВСЕ отчёты, см. WORKLOG/reference_
--- analsteroid_reports_virtual_fields_incident) — этот код не трогает
--- resolveFilterClause/CLIENT_HISTORY_FIELDS вообще.
+-- История итераций: v1 «Лид (сейчас)» stage_now_new_count → v2 удалена → v3
+-- возвращена как «Необработанные» (id stage_now_unprocessed_count) → v4 (2063)
+-- сплиты по точным именам + повторные воронки. DELETE старого id остаётся ниже.
 --
--- «Период не влияет» — та же семантика, что и у ППП/ППО, но здесь честнее:
--- ППП/ППО (тег scope_independent) технически ВСЁ ЕЩЁ фильтруются по периоду
--- через свой dateField в buildCollectedSQL (тег снимает только funnel-пилюлю
--- Первичные/Повторные, НЕ период) — это выяснилось при разборе задачи 17.07. У
--- «Стадий (сейчас)» период не участвует НИГДЕ, ни в SQL, ни в пилюле. Отдельного
--- UI-бейджа «период не влияет» в отчётах сейчас нет ни у одной метрики (проверено
--- живым кодом — есть только у карточки метрики в /metrics, не в самом отчёте) —
--- сигнал для пользователя: суффикс «(сейчас)» в name_ru/name_short_ru каждой
--- метрики (тот же приём, что «План (на сегодня)» и т.п.).
---
--- Группы 1-6 — переиспользование STAGE_GROUPS (тот же словарь, что и конверсии
--- стадий, stageConversions.ts), funnels 0(ЧЛ)/1(ЮЛ). Терминальные (продажа/
--- отгрузка/отказ) исключены по заданию. 7 — «Есть цена дешевле, запросил
--- предложение лучше» (UC_PU4HM2/C1:11), рабочая, но вне STAGE_GROUPS.
---
--- ОТКРЫТО (Серёге, НЕ блокирует): funnels 2/3 (Повторные Б2C/Б2Б) и 4/7
--- (Холодные звонки/Тендеры) НЕ покрыты per-stage метриками — их stage_id не
--- совпадают со схемой ЧЛ/ЮЛ, канонической группировки для них ещё нет. «Сделок в
--- работе» (8-10) — ПОКРЫВАЕТ все воронки разом (stage_type='WORK', семантическое
--- поле sa.stages, живая проверка 17.07: stage_type ∈ {NEW, WORK, WON, LOSS}).
---
--- СВЕРКА (запрошена явно): «Сделок в работе (все)» НЕ равно сумме per-stage
--- метрик выше — ожидаемо, см. финальный отчёт задачи (funnel-покрытие +
--- stage_type='sold' тоже считается WORK + стадии «Необработанных» NEW/C1:NEW
--- имеют stage_type='NEW' и в WORK не входят).
+-- Идемпотентно: INSERT ... ON CONFLICT DO UPDATE (без is_test в SET — ручной
+-- рычаг скрытия не перетирается перекатом).
 
--- Cleanup первой итерации: старый id stage_now_new_count («Лид (сейчас)») жил
--- только в первом прогоне миграции; метрика возвращена под новым id ниже.
--- DELETE идемпотентен.
 DELETE FROM metrics WHERE id = 'stage_now_new_count';
 
--- 1. «Необработанные» — снимок по стадиям NEW/C1:NEW «Срочно обработать»
---    (display-имя — дословное требование Серёги, итерация v3). НЕ путать с
---    unprocessed_count/unprocessed_primary_count (те — за период, эта — снимок).
+-- Необработанные
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
 VALUES ('stage_now_unprocessed_count', 'Необработанные', 'Необработанные', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1300,
-  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии «Срочно обработать» (funnels ЧЛ/ЮЛ). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент.')
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Входные created-стадии всех 4 воронок: «Срочно обработать» (ЧЛ/ЮЛ) + «Сделка» (B2C/B2B). Имя — решение Серёги (исключение из «точь-в-точь»). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Не дозвонился
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('stage_now_taken_count', 'Взято в работу (сейчас)', 'Взято в работу', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1301,
-  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии «Взял в работу» (funnels ЧЛ/ЮЛ). Период отчёта НЕ влияет.')
+VALUES ('stage_now_no_answer_count', 'Не дозвонился', 'Не дозвонился', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1301,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Стадии «Не дозвонился» (ЧЛ/ЮЛ). Расщеплено из прежней «Взято в работу» (2059). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Взял в работу
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('stage_now_contacted_count', 'Связался с заказчиком (сейчас)', 'Связался', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1302,
-  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии «Сделал запрос снабженцу, созвонился с заказчиком» (funnels ЧЛ/ЮЛ). Период отчёта НЕ влияет.')
+VALUES ('stage_now_taken_count', 'Взял в работу', 'Взял в работу', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1302,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Стадии «Взял в работу» (ЧЛ/ЮЛ). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Сделал запрос снабженцу, созвонился с заказчиком
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('stage_now_priced_count', 'Озвучены цены (сейчас)', 'Цена озвучена', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1303,
-  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии «Созвонился и озвучил цены» (funnels ЧЛ/ЮЛ). Период отчёта НЕ влияет.')
+VALUES ('stage_now_contacted_count', 'Сделал запрос снабженцу, созвонился с заказчиком', 'Сделал запрос снабженцу, созвонился с заказчиком', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1303,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Одноимённые стадии всех 4 воронок (ЧЛ/ЮЛ/B2C/B2B). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Созвонился и озвучил цены
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('stage_now_reservation_count', 'Бронь (сейчас)', 'Бронь', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1304,
-  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии брони (не подтверждённой) (funnels ЧЛ/ЮЛ). Период отчёта НЕ влияет.')
+VALUES ('stage_now_priced_count', 'Созвонился и озвучил цены', 'Созвонился и озвучил цены', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1304,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Только ЧЛ (в остальных воронках одноимённой стадии нет). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Отправил КП и позвонил
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('stage_now_confirmed_count', 'Подтв. бронь (сейчас)', 'Подтв.бронь', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1305,
-  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии подтверждённой брони (funnels ЧЛ/ЮЛ). Период отчёта НЕ влияет.')
+VALUES ('stage_now_kp_sent_count', 'Отправил КП и позвонил', 'Отправил КП и позвонил', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1305,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. ЮЛ + B2B (одноимённые стадии). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Созвонился и уточнил следующие материалы
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('stage_now_price_objection_count', 'Возражение по цене (сейчас)', 'Возражение цена', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1306,
-  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии «Есть цена дешевле, запросил предложение лучше» (funnels ЧЛ/ЮЛ). Рабочая стадия, вне 6 групп выше. Период отчёта НЕ влияет.')
+VALUES ('stage_now_next_materials_count', 'Созвонился и уточнил следующие материалы', 'Созвонился и уточнил следующие материалы', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1306,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Только повторные (B2C/B2B). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Заполнил все материалы и запланировал звонок
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('deals_in_work_count', 'Сделок в работе (сейчас)', 'В работе', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1307,
-  'Снимок: все сделки, чья ТЕКУЩАЯ стадия относится к sa.stages.stage_type=''WORK'' (все воронки, ПЕРВИЧНЫЕ funnels.is_repeat=false). НЕ равно сумме 7 метрик выше (funnel-покрытие шире + сделки в стадии "продано, не отгружено" тоже WORK). Период отчёта НЕ влияет.')
+VALUES ('stage_now_filled_planned_call_count', 'Заполнил все материалы и запланировал звонок', 'Заполнил все материалы и запланировал звонок', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1307,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Только B2C. Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Есть цена дешевле, запросил предложение лучше
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('deals_in_work_count_repeat', 'Сделок в работе, повт. (сейчас)', 'В работе (повт.)', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1308,
-  'То же, что «Сделок в работе», но funnels.is_repeat=true (Повторные Б2С/Б2Б). Период отчёта НЕ влияет.')
+VALUES ('stage_now_price_objection_count', 'Есть цена дешевле, запросил предложение лучше', 'Есть цена дешевле, запросил предложение лучше', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1308,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Все 4 воронки. Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
 
+-- Забронировано
 INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
-VALUES ('deals_in_work_count_all', 'Сделок в работе, все (сейчас)', 'В работе (все)', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1309,
-  'То же, что «Сделок в работе», ВСЕ воронки разом (первичные + повторные). Период отчёта НЕ влияет.')
+VALUES ('stage_now_reservation_count', 'Забронировано', 'Забронировано', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1309,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. ЧЛ + B2C. Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
+ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
+
+-- Отправил счет и договор (Бронь)
+INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
+VALUES ('stage_now_invoice_contract_count', 'Отправил счет и договор (Бронь)', 'Отправил счет и договор (Бронь)', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1310,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Только ЮЛ; «(Бронь)» — часть имени стадии. Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
+ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
+
+-- Подтвержденная бронь
+INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
+VALUES ('stage_now_confirmed_count', 'Подтвержденная бронь', 'Подтвержденная бронь', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1311,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. ЧЛ + B2C. Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
+ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
+
+-- Наша цена лучшая, ждем оплату (Подтв.бронь)
+INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
+VALUES ('stage_now_best_price_wait_count', 'Наша цена лучшая, ждем оплату (Подтв.бронь)', 'Наша цена лучшая, ждем оплату (Подтв.бронь)', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1312,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Только ЮЛ. Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
+ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
+
+-- Отправил счет
+INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
+VALUES ('stage_now_invoice_sent_count', 'Отправил счет', 'Отправил счет', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1313,
+  'Снимок: сколько сделок ПРЯМО СЕЙЧАС стоит в стадии с этим названием. Только B2B (event_type=''confirmed''). Период отчёта НЕ влияет — не сумма за период, а состояние на текущий момент. Охват stage_id — в коде (stageSnapshot.ts).')
+ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
+
+-- Сделок в работе (сейчас)
+INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
+VALUES ('deals_in_work_count', 'Сделок в работе (сейчас)', 'В работе', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1320,
+  'Снимок: все сделки, чья ТЕКУЩАЯ стадия относится к sa.stages.stage_type=''WORK'' (ВСЕ воронки, включая Холодные звонки/Тендеры; ПЕРВИЧНЫЕ funnels.is_repeat=false). НЕ равно сумме per-stage метрик выше (см. WORKLOG). Период отчёта НЕ влияет.')
+ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
+
+-- Сделок в работе, повт. (сейчас)
+INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
+VALUES ('deals_in_work_count_repeat', 'Сделок в работе, повт. (сейчас)', 'В работе (повт.)', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1321,
+  'То же, funnels.is_repeat=true (Повторные Б2С/Б2Б). Период отчёта НЕ влияет.')
+ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
+
+-- Сделок в работе, все (сейчас)
+INSERT INTO metrics (id, name_ru, name_short_ru, metric_type, data_type, formula, dependencies, tags, is_core, is_active, is_hidden_in_ui, is_test, decimal_places, aggregation_fn, fill_ok, calc_ok, is_collect_ok, is_calc_ok, category, sort_order, description)
+VALUES ('deals_in_work_count_all', 'Сделок в работе, все (сейчас)', 'В работе (все)', 'external', 'int', NULL, '{}', '{}', false, true, false, false, 0, 'sum', false, false, true, false, 'Стадии (сейчас)', 1322,
+  'То же, ВСЕ воронки разом (первичные + повторные). Период отчёта НЕ влияет.')
 ON CONFLICT (id) DO UPDATE SET name_ru = EXCLUDED.name_ru, name_short_ru = EXCLUDED.name_short_ru, metric_type = EXCLUDED.metric_type, data_type = EXCLUDED.data_type, is_hidden_in_ui = EXCLUDED.is_hidden_in_ui, aggregation_fn = EXCLUDED.aggregation_fn, category = EXCLUDED.category, sort_order = EXCLUDED.sort_order, is_active = EXCLUDED.is_active, is_collect_ok = EXCLUDED.is_collect_ok, description = EXCLUDED.description;
