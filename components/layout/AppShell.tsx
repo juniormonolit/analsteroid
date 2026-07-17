@@ -449,14 +449,14 @@ function SidebarBody({
                   </RailTooltip>
                 ) : item.isSales ? (
                   <>
-                    {/* relative-обёртка: «+ Создать отчёт» — компактная иконка в
-                        строке заголовка (правка Иосифа 16.07), абсолютом левее
-                        шеврона; кнопка-в-кнопке невалидна, поэтому сосед. */}
-                    <div className="relative">
+                    {/* Ряд: кнопка-тоггл (иконка+текст+шеврон) + отдельная кнопка «+»
+                        соседом (правка Иосифа 17.07: absolute «+» наезжал на шеврон).
+                        В свёрнутой рельсе «+» не показываем — только сама кнопка. */}
+                    <div className="flex items-center">
                       <RailTooltip collapsed={collapsed} label={item.label}>
                         <button
                           onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                          className={`w-full ${navItemBase(collapsed)} ${collapsed ? '' : 'pr-9'} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                          className={`${collapsed ? 'w-full' : 'flex-1 min-w-0'} ${navItemBase(collapsed)} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                         >
                           <span className={navIconCls(salesActive)}>{item.icon}</span>
                           {!collapsed && <>
@@ -468,17 +468,12 @@ function SidebarBody({
                         </button>
                       </RailTooltip>
                       {!collapsed && (
-                        /* Позиционирует обёртка: .tap-target сам ставит position:relative
-                           и ломает absolute, если вешать всё на кнопку (найдено глазами
-                           на стенде — «+» улетал за левый край). */
-                        <div className="absolute right-8 top-1/2 -translate-y-1/2">
-                          <CreateReportButton
-                            label=""
-                            iconSize={15}
-                            title="Создать отчёт"
-                            className="tap-target flex p-1 rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-active-bg)] transition-colors"
-                          />
-                        </div>
+                        <CreateReportButton
+                          label=""
+                          iconSize={16}
+                          title="Создать отчёт"
+                          className="tap-target flex shrink-0 mr-2 ml-0.5 p-1 rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-active-bg)] transition-colors"
+                        />
                       )}
                     </div>
                     {!collapsed && expanded === item.label && (
