@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
-  ChevronDown, ChevronRight, PanelLeftClose, PanelLeft, LogOut, Settings,
+  ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   Bookmark, BookOpen, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
@@ -266,15 +266,9 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
 
   return (
     <div>
-      {/* «Создать отчёт» (задача 1572): видна ВСЕМ, включая Лайт — не завязана
-          на isReportAdmin/canManage, только на то, что раздел «Продажи» вообще
-          открыт (section.sales, уже проверено выше по дереву в NAV.filter). */}
-      <div className="mx-1 mb-2">
-        <CreateReportButton
-          label="Создать отчёт"
-          className="tap-target w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[12.5px] font-medium rounded-lg border border-dashed border-[var(--color-sidebar-border)] text-[var(--color-sidebar-text)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] hover:bg-[var(--color-sidebar-hover-bg)] transition-colors"
-        />
-      </div>
+      {/* «Создать отчёт» переехала иконкой «+» в строку заголовка «Продажи»
+          (правка Иосифа 16.07 — жирная dashed-кнопка рвала связь заголовка с
+          группами отчётов). См. isSales-ветку в SidebarBody. */}
 
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
@@ -443,20 +437,33 @@ function SidebarBody({
                   </RailTooltip>
                 ) : item.isSales ? (
                   <>
-                    <RailTooltip collapsed={collapsed} label={item.label}>
-                      <button
-                        onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                        className={`w-full ${NAV_ITEM_BASE} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
-                      >
-                        <span className={navIconCls(salesActive)}>{item.icon}</span>
-                        {!collapsed && <>
-                          <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
-                          {expanded === item.label
-                            ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
-                            : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
-                        </>}
-                      </button>
-                    </RailTooltip>
+                    {/* relative-обёртка: «+ Создать отчёт» — компактная иконка в
+                        строке заголовка (правка Иосифа 16.07), абсолютом левее
+                        шеврона; кнопка-в-кнопке невалидна, поэтому сосед. */}
+                    <div className="relative">
+                      <RailTooltip collapsed={collapsed} label={item.label}>
+                        <button
+                          onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
+                          className={`w-full ${NAV_ITEM_BASE} ${collapsed ? '' : 'pr-9'} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                        >
+                          <span className={navIconCls(salesActive)}>{item.icon}</span>
+                          {!collapsed && <>
+                            <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
+                            {expanded === item.label
+                              ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
+                              : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
+                          </>}
+                        </button>
+                      </RailTooltip>
+                      {!collapsed && (
+                        <CreateReportButton
+                          label=""
+                          iconSize={15}
+                          title="Создать отчёт"
+                          className="tap-target absolute right-8 top-1/2 -translate-y-1/2 p-1 rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-active-bg)] transition-colors"
+                        />
+                      )}
+                    </div>
                     {!collapsed && expanded === item.label && (
                       <div className="py-1">
                         <SalesSidebarSection collapsed={collapsed} pathname={pathname} user={user} />
@@ -655,10 +662,21 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
       <ThemeSync />
       <div className="flex h-dvh overflow-hidden">
         {/* Desktop sidebar (на <md скрыт — вместо него drawer) */}
+        {/* group + relative — для ручки сворачивания на правой кромке (правка
+            Иосифа 16.07: кнопка в шапке «бесила»; паттерн Notion/Linear — круглая
+            ручка по центру кромки, hover-reveal: на десктопе появляется при
+            наведении на сайдбар, на таче видна всегда — правило CLAUDE.md №5). */}
         <aside
-          className="hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] border-r border-[var(--color-sidebar-border)] transition-all duration-200"
+          className="group relative hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] border-r border-[var(--color-sidebar-border)] transition-all duration-200"
           style={{ width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED }}
         >
+          <button
+            onClick={() => setCollapsed(v => !v)}
+            title={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            className="hover-reveal absolute -right-3 top-1/2 -translate-y-1/2 z-30 w-6 h-6 rounded-full border border-[var(--color-sidebar-border)] bg-[var(--color-bg-surface)] shadow-md flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:border-[var(--color-sidebar-active)] transition-colors"
+          >
+            {collapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
+          </button>
           {/* Header — клик по лого/названию ведёт на Главную (бриф Главной).
               Свёрнутая рельса (52px) слишком узкая для лого+кнопки в один ряд —
               складываем в две строки, как rail-logo/rail-expand в утверждённом
@@ -680,40 +698,22 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             }
           >
             {collapsed ? (
-              <>
-                <Link href="/home" title="Монолитика — на главную">
-                  <BrandLogo size={18} />
-                </Link>
-                <button
-                  onClick={() => setCollapsed(v => !v)}
-                  className="text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
-                >
-                  <PanelLeft size={18} />
-                </button>
-              </>
+              <Link href="/home" title="Монолитика — на главную">
+                <BrandLogo size={18} />
+              </Link>
             ) : (
               <>
-                <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
-                  {/* items-center + leading-none на названии — раньше базовая линия
-                      текста визуально «плавала» относительно центра знака лого
-                      (line-height шрифта давал текстовому блоку лишнюю высоту сверху/
-                      снизу центра); leading-none убирает этот зазор, gap-2 остаётся
-                      единым интервалом лого↔название для всех мест лочапа (шапка/
-                      мобильный drawer/топбар). */}
+                {/* pl-[22px] — лого и слоган в одном вертикальном ритме с иконками
+                    пунктов меню (правка Иосифа 16.07): x иконки «Продажи» =
+                    px-2 нава (8) + mx-1 пункта (4) + px-2.5 пункта (10) = 22px.
+                    Кнопки сворачивания в шапке больше нет — ручка на кромке. */}
+                <div className="flex items-center gap-2 pl-[22px] pr-3 pt-3 pb-1 min-w-0">
                   <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
                     <BrandLogo size={22} className="shrink-0" />
                     <span className="text-[var(--color-sidebar-text)] font-semibold text-sm leading-none tracking-wide truncate">Монолитика</span>
                   </Link>
-                  <button
-                    onClick={() => setCollapsed(v => !v)}
-                    className="text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)] p-1 rounded-md shrink-0 transition-colors"
-                  >
-                    <PanelLeftClose size={18} />
-                  </button>
                 </div>
-                {/* Тумблер Лайт/Про из шапки убран (правка Иосифа 16.07) —
-                    остался только в ЛК (ProfilePage). pb-2.5 переехал на слоган. */}
-                <span className={`px-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
+                <span className={`pl-[22px] pr-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
               </>
             )}
           </div>
@@ -732,7 +732,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               {/* Тот же двухрядный header, что у десктопного сайдбара — тумблер
                   Лайт/Про убран и здесь (правка Иосифа 16.07, остался в ЛК). */}
               <div className="flex flex-col border-b border-[var(--color-sidebar-border)] shrink-0">
-                <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
+                <div className="flex items-center justify-between gap-2 pl-[22px] pr-3 pt-3 pb-1">
                   <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
                     <BrandLogo size={22} className="shrink-0" />
                     <span className="text-[var(--color-sidebar-text)] font-semibold text-sm leading-none tracking-wide truncate">Монолитика</span>
@@ -744,7 +744,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                     <X size={18} />
                   </button>
                 </div>
-                <span className={`px-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
+                <span className={`pl-[22px] pr-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
               </div>
               <SidebarBody
                 collapsed={false} pathname={pathname} user={user}

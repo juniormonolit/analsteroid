@@ -28,10 +28,13 @@ export function CreateReportButton({
   className,
   label = 'Создать отчёт',
   iconSize = 14,
+  title,
 }: {
   className?: string;
   label?: string;
   iconSize?: number;
+  /** Нативный тултип — для icon-only варианта («+» в заголовке «Продажи»). */
+  title?: string;
 }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
@@ -43,7 +46,7 @@ export function CreateReportButton({
 
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className={className}>
+      <button type="button" onClick={() => setOpen(true)} className={className} title={title}>
         <Plus size={iconSize} />
         {label}
       </button>
