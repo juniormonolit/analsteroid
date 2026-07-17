@@ -36,8 +36,12 @@ const SIDEBAR_WIDTH_COLLAPSED = 52;
    «пункты должны читаться»): чуть выше строка (py-2), крупнее межиконный зазор,
    font-medium у неактивных (не полужирный — контраст с активным сохраняется),
    иконка подсвечивается на hover всей строки (group). */
-const NAV_ITEM_BASE =
-  'group flex items-start gap-3 px-2.5 py-2 mx-1 my-0.5 rounded-[10px] text-[13.5px] font-medium leading-[1.35] relative transition-colors';
+// В свёрнутой рельсе (52px) иконка центрируется (justify-center) — иначе она
+// прижата влево паддингом и не совпадает по вертикали с центрированным лого
+// (правка Иосифа 17.07). Развёрнутый вид — как был.
+function navItemBase(collapsed: boolean): string {
+  return `group flex items-start gap-3 px-2.5 py-2 mx-1 my-0.5 rounded-[10px] text-[13.5px] font-medium leading-[1.35] relative transition-colors${collapsed ? ' justify-center' : ''}`;
+}
 const NAV_ITEM_ACTIVE = 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)] font-semibold';
 const NAV_ITEM_INACTIVE = 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]';
 // Левая акцентная полоска активного пункта — аналог .sb-item.active::before из мока.
@@ -421,7 +425,7 @@ function SidebarBody({
               <div key={item.label}>
                 {item.disabled ? (
                   <RailTooltip collapsed={collapsed} label={`${item.label} · скоро`}>
-                    <div className={`${NAV_ITEM_BASE} cursor-not-allowed`}>
+                    <div className={`${navItemBase(collapsed)} cursor-not-allowed`}>
                       <span className="mt-px text-[var(--color-sidebar-guide)]">{item.icon}</span>
                       {!collapsed && (
                         <span className="flex-1 min-w-0 break-words line-clamp-2 text-[var(--color-sidebar-text-muted)]">
@@ -444,7 +448,7 @@ function SidebarBody({
                       <RailTooltip collapsed={collapsed} label={item.label}>
                         <button
                           onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                          className={`w-full ${NAV_ITEM_BASE} ${collapsed ? '' : 'pr-9'} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                          className={`w-full ${navItemBase(collapsed)} ${collapsed ? '' : 'pr-9'} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                         >
                           <span className={navIconCls(salesActive)}>{item.icon}</span>
                           {!collapsed && <>
@@ -480,7 +484,7 @@ function SidebarBody({
                     <RailTooltip collapsed={collapsed} label={item.label}>
                       <button
                         onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                        className={`w-full ${NAV_ITEM_BASE} ${NAV_ITEM_INACTIVE}`}
+                        className={`w-full ${navItemBase(collapsed)} ${NAV_ITEM_INACTIVE}`}
                       >
                         <span className={navIconCls(false)}>{item.icon}</span>
                         {!collapsed && <>
@@ -516,7 +520,7 @@ function SidebarBody({
                   <RailTooltip collapsed={collapsed} label={item.label}>
                     <Link
                       href={item.href!}
-                      className={`${NAV_ITEM_BASE} ${pathname === item.href ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                      className={`${navItemBase(collapsed)} ${pathname === item.href ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                     >
                       <span className={navIconCls(pathname === item.href)}>{item.icon}</span>
                       {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{item.label}</span>}
@@ -540,7 +544,7 @@ function SidebarBody({
                     <button
                       type="button"
                       onClick={() => setMoreOpen(v => !v)}
-                      className={`w-full ${NAV_ITEM_BASE} ${moreActive && !moreOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                      className={`w-full ${navItemBase(collapsed)} ${moreActive && !moreOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                     >
                       <span className={navIconCls(moreActive && !moreOpen)}><LayoutGrid size={18} /></span>
                       {!collapsed && <>
@@ -558,7 +562,7 @@ function SidebarBody({
                       <RailTooltip key={mi.href} collapsed={collapsed} label={mi.label}>
                         <Link
                           href={mi.href}
-                          className={`${NAV_ITEM_BASE} ${collapsed ? '' : 'ml-4'} ${active ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                          className={`${navItemBase(collapsed)} ${collapsed ? '' : 'ml-4'} ${active ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                         >
                           <span className={navIconCls(active)}>{mi.icon}</span>
                           {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{mi.label}</span>}
@@ -572,7 +576,7 @@ function SidebarBody({
                 <RailTooltip collapsed={collapsed} label="Настройки">
                   <Link
                     href="/settings"
-                    className={`${NAV_ITEM_BASE} ${pathname.startsWith('/settings') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                    className={`${navItemBase(collapsed)} ${pathname.startsWith('/settings') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
                   >
                     <span className={navIconCls(pathname.startsWith('/settings'))}><Settings size={18} /></span>
                     {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Настройки</span>}
@@ -592,7 +596,7 @@ function SidebarBody({
               <button
                 type="button"
                 onClick={onOpenChangelog}
-                className={`w-full ${NAV_ITEM_BASE} ${changelogOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                className={`w-full ${navItemBase(collapsed)} ${changelogOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
               >
                 <span className={navIconCls(changelogOpen)}><Bell size={18} /></span>
                 {!collapsed && (
