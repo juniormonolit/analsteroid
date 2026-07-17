@@ -14,7 +14,7 @@ import {
 } from '@/features/reports/engine/callsMetrics';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getWorkingDaysByMonthInRange } from '@/lib/plans/dailyPlan';
 import { periodDateStr } from '@/lib/period';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -342,19 +342,22 @@ export async function POST(req: NextRequest) {
         const present = new Set(rows.map(r => r.dimensionSubtitle).filter(Boolean));
         const missing = [...planByLogin.keys()].filter(l => !present.has(l));
         if (missing.length === 0) return rows;
+        // Оргструктура — из sa (analyticsDb), НЕ из YC system: синк с 13.07
+        // пишет только в sa, YC-копия протухла (задача 2065, тот же фикс, что в
+        // byManagers.ts/byProductGroups.ts). employees остаётся в system.
         const [org, allowed, logins] = await Promise.all([
-          sysDb.query<{ short_login: string; bitrix_user_id: string; manager_name: string; department_id: string | null; department_name: string | null; branch: string | null }>(
+          analyticsDb().query<{ short_login: string; bitrix_user_id: string; manager_name: string; department_id: string | null; department_name: string | null; branch: string | null }>(
             `SELECT short_login, manager_bitrix_user_id AS bitrix_user_id, manager_name,
                     department_id, department_name, branch
-             FROM org_resolved_hierarchy WHERE is_active AND short_login = ANY($1)`,
+             FROM sa.org_resolved_hierarchy WHERE is_active AND short_login = ANY($1)`,
             [missing]
           ),
           (departmentIds?.length
-            ? sysDb.query<{ bitrix_user_id: string }>(
+            ? analyticsDb().query<{ bitrix_user_id: string }>(
                 `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
-                 FROM org_resolved_hierarchy orh
+                 FROM sa.org_resolved_hierarchy orh
                  WHERE orh.department_id IN (
-                   SELECT id FROM departments WHERE bitrix_department_id::text = ANY($1)
+                   SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1)
                  ) AND orh.is_active`,
                 [departmentIds]
               )

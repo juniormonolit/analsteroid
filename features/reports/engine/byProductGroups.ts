@@ -1,4 +1,4 @@
-import { analyticsDb, systemDb } from '@/lib/db/clients';
+import { analyticsDb } from '@/lib/db/clients';
 import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
@@ -140,11 +140,13 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   let deptManagerWhere: string | undefined;
   const deptKey = deptIds.length ? [...deptIds].sort().join(',') : undefined;
   if (deptIds.length > 0) {
-    const res = await systemDb().query<{ bitrix_user_id: string }>(
+    // Оргструктура — из sa, НЕ из YC system (синк Битрикса с 13.07 пишет только
+    // в sa; YC-копия протухла — задача 2065, тот же фикс, что в byManagers.ts).
+    const res = await analyticsDb().query<{ bitrix_user_id: string }>(
       `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
-         FROM org_resolved_hierarchy orh
+         FROM sa.org_resolved_hierarchy orh
         WHERE orh.department_id IN (
-          SELECT id FROM departments WHERE bitrix_department_id::text = ANY($1)
+          SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1)
         )
           AND orh.is_active = true`,
       [deptIds],
