@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
-  Bookmark, BookOpen, BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid,
+  BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
@@ -45,11 +45,12 @@ function navItemBase(collapsed: boolean): string {
   // (замерено на стенде: 29.5 против 25.5px). Развёрнутый вид — как был (mx-1).
   return `group flex items-start gap-3 px-2.5 py-2 mx-1 my-0.5 rounded-[10px] text-[13.5px] font-medium leading-[1.35] relative transition-colors${collapsed ? ' justify-center !mx-0' : ''}`;
 }
+// Активный пункт — ТОЛЬКО заливка + цвет (задача 2055, решение Серёги: «он же и
+// так светится»): левая полоска-::before (аналог .sb-item.active::before из мока,
+// бывший NAV_ITEM_ACTIVE_BAR) дублировала заливку и убрана отовсюду в сайдбаре —
+// паттерн Linear/Notion, у активного пункта только fill.
 const NAV_ITEM_ACTIVE = 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)] font-semibold';
 const NAV_ITEM_INACTIVE = 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]';
-// Левая акцентная полоска активного пункта — аналог .sb-item.active::before из мока.
-const NAV_ITEM_ACTIVE_BAR =
-  "before:content-[''] before:absolute before:left-[-10px] before:top-[6px] before:bottom-[6px] before:w-[3px] before:rounded-r before:bg-[var(--color-sidebar-active)]";
 
 function navIconCls(active: boolean) {
   return active
@@ -198,18 +199,25 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
 
   // Направляющая линия вложенности вокруг под-группы (Роп монитор / Смекалочная / Избранное).
   const subgroupCls = 'ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]';
-  // group + hover-reveal у шеврона (правка Иосифа 17.07 «частокол стрелок»): в
-  // покое три заголовка групп — чистые лейблы без стрелок; шеврон проявляется
-  // только при наведении на строку заголовка (на таче виден всегда — правило
-  // CLAUDE.md №5). Сам заголовок остаётся кликабельным для сворачивания.
+  // Заголовок группы (задача 2050, ревью Виктора): шеврон — СЛЕВА, вплотную к
+  // тексту, виден ВСЕГДА (дисклоужер-стрелка физически привязана к тому, что
+  // раскрывает — паттерн Finder/VS Code/Linear; hover-reveal 17.07 отменён —
+  // индикатор состояния «свёрнуто/развёрнуто» не должен исчезать). Иконки у
+  // групп убраны (декор без функции, спорили за внимание со списком отчётов),
+  // капс облегчён font-bold → font-medium — лейбл группы уходит на второй план
+  // и не конкурирует с заголовком раздела «Продажи».
   const subgroupLabelCls =
-    'group w-full flex items-center gap-1.5 px-1 py-1 text-[10px] font-bold uppercase tracking-[0.07em] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] transition-colors';
-  const subgroupChevronCls = 'hover-reveal shrink-0 text-[var(--color-sidebar-text-muted)]';
+    'w-full flex items-center gap-1.5 px-1 py-1 text-[10px] font-medium uppercase tracking-[0.07em] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] transition-colors';
+  // Цвет не задаём — lucide рисует currentColor: на hover заголовка шеврон
+  // подсвечивается вместе с текстом.
+  const subgroupChevronCls = 'shrink-0';
 
+  // Активная строка — только заливка, без полоски-::before (задача 2055,
+  // см. комментарий у NAV_ITEM_ACTIVE).
   const linkCls = (href: string) =>
     `flex items-start gap-1.5 py-1 px-2 my-0.5 text-[13px] leading-[1.35] rounded-[7px] relative transition-colors group ${
       pathname === href
-        ? "text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold before:content-[''] before:absolute before:left-[-11px] before:top-[5px] before:bottom-[5px] before:w-[2px] before:rounded-[2px] before:bg-[var(--color-sidebar-active)]"
+        ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold'
         : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
     }`;
 
@@ -285,9 +293,8 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
-          <BookOpen size={11} />
-          <span className="flex-1 text-left">Роп монитор</span>
           <span className={subgroupChevronCls}>{openStd ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
+          <span className="flex-1 text-left">Роп монитор</span>
         </button>
         {openStd && (
           <>
@@ -306,9 +313,8 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
       {smekalochnayaShared.length > 0 && (
         <div className={subgroupCls}>
           <button onClick={() => setOpenShared(v => !v)} className={subgroupLabelCls}>
-            <BarChart2 size={11} />
-            <span className="flex-1 text-left">Отчёты Стаса</span>
             <span className={subgroupChevronCls}>{openShared ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
+            <span className="flex-1 text-left">Отчёты Стаса</span>
           </button>
           {openShared && smekalochnayaShared.map(r => renderReportRow(r, canDeleteShared, smekalochnayaShared))}
         </div>
@@ -317,9 +323,8 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
       {/* Избранное — личные отчёты */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenFav(v => !v)} className={subgroupLabelCls}>
-          <Bookmark size={11} />
-          <span className="flex-1 text-left">Избранное</span>
           <span className={subgroupChevronCls}>{openFav ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
+          <span className="flex-1 text-left">Избранное</span>
         </button>
         {openFav && (
           ownReports.length === 0 ? (
@@ -449,22 +454,28 @@ function SidebarBody({
                   </RailTooltip>
                 ) : item.isSales ? (
                   <>
-                    {/* Ряд: кнопка-тоггл (иконка+текст+шеврон) + отдельная кнопка «+»
-                        соседом (правка Иосифа 17.07: absolute «+» наезжал на шеврон).
-                        В свёрнутой рельсе «+» не показываем — только сама кнопка. */}
-                    <div className="flex items-center">
+                    {/* Ряд заголовка раздела (задача 2050, ревью Виктора, «сделай
+                        красиво»): шеврон — ПЕРВЫМ, слева от иконки и текста
+                        (дисклоужер-паттерн Finder/Xcode: стрелка стоит у того, что
+                        раскрывает, а не болтается у правого края — правый край
+                        освобождён). «+» — ghost-иконка справа, на десктопе видна
+                        только при наведении на строку (row-reveal, см. globals.css:
+                        НЕ .hover-reveal — тот раскрывается hover'ом ВСЕГО сайдбара
+                        через .group на <aside>); на таче видна всегда (правило
+                        CLAUDE.md №5). В свёрнутой рельсе — только иконка раздела. */}
+                    <div className="row-reveal flex items-center">
                       <RailTooltip collapsed={collapsed} label={item.label}>
                         <button
                           onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                          className={`${collapsed ? 'w-full' : 'flex-1 min-w-0'} ${navItemBase(collapsed)} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                          className={`${collapsed ? 'w-full' : 'flex-1 min-w-0'} ${navItemBase(collapsed)} ${salesActive ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                         >
+                          {/* -mr-1: зазор шеврон→иконка чуть уже базового gap-3 —
+                              шеврон и иконка читаются одним блоком заголовка. */}
+                          {!collapsed && (expanded === item.label
+                            ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0 -mr-1" />
+                            : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0 -mr-1" />)}
                           <span className={navIconCls(salesActive)}>{item.icon}</span>
-                          {!collapsed && <>
-                            <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
-                            {expanded === item.label
-                              ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
-                              : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
-                          </>}
+                          {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>}
                         </button>
                       </RailTooltip>
                       {!collapsed && (
@@ -472,7 +483,7 @@ function SidebarBody({
                           label=""
                           iconSize={16}
                           title="Создать отчёт"
-                          className="tap-target flex shrink-0 mr-2 ml-0.5 p-1 rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-active-bg)] transition-colors"
+                          className="row-reveal-item tap-target flex shrink-0 mr-2 ml-0.5 p-1 rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-active-bg)] transition-colors"
                         />
                       )}
                     </div>
@@ -508,7 +519,7 @@ function SidebarBody({
                               href={child.href}
                               className={`flex items-start gap-1.5 py-1 px-2 my-0.5 text-[13px] leading-[1.35] rounded-[7px] relative transition-colors ${
                                 active
-                                  ? "text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold before:content-[''] before:absolute before:left-[-11px] before:top-[5px] before:bottom-[5px] before:w-[2px] before:rounded-[2px] before:bg-[var(--color-sidebar-active)]"
+                                  ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold'
                                   : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
                               }`}
                             >
@@ -523,7 +534,7 @@ function SidebarBody({
                   <RailTooltip collapsed={collapsed} label={item.label}>
                     <Link
                       href={item.href!}
-                      className={`${navItemBase(collapsed)} ${pathname === item.href ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                      className={`${navItemBase(collapsed)} ${pathname === item.href ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                     >
                       <span className={navIconCls(pathname === item.href)}>{item.icon}</span>
                       {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{item.label}</span>}
@@ -547,7 +558,7 @@ function SidebarBody({
                     <button
                       type="button"
                       onClick={() => setMoreOpen(v => !v)}
-                      className={`w-full ${navItemBase(collapsed)} ${moreActive && !moreOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                      className={`w-full ${navItemBase(collapsed)} ${moreActive && !moreOpen ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                     >
                       <span className={navIconCls(moreActive && !moreOpen)}><LayoutGrid size={18} /></span>
                       {!collapsed && <>
@@ -565,7 +576,7 @@ function SidebarBody({
                       <RailTooltip key={mi.href} collapsed={collapsed} label={mi.label}>
                         <Link
                           href={mi.href}
-                          className={`${navItemBase(collapsed)} ${collapsed ? '' : 'ml-4'} ${active ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                          className={`${navItemBase(collapsed)} ${collapsed ? '' : 'ml-4'} ${active ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                         >
                           <span className={navIconCls(active)}>{mi.icon}</span>
                           {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{mi.label}</span>}
@@ -579,7 +590,7 @@ function SidebarBody({
                 <RailTooltip collapsed={collapsed} label="Настройки">
                   <Link
                     href="/settings"
-                    className={`${navItemBase(collapsed)} ${pathname.startsWith('/settings') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                    className={`${navItemBase(collapsed)} ${pathname.startsWith('/settings') ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                   >
                     <span className={navIconCls(pathname.startsWith('/settings'))}><Settings size={18} /></span>
                     {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Настройки</span>}
@@ -599,7 +610,7 @@ function SidebarBody({
               <button
                 type="button"
                 onClick={onOpenChangelog}
-                className={`w-full ${navItemBase(collapsed)} ${changelogOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                className={`w-full ${navItemBase(collapsed)} ${changelogOpen ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
               >
                 <span className={navIconCls(changelogOpen)}><Bell size={18} /></span>
                 {!collapsed && (
