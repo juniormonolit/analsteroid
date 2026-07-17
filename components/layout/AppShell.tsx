@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
-  BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid,
+  BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid, Smartphone,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
@@ -383,6 +383,9 @@ function SidebarBody({
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },
     { href: '/metrics', label: 'Метрики', icon: <BarChart2 size={18} />, ok: hasPerm(user, 'section.metrics') },
+    // Конструктор виджетов доступен любому залогиненному (данные — те же, что он и так
+    // видит; жёсткой ограды по отделам в приложении нет). Не гейтим по section.*.
+    { href: '/widget-constructor', label: 'Виджеты', icon: <Smartphone size={18} />, ok: true },
   ].filter(i => i.ok);
   const moreActive = moreItems.some(i => pathname.startsWith(i.href));
   // Авто-раскрытие, когда пользователь В одном из спрятанных разделов — активный

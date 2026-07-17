@@ -14,6 +14,40 @@ export async function register() {
 
   scheduleDailyMoscowReport();
   scheduleCallControl();
+  scheduleWidgetMetrics();
+}
+
+// Конструктор виджетов: матрица (6 метрик × отделы/филиалы/Россия × 5 периодов) в Redis
+// (widget:metrics), раз в 10 мин. Redis-замок на тик — как у scheduleCallControl, чтобы
+// соседние инстансы на общей БД не гоняли расчёт дважды. Конфиги виджетов расчёт не
+// триггерят (только выбирают срез) — нагрузка постоянна независимо от числа виджетов.
+function scheduleWidgetMetrics() {
+  let running = false;
+
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      try {
+        const { getRedis } = await import('./lib/cache/redis');
+        const redis = getRedis();
+        if (redis) {
+          const acquired = await redis.set('widget:metrics:tick', '1', 'EX', 570, 'NX');
+          if (acquired !== 'OK') return;
+        }
+      } catch { /* без Redis — полагаемся на in-process флаг */ }
+
+      const { computeAndCacheWidgetMetrics } = await import('./lib/jobs/widgetMetrics');
+      await computeAndCacheWidgetMetrics();
+    } catch (err) {
+      console.error('[widgetMetrics] цикл упал:', err);
+    } finally {
+      running = false;
+    }
+  };
+
+  void tick();
+  setInterval(() => { void tick(); }, 10 * 60 * 1000);
 }
 
 // Бот «Контроль звонков»: тик раз в минуту, движок в lib/bots/callControl.ts.

@@ -239,3 +239,61 @@ export async function getWeekWorkingDays(weekStartStr: string, asOfDateStr: stri
   const passed = parseInt(res.rows[0]?.days_passed ?? '0', 10);
   return { total: total || FIXED_WEEK_DIVISOR, passed: passed || 0 };
 }
+
+export interface PeriodPlanEntry { planSales: number; planShipments: number }
+
+/**
+ * План продаж/отгрузок каждого менеджера (по short_login) за выбранный период — те же
+ * рабочие дни периода∩сегодня × дневной план ЕГО месяца, что и «План (на период)» в
+ * app/api/reports/run (задача 10.07). Вынесено сюда (задача виджет-конструктора), чтобы
+ * не дублировать денежную логику между отчётом и джобой предрасчёта виджетов
+ * (lib/jobs/widgetMetrics.ts). Возвращает только менеджеров, у кого есть план хотя бы на
+ * один месяц периода. planSales = plan_shipments/plan_n дневной, planShipments = plan_shipments
+ * дневной (та же формула, что в reports/run enrichRow).
+ */
+export async function computePeriodPlanByLogin(
+  periodFromStr: string,
+  periodToStrRaw: string,
+  mskTodayStr: string,
+): Promise<{ byLogin: Map<string, PeriodPlanEntry>; rangeToStr: string }> {
+  const rangeToStr = periodToStrRaw < mskTodayStr ? periodToStrRaw : mskTodayStr;
+  if (rangeToStr < periodFromStr) return { byLogin: new Map(), rangeToStr };
+
+  const chunks = await getWorkingDaysByMonthInRange(periodFromStr, rangeToStr);
+  if (chunks.length === 0) return { byLogin: new Map(), rangeToStr };
+
+  const months = chunks.map(c => c.month);
+  const plansRes = await systemDb().query<{ manager_login: string; month: string; plan_shipments: string; plan_n: string }>(
+    `SELECT manager_login, to_char(month, 'YYYY-MM') as month, plan_shipments, plan_n
+     FROM manager_plans WHERE to_char(month, 'YYYY-MM') = ANY($1)`,
+    [months],
+  );
+
+  const planByLoginMonth = new Map<string, Map<string, { plan_shipments: number; plan_n: number }>>();
+  for (const row of plansRes.rows) {
+    if (!planByLoginMonth.has(row.manager_login)) planByLoginMonth.set(row.manager_login, new Map());
+    planByLoginMonth.get(row.manager_login)!.set(row.month, {
+      plan_shipments: parseFloat(row.plan_shipments),
+      plan_n: parseFloat(row.plan_n),
+    });
+  }
+
+  const byLogin = new Map<string, PeriodPlanEntry>();
+  for (const [login, monthMap] of planByLoginMonth) {
+    let planSales = 0;
+    let planShipments = 0;
+    let any = false;
+    for (const chunk of chunks) {
+      const mp = monthMap.get(chunk.month);
+      if (!mp) continue;
+      any = true;
+      const dailySales = (mp.plan_shipments / mp.plan_n) / chunk.workingDaysInMonth;
+      const dailyShipments = mp.plan_shipments / chunk.workingDaysInMonth;
+      planSales += dailySales * chunk.workingDaysInRange;
+      planShipments += dailyShipments * chunk.workingDaysInRange;
+    }
+    if (any) byLogin.set(login, { planSales, planShipments });
+  }
+
+  return { byLogin, rangeToStr };
+}
