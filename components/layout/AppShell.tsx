@@ -45,11 +45,12 @@ function navItemBase(collapsed: boolean): string {
   // (замерено на стенде: 29.5 против 25.5px). Развёрнутый вид — как был (mx-1).
   return `group flex items-start gap-3 px-2.5 py-2 mx-1 my-0.5 rounded-[10px] text-[13.5px] font-medium leading-[1.35] relative transition-colors${collapsed ? ' justify-center !mx-0' : ''}`;
 }
+// Активный пункт — ТОЛЬКО заливка + цвет (задача 2055, решение Серёги: «он же и
+// так светится»): левая полоска-::before (аналог .sb-item.active::before из мока,
+// бывший NAV_ITEM_ACTIVE_BAR) дублировала заливку и убрана отовсюду в сайдбаре —
+// паттерн Linear/Notion, у активного пункта только fill.
 const NAV_ITEM_ACTIVE = 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)] font-semibold';
 const NAV_ITEM_INACTIVE = 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]';
-// Левая акцентная полоска активного пункта — аналог .sb-item.active::before из мока.
-const NAV_ITEM_ACTIVE_BAR =
-  "before:content-[''] before:absolute before:left-[-10px] before:top-[6px] before:bottom-[6px] before:w-[3px] before:rounded-r before:bg-[var(--color-sidebar-active)]";
 
 function navIconCls(active: boolean) {
   return active
@@ -211,10 +212,12 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   // подсвечивается вместе с текстом.
   const subgroupChevronCls = 'shrink-0';
 
+  // Активная строка — только заливка, без полоски-::before (задача 2055,
+  // см. комментарий у NAV_ITEM_ACTIVE).
   const linkCls = (href: string) =>
     `flex items-start gap-1.5 py-1 px-2 my-0.5 text-[13px] leading-[1.35] rounded-[7px] relative transition-colors group ${
       pathname === href
-        ? "text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold before:content-[''] before:absolute before:left-[-11px] before:top-[5px] before:bottom-[5px] before:w-[2px] before:rounded-[2px] before:bg-[var(--color-sidebar-active)]"
+        ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold'
         : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
     }`;
 
@@ -464,7 +467,7 @@ function SidebarBody({
                       <RailTooltip collapsed={collapsed} label={item.label}>
                         <button
                           onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                          className={`${collapsed ? 'w-full' : 'flex-1 min-w-0'} ${navItemBase(collapsed)} ${salesActive ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                          className={`${collapsed ? 'w-full' : 'flex-1 min-w-0'} ${navItemBase(collapsed)} ${salesActive ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                         >
                           {/* -mr-1: зазор шеврон→иконка чуть уже базового gap-3 —
                               шеврон и иконка читаются одним блоком заголовка. */}
@@ -516,7 +519,7 @@ function SidebarBody({
                               href={child.href}
                               className={`flex items-start gap-1.5 py-1 px-2 my-0.5 text-[13px] leading-[1.35] rounded-[7px] relative transition-colors ${
                                 active
-                                  ? "text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold before:content-[''] before:absolute before:left-[-11px] before:top-[5px] before:bottom-[5px] before:w-[2px] before:rounded-[2px] before:bg-[var(--color-sidebar-active)]"
+                                  ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold'
                                   : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
                               }`}
                             >
@@ -531,7 +534,7 @@ function SidebarBody({
                   <RailTooltip collapsed={collapsed} label={item.label}>
                     <Link
                       href={item.href!}
-                      className={`${navItemBase(collapsed)} ${pathname === item.href ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                      className={`${navItemBase(collapsed)} ${pathname === item.href ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                     >
                       <span className={navIconCls(pathname === item.href)}>{item.icon}</span>
                       {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{item.label}</span>}
@@ -555,7 +558,7 @@ function SidebarBody({
                     <button
                       type="button"
                       onClick={() => setMoreOpen(v => !v)}
-                      className={`w-full ${navItemBase(collapsed)} ${moreActive && !moreOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                      className={`w-full ${navItemBase(collapsed)} ${moreActive && !moreOpen ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                     >
                       <span className={navIconCls(moreActive && !moreOpen)}><LayoutGrid size={18} /></span>
                       {!collapsed && <>
@@ -573,7 +576,7 @@ function SidebarBody({
                       <RailTooltip key={mi.href} collapsed={collapsed} label={mi.label}>
                         <Link
                           href={mi.href}
-                          className={`${navItemBase(collapsed)} ${collapsed ? '' : 'ml-4'} ${active ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                          className={`${navItemBase(collapsed)} ${collapsed ? '' : 'ml-4'} ${active ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                         >
                           <span className={navIconCls(active)}>{mi.icon}</span>
                           {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{mi.label}</span>}
@@ -587,7 +590,7 @@ function SidebarBody({
                 <RailTooltip collapsed={collapsed} label="Настройки">
                   <Link
                     href="/settings"
-                    className={`${navItemBase(collapsed)} ${pathname.startsWith('/settings') ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                    className={`${navItemBase(collapsed)} ${pathname.startsWith('/settings') ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                   >
                     <span className={navIconCls(pathname.startsWith('/settings'))}><Settings size={18} /></span>
                     {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">Настройки</span>}
@@ -607,7 +610,7 @@ function SidebarBody({
               <button
                 type="button"
                 onClick={onOpenChangelog}
-                className={`w-full ${navItemBase(collapsed)} ${changelogOpen ? `${NAV_ITEM_ACTIVE} ${NAV_ITEM_ACTIVE_BAR}` : NAV_ITEM_INACTIVE}`}
+                className={`w-full ${navItemBase(collapsed)} ${changelogOpen ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
               >
                 <span className={navIconCls(changelogOpen)}><Bell size={18} /></span>
                 {!collapsed && (
