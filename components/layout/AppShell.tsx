@@ -40,7 +40,10 @@ const SIDEBAR_WIDTH_COLLAPSED = 52;
 // прижата влево паддингом и не совпадает по вертикали с центрированным лого
 // (правка Иосифа 17.07). Развёрнутый вид — как был.
 function navItemBase(collapsed: boolean): string {
-  return `group flex items-start gap-3 px-2.5 py-2 mx-1 my-0.5 rounded-[10px] text-[13.5px] font-medium leading-[1.35] relative transition-colors${collapsed ? ' justify-center' : ''}`;
+  // В свёрнутой рельсе: justify-center + !mx-0 — иначе w-full(100%)+mx-1 сдвигает
+  // бокс кнопки на 4px вправо, и центр иконки не совпадает с центром лого
+  // (замерено на стенде: 29.5 против 25.5px). Развёрнутый вид — как был (mx-1).
+  return `group flex items-start gap-3 px-2.5 py-2 mx-1 my-0.5 rounded-[10px] text-[13.5px] font-medium leading-[1.35] relative transition-colors${collapsed ? ' justify-center !mx-0' : ''}`;
 }
 const NAV_ITEM_ACTIVE = 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)] font-semibold';
 const NAV_ITEM_INACTIVE = 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]';
