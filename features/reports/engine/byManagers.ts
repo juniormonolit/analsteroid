@@ -170,9 +170,16 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
 
   const sysDb = systemDb();
 
-  // Org hierarchy + dept filter run every request (fast, small tables)
+  // Org hierarchy + dept filter run every request (fast, small tables).
+  // ОРГСТРУКТУРА — из sa (analyticsDb), НЕ из YC system: синк Битрикса (ночной +
+  // кнопка «Синхронизировать» на странице Оргструктуры) с 13.07 пишет ТОЛЬКО в
+  // sa.org_resolved_hierarchy/sa.departments; копия в YC system больше никем не
+  // обновляется и разъезжается с реальностью (задача 2065: «Спецназ Монолит» в
+  // отчёте показывал 6 человек по устаревшей YC-копии против 3 актуальных).
+  // Тот же переезд, что deals/route.ts и marketing/sources.ts сделали 13.07 —
+  // этот движок тогда пропустили. employees остаётся в system (не переезжал).
   const [orgRes, deptRes, loginRes] = await Promise.all([
-    sysDb.query<{
+    analyticsDb().query<{
       bitrix_user_id: string; manager_name: string;
       department_id: string | null; department_name: string | null;
       rop_bitrix_user_id: string | null; short_login: string | null;
@@ -180,13 +187,13 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
     }>(`SELECT manager_bitrix_user_id AS bitrix_user_id,
               manager_name, department_id, department_name, rop_bitrix_user_id,
               short_login, branch
-         FROM org_resolved_hierarchy WHERE is_active = true`),
+         FROM sa.org_resolved_hierarchy WHERE is_active = true`),
     deptIds.length
-      ? sysDb.query<{ bitrix_user_id: string }>(
+      ? analyticsDb().query<{ bitrix_user_id: string }>(
           `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
-             FROM org_resolved_hierarchy orh
+             FROM sa.org_resolved_hierarchy orh
             WHERE orh.department_id IN (
-              SELECT id FROM departments WHERE bitrix_department_id::text = ANY($1)
+              SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1)
             )
               AND orh.is_active = true`,
           [deptIds],
