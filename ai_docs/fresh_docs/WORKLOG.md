@@ -6,6 +6,45 @@
 
 ---
 
+## 2026-07-17 — #2059: метрики ВРЕМЕННО СКРЫТЫ в общем каталоге до прод-деплоя кода (ОБЯЗАТЕЛЬНЫЙ шаг прод-деплоя!)
+
+YC analytics БД (каталог `metrics`) ОБЩАЯ у дева и прода (у дева отдельная только
+системная `junibaseone`; sa и YC analytics — общие, подтверждено env обоих
+процессов: `YC_ANALYTICS_DB` не задан → фолбэк `'analytics'` в
+`lib/db/clients.ts`). Миграция 103 попала в каталог прода ДО прод-деплоя кода
+движка → пользователи прода увидели бы 10 метрик с пустыми колонками (НЕ 500 —
+тип `external`, в SQL не эмитится, класс инцидента 14.07 не воспроизводится, но
+пустые колонки = мусор в пикере).
+
+Скрыты 17.07 ~14:20 МСК двумя флагами:
+- `is_test=true` — гигиена по образцу инцидента 14.07 (движки collected его
+  фильтруют; на наши external НЕ влияет);
+- `is_hidden_in_ui=true` — ФАКТИЧЕСКИЙ рычаг: пикер метрик берёт
+  `/api/catalog/metrics`, который фильтрует ТОЛЬКО `isHiddenInUi` (`is_test` от
+  пикера НЕ прячет — проверено кодом). `is_active=true` оставлен, чтобы метрики
+  оставались загруженными (`WHERE is_active OR NOT is_hidden_in_ui`).
+
+Эффект на дев (та же БД): пикер/колонки UI их тоже не показывают, но движок
+считает (проверено живым `/api/reports/run` с явными metricIds — значения и
+тоталы на месте). Дев-верификация задачи была выполнена ДО скрытия (скрины в
+owners-inbox).
+
+**ОБЯЗАТЕЛЬНЫЙ ШАГ ПРИ ПРОД-ДЕПЛОЕ кода с движком stageSnapshot.ts** — включить
+метрики обратно (YC analytics, run_analytics.mjs или руками):
+
+```sql
+UPDATE metrics SET is_test = false, is_hidden_in_ui = false
+WHERE id IN ('stage_now_new_count','stage_now_taken_count','stage_now_contacted_count',
+  'stage_now_priced_count','stage_now_reservation_count','stage_now_confirmed_count',
+  'stage_now_price_objection_count','deals_in_work_count','deals_in_work_count_repeat',
+  'deals_in_work_count_all');
+```
+
+Повторный прогон миграции 103 is_test НЕ сбросит (нет в ON CONFLICT SET), а
+is_hidden_in_ui — сбросит (есть в SET): НЕ перекатывать 103 до прод-деплоя кода.
+
+---
+
 ## 2026-07-17 — Каталог «Стадии (сейчас)»: снимок по рабочим стадиям + «Сделок в работе» (задача 2059, Серёга)
 
 Запрос: семейство метрик каталога — сколько сделок ПРЯМО СЕЙЧАС стоит в каждом
