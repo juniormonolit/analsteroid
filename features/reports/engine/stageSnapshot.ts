@@ -15,22 +15,25 @@ import { STAGE_GROUPS } from './stageConversions';
 // ЛЮБОГО отчёта) структурно не может повториться: этот код не трогает
 // resolveFilterClause и не эмитит d.<виртуальное_поле> вообще.
 //
-// Группы стадий (7 метрик, funnels 0=ЧЛ/1=ЮЛ) — переиспользование STAGE_GROUPS,
+// Группы стадий (6 метрик, funnels 0=ЧЛ/1=ЮЛ) — переиспользование STAGE_GROUPS,
 // того же канонического словаря, что уже используют конверсии стадий
 // (stageConversions.ts). Bitrix stage_id НЕ параллельны между воронками — вне
 // funnels 0/1 (2/3=Повторные Б2C/Б2Б, 4=Холодные звонки, 7=Тендеры) канонической
 // группировки такого же вида ещё нет (см. WORKLOG/финальный отчёт задачи —
 // открытый вопрос Серёге, не блокирует).
 //
+// «Лид» (STAGE_GROUPS.new, была stage_now_new_count) — УДАЛЕНА по решению Серёги
+// 17.07 («лид не нужен»): метрика убрана из каталога (DELETE в правке миграции
+// 103) и из этого реестра. НЕ добавлять обратно без явного запроса.
+//
 // + price_objection — стадия «Есть цена дешевле, запросил предложение лучше»
 // (UC_PU4HM2 ЧЛ / C1:11 ЮЛ) — рабочая (event_type='called'), но НЕ входит ни в
-// одну из 6 групп STAGE_GROUPS (тот же список ID, что и priceObjectionConversion.ts,
+// одну из групп STAGE_GROUPS (тот же список ID, что и priceObjectionConversion.ts,
 // живая проверка 10.07/17.07).
 //
 // Терминальные (sale/shipped — «Продажа»/«Отгрузка») и «Отказ» — исключены по
 // заданию (только рабочие статусы).
 export const STAGE_SNAPSHOT_GROUPS: Record<string, { metricId: string; stageIds: string[] }> = {
-  new:             { metricId: 'stage_now_new_count',             stageIds: STAGE_GROUPS.new },
   taken:           { metricId: 'stage_now_taken_count',            stageIds: STAGE_GROUPS.taken },
   contacted:       { metricId: 'stage_now_contacted_count',        stageIds: STAGE_GROUPS.contacted },
   priced:          { metricId: 'stage_now_priced_count',           stageIds: STAGE_GROUPS.priced },
@@ -50,14 +53,16 @@ export const STAGE_SNAPSHOT_METRIC_IDS = Object.values(STAGE_SNAPSHOT_GROUPS).ma
 // колонки видны разом, БЕЗ обхода через funnel-пилюлю отчёта (Первичные/Повторные/
 // Все) — она таким троицам не нужна, это тоже устоявшийся паттерн каталога.
 //
-// ВАЖНО (сверка со Серёгой запрошена): «Сделок в работе (все)» НЕ равно сумме 7
-// метрик STAGE_SNAPSHOT_GROUPS выше, и это ожидаемо, НЕ баг — см. финальный отчёт
-// задачи. Причины: (1) STAGE_GROUPS покрывает только funnels 0/1, WORK — все 6
-// воронок; (2) event_type='sold' стадии (2 шт., напр. «Продано (ЧЛ)», «Заказ в
-// работе, счёт оплачен (продано) (ЮЛ)») имеют stage_type='WORK' (заказ оплачен, но
-// ещё не отгружен — бизнес считает это «в работе», НЕ терминалом) — они попадают в
-// WORK, но НЕ входят ни в одну из 7 per-stage метрик (там explicitly исключены
-// «продажи» как терминал по первоначальному ТЗ).
+// ВАЖНО (сверка со Серёгой запрошена): «Сделок в работе (все)» НЕ равно сумме
+// per-stage метрик STAGE_SNAPSHOT_GROUPS выше, и это ожидаемо, НЕ баг — см.
+// финальный отчёт задачи. Причины: (1) STAGE_GROUPS покрывает только funnels 0/1,
+// WORK — все 6 воронок; (2) event_type='sold' стадии (2 шт., напр. «Продано (ЧЛ)»,
+// «Заказ в работе, счёт оплачен (продано) (ЮЛ)») имеют stage_type='WORK' (заказ
+// оплачен, но ещё не отгружен — бизнес считает это «в работе», НЕ терминалом) —
+// они попадают в WORK, но НЕ входят ни в одну из per-stage метрик (там explicitly
+// исключены «продажи» как терминал по первоначальному ТЗ); (3) стадии группы
+// «Лид» (NEW/C1:NEW, stage_type='NEW') в WORK не входят, а своей метрики больше
+// не имеют (удалена по решению Серёги 17.07).
 export const DEALS_IN_WORK_METRIC_IDS = [
   'deals_in_work_count', 'deals_in_work_count_repeat', 'deals_in_work_count_all',
 ];
