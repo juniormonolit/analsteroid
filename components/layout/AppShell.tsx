@@ -456,12 +456,17 @@ function SidebarBody({
                         </button>
                       </RailTooltip>
                       {!collapsed && (
-                        <CreateReportButton
-                          label=""
-                          iconSize={15}
-                          title="Создать отчёт"
-                          className="tap-target absolute right-8 top-1/2 -translate-y-1/2 p-1 rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-active-bg)] transition-colors"
-                        />
+                        /* Позиционирует обёртка: .tap-target сам ставит position:relative
+                           и ломает absolute, если вешать всё на кнопку (найдено глазами
+                           на стенде — «+» улетал за левый край). */
+                        <div className="absolute right-8 top-1/2 -translate-y-1/2">
+                          <CreateReportButton
+                            label=""
+                            iconSize={15}
+                            title="Создать отчёт"
+                            className="tap-target flex p-1 rounded-md text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:bg-[var(--color-sidebar-active-bg)] transition-colors"
+                          />
+                        </div>
                       )}
                     </div>
                     {!collapsed && expanded === item.label && (
