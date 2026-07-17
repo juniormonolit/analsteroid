@@ -86,15 +86,20 @@ export async function GET(req: NextRequest) {
     // Снимок «Стадии (сейчас)» — период игнорируется целиком, фильтр — ТЕКУЩИЙ
     // d.stage_id этой группы (список ids — наши же константы, не пользовательский
     // ввод, инлайним напрямую вместо позиционного параметра, чтобы не сдвигать
-    // нумерацию $1/$2 ниже).
+    // нумерацию $1/$2 ниже). ПРИМЕЧАНИЕ: $1/$2 всё равно ОБЯЗАНЫ где-то встретиться
+    // в тексте запроса — иначе Postgres кидает 42P18 «could not determine data type
+    // of parameter $1» (параметр без единого упоминания в SQL не типизируется).
+    // `$1::timestamptz IS NOT NULL` — заведомо истинно (from/to всегда валидные ISO-
+    // строки), просто даёт параметру тип и не меняет результат.
     const ids = STAGE_NOW_STAGE_IDS.get(metricFilter)!;
-    metricDateFilter = `d.stage_id IN (${ids.map(id => `'${id.replace(/'/g, "''")}'`).join(',')})`;
+    metricDateFilter = `d.stage_id IN (${ids.map(id => `'${id.replace(/'/g, "''")}'`).join(',')}) AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
   } else if (metricFilter && DEALS_IN_WORK_METRIC_IDS.includes(metricFilter)) {
     // «Сделок в работе» (перв./повт./все) — период игнорируется, фильтр — семантика
     // sa.stages.stage_type = 'WORK' (см. stageSnapshot.ts); перв./повт./все уже
-    // разруливает funnelFilter (scope=primary/repeat/all) выше.
+    // разруливает funnelFilter (scope=primary/repeat/all) выше. Тот же приём с $1/$2
+    // (см. комментарий в ветке STAGE_NOW_STAGE_IDS выше).
     extraJoin = `JOIN stages _s_work ON _s_work.id = d.stage_id`;
-    metricDateFilter = `_s_work.stage_type = 'WORK'`;
+    metricDateFilter = `_s_work.stage_type = 'WORK' AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
   } else if (metricFilter) {
     const metric = resolveToCollected(metricFilter, await loadMetrics());
     if (metric?.dateField) {
