@@ -198,8 +198,13 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
 
   // Направляющая линия вложенности вокруг под-группы (Роп монитор / Смекалочная / Избранное).
   const subgroupCls = 'ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]';
+  // group + hover-reveal у шеврона (правка Иосифа 17.07 «частокол стрелок»): в
+  // покое три заголовка групп — чистые лейблы без стрелок; шеврон проявляется
+  // только при наведении на строку заголовка (на таче виден всегда — правило
+  // CLAUDE.md №5). Сам заголовок остаётся кликабельным для сворачивания.
   const subgroupLabelCls =
-    'w-full flex items-center gap-1.5 px-1 py-1 text-[10px] font-bold uppercase tracking-[0.07em] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] transition-colors';
+    'group w-full flex items-center gap-1.5 px-1 py-1 text-[10px] font-bold uppercase tracking-[0.07em] text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] transition-colors';
+  const subgroupChevronCls = 'hover-reveal shrink-0 text-[var(--color-sidebar-text-muted)]';
 
   const linkCls = (href: string) =>
     `flex items-start gap-1.5 py-1 px-2 my-0.5 text-[13px] leading-[1.35] rounded-[7px] relative transition-colors group ${
@@ -282,7 +287,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
           <BookOpen size={11} />
           <span className="flex-1 text-left">Роп монитор</span>
-          {openStd ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          <span className={subgroupChevronCls}>{openStd ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
         </button>
         {openStd && (
           <>
@@ -303,7 +308,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
           <button onClick={() => setOpenShared(v => !v)} className={subgroupLabelCls}>
             <BarChart2 size={11} />
             <span className="flex-1 text-left">Отчёты Стаса</span>
-            {openShared ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            <span className={subgroupChevronCls}>{openShared ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
           </button>
           {openShared && smekalochnayaShared.map(r => renderReportRow(r, canDeleteShared, smekalochnayaShared))}
         </div>
@@ -314,7 +319,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         <button onClick={() => setOpenFav(v => !v)} className={subgroupLabelCls}>
           <Bookmark size={11} />
           <span className="flex-1 text-left">Избранное</span>
-          {openFav ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          <span className={subgroupChevronCls}>{openFav ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
         </button>
         {openFav && (
           ownReports.length === 0 ? (
