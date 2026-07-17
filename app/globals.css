@@ -203,6 +203,19 @@ body {
   .hover-reveal:focus-visible { opacity: 1; }
 }
 
+/* Как .hover-reveal, но со скоупом на КОНКРЕТНУЮ строку (.row-reveal), а не на
+   ближайший .group: на <aside> сайдбара уже висит .group (ручка сворачивания
+   раскрывается hover'ом всего сайдбара), поэтому .hover-reveal внутри сайдбара
+   проявился бы при наведении куда угодно. Используется для «+» в строке
+   заголовка «Продажи» (задача 2050, ревью Виктора) — на таче виден всегда
+   (то же правило CLAUDE.md №5). */
+@media (hover: hover) and (pointer: fine) {
+  .row-reveal-item { opacity: 0; transition: opacity 0.15s; }
+  .row-reveal:hover .row-reveal-item,
+  .row-reveal:focus-within .row-reveal-item,
+  .row-reveal-item:focus-visible { opacity: 1; }
+}
+
 /* Иконка «карточка менеджера» в ячейке измерения таблицы отчёта (задача 1679, case 4В
    аудита) — использует .hover-reveal выше (появляется по hover строки/фокусу на курсорных
    устройствах). На мобильном/тач (<768px) принудительно видна ВСЕГДА независимо от того,
