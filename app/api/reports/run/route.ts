@@ -5,6 +5,7 @@ import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { fetchBySources } from '@/features/reports/engine/bySources';
 import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features/reports/engine/managerActivity';
+import { fetchBookingCallRate } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/features/reports/engine/stageConversions';
 import { fetchPriceObjectionConversion } from '@/features/reports/engine/priceObjectionConversion';
 import {
@@ -496,6 +497,41 @@ export async function POST(req: NextRequest) {
     };
     currentRows = currentRows.map(r => enrichActivity(r, curActivity, curCalDays));
     compRows = compRows.map(r => enrichActivity(r, compActivity, compCalDays));
+  }
+
+  // «Доля прозвона броней / подтв. броней на след. рабочий день» (задача Иосифа 17.07,
+  // migrations/104) — служебные числители/знаменатели, видимые метрики — calculated
+  // num/denom*100. Смысл только у менеджеров (звонок атрибутируется сделке менеджера) —
+  // инжектим ТОЛЬКО в by-managers, как activity/stageConv выше.
+  const bookingCallHiddenIds = [
+    'booking_call_reserved_denom', 'booking_call_reserved_num',
+    'booking_call_confirmed_denom', 'booking_call_confirmed_num',
+  ];
+  const hasBookingCallMetric = withDeps.some(m => bookingCallHiddenIds.includes(m.id));
+
+  if (hasBookingCallMetric && reportSlug === 'by-managers') {
+    const [curBooking, compBooking] = await Promise.all([
+      fetchBookingCallRate(opts.period),
+      fetchBookingCallRate(compOpts.period),
+    ]);
+
+    const enrichBooking = (row: ReportRow, booking: Awaited<ReturnType<typeof fetchBookingCallRate>>): ReportRow => {
+      // null (весь период раньше старта звонков) → метрики null по цепочке зависимостей.
+      if (!booking) return row;
+      const b = booking.get(row.dimensionId);
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          booking_call_reserved_denom: b?.reservedDenom ?? 0,
+          booking_call_reserved_num: b?.reservedNum ?? 0,
+          booking_call_confirmed_denom: b?.confirmedDenom ?? 0,
+          booking_call_confirmed_num: b?.confirmedNum ?? 0,
+        },
+      };
+    };
+    currentRows = currentRows.map(r => enrichBooking(r, curBooking));
+    compRows = compRows.map(r => enrichBooking(r, compBooking));
   }
 
   // Матрица CR по основному пути ЧЛ+ЮЛ (задача 2, migrations/064) — «Новая → Взял в
