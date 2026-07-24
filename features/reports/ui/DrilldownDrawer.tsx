@@ -36,6 +36,7 @@ interface Deal {
   manager_id: string;
   manager_name: string;
   stage_name: string | null;
+  stage_event_type: string | null;
   product_group_display: string;
   funnel_name: string | null;
 }
@@ -132,17 +133,37 @@ type DealSort = { key: string; dir: 'asc' | 'desc' } | null;
 // сортировке — источник истины один (см. dealStage ниже).
 type DealStage = 'shipment' | 'sale' | 'reservationConfirmed' | 'reservation' | 'inProgress' | 'refusal';
 
-// Определение ТЕКУЩЕЙ стадии сделки по датам milestone-колонок (Бронь/Подтв./
-// Продажа/Отгрузка/Проиграна). Решение владельца: проигрыш терминален — красится
-// красным, даже если до отказа была бронь/подтверждение, поэтому проверяется
-// первым; иначе — максимальная достигнутая milestone, сверху вниз.
+// Определение ТЕКУЩЕЙ стадии сделки (задача #2367, фикс «шрамов»: раньше цвет
+// красился по факту НАЛИЧИЯ lost_at — навсегда, даже если сделку потом вернули
+// в работу и продали/отгрузили; 14–25% реально проданных сделок красились
+// красным). Источник истины теперь — event_type ТЕКУЩЕЙ стадии сделки
+// (sa.stages.event_type через d.stage_id, JOIN уже был в SELECT): lost —
+// красный, ТОЛЬКО если сделка СЕЙЧАС на стадии с event_type='lost'. Проигрыш
+// по-прежнему терминален для стадии 'lost' (проверяется первым), но перестал
+// быть терминальным для цвета — если стадию откатили дальше, lost_at в прошлом
+// уже не красит строку.
+// Для стадий 'created'/'called' (ещё не дошла ни до брони, ни до отказа) —
+// нейтрально, КРОМЕ случая «продана/отгружена, потом стадию отвели обратно в
+// работу» (sold_at/delivered_at есть, event_type сейчас 'created'/'called'):
+// в этом случае красим по последней ДОСТИГНУТОЙ вехе (milestone-даты), а не в
+// нейтральный серый — иначе теряется сигнал «уже была продажа», это менее
+// инвазивно, чем городить отдельное состояние «шрам», и симметрично тому, как
+// стадия трактуется везде в приложении (см. STAGE_SNAPSHOT_GROUPS).
 function dealStage(deal: Deal): DealStage {
-  if (deal.lost_at) return 'refusal';
-  if (deal.delivered_at) return 'shipment';
-  if (deal.sold_at) return 'sale';
-  if (deal.confirmed_at) return 'reservationConfirmed';
-  if (deal.reserved_at) return 'reservation';
-  return 'inProgress';
+  switch (deal.stage_event_type) {
+    case 'lost': return 'refusal';
+    case 'shipped': return 'shipment';
+    case 'sold': return 'sale';
+    case 'confirmed': return 'reservationConfirmed';
+    case 'reserved': return 'reservation';
+    default:
+      // 'created' | 'called' | null (event_type не пришёл/стадия не резолвилась)
+      if (deal.delivered_at) return 'shipment';
+      if (deal.sold_at) return 'sale';
+      if (deal.confirmed_at) return 'reservationConfirmed';
+      if (deal.reserved_at) return 'reservation';
+      return 'inProgress';
+  }
 }
 
 // Цвет полоски строки — та же палитра, что у автоцвета метрик (entity-colors.ts),

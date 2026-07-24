@@ -289,6 +289,7 @@ export async function GET(req: NextRequest) {
       d.source_id,
       d.current_manager_id::text AS manager_id,
       s.name  AS stage_name,
+      s.event_type AS stage_event_type,
       pg.name AS product_group_name,
       d.head_group_name,
       f.name  AS funnel_name

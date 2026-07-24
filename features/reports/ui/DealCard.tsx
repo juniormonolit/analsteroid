@@ -23,7 +23,7 @@ interface DealFull {
   source_id: string | null; products: Product[] | null;
   product_group_id: number | null; product_group_name: string | null;
   head_group_id: number | null; head_group_name: string | null;
-  stage_name: string | null; funnel_name: string | null; funnel_is_repeat: boolean | null;
+  stage_name: string | null; stage_event_type: string | null; funnel_name: string | null; funnel_is_repeat: boolean | null;
 }
 // LTV карточки сделки (задача 1561, владелец приложения Серёга): А — «LTV клиента»
 // (вся история продаж клиента), Б — «LTV от этой сделки» (эта продажа + все
@@ -137,7 +137,12 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const deal = data?.deal;
   const products = deal?.products ?? [];
   const productsTotal = products.reduce((s, p) => s + (Number(p.sum) || 0), 0);
-  const isLostDeal = !!deal?.lost_at;
+  // Задача #2367: раньше красный бейдж стадии красился по факту наличия lost_at
+  // (навсегда, даже после реактивации сделки). Теперь — по ТЕКУЩЕЙ стадии сделки
+  // (event_type='lost'), тем же правилом, что и dealStage() в DrilldownDrawer.tsx.
+  // Если стадия не резолвилась (стадия/JOIN пуст) — не lost (нейтрально), а не
+  // фолбэк на lost_at — иначе воспроизвели бы тот же баг «шрама».
+  const isLostDeal = deal?.stage_event_type === 'lost';
   const { closing, requestClose } = useSlideClose(onClose);
   const [tab, setTab] = useState<DealCardTab>('main');
 

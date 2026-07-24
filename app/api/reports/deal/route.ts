@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
        d.product_group_id, pg.name AS product_group_name,
        d.head_group_id, d.head_group_name,
        s.name AS stage_name,
+       s.event_type AS stage_event_type,
        f.name AS funnel_name, f.is_repeat AS funnel_is_repeat
      FROM deals d
      LEFT JOIN stages s          ON s.id  = d.stage_id
