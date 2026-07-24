@@ -32,6 +32,28 @@ function resolveToCollected(id: string, all: Metric[], depth = 0): Metric | null
   return null;
 }
 
+// "first dep = numerator" is correct for ratios (CR%, доли) — the drill-down should list
+// only the numerator's deals. It is WRONG for metrics that are a plain top-level sum of
+// disjoint slices (e.g. all_sales_amount = "[primary_sales_amount] + [repeat_sales_amount]"):
+// there every dependency contributes real deals, so picking only the first drops the rest
+// (bug #2340 — «Сумма продаж (все)» drill-down showed only primary sales, repeat sales
+// disappeared from the list while the aggregate cell stayed correct).
+// Detect that shape narrowly: formula is *only* `[a] + [b] (+ [c] ...)` at the top level —
+// no parens/division/multiplication — so ratio metrics like "([a]+[b])/[c]*100" are untouched.
+const PURE_SUM_FORMULA = /^\s*\[[\w.-]+\](?:\s*\+\s*\[[\w.-]+\])+\s*$/;
+
+function resolveAdditiveLegs(id: string, all: Metric[]): Metric[] {
+  const m = all.find(x => x.id === id);
+  if (m?.metricType === 'calculated' && m.formula && PURE_SUM_FORMULA.test(m.formula)) {
+    const legs = m.dependencies
+      .map(dep => resolveToCollected(dep, all))
+      .filter((x): x is Metric => x !== null);
+    if (legs.length) return legs;
+  }
+  const single = resolveToCollected(id, all);
+  return single ? [single] : [];
+}
+
 export async function GET(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -101,7 +123,8 @@ export async function GET(req: NextRequest) {
     extraJoin = `JOIN stages _s_work ON _s_work.id = d.stage_id`;
     metricDateFilter = `_s_work.stage_type = 'WORK' AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
   } else if (metricFilter) {
-    const metric = resolveToCollected(metricFilter, await loadMetrics());
+    const legs = resolveAdditiveLegs(metricFilter, await loadMetrics());
+    const metric = legs[0] ?? null;
     if (metric?.dateField) {
       if (metric.source === 'deal_events') {
         // Event-sourced metric (e.g. called_deals_count): deal has a matching event in period
@@ -113,12 +136,18 @@ export async function GET(req: NextRequest) {
         ) _evt ON _evt.deal_id = d.deal_id`;
         metricDateFilter = '1=1';
       } else {
-        // Deals-sourced: same date window + filters the metric itself uses in sqlGen
-        const conds = [
-          `d.${metric.dateField} >= $1 AND d.${metric.dateField} < $2`,
-          ...metric.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
-        ];
-        metricDateFilter = conds.join(' AND ');
+        // Deals-sourced: same date window + filters the metric itself uses in sqlGen.
+        // Multiple legs (pure-sum metrics, see resolveAdditiveLegs) are UNION'd (OR) so
+        // every disjoint slice's deals show up, not just the first leg's.
+        metricDateFilter = legs
+          .map(leg => {
+            const conds = [
+              `d.${leg.dateField} >= $1 AND d.${leg.dateField} < $2`,
+              ...leg.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
+            ];
+            return `(${conds.join(' AND ')})`;
+          })
+          .join(' OR ');
       }
     }
   }
