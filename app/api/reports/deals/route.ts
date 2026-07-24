@@ -171,7 +171,13 @@ export async function GET(req: NextRequest) {
         // Deals-sourced: same date window + filters the metric itself uses in sqlGen.
         // Multiple legs (composite numerators/sums, see resolveDrilldownLegs) are UNION'd (OR) so
         // every disjoint slice's deals show up, not just the first leg's.
-        metricDateFilter = legs
+        // IMPORTANT (incident #2351, root cause of the #2348 rollback): this string is spliced
+        // into `WHERE ${metricDateFilter} ${dimensionFilter} ...` (see below) with `dimensionFilter`
+        // itself starting with `AND ...`. Since SQL binds AND tighter than OR, an UNwrapped
+        // "(leg1) OR (leg2)" reads as "(leg1) OR ((leg2) AND managerId=... AND ...)" — the first
+        // leg matches with NO dimension/funnel/client filters at all. MUST stay wrapped in one
+        // outer set of parens so the whole multi-leg OR binds as a single unit before AND.
+        metricDateFilter = '(' + legs
           .map(leg => {
             const conds = [
               `d.${leg.dateField} >= $1 AND d.${leg.dateField} < $2`,
@@ -179,7 +185,7 @@ export async function GET(req: NextRequest) {
             ];
             return `(${conds.join(' AND ')})`;
           })
-          .join(' OR ');
+          .join(' OR ') + ')';
       }
     }
   }
