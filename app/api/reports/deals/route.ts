@@ -15,43 +15,75 @@ const STAGE_NOW_STAGE_IDS = new Map(
   Object.values(STAGE_SNAPSHOT_GROUPS).map(g => [g.metricId, g.stageIds]),
 );
 
-// Resolve a metric id to the collected metric whose deals we can list.
-// calculated → walk dependencies (first dep = numerator by catalog convention);
-// external (plans) → no deal filter.
-function resolveToCollected(id: string, all: Metric[], depth = 0): Metric | null {
-  if (depth > 5) return null;
-  const m = all.find(x => x.id === id);
-  if (!m) return null;
-  if (m.metricType === 'collected') return m;
-  if (m.metricType === 'calculated') {
-    for (const dep of m.dependencies) {
-      const r = resolveToCollected(dep, all, depth + 1);
-      if (r) return r;
-    }
+// Resolve a calculated metric's formula to the set of "collected" metrics whose deals should
+// appear in the drill-down list — every metric that actually contributes real, distinct deals
+// to what the user clicked on.
+//
+// Rule (derived purely from the formula text — no catalog/DB change needed):
+//   - RATIO formulas (`numerator / denominator [* 100]`): the denominator is a comparison base
+//     (plan target, wider population…), never itself a "these deals" list — only the NUMERATOR's
+//     deals belong in the drill-down. Covers plain CR/%/avg metrics (denominator dropped).
+//   - The numerator (or, when there's no division at all, the WHOLE formula — e.g.
+//     `all_sales_amount = [primary_sales_amount] + [repeat_sales_amount]`) may itself be a sum of
+//     ≥2 disjoint metric refs (`[a] + [b] + …`, parens allowed). Every such leg contributes
+//     non-overlapping deals, so ALL legs must be resolved and UNION'd (OR'd) in the SQL — taking
+//     only the first (the old "first dependency = numerator" heuristic) silently drops the rest.
+//     That was bug #2340 (`all_sales_amount`) and #2346 (`plan_execution_pct`,
+//     `cr_sale_to_shipment` — composite numerator INSIDE a ratio, same root cause).
+//   - A leg can itself be `calculated` with the same additive/ratio shape (e.g. a numerator that
+//     is itself `[a]+[b]`) — resolved RECURSIVELY until every leg bottoms out at a `collected`
+//     metric, so nested composites are fully expanded, not just one level.
+//   - Anything that doesn't match this additive/ratio shape (other operators, or nothing usable
+//     extracted) falls back to the legacy "walk `dependencies` in catalog order, take the first
+//     metric that resolves" — unchanged behavior for metrics this rule doesn't apply to
+//     (e.g. `external` plan-vs-actual metrics with no deal-level numerator at all).
+
+// Index of the first top-level `/` (i.e. outside any parens) — the ratio's numerator/denominator
+// split point. -1 if the formula has no top-level division (pure-sum formulas like
+// `all_sales_amount`).
+function topLevelDivideIndex(formula: string): number {
+  let depth = 0;
+  for (let i = 0; i < formula.length; i++) {
+    const c = formula[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === '/' && depth === 0) return i;
   }
-  return null;
+  return -1;
 }
 
-// "first dep = numerator" is correct for ratios (CR%, доли) — the drill-down should list
-// only the numerator's deals. It is WRONG for metrics that are a plain top-level sum of
-// disjoint slices (e.g. all_sales_amount = "[primary_sales_amount] + [repeat_sales_amount]"):
-// there every dependency contributes real deals, so picking only the first drops the rest
-// (bug #2340 — «Сумма продаж (все)» drill-down showed only primary sales, repeat sales
-// disappeared from the list while the aggregate cell stayed correct).
-// Detect that shape narrowly: formula is *only* `[a] + [b] (+ [c] ...)` at the top level —
-// no parens/division/multiplication — so ratio metrics like "([a]+[b])/[c]*100" are untouched.
-const PURE_SUM_FORMULA = /^\s*\[[\w.-]+\](?:\s*\+\s*\[[\w.-]+\])+\s*$/;
+// True if `segment` consists ONLY of `[metric_id]` refs combined with `+` and parens — no other
+// operators (division, multiplication, subtraction, literals). This is the safety guard: only
+// shapes this narrow are treated as "sum of legs", so anything more exotic falls back untouched.
+function isAdditiveRefsOnly(segment: string): boolean {
+  const stripped = segment.replace(/\[[\w.-]+\]/g, '');
+  return /\[[\w.-]+\]/.test(segment) && /^[\s()+]*$/.test(stripped);
+}
 
-function resolveAdditiveLegs(id: string, all: Metric[]): Metric[] {
+function extractRefs(segment: string): string[] {
+  return [...segment.matchAll(/\[([\w.-]+)\]/g)].map(m => m[1]);
+}
+
+function resolveDrilldownLegs(id: string, all: Metric[], depth = 0): Metric[] {
+  if (depth > 5) return [];
   const m = all.find(x => x.id === id);
-  if (m?.metricType === 'calculated' && m.formula && PURE_SUM_FORMULA.test(m.formula)) {
-    const legs = m.dependencies
-      .map(dep => resolveToCollected(dep, all))
-      .filter((x): x is Metric => x !== null);
-    if (legs.length) return legs;
+  if (!m) return [];
+  if (m.metricType === 'collected') return [m];
+  if (m.metricType === 'calculated' && m.formula) {
+    const divIdx = topLevelDivideIndex(m.formula);
+    const numerator = divIdx === -1 ? m.formula : m.formula.slice(0, divIdx);
+    if (isAdditiveRefsOnly(numerator)) {
+      const legs = extractRefs(numerator).flatMap(refId => resolveDrilldownLegs(refId, all, depth + 1));
+      if (legs.length) return legs;
+    }
+    // Fallback: legacy "first dependency that resolves" walk — for formulas that don't match the
+    // additive/ratio shape above (unaffected by this rule).
+    for (const dep of m.dependencies) {
+      const r = resolveDrilldownLegs(dep, all, depth + 1);
+      if (r.length) return r;
+    }
   }
-  const single = resolveToCollected(id, all);
-  return single ? [single] : [];
+  return [];
 }
 
 export async function GET(req: NextRequest) {
@@ -123,7 +155,7 @@ export async function GET(req: NextRequest) {
     extraJoin = `JOIN stages _s_work ON _s_work.id = d.stage_id`;
     metricDateFilter = `_s_work.stage_type = 'WORK' AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
   } else if (metricFilter) {
-    const legs = resolveAdditiveLegs(metricFilter, await loadMetrics());
+    const legs = resolveDrilldownLegs(metricFilter, await loadMetrics());
     const metric = legs[0] ?? null;
     if (metric?.dateField) {
       if (metric.source === 'deal_events') {
@@ -137,7 +169,7 @@ export async function GET(req: NextRequest) {
         metricDateFilter = '1=1';
       } else {
         // Deals-sourced: same date window + filters the metric itself uses in sqlGen.
-        // Multiple legs (pure-sum metrics, see resolveAdditiveLegs) are UNION'd (OR) so
+        // Multiple legs (composite numerators/sums, see resolveDrilldownLegs) are UNION'd (OR) so
         // every disjoint slice's deals show up, not just the first leg's.
         metricDateFilter = legs
           .map(leg => {
