@@ -306,10 +306,30 @@ export async function GET(req: NextRequest) {
     LIMIT 1000
   `;
 
-  const res = await db.query(sql, params);
+  // Задача #2369: список выше режется LIMIT 1000, а строка «Итого: N сделок · X ₽»
+  // во фронте (DrilldownDrawer.tsx) раньше считала count/sum reduce'ом по этому же
+  // обрезанному массиву — при выборках >1000 «Итого» было занижено. Отдельный лёгкий
+  // COUNT/SUM без LIMIT по тому же WHERE (тот же metricDateFilter — включая
+  // OR-legs-в-скобках из #2351 — + dimensionFilter/funnelFilter/clientFilter,
+  // тот же extraJoin) даёт полный агрегат независимо от урезанного списка.
+  const countSql = `
+    SELECT COUNT(*)::int AS total_count, COALESCE(SUM(d.amount), 0)::numeric AS total_amount
+    FROM deals d
+    ${extraJoin}
+    WHERE ${metricDateFilter}
+      ${dimensionFilter}
+      ${funnelFilter}
+      ${clientFilter}
+  `;
 
-  // Обогащение из system DB (кэшированные справочники): менеджер + название источника
-  const [mgrInfo, srcMap] = await Promise.all([loadManagerInfoMap(), loadSourceMap()]);
+  const [res, countRes, mgrInfo, srcMap] = await Promise.all([
+    db.query(sql, params),
+    db.query<{ total_count: number; total_amount: string }>(countSql, params),
+    loadManagerInfoMap(),
+    loadSourceMap(),
+  ]);
+  const totalCount = countRes.rows[0]?.total_count ?? 0;
+  const totalAmount = Number(countRes.rows[0]?.total_amount ?? 0);
 
   const deals = (res.rows as {
     manager_id: string;
@@ -325,5 +345,5 @@ export async function GET(req: NextRequest) {
       : (r.product_group_name ?? 'Без группы'),
   }));
 
-  return NextResponse.json({ deals });
+  return NextResponse.json({ deals, total_count: totalCount, total_amount: totalAmount });
 }

@@ -350,7 +350,15 @@ function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
     queryFn: () => fetch(`/api/reports/deals?${qs}`).then(r => r.json()),
   });
   const deals: Deal[] = data?.deals ?? [];
-  const total = deals.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  // Задача #2369: «Итого» должно отражать ПОЛНУЮ выборку, а не только пришедший
+  // список (бэк режет его LIMIT 1000, см. app/api/reports/deals/route.ts). Роут
+  // теперь всегда отдаёт total_count/total_amount отдельным безлимитным агрегатом —
+  // берём их. Фолбэк на reduce по списку — только если ответ старый (без полей),
+  // например если фронт не успел обновиться синхронно с бэком.
+  const hasTotals = data?.total_count != null && data?.total_amount != null;
+  const totalCount  = hasTotals ? Number(data.total_count)  : deals.length;
+  const totalAmount = hasTotals ? Number(data.total_amount) : deals.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+  const isTruncated = totalCount > deals.length;
 
   if (isLoading) {
     return <div className="p-6 space-y-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-8 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
@@ -362,8 +370,14 @@ function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
     <div className="h-full flex flex-col">
       <div className="px-6 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)] shrink-0">
         {/* «Итого: N сделок» (п.7 правок 09.07/2) вместо голого счётчика — склонение
-            см. dealsCountLabel. */}
-        {`Итого: ${dealsCountLabel(deals.length)}`} · {fmtMoney(total)}
+            см. dealsCountLabel. Итог теперь из безлимитного агрегата (total_count/
+            total_amount), не из reduce по обрезанному списку (#2369). */}
+        {`Итого: ${dealsCountLabel(totalCount)}`} · {fmtMoney(totalAmount)}
+        {isTruncated && (
+          <span className="ml-2 text-[var(--color-text-muted)]">
+            (показаны первые {deals.length} из {totalCount})
+          </span>
+        )}
       </div>
       <div className="flex-1 overflow-hidden">
         <DealsTable deals={sortDealsBy(deals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} tableScale={tableScale} />
