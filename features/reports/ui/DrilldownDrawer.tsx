@@ -13,6 +13,7 @@ import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
 import { dealsCountLabel } from '@/lib/format/pluralize';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { branchLabel } from '@/lib/org/branchLabel';
+import { computeCalculated } from '@/features/reports/engine/calculated';
 import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
@@ -221,52 +222,6 @@ function sortDealsBy(arr: Deal[], dealSort: DealSort): Deal[] {
   });
 }
 
-// ── Группировка списка сделок drill-down (задача #2385) ─────────────────────
-// Тот же переключатель «Без групп. / По отделу / По филиалу / Итого», что и в
-// основном отчёте (FilterBar.GroupingSelector, тип Grouping из lib/metrics/types) —
-// применяется здесь к ПЛОСКОМУ списку сделок (не к ReportRow, как в
-// features/reports/engine/grouping.ts applyGrouping, тот движок работает над уже
-// агрегированными строками мини-отчёта, а не над сделками). Логика группировки и
-// фолбэки ('Без отдела' / 'СПб') намеренно зеркалят applyGrouping — тот же ключ
-// (row.teamId/branchName), просто источник — team_id/branch_name конкретной сделки.
-interface DealGroup { key: string; label: string; deals: Deal[]; count: number; amount: number }
-
-function groupDrillDeals(deals: Deal[], grouping: Grouping): DealGroup[] {
-  if (grouping === 'total') {
-    return [{
-      key: '__total__',
-      label: 'Итого',
-      deals,
-      count: deals.length,
-      amount: deals.reduce((s, d) => s + (Number(d.amount) || 0), 0),
-    }];
-  }
-  const groups = new Map<string, { label: string; deals: Deal[] }>();
-  for (const d of deals) {
-    let key: string;
-    let label: string;
-    if (grouping === 'branch') {
-      const raw = d.branch_name ?? 'СПб'; // правило: не Москва и не Краснодар → СПб
-      key = raw;
-      label = branchLabel(raw);
-    } else {
-      key = d.team_id ?? '__no_team__';
-      label = d.team_name ?? 'Без отдела';
-    }
-    if (!groups.has(key)) groups.set(key, { label, deals: [] });
-    groups.get(key)!.deals.push(d);
-  }
-  return [...groups.entries()]
-    .map(([key, g]) => ({
-      key,
-      label: g.label,
-      deals: g.deals,
-      count: g.deals.length,
-      amount: g.deals.reduce((s, d) => s + (Number(d.amount) || 0), 0),
-    }))
-    .sort((a, b) => b.amount - a.amount);
-}
-
 // ── Deal sub-table (row expansion in the mini-report / flat list) ───────────
 function dealCell(deal: Deal, key: string) {
   const def = DEAL_FIELDS.find(f => f.key === key);
@@ -394,10 +349,6 @@ function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
 }) {
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const [dealSort, setDealSort] = useState<DealSort>(null);
-  // Задача #2385: тот же переключатель группировки, что и на верхнем уровне отчёта
-  // (FilterBar.GroupingSelector) — «Без групп.» по умолчанию, поведение списка не
-  // меняется, пока пользователь явно не переключит.
-  const [drillGrouping, setDrillGrouping] = useState<Grouping>('none');
   function onDealSort(k: string) {
     setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
   }
@@ -423,47 +374,21 @@ function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
   if (deals.length === 0) {
     return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">Нет сделок за выбранный период</div>;
   }
-  const sortedDeals = sortDealsBy(deals, dealSort);
-  // Группы считаются от той же (отсортированной) выборки, что и рендерится ниже —
-  // подытоги групп в сумме дают ровно то же «Итого», что и строка выше, ЗА
-  // ИСКЛЮЧЕНИЕМ обрезанной части при isTruncated (see #2369: список режется
-  // LIMIT 1000 на бэке, total_count/total_amount — по полной выборке; это тот же
-  // компромисс, что и раньше — предупреждение уже показано ниже).
-  const groups = drillGrouping === 'none' ? null : groupDrillDeals(sortedDeals, drillGrouping);
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)] shrink-0 flex items-center justify-between gap-3 flex-wrap">
-        <span>
-          {/* «Итого: N сделок» (п.7 правок 09.07/2) вместо голого счётчика — склонение
-              см. dealsCountLabel. Итог теперь из безлимитного агрегата (total_count/
-              total_amount), не из reduce по обрезанному списку (#2369). */}
-          {`Итого: ${dealsCountLabel(totalCount)}`} · {fmtMoney(totalAmount)}
-          {isTruncated && (
-            <span className="ml-2 text-[var(--color-text-muted)]">
-              (показаны первые {deals.length} из {totalCount})
-            </span>
-          )}
-        </span>
-        <GroupingSelector grouping={drillGrouping} onGroupingChange={setDrillGrouping} />
+      <div className="px-6 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)] shrink-0">
+        {/* «Итого: N сделок» (п.7 правок 09.07/2) вместо голого счётчика — склонение
+            см. dealsCountLabel. Итог теперь из безлимитного агрегата (total_count/
+            total_amount), не из reduce по обрезанному списку (#2369). */}
+        {`Итого: ${dealsCountLabel(totalCount)}`} · {fmtMoney(totalAmount)}
+        {isTruncated && (
+          <span className="ml-2 text-[var(--color-text-muted)]">
+            (показаны первые {deals.length} из {totalCount})
+          </span>
+        )}
       </div>
       <div className="flex-1 overflow-hidden">
-        {groups ? (
-          <div className="h-full overflow-y-auto">
-            {groups.map(g => (
-              <div key={g.key}>
-                <div className="px-6 py-1.5 text-xs font-semibold text-[var(--color-text)] bg-[var(--color-table-header)] border-t border-b border-[var(--color-border)] flex items-center justify-between gap-3 sticky top-0 z-[1]">
-                  <span className="truncate">{g.label}</span>
-                  <span className="text-[var(--color-text-muted)] font-normal whitespace-nowrap tabular-nums">
-                    {dealsCountLabel(g.count)} · {fmtMoney(g.amount)}
-                  </span>
-                </div>
-                <DealsTable deals={g.deals} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} tableScale={tableScale} />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <DealsTable deals={sortedDeals} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} tableScale={tableScale} />
-        )}
+        <DealsTable deals={sortDealsBy(deals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} tableScale={tableScale} />
       </div>
     </div>
   );
@@ -543,6 +468,122 @@ interface SourceInfoLite { source_id: string; contact_type: string | null; branc
 // <MiniReport/> — и локальный useState сортировки терялся при возврате «назад»).
 type MiniReportSort = { key: string | null; dir: 'asc' | 'desc' };
 
+// ── Группировка мини-отчёта дрилл-дауна (задача #2390, переделка #2385) ─────
+// #2385 ошибочно применил переключатель «Без групп./По отделу/По филиалу/Итого» к
+// ПЛОСКОМУ списку сделок (см. DealsListBody выше — та группировка убрана, список
+// сделок снова как до #2385). Правильный уровень — ТАБЛИЦА МЕНЕДЖЕРОВ мини-отчёта:
+// секции отделов/филиалов, свёрнутые по умолчанию, разворачиваются в строки
+// менеджеров, строка менеджера дальше разворачивается в сделки (как уже было).
+// Логика честной агрегации 1-в-1 зеркалит applyClientGrouping/aggregateGroupDeltas
+// из SalesReportPage.tsx (верхний уровень отчёта) — тот же фолбэк 'Без отдела'/'СПб',
+// тот же порядок групп «по первому появлению» в уже отсортированных строках (группы
+// естественно идут по убыванию активной колонки сортировки — см. compareRows/
+// sortGroupChildren в ReportTable.tsx, они пересортировывают И группы, И их children
+// той же колонкой). Рендерится тем же ReportTable, что и верхний уровень (isGroup/
+// children уже поддержаны компонентом, включая свёрнутость по умолчанию — grouping
+// prop, needCollapseRef).
+interface MiniGroupRow extends RowDeltas {
+  teamId?: string | null;
+  branchName?: string | null;
+}
+
+function aggregateMiniGroupDeltas(members: MiniGroupRow[], metrics: Metric[]): MiniGroupRow['deltas'] {
+  const ids = new Set<string>();
+  for (const r of members) for (const id of Object.keys(r.deltas)) ids.add(id);
+  const byId = new Map(metrics.map(m => [m.id, m]));
+
+  const sumsCur: Record<string, number | null> = {};
+  const sumsCmp: Record<string, number | null> = {};
+  for (const id of ids) {
+    if (byId.get(id)?.metricType === 'calculated') continue;
+    let cur: number | null = null, cmp: number | null = null;
+    for (const r of members) {
+      const d = r.deltas[id];
+      if (!d) continue;
+      if (d.current !== null) cur = (cur ?? 0) + d.current;
+      if (d.comparison !== null) cmp = (cmp ?? 0) + d.comparison;
+    }
+    sumsCur[id] = cur;
+    sumsCmp[id] = cmp;
+  }
+
+  const calc = metrics.filter(m => m.metricType === 'calculated' && ids.has(m.id));
+  const cur = computeCalculated(sumsCur, calc);
+  const cmp = computeCalculated(sumsCmp, calc);
+
+  const deltas: MiniGroupRow['deltas'] = {};
+  for (const id of ids) {
+    const c = cur[id] ?? null, p = cmp[id] ?? null;
+    const delta = c !== null && p !== null ? c - p : null;
+    const deltaPct = delta === null || p === null || p === 0 ? null : (delta / p) * 100;
+    deltas[id] = { current: c, comparison: p, delta, deltaPct };
+  }
+  return deltas;
+}
+
+function applyMiniGrouping(rows: MiniGroupRow[], grouping: Grouping, metrics: Metric[]): MiniGroupRow[] {
+  if (grouping === 'none') return rows;
+
+  if (grouping === 'total') {
+    return [{
+      dimensionId: '__total__', dimensionName: 'Итого', teamName: null,
+      deltas: aggregateMiniGroupDeltas(rows, metrics), isGroup: true, children: rows,
+    }];
+  }
+
+  if (grouping === 'branch') {
+    // Задача #2390 (AC1): секция филиала разворачивается СРАЗУ в строки менеджеров
+    // (не через промежуточный подытог отдела, как это сделано на верхнем уровне
+    // отчёта в SalesReportPage.applyClientGrouping, — там branch→team-подытог→[конец],
+    // без раскрытия до менеджера; для мини-отчёта дрилл-дауна ТЗ требует именно
+    // «секция→менеджеры→сделки», поэтому структура здесь плоская: branch→managers).
+    const order: string[] = [];
+    const groups = new Map<string, MiniGroupRow[]>();
+    for (const row of rows) {
+      const key = row.branchName ?? 'СПб'; // правило: не Москва и не Краснодар → СПб
+      if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+      groups.get(key)!.push(row);
+    }
+    return order.map(branch => {
+      const members = groups.get(branch)!;
+      return {
+        dimensionId: `__branch__${branch}`,
+        // Display-слой: «СПб»→«Санкт-Петербург» и т.п. — ключ dimensionId/branchName
+        // остаётся сырым.
+        dimensionName: branchLabel(branch),
+        teamId: null,
+        teamName: null,
+        branchName: branch,
+        deltas: aggregateMiniGroupDeltas(members, metrics),
+        isGroup: true,
+        children: members,
+      };
+    });
+  }
+
+  // grouping === 'team'
+  const order: string[] = [];
+  const groups = new Map<string, MiniGroupRow[]>();
+  for (const row of rows) {
+    const key = row.teamId ?? '__no_team__';
+    if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+    groups.get(key)!.push(row);
+  }
+  return order.map(key => {
+    const members = groups.get(key)!;
+    const name = members[0]?.teamName ?? 'Без отдела';
+    return {
+      dimensionId: `__team__${key}`,
+      dimensionName: name,
+      teamId: key,
+      teamName: name,
+      deltas: aggregateMiniGroupDeltas(members, metrics),
+      isGroup: true,
+      children: members,
+    };
+  });
+}
+
 function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: MiniReportSort; onSortChange: (s: MiniReportSort) => void }) {
   const {
     target, dimensionType, period, comparison, dealScope, clientType, productGroupMode,
@@ -558,6 +599,16 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   function onDealSort(k: string) {
     setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
   }
+
+  // Группировка секций мини-отчёта (задача #2390) — «Без групп.» по умолчанию,
+  // поведение таблицы менеджеров не меняется, пока пользователь явно не переключит.
+  // Применимо только там, где строки мини-отчёта — МЕНЕДЖЕРЫ: отчёт «по товарным
+  // группам» (target=товарная группа, rows=менеджеры) и маркетинговый дрилл-даун с
+  // разбивкой «Менеджер» (dim==='manager', reportSlug 'by-managers'); в остальных
+  // случаях (target=менеджер → rows=товарные группы; прочие маркетинговые разбивки)
+  // у строк нет team/branch — селектор скрыт, поведение как раньше.
+  const [miniGrouping, setMiniGrouping] = useState<Grouping>('none');
+  const rowsAreManagers = dimensionType === 'product-group' || (dimensionType === 'source' && dim === 'manager');
 
   const fromIso = period.from.toISOString();
   const toIso   = period.to.toISOString();
@@ -625,7 +676,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   const mgrBranches = useMemo(() => srcCatalog?.managerBranches ?? {}, [srcCatalog]);
 
   const metrics: Metric[] = runData?.metrics ?? [];
-  const rawRows: RowDeltas[] = runData?.rows ?? [];
+  const rawRows: MiniGroupRow[] = runData?.rows ?? [];
   const totals: Record<string, TotalsMetricValue> | null = runData?.totals ?? null;
   const deals: Deal[] = dealData?.deals ?? [];
 
@@ -672,6 +723,12 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   // Для маркетингового дрилл-дауна вторая сущность фильтруема только когда это менеджер.
   const canCellDrill = dimensionType !== 'source' || dim === 'manager';
   function handleCellClick(dimensionId: string, dimensionName: string, metricId: string) {
+    // Секция группировки (отдел/филиал, задача #2390) — синтетический dimensionId
+    // (__team__.../__branch__...), не соответствует ни одной реальной строке; клик по
+    // её метрике не должен уходить в суб-дрилл с мусорным managerId/productGroup.
+    // '__total__' сюда НЕ попадает (см. isTotal ниже) — это легитимный клик по строке
+    // «Итого» (уже существовавшее поведение, независимое от #2390).
+    if (dimensionId.startsWith('__team__') || dimensionId.startsWith('__branch__')) return;
     const m = metrics.find(x => x.id === metricId);
     const isTotal = dimensionId === '__total__';
     const base: SubDrill = {
@@ -692,44 +749,59 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
     : dimensionType === 'product-group' ? 'Менеджер'
     : dimensionLabel(dim);
 
+  // Группировка секций (задача #2390) — только когда строки реально менеджеры
+  // (rowsAreManagers, см. выше); иначе селектор скрыт, rows идут как есть.
+  const effectiveGrouping: Grouping = rowsAreManagers ? miniGrouping : 'none';
+  const groupedRows: MiniGroupRow[] = effectiveGrouping !== 'none' ? applyMiniGrouping(rows, effectiveGrouping, metrics) : rows;
+
   return (
-    <ReportTable
-      rows={rows}
-      totals={totals}
-      metrics={metrics}
-      comparisonDisplay={props.comparisonDisplay ?? 'current'}
-      metricDisplayModes={props.metricDisplayModes}
-      comparisonThreshold={props.comparisonThreshold}
-      isLoading={isLoading}
-      dimensionLabel={label}
-      highlights={props.highlights}
-      metricDecimalOverrides={props.metricDecimalOverrides}
-      metricThresholdOverrides={props.metricThresholdOverrides}
-      accentedMetricIds={props.accentedMetricIds}
-      barMetricIds={props.barMetricIds}
-      heatmapMetricIds={props.heatmapMetricIds}
-      heatmapInvertedIds={props.heatmapInvertedIds}
-      colorizeMetrics={props.colorizeMetrics}
-      zebra={props.zebra}
-      borderMode={props.borderMode}
-      numberAlign={props.numberAlign}
-      pinnedMetricIds={props.pinnedMetricIds}
-      columnGroups={props.columnGroups}
-      density={props.density}
-      tableScale={props.tableScale}
-      sortBy={sort.key}
-      sortDir={sort.dir}
-      onSortChange={(by, dir) => onSortChange({ key: by, dir })}
-      onRowClick={id => toggle(id)}
-      onCellClick={canCellDrill ? handleCellClick : undefined}
-      expandedRowIds={expanded}
-      renderExpandedRow={row => {
-        const rowDeals = dealsByRow.get(bucketKey(row)) ?? [];
-        return rowDeals.length
-          ? <DealsTable deals={sortDealsBy(rowDeals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} tableScale={props.tableScale} />
-          : <div className="px-6 py-3 text-xs text-[var(--color-text-muted)]">Нет сделок за период</div>;
-      }}
-    />
+    <div className="h-full flex flex-col">
+      {rowsAreManagers && (
+        <div className="px-3 sm:px-6 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0 flex items-center justify-end">
+          <GroupingSelector grouping={miniGrouping} onGroupingChange={setMiniGrouping} />
+        </div>
+      )}
+      <div className="flex-1 min-h-0">
+        <ReportTable
+          rows={groupedRows}
+          totals={totals}
+          metrics={metrics}
+          comparisonDisplay={props.comparisonDisplay ?? 'current'}
+          metricDisplayModes={props.metricDisplayModes}
+          comparisonThreshold={props.comparisonThreshold}
+          isLoading={isLoading}
+          grouping={effectiveGrouping}
+          dimensionLabel={label}
+          highlights={props.highlights}
+          metricDecimalOverrides={props.metricDecimalOverrides}
+          metricThresholdOverrides={props.metricThresholdOverrides}
+          accentedMetricIds={props.accentedMetricIds}
+          barMetricIds={props.barMetricIds}
+          heatmapMetricIds={props.heatmapMetricIds}
+          heatmapInvertedIds={props.heatmapInvertedIds}
+          colorizeMetrics={props.colorizeMetrics}
+          zebra={props.zebra}
+          borderMode={props.borderMode}
+          numberAlign={props.numberAlign}
+          pinnedMetricIds={props.pinnedMetricIds}
+          columnGroups={props.columnGroups}
+          density={props.density}
+          tableScale={props.tableScale}
+          sortBy={sort.key}
+          sortDir={sort.dir}
+          onSortChange={(by, dir) => onSortChange({ key: by, dir })}
+          onRowClick={id => toggle(id)}
+          onCellClick={canCellDrill ? handleCellClick : undefined}
+          expandedRowIds={expanded}
+          renderExpandedRow={row => {
+            const rowDeals = dealsByRow.get(bucketKey(row)) ?? [];
+            return rowDeals.length
+              ? <DealsTable deals={sortDealsBy(rowDeals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} tableScale={props.tableScale} />
+              : <div className="px-6 py-3 text-xs text-[var(--color-text-muted)]">Нет сделок за период</div>;
+          }}
+        />
+      </div>
+    </div>
   );
 }
 
