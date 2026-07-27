@@ -343,6 +343,14 @@ export async function GET(req: NextRequest) {
     product_group_display: pgMode === 'by_max'
       ? (r.head_group_name    ?? 'Без группы')
       : (r.product_group_name ?? 'Без группы'),
+    // Задача #2385: группировка «По отделу/По филиалу» в списке сделок drill-down —
+    // тот же teamId/teamName/branchName, что byManagers.ts кладёт в ReportRow (см.
+    // ManagerInfo.department/departmentId в lib/marketing/sources.ts), просто по
+    // менеджеру сделки. branch фолбэк ('СПб') — то же правило заказчика, что и в
+    // grouping.ts (applyGrouping) и byManagers.ts.
+    team_id: mgrInfo.get(r.manager_id)?.departmentId ?? null,
+    team_name: mgrInfo.get(r.manager_id)?.department ?? null,
+    branch_name: mgrInfo.get(r.manager_id)?.branch ?? 'СПб',
   }));
 
   return NextResponse.json({ deals, total_count: totalCount, total_amount: totalAmount });

@@ -6,18 +6,19 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { DateRange } from '@/lib/period';
 import { recomputeComparison } from '@/lib/period';
-import type { Metric, ComparisonDisplay, DealScope, ClientType, ProductGroupMode, AccountType, TotalsMetricValue, BorderMode } from '@/lib/metrics/types';
+import type { Metric, ComparisonDisplay, DealScope, ClientType, ProductGroupMode, AccountType, TotalsMetricValue, BorderMode, Grouping } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
 import { dealsCountLabel } from '@/lib/format/pluralize';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { branchLabel } from '@/lib/org/branchLabel';
 import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
-import { PeriodRangeControls, DepartmentPicker } from './FilterBar';
+import { PeriodRangeControls, DepartmentPicker, GroupingSelector } from './FilterBar';
 import { FiltersMenu } from './FiltersMenu';
 
 interface Deal {
@@ -39,6 +40,12 @@ interface Deal {
   stage_event_type: string | null;
   product_group_display: string;
   funnel_name: string | null;
+  // Задача #2385: группировка списка сделок drill-down «По отделу/По филиалу» — те
+  // же поля, что и в byManagers.ts (ReportRow.teamId/teamName/branchName), только
+  // резолвятся сервером по менеджеру КАЖДОЙ сделки (см. app/api/reports/deals/route.ts).
+  team_id: string | null;
+  team_name: string | null;
+  branch_name: string | null;
 }
 
 export interface DrilldownTarget {
@@ -214,6 +221,52 @@ function sortDealsBy(arr: Deal[], dealSort: DealSort): Deal[] {
   });
 }
 
+// ── Группировка списка сделок drill-down (задача #2385) ─────────────────────
+// Тот же переключатель «Без групп. / По отделу / По филиалу / Итого», что и в
+// основном отчёте (FilterBar.GroupingSelector, тип Grouping из lib/metrics/types) —
+// применяется здесь к ПЛОСКОМУ списку сделок (не к ReportRow, как в
+// features/reports/engine/grouping.ts applyGrouping, тот движок работает над уже
+// агрегированными строками мини-отчёта, а не над сделками). Логика группировки и
+// фолбэки ('Без отдела' / 'СПб') намеренно зеркалят applyGrouping — тот же ключ
+// (row.teamId/branchName), просто источник — team_id/branch_name конкретной сделки.
+interface DealGroup { key: string; label: string; deals: Deal[]; count: number; amount: number }
+
+function groupDrillDeals(deals: Deal[], grouping: Grouping): DealGroup[] {
+  if (grouping === 'total') {
+    return [{
+      key: '__total__',
+      label: 'Итого',
+      deals,
+      count: deals.length,
+      amount: deals.reduce((s, d) => s + (Number(d.amount) || 0), 0),
+    }];
+  }
+  const groups = new Map<string, { label: string; deals: Deal[] }>();
+  for (const d of deals) {
+    let key: string;
+    let label: string;
+    if (grouping === 'branch') {
+      const raw = d.branch_name ?? 'СПб'; // правило: не Москва и не Краснодар → СПб
+      key = raw;
+      label = branchLabel(raw);
+    } else {
+      key = d.team_id ?? '__no_team__';
+      label = d.team_name ?? 'Без отдела';
+    }
+    if (!groups.has(key)) groups.set(key, { label, deals: [] });
+    groups.get(key)!.deals.push(d);
+  }
+  return [...groups.entries()]
+    .map(([key, g]) => ({
+      key,
+      label: g.label,
+      deals: g.deals,
+      count: g.deals.length,
+      amount: g.deals.reduce((s, d) => s + (Number(d.amount) || 0), 0),
+    }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
 // ── Deal sub-table (row expansion in the mini-report / flat list) ───────────
 function dealCell(deal: Deal, key: string) {
   const def = DEAL_FIELDS.find(f => f.key === key);
@@ -341,6 +394,10 @@ function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
 }) {
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const [dealSort, setDealSort] = useState<DealSort>(null);
+  // Задача #2385: тот же переключатель группировки, что и на верхнем уровне отчёта
+  // (FilterBar.GroupingSelector) — «Без групп.» по умолчанию, поведение списка не
+  // меняется, пока пользователь явно не переключит.
+  const [drillGrouping, setDrillGrouping] = useState<Grouping>('none');
   function onDealSort(k: string) {
     setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
   }
@@ -366,21 +423,47 @@ function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
   if (deals.length === 0) {
     return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">Нет сделок за выбранный период</div>;
   }
+  const sortedDeals = sortDealsBy(deals, dealSort);
+  // Группы считаются от той же (отсортированной) выборки, что и рендерится ниже —
+  // подытоги групп в сумме дают ровно то же «Итого», что и строка выше, ЗА
+  // ИСКЛЮЧЕНИЕМ обрезанной части при isTruncated (see #2369: список режется
+  // LIMIT 1000 на бэке, total_count/total_amount — по полной выборке; это тот же
+  // компромисс, что и раньше — предупреждение уже показано ниже).
+  const groups = drillGrouping === 'none' ? null : groupDrillDeals(sortedDeals, drillGrouping);
   return (
     <div className="h-full flex flex-col">
-      <div className="px-6 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)] shrink-0">
-        {/* «Итого: N сделок» (п.7 правок 09.07/2) вместо голого счётчика — склонение
-            см. dealsCountLabel. Итог теперь из безлимитного агрегата (total_count/
-            total_amount), не из reduce по обрезанному списку (#2369). */}
-        {`Итого: ${dealsCountLabel(totalCount)}`} · {fmtMoney(totalAmount)}
-        {isTruncated && (
-          <span className="ml-2 text-[var(--color-text-muted)]">
-            (показаны первые {deals.length} из {totalCount})
-          </span>
-        )}
+      <div className="px-6 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)] shrink-0 flex items-center justify-between gap-3 flex-wrap">
+        <span>
+          {/* «Итого: N сделок» (п.7 правок 09.07/2) вместо голого счётчика — склонение
+              см. dealsCountLabel. Итог теперь из безлимитного агрегата (total_count/
+              total_amount), не из reduce по обрезанному списку (#2369). */}
+          {`Итого: ${dealsCountLabel(totalCount)}`} · {fmtMoney(totalAmount)}
+          {isTruncated && (
+            <span className="ml-2 text-[var(--color-text-muted)]">
+              (показаны первые {deals.length} из {totalCount})
+            </span>
+          )}
+        </span>
+        <GroupingSelector grouping={drillGrouping} onGroupingChange={setDrillGrouping} />
       </div>
       <div className="flex-1 overflow-hidden">
-        <DealsTable deals={sortDealsBy(deals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} tableScale={tableScale} />
+        {groups ? (
+          <div className="h-full overflow-y-auto">
+            {groups.map(g => (
+              <div key={g.key}>
+                <div className="px-6 py-1.5 text-xs font-semibold text-[var(--color-text)] bg-[var(--color-table-header)] border-t border-b border-[var(--color-border)] flex items-center justify-between gap-3 sticky top-0 z-[1]">
+                  <span className="truncate">{g.label}</span>
+                  <span className="text-[var(--color-text-muted)] font-normal whitespace-nowrap tabular-nums">
+                    {dealsCountLabel(g.count)} · {fmtMoney(g.amount)}
+                  </span>
+                </div>
+                <DealsTable deals={g.deals} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} onDealOpen={onDealOpen} tableScale={tableScale} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <DealsTable deals={sortedDeals} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} tableScale={tableScale} />
+        )}
       </div>
     </div>
   );

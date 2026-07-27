@@ -76,7 +76,11 @@ export function deriveBranchFromLogin(shortLogin: string | null): string {
   return 'СПб';
 }
 
-export interface ManagerInfo { name: string; login: string | null; branch: string; department: string | null }
+// department/departmentId — тот же источник (sa.org_resolved_hierarchy.department_name/
+// department_id), что и teamName/teamId в ReportRow (byManagers.ts) — добавлены задачей
+// #2385, чтобы drill-down список сделок мог группировать «По отделу» тем же ключом,
+// что и верхний уровень отчёта (без дублирования запроса к оргструктуре).
+export interface ManagerInfo { name: string; login: string | null; branch: string; department: string | null; departmentId: string | null }
 
 let _mgrInfo: Map<string, ManagerInfo> | null = null;
 let _mgrInfoAt = 0;
@@ -84,8 +88,8 @@ let _mgrInfoAt = 0;
 export async function loadManagerInfoMap(): Promise<Map<string, ManagerInfo>> {
   if (_mgrInfo && Date.now() - _mgrInfoAt < TTL) return _mgrInfo;
   // Оргструктура переехала в sa (задача Серёги 13.07): читаем из analyticsDb.
-  const res = await analyticsDb().query<{ id: string; name: string; branch: string | null; short_login: string | null; department_name: string | null }>(
-    `SELECT manager_bitrix_user_id::text AS id, manager_name AS name, branch, short_login, department_name
+  const res = await analyticsDb().query<{ id: string; name: string; branch: string | null; short_login: string | null; department_name: string | null; department_id: string | null }>(
+    `SELECT manager_bitrix_user_id::text AS id, manager_name AS name, branch, short_login, department_name, department_id::text AS department_id
        FROM sa.org_resolved_hierarchy WHERE is_active = true`,
   );
   _mgrInfo = new Map(res.rows.map(r => [r.id, {
@@ -93,6 +97,7 @@ export async function loadManagerInfoMap(): Promise<Map<string, ManagerInfo>> {
     login: r.short_login,
     branch: r.branch ?? deriveBranchFromLogin(r.short_login),
     department: r.department_name,
+    departmentId: r.department_id,
   }]));
   _mgrInfoAt = Date.now();
   return _mgrInfo;
