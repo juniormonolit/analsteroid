@@ -537,11 +537,17 @@ function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
 // метрик (тепловая карта, подсветки, режимы сравнения, десятичные, акценты).
 interface SourceInfoLite { source_id: string; contact_type: string | null; branch: string | null; platform: string | null; brand: string | null; ad_channel: string | null; channel_group: string | null }
 
-function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
+// Тип сортировки мини-отчёта (2-й уровень drill-down) — поднят в DrilldownDrawer
+// (см. MiniReportSort ниже), чтобы переживать переход на суб-дрилл (3-й уровень,
+// задача #2388: клик по цифре размонтирует MiniReport — sub ? <SubDealsView/> :
+// <MiniReport/> — и локальный useState сортировки терялся при возврате «назад»).
+type MiniReportSort = { key: string | null; dir: 'asc' | 'desc' };
+
+function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: MiniReportSort; onSortChange: (s: MiniReportSort) => void }) {
   const {
     target, dimensionType, period, comparison, dealScope, clientType, productGroupMode,
-    metricIds, departmentIds, dealFields, sortBy, sortDir, sourceDimension, drilldownDimension,
-    onDealOpen, onCellDrill,
+    metricIds, departmentIds, dealFields, sourceDimension, drilldownDimension,
+    onDealOpen, onCellDrill, sort, onSortChange,
   } = props;
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const mainDim = sourceDimension ?? 'brand';
@@ -549,8 +555,6 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set()); // all collapsed by default
   const [dealSort, setDealSort] = useState<DealSort>(null);
-  // Внутренняя сортировка мини-отчёта; стартует с сортировки основного отчёта
-  const [sort, setSort] = useState<{ key: string | null; dir: 'asc' | 'desc' }>({ key: sortBy ?? null, dir: sortDir ?? 'desc' });
   function onDealSort(k: string) {
     setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
   }
@@ -715,7 +719,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void }) {
       tableScale={props.tableScale}
       sortBy={sort.key}
       sortDir={sort.dir}
-      onSortChange={(by, dir) => setSort({ key: by, dir })}
+      onSortChange={(by, dir) => onSortChange({ key: by, dir })}
       onRowClick={id => toggle(id)}
       onCellClick={canCellDrill ? handleCellClick : undefined}
       expandedRowIds={expanded}
@@ -735,6 +739,13 @@ export function DrilldownDrawer(props: Props) {
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   // Суб-дрилл из мини-отчёта (клик по цифре)
   const [sub, setSub] = useState<SubDrill | null>(null);
+  // Сортировка мини-отчёта (2-й уровень) — задача #2388: живёт в DrilldownDrawer
+  // (который не размонтируется при переходе на суб-дрилл/3-й уровень и обратно),
+  // а не в MiniReport (который размонтируется, см. `sub ? <SubDealsView/> :
+  // <MiniReport/>` ниже). Дефолт берётся из сортировки основного отчёта РОВНО
+  // один раз — при монтировании drawer'а (новый target = новый drawer, см. key={...}
+  // в SalesReportPage), так что первое открытие не меняет поведение.
+  const [miniSort, setMiniSort] = useState<MiniReportSort>({ key: props.sortBy ?? null, dir: props.sortDir ?? 'desc' });
 
   // ── Собственные фильтры дрилл-дауна (п. Н4 спеки) ──────────────────────────
   // При открытии дрилл-даун наследует период/фильтры основного отчёта (значения
@@ -886,7 +897,7 @@ export function DrilldownDrawer(props: Props) {
           {localGrouped && !isGroupTarget
             ? (sub
                 ? <SubDealsView {...viewProps} sub={sub} onBack={() => setSub(null)} />
-                : <MiniReport {...viewProps} onCellDrill={setSub} />)
+                : <MiniReport {...viewProps} onCellDrill={setSub} sort={miniSort} onSortChange={setMiniSort} />)
             : <FlatDealsView {...viewProps} />}
         </div>
       </div>
