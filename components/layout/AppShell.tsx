@@ -7,6 +7,7 @@ import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid, Smartphone,
+  MessageCircle, LineChart,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
@@ -356,6 +357,10 @@ interface NavItem {
 // пресеты живут по прямым URL (/marketing/*) и вернутся в меню, когда попросят.
 const NAV: NavItem[] = [
   { label: 'Продажи', icon: <BarChart3 size={18} />, isSales: true, perm: 'section.sales' },
+  // «Графики» (задача владельца 28.07): конструктор графиков по метрикам отчётов +
+  // дефолтные кривые «вероятность продажи от дней в стадии». Раздел первого уровня,
+  // а не в «Ещё» — владелец строит его как рабочий инструмент анализа воронки.
+  { label: 'Графики', href: '/charts', icon: <LineChart size={18} />, perm: 'section.charts' },
 ];
 
 /* Содержимое сайдбара (nav + нижние секции + footer) — общее для десктопного
@@ -379,6 +384,9 @@ function SidebarBody({
 
   // «Ещё ▸» (оптимизация 16.07): второстепенные разделы одним свёрнутым пунктом.
   const moreItems = [
+    // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
+    // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
+    { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: hasPerm(user, 'action.deal_chats') },
     { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: hasPerm(user, 'section.summary') },
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },

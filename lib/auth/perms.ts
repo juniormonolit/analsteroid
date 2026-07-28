@@ -10,6 +10,7 @@ export const PERM_SECTIONS = [
   { key: 'section.summary', label: 'Сводная' },
   { key: 'section.plans', label: 'Планы' },
   { key: 'section.decomposition', label: 'Декомпозиция' },
+  { key: 'section.charts', label: 'Графики' },
   { key: 'section.metrics', label: 'Метрики (конструктор)' },
   { key: 'section.settings', label: 'Настройки' },
 ] as const;
@@ -18,6 +19,7 @@ export const PERM_ACTIONS = [
   { key: 'action.plans.edit', label: 'Редактирование планов' },
   { key: 'action.users.manage', label: 'Управление пользователями' },
   { key: 'action.shared_reports.manage', label: 'Управление общими отчётами («Роп монитор», «Отчёты Стаса»)' },
+  { key: 'action.deal_chats', label: 'Чаты по сделкам (сообщения менеджерам через бота)' },
 ] as const;
 
 export type PermKey =

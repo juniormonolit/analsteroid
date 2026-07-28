@@ -1,0 +1,164 @@
+'use client';
+
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { endOfDay } from 'date-fns';
+import { MainPeriodControl, DepartmentPicker } from '@/features/reports/ui/FilterBar';
+import { Seg } from '@/features/reports/ui/FiltersMenu';
+import { useAccountDepartments } from '@/lib/hooks/useAccountDepartments';
+import type { DateRange } from '@/lib/period';
+import type { DealScope, ClientType } from '@/lib/metrics/types';
+import type { SurvivalPreset, SurvivalResult } from '../engine/types';
+import { SurvivalChart } from './SurvivalChart';
+import { ConstructorSection } from './ConstructorSection';
+
+// Раздел «Графики» (задача владельца 28.07). Два режима:
+//  * «Вероятность продажи» (дефолт) — кастомные кривые владельца: CR в продажу от
+//    числа дней в стадии «Созвонился и озвучил цены» и в WORK-стадиях. Вопрос,
+//    на который отвечает вкладка: «где вероятность продать реально падает».
+//  * «Конструктор» — любые метрики каталога на осях поверх /api/reports/run.
+type Tab = 'survival' | 'constructor';
+
+// Старт сбора истории стадий (sa.deal_events) — раньше этой даты корзин не из чего
+// строить. Значение = DEAL_EVENTS_DATA_START движка (серверная константа, сюда
+// продублирована литералом: тянуть серверный модуль в клиент нельзя).
+const EVENTS_START = new Date('2026-04-03T00:00:00');
+
+function defaultSurvivalPeriod(): DateRange {
+  return { from: EVENTS_START, to: endOfDay(new Date()) };
+}
+
+function SurvivalCard({
+  preset, title, subtitle, period, dealScope, clientType, departmentIds, departmentsReady,
+}: {
+  preset: SurvivalPreset;
+  title: string;
+  subtitle: string;
+  period: DateRange;
+  dealScope: DealScope;
+  clientType: ClientType;
+  departmentIds: string[];
+  departmentsReady: boolean;
+}) {
+  const { data, isLoading, isError } = useQuery<{ result: SurvivalResult | null }>({
+    queryKey: ['stage-survival', preset, period, dealScope, clientType, departmentIds],
+    queryFn: async () => {
+      const res = await fetch('/api/charts/stage-survival', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preset, period: { from: period.from, to: period.to }, dealScope, clientType, departmentIds }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    enabled: departmentsReady,
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const r = data?.result ?? null;
+
+  return (
+    <section className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 sm:p-5">
+      <h2 className="text-sm font-semibold text-[var(--color-text)]">{title}</h2>
+      <p className="mt-0.5 mb-3 text-xs text-[var(--color-text-muted)]">{subtitle}</p>
+
+      {isLoading || (!isError && data === undefined) ? (
+        <div className="h-[240px] rounded-lg bg-[var(--color-border)] animate-pulse" />
+      ) : isError ? (
+        <p className="text-sm text-[var(--color-negative)]">Не удалось загрузить график.</p>
+      ) : !r ? (
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Выбранный период целиком раньше 03.04.2026 — история стадий ещё не велась.
+        </p>
+      ) : r.cohortTotal === 0 ? (
+        <p className="text-sm text-[var(--color-text-muted)]">Нет сделок под выбранные фильтры.</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2 text-xs text-[var(--color-text-muted)]">
+            <span>Когорта: <b className="text-[var(--color-text)]">{r.cohortTotal.toLocaleString('ru-RU')}</b></span>
+            <span>Продано: <b className="text-[var(--color-text)]">{r.soldTotal.toLocaleString('ru-RU')}</b></span>
+            <span>CR общий: <b className="text-[var(--color-text)]">{r.overallPct === null ? '—' : `${r.overallPct}%`}</b></span>
+            <span>Ещё в стадии: <b className="text-[var(--color-text)]">{r.stillInStage.toLocaleString('ru-RU')}</b></span>
+          </div>
+          <SurvivalChart buckets={r.buckets} />
+        </>
+      )}
+    </section>
+  );
+}
+
+export function ChartsPage() {
+  const [tab, setTab] = useState<Tab>('survival');
+  const [period, setPeriod] = useState<DateRange>(defaultSurvivalPeriod);
+  // Сравнение графикам не нужно, но MainPeriodControl при клике по пресету зовёт
+  // onComparisonChange — принимаем и игнорируем.
+  const [dealScope, setDealScope] = useState<DealScope>('primary'); // дефолт владельца: первичные
+  const [clientType, setClientType] = useState<ClientType>('all');
+  const { departmentIds, ready: departmentsReady, setDepartmentIds } = useAccountDepartments();
+
+  return (
+    <div className="p-3 sm:p-6 max-w-[1400px] mx-auto">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <h1 className="text-lg font-semibold text-[var(--color-text)]">Графики</h1>
+        <Seg<Tab>
+          options={['survival', 'constructor']}
+          value={tab}
+          onChange={setTab}
+          labels={{ survival: 'Вероятность продажи', constructor: 'Конструктор' }}
+        />
+      </div>
+
+      {/* общие фильтры (как в отчётах: период, отделы, воронка, тип клиента) */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <MainPeriodControl period={period} onPeriodChange={setPeriod} onComparisonChange={() => {}} />
+        <DepartmentPicker departmentIds={departmentIds} onDepartmentIdsChange={setDepartmentIds} />
+        <Seg<DealScope>
+          options={['primary', 'repeat', 'all']}
+          value={dealScope}
+          onChange={setDealScope}
+          labels={{ primary: 'Первичные', repeat: 'Повторные', all: 'Все' }}
+        />
+        <Seg<ClientType>
+          options={['all', 'b2c', 'b2b']}
+          value={clientType}
+          onChange={setClientType}
+          labels={{ all: 'Все клиенты', b2c: 'B2C', b2b: 'B2B' }}
+        />
+      </div>
+
+      {tab === 'survival' ? (
+        <>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <SurvivalCard
+              preset="priced"
+              title="Вероятность продажи от дней в «Созвонился и озвучил цены»"
+              subtitle="Сделки, впервые вошедшие в стадию в выбранный период. Дни — от входа до перехода в другую стадию (или до сегодня, если сделка ещё там). CR — доля дошедших до продажи."
+              period={period} dealScope={dealScope} clientType={clientType}
+              departmentIds={departmentIds} departmentsReady={departmentsReady}
+            />
+            <SurvivalCard
+              preset="work"
+              title="Вероятность продажи от дней в работе (стадии WORK)"
+              subtitle="Сделки, впервые вошедшие в любую WORK-стадию в выбранный период. Дни — суммарное время во всех стадиях с разметкой WORK до продажи/отгрузки (стадии «Продано»/«Отгружено» не считаются, хотя тоже размечены WORK). CR — доля дошедших до продажи."
+              period={period} dealScope={dealScope} clientType={clientType}
+              departmentIds={departmentIds} departmentsReady={departmentsReady}
+            />
+          </div>
+          <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
+            История стадий ведётся с 03.04.2026 — периоды раньше не дадут данных. Сделки, которые ещё
+            не вышли из стадии, учитываются с «днями по сегодня» — у свежих когорт хвост кривой занижен.
+          </p>
+        </>
+      ) : (
+        <ConstructorSection
+          period={period}
+          dealScope={dealScope}
+          clientType={clientType}
+          departmentIds={departmentIds}
+          departmentsReady={departmentsReady}
+        />
+      )}
+    </div>
+  );
+}
