@@ -1,6 +1,5 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
-import { differenceInCalendarDays } from 'date-fns';
 
 // Метрики активности менеджеров (спека owners-inbox/analsteroid-edits-spec-20260709.md,
 // правки собрания 09.07 + допы, задача от 10.07): «Дней в работе» / «% выхода» /
@@ -126,7 +125,25 @@ export async function getCalendarWorkingDaysInPeriod(period: DateRange): Promise
   // Date периода (см. lib/period::periodDateStrFromInstant).
   const fromStr = periodDateStrFromInstant(period.from, 'from');
   const toStr = periodDateStrFromInstant(period.to, 'to');
-  const totalCalendarDays = differenceInCalendarDays(period.to, period.from) + 1;
+  // БАГ (задача #2531, владелец Серёга, 29.07): «План продаж/отгрузок (на тек. день)»
+  // всегда прочерк. Причина — здесь ниже totalCalendarDays считался
+  // differenceInCalendarDays(period.to, period.from) НАПРЯМУЮ по «сырым» Date, а
+  // differenceInCalendarDays берёт календарный день ЛОКАЛЬНЫМИ геттерами (часовой
+  // пояс ХОСТА процесса), а не UTC. На проде процесс живёт в Europe/Moscow (UTC+3):
+  // period.to из app/api/reports/run/route.ts — это конец дня «сегодня» В UTC
+  // (`${mskTodayStr}T23:59:59.999Z`), что в МСК уже 02:59:59.999 СЛЕДУЮЩИХ суток —
+  // локальный календарный день на 1 больше, чем настоящая дата. totalCalendarDays
+  // получался на 1 БОЛЬШЕ, чем число дат в fromStr..toStr (тех самых, что уже
+  // TZ-безопасно посчитаны periodDateStrFromInstant выше и по которым считается
+  // covered ниже) — сравнение `covered < totalCalendarDays` срабатывало ВСЕГДА для
+  // любого периода, заканчивающегося «сегодня», хотя working_calendar на самом деле
+  // заполнен на весь период (проверено запросом: covered=29, реальных дат 29,
+  // differenceInCalendarDays давал 30). Фикс — считать длину периода из уже
+  // TZ-безопасных fromStr/toStr через Date.UTC (не через локальные календарные дни
+  // на исходных Date-инстантах).
+  const [fy, fm, fd] = fromStr.split('-').map(Number);
+  const [ty, tm, td] = toStr.split('-').map(Number);
+  const totalCalendarDays = Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000) + 1;
 
   const res = await systemDb().query<{ total_working: string; covered: string }>(
     `SELECT COUNT(*) FILTER (WHERE is_working) AS total_working, COUNT(*) AS covered
