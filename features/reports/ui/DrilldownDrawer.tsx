@@ -145,19 +145,23 @@ type DealStage = 'shipment' | 'sale' | 'reservationConfirmed' | 'reservation' | 
 // Определение ТЕКУЩЕЙ стадии сделки (задача #2367, фикс «шрамов»: раньше цвет
 // красился по факту НАЛИЧИЯ lost_at — навсегда, даже если сделку потом вернули
 // в работу и продали/отгрузили; 14–25% реально проданных сделок красились
-// красным). Источник истины теперь — event_type ТЕКУЩЕЙ стадии сделки
-// (sa.stages.event_type через d.stage_id, JOIN уже был в SELECT): lost —
-// красный, ТОЛЬКО если сделка СЕЙЧАС на стадии с event_type='lost'. Проигрыш
-// по-прежнему терминален для стадии 'lost' (проверяется первым), но перестал
-// быть терминальным для цвета — если стадию откатили дальше, lost_at в прошлом
-// уже не красит строку.
-// Для стадий 'created'/'called' (ещё не дошла ни до брони, ни до отказа) —
-// нейтрально, КРОМЕ случая «продана/отгружена, потом стадию отвели обратно в
-// работу» (sold_at/delivered_at есть, event_type сейчас 'created'/'called'):
-// в этом случае красим по последней ДОСТИГНУТОЙ вехе (milestone-даты), а не в
-// нейтральный серый — иначе теряется сигнал «уже была продажа», это менее
-// инвазивно, чем городить отдельное состояние «шрам», и симметрично тому, как
-// стадия трактуется везде в приложении (см. STAGE_SNAPSHOT_GROUPS).
+// красным). Источник истины — event_type ТЕКУЩЕЙ стадии сделки (sa.stages.
+// event_type через d.stage_id, JOIN уже был в SELECT): lost — красный, ТОЛЬКО
+// если сделка СЕЙЧАС на стадии с event_type='lost'.
+//
+// Задача #2532 (Серёга, сделка 226960): #2367 закрыл терминальный «шрам» от
+// lost_at, но для 'created'/'called' оставил ДРУГОЙ, симметричный «шрам» —
+// красил по последней ДОСТИГНУТОЙ milestone-дате (sold_at/delivered_at/…),
+// если сделку откатили обратно в раннюю стадию. Живой пример на проде —
+// сделка 225530 ("Заполнил все материалы и запланировал звонок (B2C)",
+// event_type='called', но sold_at заполнен от прошлого цикла): текст —
+// текущая ранняя стадия, бейдж — синий «Продажа» по стухшему sold_at.
+// Тот же класс бага, что и «шрам» #2367, просто с другим предикатом.
+// Правило владельца («цвет ВСЕГДА следует текущей стадии») теперь без
+// исключений: 7 значений sa.stages.event_type (created/called/reserved/
+// confirmed/sold/shipped/lost, см. CHECK-констрейнт) размечены явно, без
+// milestone-фолбэка. 'created'/'called'/не резолвилось — нейтрально
+// (inProgress), как и раньше для этих же случаев с пустыми milestone-датами.
 function dealStage(deal: Deal): DealStage {
   switch (deal.stage_event_type) {
     case 'lost': return 'refusal';
@@ -165,12 +169,10 @@ function dealStage(deal: Deal): DealStage {
     case 'sold': return 'sale';
     case 'confirmed': return 'reservationConfirmed';
     case 'reserved': return 'reservation';
+    case 'created':
+    case 'called':
     default:
       // 'created' | 'called' | null (event_type не пришёл/стадия не резолвилась)
-      if (deal.delivered_at) return 'shipment';
-      if (deal.sold_at) return 'sale';
-      if (deal.confirmed_at) return 'reservationConfirmed';
-      if (deal.reserved_at) return 'reservation';
       return 'inProgress';
   }
 }
