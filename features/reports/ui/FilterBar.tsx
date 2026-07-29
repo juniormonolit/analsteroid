@@ -1,9 +1,9 @@
 'use client';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { ChevronDown, ChevronRight, Building2, ArrowLeftRight, Search, X, SlidersHorizontal } from 'lucide-react';
+import { ChevronDown, ChevronRight, Building2, ArrowLeftRight, Search, X, SlidersHorizontal, Layers } from 'lucide-react';
 import type { DateRange } from '@/lib/period';
 import type { Grouping } from '@/lib/metrics/types';
 import { SOURCE_DIMENSIONS, type SourceDimension } from '@/lib/marketing/dimensions';
@@ -334,6 +334,110 @@ export function DepartmentPicker({ departmentIds, onDepartmentIdsChange }: {
       <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
         <button onClick={cancelDepts} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
         <button onClick={applyDepts} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity">Применить</button>
+      </div>
+    </Popover>
+  );
+}
+
+// ── Выбор товарных групп — мультиселект с поиском (раздел «Графики», задача
+// 29.07). Визуальный язык и поведение (Popover-панель, кнопка «Очистить»,
+// «Отмена»/«Применить» с драфтом, применяется только по клику) — ТЕ ЖЕ, что у
+// DepartmentPicker выше: список плоский (а не дерево — товарные группы не
+// иерархичны), с полем поиска — в шкале kc ~96 групп, без поиска непригодно для
+// использования. options приходят от вызывающего компонента (зависят от
+// выбранной шкалы kc/by_max — см. /api/catalog/product-groups?mode=).
+export interface ProductGroupOption { id: string; name: string }
+
+export function ProductGroupPicker({ productGroupIds, onProductGroupIdsChange, options, loading = false }: {
+  productGroupIds: string[]; onProductGroupIdsChange: (ids: string[]) => void;
+  options: ProductGroupOption[]; loading?: boolean;
+}) {
+  const [showGroups, setShowGroups] = useState(false);
+  const [draft, setDraft] = useState<Set<string>>(new Set(productGroupIds));
+  const [search, setSearch] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? options.filter(o => o.name.toLowerCase().includes(q)) : options;
+  }, [options, search]);
+
+  function applyGroups() { onProductGroupIdsChange(Array.from(draft)); setShowGroups(false); }
+  function cancelGroups() { setDraft(new Set(productGroupIds)); setShowGroups(false); }
+  function toggle(id: string) {
+    setDraft(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const groupsLabel = productGroupIds.length === 0 ? 'Все группы' : `${productGroupIds.length} гр.`;
+
+  return (
+    <Popover
+      open={showGroups}
+      onOpenChange={(o) => {
+        if (o) { setDraft(new Set(productGroupIds)); setSearch(''); } // свежий драфт при каждом открытии
+        setShowGroups(o);
+      }}
+      align="end"
+      className="w-[300px] max-w-[calc(100vw-16px)] flex flex-col overflow-hidden"
+      trigger={
+        <button
+          className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors min-h-[38px] ${
+            productGroupIds.length > 0
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+              : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'
+          }`}
+        >
+          <Layers size={14} />
+          <span>{groupsLabel}</span>
+          <ChevronDown size={14} className="text-[var(--color-text-muted)]" />
+        </button>
+      }
+    >
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0">
+        <span className="text-sm font-medium text-[var(--color-text)]">Товарные группы</span>
+        {draft.size > 0 && (
+          <button onClick={() => setDraft(new Set())} className="text-xs text-[var(--color-accent)] hover:underline">Очистить</button>
+        )}
+      </div>
+      <div className="p-2 border-b border-[var(--color-border)] flex-shrink-0">
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Поиск группы…"
+          // text-base на мобиле — предотвращает авто-зум iOS Safari на фокусе поля
+          className="w-full text-base sm:text-sm border border-[var(--color-border)] rounded-md px-2 py-1.5 bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
+        />
+      </div>
+      <div className="overflow-y-auto flex-1 py-1 max-h-[320px]">
+        {loading ? (
+          <div className="px-3 py-4 text-xs text-[var(--color-text-muted)]">Загрузка…</div>
+        ) : filtered.length === 0 ? (
+          <div className="px-3 py-4 text-xs text-[var(--color-text-muted)]">Ничего не найдено</div>
+        ) : filtered.map(o => {
+          const checked = draft.has(o.id);
+          return (
+            // min-h-[44px] — тап-цель ≥44px (мобильная проверка брифа задачи 29.07)
+            <label
+              key={o.id}
+              className="flex items-center gap-2 px-3 py-2.5 min-h-[44px] hover:bg-[var(--color-bg-hover)] cursor-pointer select-none"
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => toggle(o.id)}
+                className="accent-[var(--color-accent)] w-4 h-4 flex-shrink-0 cursor-pointer"
+              />
+              <span className="text-sm text-[var(--color-text)] truncate">{o.name}</span>
+            </label>
+          );
+        })}
+      </div>
+      <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0">
+        <button onClick={cancelGroups} className="px-3 py-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors">Отмена</button>
+        <button onClick={applyGroups} className="px-4 py-1.5 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity">Применить</button>
       </div>
     </Popover>
   );

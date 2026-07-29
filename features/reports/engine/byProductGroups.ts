@@ -3,6 +3,7 @@ import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
+import { buildProductGroupFilter, productGroupCacheKey } from './productGroupFilter';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ReportRow, ProductGroupMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
@@ -112,6 +113,7 @@ export interface ByProductGroupsOptions {
   dealScope?: DealScope;
   clientType?: ClientType;
   productGroupMode?: ProductGroupMode;
+  productGroupIds?: string[]; // раздел «Графики» (мультиселект, задача 29.07): пустой/undefined = все группы
   managerId?: string;      // drilldown: restrict to one manager's deals
   managerIds?: string[];   // roster aggregate: restrict to a set of managers in ONE query (avoids N+1 per-manager calls — см. хотфикс "Дирекция" 500, задача department-card)
   departmentIds?: string[]; // filter to deals by managers in selected departments
@@ -166,8 +168,22 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   const offhWhereStr = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter)]
     .filter(Boolean).join(' AND ');
   if (offhWhereStr) whereParts.push(offhWhereStr);
-  const notNullWhere = whereParts.length > 0 ? whereParts.join(' AND ') : undefined;
   const offhKey = `${createdTimeFilter}:${firstTouchFilter}`;
+
+  // Фильтр товарных групп (мультиселект раздела «Графики», задача 29.07) —
+  // параметризованный (см. productGroupFilter.ts). Здесь этот отчёт УЖЕ группирует
+  // строки ПО товарной группе — фильтр сужает набор показанных групп, та же
+  // семантика, что и у byManagers.ts. Два варианта (main/snap) — разные номера
+  // плейсхолдеров в двух разных SQL (см. комментарий в byManagers.ts).
+  const pgFilterInput = { productGroupMode: mode, productGroupIds: opts.productGroupIds };
+  const pgFilterMain = buildProductGroupFilter(pgFilterInput, 2); // после [fromIso, toExclIso]
+  const pgFilterSnap = buildProductGroupFilter(pgFilterInput, 1); // после [CURATED_STAGE_IDS]
+  const pgKey = productGroupCacheKey(pgFilterInput);
+
+  const whereMainParts = pgFilterMain ? [...whereParts, pgFilterMain.sql] : whereParts;
+  const whereSnapParts = pgFilterSnap ? [...whereParts, pgFilterSnap.sql] : whereParts;
+  const notNullWhereMain = whereMainParts.length > 0 ? whereMainParts.join(' AND ') : undefined;
+  const notNullWhereSnap = whereSnapParts.length > 0 ? whereSnapParts.join(' AND ') : undefined;
 
   const allMetrics = await loadMetrics();
   const collected  = allMetrics.filter(m => m.metricType === 'collected' && !m.isTest);
@@ -176,12 +192,11 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
     collected.filter(m => m.tags.includes('scope_independent')).map(m => m.id),
   );
 
-  const dim = mode === 'by_max'
+  const dimBase = mode === 'by_max'
     ? {
         idExpr:          `COALESCE(d.head_group_name, 'Без группы')`,
         nameExpr:        `COALESCE(d.head_group_name, 'Без группы')`,
         groupBy:         'GROUP BY d.head_group_name, d.funnel_id',
-        notNullWhere,
         funnelBreakdown: true as const,
       }
     : {
@@ -189,19 +204,20 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
         nameExpr:        `COALESCE(pg.name, 'Без группы')`,
         extraJoins:      'LEFT JOIN product_groups pg ON pg.id = d.product_group_id',
         groupBy:         'GROUP BY d.product_group_id, pg.name, d.funnel_id',
-        notNullWhere,
         funnelBreakdown: true as const,
       };
+  const dimMain = { ...dimBase, notNullWhere: notNullWhereMain };
+  const dimSnap = { ...dimBase, notNullWhere: notNullWhereSnap };
 
-  // Analytics row cache (pills NOT in key; mode + managerId + deptKey + offhKey ARE — they change the scope)
-  const key   = mkKey(fromIso, toExclIso, metricIds, mode, managerId, deptKey, managerIdsKey, offhKey);
+  // Analytics row cache (pills NOT in key; mode+pgKey+managerId+deptKey+offhKey ARE — they change the scope)
+  const key   = mkKey(fromIso, toExclIso, metricIds, pgKey, managerId, deptKey, managerIdsKey, offhKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
     const rows = await cached(`rpt:pg:${key}`, reportTtl(toExclIso), async () => {
-      const sql = buildCollectedSQL(collected, dim);
+      const sql = buildCollectedSQL(collected, dimMain);
       if (!sql) return [];
-      const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
+      const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso, ...(pgFilterMain?.params ?? [])]);
       return res.rows;
     });
     entry = { rows, at: Date.now() };
@@ -209,10 +225,10 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   }
 
   // Снимок «Стадии (сейчас)» (задача 2059) — БЕЗ периода, свой кэш (см. byManagers.ts).
-  const snapKey   = mkSnapshotKey(mode, managerId, deptKey, managerIdsKey, offhKey);
+  const snapKey   = mkSnapshotKey(pgKey, managerId, deptKey, managerIdsKey, offhKey);
   let   snapEntry = _snapshotCache.get(snapKey);
   if (!snapEntry || Date.now() - snapEntry.at > SNAPSHOT_TTL) {
-    const snap = await fetchStageSnapshot(dim);
+    const snap = await fetchStageSnapshot(dimSnap, pgFilterSnap?.params ?? []);
     snapEntry = { snap, at: Date.now() };
     _snapshotCache.set(snapKey, snapEntry);
   }

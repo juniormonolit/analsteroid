@@ -4,6 +4,7 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
 import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
+import { buildProductGroupFilter, productGroupCacheKey } from './productGroupFilter';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ReportRow, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
@@ -116,6 +117,7 @@ export interface ByManagersOptions {
   accountType?: AccountType; // managers (bitrix_login manager*) / logists (logist*) / all
   productGroupMode?: 'kc' | 'by_max';
   productGroupId?: string; // drilldown: restrict to one product group
+  productGroupIds?: string[]; // раздел «Графики» (мультиселект, задача 29.07): пустой/undefined = все группы
   // Маркетинговый дрилл-даун: ограничить сделками одного значения измерения источников
   sourceFilter?: { dimension: SourceDimension; value: string };
   // Задача 1569: экспериментальные фильтры по нерабочему времени (см.
@@ -149,24 +151,17 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
     srcKey = `${opts.sourceFilter.dimension}=${opts.sourceFilter.value}`;
   }
 
-  // Build product-group filter for drilldown (inlined into SQL like managerId in byProductGroups)
-  let pgWhere: string | undefined;
-  if (pgId !== undefined) {
-    if (pgMode === 'kc') {
-      if (pgId === '__none__') {
-        pgWhere = 'd.product_group_id IS NULL';
-      } else if (/^\d+$/.test(pgId)) {
-        pgWhere = `d.product_group_id = ${pgId}`;
-      }
-    } else {
-      // by_max: head_group_name is a string — escape single quotes (standard SQL literal escaping)
-      if (pgId === 'Без группы') {
-        pgWhere = 'd.head_group_name IS NULL';
-      } else {
-        pgWhere = `d.head_group_name = '${pgId.replace(/'/g, "''")}'`;
-      }
-    }
-  }
+  // Фильтр товарных групп — параметризованный (productGroupFilter.ts). Раньше строился
+  // конкатенацией строки в SQL (`d.product_group_id = ${pgId}` / ручное экранирование
+  // кавычки для head_group_name) — переведено на bound-параметры $N (задача 29.07,
+  // требование безопасности брифа: никакой конкатенации пользовательского ввода в SQL).
+  // Один и тот же логический фильтр нужен ДВУМ разным SQL-запросам с разным числом уже
+  // занятых позиционных параметров — main collected-запрос ($1/$2 период) и снимок
+  // «Стадии (сейчас)» (только $1 CURATED_STAGE_IDS) — поэтому строим ДВА варианта.
+  const pgFilterInput = { productGroupMode: pgMode, productGroupId: pgId, productGroupIds: opts.productGroupIds };
+  const pgFilterMain = buildProductGroupFilter(pgFilterInput, 2); // после [fromIso, toExclIso]
+  const pgFilterSnap = buildProductGroupFilter(pgFilterInput, 1); // после [CURATED_STAGE_IDS]
+  const pgKey = productGroupCacheKey(pgFilterInput);
 
   const sysDb = systemDb();
 
@@ -231,27 +226,35 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   // Общий WHERE для сделок этого разреза (менеджер IS NOT NULL + пг/источник/
   // нерабочее время) — переиспользуется И обычным collected-запросом, И снимком
   // «Стадии (сейчас)» (stageSnapshot.ts), чтобы фильтры отчёта резали оба одинаково.
-  const notNullParts = ['d.current_manager_id IS NOT NULL'];
-  if (pgWhere) notNullParts.push(pgWhere);
-  if (srcWhere) notNullParts.push(srcWhere);
-  if (offhWhere) notNullParts.push(offhWhere);
-  const dimConfig = {
+  // ДВА варианта notNullWhere (main/snap) — у пг-фильтра разные номера плейсхолдеров
+  // в каждом из двух SQL (см. комментарий у pgFilterMain/pgFilterSnap выше).
+  const notNullPartsMain = ['d.current_manager_id IS NOT NULL'];
+  if (pgFilterMain) notNullPartsMain.push(pgFilterMain.sql);
+  if (srcWhere) notNullPartsMain.push(srcWhere);
+  if (offhWhere) notNullPartsMain.push(offhWhere);
+  const dimConfigMain = {
     idExpr:          'd.current_manager_id::text',
     groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
-    notNullWhere:    notNullParts.join(' AND '),
+    notNullWhere:    notNullPartsMain.join(' AND '),
     funnelBreakdown: true as const,
   };
 
-  // Analytics row cache (pills are NOT part of the key; pgId/srcKey/offhKey ARE — they change the scope)
+  const notNullPartsSnap = ['d.current_manager_id IS NOT NULL'];
+  if (pgFilterSnap) notNullPartsSnap.push(pgFilterSnap.sql);
+  if (srcWhere) notNullPartsSnap.push(srcWhere);
+  if (offhWhere) notNullPartsSnap.push(offhWhere);
+  const dimConfigSnap = { ...dimConfigMain, notNullWhere: notNullPartsSnap.join(' AND ') };
+
+  // Analytics row cache (pills are NOT part of the key; pgKey/srcKey/offhKey ARE — they change the scope)
   // L1: in-memory Map, per-instance, 10 min. L2: Redis, shared across instances/restarts.
-  const key   = mkKey(fromIso, toExclIso, metricIds, pgId, srcKey, offhKey);
+  const key   = mkKey(fromIso, toExclIso, metricIds, pgKey, srcKey, offhKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
     const rows = await cached(`rpt:mgr:${key}`, reportTtl(toExclIso), async () => {
-      const sql = buildCollectedSQL(collected, dimConfig);
+      const sql = buildCollectedSQL(collected, dimConfigMain);
       if (!sql) return [];
-      const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso]);
+      const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso, ...(pgFilterMain?.params ?? [])]);
       return res.rows;
     });
     entry = { rows, at: Date.now() };
@@ -261,11 +264,11 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   // Снимок «Стадии (сейчас)» (задача 2059) — БЕЗ периода вообще, свой кэш (2 мин,
   // короче обычного rowCache — «сейчас» должно обновляться чаще). current+
   // comparison зовут fetchByManagers с РАЗНЫМ period, но снимок один и тот же —
-  // кэш по (pgId/srcKey/offhKey) экономит второй одинаковый запрос.
-  const snapKey   = mkSnapshotKey(pgId, srcKey, offhKey);
+  // кэш по (pgKey/srcKey/offhKey) экономит второй одинаковый запрос.
+  const snapKey   = mkSnapshotKey(pgKey, srcKey, offhKey);
   let   snapEntry = _snapshotCache.get(snapKey);
   if (!snapEntry || Date.now() - snapEntry.at > SNAPSHOT_TTL) {
-    const snap = await fetchStageSnapshot(dimConfig);
+    const snap = await fetchStageSnapshot(dimConfigSnap, pgFilterSnap?.params ?? []);
     snapEntry = { snap, at: Date.now() };
     _snapshotCache.set(snapKey, snapEntry);
   }

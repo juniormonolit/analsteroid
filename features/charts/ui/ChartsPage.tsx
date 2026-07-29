@@ -3,11 +3,11 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { endOfDay } from 'date-fns';
-import { MainPeriodControl, DepartmentPicker } from '@/features/reports/ui/FilterBar';
+import { MainPeriodControl, DepartmentPicker, ProductGroupPicker, type ProductGroupOption } from '@/features/reports/ui/FilterBar';
 import { Seg } from '@/features/reports/ui/FiltersMenu';
 import { useAccountDepartments } from '@/lib/hooks/useAccountDepartments';
 import type { DateRange } from '@/lib/period';
-import type { DealScope, ClientType } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 import type { SurvivalPreset, SurvivalResult } from '../engine/types';
 import { SurvivalChart } from './SurvivalChart';
 import { ConstructorSection } from './ConstructorSection';
@@ -30,6 +30,7 @@ function defaultSurvivalPeriod(): DateRange {
 
 function SurvivalCard({
   preset, title, subtitle, period, dealScope, clientType, departmentIds, departmentsReady,
+  productGroupMode, productGroupIds,
 }: {
   preset: SurvivalPreset;
   title: string;
@@ -39,14 +40,19 @@ function SurvivalCard({
   clientType: ClientType;
   departmentIds: string[];
   departmentsReady: boolean;
+  productGroupMode: ProductGroupMode;
+  productGroupIds: string[];
 }) {
   const { data, isLoading, isError } = useQuery<{ result: SurvivalResult | null }>({
-    queryKey: ['stage-survival', preset, period, dealScope, clientType, departmentIds],
+    queryKey: ['stage-survival', preset, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
     queryFn: async () => {
       const res = await fetch('/api/charts/stage-survival', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ preset, period: { from: period.from, to: period.to }, dealScope, clientType, departmentIds }),
+        body: JSON.stringify({
+          preset, period: { from: period.from, to: period.to }, dealScope, clientType, departmentIds,
+          productGroupMode, productGroupIds,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -97,6 +103,24 @@ export function ChartsPage() {
   const [clientType, setClientType] = useState<ClientType>('all');
   const { departmentIds, ready: departmentsReady, setDepartmentIds } = useAccountDepartments();
 
+  // Фильтр товарных групп (задача 29.07, дословно владельца: «Добавь к графикам
+  // фильтр по товарным группам»). Шкала — дефолт СТРОГО 'kc' (тот же дефолт, что
+  // у SalesReportPage.tsx), применяется к ОБЕИМ вкладкам. Переключение шкалы
+  // сбрасывает выбранные группы — kc/by_max несовместимы, маппинга между ними в
+  // БД нет (см. бриф задачи).
+  const [productGroupMode, setProductGroupMode] = useState<ProductGroupMode>('kc');
+  const [productGroupIds, setProductGroupIds] = useState<string[]>([]);
+
+  const { data: pgCatalog, isLoading: pgCatalogLoading } = useQuery<{ groups: ProductGroupOption[] }>({
+    queryKey: ['catalog/product-groups', productGroupMode],
+    queryFn: async () => {
+      const res = await fetch(`/api/catalog/product-groups?mode=${productGroupMode}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
   return (
     <div className="p-3 sm:p-6 max-w-[1400px] mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
@@ -109,7 +133,7 @@ export function ChartsPage() {
         />
       </div>
 
-      {/* общие фильтры (как в отчётах: период, отделы, воронка, тип клиента) */}
+      {/* общие фильтры (как в отчётах: период, отделы, воронка, тип клиента, товарные группы) */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <MainPeriodControl period={period} onPeriodChange={setPeriod} onComparisonChange={() => {}} />
         <DepartmentPicker departmentIds={departmentIds} onDepartmentIdsChange={setDepartmentIds} />
@@ -125,6 +149,18 @@ export function ChartsPage() {
           onChange={setClientType}
           labels={{ all: 'Все клиенты', b2c: 'B2C', b2b: 'B2B' }}
         />
+        <Seg<ProductGroupMode>
+          options={['kc', 'by_max']}
+          value={productGroupMode}
+          onChange={m => { setProductGroupMode(m); setProductGroupIds([]); }}
+          labels={{ kc: 'Категория КЦ', by_max: 'По наибольшему' }}
+        />
+        <ProductGroupPicker
+          productGroupIds={productGroupIds}
+          onProductGroupIdsChange={setProductGroupIds}
+          options={pgCatalog?.groups ?? []}
+          loading={pgCatalogLoading}
+        />
       </div>
 
       {tab === 'survival' ? (
@@ -136,6 +172,7 @@ export function ChartsPage() {
               subtitle="Сделки, впервые вошедшие в стадию в выбранный период. Дни — от входа до перехода в другую стадию (или до сегодня, если сделка ещё там). CR — доля дошедших до продажи."
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
+              productGroupMode={productGroupMode} productGroupIds={productGroupIds}
             />
             <SurvivalCard
               preset="work"
@@ -143,6 +180,7 @@ export function ChartsPage() {
               subtitle="Сделки, впервые вошедшие в любую WORK-стадию в выбранный период. Дни — суммарное время во всех стадиях с разметкой WORK до продажи/отгрузки (стадии «Продано»/«Отгружено» не считаются, хотя тоже размечены WORK). CR — доля дошедших до продажи."
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
+              productGroupMode={productGroupMode} productGroupIds={productGroupIds}
             />
           </div>
           <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
@@ -157,6 +195,8 @@ export function ChartsPage() {
           clientType={clientType}
           departmentIds={departmentIds}
           departmentsReady={departmentsReady}
+          productGroupMode={productGroupMode}
+          productGroupIds={productGroupIds}
         />
       )}
     </div>

@@ -1,7 +1,8 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { DEAL_EVENTS_DATA_START } from '@/features/reports/engine/managerActivity';
-import type { DealScope, ClientType } from '@/lib/metrics/types';
+import { buildProductGroupFilter } from '@/features/reports/engine/productGroupFilter';
+import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 
 // Кривая «вероятность продажи от числа дней в стадии» (задача владельца 28.07,
 // раздел «Графики»): когорта = сделки, ВПЕРВЫЕ вошедшие в целевой набор стадий в
@@ -29,6 +30,10 @@ export interface SurvivalOptions {
   dealScope?: DealScope;    // default 'all' на уровне движка; UI шлёт 'primary'
   clientType?: ClientType;
   departmentIds?: string[];
+  // Фильтр товарных групп (задача 29.07): мультиселект + шкала. Пустой/undefined
+  // productGroupIds = все группы (текущее поведение, без регрессии).
+  productGroupMode?: ProductGroupMode;
+  productGroupIds?: string[];
 }
 
 // Корзины дней: 0..13 по дню, дальше огрубляем — хвост тонкий, по дню он шумит.
@@ -69,6 +74,17 @@ async function fetchPricedRows(opts: SurvivalOptions): Promise<DealRow[]> {
     params.push(opts.departmentIds);
     deptWhere = departmentsWhere(params.length);
   }
+  // Фильтр товарных групп (задача 29.07) — параметризованный, offset = уже
+  // занятые позиции params на этот момент.
+  let pgWhere = '';
+  const pgFilter = buildProductGroupFilter(
+    { productGroupMode: opts.productGroupMode, productGroupIds: opts.productGroupIds },
+    params.length,
+  );
+  if (pgFilter) {
+    params.push(...pgFilter.params);
+    pgWhere = `AND ${pgFilter.sql}`;
+  }
 
   const sql = `
 WITH target_stages AS (
@@ -98,7 +114,7 @@ FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
 LEFT JOIN exit_event e ON e.deal_id = c.deal_id
-WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere}
+WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   `.trim();
 
   const res = await analyticsDb().query<{ days: string; sold: boolean; open: boolean }>(sql, params);
@@ -112,6 +128,15 @@ async function fetchWorkRows(opts: SurvivalOptions): Promise<DealRow[]> {
   if (opts.departmentIds?.length) {
     params.push(opts.departmentIds);
     deptWhere = departmentsWhere(params.length);
+  }
+  let pgWhere = '';
+  const pgFilter = buildProductGroupFilter(
+    { productGroupMode: opts.productGroupMode, productGroupIds: opts.productGroupIds },
+    params.length,
+  );
+  if (pgFilter) {
+    params.push(...pgFilter.params);
+    pgWhere = `AND ${pgFilter.sql}`;
   }
 
   // event_type IN ('sold','shipped') исключены, хотя их stage_type тоже 'WORK'
@@ -154,7 +179,7 @@ FROM cohort c
 JOIN work_time w ON w.deal_id = c.deal_id
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
-WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere}
+WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   `.trim();
 
   const res = await analyticsDb().query<{ days: string; sold: boolean; open: boolean }>(sql, params);

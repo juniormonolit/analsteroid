@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { fetchStageSurvival, type SurvivalPreset } from '@/features/charts/engine/stageSurvival';
-import type { DealScope, ClientType } from '@/lib/metrics/types';
+import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 
 // Кривая «вероятность продажи от дней в стадии» (раздел «Графики», задача 28.07).
 // POST { preset: 'priced'|'work', period: {from,to}, dealScope?, clientType?, departmentIds? }
@@ -43,6 +43,19 @@ export async function POST(req: NextRequest) {
     ? (body.departmentIds as unknown[]).filter((x): x is string => typeof x === 'string')
     : undefined;
 
-  const result = await fetchStageSurvival({ preset, period, dealScope, clientType, departmentIds });
+  // Фильтр товарных групп (задача 29.07): мультиселект + шкала. Валидация формы —
+  // сама фильтрация значений (числа для kc / строки для by_max) делает
+  // productGroupFilter.ts параметризованным запросом.
+  const productGroupMode: ProductGroupMode = body.productGroupMode === 'by_max' ? 'by_max' : 'kc';
+  let productGroupIds: string[] | undefined;
+  if (body.productGroupIds !== undefined) {
+    if (!Array.isArray(body.productGroupIds) || body.productGroupIds.length > 200
+      || (body.productGroupIds as unknown[]).some(v => typeof v !== 'string' || v.length > 200)) {
+      return NextResponse.json({ error: 'productGroupIds должен быть массивом строк (макс. 200 элементов, каждая ≤200 символов)' }, { status: 400 });
+    }
+    productGroupIds = body.productGroupIds as string[];
+  }
+
+  const result = await fetchStageSurvival({ preset, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds });
   return NextResponse.json({ result });
 }
