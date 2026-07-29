@@ -71,9 +71,19 @@ export function departmentsWhere(paramIdx: number): string {
 // один паттерн на весь модуль + calledToSaleCohort.ts.
 export const CALLED_PRICED_STAGE_ILIKE = 'Созвонился и озвучил%';
 
-interface DealRow { dealId: number; days: number; sold: boolean; open: boolean }
+// Экспортирован (задача 2553, владелец 29.07: четвёртый график «В работе →
+// продажа по дням» по аналогии с третьим) — workDaysCohort.ts строит таблицу
+// дожития поверх ТЕХ ЖЕ строк, что и бакеты «work»-пресета здесь, вместо
+// копирования SQL.
+export interface SurvivalDealRow { dealId: number; days: number; sold: boolean; open: boolean }
 
-async function fetchPricedRows(opts: SurvivalOptions): Promise<DealRow[]> {
+// preset в самих SQL-запросах строк не участвует (диспетчеризация — в
+// fetchStageSurvival/fetchStageSurvivalDealIds ниже), поэтому fetchPricedRows/
+// fetchWorkRows принимают опции без preset — workDaysCohort.ts зовёт
+// fetchWorkRows напрямую, там пресета в принципе нет (всегда 'work').
+export type SurvivalRowOptions = Omit<SurvivalOptions, 'preset'>;
+
+async function fetchPricedRows(opts: SurvivalRowOptions): Promise<SurvivalDealRow[]> {
   const { from, toExcl } = toSqlInterval(opts.period);
   const params: unknown[] = [from, toExcl];
   let deptWhere = '';
@@ -129,7 +139,7 @@ WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open }));
 }
 
-async function fetchWorkRows(opts: SurvivalOptions): Promise<DealRow[]> {
+export async function fetchWorkRows(opts: SurvivalRowOptions): Promise<SurvivalDealRow[]> {
   const { from, toExcl } = toSqlInterval(opts.period);
   const params: unknown[] = [from, toExcl];
   let deptWhere = '';

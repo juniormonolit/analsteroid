@@ -25,7 +25,7 @@ import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/type
 // делает лишнего запроса на подсчёт, только на сам список.
 
 export interface ChartDrilldownRequest {
-  endpoint: '/api/charts/stage-survival/deals' | '/api/charts/called-to-sale-cohort/deals';
+  endpoint: '/api/charts/stage-survival/deals' | '/api/charts/called-to-sale-cohort/deals' | '/api/charts/work-days-cohort/deals';
   // Базовое тело запроса БЕЗ filter — filter подставляется переключателем.
   baseBody: Record<string, unknown>;
   period: DateRange;

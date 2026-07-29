@@ -31,8 +31,16 @@ function CohortTooltip({ active, payload }: {
   );
 }
 
-export function CalledToSaleCohortChart({ points, accent, onPointClick }: {
-  points: CalledToSaleCohortPoint[]; accent?: string; onPointClick?: (point: CalledToSaleCohortPoint) => void;
+export function CalledToSaleCohortChart({ points, accent, onPointClick, axisLabel }: {
+  points: CalledToSaleCohortPoint[];
+  accent?: string;
+  onPointClick?: (point: CalledToSaleCohortPoint) => void;
+  // Подпись оси X под графиком (задача 2553): компонент переиспользуется для
+  // РАЗНЫХ «дней» (календарные от входа в «Созвонился…» vs накопленные в WORK) —
+  // единственный кусок текста, который знает про конкретную когорту, поэтому
+  // вынесен наружу вместо хардкода. Дефолт — исходная подпись (задача 2533),
+  // чтобы не трогать существующего вызывающего.
+  axisLabel?: string;
 }) {
   const color = accent ?? 'var(--color-accent)';
   const maxSold = Math.max(1, ...points.map(p => p.sold));
@@ -81,7 +89,7 @@ export function CalledToSaleCohortChart({ points, accent, onPointClick }: {
         </ResponsiveContainer>
       </div>
       <div className="mt-0.5 text-center text-[10px] text-[var(--color-text-muted)]">
-        дней от входа в «Созвонился и озвучил цены» до продажи · серые столбики — «дожили минимум N дней, не продав раньше» · линия — продано ровно на этот день
+        {axisLabel ?? 'дней от входа в «Созвонился и озвучил цены» до продажи'} · серые столбики — «дожили минимум N дней, не продав раньше» · линия — продано ровно на этот день
         {onPointClick && ' · клик — список сделок'}
       </div>
     </div>

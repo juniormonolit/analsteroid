@@ -3,8 +3,9 @@ import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/p
 import { DEAL_EVENTS_DATA_START } from '@/features/reports/engine/managerActivity';
 import { buildProductGroupFilter } from '@/features/reports/engine/productGroupFilter';
 import { scopeWhere, departmentsWhere } from './stageSurvival';
+import { buildLifeTablePoints, selectLifeTableDealIds, LIFE_TABLE_MAX_DAY, type LifeTableRow } from './lifeTable';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
-import type { CalledToSaleCohortPoint, CalledToSaleCohortResult } from './types';
+import type { CalledToSaleCohortResult } from './types';
 
 export type { CalledToSaleCohortPoint, CalledToSaleCohortResult } from './types';
 
@@ -37,15 +38,9 @@ export interface CalledToSaleCohortOptions {
 }
 
 // Дни 0..30 поштучно, дальше — один агрегированный «хвост».
-const MAX_DAY = 30;
+const MAX_DAY = LIFE_TABLE_MAX_DAY;
 
-interface DealRow {
-  dealId: number;
-  eventDay: number | null;   // floor(sold_at - first_at), null если не продана
-  observedDays: number;      // eventDay если продана, иначе floor(now() - first_at)
-}
-
-async function fetchRows(opts: CalledToSaleCohortOptions): Promise<DealRow[]> {
+async function fetchRows(opts: CalledToSaleCohortOptions): Promise<LifeTableRow[]> {
   const { from, toExcl } = toSqlInterval(opts.period);
   const params: unknown[] = [from, toExcl];
   let deptWhere = '';
@@ -108,67 +103,19 @@ export async function fetchCalledToSaleCohort(opts: CalledToSaleCohortOptions): 
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
   const rows = await fetchRows(opts);
-
-  const points: CalledToSaleCohortPoint[] = [
-    ...Array.from({ length: MAX_DAY + 1 }, (_, day) => ({ day, label: String(day), cohort: 0, sold: 0, pct: null as number | null })),
-    { day: MAX_DAY + 1, label: `${MAX_DAY + 1}+`, cohort: 0, sold: 0, pct: null },
-  ];
-
-  for (const r of rows) {
-    // cohortAtLeastN: сколько сделок «дожили» минимум N дней, не продав раньше.
-    // Право-цензурировано — сделка без продажи учитывается только пока
-    // наблюдалась минимум N дней (observedDays>=N), иначе про её судьбу на день N
-    // мы ещё ничего не знаем.
-    for (let day = 0; day <= MAX_DAY; day++) {
-      if (r.observedDays >= day) points[day].cohort += 1;
-    }
-    if (r.observedDays >= MAX_DAY + 1) points[MAX_DAY + 1].cohort += 1;
-
-    if (r.eventDay !== null) {
-      const idx = r.eventDay <= MAX_DAY ? r.eventDay : MAX_DAY + 1;
-      points[idx].sold += 1;
-    }
-  }
-
-  for (const p of points) {
-    p.pct = p.cohort > 0 ? Math.round((p.sold / p.cohort) * 1000) / 10 : null;
-  }
-
-  const soldTotal = points.reduce((s, p) => s + p.sold, 0);
-  const cohortTotal = points[0]?.cohort ?? 0;
-
-  return {
-    points,
-    cohortTotal,
-    soldTotal,
-    overallPct: cohortTotal > 0 ? Math.round((soldTotal / cohortTotal) * 1000) / 10 : null,
-  };
+  return buildLifeTablePoints(rows, MAX_DAY);
 }
 
 // ── Дрилл-даун: список сделок одного дня (задача 2546, владелец 29.07) ──────
-// Тот же выбор, что делает fetchCalledToSaleCohort при агрегации в points[day] —
-// повторяем условия 1-в-1, чтобы число сделок в списке совпадало с числом на
-// графике:
-//  * filter='all'  → «дожили» минимум day дней (observedDays >= day), при
-//    day===MAX_DAY+1 это отдельное условие «31+», как в основном цикле.
-//  * filter='sold' → продали РОВНО на день day (eventDay===day для day<=MAX_DAY;
-//    для day===MAX_DAY+1 — eventDay > MAX_DAY, тот же idx-маппинг «31+»).
+// Тот же выбор, что fetchCalledToSaleCohort кладёт в points[day] через
+// buildLifeTablePoints (lifeTable.ts) — общий код с агрегацией, число сделок в
+// списке гарантированно совпадает с числом на графике.
 export async function fetchCalledToSaleCohortDealIds(
   opts: CalledToSaleCohortOptions & { day: number; filter: 'all' | 'sold' },
 ): Promise<number[] | null> {
   const periodToStr = periodDateStrFromInstant(opts.period.to, 'to');
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
-  const day = opts.day;
-  if (day < 0 || day > MAX_DAY + 1) return [];
-
   const rows = await fetchRows(opts);
-
-  if (opts.filter === 'sold') {
-    return rows
-      .filter(r => r.eventDay !== null && (day <= MAX_DAY ? r.eventDay === day : r.eventDay > MAX_DAY))
-      .map(r => r.dealId);
-  }
-  // filter === 'all' — та же «at risk» логика, что в основном цикле выше.
-  return rows.filter(r => r.observedDays >= day).map(r => r.dealId);
+  return selectLifeTableDealIds(rows, opts.day, opts.filter, MAX_DAY);
 }

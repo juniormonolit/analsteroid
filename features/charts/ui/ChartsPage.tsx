@@ -110,14 +110,34 @@ function SurvivalCard({
   );
 }
 
-// Третий кастомный график (задача 2533, владелец 29.07): когорта «Созвонился →
-// продажа по дням» — на какой день считая от входа в стадию случается продажа
-// (не день выхода из стадии, это другая величина у SurvivalCard выше). Отдельная
-// карточка/эндпоинт, но те же общие фильтры страницы.
-function CalledToSaleCohortCard({
-  period, dealScope, clientType, departmentIds, departmentsReady,
+// Третий и четвёртый кастомные графики — оба «life table» когорты дней (тот же
+// визуальный язык, что CalledToSaleCohortChart.tsx): серые столбики «дожили
+// минимум N дней, не продав раньше», линия «продано ровно на день N». Один
+// компонент на оба — параметризован эндпоинтом/заголовком/подписью, чтобы не
+// копировать карточку целиком (задача 2553, владелец: «не копируй логику
+// дважды, если можно вынести общее»).
+//  * «Созвонился → продажа по дням» (задача 2533, 29.07) — день = календарные
+//    дни от входа в стадию «Созвонился и озвучил цены» до продажи.
+//  * «В работе → продажа по дням» (задача 2553, 29.07 — скриншот ВТОРОГО
+//    графика с подписью «по аналогии с третьим добавь ещё»): та же когорта и
+//    те же «дни», что у SurvivalCard preset="work" выше (накопленное время в
+//    WORK-стадиях), но в подаче life table вместо бакетов/CR%. Добавлен РЯДОМ
+//    со вторым графиком, не вместо него.
+interface LifeTableCardConfig {
+  fetchUrl: string;
+  dealsUrl: '/api/charts/called-to-sale-cohort/deals' | '/api/charts/work-days-cohort/deals';
+  queryKeyPrefix: string;
+  title: string;
+  description: string;
+  accent: string;
+  axisLabel: string;
+}
+
+function LifeTableCard({
+  config, period, dealScope, clientType, departmentIds, departmentsReady,
   productGroupMode, productGroupIds, onDrilldown,
 }: {
+  config: LifeTableCardConfig;
   period: DateRange;
   dealScope: DealScope;
   clientType: ClientType;
@@ -128,9 +148,9 @@ function CalledToSaleCohortCard({
   onDrilldown: (target: ChartDrilldownTarget) => void;
 }) {
   const { data, isLoading, isError } = useQuery<{ result: CalledToSaleCohortResult | null }>({
-    queryKey: ['called-to-sale-cohort', period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
+    queryKey: [config.queryKeyPrefix, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
     queryFn: async () => {
-      const res = await fetch('/api/charts/called-to-sale-cohort', {
+      const res = await fetch(config.fetchUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -150,12 +170,8 @@ function CalledToSaleCohortCard({
 
   return (
     <section className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 sm:p-5">
-      <h2 className="text-sm font-semibold text-[var(--color-text)]">Когорта «Созвонился → продажа по дням»</h2>
-      <p className="mt-0.5 mb-3 text-xs text-[var(--color-text-muted)]">
-        Сделки, впервые вошедшие в стадию «Созвонился и озвучил цены» в выбранный период. День считается от входа
-        в стадию до фактической продажи (sold_at) — не до выхода из стадии. Серые столбики — сколько сделок
-        «дожили» минимум N дней, не продав раньше; линия — сколько из них продалось ровно на день N.
-      </p>
+      <h2 className="text-sm font-semibold text-[var(--color-text)]">{config.title}</h2>
+      <p className="mt-0.5 mb-3 text-xs text-[var(--color-text-muted)]">{config.description}</p>
 
       {isLoading || (!isError && data === undefined) ? (
         <div className="h-[240px] rounded-lg bg-[var(--color-border)] animate-pulse" />
@@ -175,14 +191,14 @@ function CalledToSaleCohortCard({
             <span>CR общий: <b className="text-[var(--color-text)]">{r.overallPct === null ? '—' : `${r.overallPct}%`}</b></span>
           </div>
           <CalledToSaleCohortChart
-            points={r.points} accent="#10b981"
+            points={r.points} accent={config.accent} axisLabel={config.axisLabel}
             onPointClick={(point: CalledToSaleCohortPoint) => onDrilldown({
               title: `День ${point.label}`,
-              subtitle: 'Когорта «Созвонился → продажа по дням»',
+              subtitle: config.title,
               allCount: point.cohort,
               soldCount: point.sold,
               request: {
-                endpoint: '/api/charts/called-to-sale-cohort/deals',
+                endpoint: config.dealsUrl,
                 baseBody: { day: point.day },
                 period, dealScope, clientType, productGroupMode, productGroupIds, departmentIds,
               },
@@ -193,6 +209,37 @@ function CalledToSaleCohortCard({
     </section>
   );
 }
+
+const CALLED_TO_SALE_CONFIG: LifeTableCardConfig = {
+  fetchUrl: '/api/charts/called-to-sale-cohort',
+  dealsUrl: '/api/charts/called-to-sale-cohort/deals',
+  queryKeyPrefix: 'called-to-sale-cohort',
+  title: 'Когорта «Созвонился → продажа по дням»',
+  description: 'Сделки, впервые вошедшие в стадию «Созвонился и озвучил цены» в выбранный период. День считается от входа '
+    + 'в стадию до фактической продажи (sold_at) — не до выхода из стадии. Серые столбики — сколько сделок '
+    + '«дожили» минимум N дней, не продав раньше; линия — сколько из них продалось ровно на день N.',
+  accent: '#10b981',
+  axisLabel: 'дней от входа в «Созвонился и озвучил цены» до продажи',
+};
+
+// Задача 2553 (29.07): владелец прислал скриншот второго графика («Вероятность
+// продажи от дней в работе, стадии WORK») с подписью «по аналогии с третьим
+// добавь ещё». Когорта та же, что у SurvivalCard preset="work" (сделки,
+// впервые вошедшие в любую WORK-стадию), «день» — то же накопленное время в
+// WORK-стадиях, что и ось X там (см. workDaysCohort.ts) — НЕ календарные дни,
+// как у соседа выше.
+const WORK_DAYS_CONFIG: LifeTableCardConfig = {
+  fetchUrl: '/api/charts/work-days-cohort',
+  dealsUrl: '/api/charts/work-days-cohort/deals',
+  queryKeyPrefix: 'work-days-cohort',
+  title: 'Когорта «В работе → продажа по дням»',
+  description: 'Сделки, впервые вошедшие в любую WORK-стадию в выбранный период (та же когорта, что у графика '
+    + '«…от дней в работе» выше). День — накопленное время во всех WORK-стадиях (не календарные дни — сделка могла '
+    + 'выходить из работы и возвращаться). Серые столбики — сколько сделок «дожили» минимум N дней в работе, не '
+    + 'продав раньше; линия — сколько из них продалось ровно на день N.',
+  accent: '#f59e0b',
+  axisLabel: 'дней в работе (накопленное время в WORK-стадиях)',
+};
 
 export function ChartsPage() {
   const [tab, setTab] = useState<Tab>('survival');
@@ -213,7 +260,7 @@ export function ChartsPage() {
 
   // Дрилл-даун списка сделок по клику на когорту (задача 2546, владелец 29.07) —
   // одна панель на все три кривые, открывается целью, которую собирает
-  // SurvivalCard/CalledToSaleCohortCard в onDrilldown ниже.
+  // SurvivalCard/LifeTableCard в onDrilldown ниже.
   const [drilldown, setDrilldown] = useState<ChartDrilldownTarget | null>(null);
 
   const { data: pgCatalog, isLoading: pgCatalogLoading } = useQuery<{ groups: ProductGroupOption[] }>({
@@ -297,7 +344,17 @@ export function ChartsPage() {
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
               onDrilldown={setDrilldown}
             />
-            <CalledToSaleCohortCard
+            {/* Четвёртый график (задача 2553, 29.07) — сразу под своим «источником»
+                (SurvivalCard preset="work" выше): та же WORK-когорта, подача life table. */}
+            <LifeTableCard
+              config={WORK_DAYS_CONFIG}
+              period={period} dealScope={dealScope} clientType={clientType}
+              departmentIds={departmentIds} departmentsReady={departmentsReady}
+              productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              onDrilldown={setDrilldown}
+            />
+            <LifeTableCard
+              config={CALLED_TO_SALE_CONFIG}
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
