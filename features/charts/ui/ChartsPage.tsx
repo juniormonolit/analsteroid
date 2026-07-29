@@ -8,10 +8,11 @@ import { Seg } from '@/features/reports/ui/FiltersMenu';
 import { useAccountDepartments } from '@/lib/hooks/useAccountDepartments';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
-import type { SurvivalPreset, SurvivalResult, CalledToSaleCohortResult } from '../engine/types';
+import type { SurvivalPreset, SurvivalResult, SurvivalBucket, CalledToSaleCohortResult, CalledToSaleCohortPoint } from '../engine/types';
 import { SurvivalChart } from './SurvivalChart';
 import { CalledToSaleCohortChart } from './CalledToSaleCohortChart';
 import { ConstructorSection } from './ConstructorSection';
+import { ChartDrilldownPanel, type ChartDrilldownTarget } from './ChartDrilldownPanel';
 
 // Раздел «Графики» (задача владельца 28.07). Два режима:
 //  * «Вероятность продажи» (дефолт) — кастомные кривые владельца: CR в продажу от
@@ -31,7 +32,7 @@ function defaultSurvivalPeriod(): DateRange {
 
 function SurvivalCard({
   preset, title, subtitle, period, dealScope, clientType, departmentIds, departmentsReady,
-  productGroupMode, productGroupIds,
+  productGroupMode, productGroupIds, onDrilldown,
 }: {
   preset: SurvivalPreset;
   title: string;
@@ -43,6 +44,7 @@ function SurvivalCard({
   departmentsReady: boolean;
   productGroupMode: ProductGroupMode;
   productGroupIds: string[];
+  onDrilldown: (target: ChartDrilldownTarget) => void;
 }) {
   const { data, isLoading, isError } = useQuery<{ result: SurvivalResult | null }>({
     queryKey: ['stage-survival', preset, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
@@ -88,7 +90,20 @@ function SurvivalCard({
             <span>CR общий: <b className="text-[var(--color-text)]">{r.overallPct === null ? '—' : `${r.overallPct}%`}</b></span>
             <span>Ещё в стадии: <b className="text-[var(--color-text)]">{r.stillInStage.toLocaleString('ru-RU')}</b></span>
           </div>
-          <SurvivalChart buckets={r.buckets} />
+          <SurvivalChart
+            buckets={r.buckets}
+            onBucketClick={(bucket: SurvivalBucket) => onDrilldown({
+              title: `${preset === 'priced' ? 'Дней в стадии' : 'Дней в работе'}: ${bucket.label}`,
+              subtitle: title,
+              allCount: bucket.total,
+              soldCount: bucket.sold,
+              request: {
+                endpoint: '/api/charts/stage-survival/deals',
+                baseBody: { preset, bucketLabel: bucket.label },
+                period, dealScope, clientType, productGroupMode, productGroupIds, departmentIds,
+              },
+            })}
+          />
         </>
       )}
     </section>
@@ -101,7 +116,7 @@ function SurvivalCard({
 // карточка/эндпоинт, но те же общие фильтры страницы.
 function CalledToSaleCohortCard({
   period, dealScope, clientType, departmentIds, departmentsReady,
-  productGroupMode, productGroupIds,
+  productGroupMode, productGroupIds, onDrilldown,
 }: {
   period: DateRange;
   dealScope: DealScope;
@@ -110,6 +125,7 @@ function CalledToSaleCohortCard({
   departmentsReady: boolean;
   productGroupMode: ProductGroupMode;
   productGroupIds: string[];
+  onDrilldown: (target: ChartDrilldownTarget) => void;
 }) {
   const { data, isLoading, isError } = useQuery<{ result: CalledToSaleCohortResult | null }>({
     queryKey: ['called-to-sale-cohort', period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
@@ -158,7 +174,20 @@ function CalledToSaleCohortCard({
             <span>Продано: <b className="text-[var(--color-text)]">{r.soldTotal.toLocaleString('ru-RU')}</b></span>
             <span>CR общий: <b className="text-[var(--color-text)]">{r.overallPct === null ? '—' : `${r.overallPct}%`}</b></span>
           </div>
-          <CalledToSaleCohortChart points={r.points} accent="#10b981" />
+          <CalledToSaleCohortChart
+            points={r.points} accent="#10b981"
+            onPointClick={(point: CalledToSaleCohortPoint) => onDrilldown({
+              title: `День ${point.label}`,
+              subtitle: 'Когорта «Созвонился → продажа по дням»',
+              allCount: point.cohort,
+              soldCount: point.sold,
+              request: {
+                endpoint: '/api/charts/called-to-sale-cohort/deals',
+                baseBody: { day: point.day },
+                period, dealScope, clientType, productGroupMode, productGroupIds, departmentIds,
+              },
+            })}
+          />
         </>
       )}
     </section>
@@ -181,6 +210,11 @@ export function ChartsPage() {
   // БД нет (см. бриф задачи).
   const [productGroupMode, setProductGroupMode] = useState<ProductGroupMode>('kc');
   const [productGroupIds, setProductGroupIds] = useState<string[]>([]);
+
+  // Дрилл-даун списка сделок по клику на когорту (задача 2546, владелец 29.07) —
+  // одна панель на все три кривые, открывается целью, которую собирает
+  // SurvivalCard/CalledToSaleCohortCard в onDrilldown ниже.
+  const [drilldown, setDrilldown] = useState<ChartDrilldownTarget | null>(null);
 
   const { data: pgCatalog, isLoading: pgCatalogLoading } = useQuery<{ groups: ProductGroupOption[] }>({
     queryKey: ['catalog/product-groups', productGroupMode],
@@ -246,6 +280,7 @@ export function ChartsPage() {
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              onDrilldown={setDrilldown}
             />
             <SurvivalCard
               preset="work"
@@ -254,11 +289,13 @@ export function ChartsPage() {
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              onDrilldown={setDrilldown}
             />
             <CalledToSaleCohortCard
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              onDrilldown={setDrilldown}
             />
           </div>
           <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
@@ -277,6 +314,7 @@ export function ChartsPage() {
           productGroupIds={productGroupIds}
         />
       )}
+      {drilldown && <ChartDrilldownPanel target={drilldown} onClose={() => setDrilldown(null)} />}
     </div>
   );
 }

@@ -71,7 +71,7 @@ export function departmentsWhere(paramIdx: number): string {
 // один паттерн на весь модуль + calledToSaleCohort.ts.
 export const CALLED_PRICED_STAGE_ILIKE = 'Созвонился и озвучил%';
 
-interface DealRow { days: number; sold: boolean; open: boolean }
+interface DealRow { dealId: number; days: number; sold: boolean; open: boolean }
 
 async function fetchPricedRows(opts: SurvivalOptions): Promise<DealRow[]> {
   const { from, toExcl } = toSqlInterval(opts.period);
@@ -114,6 +114,7 @@ exit_event AS (
   GROUP BY c.deal_id
 )
 SELECT
+  c.deal_id AS deal_id,
   EXTRACT(EPOCH FROM COALESCE(e.exit_at, now()) - c.first_at) / 86400.0 AS days,
   (d.sold_at IS NOT NULL AND d.sold_at >= c.first_at) AS sold,
   (e.exit_at IS NULL) AS open
@@ -124,8 +125,8 @@ LEFT JOIN exit_event e ON e.deal_id = c.deal_id
 WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   `.trim();
 
-  const res = await analyticsDb().query<{ days: string; sold: boolean; open: boolean }>(sql, params);
-  return res.rows.map(r => ({ days: Number(r.days), sold: r.sold, open: r.open }));
+  const res = await analyticsDb().query<{ deal_id: number; days: string; sold: boolean; open: boolean }>(sql, params);
+  return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open }));
 }
 
 async function fetchWorkRows(opts: SurvivalOptions): Promise<DealRow[]> {
@@ -179,6 +180,7 @@ work_time AS (
   GROUP BY ev.deal_id
 )
 SELECT
+  c.deal_id AS deal_id,
   w.days,
   (d.sold_at IS NOT NULL AND d.sold_at >= c.first_at) AS sold,
   w.open
@@ -189,8 +191,8 @@ JOIN funnels f ON f.id = d.funnel_id
 WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   `.trim();
 
-  const res = await analyticsDb().query<{ days: string; sold: boolean; open: boolean }>(sql, params);
-  return res.rows.map(r => ({ days: Number(r.days), sold: r.sold, open: r.open }));
+  const res = await analyticsDb().query<{ deal_id: number; days: string; sold: boolean; open: boolean }>(sql, params);
+  return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open }));
 }
 
 /** null — если весь период раньше старта сбора deal_events (03.04.2026). */
@@ -223,4 +225,28 @@ export async function fetchStageSurvival(opts: SurvivalOptions): Promise<Surviva
     overallPct: rows.length > 0 ? Math.round((soldTotal / rows.length) * 1000) / 10 : null,
     stillInStage,
   };
+}
+
+// ── Дрилл-даун: список сделок одной корзины (задача 2546, владелец 29.07) ───
+// «Сделай так, чтобы при нажатии на любую когорту на графиках появлялся список
+// сделок». Возвращает deal_id ровно тех сделок, что попали в БАКЕТ bucketLabel —
+// та же граница days (BUCKETS), тот же rows-fetch, что и агрегация выше, поэтому
+// число сделок в списке гарантированно совпадает с числом на графике (общий код,
+// не копия с риском дрейфа). filter='all' — весь бакет (совпадает с высотой
+// серого столбика); filter='sold' — только продавшие (совпадает с числом sold
+// из тултипа).
+export async function fetchStageSurvivalDealIds(
+  opts: SurvivalOptions & { bucketLabel: string; filter: 'all' | 'sold' },
+): Promise<number[] | null> {
+  const periodToStr = periodDateStrFromInstant(opts.period.to, 'to');
+  if (periodToStr < DEAL_EVENTS_DATA_START) return null;
+
+  const bucket = BUCKETS.find(b => b.label === opts.bucketLabel);
+  if (!bucket) return [];
+
+  const rows = opts.preset === 'work' ? await fetchWorkRows(opts) : await fetchPricedRows(opts);
+  return rows
+    .filter(r => r.days >= bucket.from && r.days < bucket.toExcl)
+    .filter(r => (opts.filter === 'sold' ? r.sold : true))
+    .map(r => r.dealId);
 }

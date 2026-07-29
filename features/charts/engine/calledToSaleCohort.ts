@@ -40,6 +40,7 @@ export interface CalledToSaleCohortOptions {
 const MAX_DAY = 30;
 
 interface DealRow {
+  dealId: number;
   eventDay: number | null;   // floor(sold_at - first_at), null если не продана
   observedDays: number;      // eventDay если продана, иначе floor(now() - first_at)
 }
@@ -80,6 +81,7 @@ cohort AS (
   SELECT * FROM first_entry WHERE first_at >= $1 AND first_at < $2
 )
 SELECT
+  c.deal_id AS deal_id,
   CASE WHEN d.sold_at IS NOT NULL AND d.sold_at >= c.first_at
     THEN FLOOR(EXTRACT(EPOCH FROM d.sold_at - c.first_at) / 86400.0)
     ELSE NULL END AS event_day,
@@ -92,8 +94,9 @@ JOIN funnels f ON f.id = d.funnel_id
 WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   `.trim();
 
-  const res = await analyticsDb().query<{ event_day: string | null; observed_days: string }>(sql, params);
+  const res = await analyticsDb().query<{ deal_id: number; event_day: string | null; observed_days: string }>(sql, params);
   return res.rows.map(r => ({
+    dealId: Number(r.deal_id),
     eventDay: r.event_day === null ? null : Number(r.event_day),
     observedDays: Number(r.observed_days),
   }));
@@ -140,4 +143,32 @@ export async function fetchCalledToSaleCohort(opts: CalledToSaleCohortOptions): 
     soldTotal,
     overallPct: cohortTotal > 0 ? Math.round((soldTotal / cohortTotal) * 1000) / 10 : null,
   };
+}
+
+// ── Дрилл-даун: список сделок одного дня (задача 2546, владелец 29.07) ──────
+// Тот же выбор, что делает fetchCalledToSaleCohort при агрегации в points[day] —
+// повторяем условия 1-в-1, чтобы число сделок в списке совпадало с числом на
+// графике:
+//  * filter='all'  → «дожили» минимум day дней (observedDays >= day), при
+//    day===MAX_DAY+1 это отдельное условие «31+», как в основном цикле.
+//  * filter='sold' → продали РОВНО на день day (eventDay===day для day<=MAX_DAY;
+//    для day===MAX_DAY+1 — eventDay > MAX_DAY, тот же idx-маппинг «31+»).
+export async function fetchCalledToSaleCohortDealIds(
+  opts: CalledToSaleCohortOptions & { day: number; filter: 'all' | 'sold' },
+): Promise<number[] | null> {
+  const periodToStr = periodDateStrFromInstant(opts.period.to, 'to');
+  if (periodToStr < DEAL_EVENTS_DATA_START) return null;
+
+  const day = opts.day;
+  if (day < 0 || day > MAX_DAY + 1) return [];
+
+  const rows = await fetchRows(opts);
+
+  if (opts.filter === 'sold') {
+    return rows
+      .filter(r => r.eventDay !== null && (day <= MAX_DAY ? r.eventDay === day : r.eventDay > MAX_DAY))
+      .map(r => r.dealId);
+  }
+  // filter === 'all' — та же «at risk» логика, что в основном цикле выше.
+  return rows.filter(r => r.observedDays >= day).map(r => r.dealId);
 }

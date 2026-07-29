@@ -10,6 +10,10 @@ import type { CalledToSaleCohortPoint } from '../engine/types';
 // минимум N дней, не продав раньше» (day-N at risk), акцентная линия с точками —
 // сколько из них продалось РОВНО на день N (не CR%, а абсолютное число — так
 // читается «дожили 100, из них 15 продали»).
+//
+// Клик по точке (задача 2546) → onPointClick, дальше ChartsPage.tsx открывает
+// ChartDrilldownPanel с сегментированным переключателем «Все N (cohort) /
+// Продано M (sold)» — оба числа из того же point, второго запроса не нужно.
 
 function CohortTooltip({ active, payload }: {
   active?: boolean;
@@ -27,15 +31,27 @@ function CohortTooltip({ active, payload }: {
   );
 }
 
-export function CalledToSaleCohortChart({ points, accent }: { points: CalledToSaleCohortPoint[]; accent?: string }) {
+export function CalledToSaleCohortChart({ points, accent, onPointClick }: {
+  points: CalledToSaleCohortPoint[]; accent?: string; onPointClick?: (point: CalledToSaleCohortPoint) => void;
+}) {
   const color = accent ?? 'var(--color-accent)';
   const maxSold = Math.max(1, ...points.map(p => p.sold));
+
+  function handleClick(state: { activeLabel?: string | number } | null) {
+    if (!onPointClick || !state?.activeLabel) return;
+    const point = points.find(p => p.label === String(state.activeLabel));
+    if (point && point.cohort > 0) onPointClick(point);
+  }
 
   return (
     <div>
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <ComposedChart
+            data={points} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+            onClick={handleClick}
+            style={onPointClick ? { cursor: 'pointer' } : undefined}
+          >
             <CartesianGrid vertical={false} stroke="var(--color-border)" strokeDasharray="3 3" />
             <XAxis
               dataKey="label"
@@ -66,6 +82,7 @@ export function CalledToSaleCohortChart({ points, accent }: { points: CalledToSa
       </div>
       <div className="mt-0.5 text-center text-[10px] text-[var(--color-text-muted)]">
         дней от входа в «Созвонился и озвучил цены» до продажи · серые столбики — «дожили минимум N дней, не продав раньше» · линия — продано ровно на этот день
+        {onPointClick && ' · клик — список сделок'}
       </div>
     </div>
   );

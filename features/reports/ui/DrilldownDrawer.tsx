@@ -23,7 +23,7 @@ import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
 import { PeriodRangeControls, DepartmentPicker, GroupingSelector } from './FilterBar';
 import { FiltersMenu } from './FiltersMenu';
 
-interface Deal {
+export interface Deal {
   deal_id: number;
   deal_name: string;
   amount: string;
@@ -414,18 +414,28 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
 }
 
 // ── Плоский список сделок по готовому набору query-параметров ───────────────
-function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
-  query: URLSearchParams; dealFields?: string[]; onDealOpen?: (id: number) => void; tableScale?: number;
+// `fetchOverride` (задача 2546, дрилл-даун из графиков — features/charts/ui/*):
+// когда список сделок выбирается не dimension-фильтром (`managerId`/
+// `productGroup`/...), а явным набором deal_id, вычисленным на сервере (кривые
+// «Вероятность продажи»/когорта «Созвонился→продажа» строятся по deal_events,
+// не выразимы через query-параметры /api/reports/deals) — вместо GET по `query`
+// используется переданный fetcher. `query` тогда не нужен; `fetchOverride.key`
+// обязан включать всё, от чего зависит результат (иначе react-query не
+// перезапросит список при смене корзины/фильтра).
+export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, tableScale, emptyLabel }: {
+  query?: URLSearchParams;
+  fetchOverride?: { key: unknown[]; fn: () => Promise<{ deals: Deal[]; total_count: number; total_amount: number }> };
+  dealFields?: string[]; onDealOpen?: (id: number) => void; tableScale?: number; emptyLabel?: string;
 }) {
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const [dealSort, setDealSort] = useState<DealSort>(null);
   function onDealSort(k: string) {
     setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
   }
-  const qs = query.toString();
+  const qs = query?.toString() ?? '';
   const { data, isLoading } = useQuery({
-    queryKey: ['drill-deals-flat', qs],
-    queryFn: () => fetch(`/api/reports/deals?${qs}`).then(r => r.json()),
+    queryKey: fetchOverride ? ['drill-deals-override', ...fetchOverride.key] : ['drill-deals-flat', qs],
+    queryFn: fetchOverride ? fetchOverride.fn : () => fetch(`/api/reports/deals?${qs}`).then(r => r.json()),
   });
   const deals: Deal[] = data?.deals ?? [];
   // Задача #2369: «Итого» должно отражать ПОЛНУЮ выборку, а не только пришедший
@@ -442,7 +452,7 @@ function DealsListBody({ query, dealFields, onDealOpen, tableScale }: {
     return <div className="p-6 space-y-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-8 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
   }
   if (deals.length === 0) {
-    return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">Нет сделок за выбранный период</div>;
+    return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">{emptyLabel ?? 'Нет сделок за выбранный период'}</div>;
   }
   return (
     <div className="h-full flex flex-col">

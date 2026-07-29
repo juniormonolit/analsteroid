@@ -8,7 +8,15 @@ import type { SurvivalBucket } from '../engine/types';
 // Кривая «вероятность продажи от дней в стадии» — Recharts (решение владельца 29.07):
 // серые столбики — размер когорты в корзине (своя скрытая ось, только для чувства
 // масштаба), акцентная линия с точками — CR в продажу. Интерактив — тултип по
-// ховеру/тапу (дни, сделок, продано, CR) вместо прежнего клика по корзине.
+// ховеру/тапу (дни, сделок, продано, CR).
+//
+// Клик по корзине (задача 2546, владелец 29.07: «при нажатии на любую когорту —
+// список сделок») — снова добавлен, но НЕ вместо тултипа, а вместе с ним: клик
+// открывает список сделок этой корзины (ChartDrilldownPanel в ChartsPage.tsx),
+// ховер/тап по-прежнему показывает числа. `onClick` висит на всём <ComposedChart>
+// (a не на <Bar>/<Line> по отдельности) — единая область клика на корзину, работает
+// и по столбику, и по точке линии, и на тач (см. e.activeLabel — сам Recharts
+// матчит ближайшую X-категорию под курсором/тапом).
 
 function BucketTooltip({ active, payload }: {
   active?: boolean;
@@ -26,15 +34,27 @@ function BucketTooltip({ active, payload }: {
   );
 }
 
-export function SurvivalChart({ buckets, accent }: { buckets: SurvivalBucket[]; accent?: string }) {
+export function SurvivalChart({ buckets, accent, onBucketClick }: {
+  buckets: SurvivalBucket[]; accent?: string; onBucketClick?: (bucket: SurvivalBucket) => void;
+}) {
   const color = accent ?? 'var(--color-accent)';
   const maxPct = Math.max(5, ...buckets.map(b => b.pct ?? 0));
+
+  function handleClick(state: { activeLabel?: string | number } | null) {
+    if (!onBucketClick || !state?.activeLabel) return;
+    const bucket = buckets.find(b => b.label === String(state.activeLabel));
+    if (bucket && bucket.total > 0) onBucketClick(bucket);
+  }
 
   return (
     <div>
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={buckets} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <ComposedChart
+            data={buckets} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+            onClick={handleClick}
+            style={onBucketClick ? { cursor: 'pointer' } : undefined}
+          >
             <CartesianGrid vertical={false} stroke="var(--color-border)" strokeDasharray="3 3" />
             <XAxis
               dataKey="label"
@@ -67,7 +87,9 @@ export function SurvivalChart({ buckets, accent }: { buckets: SurvivalBucket[]; 
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-      <div className="mt-0.5 text-center text-[10px] text-[var(--color-text-muted)]">дней в стадии · серые столбики — размер когорты</div>
+      <div className="mt-0.5 text-center text-[10px] text-[var(--color-text-muted)]">
+        дней в стадии · серые столбики — размер когорты{onBucketClick && ' · клик по корзине — список сделок'}
+      </div>
     </div>
   );
 }
