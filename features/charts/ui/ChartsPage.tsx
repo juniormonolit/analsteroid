@@ -8,8 +8,9 @@ import { Seg } from '@/features/reports/ui/FiltersMenu';
 import { useAccountDepartments } from '@/lib/hooks/useAccountDepartments';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
-import type { SurvivalPreset, SurvivalResult } from '../engine/types';
+import type { SurvivalPreset, SurvivalResult, CalledToSaleCohortResult } from '../engine/types';
 import { SurvivalChart } from './SurvivalChart';
+import { CalledToSaleCohortChart } from './CalledToSaleCohortChart';
 import { ConstructorSection } from './ConstructorSection';
 
 // Раздел «Графики» (задача владельца 28.07). Два режима:
@@ -88,6 +89,76 @@ function SurvivalCard({
             <span>Ещё в стадии: <b className="text-[var(--color-text)]">{r.stillInStage.toLocaleString('ru-RU')}</b></span>
           </div>
           <SurvivalChart buckets={r.buckets} />
+        </>
+      )}
+    </section>
+  );
+}
+
+// Третий кастомный график (задача 2533, владелец 29.07): когорта «Созвонился →
+// продажа по дням» — на какой день считая от входа в стадию случается продажа
+// (не день выхода из стадии, это другая величина у SurvivalCard выше). Отдельная
+// карточка/эндпоинт, но те же общие фильтры страницы.
+function CalledToSaleCohortCard({
+  period, dealScope, clientType, departmentIds, departmentsReady,
+  productGroupMode, productGroupIds,
+}: {
+  period: DateRange;
+  dealScope: DealScope;
+  clientType: ClientType;
+  departmentIds: string[];
+  departmentsReady: boolean;
+  productGroupMode: ProductGroupMode;
+  productGroupIds: string[];
+}) {
+  const { data, isLoading, isError } = useQuery<{ result: CalledToSaleCohortResult | null }>({
+    queryKey: ['called-to-sale-cohort', period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
+    queryFn: async () => {
+      const res = await fetch('/api/charts/called-to-sale-cohort', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          period: { from: period.from, to: period.to }, dealScope, clientType, departmentIds,
+          productGroupMode, productGroupIds,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    enabled: departmentsReady,
+    staleTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const r = data?.result ?? null;
+
+  return (
+    <section className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 sm:p-5">
+      <h2 className="text-sm font-semibold text-[var(--color-text)]">Когорта «Созвонился → продажа по дням»</h2>
+      <p className="mt-0.5 mb-3 text-xs text-[var(--color-text-muted)]">
+        Сделки, впервые вошедшие в стадию «Созвонился и озвучил цены» в выбранный период. День считается от входа
+        в стадию до фактической продажи (sold_at) — не до выхода из стадии. Серые столбики — сколько сделок
+        «дожили» минимум N дней, не продав раньше; линия — сколько из них продалось ровно на день N.
+      </p>
+
+      {isLoading || (!isError && data === undefined) ? (
+        <div className="h-[240px] rounded-lg bg-[var(--color-border)] animate-pulse" />
+      ) : isError ? (
+        <p className="text-sm text-[var(--color-negative)]">Не удалось загрузить график.</p>
+      ) : !r ? (
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Выбранный период целиком раньше 03.04.2026 — история стадий ещё не велась.
+        </p>
+      ) : r.cohortTotal === 0 ? (
+        <p className="text-sm text-[var(--color-text-muted)]">Нет сделок под выбранные фильтры.</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2 text-xs text-[var(--color-text-muted)]">
+            <span>Когорта: <b className="text-[var(--color-text)]">{r.cohortTotal.toLocaleString('ru-RU')}</b></span>
+            <span>Продано: <b className="text-[var(--color-text)]">{r.soldTotal.toLocaleString('ru-RU')}</b></span>
+            <span>CR общий: <b className="text-[var(--color-text)]">{r.overallPct === null ? '—' : `${r.overallPct}%`}</b></span>
+          </div>
+          <CalledToSaleCohortChart points={r.points} accent="#10b981" />
         </>
       )}
     </section>
@@ -180,6 +251,11 @@ export function ChartsPage() {
               preset="work"
               title="Вероятность продажи от дней в работе (стадии WORK)"
               subtitle="Сделки, впервые вошедшие в любую WORK-стадию в выбранный период. Дни — суммарное время во всех стадиях с разметкой WORK до продажи/отгрузки (стадии «Продано»/«Отгружено» не считаются, хотя тоже размечены WORK). CR — доля дошедших до продажи."
+              period={period} dealScope={dealScope} clientType={clientType}
+              departmentIds={departmentIds} departmentsReady={departmentsReady}
+              productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+            />
+            <CalledToSaleCohortCard
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}

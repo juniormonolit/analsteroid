@@ -44,7 +44,10 @@ const BUCKETS: Array<{ label: string; from: number; toExcl: number }> = [
   { label: '30+', from: 31, toExcl: Infinity },
 ];
 
-function scopeWhere(dealScope: DealScope | undefined, clientType: ClientType | undefined): string {
+// Экспортированы для повторного использования в calledToSaleCohort.ts (когорта
+// «Созвонился → продажа по дням», задача 2533) — те же фильтры воронки/отдела,
+// один источник правды вместо копипасты.
+export function scopeWhere(dealScope: DealScope | undefined, clientType: ClientType | undefined): string {
   const parts: string[] = [];
   if (dealScope === 'primary') parts.push('f.is_repeat = false');
   if (dealScope === 'repeat') parts.push('f.is_repeat = true');
@@ -55,7 +58,7 @@ function scopeWhere(dealScope: DealScope | undefined, clientType: ClientType | u
 
 // Фильтр отделов — тот же подзапрос, что в byManagers (sa.org_resolved_hierarchy,
 // живая оргструктура из синка Битрикса, НЕ протухшая YC-копия — #2065).
-function departmentsWhere(paramIdx: number): string {
+export function departmentsWhere(paramIdx: number): string {
   // manager_bitrix_user_id — text, current_manager_id — integer: без ::text Postgres 42883
   return `AND d.current_manager_id::text IN (
     SELECT orh.manager_bitrix_user_id FROM sa.org_resolved_hierarchy orh
@@ -63,6 +66,10 @@ function departmentsWhere(paramIdx: number): string {
       AND orh.is_active = true
   )`;
 }
+
+// Резолвинг стадии «Созвонился и озвучил цены» по имени (ILIKE, только ЧЛ) —
+// один паттерн на весь модуль + calledToSaleCohort.ts.
+export const CALLED_PRICED_STAGE_ILIKE = 'Созвонился и озвучил%';
 
 interface DealRow { days: number; sold: boolean; open: boolean }
 
