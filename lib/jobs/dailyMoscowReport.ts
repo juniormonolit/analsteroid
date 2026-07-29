@@ -16,7 +16,7 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { getManagerOrgMap } from '@/lib/org/deptCategories';
 import { bx, sendBitrixBotMessage } from '@/lib/bitrix/notify';
-import { getMonthWorkingDays, getWeekWorkingDaysTotal } from '@/lib/plans/dailyPlan';
+import { getMonthWorkingDays, getWeekWorkingDays } from '@/lib/plans/dailyPlan';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 
 const TZ = 'Europe/Moscow';
@@ -31,8 +31,10 @@ const zeroSums = (): DeptSums => ({ 'ОС': 0, 'НЦ': 0, 'ЖБИ': 0, total: 0 
 
 interface PeriodSums { day: DeptSums; week: DeptSums; month: DeptSums }
 
+// Конверсии в бронь/продажу — ТОЛЬКО по первичным сделкам (правка владельца 27.07):
+// primary_* метрики каталога (funnel_type=primary), как «CR Сделка → Бронь (перв.)».
 interface ConversionRow {
-  deals: number; reservations: number; sales: number;
+  primaryDeals: number; primaryReservations: number;
   primarySales: number; repeatSales: number; ppp: number;
 }
 type Conversions = Record<Dept | 'total', ConversionRow>;
@@ -183,7 +185,7 @@ function sumDbToDepts(
 
 const SALES_AMOUNT_IDS = ['primary_sales_amount', 'repeat_sales_amount'];
 const SHIPMENT_AMOUNT_IDS = ['primary_shipments_amount', 'repeat_shipments_amount'];
-const CONVERSION_IDS = ['deals_count', 'reservations_count', 'sales_count', 'primary_sales_count', 'repeat_sales_count', 'ppp_count'];
+const CONVERSION_IDS = ['primary_deals_count', 'primary_reservations_count', 'primary_sales_count', 'repeat_sales_count', 'ppp_count'];
 
 async function getDbConversions(
   fromIso: string,
@@ -191,7 +193,7 @@ async function getDbConversions(
   orgMap: Map<string, { branch: string; category: string | null }>,
 ): Promise<Conversions> {
   const byManager = await queryDbByManager(CONVERSION_IDS, fromIso, toExclIso);
-  const zero = (): ConversionRow => ({ deals: 0, reservations: 0, sales: 0, primarySales: 0, repeatSales: 0, ppp: 0 });
+  const zero = (): ConversionRow => ({ primaryDeals: 0, primaryReservations: 0, primarySales: 0, repeatSales: 0, ppp: 0 });
   const conv: Conversions = { 'ОС': zero(), 'НЦ': zero(), 'ЖБИ': zero(), total: zero() };
   for (const [managerId, vals] of byManager) {
     const org = orgMap.get(managerId);
@@ -199,9 +201,8 @@ async function getDbConversions(
     const cat = org.category as Dept | null;
     if (!cat || !DEPTS.includes(cat)) continue;
     for (const target of [conv[cat], conv.total]) {
-      target.deals += vals.deals_count ?? 0;
-      target.reservations += vals.reservations_count ?? 0;
-      target.sales += vals.sales_count ?? 0;
+      target.primaryDeals += vals.primary_deals_count ?? 0;
+      target.primaryReservations += vals.primary_reservations_count ?? 0;
       target.primarySales += vals.primary_sales_count ?? 0;
       target.repeatSales += vals.repeat_sales_count ?? 0;
       target.ppp += vals.ppp_count ?? 0;
@@ -255,17 +256,18 @@ async function getMonthPlans(
   return plans;
 }
 
-interface WorkingDays { inMonth: number; passedInMonth: number; inWeek: number }
+interface WorkingDays { inMonth: number; passedInMonth: number; passedInWeek: number }
 
-// Источник — общий хелпер lib/plans/dailyPlan (п.7 спеки): дефолт "месячный план ÷ 20"
-// (inMonth=20, недельная константа inWeek=5), либо working_calendar, если супер-админ
-// включил режим "производственный календарь".
+// Источник — общий хелпер lib/plans/dailyPlan (п.7 спеки): дефолт "месячный план ÷ 20",
+// либо working_calendar, если супер-админ включил режим "производственный календарь".
+// Неделя и месяц — ТЕМП (правка владельца 21.07): план на прошедшие рабочие дни,
+// а не на весь период, поэтому от недели берём passed, а не total.
 async function getWorkingDays(monthFirstDay: string, reportDate: string, weekStart: string): Promise<WorkingDays> {
-  const [month, inWeek] = await Promise.all([
+  const [month, week] = await Promise.all([
     getMonthWorkingDays(monthFirstDay, reportDate),
-    getWeekWorkingDaysTotal(weekStart),
+    getWeekWorkingDays(weekStart, reportDate),
   ]);
-  return { inMonth: month.total, passedInMonth: month.passed, inWeek };
+  return { inMonth: month.total, passedInMonth: month.passed, passedInWeek: week.passed };
 }
 
 // ── Расхождения Битрикс ↔ БД ───────────────────────────────────────────────────────
@@ -375,7 +377,7 @@ export async function buildDailyMoscowReport(reportDate?: string): Promise<Daily
     return out;
   };
   const dayPlanSales = scale(plans.sales, 1 / wd.inMonth);
-  const weekPlanSales = scale(dayPlanSales, wd.inWeek);
+  const weekPlanSales = scale(dayPlanSales, wd.passedInWeek);
   const mtdPlanSales = scale(dayPlanSales, wd.passedInMonth);
   const mtdPlanShip = scale(plans.shipments, wd.passedInMonth / wd.inMonth);
 
@@ -394,8 +396,8 @@ export async function buildDailyMoscowReport(reportDate?: string): Promise<Daily
       planPercentSection('МЕСЯЦ', bxSales.month, mtdPlanSales),
     ].join('\n\n'),
     [
-      conversionSection('Конверсия в бронь (месяц)', dbConv, r => r.reservations, r => r.deals),
-      conversionSection('Конверсия в продажу (месяц)', dbConv, r => r.sales, r => r.deals),
+      conversionSection('Конверсия в бронь (месяц)', dbConv, r => r.primaryReservations, r => r.primaryDeals),
+      conversionSection('Конверсия в продажу (месяц)', dbConv, r => r.primarySales, r => r.primaryDeals),
       conversionSection('Конверсия ППП (месяц)', dbConv, r => r.ppp, r => r.primarySales),
       conversionSection('% повторных продаж (месяц)', dbConv, r => r.repeatSales, r => r.primarySales + r.repeatSales),
     ].join('\n\n'),

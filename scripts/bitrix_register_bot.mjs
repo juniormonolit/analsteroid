@@ -3,7 +3,7 @@
 //
 // Usage:
 //   BITRIX_BOT_WEBHOOK_URL=https://portal.bitrix24.ru/rest/1/token \
-//   EVENTS_URL=https://junior-analsteroid.dev.mlt-it.com/api/bitrix/events \
+//   EVENTS_URL=https://monolitika.mlt-it.com/api/bitrix/events \
 //   node scripts/bitrix_register_bot.mjs
 
 import { createRequire } from 'module';
@@ -12,7 +12,7 @@ require('@next/env').loadEnvConfig(process.cwd());
 
 const WEBHOOK = (process.env.BITRIX_BOT_WEBHOOK_URL || '').replace(/\/+$/, '');
 const CLIENT_ID = process.env.BITRIX_BOT_CLIENT_ID || '';
-const EVENTS_URL = process.env.EVENTS_URL || 'https://junior-analsteroid.dev.mlt-it.com/api/bitrix/events';
+const EVENTS_URL = process.env.EVENTS_URL || 'https://monolitika.mlt-it.com/api/bitrix/events';
 
 if (!WEBHOOK) {
   console.error('BITRIX_BOT_WEBHOOK_URL не задан');
