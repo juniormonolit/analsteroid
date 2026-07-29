@@ -80,6 +80,10 @@ function compactTooltip(comparison: number | null, delta: number | null, deltaPc
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+// Какое поле колонки сравнения используется активной сортировкой — Тек. (current,
+// прежнее единственное поведение) / Пред. (comparison) / Δ (delta) / Δ% (deltaPct).
+export type SortKind = 'current' | 'comparison' | 'delta' | 'deltaPct';
+
 export interface RowDeltas {
   dimensionId: string;
   dimensionName: string;
@@ -362,9 +366,33 @@ export function ReportTable({
     setCollapsed(new Set());
   }
 
-  function handleSort(metricId: string) {
-    const nextDir: 'asc' | 'desc' = sortBy === metricId ? (sortDir === 'desc' ? 'asc' : 'desc') : 'desc';
-    const nextBy = metricId;
+  // Сортировка по колонкам сравнения (задача Серёги «сортировка по пред./перв./дельте/
+  // проценту»): sortBy остаётся ПЛОСКОЙ строкой (persist в saved_reports.sort_by как и
+  // раньше), но для под-колонок «Пред./Δ/Δ%» кодируется составным ключом
+  // `${metricId}${SORT_KIND_SEP}${kind}`. Голый metricId (без разделителя) — как и
+  // прежде, означает сортировку по «Тек.» (current), обратная совместимость с уже
+  // сохранёнными отчётами не ломается. Разделитель «::» в id метрик каталога не
+  // встречается (snake_case-идентификаторы).
+  const SORT_KIND_SEP = '::';
+  function buildSortKey(metricId: string, kind: SortKind): string {
+    return kind === 'current' ? metricId : `${metricId}${SORT_KIND_SEP}${kind}`;
+  }
+  function parseSortKey(key: string): { metricId: string; kind: SortKind } {
+    const idx = key.indexOf(SORT_KIND_SEP);
+    if (idx === -1) return { metricId: key, kind: 'current' };
+    return { metricId: key.slice(0, idx), kind: key.slice(idx + SORT_KIND_SEP.length) as SortKind };
+  }
+  // Значение поля строки для активной сортировки. Единая точка для всех 4 колонок
+  // сравнения — раньше compareRows читал только .current напрямую.
+  function sortFieldValue(d: RowDeltas['deltas'][string] | undefined, kind: SortKind): number | null {
+    if (!d) return null;
+    const v = d[kind];
+    return v === undefined ? null : v;
+  }
+
+  function handleSort(metricId: string, kind: SortKind = 'current') {
+    const nextBy = buildSortKey(metricId, kind);
+    const nextDir: 'asc' | 'desc' = sortBy === nextBy ? (sortDir === 'desc' ? 'asc' : 'desc') : 'desc';
     if (controlled) { onSortChange!(nextBy, nextDir); }
     else { setSortByInner(nextBy); setSortDirInner(nextDir); }
   }
@@ -604,11 +632,28 @@ export function ReportTable({
       return colorSortInverted ? (av - bv) : (bv - av);
     }
     if (!sortBy) return 0;
-    const av = a.deltas[sortBy]?.current ?? null;
-    const bv = b.deltas[sortBy]?.current ?? null;
+    // Составной sortBy (metricId::comparison|delta|deltaPct) — сортировка по колонкам
+    // сравнения (см. buildSortKey/parseSortKey у handleSort выше). Голый metricId —
+    // прежнее поведение, читает .current.
+    const { metricId, kind } = parseSortKey(sortBy);
+    const av = sortFieldValue(a.deltas[metricId], kind);
+    const bv = sortFieldValue(b.deltas[metricId], kind);
+    // Политика пустых значений: null (нет данных за период/расчёт невозможен) — ВСЕГДА
+    // в конец списка, независимо от asc/desc (та же политика, что уже была у «Тек.»,
+    // теперь применена единообразно ко всем 4 колонкам).
     if (av === null && bv === null) return 0;
     if (av === null) return 1;
     if (bv === null) return -1;
+    // Рост с нулевой базы (computeDelta в calculated.ts считает его как deltaPct =
+    // ±Infinity) — ПРОВЕРЕНО эмпирически (curl /api/reports/run): Infinity не переживает
+    // JSON.stringify в API-ответе, приходит на клиент как null и рендерится тем же «—»,
+    // что и «нет данных за период» (см. formatDeltaPct). Раз приложение визуально НЕ
+    // отличает «рост с нуля» от «нет данных» — сортируем их ОДИНАКОВО (оба через ветку
+    // null выше, в конец списка при любом направлении). Эта ветка (av === bv) — на случай
+    // если av/bv всё же настоящий ±Infinity (другой источник данных/будущий вызов без
+    // HTTP-границы): равные полюса считаем равными ДО вычитания, иначе Infinity − Infinity
+    // дало бы NaN и сломало бы компаратор (Array.sort не гарантирует порядок при NaN).
+    if (av === bv) return 0;
     return sortDir === 'desc' ? bv - av : av - bv;
   }
 
@@ -1542,6 +1587,14 @@ export function ReportTable({
                         const sb = sub(idx, edgeBase(idx, lastIdx));
                         const animCls = idx === 0 ? '' : subColAnimCls(m.id, kind as 'comparison' | 'delta' | 'deltaPct');
                         const isLast = idx === lastIdx;
+                        // Сортировка по под-колонкам сравнения (Пред./Δ/Δ%, задача Серёги) —
+                        // тот же паттерн, что уже был у заголовка метрики (title-кнопка выше):
+                        // клик по подписи сортирует/меняет направление, activна колонка несёт
+                        // ArrowUp/ArrowDown того же размера. «Тек.» дублирует клик по названию
+                        // метрики (тот же составной ключ через kind='current') — для
+                        // единообразия того, что каждая видимая колонка сравнения кликабельна.
+                        const sortKey = kind === 'current' ? m.id : `${m.id}::${kind}`;
+                        const isSortActive = sortBy === sortKey;
                         return (
                           <th
                             key={kind}
@@ -1549,7 +1602,15 @@ export function ReportTable({
                             className={`${isLast ? 'relative' : ''} text-center px-1 py-1 text-xs font-normal text-[var(--color-text-muted)] border-b border-[var(--color-border)] ${sb.cls} ${animCls}`}
                             style={sb.style}
                           >
-                            {KIND_LABEL[kind]}
+                            <button
+                              type="button"
+                              onClick={() => handleSort(m.id, kind as SortKind)}
+                              title={`Сортировать по «${KIND_LABEL[kind]}»`}
+                              className={`tap-target inline-flex items-center gap-0.5 hover:text-[var(--color-accent)] transition-colors ${isSortActive ? 'text-[var(--color-accent)]' : ''}`}
+                            >
+                              {KIND_LABEL[kind]}
+                              {isSortActive && (sortDir === 'desc' ? <ArrowDown size={10} className="flex-shrink-0" /> : <ArrowUp size={10} className="flex-shrink-0" />)}
+                            </button>
                             {isLast && m.id === lastPinnedId && <span className="absolute top-0 bottom-0 right-0 w-px bg-[var(--color-border)] pointer-events-none z-50" />}
                           </th>
                         );
