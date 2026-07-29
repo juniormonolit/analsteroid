@@ -98,6 +98,7 @@ async function main() {
   // 3. org_resolved_hierarchy + детект смены имени
   const now = new Date();
   let renamed = 0;
+  let employeesSynced = 0;
   const seen = [];
   for (const m of mgr) {
     const uid = String(m.ID);
@@ -141,13 +142,28 @@ async function main() {
          branch=EXCLUDED.branch, branch_code=EXCLUDED.branch_code`,
       [uid, orh.manager_name, orh.department_id, orh.department_name, orh.rop_bitrix_user_id, orh.rop_name,
        orh.resolved_path, orh.is_active, now, orh.short_login, orh.branch, orh.branch_code]);
+    // Задача 2537: старая таблица sa.employees (легаси-импорт до переезда
+    // оргструктуры на sa.org_resolved_hierarchy 13.07) синком никогда не
+    // трогалась → 111/211 строк разошлись с боевым ФИО (напр. bitrix_id 1930:
+    // «Анна Грициенко» вместо «Ольга Портная»). Сама sa.employees сейчас НЕ
+    // читается ни одним отчётным путём приложения (grep по app/features/lib —
+    // источник имён везде sa.org_resolved_hierarchy), поэтому расхождение не
+    // портит отчёты, но вводит в заблуждение при прямом просмотре БД. Держим
+    // full_name синхронным по bitrix_id — только UPDATE существующих строк,
+    // новых сотрудников сюда не добавляем (team_id/role/hire_date — легаси-поля
+    // вне зоны синка, трогать их не наша задача).
+    const empUpd = await client.query(
+      `UPDATE sa.employees SET full_name = $2 WHERE bitrix_id = $1::integer AND full_name IS DISTINCT FROM $2`,
+      [uid, name]);
+    if (empUpd.rowCount) employeesSynced += empUpd.rowCount;
+
     seen.push(uid);
   }
   // менеджеры, пропавшие из выгрузки → is_active=false
   await client.query(`UPDATE sa.org_resolved_hierarchy SET is_active=false WHERE NOT (manager_bitrix_user_id = ANY($1))`, [seen]);
 
   await client.query('COMMIT');
-  console.log(JSON.stringify({ ok: true, departments: bxdep.length, managers: mgr.length, renamed, ms: Date.now() - t0 }));
+  console.log(JSON.stringify({ ok: true, departments: bxdep.length, managers: mgr.length, renamed, employeesSynced, ms: Date.now() - t0 }));
   await client.end();
 }
 main().catch(e => { console.error('SYNC FAILED:', e.message); process.exit(1); });

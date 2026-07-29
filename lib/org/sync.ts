@@ -25,7 +25,7 @@ interface BxManager {
   ACTIVE?: string | boolean; UF_DEPARTMENT?: (string | number)[]; WORK_POSITION?: string;
 }
 
-export interface OrgSyncResult { ok: true; departments: number; managers: number; backfilledHeads: number; renamed: number; ms: number }
+export interface OrgSyncResult { ok: true; departments: number; managers: number; backfilledHeads: number; renamed: number; employeesSynced: number; ms: number }
 
 function webhookBase(): string {
   const bx = process.env.BITRIX_ORG_WEBHOOK;
@@ -186,6 +186,7 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
     // 3. org_resolved_hierarchy + детект смены имени
     const now = new Date();
     let renamed = 0;
+    let employeesSynced = 0;
     const seen: string[] = [];
     for (const m of mgr) {
       const uid = String(m.ID);
@@ -228,13 +229,29 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
            branch=EXCLUDED.branch, branch_code=EXCLUDED.branch_code`,
         [uid, name, departmentId, departmentName, ropId, ropName, resolvedPath, isActive, now, login, branch, branchCode],
       );
+      // Задача 2537: старая таблица sa.employees (легаси-импорт до переезда
+      // оргструктуры на sa.org_resolved_hierarchy 13.07) синком никогда не
+      // трогалась → 111/211 строк разошлись с боевым ФИО (напр. bitrix_id 1930:
+      // «Анна Грициенко» вместо «Ольга Портная»). sa.employees сейчас НЕ читается
+      // ни одним отчётным путём приложения (источник имён везде
+      // sa.org_resolved_hierarchy), поэтому расхождение не портит отчёты, но
+      // вводит в заблуждение при прямом просмотре БД. Держим full_name
+      // синхронным по bitrix_id — только UPDATE существующих строк, новых
+      // сотрудников сюда не добавляем (team_id/role/hire_date — легаси-поля вне
+      // зоны синка).
+      const empUpd = await client.query(
+        'UPDATE sa.employees SET full_name = $2 WHERE bitrix_id = $1::integer AND full_name IS DISTINCT FROM $2',
+        [uid, name],
+      );
+      if (empUpd.rowCount) employeesSynced += empUpd.rowCount;
+
       seen.push(uid);
     }
     // менеджеры, пропавшие из выгрузки → is_active=false
     await client.query('UPDATE sa.org_resolved_hierarchy SET is_active=false WHERE NOT (manager_bitrix_user_id = ANY($1))', [seen]);
 
     await client.query('COMMIT');
-    return { ok: true, departments: bxdep.length, managers: mgr.length, backfilledHeads, renamed, ms: Date.now() - t0 };
+    return { ok: true, departments: bxdep.length, managers: mgr.length, backfilledHeads, renamed, employeesSynced, ms: Date.now() - t0 };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;
