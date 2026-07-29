@@ -136,7 +136,11 @@ export interface StageSnapshotResult {
  * nameExpr/extraJoins/notNullWhere один в один, чтобы фильтры отчёта (пг/источник/
  * отдел/нерабочее время) резали снимок ТАК ЖЕ, как и обычные collected-метрики.
  */
-export async function fetchStageSnapshot(dim: DimensionConfig): Promise<StageSnapshotResult> {
+// extraParams — доп. позиционные параметры для dim.notNullWhere (например,
+// параметризованный фильтр товарных групп — см. productGroupFilter.ts). Всегда
+// добавляются ПОСЛЕ $1 (CURATED_STAGE_IDS), поэтому в тексте notNullWhere,
+// собранном вызывающим кодом, они должны нумероваться начиная с $2.
+export async function fetchStageSnapshot(dim: DimensionConfig, extraParams: unknown[] = []): Promise<StageSnapshotResult> {
   const notNull = dim.notNullWhere ? `AND ${dim.notNullWhere}` : '';
   const nameSelect = dim.nameExpr ? `${dim.nameExpr} AS dimension_name,` : '';
   const nameGroup  = dim.nameExpr ? `, ${dim.nameExpr}` : '';
@@ -159,7 +163,7 @@ export async function fetchStageSnapshot(dim: DimensionConfig): Promise<StageSna
   const res = await analyticsDb().query<{
     dimension_id: string; dimension_name?: string; funnel_id: number;
     stage_id: string; stage_type: string | null; cnt: string;
-  }>(sql, [CURATED_STAGE_IDS]);
+  }>(sql, [CURATED_STAGE_IDS, ...extraParams]);
 
   const funnels = await loadFunnelsLocal();
   const isRepeatByFunnel = new Map(funnels.map(f => [f.id, f.isRepeat]));

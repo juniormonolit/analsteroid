@@ -6,7 +6,7 @@ import { ChevronDown, Check } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { Seg } from '@/features/reports/ui/FiltersMenu';
 import { computeCalculated } from '@/features/reports/engine/calculated';
-import type { Metric, ReportRow, DealScope, ClientType } from '@/lib/metrics/types';
+import type { Metric, ReportRow, DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 import type { DateRange } from '@/lib/period';
 import {
   HBarChart, LineChart, ScatterChart, ChartLegend,
@@ -32,6 +32,11 @@ interface Props {
   clientType: ClientType;
   departmentIds: string[];
   departmentsReady: boolean;
+  // Фильтр товарных групп (задача 29.07) — раньше productGroupMode был ЖЁСТКО
+  // захардкожен 'kc' в теле запроса ниже; теперь приходит из общего фильтра
+  // раздела «Графики» (ChartsPage), применяется к обеим вкладкам одинаково.
+  productGroupMode: ProductGroupMode;
+  productGroupIds: string[];
 }
 
 // ── Пикер метрик (Popover по правилу CLAUDE.md №4) ───────────────────────────
@@ -153,7 +158,7 @@ function groupRows(rows: ReportRow[], grouping: ChartGrouping, catalog: Metric[]
   });
 }
 
-export function ConstructorSection({ period, dealScope, clientType, departmentIds, departmentsReady }: Props) {
+export function ConstructorSection({ period, dealScope, clientType, departmentIds, departmentsReady, productGroupMode, productGroupIds }: Props) {
   const [mode, setMode] = useState<ChartMode>('by-managers');
   const [chartType, setChartType] = useState<ChartType>('bar');
   const [grouping, setGrouping] = useState<ChartGrouping>('none');
@@ -185,7 +190,7 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
   }, [yMetricIds, xMetricId, chartType]);
 
   const { data, isLoading, isError } = useQuery<RunResponse>({
-    queryKey: ['charts-run', mode, period, requestedIds, dealScope, clientType, departmentIds],
+    queryKey: ['charts-run', mode, period, requestedIds, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
     queryFn: async () => {
       const res = await fetch('/api/reports/run', {
         method: 'POST',
@@ -197,7 +202,7 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
           comparisonPeriod: { from: period.from, to: period.to },
           metricIds: requestedIds,
           dealScope, clientType, departmentIds,
-          productGroupMode: 'kc',
+          productGroupMode, productGroupIds,
           accountType: 'managers',
         }),
       });

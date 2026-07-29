@@ -124,6 +124,7 @@ export async function POST(req: NextRequest) {
     accountType = 'managers' as AccountType,
     managerId,       // drilldown: restrict by-product-groups to one manager
     productGroupId,  // drilldown: restrict by-managers to one product group
+    productGroupIds, // раздел «Графики» (мультиселект, задача 29.07): пустой/undefined = все группы
     sourceDimension, // by-sources: main dimension (brand/platform/contact_type/ad_channel/branch/source)
     sourceFilter,    // drilldown: { dimension, value } — restrict deals to one dimension value
     // Задача 1569: экспериментальные фильтры по нерабочему времени (сегментация,
@@ -137,6 +138,12 @@ export async function POST(req: NextRequest) {
   }
   if (!isValidPeriodInput(comparisonPeriod)) {
     return NextResponse.json({ error: 'comparisonPeriod.from и comparisonPeriod.to обязательны и должны быть валидными датами' }, { status: 400 });
+  }
+  // productGroupIds — новый мультиселект (раздел «Графики», задача 29.07): массив
+  // строк, элементы валидируются движком (byManagers.ts/byProductGroups.ts →
+  // productGroupFilter.ts, параметризованный SQL). Здесь — только форма/размер.
+  if (productGroupIds !== undefined && (!Array.isArray(productGroupIds) || productGroupIds.length > 200 || productGroupIds.some((v: unknown) => typeof v !== 'string' || v.length > 200))) {
+    return NextResponse.json({ error: 'productGroupIds должен быть массивом строк (макс. 200 элементов, каждая ≤200 символов)' }, { status: 400 });
   }
 
   const start = Date.now();
@@ -214,13 +221,13 @@ export async function POST(req: NextRequest) {
 
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
-      fetchByManagers({ ...opts, productGroupMode, productGroupId, sourceFilter }),
-      fetchByManagers({ ...compOpts, productGroupMode, productGroupId, sourceFilter }),
+      fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter }),
+      fetchByManagers({ ...compOpts, productGroupMode, productGroupId, productGroupIds, sourceFilter }),
     ]);
   } else if (reportSlug === 'by-product-groups') {
     [currentRows, compRows] = await Promise.all([
-      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
-      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
+      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, productGroupIds, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
+      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, productGroupIds, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
     ]);
   } else if (reportSlug === 'by-sources') {
     [currentRows, compRows] = await Promise.all([
