@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { buildManagerCard, type CardSegment } from '@/features/manager-card/engine/managerCard';
+import { getManagerAvatarUrl } from '@/lib/bitrix/managerAvatar';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 
 // Карточка менеджера (экран 1 мокапа manager-card-mock.html, MVP): профиль +
@@ -34,17 +35,26 @@ export async function POST(req: NextRequest) {
   }
 
   const start = Date.now();
-  const result = await buildManagerCard({
-    managerId,
-    period: { from: new Date(period.from), to: new Date(period.to) },
-    comparisonPeriod: comparisonPeriod ? { from: new Date(comparisonPeriod.from), to: new Date(comparisonPeriod.to) } : undefined,
-    segment,
-    productGroupMode: productGroupMode as ProductGroupMode | undefined,
-  });
+  // Аватар из Битрикса — параллельно с карточкой («Карточка 10.0»); кэш с TTL,
+  // см. lib/bitrix/managerAvatar.ts. Ошибка аватарки карточку не роняет.
+  const [result, avatarUrl] = await Promise.all([
+    buildManagerCard({
+      managerId,
+      period: { from: new Date(period.from), to: new Date(period.to) },
+      comparisonPeriod: comparisonPeriod ? { from: new Date(comparisonPeriod.from), to: new Date(comparisonPeriod.to) } : undefined,
+      segment,
+      productGroupMode: productGroupMode as ProductGroupMode | undefined,
+    }),
+    getManagerAvatarUrl(managerId),
+  ]);
 
   if ('error' in result) {
     return NextResponse.json({ error: result.error }, { status: 404 });
   }
 
-  return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
+  return NextResponse.json({
+    ...result,
+    profile: { ...result.profile, avatarUrl },
+    meta: { ...result.meta, durationMs: Date.now() - start },
+  });
 }

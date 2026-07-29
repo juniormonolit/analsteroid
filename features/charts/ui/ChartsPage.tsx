@@ -129,7 +129,9 @@ export function ChartsPage() {
 
       {tab === 'survival' ? (
         <>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          {/* Кастомные кривые — одна ПОД другой на всю ширину (правка владельца 29.07:
+              в две колонки графики мельчили, «чтобы было хорошо видно»). */}
+          <div className="flex flex-col gap-4">
             <SurvivalCard
               preset="priced"
               title="Вероятность продажи от дней в «Созвонился и озвучил цены»"
