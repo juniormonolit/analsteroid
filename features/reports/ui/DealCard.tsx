@@ -30,6 +30,14 @@ interface DealFull {
 // последующие). null — у сделки нет contact_id (блок скрывается, не ошибка).
 interface LtvInfo { customerLtv: number; dealLtv: number }
 interface ManagerInfo { name: string; login: string | null; branch: string; department: string | null }
+// Полная история переходов по стадиям (sa.deal_events; ведётся с 2026-04-03).
+interface StageHistoryItem {
+  eventAt: string;
+  stageId: string;
+  stageName: string;
+  eventType: string | null;
+  managerName: string | null;
+}
 interface SourceInfo {
   name: string; category: string; contact_type: string | null; branch: string | null;
   platform: string | null; brand: string | null; ad_channel: string | null; channel_group: string | null;
@@ -131,7 +139,7 @@ type DealCardTab = 'main' | 'products' | 'calls';
 export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => void }) {
   const { data, isLoading } = useQuery({
     queryKey: ['deal-card', dealId],
-    queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null; callsCount: number; ltv: LtvInfo | null }>,
+    queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null; callsCount: number; ltv: LtvInfo | null; stageHistory: StageHistoryItem[] }>,
     staleTime: 60_000,
   });
   const deal = data?.deal;
@@ -289,6 +297,39 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                     <Section title="Товарные группы">
                       <Row label="Категория КЦ" value={deal.product_group_name ?? 'Без группы'} />
                       <Row label="По наибольшему" value={deal.head_group_name ?? 'Без группы'} />
+                    </Section>
+
+                    <Section title={`История стадий${data?.stageHistory?.length ? ` · ${data.stageHistory.length}` : ''}`}>
+                      {data?.stageHistory?.length ? (
+                        // Полная история переходов (deal_events), в отличие от «Хронологии»
+                        // выше, где только ключевые вехи. max-h + скролл: у долгих сделок
+                        // десятки переходов, они не должны раздувать колонку.
+                        <div className="border border-[var(--color-border)] rounded-xl p-4 max-h-72 overflow-y-auto">
+                          <div className="flex flex-col">
+                            {data.stageHistory.map((h, i) => (
+                              <div key={`${h.eventAt}-${i}`} className="relative flex items-start gap-3 py-1.5">
+                                {i < data.stageHistory.length - 1 && (
+                                  <span className="absolute left-[4px] top-[18px] bottom-[-6px] w-px bg-[var(--color-border)]" />
+                                )}
+                                <span className={`relative z-[1] mt-1.5 w-2.5 h-2.5 rounded-full shrink-0 ${
+                                  h.eventType === 'lost' ? 'bg-[var(--color-negative,#e03131)]'
+                                    : h.eventType === 'sold' || h.eventType === 'delivered' ? 'bg-[var(--color-positive,#2f9e44)]'
+                                    : 'bg-[var(--color-accent)]'
+                                }`} />
+                                <span className="text-sm flex-1 min-w-0 text-[var(--color-text)]">
+                                  {h.stageName}
+                                  {h.managerName && <span className="text-[var(--color-text-muted)]"> · {h.managerName}</span>}
+                                </span>
+                                <span className="text-xs tabular-nums text-[var(--color-text-muted)] shrink-0 mt-0.5">{fmtDateTimeMsk(h.eventAt)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-[var(--color-text-muted)]">
+                          Нет данных — история переходов ведётся с 03.04.2026
+                        </div>
+                      )}
                     </Section>
                   </div>
 

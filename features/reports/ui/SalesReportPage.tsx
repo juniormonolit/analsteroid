@@ -17,7 +17,6 @@ import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
 import { DrilldownDrawer } from './DrilldownDrawer';
 import type { DrilldownTarget } from './DrilldownDrawer';
-import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 import { ComparisonPanel } from './ComparisonPanel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
 import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay, BorderMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
@@ -305,9 +304,6 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useState('');
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
-  // Карточка менеджера (клик по #логину в отчёте «по менеджерам», MVP экрана 1
-  // мокапа manager-card-mock.html) — независимая от drilldown правая панель.
-  const [managerCard, setManagerCard]   = useState<{ id: string; name: string } | null>(null);
   // Режим «Сравнение» (п. Н2 спеки): выбор сущностей живёт в состоянии страницы (не в
   // БД) — так он переживает закрытие/повторное открытие слайдера в рамках сессии.
   const [showComparison, setShowComparison] = useState(false);
@@ -655,9 +651,18 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // Клик по #логину менеджера (dimensionSubtitle) — только в отчёте «по менеджерам»
   // (в остальных отчётах ReportTable либо не получает onSubtitleClick вовсе, либо
   // dimensionSubtitle означает что-то другое — см. проп в ReportTable.tsx).
+  // Карточка 10.0 (задача владельца 29.07): панель заменена страницей /manager/[id];
+  // период отчёта передаётся через query, чтобы ЛК открылся на том же периоде.
   const handleSubtitleClick = useCallback(
-    (id: string, name: string) => setManagerCard({ id, name }),
-    []
+    (id: string, name: string) => {
+      const qs = new URLSearchParams({
+        name,
+        from: period.from.toISOString(),
+        to: period.to.toISOString(),
+      });
+      router.push(`/manager/${id}?${qs}`);
+    },
+    [router, period]
   );
 
   const handleCellClick = useCallback(
@@ -1098,16 +1103,6 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             />
           }
           onClose={() => setDrilldown(null)}
-        />
-      )}
-
-      {managerCard && (
-        <ManagerCardPanel
-          key={managerCard.id}
-          managerId={managerCard.id}
-          managerName={managerCard.name}
-          reportPeriod={period}
-          onClose={() => setManagerCard(null)}
         />
       )}
 

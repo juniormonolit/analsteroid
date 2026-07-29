@@ -1,8 +1,8 @@
 'use client';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Bell, IdCard, KeyRound, LayoutGrid, Moon, Rows3 } from 'lucide-react';
-import { startOfMonth } from 'date-fns';
 import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
@@ -10,7 +10,6 @@ import { useTableScale, type TableScalePct } from '@/lib/hooks/useTableScale';
 import { useTheme, type Theme } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
 import { ReportsTrashCard } from './ReportsTrashCard';
-import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 
 interface Me {
   user: {
@@ -79,8 +78,8 @@ const cardCls = 'rounded-lg border border-[var(--color-border)] bg-[var(--color-
 type ProfileTab = 'personal' | 'team' | 'reports' | 'notifications';
 
 export function ProfilePage() {
+  const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
-  const [showMyCard, setShowMyCard] = useState(false);
   const [tab, setTab] = useState<ProfileTab>('personal');
 
   // Тумблер «Про/Лайт» (п.3а спеки; переименование «Обычная»→«Лайт» — правка 09.07/2,
@@ -151,17 +150,16 @@ export function ProfilePage() {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              {/* МОП: своя карточка менеджера в ЛК (карточка менеджера v2, бриф 10.07, п.2).
-                  Маппинг юзер→менеджер — users.bitrix_user_id === org_resolved_hierarchy.
-                  manager_bitrix_user_id (уже используется для аватара/сессии, отдельная
-                  таблица не заводилась — см. отчёт задачи). */}
-              {me.user.rawRoleName === 'МОП' && me.user.bitrixUserId && (
+              {/* «Мой ЛК» («Карточка 10.0», задача владельца 29.07): страница /manager/me —
+                  МОП видит свою карточку, РОП/директор — агрегат отделов по оргструктуре
+                  «Контроля звонков». Кнопка любому связанному с Битриксом аккаунту. */}
+              {me.user.bitrixUserId && (
                 <button
-                  onClick={() => setShowMyCard(true)}
+                  onClick={() => router.push('/manager/me')}
                   className="flex items-center justify-center gap-2 px-4 py-2 text-sm border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-border-focus)] transition-colors"
                 >
                   <IdCard size={15} />
-                  Моя карточка
+                  Мой ЛК
                 </button>
               )}
               <button
@@ -385,14 +383,6 @@ export function ProfilePage() {
       </div>
 
       {showPassword && <ChangePasswordModal onClose={() => setShowPassword(false)} />}
-      {showMyCard && me?.user.bitrixUserId && (
-        <ManagerCardPanel
-          managerId={me.user.bitrixUserId}
-          managerName={me.user.displayName}
-          reportPeriod={{ from: startOfMonth(new Date()), to: new Date() }}
-          onClose={() => setShowMyCard(false)}
-        />
-      )}
     </div>
   );
 }

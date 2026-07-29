@@ -285,6 +285,17 @@ export async function GET(req: NextRequest) {
       d.sold_at,
       d.delivered_at,
       d.lost_at,
+      -- Первый переход в стадию (скалярные подзапросы — прямой JOIN deal_events дублирует строки).
+      -- Стадии матчатся по имени: точных «Запрос логисту»/«Есть цена дешевле» в Битриксе нет,
+      -- это «Сделал запрос снабженцу…» и «Есть цена дешевле… / Есть ниже цена» по всем воронкам.
+      (SELECT MIN(de.event_at) FROM deal_events de
+        WHERE de.deal_id = d.deal_id
+          AND de.stage_id IN (SELECT id FROM stages WHERE name ILIKE 'Сделал запрос снабженцу%')
+      ) AS logist_request_at,
+      (SELECT MIN(de.event_at) FROM deal_events de
+        WHERE de.deal_id = d.deal_id
+          AND de.stage_id IN (SELECT id FROM stages WHERE name ILIKE 'Есть цена дешевле%' OR name ILIKE 'Есть ниже цена%')
+      ) AS cheaper_price_at,
       NULL::timestamptz AS expected_close_date,  -- нет в sa.deals; форму ответа сохраняем
       d.source_id,
       d.current_manager_id::text AS manager_id,

@@ -2,6 +2,8 @@ import { loadMetrics, resolveMetricIds, withDependencies } from '@/lib/metrics/c
 import { fetchManagerActivity } from './managerActivity';
 import { fetchStageConversions, STAGE_PAIRS } from './stageConversions';
 import { fetchPriceObjectionConversion } from './priceObjectionConversion';
+import { fetchCalledConversion, CALLED_CONVERSION_HIDDEN_IDS } from './calledConversion';
+import { fetchStageEntered, STAGE_ENTERED_GROUP_KEYS, STAGE_ENTERED_METRIC_IDS, stageEnteredMetricIds } from './stageEntered';
 import {
   fetchCallsBaseMetrics, fetchDealCallAdditive, fetchTouchAndFirstCallMedians, fetchCallSilence,
   type Bucket, type CallsBaseRow, type DealCallAdditiveRow, type TouchAndFirstCallRow,
@@ -93,6 +95,41 @@ export async function enrichManagerRowsForMetrics(
           stage_price_lower_to_sale_num_repeat: po ? (p?.numSaleRepeat ?? 0) : null,
           stage_price_lower_to_lost_num_primary: po ? (p?.numLostPrimary ?? 0) : null,
           stage_price_lower_to_lost_num_repeat: po ? (p?.numLostRepeat ?? 0) : null,
+        },
+      };
+    });
+  }
+
+  // ── «Кол-во сделок в стадии X» за период (migrations/107) ────────────────────
+  if (withDeps.some(m => STAGE_ENTERED_METRIC_IDS.includes(m.id))) {
+    const se = await fetchStageEntered(period);
+    out = out.map(row => {
+      const s = se?.get(row.dimensionId);
+      const metrics: Record<string, number | null> = {};
+      for (const grp of STAGE_ENTERED_GROUP_KEYS) {
+        const ids = stageEnteredMetricIds(grp);
+        const c = s?.[grp];
+        metrics[ids.primary] = se ? (c?.primary ?? 0) : null;
+        metrics[ids.repeat] = se ? (c?.repeat ?? 0) : null;
+        metrics[ids.all] = se ? ((c?.primary ?? 0) + (c?.repeat ?? 0)) : null;
+      }
+      return { ...row, metrics: { ...row.metrics, ...metrics } };
+    });
+  }
+
+  // ── «CR Созвонился → Продажа» (migrations/107) ────────────────────────────────
+  if (withDeps.some(m => CALLED_CONVERSION_HIDDEN_IDS.includes(m.id))) {
+    const cc = await fetchCalledConversion(period);
+    out = out.map(row => {
+      const c = cc?.get(row.dimensionId);
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          stage_called_denom_primary: cc ? (c?.denomPrimary ?? 0) : null,
+          stage_called_denom_repeat: cc ? (c?.denomRepeat ?? 0) : null,
+          stage_called_to_sale_num_primary: cc ? (c?.numSalePrimary ?? 0) : null,
+          stage_called_to_sale_num_repeat: cc ? (c?.numSaleRepeat ?? 0) : null,
         },
       };
     });

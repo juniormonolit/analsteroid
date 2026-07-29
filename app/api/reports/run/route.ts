@@ -8,6 +8,8 @@ import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features
 import { fetchBookingCallRate } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/features/reports/engine/stageConversions';
 import { fetchPriceObjectionConversion } from '@/features/reports/engine/priceObjectionConversion';
+import { fetchCalledConversion, CALLED_CONVERSION_HIDDEN_IDS } from '@/features/reports/engine/calledConversion';
+import { fetchStageEntered, STAGE_ENTERED_GROUP_KEYS, STAGE_ENTERED_METRIC_IDS, stageEnteredMetricIds } from '@/features/reports/engine/stageEntered';
 import {
   fetchCallsBaseMetrics, fetchDealCallAdditive, fetchTouchAndFirstCallMedians, fetchCallSilence,
   GRAND_TOTAL_KEY,
@@ -122,6 +124,7 @@ export async function POST(req: NextRequest) {
     accountType = 'managers' as AccountType,
     managerId,       // drilldown: restrict by-product-groups to one manager
     productGroupId,  // drilldown: restrict by-managers to one product group
+    productGroupIds, // раздел «Графики» (мультиселект, задача 29.07): пустой/undefined = все группы
     sourceDimension, // by-sources: main dimension (brand/platform/contact_type/ad_channel/branch/source)
     sourceFilter,    // drilldown: { dimension, value } — restrict deals to one dimension value
     // Задача 1569: экспериментальные фильтры по нерабочему времени (сегментация,
@@ -135,6 +138,12 @@ export async function POST(req: NextRequest) {
   }
   if (!isValidPeriodInput(comparisonPeriod)) {
     return NextResponse.json({ error: 'comparisonPeriod.from и comparisonPeriod.to обязательны и должны быть валидными датами' }, { status: 400 });
+  }
+  // productGroupIds — новый мультиселект (раздел «Графики», задача 29.07): массив
+  // строк, элементы валидируются движком (byManagers.ts/byProductGroups.ts →
+  // productGroupFilter.ts, параметризованный SQL). Здесь — только форма/размер.
+  if (productGroupIds !== undefined && (!Array.isArray(productGroupIds) || productGroupIds.length > 200 || productGroupIds.some((v: unknown) => typeof v !== 'string' || v.length > 200))) {
+    return NextResponse.json({ error: 'productGroupIds должен быть массивом строк (макс. 200 элементов, каждая ≤200 символов)' }, { status: 400 });
   }
 
   const start = Date.now();
@@ -212,13 +221,13 @@ export async function POST(req: NextRequest) {
 
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
-      fetchByManagers({ ...opts, productGroupMode, productGroupId, sourceFilter }),
-      fetchByManagers({ ...compOpts, productGroupMode, productGroupId, sourceFilter }),
+      fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter }),
+      fetchByManagers({ ...compOpts, productGroupMode, productGroupId, productGroupIds, sourceFilter }),
     ]);
   } else if (reportSlug === 'by-product-groups') {
     [currentRows, compRows] = await Promise.all([
-      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
-      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
+      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, productGroupIds, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
+      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, productGroupIds, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
     ]);
   } else if (reportSlug === 'by-sources') {
     [currentRows, compRows] = await Promise.all([
@@ -609,6 +618,66 @@ export async function POST(req: NextRequest) {
     };
     currentRows = currentRows.map(r => enrichPriceObjection(r, curPO));
     compRows = compRows.map(r => enrichPriceObjection(r, compPO));
+  }
+
+  // «Кол-во сделок в стадии X» за период (задача 28.07, migrations/107) — потоковая
+  // пара к снимкам «Стадии (сейчас)»: впервые вошедшие в стадию в периоде, тройки
+  // перв./повт./все. Тот же гейт (только by-managers) и тот же приём «null только
+  // если весь период раньше старта сбора deal_events».
+  const hasStageEnteredMetric = withDeps.some(m => STAGE_ENTERED_METRIC_IDS.includes(m.id));
+  if (hasStageEnteredMetric && reportSlug === 'by-managers') {
+    const [curSE, compSE] = await Promise.all([
+      fetchStageEntered(opts.period),
+      fetchStageEntered(compOpts.period),
+    ]);
+
+    const enrichStageEntered = (
+      row: ReportRow,
+      se: Awaited<ReturnType<typeof fetchStageEntered>>,
+    ): ReportRow => {
+      const s = se?.get(row.dimensionId);
+      const metrics: Record<string, number | null> = {};
+      for (const grp of STAGE_ENTERED_GROUP_KEYS) {
+        const ids = stageEnteredMetricIds(grp);
+        const c = s?.[grp];
+        metrics[ids.primary] = se ? (c?.primary ?? 0) : null;
+        metrics[ids.repeat] = se ? (c?.repeat ?? 0) : null;
+        metrics[ids.all] = se ? ((c?.primary ?? 0) + (c?.repeat ?? 0)) : null;
+      }
+      return { ...row, metrics: { ...row.metrics, ...metrics } };
+    };
+    currentRows = currentRows.map(r => enrichStageEntered(r, curSE));
+    compRows = compRows.map(r => enrichStageEntered(r, compSE));
+  }
+
+  // «CR Созвонился → Продажа» (задача 28.07, migrations/107) — калька с блока
+  // priceObjection выше: только by-managers, null только если весь период раньше
+  // старта сбора deal_events.
+  const hasCalledConversionMetric = withDeps.some(m => CALLED_CONVERSION_HIDDEN_IDS.includes(m.id));
+  if (hasCalledConversionMetric && reportSlug === 'by-managers') {
+    const [curCC, compCC] = await Promise.all([
+      fetchCalledConversion(opts.period),
+      fetchCalledConversion(compOpts.period),
+    ]);
+
+    const enrichCalledConversion = (
+      row: ReportRow,
+      cc: Awaited<ReturnType<typeof fetchCalledConversion>>,
+    ): ReportRow => {
+      const c = cc?.get(row.dimensionId);
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          stage_called_denom_primary: cc ? (c?.denomPrimary ?? 0) : null,
+          stage_called_denom_repeat: cc ? (c?.denomRepeat ?? 0) : null,
+          stage_called_to_sale_num_primary: cc ? (c?.numSalePrimary ?? 0) : null,
+          stage_called_to_sale_num_repeat: cc ? (c?.numSaleRepeat ?? 0) : null,
+        },
+      };
+    };
+    currentRows = currentRows.map(r => enrichCalledConversion(r, curCC));
+    compRows = compRows.map(r => enrichCalledConversion(r, compCC));
   }
 
   // КОЛСТАТ — метрики каталога «Звонки» (va.calls, задача 10.07, owners-inbox) —

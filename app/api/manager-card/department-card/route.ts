@@ -8,6 +8,7 @@ import {
   getAllManagedDepartmentIds, bucketManagersByDepartments,
 } from '@/lib/org/teamRoster';
 import { branchLabel } from '@/lib/org/branchLabel';
+import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 
 // «Карточка отдела» (карточка менеджера v2, бриф 10.07, п.3) — та же форма, что
@@ -59,6 +60,25 @@ export async function POST(req: NextRequest) {
   // но на случай ЛЮБОЙ другой неожиданной ошибки агрегата отдаём внятный 502, а не
   // бессодержательный 500.
   try {
+    // 'my' — отделы, где пользователь эффективный руководитель ПО ОРГСТРУКТУРЕ
+    // «КОНТРОЛЯ ЗВОНКОВ» (ЛК РОПа/директора, «Карточка 10.0»): ручные назначения
+    // из call_control_recipient_overrides приоритетнее битриксовой структуры.
+    if (departmentId === 'my') {
+      if (!session.bitrixUserId) return NextResponse.json({ error: 'Аккаунт не связан с Битриксом' }, { status: 403 });
+      const managed = await getCallControlManagedDepts(session.bitrixUserId);
+      if (managed.length === 0) return NextResponse.json({ error: 'Нет отделов по структуре «Контроля звонков»' }, { status: 403 });
+      const roster = await resolveManagersForDepartments(managed.map(m => m.deptId));
+      const result = await buildDepartmentCard({
+        deptId: 'my',
+        deptName: managed.length === 1 ? (managed[0].deptName ?? 'Мой отдел') : `Мои отделы (${managed.length})`,
+        branch: null,
+        roster,
+        peerBuckets: new Map([['my', roster]]), // как 'all' — честный прочерк вместо пиров
+        period: periodRange, comparisonPeriod: comparisonRange, segment, productGroupMode: pgMode,
+      });
+      return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
+    }
+
     if (departmentId === 'all') {
       if (options.length === 0) return NextResponse.json({ error: 'Отделы не назначены' }, { status: 403 });
       const roster = await resolveManagersForDepartments(options.map(o => o.id));

@@ -6,9 +6,9 @@
 // сетка + селектор отдела/периода + ссылка «Карточка отдела».
 
 import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { startOfMonth } from 'date-fns';
-import { ManagerCardPanel } from '@/features/manager-card/ui/ManagerCardPanel';
 import type { CardSegment } from '@/features/manager-card/engine/managerCard';
 import type { DateRange } from '@/lib/period';
 
@@ -91,8 +91,8 @@ export function DeptRosterGrid() {
   const [periodChoice, setPeriodChoice] = useState<PeriodChoice>('month');
   const [segment, setSegment] = useState<CardSegment>('all');
   const [departmentId, setDepartmentId] = useState<string | undefined>(undefined);
-  const [openManagerId, setOpenManagerId] = useState<{ id: string; name?: string } | null>(null);
-  const [showDeptCard, setShowDeptCard] = useState(false);
+  // Карточка 10.0: панель заменена страницей /manager/[id] — грид просто навигирует.
+  const router = useRouter();
 
   const period: DateRange = useMemo(() => {
     if (periodChoice === 'all') return ALL_TIME_RANGE;
@@ -167,7 +167,7 @@ export function DeptRosterGrid() {
 
       {data?.selectedDepartmentId && (
         <button
-          onClick={() => setShowDeptCard(true)}
+          onClick={() => data?.selectedDepartmentId && router.push(`/manager/${data.selectedDepartmentId}?mode=department&from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}${data.departmentName ? `&name=${encodeURIComponent(data.departmentName)}` : ''}`)}
           className="w-full flex items-center gap-2 mb-4 rounded-xl px-4 py-2.5 text-xs text-[var(--color-text-muted)]"
           style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 8%, transparent)' }}
         >
@@ -204,7 +204,7 @@ export function DeptRosterGrid() {
                 {group.managers.map(m => (
                   <button
                     key={m.managerId}
-                    onClick={() => setOpenManagerId({ id: m.managerId, name: m.name })}
+                    onClick={() => router.push(`/manager/${m.managerId}?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&name=${encodeURIComponent(m.name)}`)}
                     className={`relative flex flex-col items-center text-center gap-0.5 bg-[var(--color-bg-surface)] border rounded-2xl px-3.5 py-4 hover:border-[var(--color-border-focus)] transition-colors ${
                       m.isTop1 ? 'border-2' : 'border-[var(--color-border)]'
                     }`}
@@ -239,25 +239,6 @@ export function DeptRosterGrid() {
         </div>
       )}
 
-      {openManagerId && (
-        <ManagerCardPanel
-          key={openManagerId.id}
-          managerId={openManagerId.id}
-          managerName={openManagerId.name}
-          reportPeriod={period}
-          onClose={() => setOpenManagerId(null)}
-        />
-      )}
-      {showDeptCard && data?.selectedDepartmentId && (
-        <ManagerCardPanel
-          key={`dept-${data.selectedDepartmentId}`}
-          managerId={data.selectedDepartmentId}
-          managerName={data.departmentName ?? undefined}
-          reportPeriod={period}
-          mode="department"
-          onClose={() => setShowDeptCard(false)}
-        />
-      )}
     </div>
   );
 }

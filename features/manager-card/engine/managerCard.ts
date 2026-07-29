@@ -449,6 +449,9 @@ export interface ManagerCardResult {
     login: string | null;
     department: string | null;
     branch: string | null;
+    /** Фото из Битрикса (PERSONAL_PHOTO) — добавляет API-роут поверх движка
+     *  (lib/bitrix/managerAvatar.ts, кэш manager_avatars); у отдела всегда null. */
+    avatarUrl?: string | null;
   };
   rating: { value: number | null; rank: number | null; deptSize: number };
   /** Лесенка мест (задача Иосифа 16.07): отдел → департамент (ближайший предок

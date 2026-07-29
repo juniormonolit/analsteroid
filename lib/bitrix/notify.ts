@@ -38,19 +38,37 @@ export async function bx(webhookUrl: string, method: string, params: Record<stri
   throw lastError ?? new Error(`Bitrix ${method}: не удалось выполнить запрос`);
 }
 
-export async function sendBitrixBotMessage(bitrixUserId: string, message: string): Promise<void> {
+// Кнопки под сообщением бота. Клик приходит как ONIMCOMMANDADD — команда обязана быть
+// зарегистрирована через imbot.command.register (для чатов по сделкам это 'bind_deal').
+export interface BotKeyboardButton {
+  TEXT: string;
+  COMMAND: string;
+  COMMAND_PARAMS: string;
+  DISPLAY?: 'LINE' | 'BLOCK';
+  BG_COLOR?: string;
+  TEXT_COLOR?: string;
+}
+
+/** Возвращает id отправленного сообщения (нужен для корреляции ответов по REPLY_ID). */
+export async function sendBitrixBotMessage(
+  bitrixUserId: string,
+  message: string,
+  keyboard?: BotKeyboardButton[],
+): Promise<number> {
   const webhook = process.env.BITRIX_BOT_WEBHOOK_URL || '';
   const botId = process.env.BITRIX_BOT_ID || '';
   const clientId = process.env.BITRIX_BOT_CLIENT_ID || '';
   if (!webhook || !botId || !clientId) {
     throw new Error('BITRIX_BOT_WEBHOOK_URL/BITRIX_BOT_ID/BITRIX_BOT_CLIENT_ID не заданы — бот "Аналитик" ещё не зарегистрирован');
   }
-  await bx(webhook, 'imbot.message.add', {
+  const body = await bx(webhook, 'imbot.message.add', {
     CLIENT_ID: clientId,
     BOT_ID: botId,
     DIALOG_ID: bitrixUserId,
     MESSAGE: message,
+    ...(keyboard?.length ? { KEYBOARD: { BUTTONS: keyboard } } : {}),
   });
+  return Number(body?.result) || 0;
 }
 
 // Бот «Контроль звонков» (BOT_ID 15010) — отдельный, давно зарегистрированный бот
