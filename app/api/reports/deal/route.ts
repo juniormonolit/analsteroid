@@ -64,8 +64,22 @@ export async function GET(req: NextRequest) {
   // не тащим va.calls целиком на каждое открытие карточки.
   const callsCountPromise = analyticsDb().query<{ count: string }>('SELECT count(*) FROM va.calls WHERE deal_id = $1', [Number(id)]);
 
-  const [callsCountRes, ltvRes, mgrInfo, srcMap] = await Promise.all([
-    callsCountPromise, ltvPromise, loadManagerInfoMap(), loadSourceMap(),
+  // Полная история переходов по стадиям (deal_events ведётся с 2026-04-03; для более
+  // старых сделок список будет пустым — UI показывает подсказку).
+  const historyPromise = analyticsDb().query<{
+    event_at: string; stage_id: string; stage_name: string | null; event_type: string | null; manager_id: string | null;
+  }>(
+    `SELECT de.event_at, de.stage_id, s.name AS stage_name, s.event_type,
+            de.manager_id::text AS manager_id
+       FROM deal_events de
+       LEFT JOIN stages s ON s.id = de.stage_id
+      WHERE de.deal_id = $1
+      ORDER BY de.event_at ASC`,
+    [Number(id)],
+  );
+
+  const [callsCountRes, ltvRes, historyRes, mgrInfo, srcMap] = await Promise.all([
+    callsCountPromise, ltvPromise, historyPromise, loadManagerInfoMap(), loadSourceMap(),
   ]);
   const callsCount = Number(callsCountRes.rows[0]?.count ?? 0);
   const manager = deal.manager_id ? mgrInfo.get(deal.manager_id) ?? null : null;
@@ -74,5 +88,13 @@ export async function GET(req: NextRequest) {
     ? { customerLtv: Number(ltvRes.rows[0].customer_ltv), dealLtv: Number(ltvRes.rows[0].deal_ltv) }
     : null;
 
-  return NextResponse.json({ deal, manager, source, callsCount, ltv });
+  const stageHistory = historyRes.rows.map(r => ({
+    eventAt: r.event_at,
+    stageId: r.stage_id,
+    stageName: r.stage_name ?? r.stage_id,
+    eventType: r.event_type,
+    managerName: r.manager_id ? (mgrInfo.get(r.manager_id)?.name ?? `#${r.manager_id}`) : null,
+  }));
+
+  return NextResponse.json({ deal, manager, source, callsCount, ltv, stageHistory });
 }

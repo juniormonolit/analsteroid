@@ -17,6 +17,9 @@ export const DEAL_FIELDS: DealFieldDef[] = [
   { key: 'source_name',         label: 'Источник',        kind: 'text' },
   { key: 'amount',              label: 'Сумма',           kind: 'money', align: 'right' },
   { key: 'created_at',          label: 'Создана',         kind: 'date',  align: 'right' },
+  // Даты первого перехода в стадию (MIN(event_at) из deal_events, матч стадий по имени)
+  { key: 'logist_request_at',   label: 'Запрос снабж.',   kind: 'date',  align: 'right' },
+  { key: 'cheaper_price_at',    label: 'Цена дешевле',    kind: 'date',  align: 'right' },
   { key: 'reserved_at',         label: 'Бронь',           kind: 'date',  align: 'right' },
   { key: 'confirmed_at',        label: 'Подтв.',          kind: 'date',  align: 'right' },
   { key: 'sold_at',             label: 'Продажа',         kind: 'date',  align: 'right' },
@@ -28,5 +31,6 @@ export const DEAL_FIELDS: DealFieldDef[] = [
 // Дефолтный набор колонок — компактный (остальные добавляются в «Метрики → Сделки»)
 export const DEFAULT_DEAL_FIELDS = [
   'deal_name', 'stage_name', 'funnel_name', 'amount',
-  'created_at', 'reserved_at', 'confirmed_at', 'sold_at', 'delivered_at', 'lost_at',
+  'created_at', 'logist_request_at', 'cheaper_price_at',
+  'reserved_at', 'confirmed_at', 'sold_at', 'delivered_at', 'lost_at',
 ];
