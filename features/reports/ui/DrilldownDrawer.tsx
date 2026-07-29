@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, ArrowLeft } from 'lucide-react';
+import { X, ArrowLeft, Copy, Check, MessageCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { DateRange } from '@/lib/period';
@@ -14,6 +14,7 @@ import { dealsCountLabel } from '@/lib/format/pluralize';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
+import { DealChatPanel } from './DealChatPanel';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
@@ -193,19 +194,60 @@ function sortDealsBy(arr: Deal[], dealSort: DealSort): Deal[] {
   });
 }
 
+// ── Чаты по сделкам: статусы тредов текущего пользователя (индикация кнопки) ──
+// null = права action.deal_chats нет (эндпоинт вернул 403) — кнопка не рендерится.
+type ChatStatusMap = Record<number, { status: 'sent' | 'replied'; unread: boolean }>;
+
+// Кнопки справа от названия (задача владельца 20.07): копировать ссылку CRM (всем)
+// и «Сообщение менеджеру» (право action.deal_chats). Прячутся до hover строки
+// (.row-reveal-item — на таче видны всегда, правило CLAUDE.md №5), НО кнопка
+// сообщения с существующим тредом видна всегда: зелёная — отправлено, красная —
+// есть непрочитанный ответ менеджера.
+function DealNameCell({ deal, chat }: {
+  deal: Deal;
+  chat: { map: ChatStatusMap; onOpen: (d: Deal) => void } | null;
+}) {
+  const [copied, setCopied] = useState(false);
+  const url = `https://td.monolit-crm.ru/crm/deal/details/${deal.deal_id}/`;
+  const st = chat?.map[deal.deal_id];
+  return (
+    <span className="flex items-center gap-0.5 max-w-[460px]">
+      <a href={url} target="_blank" rel="noopener noreferrer"
+         onClick={e => e.stopPropagation()}
+         className="truncate hover:text-[var(--color-accent)] hover:underline transition-colors" title={deal.deal_name}>
+        {deal.deal_name || '—'}
+      </a>
+      <button
+        onClick={e => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+        }}
+        className="row-reveal-item tap-target shrink-0 p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+        title="Копировать ссылку на сделку в Битриксе"
+      >
+        {copied ? <Check size={13} className="text-[var(--color-positive,#2f9e44)]" /> : <Copy size={13} />}
+      </button>
+      {chat && (
+        <button
+          onClick={e => { e.stopPropagation(); chat.onOpen(deal); }}
+          className={`${st ? '' : 'row-reveal-item '}tap-target shrink-0 p-0.5 transition-colors ${
+            st?.unread ? 'text-[var(--color-negative,#e03131)]'
+              : st ? 'text-[var(--color-positive,#2f9e44)]'
+              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+          title={st?.unread ? 'Есть ответ менеджера' : st ? 'Сообщение отправлено — открыть переписку' : 'Написать менеджеру через бота'}
+        >
+          <MessageCircle size={13} fill={st ? 'currentColor' : 'none'} />
+        </button>
+      )}
+    </span>
+  );
+}
+
 // ── Deal sub-table (row expansion in the mini-report / flat list) ───────────
 function dealCell(deal: Deal, key: string) {
   const def = DEAL_FIELDS.find(f => f.key === key);
   const v = (deal as unknown as Record<string, unknown>)[key] as string | null;
-  if (key === 'deal_name') {
-    return (
-      <a href={`https://td.monolit-crm.ru/crm/deal/details/${deal.deal_id}/`} target="_blank" rel="noopener noreferrer"
-         onClick={e => e.stopPropagation()}
-         className="block truncate max-w-[420px] hover:text-[var(--color-accent)] hover:underline transition-colors" title={deal.deal_name}>
-        {deal.deal_name || '—'}
-      </a>
-    );
-  }
   if (key === 'stage_name') {
     // Бейдж стадии (п.4 правок 09.07/2) — тот же цвет, что и полоска слева
     // (dealStageColor/ENTITY_COLOR, см. ниже). «В работе» — нейтральный серый бейдж
@@ -246,6 +288,24 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
 }) {
   // Column order follows the configured `fields` order.
   const cols = fields.map(k => DEAL_FIELDS.find(f => f.key === k)).filter(Boolean) as typeof DEAL_FIELDS;
+
+  // Статусы чатов по видимым сделкам (индикация кнопки «Сообщение»). 403 = права
+  // нет — statuses остаётся null и кнопка не рендерится вовсе; refetchInterval
+  // держит красную индикацию живой, пока дрилл-даун открыт.
+  const chatIdsKey = useMemo(() => deals.map(d => d.deal_id).sort((a, b) => a - b).join(','), [deals]);
+  const { data: chatData } = useQuery({
+    queryKey: ['deal-chat-statuses', chatIdsKey],
+    queryFn: async () => {
+      const res = await fetch(`/api/deal-chats?dealIds=${chatIdsKey}`);
+      if (!res.ok) return { statuses: null };
+      return res.json() as Promise<{ statuses: ChatStatusMap }>;
+    },
+    enabled: deals.length > 0,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
+  const chatStatuses: ChatStatusMap | null = chatData?.statuses ?? null;
+  const [chatDeal, setChatDeal] = useState<Deal | null>(null);
   // «Масштаб таблиц» ЛК (бриф 09.07, п.3): базовые 7px/12px (text-xs) масштабируются
   // ОБА на tableScale — тот же приём, что basePy/fontSize в ReportTable.tsx (line-height
   // text-xs — унитарный множитель, значит масштабируется вместе с fontSize сам), поэтому
@@ -280,7 +340,7 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
             <tr key={deal.deal_id}
                 onClick={onDealOpen ? () => onDealOpen(deal.deal_id) : undefined}
                 title={onDealOpen ? 'Открыть карточку сделки' : undefined}
-                className={`border-t border-[var(--color-border)] hover:bg-[var(--color-table-row-hover)] ${onDealOpen ? 'cursor-pointer' : ''} ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''}`}>
+                className={`row-reveal border-t border-[var(--color-border)] hover:bg-[var(--color-table-row-hover)] ${onDealOpen ? 'cursor-pointer' : ''} ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''}`}>
               {/* py-[var(--deals-row-py)] (база 7px, не py-1.5=6px, правка 09.07 «строка →
                   30px»): text-xs (12px) даёт line-height ~16px (Tailwind
                   --text-xs--line-height: 1/0.75), 7+16+7=30 — та же высота строки, что и в
@@ -301,7 +361,9 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
               {cols.map(c => (
                 <td key={c.key}
                     className={`px-3 py-[var(--deals-row-py)] whitespace-nowrap ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.kind !== 'text' ? 'text-[var(--color-text-muted)]' : ''} ${c.key === 'amount' ? 'font-medium !text-[var(--color-num,#000)]' : ''}`}>
-                  {dealCell(deal, c.key)}
+                  {c.key === 'deal_name'
+                    ? <DealNameCell deal={deal} chat={chatStatuses !== null ? { map: chatStatuses, onOpen: setChatDeal } : null} />
+                    : dealCell(deal, c.key)}
                 </td>
               ))}
               <td className="p-0" />
@@ -310,6 +372,14 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
           })}
         </tbody>
       </table>
+      {chatDeal && (
+        <DealChatPanel
+          dealId={chatDeal.deal_id}
+          dealName={chatDeal.deal_name}
+          managerName={chatDeal.manager_name}
+          onClose={() => setChatDeal(null)}
+        />
+      )}
     </div>
   );
 }
