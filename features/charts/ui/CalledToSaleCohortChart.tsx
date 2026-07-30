@@ -16,9 +16,11 @@ import type { CalledToSaleCohortPoint } from '../engine/types';
 // Продано M (sold)» — оба числа из того же point, второго запроса не нужно.
 
 // Формат денег — тот же, что в отчётах (fmtMoney в DrilldownDrawer.tsx):
-// «1 234 567 ₽». 0 — валидная сумма (не «—»).
+// «1 234 567 ₽». 0 — валидная сумма (не «—»). `|| 0` нормализует «-0»:
+// after на последней точке — total-before-day, float-остаток порядка 1e-8
+// может быть отрицательным и без нормализации печатался бы «-0 ₽».
 function fmtRub(v: number): string {
-  return v.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+  return (Math.round(v) || 0).toLocaleString('ru-RU') + ' ₽';
 }
 
 // Одна строка блока сумм: подпись, сумма, доля от общей суммы проданных.
