@@ -71,7 +71,9 @@ export async function GET(req: NextRequest) {
       metricKey: legacyTileStorageKey(k),
       label: LEGACY_TILE_LABELS[k],
     })),
-    metrics: visibleMetrics.map(m => ({ id: m.id, nameRu: m.nameRu, category: m.category, dataType: m.dataType })),
+    // isActive — для бейджа «вне отчётов» в пикере (метрика рабочая, но в общем
+    // каталоге отчётов скрыта — см. pickableMetricIds, задача 30.07).
+    metrics: visibleMetrics.map(m => ({ id: m.id, nameRu: m.nameRu, category: m.category, dataType: m.dataType, isActive: m.isActive })),
     maxAxes: MAX_AXES,
     // Плитки — без maxTiles (задача 10.07 карточка v4, п.1: «количество НЕ ограничено»).
   };
