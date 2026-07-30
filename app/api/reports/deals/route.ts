@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { resolveFilterClause } from '@/lib/metrics/sqlGen';
@@ -221,12 +222,29 @@ export async function GET(req: NextRequest) {
 
   // Подытог отдела: сделки менеджеров этого отдела (department_id из org_resolved_hierarchy)
   if (teamId) {
-    const res = await analyticsDb().query<{ id: string }>(
-      `SELECT manager_bitrix_user_id::text AS id
-         FROM sa.org_resolved_hierarchy
-        WHERE department_id = $1 AND is_active = true`,
-      [teamId],
-    );
+    // 'my' — сентинел «мои отделы по оргструктуре» из ЛК (/manager/me передаёт
+    // managerId="my", CategoryDealsList шлёт его сюда как teamId — см.
+    // features/manager-card/ui/ManagerCardPage.tsx). Фикс 30.07: раньше 'my'
+    // уходил сырым в uuid-параметр department_id → 22P02 `invalid input syntax
+    // for type uuid: "my"` (ошибки в app.log) → 500 → пустой список сделок.
+    // Резолв — тот же паттерн, что в app/api/manager-card/daily-sales/route.ts.
+    // Не-uuid значения (например '__no_team__' у группы «Без отдела») отсекаем ДО
+    // SQL — раньше любой такой teamId ронял запрос тем же 22P02; теперь честный
+    // пустой список (managerIdsWhere([]) → '1=0').
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const teamDeptIds = (teamId === 'my'
+      ? (session.bitrixUserId
+          ? (await getCallControlManagedDepts(session.bitrixUserId)).map(m => m.deptId)
+          : [])
+      : [teamId]).filter(id => UUID_RE.test(id));
+    const res = teamDeptIds.length
+      ? await analyticsDb().query<{ id: string }>(
+          `SELECT manager_bitrix_user_id::text AS id
+             FROM sa.org_resolved_hierarchy
+            WHERE department_id = ANY($1::uuid[]) AND is_active = true`,
+          [teamDeptIds],
+        )
+      : { rows: [] as { id: string }[] };
     dimensionFilter += ` AND ${managerIdsWhere(res.rows.map(r => r.id).filter(id => /^\d+$/.test(id)))}`;
   }
 

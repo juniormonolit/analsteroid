@@ -1042,6 +1042,17 @@ export function ReportTable({
         : `report-row ${rowBaseBg}`,
     ].join(' ');
 
+    // Клик/иконка «Открыть карточку менеджера» — ТОЛЬКО для строк реальных
+    // менеджеров (баг 30.07, репро владельца: при группировке «По филиалу»/«По
+    // отделу» агрегированные строки команд получают dimensionSubtitle «N чел.»
+    // (SalesReportPage, teamRows) и НЕ являются isGroupRow → иконка рисовалась и
+    // вела на /manager/__team__<uuid> — карточка падала «managerId (числовой
+    // bitrix_user_id) обязателен». Дискриминатор — служебный префикс «__» у
+    // агрегатов (__team__/__branch__/__total__, см. handleRowClick в
+    // SalesReportPage): у реальных менеджеров dimensionId — числовой bitrix id.
+    const subtitleClick = onSubtitleClick && !row.dimensionId.startsWith('__')
+      ? onSubtitleClick : undefined;
+
     return (
       <React.Fragment key={row.dimensionId}>
         <tr className={rowCls}>
@@ -1104,10 +1115,10 @@ export function ReportTable({
                   <span className="inline-flex items-center gap-1 flex-shrink-0 md:self-center">
                     <span
                       className={`text-[10px] leading-tight md:text-[11px] md:leading-normal text-[var(--color-text-muted)] font-normal ${
-                        onSubtitleClick ? 'hover:text-[var(--color-accent)] hover:underline transition-colors' : ''
+                        subtitleClick ? 'hover:text-[var(--color-accent)] hover:underline transition-colors' : ''
                       }`}
-                      onClick={onSubtitleClick ? (e) => { e.stopPropagation(); onSubtitleClick(row.dimensionId, row.dimensionName); } : undefined}
-                      title={onSubtitleClick ? 'Открыть карточку менеджера' : undefined}
+                      onClick={subtitleClick ? (e) => { e.stopPropagation(); subtitleClick(row.dimensionId, row.dimensionName); } : undefined}
+                      title={subtitleClick ? 'Открыть карточку менеджера' : undefined}
                     >
                       {row.dimensionSubtitle}
                     </span>
@@ -1119,9 +1130,9 @@ export function ReportTable({
                         (.hover-reveal, globals.css) — появляется по hover строки (класс
                         .group на <tr>) или фокусе; на тач/мобильном (<768px, объективно нет
                         курсорного hover) видна всегда — см. .report-card-icon override там же. */}
-                    {onSubtitleClick && (
+                    {subtitleClick && (
                       <button
-                        onClick={e => { e.stopPropagation(); onSubtitleClick(row.dimensionId, row.dimensionName); }}
+                        onClick={e => { e.stopPropagation(); subtitleClick(row.dimensionId, row.dimensionName); }}
                         title="Открыть карточку менеджера"
                         aria-label="Открыть карточку менеджера"
                         className="hover-reveal report-card-icon flex-shrink-0 inline-flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors"
