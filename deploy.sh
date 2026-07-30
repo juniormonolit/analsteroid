@@ -4,6 +4,30 @@ REMOTE="junior@62.113.100.67"
 KEY="$HOME/.ssh/ssh-key-1777295854643"
 REMOTE_DIR="/home/junior/analsteroid"
 
+BRANCH="dev-asteroid"
+
+# ── Гард свежести (правило «Git и деплой» в CLAUDE.md) ────────────────────────
+# Над dev-asteroid работают несколько агентов параллельно, и локальное дерево
+# устаревает за минуты. Если выкатить коммит, в который origin/dev-asteroid не влит,
+# прод откатится к состоянию БЕЗ чужих коммитов — это уже случалось. Проверяем до
+# сборки, чтобы не тратить пару минут на build, который всё равно нельзя катить.
+# Осознанный обход (например, срочный откат на старый коммит) — ALLOW_STALE_DEPLOY=1.
+if [ "${ALLOW_STALE_DEPLOY:-0}" != "1" ]; then
+  echo "==> Проверка свежести относительно origin/$BRANCH..."
+  if git fetch origin "$BRANCH" --quiet 2>/dev/null; then
+    if ! git merge-base --is-ancestor "origin/$BRANCH" HEAD; then
+      BEHIND=$(git rev-list --count "HEAD..origin/$BRANCH")
+      echo "!! origin/$BRANCH НЕ влит в HEAD — такая выкатка откатит прод."
+      echo "   Отстаём на $BEHIND коммит(ов). Сначала: git pull origin $BRANCH"
+      echo "   Если откат нужен осознанно: ALLOW_STALE_DEPLOY=1 bash deploy.sh"
+      exit 1
+    fi
+    echo "    ок — origin/$BRANCH влит в HEAD"
+  else
+    echo "    !! не удалось получить origin/$BRANCH (нет сети?) — проверка пропущена"
+  fi
+fi
+
 echo "==> Building..."
 npm run build
 
