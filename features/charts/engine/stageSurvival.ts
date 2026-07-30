@@ -103,7 +103,9 @@ export function amountWhere(
 // продажа по дням» по аналогии с третьим) — workDaysCohort.ts строит таблицу
 // дожития поверх ТЕХ ЖЕ строк, что и бакеты «work»-пресета здесь, вместо
 // копирования SQL.
-export interface SurvivalDealRow { dealId: number; days: number; sold: boolean; open: boolean }
+// amount — сумма сделки d.amount (NULL → 0), добавлена для сумм «до/в/после
+// дня» в тултипах lifeTable-графиков (задача 30.07); бакетам 1/2 не мешает.
+export interface SurvivalDealRow { dealId: number; days: number; sold: boolean; open: boolean; amount: number }
 
 // preset в самих SQL-запросах строк не участвует (диспетчеризация — в
 // fetchStageSurvival/fetchStageSurvivalDealIds ниже), поэтому fetchPricedRows/
@@ -156,7 +158,8 @@ SELECT
   c.deal_id AS deal_id,
   EXTRACT(EPOCH FROM COALESCE(e.exit_at, now()) - c.first_at) / 86400.0 AS days,
   (d.sold_at IS NOT NULL AND d.sold_at >= c.first_at) AS sold,
-  (e.exit_at IS NULL) AS open
+  (e.exit_at IS NULL) AS open,
+  COALESCE(d.amount, 0) AS amount
 FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
@@ -164,8 +167,8 @@ LEFT JOIN exit_event e ON e.deal_id = c.deal_id
 WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}${amtWhere}
   `.trim();
 
-  const res = await analyticsDb().query<{ deal_id: number; days: string; sold: boolean; open: boolean }>(sql, params);
-  return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open }));
+  const res = await analyticsDb().query<{ deal_id: number; days: string; sold: boolean; open: boolean; amount: string }>(sql, params);
+  return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open, amount: Number(r.amount) }));
 }
 
 // Базовые исключённые event_type у ЛЮБОГО 'work'-варианта: 'sold'/'shipped',
@@ -244,7 +247,8 @@ SELECT
   c.deal_id AS deal_id,
   COALESCE(w.days, 0) AS days,
   (d.sold_at IS NOT NULL AND d.sold_at >= c.first_at) AS sold,
-  COALESCE(w.open, false) AS open
+  COALESCE(w.open, false) AS open,
+  COALESCE(d.amount, 0) AS amount
 FROM cohort c
 LEFT JOIN work_time w ON w.deal_id = c.deal_id
 JOIN deals d ON d.deal_id = c.deal_id
@@ -252,8 +256,8 @@ JOIN funnels f ON f.id = d.funnel_id
 WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}${amtWhere}
   `.trim();
 
-  const res = await analyticsDb().query<{ deal_id: number; days: string; sold: boolean; open: boolean }>(sql, params);
-  return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open }));
+  const res = await analyticsDb().query<{ deal_id: number; days: string; sold: boolean; open: boolean; amount: string }>(sql, params);
+  return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open, amount: Number(r.amount) }));
 }
 
 // event_type ['reserved','confirmed'] — доп. исключение для пятого графика

@@ -34,7 +34,7 @@ export type WorkDaysCohortOptions = SurvivalRowOptions;
 function toLifeTableRows(rows: SurvivalDealRow[]): LifeTableRow[] {
   return rows.map(r => {
     const d = Math.floor(r.days);
-    return { dealId: r.dealId, eventDay: r.sold ? d : null, observedDays: d };
+    return { dealId: r.dealId, eventDay: r.sold ? d : null, observedDays: d, amount: r.amount };
   });
 }
 

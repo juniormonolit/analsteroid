@@ -15,6 +15,26 @@ import type { CalledToSaleCohortPoint } from '../engine/types';
 // ChartDrilldownPanel с сегментированным переключателем «Все N (cohort) /
 // Продано M (sold)» — оба числа из того же point, второго запроса не нужно.
 
+// Формат денег — тот же, что в отчётах (fmtMoney в DrilldownDrawer.tsx):
+// «1 234 567 ₽». 0 — валидная сумма (не «—»).
+function fmtRub(v: number): string {
+  return v.toLocaleString('ru-RU', { maximumFractionDigits: 0 }) + ' ₽';
+}
+
+// Одна строка блока сумм: подпись, сумма, доля от общей суммы проданных.
+function AmountRow({ label, value, total }: { label: string; value: number; total: number }) {
+  const pct = total > 0 ? Math.round((value / total) * 1000) / 10 : null;
+  return (
+    <div className="flex items-baseline justify-between gap-3 text-[var(--color-text-muted)]">
+      <span>{label}</span>
+      <span className="tabular-nums whitespace-nowrap">
+        <b className="text-[var(--color-text)]">{fmtRub(value)}</b>
+        <span className="ml-1">· {pct === null ? '—' : `${pct}%`}</span>
+      </span>
+    </div>
+  );
+}
+
 function CohortTooltip({ active, payload }: {
   active?: boolean;
   payload?: { payload: CalledToSaleCohortPoint }[];
@@ -27,6 +47,20 @@ function CohortTooltip({ active, payload }: {
       <div className="text-[var(--color-text-muted)]">дожили минимум {p.label} дн.: <b className="text-[var(--color-text)]">{p.cohort.toLocaleString('ru-RU')}</b></div>
       <div className="text-[var(--color-text-muted)]">продано именно на этот день: <b className="text-[var(--color-text)]">{p.sold.toLocaleString('ru-RU')}</b></div>
       <div className="text-[var(--color-text-muted)]">доля: <b className="text-[var(--color-text)]">{p.pct === null ? '—' : `${p.pct}%`}</b></div>
+      {/* Суммы проданного вокруг дня (задача 30.07, владелец: «навестись на
+          кагорту и понять сколько заработали слева, справа и сегодня») —
+          Σ d.amount проданных сделок по дням < N / = N / > N, доля от общей
+          суммы проданных когорты. before+day+after = total на каждой точке
+          (см. buildLifeTablePoints). Фильтры страницы (в т.ч. «Чек от/до»)
+          уже применены — суммы считаются по той же когорте, что и график. */}
+      {p.amounts && (
+        <div className="mt-1.5 pt-1.5 border-t border-[var(--color-border)]">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] mb-0.5">суммы проданного</div>
+          <AmountRow label="до этого дня" value={p.amounts.before} total={p.amounts.total} />
+          <AmountRow label="этот день" value={p.amounts.day} total={p.amounts.total} />
+          <AmountRow label="с этого дня (позже)" value={p.amounts.after} total={p.amounts.total} />
+        </div>
+      )}
       {/* Разбивка проданных дня по kc-группам (задача 2599) — блок появляется,
           только если точка её несёт (сейчас — пятый график, см. groups в
           engine/types.ts); у 3-го/4-го графиков поле пустое и тултип прежний. */}

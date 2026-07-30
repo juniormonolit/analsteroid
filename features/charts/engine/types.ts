@@ -35,11 +35,29 @@ export interface CalledToSaleCohortPoint {
   // (workExclReservedCohort.ts): топ-5 групп + «Прочие (k)»; Σ count = sold
   // точки. У 3-го/4-го графиков поля нет — тултип рисует блок по наличию.
   groups?: KcGroupSlice[];
+  // Суммы проданного до/в/после этого дня (задача 30.07, см. SoldAmountSplit
+  // ниже) — у всех lifeTable-графиков (3/4/5), тултип рисует блок по наличию.
+  amounts?: SoldAmountSplit;
 }
 
 export interface KcGroupSlice {
   name: string;   // имя группы из sa.product_groups; «Без группы» — product_group_id IS NULL; «Прочие (k)» — агрегат хвоста
   count: number;
+}
+
+// Суммы проданного вокруг дня N (задача 30.07, владелец: «В тултип графика
+// добавь суммы… чтобы можно было навестись на кагорту и понять сколько
+// заработали слева, справа и сегодня»). Величина — d.amount проданных сделок
+// (та же, что фильтр «Чек от/до» и список дрилл-дауна); NULL-amount считается
+// нулём. По построению before+day+after = total НА КАЖДОЙ точке (префиксные
+// суммы, без двойного счёта хвоста «31+» — его сумма входит в after всех
+// предыдущих точек и в day последней). Заполняется buildLifeTablePoints, когда
+// строки несут amount (графики 3/4/5 — lifeTable-карточки).
+export interface SoldAmountSplit {
+  before: number;  // Σ amount проданных на днях < N
+  day: number;     // Σ amount проданных ровно на день N
+  after: number;   // Σ amount проданных на днях > N
+  total: number;   // Σ amount всех проданных когорты (одно на все точки)
 }
 
 export interface CalledToSaleCohortResult {

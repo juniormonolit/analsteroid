@@ -87,18 +87,20 @@ SELECT
     ELSE NULL END AS event_day,
   CASE WHEN d.sold_at IS NOT NULL AND d.sold_at >= c.first_at
     THEN FLOOR(EXTRACT(EPOCH FROM d.sold_at - c.first_at) / 86400.0)
-    ELSE FLOOR(EXTRACT(EPOCH FROM now() - c.first_at) / 86400.0) END AS observed_days
+    ELSE FLOOR(EXTRACT(EPOCH FROM now() - c.first_at) / 86400.0) END AS observed_days,
+  COALESCE(d.amount, 0) AS amount
 FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
 WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}${amtWhere}
   `.trim();
 
-  const res = await analyticsDb().query<{ deal_id: number; event_day: string | null; observed_days: string }>(sql, params);
+  const res = await analyticsDb().query<{ deal_id: number; event_day: string | null; observed_days: string; amount: string }>(sql, params);
   return res.rows.map(r => ({
     dealId: Number(r.deal_id),
     eventDay: r.event_day === null ? null : Number(r.event_day),
     observedDays: Number(r.observed_days),
+    amount: Number(r.amount),
   }));
 }
 

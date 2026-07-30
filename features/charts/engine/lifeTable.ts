@@ -21,6 +21,9 @@ export interface LifeTableRow {
   dealId: number;
   eventDay: number | null;  // floor(день продажи), null — если не продана
   observedDays: number;     // floor(наблюдаемых дней): = eventDay, если продана, иначе «по сейчас»
+  // Сумма сделки d.amount (задача 30.07 — суммы «до/в/после дня» в тултипе).
+  // Используется только у ПРОДАННЫХ (eventDay !== null); NULL в БД → 0.
+  amount?: number;
 }
 
 export function buildLifeTablePoints(rows: LifeTableRow[], maxDay: number = LIFE_TABLE_MAX_DAY): CalledToSaleCohortResult {
@@ -28,6 +31,10 @@ export function buildLifeTablePoints(rows: LifeTableRow[], maxDay: number = LIFE
     ...Array.from({ length: maxDay + 1 }, (_, day) => ({ day, label: String(day), cohort: 0, sold: 0, pct: null as number | null })),
     { day: maxDay + 1, label: `${maxDay + 1}+`, cohort: 0, sold: 0, pct: null },
   ];
+  // Σ amount проданных ровно на день idx (задача 30.07 — суммы в тултипе);
+  // индексация тем же idx, что и points[idx].sold, хвост «(maxDay+1)+» — одна
+  // агрегированная точка, поэтому двойного счёта нет по построению.
+  const soldAmountAtDay = new Array<number>(points.length).fill(0);
 
   for (const r of rows) {
     // cohortAtLeastN: сколько сделок «дожили» минимум N дней, не продав раньше.
@@ -42,11 +49,26 @@ export function buildLifeTablePoints(rows: LifeTableRow[], maxDay: number = LIFE
     if (r.eventDay !== null) {
       const idx = r.eventDay <= maxDay ? r.eventDay : maxDay + 1;
       points[idx].sold += 1;
+      soldAmountAtDay[idx] += r.amount ?? 0;
     }
   }
 
   for (const p of points) {
     p.pct = p.cohort > 0 ? Math.round((p.sold / p.cohort) * 1000) / 10 : null;
+  }
+
+  // Суммы «до/в/после дня» (задача 30.07): префиксные суммы по soldAmountAtDay —
+  // before(N) + day(N) + after(N) = total НА КАЖДОЙ точке по построению.
+  // Заполняем, только если строки вообще несли amount (все 3 lifeTable-графика
+  // несут; если появится вызывающий без amount — тултип просто не покажет блок).
+  if (rows.some(r => r.amount !== undefined)) {
+    const total = soldAmountAtDay.reduce((s, v) => s + v, 0);
+    let before = 0;
+    for (let i = 0; i < points.length; i++) {
+      const day = soldAmountAtDay[i];
+      points[i].amounts = { before, day, after: total - before - day, total };
+      before += day;
+    }
   }
 
   const soldTotal = points.reduce((s, p) => s + p.sold, 0);
