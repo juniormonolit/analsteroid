@@ -91,34 +91,53 @@ function scheduleDailyMoscowReport() {
   const recipient = process.env.DAILY_REPORT_BITRIX_USER_ID;
   if (!recipient) return;
 
-  const SEND_HOUR = 18; // МСК
-  let lastSentDate = ''; // in-memory fallback, если Redis недоступен
+  // Окно отправки 18:00–19:59 МСК: тик раз в минуту, при неудаче — ПОВТОР на
+  // следующем тике (правка 30.07 после реального пропуска: Битрикс оборвал
+  // 10-мегабайтный ответ mlt.sales.list, отправка упала, а замок уже стоял —
+  // отчёт молча потерялся за день). Замок в Redis теперь ставится ТОЛЬКО ПОСЛЕ
+  // успешной отправки, до этого от гонки соседних инстансов защищает короткий
+  // «замок попытки» (2 мин) — он же не даёт двум процессам слать одновременно.
+  const SEND_HOUR_FROM = 18;
+  const SEND_HOUR_TO = 19; // включительно — запас на ретраи
+  let lastSentDate = '';   // in-memory fallback, если Redis недоступен
+  let running = false;
 
   const tick = async () => {
+    if (running) return;
     const msk = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' }); // 'YYYY-MM-DD HH:mm:ss'
     const [date, time] = msk.split(' ');
     const hour = parseInt(time.slice(0, 2), 10);
-    // Окно 18:00–18:59: тик раз в минуту, но защита по дате не даст отправить дважды.
-    if (hour !== SEND_HOUR || lastSentDate === date) return;
+    if (hour < SEND_HOUR_FROM || hour > SEND_HOUR_TO || lastSentDate === date) return;
 
+    running = true;
+    let redis: Awaited<ReturnType<typeof import('./lib/cache/redis')['getRedis']>> = null;
     try {
       const { getRedis } = await import('./lib/cache/redis');
-      const redis = getRedis();
+      redis = getRedis();
       if (redis) {
-        const acquired = await redis.set(`daily-report:sent:${date}`, '1', 'EX', 24 * 3600, 'NX');
-        if (acquired !== 'OK') { lastSentDate = date; return; }
+        // Уже отправлен другим инстансом сегодня?
+        if (await redis.get(`daily-report:sent:${date}`)) { lastSentDate = date; return; }
+        // Замок ПОПЫТКИ: кто-то прямо сейчас собирает отчёт — не дублируем.
+        const attempt = await redis.set(`daily-report:attempt:${date}`, '1', 'EX', 120, 'NX');
+        if (attempt !== 'OK') return;
       }
     } catch (err) {
-      console.warn('[dailyReport] Redis-замок недоступен, полагаюсь на in-memory флаг:', err);
+      console.warn('[dailyReport] Redis недоступен, полагаюсь на in-memory флаг:', err);
     }
-    lastSentDate = date;
 
     try {
       const { sendDailyMoscowReport } = await import('./lib/jobs/dailyMoscowReport');
       await sendDailyMoscowReport();
+      lastSentDate = date;
+      if (redis) await redis.set(`daily-report:sent:${date}`, '1', 'EX', 24 * 3600).catch(() => {});
       console.log(`[dailyReport] отчёт за ${date} отправлен пользователю ${recipient}`);
     } catch (err) {
-      console.error('[dailyReport] отправка не удалась:', err);
+      // НЕ ставим флаг «отправлено» — следующий тик (через минуту) попробует снова,
+      // пока не кончится окно 18:00–19:59.
+      console.error('[dailyReport] отправка не удалась, повтор через минуту:', err);
+      if (redis) await redis.del(`daily-report:attempt:${date}`).catch(() => {});
+    } finally {
+      running = false;
     }
   };
 

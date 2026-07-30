@@ -15,18 +15,25 @@ export async function bx(webhookUrl: string, method: string, params: Record<stri
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
-        signal: AbortSignal.timeout(15_000),
+        // 60с (было 15): mlt.sales.list за месяц отдаёт ~10 МБ — на 15 секундах
+        // большой ответ мог не долиться (реальный пропуск отчёта 30.07).
+        signal: AbortSignal.timeout(60_000),
       });
       const body = await res.json().catch(() => null);
       if (res.ok && body && !body.error) return body;
 
-      const code = body?.error || `HTTP ${res.status}`;
+      // HTTP 200, но тело не распарсилось — оборванный/битый ответ (Битрикс режет
+      // многомегабайтные payload'ы под нагрузкой). Это ТРАНЗИЕНТНАЯ ошибка: раньше
+      // код считал её фатальной («Bitrix mlt.sales.list: HTTP 200») и не повторял —
+      // из-за этого 30.07 потерялся ежедневный отчёт.
+      const truncated = res.ok && body === null;
+      const code = body?.error || (truncated ? 'BROKEN_RESPONSE' : `HTTP ${res.status}`);
       if (code === 'ACCESS_DENIED') {
         throw new Error(
           `Bitrix отказал в доступе к ${method} — у вебхука нет нужных прав. Проверьте настройки вебхука в Bitrix24.`
         );
       }
-      const retryable = code === 'QUERY_LIMIT_EXCEEDED' || res.status >= 500;
+      const retryable = code === 'QUERY_LIMIT_EXCEEDED' || code === 'BROKEN_RESPONSE' || res.status >= 500;
       if (!retryable) throw new Error(`Bitrix ${method}: ${code} ${body?.error_description || ''}`);
       lastError = new Error(`Bitrix ${method}: ${code} после ${MAX} попыток`);
     } catch (e) {
