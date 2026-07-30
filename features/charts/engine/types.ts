@@ -1,12 +1,6 @@
 // Общие типы кривой выживаемости — отдельно от stageSurvival.ts, чтобы клиентские
 // компоненты импортировали типы, не таща серверный модуль с db-клиентом.
-// 'work_excl_reserved' — пятый график (задача 2574, владелец 29.07, дословно:
-// «Добавь еще график аналогичный work, но исключающий стадии reserved и
-// confirmed»): та же WORK-когорта и алгоритм, что у 'work', но при суммировании
-// накопленного времени в работе доп. исключаются интервалы стадий с
-// event_type IN ('reserved','confirmed') — время ожидания на брони/подтверждении
-// не считается «работой менеджера». См. stageSurvival.ts fetchWorkRows.
-export type SurvivalPreset = 'priced' | 'work' | 'work_excl_reserved';
+export type SurvivalPreset = 'priced' | 'work';
 
 export interface SurvivalBucket {
   label: string;      // «0», «1», … «14–20», «30+»
@@ -42,4 +36,31 @@ export interface CalledToSaleCohortResult {
   cohortTotal: number;   // = points[0].cohort — вся когорта, вошедшая в период
   soldTotal: number;     // Σ sold по всем точкам
   overallPct: number | null;
+}
+
+// Пятый график, ВЕРСИЯ 2 (задача 2574, владелец 30.07, дословно: «показывать
+// не только продажу, но и бронь/отгрузку... на какой день конверсия в
+// бронь/продажу/отгрузку настолько ничтожна, чтобы не париться»). Три линии
+// вместо одной (reserved/sold/shipped) поверх ТОЙ ЖЕ когорты и той же шкалы
+// дней (работа без reserved/confirmed), что версия 1 — серые столбики
+// «дожили минимум N дней» общие на все три линии, каждая линия — своё
+// событие «ушла ровно на день N» (d.reserved_at / d.sold_at / d.delivered_at
+// на сделке). ВАЖНО: одна и та же сделка обычно проходит бронь → продажу →
+// отгрузку в разные дни, поэтому попадает в разные линии на разных точках —
+// сумма трёх линий НЕ равна когорте и линии друг из друга не вычитаются.
+export interface MilestoneCohortPoint {
+  day: number;              // 0..30, затем один агрегированный «31+» с day=31
+  label: string;             // «0» … «30», «31+»
+  cohort: number;             // «дожили» минимум day дней (та же для всех трёх линий)
+  reserved: number;           // ушли в бронь (reserved_at) ровно на этот день
+  sold: number;                // ушли в продажу (sold_at) ровно на этот день
+  shipped: number;             // ушли в отгрузку (delivered_at) ровно на этот день
+}
+
+export interface MilestoneCohortResult {
+  points: MilestoneCohortPoint[];
+  cohortTotal: number;
+  reservedTotal: number;
+  soldTotal: number;
+  shippedTotal: number;
 }

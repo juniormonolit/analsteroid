@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
-import { fetchStageSurvival, type SurvivalPreset } from '@/features/charts/engine/stageSurvival';
+import { fetchWorkExclReservedMilestoneCohort } from '@/features/charts/engine/workExclReservedCohort';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 
-// Кривая «вероятность продажи от дней в стадии» (раздел «Графики», задача 28.07).
-// POST { preset: 'priced'|'work', period: {from,to}, dealScope?, clientType?, departmentIds? }
+// Пятый график, подача life table с ТРЕМЯ линиями (раздел «Графики», задача
+// 2574: 28.07 v1 бакеты/CR%, 29.07 v2 переделка «по аналогии с 3 и 4», 30.07
+// v3 — владелец попросил добавить линии брони/отгрузки, не только продажу).
+// Тот же паттерн валидации/прав, что app/api/charts/work-days-cohort/route.ts
+// (тот же движок life table, см. features/charts/engine/lifeTable.ts, вызван
+// трижды в workExclReservedCohort.ts). «Дни» считаются БЕЗ времени в стадиях
+// reserved/confirmed.
+// POST { period: {from,to}, dealScope?, clientType?, departmentIds?, productGroupMode?, productGroupIds? }
 
 interface PeriodInput { from: string; to: string }
 
@@ -31,7 +37,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const preset = body.preset === 'work' ? 'work' : 'priced' as SurvivalPreset;
   const period = parsePeriod(body.period);
   if (!period) return NextResponse.json({ error: 'Invalid period' }, { status: 400 });
 
@@ -43,9 +48,6 @@ export async function POST(req: NextRequest) {
     ? (body.departmentIds as unknown[]).filter((x): x is string => typeof x === 'string')
     : undefined;
 
-  // Фильтр товарных групп (задача 29.07): мультиселект + шкала. Валидация формы —
-  // сама фильтрация значений (числа для kc / строки для by_max) делает
-  // productGroupFilter.ts параметризованным запросом.
   const productGroupMode: ProductGroupMode = body.productGroupMode === 'by_max' ? 'by_max' : 'kc';
   let productGroupIds: string[] | undefined;
   if (body.productGroupIds !== undefined) {
@@ -56,6 +58,6 @@ export async function POST(req: NextRequest) {
     productGroupIds = body.productGroupIds as string[];
   }
 
-  const result = await fetchStageSurvival({ preset, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds });
+  const result = await fetchWorkExclReservedMilestoneCohort({ period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds });
   return NextResponse.json({ result });
 }
