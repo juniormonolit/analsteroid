@@ -34,6 +34,10 @@ export interface ChartDrilldownRequest {
   productGroupMode: ProductGroupMode;
   productGroupIds: string[];
   departmentIds: string[];
+  // «Чек от/до» (задача 30.07) — те же границы, что строили когорту графика;
+  // без них список сделок точки разъехался бы с числом на столбике.
+  amountFrom?: number;
+  amountTo?: number;
 }
 
 // Опция сегментированного переключателя. Появилась для пятого графика v3 (три
@@ -81,6 +85,8 @@ async function fetchChartDeals(req: ChartDrilldownRequest, key: string): Promise
       departmentIds: req.departmentIds,
       productGroupMode: req.productGroupMode,
       productGroupIds: req.productGroupIds,
+      amountFrom: req.amountFrom,
+      amountTo: req.amountTo,
     }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -123,7 +129,8 @@ export function ChartDrilldownPanel({ target, onClose }: { target: ChartDrilldow
           <DealsListBody
             fetchOverride={{
               key: [target.request.endpoint, JSON.stringify(target.request.baseBody), selected, target.request.period.from, target.request.period.to,
-                target.request.dealScope, target.request.clientType, target.request.productGroupMode, target.request.productGroupIds, target.request.departmentIds],
+                target.request.dealScope, target.request.clientType, target.request.productGroupMode, target.request.productGroupIds, target.request.departmentIds,
+                target.request.amountFrom, target.request.amountTo],
               fn: () => fetchChartDeals(target.request, selected),
             }}
             onDealOpen={setOpenDealId}

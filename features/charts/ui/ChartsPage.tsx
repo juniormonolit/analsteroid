@@ -32,7 +32,7 @@ function defaultSurvivalPeriod(): DateRange {
 
 function SurvivalCard({
   preset, title, subtitle, period, dealScope, clientType, departmentIds, departmentsReady,
-  productGroupMode, productGroupIds, onDrilldown,
+  productGroupMode, productGroupIds, amountFrom, amountTo, onDrilldown,
 }: {
   preset: SurvivalPreset;
   title: string;
@@ -44,17 +44,19 @@ function SurvivalCard({
   departmentsReady: boolean;
   productGroupMode: ProductGroupMode;
   productGroupIds: string[];
+  amountFrom?: number;
+  amountTo?: number;
   onDrilldown: (target: ChartDrilldownTarget) => void;
 }) {
   const { data, isLoading, isError } = useQuery<{ result: SurvivalResult | null }>({
-    queryKey: ['stage-survival', preset, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
+    queryKey: ['stage-survival', preset, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, amountFrom, amountTo],
     queryFn: async () => {
       const res = await fetch('/api/charts/stage-survival', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           preset, period: { from: period.from, to: period.to }, dealScope, clientType, departmentIds,
-          productGroupMode, productGroupIds,
+          productGroupMode, productGroupIds, amountFrom, amountTo,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -101,6 +103,7 @@ function SurvivalCard({
                 endpoint: '/api/charts/stage-survival/deals',
                 baseBody: { preset, bucketLabel: bucket.label },
                 period, dealScope, clientType, productGroupMode, productGroupIds, departmentIds,
+                amountFrom, amountTo,
               },
             })}
           />
@@ -141,7 +144,7 @@ interface LifeTableCardConfig {
 
 function LifeTableCard({
   config, period, dealScope, clientType, departmentIds, departmentsReady,
-  productGroupMode, productGroupIds, onDrilldown,
+  productGroupMode, productGroupIds, amountFrom, amountTo, onDrilldown,
 }: {
   config: LifeTableCardConfig;
   period: DateRange;
@@ -151,17 +154,19 @@ function LifeTableCard({
   departmentsReady: boolean;
   productGroupMode: ProductGroupMode;
   productGroupIds: string[];
+  amountFrom?: number;
+  amountTo?: number;
   onDrilldown: (target: ChartDrilldownTarget) => void;
 }) {
   const { data, isLoading, isError } = useQuery<{ result: CalledToSaleCohortResult | null }>({
-    queryKey: [config.queryKeyPrefix, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
+    queryKey: [config.queryKeyPrefix, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, amountFrom, amountTo],
     queryFn: async () => {
       const res = await fetch(config.fetchUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           period: { from: period.from, to: period.to }, dealScope, clientType, departmentIds,
-          productGroupMode, productGroupIds,
+          productGroupMode, productGroupIds, amountFrom, amountTo,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -207,6 +212,7 @@ function LifeTableCard({
                 endpoint: config.dealsUrl,
                 baseBody: { day: point.day },
                 period, dealScope, clientType, productGroupMode, productGroupIds, departmentIds,
+                amountFrom, amountTo,
               },
             })}
           />
@@ -283,6 +289,28 @@ export function ChartsPage() {
   const [productGroupMode, setProductGroupMode] = useState<ProductGroupMode>('kc');
   const [productGroupIds, setProductGroupIds] = useState<string[]>([]);
 
+  // Фильтр «Чек от/до» по сумме сделки d.amount (задача 30.07, владелец:
+  // «фильтр по сумме сделки, чтобы можно было выставить "Чек От или до"»).
+  // Черновик (строки в инпутах) отделён от применённых чисел: применяем по
+  // blur/Enter, а не на каждый ввод символа — каждый refetch здесь = тяжёлые
+  // когорты по deal_events. from > to — мягкая подсветка, не применяем и не
+  // роняем страницу (границы остаются прежними).
+  const [amountFromStr, setAmountFromStr] = useState('');
+  const [amountToStr, setAmountToStr] = useState('');
+  const [amountFrom, setAmountFrom] = useState<number | undefined>(undefined);
+  const [amountTo, setAmountTo] = useState<number | undefined>(undefined);
+  const draftFrom = amountFromStr.trim() === '' ? undefined : Number(amountFromStr.replace(',', '.'));
+  const draftTo = amountToStr.trim() === '' ? undefined : Number(amountToStr.replace(',', '.'));
+  const amountInvalid =
+    (draftFrom !== undefined && (!Number.isFinite(draftFrom) || draftFrom < 0)) ||
+    (draftTo !== undefined && (!Number.isFinite(draftTo) || draftTo < 0)) ||
+    (draftFrom !== undefined && draftTo !== undefined && Number.isFinite(draftFrom) && Number.isFinite(draftTo) && draftFrom > draftTo);
+  const applyAmount = () => {
+    if (amountInvalid) return; // невалидный диапазон не применяем
+    setAmountFrom(draftFrom !== undefined && Number.isFinite(draftFrom) ? draftFrom : undefined);
+    setAmountTo(draftTo !== undefined && Number.isFinite(draftTo) ? draftTo : undefined);
+  };
+
   // Дрилл-даун списка сделок по клику на когорту (задача 2546, владелец 29.07) —
   // одна панель на все три кривые, открывается целью, которую собирает
   // SurvivalCard/LifeTableCard в onDrilldown ниже.
@@ -344,6 +372,44 @@ export function ChartsPage() {
           options={pgCatalog?.groups ?? []}
           loading={pgCatalogLoading}
         />
+        {tab === 'survival' && (
+          <div
+            className={`flex items-center gap-1.5 border rounded-lg px-2 py-1 text-sm bg-[var(--color-bg-surface)] ${amountInvalid ? 'border-[var(--color-negative)]' : 'border-[var(--color-border)]'}`}
+            title={amountInvalid ? '«Чек от» больше, чем «до» — фильтр не применён' : 'Фильтр по сумме сделки (d.amount). Применяется по Enter или уходу из поля.'}
+          >
+            <span className="text-[var(--color-text-muted)] text-xs whitespace-nowrap">Чек от</span>
+            <input
+              inputMode="numeric"
+              value={amountFromStr}
+              onChange={e => setAmountFromStr(e.target.value)}
+              onBlur={applyAmount}
+              onKeyDown={e => { if (e.key === 'Enter') applyAmount(); }}
+              placeholder="0"
+              className="w-20 bg-transparent outline-none text-[var(--color-text)] tabular-nums placeholder:text-[var(--color-text-muted)]"
+              aria-label="Чек от"
+              aria-invalid={amountInvalid || undefined}
+            />
+            <span className="text-[var(--color-text-muted)] text-xs">до</span>
+            <input
+              inputMode="numeric"
+              value={amountToStr}
+              onChange={e => setAmountToStr(e.target.value)}
+              onBlur={applyAmount}
+              onKeyDown={e => { if (e.key === 'Enter') applyAmount(); }}
+              placeholder="∞"
+              className="w-20 bg-transparent outline-none text-[var(--color-text)] tabular-nums placeholder:text-[var(--color-text-muted)]"
+              aria-label="Чек до"
+              aria-invalid={amountInvalid || undefined}
+            />
+            {(amountFrom !== undefined || amountTo !== undefined) && (
+              <button
+                onClick={() => { setAmountFromStr(''); setAmountToStr(''); setAmountFrom(undefined); setAmountTo(undefined); }}
+                className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-0.5"
+                aria-label="Сбросить фильтр по сумме"
+              >×</button>
+            )}
+          </div>
+        )}
       </div>
 
       {tab === 'survival' ? (
@@ -358,6 +424,7 @@ export function ChartsPage() {
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              amountFrom={amountFrom} amountTo={amountTo}
               onDrilldown={setDrilldown}
             />
             <SurvivalCard
@@ -367,6 +434,7 @@ export function ChartsPage() {
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              amountFrom={amountFrom} amountTo={amountTo}
               onDrilldown={setDrilldown}
             />
             {/* Пятый график (задачи 2574/2599, история версий — в
@@ -378,6 +446,7 @@ export function ChartsPage() {
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              amountFrom={amountFrom} amountTo={amountTo}
               onDrilldown={setDrilldown}
             />
             {/* Четвёртый график (задача 2553, 29.07) — сразу под своим «источником»
@@ -387,6 +456,7 @@ export function ChartsPage() {
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              amountFrom={amountFrom} amountTo={amountTo}
               onDrilldown={setDrilldown}
             />
             <LifeTableCard
@@ -394,6 +464,7 @@ export function ChartsPage() {
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              amountFrom={amountFrom} amountTo={amountTo}
               onDrilldown={setDrilldown}
             />
           </div>

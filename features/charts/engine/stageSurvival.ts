@@ -34,6 +34,14 @@ export interface SurvivalOptions {
   // productGroupIds = все группы (текущее поведение, без регрессии).
   productGroupMode?: ProductGroupMode;
   productGroupIds?: string[];
+  // Фильтр по сумме сделки «Чек от/до» (задача 30.07, владелец: «фильтр по
+  // сумме сделки, чтобы можно было выставить "Чек От или до"»). Поле — d.amount:
+  // та же сумма, что показывает список сделок дрилл-дауна и total_amount
+  // (lib/reports/dealsByIds.ts). Обе границы включительные; undefined = без
+  // ограничения (поведение по умолчанию не меняется). ВАЖНО: при заданной
+  // границе сделки с amount IS NULL отсекаются (SQL-сравнение с NULL).
+  amountFrom?: number;
+  amountTo?: number;
 }
 
 // Корзины дней: 0..13 по дню, дальше огрубляем — хвост тонкий, по дню он шумит.
@@ -71,6 +79,26 @@ export function departmentsWhere(paramIdx: number): string {
 // один паттерн на весь модуль + calledToSaleCohort.ts.
 export const CALLED_PRICED_STAGE_ILIKE = 'Созвонился и озвучил%';
 
+// Фильтр «Чек от/до» по d.amount — общий для обоих row-фетчеров здесь и
+// calledToSaleCohort.ts (тот же принцип, что scopeWhere/departmentsWhere:
+// один источник правды). МУТИРУЕТ params (push значений), возвращает SQL-хвост
+// с продолжением нумерации $N — тот же контракт, что buildProductGroupFilter.
+export function amountWhere(
+  params: unknown[],
+  opts: { amountFrom?: number; amountTo?: number },
+): string {
+  let sql = '';
+  if (opts.amountFrom !== undefined && Number.isFinite(opts.amountFrom)) {
+    params.push(opts.amountFrom);
+    sql += ` AND d.amount >= $${params.length}`;
+  }
+  if (opts.amountTo !== undefined && Number.isFinite(opts.amountTo)) {
+    params.push(opts.amountTo);
+    sql += ` AND d.amount <= $${params.length}`;
+  }
+  return sql;
+}
+
 // Экспортирован (задача 2553, владелец 29.07: четвёртый график «В работе →
 // продажа по дням» по аналогии с третьим) — workDaysCohort.ts строит таблицу
 // дожития поверх ТЕХ ЖЕ строк, что и бакеты «work»-пресета здесь, вместо
@@ -102,6 +130,7 @@ async function fetchPricedRows(opts: SurvivalRowOptions): Promise<SurvivalDealRo
     params.push(...pgFilter.params);
     pgWhere = `AND ${pgFilter.sql}`;
   }
+  const amtWhere = amountWhere(params, opts);
 
   const sql = `
 WITH target_stages AS (
@@ -132,7 +161,7 @@ FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
 LEFT JOIN exit_event e ON e.deal_id = c.deal_id
-WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
+WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}${amtWhere}
   `.trim();
 
   const res = await analyticsDb().query<{ deal_id: number; days: string; sold: boolean; open: boolean }>(sql, params);
@@ -179,6 +208,7 @@ export async function fetchWorkRows(
     params.push(...pgFilter.params);
     pgWhere = `AND ${pgFilter.sql}`;
   }
+  const amtWhere = amountWhere(params, opts);
 
   const sql = `
 WITH cohort_stages AS (
@@ -219,7 +249,7 @@ FROM cohort c
 LEFT JOIN work_time w ON w.deal_id = c.deal_id
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
-WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
+WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}${amtWhere}
   `.trim();
 
   const res = await analyticsDb().query<{ deal_id: number; days: string; sold: boolean; open: boolean }>(sql, params);

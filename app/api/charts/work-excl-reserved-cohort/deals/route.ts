@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { fetchWorkExclReservedCohortDealIds } from '@/features/charts/engine/workExclReservedCohort';
 import { fetchDealsByIds } from '@/lib/reports/dealsByIds';
+import { parseAmountRange } from '@/features/charts/engine/amountParam';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 
 // Дрилл-даун списка сделок одного дня когорты «В работе (без брони/подтв.) →
@@ -64,8 +65,12 @@ export async function POST(req: NextRequest) {
     productGroupIds = body.productGroupIds as string[];
   }
 
+  // «Чек от/до» (задача 30.07): границы по d.amount, пусто = без ограничения.
+  const amt = parseAmountRange(body);
+  if (!amt.ok) return NextResponse.json({ error: amt.error }, { status: 400 });
+
   const dealIds = await fetchWorkExclReservedCohortDealIds({
-    period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, day, filter,
+    period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, amountFrom: amt.amountFrom, amountTo: amt.amountTo, day, filter,
   });
   if (dealIds === null) return NextResponse.json({ deals: [], total_count: 0, total_amount: 0 });
 

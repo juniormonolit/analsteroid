@@ -2,7 +2,7 @@ import { analyticsDb } from '@/lib/db/clients';
 import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { DEAL_EVENTS_DATA_START } from '@/features/reports/engine/managerActivity';
 import { buildProductGroupFilter } from '@/features/reports/engine/productGroupFilter';
-import { scopeWhere, departmentsWhere } from './stageSurvival';
+import { scopeWhere, departmentsWhere, amountWhere } from './stageSurvival';
 import { buildLifeTablePoints, selectLifeTableDealIds, LIFE_TABLE_MAX_DAY, type LifeTableRow } from './lifeTable';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 import type { CalledToSaleCohortResult } from './types';
@@ -35,6 +35,10 @@ export interface CalledToSaleCohortOptions {
   departmentIds?: string[];
   productGroupMode?: ProductGroupMode;
   productGroupIds?: string[];
+  // «Чек от/до» по d.amount (задача 30.07) — та же семантика, что в
+  // SurvivalOptions (stageSurvival.ts), границы включительные.
+  amountFrom?: number;
+  amountTo?: number;
 }
 
 // Дни 0..30 поштучно, дальше — один агрегированный «хвост».
@@ -57,6 +61,7 @@ async function fetchRows(opts: CalledToSaleCohortOptions): Promise<LifeTableRow[
     params.push(...pgFilter.params);
     pgWhere = `AND ${pgFilter.sql}`;
   }
+  const amtWhere = amountWhere(params, opts);
 
   // Те же CTE target_stages/first_entry/cohort, что и fetchPricedRows в
   // stageSurvival.ts (когорта идентична — та же стадия, тот же период), но без
@@ -86,7 +91,7 @@ SELECT
 FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
-WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
+WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}${amtWhere}
   `.trim();
 
   const res = await analyticsDb().query<{ deal_id: number; event_day: string | null; observed_days: string }>(sql, params);

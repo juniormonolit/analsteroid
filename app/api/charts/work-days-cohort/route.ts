@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
+import { parseAmountRange } from '@/features/charts/engine/amountParam';
 import { fetchWorkDaysCohort } from '@/features/charts/engine/workDaysCohort';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 
@@ -54,6 +55,10 @@ export async function POST(req: NextRequest) {
     productGroupIds = body.productGroupIds as string[];
   }
 
-  const result = await fetchWorkDaysCohort({ period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds });
+  // «Чек от/до» (задача 30.07): границы по d.amount, пусто = без ограничения.
+  const amt = parseAmountRange(body);
+  if (!amt.ok) return NextResponse.json({ error: amt.error }, { status: 400 });
+
+  const result = await fetchWorkDaysCohort({ period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, amountFrom: amt.amountFrom, amountTo: amt.amountTo });
   return NextResponse.json({ result });
 }
