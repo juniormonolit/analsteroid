@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { managerAccessError } from '@/lib/org/managerAccess';
 import { buildManagerActivity } from '@/features/manager-card/engine/activityCalendar';
 
 // «График работы» менеджера (таб карточки, задача Иосифа 16.07): окна как у
@@ -17,6 +18,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'managerId обязателен' }, { status: 400 });
   }
   const windowDays = WINDOWS[window] ?? WINDOWS.all;
+
+  const accessErr = await managerAccessError(session, String(managerId));
+  if (accessErr) return accessErr;
 
   try {
     const result = await buildManagerActivity(String(managerId), windowDays);

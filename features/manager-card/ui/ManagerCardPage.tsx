@@ -294,7 +294,12 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
             </div>
           </div>
 
-          <div className="flex items-center gap-4 shrink-0">
+          {/* На узком экране (375px, в т.ч. мобильный Битрикс) содержимое этого
+              блока — кнопка + кольцо + ранги — суммарно ~505px: с shrink-0 и без
+              переноса оно уезжало за край и ОБРЕЗАЛОСЬ, ранги были не видны вовсе.
+              Поэтому на мобильном блок занимает всю ширину и переносится, а с sm —
+              прежнее поведение (нерастяжимая группа справа). */}
+          <div className="flex items-center gap-3 sm:gap-4 flex-wrap w-full sm:w-auto sm:shrink-0">
             <button
               onClick={copyReport}
               disabled={!planFact}

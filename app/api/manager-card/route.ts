@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { buildManagerCard, type CardSegment } from '@/features/manager-card/engine/managerCard';
 import { getManagerAvatarUrl } from '@/lib/bitrix/managerAvatar';
+import { managerAccessError } from '@/lib/org/managerAccess';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 
 // Карточка менеджера (экран 1 мокапа manager-card-mock.html, MVP): профиль +
@@ -33,6 +34,10 @@ export async function POST(req: NextRequest) {
   if (productGroupMode !== undefined && !['kc', 'by_max'].includes(productGroupMode)) {
     return NextResponse.json({ error: 'productGroupMode должен быть kc/by_max' }, { status: 400 });
   }
+
+  // Чужая карточка — только руководству и РОПу своего отдела (lib/org/managerAccess.ts)
+  const accessErr = await managerAccessError(session, managerId);
+  if (accessErr) return accessErr;
 
   const start = Date.now();
   // Аватар из Битрикса — параллельно с карточкой («Карточка 10.0»); кэш с TTL,

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const PUBLIC = ['/login', '/api/auth/login', '/invite', '/bot-avatar.png'];
+// '/bx' — страницы, встроенные в Битрикс: редирект на /login внутри iframe портала
+// показал бы форму входа вместо кабинета, поэтому гейт пропускает их, а сессию
+// проверяет сама страница и объясняет причину человеку (app/(embed)/bx/manager).
+const PUBLIC = ['/login', '/api/auth/login', '/invite', '/bot-avatar.png', '/bx'];
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;

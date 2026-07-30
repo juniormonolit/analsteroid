@@ -7,6 +7,7 @@ import { getSession } from '@/lib/auth/session';
 import { analyticsDb } from '@/lib/db/clients';
 import { resolveManagersForDepartments, getUserDepartmentOptions } from '@/lib/org/teamRoster';
 import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
+import { managerAccessError, hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -22,6 +23,13 @@ export async function POST(req: NextRequest) {
     let managerIds: string[];
     if (body.mode === 'department') {
       const departmentId = String(body.departmentId ?? '');
+      // Явный uuid — только подконтрольный (см. plan-fact: тот же рубеж)
+      if (departmentId !== 'my' && departmentId !== 'all' && !hasFullManagerAccess(session)) {
+        const allowed = await managedDepartmentIds(session);
+        if (!allowed.includes(departmentId)) {
+          return NextResponse.json({ error: 'Отдел недоступен' }, { status: 403 });
+        }
+      }
       // 'my' — отделы по оргструктуре «Контроля звонков» (ЛК РОПа/директора)
       const deptIds = departmentId === 'my'
         ? (session.bitrixUserId ? (await getCallControlManagedDepts(session.bitrixUserId)).map(m => m.deptId) : [])
@@ -32,6 +40,8 @@ export async function POST(req: NextRequest) {
     } else {
       const managerId = String(body.managerId ?? '');
       if (!/^\d+$/.test(managerId)) return NextResponse.json({ error: 'managerId (число) обязателен' }, { status: 400 });
+      const accessErr = await managerAccessError(session, managerId);
+      if (accessErr) return accessErr;
       managerIds = [managerId];
     }
     const idsNum = managerIds.map(Number).filter(n => Number.isInteger(n) && n > 0);

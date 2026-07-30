@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
+import { canViewManager, hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import { ManagerCardPage } from '@/features/manager-card/ui/ManagerCardPage';
 
 // ЛК менеджера: /manager/<bitrix_user_id> — карточка менеджера;
@@ -17,6 +18,20 @@ export default async function Page({ params, searchParams }: {
   const sp = await searchParams;
   const mode = sp.mode === 'department' ? 'department' as const : 'manager' as const;
   const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v : undefined);
+
+  // Доступ (задача 30.07, «Вариант Б»): менеджер — только себя, РОП — свой отдел,
+  // руководство — всех. Второй рубеж — в /api/manager-card/* (lib/org/managerAccess.ts).
+  const allowed = mode === 'manager'
+    ? await canViewManager(session, id)
+    : hasFullManagerAccess(session) || id === 'my' || id === 'all'
+      || (await managedDepartmentIds(session)).includes(id);
+  if (!allowed) {
+    return (
+      <div className="p-6 text-sm text-[var(--color-text-muted)]">
+        Эта карточка вам недоступна. Своя — в разделе «Мой ЛК».
+      </div>
+    );
+  }
 
   return (
     <ManagerCardPage
