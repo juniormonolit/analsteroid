@@ -9,6 +9,7 @@ import {
 } from '@/lib/org/teamRoster';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
+import { canViewDepartmentData } from '@/lib/org/managerAccess';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 
 // «Карточка отдела» (карточка менеджера v2, бриф 10.07, п.3) — та же форма, что
@@ -25,11 +26,12 @@ export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const allowedRole = session.isSuperadmin
-    || session.roleName === 'Директор'
-    || session.roleName === 'Администратор'
-    || session.roleName === 'РОП';
-  if (!allowedRole) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  // Роль ИЛИ фактическое руководство отделом по оргструктуре — см.
+  // lib/org/managerAccess.ts (иначе РОП, автосозданный при входе из Битрикса,
+  // получал 403 на свою же карточку отдела).
+  if (!(await canViewDepartmentData(session))) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const body = await req.json().catch(() => ({}));
   const { period, comparisonPeriod, segment = 'all' as CardSegment, departmentId, productGroupMode } = body;

@@ -5,6 +5,7 @@ import type { CardSegment } from '@/features/manager-card/engine/managerCard';
 import {
   getUserDepartmentOptions, getRootDepartmentOptions, resolveManagersForDepartments,
 } from '@/lib/org/teamRoster';
+import { canViewDepartmentData } from '@/lib/org/managerAccess';
 
 // ФИФА-сетка «Мой отдел» (карточка менеджера v2, бриф 10.07, п.1). Видимость —
 // РЕШЕНИЕ (см. отчёт задачи): роли РОП/Директор/Администратор + супер-админ.
@@ -23,11 +24,10 @@ export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const allowedRole = session.isSuperadmin
-    || session.roleName === 'Директор'
-    || session.roleName === 'Администратор'
-    || session.roleName === 'РОП';
-  if (!allowedRole) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  // Роль ИЛИ фактическое руководство отделом (lib/org/managerAccess.ts)
+  if (!(await canViewDepartmentData(session))) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const body = await req.json().catch(() => ({}));
   const { period, segment = 'all' as CardSegment, departmentId } = body;

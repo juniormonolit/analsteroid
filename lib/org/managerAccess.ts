@@ -41,6 +41,23 @@ export async function canViewManager(session: SessionUser, managerBitrixId: stri
   return roster.some(m => m.managerId === managerBitrixId);
 }
 
+/**
+ * Пускать ли к «отделочным» данным (карточка отдела, ФИФА-грид).
+ *
+ * Раньше это была проверка ТОЛЬКО по названию роли (РОП/Директор/Администратор), и
+ * с автосозданием аккаунтов из Битрикса она ломалась: РОП, которого ещё нет в
+ * приложении, получает роль «Пользователь» — страница по оргструктуре открывает ему
+ * режим отдела, а API отвечал 403. Поэтому право теперь даёт и ФАКТИЧЕСКОЕ
+ * руководство отделом по структуре «Контроля звонков» — тот же источник, по которому
+ * страница и решает, что показать. Роль остаётся как ручной рычаг для тех, кто
+ * руководит не по структуре.
+ */
+export async function canViewDepartmentData(session: SessionUser): Promise<boolean> {
+  if (hasFullManagerAccess(session) || session.roleName === 'РОП') return true;
+  if (!session.bitrixUserId) return false;
+  return (await getCallControlManagedDepts(session.bitrixUserId)).length > 0;
+}
+
 /** Для API-роутов: Response 403 либо null, если доступ есть. Сессию проверяет вызывающий. */
 export async function managerAccessError(
   session: SessionUser,
