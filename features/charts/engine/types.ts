@@ -1,6 +1,12 @@
 // Общие типы кривой выживаемости — отдельно от stageSurvival.ts, чтобы клиентские
 // компоненты импортировали типы, не таща серверный модуль с db-клиентом.
-export type SurvivalPreset = 'priced' | 'work';
+// 'work_excl_reserved' — пятый график (задача 2574, владелец 29.07, дословно:
+// «Добавь еще график аналогичный work, но исключающий стадии reserved и
+// confirmed»): та же WORK-когорта и алгоритм, что у 'work', но при суммировании
+// накопленного времени в работе доп. исключаются интервалы стадий с
+// event_type IN ('reserved','confirmed') — время ожидания на брони/подтверждении
+// не считается «работой менеджера». См. stageSurvival.ts fetchWorkRows.
+export type SurvivalPreset = 'priced' | 'work' | 'work_excl_reserved';
 
 export interface SurvivalBucket {
   label: string;      // «0», «1», … «14–20», «30+»

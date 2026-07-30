@@ -12,7 +12,7 @@ import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/type
 // каталога — отдельный движок поверх sa.deal_events (владелец: «таких метрик у нас
 // нет, можно и нужно ввести, но это не срочно»).
 //
-// Два пресета:
+// Три пресета:
 //  * 'priced' — стадия «Созвонился и озвучил цены» (резолвится ILIKE по имени, как
 //    в calledConversion.ts; сейчас это только ЧЛ). Дни = от первого входа до
 //    ПЕРВОГО события вне набора (выход); если сделка ещё в стадии — до текущего
@@ -20,6 +20,13 @@ import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/type
 //  * 'work' — все стадии с sa.stages.stage_type='WORK' (разметка портала). Дни =
 //    СУММА интервалов «событие WORK-стадии → следующее событие» по всей истории
 //    сделки (хвост открытой WORK-стадии — до текущего момента).
+//  * 'work_excl_reserved' — пятый график (задача 2574, владелец 29.07: «график
+//    аналогичный work, но исключающий стадии reserved и confirmed»). ТА ЖЕ
+//    когорта, что у 'work' (первый вход в любую WORK-стадию — набор для
+//    определения когорты НЕ сужается), но при суммировании дней исключаются
+//    интервалы стадий с event_type IN ('reserved','confirmed') — время ожидания
+//    брони/подтверждения не считается «работой менеджера». Дни у этого пресета
+//    ≤ дней у 'work' для тех же сделок (вычитаем часть интервалов).
 import type { SurvivalPreset, SurvivalBucket, SurvivalResult } from './types';
 
 export type { SurvivalPreset, SurvivalBucket, SurvivalResult } from './types';
@@ -139,9 +146,32 @@ WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open }));
 }
 
-export async function fetchWorkRows(opts: SurvivalRowOptions): Promise<SurvivalDealRow[]> {
+// Базовые исключённые event_type у ЛЮБОГО 'work'-варианта: 'sold'/'shipped',
+// хотя их stage_type тоже 'WORK' («Продано (ЧЛ)», «Заказ в работе, счет
+// оплачен», «Отгружено»…). Проданная сделка копила бы «дни в работе»
+// бесконечно, и кривая мерила бы не «сколько работали до исхода», а
+// «проданные висят в Продано» (артефакт виден на живых данных 28.07 — кривая
+// РОСЛА с днями). Считаем время в работе ДО продажи/отгрузки.
+const WORK_BASE_EXCLUDED_EVENT_TYPES = ['sold', 'shipped'];
+
+// extraExcludedEventTypes — параметр для варианта 'work_excl_reserved' (задача
+// 2574, владелец 29.07: «график аналогичный work, но исключающий стадии
+// reserved и confirmed»). Вынесен параметром, а не скопирован файлом целиком
+// (тот же принцип переиспользования, что lifeTable.ts): один SQL-шаблон,
+// разный набор исключённых event_type у WORK-стадий.
+export async function fetchWorkRows(
+  opts: SurvivalRowOptions,
+  extraExcludedEventTypes: string[] = [],
+): Promise<SurvivalDealRow[]> {
   const { from, toExcl } = toSqlInterval(opts.period);
-  const params: unknown[] = [from, toExcl];
+  const timeExcludedEventTypes = [...WORK_BASE_EXCLUDED_EVENT_TYPES, ...extraExcludedEventTypes];
+  // ВАЖНО: когорта (first_entry) считается по БАЗОВОМУ набору WORK-стадий (как
+  // у preset='work') независимо от extraExcludedEventTypes — иначе когорта
+  // 'work_excl_reserved' разъедется со 'work' (acceptance criteria задачи
+  // 2574: когорты обоих графиков обязаны совпадать при одинаковых фильтрах,
+  // отличаться должны только «дни»). Extra-исключения применяются ТОЛЬКО к
+  // сумме времени в работе (work_time), не к членству в когорте.
+  const params: unknown[] = [from, toExcl, WORK_BASE_EXCLUDED_EVENT_TYPES, timeExcludedEventTypes];
   let deptWhere = '';
   if (opts.departmentIds?.length) {
     params.push(opts.departmentIds);
@@ -157,19 +187,17 @@ export async function fetchWorkRows(opts: SurvivalRowOptions): Promise<SurvivalD
     pgWhere = `AND ${pgFilter.sql}`;
   }
 
-  // event_type IN ('sold','shipped') исключены, хотя их stage_type тоже 'WORK'
-  // («Продано (ЧЛ)», «Заказ в работе, счет оплачен», «Отгружено»…): проданная сделка
-  // копила бы «дни в работе» бесконечно, и кривая мерила бы не «сколько работали до
-  // исхода», а «проданные висят в Продано» (артефакт виден на живых данных 28.07 —
-  // кривая РОСЛА с днями). Считаем время в работе ДО продажи/отгрузки.
   const sql = `
-WITH work_stages AS (
-  SELECT id FROM stages WHERE stage_type = 'WORK' AND event_type NOT IN ('sold', 'shipped')
+WITH cohort_stages AS (
+  SELECT id FROM stages WHERE stage_type = 'WORK' AND event_type <> ALL($3::text[])
+),
+time_stages AS (
+  SELECT id FROM stages WHERE stage_type = 'WORK' AND event_type <> ALL($4::text[])
 ),
 first_entry AS (
   SELECT DISTINCT ON (de.deal_id) de.deal_id, de.event_at AS first_at
   FROM deal_events de
-  JOIN work_stages s ON s.id = de.stage_id
+  JOIN cohort_stages s ON s.id = de.stage_id
   ORDER BY de.deal_id, de.event_at ASC
 ),
 cohort AS (
@@ -184,18 +212,18 @@ ev AS (
 work_time AS (
   SELECT ev.deal_id,
          SUM(EXTRACT(EPOCH FROM COALESCE(ev.next_at, now()) - ev.event_at)) / 86400.0 AS days,
-         BOOL_OR(ev.next_at IS NULL) AS open
+         BOOL_OR(ev.next_at IS NULL AND ts.id IS NOT NULL) AS open
   FROM ev
-  JOIN work_stages ws ON ws.id = ev.stage_id
+  JOIN time_stages ts ON ts.id = ev.stage_id
   GROUP BY ev.deal_id
 )
 SELECT
   c.deal_id AS deal_id,
-  w.days,
+  COALESCE(w.days, 0) AS days,
   (d.sold_at IS NOT NULL AND d.sold_at >= c.first_at) AS sold,
-  w.open
+  COALESCE(w.open, false) AS open
 FROM cohort c
-JOIN work_time w ON w.deal_id = c.deal_id
+LEFT JOIN work_time w ON w.deal_id = c.deal_id
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
 WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
@@ -205,12 +233,27 @@ WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open }));
 }
 
+// event_type ['reserved','confirmed'] — доп. исключение для 'work_excl_reserved'
+// (задача 2574). Экспортирован для workExclReservedDaysCohort.ts, если он
+// понадобится (пятый график сейчас в подаче SurvivalCard, не life table, но
+// набор исключений — единственный источник правды на случай появления
+// когортной версии).
+export const RESERVED_CONFIRMED_EVENT_TYPES = ['reserved', 'confirmed'];
+
+// Диспетчер по preset — один на fetchStageSurvival/fetchStageSurvivalDealIds
+// ниже, чтобы третий preset не пришлось добавлять в двух местах по-разному.
+function fetchRowsForPreset(opts: SurvivalOptions): Promise<SurvivalDealRow[]> {
+  if (opts.preset === 'work') return fetchWorkRows(opts);
+  if (opts.preset === 'work_excl_reserved') return fetchWorkRows(opts, RESERVED_CONFIRMED_EVENT_TYPES);
+  return fetchPricedRows(opts);
+}
+
 /** null — если весь период раньше старта сбора deal_events (03.04.2026). */
 export async function fetchStageSurvival(opts: SurvivalOptions): Promise<SurvivalResult | null> {
   const periodToStr = periodDateStrFromInstant(opts.period.to, 'to');
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
-  const rows = opts.preset === 'work' ? await fetchWorkRows(opts) : await fetchPricedRows(opts);
+  const rows = await fetchRowsForPreset(opts);
 
   const buckets: SurvivalBucket[] = BUCKETS.map(b => ({
     label: b.label, daysFrom: b.from, total: 0, sold: 0, pct: null,
@@ -254,7 +297,7 @@ export async function fetchStageSurvivalDealIds(
   const bucket = BUCKETS.find(b => b.label === opts.bucketLabel);
   if (!bucket) return [];
 
-  const rows = opts.preset === 'work' ? await fetchWorkRows(opts) : await fetchPricedRows(opts);
+  const rows = await fetchRowsForPreset(opts);
   return rows
     .filter(r => r.days >= bucket.from && r.days < bucket.toExcl)
     .filter(r => (opts.filter === 'sold' ? r.sold : true))

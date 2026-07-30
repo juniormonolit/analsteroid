@@ -344,6 +344,23 @@ export function ChartsPage() {
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
               onDrilldown={setDrilldown}
             />
+            {/* Пятый график (задача 2574, 29.07, дословно: «Добавь еще график
+                аналогичный work, но исключающий стадии reserved и confirmed»).
+                Та же когорта, что у preset="work" выше (первый вход в любую
+                WORK-стадию), но при подсчёте «дней в работе» вычитается время,
+                проведённое в стадиях с event_type reserved/confirmed —
+                ожидание брони/подтверждения не считается работой менеджера.
+                Подпись ниже прямо называет отличие от соседа выше, чтобы их
+                не путали. */}
+            <SurvivalCard
+              preset="work_excl_reserved"
+              title="Вероятность продажи от дней в работе, без брони и подтверждения"
+              subtitle="Та же когорта, что у графика «…в работе (WORK)» выше — сделки, впервые вошедшие в любую WORK-стадию. Отличие: из суммы дней ДОПОЛНИТЕЛЬНО вычтено время в стадиях «Забронировано»/«Отправил счёт и договор (Бронь)» (event_type=reserved) и «Подтверждённая бронь»/«Наша цена лучшая, ждём оплату» (event_type=confirmed) — считаем только время, когда менеджер реально работал со сделкой, без ожидания на брони/подтверждении. Поэтому дни здесь ≤ дням на графике выше для тех же сделок."
+              period={period} dealScope={dealScope} clientType={clientType}
+              departmentIds={departmentIds} departmentsReady={departmentsReady}
+              productGroupMode={productGroupMode} productGroupIds={productGroupIds}
+              onDrilldown={setDrilldown}
+            />
             {/* Четвёртый график (задача 2553, 29.07) — сразу под своим «источником»
                 (SurvivalCard preset="work" выше): та же WORK-когорта, подача life table. */}
             <LifeTableCard
