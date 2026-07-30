@@ -9753,3 +9753,23 @@ buildAxisMap/salesPositiveIds/percentileScore/poolValuesForAxis/ratingFor кар
   боевые БД). Ошибок в app.log после рестарта — ноль. Замечание: ошибки
   `invalid input syntax for type uuid: "my"` в логе ДО рестарта — это дриллдаун
   категорий в ЛК РОПа (teamId='my'), баг уже починен коллегой в подтянутом коммите.
+- **Релиз на прод 30.07 (по требованию владельца «катай на прод»):** уточнение —
+  `deploy.sh` всё время катал на :8100 = monolitika.mlt-it.com, т.е. на ПРОД; дев-стенд
+  (monolitika.dev.mlt-it.com:8102) обновляется автодеплоем из dev-asteroid сам.
+  Отставала только ветка: по WORKFLOW прод = `main`. Сделано: fetch, `main`
+  fast-forward до dev-asteroid (3735fc4, без merge-коммита — main был чистым
+  предком), push origin main (6a082b9→3735fc4), выкатка прода ИЗ main:
+  BUILD JJnyEOgpzTnch-ztZn1zl, Login 200, /rating|/manager/me|/chats|/charts|
+  /settings/card-templates → 307 (гейт логина, компилируются), процесс на 8100 под
+  junior, ошибок в логе после рестарта — ноль.
+- **Сверка миграций перед выкаткой (все применены в боевых БД):** чужие 105 (переим.
+  «на тек. день»), 106 (право section.charts у 5 ролей), 107 (метрики стадий за
+  период); мои 105 (чаты), 106 (аватары), 107 (веса в осях), 108 (метрика «Рейтинг»).
+- **ЗАМЕЧАНИЕ по гигиене:** в `migrations/` коллизии номеров от параллельной работы —
+  105_deal_chats + 105_plan_execution_day_rename, 106_manager_avatars +
+  106_charts_section_perm, 107_axis_weights_in_templates + 107_stage_period_metrics.
+  Файлы разные, применяются по отдельности, но нумерация больше не отражает порядок.
+  Договориться о правиле (префикс по автору/дате или общий счётчик).
+- **Незакрытые ветки в origin:** fix/org-sync-employee-name (НЕ влита, содержимого в
+  dev-asteroid нет — sa.employees.full_name), feat/charts-product-group-filter
+  (указатель отстал, содержимое в dev уже есть). Первую владельцу/автору решать.
