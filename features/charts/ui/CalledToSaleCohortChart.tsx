@@ -27,6 +27,20 @@ function CohortTooltip({ active, payload }: {
       <div className="text-[var(--color-text-muted)]">дожили минимум {p.label} дн.: <b className="text-[var(--color-text)]">{p.cohort.toLocaleString('ru-RU')}</b></div>
       <div className="text-[var(--color-text-muted)]">продано именно на этот день: <b className="text-[var(--color-text)]">{p.sold.toLocaleString('ru-RU')}</b></div>
       <div className="text-[var(--color-text-muted)]">доля: <b className="text-[var(--color-text)]">{p.pct === null ? '—' : `${p.pct}%`}</b></div>
+      {/* Разбивка проданных дня по kc-группам (задача 2599) — блок появляется,
+          только если точка её несёт (сейчас — пятый график, см. groups в
+          engine/types.ts); у 3-го/4-го графиков поле пустое и тултип прежний. */}
+      {p.groups && p.groups.length > 0 && (
+        <div className="mt-1.5 pt-1.5 border-t border-[var(--color-border)]">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] mb-0.5">по группам КЦ</div>
+          {p.groups.map(g => (
+            <div key={g.name} className="flex items-baseline justify-between gap-3 text-[var(--color-text-muted)]">
+              <span className="truncate max-w-[180px]">{g.name}</span>
+              <b className="text-[var(--color-text)] tabular-nums">{g.count.toLocaleString('ru-RU')}</b>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,17 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
-import { fetchWorkExclReservedMilestoneDealIds, type MilestoneDrilldownKind } from '@/features/charts/engine/workExclReservedCohort';
+import { fetchWorkExclReservedCohortDealIds } from '@/features/charts/engine/workExclReservedCohort';
 import { fetchDealsByIds } from '@/lib/reports/dealsByIds';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 
 // Дрилл-даун списка сделок одного дня когорты «В работе (без брони/подтв.) →
-// бронь/продажа/отгрузка по дням» (задача 2574, доработка 30.07 — три линии
-// вместо одной). Тот же паттерн, что app/api/charts/work-days-cohort/deals/
-// route.ts, но filter заменён на kind: 'all' (весь бакет «дожили») |
-// 'reserved' | 'sold' | 'shipped' (точное попадание соответствующего события
-// на день N). POST {
-//   day, kind: 'all'|'reserved'|'sold'|'shipped',
+// продажа по дням» (v4, задача 2599 — одна линия вместо трёх, kind вернулся к
+// filter 'all'|'sold'). Тот же паттерн и контракт, что app/api/charts/
+// work-days-cohort/deals/route.ts. POST {
+//   day, filter: 'all'|'sold',
 //   period, dealScope?, clientType?, departmentIds?, productGroupMode?, productGroupIds?
 // } → { deals, total_count, total_amount }
 
@@ -46,8 +44,7 @@ export async function POST(req: NextRequest) {
   if (!Number.isInteger(day) || day < 0 || day > 31) {
     return NextResponse.json({ error: 'day должен быть целым числом 0..31' }, { status: 400 });
   }
-  const kind: MilestoneDrilldownKind = body.kind === 'reserved' || body.kind === 'sold' || body.kind === 'shipped'
-    ? body.kind : 'all';
+  const filter: 'all' | 'sold' = body.filter === 'sold' ? 'sold' : 'all';
 
   const dealScope = (['primary', 'repeat', 'all'] as const).includes(body.dealScope as DealScope)
     ? body.dealScope as DealScope : 'all';
@@ -67,8 +64,8 @@ export async function POST(req: NextRequest) {
     productGroupIds = body.productGroupIds as string[];
   }
 
-  const dealIds = await fetchWorkExclReservedMilestoneDealIds({
-    period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, day, kind,
+  const dealIds = await fetchWorkExclReservedCohortDealIds({
+    period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, day, filter,
   });
   if (dealIds === null) return NextResponse.json({ deals: [], total_count: 0, total_amount: 0 });
 

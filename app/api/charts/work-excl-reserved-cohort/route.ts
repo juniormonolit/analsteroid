@@ -1,16 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
-import { fetchWorkExclReservedMilestoneCohort } from '@/features/charts/engine/workExclReservedCohort';
+import { fetchWorkExclReservedCohort } from '@/features/charts/engine/workExclReservedCohort';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 
-// Пятый график, подача life table с ТРЕМЯ линиями (раздел «Графики», задача
-// 2574: 28.07 v1 бакеты/CR%, 29.07 v2 переделка «по аналогии с 3 и 4», 30.07
-// v3 — владелец попросил добавить линии брони/отгрузки, не только продажу).
-// Тот же паттерн валидации/прав, что app/api/charts/work-days-cohort/route.ts
-// (тот же движок life table, см. features/charts/engine/lifeTable.ts, вызван
-// трижды в workExclReservedCohort.ts). «Дни» считаются БЕЗ времени в стадиях
-// reserved/confirmed.
+// Пятый график, v4 (задача 2599, 30.07): одна линия «продано на день N» поверх
+// когорты — та же подача, что у 3-го/4-го графиков (историю версий см. в
+// features/charts/engine/workExclReservedCohort.ts), плюс в каждой точке
+// разбивка проданных по kc-группам для тултипа. Тот же паттерн валидации/прав,
+// что app/api/charts/work-days-cohort/route.ts. «Дни» считаются БЕЗ времени в
+// стадиях reserved/confirmed — механика оси не менялась.
 // POST { period: {from,to}, dealScope?, clientType?, departmentIds?, productGroupMode?, productGroupIds? }
 
 interface PeriodInput { from: string; to: string }
@@ -58,6 +57,6 @@ export async function POST(req: NextRequest) {
     productGroupIds = body.productGroupIds as string[];
   }
 
-  const result = await fetchWorkExclReservedMilestoneCohort({ period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds });
+  const result = await fetchWorkExclReservedCohort({ period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds });
   return NextResponse.json({ result });
 }

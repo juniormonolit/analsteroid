@@ -8,10 +8,9 @@ import { Seg } from '@/features/reports/ui/FiltersMenu';
 import { useAccountDepartments } from '@/lib/hooks/useAccountDepartments';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
-import type { SurvivalPreset, SurvivalResult, SurvivalBucket, CalledToSaleCohortResult, CalledToSaleCohortPoint, MilestoneCohortResult, MilestoneCohortPoint } from '../engine/types';
+import type { SurvivalPreset, SurvivalResult, SurvivalBucket, CalledToSaleCohortResult, CalledToSaleCohortPoint } from '../engine/types';
 import { SurvivalChart } from './SurvivalChart';
 import { CalledToSaleCohortChart } from './CalledToSaleCohortChart';
-import { MilestoneCohortChart } from './MilestoneCohortChart';
 import { ConstructorSection } from './ConstructorSection';
 import { ChartDrilldownPanel, type ChartDrilldownTarget } from './ChartDrilldownPanel';
 
@@ -124,12 +123,12 @@ function SurvivalCard({
 //    те же «дни», что у SurvivalCard preset="work" выше (накопленное время в
 //    WORK-стадиях), но в подаче life table вместо бакетов/CR%. Добавлен РЯДОМ
 //    со вторым графиком, не вместо него.
-//  * «В работе (без брони/подтв.) → продажа по дням» (задача 2574, доработка
-//    29.07): та же когорта, что у графика выше, «день» — накопленное время в
-//    WORK-стадиях БЕЗ интервалов reserved/confirmed. Первая версия (28.07)
-//    была в подаче бакетов/CR% (как SurvivalCard) — владелец посмотрел и
-//    попросил переделать «по аналогии с 3 и 4, то есть от общего количества
-//    сделок» — заменили подачу на life table, это НЕ шестой график.
+//  * «В работе (без брони/подтв.) → продажа по дням» (задачи 2574/2599): та же
+//    когорта, «день» — накопленное время в WORK-стадиях БЕЗ интервалов
+//    reserved/confirmed. Подача менялась 4 раза (историю версий см.
+//    engine/workExclReservedCohort.ts); v4 (2599) — снова одна линия life
+//    table, как у 3-го/4-го, плюс разбивка тултипа по kc-группам (groups в
+//    точках — рисует CohortTooltip по наличию).
 interface LifeTableCardConfig {
   fetchUrl: string;
   dealsUrl: '/api/charts/called-to-sale-cohort/deals' | '/api/charts/work-days-cohort/deals' | '/api/charts/work-excl-reserved-cohort/deals';
@@ -217,100 +216,6 @@ function LifeTableCard({
   );
 }
 
-// Пятый график, ТРЕТЬЯ версия подачи (задача 2574, доработка 30.07): вместо
-// одной линии life table — три (бронь/продажа/отгрузка), собственный компонент
-// (MilestoneCohortChart), не переиспользует LifeTableCard целиком (разная
-// форма ответа/чарта), но фильтры/загрузка/каркас карточки — тот же паттерн.
-function MilestoneCard({
-  period, dealScope, clientType, departmentIds, departmentsReady,
-  productGroupMode, productGroupIds, onDrilldown,
-}: {
-  period: DateRange;
-  dealScope: DealScope;
-  clientType: ClientType;
-  departmentIds: string[];
-  departmentsReady: boolean;
-  productGroupMode: ProductGroupMode;
-  productGroupIds: string[];
-  onDrilldown: (target: ChartDrilldownTarget) => void;
-}) {
-  const { data, isLoading, isError } = useQuery<{ result: MilestoneCohortResult | null }>({
-    queryKey: ['work-excl-reserved-cohort', period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds],
-    queryFn: async () => {
-      const res = await fetch('/api/charts/work-excl-reserved-cohort', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          period: { from: period.from, to: period.to }, dealScope, clientType, departmentIds,
-          productGroupMode, productGroupIds,
-        }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
-    enabled: departmentsReady,
-    staleTime: 2 * 60 * 1000,
-    refetchOnWindowFocus: false,
-  });
-
-  const r = data?.result ?? null;
-  const title = 'Когорта «В работе (без брони/подтв.) → бронь / продажа / отгрузка по дням»';
-
-  return (
-    <section className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 sm:p-5">
-      <h2 className="text-sm font-semibold text-[var(--color-text)]">{title}</h2>
-      <p className="mt-0.5 mb-3 text-xs text-[var(--color-text-muted)]">
-        Та же когорта, что у графика «…в работе (WORK)» и когорты «В работе → продажа по дням» выше — сделки,
-        впервые вошедшие в любую WORK-стадию. День — накопленное время в работе БЕЗ интервалов «Забронировано»/
-        «Подтверждённая бронь» (event_type reserved/confirmed). Три линии показывают, на какой день сделка обычно
-        уходит в бронь, в продажу или в отгрузку — сделка, как правило, попадает на все три линии, но в РАЗНЫЕ
-        дни (сначала бронь, потом продажа, потом отгрузка), поэтому линии не складываются в размер когорты и друг
-        из друга не вычитаются.
-      </p>
-
-      {isLoading || (!isError && data === undefined) ? (
-        <div className="h-[280px] rounded-lg bg-[var(--color-border)] animate-pulse" />
-      ) : isError ? (
-        <p className="text-sm text-[var(--color-negative)]">Не удалось загрузить график.</p>
-      ) : !r ? (
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Выбранный период целиком раньше 03.04.2026 — история стадий ещё не велась.
-        </p>
-      ) : r.cohortTotal === 0 ? (
-        <p className="text-sm text-[var(--color-text-muted)]">Нет сделок под выбранные фильтры.</p>
-      ) : (
-        <>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2 text-xs text-[var(--color-text-muted)]">
-            <span>Когорта: <b className="text-[var(--color-text)]">{r.cohortTotal.toLocaleString('ru-RU')}</b></span>
-            <span>Ушли в бронь: <b className="text-[var(--color-text)]">{r.reservedTotal.toLocaleString('ru-RU')}</b></span>
-            <span>Ушли в продажу: <b className="text-[var(--color-text)]">{r.soldTotal.toLocaleString('ru-RU')}</b></span>
-            <span>Ушли в отгрузку: <b className="text-[var(--color-text)]">{r.shippedTotal.toLocaleString('ru-RU')}</b></span>
-          </div>
-          <MilestoneCohortChart
-            points={r.points}
-            axisLabel="дней в работе (без брони и подтверждения)"
-            onPointClick={(point: MilestoneCohortPoint) => onDrilldown({
-              title: `День ${point.label}`,
-              subtitle: title,
-              options: [
-                { key: 'all', label: 'Все (дожили)', count: point.cohort },
-                { key: 'reserved', label: 'Бронь', count: point.reserved },
-                { key: 'sold', label: 'Продажа', count: point.sold },
-                { key: 'shipped', label: 'Отгрузка', count: point.shipped },
-              ],
-              request: {
-                endpoint: '/api/charts/work-excl-reserved-cohort/deals',
-                baseBody: { day: point.day },
-                period, dealScope, clientType, productGroupMode, productGroupIds, departmentIds,
-              },
-            })}
-          />
-        </>
-      )}
-    </section>
-  );
-}
-
 const CALLED_TO_SALE_CONFIG: LifeTableCardConfig = {
   fetchUrl: '/api/charts/called-to-sale-cohort',
   dealsUrl: '/api/charts/called-to-sale-cohort/deals',
@@ -340,6 +245,25 @@ const WORK_DAYS_CONFIG: LifeTableCardConfig = {
     + 'продав раньше; линия — сколько из них продалось ровно на день N.',
   accent: '#f59e0b',
   axisLabel: 'дней в работе (накопленное время в WORK-стадиях)',
+};
+
+// Пятый график, v4 (задача 2599, 30.07 — владелец про v3 с тремя линиями:
+// «переделай в 1 линию и он должен отражать не кол-во сделок, а конверсию.
+// То есть аналогично этим двум графикам»): вернулся к общей LifeTableCard-форме
+// 3-го/4-го. Отличия от WORK_DAYS_CONFIG — только ось дней (накопленное время
+// в работе БЕЗ интервалов reserved/confirmed) и разбивка тултипа по kc-группам
+// (движок кладёт groups в точки, CohortTooltip рисует по наличию).
+const WORK_EXCL_RESERVED_CONFIG: LifeTableCardConfig = {
+  fetchUrl: '/api/charts/work-excl-reserved-cohort',
+  dealsUrl: '/api/charts/work-excl-reserved-cohort/deals',
+  queryKeyPrefix: 'work-excl-reserved-cohort',
+  title: 'Когорта «В работе (без брони/подтв.) → продажа по дням»',
+  description: 'Та же когорта, что у графика «…в работе (WORK)» выше — сделки, впервые вошедшие в любую WORK-стадию. '
+    + 'День — накопленное время в работе БЕЗ интервалов «Забронировано»/«Подтверждённая бронь» (event_type '
+    + 'reserved/confirmed). Серые столбики — сколько сделок «дожили» минимум N дней, не продав раньше; линия — '
+    + 'сколько из них продалось ровно на день N. В подсказке — разбивка проданных дня по группам «Категории КЦ».',
+  accent: '#8b5cf6',
+  axisLabel: 'дней в работе (без брони и подтверждения)',
 };
 
 export function ChartsPage() {
@@ -445,14 +369,12 @@ export function ChartsPage() {
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
               onDrilldown={setDrilldown}
             />
-            {/* Пятый график (задача 2574). v2 (29.07): владелец попросил подачу
-                «по аналогии с 3 и 4, то есть от общего количества сделок» —
-                life table вместо бакетов/CR%. v3 (30.07, ДО показа v2): владелец
-                дополнил — показать не только продажу, но и бронь/отгрузку, три
-                линии вместо одной, чтобы видеть «с какого дня шансы сдвинуть
-                сделку куда-либо становятся ничтожными». Та же когорта/шкала
-                дней, что у графика «…в работе (WORK)» выше. */}
-            <MilestoneCard
+            {/* Пятый график (задачи 2574/2599, история версий — в
+                engine/workExclReservedCohort.ts). v4: одна линия life table,
+                как у 3-го/4-го, + разбивка тултипа по kc-группам. Та же
+                когорта/шкала дней, что у графика «…в работе (WORK)» выше. */}
+            <LifeTableCard
+              config={WORK_EXCL_RESERVED_CONFIG}
               period={period} dealScope={dealScope} clientType={clientType}
               departmentIds={departmentIds} departmentsReady={departmentsReady}
               productGroupMode={productGroupMode} productGroupIds={productGroupIds}
