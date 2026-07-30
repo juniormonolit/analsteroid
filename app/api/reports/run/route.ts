@@ -15,6 +15,7 @@ import {
   GRAND_TOTAL_KEY,
   type Bucket, type CallsBaseRow, type DealCallAdditiveRow, type TouchAndFirstCallRow,
 } from '@/features/reports/engine/callsMetrics';
+import { computeRatingValues } from '@/features/manager-card/engine/ratings';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
@@ -506,6 +507,25 @@ export async function POST(req: NextRequest) {
     };
     currentRows = currentRows.map(r => enrichActivity(r, curActivity, curCalDays));
     compRows = compRows.map(r => enrichActivity(r, compActivity, compCalDays));
+  }
+
+  // ── Метрика «Рейтинг» (manager_rating, миграция 108; задача владельца 30.07) ──
+  // metric_type='external': значение не считается SQL-агрегатом, а приходит из
+  // движка рейтинга (features/manager-card/engine/ratings.ts) — перцентильный
+  // скоринг по осям ШАБЛОНА карточки требует пула всех менеджеров, поэтому
+  // инъекция здесь, как у plan_*/activity-метрик, и только для «по менеджерам».
+  // Оси/веса берутся из шаблона 'manager' — то же число, что в ЛК менеджера.
+  if (withDeps.some(m => m.id === 'manager_rating') && reportSlug === 'by-managers') {
+    const [curRatings, compRatings] = await Promise.all([
+      computeRatingValues({ period: opts.period, clientType: opts.clientType }),
+      computeRatingValues({ period: compOpts.period, clientType: compOpts.clientType }),
+    ]);
+    const enrichRating = (row: ReportRow, ratings: Map<string, number | null>): ReportRow => ({
+      ...row,
+      metrics: { ...row.metrics, manager_rating: ratings.get(row.dimensionId) ?? null },
+    });
+    currentRows = currentRows.map(r => enrichRating(r, curRatings));
+    compRows = compRows.map(r => enrichRating(r, compRatings));
   }
 
   // «Доля прозвона броней / подтв. броней на след. рабочий день» (задача Иосифа 17.07,

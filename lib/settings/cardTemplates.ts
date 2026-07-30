@@ -46,8 +46,38 @@
 
 import { systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
+import type { Metric } from '@/lib/metrics/types';
 
 export type TemplateKey = 'manager' | 'department';
+
+/**
+ * Метрики, доступные для выбора осью/плиткой карточки.
+ *
+ * Задача владельца 30.07 («метрику "Доля повторных продаж, %" просто не находит
+ * поиск»): раньше здесь стоял фильтр `!isHiddenInUi && isActive`, из-за которого
+ * 34 полностью рабочие метрики каталога (calc_ok/is_calc_ok = true) были
+ * невыбираемы — в том числе repeat_sales_count_pct / repeat_sales_amount_pct,
+ * primary_sales_count, cr_deal_to_sale и другие. `is_active` в этом проекте
+ * означает «показывать в общем пикере метрик отчёта» (борьба с захламлением
+ * каталога из ~418 метрик), а НЕ «метрика нерабочая» — для конструктора карточки
+ * это не тот критерий. Единственное реальное ограничение — isHiddenInUi
+ * (служебные компоненты формул).
+ */
+export function pickableMetricIds(allMetrics: Metric[]): Set<string> {
+  return new Set(
+    allMetrics
+      // «Рейтинг» (manager_rating) — сам результат скоринга по этим осям: ось из него
+      // была бы циклической, а значение в карточке всё равно осталось бы пустым
+      // (метрика инъектируется только в отчёте «по менеджерам», см. миграцию 108).
+      .filter(m => !m.isHiddenInUi && m.id !== 'manager_rating')
+      .map(m => m.id),
+  );
+}
+
+export function clampWeight(v: number): number {
+  if (!Number.isFinite(v)) return DEFAULT_AXIS_WEIGHT;
+  return Math.min(10, Math.max(0, Math.round(v * 10) / 10));
+}
 
 export const LEGACY_AXIS_KEYS = [
   'cr_deal_to_reservation',
@@ -139,15 +169,24 @@ export interface AxisConfig {
   /** «Меньше — лучше» — переворачивает перцентильную шкалу при скоринге/отображении.
    *  Дефолт false; у legacy touch_speed/refusal_rate дефолт true (см. DEFAULT_AXES). */
   invert: boolean;
+  /** Вес оси в рейтинге, 0-10 (задача владельца 30.07: «веса не синхронизируются с
+   *  тем, что выбрано в карточках»). БЫЛО: отдельная таблица scoring_weights с 6
+   *  ФИКСИРОВАННЫМИ колонками — оси из каталога в неё не попадали и молча получали
+   *  вес 5, а второго набора (для карточки РОПа) не существовало вовсе. СТАЛО: вес
+   *  живёт в самой оси шаблона, поэтому синхронизирован по построению и у каждого
+   *  шаблона ('manager'/'department') свой. Миграция 107 переносит старые значения. */
+  weight: number;
 }
 
+export const DEFAULT_AXIS_WEIGHT = 5;
+
 export const DEFAULT_AXES: AxisConfig[] = [
-  { metricKey: legacyStorageKey('cr_deal_to_reservation'), invert: LEGACY_AXIS_DEFAULT_INVERT.cr_deal_to_reservation },
-  { metricKey: legacyStorageKey('cr_reservation_to_sale'), invert: LEGACY_AXIS_DEFAULT_INVERT.cr_reservation_to_sale },
-  { metricKey: legacyStorageKey('sales_amount'), invert: LEGACY_AXIS_DEFAULT_INVERT.sales_amount },
-  { metricKey: legacyStorageKey('avg_check'), invert: LEGACY_AXIS_DEFAULT_INVERT.avg_check },
-  { metricKey: legacyStorageKey('touch_speed'), invert: LEGACY_AXIS_DEFAULT_INVERT.touch_speed },
-  { metricKey: legacyStorageKey('refusal_rate'), invert: LEGACY_AXIS_DEFAULT_INVERT.refusal_rate },
+  { metricKey: legacyStorageKey('cr_deal_to_reservation'), invert: LEGACY_AXIS_DEFAULT_INVERT.cr_deal_to_reservation, weight: DEFAULT_AXIS_WEIGHT },
+  { metricKey: legacyStorageKey('cr_reservation_to_sale'), invert: LEGACY_AXIS_DEFAULT_INVERT.cr_reservation_to_sale, weight: DEFAULT_AXIS_WEIGHT },
+  { metricKey: legacyStorageKey('sales_amount'), invert: LEGACY_AXIS_DEFAULT_INVERT.sales_amount, weight: DEFAULT_AXIS_WEIGHT },
+  { metricKey: legacyStorageKey('avg_check'), invert: LEGACY_AXIS_DEFAULT_INVERT.avg_check, weight: DEFAULT_AXIS_WEIGHT },
+  { metricKey: legacyStorageKey('touch_speed'), invert: LEGACY_AXIS_DEFAULT_INVERT.touch_speed, weight: DEFAULT_AXIS_WEIGHT },
+  { metricKey: legacyStorageKey('refusal_rate'), invert: LEGACY_AXIS_DEFAULT_INVERT.refusal_rate, weight: DEFAULT_AXIS_WEIGHT },
 ];
 // Плитки — простой массив storage-ключей («legacy:<6 исходных>» ИЛИ голый id
 // каталога), порядок = порядок рендера, БЕЗ ограничения количества (задача 10.07,
@@ -178,18 +217,20 @@ export async function sanitizeAxes(raw: unknown): Promise<AxisConfig[]> {
   if (!Array.isArray(raw)) return DEFAULT_AXES;
 
   const allMetrics = await loadMetrics();
-  const validCatalogIds = new Set(allMetrics.filter(m => !m.isHiddenInUi && m.isActive).map(m => m.id));
+  const validCatalogIds = pickableMetricIds(allMetrics);
 
   const parsed: AxisConfig[] = [];
   for (const entry of raw) {
     let metricKey: string | undefined;
     let invert = false;
+    let weight: number | undefined;
     if (typeof entry === 'string') {
       metricKey = entry;
     } else if (entry && typeof entry === 'object') {
       const e = entry as Record<string, unknown>;
       if (typeof e.metricKey === 'string') metricKey = e.metricKey;
       if (typeof e.invert === 'boolean') invert = e.invert;
+      if (Number.isFinite(Number(e.weight))) weight = clampWeight(Number(e.weight));
     }
     if (!metricKey) continue;
 
@@ -199,13 +240,21 @@ export async function sanitizeAxes(raw: unknown): Promise<AxisConfig[]> {
       // фолбэк на исторический дефолт этой оси.
       const bare = metricKey.startsWith(LEGACY_PREFIX) ? metricKey : legacyStorageKey(metricKey as LegacyAxisKey);
       const legacyKey = stripLegacyPrefix(bare);
-      parsed.push({ metricKey: bare, invert: typeof entry === 'object' && entry && 'invert' in (entry as object) ? invert : LEGACY_AXIS_DEFAULT_INVERT[legacyKey] });
+      parsed.push({
+        metricKey: bare,
+        invert: typeof entry === 'object' && entry && 'invert' in (entry as object) ? invert : LEGACY_AXIS_DEFAULT_INVERT[legacyKey],
+        weight: weight ?? DEFAULT_AXIS_WEIGHT,
+      });
     } else if ((LEGACY_AXIS_KEYS as readonly string[]).includes(metricKey)) {
       // Голая строка исходного ключа БЕЗ префикса (данные до миграции 075, если она
       // ещё не накатана в этом окружении) — фолбэк на дефолт-invert этой оси.
-      parsed.push({ metricKey: legacyStorageKey(metricKey as LegacyAxisKey), invert: LEGACY_AXIS_DEFAULT_INVERT[metricKey as LegacyAxisKey] });
+      parsed.push({
+        metricKey: legacyStorageKey(metricKey as LegacyAxisKey),
+        invert: LEGACY_AXIS_DEFAULT_INVERT[metricKey as LegacyAxisKey],
+        weight: weight ?? DEFAULT_AXIS_WEIGHT,
+      });
     } else if (validCatalogIds.has(metricKey)) {
-      parsed.push({ metricKey, invert });
+      parsed.push({ metricKey, invert, weight: weight ?? DEFAULT_AXIS_WEIGHT });
     }
     // иначе — неизвестный/удалённый из каталога id, молча отбрасываем
   }
@@ -228,7 +277,7 @@ export async function sanitizeTiles(raw: unknown): Promise<string[]> {
   if (!Array.isArray(raw)) return DEFAULT_TILES;
 
   const allMetrics = await loadMetrics();
-  const validCatalogIds = new Set(allMetrics.filter(m => !m.isHiddenInUi && m.isActive).map(m => m.id));
+  const validCatalogIds = pickableMetricIds(allMetrics);
 
   const parsed: string[] = [];
   for (const entry of raw) {

@@ -9,6 +9,7 @@ import {
   legacyStorageKey, isLegacyStorageKey,
   legacyTileStorageKey, isLegacyTileStorageKey,
   sanitizeAxes, sanitizeTiles, invalidateCardTemplatesCache,
+  pickableMetricIds, clampWeight, DEFAULT_AXIS_WEIGHT,
   type TemplateKey, type AxisConfig,
 } from '@/lib/settings/cardTemplates';
 
@@ -55,7 +56,11 @@ export async function GET(req: NextRequest) {
   // служебные/скрытые компоненты формул выбрать осью/плиткой нельзя (как и раньше
   // молчаливо не показывались). Оси и плитки используют ОДИН и тот же список
   // metrics — пикер на странице настроек переиспользует один каталог для обоих.
-  const visibleMetrics = allMetrics.filter(m => !m.isHiddenInUi && m.isActive);
+  // Задача владельца 30.07: фильтр по isActive снят — он прятал 34 рабочие метрики
+  // (в т.ч. «Доля повторных продаж, %»), см. pickableMetricIds. Флаг isActive
+  // отдаём в UI, чтобы пикер мог пометить «вне общего каталога отчётов».
+  const pickable = pickableMetricIds(allMetrics);
+  const visibleMetrics = allMetrics.filter(m => pickable.has(m.id));
   const catalog = {
     legacyAxes: LEGACY_AXIS_KEYS.map(k => ({
       metricKey: legacyStorageKey(k),
@@ -105,7 +110,7 @@ export async function PUT(req: NextRequest) {
   // sanitizeAxes/sanitizeTiles, которые молча отбрасывают мусор при ЧТЕНИИ —
   // здесь на ЗАПИСИ хотим внятную ошибку с конкретным неверным id).
   const allMetrics = await loadMetrics();
-  const validCatalogIds = new Set(allMetrics.filter(m => !m.isHiddenInUi && m.isActive).map(m => m.id));
+  const validCatalogIds = pickableMetricIds(allMetrics);
 
   const axes: AxisConfig[] = [];
   for (const entry of body.axes as unknown[]) {
@@ -117,10 +122,13 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: `Ось без metricKey: ${JSON.stringify(entry)}` }, { status: 400 });
     }
     const invert = typeof e.invert === 'boolean' ? e.invert : false;
+    // Вес оси (0-10) — задача владельца 30.07: живёт в самой оси, а не в
+    // отдельной таблице scoring_weights, поэтому синхронизирован с выбором.
+    const weight = Number.isFinite(Number(e.weight)) ? clampWeight(Number(e.weight)) : DEFAULT_AXIS_WEIGHT;
     if (isLegacyStorageKey(e.metricKey)) {
-      axes.push({ metricKey: e.metricKey, invert });
+      axes.push({ metricKey: e.metricKey, invert, weight });
     } else if (validCatalogIds.has(e.metricKey)) {
-      axes.push({ metricKey: e.metricKey, invert });
+      axes.push({ metricKey: e.metricKey, invert, weight });
     } else {
       return NextResponse.json({ error: `Неизвестная метрика: ${e.metricKey}` }, { status: 400 });
     }

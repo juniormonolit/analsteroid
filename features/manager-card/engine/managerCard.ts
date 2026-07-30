@@ -9,9 +9,8 @@ import { branchLabel } from '@/lib/org/branchLabel';
 import { loadDepartments, type DeptRow } from '@/lib/org/deptCategories';
 import { toSqlInterval, previousPeriodSameLength, type DateRange } from '@/lib/period';
 import type { ClientType, ReportRow, ProductGroupMode, DataType } from '@/lib/metrics/types';
-import { getRawScoringWeights, AXIS_KEYS as WEIGHTED_AXIS_KEYS, type AxisKey as WeightAxisKey } from '@/lib/settings/scoringWeights';
 import {
-  getCardTemplate, isLegacyStorageKey, stripLegacyPrefix, DEFAULT_AXES,
+  getCardTemplate, isLegacyStorageKey, stripLegacyPrefix, DEFAULT_AXES, DEFAULT_AXIS_WEIGHT,
   isLegacyTileStorageKey, stripLegacyTilePrefix, DEFAULT_TILES,
   type AxisConfig, type LegacyAxisKey, type LegacyTileKey,
 } from '@/lib/settings/cardTemplates';
@@ -60,6 +59,11 @@ export interface AxisDef {
   label: string;
   unit: AxisUnit;
   invert: boolean;
+  /** Вес оси в рейтинге (0-10) — из самого шаблона карточки (задача владельца
+   *  30.07). Раньше вес искался в отдельной таблице scoring_weights по 6 фикс.
+   *  ключам, поэтому оси из каталога всегда получали 5, а у карточки РОПа своих
+   *  весов не было вовсе. */
+  weight: number;
   source: 'legacy' | 'catalog';
 }
 
@@ -90,7 +94,7 @@ function catalogUnitFor(dataType: DataType): AxisUnit {
 export const DEFAULT_RESOLVED_AXES: AxisDef[] = DEFAULT_AXES.map(cfg => {
   const bare = stripLegacyPrefix(cfg.metricKey);
   const meta = LEGACY_AXIS_META[bare];
-  return { key: cfg.metricKey, bareKey: bare, label: meta.label, unit: meta.unit, invert: cfg.invert, source: 'legacy' as const };
+  return { key: cfg.metricKey, bareKey: bare, label: meta.label, unit: meta.unit, invert: cfg.invert, weight: cfg.weight, source: 'legacy' as const };
 });
 
 /** Оси шаблона (до 6, {metricKey, invert} из card_templates) → реальные AxisDef,
@@ -105,28 +109,25 @@ export function resolveTemplateAxes(axisConfigs: readonly AxisConfig[], allMetri
       const bare = stripLegacyPrefix(cfg.metricKey);
       const meta = LEGACY_AXIS_META[bare];
       if (!meta) continue;
-      resolved.push({ key: cfg.metricKey, bareKey: bare, label: meta.label, unit: meta.unit, invert: cfg.invert, source: 'legacy' });
+      resolved.push({ key: cfg.metricKey, bareKey: bare, label: meta.label, unit: meta.unit, invert: cfg.invert, weight: cfg.weight, source: 'legacy' });
     } else {
       const m = metricById.get(cfg.metricKey);
       if (!m) continue;
-      resolved.push({ key: cfg.metricKey, bareKey: cfg.metricKey, label: m.nameRu, unit: catalogUnitFor(m.dataType), invert: cfg.invert, source: 'catalog' });
+      resolved.push({ key: cfg.metricKey, bareKey: cfg.metricKey, label: m.nameRu, unit: catalogUnitFor(m.dataType), invert: cfg.invert, weight: cfg.weight, source: 'catalog' });
     }
   }
   return resolved.length > 0 ? resolved : DEFAULT_RESOLVED_AXES;
 }
 
-/** Веса скоринга по оси: legacy-оси из ИСХОДНЫХ 6 (совпадающих со столбцами
- *  scoring_weights, миграция 068) — сырые 0-10 из lib/settings/scoringWeights.ts;
- *  ЛЮБАЯ другая ось (2 «бонусных» legacy + ЛЮБАЯ ось полного каталога) — вне
- *  таблицы весов, дефолт-вес 5 (эквивалент «важность как у остальных при равных
- *  весах»). ratingFor сам renормирует по сумме ФАКТИЧЕСКИ использованных осей
- *  (weightSum), поэтому именно СЫРАЯ (не нормированная на 1) шкала здесь корректна. */
-function weightForAxis(raw: Partial<Record<WeightAxisKey, number>>, def: AxisDef): number {
-  if (def.source === 'legacy' && (WEIGHTED_AXIS_KEYS as readonly string[]).includes(def.bareKey)) {
-    const v = raw[def.bareKey as WeightAxisKey];
-    return typeof v === 'number' ? v : 5;
-  }
-  return 5;
+/** Вес оси в рейтинге — теперь берётся ИЗ САМОЙ ОСИ шаблона (задача владельца
+ *  30.07: «веса не синхронизируются с тем, что выбрано в карточках»). Прежняя
+ *  реализация искала вес в таблице scoring_weights по 6 фиксированным legacy-
+ *  ключам и отдавала 5 всему остальному — то есть оси из каталога метрик были
+ *  невзвешиваемы, а у шаблона 'department' (карточка РОПа) своих весов не
+ *  существовало. ratingFor сам renормирует по сумме ФАКТИЧЕСКИ использованных
+ *  осей, поэтому шкала здесь СЫРАЯ (0-10), а не нормированная на 1. */
+function weightForAxis(def: AxisDef): number {
+  return Number.isFinite(def.weight) ? def.weight : DEFAULT_AXIS_WEIGHT;
 }
 
 // Сырые значения ИСХОДНЫХ 8 legacy-осей по строке отчёта (fetchByManagers всегда
@@ -220,7 +221,6 @@ export function ratingFor(
   axisMap: AxisMap,
   eligibleIds: Set<string>,
   managerId: string,
-  rawWeights: Partial<Record<WeightAxisKey, number>>,
   axes: AxisDef[] = DEFAULT_RESOLVED_AXES,
 ): number | null {
   const own = axisMap.get(managerId);
@@ -231,7 +231,7 @@ export function ratingFor(
     if (raw === null) continue;
     const pool = poolValuesForAxis(axisMap, eligibleIds, def.key);
     const score = percentileScore(raw, pool, def.invert);
-    if (score !== null) weighted.push({ score, weight: weightForAxis(rawWeights, def) });
+    if (score !== null) weighted.push({ score, weight: weightForAxis(def) });
   }
   if (weighted.length === 0) return null;
   const weightSum = weighted.reduce((s, w) => s + w.weight, 0);
@@ -504,7 +504,7 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
 
   const managerIdNum = /^\d+$/.test(managerId) ? Number(managerId) : null;
 
-  const [periodPoolRaw, prevPoolRaw, touchPeriodMap, touchCompMap, allOrgRes, deptTree, callsTizer, pgRows, rawWeights, template, allMetrics] =
+  const [periodPoolRaw, prevPoolRaw, touchPeriodMap, touchCompMap, allOrgRes, deptTree, callsTizer, pgRows, template, allMetrics] =
     await Promise.all([
       fetchByManagers({ period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
@@ -520,7 +520,6 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
       loadDepartments(),
       managerIdNum !== null ? fetchCallsTizer(managerIdNum, period) : Promise.resolve(null),
       fetchByProductGroups({ period, dealScope: 'all', clientType, productGroupMode, managerId }),
-      getRawScoringWeights(),
       getCardTemplate('manager'),
       loadMetrics(),
     ]);
@@ -590,11 +589,11 @@ export async function buildManagerCard(opts: ManagerCardOptions): Promise<Manage
   // (задача Иосифа 16.07). Ранжирование на всех уровнях — тем же ratingFor по
   // общему пулу нормировки; рейтинги мемоизируются, «страна» считает всех один раз,
   // остальные уровни переиспользуют кэш.
-  const rating = ratingFor(periodAxisMap, periodEligible, managerId, rawWeights, templateAxes);
+  const rating = ratingFor(periodAxisMap, periodEligible, managerId, templateAxes);
   const ratingCache = new Map<string, number | null>([[managerId, rating]]);
   const ratingOf = (id: string): number | null => {
     if (!ratingCache.has(id)) {
-      ratingCache.set(id, ratingFor(periodAxisMap, periodEligible, id, rawWeights, templateAxes));
+      ratingCache.set(id, ratingFor(periodAxisMap, periodEligible, id, templateAxes));
     }
     return ratingCache.get(id)!;
   };

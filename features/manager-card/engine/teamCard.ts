@@ -36,7 +36,6 @@ import {
   fetchTouchSpeedByManager, resolveTemplateAxes, resolveTemplateTiles, buildTileResults,
   type CardSegment, type CategoryShare, type ManagerCardResult,
 } from './managerCard';
-import { getRawScoringWeights } from '@/lib/settings/scoringWeights';
 import { getCardTemplate, type LegacyAxisKey } from '@/lib/settings/cardTemplates';
 import type { RosterManager } from '@/lib/org/teamRoster';
 import { toSqlInterval, type DateRange } from '@/lib/period';
@@ -75,10 +74,9 @@ export async function buildTeamRoster(opts: {
 }): Promise<TeamRosterResult> {
   const clientType = segmentToClientType(opts.segment);
 
-  const [periodPoolRaw, touchPeriodMap, rawWeights, template, allMetrics] = await Promise.all([
+  const [periodPoolRaw, touchPeriodMap, template, allMetrics] = await Promise.all([
     fetchByManagers({ period: opts.period, dealScope: 'all', clientType, accountType: 'managers' }),
     fetchTouchSpeedByManager(opts.period),
-    getRawScoringWeights(),
     getCardTemplate('manager'),
     loadMetrics(),
   ]);
@@ -100,7 +98,7 @@ export async function buildTeamRoster(opts: {
 
   const managers: TeamRosterEntry[] = opts.roster.map(m => {
     const row = rowById.get(m.managerId);
-    const rating = ratingFor(axisMap, eligible, m.managerId, rawWeights, templateAxes);
+    const rating = ratingFor(axisMap, eligible, m.managerId, templateAxes);
     const own = axisMap.get(m.managerId);
     const radar = templateAxes.map(def => {
       const raw = own?.get(def.key) ?? null;
@@ -190,13 +188,12 @@ export async function buildDepartmentCard(opts: {
   const managerIds = new Set(opts.roster.map(m => m.managerId));
   const managerIdNums = opts.roster.map(m => Number(m.managerId)).filter(n => Number.isFinite(n));
 
-  const [periodPoolRaw, prevPoolRaw, touchPeriodMap, touchCompMap, rawWeights, template, callsTizer, pgRows, allMetrics] =
+  const [periodPoolRaw, prevPoolRaw, touchPeriodMap, touchCompMap, template, callsTizer, pgRows, allMetrics] =
     await Promise.all([
       fetchByManagers({ period: opts.period, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchByManagers({ period: prevPeriod, dealScope: 'all', clientType, accountType: 'managers' }),
       fetchTouchSpeedByManager(opts.period),
       fetchTouchSpeedByManager(prevPeriod),
-      getRawScoringWeights(),
       getCardTemplate('department'),
       fetchCallsTizerForManagers(managerIdNums, opts.period),
       // Топ-5 категорий отдела — ОДИН агрегатный запрос по всему ростеру, а не по
@@ -298,9 +295,9 @@ export async function buildDepartmentCard(opts: {
   // insufficientPeers. Пример из живых данных — «Филиал Санкт-Петербург (HR)».
   const ownHasSales = deptEligible.has(opts.deptId);
   const canRate = !insufficientPeers && ownHasSales;
-  const rating = canRate ? ratingFor(deptAxisMap, deptEligible, opts.deptId, rawWeights, templateAxes) : null;
+  const rating = canRate ? ratingFor(deptAxisMap, deptEligible, opts.deptId, templateAxes) : null;
   const orderedByRating = [...deptAxisMap.keys()]
-    .map(id => ({ id, r: id === opts.deptId ? rating : (deptEligible.has(id) ? ratingFor(deptAxisMap, deptEligible, id, rawWeights, templateAxes) : null) }))
+    .map(id => ({ id, r: id === opts.deptId ? rating : (deptEligible.has(id) ? ratingFor(deptAxisMap, deptEligible, id, templateAxes) : null) }))
     .filter(x => x.r !== null)
     .sort((a, b) => b.r! - a.r!);
   const rank = canRate ? (orderedByRating.findIndex(x => x.id === opts.deptId) + 1 || null) : null;

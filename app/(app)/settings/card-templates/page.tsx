@@ -20,7 +20,8 @@ import { UnsavedChangesDialog } from '@/components/ui/UnsavedChangesDialog';
 // (нет invert-переключателя). Хранение — string[] (легаси-ключи с префиксом
 // «legacy:» либо голый id каталога), миграция 083.
 
-interface AxisConfig { metricKey: string; invert: boolean }
+interface AxisConfig { metricKey: string; invert: boolean; weight: number }
+const DEFAULT_AXIS_WEIGHT = 5;
 interface CatalogMetric { id: string; nameRu: string; category: string | null; dataType: string }
 interface LegacyAxisCatalogEntry { metricKey: string; label: string; defaultInvert: boolean }
 interface LegacyTileCatalogEntry { metricKey: string; label: string }
@@ -82,9 +83,9 @@ function labelForTile(metricKey: string, legacyTiles: LegacyTileCatalogEntry[], 
 }
 
 // ── Строка выбранной оси: номер, имя, стрелки, тумблер invert, удаление ─────
-function SelectedAxisRow({ index, total, axis, label, onMove, onInvert, onRemove }: {
-  index: number; total: number; axis: AxisConfig; label: string;
-  onMove: (dir: -1 | 1) => void; onInvert: (v: boolean) => void; onRemove: () => void;
+function SelectedAxisRow({ index, total, axis, label, weightShare, onMove, onInvert, onWeight, onRemove }: {
+  index: number; total: number; axis: AxisConfig; label: string; weightShare: number | null;
+  onMove: (dir: -1 | 1) => void; onInvert: (v: boolean) => void; onWeight: (v: number) => void; onRemove: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 px-3 py-2 border border-[var(--color-border)] rounded-lg bg-[var(--color-bg-surface)]">
@@ -110,6 +111,22 @@ function SelectedAxisRow({ index, total, axis, label, onMove, onInvert, onRemove
       >
         <ArrowDown size={14} />
       </button>
+      {/* Вес оси в рейтинге (задача владельца 30.07): раньше веса жили в отдельном
+          экране /settings/scoring-weights по 6 фикс. ключам и с осями каталога не
+          синхронизировались. Доля — сколько ось реально весит в рейтинге ЭТОГО
+          шаблона (вес / сумма весов), считается тут же живьём. */}
+      <label className="flex items-center gap-1.5 pl-1.5 ml-1 border-l border-[var(--color-border)]" title="Вес оси в рейтинге (0-10). Доля справа — сколько ось весит среди выбранных.">
+        <span className="text-[11px] text-[var(--color-text-muted)]">вес</span>
+        <input
+          type="number" min={0} max={10} step={0.5}
+          value={axis.weight}
+          onChange={e => onWeight(Number(e.target.value))}
+          className="w-14 px-1.5 py-0.5 text-sm text-right tabular-nums border border-[var(--color-border)] rounded bg-[var(--color-bg)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)]"
+        />
+        <span className="w-9 text-[11px] tabular-nums text-[var(--color-text-muted)]">
+          {weightShare === null ? '—' : `${Math.round(weightShare * 100)}%`}
+        </span>
+      </label>
       <label className="flex items-center gap-1.5 pl-1.5 ml-1 border-l border-[var(--color-border)] cursor-pointer select-none" title="Меньше — лучше (инверсия рейтинга/шкалы)">
         <input type="checkbox" checked={axis.invert} onChange={e => onInvert(e.target.checked)} className="accent-[var(--color-accent)]" />
         <span className="text-[11px] text-[var(--color-text-muted)] whitespace-nowrap">меньше — лучше</span>
@@ -221,10 +238,12 @@ export default function CardTemplatesPage() {
   }
 
   const maxAxes = catalog?.maxAxes ?? 6;
+  // Сумма весов — для показа доли каждой оси (ratingFor renормирует так же).
+  const weightSum = (axes ?? []).reduce((s, a) => s + (Number.isFinite(a.weight) ? a.weight : 0), 0);
 
   function addAxis(metricKey: string, defaultInvert: boolean) {
     if (!axes || axes.length >= maxAxes || axes.some(a => a.metricKey === metricKey)) return;
-    setAxes([...axes, { metricKey, invert: defaultInvert }]);
+    setAxes([...axes, { metricKey, invert: defaultInvert, weight: DEFAULT_AXIS_WEIGHT }]);
   }
   function removeAxis(metricKey: string) {
     if (!axes) return;
@@ -242,6 +261,13 @@ export default function CardTemplatesPage() {
     if (!axes) return;
     const next = [...axes];
     next[index] = { ...next[index], invert };
+    setAxes(next);
+  }
+  function setAxisWeight(index: number, weight: number) {
+    if (!axes) return;
+    const clamped = Number.isFinite(weight) ? Math.min(10, Math.max(0, weight)) : DEFAULT_AXIS_WEIGHT;
+    const next = [...axes];
+    next[index] = { ...next[index], weight: clamped };
     setAxes(next);
   }
 
@@ -395,7 +421,7 @@ export default function CardTemplatesPage() {
             {/* Выбранные оси */}
             <div>
               <div className="text-xs font-bold uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
-                Оси паутины ({axes.length}/{maxAxes})
+                Оси паутины ({axes.length}/{maxAxes}) · вес в рейтинге
               </div>
               <div className="flex flex-col gap-1.5">
                 {axes.length === 0 && (
@@ -406,12 +432,19 @@ export default function CardTemplatesPage() {
                     key={a.metricKey}
                     index={i} total={axes.length} axis={a}
                     label={labelFor(a.metricKey, catalog.legacyAxes, catalog.metrics)}
+                    weightShare={weightSum > 0 ? a.weight / weightSum : null}
                     onMove={dir => moveAxis(i, dir)}
                     onInvert={v => setAxisInvert(i, v)}
+                    onWeight={v => setAxisWeight(i, v)}
                     onRemove={() => removeAxis(a.metricKey)}
                   />
                 ))}
               </div>
+              <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+                Рейтинг = средневзвешенное баллов (0-10) по этим осям, доля веса — справа в строке.
+                Оси без данных за период исключаются, вес перераспределяется на остальные.
+                {weightSum === 0 && ' Все веса нулевые — рейтинг считается простым средним.'}
+              </p>
             </div>
 
             {/* Каталог метрик (оси) */}

@@ -1,0 +1,175 @@
+'use client';
+// Раздел «Рейтинг» (задача владельца 30.07) — таблица рейтинга менеджеров за
+// период: место, имя, отдел, итоговый балл и баллы по каждой оси шаблона карточки.
+// Цифры считает тот же движок, что и ЛК менеджера (ratings.ts) — расхождений быть
+// не может. Клик по строке ведёт в ЛК этого менеджера на том же периоде.
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
+import { Settings2 } from 'lucide-react';
+import Link from 'next/link';
+import { MainPeriodControl } from '@/features/reports/ui/FilterBar';
+import { Seg } from '@/features/reports/ui/FiltersMenu';
+import { startOfMonth } from 'date-fns';
+import type { DateRange } from '@/lib/period';
+import type { CardSegment } from '@/features/manager-card/engine/managerCard';
+
+interface AxisScore { key: string; label: string; score: number | null; raw: number | null; weight: number }
+interface RatingRow {
+  managerId: string; name: string; login: string | null;
+  department: string | null; branch: string | null;
+  rating: number | null; rank: number | null; isSelf: boolean;
+  axes: AxisScore[];
+}
+interface RatingResponse {
+  rows: RatingRow[];
+  total: number;
+  poolSize: number;
+  axes: { key: string; label: string; weight: number; invert: boolean }[];
+  scopeLimited: boolean;
+}
+
+// Цвет балла: 0-10 — от отрицательного к положительному, нейтральная середина.
+function scoreColor(score: number | null): string | undefined {
+  if (score === null) return undefined;
+  if (score >= 7) return 'var(--color-positive, #2f9e44)';
+  if (score <= 3) return 'var(--color-negative, #e03131)';
+  return 'var(--color-text-muted)';
+}
+
+function MedalOrRank({ rank }: { rank: number | null }) {
+  if (rank === null) return <span className="text-[var(--color-text-muted)]">—</span>;
+  if (rank <= 3) {
+    const bg = rank === 1 ? '#f59e0b' : rank === 2 ? '#94a3b8' : '#b45309';
+    return (
+      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full text-[12px] font-extrabold text-white" style={{ backgroundColor: bg }}>
+        {rank}
+      </span>
+    );
+  }
+  return <span className="inline-block w-7 text-center text-[13px] font-semibold tabular-nums text-[var(--color-text-muted)]">{rank}</span>;
+}
+
+export function RatingPage() {
+  const router = useRouter();
+  const [period, setPeriod] = useState<DateRange>(() => ({ from: startOfMonth(new Date()), to: new Date() }));
+  const [segment, setSegment] = useState<CardSegment>('all');
+
+  const fromIso = period.from.toISOString();
+  const toIso = period.to.toISOString();
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['rating', fromIso, toIso, segment],
+    queryFn: async () => {
+      const res = await fetch('/api/rating', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ period: { from: fromIso, to: toIso }, segment }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? 'Ошибка рейтинга');
+      return res.json() as Promise<RatingResponse>;
+    },
+    staleTime: 60_000,
+  });
+
+  const rows = data?.rows ?? [];
+  const axes = data?.axes ?? [];
+
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="p-4 sm:p-6 flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold text-[var(--color-text)]">Рейтинг менеджеров</h1>
+            <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
+              Балл 0-10 по каждой оси — перцентиль среди менеджеров с продажами за период
+              {data ? ` (${data.poolSize} чел.)` : ''}; итог — средневзвешенное по весам осей.
+            </p>
+          </div>
+          <Link
+            href="/settings/card-templates"
+            className="tap-target inline-flex items-center gap-2 px-3 py-1.5 text-sm border border-[var(--color-border)] rounded-lg text-[var(--color-text)] hover:border-[var(--color-border-focus)] transition-colors"
+            title="Оси рейтинга и их веса"
+          >
+            <Settings2 size={15} />
+            Настроить оси и веса
+          </Link>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <MainPeriodControl period={period} onPeriodChange={setPeriod} onComparisonChange={() => {}} />
+          <Seg<CardSegment>
+            options={['all', 'fl', 'ul']}
+            value={segment}
+            onChange={setSegment}
+            labels={{ all: 'Все', fl: 'Физики', ul: 'Юрики' }}
+          />
+        </div>
+
+        {data?.scopeLimited && (
+          <div className="text-xs text-[var(--color-text-muted)]">
+            Показаны менеджеры в вашей зоне ответственности. Место — из общего рейтинга ({data.total} чел.).
+          </div>
+        )}
+
+        {isLoading ? (
+          <div className="space-y-2">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-11 bg-[var(--color-border)] rounded-lg animate-pulse" />)}</div>
+        ) : isError ? (
+          <p className="text-sm text-[var(--color-negative)]">Не удалось посчитать рейтинг.</p>
+        ) : rows.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-muted)]">Нет менеджеров с продажами за выбранный период.</p>
+        ) : (
+          <div className="scroll-x rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-[var(--color-table-header)]">
+                  <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">#</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Менеджер</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Отдел</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-[var(--color-text)] whitespace-nowrap">Рейтинг</th>
+                  {axes.map(a => (
+                    <th key={a.key} className="px-3 py-2.5 text-right font-medium text-[var(--color-text-muted)] whitespace-nowrap" title={`Вес ${a.weight}`}>
+                      {a.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr
+                    key={r.managerId}
+                    onClick={() => router.push(`/manager/${r.managerId}?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&name=${encodeURIComponent(r.name)}`)}
+                    className={`border-t border-[var(--color-border)] cursor-pointer hover:bg-[var(--color-table-row-hover)] ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''} ${r.isSelf ? 'bg-[color-mix(in_srgb,var(--color-accent)_8%,transparent)]' : ''}`}
+                    title="Открыть ЛК менеджера"
+                  >
+                    <td className="px-3 py-2"><MedalOrRank rank={r.rank} /></td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <span className="font-medium text-[var(--color-text)]">{r.name}</span>
+                      {r.isSelf && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--color-accent)] text-[var(--color-text-inverse)]">вы</span>}
+                      {r.login && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">{r.login}</span>}
+                    </td>
+                    <td className="px-3 py-2 text-[var(--color-text-muted)] whitespace-nowrap">
+                      {r.department ?? '—'}{r.branch ? ` · ${r.branch}` : ''}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <span className="text-[15px] font-extrabold tabular-nums text-[var(--color-text)]">
+                        {r.rating !== null ? r.rating.toFixed(1) : '—'}
+                      </span>
+                    </td>
+                    {axes.map(a => {
+                      const s = r.axes.find(x => x.key === a.key)?.score ?? null;
+                      return (
+                        <td key={a.key} className="px-3 py-2 text-right tabular-nums" style={{ color: scoreColor(s) }}>
+                          {s !== null ? s.toFixed(1) : '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

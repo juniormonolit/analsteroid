@@ -39,7 +39,8 @@ export function SettingsSidebar({
     {
       label: 'Расчёты',
       items: [
-        { href: '/settings/scoring-weights', label: 'Веса скоринга', visible: isSuperadmin },
+        // «Веса скоринга» убраны из навигации: веса теперь задаются на строке оси в
+        // «Шаблонах карточек» (задача владельца 30.07). Сама страница осталась указателем.
         { href: '/settings/daily-plan-mode', label: 'Режим дневного плана', visible: isSuperadmin },
         // Шаблоны карточек (бриф 10.07) — единственный пункт этой группы БЕЗ
         // superadmin-only: явное решение владельца «админ должен видеть и менять»

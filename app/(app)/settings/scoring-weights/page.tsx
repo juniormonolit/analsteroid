@@ -1,121 +1,40 @@
-'use client';
+import Link from 'next/link';
+import { ArrowRight } from 'lucide-react';
 
-import { useEffect, useState } from 'react';
-
-// Ключи ДОЛЖНЫ буквально совпадать с AxisKey (lib/settings/scoringWeights.ts) — не
-// импортируем оттуда напрямую: тот модуль тянет systemDb (pg/fs, server-only), а
-// это клиентский компонент ('use client'), импорт сломал бы сборку браузерного бандла.
-type AxisKey = 'cr_deal_to_reservation' | 'cr_reservation_to_sale' | 'sales_amount' | 'avg_check' | 'touch_speed' | 'refusal_rate';
-const AXIS_KEYS: AxisKey[] = [
-  'cr_deal_to_reservation', 'cr_reservation_to_sale', 'sales_amount', 'avg_check', 'touch_speed', 'refusal_rate',
-];
-
-const AXIS_LABELS: Record<AxisKey, string> = {
-  cr_deal_to_reservation: 'CR Сделка → Бронь',
-  cr_reservation_to_sale: 'CR Бронь → Продажа',
-  sales_amount: 'Сумма продаж',
-  avg_check: 'Средний чек',
-  touch_speed: 'Скорость касания (меньше — лучше)',
-  refusal_rate: 'Доля отказов (меньше — лучше)',
-};
-
-type Weights = Record<AxisKey, number>;
-const EQUAL: Weights = Object.fromEntries(AXIS_KEYS.map(k => [k, 5])) as Weights;
-
-export default function ScoringWeightsPage() {
-  const [weights, setWeights] = useState<Weights | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
-  useEffect(() => {
-    fetch('/api/settings/scoring-weights')
-      .then(r => r.json())
-      .then(d => setWeights(d.weights ?? EQUAL))
-      .catch(() => setWeights(EQUAL));
-  }, []);
-
-  const sum = weights ? AXIS_KEYS.reduce((s, k) => s + weights[k], 0) : 0;
-
-  async function handleSave() {
-    if (!weights || saving) return;
-    setSaving(true);
-    setMessage(null);
-    try {
-      const res = await fetch('/api/settings/scoring-weights', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ weights }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setMessage({ type: 'error', text: data.error ?? 'Ошибка сохранения' });
-      } else {
-        setMessage({ type: 'success', text: 'Сохранено' });
-      }
-    } catch {
-      setMessage({ type: 'error', text: 'Сетевая ошибка' });
-    } finally {
-      setSaving(false);
-    }
-  }
-
+// Веса рейтинга переехали в конструктор карточек (задача владельца 30.07: «веса
+// рейтинга не синхронизируются с тем, что выбрано в карточках… и должны быть в 2
+// вариантах: для карточки менеджера и для карточки РОПа»).
+//
+// Прежний экран правил таблицу scoring_weights — singleton с 6 ФИКСИРОВАННЫМИ
+// колонками по именам legacy-осей. Как только админ выбирал осью паутины метрику
+// каталога (а с 10.07 это можно), её вес было негде задать: движок молча
+// подставлял 5. Плюс набор весов был ОДИН на оба шаблона. Теперь вес — поле самой
+// оси в card_templates (миграция 107), поэтому он синхронизирован с выбором по
+// построению и у каждого шаблона свой. Второго экрана быть не должно — иначе два
+// источника правды; страница оставлена указателем, чтобы старые ссылки/закладки
+// супер-админов не вели в пустоту.
+export default function ScoringWeightsMovedPage() {
   return (
-    <div className="p-3 sm:p-6 max-w-2xl">
-      <h1 className="text-lg font-semibold text-[var(--color-text)] mb-1">Веса скоринга карточки менеджера</h1>
-      <p className="text-sm text-[var(--color-text-muted)] mb-6">
-        Влияет на рейтинг в карточке менеджера, ФИФА-сетке «Мой отдел» и карточке отдела —
-        взвешенное среднее нормированных (0-10) значений 6 осей паутины. Шкала осей 0-10,
-        сумма нормируется автоматически (не обязана давать 10). Дефолт — равные веса
-        (эквивалент простого среднего, как в исходной карточке v1). Видна и редактируется
-        только супер-админом.
-      </p>
-
-      {weights === null ? (
-        <div className="text-sm text-[var(--color-text-muted)]">Загрузка...</div>
-      ) : (
-        <>
-          <div className="border border-[var(--color-border)] rounded-lg divide-y divide-[var(--color-border)]">
-            {AXIS_KEYS.map(key => (
-              <div key={key} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-                <span className="text-sm text-[var(--color-text)] sm:w-64 shrink-0">{AXIS_LABELS[key]}</span>
-                <input
-                  type="range" min={0} max={10} step={1}
-                  value={weights[key]}
-                  onChange={e => setWeights({ ...weights, [key]: Number(e.target.value) })}
-                  className="flex-1 accent-[var(--color-accent)]"
-                />
-                <span className="text-sm font-semibold text-[var(--color-text)] w-8 text-right shrink-0">{weights[key]}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-3 text-xs text-[var(--color-text-muted)]">
-            Сумма: {sum} {sum === 0 && '— все веса 0, будет применён фолбэк на равные доли'}
-          </div>
-
-          <div className="mt-4 flex items-center gap-3 flex-wrap">
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-4 py-2 text-sm rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] disabled:opacity-50"
-            >
-              {saving ? 'Сохранение...' : 'Сохранить'}
-            </button>
-            <button
-              onClick={() => setWeights(EQUAL)}
-              disabled={saving}
-              className="px-4 py-2 text-sm rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-border-focus)]"
-            >
-              Сбросить на равные
-            </button>
-            {message && (
-              <span className={`text-sm ${message.type === 'success' ? 'text-green-600' : 'text-red-500'}`}>
-                {message.text}
-              </span>
-            )}
-          </div>
-        </>
-      )}
+    <div className="max-w-2xl">
+      <h1 className="text-lg font-semibold text-[var(--color-text)]">Веса скоринга</h1>
+      <div className="mt-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-5 py-4">
+        <p className="text-sm text-[var(--color-text)]">
+          Веса переехали в «Шаблоны карточек» — теперь вес задаётся прямо на строке оси
+          паутины, отдельно для карточки менеджера и карточки отдела (РОП).
+        </p>
+        <p className="mt-2 text-sm text-[var(--color-text-muted)]">
+          Так вес и набор осей не могут разойтись: раньше веса жили в отдельной таблице
+          по шести фиксированным осям, и любая метрика из каталога получала вес 5 без
+          возможности его изменить.
+        </p>
+        <Link
+          href="/settings/card-templates"
+          className="mt-4 inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] hover:opacity-90 transition-opacity"
+        >
+          Открыть шаблоны карточек
+          <ArrowRight size={15} />
+        </Link>
+      </div>
     </div>
   );
 }

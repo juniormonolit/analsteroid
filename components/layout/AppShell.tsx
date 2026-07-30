@@ -7,7 +7,7 @@ import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid, Smartphone,
-  MessageCircle, LineChart,
+  MessageCircle, LineChart, Trophy,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
@@ -401,6 +401,9 @@ function SidebarBody({
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: hasPerm(user, 'action.deal_chats') },
+    // «Рейтинг» (задача владельца 30.07) — виден всем: состав строк режется по зоне
+    // ответственности на сервере (/api/rating), отдельного права не заводим.
+    { href: '/rating', label: 'Рейтинг', icon: <Trophy size={18} />, ok: true },
     { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: hasPerm(user, 'section.summary') },
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },
