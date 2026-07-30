@@ -1,4 +1,5 @@
 import type { CreatedTimeFilter, FirstTouchFilter } from './types';
+import { isWorkingDaySql } from './productionCalendar';
 
 // Задача 1569 (владелец, «побаловаться»): два экспериментальных фильтра для
 // сегментации сделок по нерабочему времени — цель: сравнить конверсию сделок,
@@ -24,15 +25,23 @@ function mskLocal(tsExpr: string): string {
   return `(${tsExpr} AT TIME ZONE '${TZ}')`;
 }
 
-/** CASE-выражение, классифицирующее момент времени на будни-рабочее/будни-нерабочее/выходные. */
+/** CASE-выражение, классифицирующее момент времени на рабочее/нерабочее/выходной день.
+ *
+ * Фикс 30.07 (владелец: «берёшь рабочий календарь этого года и предыдущего…»):
+ * раньше «выходной» определялся тупо по ISODOW 6-7 (сб/вс) — праздники среди
+ * недели (12.06, 23.02, майские, новогодние каникулы) считались буднями, а
+ * перенесённая РАБОЧАЯ суббота (01.11.2025) — выходным. Теперь «рабочий день»
+ * = по производственному календарю РФ (lib/metrics/productionCalendar.ts, там
+ * же напоминание пополнять ежегодно); «рабочее время» = рабочий день И
+ * 09:00-18:00. День/час — в МСК (AT TIME ZONE выше), время в БД — UTC. */
 function createdBucketExpr(tsExpr: string): string {
   const local = mskLocal(tsExpr);
-  const dow = `EXTRACT(ISODOW FROM ${local})`; // 1=Пн..7=Вс
+  const workingDay = isWorkingDaySql(`(${local})::date`);
   const t = `(${local})::time`;
   return `
     CASE
-      WHEN ${dow} BETWEEN 1 AND 5 AND ${t} >= TIME '${WORKDAY_START_HOUR}:00' AND ${t} < TIME '${WORKDAY_END_HOUR}:00' THEN 'business_hours'
-      WHEN ${dow} BETWEEN 1 AND 5 THEN 'weekday_after_hours'
+      WHEN ${workingDay} AND ${t} >= TIME '${WORKDAY_START_HOUR}:00' AND ${t} < TIME '${WORKDAY_END_HOUR}:00' THEN 'business_hours'
+      WHEN ${workingDay} THEN 'weekday_after_hours'
       ELSE 'weekend'
     END`;
 }
@@ -49,25 +58,33 @@ export function createdTimeWhere(alias: string, filter: CreatedTimeFilter | unde
 /**
  * Ближайший момент открытия (МСК, приведён обратно к timestamptz) НА ИЛИ ПОСЛЕ
  * данного timestamptz-выражения:
- *  - будни 09:00-18:00 → сам момент (уже открыто — окно нулевое);
- *  - будни до 09:00 → 09:00 того же дня;
- *  - будни после 18:00 → 09:00 следующего буднего дня (Пт вечер → Пн);
- *  - выходные → 09:00 ближайшего понедельника.
+ *  - рабочий день 09:00-18:00 → сам момент (уже открыто — окно нулевое);
+ *  - рабочий день до 09:00 → 09:00 того же дня;
+ *  - иначе (рабочий после 18:00 / нерабочий день) → 09:00 БЛИЖАЙШЕГО РАБОЧЕГО
+ *    дня по производственному календарю (фикс 30.07 — раньше «следующий рабочий»
+ *    искался наивным сдвигом по дню недели: пятница вечером 12.06.2026 давала
+ *    «пн 15.06» верно случайно, а вечер 31.12 давал «01.01» — праздник).
+ *
+ * Ближайший рабочий день ищется скалярным подзапросом по generate_series на
+ * 21 день вперёд — с запасом покрывает самый длинный нерабочий пробег
+ * (новогодние каникулы + выходные ≈ 11 дней).
  */
 function nextBusinessOpenExpr(tsExpr: string): string {
   const local = mskLocal(tsExpr);
-  const dow = `EXTRACT(ISODOW FROM ${local})`;
   const day = `date_trunc('day', ${local})`;
   const open = `(${day} + interval '${WORKDAY_START_HOUR} hours')`;
   const close = `(${day} + interval '${WORKDAY_END_HOUR} hours')`;
+  const workingToday = isWorkingDaySql(`(${local})::date`);
+  const nextWorkingOpen = `(
+    SELECT MIN(_g)::timestamp + interval '${WORKDAY_START_HOUR} hours'
+    FROM generate_series(((${local})::date + 1)::timestamp, ((${local})::date + 21)::timestamp, interval '1 day') AS _g
+    WHERE ${isWorkingDaySql('(_g)::date')}
+  )`;
   const naive = `
     CASE
-      WHEN ${dow} BETWEEN 1 AND 5 AND ${local} < ${open}  THEN ${open}
-      WHEN ${dow} BETWEEN 1 AND 5 AND ${local} < ${close} THEN ${local}
-      WHEN ${dow} = 5              THEN ${day} + interval '3 days ${WORKDAY_START_HOUR} hours'
-      WHEN ${dow} BETWEEN 1 AND 4  THEN ${day} + interval '1 day ${WORKDAY_START_HOUR} hours'
-      WHEN ${dow} = 6              THEN ${day} + interval '2 days ${WORKDAY_START_HOUR} hours'
-      ELSE                              ${day} + interval '1 day ${WORKDAY_START_HOUR} hours'
+      WHEN ${workingToday} AND ${local} < ${open}  THEN ${open}
+      WHEN ${workingToday} AND ${local} < ${close} THEN ${local}
+      ELSE ${nextWorkingOpen}
     END`;
   return `((${naive}) AT TIME ZONE '${TZ}')`;
 }
