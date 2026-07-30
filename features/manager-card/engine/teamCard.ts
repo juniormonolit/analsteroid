@@ -291,12 +291,19 @@ export async function buildDepartmentCard(opts: {
   const insufficientPeers = peerIds.length < 2;
 
   const { axisMap: deptAxisMap, eligible: deptEligible } = buildPeerAxisMap(periodPool, touchPeriodMap, ownAxisMapCur);
-  const rating = insufficientPeers ? null : ratingFor(deptAxisMap, deptEligible, opts.deptId, rawWeights, templateAxes);
+  // Отдел без продаж за период оценивать нечем: ratingFor вернул бы 0 (нижний
+  // перцентиль), а это читается как «худший из всех», хотя правдивый ответ — «данных
+  // нет». Заметно стало после того, как у «моих отделов» появились настоящие пиры
+  // (задача 30.07): до этого такие карточки и так отдавали прочерк из-за
+  // insufficientPeers. Пример из живых данных — «Филиал Санкт-Петербург (HR)».
+  const ownHasSales = deptEligible.has(opts.deptId);
+  const canRate = !insufficientPeers && ownHasSales;
+  const rating = canRate ? ratingFor(deptAxisMap, deptEligible, opts.deptId, rawWeights, templateAxes) : null;
   const orderedByRating = [...deptAxisMap.keys()]
     .map(id => ({ id, r: id === opts.deptId ? rating : (deptEligible.has(id) ? ratingFor(deptAxisMap, deptEligible, id, rawWeights, templateAxes) : null) }))
     .filter(x => x.r !== null)
     .sort((a, b) => b.r! - a.r!);
-  const rank = insufficientPeers ? null : (orderedByRating.findIndex(x => x.id === opts.deptId) + 1 || null);
+  const rank = canRate ? (orderedByRating.findIndex(x => x.id === opts.deptId) + 1 || null) : null;
 
   const { axisMap: compDeptAxisMap, eligible: compDeptEligible } = insufficientPeers
     ? { axisMap: new Map(), eligible: new Set<string>() }

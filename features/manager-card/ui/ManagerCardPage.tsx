@@ -18,6 +18,12 @@ import { buildManagerReportText } from '@/features/manager-card/engine/managerRe
 import { Copy, Check } from 'lucide-react';
 import type { CardSegment, ManagerCardResult, AxisUnit } from '@/features/manager-card/engine/managerCard';
 
+// Ответ карточки: у отдела к нему добавляется deptComparison (peerCount/
+// insufficientPeers из движка + aggregateOf от роута — сколько отделов объединено).
+type CardResponse = ManagerCardResult & {
+  deptComparison?: { peerCount: number; insufficientPeers: boolean; aggregateOf?: number };
+};
+
 // ── Форматирование (переехало из ManagerCardPanel без изменений) ────────────────────
 function fmtMoney(v: number | null | undefined): string {
   if (v === null || v === undefined) return '—';
@@ -229,10 +235,14 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? await res.text());
-      return res.json() as Promise<ManagerCardResult>;
+      // deptComparison приходит только с department-card; aggregateOf добавляет роут
+      // (сколько отделов объединено) — см. respondAggregate там же.
+      return res.json() as Promise<CardResponse>;
     },
     staleTime: 60_000,
   });
+
+  const aggregateOf = data?.deptComparison?.aggregateOf ?? 1;
 
   const radarAxes: RadarAxisInput[] = (data?.radar.axes ?? []).map(a => ({
     key: a.key, label: a.label, periodValue: a.period.normalized, comparisonValue: a.comparison.normalized, dataAvailable: a.dataAvailable,
@@ -286,9 +296,11 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
                 <h1 className="text-xl font-extrabold text-[var(--color-text)] truncate">{data?.profile.name ?? managerName ?? '…'}</h1>
                 {data?.profile.login && <span className="text-[13px] font-semibold text-[var(--color-text-muted)]">{data.profile.login}</span>}
               </div>
+              {/* В режиме отдела имя отдела уже стоит в заголовке («Отдел: X») —
+                  второй раз строкой ниже это был просто дубль (скрин владельца 30.07). */}
               <div className="mt-1 text-[13px] text-[var(--color-text-muted)] flex items-center gap-2 flex-wrap">
-                {data?.profile.department && <span>{data.profile.department}</span>}
-                {data?.profile.department && data?.profile.branch && <span>·</span>}
+                {mode !== 'department' && data?.profile.department && <span>{data.profile.department}</span>}
+                {mode !== 'department' && data?.profile.department && data?.profile.branch && <span>·</span>}
                 {data?.profile.branch && <span>{data.profile.branch}</span>}
               </div>
             </div>
@@ -383,6 +395,18 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
               <div className="flex justify-center overflow-x-auto py-2">
                 <ManagerCardRadar axes={radarAxes} />
               </div>
+              {/* Честная оговорка (задача 30.07): объединение нескольких отделов
+                  сравнивается с одиночными отделами компании. По относительным осям
+                  (конверсии, средний чек, скорость) это корректно, а по абсолютным
+                  сумма объединения закономерно выше — чтобы высокая оценка по ним не
+                  читалась как заслуга, говорим об этом прямо. */}
+              {aggregateOf > 1 && (
+                <p className="mt-1 text-[11px] leading-snug text-[var(--color-text-muted)]">
+                  Объединено отделов: {aggregateOf}. Сравнение идёт с отдельными отделами
+                  компании: по конверсиям и средним — корректно, по суммарным
+                  показателям объединение закономерно выше, тут оценка условная.
+                </p>
+              )}
             </SectionCard>
 
             <SectionCard title="Итоги за период · к прошлому периоду">

@@ -208,6 +208,24 @@ function polygonPoints(center: { x: number; y: number }, values: number[]): stri
 }
 
 export function ManagerCardRadar({ axes }: { axes: RadarAxisInput[] }) {
+  // Если НИ по одной оси нет нормированного значения — рисовать нечего. Раньше такой
+  // случай проваливался в `?? 0` ниже, и вместо «нет данных» получалась паутина,
+  // схлопнутая в точку в центре: визуально это читается как «все показатели по нулям»,
+  // то есть прямая дезинформация. Возникало это не в экзотике, а в кабинете каждого
+  // РОПа (сравнивать было не с кем — см. department-card/route.ts respondAggregate).
+  // Пиры теперь настоящие, но случай остаётся возможным: компания из одного отдела,
+  // либо ни у одного пира нет продаж за период.
+  const nothingToShow = axes.length === 0
+    || axes.every(a => a.periodValue === null && a.comparisonValue === null);
+  if (nothingToShow) {
+    return (
+      <div className="py-10 px-4 text-center text-sm text-[var(--color-text-muted)] max-w-xs">
+        Профиль строится сравнением с сопоставимыми — а их за этот период не нашлось,
+        поэтому показывать нечего.
+      </div>
+    );
+  }
+
   const n = axes.length;
   const periodValues     = axes.map(a => a.dataAvailable ? (a.periodValue ?? 0) : 0);
   const comparisonValues = axes.map(a => a.dataAvailable ? (a.comparisonValue ?? 0) : 0);

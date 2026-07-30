@@ -56,6 +56,83 @@ export async function POST(req: NextRequest) {
   const pgMode = productGroupMode as ProductGroupMode | undefined;
   const start = Date.now();
 
+  async function branchOf(deptId: string): Promise<string | null> {
+    const row = await analyticsDb().query<{ branch: string | null }>(
+      `SELECT branch FROM sa.org_resolved_hierarchy
+        WHERE department_id = $1 AND is_active = true LIMIT 1`,
+      [deptId],
+    );
+    return branchLabel(row.rows[0]?.branch ?? null) || null;
+  }
+
+  /**
+   * Карточка для «моих отделов»/«всех отделов» — со сравнением с ОСТАЛЬНЫМИ отделами
+   * компании (задача владельца 30.07).
+   *
+   * Раньше сюда передавался ОДИН bucket (отдел сам себе пир) → insufficientPeers,
+   * все оси радара приходили как null, а ManagerCardRadar трактует null как 0 — и
+   * РОП видел паутину, схлопнутую в точку, плюс прочерк вместо рейтинга. То есть
+   * блок был мёртвым для всей целевой аудитории кабинета.
+   *
+   * Два случая:
+   *  * руководит ОДНИМ отделом — это обычный отдел среди отделов, считаем ровно как
+   *    при явном uuid: сравнение полностью корректное, включая абсолютные оси;
+   *  * руководит НЕСКОЛЬКИМИ — агрегат сравниваем с остальными отделами, а СВОИ из
+   *    пула исключаем: сопоставлять агрегат с его же частями бессмысленно (и он бы
+   *    ещё и разбавлял сам себя в рейтинге). Оговорка: абсолютные оси (например
+   *    «Сумма продаж») у агрегата из N отделов закономерно выше одиночного отдела —
+   *    поэтому отдаём aggregateOf, и UI это честно поясняет.
+   */
+  async function respondAggregate(cfg: {
+    ownIds: string[];
+    ownNames: Array<string | null>;
+    aggregateKey: 'my' | 'all';
+    aggregateName: (n: number) => string;
+  }) {
+    const [roster, peerOptions] = await Promise.all([
+      resolveManagersForDepartments(cfg.ownIds),
+      getAllManagedDepartmentIds(),
+    ]);
+
+    if (cfg.ownIds.length === 1) {
+      const deptId = cfg.ownIds[0];
+      const peerIds = [...new Set([deptId, ...peerOptions.map(o => o.id)])];
+      const [peerBuckets, branch] = await Promise.all([
+        bucketManagersByDepartments(peerIds),
+        branchOf(deptId),
+      ]);
+      const result = await buildDepartmentCard({
+        deptId,
+        deptName: cfg.ownNames[0] ?? peerOptions.find(o => o.id === deptId)?.name ?? '—',
+        branch,
+        roster, peerBuckets,
+        period: periodRange, comparisonPeriod: comparisonRange, segment, productGroupMode: pgMode,
+      });
+      return NextResponse.json({
+        ...result,
+        deptComparison: { ...result.deptComparison, aggregateOf: 1 },
+        meta: { ...result.meta, durationMs: Date.now() - start },
+      });
+    }
+
+    const otherIds = peerOptions.map(o => o.id).filter(id => !cfg.ownIds.includes(id));
+    const peerBuckets = await bucketManagersByDepartments(otherIds);
+    peerBuckets.set(cfg.aggregateKey, roster);
+
+    const result = await buildDepartmentCard({
+      deptId: cfg.aggregateKey,
+      deptName: cfg.aggregateName(cfg.ownIds.length),
+      branch: null,
+      roster, peerBuckets,
+      period: periodRange, comparisonPeriod: comparisonRange, segment, productGroupMode: pgMode,
+    });
+    return NextResponse.json({
+      ...result,
+      deptComparison: { ...result.deptComparison, aggregateOf: cfg.ownIds.length },
+      meta: { ...result.meta, durationMs: Date.now() - start },
+    });
+  }
+
   // Живой смок деплоя 44: на отделах >5 менеджеров buildDepartmentCard валился
   // необработанным исключением (N+1 fetchByProductGroups по менеджеру упирался в
   // connectionTimeoutMillis пула analyticsDb) → голый 500. N+1 убран (см. teamCard.ts),
@@ -69,28 +146,22 @@ export async function POST(req: NextRequest) {
       if (!session.bitrixUserId) return NextResponse.json({ error: 'Аккаунт не связан с Битриксом' }, { status: 403 });
       const managed = await getCallControlManagedDepts(session.bitrixUserId);
       if (managed.length === 0) return NextResponse.json({ error: 'Нет отделов по структуре «Контроля звонков»' }, { status: 403 });
-      const roster = await resolveManagersForDepartments(managed.map(m => m.deptId));
-      const result = await buildDepartmentCard({
-        deptId: 'my',
-        deptName: managed.length === 1 ? (managed[0].deptName ?? 'Мой отдел') : `Мои отделы (${managed.length})`,
-        branch: null,
-        roster,
-        peerBuckets: new Map([['my', roster]]), // как 'all' — честный прочерк вместо пиров
-        period: periodRange, comparisonPeriod: comparisonRange, segment, productGroupMode: pgMode,
+      return respondAggregate({
+        ownIds: managed.map(m => m.deptId),
+        ownNames: managed.map(m => m.deptName),
+        aggregateKey: 'my',
+        aggregateName: n => `Мои отделы (${n})`,
       });
-      return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
     }
 
     if (departmentId === 'all') {
       if (options.length === 0) return NextResponse.json({ error: 'Отделы не назначены' }, { status: 403 });
-      const roster = await resolveManagersForDepartments(options.map(o => o.id));
-      const result = await buildDepartmentCard({
-        deptId: 'all', deptName: `Все отделы (${options.length})`, branch: null,
-        roster,
-        peerBuckets: new Map([['all', roster]]), // сравнивать не с кем — честный прочерк
-        period: periodRange, comparisonPeriod: comparisonRange, segment, productGroupMode: pgMode,
+      return respondAggregate({
+        ownIds: options.map(o => o.id),
+        ownNames: options.map(o => o.name),
+        aggregateKey: 'all',
+        aggregateName: n => `Все отделы (${n})`,
       });
-      return NextResponse.json({ ...result, meta: { ...result.meta, durationMs: Date.now() - start } });
     }
 
     if (!optionIds.has(departmentId)) return NextResponse.json({ error: 'Отдел недоступен' }, { status: 403 });
