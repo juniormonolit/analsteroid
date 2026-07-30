@@ -37,8 +37,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const preset: SurvivalPreset = body.preset === 'work' || body.preset === 'work_excl_reserved'
-    ? body.preset : 'priced';
+  const preset = body.preset === 'work' ? 'work' : 'priced' as SurvivalPreset;
   const period = parsePeriod(body.period);
   if (!period) return NextResponse.json({ error: 'Invalid period' }, { status: 400 });
 

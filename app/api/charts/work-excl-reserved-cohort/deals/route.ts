@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
-import { fetchStageSurvival, type SurvivalPreset } from '@/features/charts/engine/stageSurvival';
+import { fetchWorkExclReservedMilestoneDealIds, type MilestoneDrilldownKind } from '@/features/charts/engine/workExclReservedCohort';
+import { fetchDealsByIds } from '@/lib/reports/dealsByIds';
 import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/types';
 
-// Кривая «вероятность продажи от дней в стадии» (раздел «Графики», задача 28.07).
-// POST { preset: 'priced'|'work', period: {from,to}, dealScope?, clientType?, departmentIds? }
+// Дрилл-даун списка сделок одного дня когорты «В работе (без брони/подтв.) →
+// бронь/продажа/отгрузка по дням» (задача 2574, доработка 30.07 — три линии
+// вместо одной). Тот же паттерн, что app/api/charts/work-days-cohort/deals/
+// route.ts, но filter заменён на kind: 'all' (весь бакет «дожили») |
+// 'reserved' | 'sold' | 'shipped' (точное попадание соответствующего события
+// на день N). POST {
+//   day, kind: 'all'|'reserved'|'sold'|'shipped',
+//   period, dealScope?, clientType?, departmentIds?, productGroupMode?, productGroupIds?
+// } → { deals, total_count, total_amount }
 
 interface PeriodInput { from: string; to: string }
 
@@ -31,9 +39,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
-  const preset = body.preset === 'work' ? 'work' : 'priced' as SurvivalPreset;
   const period = parsePeriod(body.period);
   if (!period) return NextResponse.json({ error: 'Invalid period' }, { status: 400 });
+
+  const day = Number(body.day);
+  if (!Number.isInteger(day) || day < 0 || day > 31) {
+    return NextResponse.json({ error: 'day должен быть целым числом 0..31' }, { status: 400 });
+  }
+  const kind: MilestoneDrilldownKind = body.kind === 'reserved' || body.kind === 'sold' || body.kind === 'shipped'
+    ? body.kind : 'all';
 
   const dealScope = (['primary', 'repeat', 'all'] as const).includes(body.dealScope as DealScope)
     ? body.dealScope as DealScope : 'all';
@@ -43,9 +57,6 @@ export async function POST(req: NextRequest) {
     ? (body.departmentIds as unknown[]).filter((x): x is string => typeof x === 'string')
     : undefined;
 
-  // Фильтр товарных групп (задача 29.07): мультиселект + шкала. Валидация формы —
-  // сама фильтрация значений (числа для kc / строки для by_max) делает
-  // productGroupFilter.ts параметризованным запросом.
   const productGroupMode: ProductGroupMode = body.productGroupMode === 'by_max' ? 'by_max' : 'kc';
   let productGroupIds: string[] | undefined;
   if (body.productGroupIds !== undefined) {
@@ -56,6 +67,11 @@ export async function POST(req: NextRequest) {
     productGroupIds = body.productGroupIds as string[];
   }
 
-  const result = await fetchStageSurvival({ preset, period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds });
-  return NextResponse.json({ result });
+  const dealIds = await fetchWorkExclReservedMilestoneDealIds({
+    period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, day, kind,
+  });
+  if (dealIds === null) return NextResponse.json({ deals: [], total_count: 0, total_amount: 0 });
+
+  const result = await fetchDealsByIds(dealIds, productGroupMode);
+  return NextResponse.json(result);
 }

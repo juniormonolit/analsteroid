@@ -12,7 +12,7 @@ import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/type
 // каталога — отдельный движок поверх sa.deal_events (владелец: «таких метрик у нас
 // нет, можно и нужно ввести, но это не срочно»).
 //
-// Три пресета:
+// Два пресета:
 //  * 'priced' — стадия «Созвонился и озвучил цены» (резолвится ILIKE по имени, как
 //    в calledConversion.ts; сейчас это только ЧЛ). Дни = от первого входа до
 //    ПЕРВОГО события вне набора (выход); если сделка ещё в стадии — до текущего
@@ -20,13 +20,6 @@ import type { DealScope, ClientType, ProductGroupMode } from '@/lib/metrics/type
 //  * 'work' — все стадии с sa.stages.stage_type='WORK' (разметка портала). Дни =
 //    СУММА интервалов «событие WORK-стадии → следующее событие» по всей истории
 //    сделки (хвост открытой WORK-стадии — до текущего момента).
-//  * 'work_excl_reserved' — пятый график (задача 2574, владелец 29.07: «график
-//    аналогичный work, но исключающий стадии reserved и confirmed»). ТА ЖЕ
-//    когорта, что у 'work' (первый вход в любую WORK-стадию — набор для
-//    определения когорты НЕ сужается), но при суммировании дней исключаются
-//    интервалы стадий с event_type IN ('reserved','confirmed') — время ожидания
-//    брони/подтверждения не считается «работой менеджера». Дни у этого пресета
-//    ≤ дней у 'work' для тех же сделок (вычитаем часть интервалов).
 import type { SurvivalPreset, SurvivalBucket, SurvivalResult } from './types';
 
 export type { SurvivalPreset, SurvivalBucket, SurvivalResult } from './types';
@@ -233,27 +226,20 @@ WHERE 1=1 ${scopeWhere(opts.dealScope, opts.clientType)} ${deptWhere} ${pgWhere}
   return res.rows.map(r => ({ dealId: Number(r.deal_id), days: Number(r.days), sold: r.sold, open: r.open }));
 }
 
-// event_type ['reserved','confirmed'] — доп. исключение для 'work_excl_reserved'
-// (задача 2574). Экспортирован для workExclReservedDaysCohort.ts, если он
-// понадобится (пятый график сейчас в подаче SurvivalCard, не life table, но
-// набор исключений — единственный источник правды на случай появления
-// когортной версии).
+// event_type ['reserved','confirmed'] — доп. исключение для пятого графика
+// (задача 2574). Экспортирован для workExclReservedCohort.ts — тот зовёт
+// fetchWorkRows(opts, RESERVED_CONFIRMED_EVENT_TYPES) напрямую, преста здесь
+// в диспетчер не заводим (пятый график живёт в подаче life table, не бакетов/
+// CR%, см. workExclReservedCohort.ts — доработка 29.07 после показа владельцу
+// первой бакет-версии: «поправь чтобы был по аналогии с 3 и 4»).
 export const RESERVED_CONFIRMED_EVENT_TYPES = ['reserved', 'confirmed'];
-
-// Диспетчер по preset — один на fetchStageSurvival/fetchStageSurvivalDealIds
-// ниже, чтобы третий preset не пришлось добавлять в двух местах по-разному.
-function fetchRowsForPreset(opts: SurvivalOptions): Promise<SurvivalDealRow[]> {
-  if (opts.preset === 'work') return fetchWorkRows(opts);
-  if (opts.preset === 'work_excl_reserved') return fetchWorkRows(opts, RESERVED_CONFIRMED_EVENT_TYPES);
-  return fetchPricedRows(opts);
-}
 
 /** null — если весь период раньше старта сбора deal_events (03.04.2026). */
 export async function fetchStageSurvival(opts: SurvivalOptions): Promise<SurvivalResult | null> {
   const periodToStr = periodDateStrFromInstant(opts.period.to, 'to');
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
-  const rows = await fetchRowsForPreset(opts);
+  const rows = opts.preset === 'work' ? await fetchWorkRows(opts) : await fetchPricedRows(opts);
 
   const buckets: SurvivalBucket[] = BUCKETS.map(b => ({
     label: b.label, daysFrom: b.from, total: 0, sold: 0, pct: null,
@@ -297,7 +283,7 @@ export async function fetchStageSurvivalDealIds(
   const bucket = BUCKETS.find(b => b.label === opts.bucketLabel);
   if (!bucket) return [];
 
-  const rows = await fetchRowsForPreset(opts);
+  const rows = opts.preset === 'work' ? await fetchWorkRows(opts) : await fetchPricedRows(opts);
   return rows
     .filter(r => r.days >= bucket.from && r.days < bucket.toExcl)
     .filter(r => (opts.filter === 'sold' ? r.sold : true))
