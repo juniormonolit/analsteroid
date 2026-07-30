@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek,
   addDays, isSameDay, isBefore, isAfter,
@@ -11,8 +11,23 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { DateRange, PresetKey } from '@/lib/period';
 import { applyPreset, defaultPeriod, PRESET_LABELS } from '@/lib/period';
 
-const PRESETS: PresetKey[] = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month'];
+// «Этот квартал/год/Всё время» — задача 30.07 (владелец: «добавь в пресеты»).
+const PRESETS: PresetKey[] = ['today', 'yesterday', 'this_week', 'last_week', 'this_month', 'last_month', 'this_quarter', 'this_year', 'all_time'];
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+// Разбор ручного ввода «ДД.ММ.ГГГГ» (задача 30.07, владелец: «сделай так, чтобы
+// можно было вводить руками»). Допускаем и «1.7.2026»; строгая проверка через
+// обратную сверку компонент (new Date(2026,1,31) молча перескочил бы в март).
+function parseRuDate(s: string): Date | null {
+  const m = s.trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!m) return null;
+  const [, dd, mm, yyyy] = m;
+  const d = Number(dd), mo = Number(mm), y = Number(yyyy);
+  if (y < 2000 || y > 2100) return null;
+  const date = new Date(y, mo - 1, d);
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) return null;
+  return date;
+}
 
 // Мета о происхождении диапазона (задача 10.07: «быстрые кнопки — сравнение
 // календарное, ручной диапазон — как раньше, хвост»). presetKey задан только когда
@@ -50,6 +65,40 @@ export function DateRangePicker({ value, onChange, onClose, showPresets = true, 
 
   const today = startOfDay(new Date());
   const days  = buildCalendarDays(month);
+
+  // ── Ручной ввод дат (задача 30.07) ────────────────────────────────────────
+  // Черновики строк отделены от value; Enter применяет (при валидной паре),
+  // blur применяет только если фокус ушёл ЗА ПРЕДЕЛЫ пикера (relatedTarget вне
+  // rootRef) — иначе blur от клика по дню календаря применял бы черновик и
+  // закрывал popover раньше, чем сработает сам клик (родитель закрывает попап
+  // на каждый onChange). Невалидная дата или от>до — красная рамка, не
+  // применяется, страница живёт.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [fromStr, setFromStr] = useState(() => format(value.from, 'dd.MM.yyyy'));
+  const [toStr, setToStr]     = useState(() => format(value.to, 'dd.MM.yyyy'));
+  useEffect(() => {
+    setFromStr(format(value.from, 'dd.MM.yyyy'));
+    setToStr(format(value.to, 'dd.MM.yyyy'));
+  }, [value.from, value.to]);
+  const draftFrom = parseRuDate(fromStr);
+  const draftTo   = parseRuDate(toStr);
+  const inputInvalid =
+    draftFrom === null || draftTo === null || isAfter(startOfDay(draftFrom), startOfDay(draftTo));
+
+  function commitManualInput() {
+    if (inputInvalid || draftFrom === null || draftTo === null) return;
+    const next = { from: startOfDay(draftFrom), to: endOfDay(draftTo) };
+    if (isSameDay(next.from, value.from) && isSameDay(next.to, value.to)) return; // ничего не поменялось
+    setAnchor(null);
+    setHover(null);
+    onChange(next); // без meta — семантика ручного выбора (сравнение хвостом)
+  }
+
+  function handleInputBlur(e: React.FocusEvent<HTMLInputElement>) {
+    // фокус остался внутри пикера (второй инпут, календарь, пресеты) — не применяем
+    if (e.relatedTarget && rootRef.current?.contains(e.relatedTarget as Node)) return;
+    commitManualInput();
+  }
 
   // Preview range while selecting second date
   const previewFrom = anchor ? (
@@ -103,13 +152,45 @@ export function DateRangePicker({ value, onChange, onClose, showPresets = true, 
 
   return (
     // Рамку/тень даёт Popover-обёртка. На телефоне пресеты уходят под календарь.
-    <div className="flex flex-col sm:flex-row overflow-hidden">
+    <div ref={rootRef} className="flex flex-col sm:flex-row overflow-hidden">
 
       {/* Calendar */}
       <div className="p-4 w-[300px] max-w-full">
         {title && (
           <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2 uppercase tracking-wide">{title}</p>
         )}
+
+        {/* Ручной ввод дат (задача 30.07): ДД.ММ.ГГГГ, Enter/уход из пикера
+            применяет, невалидное — красная рамка без применения. */}
+        <div className="flex items-center gap-1.5 mb-3">
+          <input
+            value={fromStr}
+            onChange={e => setFromStr(e.target.value)}
+            onBlur={handleInputBlur}
+            onKeyDown={e => { if (e.key === 'Enter') commitManualInput(); }}
+            placeholder="ДД.ММ.ГГГГ"
+            inputMode="numeric"
+            aria-label="Дата начала"
+            aria-invalid={inputInvalid || undefined}
+            className={`flex-1 min-w-0 px-2 py-1 text-sm tabular-nums text-center rounded-lg border bg-[var(--color-bg-surface)] text-[var(--color-text)] outline-none transition-colors ${
+              inputInvalid ? 'border-[var(--color-negative)]' : 'border-[var(--color-border)] focus:border-[var(--color-accent)]'
+            }`}
+          />
+          <span className="text-[var(--color-text-muted)] text-sm shrink-0">—</span>
+          <input
+            value={toStr}
+            onChange={e => setToStr(e.target.value)}
+            onBlur={handleInputBlur}
+            onKeyDown={e => { if (e.key === 'Enter') commitManualInput(); }}
+            placeholder="ДД.ММ.ГГГГ"
+            inputMode="numeric"
+            aria-label="Дата конца"
+            aria-invalid={inputInvalid || undefined}
+            className={`flex-1 min-w-0 px-2 py-1 text-sm tabular-nums text-center rounded-lg border bg-[var(--color-bg-surface)] text-[var(--color-text)] outline-none transition-colors ${
+              inputInvalid ? 'border-[var(--color-negative)]' : 'border-[var(--color-border)] focus:border-[var(--color-accent)]'
+            }`}
+          />
+        </div>
 
         {/* Month navigation */}
         <div className="flex items-center justify-between mb-3">

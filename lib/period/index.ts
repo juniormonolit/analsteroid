@@ -83,7 +83,16 @@ export function previousPeriodSameLength(current: DateRange): DateRange {
 
 export type PresetKey =
   | 'today' | 'yesterday' | 'this_week' | 'last_week'
-  | 'this_month' | 'last_month';
+  | 'this_month' | 'last_month'
+  // Задача 30.07 (владелец: «добавь в пресеты "этот квартал/год/все время"»).
+  | 'this_quarter' | 'this_year' | 'all_time';
+
+// «Всё время» — с самой ранней даты данных: min(created_at) в sa.deals =
+// 08.01.2025 (проверено на проде 30.07.2026), округлено к началу того года —
+// 01.01.2025 покрывает всё и не зависит от точного времени первой сделки.
+// Константа, не запрос: пресеты — чистые клиентские функции без API (как все
+// остальные), а левая граница данных не движется назад.
+export const ALL_TIME_START = new Date(2025, 0, 1);
 
 export function applyPreset(key: PresetKey): DateRange {
   const today = msk();
@@ -106,6 +115,12 @@ export function applyPreset(key: PresetKey): DateRange {
       const lm = subMonths(today, 1);
       return { from: startOfMonth(lm), to: endOfDay(subDays(startOfMonth(today), 1)) };
     }
+    case 'this_quarter':
+      return { from: startOfQuarter(today), to: endOfDay(today) };
+    case 'this_year':
+      return { from: startOfYear(today), to: endOfDay(today) };
+    case 'all_time':
+      return { from: startOfDay(ALL_TIME_START), to: endOfDay(today) };
   }
 }
 
@@ -152,13 +167,17 @@ export function previousCalendarUnitBounds(unit: CalendarUnit, ref: Date): DateR
 // объекта, которую описывает пресет (не сам DateRange пресета — у this_month/today
 // правая граница обрезана по вчера/сегодня, а для определения ПРЕДЫДУЩЕГО
 // календарного объекта важен именно тип периода, а не его фактические границы).
-const PRESET_UNIT: Record<PresetKey, CalendarUnit> = {
+// 'all_time' сюда сознательно НЕ входит: у «всего времени» нет календарного
+// «предыдущего объекта», сравнение для него хвостовое (см. комментарий у
+// calendarComparisonForPreset ниже).
+const PRESET_UNIT: Record<Exclude<PresetKey, 'all_time'>, CalendarUnit> = {
   today: 'day', yesterday: 'day',
   this_week: 'week', last_week: 'week',
   this_month: 'month', last_month: 'month',
+  this_quarter: 'quarter', this_year: 'year',
 };
 
-function presetAnchorDate(key: PresetKey, today: Date): Date {
+function presetAnchorDate(key: Exclude<PresetKey, 'all_time'>, today: Date): Date {
   switch (key) {
     case 'today':      return today;
     case 'yesterday':  return subDays(today, 1);
@@ -167,6 +186,8 @@ function presetAnchorDate(key: PresetKey, today: Date): Date {
     case 'last_week':  return subDays(startOfWeek(today, { weekStartsOn: 1 }), 1);
     case 'this_month': return today;
     case 'last_month': return subMonths(today, 1);
+    case 'this_quarter': return today;
+    case 'this_year':  return today;
   }
 }
 
@@ -182,6 +203,11 @@ function presetAnchorDate(key: PresetKey, today: Date): Date {
  */
 export function calendarComparisonForPreset(key: PresetKey): DateRange {
   const today = msk();
+  // «Всё время» (задача 30.07): предыдущего календарного объекта у него нет —
+  // сравнение хвостовое (recomputeComparison), как у ручного диапазона. Длина
+  // хвоста уходит раньше начала данных — там просто пусто, это ок (раздел
+  // «Графики» сравнение вовсе не использует).
+  if (key === 'all_time') return recomputeComparison(applyPreset('all_time'));
   const unit = PRESET_UNIT[key];
   const anchor = presetAnchorDate(key, today);
   return previousCalendarUnitBounds(unit, anchor);
@@ -253,4 +279,7 @@ export const PRESET_LABELS: Record<PresetKey, string> = {
   last_week: 'Прошлая неделя',
   this_month: 'Этот месяц',
   last_month: 'Прошлый месяц',
+  this_quarter: 'Этот квартал',
+  this_year: 'Этот год',
+  all_time: 'Всё время',
 };
