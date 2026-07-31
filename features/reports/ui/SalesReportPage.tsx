@@ -34,6 +34,7 @@ import { buildExportFilename } from '@/features/reports/lib/exportFilename';
 import { exportTableToExcel } from '@/features/reports/lib/exportExcel';
 import { exportNodeToPng } from '@/features/reports/lib/exportImage';
 import { exportNodeToPdf } from '@/features/reports/lib/exportPdf';
+import { UserGroupsBar, type UserReportGroup, type GroupCandidate } from './UserGroupsBar';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -84,6 +85,42 @@ function aggregateGroupDeltas(members: MergedRow[], metrics: Metric[]): Deltas {
     deltas[id] = { current: c, comparison: p, delta, deltaPct };
   }
   return deltas;
+}
+
+// Пользовательские группы (задача 2653): участники схлопываются в строку-агрегат
+// с ТОЙ ЖЕ агрегацией, что у строк отдела/филиала (aggregateGroupDeltas —
+// суммы + пересчёт calculated по формуле, сравнение периодов включено).
+// Применяется ТОЛЬКО при grouping='none' (решение: участники user-группы могут
+// быть из разных отделов — в группировке по отделу/филиалу строки остаются
+// обычными, в панели виден хинт). Строка группы — isGroup с children: участники
+// «исчезают из общего списка» и живут внутри группы (раскрываются шевроном).
+function applyUserGroups(rows: MergedRow[], groups: UserReportGroup[], metrics: Metric[]): GroupedMergedRow[] {
+  if (groups.length === 0) return rows;
+  const memberOf = new Map<string, string>();
+  for (const g of groups) for (const m of g.member_ids) memberOf.set(m, g.id);
+  const byGroup = new Map<string, MergedRow[]>();
+  const rest: MergedRow[] = [];
+  for (const r of rows) {
+    const gid = memberOf.get(r.dimensionId);
+    if (gid) {
+      const arr = byGroup.get(gid) ?? [];
+      arr.push(r);
+      byGroup.set(gid, arr);
+    } else rest.push(r);
+  }
+  const groupRows: GroupedMergedRow[] = [];
+  for (const g of groups) {
+    const members = byGroup.get(g.id) ?? [];
+    if (members.length === 0) continue; // участники не в текущем срезе — группу не рисуем
+    groupRows.push({
+      dimensionId: `__ugroup__${g.id}`,
+      dimensionName: `${g.name} (${members.length})`,
+      teamId: null, teamName: null,
+      deltas: aggregateGroupDeltas(members, metrics),
+      isGroup: true, children: members,
+    });
+  }
+  return [...groupRows, ...rest];
 }
 
 function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Metric[]): GroupedMergedRow[] {
@@ -585,8 +622,32 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
 
   const dimensionType = sourceMode ? 'source' : reportSlug === 'by-product-groups' ? 'product-group' : 'manager';
 
+  // Пользовательские группы (задача 2653): per-user, per-шкала (для товарных
+  // групп kc/by_max несовместимы — dimensionKey включает режим).
+  const userGroupsKey = dimensionType === 'product-group' ? `product-group:${productGroupMode}` : 'manager';
+  const { data: userGroupsData } = useQuery<{ groups: UserReportGroup[] }>({
+    queryKey: ['report-groups', userGroupsKey],
+    queryFn: async () => {
+      const res = await fetch(`/api/report-groups?dimensionKey=${encodeURIComponent(userGroupsKey)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    enabled: !sourceMode,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const userGroups = useMemo(() => userGroupsData?.groups ?? [], [userGroupsData]);
+  const userGroupCandidates = useMemo<GroupCandidate[]>(() => {
+    const busy = new Set(userGroups.flatMap(g => g.member_ids));
+    return (data?.rows ?? [])
+      .filter((r: MergedRow) => !busy.has(r.dimensionId))
+      .map((r: MergedRow) => ({ id: r.dimensionId, name: r.dimensionName, subtitle: r.dimensionSubtitle }));
+  }, [data?.rows, userGroups]);
+
   const displayRows = useMemo(() => {
-    const grouped = applyClientGrouping(data?.rows ?? [], grouping, catalogMetrics);
+    const grouped = grouping === 'none' && !sourceMode
+      ? applyUserGroups(data?.rows ?? [], userGroups, catalogMetrics)
+      : applyClientGrouping(data?.rows ?? [], grouping, catalogMetrics);
     if (!search.trim()) return grouped;
     const q = search.trim().toLowerCase();
     // Поиск и по короткому логину менеджера (п.3 правок 09.07/2): dimensionSubtitle
@@ -605,7 +666,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         return { ...r, children: filteredChildren };
       })
       .filter(Boolean) as typeof grouped;
-  }, [data?.rows, grouping, search, catalogMetrics]);
+  }, [data?.rows, grouping, search, catalogMetrics, sourceMode, userGroups]);
 
   // Общее число отделов — только для диагноз-пилюли составного empty state (задача
   // 1698, кейс 10Б). Тот же queryKey, что у DepartmentPicker внутри FilterBar — React
@@ -641,6 +702,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const handleRowClick = useCallback(
     (id: string, name: string) => {
       // Агрегированные строки отделов внутри филиала → сделки отдела
+      if (id.startsWith('__ugroup__')) return; // пользовательская группа — дрилл-даун не поддержан (этап 1, задача 2653)
       if (id.startsWith('__team__')) setDrilldown({ id: id.slice('__team__'.length), name, kind: 'team' });
       else if (id.startsWith('__branch__')) setDrilldown({ id: id.slice('__branch__'.length), name, kind: 'branch' });
       else setDrilldown({ id, name });
@@ -670,6 +732,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
         ?? availableMetrics.find((x: { id: string }) => x.id === metricId);
       // Групповые строки и «Итого» открывают плоский список сделок всего среза
+      if (id.startsWith('__ugroup__')) return; // см. handleRowClick
       if (id === '__total__') {
         setDrilldown({ id: '__all__', name: 'Итого', metricId, metricName: m?.nameRu, kind: 'total' });
       } else if (id.startsWith('__team__')) {
@@ -980,6 +1043,16 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             Добавить метрики
           </button>
         </div>
+      )}
+
+      {!sourceMode && (
+        <UserGroupsBar
+          dimensionKey={userGroupsKey}
+          groups={userGroups}
+          candidates={userGroupCandidates}
+          groupingActive={grouping !== 'none'}
+          entityLabel={dimensionType === 'manager' ? 'менеджеров' : 'товарных групп'}
+        />
       )}
 
       <div className="flex-1 overflow-hidden">
