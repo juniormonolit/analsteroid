@@ -100,6 +100,30 @@ export async function runWalletTick(client: PoolClient): Promise<WalletTickStats
   );
   if ((exp.rowCount ?? 0) > 0 || items.rows.length > 0) await recomputeFifoRemaining(client);
 
+  // Уведомление о скором сгорании (за 7 дней, пакет 31.07): у кого живые остатки
+  // с дедлайном в ближайшие 7 дней — одно уведомление раз в 7 дней (дедуп по типу).
+  await client.query(
+    `WITH s AS (SELECT ttl_months FROM badge_coin_settings WHERE id = 1),
+     soon AS (
+       SELECT l.bitrix_id, sum(l.remaining)::int AS amt,
+              greatest(0, ceil(extract(epoch FROM min(l.created_at + make_interval(months => s.ttl_months)) - now()) / 86400))::int AS days
+         FROM badge_coin_ledger l, s
+        WHERE l.currency = 'EBALL' AND l.amount > 0 AND l.remaining > 0
+          AND l.created_at + make_interval(months => s.ttl_months) < now() + interval '7 days'
+        GROUP BY l.bitrix_id
+     )
+     INSERT INTO notifications (bitrix_id, type, title, body, link)
+     SELECT bitrix_id, 'expiry_soon',
+            'Скоро сгорит ' || amt || ' ебаллов',
+            'Через ' || days || ' дн. истечёт срок жизни части начислений — потратьте их в магазине.',
+            '/manager/me'
+       FROM soon w
+      WHERE amt > 0
+        AND NOT EXISTS (SELECT 1 FROM notifications n
+                         WHERE n.bitrix_id = w.bitrix_id AND n.type = 'expiry_soon'
+                           AND n.created_at > now() - interval '7 days')`,
+  );
+
   return {
     expiredLedger: exp.rowCount ?? 0,
     expiredAmount: exp.rows.reduce((s, r) => s + Number(r.amount), 0),

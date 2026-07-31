@@ -6,6 +6,7 @@
 import { randomInt } from 'crypto';
 import type { Pool, PoolClient } from 'pg';
 import { recomputeFifoRemaining } from './wallet';
+import { createNotification, pushViaAnalitik } from './notifications';
 
 export const PPM_TOTAL = 1_000_000;
 export const SOFT_PITY_FROM = 61;      // с 61-й крутки шанс редкого растёт
@@ -207,7 +208,23 @@ export async function runSpin(db: Pool, bitrixId: number): Promise<SpinResult | 
       [bitrixId, tier.tier_key, tier.rarity, tier.name, tier.eball_amount,
        inventoryItemId, spend.rows[0].id, prizeLedgerId, pity, forced],
     );
+    // Редкий/джекпот — уведомление в ЛК (пуш «Аналитиком» шлёт роут после ответа).
+    if (tier.rarity !== 'common') {
+      await createNotification(client, {
+        bitrixId,
+        type: tier.rarity === 'jackpot' ? 'gacha_jackpot' : 'gacha_rare',
+        title: tier.rarity === 'jackpot' ? `ДЖЕКПОТ в гаче: ${tier.name}!` : `Редкий приз в гаче: ${tier.name}`,
+        body: tier.rarity === 'jackpot'
+          ? 'Приз в инвентаре, заявка на выдачу уже у руководителя.'
+          : 'Приз упал в ваш инвентарь.',
+        link: '/manager/me',
+      });
+    }
     await client.query('COMMIT');
+    if (tier.rarity !== 'common') {
+      void pushViaAnalitik(bitrixId,
+        tier.rarity === 'jackpot' ? `ДЖЕКПОТ в гаче: ${tier.name}!` : `Редкий приз в гаче: ${tier.name}`);
+    }
 
     const gained = tier.prize_type === 'eball' ? (tier.eball_amount ?? 0) : 0;
     return {

@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
         `SELECT id::int AS id, shop_item_id::int AS shop_item_id, item_name, price_paid, currency, status,
                 to_char(purchased_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS purchased_at,
                 to_char(expires_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS expires_at,
-                activation_comment, resolver_login, resolve_comment,
+                activation_comment, resolver_login, resolve_comment, gift_history,
                 to_char(resolved_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS resolved_at
            FROM inventory_items WHERE bitrix_id = $1
           ORDER BY (status IN ('owned','activation_requested')) DESC, purchased_at DESC

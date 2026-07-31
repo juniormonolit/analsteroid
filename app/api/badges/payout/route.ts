@@ -3,6 +3,7 @@ import { getSession, type SessionUser } from '@/lib/auth/session';
 import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { systemDb, analyticsDb } from '@/lib/db/clients';
+import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 
 // Вывод рублей в ЗП (доп. Серёги 31.07): менеджер подаёт заявку (сумма не
 // больше рублёвого баланса), РОП своих / админ отмечает «выплачено» (списание
@@ -149,7 +150,18 @@ export async function PATCH(req: NextRequest) {
         [p.bitrix_id, -p.amount, p.amount, session.login, `Вывод в ЗП (заявка #${id})`, id],
       );
     }
+    // Уведомление менеджеру (в той же транзакции) + пуш после коммита.
+    const paid = body.action === 'paid';
+    await createNotification(client, {
+      bitrixId: Number(p.bitrix_id), type: 'payout_resolved',
+      title: paid ? `Выплата ${p.amount} ₽ подтверждена` : `Заявка на вывод ${p.amount} ₽ отклонена`,
+      body: paid ? `Подтвердил: ${session.login}. Сумма списана с рублёвого кошелька.` : `Причина: ${comment}`,
+      link: '/manager/me',
+    });
     await client.query('COMMIT');
+    void pushViaAnalitik(Number(p.bitrix_id),
+      paid ? `Выплата ${p.amount} ₽ подтверждена` : `Заявка на вывод ${p.amount} ₽ отклонена`,
+      paid ? `Подтвердил: ${session.login}` : `Причина: ${comment}`);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;

@@ -24,13 +24,16 @@ export async function GET() {
            ON p.shop_item_id = i.id
         ORDER BY i.category, i.sort, i.id`,
     ),
-    db.query<{ rate: string; ttl_months: number }>(
-      `SELECT rub_to_eball_rate AS rate, ttl_months FROM badge_coin_settings WHERE id = 1`,
+    db.query<{ rate: string; ttl_months: number; fee: string; tlim: number }>(
+      `SELECT rub_to_eball_rate AS rate, ttl_months, transfer_fee_percent AS fee, transfer_daily_limit AS tlim
+         FROM badge_coin_settings WHERE id = 1`,
     ),
   ]);
   const rate = Number(settings.rows[0]?.rate ?? 1);
   return NextResponse.json({
     coinTtlMonths: settings.rows[0]?.ttl_months ?? 6,
+    transferFeePercent: Number((settings.rows[0] as { fee?: string } | undefined)?.fee ?? 5),
+    transferDailyLimit: (settings.rows[0] as { tlim?: number } | undefined)?.tlim ?? 500,
     items: items.rows.map(i => ({
       id: i.id, name: i.name, description: i.description, category: i.category,
       priceUnits: Number(i.price_units), priceEball: priceEball(Number(i.price_units)),

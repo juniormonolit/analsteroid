@@ -3,6 +3,7 @@ import { getSession, type SessionUser } from '@/lib/auth/session';
 import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { systemDb, analyticsDb } from '@/lib/db/clients';
+import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 
 // Заявки на активацию предметов инвентаря (MVP магазина, 31.07) — клон механики
 // payout_requests: менеджер просит активировать предмет (owned →
@@ -117,11 +118,20 @@ export async function PATCH(req: NextRequest) {
 
   // approve → used (предмет исполнен: эффект — организационно, вне системы);
   // reject → ОБРАТНО в owned с причиной, повторная активация не ограничена.
-  await db.query(
+  const upd = await db.query<{ item_name: string }>(
     body.action === 'approve'
-      ? `UPDATE inventory_items SET status = 'used', resolved_at = now(), resolver_login = $2, resolve_comment = nullif($3, '') WHERE id = $1`
-      : `UPDATE inventory_items SET status = 'owned', resolved_at = now(), resolver_login = $2, resolve_comment = $3, requested_at = NULL WHERE id = $1`,
+      ? `UPDATE inventory_items SET status = 'used', resolved_at = now(), resolver_login = $2, resolve_comment = nullif($3, '') WHERE id = $1 RETURNING item_name`
+      : `UPDATE inventory_items SET status = 'owned', resolved_at = now(), resolver_login = $2, resolve_comment = $3, requested_at = NULL WHERE id = $1 RETURNING item_name`,
     [id, session.login, comment],
   );
+  // Уведомление менеджеру + пуш «Аналитиком» (Bitrix imbot, best-effort).
+  const itemName = upd.rows[0]?.item_name ?? 'предмет';
+  const approved = body.action === 'approve';
+  const title = approved ? `Заявка одобрена: ${itemName}` : `Заявка отклонена: ${itemName}`;
+  const bodyText = approved
+    ? `Одобрил: ${session.login}`
+    : `Причина: ${comment}. Предмет вернулся в ваш инвентарь — можно подать заявку на другую дату.`;
+  await createNotification(db, { bitrixId: Number(row.rows[0].bitrix_id), type: 'activation_resolved', title, body: bodyText, link: '/manager/me' });
+  void pushViaAnalitik(Number(row.rows[0].bitrix_id), title, bodyText);
   return NextResponse.json({ ok: true });
 }

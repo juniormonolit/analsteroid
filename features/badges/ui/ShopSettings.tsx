@@ -115,7 +115,7 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
 export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<ShopItemRow | null | 'new'>(null);
-  const { data } = useQuery<{ items: ShopItemRow[]; coinTtlMonths: number }>({
+  const { data } = useQuery<{ items: ShopItemRow[]; coinTtlMonths: number; transferFeePercent: number; transferDailyLimit: number }>({
     queryKey: ['settings-shop'],
     queryFn: async () => {
       const res = await fetch('/api/settings/badges/shop');
@@ -157,6 +157,20 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
     if (ttlDraft === null || !Number.isInteger(v) || v <= 0) { setTtlDraft(null); return; }
     saveTtl.mutate(v);
   };
+
+  // Настройки переводов (пакет 31.07): комиссия и дневной лимит.
+  const saveTransfer = useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await fetch('/api/settings/badges/transfer', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      invalidate();
+      void qc.invalidateQueries({ queryKey: ['shop-transfer-meta'] });
+    },
+  });
 
   // «Релизный старт» — заложенный одноразовый механизм, НЕ запускался.
   const { data: release } = useQuery<{ startedAt: string | null }>({
@@ -219,6 +233,18 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
             onKeyDown={e => { if (e.key === 'Enter') commitTtl(); }}
             className="w-14 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-right text-xs tabular-nums"
           />
+        </label>
+        <label className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]"
+          title="Комиссия за перевод ебаллов коллеге, % — сжигается">
+          Комиссия переводов, %
+          <SettingsNum value={data?.transferFeePercent ?? 5}
+            onCommit={v => saveTransfer.mutate({ feePercent: v })} w="w-12" allowZero />
+        </label>
+        <label className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]"
+          title="Дневной лимит суммы исходящих переводов на менеджера">
+          Лимит переводов/день
+          <SettingsNum value={data?.transferDailyLimit ?? 500}
+            onCommit={v => saveTransfer.mutate({ dailyLimit: v })} w="w-16" />
         </label>
         <button type="button" onClick={() => setEditing('new')}
           className="rounded-lg bg-[var(--color-accent)] px-3 py-1 text-xs font-semibold text-white">
@@ -284,5 +310,19 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
         />
       )}
     </div>
+  );
+}
+
+function SettingsNum({ value, onCommit, w, allowZero }: { value: number; onCommit: (v: number) => void; w: string; allowZero?: boolean }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    const v = Number(draft);
+    if (draft === null || !Number.isFinite(v) || (allowZero ? v < 0 : v <= 0) || v === value) { setDraft(null); return; }
+    onCommit(v); setDraft(null);
+  };
+  return (
+    <input value={draft ?? String(value)} onChange={e => setDraft(e.target.value)} onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') commit(); }}
+      className={`${w} rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-right text-xs tabular-nums`} />
   );
 }

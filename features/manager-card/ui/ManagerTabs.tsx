@@ -14,13 +14,14 @@ import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 import { usePlanFact } from './PlanFactStrip';
 import type { ManagerCardResult } from '@/features/manager-card/engine/managerCard';
 
-export type ManagerTabKey = 'profile' | 'stats' | 'rewards' | 'shop';
+export type ManagerTabKey = 'profile' | 'stats' | 'rewards' | 'shop' | 'inventory';
 
 export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'profile', label: 'Профиль' },
   { key: 'stats', label: 'Статистика' },
   { key: 'rewards', label: 'Награды' },
   { key: 'shop', label: 'Магазин' },
+  { key: 'inventory', label: 'Инвентарь' },
 ];
 
 export function ManagerTabBar({ active, onChange }: { active: ManagerTabKey; onChange: (t: ManagerTabKey) => void }) {
@@ -55,7 +56,7 @@ interface LedgerRow {
   // система (EBALL/RUB, миграция 116).
   source: 'auto' | 'manual_bonus' | 'manual_penalty' | 'convert' | 'payout'
     | 'shop_purchase' | 'shop_refund' | 'expiry' | 'release_zero' | 'release_grant'
-    | 'gacha_spin' | 'gacha_prize';
+    | 'gacha_spin' | 'gacha_prize' | 'transfer_out' | 'transfer_in' | 'transfer_fee';
   currency: 'EBALL' | 'RUB';
   actor_login: string | null; comment: string | null;
   penalty_name: string | null; reversal_of: number | null; reversed: boolean;
@@ -471,6 +472,9 @@ function ledgerTitle(r: LedgerRow): { title: string; sub: string | null } {
   if (r.source === 'expiry') return { title: r.comment ?? 'Сгорание ебаллов (истёк срок жизни)', sub: null };
   if (r.source === 'gacha_spin') return { title: r.comment ?? 'Крутка гачи 🎰', sub: null };
   if (r.source === 'gacha_prize') return { title: r.comment ?? 'Выигрыш в гаче', sub: null };
+  if (r.source === 'transfer_out') return { title: r.comment ?? 'Перевод коллеге', sub: null };
+  if (r.source === 'transfer_in') return { title: r.comment ?? 'Перевод от коллеги', sub: null };
+  if (r.source === 'transfer_fee') return { title: r.comment ?? 'Комиссия за перевод', sub: null };
   if (r.source === 'release_zero' || r.source === 'release_grant') {
     return { title: r.comment ?? 'Релизный старт', sub: r.actor_login ? `админ: ${r.actor_login}` : null };
   }
@@ -667,6 +671,7 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
         <div><ExpiringPill expiring={extra.expiring} currencyName={currencyName} /></div>
       )}
       <RubWalletBlock managerId={managerId} isSelf={isSelf} extra={extra} currencyName={currencyName} />
+      {isSelf && <TransferBlock balance={shelfData?.balance ?? 0} currencyName={currencyName} />}
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
         <div className="mb-2.5 flex items-baseline gap-2">
           <h2 className="text-base font-bold text-[var(--color-text)]">Выписка</h2>
@@ -734,25 +739,39 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
   );
 }
 
-// ── Таб «Магазин» (MVP, 31.07): витрина + мой инвентарь ──────────────────────
-// Каталог (материальные/нематериальные/командные), покупка с подтверждением
-// (только в своём ЛК), инвентарь со сроком годности и заявкой на активацию
-// руководителю (клон payout_requests; reject возвращает предмет).
+// ── Магазин и инвентарь (MVP 31.07 + пакет переводов/подарков) ───────────────
+// Данные общие (/api/shop): витрина — таб «Магазин», предметы — таб «Инвентарь».
 
 interface ShopItemView {
   id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'team';
   priceEball: number; priceRub: number | null; allowedCurrencies: string[];
   stock: number | null; ttlMonths: number;
 }
+interface GiftHop { from: number; fromName: string; to: number; toName: string; at: string }
 interface InventoryRow {
   id: number; shop_item_id: number; item_name: string; price_paid: number; currency: 'EBALL' | 'RUB';
   status: 'owned' | 'activation_requested' | 'used' | 'expired' | 'refunded';
   purchased_at: string; expires_at: string; activation_comment: string | null;
   resolver_login: string | null; resolve_comment: string | null; resolved_at: string | null;
+  gift_history: GiftHop[];
 }
 interface ShopData {
   currencyName: string; rate: number; balance: number; rubBalance: number;
   items: ShopItemView[]; inventory: InventoryRow[];
+}
+
+function useShopData(managerId: string, isSelf: boolean) {
+  return useQuery<ShopData>({
+    queryKey: ['shop', isSelf ? 'me' : managerId],
+    queryFn: async () => {
+      const qs = isSelf ? '' : `?bitrixId=${encodeURIComponent(managerId)}`;
+      const res = await fetch(`/api/shop${qs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
 }
 
 const SHOP_CATEGORIES: { key: ShopItemView['category']; label: string }[] = [
@@ -771,20 +790,33 @@ const INVENTORY_STATUS: Record<InventoryRow['status'], { label: string; color: s
 
 function fmtDate(iso: string): string { return iso.slice(0, 10).split('-').reverse().join('.'); }
 
-export function ShopTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
-  const qc = useQueryClient();
-  const [error, setError] = useState<string | null>(null);
-  const { data } = useQuery<ShopData>({
-    queryKey: ['shop', isSelf ? 'me' : managerId],
+// Список активных менеджеров + параметры переводов (комиссия, лимит).
+interface TransferMeta {
+  currencyName: string; feePercent: number; dailyLimit: number; sentToday: number;
+  managers: { id: number; name: string }[];
+}
+function useTransferMeta(enabled: boolean) {
+  return useQuery<TransferMeta>({
+    queryKey: ['shop-transfer-meta'],
     queryFn: async () => {
-      const qs = isSelf ? '' : `?bitrixId=${encodeURIComponent(managerId)}`;
-      const res = await fetch(`/api/shop${qs}`);
+      const res = await fetch('/api/shop/transfer');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    staleTime: 60 * 1000,
+    enabled,
+    staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
+}
+
+// ── Таб «Магазин»: гача + витрина ────────────────────────────────────────────
+
+export function ShopTab({ managerId, isSelf, onGoInventory }: {
+  managerId: string; isSelf: boolean; onGoInventory?: () => void;
+}) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const { data } = useShopData(managerId, isSelf);
   const currencyName = data?.currencyName ?? 'ебаллы';
 
   const refresh = () => {
@@ -815,95 +847,25 @@ export function ShopTab({ managerId, isSelf }: { managerId: string; isSelf: bool
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
-  const activate = useMutation({
-    mutationFn: async (row: InventoryRow) => {
-      const comment = window.prompt(
-        `Заявка руководителю на «${row.item_name}».\nПожелание (дата и т.п.) — необязательно:`,
-      );
-      if (comment === null) return false;
-      const res = await fetch('/api/shop/activate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inventoryId: row.id, comment: comment.trim() }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
-      return true;
-    },
-    onSuccess: (done) => { if (done) { setError(null); refresh(); } },
-    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
-  });
-
   const items = data?.items ?? [];
-  const inventory = data?.inventory ?? [];
-  const active = inventory.filter(i => i.status === 'owned' || i.status === 'activation_requested');
-  const history = inventory.filter(i => i.status !== 'owned' && i.status !== 'activation_requested');
+  const activeCount = (data?.inventory ?? []).filter(i => i.status === 'owned' || i.status === 'activation_requested').length;
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
-      {/* Балансы над витриной: сколько есть на что покупать */}
       <div className="flex flex-wrap items-center gap-2">
         <BalancePill balance={data?.balance ?? 0} currencyName={currencyName} />
         {(data?.rubBalance ?? 0) !== 0 && <RubPill balance={data!.rubBalance} />}
+        {onGoInventory && (
+          <button type="button" onClick={onGoInventory}
+            className="ml-auto text-xs font-semibold text-[var(--color-accent)] hover:underline">
+            🎒 Мой инвентарь{activeCount > 0 ? ` (${activeCount})` : ''} →
+          </button>
+        )}
         {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
       </div>
 
       {/* Гача (фаза 2): колесо, крутки только в своём ЛК */}
       <GachaBlock isSelf={isSelf} />
-
-      {/* Мой инвентарь */}
-      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
-        <div className="mb-2.5 flex items-baseline gap-2">
-          <h2 className="text-base font-bold text-[var(--color-text)]">🎒 Мой инвентарь</h2>
-          {active.length > 0 && <span className="text-xs text-[var(--color-text-muted)]">{active.length}</span>}
-        </div>
-        {active.length === 0 ? (
-          <div className="text-sm text-[var(--color-text-muted)]">
-            Пусто — купленные призы появятся здесь. Нематериальные активируются заявкой руководителю.
-          </div>
-        ) : (
-          <div className="flex flex-col">
-            {active.map(row => {
-              const st = INVENTORY_STATUS[row.status];
-              return (
-                <div key={row.id} className="flex flex-wrap items-center gap-2.5 border-t border-[var(--color-border)] py-2 text-[13px] first:border-t-0">
-                  <span className="font-semibold text-[var(--color-text)]">{row.item_name}</span>
-                  <span className="text-xs font-semibold" style={{ color: st.color }}>{st.label}</span>
-                  <span className="text-xs text-[var(--color-text-muted)]">
-                    куплен {fmtDate(row.purchased_at)} · годен до {fmtDate(row.expires_at)}
-                  </span>
-                  {row.resolve_comment && row.status === 'owned' && (
-                    <span className="text-xs text-[var(--color-negative,#e03131)]">отклонено: {row.resolve_comment}</span>
-                  )}
-                  {isSelf && row.status === 'owned' && (
-                    <button type="button" onClick={() => activate.mutate(row)} disabled={activate.isPending}
-                      className="ml-auto rounded-lg bg-[var(--color-accent)] px-3 py-1 text-xs font-semibold text-[var(--color-text-inverse)] disabled:opacity-50">
-                      Использовать
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {history.length > 0 && (
-          <div className="mt-3 flex flex-col opacity-70">
-            <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">История</div>
-            {history.slice(0, 10).map(row => {
-              const st = INVENTORY_STATUS[row.status];
-              return (
-                <div key={row.id} className="flex flex-wrap items-baseline gap-2.5 border-t border-[var(--color-border)] py-1.5 text-[12.5px]">
-                  <span className="text-[var(--color-text)]">{row.item_name}</span>
-                  <span className="text-xs font-semibold" style={{ color: st.color }}>{st.label}</span>
-                  {row.resolved_at && <span className="text-xs text-[var(--color-text-muted)]">{fmtDate(row.resolved_at)}</span>}
-                  {row.resolver_login && row.status === 'used' && (
-                    <span className="text-xs text-[var(--color-text-muted)]">одобрил {row.resolver_login}</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
 
       {/* Витрина по категориям */}
       {SHOP_CATEGORIES.map(cat => {
@@ -959,10 +921,337 @@ export function ShopTab({ managerId, isSelf }: { managerId: string; isSelf: bool
         );
       })}
       <div className="text-[11px] text-[var(--color-text-muted)]">
-        Покупка списывает {currencyName} сразу (старейшие начисления первыми), предмет попадает в инвентарь со сроком
-        годности. Активация — заявкой руководителю; отказ возвращает предмет в инвентарь. По истечении срока
-        возвращается 50% цены.
+        Покупка списывает {currencyName} сразу (старейшие начисления первыми), предмет попадает в таб «Инвентарь» со
+        сроком годности. Активация — заявкой руководителю; отказ возвращает предмет. По истечении срока возвращается 50% цены.
       </div>
+    </div>
+  );
+}
+
+// ── Таб «Инвентарь»: предметы + подарки коллегам ─────────────────────────────
+
+function GiftModal({ row, meta, onClose, onDone }: {
+  row: InventoryRow; meta: TransferMeta; onClose: () => void; onDone: () => void;
+}) {
+  const [to, setTo] = useState<number | ''>('');
+  const [error, setError] = useState<string | null>(null);
+  const gift = useMutation({
+    mutationFn: async () => {
+      if (to === '') throw new Error('Выберите получателя');
+      const toName = meta.managers.find(m => m.id === to)?.name ?? to;
+      if (!window.confirm(`Подарить «${row.item_name}» → ${toName}?\n\nПредмет уйдёт из вашего инвентаря, срок годности (до ${fmtDate(row.expires_at)}) сохранится.`)) return false;
+      const res = await fetch('/api/shop/gift', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inventoryId: row.id, toBitrixId: to }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      return true;
+    },
+    onSuccess: (done) => { if (done) onDone(); },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={onClose}>
+      <div className="mt-16 w-full max-w-sm rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-5 shadow-xl" onClick={e => e.stopPropagation()}>
+        <h2 className="mb-3 text-base font-bold text-[var(--color-text)]">Подарить: {row.item_name}</h2>
+        <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Кому (активный менеджер)
+          <select value={to} onChange={e => setTo(e.target.value === '' ? '' : Number(e.target.value))}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-[var(--color-text)]">
+            <option value="">— выберите —</option>
+            {meta.managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+        <div className="mt-2 text-xs text-[var(--color-text-muted)]">Без комиссии; срок годности сохраняется; получателю придёт уведомление.</div>
+        {error && <div className="mt-2 text-xs text-[var(--color-negative,#e03131)]">{error}</div>}
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={gift.isPending || to === ''} onClick={() => { setError(null); gift.mutate(); }}
+            className="rounded-lg bg-[var(--color-accent)] px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+            {gift.isPending ? 'Отправка…' : 'Подарить'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [gifting, setGifting] = useState<InventoryRow | null>(null);
+  const { data } = useShopData(managerId, isSelf);
+  const { data: meta } = useTransferMeta(isSelf);
+  const currencyName = data?.currencyName ?? 'ебаллы';
+
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['shop'] });
+    void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+  };
+
+  const activate = useMutation({
+    mutationFn: async (row: InventoryRow) => {
+      const comment = window.prompt(`Заявка руководителю на «${row.item_name}».\nПожелание (дата и т.п.) — необязательно:`);
+      if (comment === null) return false;
+      const res = await fetch('/api/shop/activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inventoryId: row.id, comment: comment.trim() }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      return true;
+    },
+    onSuccess: (done) => { if (done) { setError(null); refresh(); } },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+
+  const inventory = data?.inventory ?? [];
+  const active = inventory.filter(i => i.status === 'owned' || i.status === 'activation_requested');
+  const history = inventory.filter(i => i.status !== 'owned' && i.status !== 'activation_requested');
+
+  return (
+    <div className="flex flex-col gap-4 sm:gap-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <BalancePill balance={data?.balance ?? 0} currencyName={currencyName} />
+        {(data?.rubBalance ?? 0) !== 0 && <RubPill balance={data!.rubBalance} />}
+        {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
+      </div>
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+        <div className="mb-2.5 flex items-baseline gap-2">
+          <h2 className="text-base font-bold text-[var(--color-text)]">🎒 Мой инвентарь</h2>
+          {active.length > 0 && <span className="text-xs text-[var(--color-text-muted)]">{active.length}</span>}
+        </div>
+        {active.length === 0 ? (
+          <div className="text-sm text-[var(--color-text-muted)]">
+            Пусто — призы из магазина и гачи появятся здесь. Нематериальные активируются заявкой руководителю.
+          </div>
+        ) : (
+          <div className="flex flex-col">
+            {active.map(row => {
+              const st = INVENTORY_STATUS[row.status];
+              const gifted = (row.gift_history ?? []).length > 0;
+              return (
+                <div key={row.id} className="flex flex-wrap items-center gap-2.5 border-t border-[var(--color-border)] py-2 text-[13px] first:border-t-0">
+                  <span className="font-semibold text-[var(--color-text)]">{row.item_name}</span>
+                  <span className="text-xs font-semibold" style={{ color: st.color }}>{st.label}</span>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    куплен {fmtDate(row.purchased_at)} · годен до {fmtDate(row.expires_at)}
+                  </span>
+                  {gifted && (
+                    <span className="text-xs text-[var(--color-text-muted)]"
+                      title={(row.gift_history ?? []).map(h => `${h.fromName} → ${h.toName} (${h.at})`).join('\n')}>
+                      🎁 подарок от {row.gift_history[row.gift_history.length - 1].fromName}
+                    </span>
+                  )}
+                  {row.resolve_comment && row.status === 'owned' && (
+                    <span className="text-xs text-[var(--color-negative,#e03131)]">отклонено: {row.resolve_comment}</span>
+                  )}
+                  {isSelf && row.status === 'owned' && (
+                    <span className="ml-auto flex gap-2">
+                      <button type="button" onClick={() => activate.mutate(row)} disabled={activate.isPending}
+                        className="rounded-lg bg-[var(--color-accent)] px-3 py-1 text-xs font-semibold text-[var(--color-text-inverse)] disabled:opacity-50">
+                        Использовать
+                      </button>
+                      {meta && (
+                        <button type="button" onClick={() => setGifting(row)}
+                          className="rounded-lg border border-[var(--color-border)] px-3 py-1 text-xs font-semibold hover:bg-[var(--color-bg-hover)]">
+                          Подарить
+                        </button>
+                      )}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {history.length > 0 && (
+          <div className="mt-3 flex flex-col opacity-70">
+            <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">История</div>
+            {history.slice(0, 15).map(row => {
+              const st = INVENTORY_STATUS[row.status];
+              return (
+                <div key={row.id} className="flex flex-wrap items-baseline gap-2.5 border-t border-[var(--color-border)] py-1.5 text-[12.5px]">
+                  <span className="text-[var(--color-text)]">{row.item_name}</span>
+                  <span className="text-xs font-semibold" style={{ color: st.color }}>{st.label}</span>
+                  {row.resolved_at && <span className="text-xs text-[var(--color-text-muted)]">{fmtDate(row.resolved_at)}</span>}
+                  {row.resolver_login && row.status === 'used' && (
+                    <span className="text-xs text-[var(--color-text-muted)]">одобрил {row.resolver_login}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+      {gifting && meta && (
+        <GiftModal row={gifting} meta={meta} onClose={() => setGifting(null)}
+          onDone={() => { setGifting(null); refresh(); }} />
+      )}
+    </div>
+  );
+}
+
+// ── Перевод ебаллов коллеге (блок в табе «Награды») ──────────────────────────
+
+export function TransferBlock({ balance, currencyName }: { balance: number; currencyName: string }) {
+  const qc = useQueryClient();
+  const { data: meta } = useTransferMeta(true);
+  const [to, setTo] = useState<number | ''>('');
+  const [amount, setAmount] = useState('');
+  const [comment, setComment] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  const send = useMutation({
+    mutationFn: async () => {
+      const v = Number(amount);
+      if (to === '') throw new Error('Выберите получателя');
+      if (!Number.isInteger(v) || v <= 0) throw new Error('Сумма — целое число больше нуля');
+      const fee = Math.floor(v * (meta?.feePercent ?? 5) / 100);
+      const toName = meta?.managers.find(m => m.id === to)?.name ?? to;
+      if (!window.confirm(
+        `Перевести ${v} ${currencyName} → ${toName}?\n\nПолучит: ${v - fee} (комиссия ${meta?.feePercent ?? 5}% = ${fee} сжигается).` +
+        (comment.trim() ? `\nКомментарий: ${comment.trim()}` : ''),
+      )) return false;
+      const res = await fetch('/api/shop/transfer', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toBitrixId: to, amount: v, comment: comment.trim() }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      return json as { received: number; fee: number };
+    },
+    onSuccess: (r) => {
+      if (r === false) return;
+      setError(null); setAmount(''); setComment(''); setTo('');
+      setOkMsg(`Готово: получателю дошло ${(r as { received: number }).received}, комиссия ${(r as { fee: number }).fee} сожжена`);
+      void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
+      void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+      void qc.invalidateQueries({ queryKey: ['shop-transfer-meta'] });
+    },
+    onError: (e) => { setOkMsg(null); setError(e instanceof Error ? e.message : String(e)); },
+  });
+
+  if (!meta) return null;
+  const left = Math.max(0, meta.dailyLimit - meta.sentToday);
+  return (
+    <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+      <div className="mb-1 flex flex-wrap items-baseline gap-2">
+        <h2 className="text-base font-bold text-[var(--color-text)]">💸 Перевести коллеге</h2>
+        <span className="text-xs text-[var(--color-text-muted)]">
+          комиссия {meta.feePercent}% (сжигается) · лимит {meta.dailyLimit}/день, сегодня доступно {left}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-end gap-2.5">
+        <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Кому
+          <select value={to} onChange={e => setTo(e.target.value === '' ? '' : Number(e.target.value))}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-[var(--color-text)]">
+            <option value="">— выберите менеджера —</option>
+            {meta.managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+        <label className="flex w-28 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Сумма
+          <input value={amount} onChange={e => setAmount(e.target.value)} placeholder="100"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-right text-sm tabular-nums text-[var(--color-text)]" />
+        </label>
+        <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Комментарий (получатель увидит)
+          <input value={comment} onChange={e => setComment(e.target.value)} maxLength={300} placeholder="С днём рождения!"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-[var(--color-text)]" />
+        </label>
+        <button type="button" disabled={send.isPending || to === '' || !amount.trim() || balance <= 0}
+          onClick={() => send.mutate()}
+          className="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">
+          {send.isPending ? 'Отправка…' : 'Перевести'}
+        </button>
+      </div>
+      {amount.trim() !== '' && Number(amount) > 0 && (
+        <div className="mt-1.5 text-xs text-[var(--color-text-muted)]">
+          Получателю дойдёт <b className="text-[var(--color-text)]">{Number(amount) - Math.floor(Number(amount) * meta.feePercent / 100)}</b>,
+          комиссия {Math.floor(Number(amount) * meta.feePercent / 100)} сожжётся.
+        </div>
+      )}
+      {okMsg && <div className="mt-1.5 text-xs text-[var(--color-positive,#2f9e44)]">{okMsg}</div>}
+      {error && <div className="mt-1.5 text-xs text-[var(--color-negative,#e03131)]">{error}</div>}
+    </section>
+  );
+}
+
+// ── Колокольчик уведомлений (шапка ЛК) ───────────────────────────────────────
+
+interface NotificationRow {
+  id: number; type: string; title: string; body: string | null; link: string | null;
+  unread: boolean; at: string;
+}
+
+export function NotificationsBell() {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const { data } = useQuery<{ notifications: NotificationRow[]; unread: number }>({
+    queryKey: ['notifications'],
+    queryFn: async () => {
+      const res = await fetch('/api/notifications');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60 * 1000,
+    refetchInterval: 2 * 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+  const markAll = useMutation({
+    mutationFn: async () => {
+      await fetch('/api/notifications', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }),
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+
+  const unread = data?.unread ?? 0;
+  const list = data?.notifications ?? [];
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => { setOpen(o => !o); }}
+        title="Уведомления"
+        className="relative rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 text-base hover:bg-[var(--color-bg-hover)]">
+        🔔
+        {unread > 0 && (
+          <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--color-negative,#e03131)] px-1 text-[10px] font-bold text-white">
+            {unread > 99 ? '99+' : unread}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 z-40 mt-2 w-96 max-w-[90vw] rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 shadow-xl">
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <span className="text-sm font-bold text-[var(--color-text)]">Уведомления</span>
+            {unread > 0 && (
+              <button type="button" onClick={() => markAll.mutate()}
+                className="text-xs font-semibold text-[var(--color-accent)] hover:underline">
+                Прочитать все ({unread})
+              </button>
+            )}
+          </div>
+          <div className="max-h-96 overflow-y-auto">
+            {list.length === 0 ? (
+              <div className="py-4 text-center text-sm text-[var(--color-text-muted)]">Пока пусто</div>
+            ) : list.map(n => (
+              <div key={n.id} className={`border-t border-[var(--color-border)] py-2 first:border-t-0 ${n.unread ? '' : 'opacity-60'}`}>
+                <div className="flex items-baseline gap-2">
+                  {n.unread && <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--color-accent)]" />}
+                  <span className="text-[13px] font-semibold text-[var(--color-text)]">{n.title}</span>
+                  <span className="ml-auto whitespace-nowrap text-[11px] tabular-nums text-[var(--color-text-muted)]">{n.at.slice(5, 16).replace('-', '.')}</span>
+                </div>
+                {n.body && <div className="mt-0.5 text-xs text-[var(--color-text-muted)]">{n.body}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

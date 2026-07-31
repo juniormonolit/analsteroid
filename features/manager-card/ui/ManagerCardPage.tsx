@@ -11,7 +11,7 @@ import { ManagerActivityTab } from './ManagerActivityTab';
 import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
 import { PayoutManageBlock } from '@/features/badges/ui/PayoutManage';
 import { InventoryManageBlock } from '@/features/badges/ui/InventoryManage';
-import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, type ManagerTabKey } from './ManagerTabs';
+import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, NotificationsBell, type ManagerTabKey } from './ManagerTabs';
 import { previousPeriodSameLength, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
@@ -301,13 +301,19 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
     <div className="h-full overflow-y-auto bg-[var(--color-bg)]">
     <div className="p-4 sm:p-6 w-full flex flex-col gap-4 sm:gap-5">
       {/* ── Табы ЛК (только карточка менеджера) ── */}
-      {tabbed && <ManagerTabBar active={tab} onChange={setTab} />}
+      {tabbed && (
+        <div className="flex items-stretch gap-2">
+          <div className="flex-1"><ManagerTabBar active={tab} onChange={setTab} /></div>
+          {showBadges && <NotificationsBell />}
+        </div>
+      )}
 
       {tabbed && tab === 'profile' && (
         <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => setTab('rewards')} />
       )}
       {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} />}
-      {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} />}
+      {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => setTab('inventory')} />}
+      {tabbed && tab === 'inventory' && <InventoryTab managerId={managerId} isSelf={showBadges} />}
 
       {showStats && (<>
       {/* ── Hero ── */}
