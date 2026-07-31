@@ -191,6 +191,16 @@ interface Props {
   // время снимка (features/reports/lib/exportImage.ts). Опционален — обычный рендер
   // таблицы (ReportTable в дрилл-дауне и т.п.) его не передаёт.
   containerRef?: React.RefObject<HTMLDivElement | null>;
+  // Режим создания пользовательской группы чекбоксами в строках (правка Серёги
+  // 31.07 №2, SalesReportPage.groupSelectMode): чекбокс рисуется у РЕАЛЬНЫХ строк
+  // (dimensionId без служебного префикса «__», включая children внутри групп);
+  // занятый в другой группе — disabled с тултипом «Уже в группе …» (busy:
+  // id → имя группы). Проп передаётся только пока режим активен.
+  rowSelection?: {
+    checked: Set<string>;
+    busy: Map<string, string>;
+    onToggle: (id: string) => void;
+  };
 }
 
 function fmtEmptyStateDate(d: Date): string {
@@ -279,6 +289,7 @@ export function ReportTable({
   renderExpandedRow,
   emptyStateInfo,
   containerRef,
+  rowSelection,
 }: Props) {
   const [sortByInner, setSortByInner] = useState<string | null>(null);
   const [sortDirInner, setSortDirInner] = useState<'asc' | 'desc'>('desc');
@@ -358,6 +369,22 @@ export function ReportTable({
     needCollapseRef.current = false;
     setCollapsed(new Set(ids));
   }, [rows, grouping]);
+
+  // Авто-«Без группы» (правка Серёги 31.07 №1): строка свёрнута ПО УМОЛЧАНИЮ —
+  // юзкейс «создал группу → сразу два компактных ряда „Группа“ vs „Без группы“»
+  // (в отличие от обычных user-групп, раскрытых по умолчанию — осознанная
+  // асимметрия: в «Без группы» обычно десятки участников). Сворачиваем при
+  // каждом ПОЯВЛЕНИИ строки (ушла при сбросе групп → пришла снова = снова
+  // свёрнута), ручное раскрытие пользователем при живой строке не трогаем.
+  const NOGROUP_ID = '__ugroup__nogroup__';
+  const nogroupSeenRef = useRef(false);
+  useEffect(() => {
+    const has = rows.some(r => r.dimensionId === NOGROUP_ID);
+    if (has && !nogroupSeenRef.current) {
+      setCollapsed(prev => new Set(prev).add(NOGROUP_ID));
+    }
+    nogroupSeenRef.current = has;
+  }, [rows]);
 
   function collapseAll() {
     setCollapsed(new Set(rows.filter(r => r.isGroup).map(r => r.dimensionId)));
@@ -1087,6 +1114,29 @@ export function ReportTable({
                 <span className="w-5 flex-shrink-0" />
               )}
               {isChild && <span className="w-4 flex-shrink-0 border-l-2 border-[var(--color-border)] self-stretch mr-1" />}
+              {/* Чекбокс режима создания группы (31.07 №2) — только у реальных
+                  строк (без служебного «__»-префикса: __team__/__branch__/__total__/
+                  __ugroup__ не выбираются). Занятый в другой группе — disabled,
+                  тултип на обёртке (у disabled input title не всплывает надёжно). */}
+              {rowSelection && !row.dimensionId.startsWith('__') && (() => {
+                const busyGroup = rowSelection.busy.get(row.dimensionId);
+                return (
+                  <span
+                    className="flex-shrink-0 inline-flex items-center mr-0.5"
+                    title={busyGroup ? `Уже в группе «${busyGroup}»` : undefined}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      disabled={!!busyGroup}
+                      checked={rowSelection.checked.has(row.dimensionId)}
+                      onChange={() => rowSelection.onToggle(row.dimensionId)}
+                      className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 accent-[var(--color-accent)]"
+                      aria-label={busyGroup ? `${row.dimensionName} — уже в группе «${busyGroup}»` : `Выбрать ${row.dimensionName} в группу`}
+                    />
+                  </span>
+                );
+              })()}
               {/* Имя + #id (задача 1659, case 1A аудита): на мобильном (<768px, брейкпоинт
                   соответствует --report-dim-col выше) колонка измерения узкая
                   (clamp(140px,46vw,200px)) — раньше имя и #id стояли в один ряд и id

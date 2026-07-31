@@ -34,7 +34,7 @@ import { buildExportFilename } from '@/features/reports/lib/exportFilename';
 import { exportTableToExcel } from '@/features/reports/lib/exportExcel';
 import { exportNodeToPng } from '@/features/reports/lib/exportImage';
 import { exportNodeToPdf } from '@/features/reports/lib/exportPdf';
-import { UserGroupsBar, CreateGroupButton, type UserReportGroup, type GroupCandidate } from './UserGroupsBar';
+import { UserGroupsBar, CreateGroupButton, GroupSelectPanel, type UserReportGroup } from './UserGroupsBar';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -90,14 +90,24 @@ function aggregateGroupDeltas(members: MergedRow[], metrics: Metric[]): Deltas {
   return deltas;
 }
 
+// Синтетическая строка «Без группы» (правка Серёги 31.07 №1): id-константа —
+// дискриминатор в обработчиках кликов и в ReportTable (свёрнута по умолчанию).
+export const NOGROUP_ROW_ID = '__ugroup__nogroup__';
+
 // Пользовательские группы (задача 2653): участники схлопываются в строку-агрегат
 // с ТОЙ ЖЕ агрегацией, что у строк отдела/филиала (aggregateGroupDeltas —
 // суммы + пересчёт calculated по формуле, сравнение периодов включено).
-// Применяется ТОЛЬКО при grouping='none' (решение: участники user-группы могут
-// быть из разных отделов — в группировке по отделу/филиалу строки остаются
-// обычными, в панели виден хинт). Строка группы — isGroup с children: участники
-// «исчезают из общего списка» и живут внутри группы (раскрываются шевроном).
-function applyUserGroups(rows: MergedRow[], groups: UserReportGroup[], metrics: Metric[]): GroupedMergedRow[] {
+// Строка группы — isGroup с children: участники «исчезают из общего списка» и
+// живут внутри группы (раскрываются шевроном).
+// withNoGroup (правка Серёги 31.07 №1): все НЕ вошедшие ни в одну группу строки
+// схлопываются в одну агрегатную «Без группы» (тот же движок aggregateGroupDeltas,
+// children = участники). Решение по сочетанию с группировкой: «Без группы»
+// работает ТОЛЬКО в режиме «Без группировки» (grouping='none') — при группировке
+// по отделу/филиалу/итого поведение прежнее (свободные строки остаются в своих
+// отделах; «Без группы» поверх отделов дублировала бы их подытоги, а внутри
+// каждого отдела теряла бы смысл «всё остальное»). Сброс всех групп возвращает
+// обычный вид (groups.length===0 → rows как есть).
+function applyUserGroups(rows: MergedRow[], groups: UserReportGroup[], metrics: Metric[], withNoGroup = false): GroupedMergedRow[] {
   if (groups.length === 0) return rows;
   const memberOf = new Map<string, string>();
   for (const g of groups) for (const m of g.member_ids) memberOf.set(m, g.id);
@@ -129,6 +139,20 @@ function applyUserGroups(rows: MergedRow[], groups: UserReportGroup[], metrics: 
       deltas: aggregateGroupDeltas(members, metrics),
       isGroup: true, children: members,
     });
+  }
+  // Авто-«Без группы»: рисуем, только если хоть одна группа реально видна в срезе
+  // (иначе схлопнули бы ВЕСЬ отчёт в одну строку без пользы) и есть кого собирать.
+  // Инвариант сверки: Σ(группы) + «Без группы» = Итого отчёта — участники не
+  // теряются и не двоятся (каждая строка попадает ровно в один из двух наборов).
+  if (withNoGroup && groupRows.length > 0 && rest.length > 0) {
+    return [...groupRows, {
+      dimensionId: NOGROUP_ROW_ID,
+      dimensionName: `Без группы (${rest.length})`,
+      teamId: null, teamName: null, branchName: null,
+      ugroupSize: rest.length,
+      deltas: aggregateGroupDeltas(rest, metrics),
+      isGroup: true, children: rest,
+    }];
   }
   return [...groupRows, ...rest];
 }
@@ -654,12 +678,32 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     refetchOnWindowFocus: false,
   });
   const userGroups = useMemo(() => userGroupsData?.groups ?? [], [userGroupsData]);
-  const userGroupCandidates = useMemo<GroupCandidate[]>(() => {
-    const busy = new Set(userGroups.flatMap(g => g.member_ids));
-    return (data?.rows ?? [])
-      .filter((r: MergedRow) => !busy.has(r.dimensionId))
-      .map((r: MergedRow) => ({ id: r.dimensionId, name: r.dimensionName, subtitle: r.dimensionSubtitle }));
-  }, [data?.rows, userGroups]);
+  // id участника → имя его группы: дизейбл чекбоксов в режиме выбора (тултип
+  // «Уже в группе …») — «один участник — одна группа» (плюс серверный 409).
+  const userGroupBusy = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const g of userGroups) for (const id of g.member_ids) m.set(id, g.name);
+    return m;
+  }, [userGroups]);
+  // Свободные (не в группах) сущности текущего среза — участники строки
+  // «Без группы»: её дрилл-даун идёт объединением по этим id (как у групп).
+  const userGroupFreeIds = useMemo(
+    () => (data?.rows ?? [])
+      .map((r: MergedRow) => r.dimensionId)
+      .filter((id: string) => !userGroupBusy.has(id)),
+    [data?.rows, userGroupBusy]
+  );
+
+  // Режим создания группы чекбоксами в строках (правка Серёги 31.07 №2):
+  // состояние живёт здесь (таблица и инлайн-панель — разные ветки рендера).
+  const [groupSelectMode, setGroupSelectMode] = useState(false);
+  const [groupSelectIds, setGroupSelectIds] = useState<Set<string>>(new Set());
+  const exitGroupSelect = useCallback(() => {
+    setGroupSelectMode(false);
+    setGroupSelectIds(new Set());
+  }, []);
+  // Смена измерения (менеджеры ↔ товарные группы kc/by_max) — выбор неактуален.
+  useEffect(() => { exitGroupSelect(); }, [userGroupsKey, exitGroupSelect]);
 
   const displayRows = useMemo(() => {
     // Пользовательские группы (задача 2653, этап 2 — работают при ЛЮБОЙ
@@ -669,7 +713,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     // него; «сборная» из разных — поднимается на верхний уровень с пометкой.
     let grouped: GroupedMergedRow[];
     if (!sourceMode && userGroups.length > 0) {
-      const applied = applyUserGroups(data?.rows ?? [], userGroups, catalogMetrics);
+      // «Без группы» — только при grouping='none' (решение выше, у applyUserGroups).
+      const applied = applyUserGroups(data?.rows ?? [], userGroups, catalogMetrics, grouping === 'none');
       if (grouping === 'none' || grouping === 'total') {
         grouped = grouping === 'none' ? applied : applyClientGrouping(applied, grouping, catalogMetrics);
       } else {
@@ -778,9 +823,13 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         ?? availableMetrics.find((x: { id: string }) => x.id === metricId);
       // Групповые строки и «Итого» открывают плоский список сделок всего среза
       if (id.startsWith('__ugroup__')) {
-        const g = userGroups.find(x => `__ugroup__${x.id}` === id);
-        if (!g) return;
-        setDrilldown({ id: g.member_ids.join(','), name, metricId, metricName: m?.nameRu, kind: dimensionType === 'manager' ? 'managers' : 'productGroups' });
+        // «Без группы» (31.07 №1): дрилл по объединению всех свободных сущностей —
+        // тот же механизм managerIds/productGroups, что у обычных user-групп.
+        const memberIds = id === NOGROUP_ROW_ID
+          ? userGroupFreeIds
+          : userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [];
+        if (memberIds.length === 0) return;
+        setDrilldown({ id: memberIds.join(','), name, metricId, metricName: m?.nameRu, kind: dimensionType === 'manager' ? 'managers' : 'productGroups' });
         return;
       }
       if (id === '__total__') {
@@ -793,7 +842,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         setDrilldown({ id, name, metricId, metricName: m?.nameRu });
       }
     },
-    [catalogMetrics, availableMetrics, userGroups, dimensionType]
+    [catalogMetrics, availableMetrics, userGroups, userGroupFreeIds, dimensionType]
   );
 
   // Экспорт отчёта (задача 1706): буфер (TSV)/Excel/PDF/PNG — единый снимок таблицы
@@ -1061,11 +1110,11 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           comparisonCount: compareIds.length,
           // «Создать группу» в одном ряду с «Настройки отчёта»/«Сравнение»
           // (правка Серёги 31.07); в source-режиме группы не поддерживаются.
+          // Кнопка — тумблер режима выбора чекбоксами (31.07 №2).
           userGroupsSlot: !sourceMode ? (
             <CreateGroupButton
-              dimensionKey={userGroupsKey}
-              candidates={userGroupCandidates}
-              entityLabel={dimensionType === 'manager' ? 'менеджеров' : 'товарных групп'}
+              active={groupSelectMode}
+              onClick={() => (groupSelectMode ? exitGroupSelect() : setGroupSelectMode(true))}
             />
           ) : undefined,
         };
@@ -1105,7 +1154,19 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       )}
 
       {/* Кнопка «Создать группу» переехала в ряд тулбара (userGroupsSlot, правка
-          Серёги 31.07) — тут остаются только бейджи созданных групп. */}
+          Серёги 31.07) — тут бейджи созданных групп и инлайн-панель режима выбора. */}
+      {!sourceMode && groupSelectMode && (
+        <GroupSelectPanel
+          dimensionKey={userGroupsKey}
+          selectedIds={[...groupSelectIds]}
+          entityLabel={dimensionType === 'manager' ? 'менеджеров' : 'товарные группы'}
+          onCancel={exitGroupSelect}
+          onCreated={() => {
+            qc.invalidateQueries({ queryKey: ['report-groups', userGroupsKey] });
+            exitGroupSelect();
+          }}
+        />
+      )}
       {!sourceMode && (
         <UserGroupsBar dimensionKey={userGroupsKey} groups={userGroups} />
       )}
@@ -1130,6 +1191,17 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             dimensionLabel={dimensionColumnLabel}
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
+            // Режим создания группы чекбоксами (31.07 №2): чекбоксы у реальных
+            // строк (не у синтетических __*); занятые — disabled с тултипом.
+            rowSelection={groupSelectMode ? {
+              checked: groupSelectIds,
+              busy: userGroupBusy,
+              onToggle: (id: string) => setGroupSelectIds(prev => {
+                const next = new Set(prev);
+                if (next.has(id)) next.delete(id); else next.add(id);
+                return next;
+              }),
+            } : undefined}
             onSubtitleClick={dimensionType === 'manager' ? handleSubtitleClick : undefined}
             // «Обычная» скрывает настройки колонок и drag-перетаскивание (п.3а спеки) —
             // не передаём обработчики вовсе, ReportTable сам не рендерит соответствующий UI.

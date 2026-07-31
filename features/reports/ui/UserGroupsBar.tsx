@@ -1,14 +1,18 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Users, X } from 'lucide-react';
+import { Users, X, Check } from 'lucide-react';
 
-// Пользовательские группы строк отчёта (задача 2653): панель бейджей + модалка
-// создания. Директор отмечает галочками менеджеров (или товарные группы),
-// называет группу — участники схлопываются в одну строку-агрегат (см.
-// applyUserGroups в SalesReportPage.tsx). Один участник — в одной группе:
-// уже сгруппированные в кандидатах не показываются (плюс серверная защита 409).
+// Пользовательские группы строк отчёта (задача 2653): панель бейджей + создание
+// группы. Создание (правка Серёги 31.07 №2) — чекбоксами ПРЯМО В СТРОКАХ отчёта:
+// клик «Создать группу» включает режим выбора (SalesReportPage.groupSelectMode),
+// в строках ReportTable появляются чекбоксы, название вводится в инлайн-панели
+// GroupSelectPanel над таблицей. Старый попап CreateGroupModal УДАЛЁН (решение:
+// один флоу вместо двух расходящихся — поиск по кандидатам заменяет строка
+// поиска самого отчёта, «занятые» участники видны в строках с задизейбленным
+// чекбоксом и тултипом, а не прячутся, как раньше в модалке).
+// Один участник — в одной группе: чекбокс занятого disabled + серверная защита 409.
 
 export interface UserReportGroup {
   id: string;
@@ -16,39 +20,86 @@ export interface UserReportGroup {
   member_ids: string[];
 }
 
-export interface GroupCandidate { id: string; name: string; subtitle?: string }
-
-// Кнопка «Создать группу» (правка Серёги 31.07): вынесена из бара в ряд тулбара
+// Кнопка «Создать группу» (правка Серёги 31.07): живёт в ряду тулбара
 // («Настройки отчёта» / «Сравнение») через слот userGroupsSlot в ReportToolbar —
-// тот же стиль/размер, что у соседних кнопок (классы как у ComparisonTriggerButton).
-// Бейджи созданных групп остаются в UserGroupsBar под рядом.
-export function CreateGroupButton({ dimensionKey, candidates, entityLabel }: {
-  dimensionKey: string;
-  candidates: GroupCandidate[];
-  entityLabel: string;
+// тот же стиль/размер, что у соседних кнопок. Теперь это тумблер режима выбора:
+// повторный клик (или «Отмена» в панели) выходит из режима.
+export function CreateGroupButton({ active, onClick }: {
+  active: boolean;
+  onClick: () => void;
 }) {
-  const [modalOpen, setModalOpen] = useState(false);
-  const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['report-groups', dimensionKey] });
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs border rounded-lg transition-colors ${
+        active
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+          : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
+      }`}
+    >
+      <Users size={12} /> Создать группу
+    </button>
+  );
+}
+
+// Инлайн-панель режима выбора: поле названия + счётчик отмеченных +
+// «Сохранить»/«Отмена». Рендерится над таблицей (на месте бейджей групп),
+// пока активен режим чекбоксов.
+export function GroupSelectPanel({ dimensionKey, selectedIds, entityLabel, onCancel, onCreated }: {
+  dimensionKey: string;
+  selectedIds: string[];
+  entityLabel: string;
+  onCancel: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    if (!name.trim() || selectedIds.length === 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/report-groups', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dimensionKey, name: name.trim(), memberIds: selectedIds }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      onCreated();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSaving(false);
+    }
+  }
 
   return (
-    <>
-      <button
-        onClick={() => setModalOpen(true)}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
-      >
-        <Users size={12} /> Создать группу
-      </button>
-      {modalOpen && (
-        <CreateGroupModal
-          dimensionKey={dimensionKey}
-          candidates={candidates}
-          entityLabel={entityLabel}
-          onClose={() => setModalOpen(false)}
-          onCreated={() => { invalidate(); setModalOpen(false); }}
-        />
-      )}
-    </>
+    <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 border-b border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5">
+      <Users size={14} className="text-[var(--color-accent)] flex-shrink-0" />
+      <span className="text-xs text-[var(--color-text)] hidden sm:inline">
+        Отметьте {entityLabel} галочками в строках отчёта
+      </span>
+      <input
+        value={name} onChange={e => setName(e.target.value)} placeholder="Название группы"
+        maxLength={80} autoFocus
+        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') onCancel(); }}
+        className="px-3 py-1 text-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] w-[200px]"
+      />
+      <span className="text-xs text-[var(--color-text-muted)]">Отмечено: {selectedIds.length}</span>
+      <div className="flex items-center gap-1.5 ml-auto">
+        {error && <span className="text-xs text-[var(--color-negative)]">{error}</span>}
+        <button
+          onClick={save} disabled={!name.trim() || selectedIds.length === 0 || saving}
+          className="flex items-center gap-1 px-3 py-1 text-xs rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] disabled:opacity-40 hover:opacity-90"
+        >
+          <Check size={12} /> Сохранить
+        </button>
+        <button onClick={onCancel} className="px-3 py-1 text-xs rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
+          Отмена
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -70,7 +121,7 @@ export function UserGroupsBar({ dimensionKey, groups }: {
     onSuccess: invalidate,
   });
 
-  // Кнопка создания переехала в тулбар (см. CreateGroupButton) — пустой бар не рисуем.
+  // Кнопка создания живёт в тулбаре (см. CreateGroupButton) — пустой бар не рисуем.
   if (groups.length === 0) return null;
 
   return (
@@ -89,93 +140,6 @@ export function UserGroupsBar({ dimensionKey, groups }: {
           сбросить все
         </button>
       )}
-    </div>
-  );
-}
-
-function CreateGroupModal({ dimensionKey, candidates, entityLabel, onClose, onCreated }: {
-  dimensionKey: string;
-  candidates: GroupCandidate[];
-  entityLabel: string;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [name, setName] = useState('');
-  const [query, setQuery] = useState('');
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return candidates;
-    return candidates.filter(c => c.name.toLowerCase().includes(q) || (c.subtitle ?? '').toLowerCase().includes(q));
-  }, [candidates, query]);
-
-  async function save() {
-    if (!name.trim() || checked.size === 0) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/report-groups', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dimensionKey, name: name.trim(), memberIds: [...checked] }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-      onCreated();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="w-full max-w-[440px] max-h-[80vh] flex flex-col rounded-xl bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl" onClick={e => e.stopPropagation()}>
-        <div className="p-4 pb-2">
-          <h3 className="font-semibold text-[var(--color-text)] mb-2">Новая группа</h3>
-          <input
-            value={name} onChange={e => setName(e.target.value)} placeholder="Название группы"
-            maxLength={80} autoFocus
-            className="w-full px-3 py-1.5 mb-2 text-sm rounded-lg border border-[var(--color-border)] bg-transparent text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
-          />
-          <input
-            value={query} onChange={e => setQuery(e.target.value)} placeholder="Поиск…"
-            className="w-full px-3 py-1.5 text-sm rounded-lg border border-[var(--color-border)] bg-transparent text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
-          />
-        </div>
-        <div className="flex-1 overflow-y-auto px-4 py-1 min-h-[120px]">
-          {filtered.length === 0 ? (
-            <p className="text-xs text-[var(--color-text-muted)] py-3">Нет свободных {entityLabel} (уже в группах или отфильтрованы).</p>
-          ) : filtered.map(c => (
-            <label key={c.id} className="flex items-center gap-2 py-1 text-sm text-[var(--color-text)] cursor-pointer hover:bg-[var(--color-bg-hover)] rounded px-1">
-              <input
-                type="checkbox"
-                checked={checked.has(c.id)}
-                onChange={() => setChecked(prev => { const n = new Set(prev); if (n.has(c.id)) n.delete(c.id); else n.add(c.id); return n; })}
-              />
-              <span className="truncate">{c.name}</span>
-              {c.subtitle && <span className="text-[11px] text-[var(--color-text-muted)]">{c.subtitle}</span>}
-            </label>
-          ))}
-        </div>
-        <div className="p-4 pt-2 border-t border-[var(--color-border)]">
-          {error && <p className="text-xs text-[var(--color-negative)] mb-2">{error}</p>}
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-[var(--color-text-muted)]">Отмечено: {checked.size}</span>
-            <div className="flex gap-2">
-              <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
-              <button
-                onClick={save} disabled={!name.trim() || checked.size === 0 || saving}
-                className="px-3 py-1.5 text-sm rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] disabled:opacity-40 hover:opacity-90"
-              >
-                Создать
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

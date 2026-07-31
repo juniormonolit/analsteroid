@@ -77,10 +77,24 @@ export function BadgeCard({ item }: { item: ShelfItem }) {
   );
 }
 
-export function BadgeShelf({ compactIfEmpty = false }: { compactIfEmpty?: boolean }) {
+// managerId (доп. Серёги 31.07): полка ЧУЖОЙ карточки /manager/[id] — грузится
+// батч-эндпоинтом /api/badges/batch (тот же, что у /rating) по одному id; без
+// managerId — своя полка через /api/badges/me, как раньше. Доступ не расширяем:
+// чужая карточка уже гейтится страницей [id] (canViewManager), полка — часть неё.
+export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmpty?: boolean; managerId?: string }) {
+  const foreignId = managerId && /^\d+$/.test(managerId) ? managerId : null;
   const { data, isLoading } = useQuery<{ shelf: ShelfItem[] }>({
-    queryKey: ['badges-me'],
+    queryKey: ['badges-shelf', foreignId ?? 'me'],
     queryFn: async () => {
+      if (foreignId) {
+        const res = await fetch('/api/badges/batch', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bitrixIds: [Number(foreignId)] }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json() as { shelves: Record<string, ShelfItem[]> };
+        return { shelf: json.shelves[foreignId] ?? [] };
+      }
       const res = await fetch('/api/badges/me');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -95,12 +109,14 @@ export function BadgeShelf({ compactIfEmpty = false }: { compactIfEmpty?: boolea
   return (
     <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4">
       <div className="mb-2.5 flex items-baseline gap-2">
-        <h2 className="text-base font-bold text-[var(--color-text)]">🏅 Мои награды</h2>
+        <h2 className="text-base font-bold text-[var(--color-text)]">🏅 {foreignId ? 'Награды' : 'Мои награды'}</h2>
         {shelf.length > 0 && <span className="text-xs text-[var(--color-text-muted)]">{shelf.length}</span>}
       </div>
       {shelf.length === 0 ? (
         <div className="text-sm text-[var(--color-text-muted)]">
-          Пока пусто — награды появляются за продажи, отгрузки, допродажи и серии. Всё впереди!
+          {foreignId
+            ? 'Наград пока нет.'
+            : 'Пока пусто — награды появляются за продажи, отгрузки, допродажи и серии. Всё впереди!'}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

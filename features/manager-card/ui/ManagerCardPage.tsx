@@ -193,7 +193,10 @@ export interface ManagerCardPageProps {
   initialFrom?: string;
   initialTo?: string;
   /** Бейджи (задача 2655): полка трофеев (менеджер) / «Моя команда» (РОП).
-   *  Включается ТОЛЬКО в собственном ЛК (/manager/me), не в чужих карточках. */
+   *  true — собственный ЛК (/manager/me, своя полка через /api/badges/me).
+   *  Доп. Серёги 31.07: в ЧУЖОЙ карточке менеджера (/manager/[id], showBadges
+   *  не передан) полка тоже показывается — BadgeShelf с managerId (батч-роут);
+   *  права не расширяются, карточка уже гейтится страницей (canViewManager). */
   showBadges?: boolean;
 }
 
@@ -391,7 +394,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
 
       {/* ── Бейджи (задача 2655): своя полка в ЛК менеджера; у РОПа — «Моя команда»
           с полками подчинённых (managed-depts, чужие не видны by construction). ── */}
-      {showBadges && mode === 'manager' && <BadgeShelf />}
+      {mode === 'manager' && (showBadges ? <BadgeShelf /> : <BadgeShelf managerId={managerId} />)}
       {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><TeamBadgesBlock /></>)}
 
       {isLoading ? (

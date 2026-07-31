@@ -3,11 +3,13 @@
 // период: место, имя, отдел, итоговый балл и баллы по каждой оси шаблона карточки.
 // Цифры считает тот же движок, что и ЛК менеджера (ratings.ts) — расхождений быть
 // не может. Клик по строке ведёт в ЛК этого менеджера на том же периоде.
-import { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Settings2 } from 'lucide-react';
 import Link from 'next/link';
+import { BadgeCard } from '@/features/badges/ui/BadgeShelf';
+import type { ShelfItem } from '@/features/badges/engine/shelf';
 import { MainPeriodControl } from '@/features/reports/ui/FilterBar';
 import { Seg } from '@/features/reports/ui/FiltersMenu';
 import { startOfMonth } from 'date-fns';
@@ -74,6 +76,32 @@ export function RatingPage() {
   const rows = data?.rows ?? [];
   const axes = data?.axes ?? [];
 
+  // Награды в рейтинге (доп. Серёги 31.07 к 2655): подгружаются ОТДЕЛЬНЫМ батчем
+  // по списку видимых менеджеров (один POST /api/badges/batch) — запрос самого
+  // рейтинга не утяжеляется. Чипы — компакт как в «Моей команде» (эмодзи топ-
+  // бейджей + счётчик); клик по ячейке разворачивает полную полку BadgeCard
+  // доп. строкой под менеджером (клик по остальной строке по-прежнему ведёт в ЛК).
+  const badgeIdsKey = useMemo(
+    () => rows.map(r => r.managerId).filter(id => /^\d+$/.test(id)).sort().join(','),
+    [rows]
+  );
+  const { data: badgesData } = useQuery({
+    queryKey: ['rating-badges', badgeIdsKey],
+    queryFn: async () => {
+      const res = await fetch('/api/badges/batch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bitrixIds: badgeIdsKey.split(',').map(Number) }),
+      });
+      if (!res.ok) throw new Error('Ошибка загрузки наград');
+      return res.json() as Promise<{ shelves: Record<string, ShelfItem[]> }>;
+    },
+    enabled: badgeIdsKey.length > 0,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const shelves = badgesData?.shelves ?? {};
+  const [openBadgesId, setOpenBadgesId] = useState<string | null>(null);
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-4 sm:p-6 flex flex-col gap-4">
@@ -125,6 +153,7 @@ export function RatingPage() {
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">#</th>
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Менеджер</th>
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Отдел</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Награды</th>
                   <th className="px-3 py-2.5 text-right font-medium text-[var(--color-text)] whitespace-nowrap">Рейтинг</th>
                   {axes.map(a => (
                     <th key={a.key} className="px-3 py-2.5 text-right font-medium text-[var(--color-text-muted)] whitespace-nowrap" title={`Вес ${a.weight}`}>
@@ -134,9 +163,13 @@ export function RatingPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => (
+                {rows.map((r, i) => {
+                  const shelf = shelves[r.managerId] ?? [];
+                  const badgesTotal = shelf.reduce((s, item) => s + item.count, 0);
+                  const badgesOpen = openBadgesId === r.managerId;
+                  return (
+                  <React.Fragment key={r.managerId}>
                   <tr
-                    key={r.managerId}
                     onClick={() => router.push(`/manager/${r.managerId}?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&name=${encodeURIComponent(r.name)}`)}
                     className={`border-t border-[var(--color-border)] cursor-pointer hover:bg-[var(--color-table-row-hover)] ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''} ${r.isSelf ? 'bg-[color-mix(in_srgb,var(--color-accent)_8%,transparent)]' : ''}`}
                     title="Открыть ЛК менеджера"
@@ -149,6 +182,25 @@ export function RatingPage() {
                     </td>
                     <td className="px-3 py-2 text-[var(--color-text-muted)] whitespace-nowrap">
                       {r.department ?? '—'}{r.branch ? ` · ${r.branch}` : ''}
+                    </td>
+                    {/* Награды: компакт-чипы (топ-эмодзи + счётчик), клик — полная
+                        полка доп. строкой; stopPropagation — строка ведёт в ЛК. */}
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {shelf.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={e => { e.stopPropagation(); setOpenBadgesId(badgesOpen ? null : r.managerId); }}
+                          className="inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 hover:bg-[var(--color-bg-hover)] transition-colors"
+                          title={badgesOpen ? 'Свернуть награды' : 'Показать все награды'}
+                        >
+                          {shelf.slice(0, 4).map(item => (
+                            <span key={item.key} title={item.name} className="text-base leading-none">{item.icon}</span>
+                          ))}
+                          <span className="text-[11px] text-[var(--color-text-muted)]">{badgesTotal}</span>
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-[var(--color-text-muted)]">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <span className="text-[15px] font-extrabold tabular-nums text-[var(--color-text)]">
@@ -164,7 +216,18 @@ export function RatingPage() {
                       );
                     })}
                   </tr>
-                ))}
+                  {badgesOpen && shelf.length > 0 && (
+                    <tr className="border-t border-[var(--color-border)]">
+                      <td colSpan={5 + axes.length} className="p-3 bg-[var(--color-bg)]">
+                        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                          {shelf.map(item => <BadgeCard key={item.key} item={item} />)}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
