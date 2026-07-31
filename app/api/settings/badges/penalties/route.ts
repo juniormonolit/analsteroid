@@ -14,7 +14,7 @@ export async function GET() {
   const db = systemDb();
   const [types, settings] = await Promise.all([
     db.query(
-      `SELECT t.id, t.name, t.price, t.price_mode, t.enabled,
+      `SELECT t.id::int AS id, t.name, t.price, t.price_mode, t.enabled,
               coalesce(u.uses, 0)::int AS uses
          FROM penalty_types t
          LEFT JOIN (SELECT penalty_type_id, count(*) AS uses FROM badge_coin_ledger GROUP BY 1) u

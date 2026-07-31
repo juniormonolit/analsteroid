@@ -18,6 +18,6 @@ export async function GET() {
   ]);
   return NextResponse.json({
     currencyName,
-    types: types.rows.map(t => ({ id: t.id, name: t.name, price: t.price, priceMode: t.price_mode })),
+    types: types.rows.map(t => ({ id: Number(t.id), name: t.name, price: t.price, priceMode: t.price_mode })),
   });
 }

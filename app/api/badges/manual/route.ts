@@ -38,11 +38,15 @@ async function bonusBudgetLeft(actorLogin: string): Promise<{ budget: number; le
   );
   const budget = s.rows[0]?.monthly_bonus_budget ?? 2000;
   if (budget === 0) return null;
+  // Считаются только НЕотменённые исходные поощрения актора: сторно делает
+  // админ (компенсация числится за ним) — бюджет исходного РОПа возвращается
+  // исключением отменённой операции, а сами сторно-записи в бюджет не входят.
   const spent = await db.query<{ spent: string }>(
-    `SELECT coalesce(sum(amount), 0) AS spent
-       FROM badge_coin_ledger
-      WHERE source = 'manual_bonus' AND actor_login = $1
-        AND created_at >= date_trunc('month', now() AT TIME ZONE 'Europe/Moscow') AT TIME ZONE 'Europe/Moscow'`,
+    `SELECT coalesce(sum(l.amount), 0) AS spent
+       FROM badge_coin_ledger l
+      WHERE l.source = 'manual_bonus' AND l.actor_login = $1 AND l.reversal_of IS NULL
+        AND NOT EXISTS (SELECT 1 FROM badge_coin_ledger r WHERE r.reversal_of = l.id)
+        AND l.created_at >= date_trunc('month', now() AT TIME ZONE 'Europe/Moscow') AT TIME ZONE 'Europe/Moscow'`,
     [actorLogin],
   );
   return { budget, left: Math.max(0, budget - Number(spent.rows[0]?.spent ?? 0)) };
@@ -82,7 +86,8 @@ export async function GET(req: NextRequest) {
     budget, // null = без лимита
     canReverse: session.isSuperadmin, // сторно — только админ
     penaltyTypes: types.rows.map(t => ({
-      id: t.id, name: t.name, price: t.price, priceMode: t.price_mode,
+      // bigserial приходит из pg строкой — приводим, иначе UI отправит строку в POST
+      id: Number(t.id), name: t.name, price: t.price, priceMode: t.price_mode,
       computedAmount: penaltyAmount(t, balance),
     })),
   });

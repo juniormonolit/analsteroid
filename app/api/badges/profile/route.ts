@@ -39,10 +39,10 @@ export async function GET(req: NextRequest) {
       comment: string | null; penalty_name: string | null; reversal_of: number | null;
       reversed: boolean;
     }>(
-      `SELECT l.id, to_char(l.created_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS date,
+      `SELECT l.id::int AS id, to_char(l.created_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS date,
               coalesce(d.name, l.badge_key) AS badge_name, d.icon,
               a.tier, l.amount, l.source, l.actor_login, l.comment,
-              pt.name AS penalty_name, l.reversal_of,
+              pt.name AS penalty_name, l.reversal_of::int AS reversal_of,
               EXISTS (SELECT 1 FROM badge_coin_ledger rr WHERE rr.reversal_of = l.id) AS reversed
          FROM badge_coin_ledger l
          LEFT JOIN badge_awards a ON a.id = l.badge_award_id
