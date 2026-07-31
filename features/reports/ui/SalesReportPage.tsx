@@ -1100,7 +1100,6 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           dimensionKey={userGroupsKey}
           groups={userGroups}
           candidates={userGroupCandidates}
-          groupingActive={grouping !== 'none'}
           entityLabel={dimensionType === 'manager' ? 'менеджеров' : 'товарных групп'}
         />
       )}

@@ -18,11 +18,10 @@ export interface UserReportGroup {
 
 export interface GroupCandidate { id: string; name: string; subtitle?: string }
 
-export function UserGroupsBar({ dimensionKey, groups, candidates, groupingActive, entityLabel }: {
+export function UserGroupsBar({ dimensionKey, groups, candidates, entityLabel }: {
   dimensionKey: string;
   groups: UserReportGroup[];
   candidates: GroupCandidate[];   // строки текущего отчёта, ещё не состоящие в группах
-  groupingActive: boolean;        // включена группировка по отделу/филиалу — группы не применяются
   entityLabel: string;            // «менеджеров» / «товарных групп» — для текстов модалки
 }) {
   const [modalOpen, setModalOpen] = useState(false);
@@ -61,9 +60,6 @@ export function UserGroupsBar({ dimensionKey, groups, candidates, groupingActive
         <button onClick={() => del.mutate({ all: true })} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-negative)] px-1">
           сбросить все
         </button>
-      )}
-      {groups.length > 0 && groupingActive && (
-        <span className="text-[11px] text-[var(--color-text-muted)]">группы применяются при «Без групп.»</span>
       )}
       {modalOpen && (
         <CreateGroupModal
