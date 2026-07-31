@@ -17,6 +17,7 @@ import { isWorkingDayJs } from '@/lib/metrics/productionCalendar';
 import { cutoffForHeadGroup } from '@/features/offload/engine/cutoffs';
 import { BADGE_CATALOG, CROSS_SELL_PAIRS, type BadgeTier } from './catalog';
 import { getManagerScopes, type ManagerScope } from './orgScopes';
+import { accrueCoins } from './coins';
 
 export const RETRO_START = '2026-04-03'; // решение владельца: ретро с 03.04.2026
 
@@ -37,6 +38,9 @@ export interface RecomputeStats {
   updated: number;
   total: number;
   byBadge: Record<string, number>; // вставлено новых за прогон
+  // Валюта (задача 2657): начислено транзакций / сумма эмиссии этим прогоном.
+  coinsAccrued: number;
+  coinsEmitted: number;
   ms: number;
 }
 
@@ -593,8 +597,12 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
         else updated++;
       }
     }
+    // Валюта (задача 2657): начисление за все награды без транзакции в леджере —
+    // в ТОЙ ЖЕ транзакции, что и запись наград (ретро и ночной тик — один путь,
+    // идемпотентно через UNIQUE badge_award_id, по цене на момент начисления).
+    const coins = await accrueCoins(client);
     await client.query('COMMIT');
-    return { inserted, updated, total: awards.length, byBadge, ms: Date.now() - t0 };
+    return { inserted, updated, total: awards.length, byBadge, ...coins, ms: Date.now() - t0 };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;

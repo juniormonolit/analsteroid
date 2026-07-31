@@ -93,13 +93,18 @@ export function RatingPage() {
         body: JSON.stringify({ bitrixIds: badgeIdsKey.split(',').map(Number) }),
       });
       if (!res.ok) throw new Error('Ошибка загрузки наград');
-      return res.json() as Promise<{ shelves: Record<string, ShelfItem[]> }>;
+      return res.json() as Promise<{ shelves: Record<string, ShelfItem[]>; balances: Record<string, number>; currencyName: string }>;
     },
     enabled: badgeIdsKey.length > 0,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
   const shelves = badgesData?.shelves ?? {};
+  // Валюта (задача 2657): баланс колонкой. Решение: колонка НЕ сортируемая —
+  // таблица рейтинга вообще без пользовательской сортировки (фиксированный
+  // порядок по рангу), заводить механизм сортировки ради одной колонки не стал.
+  const balances = badgesData?.balances ?? {};
+  const currencyName = badgesData?.currencyName ?? 'ебаллы';
   const [openBadgesId, setOpenBadgesId] = useState<string | null>(null);
 
   return (
@@ -154,6 +159,7 @@ export function RatingPage() {
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Менеджер</th>
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Отдел</th>
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Награды</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-[var(--color-text-muted)] whitespace-nowrap">{currencyName}</th>
                   <th className="px-3 py-2.5 text-right font-medium text-[var(--color-text)] whitespace-nowrap">Рейтинг</th>
                   {axes.map(a => (
                     <th key={a.key} className="px-3 py-2.5 text-right font-medium text-[var(--color-text-muted)] whitespace-nowrap" title={`Вес ${a.weight}`}>
@@ -202,6 +208,10 @@ export function RatingPage() {
                         <span className="text-[11px] text-[var(--color-text-muted)]">—</span>
                       )}
                     </td>
+                    {/* Баланс валюты (2657) */}
+                    <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--color-accent)]">
+                      {(balances[r.managerId] ?? 0) > 0 ? (balances[r.managerId] ?? 0).toLocaleString('ru-RU') : '—'}
+                    </td>
                     <td className="px-3 py-2 text-right">
                       <span className="text-[15px] font-extrabold tabular-nums text-[var(--color-text)]">
                         {r.rating !== null ? r.rating.toFixed(1) : '—'}
@@ -218,7 +228,7 @@ export function RatingPage() {
                   </tr>
                   {badgesOpen && shelf.length > 0 && (
                     <tr className="border-t border-[var(--color-border)]">
-                      <td colSpan={5 + axes.length} className="p-3 bg-[var(--color-bg)]">
+                      <td colSpan={6 + axes.length} className="p-3 bg-[var(--color-bg)]">
                         <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                           {shelf.map(item => <BadgeCard key={item.key} item={item} />)}
                         </div>

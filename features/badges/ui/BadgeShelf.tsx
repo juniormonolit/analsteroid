@@ -83,7 +83,7 @@ export function BadgeCard({ item }: { item: ShelfItem }) {
 // чужая карточка уже гейтится страницей [id] (canViewManager), полка — часть неё.
 export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmpty?: boolean; managerId?: string }) {
   const foreignId = managerId && /^\d+$/.test(managerId) ? managerId : null;
-  const { data, isLoading } = useQuery<{ shelf: ShelfItem[] }>({
+  const { data, isLoading } = useQuery<{ shelf: ShelfItem[]; balance: number; currencyName: string }>({
     queryKey: ['badges-shelf', foreignId ?? 'me'],
     queryFn: async () => {
       if (foreignId) {
@@ -92,8 +92,8 @@ export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmp
           body: JSON.stringify({ bitrixIds: [Number(foreignId)] }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json() as { shelves: Record<string, ShelfItem[]> };
-        return { shelf: json.shelves[foreignId] ?? [] };
+        const json = await res.json() as { shelves: Record<string, ShelfItem[]>; balances: Record<string, number>; currencyName: string };
+        return { shelf: json.shelves[foreignId] ?? [], balance: json.balances[foreignId] ?? 0, currencyName: json.currencyName };
       }
       const res = await fetch('/api/badges/me');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -111,6 +111,12 @@ export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmp
       <div className="mb-2.5 flex items-baseline gap-2">
         <h2 className="text-base font-bold text-[var(--color-text)]">🏅 {foreignId ? 'Награды' : 'Мои награды'}</h2>
         {shelf.length > 0 && <span className="text-xs text-[var(--color-text-muted)]">{shelf.length}</span>}
+        {/* Баланс валюты (задача 2657): крупно, рядом с полкой; название валюты —
+            глобальная настройка (дефолт «ебаллы», правится в Настройки → Награды). */}
+        <span className="ml-auto inline-flex items-baseline gap-1.5 rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-3 py-1">
+          <span className="text-xl font-extrabold tabular-nums text-[var(--color-accent)]">{(data?.balance ?? 0).toLocaleString('ru-RU')}</span>
+          <span className="text-xs font-semibold text-[var(--color-text-muted)]">{data?.currencyName ?? 'ебаллы'}</span>
+        </span>
       </div>
       {shelf.length === 0 ? (
         <div className="text-sm text-[var(--color-text-muted)]">
@@ -129,11 +135,11 @@ export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmp
 
 // ── «Моя команда» (ЛК РОПа): подчинённые с полками, компакт → разворот ────────
 
-interface TeamMember { bitrixId: number; name: string; departmentName: string | null; shelf: ShelfItem[] }
+interface TeamMember { bitrixId: number; name: string; departmentName: string | null; balance: number; shelf: ShelfItem[] }
 
 export function TeamBadgesBlock() {
   const [openIds, setOpenIds] = useState<Set<number>>(new Set());
-  const { data, isLoading } = useQuery<{ team: TeamMember[] }>({
+  const { data, isLoading } = useQuery<{ team: TeamMember[]; currencyName?: string }>({
     queryKey: ['badges-team'],
     queryFn: async () => {
       const res = await fetch('/api/badges/team');
@@ -175,9 +181,12 @@ export function TeamBadgesBlock() {
                 <span className="text-sm font-semibold text-[var(--color-text)]">{m.name}</span>
                 {m.departmentName && <span className="text-xs text-[var(--color-text-muted)]">{m.departmentName}</span>}
                 <span className="ml-auto flex items-center gap-1.5">
-                  {/* компакт: топ-бейджи эмодзи + счётчик */}
+                  {/* компакт: топ-бейджи эмодзи + счётчик; + баланс валюты (2657) */}
                   {top.map(i => <span key={i.key} title={i.name} className="text-base leading-none">{i.icon}</span>)}
                   <span className="text-xs text-[var(--color-text-muted)]">{total > 0 ? `${total} нагр.` : 'пока без наград'}</span>
+                  <span className="text-xs font-bold tabular-nums text-[var(--color-accent)]">
+                    {m.balance.toLocaleString('ru-RU')} {data?.currencyName ?? 'ебаллы'}
+                  </span>
                 </span>
               </button>
               {open && m.shelf.length > 0 && (
