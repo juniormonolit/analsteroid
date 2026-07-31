@@ -18,6 +18,7 @@ import { cutoffForHeadGroup } from '@/features/offload/engine/cutoffs';
 import { BADGE_CATALOG, CROSS_SELL_PAIRS, type BadgeTier } from './catalog';
 import { getManagerScopes, type ManagerScope } from './orgScopes';
 import { accrueCoins } from './coins';
+import { runWalletTick } from './wallet';
 import { CUSTOM_PREFIX, validateCustomCriteria, type CustomCriteria, type CustomMetric, type CustomPeriod } from './customTemplates';
 
 export const RETRO_START = '2026-04-03'; // решение владельца: ретро с 03.04.2026
@@ -42,6 +43,11 @@ export interface RecomputeStats {
   // Валюта (задача 2657): начислено транзакций / сумма эмиссии этим прогоном.
   coinsAccrued: number;
   coinsEmitted: number;
+  // Кошелёк (задача 31.07): сгорание TTL и истечение предметов инвентаря.
+  expiredLedger: number;
+  expiredAmount: number;
+  expiredItems: number;
+  refundedAmount: number;
   ms: number;
 }
 
@@ -808,8 +814,12 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     // в ТОЙ ЖЕ транзакции, что и запись наград (ретро и ночной тик — один путь,
     // идемпотентно через UNIQUE badge_award_id, по цене на момент начисления).
     const coins = await accrueCoins(client);
+    // Кошелёк (задача 31.07): истечение предметов инвентаря (возврат 50%),
+    // сгорание EBALL-начислений старше ttl_months, пересчёт FIFO-остатков —
+    // та же транзакция и тот же идемпотентный путь (ночной тик = ретро = кнопка).
+    const wallet = await runWalletTick(client);
     await client.query('COMMIT');
-    return { inserted, updated, total: awards.length, byBadge, ...coins, ms: Date.now() - t0 };
+    return { inserted, updated, total: awards.length, byBadge, ...coins, ...wallet, ms: Date.now() - t0 };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;

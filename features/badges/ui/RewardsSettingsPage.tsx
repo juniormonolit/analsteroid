@@ -8,6 +8,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { PayoutManageBlock } from './PayoutManage';
+import { InventoryManageBlock } from './InventoryManage';
+import { ShopSettingsBlock } from './ShopSettings';
 import {
   CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, DAILY_BONUS_METRIC_LABELS, METRIC_LABELS,
   MILESTONE_KIND_LABELS, TEMPLATE_LABELS, validateCustomCriteria,
@@ -740,8 +742,12 @@ export function RewardsSettingsPage() {
 
       {/* Ручные операции (доп. Серёги 31.07): справочник штрафов + бюджет поощрений */}
       {!isLoading && <PenaltiesSettings currencyName={currencyName} />}
+      {/* Магазин призов (MVP 31.07): каталог + TTL валюты + «Релизный старт» (заложен, не запускался) */}
+      {!isLoading && <ShopSettingsBlock currencyName={currencyName} />}
       {/* Заявки на вывод рублей в ЗП: у админа — все (у РОПа тот же блок в его ЛК) */}
       {!isLoading && <PayoutManageBlock />}
+      {/* Заявки на активацию призов магазина: у админа — все */}
+      {!isLoading && <InventoryManageBlock />}
     </div>
   );
 }

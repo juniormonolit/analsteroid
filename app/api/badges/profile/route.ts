@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { canViewManager } from '@/lib/org/managerAccess';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { tenureLabel } from '@/features/employees/engine/tenure';
+import { getExpiringSoon } from '@/features/badges/engine/wallet';
 
 // Данные табов ЛК (доп. Серёги 31.07 к 2655/2657): стаж из реестра сотрудников
 // (COALESCE(manual_start_date, hire_date), как на странице «Сотрудники») и
@@ -56,9 +57,11 @@ export async function GET(req: NextRequest) {
   ]);
 
   // Рублёвый кошелёк (миграция 116) + курс конвертации — для профиля/выписки.
-  const [rub, rate] = await Promise.all([
+  // expiring — плашка TTL (31.07): «сгорит N ебаллов через X дней», горизонт 30 дней.
+  const [rub, rate, expiring] = await Promise.all([
     systemDb().query<{ balance: string }>(`SELECT balance FROM badge_rub_balances WHERE bitrix_id = $1`, [id]),
     systemDb().query<{ rate: string }>(`SELECT rub_to_eball_rate AS rate FROM badge_coin_settings WHERE id = 1`),
+    getExpiringSoon(systemDb(), id),
   ]);
 
   const startDate = reg.rows[0]?.start_date ?? null;
@@ -67,5 +70,6 @@ export async function GET(req: NextRequest) {
     ledger: ledger.rows,
     rubBalance: Number(rub.rows[0]?.balance ?? 0),
     rubToEballRate: Number(rate.rows[0]?.rate ?? 1),
+    expiring,
   });
 }

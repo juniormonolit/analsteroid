@@ -52,7 +52,8 @@ interface LedgerRow {
   // Выписка (доп. Серёги 31.07): source auto/manual_bonus/manual_penalty/convert/payout,
   // кем сделано, комментарий, причина штрафа, сторно-связи; currency — двухвалютная
   // система (EBALL/RUB, миграция 116).
-  source: 'auto' | 'manual_bonus' | 'manual_penalty' | 'convert' | 'payout';
+  source: 'auto' | 'manual_bonus' | 'manual_penalty' | 'convert' | 'payout'
+    | 'shop_purchase' | 'shop_refund' | 'expiry' | 'release_zero' | 'release_grant';
   currency: 'EBALL' | 'RUB';
   actor_login: string | null; comment: string | null;
   penalty_name: string | null; reversal_of: number | null; reversed: boolean;
@@ -62,6 +63,9 @@ interface ProfileExtra {
   ledger: LedgerRow[];
   rubBalance: number;
   rubToEballRate: number;
+  // Плашка TTL (31.07): сколько ебаллов сгорит в ближайшие 30 дней и через
+  // сколько дней первое сгорание (0 = ближайшей ночью).
+  expiring: { amount: number; days: number } | null;
 }
 
 // Контекст ручных операций: право, бюджет, справочник с рассчитанными суммами.
@@ -136,6 +140,28 @@ function RubPill({ balance, big = false }: { balance: number; big?: boolean }) {
     >
       <span className={`font-extrabold tabular-nums ${big ? 'text-3xl' : 'text-xl'}`} style={{ color }}>{balance.toLocaleString('ru-RU')}</span>
       <span className={`font-semibold text-[var(--color-text-muted)] ${big ? 'text-sm' : 'text-xs'}`}>₽</span>
+    </span>
+  );
+}
+
+// Плашка TTL ебаллов (31.07): «сгорит N через X дней» — живые FIFO-остатки
+// начислений, чей срок жизни (ttl_months из настроек) выходит в ближайшие 30 дней.
+function ExpiringPill({ expiring, currencyName }: {
+  expiring: { amount: number; days: number } | null | undefined; currencyName: string;
+}) {
+  if (!expiring || expiring.amount <= 0) return null;
+  const when = expiring.days <= 0 ? 'сегодня ночью' : expiring.days === 1 ? 'через 1 день' : `через ${expiring.days} дн.`;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-2xl border px-3 py-1 text-xs font-semibold"
+      style={{
+        color: 'var(--color-warning, #e8590c)',
+        borderColor: 'color-mix(in srgb, var(--color-warning, #e8590c) 40%, transparent)',
+        backgroundColor: 'color-mix(in srgb, var(--color-warning, #e8590c) 10%, transparent)',
+      }}
+      title={`Срок жизни начислений истекает — потратьте их в магазине, пока не сгорели (горизонт 30 дней)`}
+    >
+      🔥 Сгорит {expiring.amount.toLocaleString('ru-RU')} {currencyName} {when}
     </span>
   );
 }
@@ -308,6 +334,7 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
               {(extra?.rubBalance ?? 0) !== 0 && <RubPill balance={extra!.rubBalance} big />}
               <BalancePill balance={shelfData?.balance ?? 0} currencyName={shelfData?.currencyName ?? 'ебаллы'} big />
             </div>
+            <ExpiringPill expiring={extra?.expiring} currencyName={shelfData?.currencyName ?? 'ебаллы'} />
             {manualCtx?.canManual && (
               <div className="flex gap-2">
                 <button type="button"
@@ -436,6 +463,13 @@ function ledgerTitle(r: LedgerRow): { title: string; sub: string | null } {
   }
   if (r.source === 'convert') return { title: r.comment ?? 'Конвертация', sub: null };
   if (r.source === 'payout') return { title: r.comment ?? 'Вывод в ЗП', sub: r.actor_login ? `подтвердил ${r.actor_login}` : null };
+  // Магазин и TTL (31.07): покупка/возврат 50% при истечении предмета/сгорание.
+  if (r.source === 'shop_purchase') return { title: r.comment ?? 'Покупка в магазине', sub: null };
+  if (r.source === 'shop_refund') return { title: r.comment ?? 'Возврат 50% за истёкший предмет', sub: null };
+  if (r.source === 'expiry') return { title: r.comment ?? 'Сгорание ебаллов (истёк срок жизни)', sub: null };
+  if (r.source === 'release_zero' || r.source === 'release_grant') {
+    return { title: r.comment ?? 'Релизный старт', sub: r.actor_login ? `админ: ${r.actor_login}` : null };
+  }
   return { title: r.badge_name ?? '—', sub: null };
 }
 
@@ -625,6 +659,9 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <BadgeShelf managerId={isSelf ? undefined : managerId} />
+      {extra?.expiring && extra.expiring.amount > 0 && (
+        <div><ExpiringPill expiring={extra.expiring} currencyName={currencyName} /></div>
+      )}
       <RubWalletBlock managerId={managerId} isSelf={isSelf} extra={extra} currencyName={currencyName} />
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
         <div className="mb-2.5 flex items-baseline gap-2">
@@ -693,20 +730,232 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
   );
 }
 
-// ── Таб «Магазин»: заглушка (механику Серёга обсудит отдельно) ───────────────
+// ── Таб «Магазин» (MVP, 31.07): витрина + мой инвентарь ──────────────────────
+// Каталог (материальные/нематериальные/командные), покупка с подтверждением
+// (только в своём ЛК), инвентарь со сроком годности и заявкой на активацию
+// руководителю (клон payout_requests; reject возвращает предмет).
+
+interface ShopItemView {
+  id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'team';
+  priceEball: number; priceRub: number | null; allowedCurrencies: string[];
+  stock: number | null; ttlMonths: number;
+}
+interface InventoryRow {
+  id: number; shop_item_id: number; item_name: string; price_paid: number; currency: 'EBALL' | 'RUB';
+  status: 'owned' | 'activation_requested' | 'used' | 'expired' | 'refunded';
+  purchased_at: string; expires_at: string; activation_comment: string | null;
+  resolver_login: string | null; resolve_comment: string | null; resolved_at: string | null;
+}
+interface ShopData {
+  currencyName: string; rate: number; balance: number; rubBalance: number;
+  items: ShopItemView[]; inventory: InventoryRow[];
+}
+
+const SHOP_CATEGORIES: { key: ShopItemView['category']; label: string }[] = [
+  { key: 'immaterial', label: 'Нематериальные' },
+  { key: 'material', label: 'Материальные' },
+  { key: 'team', label: 'Командные (складчина отдела)' },
+];
+
+const INVENTORY_STATUS: Record<InventoryRow['status'], { label: string; color: string }> = {
+  owned: { label: 'в инвентаре', color: 'var(--color-accent)' },
+  activation_requested: { label: 'заявка у руководителя', color: 'var(--color-warning, #e8590c)' },
+  used: { label: 'использован', color: 'var(--color-positive, #2f9e44)' },
+  expired: { label: 'срок истёк (возврат 50%)', color: 'var(--color-text-muted)' },
+  refunded: { label: 'возвращён', color: 'var(--color-text-muted)' },
+};
+
+function fmtDate(iso: string): string { return iso.slice(0, 10).split('-').reverse().join('.'); }
 
 export function ShopTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
-  const { data: shelfData } = useShelfQuery(isSelf ? undefined : managerId);
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const { data } = useQuery<ShopData>({
+    queryKey: ['shop', isSelf ? 'me' : managerId],
+    queryFn: async () => {
+      const qs = isSelf ? '' : `?bitrixId=${encodeURIComponent(managerId)}`;
+      const res = await fetch(`/api/shop${qs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const currencyName = data?.currencyName ?? 'ебаллы';
+
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['shop'] });
+    void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
+    void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+  };
+
+  const buy = useMutation({
+    mutationFn: async ({ item, currency }: { item: ShopItemView; currency: 'EBALL' | 'RUB' }) => {
+      const price = currency === 'RUB' ? item.priceRub! : item.priceEball;
+      const unit = currency === 'RUB' ? '₽' : currencyName;
+      const balance = currency === 'RUB' ? (data?.rubBalance ?? 0) : (data?.balance ?? 0);
+      if (!window.confirm(
+        `Купить «${item.name}» за ${price.toLocaleString('ru-RU')} ${unit}?\n\n` +
+        `Останется: ${(balance - price).toLocaleString('ru-RU')} ${unit}. ` +
+        `Предмет попадёт в инвентарь, срок годности ${item.ttlMonths} мес.`,
+      )) return false;
+      const res = await fetch('/api/shop', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId: item.id, currency }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      return true;
+    },
+    onSuccess: (done) => { if (done) { setError(null); refresh(); } },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+
+  const activate = useMutation({
+    mutationFn: async (row: InventoryRow) => {
+      const comment = window.prompt(
+        `Заявка руководителю на «${row.item_name}».\nПожелание (дата и т.п.) — необязательно:`,
+      );
+      if (comment === null) return false;
+      const res = await fetch('/api/shop/activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inventoryId: row.id, comment: comment.trim() }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      return true;
+    },
+    onSuccess: (done) => { if (done) { setError(null); refresh(); } },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+
+  const items = data?.items ?? [];
+  const inventory = data?.inventory ?? [];
+  const active = inventory.filter(i => i.status === 'owned' || i.status === 'activation_requested');
+  const history = inventory.filter(i => i.status !== 'owned' && i.status !== 'activation_requested');
+
   return (
-    <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-10 flex flex-col items-center gap-4 text-center">
-      <span className="text-4xl">🛍️</span>
-      <BalancePill balance={shelfData?.balance ?? 0} currencyName={shelfData?.currencyName ?? 'ебаллы'} big />
-      <div>
-        <div className="text-base font-bold text-[var(--color-text)]">Магазин призов скоро откроется</div>
-        <div className="mt-1 text-sm text-[var(--color-text-muted)]">
-          Копите {shelfData?.currencyName ?? 'ебаллы'} за награды — здесь их можно будет обменять на призы.
-        </div>
+    <div className="flex flex-col gap-4 sm:gap-5">
+      {/* Балансы над витриной: сколько есть на что покупать */}
+      <div className="flex flex-wrap items-center gap-2">
+        <BalancePill balance={data?.balance ?? 0} currencyName={currencyName} />
+        {(data?.rubBalance ?? 0) !== 0 && <RubPill balance={data!.rubBalance} />}
+        {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
       </div>
-    </section>
+
+      {/* Мой инвентарь */}
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+        <div className="mb-2.5 flex items-baseline gap-2">
+          <h2 className="text-base font-bold text-[var(--color-text)]">🎒 Мой инвентарь</h2>
+          {active.length > 0 && <span className="text-xs text-[var(--color-text-muted)]">{active.length}</span>}
+        </div>
+        {active.length === 0 ? (
+          <div className="text-sm text-[var(--color-text-muted)]">
+            Пусто — купленные призы появятся здесь. Нематериальные активируются заявкой руководителю.
+          </div>
+        ) : (
+          <div className="flex flex-col">
+            {active.map(row => {
+              const st = INVENTORY_STATUS[row.status];
+              return (
+                <div key={row.id} className="flex flex-wrap items-center gap-2.5 border-t border-[var(--color-border)] py-2 text-[13px] first:border-t-0">
+                  <span className="font-semibold text-[var(--color-text)]">{row.item_name}</span>
+                  <span className="text-xs font-semibold" style={{ color: st.color }}>{st.label}</span>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    куплен {fmtDate(row.purchased_at)} · годен до {fmtDate(row.expires_at)}
+                  </span>
+                  {row.resolve_comment && row.status === 'owned' && (
+                    <span className="text-xs text-[var(--color-negative,#e03131)]">отклонено: {row.resolve_comment}</span>
+                  )}
+                  {isSelf && row.status === 'owned' && (
+                    <button type="button" onClick={() => activate.mutate(row)} disabled={activate.isPending}
+                      className="ml-auto rounded-lg bg-[var(--color-accent)] px-3 py-1 text-xs font-semibold text-[var(--color-text-inverse)] disabled:opacity-50">
+                      Использовать
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {history.length > 0 && (
+          <div className="mt-3 flex flex-col opacity-70">
+            <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">История</div>
+            {history.slice(0, 10).map(row => {
+              const st = INVENTORY_STATUS[row.status];
+              return (
+                <div key={row.id} className="flex flex-wrap items-baseline gap-2.5 border-t border-[var(--color-border)] py-1.5 text-[12.5px]">
+                  <span className="text-[var(--color-text)]">{row.item_name}</span>
+                  <span className="text-xs font-semibold" style={{ color: st.color }}>{st.label}</span>
+                  {row.resolved_at && <span className="text-xs text-[var(--color-text-muted)]">{fmtDate(row.resolved_at)}</span>}
+                  {row.resolver_login && row.status === 'used' && (
+                    <span className="text-xs text-[var(--color-text-muted)]">одобрил {row.resolver_login}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* Витрина по категориям */}
+      {SHOP_CATEGORIES.map(cat => {
+        const catItems = items.filter(i => i.category === cat.key);
+        if (catItems.length === 0) return null;
+        return (
+          <section key={cat.key} className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+            <div className="mb-3 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">{cat.label}</div>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+              {catItems.map(item => {
+                const soldOut = item.stock !== null && item.stock <= 0;
+                const canEball = (data?.balance ?? 0) >= item.priceEball;
+                const canRub = item.priceRub !== null && (data?.rubBalance ?? 0) >= item.priceRub;
+                return (
+                  <div key={item.id} className="flex flex-col gap-1.5 rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+                    <div className="font-semibold text-[var(--color-text)] text-[14px]">{item.name}</div>
+                    {item.description && <div className="text-xs text-[var(--color-text-muted)]">{item.description}</div>}
+                    <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
+                      <span className="font-extrabold tabular-nums text-[var(--color-accent)]">
+                        {item.priceEball.toLocaleString('ru-RU')} <span className="text-[11px] font-semibold text-[var(--color-text-muted)]">{currencyName}</span>
+                      </span>
+                      {item.priceRub !== null && (
+                        <span className="text-xs text-[var(--color-text-muted)] tabular-nums">или {item.priceRub.toLocaleString('ru-RU')} ₽</span>
+                      )}
+                      {item.stock !== null && (
+                        <span className="text-[11px] text-[var(--color-text-muted)]">осталось {item.stock}</span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-[var(--color-text-muted)]">срок годности {item.ttlMonths} мес</div>
+                    {isSelf && (
+                      <div className="flex gap-2">
+                        <button type="button" disabled={buy.isPending || soldOut || !canEball}
+                          onClick={() => buy.mutate({ item, currency: 'EBALL' })}
+                          title={soldOut ? 'Позиция закончилась' : canEball ? undefined : `Не хватает ${currencyName}`}
+                          className="rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-inverse)] disabled:opacity-40">
+                          {soldOut ? 'Нет в наличии' : 'Купить'}
+                        </button>
+                        {item.priceRub !== null && !soldOut && (
+                          <button type="button" disabled={buy.isPending || !canRub}
+                            onClick={() => buy.mutate({ item, currency: 'RUB' })}
+                            title={canRub ? undefined : 'Не хватает рублей'}
+                            className="rounded-lg border border-[var(--color-positive,#2f9e44)] px-3 py-1.5 text-xs font-semibold text-[var(--color-positive,#2f9e44)] disabled:opacity-40">
+                            За ₽
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
+      <div className="text-[11px] text-[var(--color-text-muted)]">
+        Покупка списывает {currencyName} сразу (старейшие начисления первыми), предмет попадает в инвентарь со сроком
+        годности. Активация — заявкой руководителю; отказ возвращает предмет в инвентарь. По истечении срока
+        возвращается 50% цены.
+      </div>
+    </div>
   );
 }
