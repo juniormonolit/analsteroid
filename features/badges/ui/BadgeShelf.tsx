@@ -10,7 +10,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { TIER_COLORS, TIER_LABELS, TIER_SCOPE_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 
 interface ShelfTierCount { tier: BadgeTier; count: number; lastPeriod: string | null }
-interface ShelfItem {
+export interface ShelfItem {
   key: string; name: string; description: string; icon: string; category: string;
   tiered: boolean; tiers: ShelfTierCount[]; count: number; value: number | null;
   lastAwardedAt: string | null;
@@ -81,9 +81,11 @@ export function BadgeCard({ item }: { item: ShelfItem }) {
 // батч-эндпоинтом /api/badges/batch (тот же, что у /rating) по одному id; без
 // managerId — своя полка через /api/badges/me, как раньше. Доступ не расширяем:
 // чужая карточка уже гейтится страницей [id] (canViewManager), полка — часть неё.
-export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmpty?: boolean; managerId?: string }) {
+// Хук полки — общий для BadgeShelf и табов ЛК («Профиль»/«Магазин», доп. Серёги
+// 31.07): одинаковый queryKey, React Query дедуплицирует запрос между табами.
+export function useShelfQuery(managerId?: string) {
   const foreignId = managerId && /^\d+$/.test(managerId) ? managerId : null;
-  const { data, isLoading } = useQuery<{ shelf: ShelfItem[]; balance: number; currencyName: string }>({
+  return useQuery<{ shelf: ShelfItem[]; balance: number; currencyName: string }>({
     queryKey: ['badges-shelf', foreignId ?? 'me'],
     queryFn: async () => {
       if (foreignId) {
@@ -102,6 +104,11 @@ export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmp
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
+}
+
+export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmpty?: boolean; managerId?: string }) {
+  const foreignId = managerId && /^\d+$/.test(managerId) ? managerId : null;
+  const { data, isLoading } = useShelfQuery(managerId);
 
   const shelf = data?.shelf ?? [];
   if (isLoading || (shelf.length === 0 && compactIfEmpty)) return null;

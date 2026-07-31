@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { ManagerActivityTab } from './ManagerActivityTab';
 import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
+import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, type ManagerTabKey } from './ManagerTabs';
 import { previousPeriodSameLength, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
@@ -214,6 +215,12 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   const [segment, setSegment] = useState<CardSegment>('all');
   const [productGroupMode, setProductGroupMode] = useState<ProductGroupMode>('kc');
   const [openCategoryId, setOpenCategoryId] = useState<string | null>(null);
+  // Табы ЛК (доп. Серёги 31.07): Профиль · Статистика · Награды · Магазин.
+  // Только mode='manager'; дефолт — «Профиль». Отделу/РОПу табы не нужны —
+  // там нет одной личности, прежняя структура с «Моей командой» сохраняется.
+  const [tab, setTab] = useState<ManagerTabKey>('profile');
+  const tabbed = mode === 'manager';
+  const showStats = !tabbed || tab === 'stats';
 
   function handlePeriodChange(p: DateRange) {
     setPeriod(p);
@@ -291,6 +298,16 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
     // (тот же паттерн, что SummaryPage). Ширина резиновая — без max-w (правка владельца).
     <div className="h-full overflow-y-auto bg-[var(--color-bg)]">
     <div className="p-4 sm:p-6 w-full flex flex-col gap-4 sm:gap-5">
+      {/* ── Табы ЛК (только карточка менеджера) ── */}
+      {tabbed && <ManagerTabBar active={tab} onChange={setTab} />}
+
+      {tabbed && tab === 'profile' && (
+        <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => setTab('rewards')} />
+      )}
+      {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} />}
+      {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} />}
+
+      {showStats && (<>
       {/* ── Hero ── */}
       <SectionCard className="!py-5">
         <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -392,9 +409,9 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {/* ── План/факт «прямо сейчас»: Сегодня · Неделя · Месяц (не зависит от фильтров) ── */}
       <PlanFactStrip managerId={managerId} mode={mode} />
 
-      {/* ── Бейджи (задача 2655): своя полка в ЛК менеджера; у РОПа — «Моя команда»
-          с полками подчинённых (managed-depts, чужие не видны by construction). ── */}
-      {mode === 'manager' && (showBadges ? <BadgeShelf /> : <BadgeShelf managerId={managerId} />)}
+      {/* ── Бейджи (задача 2655): у менеджера полка переехала в таб «Награды»
+          (табы ЛК, доп. Серёги 31.07); у РОПа-департамента — по-прежнему своя
+          полка + «Моя команда» с полками подчинённых (managed-depts). ── */}
       {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><TeamBadgesBlock /></>)}
 
       {isLoading ? (
@@ -507,6 +524,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           )}
         </>
       )}
+      </>)}
     </div>
     </div>
   );
