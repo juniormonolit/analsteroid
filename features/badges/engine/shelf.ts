@@ -46,6 +46,9 @@ function assembleShelf(defs: DefRow[], awardRows: AwardRow[]): ShelfItem[] {
     const awards = byKey.get(def.key) ?? [];
     if (awards.length === 0) continue; // полка показывает только полученное
     const criteria = (def.criteria ?? {}) as Record<string, unknown>;
+    // «Тихие» начисления (daily_bonus с silent, доп. Серёги 31.07): бейдж на полке
+    // не показывается — только строки выписки и баланс.
+    if (criteria.silent === true) continue;
 
     const tiers: ShelfTierCount[] = TIER_ORDER
       .map((tier) => {

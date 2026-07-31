@@ -29,14 +29,25 @@ export async function GET(req: NextRequest) {
         WHERE e.bitrix_id = $1`,
       [id],
     ),
-    systemDb().query<{ date: string; badge_name: string | null; icon: string | null; tier: string | null; amount: number }>(
-      // Определение может быть удалено (кастомные) — тогда имя из снимка badge_key.
-      `SELECT to_char(l.created_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS date,
-              coalesce(d.name, l.badge_key, '—') AS badge_name, d.icon,
-              a.tier, l.amount
+    // Единая «банковская выписка» (доп. Серёги 31.07): авто-начисления движка +
+    // ручные поощрения/штрафы (+ сторно-записи) — дата, награда/причина, кем,
+    // за что, сумма со знаком. Определение может быть удалено (кастомные) —
+    // тогда имя из снимка badge_key.
+    systemDb().query<{
+      id: number; date: string; badge_name: string | null; icon: string | null;
+      tier: string | null; amount: number; source: string; actor_login: string | null;
+      comment: string | null; penalty_name: string | null; reversal_of: number | null;
+      reversed: boolean;
+    }>(
+      `SELECT l.id, to_char(l.created_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS date,
+              coalesce(d.name, l.badge_key) AS badge_name, d.icon,
+              a.tier, l.amount, l.source, l.actor_login, l.comment,
+              pt.name AS penalty_name, l.reversal_of,
+              EXISTS (SELECT 1 FROM badge_coin_ledger rr WHERE rr.reversal_of = l.id) AS reversed
          FROM badge_coin_ledger l
          LEFT JOIN badge_awards a ON a.id = l.badge_award_id
          LEFT JOIN badge_definitions d ON d.key = coalesce(a.badge_key, l.badge_key)
+         LEFT JOIN penalty_types pt ON pt.id = l.penalty_type_id
         WHERE l.bitrix_id = $1
         ORDER BY l.created_at DESC, l.id DESC
         LIMIT 300`,

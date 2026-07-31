@@ -8,7 +8,23 @@ export const CUSTOM_PREFIX = 'custom_';
 export type CustomMetric = 'sales_amount' | 'sales_count' | 'shipments_amount' | 'repeat_sales_count';
 export type CustomPeriod = 'day' | 'week' | 'month' | 'year';
 export type MilestoneKind = 'sales_count' | 'sales_amount' | 'deal_amount';
-export type CustomTemplate = 'top_metric' | 'threshold_period' | 'crosssell_pair' | 'streak' | 'milestone';
+export type CustomTemplate = 'top_metric' | 'threshold_period' | 'crosssell_pair' | 'streak' | 'milestone' | 'daily_bonus';
+
+// Метрики дня для «Ежедневного бонуса» (доп. Серёги 31.07): счётчики/суммы событий
+// дня менеджера; bookings_plus_sales_count — составная (брони reserved_at +
+// продажи sold_at за день).
+export type DailyBonusMetric =
+  | 'sales_count' | 'sales_amount' | 'bookings_count' | 'shipments_count' | 'shipments_amount'
+  | 'bookings_plus_sales_count';
+
+export const DAILY_BONUS_METRIC_LABELS: Record<DailyBonusMetric, string> = {
+  bookings_plus_sales_count: 'Брони + продажи за день, шт',
+  sales_count: 'Продажи за день, шт',
+  sales_amount: 'Сумма продаж за день, ₽',
+  bookings_count: 'Брони за день, шт',
+  shipments_count: 'Отгрузки за день, шт',
+  shipments_amount: 'Сумма отгрузок за день, ₽',
+};
 
 export const METRIC_LABELS: Record<CustomMetric, string> = {
   sales_amount: 'Сумма продаж',
@@ -52,6 +68,10 @@ export const TEMPLATE_LABELS: Record<CustomTemplate, { name: string; hint: strin
     name: 'Веха',
     hint: 'Накопительный порог за всё время: всего продаж / сумма продаж / чек одной сделки не ниже X.',
   },
+  daily_bonus: {
+    name: 'Ежедневный бонус',
+    hint: 'Автопоощрение валютой за каждый день, где метрика дня достигла порога (например, «брони + продажи ≥ 5»). Начисляется ночным прогоном, идемпотентно. Можно сделать «тихим»: только выписка и баланс, без бейджа на полке.',
+  },
 };
 
 export interface CustomCriteria {
@@ -69,6 +89,13 @@ export interface CustomCriteria {
   days?: number;
   // milestone
   kind?: MilestoneKind;
+  // daily_bonus
+  dailyMetric?: DailyBonusMetric;
+  silent?: boolean;        // тихое начисление: только выписка и баланс, без бейджа на полке
+  // Задел под индексацию магазина: опциональная «сумма в единицах индекса» —
+  // пока НЕ активна, включится с магазинной индексацией
+  // (см. owners-inbox/monolitika-eball-indexation.md в life-os).
+  indexUnits?: number;
 }
 
 const METRICS = Object.keys(METRIC_LABELS) as CustomMetric[];
@@ -121,6 +148,20 @@ export function validateCustomCriteria(raw: unknown): { ok: true; criteria: Cust
       if (!posNum(c.threshold)) return { ok: false, error: 'Порог должен быть больше нуля' };
       return { ok: true, criteria: { template, kind: c.kind as MilestoneKind, threshold: c.threshold } };
     }
+    case 'daily_bonus': {
+      if (!Object.keys(DAILY_BONUS_METRIC_LABELS).includes(c.dailyMetric as string)) {
+        return { ok: false, error: 'Выберите метрику дня' };
+      }
+      if (!posNum(c.threshold)) return { ok: false, error: 'Порог должен быть больше нуля' };
+      const out: CustomCriteria = {
+        template, dailyMetric: c.dailyMetric as DailyBonusMetric, threshold: c.threshold,
+        silent: c.silent === true,
+      };
+      if (typeof c.indexUnits === 'number' && Number.isFinite(c.indexUnits) && c.indexUnits > 0) {
+        out.indexUnits = c.indexUnits; // задел индексации, пока не активен
+      }
+      return { ok: true, criteria: out };
+    }
   }
 }
 
@@ -140,5 +181,7 @@ export function describeCustom(c: CustomCriteria): string {
       return `${fmt(c.days!)} рабочих дней подряд хотя бы с одной продажей (по производственному календарю РФ).`;
     case 'milestone':
       return `${MILESTONE_KIND_LABELS[c.kind!]}: порог ${fmt(c.threshold!)} за всё время.`;
+    case 'daily_bonus':
+      return `Ежедневный бонус: ${DAILY_BONUS_METRIC_LABELS[c.dailyMetric!]} — от ${fmt(c.threshold!)}. Начисляется за каждый день выполнения.`;
   }
 }

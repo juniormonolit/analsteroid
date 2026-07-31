@@ -99,8 +99,9 @@ function num(criteria: Record<string, unknown> | undefined, key: string, dflt: n
 
 interface DaySum { managerId: number; day: string; amount: number; cnt: number }
 
-async function fetchDaySums(kind: 'sales' | 'shipments' | 'repeat_sales'): Promise<DaySum[]> {
-  const dateField = kind === 'shipments' ? 'delivered_at' : 'sold_at';
+async function fetchDaySums(kind: 'sales' | 'shipments' | 'repeat_sales' | 'bookings'): Promise<DaySum[]> {
+  // bookings — события броней (reserved_at) для «Ежедневного бонуса» (доп. Серёги 31.07)
+  const dateField = kind === 'shipments' ? 'delivered_at' : kind === 'bookings' ? 'reserved_at' : 'sold_at';
   const repeatJoin = kind === 'repeat_sales'
     ? 'JOIN sa.funnels f ON f.id = d.funnel_id AND f.is_repeat = true' : '';
   const res = await analyticsDb().query<{ manager_id: number; day: string; amount: string; cnt: string }>(
@@ -343,6 +344,7 @@ interface CustomCtx {
   sold: SoldDealRow[];
   transitions: Transition[];
   metricSums: Record<CustomMetric, DaySum[]>;
+  bookingDaySums: DaySum[]; // события reserved_at — для «Ежедневного бонуса»
 }
 
 const metricValue = (metric: CustomMetric) =>
@@ -428,6 +430,38 @@ function computeCustomBadge(key: string, c: CustomCriteria, ctx: CustomCtx): Awa
             }
           } else run = 0;
         }
+      }
+      break;
+    }
+
+    // 6. «Ежедневный бонус» (доп. Серёги 31.07): автопоощрение валютой за каждый
+    //    день, где метрика дня >= порога. Награда per (менеджер, день) — уникальность
+    //    uq_badge_awards, идемпотентно; сумма начисления = цена определения в
+    //    badge_prices ('-'), начисляет общий accrueCoins (source='auto').
+    //    criteria.silent=true → полка бейдж не показывает (только выписка и баланс).
+    case 'daily_bonus': {
+      const metric = c.dailyMetric!;
+      const per = new Map<string, number>(); // `${mgr}:${day}` -> значение метрики
+      const add = (sums: DaySum[], v: (s: DaySum) => number) => {
+        for (const s of sums) {
+          if (s.day < RETRO_START || s.day >= ctx.today) continue; // только завершённые дни ретро-окна
+          const k = `${s.managerId}:${s.day}`;
+          per.set(k, (per.get(k) ?? 0) + v(s));
+        }
+      };
+      if (metric === 'sales_count') add(ctx.metricSums.sales_amount, s => s.cnt);
+      else if (metric === 'sales_amount') add(ctx.metricSums.sales_amount, s => s.amount);
+      else if (metric === 'shipments_count') add(ctx.metricSums.shipments_amount, s => s.cnt);
+      else if (metric === 'shipments_amount') add(ctx.metricSums.shipments_amount, s => s.amount);
+      else if (metric === 'bookings_count') add(ctx.bookingDaySums, s => s.cnt);
+      else { // bookings_plus_sales_count — составная: брони + продажи событий дня
+        add(ctx.bookingDaySums, s => s.cnt);
+        add(ctx.metricSums.sales_amount, s => s.cnt);
+      }
+      for (const [k, val] of per) {
+        if (val < c.threshold!) continue;
+        const [mgr, day] = [Number(k.slice(0, k.indexOf(':'))), k.slice(k.indexOf(':') + 1)];
+        awards.push({ bitrixId: mgr, badgeKey: key, tier: null, periodType: 'day', periodDate: day, value: val });
       }
       break;
     }
@@ -724,6 +758,11 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
       }
     }
 
+    // Брони (reserved_at) — только для кастомных «Ежедневных бонусов»; выборка
+    // лёгкая (тот же GROUP BY, что у продаж), тянем всегда — гейт по шаблонам
+    // усложнил бы код сильнее, чем экономит.
+    const bookingDaySums = await fetchDaySums('bookings');
+
     // ── Кастомные награды из конструктора (этап 2) ───────────────────────────
     // Generic-исполнители по criteria.template; данные переиспользуются из уже
     // сделанных выборок (daySums/transitions/sold) — доп. запросов в sa нет.
@@ -734,7 +773,7 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
       const v = validateCustomCriteria(def.criteria);
       if (!v.ok) continue;
       awards.push(...computeCustomBadge(def.key, v.criteria, {
-        today, scopes, sold, transitions,
+        today, scopes, sold, transitions, bookingDaySums,
         metricSums: {
           sales_amount: salesDaySums,
           sales_count: salesDaySums,

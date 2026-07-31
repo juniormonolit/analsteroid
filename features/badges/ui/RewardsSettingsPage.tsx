@@ -8,8 +8,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import {
-  CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, METRIC_LABELS, MILESTONE_KIND_LABELS,
-  TEMPLATE_LABELS, validateCustomCriteria,
+  CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, DAILY_BONUS_METRIC_LABELS, METRIC_LABELS,
+  MILESTONE_KIND_LABELS, TEMPLATE_LABELS, validateCustomCriteria,
   type CustomTemplate,
 } from '@/features/badges/engine/customTemplates';
 
@@ -123,6 +123,9 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
   const [minPairs, setMinPairs] = useState('1');
   const [days, setDays] = useState('5');
   const [kind, setKind] = useState('sales_count');
+  const [dailyMetric, setDailyMetric] = useState('bookings_plus_sales_count');
+  const [silent, setSilent] = useState(false);
+  const [indexUnits, setIndexUnits] = useState('');
   // цены
   const [priceFlat, setPriceFlat] = useState('50');
   const [tierPrices, setTierPrices] = useState<Record<string, string>>({ bronze: '5', silver: '15', gold: '50', platinum: '150' });
@@ -153,6 +156,11 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
       if (template === 'crosssell_pair') Object.assign(criteria, { firstGroup, nextGroup, minPairs: num(minPairs) });
       if (template === 'streak') Object.assign(criteria, { days: num(days) });
       if (template === 'milestone') Object.assign(criteria, { kind, threshold: num(threshold) });
+      if (template === 'daily_bonus') {
+        Object.assign(criteria, { dailyMetric, threshold: num(threshold), silent });
+        const iu = num(indexUnits);
+        if (iu !== undefined) Object.assign(criteria, { indexUnits: iu }); // задел индексации (пока не активно)
+      }
 
       // клиентская валидация — тем же модулем, что и сервер
       if (!name.trim()) throw new Error('Название не может быть пустым');
@@ -270,6 +278,31 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
             </div>
           )}
 
+          {template === 'daily_bonus' && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap gap-3">
+                <Field label="Метрика дня">
+                  <select value={dailyMetric} onChange={e => setDailyMetric(e.target.value)} className={selectCls}>
+                    {Object.entries(DAILY_BONUS_METRIC_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                  </select>
+                </Field>
+                <Field label={dailyMetric.endsWith('amount') ? 'Порог, ₽' : 'Порог, шт'}>
+                  <input value={threshold} onChange={e => setThreshold(e.target.value)} className={`${inputCls} w-28 text-right tabular-nums`} placeholder="5" />
+                </Field>
+                {/* Задел под индексацию магазина: пока не активно, включится с
+                    магазинной индексацией (owners-inbox/monolitika-eball-indexation.md) */}
+                <Field label="Сумма в единицах индекса (скоро)">
+                  <input value={indexUnits} onChange={e => setIndexUnits(e.target.value)} disabled
+                    title="Включится с магазинной индексацией" className={`${inputCls} w-28 text-right tabular-nums opacity-50`} />
+                </Field>
+              </div>
+              <label className="flex items-center gap-1.5 text-xs">
+                <input type="checkbox" checked={silent} onChange={e => setSilent(e.target.checked)} />
+                тихое начисление — только выписка и баланс, без бейджа на полке
+              </label>
+            </div>
+          )}
+
           <div className="border-t border-[var(--color-border)] pt-3" />
 
           <div className="flex flex-wrap gap-3">
@@ -303,7 +336,7 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
                   className={`${inputCls} w-20 text-right tabular-nums`} />
               </Field>
             )) : (
-              <Field label={`Цена в «${currencyName}»`}>
+              <Field label={template === 'daily_bonus' ? `Начисление за день выполнения, «${currencyName}»` : `Цена в «${currencyName}»`}>
                 <input value={priceFlat} onChange={e => setPriceFlat(e.target.value)} className={`${inputCls} w-24 text-right tabular-nums`} />
               </Field>
             )}
@@ -328,6 +361,144 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Штрафы и бюджет поощрений (доп. Серёги 31.07): админский справочник ──────
+
+interface PenaltyRow { id: number; name: string; price: number; price_mode: 'fixed' | 'percent'; enabled: boolean; uses: number }
+
+function PenaltiesSettings({ currencyName }: { currencyName: string }) {
+  const qc = useQueryClient();
+  const { data } = useQuery<{ types: PenaltyRow[]; monthlyBonusBudget: number }>({
+    queryKey: ['settings-penalties'],
+    queryFn: async () => {
+      const res = await fetch('/api/settings/badges/penalties');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    refetchOnWindowFocus: false,
+  });
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['settings-penalties'] });
+    void qc.invalidateQueries({ queryKey: ['penalty-types-public'] });
+  };
+  const patch = useMutation({
+    mutationFn: async ({ id, body }: { id: number; body: Record<string, unknown> }) => {
+      const res = await fetch(`/api/settings/badges/penalties/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: invalidate,
+  });
+
+  const [newName, setNewName] = useState('');
+  const [newPrice, setNewPrice] = useState('50');
+  const [newMode, setNewMode] = useState<'fixed' | 'percent'>('fixed');
+  const [createError, setCreateError] = useState<string | null>(null);
+  const create = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/settings/badges/penalties', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName.trim(), price: Number(newPrice), priceMode: newMode }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+    },
+    onSuccess: () => { setNewName(''); setCreateError(null); invalidate(); },
+    onError: (e) => setCreateError(e instanceof Error ? e.message : String(e)),
+  });
+
+  const [budgetDraft, setBudgetDraft] = useState<string | null>(null);
+  const saveBudget = useMutation({
+    mutationFn: async (v: number) => {
+      const res = await fetch('/api/settings/badges/budget', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monthlyBonusBudget: v }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => { setBudgetDraft(null); invalidate(); },
+  });
+  const commitBudget = () => {
+    const v = Number(budgetDraft);
+    if (budgetDraft === null || !Number.isInteger(v) || v < 0) { setBudgetDraft(null); return; }
+    saveBudget.mutate(v);
+  };
+
+  return (
+    <div className="mb-5 mt-8 border-t border-[var(--color-border)] pt-5">
+      <div className="mb-2 flex flex-wrap items-center gap-3">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Штрафы и поощрения (ручные операции)</h2>
+        <label className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]"
+          title="Месячный лимит ручных поощрений на одного руководителя; 0 = без лимита. Штрафы без лимита.">
+          Бюджет поощрений/мес на руководителя
+          <input
+            value={budgetDraft ?? String(data?.monthlyBonusBudget ?? '')}
+            onChange={e => setBudgetDraft(e.target.value)}
+            onBlur={commitBudget}
+            onKeyDown={e => { if (e.key === 'Enter') commitBudget(); }}
+            className="w-24 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-right text-xs tabular-nums"
+          />
+        </label>
+      </div>
+      <div className="mb-2 text-xs text-[var(--color-text-muted)]">
+        Справочник причин штрафов: «фикс» — сумма в «{currencyName}», «%» — процент от накопленного баланса на момент штрафа
+        (сумма фиксируется в выписке и не пересчитывается). Менеджеры видят справочник в ЛК (read-only).
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {(data?.types ?? []).map(t => (
+          <PenaltyTypeRowView key={t.id} row={t} currencyName={currencyName}
+            onPatch={(body) => patch.mutate({ id: t.id, body })} />
+        ))}
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-[var(--color-border)] px-3 py-2">
+          <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Новая причина штрафа"
+            className="min-w-48 flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-xs" />
+          <select value={newMode} onChange={e => setNewMode(e.target.value as 'fixed' | 'percent')}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-1 text-xs">
+            <option value="fixed">фикс</option>
+            <option value="percent">% от баланса</option>
+          </select>
+          <input value={newPrice} onChange={e => setNewPrice(e.target.value)}
+            className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-1 text-right text-xs tabular-nums" />
+          <button type="button" onClick={() => create.mutate()} disabled={create.isPending || !newName.trim()}
+            className="rounded-lg bg-[var(--color-accent)] px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
+            Добавить
+          </button>
+          {createError && <span className="text-xs text-red-500">{createError}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PenaltyTypeRowView({ row, currencyName, onPatch }: {
+  row: PenaltyRow; currencyName: string; onPatch: (body: Record<string, unknown>) => void;
+}) {
+  const [priceDraft, setPriceDraft] = useState(String(row.price));
+  const commitPrice = () => {
+    const v = Number(priceDraft);
+    if (!Number.isInteger(v) || v <= 0 || v === row.price) { setPriceDraft(String(row.price)); return; }
+    onPatch({ price: v });
+  };
+  return (
+    <div className={`flex flex-wrap items-center gap-3 rounded-xl border border-[var(--color-border)] px-3 py-2 ${row.enabled ? '' : 'opacity-60'}`}>
+      <span className="min-w-0 flex-1 text-sm text-[var(--color-text)]">{row.name}</span>
+      <select value={row.price_mode} onChange={e => onPatch({ priceMode: e.target.value })}
+        className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-xs">
+        <option value="fixed">фикс, {currencyName}</option>
+        <option value="percent">% от баланса</option>
+      </select>
+      <input value={priceDraft} onChange={e => setPriceDraft(e.target.value)} onBlur={commitPrice}
+        onKeyDown={e => { if (e.key === 'Enter') commitPrice(); }}
+        className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-right text-xs tabular-nums" />
+      <span className="text-xs tabular-nums text-[var(--color-text-muted)]" title="применений">{row.uses}×</span>
+      <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
+        <input type="checkbox" checked={row.enabled} onChange={e => onPatch({ enabled: e.target.checked })} />
+        вкл
+      </label>
     </div>
   );
 }
@@ -522,6 +693,9 @@ export function RewardsSettingsPage() {
           </div>
         </div>
       ))}
+
+      {/* Ручные операции (доп. Серёги 31.07): справочник штрафов + бюджет поощрений */}
+      {!isLoading && <PenaltiesSettings currencyName={currencyName} />}
     </div>
   );
 }

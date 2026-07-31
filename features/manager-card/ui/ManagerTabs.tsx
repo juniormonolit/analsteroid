@@ -5,7 +5,8 @@
 // Только mode='manager': у агрегата отдела нет одной личности/полки/баланса,
 // там прежняя структура (полка РОПа + «Моя команда» — не теряются).
 
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Avatar } from '@/components/ui/Avatar';
 import { BadgeCard, BadgeShelf, useShelfQuery } from '@/features/badges/ui/BadgeShelf';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
@@ -45,8 +46,38 @@ export function ManagerTabBar({ active, onChange }: { active: ManagerTabKey; onC
 
 // ── общие данные табов ───────────────────────────────────────────────────────
 
-interface LedgerRow { date: string; badge_name: string; icon: string | null; tier: string | null; amount: number }
+interface LedgerRow {
+  id: number; date: string; badge_name: string | null; icon: string | null;
+  tier: string | null; amount: number;
+  // Выписка (доп. Серёги 31.07): source auto/manual_bonus/manual_penalty,
+  // кем сделано, комментарий, причина штрафа, сторно-связи.
+  source: 'auto' | 'manual_bonus' | 'manual_penalty';
+  actor_login: string | null; comment: string | null;
+  penalty_name: string | null; reversal_of: number | null; reversed: boolean;
+}
 interface ProfileExtra { tenure: { startDate: string; label: string | null } | null; ledger: LedgerRow[] }
+
+// Контекст ручных операций: право, бюджет, справочник с рассчитанными суммами.
+interface ManualContext {
+  canManual: boolean; currencyName?: string; balance?: number;
+  budget?: { budget: number; left: number } | null;
+  canReverse?: boolean;
+  penaltyTypes?: { id: number; name: string; price: number; priceMode: 'fixed' | 'percent'; computedAmount: number }[];
+}
+
+function useManualContext(managerId: string, enabled: boolean) {
+  return useQuery<ManualContext>({
+    queryKey: ['badges-manual-ctx', managerId],
+    queryFn: async () => {
+      const res = await fetch(`/api/badges/manual?bitrixId=${encodeURIComponent(managerId)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    enabled,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+}
 
 // Стаж + история начислений: своё (isSelf) — без параметра, чужое — по bitrixId
 // (второй рубеж canViewManager в самом роуте).
@@ -73,11 +104,131 @@ function fmtMoney(v: number | null | undefined): string {
 }
 
 function BalancePill({ balance, currencyName, big = false }: { balance: number; currencyName: string; big?: boolean }) {
+  // Баланс может уходить в минус (ручные штрафы) — минус красным.
+  const neg = balance < 0;
+  const color = neg ? 'var(--color-negative, #e03131)' : 'var(--color-accent)';
   return (
-    <span className={`inline-flex items-baseline gap-1.5 rounded-2xl border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 ${big ? 'px-5 py-2.5' : 'px-3 py-1'}`}>
-      <span className={`font-extrabold tabular-nums text-[var(--color-accent)] ${big ? 'text-3xl' : 'text-xl'}`}>{balance.toLocaleString('ru-RU')}</span>
+    <span
+      className={`inline-flex items-baseline gap-1.5 rounded-2xl border ${big ? 'px-5 py-2.5' : 'px-3 py-1'}`}
+      style={{ borderColor: `color-mix(in srgb, ${color} 40%, transparent)`, backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)` }}
+    >
+      <span className={`font-extrabold tabular-nums ${big ? 'text-3xl' : 'text-xl'}`} style={{ color }}>{balance.toLocaleString('ru-RU')}</span>
       <span className={`font-semibold text-[var(--color-text-muted)] ${big ? 'text-sm' : 'text-xs'}`}>{currencyName}</span>
     </span>
+  );
+}
+
+// ── Ручные поощрения/штрафы (доп. Серёги 31.07) ──────────────────────────────
+// Кнопки видны РОПу и старше только для СВОИХ подчинённых (managed-depts, как
+// «Моя команда»), админу — для всех; сервер отбивает вторым рубежом.
+
+function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: {
+  managerId: string; managerName: string; kind: 'bonus' | 'penalty';
+  ctx: ManualContext; onClose: () => void; onDone: () => void;
+}) {
+  const [amount, setAmount] = useState('');
+  const [comment, setComment] = useState('');
+  const [typeId, setTypeId] = useState<number | null>(ctx.penaltyTypes?.[0]?.id ?? null);
+  const [error, setError] = useState<string | null>(null);
+  const currency = ctx.currencyName ?? 'ебаллы';
+  const selType = ctx.penaltyTypes?.find(t => t.id === typeId) ?? null;
+
+  const submit = useMutation({
+    mutationFn: async () => {
+      let confirmText: string;
+      let body: Record<string, unknown>;
+      if (kind === 'bonus') {
+        const v = Number(amount);
+        if (!Number.isInteger(v) || v <= 0) throw new Error('Сумма — целое число больше нуля');
+        if (!comment.trim()) throw new Error('Комментарий обязателен');
+        confirmText = `Поощрить ${managerName} на ${v} ${currency}?\n\nКомментарий: ${comment.trim()}`;
+        body = { bitrixId: Number(managerId), type: 'bonus', amount: v, comment: comment.trim() };
+      } else {
+        if (!selType) throw new Error('Выберите причину штрафа');
+        // Подтверждающее окно с РАССЧИТАННОЙ суммой (для percent — от текущего баланса)
+        confirmText = `Оштрафовать ${managerName} на ${selType.computedAmount} ${currency}` +
+          (selType.priceMode === 'percent' ? ` (${selType.price}% от баланса ${ctx.balance ?? 0})` : '') +
+          `?\n\nПричина: ${selType.name}${comment.trim() ? `\nКомментарий: ${comment.trim()}` : ''}`;
+        body = { bitrixId: Number(managerId), type: 'penalty', penaltyTypeId: selType.id, comment: comment.trim() };
+      }
+      if (!window.confirm(confirmText)) return false;
+      const res = await fetch('/api/badges/manual', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      return true;
+    },
+    onSuccess: (done) => { if (done) onDone(); },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={onClose}>
+      <div className="mt-16 w-full max-w-md rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-5 shadow-xl" onClick={e => e.stopPropagation()}>
+        <h2 className="mb-3 text-base font-bold text-[var(--color-text)]">
+          {kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}: {managerName}
+        </h2>
+        <div className="flex flex-col gap-3">
+          {kind === 'bonus' ? (
+            <>
+              <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+                Сумма, {currency}
+                <input value={amount} onChange={e => setAmount(e.target.value)}
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-right tabular-nums" placeholder="100" />
+              </label>
+              {ctx.budget && (
+                <div className="text-xs text-[var(--color-text-muted)]">
+                  Бюджет поощрений в этом месяце: осталось <b className="text-[var(--color-text)]">{ctx.budget.left}</b> из {ctx.budget.budget}
+                </div>
+              )}
+              <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+                Комментарий (обязателен — за что поощрение)
+                <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} maxLength={500}
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm" />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+                Причина (размер фиксирован справочником)
+                <select value={typeId ?? ''} onChange={e => setTypeId(Number(e.target.value))}
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm">
+                  {(ctx.penaltyTypes ?? []).map(t => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} — {t.priceMode === 'percent' ? `${t.price}% от баланса (${t.computedAmount})` : t.price} {currency}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {(ctx.penaltyTypes ?? []).length === 0 && (
+                <div className="text-xs text-[var(--color-text-muted)]">Справочник штрафов пуст — причины создаёт админ в настройках.</div>
+              )}
+              {selType && (
+                <div className="text-xs text-[var(--color-text-muted)]">
+                  Спишется: <b className="text-[var(--color-negative,#e03131)]">−{selType.computedAmount} {currency}</b>
+                  {selType.priceMode === 'percent' && <span> ({selType.price}% от текущего баланса {ctx.balance ?? 0}; сумма фиксируется на момент операции)</span>}
+                </div>
+              )}
+              <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+                Комментарий (опционально)
+                <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} maxLength={500}
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm" />
+              </label>
+            </>
+          )}
+          {error && <div className="text-xs text-[var(--color-negative,#e03131)]">{error}</div>}
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={onClose} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
+            <button type="button" disabled={submit.isPending || (kind === 'penalty' && !selType)}
+              onClick={() => { setError(null); submit.mutate(); }}
+              className={`rounded-lg px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ${kind === 'bonus' ? 'bg-[var(--color-positive,#2f9e44)]' : 'bg-[var(--color-negative,#e03131)]'}`}>
+              {submit.isPending ? 'Сохранение…' : kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -89,9 +240,20 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
   card: ManagerCardResult | undefined;
   onGoRewards: () => void;
 }) {
+  const qc = useQueryClient();
   const { data: shelfData } = useShelfQuery(isSelf ? undefined : managerId);
   const { data: extra } = useProfileExtra(managerId, isSelf);
   const { data: planFact } = usePlanFact(managerId, 'manager');
+  // Ручные операции: контекст только в чужой карточке (себя поощрять нельзя,
+  // сервер это же и отбивает — canManual=false в своём ЛК у не-админов).
+  const { data: manualCtx } = useManualContext(managerId, !isSelf);
+  const [manualKind, setManualKind] = useState<'bonus' | 'penalty' | null>(null);
+  const afterManual = () => {
+    setManualKind(null);
+    void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
+    void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+    void qc.invalidateQueries({ queryKey: ['badges-manual-ctx'] });
+  };
 
   const shelf = shelfData?.shelf ?? [];
   const recent = shelf.slice(0, 4);
@@ -119,8 +281,40 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
               )}
             </div>
           </div>
-          <BalancePill balance={shelfData?.balance ?? 0} currencyName={shelfData?.currencyName ?? 'ебаллы'} big />
+          <div className="flex flex-col items-end gap-2">
+            <BalancePill balance={shelfData?.balance ?? 0} currencyName={shelfData?.currencyName ?? 'ебаллы'} big />
+            {manualCtx?.canManual && (
+              <div className="flex gap-2">
+                <button type="button"
+                  onClick={() => setManualKind('bonus')}
+                  disabled={!!manualCtx.budget && manualCtx.budget.left <= 0}
+                  title={manualCtx.budget && manualCtx.budget.left <= 0
+                    ? `Бюджет поощрений на месяц исчерпан (${manualCtx.budget.budget}) — кнопка откроется в следующем месяце`
+                    : 'Начислить поощрение'}
+                  className="rounded-lg bg-[var(--color-positive,#2f9e44)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">
+                  Поощрить
+                </button>
+                <button type="button" onClick={() => setManualKind('penalty')}
+                  className="rounded-lg bg-[var(--color-negative,#e03131)] px-3 py-1.5 text-xs font-semibold text-white">
+                  Оштрафовать
+                </button>
+              </div>
+            )}
+            {manualCtx?.canManual && manualCtx.budget && manualCtx.budget.left <= 0 && (
+              <div className="text-[11px] text-[var(--color-text-muted)]">Бюджет поощрений на месяц исчерпан</div>
+            )}
+          </div>
         </div>
+        {manualKind && manualCtx && (
+          <ManualOpsModal
+            managerId={managerId}
+            managerName={card?.profile.name ?? `#${managerId}`}
+            kind={manualKind}
+            ctx={manualCtx}
+            onClose={() => setManualKind(null)}
+            onDone={afterManual}
+          />
+        )}
         {/* Место в рейтинге — те же ранги, что в hero «Статистики» (общий запрос карточки) */}
         {(card?.ranks?.length ?? 0) > 0 && (
           <div className="mt-4 pt-3 border-t border-[var(--color-border)] flex items-center gap-4 flex-wrap">
@@ -201,18 +395,88 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
 
 // ── Таб «Награды»: полная полка + история начислений ─────────────────────────
 
+// Описание строки выписки: авто — награда; ручные — кем и за что; сторно — «отмена…».
+function ledgerTitle(r: LedgerRow): { title: string; sub: string | null } {
+  if (r.reversal_of !== null) {
+    return { title: r.comment ?? 'Отмена операции', sub: r.actor_login ? `админ: ${r.actor_login}` : null };
+  }
+  if (r.source === 'manual_bonus') {
+    return { title: `Поощрение: ${r.comment || '—'}`, sub: r.actor_login ? `от ${r.actor_login}` : null };
+  }
+  if (r.source === 'manual_penalty') {
+    return {
+      title: `Штраф: ${r.penalty_name ?? '—'}${r.comment ? ` — ${r.comment}` : ''}`,
+      sub: r.actor_login ? `от ${r.actor_login}` : null,
+    };
+  }
+  return { title: r.badge_name ?? '—', sub: null };
+}
+
+// Публичный справочник штрафов: все менеджеры видят «за что и сколько» (read-only).
+function PenaltyCatalog() {
+  const { data } = useQuery<{ currencyName: string; types: { id: number; name: string; price: number; priceMode: string }[] }>({
+    queryKey: ['penalty-types-public'],
+    queryFn: async () => {
+      const res = await fetch('/api/badges/penalty-types');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const types = data?.types ?? [];
+  if (types.length === 0) return null;
+  return (
+    <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+      <div className="mb-2.5 flex items-baseline gap-2">
+        <h2 className="text-base font-bold text-[var(--color-text)]">Справочник штрафов</h2>
+        <span className="text-xs text-[var(--color-text-muted)]">за что и сколько</span>
+      </div>
+      <div className="flex flex-col">
+        {types.map(t => (
+          <div key={t.id} className="flex items-baseline justify-between gap-3 border-t border-[var(--color-border)] py-1.5 first:border-t-0 text-[13px]">
+            <span className="text-[var(--color-text)]">{t.name}</span>
+            <span className="whitespace-nowrap font-semibold tabular-nums text-[var(--color-negative,#e03131)]">
+              −{t.priceMode === 'percent' ? `${t.price}% от баланса` : `${t.price} ${data?.currencyName ?? 'ебаллы'}`}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
+  const qc = useQueryClient();
   const { data: shelfData } = useShelfQuery(isSelf ? undefined : managerId);
   const { data: extra, isLoading } = useProfileExtra(managerId, isSelf);
+  const { data: manualCtx } = useManualContext(managerId, !isSelf);
   const currencyName = shelfData?.currencyName ?? 'ебаллы';
   const ledger = extra?.ledger ?? [];
+
+  // Сторно (только админ): компенсирующая запись, история сохраняется.
+  const reverse = useMutation({
+    mutationFn: async (ledgerId: number) => {
+      const res = await fetch('/api/badges/manual/reverse', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ledgerId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+      void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
+      void qc.invalidateQueries({ queryKey: ['badges-manual-ctx'] });
+    },
+  });
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <BadgeShelf managerId={isSelf ? undefined : managerId} />
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
         <div className="mb-2.5 flex items-baseline gap-2">
-          <h2 className="text-base font-bold text-[var(--color-text)]">История начислений</h2>
+          <h2 className="text-base font-bold text-[var(--color-text)]">Выписка</h2>
+          <span className="text-xs text-[var(--color-text-muted)]">награды, поощрения и штрафы</span>
           {ledger.length > 0 && <span className="text-xs text-[var(--color-text-muted)]">{ledger.length}</span>}
         </div>
         {isLoading ? (
@@ -225,33 +489,50 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
                   <th className="py-1.5 pr-3 font-bold">Дата</th>
-                  <th className="py-1.5 pr-3 font-bold">Награда</th>
+                  <th className="py-1.5 pr-3 font-bold">Операция</th>
                   <th className="py-1.5 text-right font-bold">{currencyName}</th>
                 </tr>
               </thead>
               <tbody>
-                {ledger.map((r, i) => (
-                  <tr key={i} className="border-t border-[var(--color-border)]">
-                    <td className="py-1.5 pr-3 whitespace-nowrap tabular-nums text-[var(--color-text-muted)]">
-                      {r.date.split('-').reverse().join('.')}
-                    </td>
-                    <td className="py-1.5 pr-3">
-                      {r.icon && <span className="mr-1.5">{r.icon}</span>}
-                      <span className="text-[var(--color-text)]">{r.badge_name}</span>
-                      {r.tier && (
-                        <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">
-                          {TIER_LABELS[r.tier as BadgeTier] ?? r.tier}
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-1.5 text-right font-semibold tabular-nums text-[var(--color-accent)]">+{r.amount}</td>
-                  </tr>
-                ))}
+                {ledger.map((r) => {
+                  const { title, sub } = ledgerTitle(r);
+                  const neg = r.amount < 0;
+                  return (
+                    <tr key={r.id} className={`border-t border-[var(--color-border)] ${r.reversed ? 'opacity-60' : ''}`}>
+                      <td className="py-1.5 pr-3 whitespace-nowrap tabular-nums text-[var(--color-text-muted)]">
+                        {r.date.split('-').reverse().join('.')}
+                      </td>
+                      <td className="py-1.5 pr-3">
+                        {r.icon && r.source === 'auto' && <span className="mr-1.5">{r.icon}</span>}
+                        <span className="text-[var(--color-text)]">{title}</span>
+                        {r.tier && (
+                          <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">
+                            {TIER_LABELS[r.tier as BadgeTier] ?? r.tier}
+                          </span>
+                        )}
+                        {sub && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">{sub}</span>}
+                        {r.reversed && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">(отменена)</span>}
+                        {manualCtx?.canReverse && r.source !== 'auto' && !r.reversed && r.reversal_of === null && (
+                          <button type="button"
+                            onClick={() => { if (window.confirm('Сторнировать операцию? Появится компенсирующая запись.')) reverse.mutate(r.id); }}
+                            className="ml-2 text-[11px] font-semibold text-[var(--color-accent)] hover:underline">
+                            сторно
+                          </button>
+                        )}
+                      </td>
+                      <td className="py-1.5 text-right font-semibold tabular-nums"
+                          style={{ color: neg ? 'var(--color-negative, #e03131)' : 'var(--color-positive, #2f9e44)' }}>
+                        {neg ? '' : '+'}{r.amount.toLocaleString('ru-RU')}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </section>
+      <PenaltyCatalog />
     </div>
   );
 }
