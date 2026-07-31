@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { ManagerActivityTab } from './ManagerActivityTab';
+import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
 import { previousPeriodSameLength, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
@@ -191,9 +192,12 @@ export interface ManagerCardPageProps {
   /** Начальный период из query (?from&to) — например, из отчёта; дефолт — текущий месяц. */
   initialFrom?: string;
   initialTo?: string;
+  /** Бейджи (задача 2655): полка трофеев (менеджер) / «Моя команда» (РОП).
+   *  Включается ТОЛЬКО в собственном ЛК (/manager/me), не в чужих карточках. */
+  showBadges?: boolean;
 }
 
-export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo }: ManagerCardPageProps) {
+export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo, showBadges = false }: ManagerCardPageProps) {
   const [period, setPeriod] = useState<DateRange>(() => {
     if (initialFrom && initialTo) {
       const from = new Date(initialFrom);
@@ -384,6 +388,11 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
 
       {/* ── План/факт «прямо сейчас»: Сегодня · Неделя · Месяц (не зависит от фильтров) ── */}
       <PlanFactStrip managerId={managerId} mode={mode} />
+
+      {/* ── Бейджи (задача 2655): своя полка в ЛК менеджера; у РОПа — «Моя команда»
+          с полками подчинённых (managed-depts, чужие не видны by construction). ── */}
+      {showBadges && mode === 'manager' && <BadgeShelf />}
+      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><TeamBadgesBlock /></>)}
 
       {isLoading ? (
         <div className="space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-24 bg-[var(--color-border)] rounded-2xl animate-pulse" />)}</div>

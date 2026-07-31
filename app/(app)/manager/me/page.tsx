@@ -25,8 +25,9 @@ export default async function Page() {
         managerId="my"
         mode="department"
         managerName={managed.length === 1 ? (managed[0].deptName ?? 'Мой отдел') : `Мои отделы (${managed.length})`}
+        showBadges
       />
     );
   }
-  return <ManagerCardPage managerId={session.bitrixUserId} mode="manager" managerName={session.displayName} />;
+  return <ManagerCardPage managerId={session.bitrixUserId} mode="manager" managerName={session.displayName} showBadges />;
 }

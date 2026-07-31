@@ -16,6 +16,64 @@ export async function register() {
   scheduleCallControl();
   scheduleWidgetMetrics();
   scheduleEmployeeRenameCheck();
+  scheduleBadgeRecompute();
+}
+
+// Бейджи менеджеров (задача 2655): ночной полный идемпотентный пересчёт наград
+// (03:30+ МСК, Redis-замок на дату) + ретро-прогон при первом старте, если
+// badge_awards ещё пуста. Планировщика в проекте нет — таймер в процессе
+// next start, как у остальных джоб выше.
+function scheduleBadgeRecompute() {
+  let lastRunDateMsk: string | null = null;
+  let bootChecked = false;
+
+  const run = async (reason: string) => {
+    const { runBadgeRecompute } = await import('./features/badges/engine/compute');
+    const res = await runBadgeRecompute();
+    console.log(`[badges] пересчёт (${reason}): +${res.inserted} новых, ${res.updated} обновлено, всего наград в проходе ${res.total}, ${res.ms}ms`);
+  };
+
+  const tick = async () => {
+    try {
+      const now = new Date();
+      const msk = now.toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+      const [date, time] = msk.split(' ');
+      const hour = Number(time.slice(0, 2));
+
+      if (!bootChecked) {
+        bootChecked = true;
+        try {
+          const { systemDb } = await import('./lib/db/clients');
+          const r = await systemDb().query<{ n: string }>('SELECT count(*) AS n FROM badge_awards');
+          if (Number(r.rows[0]?.n ?? '0') === 0) {
+            await run('первый запуск, ретро');
+            lastRunDateMsk = date;
+            return;
+          }
+        } catch (e) {
+          console.warn('[badges] boot-проверка не удалась (миграция 112 ещё не применена?):', e instanceof Error ? e.message : e);
+          return;
+        }
+      }
+
+      if (hour < 3 || lastRunDateMsk === date) return;
+      try {
+        const { getRedis } = await import('./lib/cache/redis');
+        const redis = getRedis();
+        if (redis) {
+          const acquired = await redis.set(`badges:recompute:${date}`, '1', 'EX', 20 * 60 * 60, 'NX');
+          if (acquired !== 'OK') { lastRunDateMsk = date; return; }
+        }
+      } catch { /* без Redis — in-memory дата */ }
+      await run('ночной');
+      lastRunDateMsk = date;
+    } catch (err) {
+      console.error('[badges] пересчёт упал:', err);
+    }
+  };
+
+  setTimeout(() => { void tick(); }, 30 * 1000); // ретро-чек через 30с после старта
+  setInterval(() => { void tick(); }, 15 * 60 * 1000);
 }
 
 // Реестр сотрудников (задача 2654): суточный серверный детект переименований
