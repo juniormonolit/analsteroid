@@ -39,6 +39,31 @@ function scoreColor(score: number | null): string | undefined {
   return 'var(--color-text-muted)';
 }
 
+// Сортировка по колонкам (задача Серёги 31.07): клик по заголовку числовой
+// колонки — убывание, повторный клик — реверс, третий — возврат к дефолтному
+// порядку по рангу. Сортировка чисто клиентская (все строки уже на клиенте).
+// Колонка «#» показывает ИСХОДНЫЙ ранг менеджера (r.rank из API) и при
+// пересортировке НЕ пересчитывается — видно «5-й по рейтингу, но 1-й по ебаллам».
+type SortKey = 'badges' | 'coins' | 'rating' | `axis:${string}`;
+type SortState = { key: SortKey; dir: 'desc' | 'asc' } | null;
+
+function SortableTh({ label, sortKey, sort, onSort, strong, title, left }: {
+  label: string; sortKey: SortKey; sort: SortState;
+  onSort: (key: SortKey) => void; strong?: boolean; title?: string; left?: boolean;
+}) {
+  const active = sort?.key === sortKey;
+  return (
+    <th
+      onClick={() => onSort(sortKey)}
+      title={title ?? 'Сортировать по колонке'}
+      className={`px-3 py-2.5 ${left ? 'text-left' : 'text-right'} font-medium whitespace-nowrap cursor-pointer select-none hover:text-[var(--color-text)] ${active || strong ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}
+    >
+      {label}
+      <span className="inline-block w-3 text-[10px]">{active ? (sort!.dir === 'desc' ? '▼' : '▲') : ''}</span>
+    </th>
+  );
+}
+
 function MedalOrRank({ rank }: { rank: number | null }) {
   if (rank === null) return <span className="text-[var(--color-text-muted)]">—</span>;
   if (rank <= 3) {
@@ -100,12 +125,42 @@ export function RatingPage() {
     refetchOnWindowFocus: false,
   });
   const shelves = badgesData?.shelves ?? {};
-  // Валюта (задача 2657): баланс колонкой. Решение: колонка НЕ сортируемая —
-  // таблица рейтинга вообще без пользовательской сортировки (фиксированный
-  // порядок по рангу), заводить механизм сортировки ради одной колонки не стал.
+  // Валюта (задача 2657): баланс колонкой. С 31.07 (правка Серёги) колонка,
+  // как и остальные числовые, сортируемая — см. sortedRows ниже.
   const balances = badgesData?.balances ?? {};
   const currencyName = badgesData?.currencyName ?? 'ебаллы';
   const [openBadgesId, setOpenBadgesId] = useState<string | null>(null);
+
+  // Состояние сортировки: null = дефолтный порядок по рангу (как отдал API).
+  const [sort, setSort] = useState<SortState>(null);
+  const handleSort = (key: SortKey) => {
+    setSort(prev => {
+      if (prev?.key !== key) return { key, dir: 'desc' };
+      if (prev.dir === 'desc') return { key, dir: 'asc' };
+      return null; // третий клик — возврат к дефолту
+    });
+  };
+
+  const sortedRows = useMemo(() => {
+    if (!sort) return rows;
+    const val = (r: RatingRow): number | null => {
+      if (sort.key === 'coins') return balances[r.managerId] ?? 0;
+      if (sort.key === 'badges') return (shelves[r.managerId] ?? []).reduce((s, it) => s + it.count, 0);
+      if (sort.key === 'rating') return r.rating;
+      const axisKey = sort.key.slice('axis:'.length);
+      return r.axes.find(x => x.key === axisKey)?.score ?? null;
+    };
+    const mult = sort.dir === 'desc' ? -1 : 1;
+    return [...rows].sort((a, b) => {
+      const va = val(a);
+      const vb = val(b);
+      if (va === null && vb === null) return (a.rank ?? Infinity) - (b.rank ?? Infinity);
+      if (va === null) return 1; // пустые значения всегда внизу
+      if (vb === null) return -1;
+      if (va !== vb) return (va - vb) * mult;
+      return (a.rank ?? Infinity) - (b.rank ?? Infinity); // тай-брейк — исходный ранг
+    });
+  }, [rows, sort, balances, shelves]);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -158,18 +213,16 @@ export function RatingPage() {
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">#</th>
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Менеджер</th>
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Отдел</th>
-                  <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Награды</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-[var(--color-text-muted)] whitespace-nowrap">{currencyName}</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-[var(--color-text)] whitespace-nowrap">Рейтинг</th>
+                  <SortableTh label="Награды" sortKey="badges" sort={sort} onSort={handleSort} left />
+                  <SortableTh label={currencyName} sortKey="coins" sort={sort} onSort={handleSort} />
+                  <SortableTh label="Рейтинг" sortKey="rating" sort={sort} onSort={handleSort} strong />
                   {axes.map(a => (
-                    <th key={a.key} className="px-3 py-2.5 text-right font-medium text-[var(--color-text-muted)] whitespace-nowrap" title={`Вес ${a.weight}`}>
-                      {a.label}
-                    </th>
+                    <SortableTh key={a.key} label={a.label} sortKey={`axis:${a.key}`} sort={sort} onSort={handleSort} title={`Вес ${a.weight} · сортировать`} />
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => {
+                {sortedRows.map((r, i) => {
                   const shelf = shelves[r.managerId] ?? [];
                   const badgesTotal = shelf.reduce((s, item) => s + item.count, 0);
                   const badgesOpen = openBadgesId === r.managerId;
