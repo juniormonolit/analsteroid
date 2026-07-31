@@ -1,0 +1,345 @@
+'use client';
+// «Мои заказчики» (фича Серёги 01.08): таб в ЛК менеджера — кому пора позвонить.
+// Клиент = contact_id (физ) / company_id (юр), как в разделе «Повторные»;
+// атрибуция — менеджер последней сделки клиента; сигналы (а)/(б) и пороги — в
+// features/customers/engine/customers.ts. ПДн: телефоны в UI не показываются —
+// звонить менеджер идёт в Битрикс по ссылке на карточку клиента/сделки.
+
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import type { ActiveDealInfo, CallSignal } from '@/features/customers/engine/customers';
+
+interface ApiRow {
+  clientKey: string; clientType: 'contact' | 'company'; clientId: number; name: string | null;
+  dealsTotal: number; dealsSold: number; sumSold: number;
+  lastSoldAt: string | null; lastCallAt: string | null; lastActivityAt: string | null;
+  activeCount: number; activeDeals: ActiveDealInfo[];
+  refusedNoCall: boolean; cycleDays: number; cycleSource: 'own' | 'global';
+  signals: CallSignal[]; urgency: number;
+}
+interface ApiResponse {
+  total: number;
+  counts: { all: number; active: number; inactive: number; overdue: number; refusedNoCall: number };
+  page: number; pageSize: number; rows: ApiRow[];
+  thresholds: { globalCycleDays: number; activeNoCallDays: number };
+}
+
+type Filter = 'all' | 'active' | 'inactive' | 'overdue';
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: 'all', label: 'Все' },
+  { key: 'overdue', label: 'Пора позвонить' },
+  { key: 'active', label: 'С активными' },
+  { key: 'inactive', label: 'Без активных' },
+];
+
+const PAGE_SIZE = 50;
+
+function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number) {
+  return useQuery<ApiResponse>({
+    queryKey: ['customers', isSelf ? 'me' : managerId, filter, search, page],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (!isSelf) qs.set('bitrixId', managerId);
+      qs.set('filter', filter);
+      if (search) qs.set('search', search);
+      qs.set('page', String(page));
+      qs.set('pageSize', String(PAGE_SIZE));
+      const res = await fetch(`/api/customers?${qs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    placeholderData: prev => prev, // страница не мигает при перелистывании
+  });
+}
+
+function fmtMoney(v: number): string {
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `${(v / 1_000_000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} млн ₽`;
+  if (abs >= 1_000) return `${(v / 1_000).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} тыс ₽`;
+  return `${v.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
+}
+function fmtDate(iso: string | null): string {
+  if (!iso) return '—';
+  return iso.slice(0, 10).split('-').reverse().join('.');
+}
+function daysAgo(iso: string | null): string {
+  if (!iso) return '—';
+  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  if (d <= 0) return 'сегодня';
+  if (d === 1) return 'вчера';
+  return `${d} дн. назад`;
+}
+function clientUrl(r: ApiRow): string {
+  return r.clientType === 'contact'
+    ? `https://td.monolit-crm.ru/crm/contact/details/${r.clientId}/`
+    : `https://td.monolit-crm.ru/crm/company/details/${r.clientId}/`;
+}
+
+function SignalBadge({ r, noCallDays }: { r: ApiRow; noCallDays: number }) {
+  if (r.signals.length === 0) {
+    return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      {r.signals.includes('active_no_call') && (
+        <span className="inline-flex w-fit items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-bold whitespace-nowrap"
+          style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 12%, transparent)' }}
+          title={`Есть активная сделка, по которой нет звонков больше ${noCallDays} дней`}>
+          📞 Сделка без звонка
+        </span>
+      )}
+      {r.signals.includes('overdue_repeat') && (
+        <span className="inline-flex w-fit items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-bold whitespace-nowrap"
+          style={{ color: 'var(--color-warning, #e8590c)', backgroundColor: 'color-mix(in srgb, var(--color-warning, #e8590c) 12%, transparent)' }}
+          title={`Активных сделок нет, а с последней покупки прошло больше типичного цикла повторки клиента (${r.cycleDays} дн., ${r.cycleSource === 'own' ? 'его собственная медиана' : 'медиана по всей базе'})`}>
+          ⏰ Пора позвонить
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ActiveDealsCell({ deals }: { deals: ActiveDealInfo[] }) {
+  const [open, setOpen] = useState(false);
+  if (deals.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">нет</span>;
+  const shown = open ? deals : deals.slice(0, 2);
+  return (
+    <div className="flex flex-col gap-0.5">
+      {shown.map(d => (
+        <div key={d.dealId} className="text-xs whitespace-nowrap">
+          <a href={`https://td.monolit-crm.ru/crm/deal/details/${d.dealId}/`} target="_blank" rel="noreferrer"
+            className="text-[var(--color-accent)] hover:underline" title={d.name ?? undefined}>
+            #{d.dealId}
+          </a>
+          <span className="ml-1 text-[var(--color-text-muted)]">{d.stage ?? '?'}</span>
+          {d.daysSilent > 7 && (
+            <span className="ml-1 font-semibold text-[var(--color-negative,#e03131)]"
+              title="Дней без звонка по этой сделке">🔇 {Math.floor(d.daysSilent)} дн.</span>
+          )}
+        </div>
+      ))}
+      {deals.length > 2 && (
+        <button type="button" onClick={() => setOpen(v => !v)}
+          className="w-fit text-[11px] font-semibold text-[var(--color-accent)] hover:underline">
+          {open ? 'свернуть' : `ещё ${deals.length - 2}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Список заказчиков одного менеджера: фильтры + поиск + пагинация.
+ *  Используется и в табе ЛК, и в провале из блока РОПа. */
+export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
+  const [filter, setFilter] = useState<Filter>('all');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+
+  // Дебаунс поиска, чтобы не дёргать API на каждый символ.
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 400);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  const { data, isLoading, isError } = useCustomers(managerId, isSelf, filter, search, page);
+  const rows = data?.rows ?? [];
+  const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE)), [data?.total]);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5">
+          {FILTERS.map(f => (
+            <button key={f.key} type="button" onClick={() => { setFilter(f.key); setPage(1); }}
+              className={`rounded-lg px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors ${
+                filter === f.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+              }`}>
+              {f.label}
+              {data && (
+                <span className="ml-1 opacity-70 tabular-nums">
+                  {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue : f.key === 'active' ? data.counts.active : data.counts.inactive}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <input value={searchInput} onChange={e => setSearchInput(e.target.value)} placeholder="Поиск по имени или id"
+          className="min-w-[180px] flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm sm:max-w-xs" />
+        {data && data.counts.refusedNoCall > 0 && (
+          <span className="text-[11px] text-[var(--color-text-muted)]" title="Клиентов, у которых есть сделка, закрытая в отказ без единого звонка">
+            🚫 отказы без звонка: <b className="text-[var(--color-text)]">{data.counts.refusedNoCall}</b>
+          </span>
+        )}
+      </div>
+
+      {isError ? (
+        <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить список заказчиков.</div>
+      ) : isLoading && rows.length === 0 ? (
+        <div className="text-sm text-[var(--color-text-muted)]">Считаем заказчиков… (первое открытие может занять до минуты)</div>
+      ) : rows.length === 0 ? (
+        <div className="text-sm text-[var(--color-text-muted)]">Ничего не найдено.</div>
+      ) : (
+        <div className="overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                <th className="px-3 py-2 font-bold">Клиент</th>
+                <th className="px-3 py-2 font-bold">Сигнал</th>
+                <th className="px-3 py-2 font-bold text-right whitespace-nowrap">Сделок / продано</th>
+                <th className="px-3 py-2 font-bold text-right">Куплено на</th>
+                <th className="px-3 py-2 font-bold whitespace-nowrap">Последняя покупка</th>
+                <th className="px-3 py-2 font-bold">Активные сделки</th>
+                <th className="px-3 py-2 font-bold whitespace-nowrap">Последний звонок</th>
+                <th className="px-3 py-2 font-bold">Активность</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.clientKey} className="border-t border-[var(--color-border)] align-top">
+                  <td className="px-3 py-2">
+                    <a href={clientUrl(r)} target="_blank" rel="noreferrer"
+                      className="font-semibold text-[var(--color-text)] hover:text-[var(--color-accent)] hover:underline">
+                      {r.name ?? (r.clientType === 'contact' ? `Контакт #${r.clientId}` : `Компания #${r.clientId}`)}
+                    </a>
+                    <div className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-[var(--color-text-muted)]">
+                      <span>{r.clientType === 'contact' ? 'физ' : 'юр'}</span>
+                      {r.refusedNoCall && (
+                        <span className="rounded px-1 font-semibold"
+                          style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 10%, transparent)' }}
+                          title="У клиента есть сделка, закрытая в отказ без единого звонка">
+                          🚫 отказ без звонка
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2"><SignalBadge r={r} noCallDays={data?.thresholds.activeNoCallDays ?? 7} /></td>
+                  <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
+                    {r.dealsTotal} / <b>{r.dealsSold}</b>
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold tabular-nums whitespace-nowrap">
+                    {r.sumSold > 0 ? fmtMoney(r.sumSold) : '—'}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap tabular-nums" title={r.lastSoldAt ? daysAgo(r.lastSoldAt) : undefined}>
+                    {fmtDate(r.lastSoldAt)}
+                  </td>
+                  <td className="px-3 py-2"><ActiveDealsCell deals={r.activeDeals} /></td>
+                  <td className="px-3 py-2 whitespace-nowrap" title={fmtDate(r.lastCallAt)}>
+                    {daysAgo(r.lastCallAt)}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]" title={fmtDate(r.lastActivityAt)}>
+                    {daysAgo(r.lastActivityAt)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <div className="flex items-center gap-2 text-xs">
+          <button type="button" disabled={page <= 1} onClick={() => setPage(p => p - 1)}
+            className="rounded-lg border border-[var(--color-border)] px-3 py-1 font-semibold disabled:opacity-40 hover:bg-[var(--color-bg-hover)]">←</button>
+          <span className="tabular-nums text-[var(--color-text-muted)]">стр. {page} из {totalPages} · {data?.total ?? 0} клиентов</span>
+          <button type="button" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}
+            className="rounded-lg border border-[var(--color-border)] px-3 py-1 font-semibold disabled:opacity-40 hover:bg-[var(--color-bg-hover)]">→</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function CustomersTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-xs text-[var(--color-text-muted)]">
+        Клиенты, где вы вели последнюю сделку. Сигналы: <b>📞 сделка без звонка</b> — по активной сделке нет звонков
+        больше недели; <b>⏰ пора позвонить</b> — активных сделок нет, а с последней покупки прошло больше типичного
+        цикла повторных покупок клиента. Имя ведёт в карточку клиента в Битриксе.
+      </div>
+      <CustomersList managerId={managerId} isSelf={isSelf} />
+    </div>
+  );
+}
+
+// ── Блок РОПа: заказчики команды (managed-depts, как «Моя команда») ──────────
+
+interface TeamRow {
+  id: number; name: string; departmentName: string | null;
+  clients: number; callNow: number; overdueRepeat: number; activeNoCall: number; refusedNoCall: number;
+}
+
+export function TeamCustomersBlock() {
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const { data, isLoading } = useQuery<{ team: TeamRow[] }>({
+    queryKey: ['customers-team'],
+    queryFn: async () => {
+      const res = await fetch('/api/customers/team');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const team = data?.team ?? [];
+  if (!isLoading && team.length === 0) return null;
+
+  return (
+    <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+      <div className="mb-2.5 flex items-baseline gap-2">
+        <h2 className="text-base font-bold text-[var(--color-text)]">Заказчики команды</h2>
+        <span className="text-xs text-[var(--color-text-muted)]">у кого сколько «пора позвонить»</span>
+      </div>
+      {isLoading ? (
+        <div className="text-sm text-[var(--color-text-muted)]">Считаем по подчинённым… (первое открытие может занять пару минут)</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                <th className="py-1.5 pr-3 font-bold">Менеджер</th>
+                <th className="py-1.5 pr-3 font-bold text-right">Клиентов</th>
+                <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap">Пора позвонить</th>
+                <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Активная сделка без звонка больше недели">Сделка молчит</th>
+                <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Без активных сделок, последняя покупка старше цикла повторки">Заброшенные</th>
+                <th className="py-1.5 font-bold text-right whitespace-nowrap" title="Клиентов со сделкой, закрытой в отказ без единого звонка">Отказы без звонка</th>
+              </tr>
+            </thead>
+            <tbody>
+              {team.map(m => (
+                <Fragment key={m.id}>
+                  <tr className="border-t border-[var(--color-border)] cursor-pointer hover:bg-[var(--color-bg-hover)]"
+                    onClick={() => setExpanded(e => (e === m.id ? null : m.id))}>
+                    <td className="py-1.5 pr-3">
+                      <span className="font-semibold text-[var(--color-text)]">{m.name}</span>
+                      {m.departmentName && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">{m.departmentName}</span>}
+                      <span className="ml-1.5 text-[11px] text-[var(--color-accent)]">{expanded === m.id ? '▲ свернуть' : '▼ раскрыть'}</span>
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{m.clients}</td>
+                    <td className="py-1.5 pr-3 text-right font-bold tabular-nums"
+                      style={{ color: m.callNow > 0 ? 'var(--color-negative, #e03131)' : 'var(--color-text-muted)' }}>
+                      {m.callNow}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{m.activeNoCall}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">{m.overdueRepeat}</td>
+                    <td className="py-1.5 text-right tabular-nums">{m.refusedNoCall}</td>
+                  </tr>
+                  {expanded === m.id && (
+                    <tr className="border-t border-[var(--color-border)]">
+                      <td colSpan={6} className="py-3 pl-2">
+                        <CustomersList managerId={String(m.id)} isSelf={false} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
