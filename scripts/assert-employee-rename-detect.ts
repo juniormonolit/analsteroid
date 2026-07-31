@@ -80,5 +80,28 @@ function check(name: string, cond: boolean) {
   check('idempotent after rename: 0 операций', ops.length === 0);
 }
 
+// 8. Логин под org-sync: расхождение employees.full_name (логин) с ФИО из истории —
+// НЕ событие (урок прода 31.07: 105 ложных переименований, откачены).
+{
+  const ops = planRenameOps(
+    new Map([['5', 'askulikov']]),
+    new Map([['5', 'Александр Куликов']]),
+    new Map(),
+    new Set(['5']),
+  );
+  check('org-managed: 0 операций', ops.length === 0);
+}
+
+// 9. Логин под org-sync, но истории ещё нет — seed допустим (истории неоткуда взяться).
+{
+  const ops = planRenameOps(
+    new Map([['77', 'Новый Сотрудник']]),
+    new Map(),
+    new Map(),
+    new Set(['77']),
+  );
+  check('org-managed seed: 1 seed', ops.length === 1 && ops[0].kind === 'seed');
+}
+
 if (failures > 0) { console.error(`\n${failures} проверок упало`); process.exit(1); }
 console.log('\nВсе проверки прошли');

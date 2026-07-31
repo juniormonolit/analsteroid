@@ -30,7 +30,7 @@ export async function detectRenames(force = false): Promise<DetectResult> {
   if (!force && _lastDetect && Date.now() - _lastDetect.checkedAt < DETECT_TTL_MS) return _lastDetect;
 
   const pool = analyticsDb();
-  const [emp, hist] = await Promise.all([
+  const [emp, hist, org] = await Promise.all([
     pool.query<{ bitrix_id: number; full_name: string }>(
       `SELECT bitrix_id, full_name FROM sa.employees
         WHERE bitrix_id IS NOT NULL AND full_name IS NOT NULL AND full_name <> ''`,
@@ -40,6 +40,11 @@ export async function detectRenames(force = false): Promise<DetectResult> {
       `SELECT bitrix_user_id, name, (valid_to IS NULL) AS is_open,
               row_number() OVER (PARTITION BY bitrix_user_id, (valid_to IS NULL) ORDER BY valid_from DESC)::int AS rn
          FROM sa.employee_name_history`,
+    ),
+    // Логины, которых авторитетно ведёт org-sync (их «переименования» мы не пишем —
+    // см. урок 31.07 в planRenameOps: employees.full_name часто логин, не ФИО).
+    pool.query<{ id: string }>(
+      `SELECT manager_bitrix_user_id AS id FROM sa.org_resolved_hierarchy`,
     ),
   ]);
 
@@ -52,7 +57,8 @@ export async function detectRenames(force = false): Promise<DetectResult> {
     if (!r.is_open && r.rn === 1) lastClosed.set(r.bitrix_user_id, r.name);
   }
 
-  const ops = planRenameOps(current, openHistory, lastClosed);
+  const orgManaged = new Set(org.rows.map(r => r.id));
+  const ops = planRenameOps(current, openHistory, lastClosed, orgManaged);
   let seeded = 0; let renamed = 0; let skippedFlips = 0;
 
   const toApply = ops.filter(o => o.kind !== 'skip-flip');

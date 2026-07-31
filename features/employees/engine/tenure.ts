@@ -50,10 +50,19 @@ export function normalizeName(s: string): string {
 
 // Чистая логика (покрыта assert-скриптом scripts/assert-employee-rename-detect.ts,
 // sa.employees при проверке не мутируется — БД тут вообще не нужна).
+//
+// ВАЖНО (урок первого прогона на проде 31.07): sa.employees.full_name у многих —
+// ЛОГИН («askulikov»), а org-sync пишет в историю настоящее ФИО из Битрикса
+// («Александр Куликов»). Наивное сравнение зафиксировало 105 ложных
+// «переименований» (откачено). Поэтому для логинов, покрытых org-sync
+// (orgManaged — есть в sa.org_resolved_hierarchy), имена авторитетно ведёт
+// ТОЛЬКО org-sync (суточный, со своим детектом renamed) — мы их не трогаем.
+// Наш детект дополняет его только для сотрудников ВНЕ оргструктуры Битрикса.
 export function planRenameOps(
   current: Map<string, string>,               // bitrix_id -> employees.full_name
   openHistory: Map<string, string>,           // bitrix_id -> имя открытой SCD2-строки
   lastClosed: Map<string, string>,            // bitrix_id -> имя последней закрытой строки
+  orgManaged: Set<string> = new Set(),        // bitrix_id, которых ведёт org-sync
 ): RenameOp[] {
   const ops: RenameOp[] = [];
   for (const [bitrixId, rawName] of current) {
@@ -65,6 +74,7 @@ export function planRenameOps(
       continue;
     }
     if (normalizeName(open) === name) continue;
+    if (orgManaged.has(bitrixId)) continue; // имя этого логина авторитетно ведёт org-sync
     const prevClosed = lastClosed.get(bitrixId);
     if (prevClosed !== undefined && normalizeName(prevClosed) === name) {
       // Возврат к только что закрытому имени — почти наверняка расхождение форматов
