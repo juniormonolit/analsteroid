@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
       `SELECT l.id::int AS id, to_char(l.created_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS date,
               coalesce(d.name, l.badge_key) AS badge_name, d.icon,
               a.tier, l.amount, l.source, l.actor_login, l.comment,
-              pt.name AS penalty_name, l.reversal_of::int AS reversal_of,
+              l.currency, pt.name AS penalty_name, l.reversal_of::int AS reversal_of,
               EXISTS (SELECT 1 FROM badge_coin_ledger rr WHERE rr.reversal_of = l.id) AS reversed
          FROM badge_coin_ledger l
          LEFT JOIN badge_awards a ON a.id = l.badge_award_id
@@ -55,9 +55,17 @@ export async function GET(req: NextRequest) {
     ),
   ]);
 
+  // Рублёвый кошелёк (миграция 116) + курс конвертации — для профиля/выписки.
+  const [rub, rate] = await Promise.all([
+    systemDb().query<{ balance: string }>(`SELECT balance FROM badge_rub_balances WHERE bitrix_id = $1`, [id]),
+    systemDb().query<{ rate: string }>(`SELECT rub_to_eball_rate AS rate FROM badge_coin_settings WHERE id = 1`),
+  ]);
+
   const startDate = reg.rows[0]?.start_date ?? null;
   return NextResponse.json({
     tenure: startDate ? { startDate, label: tenureLabel(startDate) } : null,
     ledger: ledger.rows,
+    rubBalance: Number(rub.rows[0]?.balance ?? 0),
+    rubToEballRate: Number(rate.rows[0]?.rate ?? 1),
   });
 }

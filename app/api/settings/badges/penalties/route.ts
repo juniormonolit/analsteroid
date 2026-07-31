@@ -21,11 +21,14 @@ export async function GET() {
            ON u.penalty_type_id = t.id
         ORDER BY t.name`,
     ),
-    db.query<{ monthly_bonus_budget: number }>(`SELECT monthly_bonus_budget FROM badge_coin_settings WHERE id = 1`),
+    db.query<{ monthly_bonus_budget: number; rub_to_eball_rate: string }>(
+      `SELECT monthly_bonus_budget, rub_to_eball_rate FROM badge_coin_settings WHERE id = 1`,
+    ),
   ]);
   return NextResponse.json({
     types: types.rows,
     monthlyBonusBudget: settings.rows[0]?.monthly_bonus_budget ?? 2000,
+    rubToEballRate: Number(settings.rows[0]?.rub_to_eball_rate ?? 1),
   });
 }
 

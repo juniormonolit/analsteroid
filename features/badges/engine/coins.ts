@@ -43,11 +43,16 @@ export async function accrueCoins(client: PoolClient): Promise<CoinStats> {
   );
   const r = await client.query<{ amount: number }>(
     // badge_key — снимок для аудита (миграция 114): при удалении кастомной
-    // награды её awards каскадно уходят, ссылка леджера становится NULL,
+    // награды её awards каскадно уходят, ссылка леджера остаётся NULL,
     // но начисленное остаётся и видно, за что было.
-    `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award)
-     SELECT a.bitrix_id, a.id, a.badge_key, p.price, p.price
+    // currency (миграция 116): «Ежедневный бонус» может начислять РУБЛИ
+    // (criteria.currency='RUB') — второй кошелёк; всё остальное — ебаллы.
+    // Индексация магазина (будущая) считается ТОЛЬКО по EBALL+auto.
+    `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award, currency)
+     SELECT a.bitrix_id, a.id, a.badge_key, p.price, p.price,
+            CASE WHEN d.criteria->>'currency' = 'RUB' THEN 'RUB' ELSE 'EBALL' END
        FROM badge_awards a
+       JOIN badge_definitions d ON d.key = a.badge_key
        JOIN badge_prices p ON p.badge_key = a.badge_key AND p.tier = coalesce(a.tier, '-')
        LEFT JOIN badge_coin_ledger l ON l.badge_award_id = a.id
       WHERE l.id IS NULL AND p.price > 0

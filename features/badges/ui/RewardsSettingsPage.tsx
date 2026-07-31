@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, RefreshCw, Trash2, X } from 'lucide-react';
+import { PayoutManageBlock } from './PayoutManage';
 import {
   CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, DAILY_BONUS_METRIC_LABELS, METRIC_LABELS,
   MILESTONE_KIND_LABELS, TEMPLATE_LABELS, validateCustomCriteria,
@@ -126,6 +127,9 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
   const [dailyMetric, setDailyMetric] = useState('bookings_plus_sales_count');
   const [silent, setSilent] = useState(false);
   const [indexUnits, setIndexUnits] = useState('');
+  // Двухвалютная система (миграция 116): ежедневный бонус может платить РУБЛИ
+  // («брони+продажи = +500 ₽», привычная менеджерам механика) или ебаллы.
+  const [bonusCurrency, setBonusCurrency] = useState<'EBALL' | 'RUB'>('RUB');
   // цены
   const [priceFlat, setPriceFlat] = useState('50');
   const [tierPrices, setTierPrices] = useState<Record<string, string>>({ bronze: '5', silver: '15', gold: '50', platinum: '150' });
@@ -157,7 +161,7 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
       if (template === 'streak') Object.assign(criteria, { days: num(days) });
       if (template === 'milestone') Object.assign(criteria, { kind, threshold: num(threshold) });
       if (template === 'daily_bonus') {
-        Object.assign(criteria, { dailyMetric, threshold: num(threshold), silent });
+        Object.assign(criteria, { dailyMetric, threshold: num(threshold), silent, currency: bonusCurrency });
         const iu = num(indexUnits);
         if (iu !== undefined) Object.assign(criteria, { indexUnits: iu }); // задел индексации (пока не активно)
       }
@@ -296,10 +300,18 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
                     title="Включится с магазинной индексацией" className={`${inputCls} w-28 text-right tabular-nums opacity-50`} />
                 </Field>
               </div>
-              <label className="flex items-center gap-1.5 text-xs">
-                <input type="checkbox" checked={silent} onChange={e => setSilent(e.target.checked)} />
-                тихое начисление — только выписка и баланс, без бейджа на полке
-              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <Field label="Валюта начисления">
+                  <select value={bonusCurrency} onChange={e => setBonusCurrency(e.target.value as 'EBALL' | 'RUB')} className={selectCls}>
+                    <option value="RUB">Рубли (₽) — денежный бонус</option>
+                    <option value="EBALL">{currencyName}</option>
+                  </select>
+                </Field>
+                <label className="flex items-end gap-1.5 pb-1 text-xs">
+                  <input type="checkbox" checked={silent} onChange={e => setSilent(e.target.checked)} />
+                  тихое начисление — только выписка и баланс, без бейджа на полке
+                </label>
+              </div>
             </div>
           )}
 
@@ -336,7 +348,9 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
                   className={`${inputCls} w-20 text-right tabular-nums`} />
               </Field>
             )) : (
-              <Field label={template === 'daily_bonus' ? `Начисление за день выполнения, «${currencyName}»` : `Цена в «${currencyName}»`}>
+              <Field label={template === 'daily_bonus'
+                ? `Начисление за день выполнения, ${bonusCurrency === 'RUB' ? '₽' : `«${currencyName}»`}`
+                : `Цена в «${currencyName}»`}>
                 <input value={priceFlat} onChange={e => setPriceFlat(e.target.value)} className={`${inputCls} w-24 text-right tabular-nums`} />
               </Field>
             )}
@@ -371,7 +385,7 @@ interface PenaltyRow { id: number; name: string; price: number; price_mode: 'fix
 
 function PenaltiesSettings({ currencyName }: { currencyName: string }) {
   const qc = useQueryClient();
-  const { data } = useQuery<{ types: PenaltyRow[]; monthlyBonusBudget: number }>({
+  const { data } = useQuery<{ types: PenaltyRow[]; monthlyBonusBudget: number; rubToEballRate: number }>({
     queryKey: ['settings-penalties'],
     queryFn: async () => {
       const res = await fetch('/api/settings/badges/penalties');
@@ -428,6 +442,24 @@ function PenaltiesSettings({ currencyName }: { currencyName: string }) {
     saveBudget.mutate(v);
   };
 
+  // Курс конвертации RUB → EBALL (двухвалютная система, миграция 116).
+  const [rateDraft, setRateDraft] = useState<string | null>(null);
+  const saveRate = useMutation({
+    mutationFn: async (v: number) => {
+      const res = await fetch('/api/settings/badges/rate', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rubToEballRate: v }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: () => { setRateDraft(null); invalidate(); },
+  });
+  const commitRate = () => {
+    const v = Number(rateDraft);
+    if (rateDraft === null || !Number.isFinite(v) || v <= 0) { setRateDraft(null); return; }
+    saveRate.mutate(v);
+  };
+
   return (
     <div className="mb-5 mt-8 border-t border-[var(--color-border)] pt-5">
       <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -442,6 +474,18 @@ function PenaltiesSettings({ currencyName }: { currencyName: string }) {
             onKeyDown={e => { if (e.key === 'Enter') commitBudget(); }}
             className="w-24 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-right text-xs tabular-nums"
           />
+        </label>
+        <label className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]"
+          title="Сколько ебаллов даёт 1 ₽ при конвертации (только рубли → ебаллы; обратной нет)">
+          Курс: 1 ₽ =
+          <input
+            value={rateDraft ?? String(data?.rubToEballRate ?? '')}
+            onChange={e => setRateDraft(e.target.value)}
+            onBlur={commitRate}
+            onKeyDown={e => { if (e.key === 'Enter') commitRate(); }}
+            className="w-16 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-right text-xs tabular-nums"
+          />
+          {currencyName}
         </label>
       </div>
       <div className="mb-2 text-xs text-[var(--color-text-muted)]">
@@ -696,6 +740,8 @@ export function RewardsSettingsPage() {
 
       {/* Ручные операции (доп. Серёги 31.07): справочник штрафов + бюджет поощрений */}
       {!isLoading && <PenaltiesSettings currencyName={currencyName} />}
+      {/* Заявки на вывод рублей в ЗП: у админа — все (у РОПа тот же блок в его ЛК) */}
+      {!isLoading && <PayoutManageBlock />}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { ManagerActivityTab } from './ManagerActivityTab';
 import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
+import { PayoutManageBlock } from '@/features/badges/ui/PayoutManage';
 import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, type ManagerTabKey } from './ManagerTabs';
 import { previousPeriodSameLength, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
@@ -412,7 +413,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {/* ── Бейджи (задача 2655): у менеджера полка переехала в таб «Награды»
           (табы ЛК, доп. Серёги 31.07); у РОПа-департамента — по-прежнему своя
           полка + «Моя команда» с полками подчинённых (managed-depts). ── */}
-      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><TeamBadgesBlock /></>)}
+      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><PayoutManageBlock /><TeamBadgesBlock /></>)}
 
       {isLoading ? (
         <div className="space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-24 bg-[var(--color-border)] rounded-2xl animate-pulse" />)}</div>

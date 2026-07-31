@@ -92,6 +92,7 @@ export interface CustomCriteria {
   // daily_bonus
   dailyMetric?: DailyBonusMetric;
   silent?: boolean;        // тихое начисление: только выписка и баланс, без бейджа на полке
+  currency?: 'EBALL' | 'RUB'; // валюта начисления (RUB = второй кошелёк, «+500 ₽ за день»)
   // Задел под индексацию магазина: опциональная «сумма в единицах индекса» —
   // пока НЕ активна, включится с магазинной индексацией
   // (см. owners-inbox/monolitika-eball-indexation.md в life-os).
@@ -156,6 +157,7 @@ export function validateCustomCriteria(raw: unknown): { ok: true; criteria: Cust
       const out: CustomCriteria = {
         template, dailyMetric: c.dailyMetric as DailyBonusMetric, threshold: c.threshold,
         silent: c.silent === true,
+        currency: c.currency === 'RUB' ? 'RUB' : 'EBALL',
       };
       if (typeof c.indexUnits === 'number' && Number.isFinite(c.indexUnits) && c.indexUnits > 0) {
         out.indexUnits = c.indexUnits; // задел индексации, пока не активен
