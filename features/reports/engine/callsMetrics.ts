@@ -102,6 +102,12 @@ export interface CallsBaseRow {
   medianDurationMin: Bucket;        // 5. Медианная длительность разговора, мин (прямой percentile_cont)
   outboundCount: Bucket;            // служебное: знаменатель доли недозвонов (9)
   missedOutboundCount: Bucket;      // служебное: числитель доли недозвонов (9)
+  // Кол-во исходящих/входящих ТОЛЬКО со связью со сделкой (задача 31.07,
+  // владелец: «считать только звонки, имеющие связь со сделкой») — d.deal_id
+  // находится в sa.deals (INNER-семантика через флаг linked). «(все)» тут =
+  // перв.+повт. ровно (сирот нет по определению метрики).
+  outLinkedCount: Bucket;
+  inLinkedCount: Bucket;
 }
 
 /**
@@ -142,7 +148,8 @@ export async function fetchCallsBaseMetrics(
   // второй проход, просто дополнительные строки в результате той же группировки.
   const sql = `
 WITH call_deals AS (
-  SELECT c.manager_id, c.direction, c.result, c.duration_seconds, f.is_repeat
+  SELECT c.manager_id, c.direction, c.result, c.duration_seconds, f.is_repeat,
+         (d.deal_id IS NOT NULL) AS linked
   FROM va.calls c
   LEFT JOIN deals d ON d.deal_id = c.deal_id
   LEFT JOIN funnels f ON f.id = d.funnel_id
@@ -160,7 +167,9 @@ SELECT
   count(*) FILTER (WHERE result = 'completed') AS completed_count,
   percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_seconds) FILTER (WHERE result = 'completed') AS median_duration,
   count(*) FILTER (WHERE direction = 'outbound') AS outbound_count,
-  count(*) FILTER (WHERE direction = 'outbound' AND result = 'missed') AS missed_outbound_count
+  count(*) FILTER (WHERE direction = 'outbound' AND result = 'missed') AS missed_outbound_count,
+  count(*) FILTER (WHERE direction = 'outbound' AND linked) AS out_linked_count,
+  count(*) FILTER (WHERE direction = 'inbound' AND linked) AS in_linked_count
 FROM call_deals
 GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id), (is_repeat), ())
   `.trim();
@@ -170,6 +179,7 @@ GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id), (is_repeat), ())
     calls_count: string; out_duration_sum: string; in_duration_sum: string;
     completed_duration_sum: string; completed_count: string;
     median_duration: string | null; outbound_count: string; missed_outbound_count: string;
+    out_linked_count: string; in_linked_count: string;
   }>(sql, params);
 
   const count = new Map<string, Bucket>();
@@ -180,6 +190,8 @@ GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id), (is_repeat), ())
   const medianMin = new Map<string, Bucket>();
   const outboundCount = new Map<string, Bucket>();
   const missedOutbound = new Map<string, Bucket>();
+  const outLinked = new Map<string, Bucket>();
+  const inLinked = new Map<string, Bucket>();
   const grandMedianMin = emptyBucket();
 
   for (const r of res.rows) {
@@ -191,6 +203,8 @@ GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id), (is_repeat), ())
     assignBucket(medianMin, r, x => x.median_duration !== null ? Number(x.median_duration) / 60 : 0);
     assignBucket(outboundCount, r, x => Number(x.outbound_count));
     assignBucket(missedOutbound, r, x => Number(x.missed_outbound_count));
+    assignBucket(outLinked, r, x => Number(x.out_linked_count));
+    assignBucket(inLinked, r, x => Number(x.in_linked_count));
     // «Итого» нас интересует ТОЛЬКО для медианной метрики (5) — остальные (суммы)
     // уже корректно бьются в «Итого» через computeTotals (aggregation_fn=sum).
     assignGrandBucket(grandMedianMin, r, x => x.median_duration !== null ? Number(x.median_duration) / 60 : 0);
@@ -208,6 +222,8 @@ GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id), (is_repeat), ())
       medianDurationMin: medianMin.get(id) ?? emptyBucket(),
       outboundCount: outboundCount.get(id) ?? emptyBucket(),
       missedOutboundCount: missedOutbound.get(id) ?? emptyBucket(),
+      outLinkedCount: outLinked.get(id) ?? emptyBucket(),
+      inLinkedCount: inLinked.get(id) ?? emptyBucket(),
     });
   }
   out.set(GRAND_TOTAL_KEY, {
@@ -215,6 +231,7 @@ GROUP BY GROUPING SETS ((manager_id, is_repeat), (manager_id), (is_repeat), ())
     completedDurationSumMin: emptyBucket(), completedCount: emptyBucket(),
     medianDurationMin: grandMedianMin,
     outboundCount: emptyBucket(), missedOutboundCount: emptyBucket(),
+    outLinkedCount: emptyBucket(), inLinkedCount: emptyBucket(),
   });
   return out;
 }

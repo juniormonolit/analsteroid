@@ -723,6 +723,8 @@ export async function POST(req: NextRequest) {
     'calls_missed_rate', 'calls_missed_rate_repeat', 'calls_missed_rate_all',
     'calls_deals_no_call', 'calls_deals_no_call_repeat', 'calls_deals_no_call_all',
     'calls_silence_deals', 'calls_silence_deals_repeat', 'calls_silence_deals_all',
+    'calls_outgoing_count', 'calls_outgoing_count_repeat', 'calls_outgoing_count_all',
+    'calls_incoming_count', 'calls_incoming_count_repeat', 'calls_incoming_count_all',
   ];
   const hasCallsMetric = withDeps.some(m => callsMetricIds.includes(m.id));
 
@@ -774,6 +776,7 @@ export async function POST(req: NextRequest) {
         count: zeroBucket, outDurationMin: zeroBucket, inDurationMin: zeroBucket,
         completedDurationSumMin: zeroBucket, completedCount: zeroBucket, medianDurationMin: zeroBucket,
         outboundCount: zeroBucket, missedOutboundCount: zeroBucket,
+        outLinkedCount: zeroBucket, inLinkedCount: zeroBucket,
       };
       const a = additive?.get(row.dimensionId);
       const aa: DealCallAdditiveRow = a ?? { dealsNoCalls: zeroBucket, dealsWithReservation: zeroBucket, callsBeforeReservationSum: zeroBucket };
@@ -786,6 +789,14 @@ export async function POST(req: NextRequest) {
         calls_count: base ? bb.count.primary : null,
         calls_count_repeat: base ? bb.count.repeat : null,
         calls_count_all: base ? bb.count.all : null,
+        // Кол-во исходящих/входящих ТОЛЬКО со связью со сделкой (задача 31.07);
+        // «(все)» = перв.+повт. (сирот нет по определению).
+        calls_outgoing_count: base ? bb.outLinkedCount.primary : null,
+        calls_outgoing_count_repeat: base ? bb.outLinkedCount.repeat : null,
+        calls_outgoing_count_all: base ? bb.outLinkedCount.all : null,
+        calls_incoming_count: base ? bb.inLinkedCount.primary : null,
+        calls_incoming_count_repeat: base ? bb.inLinkedCount.repeat : null,
+        calls_incoming_count_all: base ? bb.inLinkedCount.all : null,
         // 2/3. Длительность исходящих/входящих, мин — прямые external
         calls_duration_out: base ? round1(bb.outDurationMin.primary) : null,
         calls_duration_out_repeat: base ? round1(bb.outDurationMin.repeat) : null,
