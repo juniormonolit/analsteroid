@@ -10,6 +10,7 @@ import { Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { PayoutManageBlock } from './PayoutManage';
 import { InventoryManageBlock } from './InventoryManage';
 import { ShopSettingsBlock } from './ShopSettings';
+import { GachaSettingsBlock } from './GachaSettings';
 import {
   CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, DAILY_BONUS_METRIC_LABELS, METRIC_LABELS,
   MILESTONE_KIND_LABELS, TEMPLATE_LABELS, validateCustomCriteria,
@@ -744,6 +745,8 @@ export function RewardsSettingsPage() {
       {!isLoading && <PenaltiesSettings currencyName={currencyName} />}
       {/* Магазин призов (MVP 31.07): каталог + TTL валюты + «Релизный старт» (заложен, не запускался) */}
       {!isLoading && <ShopSettingsBlock currencyName={currencyName} />}
+      {/* Гача (фаза 2): пул, шансы (валидация 100%), счётчик джекпотов */}
+      {!isLoading && <GachaSettingsBlock currencyName={currencyName} />}
       {/* Заявки на вывод рублей в ЗП: у админа — все (у РОПа тот же блок в его ЛК) */}
       {!isLoading && <PayoutManageBlock />}
       {/* Заявки на активацию призов магазина: у админа — все */}

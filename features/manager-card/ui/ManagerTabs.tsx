@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Avatar } from '@/components/ui/Avatar';
 import { BadgeCard, BadgeShelf, useShelfQuery } from '@/features/badges/ui/BadgeShelf';
+import { GachaBlock } from '@/features/badges/ui/GachaBlock';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 import { usePlanFact } from './PlanFactStrip';
 import type { ManagerCardResult } from '@/features/manager-card/engine/managerCard';
@@ -53,7 +54,8 @@ interface LedgerRow {
   // кем сделано, комментарий, причина штрафа, сторно-связи; currency — двухвалютная
   // система (EBALL/RUB, миграция 116).
   source: 'auto' | 'manual_bonus' | 'manual_penalty' | 'convert' | 'payout'
-    | 'shop_purchase' | 'shop_refund' | 'expiry' | 'release_zero' | 'release_grant';
+    | 'shop_purchase' | 'shop_refund' | 'expiry' | 'release_zero' | 'release_grant'
+    | 'gacha_spin' | 'gacha_prize';
   currency: 'EBALL' | 'RUB';
   actor_login: string | null; comment: string | null;
   penalty_name: string | null; reversal_of: number | null; reversed: boolean;
@@ -467,6 +469,8 @@ function ledgerTitle(r: LedgerRow): { title: string; sub: string | null } {
   if (r.source === 'shop_purchase') return { title: r.comment ?? 'Покупка в магазине', sub: null };
   if (r.source === 'shop_refund') return { title: r.comment ?? 'Возврат 50% за истёкший предмет', sub: null };
   if (r.source === 'expiry') return { title: r.comment ?? 'Сгорание ебаллов (истёк срок жизни)', sub: null };
+  if (r.source === 'gacha_spin') return { title: r.comment ?? 'Крутка гачи 🎰', sub: null };
+  if (r.source === 'gacha_prize') return { title: r.comment ?? 'Выигрыш в гаче', sub: null };
   if (r.source === 'release_zero' || r.source === 'release_grant') {
     return { title: r.comment ?? 'Релизный старт', sub: r.actor_login ? `админ: ${r.actor_login}` : null };
   }
@@ -842,6 +846,9 @@ export function ShopTab({ managerId, isSelf }: { managerId: string; isSelf: bool
         {(data?.rubBalance ?? 0) !== 0 && <RubPill balance={data!.rubBalance} />}
         {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
       </div>
+
+      {/* Гача (фаза 2): колесо, крутки только в своём ЛК */}
+      <GachaBlock isSelf={isSelf} />
 
       {/* Мой инвентарь */}
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
