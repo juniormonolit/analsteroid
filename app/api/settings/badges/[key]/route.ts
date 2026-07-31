@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { superadminError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
+import { CUSTOM_PREFIX, validateCustomCriteria } from '@/features/badges/engine/customTemplates';
 
 // Правка награды: вкл/выкл, имя/описание/иконка, пороги в criteria (jsonb).
 // Конструктора НОВЫХ наград на этапе 1 нет — только правка существующих.
@@ -32,13 +33,21 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ key: s
     if (typeof body.criteria !== 'object' || body.criteria === null || Array.isArray(body.criteria)) {
       return NextResponse.json({ error: 'criteria: объект' }, { status: 400 });
     }
-    // числовые пороги — только конечные неотрицательные числа
-    for (const [k, v] of Object.entries(body.criteria as Record<string, unknown>)) {
-      if (typeof v === 'number' && (!Number.isFinite(v) || v < 0)) {
-        return NextResponse.json({ error: `criteria.${k}: некорректное число` }, { status: 400 });
+    // Кастомные (конструктор, этап 2): criteria с template валидируются и
+    // НОРМАЛИЗУЮТСЯ шаблоном (пороги > 0, пары X≠Y, лишние поля отбрасываются).
+    if ((body.criteria as Record<string, unknown>).template !== undefined) {
+      const v = validateCustomCriteria(body.criteria);
+      if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 });
+      push('criteria', JSON.stringify(v.criteria));
+    } else {
+      // числовые пороги — только конечные неотрицательные числа
+      for (const [k, v] of Object.entries(body.criteria as Record<string, unknown>)) {
+        if (typeof v === 'number' && (!Number.isFinite(v) || v < 0)) {
+          return NextResponse.json({ error: `criteria.${k}: некорректное число` }, { status: 400 });
+        }
       }
+      push('criteria', JSON.stringify(body.criteria));
     }
-    push('criteria', JSON.stringify(body.criteria));
   }
 
   // Цены валюты (2657): prices = {'-': 50} или {bronze: 5, ..., platinum: 60}.
@@ -84,4 +93,25 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ key: s
     }
   }
   return NextResponse.json({ ok: true });
+}
+
+// Удаление КАСТОМНОЙ награды (конструктор, этап 2). Пресеты этапа 1 удалять
+// нельзя — только custom_*. Каскад: definitions → prices, awards; леджер валюты
+// НЕ трогается (FK SET NULL, миграция 114) — начисленные «ебаллы» остаются
+// у менеджеров, принцип леджера. UI показывает предупреждение перед удалением.
+export async function DELETE(_req: Request, { params }: { params: Promise<{ key: string }> }) {
+  const session = await getSession();
+  const err = superadminError(session);
+  if (err) return err;
+
+  const { key } = await params;
+  if (!key.startsWith(CUSTOM_PREFIX)) {
+    return NextResponse.json({ error: 'Удалять можно только созданные в конструкторе награды' }, { status: 400 });
+  }
+
+  const db = systemDb();
+  const awards = await db.query<{ n: string }>(`SELECT count(*) AS n FROM badge_awards WHERE badge_key = $1`, [key]);
+  const res = await db.query(`DELETE FROM badge_definitions WHERE key = $1 RETURNING key`, [key]);
+  if (res.rowCount === 0) return NextResponse.json({ error: 'Награда не найдена' }, { status: 404 });
+  return NextResponse.json({ ok: true, awardsDeleted: Number(awards.rows[0]?.n ?? 0) });
 }

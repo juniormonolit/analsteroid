@@ -59,7 +59,7 @@ function assembleShelf(defs: DefRow[], awardRows: AwardRow[]): ShelfItem[] {
 
     // прогресс к следующему порогу для счётчиковых бейджей с порогом в criteria
     let progress: ShelfItem['progress'] = null;
-    const threshold = ['minPairs', 'minGroups', 'minRepeats', 'count']
+    const threshold = ['minPairs', 'minGroups', 'minRepeats', 'count', 'threshold']
       .map(k => (typeof criteria[k] === 'number' ? (criteria[k] as number) : null))
       .find(v => v !== null);
     if (value !== null && threshold != null && threshold > 1) {

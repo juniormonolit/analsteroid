@@ -18,6 +18,7 @@ import { cutoffForHeadGroup } from '@/features/offload/engine/cutoffs';
 import { BADGE_CATALOG, CROSS_SELL_PAIRS, type BadgeTier } from './catalog';
 import { getManagerScopes, type ManagerScope } from './orgScopes';
 import { accrueCoins } from './coins';
+import { CUSTOM_PREFIX, validateCustomCriteria, type CustomCriteria, type CustomMetric, type CustomPeriod } from './customTemplates';
 
 export const RETRO_START = '2026-04-03'; // решение владельца: ретро с 03.04.2026
 
@@ -96,21 +97,22 @@ function num(criteria: Record<string, unknown> | undefined, key: string, dflt: n
 
 // ── данные из sa.deals ───────────────────────────────────────────────────────
 
-interface DaySum { managerId: number; day: string; amount: number }
+interface DaySum { managerId: number; day: string; amount: number; cnt: number }
 
 async function fetchDaySums(kind: 'sales' | 'shipments' | 'repeat_sales'): Promise<DaySum[]> {
   const dateField = kind === 'shipments' ? 'delivered_at' : 'sold_at';
   const repeatJoin = kind === 'repeat_sales'
     ? 'JOIN sa.funnels f ON f.id = d.funnel_id AND f.is_repeat = true' : '';
-  const res = await analyticsDb().query<{ manager_id: number; day: string; amount: string }>(
+  const res = await analyticsDb().query<{ manager_id: number; day: string; amount: string; cnt: string }>(
     `SELECT d.current_manager_id AS manager_id,
             (d.${dateField} AT TIME ZONE '${MSK}')::date::text AS day,
-            sum(coalesce(d.amount, 0)) AS amount
+            sum(coalesce(d.amount, 0)) AS amount,
+            count(*) AS cnt
        FROM sa.deals d ${repeatJoin}
       WHERE d.${dateField} IS NOT NULL AND d.current_manager_id IS NOT NULL
       GROUP BY 1, 2`,
   );
-  return res.rows.map(r => ({ managerId: r.manager_id, day: r.day, amount: Number(r.amount) }));
+  return res.rows.map(r => ({ managerId: r.manager_id, day: r.day, amount: Number(r.amount), cnt: Number(r.cnt) }));
 }
 
 // ── периодические топы ───────────────────────────────────────────────────────
@@ -136,23 +138,35 @@ function periodEnded(type: string, start: string, today: string): boolean {
   return `${y + 1}-01-01` <= today;
 }
 
+// opts (этап 2, конструктор): кастомный «Топ по метрике» ограничивает типы
+// периодов одним выбранным и может быть одноуровневым (tiered=false — лучший по
+// стране, tier=null). Пресеты этапа 1 зовут без opts — поведение прежнее.
+interface TopOpts {
+  periodTypes?: ReadonlySet<string>;
+  tiered?: boolean;                  // default true
+  value?: (s: DaySum) => number;     // default amount
+}
+
 function computeTopAwards(
   badgeKey: string,
   daySums: DaySum[],
   scopes: Map<number, ManagerScope>,
   minAmount: number,
   today: string,
+  opts?: TopOpts,
 ): AwardRow[] {
+  const value = opts?.value ?? ((s: DaySum) => s.amount);
   // Суммы по (менеджер, период)
   const byPeriod = new Map<string, Map<number, number>>(); // `${type}:${start}` -> mgr -> sum
   for (const s of daySums) {
     if (s.day < RETRO_START.slice(0, 4) + '-01-01') continue; // не раньше года ретро
     for (const p of periodsOf(s.day)) {
+      if (opts?.periodTypes && !opts.periodTypes.has(p.type!)) continue;
       if (!periodEnded(p.type!, p.start, today)) continue;
       const key = `${p.type}:${p.start}`;
       let m = byPeriod.get(key);
       if (!m) { m = new Map(); byPeriod.set(key, m); }
-      m.set(s.managerId, (m.get(s.managerId) ?? 0) + s.amount);
+      m.set(s.managerId, (m.get(s.managerId) ?? 0) + value(s));
     }
   }
 
@@ -174,6 +188,18 @@ function computeTopAwards(
       }
       return acc;
     };
+    // Одноуровневый кастомный топ: только победитель по всей стране, tier=null.
+    if (opts?.tiered === false) {
+      for (const { max, winners } of best(() => 'all').values()) {
+        for (const mgr of winners) {
+          awards.push({
+            bitrixId: mgr, badgeKey, tier: null,
+            periodType: type as AwardRow['periodType'], periodDate: start, value: max,
+          });
+        }
+      }
+      continue;
+    }
     const tiers: [BadgeTier, Map<string, { max: number; winners: number[] }>][] = [
       ['bronze', best(s => s?.deptKey ?? null)],
       ['silver', best(s => s?.parentKey ?? null)],
@@ -309,6 +335,124 @@ function workDaysBetween(fromIso: string, toIso: string): number {
   return Math.max(0, b - a);
 }
 
+// ── кастомные награды (этап 2, конструктор): generic-исполнители шаблонов ────
+
+interface CustomCtx {
+  today: string;
+  scopes: Map<number, ManagerScope>;
+  sold: SoldDealRow[];
+  transitions: Transition[];
+  metricSums: Record<CustomMetric, DaySum[]>;
+}
+
+const metricValue = (metric: CustomMetric) =>
+  metric === 'sales_count' || metric === 'repeat_sales_count'
+    ? (s: DaySum) => s.cnt
+    : (s: DaySum) => s.amount;
+
+function periodStartOf(period: CustomPeriod, day: string): string {
+  if (period === 'day') return day;
+  if (period === 'week') return weekStart(day);
+  if (period === 'month') return monthStart(day);
+  return yearStart(day);
+}
+
+function computeCustomBadge(key: string, c: CustomCriteria, ctx: CustomCtx): AwardRow[] {
+  const awards: AwardRow[] = [];
+  switch (c.template) {
+    // 1. «Топ по метрике за период» — тот же computeTopAwards, что у пресетов,
+    //    но с одним типом периода и опциональной одноуровневостью.
+    case 'top_metric': {
+      awards.push(...computeTopAwards(key, ctx.metricSums[c.metric!], ctx.scopes, 1, ctx.today, {
+        periodTypes: new Set([c.period!]),
+        tiered: c.tieredScopes === true,
+        value: metricValue(c.metric!),
+      }));
+      break;
+    }
+
+    // 2. «Порог за период»: метрика за завершённый период >= threshold —
+    //    отдельная награда за каждый такой период (те же ретро-границы, что у топов).
+    case 'threshold_period': {
+      const value = metricValue(c.metric!);
+      const yearFloor = RETRO_START.slice(0, 4) + '-01-01';
+      const byPeriod = new Map<string, number>(); // `${mgr}:${start}` -> value
+      for (const s of ctx.metricSums[c.metric!]) {
+        if (s.day < yearFloor) continue;
+        const start = periodStartOf(c.period!, s.day);
+        if ((c.period === 'day' || c.period === 'week') && start < RETRO_START) continue;
+        if (!periodEnded(c.period!, start, ctx.today)) continue;
+        const k = `${s.managerId}:${start}`;
+        byPeriod.set(k, (byPeriod.get(k) ?? 0) + value(s));
+      }
+      for (const [k, sum] of byPeriod) {
+        if (sum < c.threshold!) continue;
+        const [mgr, start] = [Number(k.slice(0, k.indexOf(':'))), k.slice(k.indexOf(':') + 1)];
+        awards.push({ bitrixId: mgr, badgeKey: key, tier: null, periodType: c.period!, periodDate: start, value: sum });
+      }
+      break;
+    }
+
+    // 3. «Кросс-селл пара»: как пресетные связки (тот же поток transitions),
+    //    но группы и минимум пар — параметры создателя.
+    case 'crosssell_pair': {
+      const counts = new Map<number, number>();
+      for (const t of ctx.transitions) {
+        if (t.prevGroups.includes(c.firstGroup!) && t.nextGroups.includes(c.nextGroup!)) {
+          counts.set(t.managerId, (counts.get(t.managerId) ?? 0) + 1);
+        }
+      }
+      for (const [mgr, count] of counts) {
+        if (count < c.minPairs!) continue;
+        awards.push({ bitrixId: mgr, badgeKey: key, tier: null, periodType: null, periodDate: null, value: count, counter: true });
+      }
+      break;
+    }
+
+    // 4. «Серия»: N рабочих дней подряд с продажей — логика пресетов streak_5/10.
+    case 'streak': {
+      const len = c.days!;
+      const saleDaysByMgr = new Map<number, Set<string>>();
+      for (const s of ctx.metricSums.sales_amount) {
+        if (s.amount <= 0) continue;
+        (saleDaysByMgr.get(s.managerId) ?? saleDaysByMgr.set(s.managerId, new Set()).get(s.managerId)!).add(s.day);
+      }
+      for (const [mgr, saleDays] of saleDaysByMgr) {
+        let run = 0;
+        for (let d = RETRO_START; d < ctx.today; d = addDays(d, 1)) {
+          if (!isWorkDay(d)) continue; // выходные серию не рвут и не продлевают
+          if (saleDays.has(d)) {
+            run++;
+            if (run === len) {
+              awards.push({ bitrixId: mgr, badgeKey: key, tier: null, periodType: 'day', periodDate: d, value: len });
+            }
+          } else run = 0;
+        }
+      }
+      break;
+    }
+
+    // 5. «Веха»: накопительный порог за всё время (как sales_100/big_deal).
+    case 'milestone': {
+      const totals = new Map<number, number>(); // счётчик/сумма/кол-во крупных чеков
+      for (const d of ctx.sold) {
+        if (c.kind === 'sales_count') totals.set(d.managerId, (totals.get(d.managerId) ?? 0) + 1);
+        else if (c.kind === 'sales_amount') totals.set(d.managerId, (totals.get(d.managerId) ?? 0) + d.amount);
+        else if (d.amount >= c.threshold! && d.soldDay >= RETRO_START) {
+          // deal_amount: чеки с ретро-старта, как у пресета big_deal
+          totals.set(d.managerId, (totals.get(d.managerId) ?? 0) + 1);
+        }
+      }
+      for (const [mgr, total] of totals) {
+        if (c.kind !== 'deal_amount' && total < c.threshold!) continue;
+        awards.push({ bitrixId: mgr, badgeKey: key, tier: null, periodType: null, periodDate: null, value: total, counter: true });
+      }
+      break;
+    }
+  }
+  return awards;
+}
+
 // ── основной пересчёт ────────────────────────────────────────────────────────
 
 export async function runBadgeRecompute(): Promise<RecomputeStats> {
@@ -331,17 +475,21 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
       { key: 'top_repeat_sales', kind: 'repeat_sales' },
     ];
     let salesDaySums: DaySum[] = [];
+    let shipmentDaySums: DaySum[] = [];
+    let repeatDaySums: DaySum[] = [];
     for (const spec of topSpecs) {
       const sums = await fetchDaySums(spec.kind);
       if (spec.kind === 'sales') salesDaySums = sums;
+      if (spec.kind === 'shipments') shipmentDaySums = sums;
+      if (spec.kind === 'repeat_sales') repeatDaySums = sums;
       if (!enabled(spec.key)) continue;
       awards.push(...computeTopAwards(spec.key, sums, scopes, num(crit(spec.key), 'minAmount', 1), today));
     }
 
     // 2. Кросс-селл пары + «Мастер комбо»
+    const transitions = await fetchCrossSellTransitions();
     const pairKeysByMgr = new Map<number, Set<string>>();
     {
-      const transitions = await fetchCrossSellTransitions();
       const counts = new Map<string, number>(); // `${mgr}:${pairKey}`
       for (const t of transitions) {
         const prev = new Set(t.prevGroups);
@@ -574,6 +722,26 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
           }
         }
       }
+    }
+
+    // ── Кастомные награды из конструктора (этап 2) ───────────────────────────
+    // Generic-исполнители по criteria.template; данные переиспользуются из уже
+    // сделанных выборок (daySums/transitions/sold) — доп. запросов в sa нет.
+    // Битые criteria (невалидный шаблон) молча пропускаются: создание валидирует,
+    // а ломать весь пересчёт из-за одной награды нельзя.
+    for (const def of defs.values()) {
+      if (!def.key.startsWith(CUSTOM_PREFIX) || def.enabled === false) continue;
+      const v = validateCustomCriteria(def.criteria);
+      if (!v.ok) continue;
+      awards.push(...computeCustomBadge(def.key, v.criteria, {
+        today, scopes, sold, transitions,
+        metricSums: {
+          sales_amount: salesDaySums,
+          sales_count: salesDaySums,
+          shipments_amount: shipmentDaySums,
+          repeat_sales_count: repeatDaySums,
+        },
+      }));
     }
 
     // ── запись в БД ──────────────────────────────────────────────────────────
