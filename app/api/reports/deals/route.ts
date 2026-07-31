@@ -93,6 +93,10 @@ export async function GET(req: NextRequest) {
 
   const sp = req.nextUrl.searchParams;
   const managerId      = sp.get('managerId');
+  // Мульти-версии для дрилл-дауна пользовательских групп (задача 2653, этап 2):
+  // объединение сделок всех участников; композиция фильтров как у одиночных.
+  const managerIds     = (sp.get('managerIds') ?? '').split(',').map(x => x.trim()).filter(x => /^\d+$/.test(x));
+  const productGroups  = (sp.get('productGroups') ?? '').split(',').map(x => x.trim()).filter(Boolean);
   const productGroup   = sp.get('productGroup');    // group name (by_max) or id (kc)
   const pgMode         = sp.get('productGroupMode') ?? 'by_max';
   const from           = sp.get('from');
@@ -106,7 +110,7 @@ export async function GET(req: NextRequest) {
   const departmentIds  = (sp.get('departmentIds') ?? '').split(',').filter(Boolean);
   const accountType    = sp.get('accountType');     // managers | logists (фильтр отчёта)
 
-  if ((!managerId && !productGroup && !sourceDim && !teamId && !all) || !from || !to) {
+  if ((!managerId && !managerIds.length && !productGroup && !productGroups.length && !sourceDim && !teamId && !all) || !from || !to) {
     return NextResponse.json({ error: 'managerId, productGroup, sourceDim+sourceVal, teamId or all=1, plus from/to required' }, { status: 400 });
   }
 
@@ -200,6 +204,25 @@ export async function GET(req: NextRequest) {
   if (managerId) {
     params.push(managerId);
     dimensionFilter = `AND d.current_manager_id = $${params.length}`;
+  }
+  if (managerIds.length) {
+    params.push(managerIds);
+    dimensionFilter += ` AND d.current_manager_id = ANY($${params.length}::int[])`;
+  }
+  if (productGroups.length) {
+    // Группа товарных групп: та же семантика значений, что у одиночного
+    // productGroup выше (kc — id/'__none__', by_max — имя/'Без группы').
+    const withNull = productGroups.some(g => g === '__none__' || g === 'Без группы');
+    const rest = productGroups.filter(g => g !== '__none__' && g !== 'Без группы');
+    const parts: string[] = [];
+    if (pgMode === 'kc') {
+      if (rest.length) { params.push(rest); parts.push(`d.product_group_id::text = ANY($${params.length}::text[])`); }
+      if (withNull) parts.push('d.product_group_id IS NULL');
+    } else {
+      if (rest.length) { params.push(rest); parts.push(`d.head_group_name = ANY($${params.length}::text[])`); }
+      if (withNull) parts.push('d.head_group_name IS NULL');
+    }
+    if (parts.length) dimensionFilter += ` AND (${parts.join(' OR ')})`;
   }
   if (productGroup !== null) {
     if (pgMode === 'kc') {

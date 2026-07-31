@@ -46,6 +46,9 @@ type MergedRow = {
   teamName: string | null;
   branchName?: string | null;
   deltas: Deltas;
+  // Пользовательская группа (задача 2653): у синтетической строки — число
+  // участников (для честного «N чел.» в подытогах при группировке).
+  ugroupSize?: number;
 };
 
 type GroupedMergedRow = MergedRow & { isGroup?: boolean; children?: MergedRow[]; };
@@ -112,10 +115,17 @@ function applyUserGroups(rows: MergedRow[], groups: UserReportGroup[], metrics: 
   for (const g of groups) {
     const members = byGroup.get(g.id) ?? [];
     if (members.length === 0) continue; // участники не в текущем срезе — группу не рисуем
+    // Общий отдел/филиал участников (этап 2 — работа при группировке): если все
+    // из одного отдела, строка группы живёт ВНУТРИ него; иначе поднимается на
+    // верхний уровень (см. displayRows). Аналогично для филиала.
+    const commonTeam = members.every(m => m.teamId === members[0].teamId) ? members[0].teamId : null;
+    const commonBranch = members.every(m => (m.branchName ?? 'СПб') === (members[0].branchName ?? 'СПб')) ? (members[0].branchName ?? 'СПб') : null;
     groupRows.push({
       dimensionId: `__ugroup__${g.id}`,
       dimensionName: `${g.name} (${members.length})`,
-      teamId: null, teamName: null,
+      teamId: commonTeam, teamName: commonTeam ? members[0].teamName : null,
+      branchName: commonBranch,
+      ugroupSize: members.length,
       deltas: aggregateGroupDeltas(members, metrics),
       isGroup: true, children: members,
     });
@@ -156,11 +166,18 @@ function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Met
       }
       const teamRows: MergedRow[] = teamOrder.map(tk => {
         const tm = byTeam.get(tk)!;
+        // Пользовательская группа целиком из этого филиала (задача 2653, этап 2):
+        // отдаём её собственную строку (isGroup с участниками), а не безликий
+        // подытог — дрилл-даун/раскрытие группы сохраняются и внутри филиала.
+        if (tm.length === 1 && tm[0].dimensionId.startsWith('__ugroup__')) {
+          return { ...tm[0], dimensionSubtitle: `${tm[0].ugroupSize ?? 1} уч.` };
+        }
         const teamName = tm[0]?.teamName ?? 'Без отдела';
+        const headcount = tm.reduce((sum, r) => sum + (r.ugroupSize ?? 1), 0);
         return {
           dimensionId: `__team__${tk}`,
           dimensionName: teamName,
-          dimensionSubtitle: `${tm.length} чел.`,
+          dimensionSubtitle: `${headcount} чел.`,
           teamId: tk,
           teamName,
           branchName: branch,
@@ -645,9 +662,29 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   }, [data?.rows, userGroups]);
 
   const displayRows = useMemo(() => {
-    const grouped = grouping === 'none' && !sourceMode
-      ? applyUserGroups(data?.rows ?? [], userGroups, catalogMetrics)
-      : applyClientGrouping(data?.rows ?? [], grouping, catalogMetrics);
+    // Пользовательские группы (задача 2653, этап 2 — работают при ЛЮБОЙ
+    // группировке): участники заранее схлопнуты в синтетические строки, поэтому
+    // подытоги отделов/филиалов их НЕ задваивают (участник живёт только внутри
+    // строки группы). Строка группы с общим отделом/филиалом остаётся внутри
+    // него; «сборная» из разных — поднимается на верхний уровень с пометкой.
+    let grouped: GroupedMergedRow[];
+    if (!sourceMode && userGroups.length > 0) {
+      const applied = applyUserGroups(data?.rows ?? [], userGroups, catalogMetrics);
+      if (grouping === 'none' || grouping === 'total') {
+        grouped = grouping === 'none' ? applied : applyClientGrouping(applied, grouping, catalogMetrics);
+      } else {
+        const fits = (r: GroupedMergedRow) =>
+          !r.dimensionId.startsWith('__ugroup__')
+          || (grouping === 'team' ? r.teamId !== null : r.branchName !== null);
+        const inRows = applied.filter(fits);
+        const hoisted = applied
+          .filter(r => !fits(r))
+          .map(r => ({ ...r, dimensionName: `${r.dimensionName} · сборная` }));
+        grouped = [...hoisted, ...applyClientGrouping(inRows, grouping, catalogMetrics)];
+      }
+    } else {
+      grouped = applyClientGrouping(data?.rows ?? [], grouping, catalogMetrics);
+    }
     if (!search.trim()) return grouped;
     const q = search.trim().toLowerCase();
     // Поиск и по короткому логину менеджера (п.3 правок 09.07/2): dimensionSubtitle
@@ -702,12 +739,20 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const handleRowClick = useCallback(
     (id: string, name: string) => {
       // Агрегированные строки отделов внутри филиала → сделки отдела
-      if (id.startsWith('__ugroup__')) return; // пользовательская группа — дрилл-даун не поддержан (этап 1, задача 2653)
+      if (id.startsWith('__ugroup__')) {
+        // Этап 2 (задача 2653): список сделок ВСЕХ участников группы —
+        // объединение по managerIds/productGroups (паттерн дрилла отделов).
+        const g = userGroups.find(x => `__ugroup__${x.id}` === id);
+        if (!g) return;
+        setDrilldown({ id: g.member_ids.join(','), name, kind: dimensionType === 'manager' ? 'managers' : 'productGroups' });
+        return;
+      }
       if (id.startsWith('__team__')) setDrilldown({ id: id.slice('__team__'.length), name, kind: 'team' });
       else if (id.startsWith('__branch__')) setDrilldown({ id: id.slice('__branch__'.length), name, kind: 'branch' });
       else setDrilldown({ id, name });
     },
-    []
+    // userGroups/dimensionType — дрилл пользовательских групп (задача 2653, этап 2)
+    [userGroups, dimensionType]
   );
 
   // Клик по #логину менеджера (dimensionSubtitle) — только в отчёте «по менеджерам»
@@ -732,7 +777,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
         ?? availableMetrics.find((x: { id: string }) => x.id === metricId);
       // Групповые строки и «Итого» открывают плоский список сделок всего среза
-      if (id.startsWith('__ugroup__')) return; // см. handleRowClick
+      if (id.startsWith('__ugroup__')) {
+        const g = userGroups.find(x => `__ugroup__${x.id}` === id);
+        if (!g) return;
+        setDrilldown({ id: g.member_ids.join(','), name, metricId, metricName: m?.nameRu, kind: dimensionType === 'manager' ? 'managers' : 'productGroups' });
+        return;
+      }
       if (id === '__total__') {
         setDrilldown({ id: '__all__', name: 'Итого', metricId, metricName: m?.nameRu, kind: 'total' });
       } else if (id.startsWith('__team__')) {
@@ -743,7 +793,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         setDrilldown({ id, name, metricId, metricName: m?.nameRu });
       }
     },
-    [catalogMetrics, availableMetrics]
+    [catalogMetrics, availableMetrics, userGroups, dimensionType]
   );
 
   // Экспорт отчёта (задача 1706): буфер (TSV)/Excel/PDF/PNG — единый снимок таблицы

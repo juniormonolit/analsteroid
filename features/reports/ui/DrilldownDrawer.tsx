@@ -57,7 +57,7 @@ export interface DrilldownTarget {
   metricName?: string;
   // Групповые цели: подытог отдела/филиала или строка «Итого» — открывают
   // плоский список сделок всего среза (мини-отчёт по одной сущности не имеет смысла)
-  kind?: 'team' | 'branch' | 'total';
+  kind?: 'team' | 'branch' | 'total' | 'managers' | 'productGroups';
 }
 
 // Суб-дрилл из мини-отчёта: клик по цифре «строка × метрика» → сделки,
@@ -499,6 +499,10 @@ function FlatDealsView({ target, dimensionType, period, dealScope, clientType, p
     target.kind === 'team'   ? { teamId: target.id }
     : target.kind === 'branch' ? { sourceDim: 'branch', sourceVal: target.id }
     : target.kind === 'total'  ? { all: '1' }
+    // Пользовательская группа (задача 2653, этап 2): id = список id участников
+    // через запятую — объединение их сделок (менеджеры / товарные группы).
+    : target.kind === 'managers' ? { managerIds: target.id }
+    : target.kind === 'productGroups' ? { productGroups: target.id }
     : dimensionType === 'manager' ? { managerId: target.id }
     : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
     : { productGroup: target.id };
