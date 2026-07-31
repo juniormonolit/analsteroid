@@ -57,6 +57,14 @@ export async function detectRenames(force = false): Promise<DetectResult> {
     if (!r.is_open && r.rn === 1) lastClosed.set(r.bitrix_user_id, r.name);
   }
 
+  // Fail-safe: пустая sa.org_resolved_hierarchy = защита orgManaged молча отключилась
+  // бы, и детект деградировал бы в наивный вариант (105 ложных переименований 31.07).
+  // Пустой org-таблицы в норме не бывает (org-sync ведёт её ежедневно) — не пишем
+  // ничего и НЕ кэшируем прогон, чтобы следующий запрос повторил попытку.
+  if (org.rows.length === 0) {
+    console.warn('[employees] sa.org_resolved_hierarchy пуста — детект переименований пропущен (fail-safe)');
+    return { seeded: 0, renamed: 0, skippedFlips: 0, checkedAt: 0 };
+  }
   const orgManaged = new Set(org.rows.map(r => r.id));
   const ops = planRenameOps(current, openHistory, lastClosed, orgManaged);
   let seeded = 0; let renamed = 0; let skippedFlips = 0;
