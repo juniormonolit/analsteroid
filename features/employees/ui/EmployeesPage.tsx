@@ -81,6 +81,7 @@ export function EmployeesPage() {
   const [search, setSearch] = useState('');
   const [showInactive, setShowInactive] = useState(false);
   const [openHistory, setOpenHistory] = useState<Set<number>>(new Set());
+  const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
 
   const { data, isLoading, isError } = useQuery<{ rows: Row[] }>({
     queryKey: ['employees'],
@@ -102,6 +103,29 @@ export function EmployeesPage() {
         (r.departmentName ?? '').toLowerCase().includes(q)),
     );
   }, [data, search, showInactive]);
+
+  // Группировка по отделам (фидбек Серёги 31.07): заголовок-отдел, внутри сотрудники,
+  // сворачивание как у деревьев. Поиск работает поверх группировки (пустые отделы
+  // после фильтра исчезают). «Без отдела» — в конец.
+  const groups = useMemo(() => {
+    const by = new Map<string, Row[]>();
+    for (const r of rows) {
+      const key = r.departmentName ?? 'Без отдела';
+      const list = by.get(key) ?? [];
+      list.push(r);
+      by.set(key, list);
+    }
+    return [...by.entries()].sort((a, b) =>
+      a[0] === 'Без отдела' ? 1 : b[0] === 'Без отдела' ? -1 : a[0].localeCompare(b[0], 'ru'));
+  }, [rows]);
+
+  const toggleDept = (name: string) => {
+    setCollapsedDepts(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
 
   const saveDate = async (bitrixId: number, value: string | null): Promise<string | null> => {
     const res = await fetch('/api/employees/registry', {
@@ -126,6 +150,9 @@ export function EmployeesPage() {
   };
 
   return (
+    // h-full overflow-y-auto — AppShell main стоит в overflow-hidden, без своего
+    // скролл-контейнера страница не прокручивается (тот же фикс, что /charts, 0bdd06f).
+    <div className="h-full overflow-y-auto">
     <div className="p-4 md:p-6">
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="text-lg font-semibold">Сотрудники</h1>
@@ -162,7 +189,24 @@ export function EmployeesPage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {groups.map(([deptName, deptRows]) => (
+                <FragmentRow key={`dept:${deptName}`}>
+                  <tr
+                    className="cursor-pointer border-b border-[var(--color-border)] bg-[var(--color-bg-subtle)] hover:bg-[var(--color-bg-hover)]"
+                    onClick={() => toggleDept(deptName)}
+                  >
+                    <td colSpan={6} className="px-3 py-1.5 text-sm font-semibold">
+                      <span className="inline-flex items-center gap-1.5">
+                        {collapsedDepts.has(deptName) ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                        {deptName}
+                        <span className="font-normal text-xs text-[var(--color-text-muted)]">{deptRows.length} чел.</span>
+                        {deptRows[0]?.branch && deptName !== 'Без отдела' ? (
+                          <span className="font-normal text-xs text-[var(--color-text-muted)]">· {deptRows[0].branch}</span>
+                        ) : null}
+                      </span>
+                    </td>
+                  </tr>
+                  {!collapsedDepts.has(deptName) && deptRows.map((r) => {
                 const renames = Math.max(0, r.nameHistory.length - 1);
                 const open = openHistory.has(r.bitrixId);
                 const tenure = tenureLabel(r.startDate);
@@ -218,6 +262,8 @@ export function EmployeesPage() {
                   </FragmentRow>
                 );
               })}
+                </FragmentRow>
+              ))}
               {rows.length === 0 && (
                 <tr><td colSpan={6} className="px-3 py-6 text-center text-sm text-[var(--color-text-muted)]">Никого не найдено</td></tr>
               )}
@@ -225,6 +271,7 @@ export function EmployeesPage() {
           </table>
         </div>
       )}
+    </div>
     </div>
   );
 }
