@@ -53,8 +53,15 @@ interface BatchResponse {
 
 // экспорт для юнит-теста парсинга (dry-run без сети)
 export async function bitrixBatchClose(dealIds: number[]): Promise<Map<number, { ok: boolean; err?: string }>> {
-  const base = (process.env.BITRIX_WEBHOOK_URL ?? '').replace(/\/$/, '');
-  if (!base) throw new Error('BITRIX_WEBHOOK_URL не задан в окружении');
+  // Запись закрытий — через ОТДЕЛЬНЫЙ вебхук BITRIX_WEBHOOK_URL_2 (продолжение
+  // 2635: первое боевое закрытие упало ACCESS_DENIED — у общего вебхука 2098
+  // scope crm только на чтение; Серёга завёл новый вебхук с правом записи).
+  // Фолбэк на BITRIX_WEBHOOK_URL — если _2 не задана (поведение до фикса).
+  // Читающие вызовы приложения остаются на старом вебхуке — здесь только запись.
+  // ВАЖНО: env приходит из start.sh прода (standalone .env.local НЕ читает —
+  // server.js делает chdir в .next/standalone, см. реестр devops.md).
+  const base = (process.env.BITRIX_WEBHOOK_URL_2 ?? process.env.BITRIX_WEBHOOK_URL ?? '').replace(/\/$/, '');
+  if (!base) throw new Error('BITRIX_WEBHOOK_URL_2 / BITRIX_WEBHOOK_URL не заданы в окружении');
   const cmd: Record<string, string> = {};
   for (const id of dealIds) {
     cmd[`d${id}`] = `crm.deal.update?id=${id}&fields[STAGE_ID]=${encodeURIComponent(CLOSE_STAGE_ID)}`;
