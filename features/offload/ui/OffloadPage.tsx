@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, ExternalLink } from 'lucide-react';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { Seg } from '@/features/reports/ui/FiltersMenu';
@@ -10,9 +10,10 @@ import { useAccountDepartments } from '@/lib/hooks/useAccountDepartments';
 import type { DealScope } from '@/lib/metrics/types';
 import type { OffloadTree, OffloadDealRow, StageMode } from '../engine/offload';
 
-// «Разгрузка отделов» (задача 2635, ЭТАП 1 — read-only): инструмент директора по
-// продажам. Дерево отдел → менеджер → открытые сделки NEW/WORK с оценкой
-// «мёртвости» (модель отсечек 30.07). Кнопка закрытия — этап 2 (задизейблена).
+// «Разгрузка отделов» (задача 2635): инструмент директора по продажам. Дерево
+// отдел → менеджер → открытые сделки NEW/WORK с оценкой «мёртвости» (модель
+// отсечек 30.07). Этап 2: закрытие отмеченных в Битриксе (стадия C1:9) батчами
+// + «Лог закрытий» (offload_close_log, миграция 109).
 
 function fmtRub(v: number): string {
   return (Math.round(v) || 0).toLocaleString('ru-RU') + ' ₽';
@@ -22,6 +23,14 @@ function fmtPct(p: number | null): string {
 }
 
 interface Selected { amount: number; probability: number | null }
+
+// Этап 2 (задача 2635): закрытие в Битриксе. Стадия и лимит батча — те же
+// константы, что в движке (features/offload/engine/close.ts).
+const CLOSE_STAGE_NAME = 'НЕ ТРОГАТЬ - ЗАПРЕЩЕНО (штраф 10 000 руб)';
+const CLOSE_BATCH = 25;
+const CLOSE_PAUSE_MS = 1500;
+
+interface CloseResultItem { dealId: number; status: 'closed' | 'skipped' | 'error'; detail?: string }
 
 export function OffloadPage() {
   const [dealScope, setDealScope] = useState<DealScope>('all');
@@ -48,6 +57,13 @@ export function OffloadPage() {
   const [openManagers, setOpenManagers] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Map<number, Selected>>(new Map());
   const [openDealId, setOpenDealId] = useState<number | null>(null);
+  const [view, setView] = useState<'tree' | 'log'>('tree');
+  // Этап 2: подтверждение/прогресс/результаты закрытия
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [closing, setClosing] = useState<{ done: number; total: number } | null>(null);
+  const [closeResults, setCloseResults] = useState<CloseResultItem[] | null>(null);
+  const [closedIds, setClosedIds] = useState<Set<number>>(new Set());
+  const queryClient = useQueryClient();
 
   const filtersBody = { dealScope, departmentIds, amountFrom, amountTo };
 
@@ -102,17 +118,57 @@ export function OffloadPage() {
     });
   }
 
+  // ПОСЛЕДОВАТЕЛЬНЫЕ чанки по 25 с паузой 1.5с (требование владельца по
+  // нагрузке на Битрикс: «паковать в батчи и не отправлять слишком часто») —
+  // сервер на каждый чанк делает один batch.json; прогресс — «закрыто X из Y».
+  async function runClose() {
+    const ids = [...selected.keys()];
+    setConfirmOpen(false);
+    setClosing({ done: 0, total: ids.length });
+    const all: CloseResultItem[] = [];
+    for (let i = 0; i < ids.length; i += CLOSE_BATCH) {
+      const chunk = ids.slice(i, i + CLOSE_BATCH);
+      try {
+        const res = await fetch('/api/offload/close', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...filtersBody, dealIds: chunk }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+        all.push(...(json.results as CloseResultItem[]));
+      } catch (e) {
+        for (const id of chunk) all.push({ dealId: id, status: 'error', detail: e instanceof Error ? e.message : String(e) });
+      }
+      setClosing({ done: Math.min(i + CLOSE_BATCH, ids.length), total: ids.length });
+      if (i + CLOSE_BATCH < ids.length) await new Promise(r => setTimeout(r, CLOSE_PAUSE_MS));
+    }
+    setClosing(null);
+    setCloseResults(all);
+    setClosedIds(prev => {
+      const n = new Set(prev);
+      for (const r of all) if (r.status === 'closed') n.add(r.dealId);
+      return n;
+    });
+    setSelected(new Map());
+    queryClient.invalidateQueries({ queryKey: ['offload-log'] });
+  }
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-3 sm:p-6 max-w-[1500px] mx-auto pb-24">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
           <h1 className="text-lg font-semibold text-[var(--color-text)]">Разгрузка отделов</h1>
+          <Seg<'tree' | 'log'>
+            options={['tree', 'log']}
+            value={view} onChange={setView}
+            labels={{ tree: 'Дерево', log: 'Лог закрытий' }}
+          />
         </div>
         <p className="text-xs text-[var(--color-text-muted)] mb-4 max-w-[1100px]">
           Снимок текущих открытых сделок в стадиях NEW и WORK (стадии «продано/отгружено» исключены).
           «Раб. дн.» — накопленное рабочее время сделки (механика графика «В работе → продажа»); отсечки и
           вероятности — модель 30.07 по товарным группам (первичка; к повторным сделкам отсечка не применяется).
-          Закрытие сделок в Битриксе — этап 2, кнопка пока неактивна.
+          Кнопка закрытия меняет стадию отмеченных сделок в Битриксе на «{CLOSE_STAGE_NAME}».
         </p>
 
         <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -149,7 +205,9 @@ export function OffloadPage() {
           </button>
         </div>
 
-        {isLoading || (!isError && data === undefined) ? (
+        {view === 'log' ? (
+          <CloseLogView />
+        ) : isLoading || (!isError && data === undefined) ? (
           <div className="h-[300px] rounded-lg bg-[var(--color-border)] animate-pulse" />
         ) : isError ? (
           <p className="text-sm text-[var(--color-negative)]">Не удалось загрузить данные.</p>
@@ -177,6 +235,7 @@ export function OffloadPage() {
                   filtersBody={filtersBody}
                   stageMode={stageMode}
                   selected={selected}
+                  closedIds={closedIds}
                   onToggleDeal={toggleDeal}
                   onOpenDeal={setOpenDealId}
                 />
@@ -200,22 +259,171 @@ export function OffloadPage() {
               Снять всё
             </button>
             <button
-              disabled
-              title="Закрытие сделок в Битриксе — этап 2, скоро"
-              className="px-3 py-1.5 text-sm rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] opacity-40 cursor-not-allowed"
+              onClick={() => setConfirmOpen(true)}
+              disabled={closing !== null}
+              className="px-3 py-1.5 text-sm rounded-lg bg-[var(--color-negative)] text-white hover:opacity-90 disabled:opacity-40 transition-opacity"
             >
-              Закрыть выбранные (скоро)
+              Закрыть выбранное…
             </button>
           </div>
         </div>
       )}
 
+      {confirmOpen && (
+        <ConfirmCloseModal
+          stats={selectionStats}
+          sample={[...selected.keys()].slice(0, 10)}
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={runClose}
+        />
+      )}
+      {closing && (
+        <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center">
+          <div className="rounded-xl bg-[var(--color-bg-surface)] border border-[var(--color-border)] px-6 py-5 text-sm text-[var(--color-text)] shadow-2xl">
+            Закрываем сделки в Битриксе… обработано <b>{closing.done}</b> из <b>{closing.total}</b>
+            <div className="mt-2 h-1.5 rounded bg-[var(--color-border)] overflow-hidden">
+              <div className="h-full bg-[var(--color-accent)] transition-all" style={{ width: `${closing.total ? Math.round(closing.done / closing.total * 100) : 0}%` }} />
+            </div>
+            <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">Батчи по {CLOSE_BATCH} с паузой — не закрывайте вкладку.</p>
+          </div>
+        </div>
+      )}
+      {closeResults && <CloseResultsModal results={closeResults} onClose={() => setCloseResults(null)} />}
       {openDealId !== null && <DealCard dealId={openDealId} onClose={() => setOpenDealId(null)} />}
     </div>
   );
 }
 
-function DeptBlock({ dept, open, onToggle, openManagers, onToggleManager, filtersBody, stageMode, selected, onToggleDeal, onOpenDeal }: {
+function ConfirmCloseModal({ stats, sample, onCancel, onConfirm }: {
+  stats: { count: number; amount: number; expected: number };
+  sample: number[];
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4" onClick={onCancel}>
+      <div className="w-full max-w-[520px] rounded-xl bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl p-5" onClick={e => e.stopPropagation()}>
+        <h3 className="font-semibold text-[var(--color-text)] mb-2">Закрыть отмеченные сделки?</h3>
+        <div className="text-sm text-[var(--color-text-muted)] space-y-1 mb-3">
+          <div>Сделок: <b className="text-[var(--color-text)]">{stats.count.toLocaleString('ru-RU')}</b></div>
+          <div>Σ сумма: <b className="text-[var(--color-text)]">{fmtRub(stats.amount)}</b></div>
+          <div>Упускаемая выручка (Σ P×сумма): <b className="text-[var(--color-negative)]">{fmtRub(stats.expected)}</b></div>
+        </div>
+        <p className="text-xs text-[var(--color-text)] bg-[var(--color-negative)]/10 border border-[var(--color-negative)]/40 rounded-lg px-3 py-2 mb-3">
+          Стадия каждой сделки будет изменена в Битриксе на «{CLOSE_STAGE_NAME}» (C1:9).
+          Перед записью стадия перепроверяется: изменившиеся/проданные будут пропущены.
+        </p>
+        <p className="text-[11px] text-[var(--color-text-muted)] mb-3">
+          Первые сделки: {sample.map(id => `#${id}`).join(', ')}{stats.count > sample.length ? ` и ещё ${stats.count - sample.length}` : ''}
+        </p>
+        <div className="flex justify-end gap-2">
+          <button onClick={onCancel} className="px-3 py-1.5 text-sm rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button onClick={onConfirm} className="px-3 py-1.5 text-sm rounded-lg bg-[var(--color-negative)] text-white hover:opacity-90">Закрыть {stats.count.toLocaleString('ru-RU')}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CloseResultsModal({ results, onClose }: { results: CloseResultItem[]; onClose: () => void }) {
+  const closed = results.filter(r => r.status === 'closed').length;
+  const skipped = results.filter(r => r.status === 'skipped');
+  const errors = results.filter(r => r.status === 'error');
+  return (
+    <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="w-full max-w-[560px] max-h-[80vh] overflow-y-auto rounded-xl bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl p-5" onClick={e => e.stopPropagation()}>
+        <h3 className="font-semibold text-[var(--color-text)] mb-2">Результат закрытия</h3>
+        <div className="text-sm text-[var(--color-text-muted)] mb-3">
+          Закрыто: <b className="text-[var(--color-text)]">{closed}</b> · Пропущено: <b className="text-[var(--color-text)]">{skipped.length}</b> · Ошибок: <b className={errors.length ? 'text-[var(--color-negative)]' : 'text-[var(--color-text)]'}>{errors.length}</b>
+        </div>
+        {skipped.length > 0 && (
+          <div className="mb-3">
+            <p className="text-xs font-medium text-[var(--color-text-muted)] uppercase mb-1">Пропущено</p>
+            {skipped.map(r => <div key={r.dealId} className="text-xs text-[var(--color-text-muted)]">#{r.dealId} — {r.detail}</div>)}
+          </div>
+        )}
+        {errors.length > 0 && (
+          <div className="mb-3">
+            <p className="text-xs font-medium text-[var(--color-negative)] uppercase mb-1">Ошибки</p>
+            {errors.map(r => <div key={r.dealId} className="text-xs text-[var(--color-negative)]">#{r.dealId} — {r.detail}</div>)}
+          </div>
+        )}
+        <p className="text-[11px] text-[var(--color-text-muted)] mb-3">Закрытые сделки исчезнут из дерева после ближайшего синка с Битриксом; до этого они помечены серым. Записи — во вкладке «Лог закрытий».</p>
+        <div className="flex justify-end">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">Готово</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface CloseLogRow {
+  id: number; closed_at: string; closed_by_login: string | null; deal_id: number;
+  deal_name: string | null; amount: string | null; kc_group: string | null; head_group: string | null;
+  manager_name: string | null; department_name: string | null; work_days: string | null;
+  priced_stagnant_days: number | null; probability: string | null; was_recommended: boolean | null;
+  status: string; detail: string | null;
+}
+
+function CloseLogView() {
+  const { data, isLoading, isError } = useQuery<{ rows: CloseLogRow[] }>({
+    queryKey: ['offload-log'],
+    queryFn: async () => {
+      const res = await fetch('/api/offload/log');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  if (isLoading) return <div className="h-40 rounded-lg bg-[var(--color-border)] animate-pulse" />;
+  if (isError) return <p className="text-sm text-[var(--color-negative)]">Не удалось загрузить лог.</p>;
+  const rows = data?.rows ?? [];
+  if (rows.length === 0) return <p className="text-sm text-[var(--color-text-muted)]">Закрытий ещё не было.</p>;
+  return (
+    <div className="overflow-x-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+      <table className="min-w-[1100px] w-full text-xs">
+        <thead>
+          <tr className="text-left text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
+            <th className="px-3 py-2">Когда (МСК)</th>
+            <th className="px-3 py-2">Кто</th>
+            <th className="px-3 py-2">Сделка</th>
+            <th className="px-3 py-2 text-right">Сумма</th>
+            <th className="px-3 py-2">Группа (КЦ)</th>
+            <th className="px-3 py-2">Менеджер / отдел</th>
+            <th className="px-3 py-2 text-right" title="Раб. дни / дней в «Созвонился» / P(продажи) на момент закрытия">Метрики</th>
+            <th className="px-3 py-2">Статус</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.id} className="border-b border-[var(--color-border)] last:border-b-0">
+              <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-[var(--color-text-muted)]">{new Date(r.closed_at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}</td>
+              <td className="px-3 py-1.5">{r.closed_by_login ?? '—'}</td>
+              <td className="px-3 py-1.5 max-w-[280px]">
+                <a href={`https://td.monolit-crm.ru/crm/deal/details/${r.deal_id}/`} target="_blank" rel="noreferrer" className="text-[var(--color-text)] hover:text-[var(--color-accent)] hover:underline truncate inline-block max-w-full" title={r.deal_name ?? undefined}>
+                  {r.deal_name ?? `#${r.deal_id}`}
+                </a>
+                <div className="text-[10px] text-[var(--color-text-muted)]">#{r.deal_id}{r.was_recommended ? ' · рекомендованная' : ''}</div>
+              </td>
+              <td className="px-3 py-1.5 text-right tabular-nums">{r.amount === null ? '—' : fmtRub(Number(r.amount))}</td>
+              <td className="px-3 py-1.5 max-w-[150px] truncate" title={r.head_group ?? undefined}>{r.kc_group ?? '—'}</td>
+              <td className="px-3 py-1.5">{r.manager_name ?? '—'}<div className="text-[10px] text-[var(--color-text-muted)]">{r.department_name ?? ''}</div></td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-[var(--color-text-muted)]">
+                {r.work_days === null ? '—' : Number(r.work_days).toLocaleString('ru-RU')} / {r.priced_stagnant_days ?? '—'} / {r.probability === null ? '—' : fmtPct(Number(r.probability))}
+              </td>
+              <td className={`px-3 py-1.5 ${r.status === 'closed' ? 'text-[var(--color-text)]' : r.status === 'error' ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`} title={r.detail ?? undefined}>
+                {r.status === 'closed' ? 'закрыта' : r.status === 'skipped' ? 'пропущена' : 'ошибка'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DeptBlock({ dept, open, onToggle, openManagers, onToggleManager, filtersBody, stageMode, selected, closedIds, onToggleDeal, onOpenDeal }: {
   dept: OffloadTree['departments'][number];
   open: boolean;
   onToggle: () => void;
@@ -224,6 +432,7 @@ function DeptBlock({ dept, open, onToggle, openManagers, onToggleManager, filter
   filtersBody: Record<string, unknown>;
   stageMode: StageMode;
   selected: Map<number, Selected>;
+  closedIds: Set<number>;
   onToggleDeal: (d: { dealId: number; amount: number; probability: number | null }) => void;
   onOpenDeal: (id: number) => void;
 }) {
@@ -250,7 +459,7 @@ function DeptBlock({ dept, open, onToggle, openManagers, onToggleManager, filter
               open={openManagers.has(m.managerId)}
               onToggle={() => onToggleManager(m.managerId)}
               filtersBody={filtersBody} stageMode={stageMode}
-              selected={selected} onToggleDeal={onToggleDeal} onOpenDeal={onOpenDeal}
+              selected={selected} closedIds={closedIds} onToggleDeal={onToggleDeal} onOpenDeal={onOpenDeal}
             />
           ))}
         </div>
@@ -259,13 +468,14 @@ function DeptBlock({ dept, open, onToggle, openManagers, onToggleManager, filter
   );
 }
 
-function ManagerBlock({ manager, open, onToggle, filtersBody, stageMode, selected, onToggleDeal, onOpenDeal }: {
+function ManagerBlock({ manager, open, onToggle, filtersBody, stageMode, selected, closedIds, onToggleDeal, onOpenDeal }: {
   manager: OffloadTree['departments'][number]['managers'][number];
   open: boolean;
   onToggle: () => void;
   filtersBody: Record<string, unknown>;
   stageMode: StageMode;
   selected: Map<number, Selected>;
+  closedIds: Set<number>;
   onToggleDeal: (d: { dealId: number; amount: number; probability: number | null }) => void;
   onOpenDeal: (id: number) => void;
 }) {
@@ -320,14 +530,16 @@ function ManagerBlock({ manager, open, onToggle, filtersBody, stageMode, selecte
               </thead>
               <tbody>
                 {data.deals.map(d => (
-                  <tr key={d.dealId} className={`border-t border-[var(--color-border)] ${d.recommended ? 'bg-[var(--color-negative)]/8' : ''}`}>
+                  <tr key={d.dealId} className={`border-t border-[var(--color-border)] ${closedIds.has(d.dealId) ? 'opacity-45' : d.recommended ? 'bg-[var(--color-negative)]/8' : ''}`}>
                     <td className="px-2 py-1.5 align-top">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(d.dealId)}
-                        onChange={() => onToggleDeal(d)}
-                        aria-label={`Отметить сделку ${d.dealId}`}
-                      />
+                      {closedIds.has(d.dealId)
+                        ? <span className="text-[10px] text-[var(--color-text-muted)]" title="Закрыта — исчезнет из списка после синка с Битриксом">закрыто</span>
+                        : <input
+                            type="checkbox"
+                            checked={selected.has(d.dealId)}
+                            onChange={() => onToggleDeal(d)}
+                            aria-label={`Отметить сделку ${d.dealId}`}
+                          />}
                     </td>
                     <td className="px-2 py-1.5 max-w-[360px]">
                       <div className="flex items-center gap-1.5 min-w-0">
