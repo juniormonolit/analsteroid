@@ -92,9 +92,9 @@ interface RawRow {
   deals_total: string;
   deals_sold: string;
   sum_sold: string;
-  last_sold_at: string | null;
-  last_call_at: string | null;
-  last_event_at: string | null;
+  last_sold_at: string | Date | null;
+  last_call_at: string | Date | null;
+  last_event_at: string | Date | null;
   median_gap_days: string | null;
   refused_no_call: boolean;
   last_groups: string[] | null;
@@ -108,6 +108,13 @@ const DAY_MS = 86_400_000;
 
 function daysSince(iso: string, now: number): number {
   return (now - new Date(iso).getTime()) / DAY_MS;
+}
+
+// node-pg отдаёт timestamptz-колонки как Date (jsonb-вложенные даты — строками);
+// нормализуем всё в ISO-строки, иначе сортировка localeCompare падает (пойман живьём).
+function toIso(v: string | Date | null): string | null {
+  if (v == null) return null;
+  return (v instanceof Date ? v : new Date(v)).toISOString();
 }
 
 // Один SQL на менеджера: атрибуция клиентов + агрегаты + активные сделки +
@@ -209,9 +216,13 @@ function toRow(r: RawRow, now: number): CustomerRow {
     daysSilent: daysSince(d.lastCallAt ?? d.createdAt, now),
   }));
 
+  const lastSoldAt = toIso(r.last_sold_at);
+  const lastCallAt = toIso(r.last_call_at);
+  const lastEventAt = toIso(r.last_event_at);
+
   const signals: CallSignal[] = [];
   let urgency = 0;
-  const sinceSold = r.last_sold_at !== null ? daysSince(r.last_sold_at, now) : null;
+  const sinceSold = lastSoldAt !== null ? daysSince(lastSoldAt, now) : null;
   if (active.length === 0 && sinceSold !== null && sinceSold > cycleDays) {
     signals.push('overdue_repeat');
     // Насколько просрочен контакт относительно цикла клиента (2 = просрочка вдвое).
@@ -234,9 +245,9 @@ function toRow(r: RawRow, now: number): CustomerRow {
     dealsTotal: Number(r.deals_total),
     dealsSold,
     sumSold: Math.round(Number(r.sum_sold)),
-    lastSoldAt: r.last_sold_at,
-    lastCallAt: r.last_call_at,
-    lastActivityAt: [r.last_event_at, r.last_call_at].filter(Boolean).sort().pop() ?? null,
+    lastSoldAt,
+    lastCallAt,
+    lastActivityAt: [lastEventAt, lastCallAt].filter((v): v is string => v !== null).sort().pop() ?? null,
     activeCount: active.length,
     activeDeals: active,
     refusedNoCall: r.refused_no_call,
