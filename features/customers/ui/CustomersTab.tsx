@@ -13,7 +13,8 @@ import type { Recommendation } from '@/features/customers/engine/crossSell';
 interface ApiRow {
   clientKey: string; clientType: 'contact' | 'company'; clientId: number; name: string | null;
   dealsTotal: number; dealsSold: number; sumSold: number;
-  lastSoldAt: string | null; lastCallAt: string | null; lastActivityAt: string | null;
+  lastSoldAt: string | null; lastSoldAmount: number | null; lastSoldGroups: string[];
+  lastCallAt: string | null; lastActivityAt: string | null;
   activeCount: number; activeDeals: ActiveDealInfo[];
   refusedNoCall: boolean; cycleDays: number; cycleSource: 'own' | 'global';
   signals: CallSignal[]; urgency: number;
@@ -36,9 +37,14 @@ const FILTERS: { key: Filter; label: string }[] = [
 
 const PAGE_SIZE = 50;
 
-function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number) {
+// Сортировка по заголовкам (правило владельца 01.08 «Заголовки = сортировка»,
+// цикл как в /rating: убывание → возрастание → дефолт по сигналу/urgency).
+// Серверная — пагинация серверная, клиентская сортировала бы только страницу.
+type Sort = { key: string; dir: 'desc' | 'asc' } | null;
+
+function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort) {
   return useQuery<ApiResponse>({
-    queryKey: ['customers', isSelf ? 'me' : managerId, filter, search, page],
+    queryKey: ['customers', isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? ''],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (!isSelf) qs.set('bitrixId', managerId);
@@ -46,6 +52,7 @@ function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search
       if (search) qs.set('search', search);
       qs.set('page', String(page));
       qs.set('pageSize', String(PAGE_SIZE));
+      if (sort) { qs.set('sort', sort.key); qs.set('dir', sort.dir); }
       const res = await fetch(`/api/customers?${qs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -168,6 +175,11 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<Sort>(null);
+  const cycleSort = (key: string) => {
+    setPage(1);
+    setSort(s => (s?.key !== key ? { key, dir: 'desc' } : s.dir === 'desc' ? { key, dir: 'asc' } : null));
+  };
 
   // Дебаунс поиска, чтобы не дёргать API на каждый символ.
   useEffect(() => {
@@ -175,7 +187,17 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const { data, isLoading, isError } = useCustomers(managerId, isSelf, filter, search, page);
+  const { data, isLoading, isError } = useCustomers(managerId, isSelf, filter, search, page, sort);
+  const Th = ({ k, label, right = false }: { k?: string; label: string; right?: boolean }) => (
+    <th className={`px-3 py-2 font-bold whitespace-nowrap ${right ? 'text-right' : 'text-left'}`}>
+      {k ? (
+        <button type="button" onClick={() => cycleSort(k)} title="Сортировка: убывание → возрастание → по сигналу"
+          className={`uppercase tracking-wider hover:text-[var(--color-accent)] ${sort?.key === k ? 'text-[var(--color-accent)]' : ''}`}>
+          {label}{sort?.key === k ? (sort.dir === 'desc' ? ' ▼' : ' ▲') : ''}
+        </button>
+      ) : label}
+    </th>
+  );
   const rows = data?.rows ?? [];
   const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE)), [data?.total]);
 
@@ -217,15 +239,15 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
           <table className="w-full text-[13px]">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
-                <th className="px-3 py-2 font-bold">Клиент</th>
-                <th className="px-3 py-2 font-bold">Сигнал</th>
-                <th className="px-3 py-2 font-bold text-right whitespace-nowrap">Сделок / продано</th>
-                <th className="px-3 py-2 font-bold text-right">Куплено на</th>
-                <th className="px-3 py-2 font-bold whitespace-nowrap">Последняя покупка</th>
-                <th className="px-3 py-2 font-bold">Активные сделки</th>
-                <th className="px-3 py-2 font-bold">Предложить</th>
-                <th className="px-3 py-2 font-bold whitespace-nowrap">Последний звонок</th>
-                <th className="px-3 py-2 font-bold">Активность</th>
+                <Th label="Клиент" />
+                <Th label="Сигнал" />
+                <Th k="dealsSold" label="Сделок / продано" right />
+                <Th k="sumSold" label="Куплено на" right />
+                <Th k="lastSoldAt" label="Последняя покупка" />
+                <Th k="activeCount" label="Активные сделки" />
+                <Th label="Предложить" />
+                <Th k="lastCallAt" label="Последний звонок" />
+                <Th k="lastActivityAt" label="Активность" />
               </tr>
             </thead>
             <tbody>
@@ -254,8 +276,18 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                   <td className="px-3 py-2 text-right font-semibold tabular-nums whitespace-nowrap">
                     {r.sumSold > 0 ? fmtMoney(r.sumSold) : '—'}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap tabular-nums" title={r.lastSoldAt ? daysAgo(r.lastSoldAt) : undefined}>
-                    {fmtDate(r.lastSoldAt)}
+                  <td className="px-3 py-2" title={r.lastSoldAt ? daysAgo(r.lastSoldAt) : undefined}>
+                    {/* Доп. Серёги 01.08: дата + материал + сумма последней проданной сделки */}
+                    <div className="whitespace-nowrap tabular-nums">{fmtDate(r.lastSoldAt)}</div>
+                    {r.lastSoldAt && (r.lastSoldGroups.length > 0 || r.lastSoldAmount !== null) && (
+                      <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)] max-w-[220px]">
+                        {r.lastSoldGroups.join(', ')}
+                        {r.lastSoldGroups.length > 0 && r.lastSoldAmount !== null && r.lastSoldAmount > 0 && ', '}
+                        {r.lastSoldAmount !== null && r.lastSoldAmount > 0 && (
+                          <span className="font-semibold text-[var(--color-text)] whitespace-nowrap">{fmtMoney(r.lastSoldAmount)}</span>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2"><ActiveDealsCell deals={r.activeDeals} /></td>
                   <td className="px-3 py-2"><RecommendCell rec={r.recommend} /></td>

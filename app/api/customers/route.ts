@@ -18,6 +18,41 @@ import { fetchCrossSellMatrix, recommendFor } from '@/features/customers/engine/
 export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue';
 const PAGE_SIZE_MAX = 100;
 
+// Сортировка по заголовкам (правило владельца 01.08 «Заголовки = сортировка», по
+// образцу /rating 79daf81): цикл убывание → возрастание → дефолт (urgency).
+// Пагинация серверная, поэтому и сортировка серверная — клиент сортировал бы
+// только видимую страницу. Пустые значения всегда внизу; тай-брейк — дефолтный
+// порядок (сигнальный urgency). Имя не сортируется: полных имён на сервере нет
+// (ленивый кэш), сортировка по «известным» была бы враньём.
+type SortDir = 'desc' | 'asc';
+const SORTS: Record<string, (r: CustomerRow) => number | string | null> = {
+  dealsTotal: r => r.dealsTotal,
+  dealsSold: r => r.dealsSold,
+  sumSold: r => r.sumSold,
+  lastSoldAt: r => r.lastSoldAt,
+  lastCallAt: r => r.lastCallAt,
+  lastActivityAt: r => r.lastActivityAt,
+  activeCount: r => r.activeCount,
+};
+
+function applySort(rows: CustomerRow[], key: string | null, dir: SortDir): CustomerRow[] {
+  const get = key ? SORTS[key] : undefined;
+  if (!get) return rows; // дефолт: порядок движка (сигнал/urgency)
+  const sign = dir === 'asc' ? 1 : -1;
+  return rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const va = get(a.r); const vb = get(b.r);
+      if (va === null && vb === null) return a.i - b.i;
+      if (va === null) return 1;   // пустые всегда внизу
+      if (vb === null) return -1;
+      if (va < vb) return -sign;
+      if (va > vb) return sign;
+      return a.i - b.i;            // тай-брейк — дефолтный порядок
+    })
+    .map(x => x.r);
+}
+
 function applyFilter(rows: CustomerRow[], filter: CustomerFilter): CustomerRow[] {
   switch (filter) {
     case 'active': return rows.filter(r => r.activeCount > 0);
@@ -61,7 +96,9 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const filtered = applyFilter(searched, filter);
+  const sortKey = sp.get('sort');
+  const sortDir: SortDir = sp.get('dir') === 'asc' ? 'asc' : 'desc';
+  const filtered = applySort(applyFilter(searched, filter), sortKey, sortDir);
   const start = (page - 1) * pageSize;
   const pageRows = filtered.slice(start, start + pageSize);
 

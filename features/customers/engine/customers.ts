@@ -73,6 +73,9 @@ export interface CustomerRow {
   dealsSold: number;
   sumSold: number;
   lastSoldAt: string | null;       // ISO
+  /** Сумма и материал (head-группы) последней проданной сделки (доп. Серёги 01.08). */
+  lastSoldAmount: number | null;
+  lastSoldGroups: string[];
   lastCallAt: string | null;       // ISO, по всем сделкам клиента
   lastActivityAt: string | null;   // ISO: max(событие стадии, звонок)
   activeCount: number;
@@ -98,6 +101,8 @@ interface RawRow {
   median_gap_days: string | null;
   refused_no_call: boolean;
   last_groups: string[] | null;
+  last_sold_amount: string | null;
+  last_sold_groups: string[] | null;
   active_deals: {
     dealId: number; name: string | null; stage: string | null; amount: number | null;
     createdAt: string; lastCallAt: string | null;
@@ -171,6 +176,20 @@ lastg AS (
   WHERE cardinality(grps) > 0
   ORDER BY client_key, sold_at DESC, deal_id DESC
 ),
+lasts AS (
+  -- Последняя ПРОДАННАЯ сделка клиента целиком (доп. Серёги 01.08: показывать
+  -- материал и сумму последней покупки в строке): дата = max(sold_at) из agg,
+  -- группы/сумма — этой сделки. Группы могут быть пусты (сделка из услуг) — UI
+  -- покажет только сумму; рекомендация «Предложить» продолжает считаться от
+  -- последней сделки С ТОВАРНЫМИ группами (lastg ниже) — это разные вещи.
+  SELECT DISTINCT ON (m.client_key) m.client_key, m.amount AS last_sold_amount,
+         array(SELECT DISTINCT (p->>'head_group_name') FROM jsonb_array_elements(d.products) p
+               WHERE coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL
+                 AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS last_sold_groups
+  FROM mcd m JOIN sa.deals d ON d.deal_id = m.deal_id
+  WHERE m.sold_at IS NOT NULL
+  ORDER BY m.client_key, m.sold_at DESC, m.deal_id DESC
+),
 gaps AS (
   SELECT client_key, percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) AS median_gap_days
   FROM (
@@ -186,7 +205,8 @@ SELECT a.client_key,
        a.deals_total::text, a.deals_sold::text, a.sum_sold::text,
        a.last_sold_at, a.last_call_at, ev.last_event_at,
        g.median_gap_days::text, a.refused_no_call,
-       o.active_deals, lg.last_groups
+       o.active_deals, lg.last_groups,
+       ls.last_sold_amount::text, ls.last_sold_groups
 FROM (
   SELECT m.client_key,
          count(*) AS deals_total,
@@ -201,6 +221,7 @@ FROM (
 LEFT JOIN opens o USING (client_key)
 LEFT JOIN gaps g USING (client_key)
 LEFT JOIN lastg lg USING (client_key)
+LEFT JOIN lasts ls USING (client_key)
 LEFT JOIN ev USING (client_key)
 `;
 
@@ -246,6 +267,8 @@ function toRow(r: RawRow, now: number): CustomerRow {
     dealsSold,
     sumSold: Math.round(Number(r.sum_sold)),
     lastSoldAt,
+    lastSoldAmount: r.last_sold_amount !== null ? Math.round(Number(r.last_sold_amount)) : null,
+    lastSoldGroups: r.last_sold_groups ?? [],
     lastCallAt,
     lastActivityAt: [lastEventAt, lastCallAt].filter((v): v is string => v !== null).sort().pop() ?? null,
     activeCount: active.length,
