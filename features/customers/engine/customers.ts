@@ -78,6 +78,8 @@ export interface CustomerRow {
   activeCount: number;
   activeDeals: ActiveDealInfo[];
   refusedNoCall: boolean;          // бейдж «были отказы без звонка»
+  /** Head-группы последней покупки — база кросс-селл рекомендации (crossSell.ts). */
+  lastGroups: string[];
   cycleDays: number;               // применённый цикл повторки (для тултипа)
   cycleSource: 'own' | 'global';
   signals: CallSignal[];           // пусто = звонить не пора
@@ -95,6 +97,7 @@ interface RawRow {
   last_event_at: string | null;
   median_gap_days: string | null;
   refused_no_call: boolean;
+  last_groups: string[] | null;
   active_deals: {
     dealId: number; name: string | null; stage: string | null; amount: number | null;
     createdAt: string; lastCallAt: string | null;
@@ -144,6 +147,23 @@ opens AS (
   WHERE s.stage_type = 'NEW' OR (s.stage_type = 'WORK' AND s.event_type NOT IN ('sold','shipped'))
   GROUP BY 1
 ),
+lastg AS (
+  -- Группы последней покупки (для кросс-селл рекомендации «что предложить»):
+  -- последняя проданная сделка клиента, у которой есть ТОВАРНЫЕ head-группы
+  -- (услуги/доставка/«Разное» исключены — та же выборка, что в матрице
+  -- переходов features/customers/engine/crossSell.ts).
+  SELECT DISTINCT ON (client_key) client_key, grps AS last_groups
+  FROM (
+    SELECT m.client_key, m.sold_at, m.deal_id,
+           array(SELECT DISTINCT (p->>'head_group_name') FROM jsonb_array_elements(d.products) p
+                 WHERE coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL
+                   AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps
+    FROM mcd m JOIN sa.deals d ON d.deal_id = m.deal_id
+    WHERE m.sold_at IS NOT NULL
+  ) t
+  WHERE cardinality(grps) > 0
+  ORDER BY client_key, sold_at DESC, deal_id DESC
+),
 gaps AS (
   SELECT client_key, percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) AS median_gap_days
   FROM (
@@ -159,7 +179,7 @@ SELECT a.client_key,
        a.deals_total::text, a.deals_sold::text, a.sum_sold::text,
        a.last_sold_at, a.last_call_at, ev.last_event_at,
        g.median_gap_days::text, a.refused_no_call,
-       o.active_deals
+       o.active_deals, lg.last_groups
 FROM (
   SELECT m.client_key,
          count(*) AS deals_total,
@@ -173,6 +193,7 @@ FROM (
 ) a
 LEFT JOIN opens o USING (client_key)
 LEFT JOIN gaps g USING (client_key)
+LEFT JOIN lastg lg USING (client_key)
 LEFT JOIN ev USING (client_key)
 `;
 
@@ -219,6 +240,7 @@ function toRow(r: RawRow, now: number): CustomerRow {
     activeCount: active.length,
     activeDeals: active,
     refusedNoCall: r.refused_no_call,
+    lastGroups: r.last_groups ?? [],
     cycleDays: Math.round(cycleDays * 10) / 10,
     cycleSource: useOwn ? 'own' : 'global',
     signals,

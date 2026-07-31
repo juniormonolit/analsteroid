@@ -8,6 +8,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { ActiveDealInfo, CallSignal } from '@/features/customers/engine/customers';
+import type { Recommendation } from '@/features/customers/engine/crossSell';
 
 interface ApiRow {
   clientKey: string; clientType: 'contact' | 'company'; clientId: number; name: string | null;
@@ -16,6 +17,7 @@ interface ApiRow {
   activeCount: number; activeDeals: ActiveDealInfo[];
   refusedNoCall: boolean; cycleDays: number; cycleSource: 'own' | 'global';
   signals: CallSignal[]; urgency: number;
+  recommend: Recommendation | null;
 }
 interface ApiResponse {
   total: number;
@@ -96,6 +98,35 @@ function SignalBadge({ r, noCallDays }: { r: ApiRow; noCallDays: number }) {
           title={`Активных сделок нет, а с последней покупки прошло больше типичного цикла повторки клиента (${r.cycleDays} дн., ${r.cycleSource === 'own' ? 'его собственная медиана' : 'медиана по всей базе'})`}>
           ⏰ Пора позвонить
         </span>
+      )}
+    </div>
+  );
+}
+
+// «Что предложить» (доп. Серёги 01.08): компактно топ-1 из матрицы переходов
+// «группа последней покупки → следующая покупка», разворот — топ-3. При скудной
+// статистике по группе клиента — общий топ по базе с пометкой.
+function RecommendCell({ rec }: { rec: Recommendation | null }) {
+  const [open, setOpen] = useState(false);
+  if (!rec || rec.items.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
+  const shown = open ? rec.items : rec.items.slice(0, 1);
+  const baseTitle = rec.fallback
+    ? 'По группе последней покупки клиента мало статистики переходов — показан общий топ следующих покупок по базе'
+    : `Вероятность следующей покупки после: ${rec.basedOn.join(', ')} (доля таких переходов в истории продаж)`;
+  return (
+    <div className="flex flex-col gap-0.5" title={baseTitle}>
+      {shown.map(it => (
+        <div key={it.group} className="text-xs whitespace-nowrap">
+          <span className="text-[var(--color-text)]">{it.group}</span>
+          <span className="ml-1 font-semibold tabular-nums text-[var(--color-accent)]">{it.pct}%</span>
+        </div>
+      ))}
+      {rec.fallback && <span className="text-[10px] text-[var(--color-text-muted)]">общий топ по базе</span>}
+      {rec.items.length > 1 && (
+        <button type="button" onClick={() => setOpen(v => !v)}
+          className="w-fit text-[11px] font-semibold text-[var(--color-accent)] hover:underline">
+          {open ? 'свернуть' : `ещё ${rec.items.length - 1}`}
+        </button>
       )}
     </div>
   );
@@ -192,6 +223,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                 <th className="px-3 py-2 font-bold text-right">Куплено на</th>
                 <th className="px-3 py-2 font-bold whitespace-nowrap">Последняя покупка</th>
                 <th className="px-3 py-2 font-bold">Активные сделки</th>
+                <th className="px-3 py-2 font-bold">Предложить</th>
                 <th className="px-3 py-2 font-bold whitespace-nowrap">Последний звонок</th>
                 <th className="px-3 py-2 font-bold">Активность</th>
               </tr>
@@ -226,6 +258,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                     {fmtDate(r.lastSoldAt)}
                   </td>
                   <td className="px-3 py-2"><ActiveDealsCell deals={r.activeDeals} /></td>
+                  <td className="px-3 py-2"><RecommendCell rec={r.recommend} /></td>
                   <td className="px-3 py-2 whitespace-nowrap" title={fmtDate(r.lastCallAt)}>
                     {daysAgo(r.lastCallAt)}
                   </td>
@@ -258,7 +291,8 @@ export function CustomersTab({ managerId, isSelf }: { managerId: string; isSelf:
       <div className="text-xs text-[var(--color-text-muted)]">
         Клиенты, где вы вели последнюю сделку. Сигналы: <b>📞 сделка без звонка</b> — по активной сделке нет звонков
         больше недели; <b>⏰ пора позвонить</b> — активных сделок нет, а с последней покупки прошло больше типичного
-        цикла повторных покупок клиента. Имя ведёт в карточку клиента в Битриксе.
+        цикла повторных покупок клиента. «Предложить» — какой материал клиенты чаще всего покупают следом за
+        последней покупкой этого клиента (доля таких переходов в истории продаж). Имя ведёт в карточку клиента в Битриксе.
       </div>
       <CustomersList managerId={managerId} isSelf={isSelf} />
     </div>

@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { canViewManager } from '@/lib/org/managerAccess';
 import { fetchManagerCustomers, GLOBAL_REPEAT_CYCLE_DAYS, ACTIVE_NO_CALL_DAYS, type CustomerRow } from '@/features/customers/engine/customers';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
+import { fetchCrossSellMatrix, recommendFor } from '@/features/customers/engine/crossSell';
 
 // «Мои заказчики» (фича Серёги 01.08): постраничный список клиентов менеджера.
 // Доступ — тот же рубеж canViewManager, что у всей карточки (менеджер — себя,
@@ -64,9 +65,17 @@ export async function GET(req: NextRequest) {
   const start = (page - 1) * pageSize;
   const pageRows = filtered.slice(start, start + pageSize);
 
-  // Имена только для видимой страницы (ленивый добор из Битрикса + кэш).
-  const names = await resolveClientNames(pageRows.map(r => r.clientKey));
-  const rows = pageRows.map(r => ({ ...r, name: names.get(r.clientKey) ?? null }));
+  // Имена — только для видимой страницы (ленивый добор из Битрикса + кэш);
+  // кросс-селл рекомендация «что предложить» — из матрицы переходов (Redis 24ч).
+  const [names, matrix] = await Promise.all([
+    resolveClientNames(pageRows.map(r => r.clientKey)),
+    fetchCrossSellMatrix(),
+  ]);
+  const rows = pageRows.map(r => ({
+    ...r,
+    name: names.get(r.clientKey) ?? null,
+    recommend: recommendFor(matrix, r.lastGroups),
+  }));
 
   return NextResponse.json({
     total: filtered.length,
