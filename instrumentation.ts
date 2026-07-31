@@ -15,6 +15,42 @@ export async function register() {
   scheduleDailyMoscowReport();
   scheduleCallControl();
   scheduleWidgetMetrics();
+  scheduleEmployeeRenameCheck();
+}
+
+// Реестр сотрудников (задача 2654): суточный серверный детект переименований
+// битрикс-логинов (sa.employees.full_name vs sa.employee_name_history, SCD2).
+// Детект также срабатывает при обращении к странице «Сотрудники» (кэш ~6 ч в
+// features/employees/engine/registry.ts — общий и для тика, и для страницы).
+// Redis-замок — чтобы соседние инстансы на общей БД не гоняли детект дважды.
+function scheduleEmployeeRenameCheck() {
+  let lastRunDateMsk: string | null = null;
+
+  const tick = async () => {
+    try {
+      const now = new Date();
+      const msk = now.toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+      const [date, time] = msk.split(' ');
+      const hour = Number(time.slice(0, 2));
+      if (hour < 5 || lastRunDateMsk === date) return; // окно: с 05:00 МСК, раз в день
+      try {
+        const { getRedis } = await import('./lib/cache/redis');
+        const redis = getRedis();
+        if (redis) {
+          const acquired = await redis.set(`employees:rename-check:${date}`, '1', 'EX', 20 * 60 * 60, 'NX');
+          if (acquired !== 'OK') { lastRunDateMsk = date; return; }
+        }
+      } catch { /* без Redis — только in-memory дата */ }
+      const { detectRenames } = await import('./features/employees/engine/registry');
+      const res = await detectRenames(true);
+      lastRunDateMsk = date;
+      console.log(`[employees] суточный детект переименований: seeded=${res.seeded} renamed=${res.renamed} skippedFlips=${res.skippedFlips}`);
+    } catch (err) {
+      console.error('[employees] суточный детект упал:', err);
+    }
+  };
+
+  setInterval(() => { void tick(); }, 15 * 60 * 1000);
 }
 
 // Конструктор виджетов: матрица (6 метрик × отделы/филиалы/Россия × 5 периодов) в Redis

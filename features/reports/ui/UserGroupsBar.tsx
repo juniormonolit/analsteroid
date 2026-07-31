@@ -18,13 +18,44 @@ export interface UserReportGroup {
 
 export interface GroupCandidate { id: string; name: string; subtitle?: string }
 
-export function UserGroupsBar({ dimensionKey, groups, candidates, entityLabel }: {
+// Кнопка «Создать группу» (правка Серёги 31.07): вынесена из бара в ряд тулбара
+// («Настройки отчёта» / «Сравнение») через слот userGroupsSlot в ReportToolbar —
+// тот же стиль/размер, что у соседних кнопок (классы как у ComparisonTriggerButton).
+// Бейджи созданных групп остаются в UserGroupsBar под рядом.
+export function CreateGroupButton({ dimensionKey, candidates, entityLabel }: {
   dimensionKey: string;
-  groups: UserReportGroup[];
-  candidates: GroupCandidate[];   // строки текущего отчёта, ещё не состоящие в группах
-  entityLabel: string;            // «менеджеров» / «товарных групп» — для текстов модалки
+  candidates: GroupCandidate[];
+  entityLabel: string;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['report-groups', dimensionKey] });
+
+  return (
+    <>
+      <button
+        onClick={() => setModalOpen(true)}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-bg-hover)] transition-colors"
+      >
+        <Users size={12} /> Создать группу
+      </button>
+      {modalOpen && (
+        <CreateGroupModal
+          dimensionKey={dimensionKey}
+          candidates={candidates}
+          entityLabel={entityLabel}
+          onClose={() => setModalOpen(false)}
+          onCreated={() => { invalidate(); setModalOpen(false); }}
+        />
+      )}
+    </>
+  );
+}
+
+export function UserGroupsBar({ dimensionKey, groups }: {
+  dimensionKey: string;
+  groups: UserReportGroup[];
+}) {
   const queryClient = useQueryClient();
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['report-groups', dimensionKey] });
 
@@ -39,14 +70,11 @@ export function UserGroupsBar({ dimensionKey, groups, candidates, entityLabel }:
     onSuccess: invalidate,
   });
 
+  // Кнопка создания переехала в тулбар (см. CreateGroupButton) — пустой бар не рисуем.
+  if (groups.length === 0) return null;
+
   return (
     <div className="flex flex-wrap items-center gap-1.5 px-3 sm:px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-      <button
-        onClick={() => setModalOpen(true)}
-        className="flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
-      >
-        <Users size={13} /> Создать группу
-      </button>
       {groups.map(g => (
         <span key={g.id} className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border border-[var(--color-accent)]/50 bg-[var(--color-accent)]/10 text-[var(--color-text)]">
           <Users size={11} className="text-[var(--color-accent)]" />
@@ -60,15 +88,6 @@ export function UserGroupsBar({ dimensionKey, groups, candidates, entityLabel }:
         <button onClick={() => del.mutate({ all: true })} className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-negative)] px-1">
           сбросить все
         </button>
-      )}
-      {modalOpen && (
-        <CreateGroupModal
-          dimensionKey={dimensionKey}
-          candidates={candidates}
-          entityLabel={entityLabel}
-          onClose={() => setModalOpen(false)}
-          onCreated={() => { invalidate(); setModalOpen(false); }}
-        />
       )}
     </div>
   );

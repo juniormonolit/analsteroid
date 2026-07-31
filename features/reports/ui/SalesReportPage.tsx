@@ -34,7 +34,7 @@ import { buildExportFilename } from '@/features/reports/lib/exportFilename';
 import { exportTableToExcel } from '@/features/reports/lib/exportExcel';
 import { exportNodeToPng } from '@/features/reports/lib/exportImage';
 import { exportNodeToPdf } from '@/features/reports/lib/exportPdf';
-import { UserGroupsBar, type UserReportGroup, type GroupCandidate } from './UserGroupsBar';
+import { UserGroupsBar, CreateGroupButton, type UserReportGroup, type GroupCandidate } from './UserGroupsBar';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -1059,6 +1059,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           forceShowSave: isNew,
           onOpenComparison: () => setShowComparison(true),
           comparisonCount: compareIds.length,
+          // «Создать группу» в одном ряду с «Настройки отчёта»/«Сравнение»
+          // (правка Серёги 31.07); в source-режиме группы не поддерживаются.
+          userGroupsSlot: !sourceMode ? (
+            <CreateGroupButton
+              dimensionKey={userGroupsKey}
+              candidates={userGroupCandidates}
+              entityLabel={dimensionType === 'manager' ? 'менеджеров' : 'товарных групп'}
+            />
+          ) : undefined,
         };
 
         // Задача 1714 (мобильный тулбар, <768px): владелец прислал скрин — управление
@@ -1095,13 +1104,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         </div>
       )}
 
+      {/* Кнопка «Создать группу» переехала в ряд тулбара (userGroupsSlot, правка
+          Серёги 31.07) — тут остаются только бейджи созданных групп. */}
       {!sourceMode && (
-        <UserGroupsBar
-          dimensionKey={userGroupsKey}
-          groups={userGroups}
-          candidates={userGroupCandidates}
-          entityLabel={dimensionType === 'manager' ? 'менеджеров' : 'товарных групп'}
-        />
+        <UserGroupsBar dimensionKey={userGroupsKey} groups={userGroups} />
       )}
 
       <div className="flex-1 overflow-hidden">

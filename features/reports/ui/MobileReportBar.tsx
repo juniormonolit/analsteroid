@@ -154,6 +154,7 @@ export function MobileReportBar(props: Props) {
                 {!basic && onOpenComparison && (
                   <ComparisonTriggerButton onOpenComparison={onOpenComparison} comparisonCount={comparisonCount} />
                 )}
+                {props.userGroupsSlot}
                 {(!basic || forceShowSave) && <SaveButton onSaveReport={onSaveReport} />}
                 {onCopyTable && onExportExcel && onExportPdf && onExportPng && (
                   <ExportMenu

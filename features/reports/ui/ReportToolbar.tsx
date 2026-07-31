@@ -69,6 +69,10 @@ export interface ReportToolbarProps {
   onCreatedTimeFilterChange?: (v: CreatedTimeFilter) => void;
   firstTouchFilter?: FirstTouchFilter;
   onFirstTouchFilterChange?: (v: FirstTouchFilter) => void;
+  // Кнопка «Создать группу» (правка Серёги 31.07): живёт в одном ряду с
+  // «Настройки отчёта»/«Сравнение», тем же стилем. Передаётся слотом из
+  // SalesReportPage (там весь стейт групп), бейджи групп остаются в UserGroupsBar.
+  userGroupsSlot?: React.ReactNode;
 }
 type Props = ReportToolbarProps;
 
@@ -167,6 +171,7 @@ export function ReportToolbar({
   forceShowSave = false,
   onOpenComparison, comparisonCount = 0,
   createdTimeFilter, onCreatedTimeFilterChange, firstTouchFilter, onFirstTouchFilterChange,
+  userGroupsSlot,
 }: Props) {
   // Объединённая панель «Настройки отчёта» (правка 09.07) — раньше здесь были две
   // отдельные кнопки-дропдауна («Фильтры» + «Вид»), см. FiltersMenu/ViewSettings.
@@ -193,6 +198,8 @@ export function ReportToolbar({
       {!basic && onOpenComparison && (
         <ComparisonTriggerButton onOpenComparison={onOpenComparison} comparisonCount={comparisonCount} />
       )}
+
+      {userGroupsSlot}
 
       {/* Правая группа (правка 09.07): «Сохранить»/«Копировать» переехали вплотную
           к «Обновить» — весь блок прижат вправо через ml-auto на обёртке. */}

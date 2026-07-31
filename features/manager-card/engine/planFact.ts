@@ -91,8 +91,10 @@ async function fetchCalls(managerIdsNum: number[], fromIso: string, toExclIso: s
     const res = await analyticsDb().query<{ out_count: string; talk_seconds: string | null }>(
       `SELECT count(*) FILTER (WHERE direction = 'outbound') AS out_count,
               sum(duration_seconds) FILTER (WHERE result = 'completed') AS talk_seconds
-         FROM va.calls
-        WHERE manager_id = ANY($1::int[]) AND called_at >= $2 AND called_at < $3`,
+         FROM va.calls c
+        WHERE manager_id = ANY($1::int[]) AND called_at >= $2 AND called_at < $3
+          -- Правка владельца 31.07: только звонки со связью со сделкой (как в callsMetrics.ts)
+          AND EXISTS (SELECT 1 FROM deals d WHERE d.deal_id = c.deal_id)`,
       [managerIdsNum, fromIso, toExclIso],
     );
     const row = res.rows[0];

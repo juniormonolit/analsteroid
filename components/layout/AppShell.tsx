@@ -7,7 +7,7 @@ import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid, Smartphone,
-  MessageCircle, LineChart, Trophy, PackageOpen,
+  MessageCircle, LineChart, Trophy, PackageOpen, Users,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
@@ -408,6 +408,9 @@ function SidebarBody({
     // право по паттерну section.settings: только супер-админ + роли, которым
     // ключ выдан явно в настройках.
     { href: '/offload', label: 'Разгрузка отделов', icon: <PackageOpen size={18} />, ok: hasPerm(user, 'section.offload') },
+    // «Сотрудники» (задача 2654) — реестр: стаж + история переименований логина;
+    // закрытый раздел по паттерну section.offload (только супер-админ + роли).
+    { href: '/employees', label: 'Сотрудники', icon: <Users size={18} />, ok: hasPerm(user, 'section.employees') },
     { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: hasPerm(user, 'section.summary') },
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },

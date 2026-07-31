@@ -151,8 +151,10 @@ async function fetchCallsTizerForManagers(managerIdNums: number[], period: DateR
     const res = await analyticsDb().query<{ total: string; avg_duration: string | null }>(
       `SELECT count(*)::text AS total,
               avg(duration_seconds) FILTER (WHERE result = 'completed') AS avg_duration
-       FROM va.calls
-       WHERE manager_id = ANY($1) AND called_at >= $2 AND called_at < $3`,
+       FROM va.calls c
+       WHERE manager_id = ANY($1) AND called_at >= $2 AND called_at < $3
+         -- Правка владельца 31.07: только звонки со связью со сделкой (как в callsMetrics.ts)
+         AND EXISTS (SELECT 1 FROM deals d WHERE d.deal_id = c.deal_id)`,
       [managerIdNums, from, toExcl],
     );
     const row = res.rows[0];

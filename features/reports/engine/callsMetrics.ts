@@ -154,6 +154,10 @@ WITH call_deals AS (
   LEFT JOIN deals d ON d.deal_id = c.deal_id
   LEFT JOIN funnels f ON f.id = d.funnel_id
   WHERE c.called_at >= $1 AND c.called_at < $2 ${scopeWhere}
+    -- Правка владельца 31.07: ВСЕ звонковые метрики считают ТОЛЬКО звонки со
+    -- связью со сделкой (deal_id находится в sa.deals) — как в метриках 111.
+    -- Звонки без сделки (deal_id NULL/висячий) из метрик 1-5, 9 исключены.
+    AND d.deal_id IS NOT NULL
 )
 SELECT
   manager_id::text AS manager_id,
