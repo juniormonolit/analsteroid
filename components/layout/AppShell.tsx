@@ -7,7 +7,7 @@ import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid, Smartphone,
-  MessageCircle, LineChart, Trophy,
+  MessageCircle, LineChart, Trophy, PackageOpen,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
@@ -404,6 +404,10 @@ function SidebarBody({
     // «Рейтинг» (задача владельца 30.07) — виден всем: состав строк режется по зоне
     // ответственности на сервере (/api/rating), отдельного права не заводим.
     { href: '/rating', label: 'Рейтинг', icon: <Trophy size={18} />, ok: true },
+    // «Разгрузка отделов» (задача 2635) — инструмент директора по продажам;
+    // право по паттерну section.settings: только супер-админ + роли, которым
+    // ключ выдан явно в настройках.
+    { href: '/offload', label: 'Разгрузка отделов', icon: <PackageOpen size={18} />, ok: hasPerm(user, 'section.offload') },
     { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: hasPerm(user, 'section.summary') },
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },
