@@ -13,6 +13,7 @@ import { ShopSettingsBlock } from './ShopSettings';
 import { GachaSettingsBlock } from './GachaSettings';
 import { XpSettingsBlock } from './XpSettings';
 import { QuestSettingsBlock } from './QuestSettings';
+import { GamificationDashboard } from './GamificationDashboard';
 import {
   CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, DAILY_BONUS_METRIC_LABELS, METRIC_LABELS,
   MILESTONE_KIND_LABELS, TEMPLATE_LABELS, validateCustomCriteria,
@@ -552,7 +553,48 @@ function PenaltyTypeRowView({ row, currencyName, onPatch }: {
   );
 }
 
+// Табы раздела «Геймификация» (задача 2741, бриф Серёги 01.08): всё, что
+// раньше было одной длинной страницей «Настройки → Награды», перекомпоновано
+// в табы — первый таб «Дашборд» с живой сводкой экономики. Роут и все
+// query-ключи ниже НЕ меняются (страница по-прежнему живёт на /settings/rewards) —
+// прямых ссылок на прежние секции не было (это всегда была одна страница),
+// поэтому 404 старым URL не грозит.
+const TABS = [
+  { key: 'dashboard', label: 'Дашборд' },
+  { key: 'catalog', label: 'Награды' },
+  { key: 'penalties', label: 'Штрафы' },
+  { key: 'xp', label: 'XP' },
+  { key: 'quests', label: 'Квесты' },
+  { key: 'shop', label: 'Магазин' },
+  { key: 'gacha', label: 'Гача' },
+  { key: 'payouts', label: 'Выплаты' },
+  { key: 'inventory', label: 'Инвентарь' },
+] as const;
+type TabKey = typeof TABS[number]['key'];
+
+function TabBar({ active, onChange }: { active: TabKey; onChange: (k: TabKey) => void }) {
+  return (
+    <div className="mb-4 flex flex-wrap gap-1 border-b border-[var(--color-border)]">
+      {TABS.map(t => (
+        <button
+          key={t.key}
+          type="button"
+          onClick={() => onChange(t.key)}
+          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            active === t.key
+              ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+              : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function RewardsSettingsPage() {
+  const [tab, setTab] = useState<TabKey>('dashboard');
   const qc = useQueryClient();
   const [recomputeResult, setRecomputeResult] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -645,118 +687,129 @@ export function RewardsSettingsPage() {
 
   return (
     <div className="p-4 md:p-6">
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h1 className="text-lg font-semibold">Награды</h1>
-        {/* Название валюты (2657): глобальная настройка, дефолт «ебаллы». */}
-        <label className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]">
-          Название валюты
-          <input
-            value={currencyDraft ?? currencyName}
-            onChange={e => setCurrencyDraft(e.target.value)}
-            onBlur={commitCurrency}
-            onKeyDown={e => { if (e.key === 'Enter') commitCurrency(); }}
-            maxLength={40}
-            className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-xs"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={() => recompute.mutate()}
-          disabled={recompute.isPending}
-          className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
-        >
-          <RefreshCw size={12} className={recompute.isPending ? 'animate-spin' : ''} />
-          {recompute.isPending ? 'Пересчёт…' : 'Пересчитать награды'}
-        </button>
-        {/* Конструктор наград (этап 2): свои награды из параметризуемых шаблонов */}
-        <button
-          type="button"
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-white"
-        >
-          <Plus size={12} />
-          Создать награду
-        </button>
-        {recomputeResult && <span className="text-xs text-[var(--color-text-muted)]">{recomputeResult}</span>}
+      <div className="mb-1 flex flex-wrap items-center gap-3">
+        <h1 className="text-lg font-semibold">Геймификация</h1>
       </div>
 
-      {showCreate && (
-        <CreateBadgeModal
-          currencyName={currencyName}
-          onClose={() => setShowCreate(false)}
-          onCreated={() => {
-            setShowCreate(false);
-            void qc.invalidateQueries({ queryKey: ['settings-badges'] });
-          }}
-        />
+      <TabBar active={tab} onChange={setTab} />
+
+      {tab === 'dashboard' && <GamificationDashboard />}
+
+      {tab === 'catalog' && (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            {/* Название валюты (2657): глобальная настройка, дефолт «ебаллы». */}
+            <label className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]">
+              Название валюты
+              <input
+                value={currencyDraft ?? currencyName}
+                onChange={e => setCurrencyDraft(e.target.value)}
+                onBlur={commitCurrency}
+                onKeyDown={e => { if (e.key === 'Enter') commitCurrency(); }}
+                maxLength={40}
+                className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-xs"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => recompute.mutate()}
+              disabled={recompute.isPending}
+              className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={recompute.isPending ? 'animate-spin' : ''} />
+              {recompute.isPending ? 'Пересчёт…' : 'Пересчитать награды'}
+            </button>
+            {/* Конструктор наград (этап 2): свои награды из параметризуемых шаблонов */}
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              <Plus size={12} />
+              Создать награду
+            </button>
+            {recomputeResult && <span className="text-xs text-[var(--color-text-muted)]">{recomputeResult}</span>}
+          </div>
+
+          {showCreate && (
+            <CreateBadgeModal
+              currencyName={currencyName}
+              onClose={() => setShowCreate(false)}
+              onCreated={() => {
+                setShowCreate(false);
+                void qc.invalidateQueries({ queryKey: ['settings-badges'] });
+              }}
+            />
+          )}
+
+          {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>}
+
+          {[...byCategory.entries()].map(([cat, list]) => (
+            <div key={cat} className="mb-5">
+              <h2 className="mb-2 text-sm font-semibold text-[var(--color-text-muted)]">{CATEGORY_LABELS[cat] ?? cat}</h2>
+              <div className="flex flex-col gap-1.5">
+                {list.map(r => (
+                  <div key={r.key} className={`flex flex-wrap items-center gap-3 rounded-xl border border-[var(--color-border)] px-3 py-2 ${r.enabled ? '' : 'opacity-60'}`}>
+                    <span className="text-xl">{r.icon}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold">{r.name}
+                        {r.tiered && <span className="ml-1.5 text-[10px] font-normal uppercase text-[var(--color-text-muted)]">уровни</span>}
+                      </div>
+                      <div className="text-xs text-[var(--color-text-muted)]">{r.description}</div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {Object.keys(r.criteria).filter(k => typeof r.criteria[k] === 'number').map(k => (
+                        <ThresholdInput key={k} row={r} k={k} onSave={(body) => patch.mutate({ key: r.key, body })} />
+                      ))}
+                      {/* Цены валюты (2657): по уровням для tiered, одна для остальных */}
+                      {TIER_PRICE_ORDER.filter(t => (r.tiered ? t !== '-' : t === '-')).map(t => (
+                        <PriceInput key={t} row={r} tier={t} currencyName={currencyName}
+                          onSave={(body) => patch.mutate({ key: r.key, body })} />
+                      ))}
+                      <span className="text-xs tabular-nums text-[var(--color-text-muted)]" title="выдач / обладателей">
+                        {r.awards} / {r.holders}
+                      </span>
+                      <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={r.enabled}
+                          onChange={e => patch.mutate({ key: r.key, body: { enabled: e.target.checked } })}
+                        />
+                        вкл
+                      </label>
+                      {r.key.startsWith(CUSTOM_PREFIX) && (
+                        <button
+                          type="button"
+                          onClick={() => confirmDelete(r)}
+                          title="Удалить награду (начисленная валюта не отзывается)"
+                          className="rounded p-1 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-red-500"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </>
       )}
 
-      {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>}
-
-      {[...byCategory.entries()].map(([cat, list]) => (
-        <div key={cat} className="mb-5">
-          <h2 className="mb-2 text-sm font-semibold text-[var(--color-text-muted)]">{CATEGORY_LABELS[cat] ?? cat}</h2>
-          <div className="flex flex-col gap-1.5">
-            {list.map(r => (
-              <div key={r.key} className={`flex flex-wrap items-center gap-3 rounded-xl border border-[var(--color-border)] px-3 py-2 ${r.enabled ? '' : 'opacity-60'}`}>
-                <span className="text-xl">{r.icon}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-semibold">{r.name}
-                    {r.tiered && <span className="ml-1.5 text-[10px] font-normal uppercase text-[var(--color-text-muted)]">уровни</span>}
-                  </div>
-                  <div className="text-xs text-[var(--color-text-muted)]">{r.description}</div>
-                </div>
-                <div className="flex items-center gap-3">
-                  {Object.keys(r.criteria).filter(k => typeof r.criteria[k] === 'number').map(k => (
-                    <ThresholdInput key={k} row={r} k={k} onSave={(body) => patch.mutate({ key: r.key, body })} />
-                  ))}
-                  {/* Цены валюты (2657): по уровням для tiered, одна для остальных */}
-                  {TIER_PRICE_ORDER.filter(t => (r.tiered ? t !== '-' : t === '-')).map(t => (
-                    <PriceInput key={t} row={r} tier={t} currencyName={currencyName}
-                      onSave={(body) => patch.mutate({ key: r.key, body })} />
-                  ))}
-                  <span className="text-xs tabular-nums text-[var(--color-text-muted)]" title="выдач / обладателей">
-                    {r.awards} / {r.holders}
-                  </span>
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={r.enabled}
-                      onChange={e => patch.mutate({ key: r.key, body: { enabled: e.target.checked } })}
-                    />
-                    вкл
-                  </label>
-                  {r.key.startsWith(CUSTOM_PREFIX) && (
-                    <button
-                      type="button"
-                      onClick={() => confirmDelete(r)}
-                      title="Удалить награду (начисленная валюта не отзывается)"
-                      className="rounded p-1 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-red-500"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-
       {/* Ручные операции (доп. Серёги 31.07): справочник штрафов + бюджет поощрений */}
-      {!isLoading && <PenaltiesSettings currencyName={currencyName} />}
+      {tab === 'penalties' && !isLoading && <PenaltiesSettings currencyName={currencyName} />}
       {/* XP-система (01.08, миграция 124): коэффициенты + классы (домены) */}
-      {!isLoading && <XpSettingsBlock />}
+      {tab === 'xp' && !isLoading && <XpSettingsBlock />}
       {/* Квесты (миграция 125): номиналы, тиры, реролл */}
-      {!isLoading && <QuestSettingsBlock />}
+      {tab === 'quests' && !isLoading && <QuestSettingsBlock />}
       {/* Магазин призов (MVP 31.07): каталог + TTL валюты + «Релизный старт» (заложен, не запускался) */}
-      {!isLoading && <ShopSettingsBlock currencyName={currencyName} />}
+      {tab === 'shop' && !isLoading && <ShopSettingsBlock currencyName={currencyName} />}
       {/* Гача (фаза 2): пул, шансы (валидация 100%), счётчик джекпотов */}
-      {!isLoading && <GachaSettingsBlock currencyName={currencyName} />}
+      {tab === 'gacha' && !isLoading && <GachaSettingsBlock currencyName={currencyName} />}
       {/* Заявки на вывод рублей в ЗП: у админа — все (у РОПа тот же блок в его ЛК) */}
-      {!isLoading && <PayoutManageBlock />}
+      {tab === 'payouts' && !isLoading && <PayoutManageBlock />}
       {/* Заявки на активацию призов магазина: у админа — все */}
-      {!isLoading && <InventoryManageBlock />}
+      {tab === 'inventory' && !isLoading && <InventoryManageBlock />}
     </div>
   );
 }

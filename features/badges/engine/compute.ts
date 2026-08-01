@@ -24,6 +24,7 @@ import { computeXpTick, writeXpLedger } from '@/features/xp/engine/xp';
 import { questTick } from '@/features/quests/engine/quests';
 import { computeCategoryBadgeAwards } from './categoryBadges';
 import { computePlanningBadgeAwards } from './planningBadges';
+import { computeWalletBadgeAwards } from './walletBadges';
 
 export const RETRO_START = '2026-04-03'; // решение владельца: ретро с 03.04.2026
 
@@ -832,6 +833,23 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     } catch (e) {
       // до миграции 131 нет определений/manager_plans может быть недоступна — тик не должен падать
       console.warn('[planningBadges] пропущено:', e instanceof Error ? e.message : e);
+    }
+
+    // ── Ачивки по кошельку («Шопоголик»/«Инвестор»/«Удачливый», доп. Серёги
+    // к задаче 2741, миграция 127): читает тот же systemDb-клиент (client),
+    // до BEGIN — обычное чтение, как categoryBadges/planningBadges выше.
+    try {
+      const walletAwards = await computeWalletBadgeAwards(client);
+      for (const a of walletAwards) {
+        // defs.has(), не только enabled(): до миграции 127 ключей wallet_* нет
+        // в badge_definitions вообще — INSERT в badge_awards упал бы по FK и
+        // откатил бы ВЕСЬ пересчёт (не только эти три награды).
+        if (!defs.has(a.badgeKey) || !enabled(a.badgeKey)) continue;
+        awards.push(a);
+      }
+    } catch (e) {
+      // до миграции 127 нет определений wallet_* — тик не должен падать
+      console.warn('[walletBadges] пропущено:', e instanceof Error ? e.message : e);
     }
 
     // ── XP-система (миграция 124): леджер + награды XP-пула в общем тике ─────

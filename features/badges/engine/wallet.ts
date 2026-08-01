@@ -151,3 +151,20 @@ export async function getExpiringSoon(
   if (r.rows.length === 0 || Number(r.rows[0].amount) <= 0) return null;
   return { amount: Number(r.rows[0].amount), days: Number(r.rows[0].days) };
 }
+
+// Та же плашка, но по ВСЕЙ компании (виджет «здоровье экономики» на дашборде
+// геймификации, задача 2741) — сумма живых остатков лотов у всех менеджеров,
+// чей дедлайн (created_at + ttl) попадает в ближайшие horizonDays.
+export async function getExpiringSoonTotal(
+  db: Pool, horizonDays = 30,
+): Promise<number> {
+  const r = await db.query<{ amount: string }>(
+    `WITH s AS (SELECT ttl_months FROM badge_coin_settings WHERE id = 1)
+     SELECT coalesce(sum(l.remaining), 0) AS amount
+       FROM badge_coin_ledger l, s
+      WHERE l.currency = 'EBALL' AND l.amount > 0 AND l.remaining > 0
+        AND l.created_at + make_interval(months => s.ttl_months) < now() + make_interval(days => $1)`,
+    [horizonDays],
+  );
+  return Number(r.rows[0]?.amount ?? 0);
+}
