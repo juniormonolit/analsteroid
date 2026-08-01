@@ -232,8 +232,10 @@ async function contractProgress(c: ContractRow): Promise<number> {
 export async function refreshContracts(system: Pool, mgr: number): Promise<{ mine: ContractRow[]; open: ContractRow[] }> {
   const today = mskToday();
   // Провал по дедлайну: депозит сгорает (0-строка-маркер в выписке для аудита).
+  // done_at при провале = момент фиксации провала — от него считается кулдаун
+  // (по дедлайну кулдаун «протухал» мгновенно — пойман живьём).
   const failed = await system.query(
-    `UPDATE quest_contracts SET status='failed' WHERE status='taken' AND deadline < $1 RETURNING id, taken_by, title, deposit`,
+    `UPDATE quest_contracts SET status='failed', done_at=now() WHERE status='taken' AND deadline < $1 RETURNING id, taken_by, title, deposit`,
     [today],
   );
   for (const f of failed.rows as { taken_by: number; title: string; deposit: number }[]) {
