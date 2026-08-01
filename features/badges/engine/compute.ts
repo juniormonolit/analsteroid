@@ -20,6 +20,7 @@ import { getManagerScopes, type ManagerScope } from './orgScopes';
 import { accrueCoins } from './coins';
 import { runWalletTick } from './wallet';
 import { CUSTOM_PREFIX, validateCustomCriteria, type CustomCriteria, type CustomMetric, type CustomPeriod } from './customTemplates';
+import { computeXpTick, writeXpLedger } from '@/features/xp/engine/xp';
 
 export const RETRO_START = '2026-04-03'; // решение владельца: ретро с 03.04.2026
 
@@ -789,10 +790,17 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
       }));
     }
 
+    // ── XP-система (миграция 124): леджер + награды XP-пула в общем тике ─────
+    // Квест-заглушки (quest_*) движок сознательно скипает — активируются с
+    // запуском квестов (отдельный этап, дизайн пилится).
+    const xp = await computeXpTick(client, enabled);
+    awards.push(...xp.awards);
+
     // ── запись в БД ──────────────────────────────────────────────────────────
     let inserted = 0; let updated = 0;
     const byBadge: Record<string, number> = {};
     await client.query('BEGIN');
+    await writeXpLedger(client, xp.ledger);
     for (const a of awards) {
       const onConflict = a.counter
         ? `DO UPDATE SET value = EXCLUDED.value WHERE badge_awards.value IS DISTINCT FROM EXCLUDED.value`

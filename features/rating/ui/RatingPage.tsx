@@ -44,7 +44,7 @@ function scoreColor(score: number | null): string | undefined {
 // порядку по рангу. Сортировка чисто клиентская (все строки уже на клиенте).
 // Колонка «#» показывает ИСХОДНЫЙ ранг менеджера (r.rank из API) и при
 // пересортировке НЕ пересчитывается — видно «5-й по рейтингу, но 1-й по ебаллам».
-type SortKey = 'badges' | 'coins' | 'rating' | `axis:${string}`;
+type SortKey = 'badges' | 'coins' | 'level' | 'rating' | `axis:${string}`;
 type SortState = { key: SortKey; dir: 'desc' | 'asc' } | null;
 
 function SortableTh({ label, sortKey, sort, onSort, strong, title, left }: {
@@ -118,7 +118,11 @@ export function RatingPage() {
         body: JSON.stringify({ bitrixIds: badgeIdsKey.split(',').map(Number) }),
       });
       if (!res.ok) throw new Error('Ошибка загрузки наград');
-      return res.json() as Promise<{ shelves: Record<string, ShelfItem[]>; balances: Record<string, number>; currencyName: string }>;
+      return res.json() as Promise<{
+        shelves: Record<string, ShelfItem[]>; balances: Record<string, number>; currencyName: string;
+        // XP (миграция 124): уровень/титул/топ-класс — колонка «Уровень».
+        xp: Record<string, { level: number; title: string; totalXp: number; topClass: { name: string; level: number } | null }>;
+      }>;
     },
     enabled: badgeIdsKey.length > 0,
     staleTime: 5 * 60 * 1000,
@@ -129,6 +133,7 @@ export function RatingPage() {
   // как и остальные числовые, сортируемая — см. sortedRows ниже.
   const balances = badgesData?.balances ?? {};
   const currencyName = badgesData?.currencyName ?? 'ебаллы';
+  const xpMap = badgesData?.xp ?? {};
   const [openBadgesId, setOpenBadgesId] = useState<string | null>(null);
 
   // Состояние сортировки: null = дефолтный порядок по рангу (как отдал API).
@@ -147,6 +152,7 @@ export function RatingPage() {
       if (sort.key === 'coins') return balances[r.managerId] ?? 0;
       if (sort.key === 'badges') return (shelves[r.managerId] ?? []).reduce((s, it) => s + it.count, 0);
       if (sort.key === 'rating') return r.rating;
+      if (sort.key === 'level') return xpMap[r.managerId]?.level ?? null;
       const axisKey = sort.key.slice('axis:'.length);
       return r.axes.find(x => x.key === axisKey)?.score ?? null;
     };
@@ -160,7 +166,7 @@ export function RatingPage() {
       if (va !== vb) return (va - vb) * mult;
       return (a.rank ?? Infinity) - (b.rank ?? Infinity); // тай-брейк — исходный ранг
     });
-  }, [rows, sort, balances, shelves]);
+  }, [rows, sort, balances, shelves, xpMap]);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -215,6 +221,7 @@ export function RatingPage() {
                   <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-muted)] whitespace-nowrap">Отдел</th>
                   <SortableTh label="Награды" sortKey="badges" sort={sort} onSort={handleSort} left />
                   <SortableTh label={currencyName} sortKey="coins" sort={sort} onSort={handleSort} />
+                  <SortableTh label="Уровень" sortKey="level" sort={sort} onSort={handleSort} title="XP-уровень менеджера (репутация: только растёт) · сортировать" />
                   <SortableTh label="Рейтинг" sortKey="rating" sort={sort} onSort={handleSort} strong />
                   {axes.map(a => (
                     <SortableTh key={a.key} label={a.label} sortKey={`axis:${a.key}`} sort={sort} onSort={handleSort} title={`Вес ${a.weight} · сортировать`} />
@@ -265,6 +272,20 @@ export function RatingPage() {
                     <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--color-accent)]">
                       {(balances[r.managerId] ?? 0) > 0 ? (balances[r.managerId] ?? 0).toLocaleString('ru-RU') : '—'}
                     </td>
+                    {/* XP-уровень (миграция 124): уровень + титул, тултип — топ-класс */}
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {(() => {
+                        const x = xpMap[r.managerId];
+                        if (!x || x.level <= 0) return <span className="text-[11px] text-[var(--color-text-muted)]">—</span>;
+                        return (
+                          <span className="tabular-nums font-bold text-[var(--color-accent)]"
+                            title={`${x.title} · ${x.totalXp.toLocaleString('ru-RU')} XP${x.topClass ? ` · топ-класс: ${x.topClass.name} ${x.topClass.level} ур.` : ''}`}>
+                            {x.level}
+                            {x.topClass && <span className="ml-1 text-[10px] font-semibold text-[var(--color-text-muted)]">{x.topClass.name}</span>}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-3 py-2 text-right">
                       <span className="text-[15px] font-extrabold tabular-nums text-[var(--color-text)]">
                         {r.rating !== null ? r.rating.toFixed(1) : '—'}
@@ -281,7 +302,7 @@ export function RatingPage() {
                   </tr>
                   {badgesOpen && shelf.length > 0 && (
                     <tr className="border-t border-[var(--color-border)]">
-                      <td colSpan={6 + axes.length} className="p-3 bg-[var(--color-bg)]">
+                      <td colSpan={7 + axes.length} className="p-3 bg-[var(--color-bg)]">
                         <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                           {shelf.map(item => <BadgeCard key={item.key} item={item} />)}
                         </div>

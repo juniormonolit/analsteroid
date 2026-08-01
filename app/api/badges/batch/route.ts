@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import { buildShelves } from '@/features/badges/engine/shelf';
 import { getBalances, getCurrencyName } from '@/features/badges/engine/coins';
+import { fetchXpBriefs } from '@/features/xp/engine/xp';
 
 // Награды батчем для страницы рейтинга (доп. Серёги 31.07 к 2655): один запрос
 // по списку bitrix_id вместо N поштучных /api/badges/me — запрос самого рейтинга
@@ -28,15 +29,18 @@ export async function POST(req: NextRequest) {
 
   try {
     // + Балансы валюты и её название (задача 2657) — тем же батчем для /rating.
-    const [shelves, balances, currencyName] = await Promise.all([
+    // + Уровни XP и топ-классы (миграция 124) — колонка «Уровень» в /rating.
+    const [shelves, balances, currencyName, xp] = await Promise.all([
       buildShelves(db, ids),
       getBalances(db, ids),
       getCurrencyName(db),
+      fetchXpBriefs(db, ids).catch(() => new Map()),
     ]);
     return NextResponse.json({
       shelves: Object.fromEntries(shelves),
       balances: Object.fromEntries(balances),
       currencyName,
+      xp: Object.fromEntries(xp),
     });
   } catch (e) {
     console.error('[badges/batch] failed:', e);

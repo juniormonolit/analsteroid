@@ -5,6 +5,7 @@ import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { buildShelf } from '@/features/badges/engine/shelf';
 import { getBalances, getCurrencyName } from '@/features/badges/engine/coins';
+import { fetchXpBriefs, type XpBrief } from '@/features/xp/engine/xp';
 
 // «Моя команда» в ЛК РОПа (дополнение Серёги к 2655): подчинённые по той же
 // механике managed-depts, что и ЛК-агрегат отделов; у каждого — его полка.
@@ -22,10 +23,14 @@ export async function GET() {
   if (managed.length === 0) return NextResponse.json({ team: [], currencyName });
 
   const managers = await resolveManagersForDepartments(managed.map(d => d.deptId));
-  const team: { bitrixId: number; name: string; departmentName: string | null; balance: number; shelf: Awaited<ReturnType<typeof buildShelf>> }[] = [];
+  const team: { bitrixId: number; name: string; departmentName: string | null; balance: number; xp: XpBrief | null; shelf: Awaited<ReturnType<typeof buildShelf>> }[] = [];
   const deptNames = new Map(managed.map(d => [d.deptId, d.deptName ?? null]));
   const ids = [...new Set(managers.map(m => Number(m.managerId)).filter(id => Number.isInteger(id) && String(id) !== session.bitrixUserId))];
-  const balances = await getBalances(db, ids);
+  // + XP-уровни/топ-классы подчинённых (миграция 124) — карта специализаций РОПа.
+  const [balances, xpBriefs] = await Promise.all([
+    getBalances(db, ids),
+    fetchXpBriefs(db, ids).catch(() => new Map<number, XpBrief>()),
+  ]);
   for (const m of managers) {
     const id = Number(m.managerId);
     if (!Number.isInteger(id) || String(id) === session.bitrixUserId) continue;
@@ -35,6 +40,7 @@ export async function GET() {
       name: m.name || m.login || String(id),
       departmentName: deptNames.get(m.deptUuid) ?? null,
       balance: balances.get(id) ?? 0,
+      xp: xpBriefs.get(id) ?? null,
       shelf,
     });
   }

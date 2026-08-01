@@ -142,7 +142,11 @@ export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmp
 
 // ── «Моя команда» (ЛК РОПа): подчинённые с полками, компакт → разворот ────────
 
-interface TeamMember { bitrixId: number; name: string; departmentName: string | null; balance: number; shelf: ShelfItem[] }
+interface TeamMember {
+  bitrixId: number; name: string; departmentName: string | null; balance: number;
+  xp: { level: number; title: string; totalXp: number; topClass: { name: string; level: number } | null } | null;
+  shelf: ShelfItem[];
+}
 
 export function TeamBadgesBlock() {
   const [openIds, setOpenIds] = useState<Set<number>>(new Set());
@@ -186,6 +190,13 @@ export function TeamBadgesBlock() {
               >
                 {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                 <span className="text-sm font-semibold text-[var(--color-text)]">{m.name}</span>
+                {/* XP (миграция 124): уровень у имени — карта специализаций РОПа */}
+                {m.xp && m.xp.level > 0 && (
+                  <span className="rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--color-accent)]"
+                    title={`${m.xp.title} · ${m.xp.totalXp.toLocaleString('ru-RU')} XP`}>
+                    {m.xp.level} ур.{m.xp.topClass ? ` · ${m.xp.topClass.name} ${m.xp.topClass.level}` : ''}
+                  </span>
+                )}
                 {m.departmentName && <span className="text-xs text-[var(--color-text-muted)]">{m.departmentName}</span>}
                 <span className="ml-auto flex items-center gap-1.5">
                   {/* компакт: топ-бейджи эмодзи + счётчик; + баланс валюты (2657) */}

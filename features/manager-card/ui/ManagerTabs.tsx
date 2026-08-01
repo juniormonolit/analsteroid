@@ -71,6 +71,13 @@ interface ProfileExtra {
   // Плашка TTL (31.07): сколько ебаллов сгорит в ближайшие 30 дней и через
   // сколько дней первое сгорание (0 = ближайшей ночью).
   expiring: { amount: number; days: number } | null;
+  // XP-система (01.08, миграция 124): уровень/титул/классы.
+  xp: {
+    totalXp: number; level: number; title: string;
+    nextLevelXp: number; currentLevelXp: number;
+    classes: { name: string; xp: number; level: number; progress: number }[];
+    topClass: { name: string; level: number } | null;
+  } | null;
 }
 
 // Контекст ручных операций: право, бюджет, справочник с рассчитанными суммами.
@@ -321,7 +328,15 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
         <div className="flex items-center gap-4 flex-wrap">
           <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={72} />
           <div className="min-w-0 flex-1">
-            <h2 className="text-xl font-extrabold text-[var(--color-text)] truncate">{card?.profile.name ?? '…'}</h2>
+            <h2 className="text-xl font-extrabold text-[var(--color-text)] truncate">
+              {card?.profile.name ?? '…'}
+              {extra?.xp && extra.xp.level > 0 && (
+                <span className="ml-2 align-middle inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-[11px] font-bold text-[var(--color-accent)]"
+                  title={`Уровень ${extra.xp.level} — ${extra.xp.title}${extra.xp.topClass ? ` · топ-класс: ${extra.xp.topClass.name} ${extra.xp.topClass.level} ур.` : ''}`}>
+                  {extra.xp.level} ур.{extra.xp.topClass ? ` · ${extra.xp.topClass.name}` : ''}
+                </span>
+              )}
+            </h2>
             <div className="mt-1 text-[13px] text-[var(--color-text-muted)] flex items-center gap-2 flex-wrap">
               {card?.profile.department && <span>{card.profile.department}</span>}
               {card?.profile.department && card?.profile.branch && <span>·</span>}
@@ -391,6 +406,50 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
           </div>
         )}
       </section>
+
+      {/* XP: уровень, полоса до следующего уровня, классы (01.08, миграция 124) */}
+      {extra?.xp && (
+        <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-baseline gap-2">
+              <span className="text-4xl font-extrabold tabular-nums text-[var(--color-accent)]">{extra.xp.level}</span>
+              <span className="text-sm font-bold text-[var(--color-text)]">уровень · {extra.xp.title}</span>
+            </div>
+            <div className="min-w-[220px] flex-1">
+              {(() => {
+                const span = extra.xp!.nextLevelXp - extra.xp!.currentLevelXp;
+                const into = extra.xp!.totalXp - extra.xp!.currentLevelXp;
+                const pct = span > 0 ? Math.min(100, Math.round((into / span) * 100)) : 100;
+                return (
+                  <div title={`Всего ${extra.xp!.totalXp.toLocaleString('ru-RU')} XP. XP — репутация: только растёт, на ебаллы не меняется.`}>
+                    <div className="mb-1 flex justify-between text-[11px] text-[var(--color-text-muted)]">
+                      <span>до уровня {extra.xp!.level + 1} — {(extra.xp!.nextLevelXp - extra.xp!.totalXp).toLocaleString('ru-RU')} XP</span>
+                      <span className="tabular-nums">{extra.xp!.totalXp.toLocaleString('ru-RU')} XP</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-[var(--color-bg-hover)]">
+                      <div className="h-2 rounded-full bg-[var(--color-accent)]" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+          {extra.xp.classes.length > 0 && (
+            <div className="mt-3 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+              {extra.xp.classes.map(c => (
+                <div key={c.name} className="flex items-center gap-2 text-[13px]">
+                  <span className="w-32 truncate font-semibold text-[var(--color-text)]" title={c.name}>{c.name}</span>
+                  <span className="w-12 text-right tabular-nums font-bold text-[var(--color-accent)]">{c.level} ур.</span>
+                  <div className="h-1.5 flex-1 rounded-full bg-[var(--color-bg-hover)]" title={`${c.xp.toLocaleString('ru-RU')} XP · до следующего уровня ${c.progress}%`}>
+                    <div className="h-1.5 rounded-full bg-[var(--color-accent)] opacity-70" style={{ width: `${Math.max(c.progress, 3)}%` }} />
+                  </div>
+                  <span className="w-20 text-right text-[11px] tabular-nums text-[var(--color-text-muted)]">{c.xp.toLocaleString('ru-RU')} XP</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Ключевые цифры текущего месяца (тот же plan-fact, что «Статистика») */}
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
