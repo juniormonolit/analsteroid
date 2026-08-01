@@ -114,6 +114,11 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
     return `${a}.${f.field} IS NULL`;
   }
   if (f.op === 'is_not_null') {
+    // Зеркально is_null: «товары есть» = jsonb-массив существует И непуст
+    // (метрики «Товары только текстом», задача #2548).
+    if (f.field === 'products') {
+      return `(${a}.products IS NOT NULL AND jsonb_array_length(${a}.products) > 0)`;
+    }
     return `${a}.${f.field} IS NOT NULL`;
   }
 
