@@ -50,6 +50,9 @@ export const MIN_CYCLE_DAYS = 7;
 export const ACTIVE_NO_CALL_DAYS = 7;
 /** Клиентская медиана цикла применяется только при >=3 покупках (из брифа). */
 const MIN_PURCHASES_FOR_OWN_CYCLE = 3;
+/** «Постоянник под угрозой» (доработка 01.08): постоянник без активных сделок,
+ *  у которого давность с последней покупки больше стольких его циклов повторки. */
+export const AT_RISK_CYCLE_MULTIPLIER = 2;
 
 export interface ActiveDealInfo {
   dealId: number;
@@ -63,6 +66,24 @@ export interface ActiveDealInfo {
 }
 
 export type CallSignal = 'overdue_repeat' | 'active_no_call';
+
+/** Секции списка (доработка Серёги 01.08): постоянники (2+ успешных сделок по
+ *  sold_at) → купили один раз (кандидаты) → ещё не купили (отдельная вкладка).
+ *  Постоянничество — свойство КЛИЕНТА: считается по ВСЕЙ истории его сделок,
+ *  без привязки к менеджеру (dealsSold и так агрегирует все сделки клиента). */
+export type CustomerSection = 'regular' | 'once' | 'never';
+
+/** Один менеджер в истории клиента. Имя — НА МОМЕНТ работы с клиентом
+ *  (sa.employee_name_history, SCD2: на логине люди меняются — слот-модель),
+ *  фолбэк — текущее имя sa.employees. */
+export interface ManagerHistoryItem {
+  managerId: number;
+  name: string | null;   // null → «Менеджер #id» в UI
+  deals: number;
+  sold: number;
+  firstAt: string;       // ISO: первая сделка этого менеджера с клиентом
+  lastAt: string;        // ISO: последняя (имя взято на эту дату)
+}
 
 export interface CustomerRow {
   clientKey: string;               // 'c<contact_id>' | 'k<company_id>'
@@ -88,6 +109,16 @@ export interface CustomerRow {
   signals: CallSignal[];           // пусто = звонить не пора
   /** Вес для сортировки: чем больше, тем выше в списке. */
   urgency: number;
+  /** Секция списка: постоянник (2+ покупок) / купил один раз / ещё не купил. */
+  section: CustomerSection;
+  /** «Постоянник под угрозой»: без активных сделок и давность с последней
+   *  покупки > AT_RISK_CYCLE_MULTIPLIER × его цикла повторки. */
+  atRisk: boolean;
+  /** Все менеджеры, вёдшие сделки клиента (имена на момент работы), свежие сверху. */
+  managerHistory: ManagerHistoryItem[];
+  /** Имена ПРЕДЫДУЩИХ менеджеров (все из истории, кроме текущего) — для пометки
+   *  «ранее работал с: …» в строке. */
+  prevManagerNames: string[];
 }
 
 interface RawRow {
@@ -106,6 +137,10 @@ interface RawRow {
   active_deals: {
     dealId: number; name: string | null; stage: string | null; amount: number | null;
     createdAt: string; lastCallAt: string | null;
+  }[] | null;
+  manager_history: {
+    managerId: number; name: string | null; deals: number; sold: number;
+    firstAt: string; lastAt: string;
   }[] | null;
 }
 
@@ -190,6 +225,32 @@ lasts AS (
   WHERE m.sold_at IS NOT NULL
   ORDER BY m.client_key, m.sold_at DESC, m.deal_id DESC
 ),
+mgr_hist AS (
+  -- История менеджеров клиента (доработка 01.08): кто вёл сделки, по ИМЕНАМ НА
+  -- МОМЕНТ работы. На одном bitrix-логине люди меняются (слот-модель), поэтому
+  -- имя берём из sa.employee_name_history (SCD2, ведёт ночной org-sync) на дату
+  -- ПОСЛЕДНЕЙ сделки менеджера с клиентом; фолбэк — текущее имя sa.employees.
+  SELECT t.client_key,
+         jsonb_agg(jsonb_build_object(
+           'managerId', t.mgr, 'name', coalesce(h.name, e.full_name),
+           'deals', t.deals, 'sold', t.sold,
+           'firstAt', t.first_at, 'lastAt', t.last_at) ORDER BY t.last_at DESC) AS manager_history
+  FROM (
+    SELECT client_key, current_manager_id AS mgr, count(*)::int AS deals,
+           count(*) FILTER (WHERE sold_at IS NOT NULL)::int AS sold,
+           min(created_at) AS first_at, max(created_at) AS last_at
+    FROM mcd WHERE current_manager_id IS NOT NULL
+    GROUP BY 1, 2
+  ) t
+  LEFT JOIN LATERAL (
+    SELECT name FROM sa.employee_name_history nh
+    WHERE nh.bitrix_user_id = t.mgr::text AND nh.valid_from <= t.last_at
+      AND (nh.valid_to IS NULL OR nh.valid_to > t.last_at)
+    ORDER BY nh.valid_from DESC LIMIT 1
+  ) h ON true
+  LEFT JOIN sa.employees e ON e.bitrix_id = t.mgr
+  GROUP BY t.client_key
+),
 gaps AS (
   SELECT client_key, percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) AS median_gap_days
   FROM (
@@ -206,7 +267,8 @@ SELECT a.client_key,
        a.last_sold_at, a.last_call_at, ev.last_event_at,
        g.median_gap_days::text, a.refused_no_call,
        o.active_deals, lg.last_groups,
-       ls.last_sold_amount::text, ls.last_sold_groups
+       ls.last_sold_amount::text, ls.last_sold_groups,
+       mh.manager_history
 FROM (
   SELECT m.client_key,
          count(*) AS deals_total,
@@ -222,10 +284,11 @@ LEFT JOIN opens o USING (client_key)
 LEFT JOIN gaps g USING (client_key)
 LEFT JOIN lastg lg USING (client_key)
 LEFT JOIN lasts ls USING (client_key)
+LEFT JOIN mgr_hist mh USING (client_key)
 LEFT JOIN ev USING (client_key)
 `;
 
-function toRow(r: RawRow, now: number): CustomerRow {
+function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
   const dealsSold = Number(r.deals_sold);
   const ownMedian = r.median_gap_days !== null ? Number(r.median_gap_days) : null;
   const useOwn = ownMedian !== null && dealsSold >= MIN_PURCHASES_FOR_OWN_CYCLE;
@@ -257,6 +320,23 @@ function toRow(r: RawRow, now: number): CustomerRow {
   }
   if (r.refused_no_call) urgency += 0.5; // тай-брейк: отказники без звонка чуть выше
 
+  // Секции (доработка 01.08): 2+ успешных сделок = постоянник; постоянничество —
+  // свойство клиента (dealsSold считает ВСЕ его сделки, не только менеджера $1).
+  const section: CustomerSection = dealsSold >= 2 ? 'regular' : dealsSold === 1 ? 'once' : 'never';
+  // «Под угрозой»: постоянник без активных сделок, молчание > 2× его цикла повторки.
+  const atRisk = section === 'regular' && active.length === 0
+    && sinceSold !== null && sinceSold > AT_RISK_CYCLE_MULTIPLIER * cycleDays;
+
+  // История менеджеров: имена на момент работы (SQL выше), свежие сверху.
+  const managerHistory: ManagerHistoryItem[] = (r.manager_history ?? []).map(m => ({
+    ...m,
+    firstAt: toIso(m.firstAt)!,
+    lastAt: toIso(m.lastAt)!,
+  }));
+  const prevManagerNames = managerHistory
+    .filter(m => m.managerId !== managerBitrixId)
+    .map(m => m.name ?? `Менеджер #${m.managerId}`);
+
   const clientType = r.client_key.startsWith('c') ? 'contact' as const : 'company' as const;
   return {
     clientKey: r.client_key,
@@ -279,6 +359,10 @@ function toRow(r: RawRow, now: number): CustomerRow {
     cycleSource: useOwn ? 'own' : 'global',
     signals,
     urgency,
+    section,
+    atRisk,
+    managerHistory,
+    prevManagerNames,
   };
 }
 
@@ -290,10 +374,12 @@ function toRow(r: RawRow, now: number): CustomerRow {
  * кэша в API-роуте).
  */
 export async function fetchManagerCustomers(managerBitrixId: number): Promise<CustomerRow[]> {
-  return cached(`customers:mgr:${managerBitrixId}`, 10 * 60, async () => {
+  // v2 в ключе: форма строки расширена (секции/atRisk/история менеджеров) —
+  // старые кэшированные списки без этих полей ломали бы новый код 10 минут.
+  return cached(`customers:mgr:v2:${managerBitrixId}`, 10 * 60, async () => {
     const res = await analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]);
     const now = Date.now();
-    const rows = res.rows.map(r => toRow(r, now));
+    const rows = res.rows.map(r => toRow(r, now, managerBitrixId));
     rows.sort((a, b) => {
       if ((a.signals.length > 0) !== (b.signals.length > 0)) return a.signals.length > 0 ? -1 : 1;
       if (a.urgency !== b.urgency) return b.urgency - a.urgency;
@@ -312,6 +398,8 @@ export interface TeamCustomerStats {
   overdueRepeat: number;    // (а) просроченная повторка
   activeNoCall: number;     // (б) активная сделка без звонка
   refusedNoCall: number;    // «были отказы без звонка»
+  regulars: number;         // постоянников всего (2+ успешных сделок)
+  regularsAtRisk: number;   // из них «под угрозой» (молчание > 2× цикла)
 }
 
 /** Счётчики по подчинённым. Считается из тех же пер-менеджерских списков
@@ -331,6 +419,8 @@ export async function fetchTeamCustomerStats(managerIds: number[]): Promise<Team
         overdueRepeat: rows.filter(r => r.signals.includes('overdue_repeat')).length,
         activeNoCall: rows.filter(r => r.signals.includes('active_no_call')).length,
         refusedNoCall: rows.filter(r => r.refusedNoCall).length,
+        regulars: rows.filter(r => r.section === 'regular').length,
+        regularsAtRisk: rows.filter(r => r.atRisk).length,
       };
     }));
     out.push(...results);

@@ -1,4 +1,4 @@
-import { analyticsDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
 
 // ── Кросс-селл рекомендации «что предложить» (дополнение Серёги 01.08) ──────
@@ -29,12 +29,20 @@ export interface CrossSellMatrix {
   globalTotal: number;
 }
 
+/** Награда за допродажу (доработка Серёги 01.08): какой кросс-селл бейдж и
+ *  сколько ебаллов получит менеджер, если допродаст рекомендованную группу. */
+export interface RecommendBadge {
+  name: string;
+  icon: string;
+  price: number;  // ебаллы за награду (badge_prices, tier '-'); 0 = цена не задана
+}
+
 export interface Recommendation {
   /** Группы последней покупки клиента, от которых считали (пусто при фолбэке). */
   basedOn: string[];
   /** true = статистики по группе клиента мало, показан общий топ по базе. */
   fallback: boolean;
-  items: { group: string; pct: number }[];  // по убыванию, pct 0..100
+  items: { group: string; pct: number; badge?: RecommendBadge | null }[];  // по убыванию, pct 0..100
 }
 
 const MATRIX_SQL = `
@@ -102,4 +110,57 @@ export function recommendFor(matrix: CrossSellMatrix, lastGroups: string[]): Rec
   }
   if (matrix.globalTotal === 0) return null;
   return { basedOn: [], fallback: true, items: topN(matrix.globalTo, matrix.globalTotal) };
+}
+
+// ── Награды за допродажу (доработка Серёги 01.08) ────────────────────────────
+// Матчим рекомендованную пару «последняя покупка X → предложить Y» с кросс-селл
+// бейджами: и пресеты (criteria {firstGroup, nextGroup}, каталог catalog.ts), и
+// кастомы конструктора (crosssell_pair — те же ключи criteria). Цена — из
+// badge_prices (кросс-селл бейджи без уровней → tier '-'). Если пары-бейджа
+// нет — ничего не показываем (по брифу). БД — системная (YC), кэш 10 минут:
+// определения меняются только из «Настройки → Награды».
+
+interface CrossSellBadgeDef {
+  name: string;
+  icon: string;
+  firstGroup: string;
+  nextGroup: string;
+  price: number;
+}
+
+export async function fetchCrossSellBadges(): Promise<CrossSellBadgeDef[]> {
+  return cached('customers:crosssell-badges', 10 * 60, async () => {
+    const res = await systemDb().query<{
+      name: string; icon: string; first_group: string; next_group: string; price: string | null;
+    }>(
+      `SELECT d.name, d.icon,
+              d.criteria->>'firstGroup' AS first_group,
+              d.criteria->>'nextGroup'  AS next_group,
+              p.price::text AS price
+         FROM badge_definitions d
+         LEFT JOIN badge_prices p ON p.badge_key = d.key AND p.tier = '-'
+        WHERE d.enabled
+          AND d.criteria ? 'firstGroup' AND d.criteria ? 'nextGroup'
+        ORDER BY d.sort_order`,
+    );
+    return res.rows.map(r => ({
+      name: r.name, icon: r.icon,
+      firstGroup: r.first_group, nextGroup: r.next_group,
+      price: r.price !== null ? Number(r.price) : 0,
+    }));
+  });
+}
+
+/**
+ * Бейдж за допродажу группы `toGroup` клиенту, последняя покупка которого —
+ * `basedOn` (пусто при фолбэке на общий топ — тогда пара X→Y не определена и
+ * бейдж не подсказывается). При нескольких подходящих — самый дорогой.
+ */
+export function badgeForPair(badges: CrossSellBadgeDef[], basedOn: string[], toGroup: string): RecommendBadge | null {
+  let best: RecommendBadge | null = null;
+  for (const b of badges) {
+    if (b.nextGroup !== toGroup || !basedOn.includes(b.firstGroup)) continue;
+    if (!best || b.price > best.price) best = { name: b.name, icon: b.icon, price: b.price };
+  }
+  return best;
 }

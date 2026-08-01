@@ -7,7 +7,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { ActiveDealInfo, CallSignal } from '@/features/customers/engine/customers';
+import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem } from '@/features/customers/engine/customers';
 import type { Recommendation } from '@/features/customers/engine/crossSell';
 
 interface ApiRow {
@@ -18,22 +18,42 @@ interface ApiRow {
   activeCount: number; activeDeals: ActiveDealInfo[];
   refusedNoCall: boolean; cycleDays: number; cycleSource: 'own' | 'global';
   signals: CallSignal[]; urgency: number;
+  section: CustomerSection; atRisk: boolean;
+  managerHistory: ManagerHistoryItem[]; prevManagerNames: string[];
   recommend: Recommendation | null;
 }
 interface ApiResponse {
   total: number;
-  counts: { all: number; active: number; inactive: number; overdue: number; refusedNoCall: number };
+  counts: {
+    all: number; active: number; inactive: number; overdue: number; refusedNoCall: number;
+    sections: { regular: number; regularAtRisk: number; once: number; never: number };
+  };
   page: number; pageSize: number; rows: ApiRow[];
-  thresholds: { globalCycleDays: number; activeNoCallDays: number };
+  thresholds: { globalCycleDays: number; activeNoCallDays: number; atRiskCycleMultiplier: number };
 }
 
-type Filter = 'all' | 'active' | 'inactive' | 'overdue';
+// Секции (доработка Серёги 01.08): постоянники сверху, купившие один раз ниже,
+// «ещё не купили» — отдельная вкладка (в основном виде их нет, но сигналы по
+// их активным сделкам живут там).
+type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'never';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
   { key: 'overdue', label: 'Пора позвонить' },
   { key: 'active', label: 'С активными' },
   { key: 'inactive', label: 'Без активных' },
+  { key: 'never', label: 'Ещё не купили' },
 ];
+
+const SECTION_LABELS: Record<CustomerSection, string> = {
+  regular: 'Постоянники',
+  once: 'Купили один раз',
+  never: 'Ещё не купили',
+};
+const SECTION_HINTS: Record<CustomerSection, string> = {
+  regular: 'Клиенты с 2+ успешными сделками (по всей истории клиента, независимо от менеджера)',
+  once: 'Купили один раз — кандидаты в постоянники',
+  never: 'Ни одной успешной сделки; здесь живут сигналы по их активным сделкам',
+};
 
 const PAGE_SIZE = 50;
 
@@ -123,9 +143,22 @@ function RecommendCell({ rec }: { rec: Recommendation | null }) {
   return (
     <div className="flex flex-col gap-0.5" title={baseTitle}>
       {shown.map(it => (
-        <div key={it.group} className="text-xs whitespace-nowrap">
-          <span className="text-[var(--color-text)]">{it.group}</span>
-          <span className="ml-1 font-semibold tabular-nums text-[var(--color-accent)]">{it.pct}%</span>
+        <div key={it.group} className="text-xs">
+          <span className="whitespace-nowrap">
+            <span className="text-[var(--color-text)]">{it.group}</span>
+            <span className="ml-1 font-semibold tabular-nums text-[var(--color-accent)]">{it.pct}%</span>
+          </span>
+          {/* Награда за допродажу (доработка Серёги 01.08): какой кросс-селл
+              бейдж и сколько ебаллов даст эта пара. Нет пары-бейджа — не показываем. */}
+          {it.badge && (
+            <div className="text-[11px] text-[var(--color-text-muted)] max-w-[220px]"
+              title="Бейдж и ебаллы, которые получите, если допродадите эту группу этому клиенту">
+              → {it.badge.icon} <span className="italic">«{it.badge.name}»</span>
+              {it.badge.price > 0 && (
+                <span className="ml-1 font-bold text-[var(--color-positive,#2f9e44)] whitespace-nowrap">+{it.badge.price}</span>
+              )}
+            </div>
+          )}
         </div>
       ))}
       {rec.fallback && <span className="text-[10px] text-[var(--color-text-muted)]">общий топ по базе</span>}
@@ -135,6 +168,35 @@ function RecommendCell({ rec }: { rec: Recommendation | null }) {
           {open ? 'свернуть' : `ещё ${rec.items.length - 1}`}
         </button>
       )}
+    </div>
+  );
+}
+
+// История менеджеров клиента (доработка Серёги 01.08): кто вёл его сделки, по
+// именам НА МОМЕНТ работы (sa.employee_name_history — на логине люди меняются).
+function ManagerHistoryBlock({ items }: { items: ManagerHistoryItem[] }) {
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2">
+      <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+        История менеджеров <span className="normal-case font-normal">(имена — на момент работы с клиентом)</span>
+      </div>
+      <table className="text-xs">
+        <tbody>
+          {items.map(m => (
+            <tr key={m.managerId}>
+              <td className="py-0.5 pr-4 font-semibold text-[var(--color-text)]">
+                {m.name ?? `Менеджер #${m.managerId}`}
+              </td>
+              <td className="py-0.5 pr-4 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap">
+                сделок {m.deals} / продано <b className="text-[var(--color-text)]">{m.sold}</b>
+              </td>
+              <td className="py-0.5 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap">
+                {fmtDate(m.firstAt)}{m.firstAt.slice(0, 10) !== m.lastAt.slice(0, 10) ? ` — ${fmtDate(m.lastAt)}` : ''}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -176,6 +238,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<Sort>(null);
+  const [historyOpen, setHistoryOpen] = useState<string | null>(null);
   const cycleSort = (key: string) => {
     setPage(1);
     setSort(s => (s?.key !== key ? { key, dir: 'desc' } : s.dir === 'desc' ? { key, dir: 'asc' } : null));
@@ -213,7 +276,9 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
               {f.label}
               {data && (
                 <span className="ml-1 opacity-70 tabular-nums">
-                  {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue : f.key === 'active' ? data.counts.active : data.counts.inactive}
+                  {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue
+                    : f.key === 'active' ? data.counts.active : f.key === 'inactive' ? data.counts.inactive
+                    : data.counts.sections.never}
                 </span>
               )}
             </button>
@@ -251,15 +316,50 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
-                <tr key={r.clientKey} className="border-t border-[var(--color-border)] align-top">
+              {rows.map((r, idx) => {
+                const showHeader = idx === 0 || rows[idx - 1].section !== r.section;
+                const secCounts = data?.counts.sections;
+                const secCount = secCounts
+                  ? (r.section === 'regular' ? secCounts.regular : r.section === 'once' ? secCounts.once : secCounts.never)
+                  : null;
+                return (
+                <Fragment key={r.clientKey}>
+                {showHeader && (
+                  <tr className="border-t border-[var(--color-border)] bg-[var(--color-bg-hover)]">
+                    <td colSpan={9} className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]"
+                      title={SECTION_HINTS[r.section]}>
+                      {SECTION_LABELS[r.section]}
+                      {secCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{secCount}</span>}
+                      {r.section === 'regular' && (secCounts?.regularAtRisk ?? 0) > 0 && (
+                        <span className="ml-2 normal-case font-semibold" style={{ color: 'var(--color-negative, #e03131)' }}
+                          title="Постоянники без активных сделок, у которых с последней покупки прошло больше двух их циклов повторки">
+                          ● под угрозой: {secCounts!.regularAtRisk}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                )}
+                <tr className="border-t border-[var(--color-border)] align-top"
+                  style={r.atRisk ? { backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 5%, transparent)' } : undefined}>
                   <td className="px-3 py-2">
+                    {/* «Под угрозой» (доработка 01.08): красная точка перед именем */}
+                    {r.atRisk && (
+                      <span className="mr-1" style={{ color: 'var(--color-negative, #e03131)' }}
+                        title={`Постоянник под угрозой: активных сделок нет, с последней покупки прошло больше ${data?.thresholds.atRiskCycleMultiplier ?? 2}× его цикла повторки (${r.cycleDays} дн.)`}>●</span>
+                    )}
                     <a href={clientUrl(r)} target="_blank" rel="noreferrer"
                       className="font-semibold text-[var(--color-text)] hover:text-[var(--color-accent)] hover:underline">
                       {r.name ?? (r.clientType === 'contact' ? `Контакт #${r.clientId}` : `Компания #${r.clientId}`)}
                     </a>
                     <div className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-[var(--color-text-muted)]">
                       <span>{r.clientType === 'contact' ? 'физ' : 'юр'}</span>
+                      {r.atRisk && (
+                        <span className="rounded px-1 font-semibold"
+                          style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 10%, transparent)' }}
+                          title={`Активных сделок нет, с последней покупки прошло больше ${data?.thresholds.atRiskCycleMultiplier ?? 2}× цикла повторки клиента (${r.cycleDays} дн.) — рискуете потерять постоянника`}>
+                          ⚠ под угрозой
+                        </span>
+                      )}
                       {r.refusedNoCall && (
                         <span className="rounded px-1 font-semibold"
                           style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 10%, transparent)' }}
@@ -268,6 +368,19 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                         </span>
                       )}
                     </div>
+                    {/* Смена менеджера (доработка 01.08): клиент раньше был у других */}
+                    {r.prevManagerNames.length > 0 && (
+                      <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)] max-w-[240px]"
+                        title="Менеджеры, вёдшие сделки этого клиента раньше (имена — на момент работы)">
+                        ранее работал с: {r.prevManagerNames.join(', ')}
+                      </div>
+                    )}
+                    {r.managerHistory.length > 1 && (
+                      <button type="button" onClick={() => setHistoryOpen(v => (v === r.clientKey ? null : r.clientKey))}
+                        className="mt-0.5 w-fit text-[11px] font-semibold text-[var(--color-accent)] hover:underline">
+                        {historyOpen === r.clientKey ? 'скрыть историю менеджеров' : 'история менеджеров'}
+                      </button>
+                    )}
                   </td>
                   <td className="px-3 py-2"><SignalBadge r={r} noCallDays={data?.thresholds.activeNoCallDays ?? 7} /></td>
                   <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
@@ -298,7 +411,16 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                     {daysAgo(r.lastActivityAt)}
                   </td>
                 </tr>
-              ))}
+                {historyOpen === r.clientKey && (
+                  <tr>
+                    <td colSpan={9} className="px-3 pb-2">
+                      <ManagerHistoryBlock items={r.managerHistory} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -321,10 +443,14 @@ export function CustomersTab({ managerId, isSelf }: { managerId: string; isSelf:
   return (
     <div className="flex flex-col gap-3">
       <div className="text-xs text-[var(--color-text-muted)]">
-        Клиенты, где вы вели последнюю сделку. Сигналы: <b>📞 сделка без звонка</b> — по активной сделке нет звонков
+        Клиенты, где вы вели последнюю сделку. <b>Постоянники</b> (2+ покупок за всю историю клиента) — сверху,
+        <b> ● под угрозой</b> — постоянник молчит дольше двух своих циклов повторки и активных сделок нет; ниже —
+        купившие один раз (кандидаты в постоянники); не купившие ни разу — во вкладке «Ещё не купили».
+        Сигналы: <b>📞 сделка без звонка</b> — по активной сделке нет звонков
         больше недели; <b>⏰ пора позвонить</b> — активных сделок нет, а с последней покупки прошло больше типичного
         цикла повторных покупок клиента. «Предложить» — какой материал клиенты чаще всего покупают следом за
-        последней покупкой этого клиента (доля таких переходов в истории продаж). Имя ведёт в карточку клиента в Битриксе.
+        последней покупкой этого клиента (доля таких переходов в истории продаж); строкой ниже — бейдж и ебаллы,
+        которые получите за такую допродажу. Имя ведёт в карточку клиента в Битриксе.
       </div>
       <CustomersList managerId={managerId} isSelf={isSelf} />
     </div>
@@ -336,6 +462,7 @@ export function CustomersTab({ managerId, isSelf }: { managerId: string; isSelf:
 interface TeamRow {
   id: number; name: string; departmentName: string | null;
   clients: number; callNow: number; overdueRepeat: number; activeNoCall: number; refusedNoCall: number;
+  regulars: number; regularsAtRisk: number;
 }
 
 export function TeamCustomersBlock() {
@@ -368,6 +495,8 @@ export function TeamCustomersBlock() {
               <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
                 <th className="py-1.5 pr-3 font-bold">Менеджер</th>
                 <th className="py-1.5 pr-3 font-bold text-right">Клиентов</th>
+                <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Клиентов с 2+ успешными сделками (по всей истории клиента)">Постоянников</th>
+                <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Постоянники без активных сделок, молчащие дольше двух своих циклов повторки">Под угрозой</th>
                 <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap">Пора позвонить</th>
                 <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Активная сделка без звонка больше недели">Сделка молчит</th>
                 <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Без активных сделок, последняя покупка старше цикла повторки">Заброшенные</th>
@@ -385,6 +514,11 @@ export function TeamCustomersBlock() {
                       <span className="ml-1.5 text-[11px] text-[var(--color-accent)]">{expanded === m.id ? '▲ свернуть' : '▼ раскрыть'}</span>
                     </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums">{m.clients}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums font-semibold">{m.regulars}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums font-bold"
+                      style={{ color: m.regularsAtRisk > 0 ? 'var(--color-negative, #e03131)' : 'var(--color-text-muted)' }}>
+                      {m.regularsAtRisk}
+                    </td>
                     <td className="py-1.5 pr-3 text-right font-bold tabular-nums"
                       style={{ color: m.callNow > 0 ? 'var(--color-negative, #e03131)' : 'var(--color-text-muted)' }}>
                       {m.callNow}
@@ -395,7 +529,7 @@ export function TeamCustomersBlock() {
                   </tr>
                   {expanded === m.id && (
                     <tr className="border-t border-[var(--color-border)]">
-                      <td colSpan={6} className="py-3 pl-2">
+                      <td colSpan={8} className="py-3 pl-2">
                         <CustomersList managerId={String(m.id)} isSelf={false} />
                       </td>
                     </tr>
