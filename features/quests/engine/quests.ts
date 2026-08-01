@@ -357,10 +357,13 @@ async function buildCandidates(mgr: number, period: QuestPeriod): Promise<GenQue
     out.push({ score: (1 - repShare / Math.max(dept.repShare, 0.01)) * 1.3, q });
   }
 
-  // Допродажа (вес 1.2): магистральные пары матрицы, где >= 3 клиентов с первой группой за 60 дн
+  // Допродажа (вес 1.2): магистральные пары матрицы, где >= 3 клиентов с первой группой за 60 дн.
+  // Только КРОСС-групповые пары (X→Y, Y≠X): самопереходы (газобетон→газобетон) в матрице
+  // самые частые (клиент докупает то же), но квест «допродай ту же категорию» смысла не имеет —
+  // правка Серёги 01.08: «с газобетона продают кровлю», самоповторы исключаем фильтром.
   const topPairs: { first: string; next: string }[] = [];
   for (const [from, f] of Object.entries(matrix.from)) {
-    const best = Object.entries(f.to).sort((a, b) => b[1] - a[1])[0];
+    const best = Object.entries(f.to).filter(([to]) => to !== from).sort((a, b) => b[1] - a[1])[0];
     if (best && f.total >= 100) topPairs.push({ first: from, next: best[0] });
   }
   const pair = topPairs.find(p => (ps.pairClients.get(p.first) ?? 0) >= 3);
@@ -374,18 +377,40 @@ async function buildCandidates(mgr: number, period: QuestPeriod): Promise<GenQue
     out.push({ score: 0.5 * 1.2, q });
   }
 
-  // Узкий ассортимент (вес 1.0): группа из его лидов, которую он мало продаёт
+  // Узкий ассортимент (вес 1.0): группа из его лидов, которую он мало продаёт.
+  // Правка Серёги 01.08: Y НЕ должна быть топ-группой менеджера (её он и так гоняет) —
+  // выбираем из групп, СМЕЖНЫХ его топовым по матрице переходов (to-группы от его топ-2
+  // по продажам за 90 дн), исключая сами топы; вес смежности = частота перехода.
+  // Достижимость как в дизайне (лиды/продажи Y у менеджера были) сохранена.
+  // Fallback: если у менеджера нет выраженных топов (sales90 < 2) — старый отбор по лидам.
   const grpMed = median(ps.monthly.grp) ?? 0;
   if (grpMed < 0.7 * dept.grp) {
     const targetN = period === 'week' ? 2 : 3;
-    const cand = ps.groups
-      .filter(g => g.sales90 >= 2 && g.weeklyRate < 4 && g.leads90 >= 3 * targetN)
-      .sort((a, b) => b.leads90 - a.leads90)[0];
+    const topsArr = [...ps.groups].sort((a, b) => b.sales90 - a.sales90)
+      .slice(0, 2).filter(g => g.sales90 >= 2).map(g => g.group);
+    const tops = new Set(topsArr);
+    const adjWeight = new Map<string, number>();
+    for (const t of tops) {
+      const f = matrix.from[t];
+      if (!f) continue;
+      for (const [to, cnt] of Object.entries(f.to)) {
+        if (to === t || tops.has(to)) continue;
+        adjWeight.set(to, (adjWeight.get(to) ?? 0) + cnt);
+      }
+    }
+    const achievable = (g: { sales90: number; weeklyRate: number; leads90: number }) =>
+      g.sales90 >= 2 && g.weeklyRate < 4 && g.leads90 >= 3 * targetN;
+    const cand = tops.size > 0
+      ? ps.groups
+          .filter(g => !tops.has(g.group) && adjWeight.has(g.group) && achievable(g))
+          .sort((a, b) => (adjWeight.get(b.group)! - adjWeight.get(a.group)!) || (b.leads90 - a.leads90))[0]
+      : ps.groups.filter(achievable).sort((a, b) => b.leads90 - a.leads90)[0];
     if (cand) {
       const q: GenQuest = {
         slot: 'week1', period, category: 'group_sales', target: targetN,
         targetGroup: cand.group, pairFirst: null, title: '',
-        meta: { weakness: 'assortment', grpMed, deptGrp: dept.grp, leads90: cand.leads90, sales90: cand.sales90 },
+        meta: { weakness: 'assortment', grpMed, deptGrp: dept.grp, leads90: cand.leads90, sales90: cand.sales90,
+          adjacentTo: topsArr, adjWeight: adjWeight.get(cand.group) ?? null },
       };
       q.title = buildTitle(q, endLabel);
       out.push({ score: (1 - grpMed / Math.max(dept.grp, 1)) * 1.0, q });

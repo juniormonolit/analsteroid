@@ -91,9 +91,10 @@ export async function ensureContractPool(system: Pool | PoolClient): Promise<voi
     GROUP BY 1 HAVING count(*) >= 100 ORDER BY count(*) DESC LIMIT 12
   `);
   const topGroups = groups.rows.map(r => r.g);
+  // Самопереходы X→X исключены (правка Серёги 01.08 — «допродай ту же категорию» не контракт).
   const magistrals: { first: string; next: string }[] = [];
   for (const [from, f] of Object.entries(matrix.from)) {
-    const best = Object.entries(f.to).sort((a, b) => b[1] - a[1])[0];
+    const best = Object.entries(f.to).filter(([to]) => to !== from).sort((a, b) => b[1] - a[1])[0];
     if (best && f.total >= 300) magistrals.push({ first: from, next: best[0] });
   }
   const tiers: QuestTier[] = ['white', 'green', 'blue', 'blue', 'epic', 'epic', 'legendary', 'green'];
