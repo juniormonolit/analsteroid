@@ -120,7 +120,7 @@ export interface CompanyMedians {
  *  Считаются по менеджеро-периодам с активностью за последние 8 недель /
  *  6 месяцев (как в калибровке дизайн-дока), Redis 6ч. */
 export async function fetchCompanyMedians(): Promise<CompanyMedians> {
-  return cached('quests:company-medians:v1', 6 * 3600, async () => {
+  return cached('quests:company-medians:v2', 6 * 3600, async () => {
     const res = await analyticsDb().query<{
       period: string; mgr: number; cnt: string; amt: string; rep: string; grp: string;
     }>(`
@@ -157,16 +157,26 @@ export async function fetchCompanyMedians(): Promise<CompanyMedians> {
       a.rep.push(Number(r.rep)); a.grp.push(Number(r.grp));
     }
     const out: CompanyMedians = {};
+    // Полы редких категорий (v2 калибровки): у «продай группу Y» и «допродай
+    // пару» медианная база на менеджера < 1 за период — без пола цель «1 штука»
+    // взлетала в легендарный тир (поймано живьём на первом прогоне). Полы
+    // выбраны так, чтобы типовые цели (1 допродажа/нед, 2-3 группы/нед) давали
+    // синий-эпик, а не легендарку.
+    const FLOORS: Record<string, Partial<Record<QuestCategory, number>>> = {
+      day: { group_sales: 0.5, crosssell: 0.5 },
+      week: { group_sales: 1.5, crosssell: 1 },
+      month: { group_sales: 4, crosssell: 2 },
+    };
     for (const [period, a] of Object.entries(acc)) {
+      const fl = FLOORS[period] ?? {};
       out[period] = {
         sales_count: median(a.cnt) ?? 1,
         sales_amount: median(a.amt) ?? 500000,
         repeat_sales: Math.max(median(a.rep) ?? 1, 1),
-        // групповой квест и допродажа — «продай конкретную группу N раз»:
-        // объективная база ≈ медиана продаж одной группы = медиана продаж /
-        // медиана различных групп (аппроксимация, задокументирована).
-        group_sales: Math.max((median(a.cnt) ?? 1) / Math.max(median(a.grp) ?? 1, 1), 0.5),
-        crosssell: Math.max((median(a.rep) ?? 1) / 2, 0.5),
+        // групповой квест и допродажа: база ≈ медиана продаж одной группы =
+        // медиана продаж / медиана различных групп, но не ниже пола.
+        group_sales: Math.max((median(a.cnt) ?? 1) / Math.max(median(a.grp) ?? 1, 1), fl.group_sales ?? 0.5),
+        crosssell: Math.max((median(a.rep) ?? 1) / 2, fl.crosssell ?? 0.5),
         distinct_groups: Math.max(median(a.grp) ?? 1, 1),
       };
     }
