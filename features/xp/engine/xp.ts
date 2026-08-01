@@ -500,12 +500,14 @@ export async function fetchXpBriefs(system: Pool, bitrixIds: number[]): Promise<
   if (bitrixIds.length === 0) return out;
   const [settings, totals, cls] = await Promise.all([
     loadXpSettings(system),
+    // bitrix_id::int — pg отдаёт bigint СТРОКОЙ, а Map ключуется числом
+    // (пойман живьём: РОП-карта без уровней — get(number) мимо string-ключа).
     system.query<{ bitrix_id: number; total: string }>(
-      `SELECT bitrix_id, sum(total_xp)::text AS total FROM xp_ledger WHERE bitrix_id = ANY($1::bigint[]) GROUP BY 1`,
+      `SELECT bitrix_id::int AS bitrix_id, sum(total_xp)::text AS total FROM xp_ledger WHERE bitrix_id = ANY($1::bigint[]) GROUP BY 1`,
       [bitrixIds],
     ),
     system.query<{ bitrix_id: number; name: string; xp: string }>(
-      `SELECT l.bitrix_id, c.key AS name, sum(c.value::numeric)::text AS xp
+      `SELECT l.bitrix_id::int AS bitrix_id, c.key AS name, sum(c.value::numeric)::text AS xp
          FROM xp_ledger l, jsonb_each_text(l.classes) c
         WHERE l.bitrix_id = ANY($1::bigint[]) GROUP BY 1, 2`,
       [bitrixIds],
