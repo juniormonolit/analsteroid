@@ -1,4 +1,4 @@
-import { analyticsDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
 
 // ── «Мои заказчики» (фича Серёги 01.08) ──────────────────────────────────────
@@ -53,6 +53,14 @@ const MIN_PURCHASES_FOR_OWN_CYCLE = 3;
 /** «Постоянник под угрозой» (доработка 01.08): постоянник без активных сделок,
  *  у которого давность с последней покупки больше стольких его циклов повторки. */
 export const AT_RISK_CYCLE_MULTIPLIER = 2;
+/** Авто-архив «Спящие» (продолжение 01.08): купивший клиент без активных сделок,
+ *  молчащий дольше max(SLEEP_CYCLE_MULTIPLIER × его цикла, SLEEP_MIN_DAYS дней),
+ *  уходит из основного вида и горящих сигналов во вкладку «Спящие» (вернуть может
+ *  менеджер/РОП отметкой wake). Порог выбран по данным 01.08: без него «под
+ *  угрозой» по базе 3171 клиент (2106 постоянников молчат 200+ дней), с ним — 785;
+ *  у топ-3 менеджеров по клиентам список сжимается 93→25, 93→22, 82→16. */
+export const SLEEP_CYCLE_MULTIPLIER = 3;
+export const SLEEP_MIN_DAYS = 120;
 
 export interface ActiveDealInfo {
   dealId: number;
@@ -112,8 +120,12 @@ export interface CustomerRow {
   /** Секция списка: постоянник (2+ покупок) / купил один раз / ещё не купил. */
   section: CustomerSection;
   /** «Постоянник под угрозой»: без активных сделок и давность с последней
-   *  покупки > AT_RISK_CYCLE_MULTIPLIER × его цикла повторки. */
+   *  покупки > AT_RISK_CYCLE_MULTIPLIER × его цикла повторки (спящие исключены). */
   atRisk: boolean;
+  /** Правило авто-архива: молчание > max(3×цикла, 120 дн) без активных сделок.
+   *  Отметка wake (customer_marks) возвращает клиента в основной вид — это
+   *  применяется поверх, в роуте (кэш движка отметок не знает). */
+  sleeping: boolean;
   /** Все менеджеры, вёдшие сделки клиента (имена на момент работы), свежие сверху. */
   managerHistory: ManagerHistoryItem[];
   /** Имена ПРЕДЫДУЩИХ менеджеров (все из истории, кроме текущего) — для пометки
@@ -323,9 +335,14 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
   // Секции (доработка 01.08): 2+ успешных сделок = постоянник; постоянничество —
   // свойство клиента (dealsSold считает ВСЕ его сделки, не только менеджера $1).
   const section: CustomerSection = dealsSold >= 2 ? 'regular' : dealsSold === 1 ? 'once' : 'never';
-  // «Под угрозой»: постоянник без активных сделок, молчание > 2× его цикла повторки.
+  // Авто-архив «Спящие»: купивший, без активных, молчание > max(3×цикла, 120 дн).
+  const sleeping = dealsSold >= 1 && active.length === 0 && sinceSold !== null
+    && sinceSold > Math.max(SLEEP_CYCLE_MULTIPLIER * cycleDays, SLEEP_MIN_DAYS);
+  // «Под угрозой»: постоянник без активных сделок, молчание > 2× его цикла
+  // повторки, но ещё НЕ спящий (спящие — уже архив, не «горящий» список).
   const atRisk = section === 'regular' && active.length === 0
-    && sinceSold !== null && sinceSold > AT_RISK_CYCLE_MULTIPLIER * cycleDays;
+    && sinceSold !== null && sinceSold > AT_RISK_CYCLE_MULTIPLIER * cycleDays
+    && !sleeping;
 
   // История менеджеров: имена на момент работы (SQL выше), свежие сверху.
   const managerHistory: ManagerHistoryItem[] = (r.manager_history ?? []).map(m => ({
@@ -361,6 +378,7 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     urgency,
     section,
     atRisk,
+    sleeping,
     managerHistory,
     prevManagerNames,
   };
@@ -374,9 +392,9 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
  * кэша в API-роуте).
  */
 export async function fetchManagerCustomers(managerBitrixId: number): Promise<CustomerRow[]> {
-  // v2 в ключе: форма строки расширена (секции/atRisk/история менеджеров) —
-  // старые кэшированные списки без этих полей ломали бы новый код 10 минут.
-  return cached(`customers:mgr:v2:${managerBitrixId}`, 10 * 60, async () => {
+  // v3 в ключе: форма строки расширена (v2 — секции/atRisk/история менеджеров,
+  // v3 — sleeping) — старые кэши без этих полей ломали бы новый код 10 минут.
+  return cached(`customers:mgr:v3:${managerBitrixId}`, 10 * 60, async () => {
     const res = await analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]);
     const now = Date.now();
     const rows = res.rows.map(r => toRow(r, now, managerBitrixId));
@@ -387,6 +405,72 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
     });
     return rows;
   });
+}
+
+// ── Отметки клиентов: снуз / «не звонить» / вернуть из спящих (01.08, п.2) ───
+// Хранение — системная БД, таблица customer_marks (миграция 123), одна отметка
+// на клиента. Отметки применяются ПОВЕРХ кэша движка (свежим запросом): снуз и
+// «не звонить» должны действовать сразу, а не через 10 минут TTL.
+
+export type MarkKind = 'snooze' | 'no_call' | 'wake';
+export type NoCallReason = 'nothing_needed' | 'competitor' | 'negative' | 'other';
+
+export const NO_CALL_REASON_LABELS: Record<NoCallReason, string> = {
+  nothing_needed: 'Ничего не нужно',
+  competitor: 'Ушёл к конкуренту',
+  negative: 'Негатив',
+  other: 'Прочее',
+};
+
+export interface CustomerMark {
+  kind: MarkKind;
+  snoozeUntil: string | null;   // YYYY-MM-DD
+  reason: NoCallReason | null;
+  comment: string | null;
+  createdBy: string;
+  createdAt: string;            // ISO
+}
+
+export async function fetchCustomerMarks(clientKeys: string[]): Promise<Map<string, CustomerMark>> {
+  if (clientKeys.length === 0) return new Map();
+  const res = await systemDb().query<{
+    client_key: string; kind: MarkKind; snooze_until: string | Date | null;
+    reason: NoCallReason | null; comment: string | null; created_by: string; created_at: string | Date;
+  }>(
+    `SELECT client_key, kind, to_char(snooze_until, 'YYYY-MM-DD') AS snooze_until,
+            reason, comment, created_by, created_at
+       FROM customer_marks WHERE client_key = ANY($1::text[])`,
+    [clientKeys],
+  );
+  return new Map(res.rows.map(r => [r.client_key, {
+    kind: r.kind,
+    snoozeUntil: (r.snooze_until as string | null) ?? null,
+    reason: r.reason,
+    comment: r.comment,
+    createdBy: r.created_by,
+    createdAt: toIso(r.created_at)!,
+  }]));
+}
+
+/** Куда попадает клиент с учётом отметки: основной вид / «Спящие» / «Отказались». */
+export type CustomerBucket = 'main' | 'sleeping' | 'refused';
+
+export function classifyWithMark(r: CustomerRow, mark: CustomerMark | undefined, todayYmd: string): {
+  bucket: CustomerBucket;
+  /** Активный снуз: клиент в основном виде, но сигналы/«под угрозой» погашены до даты. */
+  snoozedActive: boolean;
+} {
+  if (mark?.kind === 'no_call') return { bucket: 'refused', snoozedActive: false };
+  const snoozedActive = mark?.kind === 'snooze' && mark.snoozeUntil !== null && mark.snoozeUntil >= todayYmd;
+  if (snoozedActive) return { bucket: 'main', snoozedActive: true };  // снуз держит клиента на виду
+  if (mark?.kind === 'wake') return { bucket: 'main', snoozedActive: false };  // возвращён из спящих
+  if (r.sleeping) return { bucket: 'sleeping', snoozedActive: false };
+  return { bucket: 'main', snoozedActive: false };
+}
+
+export function todayYmdMsk(): string {
+  // Дата «сегодня» для сравнения со snooze_until — по Москве (как всё в приложении).
+  return new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
 }
 
 // ── Агрегат для РОПа («Моя команда» из брифа) ────────────────────────────────
@@ -412,15 +496,22 @@ export async function fetchTeamCustomerStats(managerIds: number[]): Promise<Team
     const chunk = managerIds.slice(i, i + CONCURRENCY);
     const results = await Promise.all(chunk.map(async id => {
       const rows = await fetchManagerCustomers(id);
+      // Отметки применяются и здесь: «не звонить»/спящие не должны раздувать
+      // РОП-счётчики, снуз гасит сигналы до даты (та же логика, что в списке).
+      const marks = await fetchCustomerMarks(rows.map(r => r.clientKey));
+      const today = todayYmdMsk();
+      const cls = rows.map(r => ({ r, ...classifyWithMark(r, marks.get(r.clientKey), today) }));
+      const main = cls.filter(c => c.bucket === 'main').map(c => c.r);
+      const live = cls.filter(c => c.bucket === 'main' && !c.snoozedActive).map(c => c.r);
       return {
         bitrixId: id,
-        clients: rows.length,
-        callNow: rows.filter(r => r.signals.length > 0).length,
-        overdueRepeat: rows.filter(r => r.signals.includes('overdue_repeat')).length,
-        activeNoCall: rows.filter(r => r.signals.includes('active_no_call')).length,
-        refusedNoCall: rows.filter(r => r.refusedNoCall).length,
-        regulars: rows.filter(r => r.section === 'regular').length,
-        regularsAtRisk: rows.filter(r => r.atRisk).length,
+        clients: main.length,
+        callNow: live.filter(r => r.signals.length > 0).length,
+        overdueRepeat: live.filter(r => r.signals.includes('overdue_repeat')).length,
+        activeNoCall: live.filter(r => r.signals.includes('active_no_call')).length,
+        refusedNoCall: main.filter(r => r.refusedNoCall).length,
+        regulars: main.filter(r => r.section === 'regular').length,
+        regularsAtRisk: live.filter(r => r.atRisk).length,
       };
     }));
     out.push(...results);

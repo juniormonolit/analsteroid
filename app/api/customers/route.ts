@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { canViewManager } from '@/lib/org/managerAccess';
-import { fetchManagerCustomers, GLOBAL_REPEAT_CYCLE_DAYS, ACTIVE_NO_CALL_DAYS, AT_RISK_CYCLE_MULTIPLIER, type CustomerRow } from '@/features/customers/engine/customers';
+import {
+  fetchManagerCustomers, fetchCustomerMarks, classifyWithMark, todayYmdMsk,
+  GLOBAL_REPEAT_CYCLE_DAYS, ACTIVE_NO_CALL_DAYS, AT_RISK_CYCLE_MULTIPLIER,
+  SLEEP_CYCLE_MULTIPLIER, SLEEP_MIN_DAYS,
+  type CustomerRow, type CustomerMark, type CustomerBucket, type NoCallReason,
+} from '@/features/customers/engine/customers';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair } from '@/features/customers/engine/crossSell';
 
@@ -20,8 +25,24 @@ import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair 
 // вида убраны в отдельную вкладку filter='never' (не удалены — там живут
 // сигналы по активным сделкам). Сортировка по заголовкам работает ВНУТРИ
 // секций (группировка по секции — всегда первичный ключ порядка).
-export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'never';
+//
+// Продолжение 01.08: отметки клиентов (customer_marks, миграция 123) + авто-архив:
+//   * снуз («Отложить») — клиент остаётся в основном виде, но сигналы и «под
+//     угрозой» погашены до даты; после даты возвращается сам;
+//   * «Больше не звонить» (причина обязательна) — вкладка filter='refused',
+//     из сигналов исключён насовсем, mini-аналитика причин в counts;
+//   * авто-архив «Спящие» (молчание > max(3×цикла, 120 дн) без активных) —
+//     вкладка filter='sleeping'; отметка wake возвращает в основной вид.
+export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'never' | 'sleeping' | 'refused';
+const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'never', 'sleeping', 'refused'] as const;
 const PAGE_SIZE_MAX = 100;
+
+/** Строка после применения отметок: сигналы снузнутых погашены, bucket/mark в ответе. */
+type XRow = CustomerRow & {
+  bucket: CustomerBucket;
+  snoozedActive: boolean;
+  mark: CustomerMark | null;
+};
 
 // Сортировка по заголовкам (правило владельца 01.08 «Заголовки = сортировка», по
 // образцу /rating 79daf81): цикл убывание → возрастание → дефолт (urgency).
@@ -48,7 +69,7 @@ function sectionRank(r: CustomerRow): number {
   return r.section === 'regular' ? 0 : r.section === 'once' ? 1 : 2;
 }
 
-function applySort(rows: CustomerRow[], key: string | null, dir: SortDir): CustomerRow[] {
+function applySort(rows: XRow[], key: string | null, dir: SortDir): XRow[] {
   const get = key ? SORTS[key] : undefined;
   const sign = dir === 'asc' ? 1 : -1;
   return rows
@@ -57,7 +78,9 @@ function applySort(rows: CustomerRow[], key: string | null, dir: SortDir): Custo
       const sr = sectionRank(a.r) - sectionRank(b.r);
       if (sr !== 0) return sr;                       // секции не перемешиваются
       if (!get) {
-        // Дефолт: «под угрозой» выше всех в секции, дальше порядок движка.
+        // Дефолт: «под угрозой» выше всех в секции, отложенные — вниз секции
+        // (их сигналы погашены), дальше порядок движка.
+        if (a.r.snoozedActive !== b.r.snoozedActive) return a.r.snoozedActive ? 1 : -1;
         if (a.r.atRisk !== b.r.atRisk) return a.r.atRisk ? -1 : 1;
         return a.i - b.i;
       }
@@ -72,11 +95,14 @@ function applySort(rows: CustomerRow[], key: string | null, dir: SortDir): Custo
     .map(x => x.r);
 }
 
-function applyFilter(rows: CustomerRow[], filter: CustomerFilter): CustomerRow[] {
-  // Вкладка «Ещё не купили» — единственное место, где видны клиенты без покупок;
-  // из всех остальных представлений они исключены (доработка 01.08).
-  if (filter === 'never') return rows.filter(r => r.section === 'never');
-  const bought = rows.filter(r => r.section !== 'never');
+function applyFilter(rows: XRow[], filter: CustomerFilter): XRow[] {
+  // Отдельные вкладки: «Отказались» (отметка no_call), «Спящие» (авто-архив),
+  // «Ещё не купили». Из всех остальных представлений эти клиенты исключены.
+  if (filter === 'refused') return rows.filter(r => r.bucket === 'refused');
+  if (filter === 'sleeping') return rows.filter(r => r.bucket === 'sleeping');
+  const main = rows.filter(r => r.bucket === 'main');
+  if (filter === 'never') return main.filter(r => r.section === 'never');
+  const bought = main.filter(r => r.section !== 'never');
   switch (filter) {
     case 'active': return bought.filter(r => r.activeCount > 0);
     case 'inactive': return bought.filter(r => r.activeCount === 0);
@@ -98,21 +124,37 @@ export async function GET(req: NextRequest) {
       counts: {
         all: 0, active: 0, inactive: 0, overdue: 0, refusedNoCall: 0,
         sections: { regular: 0, regularAtRisk: 0, once: 0, never: 0 },
+        sleeping: 0, refused: 0, refusedByReason: {},
       },
       page: 1, pageSize: 50, rows: [],
-      thresholds: { globalCycleDays: GLOBAL_REPEAT_CYCLE_DAYS, activeNoCallDays: ACTIVE_NO_CALL_DAYS, atRiskCycleMultiplier: AT_RISK_CYCLE_MULTIPLIER },
+      thresholds: {
+        globalCycleDays: GLOBAL_REPEAT_CYCLE_DAYS, activeNoCallDays: ACTIVE_NO_CALL_DAYS,
+        atRiskCycleMultiplier: AT_RISK_CYCLE_MULTIPLIER,
+        sleepCycleMultiplier: SLEEP_CYCLE_MULTIPLIER, sleepMinDays: SLEEP_MIN_DAYS,
+      },
     });
   }
   if (bitrixId !== session.bitrixUserId && !(await canViewManager(session, bitrixId))) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const filter = (['all', 'active', 'inactive', 'overdue', 'never'] as const).find(f => f === sp.get('filter')) ?? 'all';
+  const filter = FILTER_KEYS.find(f => f === sp.get('filter')) ?? 'all';
   const search = (sp.get('search') ?? '').trim().toLowerCase();
   const page = Math.max(1, Number(sp.get('page')) || 1);
   const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(10, Number(sp.get('pageSize')) || 50));
 
-  const all = await fetchManagerCustomers(Number(bitrixId));
+  const engineRows = await fetchManagerCustomers(Number(bitrixId));
+
+  // Отметки — свежим запросом поверх кэша движка (снуз/«не звонить» действуют
+  // сразу). У снузнутых сигналы/«под угрозой» гасятся здесь же.
+  const marks = await fetchCustomerMarks(engineRows.map(r => r.clientKey));
+  const today = todayYmdMsk();
+  const all: XRow[] = engineRows.map(r => {
+    const mark = marks.get(r.clientKey) ?? null;
+    const { bucket, snoozedActive } = classifyWithMark(r, mark ?? undefined, today);
+    const base = snoozedActive ? { ...r, signals: [], atRisk: false, urgency: 0 } : r;
+    return { ...base, bucket, snoozedActive, mark };
+  });
 
   // Поиск по имени — по уже известным (закэшированным) именам + по id клиента.
   let searched = all;
@@ -146,9 +188,17 @@ export async function GET(req: NextRequest) {
     return { ...r, name: names.get(r.clientKey) ?? null, recommend: rec };
   });
 
-  // Счётчики фильтров — по купившим (без «ещё не купили»), счётчики секций —
-  // по всем строкам поиска (в т.ч. never для его вкладки).
-  const bought = searched.filter(r => r.section !== 'never');
+  // Счётчики фильтров — по основному виду (купившие, без спящих/отказавшихся);
+  // отдельные счётчики вкладок «Спящие»/«Отказались»/«Ещё не купили» + разбивка
+  // причин отказа (mini-аналитика вкладки «Отказались»).
+  const main = searched.filter(r => r.bucket === 'main');
+  const bought = main.filter(r => r.section !== 'never');
+  const refused = searched.filter(r => r.bucket === 'refused');
+  const refusedByReason: Record<string, number> = {};
+  for (const r of refused) {
+    const reason: NoCallReason = r.mark?.reason ?? 'other';
+    refusedByReason[reason] = (refusedByReason[reason] ?? 0) + 1;
+  }
   return NextResponse.json({
     total: filtered.length,
     counts: {
@@ -161,10 +211,17 @@ export async function GET(req: NextRequest) {
         regular: bought.filter(r => r.section === 'regular').length,
         regularAtRisk: bought.filter(r => r.atRisk).length,
         once: bought.filter(r => r.section === 'once').length,
-        never: searched.filter(r => r.section === 'never').length,
+        never: main.filter(r => r.section === 'never').length,
       },
+      sleeping: searched.filter(r => r.bucket === 'sleeping').length,
+      refused: refused.length,
+      refusedByReason,
     },
     page, pageSize, rows,
-    thresholds: { globalCycleDays: GLOBAL_REPEAT_CYCLE_DAYS, activeNoCallDays: ACTIVE_NO_CALL_DAYS, atRiskCycleMultiplier: AT_RISK_CYCLE_MULTIPLIER },
+    thresholds: {
+      globalCycleDays: GLOBAL_REPEAT_CYCLE_DAYS, activeNoCallDays: ACTIVE_NO_CALL_DAYS,
+      atRiskCycleMultiplier: AT_RISK_CYCLE_MULTIPLIER,
+      sleepCycleMultiplier: SLEEP_CYCLE_MULTIPLIER, sleepMinDays: SLEEP_MIN_DAYS,
+    },
   });
 }

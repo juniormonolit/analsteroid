@@ -6,9 +6,17 @@
 // звонить менеджер идёт в Битрикс по ссылке на карточку клиента/сделки.
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem } from '@/features/customers/engine/customers';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem, CustomerMark, CustomerBucket, NoCallReason } from '@/features/customers/engine/customers';
 import type { Recommendation } from '@/features/customers/engine/crossSell';
+
+// Локальная копия подписей причин (движок тянет pg — в клиентский бандл нельзя).
+const REASON_LABELS: Record<NoCallReason, string> = {
+  nothing_needed: 'Ничего не нужно',
+  competitor: 'Ушёл к конкуренту',
+  negative: 'Негатив',
+  other: 'Прочее',
+};
 
 interface ApiRow {
   clientKey: string; clientType: 'contact' | 'company'; clientId: number; name: string | null;
@@ -18,7 +26,8 @@ interface ApiRow {
   activeCount: number; activeDeals: ActiveDealInfo[];
   refusedNoCall: boolean; cycleDays: number; cycleSource: 'own' | 'global';
   signals: CallSignal[]; urgency: number;
-  section: CustomerSection; atRisk: boolean;
+  section: CustomerSection; atRisk: boolean; sleeping: boolean;
+  bucket: CustomerBucket; snoozedActive: boolean; mark: CustomerMark | null;
   managerHistory: ManagerHistoryItem[]; prevManagerNames: string[];
   recommend: Recommendation | null;
 }
@@ -27,22 +36,31 @@ interface ApiResponse {
   counts: {
     all: number; active: number; inactive: number; overdue: number; refusedNoCall: number;
     sections: { regular: number; regularAtRisk: number; once: number; never: number };
+    sleeping: number; refused: number; refusedByReason: Partial<Record<NoCallReason, number>>;
   };
   page: number; pageSize: number; rows: ApiRow[];
-  thresholds: { globalCycleDays: number; activeNoCallDays: number; atRiskCycleMultiplier: number };
+  thresholds: {
+    globalCycleDays: number; activeNoCallDays: number; atRiskCycleMultiplier: number;
+    sleepCycleMultiplier: number; sleepMinDays: number;
+  };
 }
 
 // Секции (доработка Серёги 01.08): постоянники сверху, купившие один раз ниже,
 // «ещё не купили» — отдельная вкладка (в основном виде их нет, но сигналы по
-// их активным сделкам живут там).
-type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'never';
+// их активным сделкам живут там). Продолжение 01.08: вкладки «Спящие»
+// (авто-архив по молчанию) и «Отказались» (отметка «больше не звонить»).
+type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'never' | 'sleeping' | 'refused';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
   { key: 'overdue', label: 'Пора позвонить' },
   { key: 'active', label: 'С активными' },
   { key: 'inactive', label: 'Без активных' },
   { key: 'never', label: 'Ещё не купили' },
+  { key: 'sleeping', label: 'Спящие' },
+  { key: 'refused', label: 'Отказались' },
 ];
+/** Вкладки основного вида — только в них секционные счётчики в заголовках честны. */
+const MAIN_FILTERS: Filter[] = ['all', 'overdue', 'active', 'inactive'];
 
 const SECTION_LABELS: Record<CustomerSection, string> = {
   regular: 'Постоянники',
@@ -201,6 +219,109 @@ function ManagerHistoryBlock({ items }: { items: ManagerHistoryItem[] }) {
   );
 }
 
+// ── Отметки: «Отложить» / «Больше не звонить» / «Вернуть в работу» (01.08) ───
+
+function addMonthsYmd(months: number): string {
+  const d = new Date(Date.now() + 3 * 3600_000); // МСК
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+
+type MarkSender = (payload: Record<string, unknown>) => Promise<void>;
+
+function MarkControls({ r, send, busy }: { r: ApiRow; send: MarkSender; busy: boolean }) {
+  const [open, setOpen] = useState<'snooze' | 'nocall' | null>(null);
+  const [customDate, setCustomDate] = useState('');
+  const [reason, setReason] = useState<NoCallReason | null>(null);
+  const [comment, setComment] = useState('');
+
+  const btn = 'rounded-lg border border-[var(--color-border)] px-2 py-0.5 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] disabled:opacity-40';
+
+  // Уже размеченные / спящие: одна кнопка возврата.
+  if (r.mark?.kind === 'no_call') {
+    return (
+      <button type="button" disabled={busy} className={btn}
+        onClick={() => send({ clientKey: r.clientKey, action: 'clear' })}
+        title="Снять отметку «больше не звонить» и вернуть клиента в основной список">
+        Вернуть в работу
+      </button>
+    );
+  }
+  if (r.snoozedActive) {
+    return (
+      <button type="button" disabled={busy} className={btn}
+        onClick={() => send({ clientKey: r.clientKey, action: 'clear' })}
+        title="Снять отсрочку — клиент вернётся в сигналы уже сейчас">
+        вернуть в работу
+      </button>
+    );
+  }
+  if (r.bucket === 'sleeping') {
+    return (
+      <button type="button" disabled={busy} className={btn}
+        onClick={() => send({ clientKey: r.clientKey, action: 'wake' })}
+        title="Вернуть спящего клиента в основной список — сигналы снова действуют">
+        Вернуть в работу
+      </button>
+    );
+  }
+
+  const snoozeTo = (ymd: string) => { setOpen(null); void send({ clientKey: r.clientKey, action: 'snooze', until: ymd }); };
+  return (
+    <div className="flex flex-wrap gap-1">
+      <div className="relative">
+        <button type="button" disabled={busy} className={btn} onClick={() => setOpen(v => (v === 'snooze' ? null : 'snooze'))}
+          title="Отложить клиента: до даты он исчезает из горящих сигналов, потом возвращается сам">
+          ⏸ Отложить
+        </button>
+        {open === 'snooze' && (
+          <div className="absolute left-0 top-full z-20 mt-1 flex w-44 flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2 shadow-lg">
+            <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(1))}>На месяц</button>
+            <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(3))}>На квартал</button>
+            <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(6))}>На полгода</button>
+            <div className="flex items-center gap-1">
+              <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}
+                className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-1 py-0.5 text-[11px]" />
+              <button type="button" className={btn} disabled={!customDate} onClick={() => snoozeTo(customDate)}>ОК</button>
+            </div>
+          </div>
+        )}
+      </div>
+      <button type="button" disabled={busy} className={btn} onClick={() => { setReason(null); setComment(''); setOpen('nocall'); }}
+        title="Больше не звонить этому клиенту — уйдёт во вкладку «Отказались» (причина обязательна)">
+        🚫 Не звонить
+      </button>
+      {open === 'nocall' && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => setOpen(null)}>
+          <div className="w-full max-w-sm rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4" onClick={e => e.stopPropagation()}>
+            <div className="mb-2 text-sm font-bold text-[var(--color-text)]">Больше не звонить — почему?</div>
+            <div className="flex flex-col gap-1.5">
+              {(Object.keys(REASON_LABELS) as NoCallReason[]).map(k => (
+                <label key={k} className="flex cursor-pointer items-center gap-2 text-sm text-[var(--color-text)]">
+                  <input type="radio" name={`nocall-${r.clientKey}`} checked={reason === k} onChange={() => setReason(k)} />
+                  {REASON_LABELS[k]}
+                </label>
+              ))}
+              <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
+                placeholder={reason === 'other' ? 'Комментарий (обязателен для «Прочее»)' : 'Комментарий (необязательно)'}
+                className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm" />
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" className={btn} onClick={() => setOpen(null)}>Отмена</button>
+              <button type="button" disabled={busy || !reason || (reason === 'other' && comment.trim() === '')}
+                className={`${btn} !border-transparent`}
+                style={{ color: 'var(--color-text-inverse)', backgroundColor: 'var(--color-negative, #e03131)' }}
+                onClick={() => { setOpen(null); void send({ clientKey: r.clientKey, action: 'no_call', reason, comment: comment.trim() || undefined }); }}>
+                Больше не звонить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActiveDealsCell({ deals }: { deals: ActiveDealInfo[] }) {
   const [open, setOpen] = useState(false);
   if (deals.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">нет</span>;
@@ -239,6 +360,25 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<Sort>(null);
   const [historyOpen, setHistoryOpen] = useState<string | null>(null);
+
+  // Мутация отметок: POST + инвалидация списка и РОП-агрегата.
+  const qc = useQueryClient();
+  const [markBusy, setMarkBusy] = useState(false);
+  const sendMark: MarkSender = async (payload) => {
+    setMarkBusy(true);
+    try {
+      const res = await fetch('/api/customers/mark', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, ...(isSelf ? {} : { managerId }) }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        alert((j as { error?: string } | null)?.error ?? `Ошибка ${res.status}`);
+      }
+      await qc.invalidateQueries({ queryKey: ['customers'] });
+      void qc.invalidateQueries({ queryKey: ['customers-team'] });
+    } finally { setMarkBusy(false); }
+  };
   const cycleSort = (key: string) => {
     setPage(1);
     setSort(s => (s?.key !== key ? { key, dir: 'desc' } : s.dir === 'desc' ? { key, dir: 'asc' } : null));
@@ -278,7 +418,8 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                 <span className="ml-1 opacity-70 tabular-nums">
                   {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue
                     : f.key === 'active' ? data.counts.active : f.key === 'inactive' ? data.counts.inactive
-                    : data.counts.sections.never}
+                    : f.key === 'never' ? data.counts.sections.never
+                    : f.key === 'sleeping' ? data.counts.sleeping : data.counts.refused}
                 </span>
               )}
             </button>
@@ -292,6 +433,28 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
           </span>
         )}
       </div>
+
+      {/* Mini-аналитика вкладки «Отказались»: счётчики по причинам */}
+      {filter === 'refused' && data && data.counts.refused > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Причины:</span>
+          {(Object.keys(REASON_LABELS) as NoCallReason[]).map(k => {
+            const n = data.counts.refusedByReason[k] ?? 0;
+            if (n === 0) return null;
+            return (
+              <span key={k} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 py-0.5">
+                {REASON_LABELS[k]}: <b className="tabular-nums">{n}</b>
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {filter === 'sleeping' && data && (
+        <div className="text-[11px] text-[var(--color-text-muted)]">
+          Авто-архив: клиенты без активных сделок, молчащие дольше {data.thresholds.sleepCycleMultiplier}× своего цикла
+          повторки (и не меньше {data.thresholds.sleepMinDays} дней). Из горящих сигналов исключены; «Вернуть в работу» — и клиент снова в списке.
+        </div>
+      )}
 
       {isError ? (
         <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить список заказчиков.</div>
@@ -318,7 +481,9 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
             <tbody>
               {rows.map((r, idx) => {
                 const showHeader = idx === 0 || rows[idx - 1].section !== r.section;
-                const secCounts = data?.counts.sections;
+                // Счётчики секций честны только в основном виде: в вкладках
+                // «Спящие»/«Отказались»/«Ещё не купили» показываем метку без числа.
+                const secCounts = MAIN_FILTERS.includes(filter) ? data?.counts.sections : undefined;
                 const secCount = secCounts
                   ? (r.section === 'regular' ? secCounts.regular : r.section === 'once' ? secCounts.once : secCounts.never)
                   : null;
@@ -330,7 +495,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                       title={SECTION_HINTS[r.section]}>
                       {SECTION_LABELS[r.section]}
                       {secCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{secCount}</span>}
-                      {r.section === 'regular' && (secCounts?.regularAtRisk ?? 0) > 0 && (
+                      {r.section === 'regular' && secCounts !== undefined && (secCounts?.regularAtRisk ?? 0) > 0 && (
                         <span className="ml-2 normal-case font-semibold" style={{ color: 'var(--color-negative, #e03131)' }}
                           title="Постоянники без активных сделок, у которых с последней покупки прошло больше двух их циклов повторки">
                           ● под угрозой: {secCounts!.regularAtRisk}
@@ -367,7 +532,29 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                           🚫 отказ без звонка
                         </span>
                       )}
+                      {r.snoozedActive && r.mark && (
+                        <span className="rounded px-1 font-semibold text-[var(--color-text-muted)] bg-[var(--color-bg-hover)]"
+                          title={`Отложен: сигналы не горят до этой даты, потом клиент вернётся сам. Отметил(а): ${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}`}>
+                          ⏸ отложен до {fmtDate(r.mark.snoozeUntil)} · {r.mark.createdBy}
+                        </span>
+                      )}
+                      {r.bucket === 'main' && r.mark?.kind === 'wake' && (
+                        <span className="rounded px-1 text-[var(--color-text-muted)]"
+                          title={`Был в «Спящих», возвращён в работу: ${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}`}>
+                          ⏰ возвращён из спящих
+                        </span>
+                      )}
+                      {r.mark?.kind === 'no_call' && (
+                        <span className="rounded px-1 font-semibold"
+                          style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 10%, transparent)' }}
+                          title={`Отметил(а): ${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}${r.mark.comment ? ` — ${r.mark.comment}` : ''}`}>
+                          🚫 {r.mark.reason ? REASON_LABELS[r.mark.reason] : 'не звонить'} · {r.mark.createdBy}
+                        </span>
+                      )}
                     </div>
+                    {r.mark?.kind === 'no_call' && r.mark.comment && (
+                      <div className="mt-0.5 max-w-[240px] text-[11px] text-[var(--color-text-muted)]">«{r.mark.comment}»</div>
+                    )}
                     {/* Смена менеджера (доработка 01.08): клиент раньше был у других */}
                     {r.prevManagerNames.length > 0 && (
                       <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)] max-w-[240px]"
@@ -381,6 +568,9 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                         {historyOpen === r.clientKey ? 'скрыть историю менеджеров' : 'история менеджеров'}
                       </button>
                     )}
+                    <div className="mt-1">
+                      <MarkControls r={r} send={sendMark} busy={markBusy} />
+                    </div>
                   </td>
                   <td className="px-3 py-2"><SignalBadge r={r} noCallDays={data?.thresholds.activeNoCallDays ?? 7} /></td>
                   <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
