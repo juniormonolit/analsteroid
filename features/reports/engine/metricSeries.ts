@@ -176,7 +176,10 @@ export async function fetchMetricSeries(opts: MetricSeriesOptions): Promise<Metr
 
   // Непрерывная шкала бакетов периода (нули там, где данных нет).
   const startYmd = bucketStartYmd(opts.period.from, unit);
-  const endExclYmd = new Date(toExclIso).toISOString().slice(0, 10); // toExcl в МСК-полночь по построению
+  // Правая граница — в МСК: toExclIso = МСК-полночь следующего дня, но её
+  // UTC-дата на день раньше (21:00Z) — резать по UTC-дате теряло последний
+  // день периода (пойман сверкой: сумма дневных бакетов < ячейки на день).
+  const endExclYmd = bucketStartYmd(new Date(toExclIso), "day");
   const buckets: SeriesBucket[] = [];
   for (let b = startYmd; b < endExclYmd && buckets.length < 500; b = nextBucketYmd(b, unit)) {
     const entry = sums.get(b) ?? {};
