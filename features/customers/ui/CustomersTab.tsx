@@ -159,13 +159,18 @@ export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkS
   }
 
   const snoozeTo = (ymd: string) => fire({ clientKey: r.clientKey, action: 'snooze', until: ymd });
+  // Компактный ряд (правка владельца 01.08 «в один ряд с иконками», было —
+  // столбиком, раздувало карточку/меню строки): иконка + короткая подпись,
+  // расшифровка — в title; попап дат — абсолютным поповером, не сдвигает layout.
+  const iconBtn = 'inline-flex items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] disabled:opacity-40 whitespace-nowrap';
   return (
-    <div className="flex flex-col gap-1">
-      {open !== 'snooze' ? (
-        <button type="button" disabled={busy} className={btn} onClick={() => setOpen('snooze')}
-          title="Отложить клиента: до даты он исчезает из горящих сигналов, потом возвращается сам">⏸ Отложить…</button>
-      ) : (
-        <div className="flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5">
+    <div className="relative flex flex-row flex-wrap items-center gap-1">
+      <button type="button" disabled={busy} className={iconBtn} onClick={() => setOpen(o => o === 'snooze' ? null : 'snooze')}
+        title="Отложить клиента: до даты он исчезает из горящих сигналов, потом возвращается сам">⏸ Отложить</button>
+      <button type="button" disabled={busy} className={iconBtn} onClick={() => { setReason(null); setComment(''); setOpen('nocall'); }}
+        title="Больше не звонить этому клиенту — уйдёт во вкладку «Отказались» (причина обязательна)">🚫 Не звонить</button>
+      {open === 'snooze' && (
+        <div className="absolute right-0 top-full z-10 mt-1 flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1.5 shadow-lg min-w-[140px]">
           <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(1))}>На месяц</button>
           <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(3))}>На квартал</button>
           <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(6))}>На полгода</button>
@@ -176,8 +181,6 @@ export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkS
           </div>
         </div>
       )}
-      <button type="button" disabled={busy} className={btn} onClick={() => { setReason(null); setComment(''); setOpen('nocall'); }}
-        title="Больше не звонить этому клиенту — уйдёт во вкладку «Отказались» (причина обязательна)">🚫 Не звонить…</button>
       {open === 'nocall' && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setOpen(null)}>
           <div className="w-full max-w-sm rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4" onClick={e => e.stopPropagation()}>

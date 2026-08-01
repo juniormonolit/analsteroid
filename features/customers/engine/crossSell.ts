@@ -96,6 +96,7 @@ function topN(counts: Record<string, number>, total: number): { group: string; p
  */
 export function recommendFor(matrix: CrossSellMatrix, lastGroups: string[]): Recommendation | null {
   const known = lastGroups.filter(g => matrix.from[g]);
+  const knownSet = new Set(known);
   if (known.length > 0) {
     const combined: Record<string, number> = {};
     let total = 0;
@@ -105,11 +106,38 @@ export function recommendFor(matrix: CrossSellMatrix, lastGroups: string[]): Rec
       for (const [to, cnt] of Object.entries(f.to)) combined[to] = (combined[to] ?? 0) + cnt;
     }
     if (total >= MIN_TRANSITIONS_FOR_GROUP) {
-      return { basedOn: known, fallback: false, items: topN(combined, total) };
+      // Исключаем самоповторы — правка владельца 01.08 (то же правило, что уже
+      // применено в кросс-селл квестах: «пары X→Y только с Y≠X»): «Предложить»
+      // должно рекомендовать ДРУГУЮ группу, а не то, что клиент и так покупает
+      // (баг живьём: клиент с двумя покупками «Ограждения» получал «40%
+      // Ограждения» вместо реальных кросс-переходов кровля/утеплитель).
+      // Проценты нормируются на сумму ТОЛЬКО кросс-группных переходов —
+      // «из тех случаев, что вели на ДРУГУЮ группу, X% ушло в Y».
+      const crossOnly: Record<string, number> = {};
+      let crossTotal = 0;
+      for (const [to, cnt] of Object.entries(combined)) {
+        if (knownSet.has(to)) continue;
+        crossOnly[to] = cnt;
+        crossTotal += cnt;
+      }
+      if (crossTotal > 0) {
+        return { basedOn: known, fallback: false, items: topN(crossOnly, crossTotal) };
+      }
+      // У группы клиента вообще нет статистики переходов НА ДРУГУЮ группу (в
+      // данных только самоповторы) — честный фолбэк на общий топ базы, тоже
+      // без самоповтора (ниже), с пометкой fallback.
     }
   }
   if (matrix.globalTotal === 0) return null;
-  return { basedOn: [], fallback: true, items: topN(matrix.globalTo, matrix.globalTotal) };
+  const globalCross: Record<string, number> = {};
+  let globalCrossTotal = 0;
+  for (const [to, cnt] of Object.entries(matrix.globalTo)) {
+    if (knownSet.has(to)) continue;
+    globalCross[to] = cnt;
+    globalCrossTotal += cnt;
+  }
+  if (globalCrossTotal === 0) return null;
+  return { basedOn: known, fallback: true, items: topN(globalCross, globalCrossTotal) };
 }
 
 // ── Награды за допродажу (доработка Серёги 01.08) ────────────────────────────

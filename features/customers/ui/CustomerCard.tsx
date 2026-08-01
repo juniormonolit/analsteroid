@@ -5,6 +5,7 @@
 // (таймлайн покупок, звонки, отказы, история отметок) — /api/customers/card.
 // ПДн: телефонов нет by construction — звонить менеджер идёт в Битрикс по ссылке.
 
+import { Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { X, ExternalLink } from 'lucide-react';
 import type { CustomerCardData } from '@/features/customers/engine/card';
@@ -31,12 +32,31 @@ function Chip({ children, tone = 'muted', title }: { children: React.ReactNode; 
   );
 }
 
+// Полиш 01.08 (правка владельца через Серёгу «наведи порядок»): секции — карточки
+// с фоном/отступами (та же оболочка, что везде в ЛК — ManagerTabs.tsx), а не голый
+// капс-заголовок + текст встык с предыдущим блоком. hintIcon — маленькая «ⓘ» с
+// тултипом вместо приписки текстом в заголовке (пример: «цикл повторки… (по базе)»).
 function Section({ title, children, hint }: { title: string; children: React.ReactNode; hint?: string }) {
   return (
-    <section>
-      <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]" title={hint}>{title}</div>
+    <section className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3.5 py-3">
+      <div className="mb-2 flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+        {title}
+        {hint && <span title={hint} className="cursor-help normal-case tracking-normal opacity-70">ⓘ</span>}
+      </div>
       {children}
     </section>
+  );
+}
+
+// Плашка ключевой цифры шапки (сетка 2×2/4, вместо строки-простыни «покупок N из
+// M сделок на сумму… средний чек…»): крупное число, мелкая серая подпись.
+function StatTile({ label, value, sub, hint }: { label: string; value: React.ReactNode; sub?: string; hint?: string }) {
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5" title={hint}>
+      <div className="text-[10px] leading-tight text-[var(--color-text-muted)]">{label}</div>
+      <div className="text-[14px] font-bold leading-tight text-[var(--color-text)] tabular-nums whitespace-nowrap">{value}</div>
+      {sub && <div className="text-[10px] leading-tight text-[var(--color-text-muted)]">{sub}</div>}
+    </div>
   );
 }
 
@@ -84,16 +104,18 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
     <div className="fixed inset-0 z-50 flex">
       <div className="hidden sm:block flex-1 min-w-[10%] bg-black/40 cursor-pointer" onClick={onClose} />
       <div className="w-full sm:w-[720px] sm:max-w-[85vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
-        {/* Шапка */}
+        {/* Шапка — полиш 01.08 (правка владельца через Серёгу): имя+статусные чипы в
+            ОДНУ строку в логичном порядке (тип → категория → модификаторы →
+            статус → Битрикс), менеджер отдельной строкой, метрики покупок —
+            сеткой плашек вместо строки-простыни. */}
         <div className="px-4 sm:px-6 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-bold text-[var(--color-text)] truncate max-w-[380px]" title={clientDisplayName(row)}>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h2 className="text-base font-bold text-[var(--color-text)] truncate max-w-[320px]" title={clientDisplayName(row)}>
                   {clientDisplayName(row)}
                 </h2>
                 <Chip>{row.clientType === 'contact' ? 'физ' : 'юр'}</Chip>
-                {/* Категория клиента — крупно (дополнение Серёги 01.08) */}
                 {row.category && row.category !== 'none' && (
                   <span className="inline-flex items-center rounded px-2 py-0.5 text-[12px] font-bold"
                     style={{ color: CATEGORY_STYLE[row.category].color, backgroundColor: CATEGORY_STYLE[row.category].bg }}
@@ -110,24 +132,24 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                 )}
                 {row.refusedNoCall && <Chip tone="neg" title="У клиента есть сделка, закрытая в отказ без единого звонка">🚫 отказ без звонка</Chip>}
                 <a href={clientBitrixUrl(row)} target="_blank" rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-[12px] font-semibold text-[var(--color-accent)] hover:underline whitespace-nowrap">
+                  className="ml-auto inline-flex items-center gap-1 text-[12px] font-semibold text-[var(--color-accent)] hover:underline whitespace-nowrap">
                   <ExternalLink size={12} /> Битрикс
                 </a>
               </div>
-              <div className="mt-1 text-[12px] text-[var(--color-text-muted)]">
+              <div className="mt-1 text-[12px] text-[var(--color-text-muted)] truncate">
                 Менеджер: <b className="text-[var(--color-text)]">{currentManager?.name ?? `#${managerId}`}</b>
-                {row.prevManagerNames.length > 0 && <span> · ранее: {row.prevManagerNames.join(', ')}</span>}
+                {row.prevManagerNames.length > 0 && (
+                  <span title={`Ранее вёл(а): ${row.prevManagerNames.join(', ')}`}> · ранее: {row.prevManagerNames.join(', ')}</span>
+                )}
               </div>
-              <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[12px] tabular-nums">
-                <span>покупок <b>{row.dealsSold}</b> из {row.dealsTotal} сделок</span>
-                <span>на сумму <b>{row.sumSold > 0 ? fmtMoney(row.sumSold) : '—'}</b></span>
-                <span>средний чек <b>{avgCheck !== null && avgCheck > 0 ? fmtMoney(avgCheck) : '—'}</b></span>
-                <span title={row.cycleSource === 'own' ? 'Медиана интервалов между его покупками' : 'Медиана по всей базе (своих покупок мало)'}>
-                  цикл повторки <b>{row.cycleDays} дн.</b>{row.cycleSource === 'global' ? ' (по базе)' : ''}
-                </span>
-                <span title="Отгрузки (delivered) — база категорий «Ключевой»/«Крупный»">
-                  отгрузок <b>{row.dealsDelivered}</b> на <b>{row.sumDelivered > 0 ? fmtMoney(row.sumDelivered) : '—'}</b>
-                </span>
+              <div className="mt-2 grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                <StatTile label="Покупок" value={`${row.dealsSold} из ${row.dealsTotal}`} />
+                <StatTile label="Сумма покупок" value={row.sumSold > 0 ? fmtMoney(row.sumSold) : '—'} />
+                <StatTile label="Средний чек" value={avgCheck !== null && avgCheck > 0 ? fmtMoney(avgCheck) : '—'} />
+                <StatTile label="Цикл повторки" value={`${row.cycleDays} дн.`}
+                  hint={row.cycleSource === 'own' ? 'Медиана интервалов между его покупками' : 'По базе — своих покупок у клиента мало, взята медиана по всей базе (16 дн.)'} />
+                <StatTile label="Отгружено" value={row.dealsDelivered > 0 ? `${row.dealsDelivered} / ${fmtMoney(row.sumDelivered)}` : '—'}
+                  hint="Отгрузки (delivered) — база категорий «Ключевой»/«Крупный»" />
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -143,9 +165,11 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
         <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 flex flex-col gap-5">
           {isError && <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить карточку клиента.</div>}
 
-          {/* Активные сделки — из строки списка */}
-          <Section title={`Активные сделки · ${row.activeDeals.length}`}>
-            {row.activeDeals.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">—</div> : (
+          {/* Активные сделки — из строки списка. Пустая секция целиком не рендерим
+              (правка владельца 01.08) — сводится в одну строку ниже вместе с
+              «Отказов не было», если и то, и другое пусто. */}
+          {row.activeDeals.length > 0 && (
+            <Section title={`Активные сделки · ${row.activeDeals.length}`}>
               <table className="w-full text-[12.5px]">
                 <tbody>
                   {row.activeDeals.map(d => {
@@ -168,34 +192,44 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                   })}
                 </tbody>
               </table>
-            )}
-          </Section>
+            </Section>
+          )}
 
-          {/* Таймлайн покупок */}
+          {/* Таймлайн покупок — сведён в строку-таблицу (дата · #сделка · группа ·
+              сумма), интервал между покупками — компактная серая метка МЕЖДУ
+              строками таблицы (не отдельная болтающаяся строка-текст). */}
           <Section title={`Покупки · ${timeline.length}`} hint="Все проданные сделки клиента хронологически; между покупками — интервал в днях">
             {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div>
-              : timeline.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">Покупок ещё не было.</div> : (
-              <div className="flex flex-col">
-                {timeline.map((d, i) => (
-                  <div key={d.dealId}>
-                    {gaps[i] !== null && (
-                      <div className="ml-[52px] my-0.5 text-[11px] text-[var(--color-text-muted)] border-l-2 border-dotted border-[var(--color-border)] pl-2 py-0.5">
-                        ↓ {gaps[i]} дн.
-                      </div>
-                    )}
-                    <div className="flex items-center gap-2 text-[12.5px] py-0.5">
-                      <span className="w-[76px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtDate(d.soldAt)}</span>
-                      <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline shrink-0">#{d.dealId}</a>
-                      <span className="truncate min-w-0" title={[...d.groups, d.name ?? ''].filter(Boolean).join(' · ')}>
-                        {d.groups.length > 0 ? d.groups.join(', ') : (d.name ?? 'без товарных групп')}
-                      </span>
-                      <span className="ml-auto shrink-0 font-semibold tabular-nums whitespace-nowrap">
-                        {d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              : timeline.length === 0 ? <div className="text-[12px] text-[var(--color-text-muted)]">Покупок ещё не было.</div> : (
+              <table className="w-full text-[12.5px]">
+                <tbody>
+                  {timeline.map((d, i) => (
+                    <Fragment key={d.dealId}>
+                      {gaps[i] !== null && (
+                        <tr>
+                          <td colSpan={4} className="pt-0.5 pb-1">
+                            <span className="inline-flex items-center rounded bg-[var(--color-bg-hover)] px-1.5 py-px text-[10px] font-semibold text-[var(--color-text-muted)]">
+                              ↓ {gaps[i]} дн.
+                            </span>
+                          </td>
+                        </tr>
+                      )}
+                      <tr className={i > 0 && gaps[i] === null ? 'border-t border-[var(--color-border)]' : ''}>
+                        <td className="py-1 pr-3 w-[76px] whitespace-nowrap tabular-nums text-[var(--color-text-muted)]">{fmtDate(d.soldAt)}</td>
+                        <td className="py-1 pr-3 whitespace-nowrap">
+                          <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline">#{d.dealId}</a>
+                        </td>
+                        <td className="py-1 pr-3 truncate" title={[...d.groups, d.name ?? ''].filter(Boolean).join(' · ')}>
+                          {d.groups.length > 0 ? d.groups.join(', ') : (d.name ?? 'без товарных групп')}
+                        </td>
+                        <td className="py-1 text-right font-semibold tabular-nums whitespace-nowrap">
+                          {d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}
+                        </td>
+                      </tr>
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
             )}
           </Section>
 
@@ -230,10 +264,9 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
             )}
           </Section>
 
-          {/* Отказы */}
-          <Section title={`Отказы · ${data?.refused.length ?? 0}`} hint="Сделки клиента, закрытые в отказ; отмечено, были ли по ним звонки">
-            {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div>
-              : (data?.refused.length ?? 0) === 0 ? <div className="text-sm text-[var(--color-text-muted)]">—</div> : (
+          {/* Отказы — как активные сделки, пустая секция целиком не рендерим. */}
+          {!isLoading && (data?.refused.length ?? 0) > 0 && (
+            <Section title={`Отказы · ${data!.refused.length}`} hint="Сделки клиента, закрытые в отказ; отмечено, были ли по ним звонки">
               <table className="w-full text-[12.5px]">
                 <tbody>
                   {data!.refused.map(d => (
@@ -252,8 +285,16 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                   ))}
                 </tbody>
               </table>
-            )}
-          </Section>
+            </Section>
+          )}
+
+          {/* Сводка «пусто» (правка владельца 01.08): вместо двух раздутых секций
+              «АКТИВНЫЕ СДЕЛКИ · 0 —» и «ОТКАЗЫ · 0 —» — одна тихая строка, и то
+              только когда ОБЕ секции пусты (если хоть одна не пуста — молча
+              опускаем вторую, above). */}
+          {!isLoading && row.activeDeals.length === 0 && (data?.refused.length ?? 0) === 0 && (
+            <div className="-mt-2 text-[12px] text-[var(--color-text-muted)]">Активных сделок нет · Отказов не было</div>
+          )}
 
           {/* История менеджеров */}
           {row.managerHistory.length > 0 && (
@@ -277,7 +318,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
           {/* История отметок */}
           <Section title="История отметок" hint="Снузы / «не звонить» / возвраты: кто и когда">
             {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div>
-              : (data?.markHistory.length ?? 0) === 0 ? <div className="text-sm text-[var(--color-text-muted)]">Отметок не было.</div> : (
+              : (data?.markHistory.length ?? 0) === 0 ? <div className="text-[11px] text-[var(--color-text-muted)]">Отметок не было.</div> : (
               <div className="flex flex-col gap-0.5 text-[12.5px]">
                 {data!.markHistory.map((h, i) => (
                   <div key={i} className="flex items-baseline gap-2">
