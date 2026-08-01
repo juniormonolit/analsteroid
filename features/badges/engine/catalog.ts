@@ -81,6 +81,23 @@ export const BADGE_CATALOG: BadgeDef[] = [
     criteria: { firstGroup: p.first, nextGroup: p.next },
   })),
 
+  // ── Категории клиентов (ок Серёги 01.08, пакет категорий) ──────────────────
+  {
+    key: 'category_keymaker', name: 'Кит-мейкер', icon: '🔑', category: 'rare', tiered: false, sortOrder: 33,
+    description: 'Клиент впервые стал «Ключевым» (отгрузок и сумма выше порогов категории) — и порог пробила ваша сделка. Редкая.',
+    criteria: {},
+  },
+  {
+    key: 'category_upgrade', name: 'Апгрейд', icon: '🚀', category: 'milestone', tiered: false, sortOrder: 94,
+    description: 'Клиент впервые достиг категории «Крупный» по вашим сделкам (пороги — Настройки → Категории клиентов).',
+    criteria: {},
+  },
+  {
+    key: 'category_keykeeper', name: 'Хранитель ключей', icon: '🗝️', category: 'streak', tiered: false, sortOrder: 87,
+    description: 'За календарный месяц ни один ваш ключевой клиент не был «под угрозой» (и ключевые клиенты были). Ежемесячная.',
+    criteria: {},
+  },
+
   // ── Редкие ачивки ──────────────────────────────────────────────────────────
   {
     key: 'combo_master', name: 'Мастер комбо', icon: '🎯', category: 'rare', tiered: false, sortOrder: 30,
