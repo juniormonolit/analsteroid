@@ -10,7 +10,7 @@ import { sendBitrixBotMessage } from '@/lib/bitrix/notify';
 
 export type NotificationType =
   | 'transfer_in' | 'gift_in' | 'activation_resolved' | 'payout_resolved'
-  | 'expiry_soon' | 'gacha_rare' | 'gacha_jackpot';
+  | 'expiry_soon' | 'gacha_rare' | 'gacha_jackpot' | 'quest_done';
 
 export interface NotificationInput {
   bitrixId: number;

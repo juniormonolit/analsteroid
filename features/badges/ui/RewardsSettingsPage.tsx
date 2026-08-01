@@ -12,6 +12,7 @@ import { InventoryManageBlock } from './InventoryManage';
 import { ShopSettingsBlock } from './ShopSettings';
 import { GachaSettingsBlock } from './GachaSettings';
 import { XpSettingsBlock } from './XpSettings';
+import { QuestSettingsBlock } from './QuestSettings';
 import {
   CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, DAILY_BONUS_METRIC_LABELS, METRIC_LABELS,
   MILESTONE_KIND_LABELS, TEMPLATE_LABELS, validateCustomCriteria,
@@ -746,6 +747,8 @@ export function RewardsSettingsPage() {
       {!isLoading && <PenaltiesSettings currencyName={currencyName} />}
       {/* XP-система (01.08, миграция 124): коэффициенты + классы (домены) */}
       {!isLoading && <XpSettingsBlock />}
+      {/* Квесты (миграция 125): номиналы, тиры, реролл */}
+      {!isLoading && <QuestSettingsBlock />}
       {/* Магазин призов (MVP 31.07): каталог + TTL валюты + «Релизный старт» (заложен, не запускался) */}
       {!isLoading && <ShopSettingsBlock currencyName={currencyName} />}
       {/* Гача (фаза 2): пул, шансы (валидация 100%), счётчик джекпотов */}

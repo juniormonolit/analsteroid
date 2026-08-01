@@ -14,12 +14,14 @@ import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 import { usePlanFact } from './PlanFactStrip';
 import type { ManagerCardResult } from '@/features/manager-card/engine/managerCard';
 
-export type ManagerTabKey = 'profile' | 'customers' | 'stats' | 'rewards' | 'shop' | 'inventory';
+export type ManagerTabKey = 'profile' | 'customers' | 'quests' | 'stats' | 'rewards' | 'shop' | 'inventory';
 
 export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'profile', label: 'Профиль' },
   // «Мои заказчики» (фича Серёги 01.08): кому пора позвонить — features/customers.
   { key: 'customers', label: 'Мои заказчики' },
+  // Квесты (миграция 125): миссии с наградами — features/quests.
+  { key: 'quests', label: 'Квесты' },
   { key: 'stats', label: 'Статистика' },
   { key: 'rewards', label: 'Награды' },
   { key: 'shop', label: 'Магазин' },

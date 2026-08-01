@@ -13,6 +13,7 @@ import { PayoutManageBlock } from '@/features/badges/ui/PayoutManage';
 import { InventoryManageBlock } from '@/features/badges/ui/InventoryManage';
 import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, NotificationsBell, type ManagerTabKey } from './ManagerTabs';
 import { CustomersTab, TeamCustomersBlock } from '@/features/customers/ui/CustomersTab';
+import { QuestsTab, TeamQuestsBlock } from '@/features/quests/ui/QuestsTab';
 import { previousPeriodSameLength, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
@@ -313,6 +314,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
         <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => setTab('rewards')} />
       )}
       {tabbed && tab === 'customers' && <CustomersTab managerId={managerId} isSelf={showBadges} />}
+      {tabbed && tab === 'quests' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
       {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} />}
       {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => setTab('inventory')} />}
       {tabbed && tab === 'inventory' && <InventoryTab managerId={managerId} isSelf={showBadges} />}
@@ -422,7 +424,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {/* ── Бейджи (задача 2655): у менеджера полка переехала в таб «Награды»
           (табы ЛК, доп. Серёги 31.07); у РОПа-департамента — по-прежнему своя
           полка + «Моя команда» с полками подчинённых (managed-depts). ── */}
-      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><PayoutManageBlock /><InventoryManageBlock /><TeamCustomersBlock /><TeamBadgesBlock /></>)}
+      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><PayoutManageBlock /><InventoryManageBlock /><TeamCustomersBlock /><TeamQuestsBlock /><TeamBadgesBlock /></>)}
 
       {isLoading ? (
         <div className="space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-24 bg-[var(--color-border)] rounded-2xl animate-pulse" />)}</div>

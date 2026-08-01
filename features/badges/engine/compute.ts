@@ -21,6 +21,7 @@ import { accrueCoins } from './coins';
 import { runWalletTick } from './wallet';
 import { CUSTOM_PREFIX, validateCustomCriteria, type CustomCriteria, type CustomMetric, type CustomPeriod } from './customTemplates';
 import { computeXpTick, writeXpLedger } from '@/features/xp/engine/xp';
+import { questTick } from '@/features/quests/engine/quests';
 
 export const RETRO_START = '2026-04-03'; // решение владельца: ретро с 03.04.2026
 
@@ -790,9 +791,23 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
       }));
     }
 
+    // ── Квесты (миграция 125): экспирация, генерация всем активным, автозачёт
+    // + квест-бейджи. ДО XP-тика: выполненные квесты дают XP в уровень.
+    try {
+      const activeIds = await analyticsDb().query<{ id: number }>(
+        `SELECT bitrix_id::int AS id FROM sa.employees WHERE is_active AND bitrix_id IS NOT NULL`,
+      );
+      const qt = await questTick(systemDb(), activeIds.rows.map(r => r.id));
+      for (const a of qt.awards) {
+        if (!enabled(a.badgeKey)) continue;
+        awards.push({ bitrixId: a.bitrixId, badgeKey: a.badgeKey, tier: a.tier, periodType: a.periodType, periodDate: a.periodDate, value: a.value, counter: a.counter });
+      }
+    } catch (e) {
+      // до применения миграции 125 таблиц квестов нет — тик не должен падать
+      console.warn('[quests] тик пропущен:', e instanceof Error ? e.message : e);
+    }
+
     // ── XP-система (миграция 124): леджер + награды XP-пула в общем тике ─────
-    // Квест-заглушки (quest_*) движок сознательно скипает — активируются с
-    // запуском квестов (отдельный этап, дизайн пилится).
     const xp = await computeXpTick(client, enabled);
     awards.push(...xp.awards);
 

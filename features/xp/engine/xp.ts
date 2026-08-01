@@ -243,6 +243,17 @@ function median(nums: number[]): number | null {
  * читаются из него, чтобы тик и кнопка видели актуальные правки).
  * Леджер НЕ пишет — это делает writeXpLedger в транзакции вызывающего.
  */
+/** XP за выполненные квесты (source второй к леджеру сделок): {mgr: xp}.
+ *  Таблица quests появляется миграцией 125 — до неё тихо пусто. */
+async function fetchQuestXp(system: Pool | PoolClient): Promise<Map<number, number>> {
+  try {
+    const r = await system.query<{ b: number; xp: string }>(
+      `SELECT bitrix_id::int AS b, sum(reward_xp)::text AS xp FROM quests WHERE status = 'done' GROUP BY 1`,
+    );
+    return new Map(r.rows.map(x => [x.b, Number(x.xp)]));
+  } catch { return new Map(); }
+}
+
 export async function computeXpTick(
   system: Pool | PoolClient,
   isBadgeEnabled: (key: string) => boolean,
@@ -347,9 +358,10 @@ export async function computeXpTick(
     const d = new Date(Date.parse('2000-01-01T12:00:00Z') + level * 86_400_000);
     return d.toISOString().slice(0, 10);
   };
+  const questXp = await fetchQuestXp(system);
   if (isBadgeEnabled('xp_level_up')) {
     for (const [mgr, rows] of byMgr) {
-      const total = rows.reduce((s, r) => s + r.totalXp, 0);
+      const total = rows.reduce((s, r) => s + r.totalXp, 0) + (questXp.get(mgr) ?? 0);
       const level = levelFromXp(total, settings.levelBase, settings.levelExp);
       for (let n = 1; n <= level; n++) {
         awards.push({ bitrixId: mgr, badgeKey: 'xp_level_up', tier: null, periodType: 'day', periodDate: synthDate(n), value: n });
@@ -462,7 +474,7 @@ export interface XpProfile {
 }
 
 export async function fetchXpProfile(system: Pool, bitrixId: number): Promise<XpProfile> {
-  const [settings, totals, cls] = await Promise.all([
+  const [settings, totals, cls, questXp] = await Promise.all([
     loadXpSettings(system),
     system.query<{ total: string | null }>(`SELECT sum(total_xp)::text AS total FROM xp_ledger WHERE bitrix_id = $1`, [bitrixId]),
     system.query<{ name: string; xp: string }>(
@@ -471,8 +483,9 @@ export async function fetchXpProfile(system: Pool, bitrixId: number): Promise<Xp
         WHERE l.bitrix_id = $1 GROUP BY 1 ORDER BY 2 DESC`,
       [bitrixId],
     ),
+    fetchQuestXp(system),
   ]);
-  const totalXp = Math.round(Number(totals.rows[0]?.total ?? 0));
+  const totalXp = Math.round(Number(totals.rows[0]?.total ?? 0)) + (questXp.get(bitrixId) ?? 0);
   const level = levelFromXp(totalXp, settings.levelBase, settings.levelExp);
   const classes = cls.rows.map(r => {
     const xp = Math.round(Number(r.xp));
@@ -519,8 +532,9 @@ export async function fetchXpBriefs(system: Pool, bitrixIds: number[]): Promise<
     const cur = bestClass.get(r.bitrix_id);
     if (!cur || xp > cur.xp) bestClass.set(r.bitrix_id, { name: r.name, xp });
   }
+  const questXp = await fetchQuestXp(system);
   for (const r of totals.rows) {
-    const totalXp = Math.round(Number(r.total));
+    const totalXp = Math.round(Number(r.total)) + (questXp.get(r.bitrix_id) ?? 0);
     const level = levelFromXp(totalXp, settings.levelBase, settings.levelExp);
     const bc = bestClass.get(r.bitrix_id);
     const bcLevel = bc ? levelFromXp(bc.xp, settings.classLevelBase, settings.levelExp) : 0;
