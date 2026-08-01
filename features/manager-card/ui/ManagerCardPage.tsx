@@ -229,6 +229,25 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   // Деп-линк «Планёрка» → «Мои заказчики» (клик по цифре открывает список в
   // нужном срезе: filter/category — best-effort, читается один раз при заходе на таб).
   const [customersDeepLink, setCustomersDeepLink] = useState<{ filter?: CustomerFilter; category?: string } | null>(null);
+  // Фиче-флаг «Планёрка» (01.08, решение владельца после отзыва Серёги «не
+  // нравится — убери»): код/роуты живы, таб и блок РОПа спрятаны, пока флаг
+  // feature_flags.planyorka_enabled = false. Дефолт false, пока флаги не загрузились
+  // (или таблицы ещё нет) — безопасно, ничего лишнего не мелькнёт.
+  const { data: features } = useQuery<{ planyorka: boolean }>({
+    queryKey: ['features'],
+    queryFn: async () => {
+      const res = await fetch('/api/features');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const planyorkaEnabled = features?.planyorka === true;
+  useEffect(() => {
+    // Защита от протухшего состояния (напр. флаг выключили, пока таб уже был открыт).
+    if (!planyorkaEnabled && tab === 'planyorka') setTab('profile');
+  }, [planyorkaEnabled, tab]);
   const tabbed = mode === 'manager';
   const showStats = !tabbed || tab === 'stats';
 
@@ -311,7 +330,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {/* ── Табы ЛК (только карточка менеджера) ── */}
       {tabbed && (
         <div className="flex items-stretch gap-2">
-          <div className="flex-1"><ManagerTabBar active={tab} onChange={setTab} /></div>
+          <div className="flex-1"><ManagerTabBar active={tab} onChange={setTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
           {showBadges && <NotificationsBell />}
         </div>
       )}
@@ -319,7 +338,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {tabbed && tab === 'profile' && (
         <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => setTab('rewards')} />
       )}
-      {tabbed && tab === 'planyorka' && (
+      {tabbed && planyorkaEnabled && tab === 'planyorka' && (
         <PlanyorkaTab
           managerId={managerId} isSelf={showBadges}
           onGoStats={() => setTab('stats')}
@@ -440,7 +459,9 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {/* ── Бейджи (задача 2655): у менеджера полка переехала в таб «Награды»
           (табы ЛК, доп. Серёги 31.07); у РОПа-департамента — по-прежнему своя
           полка + «Моя команда» с полками подчинённых (managed-depts). ── */}
-      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><PayoutManageBlock /><InventoryManageBlock /><TeamPlanyorkaBlock /><TeamCustomersBlock /><TeamQuestsBlock /><TeamBadgesBlock /></>)}
+      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><PayoutManageBlock /><InventoryManageBlock /><TeamCustomersBlock /><TeamQuestsBlock /><TeamBadgesBlock /></>)}
+      {/* «Планёрка команды» спрятана флагом (01.08) — код жив в features/planyorka, не подключён сюда. */}
+      {showBadges && mode === 'department' && planyorkaEnabled && <TeamPlanyorkaBlock />}
 
       {isLoading ? (
         <div className="space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-24 bg-[var(--color-border)] rounded-2xl animate-pulse" />)}</div>

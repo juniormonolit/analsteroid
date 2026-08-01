@@ -31,11 +31,17 @@ export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'inventory', label: 'Инвентарь' },
 ];
 
-export function ManagerTabBar({ active, onChange }: { active: ManagerTabKey; onChange: (t: ManagerTabKey) => void }) {
+export function ManagerTabBar({ active, onChange, hidden }: {
+  active: ManagerTabKey; onChange: (t: ManagerTabKey) => void;
+  // Табы за фиче-флагом (01.08: «Планёрка» спрятана — feature_flags.planyorka_enabled)
+  // фильтруются здесь, не в самом списке MANAGER_TABS — код таба остаётся нетронутым.
+  hidden?: ManagerTabKey[];
+}) {
+  const tabs = hidden?.length ? MANAGER_TABS.filter(t => !hidden.includes(t.key)) : MANAGER_TABS;
   return (
     // Узкий вьюпорт (Битрикс-iframe): горизонтальный скролл вместо развала сетки.
     <div className="flex gap-1 overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1">
-      {MANAGER_TABS.map(t => (
+      {tabs.map(t => (
         <button
           key={t.key}
           type="button"

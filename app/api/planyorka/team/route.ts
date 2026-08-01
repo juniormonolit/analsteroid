@@ -3,12 +3,18 @@ import { getSession } from '@/lib/auth/session';
 import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { buildTeamPlanyorka, type PlanyorkaUnit } from '@/features/planyorka/engine/planyorka';
+import { isFeatureEnabled } from '@/lib/featureFlags';
 
 // «Планёрка команды» (РОП, задача владельца 01.08) — та же managed-depts механика,
 // что «Заказчики команды» / «Моя команда»: список строится ТОЛЬКО из отделов сессии.
+//
+// СКРЫТО ФЛАГОМ (01.08, см. app/api/planyorka/route.ts) — feature_flags.planyorka_enabled.
 const UNITS: PlanyorkaUnit[] = ['day', 'week', 'month'];
 
 export async function GET(req: NextRequest) {
+  if (!(await isFeatureEnabled('planyorka_enabled'))) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.bitrixUserId) return NextResponse.json({ team: [] });

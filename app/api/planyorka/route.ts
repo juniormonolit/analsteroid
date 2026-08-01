@@ -2,13 +2,22 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { canViewManager } from '@/lib/org/managerAccess';
 import { buildManagerPlanyorka, type PlanyorkaUnit } from '@/features/planyorka/engine/planyorka';
+import { isFeatureEnabled } from '@/lib/featureFlags';
 
 // «Планёрка» (задача владельца 01.08): текстовая сводка менеджера. Доступ — тот же
 // рубеж canViewManager, что у «Моих заказчиков»/карточки менеджера: себя — всегда,
 // РОП/руководство — подчинённых, остальным — 403.
+//
+// СКРЫТО ФЛАГОМ (01.08, решение владельца после отзыва Серёги «не нравится как
+// получилась — убери»): код и роут остаются, но выключены по умолчанию
+// (feature_flags.planyorka_enabled = false, миграция 132). Включение — PUT
+// /api/settings/feature-flags, без выкатки.
 const UNITS: PlanyorkaUnit[] = ['day', 'week', 'month'];
 
 export async function GET(req: NextRequest) {
+  if (!(await isFeatureEnabled('planyorka_enabled'))) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
