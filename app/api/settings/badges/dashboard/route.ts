@@ -8,11 +8,13 @@ import {
   getCirculation, getBalanceRows,
 } from '@/features/badges/engine/dashboard';
 import { getExpiringSoonTotal } from '@/features/badges/engine/wallet';
+import { getXpDashboard } from '@/features/badges/engine/xpDashboard';
 
-// «Геймификация → Дашборд» (задача 2741): сводка экономики ебаллов/рублей —
-// балансы по сотрудникам, эмиссия/поглощение за месяц по source, виджет
-// «здоровье экономики» (методика — owners-inbox/monolitika-sink-mechanics.md).
-// Тот же гейт, что у остальных /settings/badges/* — только супер-админ.
+// «Геймификация → Дашборд» (задача 2741 + 2745 «ещё и по опыту»): сводка
+// экономики ебаллов/рублей (балансы, эмиссия/поглощение, здоровье экономики —
+// owners-inbox/monolitika-sink-mechanics.md) + сводка/список по XP-системе
+// (features/xp/engine/xp.ts). Тот же гейт, что у остальных /settings/badges/*
+// — только супер-админ.
 export async function GET() {
   const session = await getSession();
   const err = superadminError(session);
@@ -21,7 +23,7 @@ export async function GET() {
   const db = systemDb();
   const [
     currencyName, emission, prevEmission, { abs: absorption, freeSinkAmount },
-    circulation, toBurn30d, balanceRows, orgRes,
+    circulation, toBurn30d, balanceRows, orgRes, xp,
   ] = await Promise.all([
     getCurrencyName(db),
     getMonthlyEmission(db),
@@ -35,6 +37,7 @@ export async function GET() {
               department_name AS department
          FROM sa.org_resolved_hierarchy WHERE is_active = true`,
     ),
+    getXpDashboard(db),
   ]);
 
   const orgById = new Map(orgRes.rows.map(r => [r.manager_id, r]));
@@ -61,6 +64,15 @@ export async function GET() {
     : null;
   const freeSinkShare = emission.total > 0 ? freeSinkAmount / emission.total : null;
 
+  // XP-список (задача 2745): те же имя/отдел из оргструктуры, что у балансов
+  // выше; сотрудников без единой XP-строки НЕ добавляем нулями — таблица «по
+  // опыту» показывает только тех, у кого вообще есть прогресс (иначе список
+  // на 430 строк с сотнями нулей, менее полезно, чем балансы валюты).
+  const xpRows = xp.rows.map(r => {
+    const org = orgById.get(String(r.bitrixId));
+    return { ...r, name: org?.name ?? `#${r.bitrixId}`, department: org?.department ?? null };
+  }).sort((a, b) => b.totalXp - a.totalXp);
+
   return NextResponse.json({
     currencyName,
     balances,
@@ -76,5 +88,6 @@ export async function GET() {
       toBurn30d,
     },
     circulation,
+    xp: { summary: xp.summary, rows: xpRows },
   });
 }

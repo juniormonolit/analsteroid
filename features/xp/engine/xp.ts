@@ -245,7 +245,7 @@ function median(nums: number[]): number | null {
  */
 /** XP за выполненные квесты (source второй к леджеру сделок): {mgr: xp}.
  *  Таблица quests появляется миграцией 125 — до неё тихо пусто. */
-async function fetchQuestXp(system: Pool | PoolClient): Promise<Map<number, number>> {
+export async function fetchQuestXp(system: Pool | PoolClient): Promise<Map<number, number>> {
   try {
     const r = await system.query<{ b: number; xp: string }>(
       `SELECT b, sum(xp)::text AS xp FROM (

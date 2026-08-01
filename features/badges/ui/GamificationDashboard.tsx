@@ -17,6 +17,15 @@ interface AbsorptionBySource {
   shop: number; gacha: number; reroll: number; burn: number;
   commission: number; penalty: number; deposit: number; total: number;
 }
+interface XpRow {
+  bitrixId: number; name: string; department: string | null;
+  totalXp: number; xp30: number; level: number; title: string;
+  topClass: { name: string; level: number } | null;
+}
+interface XpSummary {
+  totalXp: number; monthXp: number; medianLevel: number; topLevel: number;
+  titleCounts: Record<string, number>;
+}
 interface DashboardData {
   currencyName: string;
   balances: BalanceRow[];
@@ -26,7 +35,11 @@ interface DashboardData {
   absorption: AbsorptionBySource;
   health: { emission: number; absorption: number; freeSinkAmount: number; freeSinkShare: number | null; toBurn30d: number };
   circulation: { totalEball: number; totalRub: number };
+  xp: { summary: XpSummary; rows: XpRow[] };
 }
+
+// Порядок титулов для сводки (Стажёр → Легенда) — фиксированный, не по алфавиту.
+const TITLE_ORDER = ['Стажёр', 'Боец', 'Ветеран', 'Мастер', 'Грандмастер', 'Легенда Монолита'];
 
 function num(n: number): string {
   return n.toLocaleString('ru-RU');
@@ -53,14 +66,17 @@ function SourceRow({ label, value, currencyName }: { label: string; value: numbe
 type SortKey = 'name' | 'department' | 'eball' | 'rub' | 'earned30' | 'spent30';
 type SortState = { key: SortKey; dir: 'desc' | 'asc' };
 
-function SortableTh({ label, sortKey, sort, onSort, left }: {
-  label: string; sortKey: SortKey; sort: SortState; onSort: (key: SortKey) => void; left?: boolean;
+type XpSortKey = 'name' | 'department' | 'level' | 'title' | 'totalXp' | 'xp30' | 'topClass';
+type XpSortState = { key: XpSortKey; dir: 'desc' | 'asc' };
+
+function SortableTh<K extends string>({ label, sortKey, sort, onSort, left, title }: {
+  label: string; sortKey: K; sort: { key: K; dir: 'desc' | 'asc' }; onSort: (key: K) => void; left?: boolean; title?: string;
 }) {
   const active = sort.key === sortKey;
   return (
     <th
       onClick={() => onSort(sortKey)}
-      title="Сортировать по колонке"
+      title={title ?? 'Сортировать по колонке'}
       className={`px-3 py-2.5 ${left ? 'text-left' : 'text-right'} font-medium whitespace-nowrap cursor-pointer select-none hover:text-[var(--color-text)] ${active ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}
     >
       {label}
@@ -83,6 +99,9 @@ export function GamificationDashboard() {
   const [sort, setSort] = useState<SortState>({ key: 'eball', dir: 'desc' });
   const onSort = (key: SortKey) => setSort(s => (s.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }));
 
+  const [xpSort, setXpSort] = useState<XpSortState>({ key: 'totalXp', dir: 'desc' });
+  const onXpSort = (key: XpSortKey) => setXpSort(s => (s.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' }));
+
   const rows = data?.balances ?? [];
   const sortedRows = useMemo(() => {
     const mult = sort.dir === 'desc' ? -1 : 1;
@@ -93,10 +112,22 @@ export function GamificationDashboard() {
     });
   }, [rows, sort]);
 
+  const xpRows = data?.xp.rows ?? [];
+  const sortedXpRows = useMemo(() => {
+    const mult = xpSort.dir === 'desc' ? -1 : 1;
+    return [...xpRows].sort((a, b) => {
+      if (xpSort.key === 'name') return mult * a.name.localeCompare(b.name, 'ru');
+      if (xpSort.key === 'department') return mult * (a.department ?? '').localeCompare(b.department ?? '', 'ru');
+      if (xpSort.key === 'title') return mult * a.title.localeCompare(b.title, 'ru');
+      if (xpSort.key === 'topClass') return mult * (a.topClass?.name ?? '').localeCompare(b.topClass?.name ?? '', 'ru');
+      return mult * (Number(a[xpSort.key]) - Number(b[xpSort.key]));
+    });
+  }, [xpRows, xpSort]);
+
   if (isLoading) return <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>;
   if (isError || !data) return <p className="text-sm text-[var(--color-negative)]">Не удалось загрузить дашборд.</p>;
 
-  const { currencyName, emission, absorption, health, circulation, emissionMomPct } = data;
+  const { currencyName, emission, absorption, health, circulation, emissionMomPct, xp } = data;
   const freeSinkPct = health.freeSinkShare === null ? null : Math.round(health.freeSinkShare * 1000) / 10;
   const freeSinkOk = freeSinkPct !== null && freeSinkPct >= 25 && freeSinkPct <= 35;
   const netFlow = health.emission - health.absorption;
@@ -203,6 +234,74 @@ export function GamificationDashboard() {
                     <td className="px-3 py-2 text-right tabular-nums">{num(r.rub)}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-[var(--color-positive)]">{num(r.earned30)}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-[var(--color-negative)]">{num(r.spent30)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* По опыту (XP) — задача 2745, продолжение дашборда */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Card title="Суммарный XP компании">
+          <div className="text-2xl font-semibold tabular-nums">{num(xp.summary.totalXp)}</div>
+        </Card>
+        <Card title="Начислено XP за месяц">
+          <div className="text-2xl font-semibold tabular-nums">{num(xp.summary.monthXp)}</div>
+        </Card>
+        <Card title="Медианный уровень">
+          <div className="text-2xl font-semibold tabular-nums">{xp.summary.medianLevel}</div>
+        </Card>
+        <Card title="Топ-уровень">
+          <div className="text-2xl font-semibold tabular-nums">{xp.summary.topLevel}</div>
+        </Card>
+      </div>
+
+      <Card title="Распределение по титулам">
+        <div className="flex flex-wrap gap-4">
+          {TITLE_ORDER.map(t => (
+            <div key={t} className="flex items-baseline gap-1.5">
+              <span className="text-lg font-semibold tabular-nums">{xp.summary.titleCounts[t] ?? 0}</span>
+              <span className="text-xs text-[var(--color-text-muted)]">{t}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-[var(--color-text-muted)]">По опыту (XP)</h3>
+        {xpRows.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-muted)]">Пока нет данных по XP-леджеру.</p>
+        ) : (
+          <div className="scroll-x rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="bg-[var(--color-table-header)]">
+                  <SortableTh label="Сотрудник" sortKey="name" sort={xpSort} onSort={onXpSort} left />
+                  <SortableTh label="Отдел" sortKey="department" sort={xpSort} onSort={onXpSort} left />
+                  <SortableTh label="Уровень" sortKey="level" sort={xpSort} onSort={onXpSort} />
+                  <SortableTh label="Титул" sortKey="title" sort={xpSort} onSort={onXpSort} left />
+                  <SortableTh label="Всего XP" sortKey="totalXp" sort={xpSort} onSort={onXpSort} />
+                  <SortableTh label="XP за 30д" sortKey="xp30" sort={xpSort} onSort={onXpSort} title="Только по датам сделок (sold/ship) — квестовый бонус в 30-дневную дельту не входит, дата события не хранится · сортировать" />
+                  <SortableTh label="Топ-класс" sortKey="topClass" sort={xpSort} onSort={onXpSort} left />
+                </tr>
+              </thead>
+              <tbody>
+                {sortedXpRows.map((r, i) => (
+                  <tr
+                    key={r.bitrixId}
+                    className={`border-t border-[var(--color-border)] ${i % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''}`}
+                  >
+                    <td className="px-3 py-2 whitespace-nowrap font-medium">{r.name}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]">{r.department ?? '—'}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{r.level}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{r.title}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{num(r.totalXp)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-[var(--color-positive)]">{num(r.xp30)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]">
+                      {r.topClass ? `${r.topClass.name} (ур. ${r.topClass.level})` : '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
