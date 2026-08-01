@@ -1,6 +1,6 @@
 'use client';
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Trash2 } from 'lucide-react';
 import { hasPerm } from '@/lib/auth/perms';
@@ -35,6 +35,8 @@ import { exportTableToExcel } from '@/features/reports/lib/exportExcel';
 import { exportNodeToPng } from '@/features/reports/lib/exportImage';
 import { exportNodeToPdf } from '@/features/reports/lib/exportPdf';
 import { UserGroupsBar, CreateGroupButton, GroupSelectPanel, type UserReportGroup } from './UserGroupsBar';
+import { ReportTabsBar } from './ReportTabsBar';
+import { loadTabsStore, saveTabsStore, newTabId, type ReportTab, type ReportTabSnapshot, type ReportTabsStore } from '@/features/reports/lib/reportTabs';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -487,6 +489,183 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     setSortDir(preset.sortDir ?? 'desc');
     setColumnGroups(preset.columnGroups ?? []);
   }, [preset?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Вкладки отчётов «как в браузере» (фича Серёги 01.08) ────────────────────
+  // Вкладка = экземпляр отчёта со своим полным состоянием (reportTabs.ts),
+  // хранение localStorage per-user — осознанно эфемерно (НЕ БД/избранное).
+  // Рендерится только активная вкладка (страница монтирует один SalesReportPage),
+  // неактивные — сериализованный JSON, живых запросов не держат. Правила:
+  //  * прямой заход по URL (сайдбар/диплинк) активирует последнюю вкладку этого
+  //    route или создаёт новую — «открытие по URL = активная вкладка»; ?new=1
+  //    всегда создаёт свежую;
+  //  * «+» — новая вкладка-КОПИЯ текущего отчёта (UX-решение: сохраняет контекст,
+  //    дефолтный отчёт всегда доступен сайдбаром);
+  //  * переключение снапшотит текущую вкладку синхронно ДО ухода;
+  //  * restore стоит ПОСЛЕ preset-эффекта — состояние вкладки выигрывает
+  //    (это и есть «настроил и вернулся»);
+  //  * навигация между route-ами НЕ ремоунтит SalesReportPage (React сохраняет
+  //    инстанс одинакового типа) — поэтому сброс tabsRestoredRef по pathname.
+  const pathname = usePathname();
+  const [tabsStore, setTabsStore] = useState<ReportTabsStore | null>(null);
+  const tabsLogin = currentUser === undefined ? undefined : (currentUser?.login ?? null);
+  const tabsRestoredRef = useRef(false);
+
+  const buildTabSnapshot = useCallback((): ReportTabSnapshot => ({
+    period: { from: period.from.toISOString(), to: period.to.toISOString() },
+    comparison: { from: comparison.from.toISOString(), to: comparison.to.toISOString() },
+    dealScope, clientType, grouping, metricIds,
+    comparisonDisplay,
+    metricDisplayModes: metricDisplayModes as Record<string, string>,
+    comparisonThreshold, productGroupMode,
+    highlights: highlights as Record<string, unknown>,
+    pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides,
+    accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds,
+    colorizeMetrics, zebra, borderMode, numberAlign, accountType,
+    drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped,
+    sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups,
+    metricFilters: metricFilters as Record<string, unknown>,
+    createdTimeFilter, firstTouchFilter, search,
+  }), [period, comparison, dealScope, clientType, grouping, metricIds, comparisonDisplay, metricDisplayModes, comparisonThreshold, productGroupMode, highlights, pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides, accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, numberAlign, accountType, drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped, sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups, metricFilters, createdTimeFilter, firstTouchFilter, search]);
+
+  const applyTabSnapshot = useCallback((s: ReportTabSnapshot) => {
+    setPeriod({ from: new Date(s.period.from), to: new Date(s.period.to) });
+    setComparison({ from: new Date(s.comparison.from), to: new Date(s.comparison.to) });
+    setDealScope(s.dealScope as DealScope);
+    setClientType(s.clientType as ClientType);
+    setGrouping(s.grouping as Grouping);
+    setMetricIds(s.metricIds ?? []);
+    setFetchedMetricIds(s.metricIds ?? []);
+    setComparisonDisplay(s.comparisonDisplay as ComparisonDisplay);
+    setMetricDisplayModes((s.metricDisplayModes ?? {}) as Record<string, ComparisonDisplay>);
+    setComparisonThreshold(s.comparisonThreshold ?? 5);
+    setProductGroupMode(s.productGroupMode as ProductGroupMode);
+    setHighlights((s.highlights ?? {}) as Record<string, MetricHighlightConfig>);
+    setPinnedMetricIds(s.pinnedMetricIds ?? []);
+    setMetricDecimalOverrides(s.metricDecimalOverrides ?? {});
+    setMetricThresholdOverrides(s.metricThresholdOverrides ?? {});
+    setAccentedMetricIds(s.accentedMetricIds ?? []);
+    setBarMetricIds(s.barMetricIds ?? []);
+    setHeatmapMetricIds(s.heatmapMetricIds ?? []);
+    setHeatmapInvertedIds(s.heatmapInvertedIds ?? []);
+    setColorizeMetrics(s.colorizeMetrics ?? false);
+    setZebra(s.zebra ?? false);
+    setBorderMode((s.borderMode ?? 'grid') as BorderMode);
+    setNumberAlign((s.numberAlign ?? 'center') as 'left' | 'center' | 'right');
+    setAccountType((s.accountType ?? 'managers') as 'managers' | 'logists' | 'all');
+    setDrilldownDuplicate(s.drilldownDuplicate ?? true);
+    setDrilldownMetricIds(s.drilldownMetricIds ?? []);
+    setDealFields(s.dealFields ?? undefined);
+    setDrilldownGrouped(s.drilldownGrouped ?? true);
+    setSourceDimension((s.sourceDimension ?? 'brand') as SourceDimension);
+    setDrilldownDimension((s.drilldownDimension ?? 'contact_type') as DrilldownDimension);
+    setSortBy(s.sortBy ?? null);
+    setSortDir((s.sortDir ?? 'desc') as 'asc' | 'desc');
+    setColumnGroups(s.columnGroups ?? []);
+    setMetricFilters((s.metricFilters ?? {}) as MetricFilters);
+    setCreatedTimeFilter((s.createdTimeFilter ?? 'all') as CreatedTimeFilter);
+    setFirstTouchFilter((s.firstTouchFilter ?? 'all') as FirstTouchFilter);
+    setSearch(s.search ?? '');
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Смена route без ремоунта (см. шапку блока) — форсим повторный restore.
+  useEffect(() => {
+    tabsRestoredRef.current = false;
+    setTabsStore(null);
+  }, [pathname]);
+
+  // Инициализация/restore после резолва сессии (ключ localStorage — per-login).
+  useEffect(() => {
+    if (tabsLogin === undefined || tabsRestoredRef.current) return;
+    const store = loadTabsStore(tabsLogin);
+    let active = store.tabs.find(t => t.id === store.activeId) ?? null;
+    if (isNew || !active || active.route !== pathname) {
+      const reusable = isNew ? null
+        : (store.tabs.filter(t => t.route === pathname).sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0] ?? null);
+      if (reusable) {
+        active = reusable;
+      } else {
+        active = { id: newTabId(), route: pathname, name: title, state: null, lastUsedAt: Date.now() };
+        store.tabs.push(active);
+      }
+      store.activeId = active.id;
+    }
+    active.lastUsedAt = Date.now();
+    if (active.state) applyTabSnapshot(active.state);
+    saveTabsStore(tabsLogin, store);
+    setTabsStore(store);
+    tabsRestoredRef.current = true;
+  }, [tabsLogin, pathname, isNew, title, applyTabSnapshot]);
+
+  // Персист состояния активной вкладки при каждом изменении (дёшево, <5КБ JSON).
+  useEffect(() => {
+    if (!tabsRestoredRef.current || !tabsStore || tabsLogin === undefined) return;
+    const active = tabsStore.tabs.find(t => t.id === tabsStore.activeId);
+    if (!active || active.route !== pathname) return;
+    active.state = buildTabSnapshot();
+    active.lastUsedAt = Date.now();
+    saveTabsStore(tabsLogin, tabsStore);
+  }, [buildTabSnapshot, tabsStore, tabsLogin, pathname]);
+
+  function handleTabSelect(tab: ReportTab) {
+    if (!tabsStore) return;
+    const cur = tabsStore.tabs.find(t => t.id === tabsStore.activeId);
+    if (cur && cur.route === pathname) cur.state = buildTabSnapshot(); // снапшот ДО ухода
+    tabsStore.activeId = tab.id;
+    tab.lastUsedAt = Date.now();
+    saveTabsStore(tabsLogin ?? null, tabsStore);
+    if (tab.route !== pathname) {
+      router.push(tab.route);
+    } else {
+      if (tab.state) applyTabSnapshot(tab.state);
+      setTabsStore({ ...tabsStore });
+    }
+  }
+
+  function handleTabAdd() {
+    if (!tabsStore) return;
+    const snap = buildTabSnapshot();
+    const cur = tabsStore.tabs.find(t => t.id === tabsStore.activeId);
+    if (cur && cur.route === pathname) cur.state = snap;
+    const tab: ReportTab = { id: newTabId(), route: pathname, name: title, state: snap, lastUsedAt: Date.now() };
+    tabsStore.tabs.push(tab);
+    tabsStore.activeId = tab.id;
+    saveTabsStore(tabsLogin ?? null, tabsStore);
+    setTabsStore({ ...tabsStore });
+  }
+
+  function handleTabClose(tab: ReportTab) {
+    if (!tabsStore) return;
+    const idx = tabsStore.tabs.findIndex(t => t.id === tab.id);
+    if (idx === -1) return;
+    const wasActive = tabsStore.activeId === tab.id;
+    tabsStore.tabs.splice(idx, 1);
+    if (wasActive) {
+      const next = tabsStore.tabs[idx] ?? tabsStore.tabs[idx - 1] ?? null;
+      if (next) {
+        tabsStore.activeId = next.id;
+        next.lastUsedAt = Date.now();
+        saveTabsStore(tabsLogin ?? null, tabsStore);
+        if (next.route !== pathname) { setTabsStore({ ...tabsStore }); router.push(next.route); return; }
+        if (next.state) applyTabSnapshot(next.state);
+      } else {
+        // Последняя вкладка закрыта — остаёмся на текущем отчёте свежей вкладкой.
+        const fresh: ReportTab = { id: newTabId(), route: pathname, name: title, state: buildTabSnapshot(), lastUsedAt: Date.now() };
+        tabsStore.tabs.push(fresh);
+        tabsStore.activeId = fresh.id;
+        saveTabsStore(tabsLogin ?? null, tabsStore);
+      }
+    } else {
+      saveTabsStore(tabsLogin ?? null, tabsStore);
+    }
+    setTabsStore({ ...tabsStore });
+  }
+
+  function handleTabRename(tab: ReportTab, name: string) {
+    if (!tabsStore) return;
+    tab.name = name;
+    saveTabsStore(tabsLogin ?? null, tabsStore);
+    setTabsStore({ ...tabsStore });
+  }
 
   // Сравнение при смене периода теперь считает PeriodRangeControls (FilterBar.tsx —
   // задача 10.07: быстрый пресет → календарный шаг назад, ручной диапазон → хвост
@@ -1001,6 +1180,16 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      {tabsStore && (
+        <ReportTabsBar
+          tabs={tabsStore.tabs}
+          activeId={tabsStore.activeId}
+          onSelect={handleTabSelect}
+          onClose={handleTabClose}
+          onAdd={handleTabAdd}
+          onRename={handleTabRename}
+        />
+      )}
       <div className="px-6 pt-4 pb-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
         {renamingTitle ? (
           <input
