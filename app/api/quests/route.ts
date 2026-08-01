@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { canViewManager } from '@/lib/org/managerAccess';
 import { systemDb } from '@/lib/db/clients';
 import { refreshQuests, loadQuestSettings, mskToday, isWorkDay } from '@/features/quests/engine/quests';
+import { refreshContracts, ensureContractPool } from '@/features/quests/engine/contracts';
 
 // Квесты ЛК (миграция 125): текущие слоты + история 8 недель. Генерация
 // ленивая (недостающие слоты создаются при обращении), прогресс и автозачёт
@@ -17,9 +18,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   const db = systemDb();
-  const [data, settings] = await Promise.all([
+  await ensureContractPool(db).catch(() => {});
+  const [data, settings, contracts] = await Promise.all([
     refreshQuests(db, Number(bitrixId)),
     loadQuestSettings(db),
+    refreshContracts(db, Number(bitrixId)).catch(() => ({ mine: [], open: [] })),
   ]);
   // Цена следующего доп. квеста (растёт ×2 за каждый купленный на неделе).
   const week = await db.query<{ c: string }>(
@@ -30,6 +33,7 @@ export async function GET(req: NextRequest) {
   const extraPrice = settings.extraDay * Math.pow(2, Number(week.rows[0]?.c ?? 0));
   return NextResponse.json({
     ...data,
+    contracts,
     isSelf: bitrixId === session.bitrixUserId,
     workday: isWorkDay(mskToday()),
     prices: {

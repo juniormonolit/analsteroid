@@ -248,7 +248,11 @@ function median(nums: number[]): number | null {
 async function fetchQuestXp(system: Pool | PoolClient): Promise<Map<number, number>> {
   try {
     const r = await system.query<{ b: number; xp: string }>(
-      `SELECT bitrix_id::int AS b, sum(reward_xp)::text AS xp FROM quests WHERE status = 'done' GROUP BY 1`,
+      `SELECT b, sum(xp)::text AS xp FROM (
+         SELECT bitrix_id::int AS b, reward_xp AS xp FROM quests WHERE status = 'done'
+         UNION ALL
+         SELECT taken_by::int, reward_xp FROM quest_contracts WHERE status = 'done'
+       ) t GROUP BY 1`,
     );
     return new Map(r.rows.map(x => [x.b, Number(x.xp)]));
   } catch { return new Map(); }

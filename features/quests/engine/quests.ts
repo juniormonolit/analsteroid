@@ -664,6 +664,7 @@ export async function refreshQuests(system: Pool, mgr: number): Promise<{ curren
 async function completeQuest(system: Pool, q: QuestRow, progress: number): Promise<void> {
   const client = await system.connect();
   let completed = false;
+  let loot: LootDrop | null = null;
   try {
     await client.query('BEGIN');
     const upd = await client.query(
@@ -676,11 +677,13 @@ async function completeQuest(system: Pool, q: QuestRow, progress: number): Promi
          VALUES ($1, NULL, NULL, $2, $2, 'EBALL', 'quest', $3) RETURNING id`,
         [q.bitrixId, q.rewardEballs, `Квест: ${q.title}`],
       );
-      await client.query(`UPDATE quests SET coin_ledger_id=$2 WHERE id=$1`, [q.id, Number(led.rows[0].id)]);
+      loot = await rollLoot(client, q.bitrixId, q.tier);
+      await client.query(`UPDATE quests SET coin_ledger_id=$2, meta = meta || $3::jsonb WHERE id=$1`,
+        [q.id, Number(led.rows[0].id), JSON.stringify({ loot })]);
       await createNotification(client, {
         bitrixId: q.bitrixId, type: 'quest_done',
         title: `Квест выполнен: ${q.title}`,
-        body: `+${q.rewardEballs} ебаллов и +${q.rewardXp} XP. Так держать!`,
+        body: `+${q.rewardEballs} ебаллов и +${q.rewardXp} XP.${loot ? ` Лутдроп: ${loot.itemName}!` : ''} Так держать!`,
       });
       completed = true;
     }
@@ -692,7 +695,8 @@ async function completeQuest(system: Pool, q: QuestRow, progress: number): Promi
     client.release();
   }
   if (completed) {
-    void pushViaAnalitik(q.bitrixId, `🗺️ Квест выполнен: ${q.title}`, `+${q.rewardEballs} ебаллов, +${q.rewardXp} XP`);
+    void pushViaAnalitik(q.bitrixId, `🗺️ Квест выполнен: ${q.title}`,
+      `+${q.rewardEballs} ебаллов, +${q.rewardXp} XP${loot ? `. 🎁 Лутдроп: ${loot.itemName}!` : ''}`);
   }
 }
 
@@ -812,6 +816,36 @@ export async function buyExtraQuest(system: Pool, mgr: number, actorLogin: strin
   }
 }
 
+
+// ── лутдроп (общий для квестов и контрактов, миграция 126) ───────────────────
+
+export interface LootDrop { itemId: number; itemName: string }
+
+/** Серверный ролл лута по тиру (в транзакции зачёта): предмет магазина в
+ *  инвентарь (механика гачи: owned, TTL предмета). null = не выпало.
+ *  Легендарный тир — шанс 100% (гарантированная шмотка). */
+export async function rollLoot(client: PoolClient, bitrixId: number, tier: QuestTier): Promise<LootDrop | null> {
+  try {
+    const lt = await client.query<{ loot_table: Record<string, { chance: number; items: number[] }> }>(
+      `SELECT loot_table FROM quest_settings WHERE id=1`,
+    );
+    const entry = lt.rows[0]?.loot_table?.[tier];
+    if (!entry || !Array.isArray(entry.items) || entry.items.length === 0) return null;
+    if (Math.random() >= Number(entry.chance)) return null;
+    const itemId = entry.items[Math.floor(Math.random() * entry.items.length)];
+    const item = await client.query<{ id: number; name: string; ttl_months: number }>(
+      `SELECT id, name, ttl_months FROM shop_items WHERE id=$1 AND enabled`, [itemId],
+    );
+    if (item.rows.length === 0) return null;
+    await client.query(
+      `INSERT INTO inventory_items (bitrix_id, shop_item_id, item_name, price_paid, currency, status, expires_at)
+       VALUES ($1, $2, $3, 1, 'EBALL', 'owned', now() + make_interval(months => $4))`,
+      [bitrixId, item.rows[0].id, item.rows[0].name, item.rows[0].ttl_months],
+    );
+    return { itemId: item.rows[0].id, itemName: item.rows[0].name };
+  } catch { return null; } // до миграции 126 колонки loot_table нет
+}
+
 // ── ночной тик: экспирация, генерация всем, автозачёт, квест-бейджи ──────────
 
 export interface QuestAwardRow {
@@ -822,6 +856,15 @@ export interface QuestAwardRow {
 export async function questTick(system: Pool, activeManagerIds: number[]): Promise<{ awards: QuestAwardRow[]; generatedFor: number }> {
   const today = mskToday();
   await system.query(`UPDATE quests SET status='failed' WHERE status='active' AND period_end < $1`, [today]);
+  // Доска контрактов (миграция 126): пул недели + прогресс/дедлайны взятых.
+  try {
+    const { ensureContractPool, refreshContracts } = await import('./contracts');
+    await ensureContractPool(system);
+    const owners = await system.query<{ b: number }>(`SELECT DISTINCT taken_by::int AS b FROM quest_contracts WHERE status='taken'`);
+    for (const o of owners.rows) await refreshContracts(system, o.b).catch(() => {});
+  } catch (e) {
+    console.warn('[quests] контракты в тике пропущены:', e instanceof Error ? e.message : e);
+  }
   let generatedFor = 0;
   for (const mgr of activeManagerIds) {
     try {

@@ -19,8 +19,15 @@ interface QuestRow {
   status: 'active' | 'done' | 'failed'; progress: number; doneAt: string | null;
   rerollOf: number | null;
 }
+interface ContractRow {
+  id: number; title: string; tier: Tier; category: string; target: number; days: number;
+  rewardEballs: number; rewardXp: number; deposit: number;
+  status: 'open' | 'taken' | 'done' | 'failed' | 'expired';
+  deadline: string | null; progress: number;
+}
 interface ApiResponse {
   current: QuestRow[]; history: QuestRow[];
+  contracts: { mine: ContractRow[]; open: ContractRow[] };
   isSelf: boolean; workday: boolean;
   prices: { rerollDay: number; rerollWeek: number; rerollMonth: number; extra: number };
   xpMult: number;
@@ -110,6 +117,20 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
     refetchOnWindowFocus: false,
   });
 
+  const takeC = async (contractId: number) => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/quests/contracts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contractId }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        alert((j as { error?: string } | null)?.error ?? `Ошибка ${res.status}`);
+      }
+      await qc.invalidateQueries({ queryKey: ['quests'] });
+    } finally { setBusy(false); }
+  };
+
   const act = async (payload: Record<string, unknown>) => {
     setBusy(true);
     try {
@@ -164,6 +185,60 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
           Ещё квест ({data.prices.extra})
         </button>
       )}
+
+      {/* Доска контрактов (миграция 126): общий пул, депозит, любой тир */}
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-3">
+        <div className="mb-1 flex flex-wrap items-baseline gap-2">
+          <h3 className="text-sm font-bold text-[var(--color-text)]">📜 Доска контрактов</h3>
+          <span className="text-[11px] text-[var(--color-text-muted)]">
+            общий пул: бери любой тир добровольно; при взятии замораживается депозит — выполнил: депозит назад + награда (+ шанс лутдропа), провалил — депозит сгорает
+          </span>
+        </div>
+        {(data.contracts?.mine ?? []).length > 0 && (
+          <div className="mb-2 flex flex-col gap-1.5">
+            {data.contracts.mine.map(c => (
+              <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-1.5 text-[12px]"
+                style={{ borderColor: `color-mix(in srgb, ${TIER_COLORS[c.tier]} 60%, transparent)`,
+                  backgroundColor: c.status === 'done' ? 'color-mix(in srgb, var(--color-positive,#2f9e44) 8%, transparent)'
+                    : `color-mix(in srgb, ${TIER_COLORS[c.tier]} 6%, transparent)` }}>
+                <span className="rounded px-1 text-[10px] font-bold text-white" style={{ backgroundColor: TIER_COLORS[c.tier] }}>{TIER_LABELS[c.tier]}</span>
+                <span className={c.status === 'failed' ? 'line-through text-[var(--color-text-muted)]' : 'font-semibold text-[var(--color-text)]'}>{c.title}</span>
+                <span className="ml-auto tabular-nums text-[var(--color-text-muted)]">
+                  {c.status === 'taken' && `${fmtNum(c.progress)} / ${fmtNum(c.target)} · до ${c.deadline?.split('-').reverse().join('.')}`}
+                  {c.status === 'done' && `✅ +${c.rewardEballs} (депозит вернулся)`}
+                  {c.status === 'failed' && `✕ депозит ${c.deposit} сгорел`}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {(data.contracts?.open ?? []).length === 0 ? (
+          <div className="text-xs text-[var(--color-text-muted)]">Доска пуста — новый пул появится с генерацией.</div>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {data.contracts.open.map(c => (
+              <div key={c.id} className="flex flex-col gap-1.5 rounded-xl border-2 p-2.5"
+                style={{ borderColor: `color-mix(in srgb, ${TIER_COLORS[c.tier]} 60%, transparent)`,
+                  backgroundColor: `color-mix(in srgb, ${TIER_COLORS[c.tier]} 6%, transparent)` }}>
+                <div className="flex items-center gap-1.5">
+                  <span className="rounded px-1 text-[10px] font-bold text-white" style={{ backgroundColor: TIER_COLORS[c.tier] }}>{TIER_LABELS[c.tier]}</span>
+                  <span className="ml-auto text-[11px] tabular-nums text-[var(--color-text-muted)]">{c.days} дн.</span>
+                </div>
+                <div className="text-[12px] font-semibold text-[var(--color-text)]">{c.title}</div>
+                <div className="text-[11px] tabular-nums text-[var(--color-text-muted)]">
+                  +{c.rewardEballs} еб · +{c.rewardXp} XP · депозит <b>{c.deposit}</b>
+                </div>
+                {isSelf && (
+                  <button type="button" disabled={busy} onClick={() => void takeC(c.id)}
+                    className="w-fit rounded-lg border border-[var(--color-accent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40">
+                    Взять (депозит {c.deposit})
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
 
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-3">
         <div className="mb-2 flex flex-wrap items-baseline gap-2">

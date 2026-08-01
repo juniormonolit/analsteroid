@@ -11,7 +11,24 @@ export async function GET() {
   const session = await getSession();
   const err = superadminError(session);
   if (err) return err;
-  return NextResponse.json({ settings: await loadQuestSettings(systemDb()) });
+  const db = systemDb();
+  const [settings, extra] = await Promise.all([
+    loadQuestSettings(db),
+    db.query<Record<string, unknown>>(
+      `SELECT deposit_pct, contract_limit, contract_cooldown_h, contract_pool_size, loot_table FROM quest_settings WHERE id=1`,
+    ),
+  ]);
+  const e = extra.rows[0] ?? {};
+  return NextResponse.json({
+    settings: {
+      ...settings,
+      depositPct: Number(e.deposit_pct ?? 0.3),
+      contractLimit: Number(e.contract_limit ?? 2),
+      contractCooldownH: Number(e.contract_cooldown_h ?? 24),
+      contractPoolSize: Number(e.contract_pool_size ?? 8),
+      lootTable: e.loot_table ?? {},
+    },
+  });
 }
 
 const FIELDS: Record<string, { col: string; min: number; max: number }> = {
@@ -23,6 +40,10 @@ const FIELDS: Record<string, { col: string; min: number; max: number }> = {
   rerollWeek: { col: 'reroll_week', min: 0, max: 10000 },
   rerollMonth: { col: 'reroll_month', min: 0, max: 10000 },
   extraDay: { col: 'extra_day', min: 0, max: 10000 },
+  depositPct: { col: 'deposit_pct', min: 0, max: 1 },
+  contractLimit: { col: 'contract_limit', min: 1, max: 10 },
+  contractCooldownH: { col: 'contract_cooldown_h', min: 0, max: 720 },
+  contractPoolSize: { col: 'contract_pool_size', min: 1, max: 50 },
 };
 const TIERS: QuestTier[] = ['white', 'green', 'blue', 'epic', 'legendary'];
 
@@ -56,6 +77,21 @@ export async function PATCH(req: Request) {
     }
     params.push(JSON.stringify(clean));
     sets.push(`tier_mult = $${params.length}::jsonb`);
+  }
+  if (body.lootTable !== undefined) {
+    const lt = body.lootTable as Record<string, { chance?: unknown; items?: unknown }>;
+    const clean: Record<string, { chance: number; items: number[] }> = {};
+    for (const t of TIERS) {
+      const e = lt?.[t];
+      const chance = Number(e?.chance);
+      const items = Array.isArray(e?.items) ? (e!.items as unknown[]).map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
+      if (!Number.isFinite(chance) || chance < 0 || chance > 1) {
+        return NextResponse.json({ error: `lootTable.${t}.chance: число 0..1` }, { status: 400 });
+      }
+      clean[t] = { chance, items };
+    }
+    params.push(JSON.stringify(clean));
+    sets.push(`loot_table = $${params.length}::jsonb`);
   }
   if (sets.length > 0) {
     await systemDb().query(`UPDATE quest_settings SET ${sets.join(', ')}, updated_at = now() WHERE id = 1`, params);
