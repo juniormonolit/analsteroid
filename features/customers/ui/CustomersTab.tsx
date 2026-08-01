@@ -1,36 +1,30 @@
 'use client';
 // «Мои заказчики» (фича Серёги 01.08): таб в ЛК менеджера — кому пора позвонить.
-// Клиент = contact_id (физ) / company_id (юр), как в разделе «Повторные»;
-// атрибуция — менеджер последней сделки клиента; сигналы (а)/(б) и пороги — в
-// features/customers/engine/customers.ts. ПДн: телефоны в UI не показываются —
-// звонить менеджер идёт в Битрикс по ссылке на карточку клиента/сделки.
+// РЕДИЗАЙН 01.08 (правка Серёги «суперкривожопый» со скрином): плотный рабочий
+// вид по образцу обычных отчётов («Базовый минимум») —
+//   * легенда-простыня → поповер за иконкой «?»;
+//   * строки в одну линию (~34px, 10-12 клиентов на экране): имя с эллипсисом,
+//     статусные чипы инлайн, «нет» → «—», последняя покупка одной строкой;
+//   * кнопки «Отложить»/«Не звонить» → меню «⋯» в конце строки;
+//   * «Предложить» — топ-1 чипом, топ-3 и награда в тултипе;
+//   * секции — тонкая строка-разделитель, не серый блок;
+//   * имя открывает КАРТОЧКУ КЛИЕНТА (CustomerCard.tsx) — ссылка на Битрикс,
+//     история менеджеров, таймлайн, отметки и пр. переехали туда.
+// Клиент = contact_id (физ) / company_id (юр); атрибуция — менеджер последней
+// сделки; сигналы и пороги — в features/customers/engine/customers.ts.
+// ПДн: телефоны в UI не показываются — звонить менеджер идёт в Битрикс.
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem, CustomerMark, CustomerBucket, NoCallReason } from '@/features/customers/engine/customers';
+import { HelpCircle, MoreHorizontal, ExternalLink } from 'lucide-react';
+import type { ActiveDealInfo, CustomerSection, NoCallReason } from '@/features/customers/engine/customers';
 import type { Recommendation } from '@/features/customers/engine/crossSell';
+import { CustomerCard } from './CustomerCard';
+import {
+  type ApiRow, REASON_LABELS, fmtMoney, fmtDate, daysAgo,
+  clientBitrixUrl, dealBitrixUrl, clientDisplayName,
+} from './shared';
 
-// Локальная копия подписей причин (движок тянет pg — в клиентский бандл нельзя).
-const REASON_LABELS: Record<NoCallReason, string> = {
-  nothing_needed: 'Ничего не нужно',
-  competitor: 'Ушёл к конкуренту',
-  negative: 'Негатив',
-  other: 'Прочее',
-};
-
-interface ApiRow {
-  clientKey: string; clientType: 'contact' | 'company'; clientId: number; name: string | null;
-  dealsTotal: number; dealsSold: number; sumSold: number;
-  lastSoldAt: string | null; lastSoldAmount: number | null; lastSoldGroups: string[];
-  lastCallAt: string | null; lastActivityAt: string | null;
-  activeCount: number; activeDeals: ActiveDealInfo[];
-  refusedNoCall: boolean; cycleDays: number; cycleSource: 'own' | 'global';
-  signals: CallSignal[]; urgency: number;
-  section: CustomerSection; atRisk: boolean; sleeping: boolean;
-  bucket: CustomerBucket; snoozedActive: boolean; mark: CustomerMark | null;
-  managerHistory: ManagerHistoryItem[]; prevManagerNames: string[];
-  recommend: Recommendation | null;
-}
 interface ApiResponse {
   total: number;
   counts: {
@@ -45,10 +39,6 @@ interface ApiResponse {
   };
 }
 
-// Секции (доработка Серёги 01.08): постоянники сверху, купившие один раз ниже,
-// «ещё не купили» — отдельная вкладка (в основном виде их нет, но сигналы по
-// их активным сделкам живут там). Продолжение 01.08: вкладки «Спящие»
-// (авто-архив по молчанию) и «Отказались» (отметка «больше не звонить»).
 type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'never' | 'sleeping' | 'refused';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
@@ -59,7 +49,6 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'sleeping', label: 'Спящие' },
   { key: 'refused', label: 'Отказались' },
 ];
-/** Вкладки основного вида — только в них секционные счётчики в заголовках честны. */
 const MAIN_FILTERS: Filter[] = ['all', 'overdue', 'active', 'inactive'];
 
 const SECTION_LABELS: Record<CustomerSection, string> = {
@@ -75,9 +64,6 @@ const SECTION_HINTS: Record<CustomerSection, string> = {
 
 const PAGE_SIZE = 50;
 
-// Сортировка по заголовкам (правило владельца 01.08 «Заголовки = сортировка»,
-// цикл как в /rating: убывание → возрастание → дефолт по сигналу/urgency).
-// Серверная — пагинация серверная, клиентская сортировала бы только страницу.
 type Sort = { key: string; dir: 'desc' | 'asc' } | null;
 
 function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort) {
@@ -97,129 +83,43 @@ function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search
     },
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
-    placeholderData: prev => prev, // страница не мигает при перелистывании
+    placeholderData: prev => prev,
   });
 }
 
-function fmtMoney(v: number): string {
-  const abs = Math.abs(v);
-  if (abs >= 1_000_000) return `${(v / 1_000_000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} млн ₽`;
-  if (abs >= 1_000) return `${(v / 1_000).toLocaleString('ru-RU', { maximumFractionDigits: 0 })} тыс ₽`;
-  return `${v.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
-}
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—';
-  return iso.slice(0, 10).split('-').reverse().join('.');
-}
-function daysAgo(iso: string | null): string {
-  if (!iso) return '—';
-  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
-  if (d <= 0) return 'сегодня';
-  if (d === 1) return 'вчера';
-  return `${d} дн. назад`;
-}
-function clientUrl(r: ApiRow): string {
-  return r.clientType === 'contact'
-    ? `https://td.monolit-crm.ru/crm/contact/details/${r.clientId}/`
-    : `https://td.monolit-crm.ru/crm/company/details/${r.clientId}/`;
-}
-
-function SignalBadge({ r, noCallDays }: { r: ApiRow; noCallDays: number }) {
-  if (r.signals.length === 0) {
-    return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
-  }
-  return (
-    <div className="flex flex-col gap-1">
-      {r.signals.includes('active_no_call') && (
-        <span className="inline-flex w-fit items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-bold whitespace-nowrap"
-          style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 12%, transparent)' }}
-          title={`Есть активная сделка, по которой нет звонков больше ${noCallDays} дней`}>
-          📞 Сделка без звонка
-        </span>
-      )}
-      {r.signals.includes('overdue_repeat') && (
-        <span className="inline-flex w-fit items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-bold whitespace-nowrap"
-          style={{ color: 'var(--color-warning, #e8590c)', backgroundColor: 'color-mix(in srgb, var(--color-warning, #e8590c) 12%, transparent)' }}
-          title={`Активных сделок нет, а с последней покупки прошло больше типичного цикла повторки клиента (${r.cycleDays} дн., ${r.cycleSource === 'own' ? 'его собственная медиана' : 'медиана по всей базе'})`}>
-          ⏰ Пора позвонить
-        </span>
-      )}
-    </div>
-  );
-}
-
-// «Что предложить» (доп. Серёги 01.08): компактно топ-1 из матрицы переходов
-// «группа последней покупки → следующая покупка», разворот — топ-3. При скудной
-// статистике по группе клиента — общий топ по базе с пометкой.
-function RecommendCell({ rec }: { rec: Recommendation | null }) {
+// Легенда — за иконкой «?» (редизайн 01.08: простыня текста над таблицей мешала работать).
+function LegendPopover() {
   const [open, setOpen] = useState(false);
-  if (!rec || rec.items.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
-  const shown = open ? rec.items : rec.items.slice(0, 1);
-  const baseTitle = rec.fallback
-    ? 'По группе последней покупки клиента мало статистики переходов — показан общий топ следующих покупок по базе'
-    : `Вероятность следующей покупки после: ${rec.basedOn.join(', ')} (доля таких переходов в истории продаж)`;
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
   return (
-    <div className="flex flex-col gap-0.5" title={baseTitle}>
-      {shown.map(it => (
-        <div key={it.group} className="text-xs">
-          <span className="whitespace-nowrap">
-            <span className="text-[var(--color-text)]">{it.group}</span>
-            <span className="ml-1 font-semibold tabular-nums text-[var(--color-accent)]">{it.pct}%</span>
-          </span>
-          {/* Награда за допродажу (доработка Серёги 01.08): какой кросс-селл
-              бейдж и сколько ебаллов даст эта пара. Нет пары-бейджа — не показываем. */}
-          {it.badge && (
-            <div className="text-[11px] text-[var(--color-text-muted)] max-w-[220px]"
-              title="Бейдж и ебаллы, которые получите, если допродадите эту группу этому клиенту">
-              → {it.badge.icon} <span className="italic">«{it.badge.name}»</span>
-              {it.badge.price > 0 && (
-                <span className="ml-1 font-bold text-[var(--color-positive,#2f9e44)] whitespace-nowrap">+{it.badge.price}</span>
-              )}
-            </div>
-          )}
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={() => setOpen(v => !v)} title="Как читать этот список"
+        className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
+        <HelpCircle size={14} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-[380px] max-w-[85vw] rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 text-xs leading-relaxed text-[var(--color-text-muted)] shadow-xl">
+          Клиенты, где вы вели последнюю сделку. <b>Постоянники</b> (2+ покупок за всю историю клиента) — сверху,
+          <b> ⚠ под угрозой</b> — постоянник молчит дольше двух своих циклов повторки и активных сделок нет; ниже —
+          купившие один раз; не купившие — во вкладке «Ещё не купили». Сигналы: <b>📞 сделка молчит</b> — по активной
+          сделке нет звонков больше недели; <b>⏰ пора позвонить</b> — активных сделок нет, а с последней покупки прошло
+          больше типичного цикла повторки клиента. «Предложить» — что клиенты чаще всего покупают следом (наведите —
+          топ-3 и награда за допродажу). Имя открывает карточку клиента; действия — в меню «⋯».
         </div>
-      ))}
-      {rec.fallback && <span className="text-[10px] text-[var(--color-text-muted)]">общий топ по базе</span>}
-      {rec.items.length > 1 && (
-        <button type="button" onClick={() => setOpen(v => !v)}
-          className="w-fit text-[11px] font-semibold text-[var(--color-accent)] hover:underline">
-          {open ? 'свернуть' : `ещё ${rec.items.length - 1}`}
-        </button>
       )}
     </div>
   );
 }
 
-// История менеджеров клиента (доработка Серёги 01.08): кто вёл его сделки, по
-// именам НА МОМЕНТ работы (sa.employee_name_history — на логине люди меняются).
-function ManagerHistoryBlock({ items }: { items: ManagerHistoryItem[] }) {
-  return (
-    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2">
-      <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-        История менеджеров <span className="normal-case font-normal">(имена — на момент работы с клиентом)</span>
-      </div>
-      <table className="text-xs">
-        <tbody>
-          {items.map(m => (
-            <tr key={m.managerId}>
-              <td className="py-0.5 pr-4 font-semibold text-[var(--color-text)]">
-                {m.name ?? `Менеджер #${m.managerId}`}
-              </td>
-              <td className="py-0.5 pr-4 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap">
-                сделок {m.deals} / продано <b className="text-[var(--color-text)]">{m.sold}</b>
-              </td>
-              <td className="py-0.5 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap">
-                {fmtDate(m.firstAt)}{m.firstAt.slice(0, 10) !== m.lastAt.slice(0, 10) ? ` — ${fmtDate(m.lastAt)}` : ''}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Отметки: «Отложить» / «Больше не звонить» / «Вернуть в работу» (01.08) ───
+// ── Отметки: «Отложить» / «Больше не звонить» / «Вернуть в работу» ───────────
+// Редизайн 01.08: контролы больше не живут в каждой строке (раздували её до
+// 150px) — рендерятся в меню «⋯» строки и в шапке карточки клиента.
 
 function addMonthsYmd(months: number): string {
   const d = new Date(Date.now() + 3 * 3600_000); // МСК
@@ -229,70 +129,53 @@ function addMonthsYmd(months: number): string {
 
 type MarkSender = (payload: Record<string, unknown>) => Promise<void>;
 
-function MarkControls({ r, send, busy }: { r: ApiRow; send: MarkSender; busy: boolean }) {
+export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkSender; busy: boolean; onDone?: () => void }) {
   const [open, setOpen] = useState<'snooze' | 'nocall' | null>(null);
   const [customDate, setCustomDate] = useState('');
   const [reason, setReason] = useState<NoCallReason | null>(null);
   const [comment, setComment] = useState('');
 
-  const btn = 'rounded-lg border border-[var(--color-border)] px-2 py-0.5 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] disabled:opacity-40';
+  const btn = 'rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] disabled:opacity-40 text-left';
+  const fire = (payload: Record<string, unknown>) => { setOpen(null); onDone?.(); void send(payload); };
 
-  // Уже размеченные / спящие: одна кнопка возврата.
   if (r.mark?.kind === 'no_call') {
-    return (
-      <button type="button" disabled={busy} className={btn}
-        onClick={() => send({ clientKey: r.clientKey, action: 'clear' })}
-        title="Снять отметку «больше не звонить» и вернуть клиента в основной список">
-        Вернуть в работу
-      </button>
-    );
+    return <button type="button" disabled={busy} className={btn}
+      onClick={() => fire({ clientKey: r.clientKey, action: 'clear' })}
+      title="Снять отметку «больше не звонить» и вернуть клиента в основной список">↩ Вернуть в работу</button>;
   }
   if (r.snoozedActive) {
-    return (
-      <button type="button" disabled={busy} className={btn}
-        onClick={() => send({ clientKey: r.clientKey, action: 'clear' })}
-        title="Снять отсрочку — клиент вернётся в сигналы уже сейчас">
-        вернуть в работу
-      </button>
-    );
+    return <button type="button" disabled={busy} className={btn}
+      onClick={() => fire({ clientKey: r.clientKey, action: 'clear' })}
+      title="Снять отсрочку — клиент вернётся в сигналы уже сейчас">↩ Вернуть в работу</button>;
   }
   if (r.bucket === 'sleeping') {
-    return (
-      <button type="button" disabled={busy} className={btn}
-        onClick={() => send({ clientKey: r.clientKey, action: 'wake' })}
-        title="Вернуть спящего клиента в основной список — сигналы снова действуют">
-        Вернуть в работу
-      </button>
-    );
+    return <button type="button" disabled={busy} className={btn}
+      onClick={() => fire({ clientKey: r.clientKey, action: 'wake' })}
+      title="Вернуть спящего клиента в основной список — сигналы снова действуют">↩ Вернуть в работу</button>;
   }
 
-  const snoozeTo = (ymd: string) => { setOpen(null); void send({ clientKey: r.clientKey, action: 'snooze', until: ymd }); };
+  const snoozeTo = (ymd: string) => fire({ clientKey: r.clientKey, action: 'snooze', until: ymd });
   return (
-    <div className="flex flex-wrap gap-1">
-      <div className="relative">
-        <button type="button" disabled={busy} className={btn} onClick={() => setOpen(v => (v === 'snooze' ? null : 'snooze'))}
-          title="Отложить клиента: до даты он исчезает из горящих сигналов, потом возвращается сам">
-          ⏸ Отложить
-        </button>
-        {open === 'snooze' && (
-          <div className="absolute left-0 top-full z-20 mt-1 flex w-44 flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2 shadow-lg">
-            <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(1))}>На месяц</button>
-            <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(3))}>На квартал</button>
-            <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(6))}>На полгода</button>
-            <div className="flex items-center gap-1">
-              <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}
-                className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-1 py-0.5 text-[11px]" />
-              <button type="button" className={btn} disabled={!customDate} onClick={() => snoozeTo(customDate)}>ОК</button>
-            </div>
+    <div className="flex flex-col gap-1">
+      {open !== 'snooze' ? (
+        <button type="button" disabled={busy} className={btn} onClick={() => setOpen('snooze')}
+          title="Отложить клиента: до даты он исчезает из горящих сигналов, потом возвращается сам">⏸ Отложить…</button>
+      ) : (
+        <div className="flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5">
+          <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(1))}>На месяц</button>
+          <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(3))}>На квартал</button>
+          <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(6))}>На полгода</button>
+          <div className="flex items-center gap-1">
+            <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}
+              className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-1 py-0.5 text-[11px]" />
+            <button type="button" className={btn} disabled={!customDate} onClick={() => snoozeTo(customDate)}>ОК</button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
       <button type="button" disabled={busy} className={btn} onClick={() => { setReason(null); setComment(''); setOpen('nocall'); }}
-        title="Больше не звонить этому клиенту — уйдёт во вкладку «Отказались» (причина обязательна)">
-        🚫 Не звонить
-      </button>
+        title="Больше не звонить этому клиенту — уйдёт во вкладку «Отказались» (причина обязательна)">🚫 Не звонить…</button>
       {open === 'nocall' && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={() => setOpen(null)}>
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setOpen(null)}>
           <div className="w-full max-w-sm rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4" onClick={e => e.stopPropagation()}>
             <div className="mb-2 text-sm font-bold text-[var(--color-text)]">Больше не звонить — почему?</div>
             <div className="flex flex-col gap-1.5">
@@ -311,7 +194,7 @@ function MarkControls({ r, send, busy }: { r: ApiRow; send: MarkSender; busy: bo
               <button type="button" disabled={busy || !reason || (reason === 'other' && comment.trim() === '')}
                 className={`${btn} !border-transparent`}
                 style={{ color: 'var(--color-text-inverse)', backgroundColor: 'var(--color-negative, #e03131)' }}
-                onClick={() => { setOpen(null); void send({ clientKey: r.clientKey, action: 'no_call', reason, comment: comment.trim() || undefined }); }}>
+                onClick={() => fire({ clientKey: r.clientKey, action: 'no_call', reason, comment: comment.trim() || undefined })}>
                 Больше не звонить
               </button>
             </div>
@@ -322,31 +205,115 @@ function MarkControls({ r, send, busy }: { r: ApiRow; send: MarkSender; busy: bo
   );
 }
 
-function ActiveDealsCell({ deals }: { deals: ActiveDealInfo[] }) {
+// Меню «⋯» строки: действия + ссылка в Битрикс (редизайн 01.08).
+function RowMenu({ r, send, busy, onOpenCard }: { r: ApiRow; send: MarkSender; busy: boolean; onOpenCard: () => void }) {
   const [open, setOpen] = useState(false);
-  if (deals.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">нет</span>;
-  const shown = open ? deals : deals.slice(0, 2);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
   return (
-    <div className="flex flex-col gap-0.5">
-      {shown.map(d => (
-        <div key={d.dealId} className="text-xs whitespace-nowrap">
-          <a href={`https://td.monolit-crm.ru/crm/deal/details/${d.dealId}/`} target="_blank" rel="noreferrer"
-            className="text-[var(--color-accent)] hover:underline" title={d.name ?? undefined}>
-            #{d.dealId}
+    <div className="relative" ref={ref}>
+      <button type="button" onClick={() => setOpen(v => !v)} title="Действия"
+        className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent)]">
+        <MoreHorizontal size={15} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 flex w-48 flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1.5 shadow-xl">
+          <button type="button" onClick={() => { setOpen(false); onOpenCard(); }}
+            className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-left text-[11px] font-semibold hover:bg-[var(--color-bg-hover)]">
+            👤 Карточка клиента
+          </button>
+          <a href={clientBitrixUrl(r)} target="_blank" rel="noreferrer"
+            className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] inline-flex items-center gap-1">
+            <ExternalLink size={11} /> Открыть в Битриксе
           </a>
-          <span className="ml-1 text-[var(--color-text-muted)]">{d.stage ?? '?'}</span>
-          {d.daysSilent > 7 && (
-            <span className="ml-1 font-semibold text-[var(--color-negative,#e03131)]"
-              title="Дней без звонка по этой сделке">🔇 {Math.floor(d.daysSilent)} дн.</span>
-          )}
+          <MarkControls r={r} send={send} busy={busy} onDone={() => setOpen(false)} />
         </div>
-      ))}
-      {deals.length > 2 && (
-        <button type="button" onClick={() => setOpen(v => !v)}
-          className="w-fit text-[11px] font-semibold text-[var(--color-accent)] hover:underline">
-          {open ? 'свернуть' : `ещё ${deals.length - 2}`}
-        </button>
       )}
+    </div>
+  );
+}
+
+// Компактный чип статуса (одна строка рядом с именем, редизайн 01.08).
+function StatusChips({ r }: { r: ApiRow }) {
+  const chips: { label: string; title: string; neg?: boolean }[] = [];
+  chips.push({ label: r.clientType === 'contact' ? 'физ' : 'юр', title: r.clientType === 'contact' ? 'Физлицо (контакт)' : 'Юрлицо (компания)' });
+  if (r.atRisk) chips.push({ label: '⚠', title: `Постоянник под угрозой: активных сделок нет, с последней покупки прошло больше 2× его цикла повторки (${r.cycleDays} дн.)`, neg: true });
+  if (r.refusedNoCall) chips.push({ label: '🚫', title: 'Есть сделка, закрытая в отказ без единого звонка', neg: true });
+  if (r.snoozedActive && r.mark) chips.push({ label: `⏸ ${fmtDate(r.mark.snoozeUntil)}`, title: `Отложен до ${fmtDate(r.mark.snoozeUntil)} · ${r.mark.createdBy}` });
+  if (r.mark?.kind === 'no_call') chips.push({ label: `🚫 ${r.mark.reason ? REASON_LABELS[r.mark.reason] : 'не звонить'}`, title: `${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}${r.mark.comment ? ` — «${r.mark.comment}»` : ''}`, neg: true });
+  return (
+    <>
+      {chips.map((c, i) => (
+        <span key={i} title={c.title}
+          className="inline-flex shrink-0 items-center whitespace-nowrap rounded px-1 py-px text-[10.5px] font-semibold"
+          style={c.neg
+            ? { color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 10%, transparent)' }
+            : { color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-hover)' }}>
+          {c.label}
+        </span>
+      ))}
+    </>
+  );
+}
+
+// Сигнал одной строкой: иконка + короткая подпись цветом (редизайн 01.08).
+function SignalCell({ r, noCallDays }: { r: ApiRow; noCallDays: number }) {
+  if (r.signals.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
+  const silent = Math.floor(r.activeDeals.reduce((mx, d) => Math.max(mx, d.daysSilent), 0));
+  return (
+    <div className="flex items-center gap-1.5 whitespace-nowrap">
+      {r.signals.includes('active_no_call') && (
+        <span className="text-[11.5px] font-bold" style={{ color: 'var(--color-negative, #e03131)' }}
+          title={`Есть активная сделка, по которой нет звонков больше ${noCallDays} дней (молчит ${silent} дн.)`}>
+          📞 молчит {silent} дн.
+        </span>
+      )}
+      {r.signals.includes('overdue_repeat') && (
+        <span className="text-[11.5px] font-bold" style={{ color: 'var(--color-warning, #e8590c)' }}
+          title={`Активных сделок нет, с последней покупки прошло больше цикла повторки клиента (${r.cycleDays} дн., ${r.cycleSource === 'own' ? 'его медиана' : 'медиана по базе'})`}>
+          ⏰ пора позвонить
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Активные сделки одной строкой: первая + «+N» с тултипом (редизайн 01.08).
+function ActiveDealsCell({ deals }: { deals: ActiveDealInfo[] }) {
+  if (deals.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
+  const d = deals[0];
+  const restTitle = deals.map(x => `#${x.dealId} · ${x.stage ?? '?'}${x.daysSilent > 7 ? ` · 🔇 ${Math.floor(x.daysSilent)} дн.` : ''}`).join('\n');
+  return (
+    <div className="flex items-center gap-1 whitespace-nowrap text-xs" title={restTitle}>
+      <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline">#{d.dealId}</a>
+      <span className="text-[var(--color-text-muted)] max-w-[110px] truncate">{d.stage ?? '?'}</span>
+      {d.daysSilent > 7 && <span className="font-semibold text-[var(--color-negative,#e03131)]">🔇{Math.floor(d.daysSilent)}</span>}
+      {deals.length > 1 && <span className="font-semibold text-[var(--color-text-muted)]">+{deals.length - 1}</span>}
+    </div>
+  );
+}
+
+// «Предложить» — топ-1 чипом, полный топ-3 и награды в тултипе (редизайн 01.08).
+function RecommendCell({ rec }: { rec: Recommendation | null }) {
+  if (!rec || rec.items.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
+  const top = rec.items[0];
+  const title = [
+    rec.fallback ? 'Мало статистики по группе клиента — общий топ по базе:' : `После: ${rec.basedOn.join(', ')} чаще всего покупают:`,
+    ...rec.items.map(it => `${it.group} — ${it.pct}%${it.badge ? ` (бейдж «${it.badge.name}»${it.badge.price > 0 ? `, +${it.badge.price}` : ''})` : ''}`),
+  ].join('\n');
+  return (
+    <div className="flex items-center gap-1 whitespace-nowrap text-xs" title={title}>
+      <span className="max-w-[150px] truncate">{top.group}</span>
+      <span className="font-semibold tabular-nums text-[var(--color-accent)]">{top.pct}%</span>
+      {top.badge && top.badge.price > 0 && (
+        <span className="font-bold text-[var(--color-positive,#2f9e44)]">+{top.badge.price}</span>
+      )}
+      {rec.items.length > 1 && <span className="text-[var(--color-text-muted)]">+{rec.items.length - 1}</span>}
     </div>
   );
 }
@@ -359,9 +326,8 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<Sort>(null);
-  const [historyOpen, setHistoryOpen] = useState<string | null>(null);
+  const [cardRow, setCardRow] = useState<ApiRow | null>(null);
 
-  // Мутация отметок: POST + инвалидация списка и РОП-агрегата.
   const qc = useQueryClient();
   const [markBusy, setMarkBusy] = useState(false);
   const sendMark: MarkSender = async (payload) => {
@@ -377,6 +343,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
       }
       await qc.invalidateQueries({ queryKey: ['customers'] });
       void qc.invalidateQueries({ queryKey: ['customers-team'] });
+      void qc.invalidateQueries({ queryKey: ['customer-card'] });
     } finally { setMarkBusy(false); }
   };
   const cycleSort = (key: string) => {
@@ -384,15 +351,20 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
     setSort(s => (s?.key !== key ? { key, dir: 'desc' } : s.dir === 'desc' ? { key, dir: 'asc' } : null));
   };
 
-  // Дебаунс поиска, чтобы не дёргать API на каждый символ.
   useEffect(() => {
     const t = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 400);
     return () => clearTimeout(t);
   }, [searchInput]);
 
   const { data, isLoading, isError } = useCustomers(managerId, isSelf, filter, search, page, sort);
+  const rows = data?.rows ?? [];
+  const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE)), [data?.total]);
+
+  // Карточка открыта — держим строку свежей после мутаций (список перезапросился).
+  const cardRowLive = cardRow ? (rows.find(r => r.clientKey === cardRow.clientKey) ?? cardRow) : null;
+
   const Th = ({ k, label, right = false }: { k?: string; label: string; right?: boolean }) => (
-    <th className={`px-3 py-2 font-bold whitespace-nowrap ${right ? 'text-right' : 'text-left'}`}>
+    <th className={`px-2.5 py-1.5 font-bold whitespace-nowrap ${right ? 'text-right' : 'text-left'}`}>
       {k ? (
         <button type="button" onClick={() => cycleSort(k)} title="Сортировка: убывание → возрастание → по сигналу"
           className={`uppercase tracking-wider hover:text-[var(--color-accent)] ${sort?.key === k ? 'text-[var(--color-accent)]' : ''}`}>
@@ -401,16 +373,14 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
       ) : label}
     </th>
   );
-  const rows = data?.rows ?? [];
-  const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE)), [data?.total]);
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2.5">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5">
+        <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5 overflow-x-auto">
           {FILTERS.map(f => (
             <button key={f.key} type="button" onClick={() => { setFilter(f.key); setPage(1); }}
-              className={`rounded-lg px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors ${
+              className={`rounded-lg px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors ${
                 filter === f.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
               }`}>
               {f.label}
@@ -426,15 +396,10 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
           ))}
         </div>
         <input value={searchInput} onChange={e => setSearchInput(e.target.value)} placeholder="Поиск по имени или id"
-          className="min-w-[180px] flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm sm:max-w-xs" />
-        {data && data.counts.refusedNoCall > 0 && (
-          <span className="text-[11px] text-[var(--color-text-muted)]" title="Клиентов, у которых есть сделка, закрытая в отказ без единого звонка">
-            🚫 отказы без звонка: <b className="text-[var(--color-text)]">{data.counts.refusedNoCall}</b>
-          </span>
-        )}
+          className="min-w-[160px] flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm sm:max-w-xs" />
+        <LegendPopover />
       </div>
 
-      {/* Mini-аналитика вкладки «Отказались»: счётчики по причинам */}
       {filter === 'refused' && data && data.counts.refused > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
           <span className="font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Причины:</span>
@@ -451,8 +416,8 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
       )}
       {filter === 'sleeping' && data && (
         <div className="text-[11px] text-[var(--color-text-muted)]">
-          Авто-архив: клиенты без активных сделок, молчащие дольше {data.thresholds.sleepCycleMultiplier}× своего цикла
-          повторки (и не меньше {data.thresholds.sleepMinDays} дней). Из горящих сигналов исключены; «Вернуть в работу» — и клиент снова в списке.
+          Авто-архив: без активных сделок, молчание дольше {data.thresholds.sleepCycleMultiplier}× цикла повторки
+          (минимум {data.thresholds.sleepMinDays} дн.). «Вернуть в работу» — в меню «⋯».
         </div>
       )}
 
@@ -464,151 +429,85 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
         <div className="text-sm text-[var(--color-text-muted)]">Ничего не найдено.</div>
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-          <table className="w-full text-[13px]">
+          <table className="w-full text-[12.5px]">
             <thead>
-              <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
+              <tr className="text-left text-[10.5px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
                 <Th label="Клиент" />
                 <Th label="Сигнал" />
-                <Th k="dealsSold" label="Сделок / продано" right />
+                <Th k="dealsSold" label="Сд/прод" right />
                 <Th k="sumSold" label="Куплено на" right />
                 <Th k="lastSoldAt" label="Последняя покупка" />
-                <Th k="activeCount" label="Активные сделки" />
+                <Th k="activeCount" label="Активные" />
                 <Th label="Предложить" />
-                <Th k="lastCallAt" label="Последний звонок" />
-                <Th k="lastActivityAt" label="Активность" />
+                <Th k="lastCallAt" label="Звонок" />
+                <Th k="lastActivityAt" label="Актив-ть" />
+                <Th label="" />
               </tr>
             </thead>
             <tbody>
               {rows.map((r, idx) => {
                 const showHeader = idx === 0 || rows[idx - 1].section !== r.section;
-                // Счётчики секций честны только в основном виде: в вкладках
-                // «Спящие»/«Отказались»/«Ещё не купили» показываем метку без числа.
                 const secCounts = MAIN_FILTERS.includes(filter) ? data?.counts.sections : undefined;
                 const secCount = secCounts
                   ? (r.section === 'regular' ? secCounts.regular : r.section === 'once' ? secCounts.once : secCounts.never)
                   : null;
                 return (
-                <Fragment key={r.clientKey}>
-                {showHeader && (
-                  <tr className="border-t border-[var(--color-border)] bg-[var(--color-bg-hover)]">
-                    <td colSpan={9} className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]"
-                      title={SECTION_HINTS[r.section]}>
-                      {SECTION_LABELS[r.section]}
-                      {secCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{secCount}</span>}
-                      {r.section === 'regular' && secCounts !== undefined && (secCounts?.regularAtRisk ?? 0) > 0 && (
-                        <span className="ml-2 normal-case font-semibold" style={{ color: 'var(--color-negative, #e03131)' }}
-                          title="Постоянники без активных сделок, у которых с последней покупки прошло больше двух их циклов повторки">
-                          ● под угрозой: {secCounts!.regularAtRisk}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                )}
-                <tr className="border-t border-[var(--color-border)] align-top"
-                  style={r.atRisk ? { backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 5%, transparent)' } : undefined}>
-                  <td className="px-3 py-2">
-                    {/* «Под угрозой» (доработка 01.08): красная точка перед именем */}
-                    {r.atRisk && (
-                      <span className="mr-1" style={{ color: 'var(--color-negative, #e03131)' }}
-                        title={`Постоянник под угрозой: активных сделок нет, с последней покупки прошло больше ${data?.thresholds.atRiskCycleMultiplier ?? 2}× его цикла повторки (${r.cycleDays} дн.)`}>●</span>
+                  <Fragment key={r.clientKey}>
+                    {showHeader && (
+                      // Секция — тонкая строка-разделитель (редизайн 01.08), не серый блок.
+                      <tr className="border-t border-[var(--color-border)]">
+                        <td colSpan={10} className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]"
+                          title={SECTION_HINTS[r.section]}>
+                          {SECTION_LABELS[r.section]}
+                          {secCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{secCount}</span>}
+                          {r.section === 'regular' && secCounts !== undefined && (secCounts?.regularAtRisk ?? 0) > 0 && (
+                            <span className="ml-2 normal-case font-semibold" style={{ color: 'var(--color-negative, #e03131)' }}
+                              title="Постоянники без активных сделок, молчащие дольше двух своих циклов повторки">
+                              ⚠ {secCounts!.regularAtRisk}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
                     )}
-                    <a href={clientUrl(r)} target="_blank" rel="noreferrer"
-                      className="font-semibold text-[var(--color-text)] hover:text-[var(--color-accent)] hover:underline">
-                      {r.name ?? (r.clientType === 'contact' ? `Контакт #${r.clientId}` : `Компания #${r.clientId}`)}
-                    </a>
-                    <div className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-[var(--color-text-muted)]">
-                      <span>{r.clientType === 'contact' ? 'физ' : 'юр'}</span>
-                      {r.atRisk && (
-                        <span className="rounded px-1 font-semibold"
-                          style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 10%, transparent)' }}
-                          title={`Активных сделок нет, с последней покупки прошло больше ${data?.thresholds.atRiskCycleMultiplier ?? 2}× цикла повторки клиента (${r.cycleDays} дн.) — рискуете потерять постоянника`}>
-                          ⚠ под угрозой
-                        </span>
-                      )}
-                      {r.refusedNoCall && (
-                        <span className="rounded px-1 font-semibold"
-                          style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 10%, transparent)' }}
-                          title="У клиента есть сделка, закрытая в отказ без единого звонка">
-                          🚫 отказ без звонка
-                        </span>
-                      )}
-                      {r.snoozedActive && r.mark && (
-                        <span className="rounded px-1 font-semibold text-[var(--color-text-muted)] bg-[var(--color-bg-hover)]"
-                          title={`Отложен: сигналы не горят до этой даты, потом клиент вернётся сам. Отметил(а): ${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}`}>
-                          ⏸ отложен до {fmtDate(r.mark.snoozeUntil)} · {r.mark.createdBy}
-                        </span>
-                      )}
-                      {r.bucket === 'main' && r.mark?.kind === 'wake' && (
-                        <span className="rounded px-1 text-[var(--color-text-muted)]"
-                          title={`Был в «Спящих», возвращён в работу: ${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}`}>
-                          ⏰ возвращён из спящих
-                        </span>
-                      )}
-                      {r.mark?.kind === 'no_call' && (
-                        <span className="rounded px-1 font-semibold"
-                          style={{ color: 'var(--color-negative, #e03131)', backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 10%, transparent)' }}
-                          title={`Отметил(а): ${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}${r.mark.comment ? ` — ${r.mark.comment}` : ''}`}>
-                          🚫 {r.mark.reason ? REASON_LABELS[r.mark.reason] : 'не звонить'} · {r.mark.createdBy}
-                        </span>
-                      )}
-                    </div>
-                    {r.mark?.kind === 'no_call' && r.mark.comment && (
-                      <div className="mt-0.5 max-w-[240px] text-[11px] text-[var(--color-text-muted)]">«{r.mark.comment}»</div>
-                    )}
-                    {/* Смена менеджера (доработка 01.08): клиент раньше был у других */}
-                    {r.prevManagerNames.length > 0 && (
-                      <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)] max-w-[240px]"
-                        title="Менеджеры, вёдшие сделки этого клиента раньше (имена — на момент работы)">
-                        ранее работал с: {r.prevManagerNames.join(', ')}
-                      </div>
-                    )}
-                    {r.managerHistory.length > 1 && (
-                      <button type="button" onClick={() => setHistoryOpen(v => (v === r.clientKey ? null : r.clientKey))}
-                        className="mt-0.5 w-fit text-[11px] font-semibold text-[var(--color-accent)] hover:underline">
-                        {historyOpen === r.clientKey ? 'скрыть историю менеджеров' : 'история менеджеров'}
-                      </button>
-                    )}
-                    <div className="mt-1">
-                      <MarkControls r={r} send={sendMark} busy={markBusy} />
-                    </div>
-                  </td>
-                  <td className="px-3 py-2"><SignalBadge r={r} noCallDays={data?.thresholds.activeNoCallDays ?? 7} /></td>
-                  <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
-                    {r.dealsTotal} / <b>{r.dealsSold}</b>
-                  </td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums whitespace-nowrap">
-                    {r.sumSold > 0 ? fmtMoney(r.sumSold) : '—'}
-                  </td>
-                  <td className="px-3 py-2" title={r.lastSoldAt ? daysAgo(r.lastSoldAt) : undefined}>
-                    {/* Доп. Серёги 01.08: дата + материал + сумма последней проданной сделки */}
-                    <div className="whitespace-nowrap tabular-nums">{fmtDate(r.lastSoldAt)}</div>
-                    {r.lastSoldAt && (r.lastSoldGroups.length > 0 || r.lastSoldAmount !== null) && (
-                      <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)] max-w-[220px]">
-                        {r.lastSoldGroups.join(', ')}
-                        {r.lastSoldGroups.length > 0 && r.lastSoldAmount !== null && r.lastSoldAmount > 0 && ', '}
-                        {r.lastSoldAmount !== null && r.lastSoldAmount > 0 && (
-                          <span className="font-semibold text-[var(--color-text)] whitespace-nowrap">{fmtMoney(r.lastSoldAmount)}</span>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-3 py-2"><ActiveDealsCell deals={r.activeDeals} /></td>
-                  <td className="px-3 py-2"><RecommendCell rec={r.recommend} /></td>
-                  <td className="px-3 py-2 whitespace-nowrap" title={fmtDate(r.lastCallAt)}>
-                    {daysAgo(r.lastCallAt)}
-                  </td>
-                  <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]" title={fmtDate(r.lastActivityAt)}>
-                    {daysAgo(r.lastActivityAt)}
-                  </td>
-                </tr>
-                {historyOpen === r.clientKey && (
-                  <tr>
-                    <td colSpan={9} className="px-3 pb-2">
-                      <ManagerHistoryBlock items={r.managerHistory} />
-                    </td>
-                  </tr>
-                )}
-                </Fragment>
+                    <tr className="border-t border-[var(--color-border)] align-middle hover:bg-[var(--color-bg-hover)]/50"
+                      style={r.atRisk ? { backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 4%, transparent)' } : undefined}>
+                      <td className="px-2.5 py-1">
+                        <div className="flex items-center gap-1.5 min-w-0 max-w-[300px]">
+                          <button type="button" onClick={() => setCardRow(r)}
+                            title={`${clientDisplayName(r)} — открыть карточку клиента`}
+                            className="min-w-0 truncate text-left font-semibold text-[var(--color-text)] hover:text-[var(--color-accent)] hover:underline">
+                            {clientDisplayName(r)}
+                          </button>
+                          <StatusChips r={r} />
+                        </div>
+                      </td>
+                      <td className="px-2.5 py-1"><SignalCell r={r} noCallDays={data?.thresholds.activeNoCallDays ?? 7} /></td>
+                      <td className="px-2.5 py-1 text-right tabular-nums whitespace-nowrap">{r.dealsTotal}/<b>{r.dealsSold}</b></td>
+                      <td className="px-2.5 py-1 text-right font-semibold tabular-nums whitespace-nowrap">{r.sumSold > 0 ? fmtMoney(r.sumSold) : '—'}</td>
+                      <td className="px-2.5 py-1">
+                        {/* Одной строкой: дата · группа · сумма (редизайн 01.08) */}
+                        {r.lastSoldAt ? (
+                          <div className="flex items-center gap-1 whitespace-nowrap max-w-[240px]"
+                            title={`${daysAgo(r.lastSoldAt)}${r.lastSoldGroups.length ? ` · ${r.lastSoldGroups.join(', ')}` : ''}`}>
+                            <span className="tabular-nums">{fmtDate(r.lastSoldAt)}</span>
+                            {r.lastSoldGroups.length > 0 && (
+                              <span className="min-w-0 truncate text-[11px] text-[var(--color-text-muted)]">· {r.lastSoldGroups.join(', ')}</span>
+                            )}
+                            {r.lastSoldAmount !== null && r.lastSoldAmount > 0 && (
+                              <span className="shrink-0 text-[11px] font-semibold">· {fmtMoney(r.lastSoldAmount)}</span>
+                            )}
+                          </div>
+                        ) : <span className="text-xs text-[var(--color-text-muted)]">—</span>}
+                      </td>
+                      <td className="px-2.5 py-1"><ActiveDealsCell deals={r.activeDeals} /></td>
+                      <td className="px-2.5 py-1"><RecommendCell rec={r.recommend} /></td>
+                      <td className="px-2.5 py-1 whitespace-nowrap text-xs" title={fmtDate(r.lastCallAt)}>{daysAgo(r.lastCallAt)}</td>
+                      <td className="px-2.5 py-1 whitespace-nowrap text-xs text-[var(--color-text-muted)]" title={fmtDate(r.lastActivityAt)}>{daysAgo(r.lastActivityAt)}</td>
+                      <td className="px-1.5 py-1 text-right">
+                        <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} />
+                      </td>
+                    </tr>
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -625,26 +524,22 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
             className="rounded-lg border border-[var(--color-border)] px-3 py-1 font-semibold disabled:opacity-40 hover:bg-[var(--color-bg-hover)]">→</button>
         </div>
       )}
+
+      {cardRowLive && (
+        <CustomerCard
+          row={cardRowLive}
+          managerId={managerId}
+          isSelf={isSelf}
+          onClose={() => setCardRow(null)}
+          markControls={<MarkControls r={cardRowLive} send={sendMark} busy={markBusy} />}
+        />
+      )}
     </div>
   );
 }
 
 export function CustomersTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="text-xs text-[var(--color-text-muted)]">
-        Клиенты, где вы вели последнюю сделку. <b>Постоянники</b> (2+ покупок за всю историю клиента) — сверху,
-        <b> ● под угрозой</b> — постоянник молчит дольше двух своих циклов повторки и активных сделок нет; ниже —
-        купившие один раз (кандидаты в постоянники); не купившие ни разу — во вкладке «Ещё не купили».
-        Сигналы: <b>📞 сделка без звонка</b> — по активной сделке нет звонков
-        больше недели; <b>⏰ пора позвонить</b> — активных сделок нет, а с последней покупки прошло больше типичного
-        цикла повторных покупок клиента. «Предложить» — какой материал клиенты чаще всего покупают следом за
-        последней покупкой этого клиента (доля таких переходов в истории продаж); строкой ниже — бейдж и ебаллы,
-        которые получите за такую допродажу. Имя ведёт в карточку клиента в Битриксе.
-      </div>
-      <CustomersList managerId={managerId} isSelf={isSelf} />
-    </div>
-  );
+  return <CustomersList managerId={managerId} isSelf={isSelf} />;
 }
 
 // ── Блок РОПа: заказчики команды (managed-depts, как «Моя команда») ──────────

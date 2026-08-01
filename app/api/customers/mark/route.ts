@@ -41,8 +41,20 @@ export async function POST(req: NextRequest) {
   }
 
   const db = systemDb();
+  // История отметок (миграция 128, карточка клиента): каждое действие пишется
+  // в customer_mark_history; best-effort — отсутствие таблицы не валит отметку.
+  const logHistory = async (act: string, until2: string | null, reason2: string | null, comment2: string | null) => {
+    try {
+      await db.query(
+        `INSERT INTO customer_mark_history (client_key, action, snooze_until, reason, comment, created_by, created_by_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [clientKey, act, until2, reason2, comment2, session.displayName, session.id],
+      );
+    } catch { /* таблицы ещё нет */ }
+  };
   if (action === 'clear') {
     await db.query(`DELETE FROM customer_marks WHERE client_key = $1`, [clientKey]);
+    await logHistory('clear', null, null, null);
     return NextResponse.json({ ok: true });
   }
 
@@ -75,5 +87,6 @@ export async function POST(req: NextRequest) {
        created_at = now()`,
     [clientKey, action, until, reason, comment, session.displayName, session.id],
   );
+  await logHistory(action!, until, reason, comment);
   return NextResponse.json({ ok: true });
 }
