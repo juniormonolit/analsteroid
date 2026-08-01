@@ -440,11 +440,24 @@ export interface QuestRow {
   status: QuestStatus; progress: number; doneAt: string | null; rerollOf: number | null;
 }
 
+// pg отдаёт date-колонки объектами Date (та же грабля, что с timestamptz в
+// «Моих заказчиках») — нормализуем в YYYY-MM-DD, иначе строки дат ломают
+// последующие SQL-параметры (пойман живьём: DecodeDateTime на $2).
+function ymd(v: unknown): string {
+  if (v instanceof Date) {
+    // локальные геттеры — pg парсит date в локальную полночь, компоненты
+    // совпадают с исходной датой при любом TZ процесса
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+  }
+  return String(v).slice(0, 10);
+}
+
 function rowFromDb(r: Record<string, unknown>): QuestRow {
   return {
     id: Number(r.id), bitrixId: Number(r.bitrix_id), slot: r.slot as QuestSlot,
     periodType: r.period_type as QuestPeriod,
-    periodStart: String(r.period_start), periodEnd: String(r.period_end),
+    periodStart: ymd(r.period_start), periodEnd: ymd(r.period_end),
     category: r.category as QuestCategory, target: Number(r.target),
     targetGroup: (r.target_group as string) ?? null, pairFirst: (r.pair_first as string) ?? null,
     title: String(r.title), tier: r.tier as QuestTier,
