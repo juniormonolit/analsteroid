@@ -16,6 +16,7 @@ import { ViewSettings, loadViewPrefs, saveViewPrefs, DEFAULT_VIEW_PREFS, type Vi
 import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
 import { DrilldownDrawer } from './DrilldownDrawer';
+import { MetricChartModal, type MetricChartTarget } from './MetricChartModal';
 import type { DrilldownTarget } from './DrilldownDrawer';
 import { ComparisonPanel } from './ComparisonPanel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
@@ -384,6 +385,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useState('');
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
+  // «График из отчёта» (фича Серёги 01.08): цель открытого графика метрики.
+  const [chartTarget, setChartTarget]   = useState<MetricChartTarget | null>(null);
   // Режим «Сравнение» (п. Н2 спеки): выбор сущностей живёт в состоянии страницы (не в
   // БД) — так он переживает закрытие/повторное открытие слайдера в рамках сессии.
   const [showComparison, setShowComparison] = useState(false);
@@ -1024,6 +1027,52 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     [catalogMetrics, availableMetrics, userGroups, userGroupFreeIds, dimensionType]
   );
 
+  // «График из отчёта» (фича Серёги 01.08): открыть график динамики метрики для
+  // строки/группы/«Итого». Чтобы график ГАРАНТИРОВАННО бился с ячейкой, ограничение
+  // строки передаётся ЯВНО: by-managers — список manager-id (для отдела/филиала/
+  // пользовательской группы/Итого — участники видимого отчёта: так же учитываются
+  // отделы и тип аккаунта, отфильтрованные на этом слое); by-product-groups —
+  // товарная группа строки (тот же buildProductGroupFilter на сервере).
+  const handleMetricChart = useCallback(
+    (id: string, name: string, metricId: string) => {
+      const findRow = (rs: GroupedMergedRow[]): MergedRow | undefined => {
+        for (const r of rs) {
+          if (r.dimensionId === id) return r;
+          if (r.children) { const c = findRow(r.children as GroupedMergedRow[]); if (c) return c; }
+        }
+        return undefined;
+      };
+      const cellValue = id === '__total__'
+        ? (data?.totals?.[metricId]?.current ?? null)
+        : (findRow(displayRows as GroupedMergedRow[])?.deltas?.[metricId]?.current ?? null);
+      let managerIds: string[] | undefined;
+      let pgRowId: string | undefined;
+      const baseRows: MergedRow[] = (data?.rows ?? []) as MergedRow[];
+      if (sourceMode) {
+        // Разрез источников: строка ≠ менеджер/группа — поддержан только «Итого»
+        // (фильтры источников в серию пока не транслируются — осознанное ограничение v1).
+        if (id !== '__total__') { alert('График по строкам источников пока не поддержан — используйте иконку в заголовке метрики («Итого»)'); return; }
+      } else if (reportSlug === 'by-managers') {
+        if (id === '__total__') managerIds = baseRows.map(r => r.dimensionId);
+        else if (id.startsWith('__team__')) { const t = id.slice(8); managerIds = baseRows.filter(r => (r.teamId ?? '__no_team__') === t).map(r => r.dimensionId); }
+        else if (id.startsWith('__branch__')) { const b = id.slice(10); managerIds = baseRows.filter(r => (r.branchName ?? 'СПб') === b).map(r => r.dimensionId); }
+        else if (id === NOGROUP_ROW_ID) managerIds = userGroupFreeIds;
+        else if (id.startsWith('__ugroup__')) managerIds = userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [];
+        else managerIds = [id];
+        if (managerIds !== undefined && managerIds.length === 0) return;
+      } else if (reportSlug === 'by-product-groups') {
+        if (id !== '__total__' && !id.startsWith('__')) {
+          // kc: '__none__' уже в id; by_max: строковое имя head-группы (включая «Без группы»).
+          pgRowId = productGroupMode === 'by_max' && id === 'Без группы' ? 'Без группы' : id;
+        } else if (id !== '__total__') {
+          return; // групповые строки этого разреза графику пока не учим
+        }
+      }
+      setChartTarget({ metricId, dimensionId: id, dimensionName: name, managerIds, productGroupId: pgRowId, cellValue });
+    },
+    [data?.rows, data?.totals, displayRows, reportSlug, sourceMode, productGroupMode, userGroups, userGroupFreeIds],
+  );
+
   // Экспорт отчёта (задача 1706): буфер (TSV)/Excel/PDF/PNG — единый снимок таблицы
   // (buildExportTable, features/reports/lib/tableExport.ts) форматирует значения ПО ТИПУ
   // МЕТРИКИ (percent/money/...), один источник форматирования на все 4 способа
@@ -1380,6 +1429,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             dimensionLabel={dimensionColumnLabel}
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
+            onMetricChart={handleMetricChart}
             // Режим создания группы чекбоксами (31.07 №2): чекбоксы у реальных
             // строк (не у синтетических __*); занятые — disabled с тултипом.
             rowSelection={groupSelectMode ? {
@@ -1432,6 +1482,23 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         )}
       </div>
 
+      {chartTarget && (() => {
+        const cm = (catalogMetrics.find((x: { id: string }) => x.id === chartTarget.metricId)
+          ?? availableMetrics.find((x: { id: string }) => x.id === chartTarget.metricId)) as Metric | undefined;
+        if (!cm) return null;
+        return (
+          <MetricChartModal
+            target={chartTarget}
+            metric={cm}
+            reportSlug={reportSlug}
+            period={period}
+            comparison={comparison}
+            hasComparison={comparisonDisplay !== 'current'}
+            filters={{ dealScope, clientType, productGroupMode, createdTimeFilter, firstTouchFilter }}
+            onClose={() => setChartTarget(null)}
+          />
+        );
+      })()}
       {drilldown && (
         <DrilldownDrawer
           key={`${drilldown.id}:${drilldown.metricId ?? ''}`}

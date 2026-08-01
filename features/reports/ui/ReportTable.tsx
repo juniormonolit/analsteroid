@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, Search } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChartLine, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, Search } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
@@ -133,6 +133,9 @@ interface Props {
   // переехали в саму панель настроек (см. HighlightEditor: isFirst/isLast/onMoveLeft/
   // onMoveRight/onRemove).
   onMetricConfigure?: (metricId: string) => void;
+  // «График из отчёта» (фича Серёги 01.08): иконка 📈 в ячейке (динамика метрики
+  // для строки) и в полоске заголовка (динамика по «Итого»).
+  onMetricChart?: (dimensionId: string, dimensionName: string, metricId: string) => void;
   pinnedMetricIds?: string[];
   onMetricPinToggle?: (metricId: string) => void;
   metricDecimalOverrides?: Record<string, number>;
@@ -262,7 +265,7 @@ export function ReportTable({
   grouping = 'none',
   dimensionLabel = 'Менеджер',
   highlights = {},
-  onRowClick, onCellClick, onSubtitleClick,
+  onRowClick, onCellClick, onSubtitleClick, onMetricChart,
   onMetricQuickCompareToggle,
   onMetricReorder,
   onMetricConfigure,
@@ -881,6 +884,19 @@ export function ReportTable({
         return { className: pinnedCls, style };
       }
 
+      // Иконка «график» в ячейке значения (фича Серёги 01.08): видна по hover
+      // (группа на <td> — group/cell), клик НЕ открывает дрилл-даун (stopPropagation).
+      const cellChartBtn = onMetricChart ? (
+        <button
+          type="button"
+          title="График динамики этой метрики для этой строки"
+          onClick={e => { e.stopPropagation(); onMetricChart(row.dimensionId, row.dimensionName, m.id); }}
+          className="absolute top-1/2 -translate-y-1/2 right-0 hidden group-hover/cell:flex h-4 w-4 items-center justify-center rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)] bg-[var(--color-bg-surface)]/85 z-10"
+        >
+          <ChartLine size={11} />
+        </button>
+      ) : null;
+
       function HlValue({ value }: { value: number | null }) {
         const formatted = formatValue(value, m.dataType, decFor(m));
         // Чистый чёрный #000 у числовых значений (п.9 правок 09.07/2) — только у САМОГО
@@ -920,12 +936,13 @@ export function ReportTable({
                 return (
                   <td
                     key={kind}
-                    className={`relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${clickCls} ${p.className}`}
+                    className={`group/cell relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${edgeCls(idx)} ${cellBase} ${clickCls} ${p.className}`}
                     style={{ ...p.style, ...accent, ...alignStyle }}
                     onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
                   >
                     <BarBg metricId={m.id} value={d?.current ?? null} />
                     <span className="relative"><HlValue value={d?.current ?? null} /></span>
+                    {cellChartBtn}
                   </td>
                 );
               }
@@ -959,11 +976,12 @@ export function ReportTable({
         return (
           <td
             key={m.id}
-            className={`relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
+            className={`group/cell relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
             style={{ ...p.style, ...accent, ...alignStyle }}
             onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
           >
             {pinBar}
+            {cellChartBtn}
             <BarBg metricId={m.id} value={d?.current ?? null} />
             {/* Ховер-зона тултипа (пред./Δ/Δ%) — правка 09.07: раньше title сидел только на
                 стрелке (span 11px), навести приходилось буквально в стрелку. Теперь title —
@@ -991,11 +1009,12 @@ export function ReportTable({
       return (
         <td
           key={m.id}
-          className={`relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
+          className={`group/cell relative text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} ${cellBase} ${clickCls} ${p.className}`}
           style={{ ...p.style, ...accent, ...alignStyle }}
           onClick={canClick ? () => onCellClick!(row.dimensionId, row.dimensionName, m.id) : undefined}
         >
           {pinBar}
+          {cellChartBtn}
           <BarBg metricId={m.id} value={d?.current ?? null} />
           <span className="relative"><HlValue value={d?.current ?? null} /></span>
         </td>
@@ -1605,6 +1624,16 @@ export function ReportTable({
                         </span>
                       ) : (
                         <span className="flex-1 min-w-[28px] bg-[var(--color-bg)]" />
+                      )}
+                      {/* График по «Итого» (фича Серёги 01.08) */}
+                      {onMetricChart && (
+                        <button
+                          onClick={e => { e.stopPropagation(); onMetricChart('__total__', 'Итого', m.id); }}
+                          className="w-6 flex-shrink-0 flex items-center justify-center border-l border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-accent)] transition-colors"
+                          title="График динамики метрики (Итого)"
+                        >
+                          <ChartLine size={12} />
+                        </button>
                       )}
                       {/* Шестерёнка ведёт сразу в панель настроек метрики (HighlightEditor) —
                           промежуточное контекстное меню (MetricMenu) упразднено 09.07, ←/→/
