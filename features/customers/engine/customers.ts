@@ -126,6 +126,12 @@ export interface CustomerRow {
    *  Отметка wake (customer_marks) возвращает клиента в основной вид — это
    *  применяется поверх, в роуте (кэш движка отметок не знает). */
   sleeping: boolean;
+  /** Категории клиентов (дополнение Серёги 01.08): сырьё для classifyCategory. */
+  dealsDelivered: number;
+  sumDelivered: number;
+  distinctGroups: number;
+  avgGapDays: number | null;
+  lastGapDays: number | null;
   /** Все менеджеры, вёдшие сделки клиента (имена на момент работы), свежие сверху. */
   managerHistory: ManagerHistoryItem[];
   /** Имена ПРЕДЫДУЩИХ менеджеров (все из истории, кроме текущего) — для пометки
@@ -142,6 +148,11 @@ interface RawRow {
   last_call_at: string | Date | null;
   last_event_at: string | Date | null;
   median_gap_days: string | null;
+  avg_gap_days: string | null;
+  last_gap_days: string | null;
+  deals_delivered: string;
+  sum_delivered: string;
+  distinct_groups: string;
   refused_no_call: boolean;
   last_groups: string[] | null;
   last_sold_amount: string | null;
@@ -175,7 +186,7 @@ function toIso(v: string | Date | null): string | null {
 const CUSTOMERS_SQL = `
 WITH cd AS (
   SELECT d.deal_id, d.deal_name, d.amount, d.created_at, d.sold_at, d.lost_at,
-         d.stage_id, d.current_manager_id,
+         d.delivered_at, d.head_group_name, d.stage_id, d.current_manager_id,
          (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END) AS client_key
   FROM sa.deals d
   WHERE d.funnel_id IN (0,1,2,3)
@@ -264,10 +275,13 @@ mgr_hist AS (
   GROUP BY t.client_key
 ),
 gaps AS (
-  SELECT client_key, percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) AS median_gap_days
+  SELECT client_key, percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) AS median_gap_days,
+         avg(gap) AS avg_gap_days,
+         max(gap) FILTER (WHERE rn = 1) AS last_gap_days
   FROM (
-    SELECT client_key,
-           EXTRACT(EPOCH FROM sold_at - lag(sold_at) OVER (PARTITION BY client_key ORDER BY sold_at))/86400.0 AS gap
+    SELECT client_key, sold_at,
+           EXTRACT(EPOCH FROM sold_at - lag(sold_at) OVER (PARTITION BY client_key ORDER BY sold_at))/86400.0 AS gap,
+           row_number() OVER (PARTITION BY client_key ORDER BY sold_at DESC) AS rn
     FROM mcd WHERE sold_at IS NOT NULL
   ) g
   -- Интервалы <1 дня — дробление одного заказа, циклом повторки не считаем
@@ -277,7 +291,8 @@ gaps AS (
 SELECT a.client_key,
        a.deals_total::text, a.deals_sold::text, a.sum_sold::text,
        a.last_sold_at, a.last_call_at, ev.last_event_at,
-       g.median_gap_days::text, a.refused_no_call,
+       g.median_gap_days::text, g.avg_gap_days::text, g.last_gap_days::text, a.refused_no_call,
+       a.deals_delivered::text, a.sum_delivered::text, a.distinct_groups::text,
        o.active_deals, lg.last_groups,
        ls.last_sold_amount::text, ls.last_sold_groups,
        mh.manager_history
@@ -288,7 +303,13 @@ FROM (
          COALESCE(sum(m.amount) FILTER (WHERE m.sold_at IS NOT NULL), 0) AS sum_sold,
          max(m.sold_at) AS last_sold_at,
          max(dc.last_call_at) AS last_call_at,
-         bool_or(m.lost_at IS NOT NULL AND dc.deal_id IS NULL) AS refused_no_call
+         bool_or(m.lost_at IS NOT NULL AND dc.deal_id IS NULL) AS refused_no_call,
+         -- Категории клиентов (дополнение Серёги 01.08): «отгрузка» = delivered_at
+         -- (как «покупка» в отчёте «Повторные»), комплексность = разные deal-level
+         -- head-группы отгруженных сделок (шкала by_max — как complex_clients там же).
+         count(*) FILTER (WHERE m.delivered_at IS NOT NULL) AS deals_delivered,
+         COALESCE(sum(m.amount) FILTER (WHERE m.delivered_at IS NOT NULL), 0) AS sum_delivered,
+         count(DISTINCT m.head_group_name) FILTER (WHERE m.delivered_at IS NOT NULL AND m.head_group_name IS NOT NULL) AS distinct_groups
   FROM mcd m LEFT JOIN deal_calls dc ON dc.deal_id = m.deal_id
   GROUP BY 1
 ) a
@@ -371,6 +392,11 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     activeCount: active.length,
     activeDeals: active,
     refusedNoCall: r.refused_no_call,
+    dealsDelivered: Number(r.deals_delivered),
+    sumDelivered: Math.round(Number(r.sum_delivered)),
+    distinctGroups: Number(r.distinct_groups),
+    avgGapDays: r.avg_gap_days !== null ? Number(r.avg_gap_days) : null,
+    lastGapDays: r.last_gap_days !== null ? Number(r.last_gap_days) : null,
     lastGroups: r.last_groups ?? [],
     cycleDays: Math.round(cycleDays * 10) / 10,
     cycleSource: useOwn ? 'own' : 'global',
@@ -394,7 +420,8 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
 export async function fetchManagerCustomers(managerBitrixId: number): Promise<CustomerRow[]> {
   // v3 в ключе: форма строки расширена (v2 — секции/atRisk/история менеджеров,
   // v3 — sleeping) — старые кэши без этих полей ломали бы новый код 10 минут.
-  return cached(`customers:mgr:v3:${managerBitrixId}`, 10 * 60, async () => {
+  // v4 — поля категорий клиентов (отгрузки/комплексность/интервалы, 01.08).
+  return cached(`customers:mgr:v4:${managerBitrixId}`, 10 * 60, async () => {
     const res = await analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]);
     const now = Date.now();
     const rows = res.rows.map(r => toRow(r, now, managerBitrixId));
@@ -405,6 +432,80 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
     });
     return rows;
   });
+}
+
+// ── Категории клиентов (дополнение Серёги 01.08) ─────────────────────────────
+// Именные категории вместо RFM-скоров. Правила читаемые, пороги — в системной
+// таблице customer_category_settings (миграция 129, редактор в настройках).
+// Классификация — чистая функция ПОВЕРХ кэша движка: правка порога действует
+// сразу. «Отгрузка» = delivered_at (шкала отчёта «Повторные»), «покупка» =
+// sold_at (шкала этого списка) — сознательно две шкалы, как в самих отчётах.
+
+export type CustomerCategory = 'key' | 'large' | 'regular' | 'once' | 'potential' | 'none';
+export type CustomerModifier = 'complex' | 'frequent' | 'fading';
+
+export interface CustomerCategorySettings {
+  keyMinShipments: number;
+  keyMinSum: number;
+  largeMinSum: number;
+  largeMinShipments: number;
+  complexMinGroups: number;
+  frequentFactor: number;
+  fadingFactor: number;
+}
+
+export const DEFAULT_CATEGORY_SETTINGS: CustomerCategorySettings = {
+  keyMinShipments: 2, keyMinSum: 5_000_000,
+  largeMinSum: 1_500_000, largeMinShipments: 5,
+  complexMinGroups: 3, frequentFactor: 0.5, fadingFactor: 2,
+};
+
+export async function fetchCategorySettings(): Promise<CustomerCategorySettings> {
+  try {
+    const res = await systemDb().query<{
+      key_min_shipments: number; key_min_sum: string; large_min_sum: string;
+      large_min_shipments: number; complex_min_groups: number;
+      frequent_factor: string; fading_factor: string;
+    }>('SELECT * FROM customer_category_settings WHERE id = 1');
+    const r = res.rows[0];
+    if (!r) return DEFAULT_CATEGORY_SETTINGS;
+    return {
+      keyMinShipments: Number(r.key_min_shipments),
+      keyMinSum: Number(r.key_min_sum),
+      largeMinSum: Number(r.large_min_sum),
+      largeMinShipments: Number(r.large_min_shipments),
+      complexMinGroups: Number(r.complex_min_groups),
+      frequentFactor: Number(r.frequent_factor),
+      fadingFactor: Number(r.fading_factor),
+    };
+  } catch { return DEFAULT_CATEGORY_SETTINGS; } // таблицы может не быть до миграции 129
+}
+
+export function classifyCategory(r: CustomerRow, s: CustomerCategorySettings, now = Date.now()): {
+  category: CustomerCategory; modifiers: CustomerModifier[];
+} {
+  let category: CustomerCategory;
+  if (r.dealsDelivered >= s.keyMinShipments && r.sumDelivered >= s.keyMinSum) category = 'key';
+  else if (r.sumDelivered >= s.largeMinSum || r.dealsDelivered >= s.largeMinShipments) category = 'large';
+  else if (r.dealsSold >= 2) category = 'regular';
+  else if (r.dealsSold === 1) category = 'once';
+  else if (r.activeCount > 0) category = 'potential';
+  else category = 'none';
+
+  const modifiers: CustomerModifier[] = [];
+  if (r.distinctGroups >= s.complexMinGroups) modifiers.push('complex');
+  // «Частый»: свой (не глобальный) цикл заметно чаще медианы базы.
+  if (r.cycleSource === 'own' && r.cycleDays < s.frequentFactor * GLOBAL_REPEAT_CYCLE_DAYS) modifiers.push('frequent');
+  // «Затухающий»: частота падает — последний ЗАВЕРШЁННЫЙ интервал или ТЕКУЩАЯ
+  // тишина с последней покупки больше fadingFactor × его среднего интервала
+  // (текущая тишина включена сознательно: клиент, который «ещё не купил снова»,
+  // затухает точно так же — отмечено в отчёте задачи).
+  if (r.avgGapDays !== null && r.avgGapDays > 0 && r.lastSoldAt !== null) {
+    const silence = (now - new Date(r.lastSoldAt).getTime()) / 86_400_000;
+    const worst = Math.max(r.lastGapDays ?? 0, silence);
+    if (worst > s.fadingFactor * r.avgGapDays) modifiers.push('fading');
+  }
+  return { category, modifiers };
 }
 
 // ── Отметки клиентов: снуз / «не звонить» / вернуть из спящих (01.08, п.2) ───
@@ -478,6 +579,8 @@ export function todayYmdMsk(): string {
 export interface TeamCustomerStats {
   bitrixId: number;
   clients: number;
+  keyClients: number;       // «Ключевые» (категория key) — дополнение 01.08
+  keyAtRisk: number;        // ключевые под угрозой — главный сигнал РОПа
   callNow: number;          // клиентов с любым сигналом
   overdueRepeat: number;    // (а) просроченная повторка
   activeNoCall: number;     // (б) активная сделка без звонка
@@ -503,9 +606,21 @@ export async function fetchTeamCustomerStats(managerIds: number[]): Promise<Team
       const cls = rows.map(r => ({ r, ...classifyWithMark(r, marks.get(r.clientKey), today) }));
       const main = cls.filter(c => c.bucket === 'main').map(c => c.r);
       const live = cls.filter(c => c.bucket === 'main' && !c.snoozedActive).map(c => c.r);
+      const catSettings = await fetchCategorySettings();
+      const keyRows = main.filter(r => classifyCategory(r, catSettings).category === 'key');
       return {
         bitrixId: id,
         clients: main.length,
+        keyClients: keyRows.length,
+        // «Ключевой под угрозой» — самый дорогой сигнал: без активных сделок и
+        // молчит дольше 2× своего цикла (общий atRisk-предикат, но БЕЗ требования
+        // «постоянник» — ключевой определяется отгрузками; снуз гасит, как всё).
+        keyAtRisk: keyRows.filter(r => {
+          const snoozed = cls.find(c => c.r.clientKey === r.clientKey)?.snoozedActive ?? false;
+          if (snoozed || r.activeCount > 0 || r.lastSoldAt === null) return false;
+          const since = (Date.now() - new Date(r.lastSoldAt).getTime()) / 86_400_000;
+          return since > AT_RISK_CYCLE_MULTIPLIER * r.cycleDays;
+        }).length,
         callNow: live.filter(r => r.signals.length > 0).length,
         overdueRepeat: live.filter(r => r.signals.includes('overdue_repeat')).length,
         activeNoCall: live.filter(r => r.signals.includes('active_no_call')).length,

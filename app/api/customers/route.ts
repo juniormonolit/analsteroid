@@ -3,9 +3,11 @@ import { getSession } from '@/lib/auth/session';
 import { canViewManager } from '@/lib/org/managerAccess';
 import {
   fetchManagerCustomers, fetchCustomerMarks, classifyWithMark, todayYmdMsk,
+  fetchCategorySettings, classifyCategory,
   GLOBAL_REPEAT_CYCLE_DAYS, ACTIVE_NO_CALL_DAYS, AT_RISK_CYCLE_MULTIPLIER,
   SLEEP_CYCLE_MULTIPLIER, SLEEP_MIN_DAYS,
   type CustomerRow, type CustomerMark, type CustomerBucket, type NoCallReason,
+  type CustomerCategory, type CustomerModifier,
 } from '@/features/customers/engine/customers';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair } from '@/features/customers/engine/crossSell';
@@ -42,6 +44,8 @@ type XRow = CustomerRow & {
   bucket: CustomerBucket;
   snoozedActive: boolean;
   mark: CustomerMark | null;
+  category: CustomerCategory;
+  modifiers: CustomerModifier[];
 };
 
 // Сортировка по заголовкам (правило владельца 01.08 «Заголовки = сортировка», по
@@ -51,7 +55,9 @@ type XRow = CustomerRow & {
 // порядок (сигнальный urgency). Имя не сортируется: полных имён на сервере нет
 // (ленивый кэш), сортировка по «известным» была бы враньём.
 type SortDir = 'desc' | 'asc';
-const SORTS: Record<string, (r: CustomerRow) => number | string | null> = {
+const CATEGORY_RANK: Record<CustomerCategory, number> = { key: 5, large: 4, regular: 3, once: 2, potential: 1, none: 0 };
+const SORTS: Record<string, (r: CustomerRow & { category?: CustomerCategory }) => number | string | null> = {
+  category: r => CATEGORY_RANK[r.category ?? 'none'],
   dealsTotal: r => r.dealsTotal,
   dealsSold: r => r.dealsSold,
   sumSold: r => r.sumSold,
@@ -147,13 +153,19 @@ export async function GET(req: NextRequest) {
 
   // Отметки — свежим запросом поверх кэша движка (снуз/«не звонить» действуют
   // сразу). У снузнутых сигналы/«под угрозой» гасятся здесь же.
-  const marks = await fetchCustomerMarks(engineRows.map(r => r.clientKey));
+  const [marks, catSettings] = await Promise.all([
+    fetchCustomerMarks(engineRows.map(r => r.clientKey)),
+    fetchCategorySettings(),
+  ]);
   const today = todayYmdMsk();
   const all: XRow[] = engineRows.map(r => {
     const mark = marks.get(r.clientKey) ?? null;
     const { bucket, snoozedActive } = classifyWithMark(r, mark ?? undefined, today);
     const base = snoozedActive ? { ...r, signals: [], atRisk: false, urgency: 0 } : r;
-    return { ...base, bucket, snoozedActive, mark };
+    // Категория — на лету поверх кэша (дополнение 01.08): правка порогов в
+    // настройках действует сразу, без инвалидации 10-минутного кэша движка.
+    const { category, modifiers } = classifyCategory(r, catSettings);
+    return { ...base, bucket, snoozedActive, mark, category, modifiers };
   });
 
   // Поиск по имени — по уже известным (закэшированным) именам + по id клиента.
@@ -168,7 +180,12 @@ export async function GET(req: NextRequest) {
 
   const sortKey = sp.get('sort');
   const sortDir: SortDir = sp.get('dir') === 'asc' ? 'asc' : 'desc';
-  const filtered = applySort(applyFilter(searched, filter), sortKey, sortDir);
+  // Фильтр по категории (дополнение 01.08) — поверх обычного фильтра вкладки.
+  const catParam = sp.get('category');
+  const catFiltered = catParam && catParam !== 'all'
+    ? searched.filter(r => r.category === catParam)
+    : searched;
+  const filtered = applySort(applyFilter(catFiltered, filter), sortKey, sortDir);
   const start = (page - 1) * pageSize;
   const pageRows = filtered.slice(start, start + pageSize);
 
@@ -216,6 +233,15 @@ export async function GET(req: NextRequest) {
       sleeping: searched.filter(r => r.bucket === 'sleeping').length,
       refused: refused.length,
       refusedByReason,
+      // Категории (дополнение 01.08): счётчики по основному виду + ключевые под угрозой.
+      byCategory: {
+        key: main.filter(r => r.category === 'key').length,
+        large: main.filter(r => r.category === 'large').length,
+        regular: main.filter(r => r.category === 'regular').length,
+        once: main.filter(r => r.category === 'once').length,
+        potential: main.filter(r => r.category === 'potential').length,
+        keyAtRisk: main.filter(r => r.category === 'key' && r.atRisk).length,
+      },
     },
     page, pageSize, rows,
     thresholds: {

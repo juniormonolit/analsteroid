@@ -23,7 +23,9 @@ import { CustomerCard } from './CustomerCard';
 import {
   type ApiRow, REASON_LABELS, fmtMoney, fmtDate, daysAgo,
   clientBitrixUrl, dealBitrixUrl, clientDisplayName,
+  CATEGORY_LABELS, CATEGORY_STYLE, MODIFIER_LABELS,
 } from './shared';
+import type { CustomerCategory } from '@/features/customers/engine/customers';
 
 interface ApiResponse {
   total: number;
@@ -31,6 +33,7 @@ interface ApiResponse {
     all: number; active: number; inactive: number; overdue: number; refusedNoCall: number;
     sections: { regular: number; regularAtRisk: number; once: number; never: number };
     sleeping: number; refused: number; refusedByReason: Partial<Record<NoCallReason, number>>;
+    byCategory?: { key: number; large: number; regular: number; once: number; potential: number; keyAtRisk: number };
   };
   page: number; pageSize: number; rows: ApiRow[];
   thresholds: {
@@ -66,9 +69,9 @@ const PAGE_SIZE = 50;
 
 type Sort = { key: string; dir: 'desc' | 'asc' } | null;
 
-function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort) {
+function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort, category: string) {
   return useQuery<ApiResponse>({
-    queryKey: ['customers', isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? ''],
+    queryKey: ['customers', isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? '', category],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (!isSelf) qs.set('bitrixId', managerId);
@@ -77,6 +80,7 @@ function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search
       qs.set('page', String(page));
       qs.set('pageSize', String(PAGE_SIZE));
       if (sort) { qs.set('sort', sort.key); qs.set('dir', sort.dir); }
+      if (category !== 'all') qs.set('category', category);
       const res = await fetch(`/api/customers?${qs}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
@@ -261,6 +265,27 @@ function StatusChips({ r }: { r: ApiRow }) {
   );
 }
 
+// Категория клиента чипом + модификаторы-иконки (дополнение Серёги 01.08).
+function CategoryCell({ r }: { r: ApiRow }) {
+  const cat = (r.category ?? 'none') as CustomerCategory;
+  const st = CATEGORY_STYLE[cat];
+  const hint = `Правила: ключевой — отгрузок ≥2 и сумма ≥5 млн; крупный — ≥1,5 млн или ≥5 отгрузок; постоянный — 2+ покупки; разовый — 1; потенциальный — покупок нет, есть активные. Пороги — в Настройки → Категории клиентов. Отгрузок: ${r.dealsDelivered} на ${fmtMoney(r.sumDelivered)}, групп: ${r.distinctGroups}`;
+  return (
+    <div className="flex items-center gap-1 whitespace-nowrap">
+      {cat === 'none' ? <span className="text-xs text-[var(--color-text-muted)]">—</span> : (
+        <span className="inline-flex items-center rounded px-1.5 py-px text-[11px] font-bold" style={{ color: st.color, backgroundColor: st.bg }} title={hint}>
+          {cat === 'key' && '🔑 '}{CATEGORY_LABELS[cat]}
+        </span>
+      )}
+      {(r.modifiers ?? []).map(mod => (
+        <span key={mod} className="text-[12px] cursor-default" title={`${MODIFIER_LABELS[mod].label} — ${MODIFIER_LABELS[mod].hint}`}>
+          {MODIFIER_LABELS[mod].icon}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // Сигнал одной строкой: иконка + короткая подпись цветом (редизайн 01.08).
 function SignalCell({ r, noCallDays }: { r: ApiRow; noCallDays: number }) {
   if (r.signals.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
@@ -327,6 +352,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<Sort>(null);
   const [cardRow, setCardRow] = useState<ApiRow | null>(null);
+  const [category, setCategory] = useState<string>('all'); // фильтр по категории (01.08)
 
   const qc = useQueryClient();
   const [markBusy, setMarkBusy] = useState(false);
@@ -356,7 +382,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const { data, isLoading, isError } = useCustomers(managerId, isSelf, filter, search, page, sort);
+  const { data, isLoading, isError } = useCustomers(managerId, isSelf, filter, search, page, sort, category);
   const rows = data?.rows ?? [];
   const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE)), [data?.total]);
 
@@ -397,6 +423,17 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
         </div>
         <input value={searchInput} onChange={e => setSearchInput(e.target.value)} placeholder="Поиск по имени или id"
           className="min-w-[160px] flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm sm:max-w-xs" />
+        {/* Фильтр по категории клиента (дополнение Серёги 01.08) */}
+        <select value={category} onChange={e => { setCategory(e.target.value); setPage(1); }}
+          title="Фильтр по категории клиента (правила — в Настройки → Категории клиентов)"
+          className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
+          <option value="all">Все категории{data?.counts.byCategory ? ` · 🔑 ${data.counts.byCategory.key}` : ''}</option>
+          <option value="key">Ключевые{data?.counts.byCategory ? ` (${data.counts.byCategory.key})` : ''}</option>
+          <option value="large">Крупные{data?.counts.byCategory ? ` (${data.counts.byCategory.large})` : ''}</option>
+          <option value="regular">Постоянные{data?.counts.byCategory ? ` (${data.counts.byCategory.regular})` : ''}</option>
+          <option value="once">Разовые{data?.counts.byCategory ? ` (${data.counts.byCategory.once})` : ''}</option>
+          <option value="potential">Потенциальные{data?.counts.byCategory ? ` (${data.counts.byCategory.potential})` : ''}</option>
+        </select>
         <LegendPopover />
       </div>
 
@@ -433,6 +470,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
             <thead>
               <tr className="text-left text-[10.5px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
                 <Th label="Клиент" />
+                <Th k="category" label="Категория" />
                 <Th label="Сигнал" />
                 <Th k="dealsSold" label="Сд/прод" right />
                 <Th k="sumSold" label="Куплено на" right />
@@ -456,7 +494,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                     {showHeader && (
                       // Секция — тонкая строка-разделитель (редизайн 01.08), не серый блок.
                       <tr className="border-t border-[var(--color-border)]">
-                        <td colSpan={10} className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]"
+                        <td colSpan={11} className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]"
                           title={SECTION_HINTS[r.section]}>
                           {SECTION_LABELS[r.section]}
                           {secCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{secCount}</span>}
@@ -481,6 +519,7 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
                           <StatusChips r={r} />
                         </div>
                       </td>
+                      <td className="px-2.5 py-1"><CategoryCell r={r} /></td>
                       <td className="px-2.5 py-1"><SignalCell r={r} noCallDays={data?.thresholds.activeNoCallDays ?? 7} /></td>
                       <td className="px-2.5 py-1 text-right tabular-nums whitespace-nowrap">{r.dealsTotal}/<b>{r.dealsSold}</b></td>
                       <td className="px-2.5 py-1 text-right font-semibold tabular-nums whitespace-nowrap">{r.sumSold > 0 ? fmtMoney(r.sumSold) : '—'}</td>
@@ -548,6 +587,7 @@ interface TeamRow {
   id: number; name: string; departmentName: string | null;
   clients: number; callNow: number; overdueRepeat: number; activeNoCall: number; refusedNoCall: number;
   regulars: number; regularsAtRisk: number;
+  keyClients: number; keyAtRisk: number; // категории клиентов (01.08)
 }
 
 export function TeamCustomersBlock() {
@@ -580,6 +620,8 @@ export function TeamCustomersBlock() {
               <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
                 <th className="py-1.5 pr-3 font-bold">Менеджер</th>
                 <th className="py-1.5 pr-3 font-bold text-right">Клиентов</th>
+                <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Категория «Ключевой»: отгрузок ≥2 и сумма отгрузок ≥5 млн (пороги в настройках)">🔑 Ключевых</th>
+                <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Ключевые клиенты без активных сделок, молчащие дольше 2× своего цикла повторки — самый дорогой сигнал">🔑⚠ Под угрозой</th>
                 <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Клиентов с 2+ успешными сделками (по всей истории клиента)">Постоянников</th>
                 <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap" title="Постоянники без активных сделок, молчащие дольше двух своих циклов повторки">Под угрозой</th>
                 <th className="py-1.5 pr-3 font-bold text-right whitespace-nowrap">Пора позвонить</th>
@@ -599,6 +641,9 @@ export function TeamCustomersBlock() {
                       <span className="ml-1.5 text-[11px] text-[var(--color-accent)]">{expanded === m.id ? '▲ свернуть' : '▼ раскрыть'}</span>
                     </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums">{m.clients}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums font-semibold" style={{ color: m.keyClients > 0 ? '#8a6d00' : 'var(--color-text-muted)' }}>{m.keyClients}</td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums font-bold"
+                      style={{ color: m.keyAtRisk > 0 ? 'var(--color-negative, #e03131)' : 'var(--color-text-muted)' }}>{m.keyAtRisk}</td>
                     <td className="py-1.5 pr-3 text-right tabular-nums font-semibold">{m.regulars}</td>
                     <td className="py-1.5 pr-3 text-right tabular-nums font-bold"
                       style={{ color: m.regularsAtRisk > 0 ? 'var(--color-negative, #e03131)' : 'var(--color-text-muted)' }}>
@@ -614,7 +659,7 @@ export function TeamCustomersBlock() {
                   </tr>
                   {expanded === m.id && (
                     <tr className="border-t border-[var(--color-border)]">
-                      <td colSpan={8} className="py-3 pl-2">
+                      <td colSpan={10} className="py-3 pl-2">
                         <CustomersList managerId={String(m.id)} isSelf={false} />
                       </td>
                     </tr>

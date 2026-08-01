@@ -32,8 +32,9 @@ export async function GET() {
   const stats = await fetchTeamCustomerStats(roster.map(r => r.id));
   const byId = new Map(stats.map(s => [s.bitrixId, s]));
   const team = roster.map(r => ({ ...r, ...byId.get(r.id)! }))
-    // Самые горящие сверху: по числу клиентов «пора позвонить».
-    .sort((a, b) => b.callNow - a.callNow);
+    // Самые горящие сверху: сначала «ключевые под угрозой» (самый дорогой сигнал,
+    // дополнение Серёги 01.08), затем «пора позвонить».
+    .sort((a, b) => (b.keyAtRisk - a.keyAtRisk) || (b.callNow - a.callNow));
 
   return NextResponse.json({ team });
 }

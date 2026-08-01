@@ -1,7 +1,7 @@
 // Общие утилиты «Моих заказчиков» (вынесены при редизайне 01.08, чтобы карточка
 // клиента (CustomerCard.tsx) и список (CustomersTab.tsx) не плодили копий и не
 // образовывали циклический импорт).
-import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem, CustomerMark, CustomerBucket, NoCallReason } from '@/features/customers/engine/customers';
+import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem, CustomerMark, CustomerBucket, NoCallReason, CustomerCategory, CustomerModifier } from '@/features/customers/engine/customers';
 import type { Recommendation } from '@/features/customers/engine/crossSell';
 
 export const REASON_LABELS: Record<NoCallReason, string> = {
@@ -23,7 +23,29 @@ export interface ApiRow {
   bucket: CustomerBucket; snoozedActive: boolean; mark: CustomerMark | null;
   managerHistory: ManagerHistoryItem[]; prevManagerNames: string[];
   recommend: Recommendation | null;
+  // Категории клиентов (дополнение Серёги 01.08)
+  category: CustomerCategory; modifiers: CustomerModifier[];
+  dealsDelivered: number; sumDelivered: number; distinctGroups: number;
 }
+
+export const CATEGORY_LABELS: Record<CustomerCategory, string> = {
+  key: 'Ключевой', large: 'Крупный', regular: 'Постоянный',
+  once: 'Разовый', potential: 'Потенциальный', none: '—',
+};
+/** Цвета чипов категорий: ключевой — золото, крупный — фиолет, постоянный — зелёный. */
+export const CATEGORY_STYLE: Record<CustomerCategory, { color: string; bg: string }> = {
+  key:       { color: '#8a6d00', bg: 'color-mix(in srgb, #eab308 22%, transparent)' },
+  large:     { color: '#6741d9', bg: 'color-mix(in srgb, #7950f2 14%, transparent)' },
+  regular:   { color: 'var(--color-positive, #2f9e44)', bg: 'color-mix(in srgb, var(--color-positive, #2f9e44) 12%, transparent)' },
+  once:      { color: 'var(--color-text-muted)', bg: 'var(--color-bg-hover)' },
+  potential: { color: 'var(--color-accent)', bg: 'color-mix(in srgb, var(--color-accent) 10%, transparent)' },
+  none:      { color: 'var(--color-text-muted)', bg: 'transparent' },
+};
+export const MODIFIER_LABELS: Record<CustomerModifier, { icon: string; label: string; hint: string }> = {
+  complex:  { icon: '🧩', label: 'комплексный', hint: 'Покупал 3+ разных товарных групп (по отгрузкам, шкала by_max — как «комплексные» в «Повторных»)' },
+  frequent: { icon: '⚡', label: 'частый', hint: 'Собственный цикл повторки заметно чаще медианы базы (16 дн.)' },
+  fading:   { icon: '📉', label: 'затухающий', hint: 'Частота падает: последний интервал (или текущая тишина) больше 2× его среднего интервала покупок' },
+};
 
 export function fmtMoney(v: number): string {
   const abs = Math.abs(v);

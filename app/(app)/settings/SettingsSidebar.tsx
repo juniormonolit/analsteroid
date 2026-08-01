@@ -42,6 +42,7 @@ export function SettingsSidebar({
         // «Веса скоринга» убраны из навигации: веса теперь задаются на строке оси в
         // «Шаблонах карточек» (задача владельца 30.07). Сама страница осталась указателем.
         { href: '/settings/daily-plan-mode', label: 'Режим дневного плана', visible: isSuperadmin },
+        { href: '/settings/customer-categories', label: 'Категории клиентов', visible: isSuperadmin },
         // «Награды» (задача 2655): каталог бейджей ЛК — вкл/выкл, пороги. Супер-админ.
         { href: '/settings/rewards', label: 'Награды', visible: isSuperadmin },
         // Шаблоны карточек (бриф 10.07) — единственный пункт этой группы БЕЗ

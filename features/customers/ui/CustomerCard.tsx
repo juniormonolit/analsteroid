@@ -11,6 +11,7 @@ import type { CustomerCardData } from '@/features/customers/engine/card';
 import {
   type ApiRow, REASON_LABELS, fmtMoney, fmtDate, daysAgo,
   clientBitrixUrl, dealBitrixUrl, clientDisplayName,
+  CATEGORY_LABELS, CATEGORY_STYLE, MODIFIER_LABELS,
 } from './shared';
 
 const DAY_MS = 86_400_000;
@@ -92,6 +93,17 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                   {clientDisplayName(row)}
                 </h2>
                 <Chip>{row.clientType === 'contact' ? 'физ' : 'юр'}</Chip>
+                {/* Категория клиента — крупно (дополнение Серёги 01.08) */}
+                {row.category && row.category !== 'none' && (
+                  <span className="inline-flex items-center rounded px-2 py-0.5 text-[12px] font-bold"
+                    style={{ color: CATEGORY_STYLE[row.category].color, backgroundColor: CATEGORY_STYLE[row.category].bg }}
+                    title={`Отгрузок ${row.dealsDelivered} на ${fmtMoney(row.sumDelivered)}, разных групп: ${row.distinctGroups}. Пороги — Настройки → Категории клиентов`}>
+                    {row.category === 'key' && '🔑 '}{CATEGORY_LABELS[row.category]}
+                  </span>
+                )}
+                {(row.modifiers ?? []).map(mod => (
+                  <Chip key={mod} title={MODIFIER_LABELS[mod].hint}>{MODIFIER_LABELS[mod].icon} {MODIFIER_LABELS[mod].label}</Chip>
+                ))}
                 <Chip tone={status.tone}>{status.label}</Chip>
                 {row.snoozedActive && row.mark && (
                   <Chip title={`Отметил(а): ${row.mark.createdBy}, ${fmtDate(row.mark.createdAt)}`}>⏸ до {fmtDate(row.mark.snoozeUntil)}</Chip>
@@ -112,6 +124,9 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                 <span>средний чек <b>{avgCheck !== null && avgCheck > 0 ? fmtMoney(avgCheck) : '—'}</b></span>
                 <span title={row.cycleSource === 'own' ? 'Медиана интервалов между его покупками' : 'Медиана по всей базе (своих покупок мало)'}>
                   цикл повторки <b>{row.cycleDays} дн.</b>{row.cycleSource === 'global' ? ' (по базе)' : ''}
+                </span>
+                <span title="Отгрузки (delivered) — база категорий «Ключевой»/«Крупный»">
+                  отгрузок <b>{row.dealsDelivered}</b> на <b>{row.sumDelivered > 0 ? fmtMoney(row.sumDelivered) : '—'}</b>
                 </span>
               </div>
             </div>
