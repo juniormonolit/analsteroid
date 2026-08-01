@@ -5,6 +5,7 @@ import {
   differenceInCalendarDays, addDays,
 } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
+import { isWithinFirstWorkingWeek } from '@/lib/metrics/productionCalendar';
 
 const TZ = 'Europe/Moscow';
 
@@ -22,10 +23,20 @@ function msk(): Date {
   return toZonedTime(new Date(), TZ);
 }
 
+/**
+ * Дефолт «текущий месяц» (правка владельца через Серёгу, 01.08, на смену
+ * прежнему «только 1-е число»): в ПЕРВУЮ РАБОЧУЮ НЕДЕЛЮ месяца (первые 5 рабочих
+ * дней по производственному календарю РФ — isWithinFirstWorkingWeek) данных
+ * почти нет и сравнивать не с чем — дефолт ПРОШЛЫЙ месяц. С 6-го рабочего дня —
+ * как раньше, текущий месяц (по вчера включительно). Это ЕДИНАЯ точка дефолта:
+ * все места, что зовут defaultPeriod()/defaultComparison() (см. импорты),
+ * подхватывают правило автоматически. Явно выбранный пользователем период
+ * (ручной диапазон, сохранённая вкладка отчёта, пресет) эту функцию не вызывает
+ * и не трогается.
+ */
 export function defaultPeriod(): DateRange {
   const today = msk();
-  const isFirst = today.getDate() === 1;
-  if (isFirst) {
+  if (isWithinFirstWorkingWeek(today)) {
     const prevMonth = subMonths(today, 1);
     return {
       from: startOfMonth(prevMonth),

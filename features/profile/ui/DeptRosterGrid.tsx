@@ -8,9 +8,8 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { startOfMonth } from 'date-fns';
 import type { CardSegment } from '@/features/manager-card/engine/managerCard';
-import type { DateRange } from '@/lib/period';
+import { defaultPeriod, type DateRange } from '@/lib/period';
 
 interface TeamManager {
   managerId: string;
@@ -96,7 +95,9 @@ export function DeptRosterGrid() {
 
   const period: DateRange = useMemo(() => {
     if (periodChoice === 'all') return ALL_TIME_RANGE;
-    return { from: startOfMonth(new Date()), to: new Date() };
+    // Единая точка дефолта (правка владельца 01.08): первая рабочая неделя месяца →
+    // прошлый месяц (было локальное «startOfMonth(now) → now»).
+    return defaultPeriod();
   }, [periodChoice]);
   const fromIso = period.from.toISOString();
   const toIso = period.to.toISOString();

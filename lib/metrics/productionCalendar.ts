@@ -89,3 +89,24 @@ export function isWorkingDayJs(year: number, month1: number, day: number, isoDow
   if (isoDow > 5) return false;
   return !(EXTRA_NON_WORKING[year] ?? []).includes(key);
 }
+
+/**
+ * «Первая рабочая неделя месяца» (правка владельца через Серёгу, 01.08): дефолт
+ * периода «текущий месяц» в первых числах почти пуст — не с чем сравнивать,
+ * заходишь в отчёт/планёрку — а там нули. Правило: если с начала месяца по
+ * `d` включительно прошло НЕ БОЛЕЕ 5 РАБОЧИХ дней — считаем это «первой рабочей
+ * неделей». `d` — МСК-локальная дата (getFullYear/getMonth/getDate читаются как
+ * есть, как и весь остальной JS-календарь здесь — вызывающая сторона обязана
+ * передавать уже зонированную дату, см. msk() в lib/period/index.ts).
+ */
+export function isWithinFirstWorkingWeek(d: Date): boolean {
+  const year = d.getFullYear();
+  const month1 = d.getMonth() + 1;
+  let workingCount = 0;
+  for (let day = 1; day <= d.getDate(); day++) {
+    const dow = new Date(year, month1 - 1, day).getDay(); // 0=Вс..6=Сб (локально)
+    const isoDow = dow === 0 ? 7 : dow;
+    if (isWorkingDayJs(year, month1, day, isoDow)) workingCount++;
+  }
+  return workingCount <= 5;
+}

@@ -23,6 +23,7 @@ import { CUSTOM_PREFIX, validateCustomCriteria, type CustomCriteria, type Custom
 import { computeXpTick, writeXpLedger } from '@/features/xp/engine/xp';
 import { questTick } from '@/features/quests/engine/quests';
 import { computeCategoryBadgeAwards } from './categoryBadges';
+import { computePlanningBadgeAwards } from './planningBadges';
 
 export const RETRO_START = '2026-04-03'; // решение владельца: ретро с 03.04.2026
 
@@ -819,6 +820,18 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     } catch (e) {
       // до миграции 129 нет customer_category_settings — тик не должен падать
       console.warn('[categoryBadges] пропущено:', e instanceof Error ? e.message : e);
+    }
+
+    // ── Награды пула «Планёрка» (01.08): «Дисциплина броней»/«Камбэк»/«Досрочник» ─
+    try {
+      const planningAwards = await computePlanningBadgeAwards(today, RETRO_START);
+      for (const a of planningAwards) {
+        if (!enabled(a.badgeKey)) continue;
+        awards.push(a);
+      }
+    } catch (e) {
+      // до миграции 131 нет определений/manager_plans может быть недоступна — тик не должен падать
+      console.warn('[planningBadges] пропущено:', e instanceof Error ? e.message : e);
     }
 
     // ── XP-система (миграция 124): леджер + награды XP-пула в общем тике ─────

@@ -12,8 +12,7 @@ import { BadgeCard } from '@/features/badges/ui/BadgeShelf';
 import type { ShelfItem } from '@/features/badges/engine/shelf';
 import { MainPeriodControl } from '@/features/reports/ui/FilterBar';
 import { Seg } from '@/features/reports/ui/FiltersMenu';
-import { startOfMonth } from 'date-fns';
-import type { DateRange } from '@/lib/period';
+import { defaultPeriod, type DateRange } from '@/lib/period';
 import type { CardSegment } from '@/features/manager-card/engine/managerCard';
 
 interface AxisScore { key: string; label: string; score: number | null; raw: number | null; weight: number }
@@ -79,7 +78,9 @@ function MedalOrRank({ rank }: { rank: number | null }) {
 
 export function RatingPage() {
   const router = useRouter();
-  const [period, setPeriod] = useState<DateRange>(() => ({ from: startOfMonth(new Date()), to: new Date() }));
+  // Единая точка дефолта периода (правка владельца 01.08: первая рабочая неделя
+  // месяца → прошлый месяц, было локальное «startOfMonth(now) → now»).
+  const [period, setPeriod] = useState<DateRange>(defaultPeriod);
   const [segment, setSegment] = useState<CardSegment>('all');
 
   const fromIso = period.from.toISOString();

@@ -12,9 +12,10 @@ import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
 import { PayoutManageBlock } from '@/features/badges/ui/PayoutManage';
 import { InventoryManageBlock } from '@/features/badges/ui/InventoryManage';
 import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, NotificationsBell, type ManagerTabKey } from './ManagerTabs';
-import { CustomersTab, TeamCustomersBlock } from '@/features/customers/ui/CustomersTab';
+import { CustomersTab, TeamCustomersBlock, type Filter as CustomerFilter } from '@/features/customers/ui/CustomersTab';
+import { PlanyorkaTab, TeamPlanyorkaBlock } from '@/features/planyorka/ui/PlanyorkaTab';
 import { QuestsTab, TeamQuestsBlock } from '@/features/quests/ui/QuestsTab';
-import { previousPeriodSameLength, type DateRange } from '@/lib/period';
+import { previousPeriodSameLength, defaultPeriod, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
 import { Avatar } from '@/components/ui/Avatar';
@@ -212,8 +213,10 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       const to = new Date(initialTo);
       if (!isNaN(+from) && !isNaN(+to)) return { from, to };
     }
-    const now = new Date();
-    return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: now };
+    // Единая точка дефолта (правка владельца 01.08): первая рабочая неделя месяца →
+    // прошлый месяц, иначе текущий — та же defaultPeriod(), что у отчётов (было
+    // локальное дублирование «1-е число месяца → now», без правила первой недели).
+    return defaultPeriod();
   });
   const [comparisonPeriod, setComparisonPeriod] = useState<DateRange>(() => previousPeriodSameLength(period));
   const [segment, setSegment] = useState<CardSegment>('all');
@@ -223,6 +226,9 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   // Только mode='manager'; дефолт — «Профиль». Отделу/РОПу табы не нужны —
   // там нет одной личности, прежняя структура с «Моей командой» сохраняется.
   const [tab, setTab] = useState<ManagerTabKey>('profile');
+  // Деп-линк «Планёрка» → «Мои заказчики» (клик по цифре открывает список в
+  // нужном срезе: filter/category — best-effort, читается один раз при заходе на таб).
+  const [customersDeepLink, setCustomersDeepLink] = useState<{ filter?: CustomerFilter; category?: string } | null>(null);
   const tabbed = mode === 'manager';
   const showStats = !tabbed || tab === 'stats';
 
@@ -313,7 +319,17 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {tabbed && tab === 'profile' && (
         <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => setTab('rewards')} />
       )}
-      {tabbed && tab === 'customers' && <CustomersTab managerId={managerId} isSelf={showBadges} />}
+      {tabbed && tab === 'planyorka' && (
+        <PlanyorkaTab
+          managerId={managerId} isSelf={showBadges}
+          onGoStats={() => setTab('stats')}
+          onGoCustomers={(filter, category) => { setCustomersDeepLink({ filter, category }); setTab('customers'); }}
+        />
+      )}
+      {tabbed && tab === 'customers' && (
+        <CustomersTab managerId={managerId} isSelf={showBadges}
+          initialFilter={customersDeepLink?.filter} initialCategory={customersDeepLink?.category} />
+      )}
       {tabbed && tab === 'quests' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
       {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} />}
       {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => setTab('inventory')} />}
@@ -424,7 +440,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {/* ── Бейджи (задача 2655): у менеджера полка переехала в таб «Награды»
           (табы ЛК, доп. Серёги 31.07); у РОПа-департамента — по-прежнему своя
           полка + «Моя команда» с полками подчинённых (managed-depts). ── */}
-      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><PayoutManageBlock /><InventoryManageBlock /><TeamCustomersBlock /><TeamQuestsBlock /><TeamBadgesBlock /></>)}
+      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><PayoutManageBlock /><InventoryManageBlock /><TeamPlanyorkaBlock /><TeamCustomersBlock /><TeamQuestsBlock /><TeamBadgesBlock /></>)}
 
       {isLoading ? (
         <div className="space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-24 bg-[var(--color-border)] rounded-2xl animate-pulse" />)}</div>

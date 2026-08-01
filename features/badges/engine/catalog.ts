@@ -98,6 +98,23 @@ export const BADGE_CATALOG: BadgeDef[] = [
     criteria: {},
   },
 
+  // ── Пул «Планёрка» (одобрено Серёгой 01.08) ─────────────────────────────────
+  {
+    key: 'planning_discipline', name: 'Дисциплина броней', icon: '📞', category: 'streak', tiered: false, sortOrder: 88,
+    description: 'За календарную неделю ВСЕ ваши брони получили звонок в течение 7 дней. Еженедельная.',
+    criteria: {},
+  },
+  {
+    key: 'comeback', name: 'Камбэк', icon: '📈', category: 'streak', tiered: false, sortOrder: 89,
+    description: 'Месяц с ростом суммы продаж после месяца падения. Ежемесячная.',
+    criteria: {},
+  },
+  {
+    key: 'early_bird', name: 'Досрочник', icon: '🏁', category: 'milestone', tiered: false, sortOrder: 90,
+    description: 'План месяца выполнен к 20-му числу. Ежемесячная.',
+    criteria: {},
+  },
+
   // ── Редкие ачивки ──────────────────────────────────────────────────────────
   {
     key: 'combo_master', name: 'Мастер комбо', icon: '🎯', category: 'rare', tiered: false, sortOrder: 30,

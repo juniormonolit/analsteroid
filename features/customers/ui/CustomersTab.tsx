@@ -42,7 +42,7 @@ interface ApiResponse {
   };
 }
 
-type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'never' | 'sleeping' | 'refused';
+export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'never' | 'sleeping' | 'refused';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
   { key: 'overdue', label: 'Пора позвонить' },
@@ -345,14 +345,19 @@ function RecommendCell({ rec }: { rec: Recommendation | null }) {
 
 /** Список заказчиков одного менеджера: фильтры + поиск + пагинация.
  *  Используется и в табе ЛК, и в провале из блока РОПа. */
-export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
-  const [filter, setFilter] = useState<Filter>('all');
+export function CustomersList({ managerId, isSelf, initialFilter, initialCategory }: {
+  managerId: string; isSelf: boolean;
+  // Деп-линк из «Планёрки» (01.08): открыть список сразу в нужном срезе
+  // (например filter='overdue' — «пора позвонить», category='key' — ключевые).
+  initialFilter?: Filter; initialCategory?: string;
+}) {
+  const [filter, setFilter] = useState<Filter>(initialFilter ?? 'all');
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState<Sort>(null);
   const [cardRow, setCardRow] = useState<ApiRow | null>(null);
-  const [category, setCategory] = useState<string>('all'); // фильтр по категории (01.08)
+  const [category, setCategory] = useState<string>(initialCategory ?? 'all'); // фильтр по категории (01.08)
 
   const qc = useQueryClient();
   const [markBusy, setMarkBusy] = useState(false);
@@ -577,8 +582,10 @@ export function CustomersList({ managerId, isSelf }: { managerId: string; isSelf
   );
 }
 
-export function CustomersTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
-  return <CustomersList managerId={managerId} isSelf={isSelf} />;
+export function CustomersTab({ managerId, isSelf, initialFilter, initialCategory }: {
+  managerId: string; isSelf: boolean; initialFilter?: Filter; initialCategory?: string;
+}) {
+  return <CustomersList managerId={managerId} isSelf={isSelf} initialFilter={initialFilter} initialCategory={initialCategory} />;
 }
 
 // ── Блок РОПа: заказчики команды (managed-depts, как «Моя команда») ──────────
