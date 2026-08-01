@@ -305,7 +305,11 @@ export interface PlanyorkaResult {
 }
 
 function pct(a: number, b: number): number | null { return b > 0 ? ((a - b) / b) * 100 : null; }
-function ymd(d: Date): string { return d.toISOString().slice(0, 10); }
+// МСК-локальная календарная дата (НЕ .toISOString() — тот отдаёт UTC-дату и на
+// сервере с TZ=Europe/Moscow сдвигал бы полночь МСК на день назад, баг пойман
+// живьём при проверке: period.fromStr показывал 31.07 вместо 01.08 для месяца
+// offset=0). Тот же приём, что mskToday() в features/badges/engine/compute.ts.
+function ymd(d: Date): string { return d.toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }); }
 
 export async function buildManagerPlanyorka(managerBitrixId: number, unit: PlanyorkaUnit, offset: number): Promise<PlanyorkaResult> {
   const { period, compare } = periodBounds(unit, offset);
