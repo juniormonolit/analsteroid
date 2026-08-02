@@ -8,6 +8,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MltCoin } from '@/components/icons/MltCoin';
+import { Modal } from '@/components/ui/Modal';
 
 interface PoolTier {
   tierKey: string; name: string; icon: string; rarity: 'common' | 'rare' | 'jackpot';
@@ -114,43 +115,43 @@ function Wheel({ tiers, rotation, spinning, onDone }: {
   );
 }
 
+// Переведено на общий Modal (задача 2764, правило 3 CLAUDE.md) — раньше был
+// самописный fixed inset-0: на телефоне центрированное окно вместо bottom-sheet,
+// без focus-trap/Esc/safe-area из коробки, которые Modal даёт сам.
 function ChancesModal({ data, onClose }: { data: GachaData; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={onClose}>
-      <div className="mt-16 w-full max-w-md rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-5 shadow-xl" onClick={e => e.stopPropagation()}>
-        <h2 className="mb-1 text-base font-bold text-[var(--color-text)]">Шансы гачи</h2>
-        <div className="mb-3 text-xs text-[var(--color-text-muted)]">
-          Все вероятности опубликованы, сумма ровно 100%. Результат каждой крутки определяет сервер.
-        </div>
-        <div className="scroll-x">
-          <table className="w-full text-[13px]">
-            <tbody>
-              {data.pool.map(t => (
-                <tr key={t.tierKey} className="border-t border-[var(--color-border)]">
-                  <td className="py-1.5 pr-2">{t.icon}</td>
-                  <td className="py-1.5 pr-2 text-[var(--color-text)]">
-                    {t.name}
-                    {t.soldOut && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">(приз закончился)</span>}
-                  </td>
-                  <td className="py-1.5 text-right font-semibold tabular-nums" style={{ color: RARITY_COLOR[t.rarity] }}>
-                    {fmtChance(t.chancePpm)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="mt-3 rounded-xl border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
-          <b className="text-[var(--color-text)]">Гарантия (pity):</b> с {data.pity.softFrom}-й крутки без редкого приза шанс
-          редкого растёт на 2 п.п. за крутку, на {data.pity.hardAt}-й — редкий приз гарантирован. Джекпот в гарантию
-          не входит — его шанс всегда {fmtChance(data.pool.find(t => t.rarity === 'jackpot')?.chancePpm ?? 0)}.
-          Лимиты: {data.limits.daily} круток в день, {data.limits.weekly} в неделю.
-        </div>
-        <div className="mt-3 flex justify-end">
-          <button type="button" onClick={onClose} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Закрыть</button>
-        </div>
+    <Modal open onOpenChange={(o) => { if (!o) onClose(); }} title="Шансы гачи" desktopWidth="sm:max-w-md">
+      <div className="mb-3 text-xs text-[var(--color-text-muted)]">
+        Все вероятности опубликованы, сумма ровно 100%. Результат каждой крутки определяет сервер.
       </div>
-    </div>
+      <div className="scroll-x">
+        <table className="w-full text-[13px]">
+          <tbody>
+            {data.pool.map(t => (
+              <tr key={t.tierKey} className="border-t border-[var(--color-border)]">
+                <td className="py-1.5 pr-2">{t.icon}</td>
+                <td className="py-1.5 pr-2 text-[var(--color-text)]">
+                  {t.name}
+                  {t.soldOut && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">(приз закончился)</span>}
+                </td>
+                <td className="py-1.5 text-right font-semibold tabular-nums" style={{ color: RARITY_COLOR[t.rarity] }}>
+                  {fmtChance(t.chancePpm)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-3 rounded-xl border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
+        <b className="text-[var(--color-text)]">Гарантия (pity):</b> с {data.pity.softFrom}-й крутки без редкого приза шанс
+        редкого растёт на 2 п.п. за крутку, на {data.pity.hardAt}-й — редкий приз гарантирован. Джекпот в гарантию
+        не входит — его шанс всегда {fmtChance(data.pool.find(t => t.rarity === 'jackpot')?.chancePpm ?? 0)}.
+        Лимиты: {data.limits.daily} круток в день, {data.limits.weekly} в неделю.
+      </div>
+      <div className="mt-3 flex justify-end">
+        <button type="button" onClick={onClose} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Закрыть</button>
+      </div>
+    </Modal>
   );
 }
 

@@ -4,14 +4,15 @@
 // Разделы: hero (аватар/рейтинг/ранги) → фильтры → профиль эффективности
 // (шестиугольник + плитки) → звонки → товарные категории → график работы.
 // mode='department' — те же разделы на агрегате отдела (managerId = uuid отдела | 'all').
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { ManagerActivityTab } from './ManagerActivityTab';
 import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
 import { PayoutManageBlock } from '@/features/badges/ui/PayoutManage';
 import { InventoryManageBlock } from '@/features/badges/ui/InventoryManage';
-import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, NotificationsBell, type ManagerTabKey } from './ManagerTabs';
+import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, NotificationsBell, MANAGER_TABS, type ManagerTabKey } from './ManagerTabs';
 import { CustomersTab, TeamCustomersBlock, type Filter as CustomerFilter } from '@/features/customers/ui/CustomersTab';
 import { PlanyorkaTab, TeamPlanyorkaBlock } from '@/features/planyorka/ui/PlanyorkaTab';
 import { QuestsTab, TeamQuestsBlock } from '@/features/quests/ui/QuestsTab';
@@ -225,9 +226,29 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   // Табы ЛК (доп. Серёги 31.07): Профиль · Статистика · Награды · Магазин.
   // Только mode='manager'; дефолт — «Профиль». Отделу/РОПу табы не нужны —
   // там нет одной личности, прежняя структура с «Моей командой» сохраняется.
-  const [tab, setTab] = useState<ManagerTabKey>('profile');
+  //
+  // Синхронизация с URL (задача 2764, «мобильное приложение» — deep links +
+  // «назад» листает вкладки, а не выкидывает со страницы): таб больше не
+  // самостоятельный useState, а ПРОИЗВОДНАЯ от ?tab= в адресной строке — URL
+  // и есть источник правды, отдельного состояния для рассинхрона не заводим.
+  // goToTab() — router.push (не replace), поэтому каждый переключённый таб —
+  // запись в history: браузерный «назад» возвращает на предыдущий таб, а не
+  // сразу выкидывает со страницы ЛК.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const validTabKeys = MANAGER_TABS.map(t => t.key) as string[];
+  const tab: ManagerTabKey = tabParam && validTabKeys.includes(tabParam) ? (tabParam as ManagerTabKey) : 'profile';
+  const goToTab = useCallback((next: ManagerTabKey) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('tab', next);
+    router.push(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [router, pathname, searchParams]);
   // Деп-линк «Планёрка» → «Мои заказчики» (клик по цифре открывает список в
   // нужном срезе: filter/category — best-effort, читается один раз при заходе на таб).
+  // Остаётся локальным состоянием (не в URL) — одноразовая передача среза при
+  // переходе, не то, что имеет смысл сохранять в закладке отдельно от таба.
   const [customersDeepLink, setCustomersDeepLink] = useState<{ filter?: CustomerFilter; category?: string } | null>(null);
   // Фиче-флаг «Планёрка» (01.08, решение владельца после отзыва Серёги «не
   // нравится — убери»): код/роуты живы, таб и блок РОПа спрятаны, пока флаг
@@ -245,9 +266,17 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   });
   const planyorkaEnabled = features?.planyorka === true;
   useEffect(() => {
-    // Защита от протухшего состояния (напр. флаг выключили, пока таб уже был открыт).
-    if (!planyorkaEnabled && tab === 'planyorka') setTab('profile');
-  }, [planyorkaEnabled, tab]);
+    // Защита от протухшего состояния (напр. флаг выключили, пока таб уже был
+    // открыт). router.replace (не goToTab/push) — это не выбор пользователя,
+    // а исправление невалидного URL, отдельная запись в history не нужна:
+    // иначе «назад» с профиля вернул бы на ?tab=planyorka и тут же выкинуло
+    // обратно на профиль — бессмысленный шаг в истории.
+    if (!planyorkaEnabled && tab === 'planyorka') {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('tab', 'profile');
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    }
+  }, [planyorkaEnabled, tab, pathname, router, searchParams]);
   const tabbed = mode === 'manager';
   const showStats = !tabbed || tab === 'stats';
 
@@ -330,19 +359,19 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {/* ── Табы ЛК (только карточка менеджера) ── */}
       {tabbed && (
         <div className="flex items-stretch gap-2">
-          <div className="flex-1"><ManagerTabBar active={tab} onChange={setTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
+          <div className="flex-1"><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
           {showBadges && <NotificationsBell />}
         </div>
       )}
 
       {tabbed && tab === 'profile' && (
-        <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => setTab('rewards')} />
+        <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => goToTab('rewards')} />
       )}
       {tabbed && planyorkaEnabled && tab === 'planyorka' && (
         <PlanyorkaTab
           managerId={managerId} isSelf={showBadges}
-          onGoStats={() => setTab('stats')}
-          onGoCustomers={(filter, category) => { setCustomersDeepLink({ filter, category }); setTab('customers'); }}
+          onGoStats={() => goToTab('stats')}
+          onGoCustomers={(filter, category) => { setCustomersDeepLink({ filter, category }); goToTab('customers'); }}
         />
       )}
       {tabbed && tab === 'customers' && (
@@ -351,7 +380,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       )}
       {tabbed && tab === 'quests' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
       {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} />}
-      {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => setTab('inventory')} />}
+      {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => goToTab('inventory')} />}
       {tabbed && tab === 'inventory' && <InventoryTab managerId={managerId} isSelf={showBadges} />}
 
       {showStats && (<>

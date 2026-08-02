@@ -17,6 +17,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { HelpCircle, MoreHorizontal, ExternalLink } from 'lucide-react';
+import { Modal } from '@/components/ui/Modal';
 import type { ActiveDealInfo, CustomerSection, NoCallReason } from '@/features/customers/engine/customers';
 import type { Recommendation } from '@/features/customers/engine/crossSell';
 import { CustomerCard } from './CustomerCard';
@@ -182,31 +183,29 @@ export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkS
         </div>
       )}
       {open === 'nocall' && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setOpen(null)}>
-          <div className="w-full max-w-sm rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4" onClick={e => e.stopPropagation()}>
-            <div className="mb-2 text-sm font-bold text-[var(--color-text)]">Больше не звонить — почему?</div>
-            <div className="flex flex-col gap-1.5">
-              {(Object.keys(REASON_LABELS) as NoCallReason[]).map(k => (
-                <label key={k} className="flex cursor-pointer items-center gap-2 text-sm text-[var(--color-text)]">
-                  <input type="radio" name={`nocall-${r.clientKey}`} checked={reason === k} onChange={() => setReason(k)} />
-                  {REASON_LABELS[k]}
-                </label>
-              ))}
-              <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
-                placeholder={reason === 'other' ? 'Комментарий (обязателен для «Прочее»)' : 'Комментарий (необязательно)'}
-                className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm" />
-            </div>
-            <div className="mt-3 flex justify-end gap-2">
-              <button type="button" className={btn} onClick={() => setOpen(null)}>Отмена</button>
-              <button type="button" disabled={busy || !reason || (reason === 'other' && comment.trim() === '')}
-                className={`${btn} !border-transparent`}
-                style={{ color: 'var(--color-text-inverse)', backgroundColor: 'var(--color-negative, #e03131)' }}
-                onClick={() => fire({ clientKey: r.clientKey, action: 'no_call', reason, comment: comment.trim() || undefined })}>
-                Больше не звонить
-              </button>
-            </div>
+        // Modal вместо самописного fixed inset-0 (задача 2764, правило 3 CLAUDE.md).
+        <Modal open onOpenChange={(o) => { if (!o) setOpen(null); }} title="Больше не звонить — почему?" desktopWidth="sm:max-w-sm">
+          <div className="flex flex-col gap-1.5">
+            {(Object.keys(REASON_LABELS) as NoCallReason[]).map(k => (
+              <label key={k} className="flex cursor-pointer items-center gap-2 text-sm text-[var(--color-text)]">
+                <input type="radio" name={`nocall-${r.clientKey}`} checked={reason === k} onChange={() => setReason(k)} />
+                {REASON_LABELS[k]}
+              </label>
+            ))}
+            <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
+              placeholder={reason === 'other' ? 'Комментарий (обязателен для «Прочее»)' : 'Комментарий (необязательно)'}
+              className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm" />
           </div>
-        </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button type="button" className={btn} onClick={() => setOpen(null)}>Отмена</button>
+            <button type="button" disabled={busy || !reason || (reason === 'other' && comment.trim() === '')}
+              className={`${btn} !border-transparent`}
+              style={{ color: 'var(--color-text-inverse)', backgroundColor: 'var(--color-negative, #e03131)' }}
+              onClick={() => fire({ clientKey: r.clientKey, action: 'no_call', reason, comment: comment.trim() || undefined })}>
+              Больше не звонить
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );

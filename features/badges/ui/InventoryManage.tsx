@@ -5,7 +5,10 @@
 // «Одобрить» = предмет использован (эффект — организационно); «Отклонить» —
 // с обязательной причиной, предмет ВОЗВРАЩАЕТСЯ в инвентарь менеджера.
 
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Modal } from '@/components/ui/Modal';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 interface ManagedActivation {
   id: number; bitrix_id: number; managerName: string; item_name: string;
@@ -17,6 +20,10 @@ interface ManagedActivation {
 
 export function InventoryManageBlock() {
   const qc = useQueryClient();
+  // Подтверждение/отклонение — вместо window.confirm+window.prompt (задача 2764).
+  const [approving, setApproving] = useState<ManagedActivation | null>(null);
+  const [rejecting, setRejecting] = useState<ManagedActivation | null>(null);
+  const [rejectComment, setRejectComment] = useState('');
   const { data } = useQuery<{ canManage: boolean; requests: ManagedActivation[] }>({
     queryKey: ['shop-activations-manage'],
     queryFn: async () => {
@@ -66,19 +73,12 @@ export function InventoryManageBlock() {
             <span className="text-xs text-[var(--color-text-muted)]">годен до {r.expires_at.split('-').reverse().join('.')}</span>
             <span className="ml-auto flex gap-2">
               <button type="button"
-                onClick={() => {
-                  if (window.confirm(`Одобрить «${r.item_name}» для ${r.managerName}? Предмет будет отмечен использованным.`)) {
-                    act.mutate({ id: r.id, action: 'approve' });
-                  }
-                }}
+                onClick={() => setApproving(r)}
                 className="rounded-lg bg-[var(--color-positive,#2f9e44)] px-3 py-1 text-xs font-semibold text-white">
                 Одобрить
               </button>
               <button type="button"
-                onClick={() => {
-                  const comment = window.prompt('Причина отклонения (менеджер её увидит; предмет вернётся в его инвентарь):');
-                  if (comment && comment.trim()) act.mutate({ id: r.id, action: 'reject', comment: comment.trim() });
-                }}
+                onClick={() => { setRejecting(r); setRejectComment(''); }}
                 className="rounded-lg border border-[var(--color-negative,#e03131)] px-3 py-1 text-xs font-semibold text-[var(--color-negative,#e03131)]">
                 Отклонить
               </button>
@@ -100,6 +100,35 @@ export function InventoryManageBlock() {
           </div>
         ))}
       </div>
+      <ConfirmDialog
+        open={!!approving}
+        title="Одобрить активацию?"
+        description={approving ? `Одобрить «${approving.item_name}» для ${approving.managerName}? Предмет будет отмечен использованным.` : ''}
+        confirmLabel="Одобрить"
+        pending={act.isPending}
+        onConfirm={() => { if (approving) { act.mutate({ id: approving.id, action: 'approve' }); setApproving(null); } }}
+        onCancel={() => setApproving(null)}
+      />
+      <Modal
+        open={!!rejecting}
+        onOpenChange={(o) => { if (!o) setRejecting(null); }}
+        title={`Отклонить заявку: ${rejecting?.managerName ?? ''}`}
+        desktopWidth="sm:max-w-sm"
+      >
+        <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Причина отклонения (менеджер её увидит; предмет вернётся в его инвентарь)
+          <textarea autoFocus value={rejectComment} onChange={e => setRejectComment(e.target.value)} rows={3}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm" />
+        </label>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={() => setRejecting(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={act.isPending || !rejectComment.trim()}
+            onClick={() => { if (rejecting) { act.mutate({ id: rejecting.id, action: 'reject', comment: rejectComment.trim() }); setRejecting(null); } }}
+            className="rounded-lg bg-[var(--color-negative,#e03131)] px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+            Отклонить
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

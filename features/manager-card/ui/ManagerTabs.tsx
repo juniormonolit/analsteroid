@@ -8,6 +8,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Avatar } from '@/components/ui/Avatar';
+import { Modal } from '@/components/ui/Modal';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { BadgeCard, BadgeShelf, useShelfQuery } from '@/features/badges/ui/BadgeShelf';
 import { GachaBlock } from '@/features/badges/ui/GachaBlock';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
@@ -203,28 +205,14 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
   const [comment, setComment] = useState('');
   const [typeId, setTypeId] = useState<number | null>(ctx.penaltyTypes?.[0]?.id ?? null);
   const [error, setError] = useState<string | null>(null);
+  // Подтверждение — вместо window.confirm (задача 2764): compute сам текст и
+  // body заранее, дальше — ConfirmDialog, submit.mutate запускается из onConfirm.
+  const [pendingConfirm, setPendingConfirm] = useState<{ text: string; body: Record<string, unknown> } | null>(null);
   const currency = ctx.currencyName ?? 'MLT';
   const selType = ctx.penaltyTypes?.find(t => t.id === typeId) ?? null;
 
   const submit = useMutation({
-    mutationFn: async () => {
-      let confirmText: string;
-      let body: Record<string, unknown>;
-      if (kind === 'bonus') {
-        const v = Number(amount);
-        if (!Number.isInteger(v) || v <= 0) throw new Error('Сумма — целое число больше нуля');
-        if (!comment.trim()) throw new Error('Комментарий обязателен');
-        confirmText = `Поощрить ${managerName} на ${v} ${currency}?\n\nКомментарий: ${comment.trim()}`;
-        body = { bitrixId: Number(managerId), type: 'bonus', amount: v, comment: comment.trim() };
-      } else {
-        if (!selType) throw new Error('Выберите причину штрафа');
-        // Подтверждающее окно с РАССЧИТАННОЙ суммой (для percent — от текущего баланса)
-        confirmText = `Оштрафовать ${managerName} на ${selType.computedAmount} ${currency}` +
-          (selType.priceMode === 'percent' ? ` (${selType.price}% от баланса ${ctx.balance ?? 0})` : '') +
-          `?\n\nПричина: ${selType.name}${comment.trim() ? `\nКомментарий: ${comment.trim()}` : ''}`;
-        body = { bitrixId: Number(managerId), type: 'penalty', penaltyTypeId: selType.id, comment: comment.trim() };
-      }
-      if (!window.confirm(confirmText)) return false;
+    mutationFn: async (body: Record<string, unknown>) => {
       const res = await fetch('/api/badges/manual', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
@@ -236,12 +224,34 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
+  // Валидация + текст подтверждения — раньше жили внутри mutationFn (throw →
+  // onError), теперь считаются на клик «Поощрить»/«Оштрафовать»: ошибка сразу
+  // в error-стейт, успех — открывает ConfirmDialog вместо window.confirm.
+  function requestConfirm() {
+    setError(null);
+    if (kind === 'bonus') {
+      const v = Number(amount);
+      if (!Number.isInteger(v) || v <= 0) return setError('Сумма — целое число больше нуля');
+      if (!comment.trim()) return setError('Комментарий обязателен');
+      setPendingConfirm({
+        text: `Поощрить ${managerName} на ${v} ${currency}?\n\nКомментарий: ${comment.trim()}`,
+        body: { bitrixId: Number(managerId), type: 'bonus', amount: v, comment: comment.trim() },
+      });
+    } else {
+      if (!selType) return setError('Выберите причину штрафа');
+      // Текст подтверждения с РАССЧИТАННОЙ суммой (для percent — от текущего баланса)
+      setPendingConfirm({
+        text: `Оштрафовать ${managerName} на ${selType.computedAmount} ${currency}` +
+          (selType.priceMode === 'percent' ? ` (${selType.price}% от баланса ${ctx.balance ?? 0})` : '') +
+          `?\n\nПричина: ${selType.name}${comment.trim() ? `\nКомментарий: ${comment.trim()}` : ''}`,
+        body: { bitrixId: Number(managerId), type: 'penalty', penaltyTypeId: selType.id, comment: comment.trim() },
+      });
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={onClose}>
-      <div className="mt-16 w-full max-w-md rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-5 shadow-xl" onClick={e => e.stopPropagation()}>
-        <h2 className="mb-3 text-base font-bold text-[var(--color-text)]">
-          {kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}: {managerName}
-        </h2>
+    // Modal вместо самописного fixed inset-0 (задача 2764, правило 3 CLAUDE.md).
+    <Modal open onOpenChange={(o) => { if (!o) onClose(); }} title={`${kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}: ${managerName}`} desktopWidth="sm:max-w-md">
         <div className="flex flex-col gap-3">
           {kind === 'bonus' ? (
             <>
@@ -294,14 +304,23 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
             <button type="button" disabled={submit.isPending || (kind === 'penalty' && !selType)}
-              onClick={() => { setError(null); submit.mutate(); }}
+              onClick={requestConfirm}
               className={`rounded-lg px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ${kind === 'bonus' ? 'bg-[var(--color-positive,#2f9e44)]' : 'bg-[var(--color-negative,#e03131)]'}`}>
               {submit.isPending ? 'Сохранение…' : kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}
             </button>
           </div>
         </div>
-      </div>
-    </div>
+      <ConfirmDialog
+        open={!!pendingConfirm}
+        title={kind === 'bonus' ? 'Подтвердите поощрение' : 'Подтвердите штраф'}
+        description={pendingConfirm?.text ?? ''}
+        confirmLabel={kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}
+        tone={kind === 'bonus' ? 'default' : 'danger'}
+        pending={submit.isPending}
+        onConfirm={() => { if (pendingConfirm) { const body = pendingConfirm.body; setPendingConfirm(null); submit.mutate(body); } }}
+        onCancel={() => setPendingConfirm(null)}
+      />
+    </Modal>
   );
 }
 
@@ -631,12 +650,7 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
   };
 
   const convert = useMutation({
-    mutationFn: async () => {
-      const raw = window.prompt(`Сколько рублей обменять на ${currencyName}? (курс: 1 ₽ = ${rate} ${currencyName}, доступно ${rub} ₽)`);
-      if (raw === null) return false;
-      const v = Number(raw);
-      if (!Number.isInteger(v) || v <= 0) throw new Error('Сумма — целое число больше нуля');
-      if (!window.confirm(`Обменять ${v} ₽ на ${Math.round(v * rate)} ${currencyName}? Обратной конвертации нет.`)) return false;
+    mutationFn: async (v: number) => {
       const res = await fetch('/api/badges/convert', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: v }),
       });
@@ -649,12 +663,7 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
   });
 
   const payout = useMutation({
-    mutationFn: async () => {
-      const raw = window.prompt(`Сколько рублей вывести в ЗП? (доступно ${rub} ₽)`);
-      if (raw === null) return false;
-      const v = Number(raw);
-      if (!Number.isInteger(v) || v <= 0) throw new Error('Сумма — целое число больше нуля');
-      if (!window.confirm(`Подать заявку на вывод ${v} ₽ в зарплату? Выплату подтверждает руководитель.`)) return false;
+    mutationFn: async (v: number) => {
       const res = await fetch('/api/badges/payout', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: v }),
       });
@@ -666,6 +675,32 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
+  // Ввод суммы + подтверждение — вместо window.prompt+window.confirm (задача
+  // 2764): двухшаговый диалог (сумма → расчёт/подтверждение), обе кнопки ведут
+  // сюда с разным kind, текст и мутация выбираются по нему.
+  const [amountDialog, setAmountDialog] = useState<'convert' | 'payout' | null>(null);
+  const [amountInput, setAmountInput] = useState('');
+  const [amountError, setAmountError] = useState<string | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ kind: 'convert' | 'payout'; v: number; text: string } | null>(null);
+
+  function openAmountDialog(kind: 'convert' | 'payout') {
+    setAmountInput('');
+    setAmountError(null);
+    setAmountDialog(kind);
+  }
+  function submitAmount() {
+    const v = Number(amountInput);
+    if (!Number.isInteger(v) || v <= 0) return setAmountError('Сумма — целое число больше нуля');
+    const kind = amountDialog!;
+    setAmountDialog(null);
+    setPendingConfirm({
+      kind, v,
+      text: kind === 'convert'
+        ? `Обменять ${v} ₽ на ${Math.round(v * rate)} ${currencyName}? Обратной конвертации нет.`
+        : `Подать заявку на вывод ${v} ₽ в зарплату? Выплату подтверждает руководитель.`,
+    });
+  }
+
   const requests = payouts?.requests ?? [];
   if (!isSelf && rub === 0) return null;
 
@@ -676,11 +711,11 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
         <RubPill balance={rub} />
         {isSelf && (
           <div className="ml-auto flex flex-wrap gap-2">
-            <button type="button" onClick={() => convert.mutate()} disabled={convert.isPending || rub <= 0}
+            <button type="button" onClick={() => openAmountDialog('convert')} disabled={convert.isPending || rub <= 0}
               className="rounded-lg border border-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 disabled:opacity-40">
               Обменять на {currencyName}
             </button>
-            <button type="button" onClick={() => payout.mutate()} disabled={payout.isPending || rub <= 0}
+            <button type="button" onClick={() => openAmountDialog('payout')} disabled={payout.isPending || rub <= 0}
               className="rounded-lg bg-[var(--color-positive,#2f9e44)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">
               Вывести в ЗП
             </button>
@@ -710,6 +745,44 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
           })}
         </div>
       )}
+      <Modal
+        open={!!amountDialog}
+        onOpenChange={(o) => { if (!o) setAmountDialog(null); }}
+        title={amountDialog === 'convert' ? `Обменять на ${currencyName}` : 'Вывести в ЗП'}
+        desktopWidth="sm:max-w-xs"
+      >
+        <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Сумма, ₽ {amountDialog === 'convert'
+            ? `(курс 1 ₽ = ${rate} ${currencyName}, доступно ${rub} ₽)`
+            : `(доступно ${rub} ₽)`}
+          <input
+            autoFocus type="number" inputMode="numeric" value={amountInput}
+            onChange={e => setAmountInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') submitAmount(); }}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm text-right tabular-nums"
+            placeholder="1000"
+          />
+        </label>
+        {amountError && <div className="mt-1.5 text-xs text-[var(--color-negative,#e03131)]">{amountError}</div>}
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={() => setAmountDialog(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" onClick={submitAmount} className="rounded-lg bg-[var(--color-accent)] px-4 py-1.5 text-xs font-semibold text-white">Далее</button>
+        </div>
+      </Modal>
+      <ConfirmDialog
+        open={!!pendingConfirm}
+        title={pendingConfirm?.kind === 'convert' ? 'Подтвердите обмен' : 'Подтвердите заявку на вывод'}
+        description={pendingConfirm?.text ?? ''}
+        confirmLabel={pendingConfirm?.kind === 'convert' ? 'Обменять' : 'Подать заявку'}
+        pending={convert.isPending || payout.isPending}
+        onConfirm={() => {
+          if (!pendingConfirm) return;
+          const { kind, v } = pendingConfirm;
+          setPendingConfirm(null);
+          if (kind === 'convert') convert.mutate(v); else payout.mutate(v);
+        }}
+        onCancel={() => setPendingConfirm(null)}
+      />
     </section>
   );
 }
@@ -721,6 +794,8 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
   const { data: manualCtx } = useManualContext(managerId, !isSelf);
   const currencyName = shelfData?.currencyName ?? 'MLT';
   const ledger = extra?.ledger ?? [];
+  // Подтверждение сторно — вместо window.confirm (задача 2764).
+  const [reverseConfirmId, setReverseConfirmId] = useState<number | null>(null);
 
   // Сторно (только админ): компенсирующая запись, история сохраняется.
   const reverse = useMutation({
@@ -787,7 +862,7 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
                         {r.reversed && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">(отменена)</span>}
                         {manualCtx?.canReverse && r.source !== 'auto' && !r.reversed && r.reversal_of === null && (
                           <button type="button"
-                            onClick={() => { if (window.confirm('Сторнировать операцию? Появится компенсирующая запись.')) reverse.mutate(r.id); }}
+                            onClick={() => setReverseConfirmId(r.id)}
                             className="ml-2 text-[11px] font-semibold text-[var(--color-accent)] hover:underline">
                             сторно
                           </button>
@@ -809,6 +884,16 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
         )}
       </section>
       <PenaltyCatalog />
+      <ConfirmDialog
+        open={reverseConfirmId !== null}
+        title="Сторнировать операцию?"
+        description="Появится компенсирующая запись, история сохраняется."
+        confirmLabel="Сторнировать"
+        tone="danger"
+        pending={reverse.isPending}
+        onConfirm={() => { if (reverseConfirmId !== null) { reverse.mutate(reverseConfirmId); setReverseConfirmId(null); } }}
+        onCancel={() => setReverseConfirmId(null)}
+      />
     </div>
   );
 }
@@ -899,16 +984,22 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
     void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
   };
 
-  const buy = useMutation({
-    mutationFn: async ({ item, currency }: { item: ShopItemView; currency: 'EBALL' | 'RUB' }) => {
-      const price = currency === 'RUB' ? item.priceRub! : item.priceEball;
-      const unit = currency === 'RUB' ? '₽' : currencyName;
-      const balance = currency === 'RUB' ? (data?.rubBalance ?? 0) : (data?.balance ?? 0);
-      if (!window.confirm(
-        `Купить «${item.name}» за ${price.toLocaleString('ru-RU')} ${unit}?\n\n` +
+  // Подтверждение покупки — вместо window.confirm (задача 2764).
+  const [pendingBuy, setPendingBuy] = useState<{ item: ShopItemView; currency: 'EBALL' | 'RUB'; text: string } | null>(null);
+  function requestBuy(item: ShopItemView, currency: 'EBALL' | 'RUB') {
+    const price = currency === 'RUB' ? item.priceRub! : item.priceEball;
+    const unit = currency === 'RUB' ? '₽' : currencyName;
+    const balance = currency === 'RUB' ? (data?.rubBalance ?? 0) : (data?.balance ?? 0);
+    setPendingBuy({
+      item, currency,
+      text: `Купить «${item.name}» за ${price.toLocaleString('ru-RU')} ${unit}?\n\n` +
         `Останется: ${(balance - price).toLocaleString('ru-RU')} ${unit}. ` +
         `Предмет попадёт в инвентарь, срок годности ${item.ttlMonths} мес.`,
-      )) return false;
+    });
+  }
+
+  const buy = useMutation({
+    mutationFn: async ({ item, currency }: { item: ShopItemView; currency: 'EBALL' | 'RUB' }) => {
       const res = await fetch('/api/shop', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ itemId: item.id, currency }),
@@ -973,14 +1064,14 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                     {isSelf && (
                       <div className="flex gap-2">
                         <button type="button" disabled={buy.isPending || soldOut || !canEball}
-                          onClick={() => buy.mutate({ item, currency: 'EBALL' })}
+                          onClick={() => requestBuy(item, 'EBALL')}
                           title={soldOut ? 'Позиция закончилась' : canEball ? undefined : `Не хватает ${currencyName}`}
                           className="rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-inverse)] disabled:opacity-40">
                           {soldOut ? 'Нет в наличии' : 'Купить'}
                         </button>
                         {item.priceRub !== null && !soldOut && (
                           <button type="button" disabled={buy.isPending || !canRub}
-                            onClick={() => buy.mutate({ item, currency: 'RUB' })}
+                            onClick={() => requestBuy(item, 'RUB')}
                             title={canRub ? undefined : 'Не хватает рублей'}
                             className="rounded-lg border border-[var(--color-positive,#2f9e44)] px-3 py-1.5 text-xs font-semibold text-[var(--color-positive,#2f9e44)] disabled:opacity-40">
                             За ₽
@@ -999,6 +1090,15 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
         Покупка списывает {currencyName} сразу (старейшие начисления первыми), предмет попадает в таб «Инвентарь» со
         сроком годности. Активация — заявкой руководителю; отказ возвращает предмет. По истечении срока возвращается 50% цены.
       </div>
+      <ConfirmDialog
+        open={!!pendingBuy}
+        title="Подтвердите покупку"
+        description={pendingBuy?.text ?? ''}
+        confirmLabel="Купить"
+        pending={buy.isPending}
+        onConfirm={() => { if (pendingBuy) { const { item, currency } = pendingBuy; setPendingBuy(null); buy.mutate({ item, currency }); } }}
+        onCancel={() => setPendingBuy(null)}
+      />
     </div>
   );
 }
@@ -1010,11 +1110,10 @@ function GiftModal({ row, meta, onClose, onDone }: {
 }) {
   const [to, setTo] = useState<number | ''>('');
   const [error, setError] = useState<string | null>(null);
+  // Подтверждение — вместо window.confirm (задача 2764).
+  const [confirming, setConfirming] = useState(false);
   const gift = useMutation({
     mutationFn: async () => {
-      if (to === '') throw new Error('Выберите получателя');
-      const toName = meta.managers.find(m => m.id === to)?.name ?? to;
-      if (!window.confirm(`Подарить «${row.item_name}» → ${toName}?\n\nПредмет уйдёт из вашего инвентаря, срок годности (до ${fmtDate(row.expires_at)}) сохранится.`)) return false;
       const res = await fetch('/api/shop/gift', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ inventoryId: row.id, toBitrixId: to }),
@@ -1026,10 +1125,10 @@ function GiftModal({ row, meta, onClose, onDone }: {
     onSuccess: (done) => { if (done) onDone(); },
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
+  const toName = meta.managers.find(m => m.id === to)?.name ?? to;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={onClose}>
-      <div className="mt-16 w-full max-w-sm rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-5 shadow-xl" onClick={e => e.stopPropagation()}>
-        <h2 className="mb-3 text-base font-bold text-[var(--color-text)]">Подарить: {row.item_name}</h2>
+    // Modal вместо самописного fixed inset-0 (задача 2764, правило 3 CLAUDE.md).
+    <Modal open onOpenChange={(o) => { if (!o) onClose(); }} title={`Подарить: ${row.item_name}`} desktopWidth="sm:max-w-sm">
         <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Кому (активный менеджер)
           <select value={to} onChange={e => setTo(e.target.value === '' ? '' : Number(e.target.value))}
@@ -1042,13 +1141,21 @@ function GiftModal({ row, meta, onClose, onDone }: {
         {error && <div className="mt-2 text-xs text-[var(--color-negative,#e03131)]">{error}</div>}
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
-          <button type="button" disabled={gift.isPending || to === ''} onClick={() => { setError(null); gift.mutate(); }}
+          <button type="button" disabled={gift.isPending || to === ''} onClick={() => { setError(null); setConfirming(true); }}
             className="rounded-lg bg-[var(--color-accent)] px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
             {gift.isPending ? 'Отправка…' : 'Подарить'}
           </button>
         </div>
-      </div>
-    </div>
+      <ConfirmDialog
+        open={confirming}
+        title="Подтвердите подарок"
+        description={`Подарить «${row.item_name}» → ${toName}?\n\nПредмет уйдёт из вашего инвентаря, срок годности (до ${fmtDate(row.expires_at)}) сохранится.`}
+        confirmLabel="Подарить"
+        pending={gift.isPending}
+        onConfirm={() => { setConfirming(false); gift.mutate(); }}
+        onCancel={() => setConfirming(false)}
+      />
+    </Modal>
   );
 }
 
@@ -1065,10 +1172,12 @@ export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf:
     void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
   };
 
+  // Заявка на активацию — вместо window.prompt (задача 2764): маленькая форма
+  // (необязательный комментарий) вместо системного текстового окна.
+  const [activatingRow, setActivatingRow] = useState<InventoryRow | null>(null);
+  const [activateComment, setActivateComment] = useState('');
   const activate = useMutation({
-    mutationFn: async (row: InventoryRow) => {
-      const comment = window.prompt(`Заявка руководителю на «${row.item_name}».\nПожелание (дата и т.п.) — необязательно:`);
-      if (comment === null) return false;
+    mutationFn: async ({ row, comment }: { row: InventoryRow; comment: string }) => {
       const res = await fetch('/api/shop/activate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ inventoryId: row.id, comment: comment.trim() }),
@@ -1124,7 +1233,7 @@ export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf:
                   )}
                   {isSelf && row.status === 'owned' && (
                     <span className="ml-auto flex gap-2">
-                      <button type="button" onClick={() => activate.mutate(row)} disabled={activate.isPending}
+                      <button type="button" onClick={() => { setActivatingRow(row); setActivateComment(''); }} disabled={activate.isPending}
                         className="rounded-lg bg-[var(--color-accent)] px-3 py-1 text-xs font-semibold text-[var(--color-text-inverse)] disabled:opacity-50">
                         Использовать
                       </button>
@@ -1164,6 +1273,26 @@ export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf:
         <GiftModal row={gifting} meta={meta} onClose={() => setGifting(null)}
           onDone={() => { setGifting(null); refresh(); }} />
       )}
+      <Modal
+        open={!!activatingRow}
+        onOpenChange={(o) => { if (!o) setActivatingRow(null); }}
+        title={`Заявка руководителю: ${activatingRow?.item_name ?? ''}`}
+        desktopWidth="sm:max-w-sm"
+      >
+        <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Пожелание (дата и т.п.) — необязательно
+          <textarea autoFocus value={activateComment} onChange={e => setActivateComment(e.target.value)} rows={3}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm" />
+        </label>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={() => setActivatingRow(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={activate.isPending}
+            onClick={() => { if (activatingRow) { const row = activatingRow; const comment = activateComment; setActivatingRow(null); activate.mutate({ row, comment }); } }}
+            className="rounded-lg bg-[var(--color-accent)] px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+            {activate.isPending ? 'Отправка…' : 'Отправить заявку'}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -1178,18 +1307,12 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
   const [comment, setComment] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  // Подтверждение перевода — вместо window.confirm (задача 2764).
+  const [pendingTransfer, setPendingTransfer] = useState<string | null>(null);
 
   const send = useMutation({
     mutationFn: async () => {
       const v = Number(amount);
-      if (to === '') throw new Error('Выберите получателя');
-      if (!Number.isInteger(v) || v <= 0) throw new Error('Сумма — целое число больше нуля');
-      const fee = Math.floor(v * (meta?.feePercent ?? 5) / 100);
-      const toName = meta?.managers.find(m => m.id === to)?.name ?? to;
-      if (!window.confirm(
-        `Перевести ${v} ${currencyName} → ${toName}?\n\nПолучит: ${v - fee} (комиссия ${meta?.feePercent ?? 5}% = ${fee} сжигается).` +
-        (comment.trim() ? `\nКомментарий: ${comment.trim()}` : ''),
-      )) return false;
       const res = await fetch('/api/shop/transfer', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ toBitrixId: to, amount: v, comment: comment.trim() }),
@@ -1199,15 +1322,27 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
       return json as { received: number; fee: number };
     },
     onSuccess: (r) => {
-      if (r === false) return;
       setError(null); setAmount(''); setComment(''); setTo('');
-      setOkMsg(`Готово: получателю дошло ${(r as { received: number }).received}, комиссия ${(r as { fee: number }).fee} сожжена`);
+      setOkMsg(`Готово: получателю дошло ${r.received}, комиссия ${r.fee} сожжена`);
       void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
       void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
       void qc.invalidateQueries({ queryKey: ['shop-transfer-meta'] });
     },
     onError: (e) => { setOkMsg(null); setError(e instanceof Error ? e.message : String(e)); },
   });
+
+  function requestTransferConfirm() {
+    setError(null);
+    const v = Number(amount);
+    if (to === '') return setError('Выберите получателя');
+    if (!Number.isInteger(v) || v <= 0) return setError('Сумма — целое число больше нуля');
+    const fee = Math.floor(v * (meta?.feePercent ?? 5) / 100);
+    const toName = meta?.managers.find(m => m.id === to)?.name ?? to;
+    setPendingTransfer(
+      `Перевести ${v} ${currencyName} → ${toName}?\n\nПолучит: ${v - fee} (комиссия ${meta?.feePercent ?? 5}% = ${fee} сжигается).` +
+      (comment.trim() ? `\nКомментарий: ${comment.trim()}` : ''),
+    );
+  }
 
   if (!meta) return null;
   const left = Math.max(0, meta.dailyLimit - meta.sentToday);
@@ -1239,7 +1374,7 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
             className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-[var(--color-text)]" />
         </label>
         <button type="button" disabled={send.isPending || to === '' || !amount.trim() || balance <= 0}
-          onClick={() => send.mutate()}
+          onClick={requestTransferConfirm}
           className="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">
           {send.isPending ? 'Отправка…' : 'Перевести'}
         </button>
@@ -1252,6 +1387,15 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
       )}
       {okMsg && <div className="mt-1.5 text-xs text-[var(--color-positive,#2f9e44)]">{okMsg}</div>}
       {error && <div className="mt-1.5 text-xs text-[var(--color-negative,#e03131)]">{error}</div>}
+      <ConfirmDialog
+        open={!!pendingTransfer}
+        title="Подтвердите перевод"
+        description={pendingTransfer ?? ''}
+        confirmLabel="Перевести"
+        pending={send.isPending}
+        onConfirm={() => { setPendingTransfer(null); send.mutate(); }}
+        onCancel={() => setPendingTransfer(null)}
+      />
     </section>
   );
 }

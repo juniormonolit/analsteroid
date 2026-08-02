@@ -5,7 +5,10 @@
 // с рублёвого баланса записью в леджер; «Отклонить» — с обязательной причиной,
 // менеджер видит её в своём списке заявок. Фактическая выплата — бухгалтерией.
 
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Modal } from '@/components/ui/Modal';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 interface ManagedPayout {
   id: number; bitrix_id: number; managerName: string; amount: number;
@@ -16,6 +19,10 @@ interface ManagedPayout {
 
 export function PayoutManageBlock() {
   const qc = useQueryClient();
+  // Подтверждение/отклонение — вместо window.confirm+window.prompt (задача 2764).
+  const [confirmingPaid, setConfirmingPaid] = useState<ManagedPayout | null>(null);
+  const [rejecting, setRejecting] = useState<ManagedPayout | null>(null);
+  const [rejectComment, setRejectComment] = useState('');
   const { data } = useQuery<{ canManage: boolean; requests: ManagedPayout[] }>({
     queryKey: ['badges-payouts-manage'],
     queryFn: async () => {
@@ -62,19 +69,12 @@ export function PayoutManageBlock() {
             <span className="text-xs text-[var(--color-text-muted)]">(баланс {r.rub_balance.toLocaleString('ru-RU')} ₽)</span>
             <span className="ml-auto flex gap-2">
               <button type="button"
-                onClick={() => {
-                  if (window.confirm(`Отметить выплаченным ${r.amount} ₽ для ${r.managerName}? Сумма спишется с рублёвого баланса.`)) {
-                    act.mutate({ id: r.id, action: 'paid' });
-                  }
-                }}
+                onClick={() => setConfirmingPaid(r)}
                 className="rounded-lg bg-[var(--color-positive,#2f9e44)] px-3 py-1 text-xs font-semibold text-white">
                 Выплачено
               </button>
               <button type="button"
-                onClick={() => {
-                  const comment = window.prompt('Причина отклонения (менеджер её увидит):');
-                  if (comment && comment.trim()) act.mutate({ id: r.id, action: 'rejected', comment: comment.trim() });
-                }}
+                onClick={() => { setRejecting(r); setRejectComment(''); }}
                 className="rounded-lg border border-[var(--color-negative,#e03131)] px-3 py-1 text-xs font-semibold text-[var(--color-negative,#e03131)]">
                 Отклонить
               </button>
@@ -93,6 +93,35 @@ export function PayoutManageBlock() {
           </div>
         ))}
       </div>
+      <ConfirmDialog
+        open={!!confirmingPaid}
+        title="Отметить выплаченным?"
+        description={confirmingPaid ? `Отметить выплаченным ${confirmingPaid.amount} ₽ для ${confirmingPaid.managerName}? Сумма спишется с рублёвого баланса.` : ''}
+        confirmLabel="Выплачено"
+        pending={act.isPending}
+        onConfirm={() => { if (confirmingPaid) { act.mutate({ id: confirmingPaid.id, action: 'paid' }); setConfirmingPaid(null); } }}
+        onCancel={() => setConfirmingPaid(null)}
+      />
+      <Modal
+        open={!!rejecting}
+        onOpenChange={(o) => { if (!o) setRejecting(null); }}
+        title={`Отклонить заявку: ${rejecting?.managerName ?? ''}`}
+        desktopWidth="sm:max-w-sm"
+      >
+        <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Причина отклонения (менеджер её увидит)
+          <textarea autoFocus value={rejectComment} onChange={e => setRejectComment(e.target.value)} rows={3}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm" />
+        </label>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={() => setRejecting(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={act.isPending || !rejectComment.trim()}
+            onClick={() => { if (rejecting) { act.mutate({ id: rejecting.id, action: 'rejected', comment: rejectComment.trim() }); setRejecting(null); } }}
+            className="rounded-lg bg-[var(--color-negative,#e03131)] px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+            Отклонить
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
-  BarChart2, ClipboardList, Network, Gauge, Menu, X, Bell, LayoutGrid, Smartphone,
+  BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/auth/session';
@@ -22,6 +22,7 @@ import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
 import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
 import { useTheme } from '@/lib/hooks/useTheme';
 import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
+import { BottomTabBar } from '@/components/layout/BottomTabBar';
 
 // Ширина развёрнутого сайдбара (задача 1575, полировка шапки/меню): было 260 —
 // «Менеджеры - Повторные» / «Товары - Сравнительный» и другие длинные имена
@@ -819,15 +820,10 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
 
         {/* Main */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-          {/* Mobile topbar */}
-          <div className="md:hidden flex items-center gap-1.5 h-12 px-2 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0">
-            <button
-              onClick={() => setMobileOpen(true)}
-              className="tap-target min-w-11 min-h-11 flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-text)] rounded"
-              aria-label="Открыть меню"
-            >
-              <Menu size={20} />
-            </button>
+          {/* Mobile topbar — гамбургер убран (задача 2764): его роль теперь
+              у «Ещё» в нижнем таб-баре (BottomTabBar ниже), два разных
+              контрола на одно и то же действие — лишний хром на 375px. */}
+          <div className="md:hidden flex items-center gap-1.5 h-12 px-3 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0">
             <Link href="/home" className="flex items-center gap-1.5 min-w-0" title="На главную">
               <BrandLogo size={20} className="shrink-0" />
               <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
@@ -836,6 +832,10 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           <main className="flex-1 overflow-hidden flex flex-col">
             {children}
           </main>
+          {/* Нижняя навигация (задача 2764) — flex-сиблинг main, не fixed-оверлей:
+              main отдаёт ей реальную высоту, поэтому ни одной из ~30 страниц с
+              собственным h-full не нужно ничего менять под новый нижний бар. */}
+          <BottomTabBar onMore={() => setMobileOpen(true)} />
         </div>
       </div>
       {changelogOpen && (
