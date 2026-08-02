@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleIncomingBotMessage, handleBindDealCommand } from '@/lib/deal-chats/service';
+import { handleAdviceFeedback } from '@/lib/bot/feedback';
 
 // Обработчик событий бота «Аналитик». Сейчас обслуживает чаты по сделкам
 // (ответы менеджеров и клики по кнопкам bind_deal); разбор вопросов на
@@ -48,6 +49,23 @@ export async function POST(req: NextRequest) {
         const chatId = Number(str(cmdKey.replace(/\[COMMAND\]$/, '[COMMAND_PARAMS]')));
         if (chatId) {
           await handleBindDealCommand({ fromUserId: str('data[PARAMS][FROM_USER_ID]'), chatId });
+        }
+      }
+
+      // Кнопки «⚠️ Ошибка» / «👍 Полезно» под сообщениями «Аналитика» (задача
+      // 2765): те же imbot-команды, тот же паттерн разбора ключей, что и у
+      // bind_deal выше — COMMAND_PARAMS = id строки bot_outbound_log.
+      for (const signal of ['advice_error', 'advice_useful'] as const) {
+        const fbKey = Object.keys(data).find(
+          k => /^data\[COMMAND\]\[\d+\]\[COMMAND\]$/.test(k) && data[k] === signal,
+        );
+        if (fbKey) {
+          const logIdRaw = str(fbKey.replace(/\[COMMAND\]$/, '[COMMAND_PARAMS]'));
+          await handleAdviceFeedback({
+            fromUserId: str('data[PARAMS][FROM_USER_ID]'),
+            logIdRaw,
+            signal: signal === 'advice_error' ? 'error' : 'useful',
+          });
         }
       }
     }

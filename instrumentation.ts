@@ -17,6 +17,118 @@ export async function register() {
   scheduleWidgetMetrics();
   scheduleEmployeeRenameCheck();
   scheduleBadgeRecompute();
+  scheduleManagerDigest();
+  scheduleAdviceFeedback();
+}
+
+// ── Дайджест «Аналитика» менеджерам + цикл обратной связи (задача 2765) ──────
+// Ежедневный (будни, короткий) и еженедельный (по понедельникам, итоги) пуш
+// каждому активному менеджеру: движок lib/jobs/managerDigest.ts. Гейт —
+// digest_settings (правится в «Настройки → Геймификация → Дайджест»), не env —
+// как у call_control_settings, чтобы дев-стенд не слал дублей на общую БД
+// (там свой YC system, junibaseone).
+
+// Общий хелпер «раз в сутки по МСК с Redis-замком» — та же идея, что у
+// scheduleDailyMoscowReport, но вынесена: дневное и недельное окно дайджеста
+// почти идентичны, дублировать блок целиком незачем.
+async function runOnceADayMsk(lockKey: string, dateStr: string, job: () => Promise<void>): Promise<'ran' | 'already' | 'busy'> {
+  let redis: Awaited<ReturnType<typeof import('./lib/cache/redis')['getRedis']>> = null;
+  try {
+    const { getRedis } = await import('./lib/cache/redis');
+    redis = getRedis();
+    if (redis) {
+      if (await redis.get(`${lockKey}:sent:${dateStr}`)) return 'already';
+      const attempt = await redis.set(`${lockKey}:attempt:${dateStr}`, '1', 'EX', 900, 'NX');
+      if (attempt !== 'OK') return 'busy';
+    }
+  } catch (err) {
+    console.warn(`[${lockKey}] Redis недоступен, полагаюсь на in-memory флаг:`, err);
+  }
+  await job();
+  if (redis) await redis.set(`${lockKey}:sent:${dateStr}`, '1', 'EX', 24 * 3600).catch(() => {});
+  return 'ran';
+}
+
+function scheduleManagerDigest() {
+  let lastDailyDate = '';   // in-memory fallback, если Redis недоступен
+  let lastWeeklyDate = '';
+  let dailyRunning = false;
+  let weeklyRunning = false;
+
+  const tick = async () => {
+    try {
+      const { fetchDigestSettings, mskIsoWeekday, runDailyDigestForAllManagers, runWeeklyDigestForAllManagers } = await import('./lib/jobs/managerDigest');
+      const now = new Date();
+      const msk = now.toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' }); // 'YYYY-MM-DD HH:mm:ss'
+      const [date, time] = msk.split(' ');
+      const hour = parseInt(time.slice(0, 2), 10);
+      const weekday = mskIsoWeekday(now); // 1=Пн … 7=Вс
+      const settings = await fetchDigestSettings();
+
+      // Ежедневный: только будни (Пн-Пт) — «в выходные ежедневный не слать» из брифа.
+      if (settings.dailyEnabled && weekday <= 5 && hour === settings.dailyHour && !dailyRunning && lastDailyDate !== date) {
+        dailyRunning = true;
+        try {
+          const outcome = await runOnceADayMsk('digest:daily', date, async () => {
+            const res = await runDailyDigestForAllManagers();
+            console.log(`[digest] дневной: отправлено ${res.sent}, ошибок ${res.failed}`);
+          });
+          if (outcome !== 'busy') lastDailyDate = date;
+        } finally { dailyRunning = false; }
+      }
+
+      // Еженедельный: только понедельник, итоги закончившейся недели.
+      if (settings.weeklyEnabled && weekday === 1 && hour === settings.weeklyHour && !weeklyRunning && lastWeeklyDate !== date) {
+        weeklyRunning = true;
+        try {
+          const outcome = await runOnceADayMsk('digest:weekly', date, async () => {
+            const res = await runWeeklyDigestForAllManagers();
+            console.log(`[digest] недельный: отправлено ${res.sent}, ошибок ${res.failed}`);
+          });
+          if (outcome !== 'busy') lastWeeklyDate = date;
+        } finally { weeklyRunning = false; }
+      }
+    } catch (err) {
+      console.error('[digest] тик упал:', err);
+    }
+  };
+
+  setInterval(() => { void tick(); }, 60 * 1000);
+}
+
+// Цикл обратной связи по журналу подсказок (lib/jobs/adviceFeedback.ts) — тик
+// чаще дайджеста (раз в 15 мин), строк обычно немного (открытых советов на
+// менеджера — единицы), Redis-замок на случай нескольких инстансов на общей БД.
+function scheduleAdviceFeedback() {
+  let running = false;
+
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      try {
+        const { getRedis } = await import('./lib/cache/redis');
+        const redis = getRedis();
+        if (redis) {
+          const acquired = await redis.set('advice-feedback:tick', '1', 'EX', 14 * 60, 'NX');
+          if (acquired !== 'OK') return;
+        }
+      } catch { /* без Redis — полагаемся на in-process флаг running */ }
+
+      const { runAdviceFeedbackTick } = await import('./lib/jobs/adviceFeedback');
+      const stats = await runAdviceFeedbackTick();
+      if (stats.checked > 0) {
+        console.log(`[adviceFeedback] проверено ${stats.checked}: успех ${stats.success}, контакт ${stats.contacted}, напоминаний ${stats.reminded}, закрыто без контакта ${stats.closedNoContact}, закрыто без сделки ${stats.closedNoDeal}, ошибок ${stats.errors}`);
+      }
+    } catch (err) {
+      console.error('[adviceFeedback] тик упал:', err);
+    } finally {
+      running = false;
+    }
+  };
+
+  setTimeout(() => { void tick(); }, 45 * 1000); // сдвиг от старта — не толпиться с остальными job на боевом старте
+  setInterval(() => { void tick(); }, 15 * 60 * 1000);
 }
 
 // Бейджи менеджеров (задача 2655): ночной полный идемпотентный пересчёт наград

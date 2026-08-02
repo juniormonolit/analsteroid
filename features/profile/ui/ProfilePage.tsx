@@ -2,7 +2,7 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, IdCard, KeyRound, LayoutGrid, Moon, Rows3 } from 'lucide-react';
+import { IdCard, KeyRound, LayoutGrid, Moon, Rows3 } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
@@ -10,6 +10,7 @@ import { useTableScale, type TableScalePct } from '@/lib/hooks/useTableScale';
 import { useTheme, type Theme } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
 import { ReportsTrashCard } from './ReportsTrashCard';
+import { BotSubscriptionSettings } from './BotSubscriptionSettings';
 
 interface Me {
   user: {
@@ -358,25 +359,9 @@ export function ProfilePage() {
             )}
 
             {tab === 'notifications' && (
-              /* Уведомления — заглушка под будущий конструктор */
-              <div className={cardCls}>
-                <div className="flex items-center gap-2 mb-2">
-                  <Bell size={15} className="text-[var(--color-text-muted)]" />
-                  <h2 className="text-sm font-semibold text-[var(--color-text)]">Уведомления от бота «Аналитик»</h2>
-                  <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
-                    скоро
-                  </span>
-                </div>
-                <p className="text-sm text-[var(--color-text-muted)] mb-3">
-                  Здесь появится конструктор уведомлений: бот «Аналитик» будет автоматически присылать
-                  в Битрикс сообщение, когда показатель отклонится от нормы — аномалия, резкое снижение
-                  или рост, отставание от плана.
-                </p>
-                <label className="flex items-center gap-2 opacity-50 cursor-not-allowed select-none">
-                  <input type="checkbox" disabled className="accent-[var(--color-accent)] w-4 h-4" />
-                  <span className="text-sm text-[var(--color-text)]">Получать уведомления</span>
-                </label>
-              </div>
+              /* Личные настройки подписки на бота «Аналитик» (задача 2765, 02.08) —
+                 «это его личка», настройки видны и редактируемы только самим менеджером. */
+              <BotSubscriptionSettings />
             )}
           </div>
         </div>

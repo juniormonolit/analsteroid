@@ -14,6 +14,9 @@ import { GachaSettingsBlock } from './GachaSettings';
 import { XpSettingsBlock } from './XpSettings';
 import { QuestSettingsBlock } from './QuestSettings';
 import { GamificationDashboard } from './GamificationDashboard';
+import { DigestSettingsBlock } from './DigestSettings';
+import { OutboundLogBlock } from './OutboundLog';
+import { FeedbackQueueBlock } from './FeedbackQueue';
 import { MltCoin } from '@/components/icons/MltCoin';
 import {
   CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, DAILY_BONUS_METRIC_LABELS, METRIC_LABELS,
@@ -571,6 +574,10 @@ const TABS = [
   { key: 'gacha', label: 'Гача' },
   { key: 'payouts', label: 'Выплаты' },
   { key: 'inventory', label: 'Инвентарь' },
+  // Задача 2765 (02.08): дайджест менеджерам + система отладки сообщений бота.
+  { key: 'digest', label: 'Дайджест' },
+  { key: 'outbound', label: 'Исходящие' },
+  { key: 'feedback', label: 'Обратная связь' },
 ] as const;
 type TabKey = typeof TABS[number]['key'];
 
@@ -812,6 +819,10 @@ export function RewardsSettingsPage() {
       {tab === 'payouts' && !isLoading && <PayoutManageBlock />}
       {/* Заявки на активацию призов магазина: у админа — все */}
       {tab === 'inventory' && !isLoading && <InventoryManageBlock />}
+      {/* Дайджест менеджерам + отладка сообщений (задача 2765, 02.08) */}
+      {tab === 'digest' && <DigestSettingsBlock />}
+      {tab === 'outbound' && <OutboundLogBlock />}
+      {tab === 'feedback' && <FeedbackQueueBlock />}
     </div>
   );
 }
