@@ -39,26 +39,29 @@ const TZ = 'Europe/Moscow';
 
 // ── Даты (МСК, тот же стиль, что lib/jobs/dailyMoscowReport.ts) ──────────────
 
-function mskDateStr(d: Date = new Date()): string {
+// Экспортированы (без изменения поведения) — задача 2769 (дайджест РОПа)
+// переиспользует те же даты/форматирование МСК, чтобы дневной/недельный текст
+// department-дайджеста не разъезжался с менеджерским по формату дат/сумм.
+export function mskDateStr(d: Date = new Date()): string {
   const z = toZonedTime(d, TZ);
   return `${z.getFullYear()}-${String(z.getMonth() + 1).padStart(2, '0')}-${String(z.getDate()).padStart(2, '0')}`;
 }
-function addDaysStr(dateStr: string, days: number): string {
+export function addDaysStr(dateStr: string, days: number): string {
   const d = new Date(`${dateStr}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
-function mondayOf(dateStr: string): string {
+export function mondayOf(dateStr: string): string {
   const d = new Date(`${dateStr}T00:00:00Z`);
   const shift = (d.getUTCDay() + 6) % 7; // Пн=0 … Вс=6
   d.setUTCDate(d.getUTCDate() - shift);
   return d.toISOString().slice(0, 10);
 }
 /** UTC-инстант московской полуночи данной даты — границы для timestamptz-запросов. */
-function mskMidnight(dateStr: string): Date {
+export function mskMidnight(dateStr: string): Date {
   return fromZonedTime(`${dateStr} 00:00:00`, TZ);
 }
-function fmtDateRu(dateStr: string): string {
+export function fmtDateRu(dateStr: string): string {
   const [y, m, d] = dateStr.split('-');
   return `${d}.${m}.${y}`;
 }
@@ -420,7 +423,9 @@ async function fetchPlanTempoPct(managerBitrixId: number, dateStr: string): Prom
 
 // ── Форматирование чисел ─────────────────────────────────────────────────────
 
-function fmtSum(v: number): string {
+// Экспортирована для lib/jobs/ropDigest.ts (задача 2769) — тот же формат сумм
+// в дайджесте РОПа, никакого параллельного форматтера.
+export function fmtSum(v: number): string {
   if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1).replace('.', ',')} млн ₽`;
   if (Math.abs(v) >= 1_000) return `${Math.round(v / 1000)} тыс ₽`;
   return `${Math.round(v)} ₽`;

@@ -39,7 +39,12 @@ interface OpenAdvice {
   contacted_at: string | null;
 }
 
-async function hasSaleSince(clientKey: string, sinceIso: string): Promise<boolean> {
+// Экспортированы для lib/jobs/ropAdviceFeedback.ts (задача 2769, дайджест РОПа):
+// подсказка «крупный заказчик отдела без касания» проверяется ТЕМ ЖЕ фактом
+// «звонок/продажа после совета», просто клиент атрибутирован не одному
+// менеджеру, а отделу — сам факт («была ли продажа/звонок по client_key после
+// timestamp») от получателя не зависит, повторного SQL не нужно.
+export async function hasSaleSince(clientKey: string, sinceIso: string): Promise<boolean> {
   const res = await analyticsDb().query<{ n: string }>(
     `SELECT count(*)::text AS n FROM sa.deals d
       WHERE d.sold_at IS NOT NULL AND d.sold_at > $2 AND d.funnel_id IN (0,1,2,3)
@@ -49,7 +54,7 @@ async function hasSaleSince(clientKey: string, sinceIso: string): Promise<boolea
   return Number(res.rows[0]?.n ?? '0') > 0;
 }
 
-async function firstCallSince(clientKey: string, sinceIso: string): Promise<Date | null> {
+export async function firstCallSince(clientKey: string, sinceIso: string): Promise<Date | null> {
   const res = await analyticsDb().query<{ first_call: string | Date | null }>(
     `SELECT min(c.called_at) AS first_call
        FROM va.calls c JOIN sa.deals d ON d.deal_id = c.deal_id

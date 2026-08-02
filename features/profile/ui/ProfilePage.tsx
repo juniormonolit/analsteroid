@@ -11,6 +11,7 @@ import { useTheme, type Theme } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
 import { ReportsTrashCard } from './ReportsTrashCard';
 import { BotSubscriptionSettings } from './BotSubscriptionSettings';
+import { RopDigestSettings } from './RopDigestSettings';
 import { MyFeedbackLog } from './MyFeedbackLog';
 
 interface Me {
@@ -362,9 +363,12 @@ export function ProfilePage() {
             {tab === 'notifications' && (
               /* Личные настройки подписки на бота «Аналитик» (задача 2765, 02.08) —
                  «это его личка», настройки видны и редактируемы только самим менеджером.
-                 Плюс личный журнал сигналов «Мои замечания» — своё, ниже настроек. */
+                 Плюс личный журнал сигналов «Мои замечания» — своё, ниже настроек.
+                 RopDigestSettings (задача 2769) — дайджест отдела, сам себя скрывает
+                 для не-РОПов (isRop=false), рендерится всегда, без серверного гейта. */
               <div className="flex flex-col gap-4">
                 <BotSubscriptionSettings />
+                <RopDigestSettings />
                 <MyFeedbackLog />
               </div>
             )}

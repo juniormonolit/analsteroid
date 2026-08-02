@@ -19,6 +19,8 @@ export async function register() {
   scheduleBadgeRecompute();
   scheduleManagerDigest();
   scheduleAdviceFeedback();
+  scheduleRopDigest();
+  scheduleRopAdviceFeedback();
 }
 
 // ── Дайджест «Аналитика» менеджерам + цикл обратной связи (задача 2765) ──────
@@ -128,6 +130,93 @@ function scheduleAdviceFeedback() {
   };
 
   setTimeout(() => { void tick(); }, 45 * 1000); // сдвиг от старта — не толпиться с остальными job на боевом старте
+  setInterval(() => { void tick(); }, 15 * 60 * 1000);
+}
+
+// ── Дайджест «Аналитика» РОПу — агрегированный по отделу (задача 2769,
+// продолжение 2765) + свой цикл обратной связи (lib/jobs/ropAdviceFeedback.ts).
+// ПЕРЕИСПОЛЬЗУЕТ те же часы/гейт, что менеджерский дайджест (digest_settings —
+// отдельных настроек времени для РОПа не заводили, не просили), поэтому окна
+// отправки daily/weekly у менеджеров и РОПов совпадают по времени — они не
+// зависят друг от друга (свои Redis-замки `rop-digest:*`, своя таблица
+// rop_bot_prefs/rop_advice_log), но не толпятся, т.к. это разные списки
+// получателей (менеджер vs РОП одного отдела получают РАЗНЫЕ сообщения).
+function scheduleRopDigest() {
+  let lastDailyDate = '';
+  let lastWeeklyDate = '';
+  let dailyRunning = false;
+  let weeklyRunning = false;
+
+  const tick = async () => {
+    try {
+      const { fetchDigestSettings, mskIsoWeekday, runDailyDigestForAllRops, runWeeklyDigestForAllRops } = await import('./lib/jobs/ropDigest');
+      const now = new Date();
+      const msk = now.toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+      const [date, time] = msk.split(' ');
+      const hour = parseInt(time.slice(0, 2), 10);
+      const weekday = mskIsoWeekday(now);
+      const settings = await fetchDigestSettings();
+
+      if (settings.dailyEnabled && weekday <= 5 && hour === settings.dailyHour && !dailyRunning && lastDailyDate !== date) {
+        dailyRunning = true;
+        try {
+          const outcome = await runOnceADayMsk('rop-digest:daily', date, async () => {
+            const res = await runDailyDigestForAllRops();
+            console.log(`[ropDigest] дневной: отправлено ${res.sent}, ошибок ${res.failed}`);
+          });
+          if (outcome !== 'busy') lastDailyDate = date;
+        } finally { dailyRunning = false; }
+      }
+
+      if (settings.weeklyEnabled && weekday === 1 && hour === settings.weeklyHour && !weeklyRunning && lastWeeklyDate !== date) {
+        weeklyRunning = true;
+        try {
+          const outcome = await runOnceADayMsk('rop-digest:weekly', date, async () => {
+            const res = await runWeeklyDigestForAllRops();
+            console.log(`[ropDigest] недельный: отправлено ${res.sent}, ошибок ${res.failed}`);
+          });
+          if (outcome !== 'busy') lastWeeklyDate = date;
+        } finally { weeklyRunning = false; }
+      }
+    } catch (err) {
+      console.error('[ropDigest] тик упал:', err);
+    }
+  };
+
+  setInterval(() => { void tick(); }, 60 * 1000);
+}
+
+// Цикл обратной связи по rop_advice_log (lib/jobs/ropAdviceFeedback.ts) — тот
+// же ритм 15 мин, что и менеджерский, свой Redis-замок.
+function scheduleRopAdviceFeedback() {
+  let running = false;
+
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      try {
+        const { getRedis } = await import('./lib/cache/redis');
+        const redis = getRedis();
+        if (redis) {
+          const acquired = await redis.set('rop-advice-feedback:tick', '1', 'EX', 14 * 60, 'NX');
+          if (acquired !== 'OK') return;
+        }
+      } catch { /* без Redis — полагаемся на in-process флаг running */ }
+
+      const { runRopAdviceFeedbackTick } = await import('./lib/jobs/ropAdviceFeedback');
+      const stats = await runRopAdviceFeedbackTick();
+      if (stats.checked > 0) {
+        console.log(`[ropAdviceFeedback] проверено ${stats.checked}: успех ${stats.success}, контакт ${stats.contacted}, напоминаний ${stats.reminded}, закрыто без контакта ${stats.closedNoContact}, закрыто без результата ${stats.closedNoDeal}, ошибок ${stats.errors}`);
+      }
+    } catch (err) {
+      console.error('[ropAdviceFeedback] тик упал:', err);
+    } finally {
+      running = false;
+    }
+  };
+
+  setTimeout(() => { void tick(); }, 60 * 1000); // сдвиг от старта, отличный от менеджерского (45с) — не толпиться
   setInterval(() => { void tick(); }, 15 * 60 * 1000);
 }
 

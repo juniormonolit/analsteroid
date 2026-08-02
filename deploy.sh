@@ -51,6 +51,28 @@ for pkg in "${NEEDED_PKGS[@]}"; do
   fi
 done
 
+echo "==> Patching pg module (Turbopack NFT tracing gap — MANDATORY since deploy #27, see team/devops.md 'NEEDED_PKGS = 10 пакетов')..."
+# .next/standalone/.next/node_modules/pg-<hash> is where Turbopack resolves the external
+# `pg` package at runtime; NFT tracing leaves it as a symlink to .next/standalone/node_modules/pg
+# (or an empty dir), and that standalone copy itself is sometimes incomplete (18/20 files,
+# observed deploy #30). Always overwrite with the ROOT node_modules/pg (guaranteed complete),
+# regardless of what NFT left behind — cheap and idempotent.
+PG_DEST=$(find .next/standalone/.next/node_modules -maxdepth 1 \( -type l -o -type d \) -name 'pg-*' 2>/dev/null | head -1)
+if [ -z "$PG_DEST" ]; then
+  echo "  !! pg-<hash> not found under .next/standalone/.next/node_modules — CHECK MANUALLY (see team/devops.md)"
+else
+  rm -rf "$PG_DEST"
+  mkdir -p "$PG_DEST"
+  cp -R node_modules/pg/. "$PG_DEST/"
+  PG_FILES=$(find "$PG_DEST" -type f | wc -l | tr -d ' ')
+  ROOT_FILES=$(find node_modules/pg -type f | wc -l | tr -d ' ')
+  echo "  patched $PG_DEST ($PG_FILES files, root has $ROOT_FILES)"
+  if [ "$PG_FILES" != "$ROOT_FILES" ]; then
+    echo "  !! file count mismatch after patch — investigate before deploying"
+    exit 1
+  fi
+fi
+
 echo "==> Packing..."
 # public/ is optional — this project has none; only include it when present.
 PACK_PATHS=(
@@ -66,6 +88,7 @@ PACK_PATHS=(
 for pkg in "${NEEDED_PKGS[@]}"; do
   [ -d ".next/standalone/node_modules/$pkg" ] && PACK_PATHS+=(".next/standalone/node_modules/$pkg/")
 done
+[ -n "$PG_DEST" ] && PACK_PATHS+=("$PG_DEST/")
 tar -czf /tmp/analsteroid-deploy.tar.gz "${PACK_PATHS[@]}"
 
 echo "==> Uploading..."
@@ -79,6 +102,11 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$REMOTE" "
   # Stop server
   kill \$(ss -tlnp | grep 8100 | grep -oP 'pid=\K[0-9]+') 2>/dev/null || true
   sleep 1
+
+  # pg-<hash> may currently be a SYMLINK on the server (from an older deploy before this
+  # fix existed) — tar --overwrite won't cleanly replace a symlink with a real directory,
+  # so remove it explicitly first; the tarball always contains a real directory for it.
+  $([ -n "$PG_DEST" ] && echo "rm -rf '$PG_DEST'")
 
   # Extract (overwrite, no node_modules conflict)
   tar -xzf deploy.tar.gz --overwrite
@@ -103,5 +131,12 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$REMOTE" "
   STATUS=\$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8100/login)
   STATIC=\$(curl -s -o /dev/null -w '%{http_code}' \"http://localhost:8100/_next/static/\${BUILD_ID}/_buildManifest.js\")
   echo \"Login: \$STATUS | Static: \$STATIC | BUILD: \$BUILD_ID\"
+
+  # pg module sanity check (mandatory, see team/devops.md) — any DB route
+  # depends on this resolving; a silent MODULE_NOT_FOUND here means every
+  # /api/* route touching the DB is broken even though /login still returns 200.
+  PG_FILES=\$(find '$PG_DEST' -type f 2>/dev/null | wc -l | tr -d ' ')
+  PG_REQUIRE_OK=\$(node -e \"require('$REMOTE_DIR/$PG_DEST'); console.log('ok')\" 2>&1 || true)
+  echo \"pg module: \$PG_FILES files in $PG_DEST, require(): \$PG_REQUIRE_OK\"
 "
 echo "==> Done!"
