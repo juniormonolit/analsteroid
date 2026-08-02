@@ -632,10 +632,16 @@ export function RewardsSettingsPage() {
     mutationFn: async () => {
       const res = await fetch('/api/badges/recompute', { method: 'POST' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json() as Promise<{ stats: { inserted: number; updated: number; total: number; coinsAccrued: number; coinsEmitted: number; ms: number } }>;
+      return res.json() as Promise<{ stats: { inserted: number; updated: number; total: number; coinsAccrued: number; coinsEmitted: number; ms: number; skipped?: boolean } }>;
     },
     onSuccess: (d) => {
-      setRecomputeResult(`+${d.stats.inserted} новых, ${d.stats.updated} обновлено, валюта: +${d.stats.coinsAccrued} начислений на ${d.stats.coinsEmitted.toLocaleString('ru-RU')}, ${Math.round(d.stats.ms / 1000)} с`);
+      // Задача 2776: другой прогон (ночной тик или чьё-то ещё нажатие) уже держит
+      // advisory-лок — этот вызов ничего не считал, показываем это явно, а не «+0 новых».
+      if (d.stats.skipped) {
+        setRecomputeResult('Пересчёт уже выполняется в другом прогоне — подождите и повторите');
+      } else {
+        setRecomputeResult(`+${d.stats.inserted} новых, ${d.stats.updated} обновлено, валюта: +${d.stats.coinsAccrued} начислений на ${d.stats.coinsEmitted.toLocaleString('ru-RU')}, ${Math.round(d.stats.ms / 1000)} с`);
+      }
       void qc.invalidateQueries({ queryKey: ['settings-badges'] });
     },
     onError: (e) => setRecomputeResult(`Ошибка: ${e instanceof Error ? e.message : e}`),
