@@ -115,7 +115,9 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                 <h2 className="text-base font-bold text-[var(--color-text)] truncate max-w-[320px]" title={clientDisplayName(row)}>
                   {clientDisplayName(row)}
                 </h2>
-                <Chip>{row.clientType === 'contact' ? 'физ' : 'юр'}</Chip>
+                <Chip title={row.clientKey.startsWith('x')
+                  ? 'Юр.сделка без карточки компании в CRM — клиент определён по контакту-представителю (задача 2776, фикс «k0»)'
+                  : undefined}>{row.clientType === 'contact' ? 'физ' : 'юр'}</Chip>
                 {row.category && row.category !== 'none' && (
                   <span className="inline-flex items-center rounded px-2 py-0.5 text-[12px] font-bold"
                     style={{ color: CATEGORY_STYLE[row.category].color, backgroundColor: CATEGORY_STYLE[row.category].bg }}

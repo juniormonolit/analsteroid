@@ -11,6 +11,7 @@ import { analyticsDb } from '@/lib/db/clients';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { fetchCrossSellMatrix } from '@/features/customers/engine/crossSell';
+import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import {
   fetchCompanyMedians, loadQuestSettings, mskToday, rollLoot,
   type LootDrop, type QuestCategory, type QuestTier,
@@ -211,7 +212,7 @@ async function contractProgress(c: ContractRow): Promise<number> {
   const res = await analyticsDb().query<{ sold_day: string; amount: string; grps: string[] | null; prev_grps: string[] | null }>(`
     WITH seq AS (
       SELECT d.deal_id, d.current_manager_id, d.sold_at, coalesce(d.amount,0) AS amount, dg.grps,
-             LAG(dg.grps) OVER (PARTITION BY (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END)
+             LAG(dg.grps) OVER (PARTITION BY (${CLIENT_KEY_CASE_SQL})
                                 ORDER BY d.sold_at, d.deal_id) AS prev_grps
       FROM sa.deals d
       CROSS JOIN LATERAL (
@@ -220,7 +221,7 @@ async function contractProgress(c: ContractRow): Promise<number> {
                        AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps
       ) dg
       WHERE d.sold_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)
-        AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) IS NOT NULL
+        AND (${CLIENT_KEY_CASE_SQL}) IS NOT NULL
     )
     SELECT (sold_at AT TIME ZONE '${MSK}')::date::text AS sold_day, amount::text, grps, prev_grps
     FROM seq WHERE current_manager_id = $1 AND (sold_at AT TIME ZONE '${MSK}')::date >= $2::date

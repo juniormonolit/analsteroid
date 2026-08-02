@@ -19,8 +19,15 @@ async function fetchFromBitrix(keys: string[]): Promise<Map<string, string | nul
   const webhook = process.env.BITRIX_WEBHOOK_URL || '';
   if (!webhook) return out;
 
-  const contactIds = keys.filter(k => k.startsWith('c')).map(k => k.slice(1));
+  // 'x' — юр-сделка без карточки компании (company_id=0), фолбэк-ключ по
+  // contact_id (задача 2776, фикс склейки «k0» — owners-inbox/
+  // customers-k0-merge-issue.md). Резолвится ТЕМ ЖЕ crm.contact.list, что и
+  // обычный 'c'-контакт — сущность в Bitrix одна и та же (контакт), разница
+  // только в намеренно разделённом префиксе ключа (не склеивать с личной
+  // B2C-историей того же человека под 'c'-ключом).
+  const contactKeys = keys.filter(k => k.startsWith('c') || k.startsWith('x'));
   const companyIds = keys.filter(k => k.startsWith('k')).map(k => k.slice(1));
+  const contactIds = [...new Set(contactKeys.map(k => k.slice(1)))];
 
   if (contactIds.length > 0) {
     try {
@@ -30,7 +37,11 @@ async function fetchFromBitrix(keys: string[]): Promise<Map<string, string | nul
       });
       for (const c of (body?.result ?? []) as BxContact[]) {
         const name = [c.LAST_NAME, c.NAME, c.SECOND_NAME].filter(Boolean).join(' ').trim();
-        out.set(`c${c.ID}`, name || null);
+        // Пишем под КАЖДЫМ префиксом, который реально запрашивался для этого
+        // ID (обычно ровно один — оба сразу, только если у контакта есть и
+        // личная B2C-история, и k0-фолбэк-сделки).
+        if (keys.includes(`c${c.ID}`)) out.set(`c${c.ID}`, name || null);
+        if (keys.includes(`x${c.ID}`)) out.set(`x${c.ID}`, name || null);
       }
     } catch (e) {
       console.warn('[clientNames] crm.contact.list не удался:', e instanceof Error ? e.message : e);

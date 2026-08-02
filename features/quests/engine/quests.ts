@@ -32,6 +32,7 @@ import type { Pool, PoolClient } from 'pg';
 import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
 import { fetchCrossSellMatrix } from '@/features/customers/engine/crossSell';
+import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { isWorkingDayJs } from '@/lib/metrics/productionCalendar';
@@ -242,11 +243,11 @@ async function fetchPersonal(mgr: number): Promise<PersonalStats> {
     `, [mgr]),
     analyticsDb().query<{ g: string; clients: string }>(`
       SELECT p->>'head_group_name' AS g,
-             count(DISTINCT CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END) AS clients
+             count(DISTINCT (${CLIENT_KEY_CASE_SQL})) AS clients
       FROM sa.deals d, jsonb_array_elements(d.products) p
       WHERE d.current_manager_id = $1 AND d.sold_at >= now() - interval '60 days'
         AND d.funnel_id IN (0,1,2,3)
-        AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) IS NOT NULL
+        AND (${CLIENT_KEY_CASE_SQL}) IS NOT NULL
         AND coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL
         AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)'
       GROUP BY 1
@@ -604,7 +605,7 @@ async function fetchPeriodDeals(mgr: number, fromDay: string): Promise<PeriodDea
     WITH seq AS (
       SELECT d.deal_id, d.current_manager_id, d.sold_at, coalesce(d.amount,0) AS amount,
              coalesce(f.is_repeat,false) AS is_repeat, dg.grps,
-             LAG(dg.grps) OVER (PARTITION BY (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END)
+             LAG(dg.grps) OVER (PARTITION BY (${CLIENT_KEY_CASE_SQL})
                                 ORDER BY d.sold_at, d.deal_id) AS prev_grps
       FROM sa.deals d
       LEFT JOIN sa.funnels f ON f.id = d.funnel_id
@@ -614,7 +615,7 @@ async function fetchPeriodDeals(mgr: number, fromDay: string): Promise<PeriodDea
                        AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps
       ) dg
       WHERE d.sold_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)
-        AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) IS NOT NULL
+        AND (${CLIENT_KEY_CASE_SQL}) IS NOT NULL
     )
     SELECT (sold_at AT TIME ZONE '${MSK}')::date::text AS sold_day, amount::text, is_repeat, grps, prev_grps
     FROM seq WHERE current_manager_id = $1 AND (sold_at AT TIME ZONE '${MSK}')::date >= $2::date
@@ -627,7 +628,7 @@ async function fetchPeriodDeals(mgr: number, fromDay: string): Promise<PeriodDea
     FROM sa.deals d LEFT JOIN sa.funnels f ON f.id = d.funnel_id
     WHERE d.sold_at IS NOT NULL AND d.current_manager_id = $1
       AND (d.sold_at AT TIME ZONE '${MSK}')::date >= $2::date
-      AND NOT (d.funnel_id IN (0,1,2,3) AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) IS NOT NULL)
+      AND NOT (d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) IS NOT NULL)
   `, [mgr, fromDay]);
   return res.rows.map(r => ({
     soldDay: r.sold_day, amount: Number(r.amount), isRepeat: r.is_repeat,

@@ -20,6 +20,7 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { sendManagerBotMessage } from '@/features/badges/engine/notifications';
 import { fetchDigestSettings, fetchManagerBotPrefs } from './managerDigest';
+import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 
 const REMINDER_INTERVAL_DAYS = 3;   // не чаще одного напоминания в 3 дня
 const WATCH_DAYS_AFTER_CONTACT = 21; // сколько ждём сделку после «контакт был»
@@ -48,7 +49,7 @@ export async function hasSaleSince(clientKey: string, sinceIso: string): Promise
   const res = await analyticsDb().query<{ n: string }>(
     `SELECT count(*)::text AS n FROM sa.deals d
       WHERE d.sold_at IS NOT NULL AND d.sold_at > $2 AND d.funnel_id IN (0,1,2,3)
-        AND (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END) = $1`,
+        AND (${CLIENT_KEY_CASE_SQL}) = $1`,
     [clientKey, sinceIso],
   );
   return Number(res.rows[0]?.n ?? '0') > 0;
@@ -59,7 +60,7 @@ export async function firstCallSince(clientKey: string, sinceIso: string): Promi
     `SELECT min(c.called_at) AS first_call
        FROM va.calls c JOIN sa.deals d ON d.deal_id = c.deal_id
       WHERE c.called_at > $2 AND d.funnel_id IN (0,1,2,3)
-        AND (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END) = $1`,
+        AND (${CLIENT_KEY_CASE_SQL}) = $1`,
     [clientKey, sinceIso],
   );
   const v = res.rows[0]?.first_call;

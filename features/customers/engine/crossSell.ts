@@ -1,5 +1,6 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
+import { CLIENT_KEY_CASE_SQL } from './clientKey';
 
 // ── Кросс-селл рекомендации «что предложить» (дополнение Серёги 01.08) ──────
 // Матрица переходов «head-группа X → следующая покупка группы Y» по клиенту —
@@ -48,14 +49,16 @@ export interface Recommendation {
 
 const MATRIX_SQL = `
 WITH dg AS (
-  SELECT (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END) AS client_key,
-         d.sold_at, d.deal_id,
-         array(SELECT DISTINCT (p->>'head_group_name') FROM jsonb_array_elements(d.products) p
-               WHERE coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL
-                 AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps
-  FROM sa.deals d
-  WHERE d.sold_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)
-    AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) IS NOT NULL
+  SELECT * FROM (
+    SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key,
+           d.sold_at, d.deal_id,
+           array(SELECT DISTINCT (p->>'head_group_name') FROM jsonb_array_elements(d.products) p
+                 WHERE coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL
+                   AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps
+    FROM sa.deals d
+    WHERE d.sold_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)
+  ) t
+  WHERE client_key IS NOT NULL
 ), seq AS (
   SELECT grps AS prev_grps,
          LEAD(grps) OVER (PARTITION BY client_key ORDER BY sold_at, deal_id) AS next_grps
@@ -68,7 +71,10 @@ GROUP BY 1, 2
 `;
 
 export async function fetchCrossSellMatrix(): Promise<CrossSellMatrix> {
-  return cached('customers:crosssell-matrix', 24 * 60 * 60, async () => {
+  // v2 (задача 2776): формула client_key поменялась (фикс «k0» — было 2 125 из
+  // 16 999 пар матрицы, 12,5%, порождены схлопнутым 'k0') — версия форсирует
+  // немедленный промах вместо ожидания истечения суточного TTL после деплоя.
+  return cached('customers:crosssell-matrix:v2', 24 * 60 * 60, async () => {
     const res = await analyticsDb().query<{ from_group: string; to_group: string; cnt: number }>(MATRIX_SQL);
     const matrix: CrossSellMatrix = { from: {}, globalTo: {}, globalTotal: 0 };
     for (const r of res.rows) {

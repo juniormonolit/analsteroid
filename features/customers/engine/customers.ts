@@ -1,5 +1,6 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
+import { CLIENT_KEY_CASE_SQL, deriveClientType } from './clientKey';
 
 // ── «Мои заказчики» (фича Серёги 01.08) ──────────────────────────────────────
 // Список клиентов менеджера с сигналом «пора позвонить». Мотив: анализ показал,
@@ -185,12 +186,14 @@ function toIso(v: string | Date | null): string | null {
 // 01.08 на проде), поэтому результат живёт в Redis-кэше 10 минут (ниже).
 const CUSTOMERS_SQL = `
 WITH cd AS (
-  SELECT d.deal_id, d.deal_name, d.amount, d.created_at, d.sold_at, d.lost_at,
-         d.delivered_at, d.head_group_name, d.stage_id, d.current_manager_id,
-         (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END) AS client_key
-  FROM sa.deals d
-  WHERE d.funnel_id IN (0,1,2,3)
-    AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) IS NOT NULL
+  SELECT * FROM (
+    SELECT d.deal_id, d.deal_name, d.amount, d.created_at, d.sold_at, d.lost_at,
+           d.delivered_at, d.head_group_name, d.stage_id, d.current_manager_id,
+           (${CLIENT_KEY_CASE_SQL}) AS client_key
+    FROM sa.deals d
+    WHERE d.funnel_id IN (0,1,2,3)
+  ) t
+  WHERE client_key IS NOT NULL
 ),
 attr AS (
   SELECT DISTINCT ON (client_key) client_key, current_manager_id AS mgr
@@ -375,7 +378,7 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     .filter(m => m.managerId !== managerBitrixId)
     .map(m => m.name ?? `Менеджер #${m.managerId}`);
 
-  const clientType = r.client_key.startsWith('c') ? 'contact' as const : 'company' as const;
+  const clientType = deriveClientType(r.client_key);
   return {
     clientKey: r.client_key,
     clientType,
@@ -421,7 +424,10 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   // v3 в ключе: форма строки расширена (v2 — секции/atRisk/история менеджеров,
   // v3 — sleeping) — старые кэши без этих полей ломали бы новый код 10 минут.
   // v4 — поля категорий клиентов (отгрузки/комплексность/интервалы, 01.08).
-  return cached(`customers:mgr:v4:${managerBitrixId}`, 10 * 60, async () => {
+  // v5 (задача 2776) — формула client_key поменялась (фикс «k0»): без бампа
+  // версии до 10 минут после деплоя отдавался бы старый кэш со «схлопнутым»
+  // client_key='k0' под старым TTL — версия форсирует немедленный промах.
+  return cached(`customers:mgr:v5:${managerBitrixId}`, 10 * 60, async () => {
     const res = await analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]);
     const now = Date.now();
     const rows = res.rows.map(r => toRow(r, now, managerBitrixId));

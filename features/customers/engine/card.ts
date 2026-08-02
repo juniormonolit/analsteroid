@@ -1,5 +1,6 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import type { MarkKind, NoCallReason } from './customers';
+import { CLIENT_KEY_CASE_SQL } from './clientKey';
 
 // ── Карточка клиента (фича Серёги 01.08, вместе с редизайном «Моих заказчиков») ─
 // Дополнительные данные к строке списка: таймлайн покупок, звонки, отказы,
@@ -43,12 +44,15 @@ function toIso(v: string | Date | null): string | null {
   return (v instanceof Date ? v : new Date(v)).toISOString();
 }
 
+// Формула ключа — ЕДИНАЯ с customers.ts/crossSell.ts (задача 2776, фикс
+// «k0»): clientKey от списка должен матчиться СЮДА же 1:1, иначе карточка
+// клиента откроется пустой или (хуже) подмешает чужие сделки.
 const CLIENT_DEALS_CTE = `
 WITH cdeals AS (
   SELECT d.*
   FROM sa.deals d
   WHERE d.funnel_id IN (0,1,2,3)
-    AND (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END) = $1
+    AND (${CLIENT_KEY_CASE_SQL}) = $1
 )`;
 
 export async function fetchCustomerCard(clientKey: string): Promise<CustomerCardData> {

@@ -247,7 +247,17 @@ function RowMenu({ r, send, busy, onOpenCard }: { r: ApiRow; send: MarkSender; b
 // Компактный чип статуса (одна строка рядом с именем, редизайн 01.08).
 function StatusChips({ r }: { r: ApiRow }) {
   const chips: { label: string; title: string; neg?: boolean }[] = [];
-  chips.push({ label: r.clientType === 'contact' ? 'физ' : 'юр', title: r.clientType === 'contact' ? 'Физлицо (контакт)' : 'Юрлицо (компания)' });
+  // 'x'-ключ (задача 2776, фикс «k0») — юр-сделка (funnel 1/3) без карточки
+  // компании в CRM, клиент опознан по контакту-представителю. Формально
+  // резолвится и ссылается как контакт (см. clientKey.ts), поэтому чип «физ»,
+  // но title честно объясняет происхождение — не путать с обычным физлицом.
+  const isCompanyFallback = r.clientKey.startsWith('x');
+  chips.push({
+    label: r.clientType === 'contact' ? 'физ' : 'юр',
+    title: isCompanyFallback
+      ? 'Юр.сделка без карточки компании в CRM — клиент определён по контакту-представителю'
+      : r.clientType === 'contact' ? 'Физлицо (контакт)' : 'Юрлицо (компания)',
+  });
   if (r.atRisk) chips.push({ label: '⚠', title: `Постоянник под угрозой: активных сделок нет, с последней покупки прошло больше 2× его цикла повторки (${r.cycleDays} дн.)`, neg: true });
   if (r.refusedNoCall) chips.push({ label: '🚫', title: 'Есть сделка, закрытая в отказ без единого звонка', neg: true });
   if (r.snoozedActive && r.mark) chips.push({ label: `⏸ ${fmtDate(r.mark.snoozeUntil)}`, title: `Отложен до ${fmtDate(r.mark.snoozeUntil)} · ${r.mark.createdBy}` });

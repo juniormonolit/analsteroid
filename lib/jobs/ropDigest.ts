@@ -478,16 +478,16 @@ async function buildStaleCustomerCandidates(managerIds: number[], limit: number)
   const catSettings = await fetchCategorySettings();
   const candidates = rows
     .filter(r => r.signals.length > 0)
-    // clientId=0 у B2B-сделок (funnel_id 1/3) — «нет карточки компании» в CRM,
-    // НЕ настоящий заказчик: подтверждено на живых данных задачи 2769 —
-    // company_id=0 склеивает 585 РАЗНЫХ реальных контактов/1688 сделок 89
-    // менеджеров в ОДИН синтетический client_key 'k0' с суммой всей истории
-    // компании (247+ млрд ₽ на проде, деплой 02.08) — при агрегации по
-    // отделу (в отличие от одного менеджера) это стало заметно бессмысленным.
-    // Тот же класс проблемы, что служебные узлы оргструктуры (см. шапку
-    // файла) — исключаем с оговоркой, не чиним общий движок customers.ts
-    // (используется живым менеджерским дайджестом, трогать рискованно).
-    .filter(r => !(r.clientType === 'company' && r.clientId === 0))
+    // Задача 2776: локальный обход «клиента 'k0'» УБРАН — общий движок
+    // customers.ts больше не производит склеенный client_key='k0' вообще
+    // (фикс в features/customers/engine/clientKey.ts, разбор — owners-inbox/
+    // customers-k0-merge-issue.md). company_id=0 теперь разъезжается по
+    // contact_id (clientType всегда 'contact' для этой ветки) — условие
+    // clientType==='company' && clientId===0 больше никогда не матчится
+    // (у настоящих компаний clientId=company_id≠0 по построению формулы),
+    // поэтому фильтр стал мёртвым кодом и удалён, а не оставлен «на всякий
+    // случай» — оставленный мёртвый фильтр маскировал бы регрессию формулы
+    // тишиной вместо явной ошибки.
     .map(r => ({ row: r, category: classifyCategory(r, catSettings).category }))
     .filter(c => c.category === 'key' || c.category === 'large')
     .sort((a, b) => b.row.sumSold - a.row.sumSold)

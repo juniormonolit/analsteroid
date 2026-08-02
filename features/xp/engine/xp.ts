@@ -31,6 +31,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { analyticsDb } from '@/lib/db/clients';
 import { fetchCrossSellMatrix, recommendFor } from '@/features/customers/engine/crossSell';
+import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 
 const MSK = 'Europe/Moscow';
 /** Ретро-старт XP-леджера (решение Серёги: вся история продаж с 2025). */
@@ -189,9 +190,9 @@ WITH sold_seq AS (
                    AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps
   ) dg
   WHERE d.sold_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)
-    AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) IS NOT NULL
+    AND (${CLIENT_KEY_CASE_SQL}) IS NOT NULL
   WINDOW w AS (
-    PARTITION BY (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END)
+    PARTITION BY (${CLIENT_KEY_CASE_SQL})
     ORDER BY d.sold_at, d.deal_id
   )
 ),

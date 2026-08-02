@@ -20,14 +20,25 @@
 // Пороги — из customer_category_settings (та же таблица, что список).
 //
 // Клиентская сегментация — как в «Моих заказчиках» (funnel 0/2 → contact,
-// 1/3 → company, воронки 4/7 исключены); id=0 (битая свалка 'k0' с тысячами
-// сделок) исключён явно.
-
+// 1/3 → company, воронки 4/7 исключены).
+//
+// Задача 2776 (фикс химеры «k0», owners-inbox/customers-k0-merge-issue.md):
+// формула ключа теперь ЕДИНАЯ с общим движком (features/customers/engine/
+// clientKey.ts) — company_id=0 больше НЕ склеивается в один 'k0' с суммой
+// всей истории компании, а разъезжается по contact_id (префикс 'x'). Это
+// ОЖИДАЕМО меняет начисления: реальные клиенты, ранее скрытые внутри «k0»,
+// теперь могут ВПЕРВЫЕ легитимно пересечь пороги «Ключевой»/«Крупный» и
+// получить «Кит-мейкер»/«Апгрейд» — не баг, а снятие маскировки (см. отчёт,
+// раздел 5, «Общее для обоих вариантов»).
+// Собственная, более старая защита ЭТОГО файла — исключение 'c0' (contact_id=0
+// у физлиц, зеркальная и более мелкая версия «k0», отчёт п.1.3) — оставлена
+// как была: общий движок её сознательно не гасит (вне скоупа фикса).
 import { analyticsDb } from '@/lib/db/clients';
 import {
   fetchCategorySettings, GLOBAL_REPEAT_CYCLE_DAYS, MIN_CYCLE_DAYS,
   AT_RISK_CYCLE_MULTIPLIER,
 } from '@/features/customers/engine/customers';
+import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import type { BadgeTier } from './catalog';
 
 export interface CategoryAwardRow {
@@ -61,12 +72,16 @@ export async function computeCategoryBadgeAwards(todayYmd: string): Promise<Cate
   // полная история сделок таких клиентов легко помещается в память.
   const res = await analyticsDb().query<DealRow>(`
     WITH cd AS (
-      SELECT (CASE WHEN d.funnel_id IN (0,2) THEN 'c'||d.contact_id ELSE 'k'||d.company_id END) AS client_key,
-             d.deal_id, d.created_at, d.sold_at, d.delivered_at, d.amount, d.current_manager_id
-      FROM sa.deals d
-      WHERE d.funnel_id IN (0,1,2,3)
-        AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) IS NOT NULL
-        AND (CASE WHEN d.funnel_id IN (0,2) THEN d.contact_id ELSE d.company_id END) > 0
+      SELECT * FROM (
+        SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key,
+               d.deal_id, d.created_at, d.sold_at, d.delivered_at, d.amount, d.current_manager_id
+        FROM sa.deals d
+        WHERE d.funnel_id IN (0,1,2,3)
+      ) t
+      -- client_key IS NULL — уже гасит company_id IS NULL и «0,3% без contact_id»
+      -- (см. CLIENT_KEY_CASE_SQL). 'c0' — своя, более старая защита этого файла
+      -- (contact_id=0 у физлиц, отчёт п.1.3) — общая формула её не покрывает.
+      WHERE client_key IS NOT NULL AND client_key <> 'c0'
     ),
     big AS (
       SELECT client_key
