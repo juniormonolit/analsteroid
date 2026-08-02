@@ -61,19 +61,25 @@ async function firstCallSince(clientKey: string, sinceIso: string): Promise<Date
   return v ? new Date(v) : null;
 }
 
-function who(row: OpenAdvice): string {
+// Именительная метка перед двоеточием — не объект глагола (правка владельца
+// 02.08: живые баги «позвонить Николай» — дательный падеж на произвольное ФИО
+// из CRM склонять небезопасно — и скрытые родовые формы «созрел»/«он брал»,
+// пол клиента нам неизвестен). «Клиент»/«компания» как generic-заглушка при
+// отсутствии имени — грамматически муж.р. по умолчанию, это норма для
+// родовых существительных в русском (как «менеджер», «сотрудник»), не
+// привязано к реальному полу конкретного человека.
+function label(row: OpenAdvice): string {
   const name = row.client_name ?? (row.client_type === 'contact' ? 'клиент' : 'компания');
-  return row.client_type === 'company' ? `в «${name}»` : name;
+  return row.client_type === 'company' ? `«${name}»` : name;
 }
 
 function successMessage(row: OpenAdvice): string {
-  const subj = row.client_type === 'company' ? `в «${row.client_name ?? 'компании'}» всё-таки созрели` : `${row.client_name ?? 'клиент'} всё-таки созрел`;
-  return `🎉 Смотри-ка: ${subj} на «${row.recommended_group}». Как я и говорил! Кайф 😎`;
+  return `🎉 Смотри-ка: ${label(row)} — интерес к «${row.recommended_group}» подтвердился! Как я и говорил! Кайф 😎`;
 }
 function nudgeMessage(row: OpenAdvice): string {
   // Мягкий тон (правка владельца 02.08): «клиент ещё ждёт, момент хороший» —
   // НЕ «ты не позвонил»/«почему не сделал». Предложение, а не укор.
-  return `Клиент ещё ждёт — момент всё ещё хороший, чтобы позвонить ${who(row)} и предложить «${row.recommended_group}» 🙂`;
+  return `${label(row)}: момент всё ещё хороший, чтобы позвонить и предложить «${row.recommended_group}» 🙂`;
 }
 
 // Через sendManagerBotMessage (единая точка + рубильник dry-run + личные

@@ -55,8 +55,8 @@ export function BotSubscriptionSettings() {
         <h2 className="text-sm font-semibold text-[var(--color-text)]">Бот «Аналитик»</h2>
       </div>
       <p className="text-sm text-[var(--color-text-muted)] mb-4">
-        Это твоя личка с ботом — сам решаешь, что получать. Отключение ничего не меняет в рейтинге,
-        наградах и XP — на них это никак не влияет. РОП и руководство не видят, что именно ты тут отключил.
+        Это твоя личка с ботом — что получать, решаешь ты сам(а). Отключение ничего не меняет в
+        рейтинге, наградах и XP — на них это никак не влияет. РОП и руководство не видят, что тут отключено.
       </p>
 
       <label className="flex items-center justify-between gap-3 mb-3 pb-3 border-b border-[var(--color-border)]">

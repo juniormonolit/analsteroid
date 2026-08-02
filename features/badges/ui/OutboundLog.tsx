@@ -7,6 +7,9 @@
 
 import { Fragment, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { pluralizeRu } from '@/lib/format/pluralize';
+
+const MESSAGE_FORMS = ['сообщение', 'сообщения', 'сообщений'] as const;
 
 interface Row {
   logId: number; shortId: string; bitrixId: number; managerName: string | null;
@@ -89,7 +92,7 @@ export function OutboundLogBlock() {
           placeholder="Фильтр по сотруднику"
           className="w-48 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs"
         />
-        <span className="text-[11px] text-[var(--color-text-muted)]">{rows.length} сообщений</span>
+        <span className="text-[11px] text-[var(--color-text-muted)]">{rows.length} {pluralizeRu(rows.length, MESSAGE_FORMS)}</span>
       </div>
 
       {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>}

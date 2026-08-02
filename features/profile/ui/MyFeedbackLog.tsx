@@ -66,11 +66,11 @@ export function MyFeedbackLog() {
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4 sm:p-5">
       <h2 className="mb-1 text-sm font-semibold text-[var(--color-text)]">Мои замечания</h2>
       <p className="mb-3 text-sm text-[var(--color-text-muted)]">
-        Всё, что ты отмечал кнопками «⚠️ Ошибка» / «👍 Полезно» под сообщениями Аналитика, и что нам
+        Всё, что помечено кнопками «⚠️ Ошибка» / «👍 Полезно» под сообщениями Аналитика, и что нам
         удалось разобрать.
       </p>
       {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>}
-      {!isLoading && rows.length === 0 && <div className="text-sm text-[var(--color-text-muted)]">Пока ничего не отмечал(а).</div>}
+      {!isLoading && rows.length === 0 && <div className="text-sm text-[var(--color-text-muted)]">Пока отметок нет.</div>}
       {rows.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-[var(--color-border)]">
           <table className="w-full text-xs">

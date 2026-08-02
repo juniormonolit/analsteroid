@@ -332,7 +332,11 @@ function buildSalesPraiseSlot(m: PeriodMetrics, bench: SalesBenchmark | null): H
   }
   if (!best) return null;
 
-  let text = `Молодец! ${best.label} выросли на ${Math.round(bestPct)}% (${best.fmt(best.prev)} → ${best.fmt(best.cur)})!`;
+  // Нейтральная формулировка (правка владельца 02.08, живой баг «Сумма продаж
+  // вырослИ» — род метки не согласован: «сумма» жен.р., «продажи»/«звонки»
+  // мн.ч.). Вместо словаря родов на каждую метку — конструкция без глагола,
+  // согласованного с меткой: «Метка: рост на X% (было → стало)».
+  let text = `Молодец! ${best.label}: рост на ${Math.round(bestPct)}% (${best.fmt(best.prev)} → ${best.fmt(best.cur)})!`;
   if (best.bench && best.bench.avg > 0) {
     text += best.cur >= best.bench.avg
       ? ` Это выше среднего по отделу (${best.fmt(best.bench.avg)}).`
@@ -465,24 +469,32 @@ export async function pickAdvice(
   return picks;
 }
 
+// Ни склонений имени, ни родовых местоимений/глаголов (правка владельца
+// 02.08, живые баги «позвонить Николай» и скрытое «у него»/«он брал» — ФИО
+// из CRM склонять автоматически рискованно, а пол клиента нам неизвестен и
+// не должен угадываться). «дн» без точки — намеренно, чтобы не подставлять
+// «день/дня/дней» под число без словаря склонений.
 function signalReason(row: CustomerRow, signal: CallSignal): string {
   if (signal === 'active_no_call') {
     const maxSilent = Math.round(Math.max(...row.activeDeals.map(d => d.daysSilent), 0));
-    return `у него открыта сделка, а тишина по ней уже ${maxSilent} дн`;
+    return `открыта сделка без звонков уже ${maxSilent} дн`;
   }
-  return `не появлялся с последней покупки дольше обычного (обычно берёт снова через ~${Math.round(row.cycleDays)} дн.)`;
+  return `нет контакта дольше обычного цикла (обычно возвращается за покупкой через ~${Math.round(row.cycleDays)} дн.)`;
 }
 
 function adviceLine(pick: AdvicePick, verbose: boolean): string {
   const { row, clientName, recommendedGroup, basedOnGroups, fallback, pct, signal } = pick;
-  const who = row.clientType === 'company' ? `в «${clientName}»` : clientName;
+  // Имя/компания — ИМЕНИТЕЛЬНАЯ метка перед двоеточием, не объект глагола
+  // «позвонить» (тот требовал бы дательного падежа: «позвонить Николаю», а
+  // автоматически склонять произвольные ФИО из CRM небезопасно).
+  const label = row.clientType === 'company' ? `«${clientName}»` : clientName;
   const reason = signalReason(row, signal);
   if (fallback || basedOnGroups.length === 0) {
-    return `💡 Похоже, самое время позвонить ${who} — ${reason}. Что предложить — глянь карточку клиента, там видно, чем он раньше интересовался.`;
+    return `💡 ${label}: пора позвонить — ${reason}. Что предложить — глянь карточку клиента, там видно, чем раньше интересовался клиент.`;
   }
   const basedOnStr = basedOnGroups.map(g => `«${g}»`).join(' + ');
   const tail = verbose ? ` (так уходит примерно ${pct}% похожих клиентов)` : '';
-  return `💡 Позвони ${who} — ${reason}. Он уже брал у тебя ${basedOnStr} — обычно следом берут «${recommendedGroup}»${tail}. Стоит предложить!`;
+  return `💡 ${label}: пора позвонить — ${reason}. Есть покупка ${basedOnStr} — обычно следом берут «${recommendedGroup}»${tail}. Стоит предложить!`;
 }
 
 // ── Сборка сообщений ──────────────────────────────────────────────────────────
