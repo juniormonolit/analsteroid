@@ -32,6 +32,7 @@ export interface CrossSellMatrix {
 /** Награда за допродажу (доработка Серёги 01.08): какой кросс-селл бейдж и
  *  сколько ебаллов получит менеджер, если допродаст рекомендованную группу. */
 export interface RecommendBadge {
+  key: string;    // badge_definitions.key — нужен, чтобы проверить badge_awards («уже получена?», задача 2765)
   name: string;
   icon: string;
   price: number;  // ебаллы за награду (badge_prices, tier '-'); 0 = цена не задана
@@ -149,6 +150,7 @@ export function recommendFor(matrix: CrossSellMatrix, lastGroups: string[]): Rec
 // определения меняются только из «Настройки → Награды».
 
 interface CrossSellBadgeDef {
+  key: string;
   name: string;
   icon: string;
   firstGroup: string;
@@ -159,9 +161,9 @@ interface CrossSellBadgeDef {
 export async function fetchCrossSellBadges(): Promise<CrossSellBadgeDef[]> {
   return cached('customers:crosssell-badges', 10 * 60, async () => {
     const res = await systemDb().query<{
-      name: string; icon: string; first_group: string; next_group: string; price: string | null;
+      key: string; name: string; icon: string; first_group: string; next_group: string; price: string | null;
     }>(
-      `SELECT d.name, d.icon,
+      `SELECT d.key, d.name, d.icon,
               d.criteria->>'firstGroup' AS first_group,
               d.criteria->>'nextGroup'  AS next_group,
               p.price::text AS price
@@ -172,7 +174,7 @@ export async function fetchCrossSellBadges(): Promise<CrossSellBadgeDef[]> {
         ORDER BY d.sort_order`,
     );
     return res.rows.map(r => ({
-      name: r.name, icon: r.icon,
+      key: r.key, name: r.name, icon: r.icon,
       firstGroup: r.first_group, nextGroup: r.next_group,
       price: r.price !== null ? Number(r.price) : 0,
     }));
@@ -188,7 +190,7 @@ export function badgeForPair(badges: CrossSellBadgeDef[], basedOn: string[], toG
   let best: RecommendBadge | null = null;
   for (const b of badges) {
     if (b.nextGroup !== toGroup || !basedOn.includes(b.firstGroup)) continue;
-    if (!best || b.price > best.price) best = { name: b.name, icon: b.icon, price: b.price };
+    if (!best || b.price > best.price) best = { key: b.key, name: b.name, icon: b.icon, price: b.price };
   }
   return best;
 }

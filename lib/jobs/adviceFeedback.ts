@@ -69,7 +69,7 @@ async function firstCallSince(clientKey: string, sinceIso: string): Promise<Date
 // родовых существительных в русском (как «менеджер», «сотрудник»), не
 // привязано к реальному полу конкретного человека.
 function label(row: OpenAdvice): string {
-  const name = row.client_name ?? (row.client_type === 'contact' ? 'клиент' : 'компания');
+  const name = row.client_name ?? (row.client_type === 'contact' ? 'заказчик' : 'компания');
   return row.client_type === 'company' ? `«${name}»` : name;
 }
 

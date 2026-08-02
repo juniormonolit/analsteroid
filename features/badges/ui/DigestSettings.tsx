@@ -7,10 +7,26 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
+interface ScoringSettings {
+  scoreThreshold: number;
+  weightRecency: number; weightFrequency: number; weightValue: number;
+  weightResponsive: number; weightCrosssell: number;
+  deadRatioThreshold: number; deadDaysThreshold: number;
+}
+
 interface DigestPayload {
   settings: { dailyEnabled: boolean; weeklyEnabled: boolean; dailyHour: number; weeklyHour: number; maxReminders: number };
+  scoring: ScoringSettings;
   stats: { total: number; success: number; closedNoContact: number; closedNoDeal: number; open: number; successRatePct: number | null };
 }
+
+const WEIGHT_FIELDS: { key: keyof ScoringSettings; label: string; hint: string }[] = [
+  { key: 'weightRecency', label: 'Давность / личный цикл', hint: 'Насколько давность последней покупки уместна относительно ЛИЧНОГО цикла повторки этого заказчика (бэктест по истории продаж)' },
+  { key: 'weightFrequency', label: 'Частота покупок', hint: 'Число покупок заказчика — капед на 5' },
+  { key: 'weightValue', label: 'Сумма и категория', hint: 'Категория из «Мои заказчики» (ключевой/крупный/постоянный/разовый/потенциальный)' },
+  { key: 'weightResponsive', label: 'Реакция на касания', hint: 'Прокси: был ли вообще звонок по этому заказчику (точной атрибуции звонок→продажа нет)' },
+  { key: 'weightCrosssell', label: 'Сила кросс-перехода', hint: 'Вероятность именно этого перехода товарных групп (не «часто берут», а «часто берут именно после этой покупки»)' },
+];
 
 export function DigestSettingsBlock() {
   const qc = useQueryClient();
@@ -36,8 +52,10 @@ export function DigestSettingsBlock() {
   });
 
   const [hourDraft, setHourDraft] = useState<Record<string, string>>({});
+  const [scoringDraft, setScoringDraft] = useState<Record<string, string>>({});
   if (!data) return null;
   const s = data.settings;
+  const sc = data.scoring;
 
   const saveHour = (key: 'dailyHour' | 'weeklyHour') => {
     const raw = hourDraft[key];
@@ -46,6 +64,15 @@ export function DigestSettingsBlock() {
     if (!Number.isInteger(v) || v < 0 || v > 23) return;
     patch.mutate({ [key]: v });
     setHourDraft(d => { const n = { ...d }; delete n[key]; return n; });
+  };
+
+  const saveScoring = (key: keyof ScoringSettings) => {
+    const raw = scoringDraft[key];
+    if (raw === undefined || raw.trim() === '') return;
+    const v = Number(raw.replace(',', '.'));
+    if (!Number.isFinite(v)) return;
+    patch.mutate({ [key]: v });
+    setScoringDraft(d => { const n = { ...d }; delete n[key]; return n; });
   };
 
   return (
@@ -97,6 +124,65 @@ export function DigestSettingsBlock() {
             >
               {[0, 1, 2, 3, 4, 5].map(n => <option key={n} value={n}>{n}</option>)}
             </select>
+          </label>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4">
+        <h2 className="mb-1 text-sm font-semibold">Скоринг подсказок «кому звонить»</h2>
+        <p className="mb-3 text-xs text-[var(--color-text-muted)]">
+          Подсказка по заказчику формируется, только если он набрал явный порог по пяти взвешенным
+          факторам ниже — иначе дайджест уходит только с цифрами, без совета (лучше без совета, чем с
+          бессмысленным). Заказчики, чья давность многократно превышает их же личный цикл повторки
+          (сейчас — {sc.deadRatioThreshold}× цикла И больше {sc.deadDaysThreshold} дней), из кандидатов
+          исключаются полностью — «реинкарнировать» их не предлагаем ни при каком скоре.
+        </p>
+        <div className="flex flex-col gap-3 max-w-md">
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span title="Ниже — подсказки не будет вовсе">Порог отсечки (0-100)</span>
+            <input
+              type="number" min={0} max={100}
+              value={scoringDraft.scoreThreshold ?? sc.scoreThreshold}
+              onChange={e => setScoringDraft(d => ({ ...d, scoreThreshold: e.target.value }))}
+              onBlur={() => saveScoring('scoreThreshold')}
+              onKeyDown={e => { if (e.key === 'Enter') saveScoring('scoreThreshold'); }}
+              className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-right text-sm"
+            />
+          </label>
+          {WEIGHT_FIELDS.map(f => (
+            <label key={f.key} className="flex items-center justify-between gap-3 text-sm" title={f.hint}>
+              <span>{f.label}</span>
+              <input
+                type="number" min={0} max={100}
+                value={scoringDraft[f.key] ?? sc[f.key]}
+                onChange={e => setScoringDraft(d => ({ ...d, [f.key]: e.target.value }))}
+                onBlur={() => saveScoring(f.key)}
+                onKeyDown={e => { if (e.key === 'Enter') saveScoring(f.key); }}
+                className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-right text-sm"
+              />
+            </label>
+          ))}
+          <label className="flex items-center justify-between gap-3 text-sm" title="Множитель личного цикла повторки, после которого заказчик считается «мёртвым»">
+            <span>«Мёртвые»: × личного цикла</span>
+            <input
+              type="number" min={1} max={50}
+              value={scoringDraft.deadRatioThreshold ?? sc.deadRatioThreshold}
+              onChange={e => setScoringDraft(d => ({ ...d, deadRatioThreshold: e.target.value }))}
+              onBlur={() => saveScoring('deadRatioThreshold')}
+              onKeyDown={e => { if (e.key === 'Enter') saveScoring('deadRatioThreshold'); }}
+              className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-right text-sm"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-3 text-sm" title="И одновременно больше стольких дней с последней покупки">
+            <span>«Мёртвые»: минимум дней</span>
+            <input
+              type="number" min={30} max={3650}
+              value={scoringDraft.deadDaysThreshold ?? sc.deadDaysThreshold}
+              onChange={e => setScoringDraft(d => ({ ...d, deadDaysThreshold: e.target.value }))}
+              onBlur={() => saveScoring('deadDaysThreshold')}
+              onKeyDown={e => { if (e.key === 'Enter') saveScoring('deadDaysThreshold'); }}
+              className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-right text-sm"
+            />
           </label>
         </div>
       </section>

@@ -25,10 +25,14 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 import { sendManagerBotMessage } from '@/features/badges/engine/notifications';
 import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
+import { getCurrencyName } from '@/features/badges/engine/coins';
 import {
-  fetchManagerCustomers, type CustomerRow, type CallSignal,
+  fetchManagerCustomers, fetchCategorySettings, classifyCategory,
+  type CustomerRow, type CallSignal, type CustomerCategory,
 } from '@/features/customers/engine/customers';
-import { fetchCrossSellMatrix, recommendFor, type CrossSellMatrix } from '@/features/customers/engine/crossSell';
+import {
+  fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair,
+} from '@/features/customers/engine/crossSell';
 import { resolveClientNames } from '@/lib/bitrix/clientNames';
 
 const TZ = 'Europe/Moscow';
@@ -93,6 +97,126 @@ export async function fetchDigestSettings(): Promise<DigestSettings> {
       dailyHour: r.daily_hour, weeklyHour: r.weekly_hour, maxReminders: r.max_reminders,
     };
   } catch { return DEFAULT_DIGEST_SETTINGS; } // до наката миграции 134 — дефолты, тик просто не шлёт
+}
+
+// ── Скоринг подсказок «кому звонить» (правка владельца 02.08: «подсказывать
+// только по реально высокошансовым») ─────────────────────────────────────────
+// Явные веса + порог отсечки + порог «мёртвых» — миграция 137, редактируются в
+// «Настройки → Геймификация → Дайджест». Веса калиброваны бэктестом по
+// истории продаж (WORKLOG 02.08) — см. recencyFactorOverdue/isDead ниже.
+
+export interface AdviceScoringSettings {
+  scoreThreshold: number;
+  weightRecency: number; weightFrequency: number; weightValue: number;
+  weightResponsive: number; weightCrosssell: number;
+  deadRatioThreshold: number; deadDaysThreshold: number;
+}
+export const DEFAULT_ADVICE_SCORING: AdviceScoringSettings = {
+  scoreThreshold: 55,
+  weightRecency: 35, weightFrequency: 15, weightValue: 20, weightResponsive: 10, weightCrosssell: 20,
+  deadRatioThreshold: 5, deadDaysThreshold: 365,
+};
+
+export async function fetchAdviceScoringSettings(): Promise<AdviceScoringSettings> {
+  try {
+    const res = await systemDb().query<{
+      advice_score_threshold: string; weight_recency: string; weight_frequency: string; weight_value: string;
+      weight_responsive: string; weight_crosssell: string; dead_ratio_threshold: string; dead_days_threshold: number;
+    }>(`SELECT advice_score_threshold, weight_recency, weight_frequency, weight_value,
+               weight_responsive, weight_crosssell, dead_ratio_threshold, dead_days_threshold
+          FROM digest_settings WHERE id = 1`);
+    const r = res.rows[0];
+    if (!r) return DEFAULT_ADVICE_SCORING;
+    return {
+      scoreThreshold: Number(r.advice_score_threshold),
+      weightRecency: Number(r.weight_recency), weightFrequency: Number(r.weight_frequency),
+      weightValue: Number(r.weight_value), weightResponsive: Number(r.weight_responsive),
+      weightCrosssell: Number(r.weight_crosssell),
+      deadRatioThreshold: Number(r.dead_ratio_threshold), deadDaysThreshold: Number(r.dead_days_threshold),
+    };
+  } catch { return DEFAULT_ADVICE_SCORING; } // до наката миграции 137 — дефолты
+}
+
+/**
+ * Историческая доля возврата заказчика по бакетам «давность покупки / личный
+ * цикл повторки» — бэктест 02.08 по ВСЕЙ истории sa.deals (заказчики с 3+
+ * покупками, личный цикл — медиана их интервалов, как GLOBAL_REPEAT_CYCLE_DAYS
+ * в customers.ts). Буквально «калибровка на истории»: фактор = реальная
+ * доля тех, кто в этом бакете когда-либо покупал снова (см. WORKLOG 02.08 —
+ * точные SQL и n на бакет). НЕ монотонно убывает линейно — реальные данные
+ * показали характерный обрыв уже на 2-3x, не на 5x+, куда чаще целятся «на
+ * глаз».
+ */
+function recencyFactorOverdue(ratio: number): number {
+  if (ratio < 1) return 0.90;
+  if (ratio < 2) return 0.93;
+  if (ratio < 3) return 0.74;
+  if (ratio < 5) return 0.62;
+  if (ratio < 10) return 0.43;
+  return 0.13;
+}
+
+/**
+ * «Мёртвые не воскресают» (владелец 02.08): давность >= dead_ratio_threshold
+ * циклов И > dead_days_threshold дней — жёсткое исключение из кандидатов,
+ * не просто понижение веса. Порог по умолчанию (5x И 365 дн.) — эмпирический:
+ * в этой зоне историческая доля возврата 3.1% (n=295), тогда как соседняя
+ * зона 3-5x/<=365 дн. даёт 62% (n=405) — резать её было бы ошибкой (владелец
+ * предлагал «условно >3×», бэктест показал, что это СЛИШКОМ агрессивно).
+ * Правило применяется ТОЛЬКО к overdue_repeat — активная сделка без звонка
+ * (active_no_call) не «спит», это открытая живая возможность независимо от
+ * давности молчания по ней.
+ */
+function isDeadCandidate(row: CustomerRow, s: AdviceScoringSettings): boolean {
+  if (!row.signals.includes('overdue_repeat') || row.lastSoldAt === null) return false;
+  const sinceDays = (Date.now() - new Date(row.lastSoldAt).getTime()) / 86_400_000;
+  const ratio = sinceDays / row.cycleDays;
+  return ratio >= s.deadRatioThreshold && sinceDays > s.deadDaysThreshold;
+}
+
+const CATEGORY_VALUE_FACTOR: Record<CustomerCategory, number> = {
+  key: 1, large: 0.8, regular: 0.5, once: 0.3, potential: 0.2, none: 0.15,
+};
+
+export interface AdviceScoreBreakdown {
+  total: number; recency: number; frequency: number; value: number; responsive: number; crosssell: number;
+  category: CustomerCategory;
+}
+
+/**
+ * Взвешенный скор 0..~100 (сумма весов по умолчанию = 100, но настройка не
+ * принуждает к этому — веса просто множители). Факторы:
+ *  - recency — см. recencyFactorOverdue (overdue_repeat) или фикс. 0.9 для
+ *    active_no_call (деньги на столе, тот же бэктест сюда не применялся —
+ *    другой механизм, ургентность не зависит от давности так же линейно);
+ *  - frequency — dealsSold, капед на 5 покупках;
+ *  - value — категория заказчика (classifyCategory, тот же движок, что
+ *    «Мои заказчики»/настройки категорий);
+ *  - responsive — «реакция на прошлые касания»: ЧЕСТНАЯ ОГОВОРКА — точной
+ *    атрибуции звонок→продажа нет, прокси = был ли вообще хоть один звонок
+ *    по истории заказчика (lastCallAt не null). Грубо, но не выдумано —
+ *    основано на реальном факте наличия контакта, не на догадке;
+ *  - crosssell — вероятность перехода (pct из recommendFor), фолбэк на общий
+ *    топ базы штрафуется низким фиксом (0.15) — «часто берут» вообще не то
+ *    же самое, что «часто берут именно после этой покупки».
+ */
+function scoreCandidate(row: CustomerRow, pct: number, fallback: boolean, category: CustomerCategory, s: AdviceScoringSettings): AdviceScoreBreakdown {
+  let recency: number;
+  if (row.signals.includes('active_no_call')) {
+    recency = 0.90;
+  } else {
+    const sinceDays = row.lastSoldAt ? (Date.now() - new Date(row.lastSoldAt).getTime()) / 86_400_000 : 0;
+    recency = recencyFactorOverdue(sinceDays / row.cycleDays);
+  }
+  const frequency = Math.min(row.dealsSold / 5, 1);
+  const value = CATEGORY_VALUE_FACTOR[category] ?? 0.15;
+  const responsive = row.lastCallAt !== null ? 0.75 : 0.45;
+  const crosssell = fallback ? 0.15 : Math.min(pct / 100, 1);
+
+  const total =
+    s.weightRecency * recency + s.weightFrequency * frequency + s.weightValue * value +
+    s.weightResponsive * responsive + s.weightCrosssell * crosssell;
+  return { total: Math.round(total * 10) / 10, recency, frequency, value, responsive, crosssell, category };
 }
 
 // ── Личные настройки подписки менеджера (миграция 135) ───────────────────────
@@ -409,6 +533,8 @@ export interface AdvicePick {
   fallback: boolean;
   pct: number;
   signal: CallSignal;
+  score: AdviceScoreBreakdown;
+  rewardHook: string | null;
 }
 
 const ADVICE_COOLDOWN_SQL = `
@@ -417,16 +543,43 @@ const ADVICE_COOLDOWN_SQL = `
      AND (status IN ('active', 'contacted') OR (next_eligible_at IS NOT NULL AND next_eligible_at > now()))
 `;
 
-/** Кандидаты «пора позвонить» минус те, кому уже советовали недавно/сейчас
- *  ведём открытую подсказку (см. миграцию 134 — cooldown/дедуп по паре). */
-async function eligibleCandidates(managerBitrixId: number): Promise<CustomerRow[]> {
+interface ScoredCandidate { row: CustomerRow; group: string; basedOn: string[]; fallback: boolean; pct: number; score: AdviceScoreBreakdown }
+
+/**
+ * Кандидаты «пора позвонить» → скоринг (владелец 02.08: «только реально
+ * высокошансовые») → отсортировано по убыванию скора. Убраны: кому уже
+ * советовали недавно/сейчас ведём открытую подсказку (cooldown, миграция
+ * 134), «мёртвые» (isDeadCandidate), те, кому нечего честно предложить
+ * (recommendFor вернул null), и те, кто не набрал score_threshold.
+ */
+async function scoredCandidates(managerBitrixId: number): Promise<ScoredCandidate[]> {
   const rows = await fetchManagerCustomers(managerBitrixId);
   const candidates = rows.filter(r => r.signals.length > 0);
   if (candidates.length === 0) return [];
-  const blocked = await systemDb().query<{ client_key: string }>(
-    ADVICE_COOLDOWN_SQL, [managerBitrixId, candidates.map(c => c.clientKey)],
-  ).then(r => new Set(r.rows.map(x => x.client_key))).catch(() => new Set<string>());
-  return candidates.filter(c => !blocked.has(c.clientKey));
+
+  const [blocked, matrix, categorySettings, scoring] = await Promise.all([
+    systemDb().query<{ client_key: string }>(ADVICE_COOLDOWN_SQL, [managerBitrixId, candidates.map(c => c.clientKey)])
+      .then(r => new Set(r.rows.map(x => x.client_key))).catch(() => new Set<string>()),
+    fetchCrossSellMatrix(),
+    fetchCategorySettings(),
+    fetchAdviceScoringSettings(),
+  ]);
+
+  const out: ScoredCandidate[] = [];
+  for (const row of candidates) {
+    if (blocked.has(row.clientKey)) continue;
+    if (isDeadCandidate(row, scoring)) continue; // «мёртвые не воскресают» — не набираем баллы, не суём в кандидаты вовсе
+    const lastGroups = row.lastSoldGroups.length > 0 ? row.lastSoldGroups : row.lastGroups;
+    const rec = recommendFor(matrix, lastGroups);
+    if (!rec || rec.items.length === 0) continue; // нечего честно предложить — пропускаем, не выдумываем
+    const top = rec.items[0]!;
+    const { category } = classifyCategory(row, categorySettings);
+    const score = scoreCandidate(row, top.pct, rec.fallback, category, scoring);
+    if (score.total < scoring.scoreThreshold) continue; // ниже порога — совета не будет вовсе (лучше только цифры, чем слабый совет)
+    out.push({ row, group: top.group, basedOn: rec.basedOn, fallback: rec.fallback, pct: top.pct, score });
+  }
+  out.sort((a, b) => b.score.total - a.score.total);
+  return out;
 }
 
 /** Выбирает до `limit` подсказок, пишет их в advice_log (одна строка на
@@ -436,20 +589,17 @@ async function eligibleCandidates(managerBitrixId: number): Promise<CustomerRow[
 export async function pickAdvice(
   managerBitrixId: number, digestKind: 'daily' | 'weekly', limit: number, testRun = false,
 ): Promise<AdvicePick[]> {
-  const candidates = await eligibleCandidates(managerBitrixId);
-  if (candidates.length === 0) return [];
+  const scored = await scoredCandidates(managerBitrixId);
+  if (scored.length === 0) return [];
 
-  const matrix: CrossSellMatrix = await fetchCrossSellMatrix();
   const picks: AdvicePick[] = [];
-  const names = await resolveClientNames(candidates.slice(0, limit + 3).map(c => c.clientKey));
+  const names = await resolveClientNames(scored.slice(0, limit + 3).map(s => s.row.clientKey));
 
-  for (const row of candidates) {
+  for (const cand of scored) {
     if (picks.length >= limit) break;
-    const lastGroups = row.lastSoldGroups.length > 0 ? row.lastSoldGroups : row.lastGroups;
-    const rec = recommendFor(matrix, lastGroups);
-    if (!rec || rec.items.length === 0) continue; // нечего честно предложить — пропускаем кандидата, не выдумываем
-    const top = rec.items[0]!;
+    const { row, group, basedOn, fallback, pct, score } = cand;
     const clientName = names.get(row.clientKey) ?? (row.clientType === 'contact' ? `Контакт #${row.clientId}` : `Компания #${row.clientId}`);
+    const rewardHook = await fetchRewardHook(managerBitrixId, basedOn, group).catch(() => null);
 
     const ins = await systemDb().query<{ id: string }>(
       `INSERT INTO advice_log (manager_bitrix_id, client_key, client_type, client_id, client_name,
@@ -457,16 +607,78 @@ export async function pickAdvice(
                                 digest_kind, test_run)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [managerBitrixId, row.clientKey, row.clientType, row.clientId, clientName,
-        top.group, rec.basedOn, rec.fallback, top.pct, row.signals[0] ?? null, digestKind, testRun],
+        group, basedOn, fallback, pct, row.signals[0] ?? null, digestKind, testRun],
     );
 
     picks.push({
       logDbId: Number(ins.rows[0]!.id),
-      row, clientName, recommendedGroup: top.group, basedOnGroups: rec.basedOn,
-      fallback: rec.fallback, pct: top.pct, signal: row.signals[0]!,
+      row, clientName, recommendedGroup: group, basedOnGroups: basedOn,
+      fallback, pct, signal: row.signals[0]!, score, rewardHook,
     });
   }
   return picks;
+}
+
+// ── «Прикормка» (правка владельца 02.08): что реально светит за действие ────
+// «Вернёшь заказчика после 570 дней тишины — заберёшь награду «Некромант» и
+// 80 MLT на баланс. Дерзай!» Обязательные условия (владелец, дословно):
+// проверять по РЕАЛЬНЫМ критериям и текущему состоянию менеджера (не
+// упоминать, если награда уже есть или условие этим действием не выполнится);
+// цену — из badge_prices, не хардкодить; если подходящей награды нет —
+// строку не выводить вовсе; активный квест — приоритет над наградой (ценнее).
+// ВАЖНО: это надстройка НАД уже отобранным по скорингу кандидатом — сначала
+// scoredCandidates() решает, стоит ли вообще звонить, и только потом сюда
+// подставляются basedOn/group УЖЕ выбранной пары. Прикормка никогда не влияет
+// на то, кого выбрать (см. правку про скоринг выше) — только комментирует
+// готовое решение.
+async function fetchRewardHook(managerBitrixId: number, basedOnGroups: string[], recommendedGroup: string): Promise<string | null> {
+  const db = systemDb();
+
+  // 1) Активный квест — приоритет: «это ценнее» (владелец). Читаем НАПРЯМУЮ
+  // из quests (не через ensureQuests/refreshQuests — те могут сгенерировать/
+  // сроллить квесты как побочный эффект, здесь нужно только READ текущих).
+  try {
+    const questRes = await db.query<{
+      id: string; category: string; target: string; target_group: string | null;
+      pair_first: string | null; progress: string; title: string; reward_eballs: number;
+    }>(
+      `SELECT id, category, target, target_group, pair_first, progress, title, reward_eballs
+         FROM quests WHERE bitrix_id = $1 AND status = 'active' AND category IN ('group_sales', 'crosssell')`,
+      [managerBitrixId],
+    );
+    const quest = questRes.rows.find(q =>
+      q.target_group === recommendedGroup
+      && (q.category !== 'crosssell' || !q.pair_first || basedOnGroups.includes(q.pair_first)),
+    );
+    if (quest) {
+      const currencyName = await getCurrencyName(db);
+      const progress = Number(quest.progress);
+      const target = Number(quest.target);
+      const closes = progress + 1 >= target;
+      return closes
+        ? `Заодно закроешь квест «${quest.title}» — плюс ${quest.reward_eballs} ${currencyName} на баланс. Дерзай!`
+        : `Заодно продвинешь квест «${quest.title}» (${progress}→${progress + 1} из ${target}). Дерзай!`;
+    }
+  } catch { /* миграция 125 могла ещё не накатиться на этом инстансе — тихо пропускаем */ }
+
+  // 2) Кросс-селл награда — тот же движок сопоставления, что уже используется
+  // в «Мои заказчики» (badgeForPair): пара (basedOn → recommendedGroup) должна
+  // РЕАЛЬНО матчить criteria включённой награды, цена — из badge_prices.
+  if (basedOnGroups.length === 0) return null; // фолбэк-рекомендация — пары нет, награду не за что матчить
+  try {
+    const badges = await fetchCrossSellBadges();
+    const badge = badgeForPair(badges, basedOnGroups, recommendedGroup);
+    if (!badge || badge.price <= 0) return null; // нет награды за именно эту пару, или цена не задана — ничего не выдумываем
+    const already = await db.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM badge_awards WHERE bitrix_id = $1 AND badge_key = $2`,
+      [managerBitrixId, badge.key],
+    );
+    if (Number(already.rows[0]?.n ?? '0') > 0) return null; // уже получена — упоминать нечего (владелец: «не должно быть враньём»)
+    const currencyName = await getCurrencyName(db);
+    return `Заберёшь награду «${badge.name}» и ${badge.price} ${currencyName} на баланс. Дерзай!`;
+  } catch {
+    return null; // таблиц наград ещё нет на этом инстансе — не роняем дайджест из-за бонусной строки
+  }
 }
 
 // Ни склонений имени, ни родовых местоимений/глаголов (правка владельца
@@ -483,18 +695,19 @@ function signalReason(row: CustomerRow, signal: CallSignal): string {
 }
 
 function adviceLine(pick: AdvicePick, verbose: boolean): string {
-  const { row, clientName, recommendedGroup, basedOnGroups, fallback, pct, signal } = pick;
+  const { row, clientName, recommendedGroup, basedOnGroups, fallback, pct, signal, rewardHook } = pick;
   // Имя/компания — ИМЕНИТЕЛЬНАЯ метка перед двоеточием, не объект глагола
   // «позвонить» (тот требовал бы дательного падежа: «позвонить Николаю», а
   // автоматически склонять произвольные ФИО из CRM небезопасно).
   const label = row.clientType === 'company' ? `«${clientName}»` : clientName;
   const reason = signalReason(row, signal);
+  const hookSuffix = rewardHook ? ` ${rewardHook}` : '';
   if (fallback || basedOnGroups.length === 0) {
-    return `💡 ${label}: пора позвонить — ${reason}. Что предложить — глянь карточку клиента, там видно, чем раньше интересовался клиент.`;
+    return `💡 ${label}: пора позвонить — ${reason}. Что предложить — глянь карточку заказчика, там видно, чем раньше интересовался заказчик.${hookSuffix}`;
   }
   const basedOnStr = basedOnGroups.map(g => `«${g}»`).join(' + ');
-  const tail = verbose ? ` (так уходит примерно ${pct}% похожих клиентов)` : '';
-  return `💡 ${label}: пора позвонить — ${reason}. Есть покупка ${basedOnStr} — обычно следом берут «${recommendedGroup}»${tail}. Стоит предложить!`;
+  const tail = verbose ? ` (так уходит примерно ${pct}% похожих заказчиков)` : '';
+  return `💡 ${label}: пора позвонить — ${reason}. Есть покупка ${basedOnStr} — обычно следом берут «${recommendedGroup}»${tail}. Стоит предложить!${hookSuffix}`;
 }
 
 // ── Сборка сообщений ──────────────────────────────────────────────────────────
@@ -541,7 +754,7 @@ export async function sendDailyDigestForManager(m: ManagerRef, opts: { testRun?:
   const trace = {
     manager: { bitrixId: m.bitrixId, name: m.name }, dateStr, metrics,
     hamburgerSlots: hamburger.map(s => s.trace),
-    advice: picks.map(p => ({ logDbId: p.logDbId, clientKey: p.row.clientKey, recommendedGroup: p.recommendedGroup, fallback: p.fallback, pct: p.pct, signal: p.signal })),
+    advice: picks.map(p => ({ logDbId: p.logDbId, clientKey: p.row.clientKey, recommendedGroup: p.recommendedGroup, fallback: p.fallback, pct: p.pct, signal: p.signal, score: p.score, rewardHook: p.rewardHook })),
     prefsApplied: prefs,
   };
   const suppressReason = opts.testRun ? null : subscriptionBlockReason(prefs, 'daily');
@@ -562,7 +775,7 @@ export async function sendWeeklyDigestForManager(m: ManagerRef, opts: { testRun?
   const trace = {
     manager: { bitrixId: m.bitrixId, name: m.name }, weekLabel, metrics,
     hamburgerSlots: hamburger.map(s => s.trace),
-    advice: picks.map(p => ({ logDbId: p.logDbId, clientKey: p.row.clientKey, recommendedGroup: p.recommendedGroup, fallback: p.fallback, pct: p.pct, signal: p.signal })),
+    advice: picks.map(p => ({ logDbId: p.logDbId, clientKey: p.row.clientKey, recommendedGroup: p.recommendedGroup, fallback: p.fallback, pct: p.pct, signal: p.signal, score: p.score, rewardHook: p.rewardHook })),
     prefsApplied: prefs,
   };
   const suppressReason = opts.testRun ? null : subscriptionBlockReason(prefs, 'weekly');
