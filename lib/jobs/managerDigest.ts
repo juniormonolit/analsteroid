@@ -468,7 +468,7 @@ export async function pickAdvice(
 function signalReason(row: CustomerRow, signal: CallSignal): string {
   if (signal === 'active_no_call') {
     const maxSilent = Math.round(Math.max(...row.activeDeals.map(d => d.daysSilent), 0));
-    return `у него открыта сделка, а тишина по ней уже ${maxSilent} дн.`;
+    return `у него открыта сделка, а тишина по ней уже ${maxSilent} дн`;
   }
   return `не появлялся с последней покупки дольше обычного (обычно берёт снова через ~${Math.round(row.cycleDays)} дн.)`;
 }
