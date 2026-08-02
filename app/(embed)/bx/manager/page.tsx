@@ -1,5 +1,6 @@
 import { getSession } from '@/lib/auth/session';
 import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
+import { hasPerm } from '@/lib/auth/perms';
 import { ManagerCardPage } from '@/features/manager-card/ui/ManagerCardPage';
 
 // ЛК внутри Битрикса. Логика «чью карточку показать» — ровно та же, что на
@@ -39,10 +40,23 @@ export default async function Page() {
   }
 
   if (!session.bitrixUserId) {
+    // Прямая ссылка на настройки пользователей (задача 2771). target="_blank"
+    // ОБЯЗАТЕЛЕН здесь: /settings/users вне /bx/* запрещён к фреймингу (CSP
+    // frame-ancestors в next.config.ts) — обычная ссылка внутри iframe портала
+    // просто не отрисуется (пустой фрейм), нужна навигация в новой вкладке.
+    const canFix = hasPerm(session, 'action.users.manage');
     return (
       <div className="p-6 text-sm text-[var(--color-text-muted)] max-w-md mx-auto text-center">
-        Аккаунт не связан с Битриксом — попросите администратора указать Bitrix ID,
-        и здесь появится ваш кабинет.
+        Аккаунт не связан с Битриксом — {canFix ? (
+          <>
+            укажите Bitrix ID в{' '}
+            <a href="/settings/users" target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline font-semibold">
+              настройках пользователей
+            </a>{' '}(откроется в новой вкладке — здесь, внутри Битрикса, эта страница не встраивается),
+          </>
+        ) : (
+          'попросите администратора указать Bitrix ID в настройках пользователей,'
+        )} и здесь появится ваш кабинет.
       </div>
     );
   }

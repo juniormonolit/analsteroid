@@ -5,6 +5,7 @@
 // (шестиугольник + плитки) → звонки → товарные категории → график работы.
 // mode='department' — те же разделы на агрегате отдела (managerId = uuid отдела | 'all').
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
@@ -23,7 +24,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { PlanFactStrip, usePlanFact } from './PlanFactStrip';
 import { ManagerDailySalesCard } from './ManagerDailySalesCard';
 import { buildManagerReportText } from '@/features/manager-card/engine/managerReportText';
-import { Copy, Check } from 'lucide-react';
+import { Copy, Check, Eye, Lock } from 'lucide-react';
 import type { CardSegment, ManagerCardResult, AxisUnit } from '@/features/manager-card/engine/managerCard';
 
 // Ответ карточки: у отдела к нему добавляется deptComparison (peerCount/
@@ -205,9 +206,16 @@ export interface ManagerCardPageProps {
    *  не передан) полка тоже показывается — BadgeShelf с managerId (батч-роут);
    *  права не расширяются, карточка уже гейтится страницей (canViewManager). */
   showBadges?: boolean;
+  /** Принудительный read-only (задача 2771): список сотрудников для admin/
+   *  director+ ведёт сюда с этим флагом — прячет «Ручные операции» (поощрить/
+   *  оштрафовать) ДАЖЕ у тех, кому canManualFor() на сервере их разрешает.
+   *  Самостоятельный self-service (магазин/гача/переводы и т.п.) уже и без
+   *  этого флага недоступен в чужой карточке — см. isSelf=showBadges выше,
+   *  все такие кнопки/API работают только с session.bitrixUserId. */
+  forceReadOnly?: boolean;
 }
 
-export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo, showBadges = false }: ManagerCardPageProps) {
+export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo, showBadges = false, forceReadOnly = false }: ManagerCardPageProps) {
   const [period, setPeriod] = useState<DateRange>(() => {
     if (initialFrom && initialTo) {
       const from = new Date(initialFrom);
@@ -279,6 +287,12 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   }, [planyorkaEnabled, tab, pathname, router, searchParams]);
   const tabbed = mode === 'manager';
   const showStats = !tabbed || tab === 'stats';
+  // Читаете чужой кабинет (задача 2771) — плашка + «вернуться к себе».
+  // mode==='manager' — только персональная карточка, не агрегат отдела (у него
+  // и так своя структура «Моя команда», путать нечего). !showBadges === «не я
+  // сам» (см. showBadges на месте вызова — /manager/me/bx всегда true для
+  // своей, /manager/[id] — только если id буквально совпал с твоим).
+  const viewingOther = tabbed && !showBadges;
 
   function handlePeriodChange(p: DateRange) {
     setPeriod(p);
@@ -356,6 +370,31 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
     // (тот же паттерн, что SummaryPage). Ширина резиновая — без max-w (правка владельца).
     <div className="h-full overflow-y-auto bg-[var(--color-bg)]">
     <div className="p-4 sm:p-6 w-full flex flex-col gap-4 sm:gap-5">
+      {/* ── Плашка «чужой кабинет» (задача 2771) — строго read-only просмотр:
+          явно видно, чей это ЛК, и как вернуться к своему. forceReadOnly
+          дополнительно прячет «Ручные операции» ниже (ProfileTab). */}
+      {viewingOther && (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-xl border px-3.5 py-2.5 text-[13px]"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--color-accent) 35%, transparent)',
+            backgroundColor: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
+          }}
+        >
+          <Eye size={15} className="shrink-0 text-[var(--color-accent)]" />
+          <span className="text-[var(--color-text)]">
+            Вы смотрите кабинет: <b>{data?.profile.name ?? managerName ?? `#${managerId}`}</b>
+          </span>
+          {forceReadOnly && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[var(--color-text-muted)]" title="Действия с балансом и инвентарём недоступны в этом режиме">
+              <Lock size={11} /> только чтение
+            </span>
+          )}
+          <Link href="/manager/me" className="ml-auto tap-target text-xs font-semibold text-[var(--color-accent)] hover:underline whitespace-nowrap">
+            ← Вернуться к себе
+          </Link>
+        </div>
+      )}
       {/* ── Табы ЛК (только карточка менеджера) ── */}
       {tabbed && (
         <div className="flex items-stretch gap-2">
@@ -365,7 +404,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       )}
 
       {tabbed && tab === 'profile' && (
-        <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => goToTab('rewards')} />
+        <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => goToTab('rewards')} forceReadOnly={forceReadOnly} />
       )}
       {tabbed && planyorkaEnabled && tab === 'planyorka' && (
         <PlanyorkaTab
@@ -379,7 +418,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           initialFilter={customersDeepLink?.filter} initialCategory={customersDeepLink?.category} />
       )}
       {tabbed && tab === 'quests' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
-      {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} />}
+      {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} forceReadOnly={forceReadOnly} />}
       {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => goToTab('inventory')} />}
       {tabbed && tab === 'inventory' && <InventoryTab managerId={managerId} isSelf={showBadges} />}
 

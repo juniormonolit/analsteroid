@@ -33,6 +33,25 @@ export default async function Page({ params, searchParams }: {
     );
   }
 
+  // showBadges = «это буквально я сам» (задача 2771, попутный багфикс той же
+  // природы, что showBadges в app/(embed)/bx/manager/page.tsx, задача 2764):
+  // раньше здесь showBadges НИКОГДА не передавался, то есть если человек
+  // вручную открывал /manager/<свой_id> вместо /manager/me — isSelf=false
+  // и собственные self-service кнопки (магазин/гача/переводы) не показывались,
+  // хотя ManagerCardPage у себя корректно их бы дал. Для чужой карточки
+  // (обычный случай) ничего не изменилось — isOwnId=false, как и раньше.
+  const isOwnId = mode === 'manager' && session.bitrixUserId === id;
+
+  // Read-only режим (задача 2771 — Серёга зашёл с телефона как админ, увидел
+  // пустой ЛК, попросил список сотрудников с переходом в чужой ЛК): ссылка из
+  // этого списка ведёт сюда с ?view=readonly — ManagerCardPage тогда прячет
+  // «Ручные операции» (поощрить/оштрафовать) даже у admin/director+, которым
+  // canManualFor() их в принципе разрешает. Существующий путь «Моя команда»
+  // (DeptRosterGrid) этот параметр не ставит — ROП по-прежнему может поощрять
+  // своих подчинённых оттуда, ничего не отнято. Сам параметр может только
+  // ОГРАНИЧИТЬ показ, не расширить — принимаем его от кого угодно без проверки роли.
+  const forceReadOnly = sp.view === 'readonly';
+
   return (
     <ManagerCardPage
       managerId={id}
@@ -40,6 +59,8 @@ export default async function Page({ params, searchParams }: {
       managerName={str(sp.name)}
       initialFrom={str(sp.from)}
       initialTo={str(sp.to)}
+      showBadges={isOwnId}
+      forceReadOnly={forceReadOnly}
     />
   );
 }

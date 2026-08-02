@@ -19,6 +19,7 @@
 
 import { analyticsDb } from '@/lib/db/clients';
 import { planRenameOps } from './tenure';
+import { getAllRopAndDirectorIds } from '@/lib/org/callControlScope';
 export { planRenameOps, normalizeName, type RenameOp } from './tenure';
 
 export interface DetectResult { seeded: number; renamed: number; skippedFlips: number; checkedAt: number }
@@ -118,6 +119,8 @@ export async function detectRenames(force = false): Promise<DetectResult> {
 
 export interface NameHistoryItem { name: string; validFrom: string; validTo: string | null }
 
+export type EmployeeOrgRole = 'director' | 'rop' | 'manager';
+
 export interface EmployeeListRow {
   bitrixId: number;
   fullName: string;
@@ -131,11 +134,16 @@ export interface EmployeeListRow {
   updatedBy: string | null;
   updatedAt: string | null;
   nameHistory: NameHistoryItem[];   // SCD2 по возрастанию valid_from
+  // Организационная роль (задача 2771) — из «Контроль звонков»
+  // (org_resolved_hierarchy + call_control_recipient_overrides), НЕ путать с
+  // ролью доступа приложения (Администратор/Пользователь и т.п., lib/auth/perms).
+  // «Директор» приоритетнее «РОП», если оба назначения совпали (редкий случай).
+  orgRole: EmployeeOrgRole;
 }
 
 export async function getEmployeesList(): Promise<EmployeeListRow[]> {
   const pool = analyticsDb();
-  const [rows, hist] = await Promise.all([
+  const [rows, hist, orgRoles] = await Promise.all([
     pool.query(
       `SELECT e.bitrix_id, e.full_name, e.is_active,
               to_char(e.hire_date, 'YYYY-MM-DD') AS hire_date,
@@ -156,6 +164,7 @@ export async function getEmployeesList(): Promise<EmployeeListRow[]> {
          FROM sa.employee_name_history
         ORDER BY valid_from, id`,
     ),
+    getAllRopAndDirectorIds(),
   ]);
 
   const histBy = new Map<string, NameHistoryItem[]>();
@@ -165,20 +174,26 @@ export async function getEmployeesList(): Promise<EmployeeListRow[]> {
     histBy.set(r.bitrix_user_id, list);
   }
 
-  return rows.rows.map((r) => ({
-    bitrixId: r.bitrix_id,
-    fullName: r.full_name,
-    departmentName: r.department_name ?? null,
-    branch: r.branch ?? null,
-    isActive: !!r.is_active,
-    hireDate: r.hire_date ?? null,
-    manualStartDate: r.manual_start_date ?? null,
-    startDate: r.manual_start_date ?? r.hire_date ?? null,
-    notes: r.notes,
-    updatedBy: r.updated_by ?? null,
-    updatedAt: r.updated_at ?? null,
-    nameHistory: histBy.get(String(r.bitrix_id)) ?? [],
-  }));
+  return rows.rows.map((r) => {
+    const id = String(r.bitrix_id);
+    const orgRole: EmployeeOrgRole = orgRoles.directorIds.has(id)
+      ? 'director' : orgRoles.ropIds.has(id) ? 'rop' : 'manager';
+    return {
+      bitrixId: r.bitrix_id,
+      fullName: r.full_name,
+      departmentName: r.department_name ?? null,
+      branch: r.branch ?? null,
+      isActive: !!r.is_active,
+      hireDate: r.hire_date ?? null,
+      manualStartDate: r.manual_start_date ?? null,
+      startDate: r.manual_start_date ?? r.hire_date ?? null,
+      notes: r.notes,
+      updatedBy: r.updated_by ?? null,
+      updatedAt: r.updated_at ?? null,
+      nameHistory: histBy.get(String(r.bitrix_id)) ?? [],
+      orgRole,
+    };
+  });
 }
 
 // ---------- Реестр: upsert ручной даты/заметок ----------

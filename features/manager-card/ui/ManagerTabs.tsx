@@ -326,11 +326,15 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
 
 // ── Таб «Профиль»: сводка ────────────────────────────────────────────────────
 
-export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
+export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly = false }: {
   managerId: string;
   isSelf: boolean;
   card: ManagerCardResult | undefined;
   onGoRewards: () => void;
+  /** Задача 2771: список сотрудников для admin/director+ ведёт сюда с этим
+   *  флагом — прячет «Ручные операции» даже там, где сервер их бы разрешил
+   *  (canManualFor). Существующий путь «Моя команда» его не ставит. */
+  forceReadOnly?: boolean;
 }) {
   const qc = useQueryClient();
   const { data: shelfData } = useShelfQuery(isSelf ? undefined : managerId);
@@ -338,7 +342,8 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
   const { data: planFact } = usePlanFact(managerId, 'manager');
   // Ручные операции: контекст только в чужой карточке (себя поощрять нельзя,
   // сервер это же и отбивает — canManual=false в своём ЛК у не-админов).
-  const { data: manualCtx } = useManualContext(managerId, !isSelf);
+  // forceReadOnly — даже не запрашиваем контекст, не только прячем кнопки.
+  const { data: manualCtx } = useManualContext(managerId, !isSelf && !forceReadOnly);
   const [manualKind, setManualKind] = useState<'bonus' | 'penalty' | null>(null);
   const afterManual = () => {
     setManualKind(null);
@@ -787,11 +792,13 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
   );
 }
 
-export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
+export function RewardsTab({ managerId, isSelf, forceReadOnly = false }: { managerId: string; isSelf: boolean; forceReadOnly?: boolean }) {
   const qc = useQueryClient();
   const { data: shelfData } = useShelfQuery(isSelf ? undefined : managerId);
   const { data: extra, isLoading } = useProfileExtra(managerId, isSelf);
-  const { data: manualCtx } = useManualContext(managerId, !isSelf);
+  // forceReadOnly (задача 2771) — прячет и «сторно» тем же способом, что
+  // ProfileTab прячет поощрить/оштрафовать: контекст просто не запрашивается.
+  const { data: manualCtx } = useManualContext(managerId, !isSelf && !forceReadOnly);
   const currencyName = shelfData?.currencyName ?? 'MLT';
   const ledger = extra?.ledger ?? [];
   // Подтверждение сторно — вместо window.confirm (задача 2764).
