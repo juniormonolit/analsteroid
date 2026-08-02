@@ -122,22 +122,24 @@ function ChancesModal({ data, onClose }: { data: GachaData; onClose: () => void 
         <div className="mb-3 text-xs text-[var(--color-text-muted)]">
           Все вероятности опубликованы, сумма ровно 100%. Результат каждой крутки определяет сервер.
         </div>
-        <table className="w-full text-[13px]">
-          <tbody>
-            {data.pool.map(t => (
-              <tr key={t.tierKey} className="border-t border-[var(--color-border)]">
-                <td className="py-1.5 pr-2">{t.icon}</td>
-                <td className="py-1.5 pr-2 text-[var(--color-text)]">
-                  {t.name}
-                  {t.soldOut && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">(приз закончился)</span>}
-                </td>
-                <td className="py-1.5 text-right font-semibold tabular-nums" style={{ color: RARITY_COLOR[t.rarity] }}>
-                  {fmtChance(t.chancePpm)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table className="w-full text-[13px]">
+            <tbody>
+              {data.pool.map(t => (
+                <tr key={t.tierKey} className="border-t border-[var(--color-border)]">
+                  <td className="py-1.5 pr-2">{t.icon}</td>
+                  <td className="py-1.5 pr-2 text-[var(--color-text)]">
+                    {t.name}
+                    {t.soldOut && <span className="ml-1.5 text-[11px] text-[var(--color-text-muted)]">(приз закончился)</span>}
+                  </td>
+                  <td className="py-1.5 text-right font-semibold tabular-nums" style={{ color: RARITY_COLOR[t.rarity] }}>
+                    {fmtChance(t.chancePpm)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <div className="mt-3 rounded-xl border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
           <b className="text-[var(--color-text)]">Гарантия (pity):</b> с {data.pity.softFrom}-й крутки без редкого приза шанс
           редкого растёт на 2 п.п. за крутку, на {data.pity.hardAt}-й — редкий приз гарантирован. Джекпот в гарантию

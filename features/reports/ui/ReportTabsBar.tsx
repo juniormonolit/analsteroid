@@ -70,7 +70,7 @@ export function ReportTabsBar({ tabs, activeId, onSelect, onClose, onAdd, onRena
             )}
             <button
               onClick={e => { e.stopPropagation(); onClose(tab); }}
-              className="w-5 h-5 flex-shrink-0 flex items-center justify-center rounded hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] opacity-0 group-hover:opacity-100 transition-opacity"
+              className="tap-target hover-reveal w-5 h-5 flex-shrink-0 flex items-center justify-center rounded hover:bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] transition-opacity"
               title="Закрыть вкладку"
             >
               <X size={12} />

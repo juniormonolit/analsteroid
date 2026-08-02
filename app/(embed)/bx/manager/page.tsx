@@ -7,6 +7,16 @@ import { ManagerCardPage } from '@/features/manager-card/ui/ManagerCardPage';
 // звонков», менеджер — себя): личность берём ТОЛЬКО из сессии, которую завёл
 // обработчик /api/bitrix/app по токену от портала. Никаких id из URL — иначе
 // сотрудник открыл бы карточку коллеги, поправив адрес.
+//
+// Багфикс (аудит мобильной готовности, задача 2764): эта страница написана
+// 30.07, ДО системы наград (showBadges/isSelf, задача 2655, 31.07) — при
+// добавлении наград проп showBadges забыли протащить сюда же, хотя на
+// /manager/me он есть с самого начала фичи. Без него ManagerCardPage считает
+// свой же кабинет ЧУЖИМ (isSelf=showBadges=false): пропадают кнопки
+// «Обменять»/«Вывести в ЗП» в рублёвом кошельке, перевод MLT коллеге, крутка
+// гачи, реролл квеста, активация/подарок предмета в инвентаре — весь ЛК внутри
+// Битрикса становится «только читать». showBadges теперь передаётся в обеих
+// ветках, как на /manager/me.
 export const metadata = { title: 'Мой кабинет — Монолитика' };
 
 export default async function Page() {
@@ -44,8 +54,9 @@ export default async function Page() {
         managerId="my"
         mode="department"
         managerName={managed.length === 1 ? (managed[0].deptName ?? 'Мой отдел') : `Мои отделы (${managed.length})`}
+        showBadges
       />
     );
   }
-  return <ManagerCardPage managerId={session.bitrixUserId} mode="manager" managerName={session.displayName} />;
+  return <ManagerCardPage managerId={session.bitrixUserId} mode="manager" managerName={session.displayName} showBadges />;
 }

@@ -170,6 +170,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
               «Отказов не было», если и то, и другое пусто. */}
           {row.activeDeals.length > 0 && (
             <Section title={`Активные сделки · ${row.activeDeals.length}`}>
+              <div className="scroll-x">
               <table className="w-full text-[12.5px]">
                 <tbody>
                   {row.activeDeals.map(d => {
@@ -192,6 +193,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                   })}
                 </tbody>
               </table>
+              </div>
             </Section>
           )}
 
@@ -201,6 +203,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
           <Section title={`Покупки · ${timeline.length}`} hint="Все проданные сделки клиента хронологически; между покупками — интервал в днях">
             {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div>
               : timeline.length === 0 ? <div className="text-[12px] text-[var(--color-text-muted)]">Покупок ещё не было.</div> : (
+              <div className="scroll-x">
               <table className="w-full text-[12.5px]">
                 <tbody>
                   {timeline.map((d, i) => (
@@ -230,6 +233,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </Section>
 
@@ -267,6 +271,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
           {/* Отказы — как активные сделки, пустая секция целиком не рендерим. */}
           {!isLoading && (data?.refused.length ?? 0) > 0 && (
             <Section title={`Отказы · ${data!.refused.length}`} hint="Сделки клиента, закрытые в отказ; отмечено, были ли по ним звонки">
+              <div className="scroll-x">
               <table className="w-full text-[12.5px]">
                 <tbody>
                   {data!.refused.map(d => (
@@ -285,6 +290,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                   ))}
                 </tbody>
               </table>
+              </div>
             </Section>
           )}
 
@@ -299,6 +305,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
           {/* История менеджеров */}
           {row.managerHistory.length > 0 && (
             <Section title="История менеджеров" hint="Имена — на момент работы с клиентом (на логине люди меняются)">
+              <div className="scroll-x">
               <table className="text-[12.5px]">
                 <tbody>
                   {row.managerHistory.map(m => (
@@ -312,6 +319,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                   ))}
                 </tbody>
               </table>
+              </div>
             </Section>
           )}
 
