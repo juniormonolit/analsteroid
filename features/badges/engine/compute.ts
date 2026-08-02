@@ -55,7 +55,16 @@ export interface RecomputeStats {
   expiredItems: number;
   refundedAmount: number;
   ms: number;
+  // Гонка xp_ledger (задача 2776): true — другой прогон уже держит advisory-лок,
+  // этот вызов ничего не считал и не писал (все счётчики выше — 0/{}).
+  skipped?: boolean;
 }
+
+// Ключ pg-advisory-лока пересчёта наград — тот же стиль, что уже используется в
+// проекте (gacha.ts, shop/transfer/route.ts): hashtext() от строкового ключа.
+// int4 из hashtext() неявно приводится к bigint — единственному аргументу
+// pg_try_advisory_lock(bigint)/pg_advisory_unlock(bigint).
+const BADGE_RECOMPUTE_LOCK_SQL = `hashtext('badge_recompute')`;
 
 // ── календарные помощники (все даты — строки YYYY-MM-DD в МСК) ───────────────
 
@@ -501,11 +510,40 @@ function computeCustomBadge(key: string, c: CustomCriteria, ctx: CustomCtx): Awa
 
 // ── основной пересчёт ────────────────────────────────────────────────────────
 
+const EMPTY_STATS_SKIPPED = (ms: number): RecomputeStats => ({
+  inserted: 0, updated: 0, total: 0, byBadge: {},
+  coinsAccrued: 0, coinsEmitted: 0,
+  expiredLedger: 0, expiredAmount: 0, expiredItems: 0, refundedAmount: 0,
+  ms, skipped: true,
+});
+
+// Пересчёт наград — ЕДИНСТВЕННЫЙ путь и для ночного крона (instrumentation.ts,
+// scheduleBadgeRecompute), и для ручной кнопки «Пересчитать» (POST
+// /api/badges/recompute). Взаимоисключение — pg_try_advisory_lock на уровне
+// Postgres, а не Redis (задача 2776, находка QA: параллельный запуск давал
+// `duplicate key value violates unique constraint "xp_ledger_pkey"`, потому что
+// Redis-лок в instrumentation.ts мог промолчать после ошибки ioredis, а
+// ручная кнопка вообще не проверяла никакой лок). pg_try_advisory_lock —
+// НЕ блокирующий (в отличие от pg_advisory_xact_lock, который уже используется
+// в проекте) и session-scoped, а не transaction-scoped — держим его на этом же
+// `client` от подключения до releasing, снимаем явно в finally, ДО
+// `client.release()` (иначе лок повис бы до следующего заимствования
+// соединения из пула, а не снялся бы сразу).
 export async function runBadgeRecompute(): Promise<RecomputeStats> {
   const t0 = Date.now();
   const today = mskToday();
   const client = await systemDb().connect();
+  let lockHeld = false;
   try {
+    const lockRes = await client.query<{ locked: boolean }>(
+      `SELECT pg_try_advisory_lock(${BADGE_RECOMPUTE_LOCK_SQL}) AS locked`,
+    );
+    lockHeld = lockRes.rows[0]?.locked === true;
+    if (!lockHeld) {
+      console.warn('[badges] пересчёт уже выполняется в другом прогоне (advisory-лок занят) — пропускаю');
+      return EMPTY_STATS_SKIPPED(Date.now() - t0);
+    }
+
     await seedDefinitions(client);
     const defs = await loadDefs(client);
     const enabled = (key: string) => defs.get(key)?.enabled !== false;
@@ -967,6 +1005,12 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     await client.query('ROLLBACK').catch(() => {});
     throw e;
   } finally {
+    // Снимаем advisory-лок ДО возврата соединения в пул — иначе он держался
+    // бы за скрытым pg-сеансом до следующего заимствования этого клиента.
+    if (lockHeld) {
+      await client.query(`SELECT pg_advisory_unlock(${BADGE_RECOMPUTE_LOCK_SQL})`).catch(err =>
+        console.error('[badges] не удалось снять advisory-лок (сессия уйдёт в пул с висящим локом до её закрытия):', err));
+    }
     client.release();
   }
 }

@@ -33,7 +33,14 @@ export async function register() {
 // Общий хелпер «раз в сутки по МСК с Redis-замком» — та же идея, что у
 // scheduleDailyMoscowReport, но вынесена: дневное и недельное окно дайджеста
 // почти идентичны, дублировать блок целиком незачем.
-async function runOnceADayMsk(lockKey: string, dateStr: string, job: () => Promise<void>): Promise<'ran' | 'already' | 'busy'> {
+// Задача 2776: 'lock-error' — отдельный от 'busy' исход. Ошибка при чтении/
+// взятии лока (Redis настроен, но бросил — ioredis переподключается после
+// рестарта) — это НЕ «Redis отсутствует» и не должно вести себя как
+// «свободно, шлём»: раньше `catch` глотал исключение и код всё равно слал
+// дайджест. Теперь такой тик пропускается и не помечается как выполненный
+// (см. вызовы ниже — `lastDate` не обновляется на 'lock-error', чтобы
+// следующий минутный тик попробовал снова, пока не кончится часовое окно).
+async function runOnceADayMsk(lockKey: string, dateStr: string, job: () => Promise<void>): Promise<'ran' | 'already' | 'busy' | 'lock-error'> {
   let redis: Awaited<ReturnType<typeof import('./lib/cache/redis')['getRedis']>> = null;
   try {
     const { getRedis } = await import('./lib/cache/redis');
@@ -44,7 +51,8 @@ async function runOnceADayMsk(lockKey: string, dateStr: string, job: () => Promi
       if (attempt !== 'OK') return 'busy';
     }
   } catch (err) {
-    console.warn(`[${lockKey}] Redis недоступен, полагаюсь на in-memory флаг:`, err);
+    console.warn(`[${lockKey}] Redis-лок не проверить (ошибка), пропускаю тик:`, err instanceof Error ? err.message : err);
+    return 'lock-error';
   }
   await job();
   if (redis) await redis.set(`${lockKey}:sent:${dateStr}`, '1', 'EX', 24 * 3600).catch(() => {});
@@ -75,7 +83,7 @@ function scheduleManagerDigest() {
             const res = await runDailyDigestForAllManagers();
             console.log(`[digest] дневной: отправлено ${res.sent}, ошибок ${res.failed}`);
           });
-          if (outcome !== 'busy') lastDailyDate = date;
+          if (outcome !== 'busy' && outcome !== 'lock-error') lastDailyDate = date;
         } finally { dailyRunning = false; }
       }
 
@@ -87,7 +95,7 @@ function scheduleManagerDigest() {
             const res = await runWeeklyDigestForAllManagers();
             console.log(`[digest] недельный: отправлено ${res.sent}, ошибок ${res.failed}`);
           });
-          if (outcome !== 'busy') lastWeeklyDate = date;
+          if (outcome !== 'busy' && outcome !== 'lock-error') lastWeeklyDate = date;
         } finally { weeklyRunning = false; }
       }
     } catch (err) {
@@ -115,7 +123,13 @@ function scheduleAdviceFeedback() {
           const acquired = await redis.set('advice-feedback:tick', '1', 'EX', 14 * 60, 'NX');
           if (acquired !== 'OK') return;
         }
-      } catch { /* без Redis — полагаемся на in-process флаг running */ }
+      } catch (err) {
+        // Задача 2776: ошибка Redis ≠ «Redis не настроен» (та ветка — redis===null,
+        // штатно, работаем на одном `running`). Не уверены, свободен ли лок —
+        // пропускаем тик, следующий (через 15 мин) попробует снова.
+        console.warn('[adviceFeedback] Redis-лок не проверить (ошибка), пропускаю тик:', err instanceof Error ? err.message : err);
+        return;
+      }
 
       const { runAdviceFeedbackTick } = await import('./lib/jobs/adviceFeedback');
       const stats = await runAdviceFeedbackTick();
@@ -164,7 +178,7 @@ function scheduleRopDigest() {
             const res = await runDailyDigestForAllRops();
             console.log(`[ropDigest] дневной: отправлено ${res.sent}, ошибок ${res.failed}`);
           });
-          if (outcome !== 'busy') lastDailyDate = date;
+          if (outcome !== 'busy' && outcome !== 'lock-error') lastDailyDate = date;
         } finally { dailyRunning = false; }
       }
 
@@ -175,7 +189,7 @@ function scheduleRopDigest() {
             const res = await runWeeklyDigestForAllRops();
             console.log(`[ropDigest] недельный: отправлено ${res.sent}, ошибок ${res.failed}`);
           });
-          if (outcome !== 'busy') lastWeeklyDate = date;
+          if (outcome !== 'busy' && outcome !== 'lock-error') lastWeeklyDate = date;
         } finally { weeklyRunning = false; }
       }
     } catch (err) {
@@ -202,7 +216,10 @@ function scheduleRopAdviceFeedback() {
           const acquired = await redis.set('rop-advice-feedback:tick', '1', 'EX', 14 * 60, 'NX');
           if (acquired !== 'OK') return;
         }
-      } catch { /* без Redis — полагаемся на in-process флаг running */ }
+      } catch (err) {
+        console.warn('[ropAdviceFeedback] Redis-лок не проверить (ошибка), пропускаю тик:', err instanceof Error ? err.message : err);
+        return;
+      }
 
       const { runRopAdviceFeedbackTick } = await import('./lib/jobs/ropAdviceFeedback');
       const stats = await runRopAdviceFeedbackTick();
@@ -224,17 +241,35 @@ function scheduleRopAdviceFeedback() {
 // (03:30+ МСК, Redis-замок на дату) + ретро-прогон при первом старте, если
 // badge_awards ещё пуста. Планировщика в проекте нет — таймер в процессе
 // next start, как у остальных джоб выше.
+// Задача 2776 (QA-находка, гонка xp_ledger): у этой джобы, в отличие от
+// callControl/widgetMetrics/adviceFeedback, не было in-process `running`-флага,
+// а исключение при взятии Redis-лока молча глоталось (`catch {}`) — код шёл
+// пересчитывать, как будто лок свободен, хотя ioredis мог просто не успеть
+// переподключиться после рестарта процесса («Stream isn't writeable»). Реальная
+// защита от гонки (в т.ч. с ручной кнопкой «Пересчитать», которая раньше вообще
+// не проверяла лок) теперь — pg_try_advisory_lock ВНУТРИ runBadgeRecompute()
+// (features/badges/engine/compute.ts); Redis-лок и `running` здесь — только
+// дешёвый пре-фильтр, чтобы не открывать лишнее pg-соединение и не гонять
+// тяжёлые SELECT'ы на каждый 15-минутный тик, если и так известно, что сегодня
+// уже отработали.
 function scheduleBadgeRecompute() {
   let lastRunDateMsk: string | null = null;
   let bootChecked = false;
+  let running = false;
 
   const run = async (reason: string) => {
     const { runBadgeRecompute } = await import('./features/badges/engine/compute');
     const res = await runBadgeRecompute();
+    if (res.skipped) {
+      console.warn(`[badges] пересчёт (${reason}): пропущен — advisory-лок уже занят другим прогоном`);
+      return;
+    }
     console.log(`[badges] пересчёт (${reason}): +${res.inserted} новых, ${res.updated} обновлено, всего наград в проходе ${res.total}, ${res.ms}ms`);
   };
 
   const tick = async () => {
+    if (running) return;
+    running = true;
     try {
       const now = new Date();
       const msk = now.toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
@@ -265,11 +300,20 @@ function scheduleBadgeRecompute() {
           const acquired = await redis.set(`badges:recompute:${date}`, '1', 'EX', 20 * 60 * 60, 'NX');
           if (acquired !== 'OK') { lastRunDateMsk = date; return; }
         }
-      } catch { /* без Redis — in-memory дата */ }
+      } catch (err) {
+        // Redis настроен, но бросил — НЕ считаем это «Redis отсутствует» (тот
+        // случай — `redis === null`, штатная ветка выше). Не уверены, свободен
+        // ли лок → пропускаем тик и логируем; следующий тик через 15 мин
+        // попробует снова (и в любом случае под защитой advisory-лока в БД).
+        console.warn('[badges] Redis-лок не проверить (ошибка ниже), пропускаю тик:', err instanceof Error ? err.message : err);
+        return;
+      }
       await run('ночной');
       lastRunDateMsk = date;
     } catch (err) {
       console.error('[badges] пересчёт упал:', err);
+    } finally {
+      running = false;
     }
   };
 
@@ -299,7 +343,12 @@ function scheduleEmployeeRenameCheck() {
           const acquired = await redis.set(`employees:rename-check:${date}`, '1', 'EX', 20 * 60 * 60, 'NX');
           if (acquired !== 'OK') { lastRunDateMsk = date; return; }
         }
-      } catch { /* без Redis — только in-memory дата */ }
+      } catch (err) {
+        // Задача 2776: НЕ помечаем date как выполненную — ошибка Redis-лока
+        // означает «не уверены», следующий тик (через 15 мин) попробует снова.
+        console.warn('[employees] Redis-лок не проверить (ошибка), пропускаю тик:', err instanceof Error ? err.message : err);
+        return;
+      }
       const { detectRenames } = await import('./features/employees/engine/registry');
       const res = await detectRenames(true);
       lastRunDateMsk = date;
@@ -330,7 +379,10 @@ function scheduleWidgetMetrics() {
           const acquired = await redis.set('widget:metrics:tick', '1', 'EX', 570, 'NX');
           if (acquired !== 'OK') return;
         }
-      } catch { /* без Redis — полагаемся на in-process флаг */ }
+      } catch (err) {
+        console.warn('[widgetMetrics] Redis-лок не проверить (ошибка), пропускаю тик:', err instanceof Error ? err.message : err);
+        return;
+      }
 
       const { computeAndCacheWidgetMetrics } = await import('./lib/jobs/widgetMetrics');
       await computeAndCacheWidgetMetrics();
@@ -363,7 +415,10 @@ function scheduleCallControl() {
           const acquired = await redis.set('call-control:tick', '1', 'EX', 55, 'NX');
           if (acquired !== 'OK') return;
         }
-      } catch { /* без Redis — полагаемся на in-process флаг */ }
+      } catch (err) {
+        console.warn('[callControl] Redis-лок не проверить (ошибка), пропускаю тик:', err instanceof Error ? err.message : err);
+        return;
+      }
 
       const { runCallControlCycle } = await import('./lib/bots/callControl');
       const summary = await runCallControlCycle();
@@ -405,32 +460,44 @@ function scheduleDailyMoscowReport() {
     if (hour < SEND_HOUR_FROM || hour > SEND_HOUR_TO || lastSentDate === date) return;
 
     running = true;
-    let redis: Awaited<ReturnType<typeof import('./lib/cache/redis')['getRedis']>> = null;
+    // Задача 2776: раньше `running = true` мог повиснуть навсегда, если ниже
+    // сработал ранний `return` (уже отправлено другим инстансом / занято) —
+    // finally стоял только вокруг ВТОРОГО try (отправка), а не вокруг первого
+    // (Redis-лок), и ни один из тех return'ов до него не доходил. На практике
+    // это означало, что после первого же такого случая джоба переставала
+    // тикать до перезапуска процесса. Теперь весь тик — один try/finally.
     try {
-      const { getRedis } = await import('./lib/cache/redis');
-      redis = getRedis();
-      if (redis) {
-        // Уже отправлен другим инстансом сегодня?
-        if (await redis.get(`daily-report:sent:${date}`)) { lastSentDate = date; return; }
-        // Замок ПОПЫТКИ: кто-то прямо сейчас собирает отчёт — не дублируем.
-        const attempt = await redis.set(`daily-report:attempt:${date}`, '1', 'EX', 120, 'NX');
-        if (attempt !== 'OK') return;
+      let redis: Awaited<ReturnType<typeof import('./lib/cache/redis')['getRedis']>> = null;
+      try {
+        const { getRedis } = await import('./lib/cache/redis');
+        redis = getRedis();
+        if (redis) {
+          // Уже отправлен другим инстансом сегодня?
+          if (await redis.get(`daily-report:sent:${date}`)) { lastSentDate = date; return; }
+          // Замок ПОПЫТКИ: кто-то прямо сейчас собирает отчёт — не дублируем.
+          const attempt = await redis.set(`daily-report:attempt:${date}`, '1', 'EX', 120, 'NX');
+          if (attempt !== 'OK') return;
+        }
+      } catch (err) {
+        // Ошибка Redis-лока ≠ «Redis не настроен» (redis===null — штатно, шлём
+        // через in-memory `lastSentDate`). Не уверены, свободен ли лок —
+        // пропускаем тик, следующий (через минуту) попробует снова.
+        console.warn('[dailyReport] Redis-лок не проверить (ошибка), пропускаю тик:', err instanceof Error ? err.message : err);
+        return;
       }
-    } catch (err) {
-      console.warn('[dailyReport] Redis недоступен, полагаюсь на in-memory флаг:', err);
-    }
 
-    try {
-      const { sendDailyMoscowReport } = await import('./lib/jobs/dailyMoscowReport');
-      await sendDailyMoscowReport();
-      lastSentDate = date;
-      if (redis) await redis.set(`daily-report:sent:${date}`, '1', 'EX', 24 * 3600).catch(() => {});
-      console.log(`[dailyReport] отчёт за ${date} отправлен пользователю ${recipient}`);
-    } catch (err) {
-      // НЕ ставим флаг «отправлено» — следующий тик (через минуту) попробует снова,
-      // пока не кончится окно 18:00–19:59.
-      console.error('[dailyReport] отправка не удалась, повтор через минуту:', err);
-      if (redis) await redis.del(`daily-report:attempt:${date}`).catch(() => {});
+      try {
+        const { sendDailyMoscowReport } = await import('./lib/jobs/dailyMoscowReport');
+        await sendDailyMoscowReport();
+        lastSentDate = date;
+        if (redis) await redis.set(`daily-report:sent:${date}`, '1', 'EX', 24 * 3600).catch(() => {});
+        console.log(`[dailyReport] отчёт за ${date} отправлен пользователю ${recipient}`);
+      } catch (err) {
+        // НЕ ставим флаг «отправлено» — следующий тик (через минуту) попробует снова,
+        // пока не кончится окно 18:00–19:59.
+        console.error('[dailyReport] отправка не удалась, повтор через минуту:', err);
+        if (redis) await redis.del(`daily-report:attempt:${date}`).catch(() => {});
+      }
     } finally {
       running = false;
     }
