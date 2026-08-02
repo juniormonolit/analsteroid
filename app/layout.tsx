@@ -1,9 +1,25 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
+// PWA-метаданные (задача 2764, «ЛК как мобильное приложение»). Манифест —
+// app/manifest.ts (Next сам линкует), иконки — app/apple-icon.png +
+// public/icons/*.png (scripts/generate-pwa-icons.mjs). appleWebApp здесь
+// автоматически рендерит apple-mobile-web-app-capable/-status-bar-style/
+// -title — руками эти <meta> не пишем.
 export const metadata: Metadata = {
   title: 'Монолитика',
   description: 'BI-аналитика продаж',
+  appleWebApp: {
+    capable: true,
+    // 'default' — статус-бар остаётся непрозрачным (безопасный выбор: контент
+    // не залезает под системные часы/индикаторы). 'black-translucent' дал бы
+    // полноэкранный вид, но требует safe-area-padding ВЕЗДЕ в шапке — сейчас
+    // env(safe-area-inset-*) применён только в components/ui/Modal.tsx (см.
+    // аудит), включать раньше, чем это закрыто — риск обрезанного контента
+    // под чёлкой на iPhone.
+    statusBarStyle: 'default',
+    title: 'Монолитика',
+  },
 };
 
 export const viewport: Viewport = {
@@ -11,6 +27,13 @@ export const viewport: Viewport = {
   initialScale: 1,
   // viewportFit=cover — чтобы работали env(safe-area-inset-*) на iPhone с вырезом
   viewportFit: 'cover',
+  // Цвет системной строки состояния/адресной строки браузера — те же токены,
+  // что --color-bg светлой/тёмной темы (app/globals.css), чтобы не изобретать
+  // отдельный «PWA-цвет» рассинхронизированный с самим приложением.
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#f8f9fa' },
+    { media: '(prefers-color-scheme: dark)', color: '#14161b' },
+  ],
 };
 
 // Анти-вспышка тёмной темы (владелец утвердил макет, задача Николая): читает зеркало

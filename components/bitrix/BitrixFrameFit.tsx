@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { useAppMode } from '@/lib/hooks/useAppMode';
 
 // Подгоняет высоту iframe под контент внутри Битрикса. Без этого портал держит
 // фрейм фиксированной высоты и карточка обрезается (у неё высота меняется по мере
@@ -17,9 +18,14 @@ declare global {
 const SDK_URL = 'https://api.bitrix24.com/api/v1/';
 
 export function BitrixFrameFit() {
+  // Режим запуска — единый механизм (задача 2764, useAppMode). Раньше здесь была
+  // своя проверка `window.self === window.top`; теперь та же проверка живёт
+  // только в lib/hooks/useAppMode.ts, а тут — просто читается.
+  const { isBitrixIframe } = useAppMode();
+
   useEffect(() => {
     // Вне iframe делать нечего
-    if (window.self === window.top) return;
+    if (!isBitrixIframe) return;
 
     let observer: ResizeObserver | null = null;
     let cancelled = false;
@@ -46,7 +52,13 @@ export function BitrixFrameFit() {
     }
 
     return () => { cancelled = true; observer?.disconnect(); };
-  }, []);
+    // isBitrixIframe зависит от useSyncExternalStore (useAppMode) — на SSR/первом
+    // клиентском рендере снимок всегда `false` (getServerSnapshot), реальное
+    // значение внутри настоящего iframe приходит ОДНИМ рендером позже, сразу
+    // после гидрации. С пустым deps-массивом эффект захватил бы устаревший
+    // `false` навсегда и BX24 внутри Битрикса никогда бы не подгружался —
+    // поэтому isBitrixIframe обязателен в зависимостях.
+  }, [isBitrixIframe]);
 
   return null;
 }
