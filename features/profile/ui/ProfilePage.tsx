@@ -11,6 +11,7 @@ import { useTheme, type Theme } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
 import { ReportsTrashCard } from './ReportsTrashCard';
 import { BotSubscriptionSettings } from './BotSubscriptionSettings';
+import { MyFeedbackLog } from './MyFeedbackLog';
 
 interface Me {
   user: {
@@ -360,8 +361,12 @@ export function ProfilePage() {
 
             {tab === 'notifications' && (
               /* Личные настройки подписки на бота «Аналитик» (задача 2765, 02.08) —
-                 «это его личка», настройки видны и редактируемы только самим менеджером. */
-              <BotSubscriptionSettings />
+                 «это его личка», настройки видны и редактируемы только самим менеджером.
+                 Плюс личный журнал сигналов «Мои замечания» — своё, ниже настроек. */
+              <div className="flex flex-col gap-4">
+                <BotSubscriptionSettings />
+                <MyFeedbackLog />
+              </div>
             )}
           </div>
         </div>
