@@ -6,6 +6,79 @@
 
 ---
 
+## 2026-08-02 — ЛК как мобильное приложение, этап 2: useAppMode + PWA-фундамент (задача 2764)
+
+**useAppMode — единый механизм режима запуска.** `lib/hooks/useAppMode.ts`: четыре
+режима `bitrix-iframe` / `standalone` / `mobile` / `desktop` (иерархия — iframe
+перекрывает остальное, дальше standalone, дальше по ширине вьюпорта) + отдельный
+флаг `isMobileLayout` для решений про раскладку (не привязан к `mode` напрямую —
+`standalone` тоже может быть широким). SSR-safe, тот же паттерн
+`useSyncExternalStore`, что уже был в `lib/hooks/useMediaQuery.ts` — новый паттерн
+в проект не завозился. Контракт задокументирован в `DESIGN_GUIDELINES.md` («Режимы
+запуска»), правило 11 в `CLAUDE.md` — новый UI обязан спрашивать хук, а не
+изобретать свою проверку `window.self`/`matchMedia`/UA.
+
+**Первый реальный потребитель — `components/bitrix/BitrixFrameFit.tsx`**, у него
+раньше была своя проверка `window.self === window.top`, теперь читает
+`isBitrixIframe`. При рефакторинге поймана и сразу починена SSR-ловушка: значение из
+`useSyncExternalStore` добирается до настоящего внутри-iframe `true` ОДНИМ рендером
+позже гидрации, а `useEffect` был с пустым `[]` — с пустыми deps эффект захватил бы
+устаревший `false` навсегда, и BX24 внутри настоящего Битрикса перестал бы
+подгружаться. Deps исправлены на `[isBitrixIframe]`.
+
+**PWA-фундамент.** `app/manifest.ts` (Next file convention — `/manifest.webmanifest`
+линкуется сам), `start_url: '/manager/me'` (у ЛК, в отличие от дашборда в целом, есть
+осмысленный дефолтный экран — то, что владелец просит «поставить на экран»).
+Иконки — мастер `public/icons/icon-mark.svg` (тот же знак «Монолитика», что
+`app/icon.svg`/`BrandLogo.tsx`, отмасштабирован ×9 с safe-zone под maskable) →
+192/512 + maskable-варианты + `app/apple-icon.png`, генерация —
+`scripts/generate-pwa-icons.mjs` (sharp; PNG не редактировать руками, перегенерировать
+скриптом при правке логотипа). `app/layout.tsx`: `metadata.appleWebApp`
+(`apple-mobile-web-app-status-bar-style`/`-title`, `statusBarStyle: 'default'` —
+`black-translucent` дал бы полноэкранный вид, но safe-area пока закрыта только в
+`Modal.tsx`, рано) + `viewport.themeColor` светлая/тёмная (те же токены `--color-bg`,
+что в `globals.css`, не отдельный «PWA-цвет»).
+
+**Догон посреди этапа: `apple-mobile-web-app-capable` Next не рендерит.** Проверка
+живьём на проде (`curl /login`) после первого деплоя этапа показала: `appleWebApp.capable`
+в Next 16.2.9 выдаёт только непрефиксованный `mobile-web-app-capable`, а легаси
+`apple-mobile-web-app-capable` — тег, от которого на iOS Safari реально зависит
+полноэкранный запуск с домашнего экрана без урезанной адресной строки — не пишет
+вовсе. Дописан руками через `metadata.other`, подтверждено повторной живой проверкой.
+
+**Баг-догон, найден проверкой живьём: гейт авторизации резал PWA-ассеты.**
+`proxy.ts` редиректил `/manifest.webmanifest` и все иконки на `/login` (307) для
+неавторизованных — браузер не идёт по редиректу, проверяя манифест на
+установку, то есть «Добавить на экран» никогда бы не появилось, и до входа вкладка
+была бы без иконки вовсе. `/manifest.webmanifest`, `/icon.svg`, `/apple-icon.png`,
+`/icons` добавлены в `PUBLIC`-аллоулист `proxy.ts`. Это чисто раздача статики —
+`/manager/me` и прочие настоящие страницы по-прежнему 307 без сессии, гейт не
+ослаблен.
+
+**Проверка перед каждым деплоем этапа:** `npm run typecheck` — чисто;
+`npm run lint:responsive` — чисто (0 новых); `npm run build` — успешно. Живая
+проверка на проде после каждого из трёх деплоев этапа (два фикса догнали в
+процессе, каждый передеплоен отдельно с бэкапом): `/manifest.webmanifest` → 200
+`application/manifest+json` с корректным JSON; все иконки → 200; `/login` содержит
+`theme-color`×2, `link rel="manifest"`, `mobile-web-app-capable`,
+`apple-mobile-web-app-capable`(после догона), `apple-mobile-web-app-title`,
+`apple-mobile-web-app-status-bar-style`, `link rel="apple-touch-icon"`;
+`/manager/me` без сессии — по-прежнему 307; `/bx/manager` без сессии — по-прежнему
+200 с текстовой заглушкой (гейт для настоящих страниц не тронут).
+
+**Деплой.** Коммиты `bb47846` (useAppMode+PWA) → `57feb05` (догон
+apple-mobile-web-app-capable), оба в `origin/dev-asteroid`, fast-forward. Бэкапы
+прод-каталога: `analsteroid-prod-backup-etap2-20260802-161659.tar.gz`,
+`analsteroid-prod-backup-etap2fix-20260802-162055.tar.gz`. BUILD_ID:
+`xbdfTD46s3y-rxGlOpi9s` → `d618_nw27DLAExdO-tPY0` → `rPlONLUSCguvG7r0hjgPn` (финал).
+
+**Дальше — этап 3** (не в этом коммите): нижний таб-бар на мобиле/standalone вместо
+гамбургера (десктоп — как сейчас), синхронизация вкладок ЛК с URL (deep links +
+«назад» листает вкладки), 4 самописные модалки ЛК → `components/ui/Modal`
+(bottom-sheet на мобиле), удаление `window.confirm`/`window.prompt` в ЛК.
+
+---
+
 ## 2026-08-02 — ЛК как мобильное приложение, этап 1: баги, ломающие сейчас (задача 2764)
 
 **Контекст.** Владелец («го» на аудит `owners-inbox/analsteroid-mobile-readiness.md`):
