@@ -15,16 +15,17 @@ import type { PoolClient } from 'pg';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { isWorkingDayJs } from '@/lib/metrics/productionCalendar';
 import { cutoffForHeadGroup } from '@/features/offload/engine/cutoffs';
-import { BADGE_CATALOG, CROSS_SELL_PAIRS, type BadgeTier } from './catalog';
+import { BADGE_CATALOG, CROSS_SELL_PAIRS, TIER_LABELS, type BadgeTier } from './catalog';
 import { getManagerScopes, type ManagerScope } from './orgScopes';
-import { accrueCoins } from './coins';
+import { accrueCoins, getCurrencyName } from './coins';
 import { runWalletTick } from './wallet';
 import { CUSTOM_PREFIX, validateCustomCriteria, type CustomCriteria, type CustomMetric, type CustomPeriod } from './customTemplates';
-import { computeXpTick, writeXpLedger } from '@/features/xp/engine/xp';
+import { computeXpTick, writeXpLedger, titleForLevel, levelFromXp, loadXpSettings, fetchQuestXp } from '@/features/xp/engine/xp';
 import { questTick } from '@/features/quests/engine/quests';
 import { computeCategoryBadgeAwards } from './categoryBadges';
 import { computePlanningBadgeAwards } from './planningBadges';
 import { computeWalletBadgeAwards } from './walletBadges';
+import { pushViaAnalitik } from './notifications';
 
 export const RETRO_START = '2026-04-03'; // решение владельца: ретро с 03.04.2026
 
@@ -94,10 +95,10 @@ async function seedDefinitions(client: PoolClient): Promise<void> {
   }
 }
 
-interface DefRow { key: string; enabled: boolean; criteria: Record<string, unknown> }
+interface DefRow { key: string; name: string; enabled: boolean; criteria: Record<string, unknown> }
 
 async function loadDefs(client: PoolClient): Promise<Map<string, DefRow>> {
-  const res = await client.query<DefRow>(`SELECT key, enabled, criteria FROM badge_definitions`);
+  const res = await client.query<DefRow>(`SELECT key, name, enabled, criteria FROM badge_definitions`);
   return new Map(res.rows.map(r => [r.key, r]));
 }
 
@@ -509,6 +510,25 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     const defs = await loadDefs(client);
     const enabled = (key: string) => defs.get(key)?.enabled !== false;
     const crit = (key: string) => defs.get(key)?.criteria ?? {};
+    // Название валюты — один раз на весь прогон, все пуши ниже читают отсюда
+    // (getCurrencyName(), НЕ литерал — задача 2747/2759).
+    const currencyName = await getCurrencyName(client);
+
+    // Снимок квестового XP ДО тика квестов (questTick ниже переводит часть
+    // quests/quest_contracts в status='done' В ЭТОМ ЖЕ прогоне) — нужен для
+    // корректного «было / стало» в level-up пуше (задача 2759): без снимка ДО
+    // сравнение всегда показывало бы «прирост» на весь квестовый бонус, даже
+    // если реально изменился только счётчик сделок.
+    const questXpBefore = await fetchQuestXp(client);
+    const xpSettingsForLevel = await loadXpSettings(client);
+    const oldLedgerSumsRes = await client.query<{ bitrix_id: number; total: string }>(
+      `SELECT bitrix_id::int AS bitrix_id, sum(total_xp)::text AS total FROM xp_ledger GROUP BY 1`,
+    );
+    const oldLevelByMgr = new Map<number, number>();
+    for (const r of oldLedgerSumsRes.rows) {
+      const total = Math.round(Number(r.total)) + (questXpBefore.get(r.bitrix_id) ?? 0);
+      oldLevelByMgr.set(r.bitrix_id, levelFromXp(total, xpSettingsForLevel.levelBase, xpSettingsForLevel.levelExp));
+    }
 
     const scopes = await getManagerScopes();
     const awards: AwardRow[] = [];
@@ -856,9 +876,20 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     const xp = await computeXpTick(client, enabled);
     awards.push(...xp.awards);
 
+    // Цены наград (задача 2759, пуш «начислена награда») — читаем ДО транзакции,
+    // read-only, маленькая таблица.
+    const pricesRes = await client.query<{ badge_key: string; tier: string; price: number }>(
+      `SELECT badge_key, tier, price FROM badge_prices`,
+    );
+    const priceByKeyTier = new Map<string, number>(pricesRes.rows.map(r => [`${r.badge_key}:${r.tier}`, r.price]));
+
     // ── запись в БД ──────────────────────────────────────────────────────────
     let inserted = 0; let updated = 0;
     const byBadge: Record<string, number> = {};
+    // Свежие НЕ-тихие награды за этот прогон, для пуша ниже (задача 2759, п.1):
+    // criteria.silent=true (напр. «Ежедневный бонус», xp_level_up) — пропускаем,
+    // level up обрабатывается отдельным, точным пушем (см. ниже), не отсюда.
+    const freshAwardsByMgr = new Map<number, { name: string; tier: BadgeTier | null; price: number }[]>();
     await client.query('BEGIN');
     await writeXpLedger(client, xp.ledger);
     for (const a of awards) {
@@ -874,8 +905,17 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
         [a.bitrixId, a.badgeKey, a.tier, a.periodType, a.periodDate, a.value],
       );
       if (res.rows.length > 0) {
-        if (res.rows[0].is_insert) { inserted++; byBadge[a.badgeKey] = (byBadge[a.badgeKey] ?? 0) + 1; }
-        else updated++;
+        if (res.rows[0].is_insert) {
+          inserted++; byBadge[a.badgeKey] = (byBadge[a.badgeKey] ?? 0) + 1;
+          const def = defs.get(a.badgeKey);
+          const silent = def?.criteria?.silent === true || a.badgeKey === 'xp_level_up';
+          if (def && !silent) {
+            const price = priceByKeyTier.get(`${a.badgeKey}:${a.tier ?? '-'}`) ?? 0;
+            const list = freshAwardsByMgr.get(a.bitrixId) ?? [];
+            list.push({ name: def.name, tier: a.tier as BadgeTier | null, price });
+            freshAwardsByMgr.set(a.bitrixId, list);
+          }
+        } else updated++;
       }
     }
     // Валюта (задача 2657): начисление за все награды без транзакции в леджере —
@@ -887,6 +927,41 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     // та же транзакция и тот же идемпотентный путь (ночной тик = ретро = кнопка).
     const wallet = await runWalletTick(client);
     await client.query('COMMIT');
+
+    // ── пуши ботом «Аналитик» (задача 2759) — ПОСЛЕ коммита, best-effort ─────
+    // Награды (п.1): >4 за прогон на человека — сводкой одним сообщением.
+    for (const [bitrixId, list] of freshAwardsByMgr) {
+      if (list.length === 0) continue;
+      if (list.length <= 4) {
+        for (const it of list) {
+          const label = it.tier ? `${it.name} (${TIER_LABELS[it.tier]})` : it.name;
+          void pushViaAnalitik(bitrixId, `🏅 Новая награда: ${label}`, it.price > 0 ? `+${it.price} ${currencyName}` : undefined);
+        }
+      } else {
+        const sum = list.reduce((s, it) => s + it.price, 0);
+        const names = list.slice(0, 6).map(it => it.tier ? `${it.name} (${TIER_LABELS[it.tier]})` : it.name).join(', ');
+        void pushViaAnalitik(bitrixId, `🏅 Начислено ${list.length} наград`,
+          `${names}${list.length > 6 ? '…' : ''}${sum > 0 ? ` — суммарно +${sum} ${currencyName}` : ''}`);
+      }
+    }
+    // Level up / новый титул (п.2): сравнение «было/стало» по totalsByMgr этого
+    // тика vs снимку ДО (oldLevelByMgr, снят до тика квестов — см. выше).
+    for (const [bitrixId, total] of xp.totalsByMgr) {
+      const newLevel = levelFromXp(total, xpSettingsForLevel.levelBase, xpSettingsForLevel.levelExp);
+      const oldLevel = oldLevelByMgr.get(bitrixId) ?? 0;
+      if (newLevel <= oldLevel) continue;
+      const oldTitle = titleForLevel(oldLevel);
+      const newTitle = titleForLevel(newLevel);
+      void pushViaAnalitik(bitrixId, `⬆️ Новый уровень: ${newLevel}`,
+        oldTitle !== newTitle ? `Новый титул: ${newTitle}!` : `Титул: ${newTitle}`);
+    }
+    // «Скоро сгорит» (п.10): собрано в runWalletTick (тот же прогон, тот же
+    // недельный дедуп по человеку, что у in-app уведомления).
+    for (const w of wallet.expirySoonPushes) {
+      void pushViaAnalitik(w.bitrixId, `🔥 Скоро сгорит ${w.amount} ${currencyName}`,
+        `Через ${w.days} дн. истечёт срок жизни части начислений — потратьте их в магазине.`);
+    }
+
     return { inserted, updated, total: awards.length, byBadge, ...coins, ...wallet, ms: Date.now() - t0 };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

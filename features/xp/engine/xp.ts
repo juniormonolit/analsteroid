@@ -126,6 +126,10 @@ export interface XpTickResult {
   ledger: XpLedgerRow[];
   awards: XpAwardRow[];
   stats: { deals: number; managers: number; totalXp: number; boundedManagers: number };
+  // Итоговый total XP (леджер сделок ЭТОГО тика + квестовый бонус) по менеджеру —
+  // задача 2759 (level up push): нужен для сравнения со «старым» уровнем ДО
+  // перезаписи xp_ledger, без пересчёта той же формулы дважды в двух модулях.
+  totalsByMgr: Map<number, number>;
 }
 
 // ── границы людей (слот-модель) ──────────────────────────────────────────────
@@ -363,9 +367,17 @@ export async function computeXpTick(
     return d.toISOString().slice(0, 10);
   };
   const questXp = await fetchQuestXp(system);
+  // total XP по менеджеру — считаем ДЛЯ ВСЕХ (не только при enabled('xp_level_up')):
+  // задача 2759 держит на этом level-up push независимо от того, включён ли
+  // тихий бейдж xp_level_up в каталоге.
+  const totalsByMgr = new Map<number, number>();
+  for (const mgr of new Set([...byMgr.keys(), ...questXp.keys()])) {
+    const rows = byMgr.get(mgr) ?? [];
+    totalsByMgr.set(mgr, rows.reduce((s, r) => s + r.totalXp, 0) + (questXp.get(mgr) ?? 0));
+  }
   if (isBadgeEnabled('xp_level_up')) {
     for (const [mgr, rows] of byMgr) {
-      const total = rows.reduce((s, r) => s + r.totalXp, 0) + (questXp.get(mgr) ?? 0);
+      const total = totalsByMgr.get(mgr) ?? (rows.reduce((s, r) => s + r.totalXp, 0) + (questXp.get(mgr) ?? 0));
       const level = levelFromXp(total, settings.levelBase, settings.levelExp);
       for (let n = 1; n <= level; n++) {
         awards.push({ bitrixId: mgr, badgeKey: 'xp_level_up', tier: null, periodType: 'day', periodDate: synthDate(n), value: n });
@@ -442,6 +454,7 @@ export async function computeXpTick(
       totalXp: ledger.reduce((s, r) => s + r.totalXp, 0),
       boundedManagers,
     },
+    totalsByMgr,
   };
 }
 

@@ -650,12 +650,47 @@ function questProgress(q: QuestRow, deals: PeriodDeal[]): number {
   }
 }
 
+// Слоты SLOT_LABELS для читаемого текста пуша (задача 2759, п.6) — держим
+// маленький локальный словарь, не тянем UI-константы из features/quests/ui.
+const SLOT_LABELS_RU: Record<string, string> = {
+  day: 'Дневной', week1: 'Недельный', week2: 'Недельный', month: 'Месячный', extra: 'Доп.',
+};
+
+/** Переводит просроченные активные квесты в failed и шлёт пуш «Аналитиком»
+ *  (задача 2759, п.6: «провалил — ничего не теряешь», просто уведомление, без
+ *  штрафов). Global UPDATE (не по конкретному mgr) — вызывается и из questTick
+ *  (ночной прогон), и из refreshQuests (открыл таб «Квесты») — идемпотентно:
+ *  WHERE status='active' ловит каждую строку РОВНО один раз, кто бы первый ни
+ *  зашёл, поэтому безопасно звать из обоих мест без риска задвоить пуш. */
+async function expireOverdueQuests(system: Pool, today: string): Promise<void> {
+  const failed = await system.query<{ bitrix_id: number; slot: string; title: string }>(
+    `UPDATE quests SET status='failed' WHERE status='active' AND period_end < $1
+     RETURNING bitrix_id::int AS bitrix_id, slot, title`,
+    [today],
+  );
+  if (failed.rows.length === 0) return;
+  const byMgr = new Map<number, { slot: string; title: string }[]>();
+  for (const r of failed.rows) (byMgr.get(r.bitrix_id) ?? byMgr.set(r.bitrix_id, []).get(r.bitrix_id)!).push(r);
+  for (const [mgr, list] of byMgr) {
+    if (list.length <= 4) {
+      for (const q of list) {
+        void pushViaAnalitik(mgr, `⏳ Квест сгорел: ${q.title}`,
+          `${SLOT_LABELS_RU[q.slot] ?? q.slot} слот не выполнен в срок — ничего не списано, квест просто исчез.`);
+      }
+    } else {
+      void pushViaAnalitik(mgr, `⏳ Сгорело ${list.length} квестов`,
+        `${list.slice(0, 6).map(q => q.title).join(', ')}${list.length > 6 ? '…' : ''} — ничего не списано.`);
+    }
+  }
+}
+
 /** Пересчёт прогресса активных квестов менеджера + автозачёт выполненных +
  *  провал просроченных. Возвращает свежие квесты текущих периодов + историю. */
 export async function refreshQuests(system: Pool, mgr: number): Promise<{ current: QuestRow[]; history: QuestRow[] }> {
   const today = mskToday();
-  // Просроченные активные — в failed (молча, без штрафов).
-  await system.query(`UPDATE quests SET status='failed' WHERE status='active' AND period_end < $1`, [today]);
+  // Просроченные активные — в failed (молча по деньгам — ничего не списывается;
+  // не молча по уведомлению — задача 2759 добавила пуш, см. expireOverdueQuests).
+  await expireOverdueQuests(system, today);
   await ensureQuests(system, mgr);
 
   const act = await system.query(`SELECT * FROM quests WHERE bitrix_id=$1 AND status='active'`, [mgr]);
@@ -882,7 +917,7 @@ export interface QuestAwardRow {
 
 export async function questTick(system: Pool, activeManagerIds: number[]): Promise<{ awards: QuestAwardRow[]; generatedFor: number }> {
   const today = mskToday();
-  await system.query(`UPDATE quests SET status='failed' WHERE status='active' AND period_end < $1`, [today]);
+  await expireOverdueQuests(system, today);
   // Доска контрактов (миграция 126): пул недели + прогресс/дедлайны взятых.
   try {
     const { ensureContractPool, refreshContracts } = await import('./contracts');

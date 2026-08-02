@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
+import { pushViaAnalitik } from '@/features/badges/engine/notifications';
 
 // Конвертация валют (доп. Серёги 31.07): ТОЛЬКО рубли → MLT (было «ебаллы»,
 // ребренд задачи 2747 — по курсу из настроек (badge_coin_settings.rub_to_eball_rate,
@@ -60,6 +61,8 @@ export async function POST(req: Request) {
       [id, eballs, session.login, `Конвертация ${amount} ₽ → ${eballs} ${currencyName} (курс ${rate})`, out.rows[0].id],
     );
     await client.query('COMMIT');
+    // Пуш «Аналитиком» (задача 2759, п.9) — ПОСЛЕ коммита, best-effort.
+    void pushViaAnalitik(id, `💱 Конвертация: ${amount} ₽ → ${eballs} ${currencyName}`, `Курс: 1 ₽ = ${rate} ${currencyName}`);
     return NextResponse.json({ ok: true, spentRub: amount, gainedEballs: eballs, rate });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

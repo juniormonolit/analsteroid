@@ -4,6 +4,7 @@ import { canViewManager } from '@/lib/org/managerAccess';
 import { systemDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { priceEball, priceRub, recomputeFifoRemaining } from '@/features/badges/engine/wallet';
+import { pushViaAnalitik } from '@/features/badges/engine/notifications';
 
 // Магазин призов, MVP (31.07): витрина + покупка + свой инвентарь.
 // Покупка = списание из леджера source='shop_purchase' (валюта по выбору из
@@ -152,7 +153,14 @@ export async function POST(req: NextRequest) {
     // FIFO (TTL ебаллов): списание расходует старейшие живые начисления —
     // точечный пересчёт остатков лотов покупателя в той же транзакции.
     if (currency === 'EBALL') await recomputeFifoRemaining(client, id);
+    // Название валюты — ДО коммита, пока client ещё жив (после client.release()
+    // в finally соединение уходит обратно в пул — использовать client после
+    // COMMIT нельзя, гонка с чужим запросом).
+    const unit = currency === 'RUB' ? '₽' : await getCurrencyName(client);
     await client.query('COMMIT');
+    // Пуш «Аналитиком» (задача 2759, п.4) — ПОСЛЕ коммита, best-effort.
+    void pushViaAnalitik(id, `🛍️ Покупка в магазине: ${item.name}`,
+      `−${price} ${unit}. Срок годности ${item.ttl_months} мес — в табе «Инвентарь».`);
     return NextResponse.json({ ok: true, inventoryId: inv.rows[0].id, paid: price, currency });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

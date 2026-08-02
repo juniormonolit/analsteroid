@@ -4,6 +4,7 @@ import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAcc
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { systemDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
+import { pushViaAnalitik } from '@/features/badges/engine/notifications';
 
 // Ручные поощрения/штрафы валютой (доп. Серёги 31.07 к 2657).
 // Право: админ/директор — на всех; РОП и любой с managed-отделами — ТОЛЬКО на
@@ -130,6 +131,16 @@ export async function POST(req: NextRequest) {
        VALUES ($1, NULL, NULL, $2, $2, 'manual_bonus', $3, $4, $5) RETURNING id`,
       [Number(bitrixId), amount, session.bitrixUserId ? Number(session.bitrixUserId) : null, session.login, comment],
     );
+    // Пуш «Аналитиком» (задача 2759, п.3): сумма, причина, новый баланс.
+    void (async () => {
+      try {
+        const [currencyName, newBalance] = await Promise.all([getCurrencyName(db), balanceOf(Number(bitrixId))]);
+        await pushViaAnalitik(Number(bitrixId), `🎁 Ручное поощрение: +${amount} ${currencyName}`,
+          `Причина: ${comment}. Баланс: ${newBalance} ${currencyName}`);
+      } catch (e) {
+        console.warn('[notify] пуш ручного поощрения не ушёл:', e instanceof Error ? e.message : e);
+      }
+    })();
     return NextResponse.json({ ok: true, id: r.rows[0].id, amount });
   }
 
@@ -152,6 +163,16 @@ export async function POST(req: NextRequest) {
        VALUES ($1, NULL, NULL, $2, $3, 'manual_penalty', $4, $5, $6, $7) RETURNING id`,
       [Number(bitrixId), -amount, amount, session.bitrixUserId ? Number(session.bitrixUserId) : null, session.login, comment, typeId],
     );
+    // Пуш «Аналитиком» (задача 2759, п.3): сумма, причина, новый баланс.
+    void (async () => {
+      try {
+        const [currencyName, newBalance] = await Promise.all([getCurrencyName(db), balanceOf(Number(bitrixId))]);
+        await pushViaAnalitik(Number(bitrixId), `⚠️ Штраф: −${amount} ${currencyName}`,
+          `Причина: ${t.rows[0].name}${comment ? ` — ${comment}` : ''}. Баланс: ${newBalance} ${currencyName}`);
+      } catch (e) {
+        console.warn('[notify] пуш штрафа не ушёл:', e instanceof Error ? e.message : e);
+      }
+    })();
     return NextResponse.json({ ok: true, id: r.rows[0].id, amount: -amount });
   }
 

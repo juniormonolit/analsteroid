@@ -186,10 +186,16 @@ export async function takeContract(system: Pool, mgr: number, contractId: number
        WHERE id=$1 RETURNING *`,
       [contractId, mgr, Number(led.rows[0].id)],
     );
+    // Название валюты — ДО коммита (client после релиза переиспользовать нельзя).
+    const currencyNameTaken = await getCurrencyName(client);
     await client.query('COMMIT');
     // пополняем пул вместо взятого
     void ensureContractPool(system).catch(() => {});
-    return { ok: true, contract: rowFromDb(upd.rows[0]) };
+    // Пуш «Аналитиком» (задача 2759, п.8): взятие контракта с доски.
+    const takenRow = rowFromDb(upd.rows[0]);
+    void pushViaAnalitik(mgr, `📋 Контракт взят: ${takenRow.title}`,
+      `Депозит −${takenRow.deposit} ${currencyNameTaken}, срок ${takenRow.days} дн. Награда: +${takenRow.rewardEballs} ${currencyNameTaken}, +${takenRow.rewardXp} XP.`);
+    return { ok: true, contract: takenRow };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;
@@ -241,12 +247,19 @@ export async function refreshContracts(system: Pool, mgr: number): Promise<{ min
     `UPDATE quest_contracts SET status='failed', done_at=now() WHERE status='taken' AND deadline < $1 RETURNING id, taken_by, title, deposit`,
     [today],
   );
-  for (const f of failed.rows as { taken_by: number; title: string; deposit: number }[]) {
-    await system.query(
-      `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award, currency, source, comment)
-       VALUES ($1, NULL, NULL, 0, 0, 'EBALL', 'contract_deposit_burn', $2)`,
-      [f.taken_by, `Депозит сгорел (−${f.deposit}): ${f.title}`],
-    );
+  if (failed.rows.length > 0) {
+    // Название валюты — один раз на все провалы этого вызова.
+    const currencyNameFailed = await getCurrencyName(system);
+    for (const f of failed.rows as { taken_by: number; title: string; deposit: number }[]) {
+      await system.query(
+        `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award, currency, source, comment)
+         VALUES ($1, NULL, NULL, 0, 0, 'EBALL', 'contract_deposit_burn', $2)`,
+        [f.taken_by, `Депозит сгорел (−${f.deposit}): ${f.title}`],
+      );
+      // Пуш «Аналитиком» (задача 2759, п.7): провал контракта, сгоревший депозит.
+      void pushViaAnalitik(f.taken_by, `💥 Контракт провален: ${f.title}`,
+        `Депозит сгорел: −${f.deposit} ${currencyNameFailed}. Кулдаун на взятие нового контракта.`);
+    }
   }
   const mineQ = await system.query(`SELECT * FROM quest_contracts WHERE taken_by=$1 AND status='taken' ORDER BY deadline`, [mgr]);
   for (const raw of mineQ.rows) {

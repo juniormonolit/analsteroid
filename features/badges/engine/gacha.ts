@@ -7,6 +7,7 @@ import { randomInt } from 'crypto';
 import type { Pool, PoolClient } from 'pg';
 import { recomputeFifoRemaining } from './wallet';
 import { createNotification, pushViaAnalitik } from './notifications';
+import { getCurrencyName } from './coins';
 
 export const PPM_TOTAL = 1_000_000;
 export const SOFT_PITY_FROM = 61;      // с 61-й крутки шанс редкого растёт
@@ -220,10 +221,19 @@ export async function runSpin(db: Pool, bitrixId: number): Promise<SpinResult | 
         link: '/manager/me',
       });
     }
+    // Название валюты — ДО коммита (client после client.release() в finally
+    // повторно использовать нельзя, гонка с чужим запросом из пула).
+    const currencyName = tier.rarity === 'common' ? await getCurrencyName(client) : null;
     await client.query('COMMIT');
     if (tier.rarity !== 'common') {
       void pushViaAnalitik(bitrixId,
         tier.rarity === 'jackpot' ? `ДЖЕКПОТ в гаче: ${tier.name}!` : `Редкий приз в гаче: ${tier.name}`);
+    } else {
+      // Обычный приз (задача 2759, п.5): тише редкого/джекпота, без «!» и без
+      // in-app уведомления (createNotification выше не пишется для common —
+      // не трогаем это поведение), только короткий пуш ботом.
+      void pushViaAnalitik(bitrixId, `🎰 Гача: ${tier.name}`,
+        tier.prize_type === 'eball' ? `+${tier.eball_amount} ${currencyName}` : 'Приз упал в ваш инвентарь.');
     }
 
     const gained = tier.prize_type === 'eball' ? (tier.eball_amount ?? 0) : 0;
