@@ -38,7 +38,7 @@ export function DealChatsPage() {
 
   return (
     // <main> AppShell — overflow-hidden: скролл-контейнер страницы свой (как SummaryPage).
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
     <div className="p-4 sm:p-6 max-w-3xl">
       <div className="flex items-baseline gap-3 mb-4">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Чаты по сделкам</h1>

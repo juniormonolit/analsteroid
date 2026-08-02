@@ -154,7 +154,7 @@ export function OffloadPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
       <div className="p-3 sm:p-6 max-w-[1500px] mx-auto pb-24">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
           <h1 className="text-lg font-semibold text-[var(--color-text)]">Разгрузка отделов</h1>

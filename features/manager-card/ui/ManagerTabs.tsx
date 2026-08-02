@@ -5,7 +5,7 @@
 // Только mode='manager': у агрегата отдела нет одной личности/полки/баланса,
 // там прежняя структура (полка РОПа + «Моя команда» — не теряются).
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
@@ -41,23 +41,92 @@ export function ManagerTabBar({ active, onChange, hidden }: {
   hidden?: ManagerTabKey[];
 }) {
   const tabs = hidden?.length ? MANAGER_TABS.filter(t => !hidden.includes(t.key)) : MANAGER_TABS;
+
+  // Мобильное поведение полосы вкладок (задача 2779 — владелец со скрина: полоса
+  // обрезана по краю, непонятно, что листается; следом — уточнение: без
+  // собственного скролл-контейнера полоса РАСПИРАЛА ВСЮ СТРАНИЦУ по горизонтали).
+  // Скролл-контейнер уже был (overflow-x-auto ниже), но: 1) без видимого
+  // индикатора «есть продолжение» — человек не понимает, что можно листать;
+  // 2) активная вкладка не попадала в видимую область при заходе по прямой
+  // ссылке (deep link на «Инвентарь» — а видно «Профиль»); 3) сам факт, что
+  // страница ехала целиком — отдельный баг родительской обёртки, см. фикс
+  // min-w-0/overflow-x-hidden в ManagerCardPage.tsx, тут его нет и не будет.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [fade, setFade] = useState({ left: false, right: false });
+  const firstRun = useRef(true);
+
+  const updateFade = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setFade({
+      left: el.scrollLeft > 2,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 2,
+    });
+  }, []);
+
+  useEffect(() => {
+    updateFade();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', updateFade, { passive: true });
+    const ro = new ResizeObserver(updateFade);
+    ro.observe(el);
+    return () => { el.removeEventListener('scroll', updateFade); ro.disconnect(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [updateFade, tabs.length]);
+
+  useEffect(() => {
+    // Автоскролл активной вкладки в видимую область — обязательное условие
+    // задачи: заход по прямой ссылке (?tab=inventory) должен сразу показывать,
+    // какая вкладка активна, а не оставлять её за правым краем. Первый заход —
+    // без анимации (иначе полоса дёргается сразу после открытия страницы),
+    // переключение табов кликом — плавно.
+    const el = scrollRef.current;
+    if (!el) return;
+    const activeBtn = el.querySelector<HTMLElement>(`[data-tab-key="${active}"]`);
+    activeBtn?.scrollIntoView({ behavior: firstRun.current ? 'auto' : 'smooth', inline: 'nearest', block: 'nearest' });
+    firstRun.current = false;
+  }, [active]);
+
   return (
-    // Узкий вьюпорт (Битрикс-iframe): горизонтальный скролл вместо развала сетки.
-    <div className="flex gap-1 overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1">
-      {tabs.map(t => (
-        <button
-          key={t.key}
-          type="button"
-          onClick={() => onChange(t.key)}
-          className={`flex-1 whitespace-nowrap rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
-            active === t.key
-              ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
-              : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
+    <div className="relative">
+      <div
+        ref={scrollRef}
+        className="scroll-x scrollbar-none flex snap-x snap-proximity gap-1 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1"
+      >
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            type="button"
+            data-tab-key={t.key}
+            onClick={() => onChange(t.key)}
+            className={`min-h-11 flex-1 snap-start whitespace-nowrap rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${
+              active === t.key
+                ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {/* Градиент-затухание у края — единственный индикатор «есть продолжение»,
+          который остаётся честным (появляется/пропадает по факту scrollLeft),
+          а не декоративная стрелка, которая может соврать. Цвет фона строго
+          --color-bg-surface — тот же, что у самой полосы, иначе на границе
+          будет видна ступенька. */}
+      {fade.left && (
+        <div
+          className="pointer-events-none absolute inset-y-0 left-0 w-6 rounded-l-2xl"
+          style={{ background: 'linear-gradient(to right, var(--color-bg-surface), transparent)' }}
+        />
+      )}
+      {fade.right && (
+        <div
+          className="pointer-events-none absolute inset-y-0 right-0 w-6 rounded-r-2xl"
+          style={{ background: 'linear-gradient(to left, var(--color-bg-surface), transparent)' }}
+        />
+      )}
     </div>
   );
 }

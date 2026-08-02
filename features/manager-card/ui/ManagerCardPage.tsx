@@ -368,7 +368,15 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   return (
     // <main> в AppShell — overflow-hidden: страница сама несёт скролл-контейнер
     // (тот же паттерн, что SummaryPage). Ширина резиновая — без max-w (правка владельца).
-    <div className="h-full overflow-y-auto bg-[var(--color-bg)]">
+    // overflow-x-hidden — задача 2779, защита «на будущее»: overflow-y: auto без
+    // явного overflow-x по спецификации CSS трактуется браузером как auto по
+    // ОБЕИМ осям (не только вертикальной) — любой будущий ребёнок с той же
+    // ошибкой (flex-item без min-w-0) снова утащит вбок страницу целиком, а
+    // не проявится как «просто что-то криво выглядит». Явный overflow-x-hidden
+    // здесь делает страницу вертикально-only-скроллящейся раз и навсегда —
+    // горизонтальный скролл должен жить ТОЛЬКО внутри собственных
+    // scroll-контейнеров конкретных виджетов (scroll-x/полоса вкладок и т.п.).
+    <div className="h-full overflow-y-auto overflow-x-hidden bg-[var(--color-bg)]">
     <div className="p-4 sm:p-6 w-full flex flex-col gap-4 sm:gap-5">
       {/* ── Плашка «чужой кабинет» (задача 2771) — строго read-only просмотр:
           явно видно, чей это ЛК, и как вернуться к своему. forceReadOnly
@@ -397,8 +405,17 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       )}
       {/* ── Табы ЛК (только карточка менеджера) ── */}
       {tabbed && (
-        <div className="flex items-stretch gap-2">
-          <div className="flex-1"><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
+        // min-w-0 — задача 2779 (владелец: свайп по табам утащил ВСЮ страницу
+        // вбок, не только полосу вкладок). Причина: flex-item без min-w-0
+        // держится за content-based минимальную ширину ребёнка — у ManagerTabBar
+        // это 7 кнопок целиком, а не то, что реально помещается. Родительский
+        // overflow-y-auto (см. ниже) при этом по спецификации CSS ведёт себя
+        // как overflow: auto по ОБЕИМ осям, раз хоть одна не visible — так
+        // лишний невидимый min-w-0 избыток и утаскивал ВЕСЬ body по горизонтали,
+        // а не оставался внутри scroll-контейнера самой полосы (тот scroll-x
+        // формально был, но родитель не давал ему стать реальной границей).
+        <div className="flex min-w-0 items-stretch gap-2">
+          <div className="min-w-0 flex-1"><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
           {showBadges && <NotificationsBell />}
         </div>
       )}

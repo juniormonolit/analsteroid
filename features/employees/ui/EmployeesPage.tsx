@@ -217,7 +217,7 @@ export function EmployeesPage() {
   return (
     // h-full overflow-y-auto — AppShell main стоит в overflow-hidden, без своего
     // скролл-контейнера страница не прокручивается (тот же фикс, что /charts, 0bdd06f).
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
     <div className="p-4 md:p-6">
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="text-lg font-semibold">Сотрудники</h1>

@@ -226,15 +226,17 @@ body {
 }
 
 /* Расширенная зона нажатия для мелких иконок-кнопок (чекбоксы, chevron, trash).
-   Визуальный размер не меняется, hit-area растёт до ~44px. Родитель должен быть
-   position: relative (у кнопок это почти всегда так и есть — иначе добавить). */
+   Визуальный размер не меняется, hit-area растёт до 44px (канон тач-таргета —
+   было 40px, поднято в задаче 2779 заодно, раз уж требование «не меньше 44px»
+   стало явным правилом задачи). Родитель должен быть position: relative
+   (у кнопок это почти всегда так и есть — иначе добавить). */
 .tap-target { position: relative; }
 .tap-target::after {
   content: '';
   position: absolute;
   inset: 50% auto auto 50%;
-  width: max(100%, 40px);
-  height: max(100%, 40px);
+  width: max(100%, 44px);
+  height: max(100%, 44px);
   transform: translate(-50%, -50%);
 }
 
@@ -244,6 +246,14 @@ body {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
 }
+
+/* Скрыть нативный скроллбар у горизонтальных лент (табы, чипы) — задача 2779:
+   свой индикатор «есть продолжение» (градиент-затухание, ставится в месте
+   использования) читается яснее тонкой системной полосы, особенно на iOS,
+   где скроллбар и так виден только во время скролла. Сам скролл остаётся
+   рабочим (мышью/тачем/клавиатурой) — прячется только визуальный трек. */
+.scrollbar-none { scrollbar-width: none; -ms-overflow-style: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
 
 /* Убрать серую вспышку при тапе на интерактивные элементы (iOS/Android) */
 button, a { -webkit-tap-highlight-color: transparent; }

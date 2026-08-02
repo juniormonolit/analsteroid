@@ -332,7 +332,7 @@ export function ChartsPage() {
     // поэтому страница обязана сама открыть свою скролл-область (как home/page.tsx,
     // metrics/page.tsx и т.д.). До третьего графика (задача 2533, 29.07) контент
     // всегда помещался по высоте и без этого — баг был скрыт, а не отсутствовал.
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
     <div className="p-3 sm:p-6 max-w-[1400px] mx-auto">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Графики</h1>

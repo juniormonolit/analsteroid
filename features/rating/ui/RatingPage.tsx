@@ -171,7 +171,7 @@ export function RatingPage() {
   }, [rows, sort, balances, shelves, xpMap]);
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
       <div className="p-4 sm:p-6 flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

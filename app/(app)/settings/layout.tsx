@@ -23,7 +23,13 @@ export default async function SettingsLayout({ children }: { children: React.Rea
       {/* md:w-48→md:w-60 (правка 10.07, msg 500): «Режим дневного плана» и другие
           длинные названия разделов еле влезали в 192px, обрезаясь/переносясь.
           Контентная часть (flex-1 справа) не тронута — растёт колонка НАВИГАЦИИ. */}
-      <aside className="md:w-60 shrink-0 border-b md:border-b-0 md:border-r border-[var(--color-border)] bg-[var(--color-bg-surface)] flex flex-col">
+      {/* min-w-0 — задача 2779 (проверка «та же болячка» на других лентах вкладок):
+          на телефоне <nav overflow-x-auto> внутри рендерит горизонтальную ленту
+          разделов настроек (SettingsSidebar, whitespace-nowrap shrink-0 пункты).
+          Без min-w-0 на этом flex-item тот же риск, что был у ManagerTabBar —
+          пункты могли распереть <aside> шире вьюпорта вместо скролла внутри
+          собственного overflow-x-auto. */}
+      <aside className="md:w-60 min-w-0 shrink-0 border-b md:border-b-0 md:border-r border-[var(--color-border)] bg-[var(--color-bg-surface)] flex flex-col">
         <div className="px-4 py-3 border-b border-[var(--color-border)] hidden md:block">
           <h2 className="text-sm font-semibold text-[var(--color-text)]">Настройки</h2>
         </div>

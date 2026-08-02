@@ -581,6 +581,12 @@ const TABS = [
 ] as const;
 type TabKey = typeof TABS[number]['key'];
 
+// Табы этой страницы уже переносятся на новую строку (flex-wrap) — та же
+// болячка, что у ManagerTabBar/ReportTabsBar (полоса шире экрана, обрезана,
+// активная вкладка не видна), тут структурно невозможна: нечему прятаться за
+// краем, всё видно всегда. Задача 2779 проверяла именно этот класс бага — его
+// здесь нет. Тач-таргет всё равно поднят до 44px на мобильном (было ~36px) —
+// отдельное требование брифа, sm: возвращает прежнюю компактную высоту на десктопе.
 function TabBar({ active, onChange }: { active: TabKey; onChange: (k: TabKey) => void }) {
   return (
     <div className="mb-4 flex flex-wrap gap-1 border-b border-[var(--color-border)]">
@@ -589,7 +595,7 @@ function TabBar({ active, onChange }: { active: TabKey; onChange: (k: TabKey) =>
           key={t.key}
           type="button"
           onClick={() => onChange(t.key)}
-          className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+          className={`min-h-11 sm:min-h-0 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
             active === t.key
               ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
               : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
