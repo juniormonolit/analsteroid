@@ -3,9 +3,15 @@ import './globals.css';
 
 // PWA-метаданные (задача 2764, «ЛК как мобильное приложение»). Манифест —
 // app/manifest.ts (Next сам линкует), иконки — app/apple-icon.png +
-// public/icons/*.png (scripts/generate-pwa-icons.mjs). appleWebApp здесь
-// автоматически рендерит apple-mobile-web-app-capable/-status-bar-style/
-// -title — руками эти <meta> не пишем.
+// public/icons/*.png (scripts/generate-pwa-icons.mjs). appleWebApp ниже
+// рендерит apple-mobile-web-app-status-bar-style/-title и (только!) новый
+// НЕпрефиксованный mobile-web-app-capable — проверено живьём на проде
+// (curl /login), Next 16.2.9 apple-mobile-web-app-capable САМ не пишет,
+// хотя это ровно тот тег, от которого на iOS Safari зависит полноэкранный
+// запуск с домашнего экрана (без него на некоторых версиях iOS в
+// standalone всё равно остаётся урезанная адресная строка). Дописан руками
+// через `other` — не полагаться на то, что появится молча в будущей версии
+// Next, тег обязателен явно.
 export const metadata: Metadata = {
   title: 'Монолитика',
   description: 'BI-аналитика продаж',
@@ -19,6 +25,9 @@ export const metadata: Metadata = {
     // под чёлкой на iPhone.
     statusBarStyle: 'default',
     title: 'Монолитика',
+  },
+  other: {
+    'apple-mobile-web-app-capable': 'yes',
   },
 };
 
