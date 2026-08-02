@@ -386,9 +386,24 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
               )}
             </div>
           </div>
-          <div className="flex flex-col items-end gap-2">
+          {/* Баланс/действия — задача 2778 (скрин владельца с iPhone, 375px):
+              блок был БЕЗ ограничителя ширины, а средняя колонка (имя/отдел/стаж)
+              — min-w-0 flex-1 (может сжиматься до нуля). Итог: flex-wrap на
+              родителе никогда не срабатывал — браузер предпочитал сжать среднюю
+              колонку в нитку, а не перенести этот блок на новую строку, плашка
+              баланса налезала поверх текста. Тот же приём, что уже есть в hero
+              ManagerCardPage.tsx (комментарий «на узком экране... содержимое
+              этого блока... с shrink-0 и без переноса оно уезжало за край»):
+              w-full на мобильном заставляет блок занять всю строку целиком —
+              с flex-wrap на родителе это и есть перенос на новую строку; с sm —
+              прежнее поведение (нерастяжимая группа справа). */}
+          <div className="flex flex-col items-end gap-2 w-full sm:w-auto sm:shrink-0">
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {(extra?.rubBalance ?? 0) !== 0 && <RubPill balance={extra!.rubBalance} big />}
+              {/* Рублёвый баланс — теперь ВСЕГДА виден, включая 0 (правка
+                  владельца 02.08: «не вижу рублевого счета вообще. Если 0
+                  пусть будет 0» — раньше плашка пряталась целиком при
+                  balance===0, из-за чего казалось, что кошелька нет вовсе). */}
+              <RubPill balance={extra?.rubBalance ?? 0} big />
               <BalancePill balance={shelfData?.balance ?? 0} currencyName={shelfData?.currencyName ?? 'MLT'} big />
             </div>
             <ExpiringPill expiring={extra?.expiring} currencyName={shelfData?.currencyName ?? 'MLT'} />
@@ -707,7 +722,10 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
   }
 
   const requests = payouts?.requests ?? [];
-  if (!isSelf && rub === 0) return null;
+  // Раньше секция целиком пряталась у чужой карточки с нулевым рублёвым
+  // балансом — правка владельца 02.08 («если 0 пусть будет 0») отменяет это:
+  // кошелёк виден всегда, просто с 0 ₽ и неактивными кнопками действий
+  // (уже была своя защита disabled={... || rub <= 0} на самих кнопках).
 
   return (
     <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
@@ -1026,7 +1044,8 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
     <div className="flex flex-col gap-4 sm:gap-5">
       <div className="flex flex-wrap items-center gap-2">
         <BalancePill balance={data?.balance ?? 0} currencyName={currencyName} />
-        {(data?.rubBalance ?? 0) !== 0 && <RubPill balance={data!.rubBalance} />}
+        {/* Всегда виден, включая 0 (правка владельца 02.08) — см. ProfileTab. */}
+        <RubPill balance={data?.rubBalance ?? 0} />
         {onGoInventory && (
           <button type="button" onClick={onGoInventory}
             className="ml-auto text-xs font-semibold text-[var(--color-accent)] hover:underline">
@@ -1205,7 +1224,8 @@ export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf:
     <div className="flex flex-col gap-4 sm:gap-5">
       <div className="flex flex-wrap items-center gap-2">
         <BalancePill balance={data?.balance ?? 0} currencyName={currencyName} />
-        {(data?.rubBalance ?? 0) !== 0 && <RubPill balance={data!.rubBalance} />}
+        {/* Всегда виден, включая 0 (правка владельца 02.08) — см. ProfileTab. */}
+        <RubPill balance={data?.rubBalance ?? 0} />
         {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
       </div>
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
