@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { TIER_COLORS, TIER_LABELS, TIER_SCOPE_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
+import { MltCoin } from '@/components/icons/MltCoin';
 
 interface ShelfTierCount { tier: BadgeTier; count: number; lastPeriod: string | null }
 export interface ShelfItem {
@@ -121,8 +122,9 @@ export function BadgeShelf({ compactIfEmpty = false, managerId }: { compactIfEmp
         {/* Баланс валюты (задача 2657): крупно, рядом с полкой; название валюты —
             глобальная настройка (дефолт «ебаллы», правится в Настройки → Награды). */}
         <span className="ml-auto inline-flex items-baseline gap-1.5 rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-3 py-1">
+          <MltCoin variant="full" size={22} title={data?.currencyName ?? 'MLT'} />
           <span className="text-xl font-extrabold tabular-nums text-[var(--color-accent)]">{(data?.balance ?? 0).toLocaleString('ru-RU')}</span>
-          <span className="text-xs font-semibold text-[var(--color-text-muted)]">{data?.currencyName ?? 'ебаллы'}</span>
+          <span className="text-xs font-semibold text-[var(--color-text-muted)]">{data?.currencyName ?? 'MLT'}</span>
         </span>
       </div>
       {shelf.length === 0 ? (
@@ -202,8 +204,9 @@ export function TeamBadgesBlock() {
                   {/* компакт: топ-бейджи эмодзи + счётчик; + баланс валюты (2657) */}
                   {top.map(i => <span key={i.key} title={i.name} className="text-base leading-none">{i.icon}</span>)}
                   <span className="text-xs text-[var(--color-text-muted)]">{total > 0 ? `${total} нагр.` : 'пока без наград'}</span>
-                  <span className="text-xs font-bold tabular-nums text-[var(--color-accent)]">
-                    {m.balance.toLocaleString('ru-RU')} {data?.currencyName ?? 'ебаллы'}
+                  <span className="inline-flex items-center gap-1 text-xs font-bold tabular-nums text-[var(--color-accent)]">
+                    <MltCoin size={13} title={data?.currencyName ?? 'MLT'} />
+                    {m.balance.toLocaleString('ru-RU')} {data?.currencyName ?? 'MLT'}
                   </span>
                 </span>
               </button>

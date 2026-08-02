@@ -14,7 +14,7 @@ export async function getCurrencyName(db: Pool | PoolClient): Promise<string> {
   const r = await db.query<{ currency_name: string }>(
     `SELECT currency_name FROM badge_coin_settings WHERE id = 1`,
   );
-  return r.rows[0]?.currency_name ?? 'ебаллы';
+  return r.rows[0]?.currency_name ?? 'MLT';
 }
 
 export async function getBalances(db: Pool, bitrixIds: number[]): Promise<Map<number, number>> {

@@ -254,7 +254,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
                     <span className="font-semibold tabular-nums text-[var(--color-accent)] w-10 shrink-0">{it.pct}%</span>
                     <span className="truncate">{it.group}</span>
                     {it.badge && (
-                      <span className="text-[11px] text-[var(--color-text-muted)] truncate" title="Бейдж и ебаллы за такую допродажу">
+                      <span className="text-[11px] text-[var(--color-text-muted)] truncate" title="Бейдж и MLT за такую допродажу">
                         → {it.badge.icon} «{it.badge.name}»{it.badge.price > 0 && <b className="ml-1 text-[var(--color-positive,#2f9e44)]">+{it.badge.price}</b>}
                       </span>
                     )}

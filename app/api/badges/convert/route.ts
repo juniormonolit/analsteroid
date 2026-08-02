@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
+import { getCurrencyName } from '@/features/badges/engine/coins';
 
-// Конвертация валют (доп. Серёги 31.07): ТОЛЬКО рубли → ебаллы, по курсу из
-// настроек (badge_coin_settings.rub_to_eball_rate, дефолт 1:1). Обратной
-// операции (ебаллы → рубли) НЕ СУЩЕСТВУЕТ ни здесь, ни где-либо в движке —
-// запрет на уровне API: этот эндпоинт списывает строго RUB и зачисляет строго
-// EBALL двумя связанными записями (link_id), других путей обмена нет.
+// Конвертация валют (доп. Серёги 31.07): ТОЛЬКО рубли → MLT (было «ебаллы»,
+// ребренд задачи 2747 — по курсу из настроек (badge_coin_settings.rub_to_eball_rate,
+// дефолт 1:1). Обратной операции (MLT → рубли) НЕ СУЩЕСТВУЕТ ни здесь, ни
+// где-либо в движке — запрет на уровне API: этот эндпоинт списывает строго RUB
+// и зачисляет строго EBALL двумя связанными записями (link_id), других путей
+// обмена нет.
 export async function POST(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -16,7 +18,7 @@ export async function POST(req: Request) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   // Явная защита от попытки обратной конвертации через параметр
   if (body.direction !== undefined && body.direction !== 'rub_to_eball') {
-    return NextResponse.json({ error: 'Конвертация возможна только из рублей в ебаллы' }, { status: 400 });
+    return NextResponse.json({ error: 'Конвертация возможна только из рублей в MLT' }, { status: 400 });
   }
   const amount = body.amount;
   if (typeof amount !== 'number' || !Number.isInteger(amount) || amount <= 0) {
@@ -46,15 +48,16 @@ export async function POST(req: Request) {
       await client.query('ROLLBACK');
       return NextResponse.json({ error: 'По текущему курсу получится 0 — увеличьте сумму' }, { status: 400 });
     }
+    const currencyName = await getCurrencyName(client);
     const out = await client.query<{ id: number }>(
       `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment)
        VALUES ($1, $2, $3, 'RUB', 'convert', $4, $5) RETURNING id`,
-      [id, -amount, amount, session.login, `Конвертация ${amount} ₽ → ${eballs} ебаллов (курс ${rate})`],
+      [id, -amount, amount, session.login, `Конвертация ${amount} ₽ → ${eballs} ${currencyName} (курс ${rate})`],
     );
     await client.query(
       `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment, link_id)
        VALUES ($1, $2, $2, 'EBALL', 'convert', $3, $4, $5)`,
-      [id, eballs, session.login, `Конвертация ${amount} ₽ → ${eballs} ебаллов (курс ${rate})`, out.rows[0].id],
+      [id, eballs, session.login, `Конвертация ${amount} ₽ → ${eballs} ${currencyName} (курс ${rate})`, out.rows[0].id],
     );
     await client.query('COMMIT');
     return NextResponse.json({ ok: true, spentRub: amount, gainedEballs: eballs, rate });

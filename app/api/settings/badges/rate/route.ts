@@ -13,7 +13,7 @@ export async function PATCH(req: Request) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   const v = body.rubToEballRate;
   if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 1000) {
-    return NextResponse.json({ error: 'Курс — число больше нуля (ебаллов за 1 ₽)' }, { status: 400 });
+    return NextResponse.json({ error: 'Курс — число больше нуля (MLT за 1 ₽)' }, { status: 400 });
   }
   await systemDb().query(`UPDATE badge_coin_settings SET rub_to_eball_rate = $1, updated_at = now() WHERE id = 1`, [v]);
   return NextResponse.json({ ok: true });

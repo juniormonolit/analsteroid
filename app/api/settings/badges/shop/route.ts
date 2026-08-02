@@ -59,7 +59,7 @@ function validate(body: Record<string, unknown>): ItemInput | string {
   }
   const priceUnits = body.priceUnits;
   if (typeof priceUnits !== 'number' || !Number.isFinite(priceUnits) || priceUnits <= 0 || priceUnits > 1_000_000) {
-    return 'Цена — число больше нуля (в единицах, сейчас 1 ед = 1 ебалл)';
+    return 'Цена — число больше нуля (в единицах, сейчас 1 ед = 1 MLT)';
   }
   const stock = body.stock === null || body.stock === undefined || body.stock === ''
     ? null : Number(body.stock);

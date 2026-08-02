@@ -83,7 +83,7 @@ export async function runWalletTick(client: PoolClient): Promise<WalletTickStats
   // 2. Сгорание EBALL-начислений старше ttl_months (RUB не трогаем по условию).
   await recomputeFifoRemaining(client);
   const exp = await client.query<{ amount: number }>(
-    `WITH s AS (SELECT ttl_months FROM badge_coin_settings WHERE id = 1),
+    `WITH s AS (SELECT ttl_months, currency_name FROM badge_coin_settings WHERE id = 1),
      burn AS (
        SELECT l.bitrix_id, sum(l.remaining)::int AS amt
          FROM badge_coin_ledger l, s
@@ -93,7 +93,7 @@ export async function runWalletTick(client: PoolClient): Promise<WalletTickStats
      )
      INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, comment)
      SELECT b.bitrix_id, -b.amt, b.amt, 'EBALL', 'expiry',
-            'Сгорание: начисления старше ' || s.ttl_months || ' мес (срок жизни ебаллов)'
+            'Сгорание: начисления старше ' || s.ttl_months || ' мес (срок жизни ' || s.currency_name || ')'
        FROM burn b, s
       WHERE b.amt > 0
      RETURNING -amount AS amount`,
@@ -103,7 +103,7 @@ export async function runWalletTick(client: PoolClient): Promise<WalletTickStats
   // Уведомление о скором сгорании (за 7 дней, пакет 31.07): у кого живые остатки
   // с дедлайном в ближайшие 7 дней — одно уведомление раз в 7 дней (дедуп по типу).
   await client.query(
-    `WITH s AS (SELECT ttl_months FROM badge_coin_settings WHERE id = 1),
+    `WITH s AS (SELECT ttl_months, currency_name FROM badge_coin_settings WHERE id = 1),
      soon AS (
        SELECT l.bitrix_id, sum(l.remaining)::int AS amt,
               greatest(0, ceil(extract(epoch FROM min(l.created_at + make_interval(months => s.ttl_months)) - now()) / 86400))::int AS days
@@ -113,12 +113,12 @@ export async function runWalletTick(client: PoolClient): Promise<WalletTickStats
         GROUP BY l.bitrix_id
      )
      INSERT INTO notifications (bitrix_id, type, title, body, link)
-     SELECT bitrix_id, 'expiry_soon',
-            'Скоро сгорит ' || amt || ' ебаллов',
-            'Через ' || days || ' дн. истечёт срок жизни части начислений — потратьте их в магазине.',
+     SELECT w.bitrix_id, 'expiry_soon',
+            'Скоро сгорит ' || w.amt || ' ' || s.currency_name,
+            'Через ' || w.days || ' дн. истечёт срок жизни части начислений — потратьте их в магазине.',
             '/manager/me'
-       FROM soon w
-      WHERE amt > 0
+       FROM soon w, s
+      WHERE w.amt > 0
         AND NOT EXISTS (SELECT 1 FROM notifications n
                          WHERE n.bitrix_id = w.bitrix_id AND n.type = 'expiry_soon'
                            AND n.created_at > now() - interval '7 days')`,

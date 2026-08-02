@@ -12,6 +12,7 @@ import { BadgeCard, BadgeShelf, useShelfQuery } from '@/features/badges/ui/Badge
 import { GachaBlock } from '@/features/badges/ui/GachaBlock';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 import { usePlanFact } from './PlanFactStrip';
+import { MltCoin } from '@/components/icons/MltCoin';
 import type { ManagerCardResult } from '@/features/manager-card/engine/managerCard';
 
 export type ManagerTabKey = 'profile' | 'planyorka' | 'customers' | 'quests' | 'stats' | 'rewards' | 'shop' | 'inventory';
@@ -79,7 +80,7 @@ interface ProfileExtra {
   ledger: LedgerRow[];
   rubBalance: number;
   rubToEballRate: number;
-  // Плашка TTL (31.07): сколько ебаллов сгорит в ближайшие 30 дней и через
+  // Плашка TTL (31.07): сколько MLT сгорит в ближайшие 30 дней и через
   // сколько дней первое сгорание (0 = ближайшей ночью).
   expiring: { amount: number; days: number } | null;
   // XP-система (01.08, миграция 124): уровень/титул/классы.
@@ -146,6 +147,7 @@ function BalancePill({ balance, currencyName, big = false }: { balance: number; 
       className={`inline-flex items-baseline gap-1.5 rounded-2xl border ${big ? 'px-5 py-2.5' : 'px-3 py-1'}`}
       style={{ borderColor: `color-mix(in srgb, ${color} 40%, transparent)`, backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)` }}
     >
+      <MltCoin variant={big ? 'full' : 'simple'} size={big ? 32 : 18} title={currencyName} />
       <span className={`font-extrabold tabular-nums ${big ? 'text-3xl' : 'text-xl'}`} style={{ color }}>{balance.toLocaleString('ru-RU')}</span>
       <span className={`font-semibold text-[var(--color-text-muted)] ${big ? 'text-sm' : 'text-xs'}`}>{currencyName}</span>
     </span>
@@ -159,7 +161,7 @@ function RubPill({ balance, big = false }: { balance: number; big?: boolean }) {
     <span
       className={`inline-flex items-baseline gap-1.5 rounded-2xl border ${big ? 'px-5 py-2.5' : 'px-3 py-1'}`}
       style={{ borderColor: `color-mix(in srgb, ${color} 40%, transparent)`, backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)` }}
-      title="Рублёвый кошелёк: денежные бонусы; можно обменять на ебаллы или вывести в ЗП"
+      title="Рублёвый кошелёк: денежные бонусы; можно обменять на MLT или вывести в ЗП"
     >
       <span className={`font-extrabold tabular-nums ${big ? 'text-3xl' : 'text-xl'}`} style={{ color }}>{balance.toLocaleString('ru-RU')}</span>
       <span className={`font-semibold text-[var(--color-text-muted)] ${big ? 'text-sm' : 'text-xs'}`}>₽</span>
@@ -167,7 +169,7 @@ function RubPill({ balance, big = false }: { balance: number; big?: boolean }) {
   );
 }
 
-// Плашка TTL ебаллов (31.07): «сгорит N через X дней» — живые FIFO-остатки
+// Плашка TTL MLT (31.07): «сгорит N через X дней» — живые FIFO-остатки
 // начислений, чей срок жизни (ttl_months из настроек) выходит в ближайшие 30 дней.
 function ExpiringPill({ expiring, currencyName }: {
   expiring: { amount: number; days: number } | null | undefined; currencyName: string;
@@ -201,7 +203,7 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
   const [comment, setComment] = useState('');
   const [typeId, setTypeId] = useState<number | null>(ctx.penaltyTypes?.[0]?.id ?? null);
   const [error, setError] = useState<string | null>(null);
-  const currency = ctx.currencyName ?? 'ебаллы';
+  const currency = ctx.currencyName ?? 'MLT';
   const selType = ctx.penaltyTypes?.find(t => t.id === typeId) ?? null;
 
   const submit = useMutation({
@@ -363,9 +365,9 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
           <div className="flex flex-col items-end gap-2">
             <div className="flex flex-wrap items-center justify-end gap-2">
               {(extra?.rubBalance ?? 0) !== 0 && <RubPill balance={extra!.rubBalance} big />}
-              <BalancePill balance={shelfData?.balance ?? 0} currencyName={shelfData?.currencyName ?? 'ебаллы'} big />
+              <BalancePill balance={shelfData?.balance ?? 0} currencyName={shelfData?.currencyName ?? 'MLT'} big />
             </div>
-            <ExpiringPill expiring={extra?.expiring} currencyName={shelfData?.currencyName ?? 'ебаллы'} />
+            <ExpiringPill expiring={extra?.expiring} currencyName={shelfData?.currencyName ?? 'MLT'} />
             {manualCtx?.canManual && (
               <div className="flex gap-2">
                 <button type="button"
@@ -432,7 +434,7 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards }: {
                 const into = extra.xp!.totalXp - extra.xp!.currentLevelXp;
                 const pct = span > 0 ? Math.min(100, Math.round((into / span) * 100)) : 100;
                 return (
-                  <div title={`Всего ${extra.xp!.totalXp.toLocaleString('ru-RU')} XP. XP — репутация: только растёт, на ебаллы не меняется.`}>
+                  <div title={`Всего ${extra.xp!.totalXp.toLocaleString('ru-RU')} XP. XP — репутация: только растёт, на MLT не меняется.`}>
                     <div className="mb-1 flex justify-between text-[11px] text-[var(--color-text-muted)]">
                       <span>до уровня {extra.xp!.level + 1} — {(extra.xp!.nextLevelXp - extra.xp!.totalXp).toLocaleString('ru-RU')} XP</span>
                       <span className="tabular-nums">{extra.xp!.totalXp.toLocaleString('ru-RU')} XP</span>
@@ -541,7 +543,7 @@ function ledgerTitle(r: LedgerRow): { title: string; sub: string | null } {
   // Магазин и TTL (31.07): покупка/возврат 50% при истечении предмета/сгорание.
   if (r.source === 'shop_purchase') return { title: r.comment ?? 'Покупка в магазине', sub: null };
   if (r.source === 'shop_refund') return { title: r.comment ?? 'Возврат 50% за истёкший предмет', sub: null };
-  if (r.source === 'expiry') return { title: r.comment ?? 'Сгорание ебаллов (истёк срок жизни)', sub: null };
+  if (r.source === 'expiry') return { title: r.comment ?? 'Сгорание MLT (истёк срок жизни)', sub: null };
   if (r.source === 'gacha_spin') return { title: r.comment ?? 'Крутка гачи 🎰', sub: null };
   if (r.source === 'gacha_prize') return { title: r.comment ?? 'Выигрыш в гаче', sub: null };
   if (r.source === 'transfer_out') return { title: r.comment ?? 'Перевод коллеге', sub: null };
@@ -578,7 +580,7 @@ function PenaltyCatalog() {
           <div key={t.id} className="flex items-baseline justify-between gap-3 border-t border-[var(--color-border)] py-1.5 first:border-t-0 text-[13px]">
             <span className="text-[var(--color-text)]">{t.name}</span>
             <span className="whitespace-nowrap font-semibold tabular-nums text-[var(--color-negative,#e03131)]">
-              −{t.priceMode === 'percent' ? `${t.price}% от баланса` : `${t.price} ${data?.currencyName ?? 'ебаллы'}`}
+              −{t.priceMode === 'percent' ? `${t.price}% от баланса` : `${t.price} ${data?.currencyName ?? 'MLT'}`}
             </span>
           </div>
         ))}
@@ -717,7 +719,7 @@ export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: b
   const { data: shelfData } = useShelfQuery(isSelf ? undefined : managerId);
   const { data: extra, isLoading } = useProfileExtra(managerId, isSelf);
   const { data: manualCtx } = useManualContext(managerId, !isSelf);
-  const currencyName = shelfData?.currencyName ?? 'ебаллы';
+  const currencyName = shelfData?.currencyName ?? 'MLT';
   const ledger = extra?.ledger ?? [];
 
   // Сторно (только админ): компенсирующая запись, история сохраняется.
@@ -889,7 +891,7 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const { data } = useShopData(managerId, isSelf);
-  const currencyName = data?.currencyName ?? 'ебаллы';
+  const currencyName = data?.currencyName ?? 'MLT';
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['shop'] });
@@ -956,7 +958,8 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                     <div className="font-semibold text-[var(--color-text)] text-[14px]">{item.name}</div>
                     {item.description && <div className="text-xs text-[var(--color-text-muted)]">{item.description}</div>}
                     <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
-                      <span className="font-extrabold tabular-nums text-[var(--color-accent)]">
+                      <span className="inline-flex items-center gap-1 font-extrabold tabular-nums text-[var(--color-accent)]">
+                        <MltCoin variant="full" size={20} title={currencyName} />
                         {item.priceEball.toLocaleString('ru-RU')} <span className="text-[11px] font-semibold text-[var(--color-text-muted)]">{currencyName}</span>
                       </span>
                       {item.priceRub !== null && (
@@ -1055,7 +1058,7 @@ export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf:
   const [gifting, setGifting] = useState<InventoryRow | null>(null);
   const { data } = useShopData(managerId, isSelf);
   const { data: meta } = useTransferMeta(isSelf);
-  const currencyName = data?.currencyName ?? 'ебаллы';
+  const currencyName = data?.currencyName ?? 'MLT';
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['shop'] });
@@ -1165,7 +1168,7 @@ export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf:
   );
 }
 
-// ── Перевод ебаллов коллеге (блок в табе «Награды») ──────────────────────────
+// ── Перевод MLT коллеге (блок в табе «Награды») ──────────────────────────────
 
 export function TransferBlock({ balance, currencyName }: { balance: number; currencyName: string }) {
   const qc = useQueryClient();

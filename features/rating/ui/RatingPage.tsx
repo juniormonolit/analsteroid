@@ -10,6 +10,7 @@ import { Settings2 } from 'lucide-react';
 import Link from 'next/link';
 import { BadgeCard } from '@/features/badges/ui/BadgeShelf';
 import type { ShelfItem } from '@/features/badges/engine/shelf';
+import { MltCoin } from '@/components/icons/MltCoin';
 import { MainPeriodControl } from '@/features/reports/ui/FilterBar';
 import { Seg } from '@/features/reports/ui/FiltersMenu';
 import { defaultPeriod, type DateRange } from '@/lib/period';
@@ -133,7 +134,7 @@ export function RatingPage() {
   // Валюта (задача 2657): баланс колонкой. С 31.07 (правка Серёги) колонка,
   // как и остальные числовые, сортируемая — см. sortedRows ниже.
   const balances = badgesData?.balances ?? {};
-  const currencyName = badgesData?.currencyName ?? 'ебаллы';
+  const currencyName = badgesData?.currencyName ?? 'MLT';
   const xpMap = badgesData?.xp ?? {};
   const [openBadgesId, setOpenBadgesId] = useState<string | null>(null);
 
@@ -269,9 +270,14 @@ export function RatingPage() {
                         <span className="text-[11px] text-[var(--color-text-muted)]">—</span>
                       )}
                     </td>
-                    {/* Баланс валюты (2657) */}
+                    {/* Баланс валюты (2657, MLT-ребренд 2747) */}
                     <td className="px-3 py-2 text-right tabular-nums font-semibold text-[var(--color-accent)]">
-                      {(balances[r.managerId] ?? 0) > 0 ? (balances[r.managerId] ?? 0).toLocaleString('ru-RU') : '—'}
+                      {(balances[r.managerId] ?? 0) > 0 ? (
+                        <span className="inline-flex items-center justify-end gap-1">
+                          <MltCoin size={13} title={currencyName} />
+                          {(balances[r.managerId] ?? 0).toLocaleString('ru-RU')}
+                        </span>
+                      ) : '—'}
                     </td>
                     {/* XP-уровень (миграция 124): уровень + титул, тултип — топ-класс */}
                     <td className="px-3 py-2 text-right whitespace-nowrap">

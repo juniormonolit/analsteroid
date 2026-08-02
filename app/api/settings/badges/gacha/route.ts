@@ -109,7 +109,7 @@ export async function PATCH(req: Request) {
   }
   const eballAmount = tier.eballAmount;
   if (eballAmount !== undefined && (typeof eballAmount !== 'number' || !Number.isInteger(eballAmount) || eballAmount <= 0)) {
-    return NextResponse.json({ error: 'Сумма ебаллов — целое > 0' }, { status: 400 });
+    return NextResponse.json({ error: 'Сумма MLT — целое > 0' }, { status: 400 });
   }
   const name = typeof tier.name === 'string' ? tier.name.trim().slice(0, 200) : undefined;
 

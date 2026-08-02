@@ -2,7 +2,7 @@
 
 // Таб «Квесты» ЛК (миграция 125, дизайн-док Софьи + тиры v2): 4 карточки слотов
 // (дневной / 2 недельных / месячный, + докупленные), цвет карточки по тиру,
-// прогресс-бар, награда «N ебаллов + M XP», таймер, реролл за ебаллы; ниже —
+// прогресс-бар, награда «N MLT + M XP», таймер, реролл за MLT; ниже —
 // история 8 недель со счётчиками по тирам. РОПу — сводка по команде.
 
 import { Fragment, useState } from 'react';
@@ -84,7 +84,7 @@ function QuestCard({ q, prices, isSelf, onReroll, busy }: {
         <div className="mb-1 flex justify-between text-[11px] tabular-nums text-[var(--color-text-muted)]">
           <span>{fmtNum(q.progress)} из {fmtNum(q.target)}</span>
           <span className="font-bold" style={{ color: 'var(--color-accent)' }}>
-            +{q.rewardEballs} ебаллов · +{q.rewardXp} XP
+            +{q.rewardEballs} MLT · +{q.rewardXp} XP
           </span>
         </div>
         <div className="h-2 rounded-full bg-[var(--color-bg-hover)]">
@@ -94,7 +94,7 @@ function QuestCard({ q, prices, isSelf, onReroll, busy }: {
       {isSelf && q.status === 'active' && q.rerollOf === null && (
         <button type="button" disabled={busy} onClick={() => onReroll(q.id)}
           className="w-fit rounded-lg border border-[var(--color-border)] px-2 py-0.5 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
-          title="Заменить квест на другой того же тира (списываются ебаллы; максимум одна замена)">
+          title="Заменить квест на другой того же тира (списываются MLT; максимум одна замена)">
           Заменить ({rerollPrice})
         </button>
       )}
@@ -164,8 +164,8 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
     <div className="flex flex-col gap-4">
       <div className="text-xs text-[var(--color-text-muted)]">
         Личные миссии: цели считаются от вашей собственной истории продаж (120% вашей медианы), тир —
-        от сложности относительно медианного менеджера компании. Выполнил — ебаллы и XP сразу; провалил —
-        ничего не теряешь, квест просто сгорает. Замена квеста и доп. квест — за ебаллы.
+        от сложности относительно медианного менеджера компании. Выполнил — MLT и XP сразу; провалил —
+        ничего не теряешь, квест просто сгорает. Замена квеста и доп. квест — за MLT.
       </div>
       {current.length === 0 ? (
         <div className="text-sm text-[var(--color-text-muted)]">

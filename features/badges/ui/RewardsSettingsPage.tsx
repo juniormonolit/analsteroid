@@ -14,6 +14,7 @@ import { GachaSettingsBlock } from './GachaSettings';
 import { XpSettingsBlock } from './XpSettings';
 import { QuestSettingsBlock } from './QuestSettings';
 import { GamificationDashboard } from './GamificationDashboard';
+import { MltCoin } from '@/components/icons/MltCoin';
 import {
   CUSTOM_PREFIX, CUSTOM_PERIOD_LABELS, DAILY_BONUS_METRIC_LABELS, METRIC_LABELS,
   MILESTONE_KIND_LABELS, TEMPLATE_LABELS, validateCustomCriteria,
@@ -83,6 +84,7 @@ function PriceInput({ row, tier, currencyName, onSave }: {
   };
   return (
     <label className="inline-flex items-center gap-1 text-xs text-[var(--color-accent)]" title={`Цена в «${currencyName}» — влияет только на будущие начисления`}>
+      <MltCoin size={12} title={currencyName} />
       {TIER_PRICE_LABELS[tier] ?? tier}
       <input
         value={draft}
@@ -482,7 +484,7 @@ function PenaltiesSettings({ currencyName }: { currencyName: string }) {
           />
         </label>
         <label className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]"
-          title="Сколько ебаллов даёт 1 ₽ при конвертации (только рубли → ебаллы; обратной нет)">
+          title={`Сколько ${currencyName} даёт 1 ₽ при конвертации (только рубли → ${currencyName}; обратной нет)`}>
           Курс: 1 ₽ =
           <input
             value={rateDraft ?? String(data?.rubToEballRate ?? '')}
@@ -632,7 +634,7 @@ export function RewardsSettingsPage() {
     onError: (e) => setRecomputeResult(`Ошибка: ${e instanceof Error ? e.message : e}`),
   });
 
-  const currencyName = data?.currencyName ?? 'ебаллы';
+  const currencyName = data?.currencyName ?? 'MLT';
   const [currencyDraft, setCurrencyDraft] = useState<string | null>(null);
   const saveCurrency = useMutation({
     mutationFn: async (name: string) => {

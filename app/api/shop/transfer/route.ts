@@ -131,14 +131,15 @@ export async function POST(req: NextRequest) {
     );
     await recomputeFifoRemaining(client, from);
     await recomputeFifoRemaining(client, to);
+    const currencyName = await getCurrencyName(client);
     await createNotification(client, {
       bitrixId: to, type: 'transfer_in',
-      title: `Вам перевели ${received} ${await getCurrencyName(client)}`,
+      title: `Вам перевели ${received} ${currencyName}`,
       body: `От: ${fromName}${note}`,
       link: '/manager/me',
     });
     await client.query('COMMIT');
-    void pushViaAnalitik(to, `Вам перевели ${received} ебаллов`, `От: ${fromName}${note}`);
+    void pushViaAnalitik(to, `Вам перевели ${received} ${currencyName}`, `От: ${fromName}${note}`);
     return NextResponse.json({ ok: true, sent: amount, received, fee });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

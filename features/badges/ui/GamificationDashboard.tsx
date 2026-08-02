@@ -1,12 +1,14 @@
 'use client';
 
 // «Геймификация → Дашборд» (задача 2741): первая вкладка раздела настроек —
-// живая сводка экономики ебаллов/рублей. Данные — /api/settings/badges/dashboard
-// (read-only, gамификационный движок не трогается). Методика виджета «здоровье
-// экономики» — owners-inbox/monolitika-sink-mechanics.md.
+// живая сводка экономики MLT/рублей (валюта переименована из «ебаллов» в MLT,
+// задача 2747). Данные — /api/settings/badges/dashboard (read-only,
+// гамификационный движок не трогается). Методика виджета «здоровье экономики»
+// — owners-inbox/monolitika-sink-mechanics.md.
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { MltCoin } from '@/components/icons/MltCoin';
 
 interface BalanceRow {
   bitrixId: number; name: string; department: string | null;
@@ -58,7 +60,10 @@ function SourceRow({ label, value, currencyName }: { label: string; value: numbe
   return (
     <div className="flex items-center justify-between py-1 text-sm">
       <span className="text-[var(--color-text-muted)]">{label}</span>
-      <span className="tabular-nums font-medium">{num(value)} {currencyName}</span>
+      <span className="inline-flex items-center gap-1 tabular-nums font-medium">
+        <MltCoin size={14} title={currencyName} />
+        {num(value)} {currencyName}
+      </span>
     </div>
   );
 }
@@ -137,13 +142,19 @@ export function GamificationDashboard() {
       {/* Агрегаты в обращении */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card title={`Всего в обращении, ${currencyName}`}>
-          <div className="text-2xl font-semibold tabular-nums">{num(circulation.totalEball)}</div>
+          <div className="flex items-center gap-2 text-2xl font-semibold tabular-nums">
+            <MltCoin variant="full" size={28} title={currencyName} />
+            {num(circulation.totalEball)}
+          </div>
         </Card>
         <Card title="Всего в обращении, ₽">
           <div className="text-2xl font-semibold tabular-nums">{num(circulation.totalRub)}</div>
         </Card>
         <Card title="Эмиссия за месяц">
-          <div className="text-2xl font-semibold tabular-nums">{num(emission.total)}</div>
+          <div className="flex items-center gap-1.5 text-2xl font-semibold tabular-nums">
+            <MltCoin size={20} title={currencyName} />
+            {num(emission.total)}
+          </div>
           {emissionMomPct !== null && (
             <div className={`text-xs mt-1 ${emissionMomPct >= 0 ? 'text-[var(--color-positive)]' : 'text-[var(--color-negative)]'}`}>
               {emissionMomPct >= 0 ? '▲' : '▼'} {Math.abs(emissionMomPct)}% к пред. месяцу
@@ -151,7 +162,10 @@ export function GamificationDashboard() {
           )}
         </Card>
         <Card title="Поглощение за месяц">
-          <div className="text-2xl font-semibold tabular-nums">{num(health.absorption)}</div>
+          <div className="flex items-center gap-1.5 text-2xl font-semibold tabular-nums">
+            <MltCoin size={20} title={currencyName} />
+            {num(health.absorption)}
+          </div>
           <div className={`text-xs mt-1 ${netFlow >= 0 ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-positive)]'}`}>
             нетто {netFlow >= 0 ? '+' : ''}{num(netFlow)}
           </div>
@@ -170,7 +184,10 @@ export function GamificationDashboard() {
           </div>
           <div>
             <div className="text-xs text-[var(--color-text-muted)] mb-1">К сгоранию в ближайшие 30 дней</div>
-            <div className="text-xl font-semibold tabular-nums">{num(health.toBurn30d)} {currencyName}</div>
+            <div className="flex items-center gap-1.5 text-xl font-semibold tabular-nums">
+              <MltCoin size={18} title={currencyName} />
+              {num(health.toBurn30d)} {currencyName}
+            </div>
           </div>
           <div>
             <div className="text-xs text-[var(--color-text-muted)] mb-1">Эмиссия vs поглощение (месяц)</div>
@@ -230,7 +247,9 @@ export function GamificationDashboard() {
                   >
                     <td className="px-3 py-2 whitespace-nowrap font-medium">{r.name}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-[var(--color-text-muted)]">{r.department ?? '—'}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{num(r.eball)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      <span className="inline-flex items-center justify-end gap-1"><MltCoin size={14} title={currencyName} />{num(r.eball)}</span>
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums">{num(r.rub)}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-[var(--color-positive)]">{num(r.earned30)}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-[var(--color-negative)]">{num(r.spent30)}</td>

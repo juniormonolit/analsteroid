@@ -33,6 +33,7 @@ import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
 import { fetchCrossSellMatrix } from '@/features/customers/engine/crossSell';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { getCurrencyName } from '@/features/badges/engine/coins';
 import { isWorkingDayJs } from '@/lib/metrics/productionCalendar';
 
 const MSK = 'Europe/Moscow';
@@ -690,6 +691,7 @@ async function completeQuest(system: Pool, q: QuestRow, progress: number): Promi
   const client = await system.connect();
   let completed = false;
   let loot: LootDrop | null = null;
+  const currencyName = await getCurrencyName(system);
   try {
     await client.query('BEGIN');
     const upd = await client.query(
@@ -708,7 +710,7 @@ async function completeQuest(system: Pool, q: QuestRow, progress: number): Promi
       await createNotification(client, {
         bitrixId: q.bitrixId, type: 'quest_done',
         title: `Квест выполнен: ${q.title}`,
-        body: `+${q.rewardEballs} ебаллов и +${q.rewardXp} XP.${loot ? ` Лутдроп: ${loot.itemName}!` : ''} Так держать!`,
+        body: `+${q.rewardEballs} ${currencyName} и +${q.rewardXp} XP.${loot ? ` Лутдроп: ${loot.itemName}!` : ''} Так держать!`,
       });
       completed = true;
     }
@@ -721,7 +723,7 @@ async function completeQuest(system: Pool, q: QuestRow, progress: number): Promi
   }
   if (completed) {
     void pushViaAnalitik(q.bitrixId, `🗺️ Квест выполнен: ${q.title}`,
-      `+${q.rewardEballs} ебаллов, +${q.rewardXp} XP${loot ? `. 🎁 Лутдроп: ${loot.itemName}!` : ''}`);
+      `+${q.rewardEballs} ${currencyName}, +${q.rewardXp} XP${loot ? `. 🎁 Лутдроп: ${loot.itemName}!` : ''}`);
   }
 }
 
@@ -740,7 +742,7 @@ export async function rerollQuest(system: Pool, mgr: number, questId: number, ac
   const price = q.periodType === 'day' ? settings.rerollDay : q.periodType === 'week' ? settings.rerollWeek : settings.rerollMonth;
 
   const bal = await system.query<{ b: string }>(`SELECT coalesce(balance,0)::text AS b FROM badge_coin_balances WHERE bitrix_id=$1`, [mgr]);
-  if (Number(bal.rows[0]?.b ?? 0) < price) return { ok: false, error: `Не хватает ебаллов (нужно ${price})` };
+  if (Number(bal.rows[0]?.b ?? 0) < price) return { ok: false, error: `Не хватает ${await getCurrencyName(system)} (нужно ${price})` };
 
   // Новый квест ТОГО ЖЕ тира (схема v2): генерим кандидатов, берём первый
   // другой категории с тем же расчётным тиром; если такого нет — ближайший.
@@ -809,7 +811,7 @@ export async function buyExtraQuest(system: Pool, mgr: number, actorLogin: strin
   );
   const price = settings.extraDay * Math.pow(2, Number(weekExtra.rows[0].c)); // ×2 за каждый следующий в неделе
   const bal = await system.query<{ b: string }>(`SELECT coalesce(balance,0)::text AS b FROM badge_coin_balances WHERE bitrix_id=$1`, [mgr]);
-  if (Number(bal.rows[0]?.b ?? 0) < price) return { ok: false, error: `Не хватает ебаллов (нужно ${price})` };
+  if (Number(bal.rows[0]?.b ?? 0) < price) return { ok: false, error: `Не хватает ${await getCurrencyName(system)} (нужно ${price})` };
 
   const cm = await fetchCompanyMedians();
   const xpLevel = await fetchXpLevel(system, mgr);

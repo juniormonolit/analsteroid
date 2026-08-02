@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { MltCoin } from '@/components/icons/MltCoin';
 
 interface ShopItemRow {
   id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'team';
@@ -235,7 +236,7 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
           />
         </label>
         <label className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-muted)]"
-          title="Комиссия за перевод ебаллов коллеге, % — сжигается">
+          title="Комиссия за перевод MLT коллеге, % — сжигается">
           Комиссия переводов, %
           <SettingsNum value={data?.transferFeePercent ?? 5}
             onCommit={v => saveTransfer.mutate({ feePercent: v })} w="w-12" allowZero />
@@ -280,7 +281,8 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
                   <div className="text-sm font-semibold text-[var(--color-text)]">{i.name}</div>
                   {i.description && <div className="text-xs text-[var(--color-text-muted)]">{i.description}</div>}
                 </div>
-                <span className="text-xs tabular-nums font-semibold text-[var(--color-accent)]">
+                <span className="inline-flex items-center gap-1 text-xs tabular-nums font-semibold text-[var(--color-accent)]">
+                  <MltCoin size={13} title={currencyName} />
                   {i.priceEball.toLocaleString('ru-RU')} {currencyName}
                   {i.priceRub !== null && <span className="ml-1 font-normal text-[var(--color-text-muted)]">/ {i.priceRub.toLocaleString('ru-RU')} ₽</span>}
                 </span>

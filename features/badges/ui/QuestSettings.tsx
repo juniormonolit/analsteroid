@@ -21,7 +21,7 @@ interface Payload {
 
 const FIELDS: [string, string][] = [
   ['rewardDay', 'Дневной (синий тир)'], ['rewardWeek', 'Недельный (синий тир)'], ['rewardMonth', 'Месячный (синий тир)'],
-  ['xpMult', 'XP за 1 ебалл награды'],
+  ['xpMult', 'XP за 1 MLT награды'],
   ['rerollDay', 'Замена дневного'], ['rerollWeek', 'Замена недельного'], ['rerollMonth', 'Замена месячного'],
   ['extraDay', 'Доп. дневной (база, ×2 за каждый следующий)'],
 ];

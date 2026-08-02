@@ -7,6 +7,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { MltCoin } from '@/components/icons/MltCoin';
 
 interface PoolTier {
   tierKey: string; name: string; icon: string; rarity: 'common' | 'rare' | 'jackpot';
@@ -218,7 +219,8 @@ export function GachaBlock({ isSelf }: { isSelf: boolean }) {
       {(reveal && reveal.rarity !== 'common') && <Confetti />}
       <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-base font-bold text-[var(--color-text)]">🎰 Гача</h2>
-        <span className="text-xs text-[var(--color-text-muted)]">
+        <span className="inline-flex items-center gap-1 text-xs text-[var(--color-text-muted)]">
+          <MltCoin size={13} title={data.currencyName} />
           крутка {data.spinCost} {data.currencyName} · сегодня осталось {data.limits.dayLeft} из {data.limits.daily},
           на неделе {data.limits.weekLeft} из {data.limits.weekly}
         </span>

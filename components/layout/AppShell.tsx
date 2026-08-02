@@ -15,6 +15,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { BrandLogo } from '@/components/ui/BrandLogo';
+import { MltCoinDefs } from '@/components/icons/MltCoin';
 import type { SavedReport, TrashedReport } from '@/lib/saved-reports/types';
 import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
 import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
@@ -718,6 +719,9 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
     <QueryProvider>
       <TooltipProvider>
       <ThemeSync />
+      {/* Иконка валюты MLT (задача 2747): defs регистрируются один раз на весь
+          авторизованный контур — дальше везде лёгкий <MltCoin/> через <use>. */}
+      <MltCoinDefs />
       <div className="flex h-dvh overflow-hidden">
         {/* Desktop sidebar (на <md скрыт — вместо него drawer) */}
         {/* group + relative — для ручки сворачивания на правой кромке (правка

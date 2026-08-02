@@ -9,6 +9,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { analyticsDb } from '@/lib/db/clients';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { getCurrencyName } from '@/features/badges/engine/coins';
 import { fetchCrossSellMatrix } from '@/features/customers/engine/crossSell';
 import {
   fetchCompanyMedians, loadQuestSettings, mskToday, rollLoot,
@@ -171,7 +172,8 @@ export async function takeContract(system: Pool, mgr: number, contractId: number
     const bal = await client.query<{ b: string }>(`SELECT coalesce(balance,0)::text AS b FROM badge_coin_balances WHERE bitrix_id=$1`, [mgr]);
     if (Number(bal.rows[0]?.b ?? 0) < row.deposit) {
       await client.query('ROLLBACK');
-      return { ok: false, error: `Не хватает ебаллов на депозит (нужно ${row.deposit})` };
+      const currencyName = await getCurrencyName(client);
+      return { ok: false, error: `Не хватает ${currencyName} на депозит (нужно ${row.deposit})` };
     }
     const led = await client.query<{ id: string }>(
       `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award, currency, source, actor_login, comment)
@@ -267,6 +269,7 @@ async function completeContract(system: Pool, c: ContractRow, progress: number):
   const client = await system.connect();
   let loot: LootDrop | null = null;
   let completed = false;
+  const currencyName = await getCurrencyName(system);
   try {
     await client.query('BEGIN');
     const upd = await client.query(
@@ -292,7 +295,7 @@ async function completeContract(system: Pool, c: ContractRow, progress: number):
       await createNotification(client, {
         bitrixId: c.takenBy!, type: 'quest_done',
         title: `Контракт выполнен: ${c.title}`,
-        body: `+${c.rewardEballs} ебаллов, +${c.rewardXp} XP, депозит ${c.deposit} вернулся.${loot ? ` Лутдроп: ${loot.itemName}!` : ''}`,
+        body: `+${c.rewardEballs} ${currencyName}, +${c.rewardXp} XP, депозит ${c.deposit} вернулся.${loot ? ` Лутдроп: ${loot.itemName}!` : ''}`,
       });
       completed = true;
     }
@@ -305,7 +308,7 @@ async function completeContract(system: Pool, c: ContractRow, progress: number):
   }
   if (completed) {
     void pushViaAnalitik(c.takenBy!, `📜 Контракт выполнен: ${c.title}`,
-      `+${c.rewardEballs} ебаллов, +${c.rewardXp} XP, депозит вернулся.${loot ? ` 🎁 Лутдроп: ${loot.itemName}!` : ''}`);
+      `+${c.rewardEballs} ${currencyName}, +${c.rewardXp} XP, депозит вернулся.${loot ? ` 🎁 Лутдроп: ${loot.itemName}!` : ''}`);
   }
 }
 
