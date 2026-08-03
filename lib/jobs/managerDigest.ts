@@ -557,12 +557,17 @@ export function buildCustomerLink(managerBitrixId: number, clientKey: string): s
 // доловил ещё «1» — голое число без единой буквы никого не идентифицирует,
 // реальных юрлиц/контактов с названием из одних цифр не бывает) — не
 // выводим вовсе, pickAdvice берёт следующего кандидата по скору (см. ниже).
+// «Без имени» (живой прогон, менеджер 4430) — это дефолтная ЗАГЛУШКА самого
+// Bitrix для контакта без заполненного имени, не реальное имя — сама фраза
+// в точности означает «имени нет», её нельзя опознать так же, как «-»/«000».
+const PLACEHOLDER_NAME_RE = /^без\s+имени$/i;
 function isJunkName(raw: string | null): boolean {
   if (raw === null) return true;
   const t = raw.trim();
   if (t === '') return true;
   if (/^[\s\-–—.]*$/.test(t)) return true; // только тире/точки/пробелы
   if (/^\d+$/.test(t)) return true;         // голое число: «0», «000», «1» — не идентифицирует человека/юрлицо
+  if (PLACEHOLDER_NAME_RE.test(t)) return true; // заглушка Bitrix «Без имени»
   return false;
 }
 
@@ -592,11 +597,19 @@ function normalizeAdviceLabel(row: CustomerRow, rawName: string | null): string 
   // хвосте одного из полей ФИО в самой CRM (не инициал — там имя целиком).
   // Снимаем ОДНУ висячую точку в конце (не трогаем многоточие/аббревиатуры
   // из нескольких точек — те не встречались, но на всякий случай не режем).
-  const name = rawName!.trim().replace(/([^.])\.$/, '$1');
+  // Живой прогон поймал двойной пробел («Бугрова  Ольга» — склейка LAST_NAME+
+  // NAME с пустым отчеством в CRM оставляет два пробела подряд).
+  let name = rawName!.trim().replace(/\s+/g, ' ').replace(/([^.])\.$/, '$1');
   if (row.clientType === 'company') {
     const q = normalizeQuotes(name);
     return q.includes('«') ? q : `«${q}»`;
   }
+  // Живой прогон поймал «денис» рядом с «Кононок Эдуард Владимирович» — то же
+  // «неоднородный вид» из брифа, только по регистру, не по составу слов.
+  // Капитализируем ТОЛЬКО слова, набранные ЦЕЛИКОМ строчными — реальные ФИО
+  // с намеренно смешанным регистром (двойные фамилии через дефис у нас не
+  // встречались отдельно) капитализацию не потеряют.
+  name = name.split(' ').map(w => (w === w.toLowerCase() && w.length > 0 ? w[0]!.toUpperCase() + w.slice(1) : w)).join(' ');
   const isSingleWord = !/\s/.test(name);
   if (isSingleWord && row.lastSoldAmount) {
     return `${name} (сделка ~${fmtSum(row.lastSoldAmount)})`;
