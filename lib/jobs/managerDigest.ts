@@ -529,10 +529,74 @@ async function buildWeeklyHamburger(managerBitrixId: number, mondayStr: string, 
 
 // ── Подсказка по клиенту (движок «Мои заказчики» + кросс-селл) ──────────────
 
+// Задача 2822 (правка владельца, после скриншота реального дайджеста):
+// кликабельное имя заказчика ведёт НЕ в Битрикс, а в НАШ ЛК Монолитики
+// («приучать людей пользоваться сервисом», дословно) — на уже существующую
+// карточку заказчика (features/customers/ui/CustomerCard.tsx, ничего нового
+// не строим), которой в задаче 2822 добавлена адресуемость через URL:
+// /manager/<bitrixId>?tab=customers&customer=<clientKey> (см. ManagerCardPage.tsx
+// и app/api/customers/route.ts::key=). /manager/<id>, а не /manager/me — так
+// ссылка работает одинаково и для самого менеджера (получателя дайджеста), и
+// для админа/директора, открывшего превью чужого дайджеста (canViewManager
+// уже гейтит доступ на уровне страницы, ничего дополнительно проверять не
+// нужно). Домен захардкожен по тому же принципу, что td.monolit-crm.ru в
+// features/customers/ui/shared.ts::clientBitrixUrl — своего getPublicOrigin()
+// у фонового job'а (без NextRequest) нет и не будет.
+const MONOLITIKA_ORIGIN = 'https://monolitika.mlt-it.com';
+export function buildCustomerLink(managerBitrixId: number, clientKey: string): string {
+  return `${MONOLITIKA_ORIGIN}/manager/${managerBitrixId}?tab=customers&customer=${encodeURIComponent(clientKey)}`;
+}
+
+// Мусорные имена (задача 2822, со скриншота: «-», «000») — не выводим вовсе,
+// pickAdvice берёт следующего кандидата по скору (см. ниже).
+function isJunkName(raw: string | null): boolean {
+  if (raw === null) return true;
+  const t = raw.trim();
+  if (t === '') return true;
+  if (/^[\s\-–—.]*$/.test(t)) return true; // только тире/точки/пробелы
+  if (/^0+$/.test(t)) return true;          // «0», «000»
+  return false;
+}
+
+/** Прямые кавычки ВНУТРИ самого названия (частый паттерн CRM: ООО "Название")
+ *  — не оборачиваем ещё одной парой «» (баг со скриншота: «ООО "Название"»
+ *  задвоенные кавычки), просто приводим к ёлочкам. */
+function normalizeQuotes(raw: string): string {
+  const first = raw.indexOf('"');
+  const last = raw.lastIndexOf('"');
+  if (first !== -1 && last !== -1 && first !== last) {
+    return `${raw.slice(0, first)}«${raw.slice(first + 1, last)}»${raw.slice(last + 1)}`;
+  }
+  return raw;
+}
+
+/**
+ * Единый вид имени/названия в дайджесте (задача 2822). Юрлицо — название без
+ * задвоенных кавычек. Физлицо — полное имя, если оно в CRM есть; если имя из
+ * ОДНОГО слова (частый случай — только имя без фамилии, со скриншота
+ * «Валерий», непонятно кто) — добавляем уточнение по сумме последней сделки
+ * (реальный, а не выдуманный признак — города/email в движке заказчиков нет).
+ * null — имя мусорное или отсутствует, вызывающий код пропускает кандидата.
+ */
+function normalizeAdviceLabel(row: CustomerRow, rawName: string | null): string | null {
+  if (isJunkName(rawName)) return null;
+  const name = rawName!.trim();
+  if (row.clientType === 'company') {
+    const q = normalizeQuotes(name);
+    return q.includes('«') ? q : `«${q}»`;
+  }
+  const isSingleWord = !/\s/.test(name);
+  if (isSingleWord && row.lastSoldAmount) {
+    return `${name} (сделка ~${fmtSum(row.lastSoldAmount)})`;
+  }
+  return name;
+}
+
 export interface AdvicePick {
   logDbId: number;
   row: CustomerRow;
   clientName: string;
+  link: string;
   recommendedGroup: string;
   basedOnGroups: string[];
   fallback: boolean;
@@ -598,12 +662,23 @@ export async function pickAdvice(
   if (scored.length === 0) return [];
 
   const picks: AdvicePick[] = [];
-  const names = await resolveClientNames(scored.slice(0, limit + 3).map(s => s.row.clientKey));
+  // Буфер побольше limit — часть кандидатов может отсеяться мусорным именем
+  // (задача 2822), нужен запас, чтобы не остаться с пустым списком там, где
+  // реально были ещё нормальные кандидаты ниже по скору.
+  let names = await resolveClientNames(scored.slice(0, limit + 8).map(s => s.row.clientKey));
 
   for (const cand of scored) {
     if (picks.length >= limit) break;
     const { row, group, basedOn, fallback, pct, score } = cand;
-    const clientName = names.get(row.clientKey) ?? (row.clientType === 'contact' ? `Контакт #${row.clientId}` : `Компания #${row.clientId}`);
+    let rawName = names.get(row.clientKey);
+    if (rawName === undefined) { // кандидат за пределами буфера (много мусорных имён выше по списку) — доберём точечно
+      const one = await resolveClientNames([row.clientKey]);
+      rawName = one.get(row.clientKey) ?? null;
+      names = new Map([...names, ...one]);
+    }
+    const clientName = normalizeAdviceLabel(row, rawName ?? null);
+    if (clientName === null) continue; // мусорное/пустое имя (задача 2822) — не выдумываем, берём следующего кандидата
+
     const rewardHook = await fetchRewardHook(managerBitrixId, basedOn, group).catch(() => null);
 
     const ins = await systemDb().query<{ id: string }>(
@@ -617,7 +692,8 @@ export async function pickAdvice(
 
     picks.push({
       logDbId: Number(ins.rows[0]!.id),
-      row, clientName, recommendedGroup: group, basedOnGroups: basedOn,
+      row, clientName, link: buildCustomerLink(managerBitrixId, row.clientKey),
+      recommendedGroup: group, basedOnGroups: basedOn,
       fallback, pct, signal: row.signals[0]!, score, rewardHook,
     });
   }
@@ -660,9 +736,14 @@ async function fetchRewardHook(managerBitrixId: number, basedOnGroups: string[],
       const progress = Number(quest.progress);
       const target = Number(quest.target);
       const closes = progress + 1 >= target;
+      // Компактно (задача 2822 — плотность блока): полный сгенерированный
+      // title квеста («Допродай «Щебень» клиенту, купившему...до воскресенья»)
+      // сюда НЕ идёт — раздул бы строку; кто продаёт, видит квест целиком в
+      // табе «Квесты». «Дерзай!» — не здесь, один раз в конце всего блока
+      // (см. buildAdviceSection) — иначе повторялось бы фразой на каждую строку.
       return closes
-        ? `Заодно закроешь квест «${quest.title}» — плюс ${quest.reward_eballs} ${currencyName} на баланс. Дерзай!`
-        : `Заодно продвинешь квест «${quest.title}» (${progress}→${progress + 1} из ${target}). Дерзай!`;
+        ? `🎁 закроет квест, +${quest.reward_eballs} ${currencyName}`
+        : `🎁 квест ${progress}→${progress + 1}/${target}, +${quest.reward_eballs} ${currencyName}`;
     }
   } catch { /* миграция 125 могла ещё не накатиться на этом инстансе — тихо пропускаем */ }
 
@@ -680,39 +761,79 @@ async function fetchRewardHook(managerBitrixId: number, basedOnGroups: string[],
     );
     if (Number(already.rows[0]?.n ?? '0') > 0) return null; // уже получена — упоминать нечего (владелец: «не должно быть враньём»)
     const currencyName = await getCurrencyName(db);
-    return `Заберёшь награду «${badge.name}» и ${badge.price} ${currencyName} на баланс. Дерзай!`;
+    return `🎁 «${badge.name}» +${badge.price} ${currencyName}`;
   } catch {
     return null; // таблиц наград ещё нет на этом инстансе — не роняем дайджест из-за бонусной строки
   }
 }
 
-// Ни склонений имени, ни родовых местоимений/глаголов (правка владельца
-// 02.08, живые баги «позвонить Николай» и скрытое «у него»/«он брал» — ФИО
-// из CRM склонять автоматически рискованно, а пол клиента нам неизвестен и
-// не должен угадываться). «дн» без точки — намеренно, чтобы не подставлять
-// «день/дня/дней» под число без словаря склонений.
-function signalReason(row: CustomerRow, signal: CallSignal): string {
-  if (signal === 'active_no_call') {
-    const maxSilent = Math.round(Math.max(...row.activeDeals.map(d => d.daysSilent), 0));
-    return `открыта сделка без звонков уже ${maxSilent} дн`;
+// ── Блок подсказок: группировка по причине, без копипасты (задача 2822) ─────
+// Скриншот реального дайджеста показал: три подсказки подряд, в каждой ПОЛНОСТЬЮ
+// повторяется одна и та же 4-строчная конструкция — «выглядит как робот-копипаста»
+// (владелец, дословно). Переделано: общая причина («нет контакта дольше цикла» /
+// «активная сделка без звонка») выносится в заголовок ГРУППЫ один раз; если
+// давность (цикл/дни тишины) у всех в группе совпадает — тоже в заголовок,
+// иначе — индивидуально в строке. По каждому заказчику — только уникальное:
+// имя (ссылкой), что купил → что предложить (%), прикормка (если есть).
+// Жёсткое правило: ни одна ФРАЗА не встречается в сообщении дважды — общее
+// сказано один раз в заголовке группы, «Дерзай!» — один раз в конце блока
+// (если хоть где-то есть прикормка), а не на каждой строке.
+
+/** Число, определяющее «совпадает ли причина у всех в группе»: для
+ *  active_no_call — дней тишины по самой давней активной сделке; для
+ *  overdue_repeat — личный цикл повторки заказчика (округлённый). */
+function reasonValue(pick: AdvicePick): number {
+  if (pick.signal === 'active_no_call') {
+    return Math.round(Math.max(...pick.row.activeDeals.map(d => d.daysSilent), 0));
   }
-  return `нет контакта дольше обычного цикла (обычно возвращается за покупкой через ~${Math.round(row.cycleDays)} дн.)`;
+  return Math.round(pick.row.cycleDays);
 }
 
-function adviceLine(pick: AdvicePick, verbose: boolean): string {
-  const { row, clientName, recommendedGroup, basedOnGroups, fallback, pct, signal, rewardHook } = pick;
-  // Имя/компания — ИМЕНИТЕЛЬНАЯ метка перед двоеточием, не объект глагола
-  // «позвонить» (тот требовал бы дательного падежа: «позвонить Николаю», а
-  // автоматически склонять произвольные ФИО из CRM небезопасно).
-  const label = row.clientType === 'company' ? `«${clientName}»` : clientName;
-  const reason = signalReason(row, signal);
-  const hookSuffix = rewardHook ? ` ${rewardHook}` : '';
-  if (fallback || basedOnGroups.length === 0) {
-    return `💡 ${label}: пора позвонить — ${reason}. Что предложить — глянь карточку заказчика, там видно, чем раньше интересовался заказчик.${hookSuffix}`;
+function groupHeader(signal: CallSignal, uniformValue: number | null): string {
+  if (signal === 'active_no_call') {
+    return uniformValue !== null
+      ? `[b]Активная сделка без звонка уже ~${uniformValue} дн.:[/b]`
+      : '[b]Активная сделка без звонка:[/b]';
   }
-  const basedOnStr = basedOnGroups.map(g => `«${g}»`).join(' + ');
-  const tail = verbose ? ` (так уходит примерно ${pct}% похожих заказчиков)` : '';
-  return `💡 ${label}: пора позвонить — ${reason}. Есть покупка ${basedOnStr} — обычно следом берут «${recommendedGroup}»${tail}. Стоит предложить!${hookSuffix}`;
+  return uniformValue !== null
+    ? `[b]Нет контакта дольше обычного цикла (~${uniformValue} дн.):[/b]`
+    : '[b]Нет контакта дольше обычного цикла:[/b]';
+}
+
+function buildAdviceSection(picks: AdvicePick[]): string[] {
+  if (picks.length === 0) return [];
+  const lines: string[] = [];
+
+  // Группировка СТРОГО по причине (владелец: «группируй по причине, а не
+  // сваливай в одну шапку») — сохраняем порядок первого появления сигнала.
+  const order: CallSignal[] = [];
+  const bySignal = new Map<CallSignal, AdvicePick[]>();
+  for (const p of picks) {
+    if (!bySignal.has(p.signal)) order.push(p.signal);
+    (bySignal.get(p.signal) ?? bySignal.set(p.signal, []).get(p.signal)!).push(p);
+  }
+
+  let anyReward = false;
+  for (const signal of order) {
+    const group = bySignal.get(signal)!;
+    const values = group.map(reasonValue);
+    const uniform = values.every(v => v === values[0]) ? values[0] : null;
+    lines.push(groupHeader(signal, uniform));
+    for (const p of group) {
+      // Давность разная внутри группы (владелец: «не выноси в шапку, показывай
+      // индивидуально») — дописываем к конкретному заказчику.
+      const valueSuffix = uniform === null ? ` (${reasonValue(p)} дн.)` : '';
+      const hasOffer = !p.fallback && p.basedOnGroups.length > 0;
+      const offerStr = hasOffer
+        ? `${p.basedOnGroups.map(g => `«${g}»`).join(' + ')} → «${p.recommendedGroup}» (${p.pct}%)`
+        : 'нет чёткой пары — смотри карточку';
+      const rewardSuffix = p.rewardHook ? ` ${p.rewardHook}` : '';
+      if (p.rewardHook) anyReward = true;
+      lines.push(`• [URL=${p.link}]${p.clientName}[/URL]${valueSuffix} — ${offerStr}${rewardSuffix}`);
+    }
+  }
+  if (anyReward) lines.push('Дерзай! 😎');
+  return lines;
 }
 
 // ── Сборка сообщений ──────────────────────────────────────────────────────────
@@ -721,11 +842,11 @@ function hamburgerText(slots: HamburgerSlot[]): string[] {
   return slots.map(s => s.text);
 }
 
-export function buildDailyDigestMessage(dateStr: string, hamburger: HamburgerSlot[], advice: AdvicePick | null, includeNumbers: boolean, includeAdvice: boolean): string {
+export function buildDailyDigestMessage(dateStr: string, hamburger: HamburgerSlot[], advice: AdvicePick[], includeNumbers: boolean, includeAdvice: boolean): string {
   const lines = [`[b]Доброе утро! Дайджест за ${fmtDateRu(dateStr)}[/b]`];
   if (includeNumbers && hamburger.length > 0) lines.push('', ...hamburgerText(hamburger));
   else if (includeNumbers) lines.push('', 'Сегодня без ярких цифр — не за что особо ни похвалить, ни поругать 🙂');
-  if (includeAdvice && advice) { lines.push(''); lines.push(adviceLine(advice, false)); }
+  if (includeAdvice && advice.length > 0) lines.push('', ...buildAdviceSection(advice));
   return lines.join('\n');
 }
 
@@ -734,8 +855,7 @@ export function buildWeeklyDigestMessage(weekLabel: string, hamburger: Hamburger
   if (includeNumbers && hamburger.length > 0) lines.push('', ...hamburgerText(hamburger));
   else if (includeNumbers) lines.push('', 'На этой неделе без ярких цифр.');
   if (includeAdvice && advice.length > 0) {
-    lines.push('', '[b]Кому стоит позвонить на этой неделе:[/b]');
-    for (const a of advice) lines.push(adviceLine(a, true));
+    lines.push('', '[b]Кому стоит позвонить на этой неделе:[/b]', ...buildAdviceSection(advice));
   }
   return lines.join('\n');
 }
@@ -754,12 +874,12 @@ export async function sendDailyDigestForManager(m: ManagerRef, opts: { testRun?:
   const metrics = await fetchDayMetrics(m.bitrixId, dateStr);
   const hamburger = prefs.adviceNumbers ? await buildDailyHamburger(m.bitrixId, dateStr, metrics) : [];
   const picks = prefs.adviceCustomers ? await pickAdvice(m.bitrixId, 'daily', 1, opts.testRun ?? false) : [];
-  const message = buildDailyDigestMessage(dateStr, hamburger, picks[0] ?? null, prefs.adviceNumbers, prefs.adviceCustomers);
+  const message = buildDailyDigestMessage(dateStr, hamburger, picks, prefs.adviceNumbers, prefs.adviceCustomers);
 
   const trace = {
     manager: { bitrixId: m.bitrixId, name: m.name }, dateStr, metrics,
     hamburgerSlots: hamburger.map(s => s.trace),
-    advice: picks.map(p => ({ logDbId: p.logDbId, clientKey: p.row.clientKey, recommendedGroup: p.recommendedGroup, fallback: p.fallback, pct: p.pct, signal: p.signal, score: p.score, rewardHook: p.rewardHook })),
+    advice: picks.map(p => ({ logDbId: p.logDbId, clientKey: p.row.clientKey, clientName: p.clientName, link: p.link, recommendedGroup: p.recommendedGroup, fallback: p.fallback, pct: p.pct, signal: p.signal, score: p.score, rewardHook: p.rewardHook })),
     prefsApplied: prefs,
   };
   const suppressReason = opts.testRun ? null : subscriptionBlockReason(prefs, 'daily');
@@ -780,7 +900,7 @@ export async function sendWeeklyDigestForManager(m: ManagerRef, opts: { testRun?
   const trace = {
     manager: { bitrixId: m.bitrixId, name: m.name }, weekLabel, metrics,
     hamburgerSlots: hamburger.map(s => s.trace),
-    advice: picks.map(p => ({ logDbId: p.logDbId, clientKey: p.row.clientKey, recommendedGroup: p.recommendedGroup, fallback: p.fallback, pct: p.pct, signal: p.signal, score: p.score, rewardHook: p.rewardHook })),
+    advice: picks.map(p => ({ logDbId: p.logDbId, clientKey: p.row.clientKey, clientName: p.clientName, link: p.link, recommendedGroup: p.recommendedGroup, fallback: p.fallback, pct: p.pct, signal: p.signal, score: p.score, rewardHook: p.rewardHook })),
     prefsApplied: prefs,
   };
   const suppressReason = opts.testRun ? null : subscriptionBlockReason(prefs, 'weekly');

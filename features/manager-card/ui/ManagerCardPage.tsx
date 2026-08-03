@@ -246,8 +246,15 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get('tab');
+  // Деп-линк по заказчику (задача 2822, из дайджеста бота «Аналитик»):
+  // ?customer=<clientKey> без явного ?tab= молча подразумевает вкладку
+  // «Мои заказчики» — ссылку из бота удобнее делать одним параметром, а не
+  // двумя обязательными.
+  const customerParam = searchParams.get('customer');
   const validTabKeys = MANAGER_TABS.map(t => t.key) as string[];
-  const tab: ManagerTabKey = tabParam && validTabKeys.includes(tabParam) ? (tabParam as ManagerTabKey) : 'profile';
+  const tab: ManagerTabKey = tabParam && validTabKeys.includes(tabParam)
+    ? (tabParam as ManagerTabKey)
+    : customerParam ? 'customers' : 'profile';
   const goToTab = useCallback((next: ManagerTabKey) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set('tab', next);
@@ -432,7 +439,8 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       )}
       {tabbed && tab === 'customers' && (
         <CustomersTab managerId={managerId} isSelf={showBadges}
-          initialFilter={customersDeepLink?.filter} initialCategory={customersDeepLink?.category} />
+          initialFilter={customersDeepLink?.filter} initialCategory={customersDeepLink?.category}
+          initialCustomerKey={customerParam ?? undefined} />
       )}
       {tabbed && tab === 'quests' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
       {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} forceReadOnly={forceReadOnly} />}

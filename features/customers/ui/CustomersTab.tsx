@@ -70,6 +70,28 @@ const PAGE_SIZE = 50;
 
 type Sort = { key: string; dir: 'desc' | 'asc' } | null;
 
+// Деп-линк по clientKey (задача 2822 — кликабельные имена заказчиков в
+// дайджесте бота «Аналитик»): открывает КОНКРЕТНУЮ карточку напрямую, минуя
+// фильтр/страницу/сортировку — отдельный лёгкий запрос, не завязан на то, что
+// сейчас показано в списке (заказчик может быть на любой другой странице/
+// в другой вкладке-фильтре).
+function useCustomerByKey(managerId: string, isSelf: boolean, key: string | null) {
+  return useQuery<{ row: ApiRow | null }>({
+    queryKey: ['customer-by-key', isSelf ? 'me' : managerId, key],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (!isSelf) qs.set('bitrixId', managerId);
+      qs.set('key', key!);
+      const res = await fetch(`/api/customers?${qs}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    enabled: !!key,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
 function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort, category: string) {
   return useQuery<ApiResponse>({
     queryKey: ['customers', isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? '', category],
@@ -357,11 +379,14 @@ function RecommendCell({ rec }: { rec: Recommendation | null }) {
 
 /** Список заказчиков одного менеджера: фильтры + поиск + пагинация.
  *  Используется и в табе ЛК, и в провале из блока РОПа. */
-export function CustomersList({ managerId, isSelf, initialFilter, initialCategory }: {
+export function CustomersList({ managerId, isSelf, initialFilter, initialCategory, initialCustomerKey }: {
   managerId: string; isSelf: boolean;
   // Деп-линк из «Планёрки» (01.08): открыть список сразу в нужном срезе
   // (например filter='overdue' — «пора позвонить», category='key' — ключевые).
   initialFilter?: Filter; initialCategory?: string;
+  // Деп-линк по конкретному заказчику (задача 2822, из ?customer= в URL) —
+  // открывает его карточку сразу при заходе, независимо от фильтра/страницы.
+  initialCustomerKey?: string;
 }) {
   const [filter, setFilter] = useState<Filter>(initialFilter ?? 'all');
   const [searchInput, setSearchInput] = useState('');
@@ -370,6 +395,21 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   const [sort, setSort] = useState<Sort>(null);
   const [cardRow, setCardRow] = useState<ApiRow | null>(null);
   const [category, setCategory] = useState<string>(initialCategory ?? 'all'); // фильтр по категории (01.08)
+
+  // Деп-линк по заказчику (задача 2822): одноразовый запрос при заходе — после
+  // первого ответа (найден/не найден) ключ сбрасывается, повторные ререндеры
+  // не рефетчат. «Не найден» — видимая, но ненавязчивая полоска (снят с учёта,
+  // сменил менеджера, устаревшая ссылка — так и остаётся честно объяснённым).
+  const [deepLinkKey, setDeepLinkKey] = useState<string | null>(initialCustomerKey ?? null);
+  const [deepLinkMissing, setDeepLinkMissing] = useState(false);
+  const deepLinkQuery = useCustomerByKey(managerId, isSelf, deepLinkKey);
+  useEffect(() => {
+    if (!deepLinkQuery.data) return;
+    if (deepLinkQuery.data.row) setCardRow(deepLinkQuery.data.row);
+    else setDeepLinkMissing(true);
+    setDeepLinkKey(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkQuery.data]);
 
   const qc = useQueryClient();
   const [markBusy, setMarkBusy] = useState(false);
@@ -419,6 +459,12 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
 
   return (
     <div className="flex flex-col gap-2.5">
+      {deepLinkMissing && (
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
+          <span>Заказчик по ссылке не найден в вашем списке — возможно, сменил менеджера или ссылка устарела.</span>
+          <button type="button" onClick={() => setDeepLinkMissing(false)} className="shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">✕</button>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5 overflow-x-auto">
           {FILTERS.map(f => (
@@ -594,10 +640,10 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   );
 }
 
-export function CustomersTab({ managerId, isSelf, initialFilter, initialCategory }: {
-  managerId: string; isSelf: boolean; initialFilter?: Filter; initialCategory?: string;
+export function CustomersTab({ managerId, isSelf, initialFilter, initialCategory, initialCustomerKey }: {
+  managerId: string; isSelf: boolean; initialFilter?: Filter; initialCategory?: string; initialCustomerKey?: string;
 }) {
-  return <CustomersList managerId={managerId} isSelf={isSelf} initialFilter={initialFilter} initialCategory={initialCategory} />;
+  return <CustomersList managerId={managerId} isSelf={isSelf} initialFilter={initialFilter} initialCategory={initialCategory} initialCustomerKey={initialCustomerKey} />;
 }
 
 // ── Блок РОПа: заказчики команды (managed-depts, как «Моя команда») ──────────
