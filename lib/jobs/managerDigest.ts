@@ -588,7 +588,11 @@ function normalizeQuotes(raw: string): string {
  */
 function normalizeAdviceLabel(row: CustomerRow, rawName: string | null): string | null {
   if (isJunkName(rawName)) return null;
-  const name = rawName!.trim();
+  // Живой прогон поймал «Белозеров Владимир Дмитриевич.» — лишняя точка в
+  // хвосте одного из полей ФИО в самой CRM (не инициал — там имя целиком).
+  // Снимаем ОДНУ висячую точку в конце (не трогаем многоточие/аббревиатуры
+  // из нескольких точек — те не встречались, но на всякий случай не режем).
+  const name = rawName!.trim().replace(/([^.])\.$/, '$1');
   if (row.clientType === 'company') {
     const q = normalizeQuotes(name);
     return q.includes('«') ? q : `«${q}»`;
