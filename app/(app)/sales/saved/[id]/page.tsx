@@ -1,9 +1,22 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import type { SavedReport } from '@/lib/saved-reports/types';
 import { SalesReportPage } from '@/features/reports/ui/SalesReportPage';
+import { AccessDenied } from '@/components/ui/AccessDenied';
 
+// Задача 2824 (аудит, раздел 3): раньше ЛЮБОЙ отказ — «сессии нет», «отчёта
+// не существует», «отчёт существует, но чужой и не расшарен» — отвечал одним
+// и тем же generic notFound(). Это САМЫЙ частый «сущностный» URL приложения
+// (боты «Аналитик»/«Стас» шлют именно такие ссылки на конкретный отчёт), и
+// «страница не найдена» для «нет прав» вводит в заблуждение: получатель решает,
+// что отчёт удалили, хотя на самом деле его просто не расшарили. Три случая
+// теперь различаются:
+//  1. нет сессии → redirect('/login') (как везде в проекте);
+//  2. строки в БД вообще нет (или soft-deleted) → notFound() — это ЧЕСТНЫЙ 404,
+//     отчёт правда не существует;
+//  3. строка есть, но не твоя и не расшарена → AccessDenied — было отчёт,
+//     просто не для тебя.
 export default async function SavedReportPage({
   params,
 }: {
@@ -11,7 +24,7 @@ export default async function SavedReportPage({
 }) {
   const { id } = await params;
   const session = await getSession();
-  if (!session) return notFound();
+  if (!session) redirect('/login');
 
   const db = systemDb();
   const res = await db.query<SavedReport>(
@@ -55,12 +68,21 @@ export default async function SavedReportPage({
             fixed_comparison AS "fixedComparison",
             created_at AS "createdAt"
      FROM saved_reports
-     WHERE id = $1 AND (user_login = $2 OR is_shared = true) AND deleted_at IS NULL`,
-    [id, session.login]
+     WHERE id = $1 AND deleted_at IS NULL`,
+    [id]
   );
 
+  // Случай 2: отчёта правда нет (или в корзине) — честный 404.
   if (!res.rows.length) return notFound();
   const preset = res.rows[0];
+
+  // Случай 3: отчёт существует, но не твой и не расшарен — «недостаточно
+  // прав», не «страницы нет». (Владелец видит свой отчёт всегда; is_shared —
+  // видимость витрины «Роп монитор»/«Отчёты Стаса», не зависит от ролевых
+  // прав section.* — доступ к самим витринам управляется навигацией/ссылкой.)
+  if (preset.userLogin !== session.login && !preset.isShared) {
+    return <AccessDenied reason="Этот отчёт вам недоступен — он не ваш и не расшарен. Попросите автора расшарить отчёт или пришлите ссылку на свою копию." />;
+  }
 
   return (
     <SalesReportPage

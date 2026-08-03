@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useUrlState, enumParam } from '@/lib/hooks/useUrlState';
 import { Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { PayoutManageBlock } from './PayoutManage';
 import { InventoryManageBlock } from './InventoryManage';
@@ -608,8 +609,15 @@ function TabBar({ active, onChange }: { active: TabKey; onChange: (k: TabKey) =>
   );
 }
 
+const TAB_KEYS = TABS.map(t => t.key);
+
 export function RewardsSettingsPage() {
-  const [tab, setTab] = useState<TabKey>('dashboard');
+  // Задача 2824 (план из аудита адресуемости, п.1.4): 12 вкладок раздела —
+  // единственное состояние всей страницы (см. шапку блока TABS выше) — теперь
+  // адресуемы через ?tab=, по образцу ManagerCardPage.tsx::goToTab (тот же
+  // паттерн: push, не replace — переключение таба это смысловой шаг истории,
+  // «назад» должен возвращать на предыдущую вкладку, а не выкидывать со страницы).
+  const [tab, setTab] = useUrlState<TabKey>('tab', { ...enumParam(TAB_KEYS, 'dashboard'), mode: 'push' });
   const qc = useQueryClient();
   const [recomputeResult, setRecomputeResult] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);

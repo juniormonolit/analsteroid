@@ -1,6 +1,7 @@
 'use client';
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { useUrlState, dateRangeParam, enumParam, listParam, stringParam, type UrlDateRange } from '@/lib/hooks/useUrlState';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Trash2 } from 'lucide-react';
 import { hasPerm } from '@/lib/auth/perms';
@@ -286,6 +287,20 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const router = useRouter();
   const qc = useQueryClient();
 
+  // Задача 2824: приоритет источников состояния — URL (если параметр явно
+  // присутствует в адресе) ПОБЕЖДАЕТ и пресет сохранённого отчёта, и restore
+  // вкладки из localStorage. Иначе открытие диплинка вида
+  // `/sales/saved/<id>?dealScope=primary` тут же затиралось бы обратно
+  // значением из сохранённого отчёта на первом же useEffect ниже — весь смысл
+  // «пришли ссылку с настройками» терялся бы молча. urlHasRef — снимок ДО
+  // применения preset/tab-restore эффектов на монтировании; сами эти эффекты
+  // держат стабильный deps-массив (см. их eslint-disable рядом), поэтому
+  // читаем актуальные searchParams через ref, а не добавляем их в зависимости.
+  const searchParams = useSearchParams();
+  const urlHasRef = useRef(searchParams);
+  urlHasRef.current = searchParams;
+  const urlHas = useCallback((key: string) => urlHasRef.current.has(key), []);
+
   // Пункт 3а спеки: тумблер «Обычная/Про» из ЛК. Пока грузится/не резолвится — не
   // урезаем UI (fail-open к «Про»), чтобы не мигать тулбаром на первом рендере.
   const { data: uiModeData } = useQuery<{ uiMode: 'basic' | 'pro' }>({
@@ -355,35 +370,53 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     qc.invalidateQueries({ queryKey: ['saved-reports-trash'] });
     router.push('/home');
   }
-  const [period, setPeriod]             = useState<DateRange>(defaultPeriod);
+  // ── Задача 2824 (план из аудита адресуемости, п.1.1) ────────────────────────
+  // Поля отчёта, которые реально определяют «какой это отчёт» — период,
+  // сравнение, срез сделок/клиентов, группировка, набор метрик, поиск,
+  // сортировка, доп.фильтры — переведены на useUrlState: это то, что
+  // ФАКТИЧЕСКИ уходит в /api/reports/run (см. queryKey/queryFn ниже) и то,
+  // ради чего пересылают ссылку на отчёт. Формат-настройки отображения (зебра,
+  // границы, цвет метрик, точность, дрилл-даун-детали и т.п.) остаются
+  // локальным useState — это персональные предпочтения ПРОСМОТРА, а не
+  // «какой отчёт открыт» (та же граница, что и так уже проведена для viewPrefs
+  // в localStorage, см. ниже). Контракт хука и разбор границы — WORKLOG,
+  // задача 2824, и `ai_docs/fresh_docs/DESIGN_GUIDELINES.md`.
+  //
+  // default вычисляется ОДИН раз на монтирование (не на каждый рендер) — иначе
+  // «текущий момент» внутри defaultPeriod()/defaultComparison() гулял бы между
+  // рендерами и путал сравнение «равно дефолту → не пишем в URL» (см. коммент
+  // в lib/hooks/useUrlState.ts::dateRangeParam).
+  const initialPeriod = useMemo<UrlDateRange>(defaultPeriod, []); // eslint-disable-line react-hooks/exhaustive-deps
   // Дефолт НОВОГО отчёта (без сохранённого пресета) — предыдущий период ТОЙ ЖЕ
   // длины, вплотную к началу основного (задача 1666: регрессия f9d69d4 подставляла
   // сюда календарный «весь предыдущий месяц» — это семантика ЯВНОГО клика по
   // быстрой кнопке-пресету, см. calendarComparisonForPreset в lib/period, а не
   // дефолта конструктора). См. lib/period::defaultComparison.
-  const [comparison, setComparison]     = useState<DateRange>(defaultComparison);
-  const [dealScope, setDealScope]       = useState<DealScope>('all');
-  const [clientType, setClientType]     = useState<ClientType>('all');
-  const [grouping, setGrouping]         = useState<Grouping>('none');
+  const initialComparison = useMemo<UrlDateRange>(defaultComparison, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [period, setPeriod]             = useUrlState<DateRange>('period', dateRangeParam(initialPeriod));
+  const [comparison, setComparison]     = useUrlState<DateRange>('cmp', dateRangeParam(initialComparison));
+  const [dealScope, setDealScope]       = useUrlState<DealScope>('dealScope', enumParam(['primary', 'repeat', 'all'], 'all'));
+  const [clientType, setClientType]     = useUrlState<ClientType>('clientType', enumParam(['all', 'b2c', 'b2b'], 'all'));
+  const [grouping, setGrouping]         = useUrlState<Grouping>('grouping', enumParam(['none', 'team', 'branch', 'total'], 'none'));
   // «Создать отчёт» (задача 1572): новый отчёт стартует БЕЗ метрик (пустая
   // колонка сущности + подсказка ниже) — preset (если он всё же передан,
   // например прямой заход на /sales/saved/[id]) всегда выигрывает у isNew
   // через useEffect ниже, так что порядок приоритета верный.
-  const [metricIds, setMetricIds]       = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
+  const [metricIds, setMetricIds]       = useUrlState<string[]>('metrics', listParam(isNew ? [] : DEFAULT_METRIC_IDS));
   const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
   // Выбор отделов — настройка АККАУНТА, не отчёта (задача Иосифа 15.07, миграция 102):
   // одно значение на пользователя для всех отчётов; из конфигов сохранённых отчётов
   // departmentIds больше не применяется (см. пропуск в useEffect preset ниже).
   const { departmentIds, ready: departmentsReady, setDepartmentIds } = useAccountDepartments();
-  const [comparisonDisplay, setComparisonDisplay] = useState<ComparisonDisplay>('current');
+  const [comparisonDisplay, setComparisonDisplay] = useUrlState<ComparisonDisplay>('cmpDisplay', enumParam(['full', 'partial', 'compact', 'current'], 'current'));
   const [metricDisplayModes, setMetricDisplayModes] = useState<Record<string, ComparisonDisplay>>({});
   const [comparisonThreshold, setComparisonThreshold] = useState<number>(5);
   // Дефолт группировки по товарам для НОВОГО отчёта — «Категория КЦ» (kc), правка
   // владельца (Серёга, 13.07): во всех отчётах товары по умолчанию считаются по
   // системе «Категория КЦ», а не «По наибольшему» (by_max).
-  const [productGroupMode, setProductGroupMode]   = useState<ProductGroupMode>('kc');
+  const [productGroupMode, setProductGroupMode]   = useUrlState<ProductGroupMode>('productGroupMode', enumParam(['kc', 'by_max'], 'kc'));
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
-  const [search, setSearch]             = useState('');
+  const [search, setSearch]             = useUrlState<string>('q', stringParam(''));
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
   // «График из отчёта» (фича Серёги 01.08): цель открытого графика метрики.
   const [chartTarget, setChartTarget]   = useState<MetricChartTarget | null>(null);
@@ -410,15 +443,21 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const [borderMode, setBorderMode] = useState<BorderMode>('grid');
   const [themeAccent, setThemeAccent] = useState<string | null>(null); // legacy, UI выпилен
   const [numberAlign, setNumberAlign] = useState<'left' | 'center' | 'right'>('center');
-  const [accountType, setAccountType] = useState<'managers' | 'logists' | 'all'>('managers');
+  const [accountType, setAccountType] = useUrlState<'managers' | 'logists' | 'all'>('accountType', enumParam(['managers', 'logists', 'all'], 'managers'));
   const [drilldownDuplicate, setDrilldownDuplicate] = useState(true);
   const [drilldownMetricIds, setDrilldownMetricIds] = useState<string[]>([]);
   const [dealFields, setDealFields] = useState<string[] | undefined>(undefined);
   const [drilldownGrouped, setDrilldownGrouped] = useState(true);
-  const [sourceDimension, setSourceDimension] = useState<SourceDimension>('brand');
+  const [sourceDimension, setSourceDimension] = useUrlState<SourceDimension>('sourceDim', enumParam(
+    ['brand', 'platform', 'contact_type', 'ad_channel', 'channel_group', 'branch', 'source'], 'brand',
+  ));
   const [drilldownDimension, setDrilldownDimension] = useState<DrilldownDimension>('contact_type');
-  const [sortBy, setSortBy] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [sortBy, setSortBy] = useUrlState<string | null>('sortBy', {
+    parse: (raw) => raw,
+    serialize: (v) => v,
+    default: null,
+  });
+  const [sortDir, setSortDir] = useUrlState<'asc' | 'desc'>('sortDir', enumParam(['asc', 'desc'], 'desc'));
   // Фильтр по цвету/условию + сортировка по цвету (правка владельца 09.07, панель
   // настроек метрики → «Фильтр и сортировка»). Намеренно СЕССИОННОЕ состояние — не
   // персистится в SavedReport (меньше риска на первый заход), сбрасывается сменой отчёта.
@@ -430,8 +469,14 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // персистентности потребовало бы миграции БД (saved_reports — типизированная
   // таблица без catch-all JSON-колонки, см. отчёт задачи), что вне разрешённых
   // правок этой задачи; сбрасывается сменой отчёта, как metricFilters.
-  const [createdTimeFilter, setCreatedTimeFilter] = useState<CreatedTimeFilter>('all');
-  const [firstTouchFilter, setFirstTouchFilter] = useState<FirstTouchFilter>('all');
+  // Задача 2824: в URL всё же вынесены (это тоже «фильтры», см. план п.1.1) —
+  // сессионность касалась только SavedReport-персистентности, не адресуемости.
+  const [createdTimeFilter, setCreatedTimeFilter] = useUrlState<CreatedTimeFilter>('createdTime', enumParam(
+    ['all', 'business_hours', 'weekday_after_hours', 'weekend'], 'all',
+  ));
+  const [firstTouchFilter, setFirstTouchFilter] = useUrlState<FirstTouchFilter>('firstTouch', enumParam(
+    ['all', 'off_hours', 'business_hours'], 'all',
+  ));
   const [columnGroups, setColumnGroups] = useState<{ name: string; metricIds: string[] }[]>([]);
   const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
 
@@ -445,28 +490,31 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
 
   useEffect(() => {
     if (!preset) return;
+    // Задача 2824: каждое поле, мигрировавшее на useUrlState, применяется из
+    // пресета, ТОЛЬКО если его нет явно в URL — см. urlHas выше. Остальные
+    // (формат-настройки просмотра) применяются как раньше, безусловно.
     if (preset.periodMode === 'relative' && preset.relativePeriod) {
       const p = resolveRelativePeriod(preset.relativePeriod);
       const c = resolveComparison(p, preset.comparisonMode, preset.relativePeriod);
-      setPeriod(p);
-      setComparison(c);
+      if (!urlHas('period')) setPeriod(p);
+      if (!urlHas('cmp')) setComparison(c);
     } else if (preset.fixedPeriod) {
-      setPeriod({ from: new Date(preset.fixedPeriod.from), to: new Date(preset.fixedPeriod.to) });
-      if (preset.fixedComparison) {
+      if (!urlHas('period')) setPeriod({ from: new Date(preset.fixedPeriod.from), to: new Date(preset.fixedPeriod.to) });
+      if (preset.fixedComparison && !urlHas('cmp')) {
         setComparison({ from: new Date(preset.fixedComparison.from), to: new Date(preset.fixedComparison.to) });
       }
     }
-    setDealScope(preset.dealScope);
-    setClientType(preset.clientType);
-    setGrouping(preset.grouping);
-    setComparisonDisplay(preset.comparisonDisplay);
+    if (!urlHas('dealScope')) setDealScope(preset.dealScope);
+    if (!urlHas('clientType')) setClientType(preset.clientType);
+    if (!urlHas('grouping')) setGrouping(preset.grouping);
+    if (!urlHas('cmpDisplay')) setComparisonDisplay(preset.comparisonDisplay);
     setMetricDisplayModes(preset.metricDisplayModes ?? {});
     setComparisonThreshold(preset.comparisonThreshold ?? 5);
-    setProductGroupMode(preset.productGroupMode);
+    if (!urlHas('productGroupMode')) setProductGroupMode(preset.productGroupMode);
     // preset.departmentIds сознательно НЕ применяется: выбор отделов — настройка
     // аккаунта (useAccountDepartments), сохранённый отчёт её не перетирает.
     const ids = preset.metricIds.length ? preset.metricIds : ['all_core'];
-    setMetricIds(ids);
+    if (!urlHas('metrics')) setMetricIds(ids);
     setFetchedMetricIds(ids);
     setHighlights(preset.metricHighlights ?? {});
     setPinnedMetricIds(preset.pinnedMetricIds ?? []);
@@ -481,15 +529,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     setBorderMode(preset.borderMode ?? 'grid');
     setThemeAccent(preset.themeAccent ?? null);
     setNumberAlign(preset.numberAlign ?? 'center');
-    setAccountType(preset.accountType ?? 'managers');
+    if (!urlHas('accountType')) setAccountType(preset.accountType ?? 'managers');
     setDrilldownDuplicate(preset.drilldownDuplicateMetrics ?? true);
     setDrilldownMetricIds(preset.drilldownMetricIds ?? []);
     setDealFields(preset.dealFields ?? undefined);
     setDrilldownGrouped(preset.drilldownGrouped ?? true);
-    setSourceDimension((preset.sourceDimension as SourceDimension) ?? 'brand');
+    if (!urlHas('sourceDim')) setSourceDimension((preset.sourceDimension as SourceDimension) ?? 'brand');
     setDrilldownDimension((preset.drilldownDimension as DrilldownDimension) ?? 'contact_type');
-    setSortBy(preset.sortBy ?? null);
-    setSortDir(preset.sortDir ?? 'desc');
+    if (!urlHas('sortBy')) setSortBy(preset.sortBy ?? null);
+    if (!urlHas('sortDir')) setSortDir(preset.sortDir ?? 'desc');
     setColumnGroups(preset.columnGroups ?? []);
   }, [preset?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -530,18 +578,25 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     createdTimeFilter, firstTouchFilter, search,
   }), [period, comparison, dealScope, clientType, grouping, metricIds, comparisonDisplay, metricDisplayModes, comparisonThreshold, productGroupMode, highlights, pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides, accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, numberAlign, accountType, drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped, sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups, metricFilters, createdTimeFilter, firstTouchFilter, search]);
 
-  const applyTabSnapshot = useCallback((s: ReportTabSnapshot) => {
-    setPeriod({ from: new Date(s.period.from), to: new Date(s.period.to) });
-    setComparison({ from: new Date(s.comparison.from), to: new Date(s.comparison.to) });
-    setDealScope(s.dealScope as DealScope);
-    setClientType(s.clientType as ClientType);
-    setGrouping(s.grouping as Grouping);
-    setMetricIds(s.metricIds ?? []);
-    setFetchedMetricIds(s.metricIds ?? []);
-    setComparisonDisplay(s.comparisonDisplay as ComparisonDisplay);
+  // Задача 2824: respectUrl=true — только для ПЕРВОГО restore на монтировании
+  // (см. вызов ниже) — там URL-параметр диплинка должен победить сохранённую
+  // вкладку. При явном действии пользователя (клик по другой открытой вкладке,
+  // закрытие текущей — handleTabSelect/handleTabClose ниже) снапшот вкладки
+  // применяется целиком БЕЗ оглядки на URL — это осознанная смена конфигурации,
+  // и адрес закономерно обновится ПОД неё (URL — следствие, не помеха).
+  const applyTabSnapshot = useCallback((s: ReportTabSnapshot, opts?: { respectUrl?: boolean }) => {
+    const keep = (key: string) => !!opts?.respectUrl && urlHasRef.current.has(key);
+    if (!keep('period')) setPeriod({ from: new Date(s.period.from), to: new Date(s.period.to) });
+    if (!keep('cmp')) setComparison({ from: new Date(s.comparison.from), to: new Date(s.comparison.to) });
+    if (!keep('dealScope')) setDealScope(s.dealScope as DealScope);
+    if (!keep('clientType')) setClientType(s.clientType as ClientType);
+    if (!keep('grouping')) setGrouping(s.grouping as Grouping);
+    if (!keep('metrics')) { setMetricIds(s.metricIds ?? []); setFetchedMetricIds(s.metricIds ?? []); }
+    else setFetchedMetricIds(s.metricIds ?? []);
+    if (!keep('cmpDisplay')) setComparisonDisplay(s.comparisonDisplay as ComparisonDisplay);
     setMetricDisplayModes((s.metricDisplayModes ?? {}) as Record<string, ComparisonDisplay>);
     setComparisonThreshold(s.comparisonThreshold ?? 5);
-    setProductGroupMode(s.productGroupMode as ProductGroupMode);
+    if (!keep('productGroupMode')) setProductGroupMode(s.productGroupMode as ProductGroupMode);
     setHighlights((s.highlights ?? {}) as Record<string, MetricHighlightConfig>);
     setPinnedMetricIds(s.pinnedMetricIds ?? []);
     setMetricDecimalOverrides(s.metricDecimalOverrides ?? {});
@@ -554,20 +609,20 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     setZebra(s.zebra ?? false);
     setBorderMode((s.borderMode ?? 'grid') as BorderMode);
     setNumberAlign((s.numberAlign ?? 'center') as 'left' | 'center' | 'right');
-    setAccountType((s.accountType ?? 'managers') as 'managers' | 'logists' | 'all');
+    if (!keep('accountType')) setAccountType((s.accountType ?? 'managers') as 'managers' | 'logists' | 'all');
     setDrilldownDuplicate(s.drilldownDuplicate ?? true);
     setDrilldownMetricIds(s.drilldownMetricIds ?? []);
     setDealFields(s.dealFields ?? undefined);
     setDrilldownGrouped(s.drilldownGrouped ?? true);
-    setSourceDimension((s.sourceDimension ?? 'brand') as SourceDimension);
+    if (!keep('sourceDim')) setSourceDimension((s.sourceDimension ?? 'brand') as SourceDimension);
     setDrilldownDimension((s.drilldownDimension ?? 'contact_type') as DrilldownDimension);
-    setSortBy(s.sortBy ?? null);
-    setSortDir((s.sortDir ?? 'desc') as 'asc' | 'desc');
+    if (!keep('sortBy')) setSortBy(s.sortBy ?? null);
+    if (!keep('sortDir')) setSortDir((s.sortDir ?? 'desc') as 'asc' | 'desc');
     setColumnGroups(s.columnGroups ?? []);
     setMetricFilters((s.metricFilters ?? {}) as MetricFilters);
-    setCreatedTimeFilter((s.createdTimeFilter ?? 'all') as CreatedTimeFilter);
-    setFirstTouchFilter((s.firstTouchFilter ?? 'all') as FirstTouchFilter);
-    setSearch(s.search ?? '');
+    if (!keep('createdTime')) setCreatedTimeFilter((s.createdTimeFilter ?? 'all') as CreatedTimeFilter);
+    if (!keep('firstTouch')) setFirstTouchFilter((s.firstTouchFilter ?? 'all') as FirstTouchFilter);
+    if (!keep('q')) setSearch(s.search ?? '');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Смена route без ремоунта (см. шапку блока) — форсим повторный restore.
@@ -593,7 +648,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       store.activeId = active.id;
     }
     active.lastUsedAt = Date.now();
-    if (active.state) applyTabSnapshot(active.state);
+    // respectUrl: true — единственный вызов на самом первом restore при
+    // монтировании: диплинк с явным ?dealScope=/?period=/... должен победить
+    // то, что было сохранено в localStorage с прошлого визита (задача 2824).
+    if (active.state) applyTabSnapshot(active.state, { respectUrl: true });
     saveTabsStore(tabsLogin, store);
     setTabsStore(store);
     tabsRestoredRef.current = true;
