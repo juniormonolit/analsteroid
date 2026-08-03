@@ -148,6 +148,12 @@ export async function GET(req: NextRequest) {
   const search = (sp.get('search') ?? '').trim().toLowerCase();
   const page = Math.max(1, Number(sp.get('page')) || 1);
   const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(10, Number(sp.get('pageSize')) || 50));
+  // Деп-линк по clientKey (задача 2822 — кликабельные имена в дайджесте):
+  // открыть КОНКРЕТНОГО заказчика по ключу, независимо от текущего фильтра/
+  // страницы/сортировки — ищем в ПОЛНОМ (некэшированном постранично) списке
+  // движка, не в urlSearchParams фильтров вкладки. Отдельная, более лёгкая
+  // ветка ответа — без счётчиков вкладок, они тут не нужны.
+  const keyParam = sp.get('key');
 
   const engineRows = await fetchManagerCustomers(Number(bitrixId));
 
@@ -167,6 +173,23 @@ export async function GET(req: NextRequest) {
     const { category, modifiers } = classifyCategory(r, catSettings);
     return { ...base, bucket, snoozedActive, mark, category, modifiers };
   });
+
+  // Деп-линк по ключу (задача 2822) — короткий путь, отдельный от обычной
+  // постраничной выдачи ниже. Ищем БЕЗ учёта filter/category/bucket (снузнутый/
+  // спящий/отказавшийся заказчик — деп-линк всё равно должен открыться, это
+  // явный переход по ссылке, а не листание вкладки).
+  if (keyParam) {
+    const found = all.find(r => r.clientKey === keyParam);
+    if (!found) return NextResponse.json({ row: null });
+    const [names, matrix, csBadges] = await Promise.all([
+      resolveClientNames([found.clientKey]),
+      fetchCrossSellMatrix(),
+      fetchCrossSellBadges(),
+    ]);
+    const rec = recommendFor(matrix, found.lastGroups);
+    if (rec) rec.items = rec.items.map(it => ({ ...it, badge: badgeForPair(csBadges, rec.basedOn, it.group) }));
+    return NextResponse.json({ row: { ...found, name: names.get(found.clientKey) ?? null, recommend: rec } });
+  }
 
   // Поиск по имени — по уже известным (закэшированным) именам + по id клиента.
   let searched = all;
