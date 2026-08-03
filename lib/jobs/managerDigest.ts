@@ -592,11 +592,17 @@ function normalizeAdviceLabel(row: CustomerRow, rawName: string | null): string 
   // хвосте одного из полей ФИО в самой CRM (не инициал — там имя целиком).
   // Снимаем ОДНУ висячую точку в конце (не трогаем многоточие/аббревиатуры
   // из нескольких точек — те не встречались, но на всякий случай не режем).
-  const name = rawName!.trim().replace(/([^.])\.$/, '$1');
+  let name = rawName!.trim().replace(/([^.])\.$/, '$1');
   if (row.clientType === 'company') {
     const q = normalizeQuotes(name);
     return q.includes('«') ? q : `«${q}»`;
   }
+  // Живой прогон поймал «денис» рядом с «Кононок Эдуард Владимирович» — то же
+  // «неоднородный вид» из брифа, только по регистру, не по составу слов.
+  // Капитализируем ТОЛЬКО слова, набранные ЦЕЛИКОМ строчными — реальные ФИО
+  // с намеренно смешанным регистром (двойные фамилии через дефис у нас не
+  // встречались отдельно) капитализацию не потеряют.
+  name = name.split(' ').map(w => (w === w.toLowerCase() && w.length > 0 ? w[0]!.toUpperCase() + w.slice(1) : w)).join(' ');
   const isSingleWord = !/\s/.test(name);
   if (isSingleWord && row.lastSoldAmount) {
     return `${name} (сделка ~${fmtSum(row.lastSoldAmount)})`;
