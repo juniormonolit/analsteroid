@@ -597,7 +597,9 @@ function normalizeAdviceLabel(row: CustomerRow, rawName: string | null): string 
   // хвосте одного из полей ФИО в самой CRM (не инициал — там имя целиком).
   // Снимаем ОДНУ висячую точку в конце (не трогаем многоточие/аббревиатуры
   // из нескольких точек — те не встречались, но на всякий случай не режем).
-  let name = rawName!.trim().replace(/([^.])\.$/, '$1');
+  // Живой прогон поймал двойной пробел («Бугрова  Ольга» — склейка LAST_NAME+
+  // NAME с пустым отчеством в CRM оставляет два пробела подряд).
+  let name = rawName!.trim().replace(/\s+/g, ' ').replace(/([^.])\.$/, '$1');
   if (row.clientType === 'company') {
     const q = normalizeQuotes(name);
     return q.includes('«') ? q : `«${q}»`;
