@@ -557,12 +557,17 @@ export function buildCustomerLink(managerBitrixId: number, clientKey: string): s
 // доловил ещё «1» — голое число без единой буквы никого не идентифицирует,
 // реальных юрлиц/контактов с названием из одних цифр не бывает) — не
 // выводим вовсе, pickAdvice берёт следующего кандидата по скору (см. ниже).
+// «Без имени» (живой прогон, менеджер 4430) — это дефолтная ЗАГЛУШКА самого
+// Bitrix для контакта без заполненного имени, не реальное имя — сама фраза
+// в точности означает «имени нет», её нельзя опознать так же, как «-»/«000».
+const PLACEHOLDER_NAME_RE = /^без\s+имени$/i;
 function isJunkName(raw: string | null): boolean {
   if (raw === null) return true;
   const t = raw.trim();
   if (t === '') return true;
   if (/^[\s\-–—.]*$/.test(t)) return true; // только тире/точки/пробелы
   if (/^\d+$/.test(t)) return true;         // голое число: «0», «000», «1» — не идентифицирует человека/юрлицо
+  if (PLACEHOLDER_NAME_RE.test(t)) return true; // заглушка Bitrix «Без имени»
   return false;
 }
 
