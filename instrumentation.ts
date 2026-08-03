@@ -12,7 +12,28 @@ export async function register() {
   run();
   setInterval(run, 10 * 60 * 1000);
 
-  scheduleDailyMoscowReport();
+  // Отчёт «МОСКВА» владельцу (получатель — env, как было).
+  scheduleDailyReport({
+    name: 'dailyReport',
+    lockPrefix: 'daily-report',
+    recipient: process.env.DAILY_REPORT_BITRIX_USER_ID,
+    send: async () => {
+      const { sendDailyMoscowReport } = await import('./lib/jobs/dailyMoscowReport');
+      return sendDailyMoscowReport();
+    },
+  });
+  // Отчёт «ОБЩЕСТРОЙ по командам» Коваленко (задача владельца 03.08). Получателя
+  // можно переопределить env OS_TEAMS_REPORT_BITRIX_USER_ID; дефолт — 1923, зашит
+  // в самой джобе, поэтому отдельная переменная на прод-сервере не требуется.
+  scheduleDailyReport({
+    name: 'osTeamsReport',
+    lockPrefix: 'os-teams-report',
+    recipient: process.env.OS_TEAMS_REPORT_BITRIX_USER_ID || '1923',
+    send: async () => {
+      const { sendOsTeamsReport } = await import('./lib/jobs/dailyOsTeamsReport');
+      return sendOsTeamsReport();
+    },
+  });
   scheduleCallControl();
   scheduleWidgetMetrics();
   scheduleEmployeeRenameCheck();
@@ -439,8 +460,22 @@ function scheduleCallControl() {
 // Включается только если задан DAILY_REPORT_BITRIX_USER_ID (на dev-машине не задаём,
 // чтобы запущенный dev-сервер не слал дубли). Защита от повторной отправки после
 // рестарта процесса — Redis SET NX; без Redis — in-memory флаг на дату.
-function scheduleDailyMoscowReport() {
-  const recipient = process.env.DAILY_REPORT_BITRIX_USER_ID;
+interface DailyReportJob {
+  /** Имя для логов: «dailyReport» / «osTeamsReport». */
+  name: string;
+  /** Префикс Redis-ключей замков — свой у каждого отчёта. */
+  lockPrefix: string;
+  /** Получатель (bitrix id). Пустой — джоба не запускается. */
+  recipient: string | undefined;
+  send: () => Promise<unknown>;
+}
+
+// Один планировщик на все ежедневные отчёты «план/факт» (задача 03.08: к отчёту
+// «МОСКВА» добавился отчёт по командам Общестроя для Коваленко). Логика замков
+// здесь выстрадана (см. историю правок 30.07 и задачи 2776) — дублировать её
+// вторым экземпляром нельзя, поэтому джоба параметризована.
+function scheduleDailyReport(job: DailyReportJob) {
+  const recipient = job.recipient;
   if (!recipient) return;
 
   // Окно отправки 18:00–19:59 МСК: тик раз в минуту, при неудаче — ПОВТОР на
@@ -475,30 +510,29 @@ function scheduleDailyMoscowReport() {
         redis = getRedis();
         if (redis) {
           // Уже отправлен другим инстансом сегодня?
-          if (await redis.get(`daily-report:sent:${date}`)) { lastSentDate = date; return; }
+          if (await redis.get(`${job.lockPrefix}:sent:${date}`)) { lastSentDate = date; return; }
           // Замок ПОПЫТКИ: кто-то прямо сейчас собирает отчёт — не дублируем.
-          const attempt = await redis.set(`daily-report:attempt:${date}`, '1', 'EX', 120, 'NX');
+          const attempt = await redis.set(`${job.lockPrefix}:attempt:${date}`, '1', 'EX', 120, 'NX');
           if (attempt !== 'OK') return;
         }
       } catch (err) {
         // Ошибка Redis-лока ≠ «Redis не настроен» (redis===null — штатно, шлём
         // через in-memory `lastSentDate`). Не уверены, свободен ли лок —
         // пропускаем тик, следующий (через минуту) попробует снова.
-        console.warn('[dailyReport] Redis-лок не проверить (ошибка), пропускаю тик:', err instanceof Error ? err.message : err);
+        console.warn(`[${job.name}] Redis-лок не проверить (ошибка), пропускаю тик:`, err instanceof Error ? err.message : err);
         return;
       }
 
       try {
-        const { sendDailyMoscowReport } = await import('./lib/jobs/dailyMoscowReport');
-        await sendDailyMoscowReport();
+        await job.send();
         lastSentDate = date;
-        if (redis) await redis.set(`daily-report:sent:${date}`, '1', 'EX', 24 * 3600).catch(() => {});
-        console.log(`[dailyReport] отчёт за ${date} отправлен пользователю ${recipient}`);
+        if (redis) await redis.set(`${job.lockPrefix}:sent:${date}`, '1', 'EX', 24 * 3600).catch(() => {});
+        console.log(`[${job.name}] отчёт за ${date} отправлен пользователю ${recipient}`);
       } catch (err) {
         // НЕ ставим флаг «отправлено» — следующий тик (через минуту) попробует снова,
         // пока не кончится окно 18:00–19:59.
-        console.error('[dailyReport] отправка не удалась, повтор через минуту:', err);
-        if (redis) await redis.del(`daily-report:attempt:${date}`).catch(() => {});
+        console.error(`[${job.name}] отправка не удалась, повтор через минуту:`, err);
+        if (redis) await redis.del(`${job.lockPrefix}:attempt:${date}`).catch(() => {});
       }
     } finally {
       running = false;
