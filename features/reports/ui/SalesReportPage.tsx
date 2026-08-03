@@ -1,9 +1,9 @@
 'use client';
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { useUrlState, dateRangeParam, enumParam, listParam, stringParam, type UrlDateRange } from '@/lib/hooks/useUrlState';
+import { useUrlState, dateRangeParam, enumParam, stringParam, type UrlDateRange } from '@/lib/hooks/useUrlState';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Pencil, Trash2, Info } from 'lucide-react';
 import { hasPerm } from '@/lib/auth/perms';
 import type { SessionUser } from '@/lib/auth/session';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
@@ -39,6 +39,7 @@ import { exportNodeToPdf } from '@/features/reports/lib/exportPdf';
 import { UserGroupsBar, CreateGroupButton, GroupSelectPanel, type UserReportGroup } from './UserGroupsBar';
 import { ReportTabsBar } from './ReportTabsBar';
 import { loadTabsStore, saveTabsStore, newTabId, type ReportTab, type ReportTabSnapshot, type ReportTabsStore } from '@/features/reports/lib/reportTabs';
+import { diffFromPreset } from '@/features/reports/lib/presetDiff';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -402,7 +403,21 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // колонка сущности + подсказка ниже) — preset (если он всё же передан,
   // например прямой заход на /sales/saved/[id]) всегда выигрывает у isNew
   // через useEffect ниже, так что порядок приоритета верный.
-  const [metricIds, setMetricIds]       = useUrlState<string[]>('metrics', listParam(isNew ? [] : DEFAULT_METRIC_IDS));
+  //
+  // ВАЖНО (задача 2881, откат находки инцидента #2870): metricIds сознательно
+  // НЕ на useUrlState, в отличие от соседних полей ниже. Волна 1 (#2824) сперва
+  // перевела набор метрик на URL как источник правды — со стороны выглядело
+  // симметрично остальным полям, но здесь другая семантика: удаление
+  // метрики-колонки крестиком (штатное, всегда было чисто визуальным и
+  // сбрасывалось на F5) начало писаться в URL через router.replace. При
+  // следующем восстановлении вкладки/F5 `urlHas('metrics')` был true, и полный
+  // пресет сохранённого отчёта из БД переставал применяться — второй источник
+  // того же класса проблемы, что и снапшот вкладки в localStorage (см.
+  // reportTabs.ts), только теперь ещё и в URL. Разбор — WORKLOG 03.08 (#2870),
+  // `owners-inbox/analsteroid-incident-2870-wave1-rollback.html`. Период/срез/
+  // группировка/сортировка на URL остаются — там «URL побеждает при первом
+  // монтировании» корректная семантика (диплинк), у набора метрик — нет.
+  const [metricIds, setMetricIds]       = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
   const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
   // Выбор отделов — настройка АККАУНТА, не отчёта (задача Иосифа 15.07, миграция 102):
   // одно значение на пользователя для всех отчётов; из конфигов сохранённых отчётов
@@ -488,58 +503,97 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // источник — users.table_scale (см. ViewSettings.tsx — «Размер шрифта» убран оттуда).
   const { tableScaleMult } = useTableScale();
 
-  useEffect(() => {
-    if (!preset) return;
-    // Задача 2824: каждое поле, мигрировавшее на useUrlState, применяется из
-    // пресета, ТОЛЬКО если его нет явно в URL — см. urlHas выше. Остальные
-    // (формат-настройки просмотра) применяются как раньше, безусловно.
-    if (preset.periodMode === 'relative' && preset.relativePeriod) {
-      const p = resolveRelativePeriod(preset.relativePeriod);
-      const c = resolveComparison(p, preset.comparisonMode, preset.relativePeriod);
-      if (!urlHas('period')) setPeriod(p);
-      if (!urlHas('cmp')) setComparison(c);
-    } else if (preset.fixedPeriod) {
-      if (!urlHas('period')) setPeriod({ from: new Date(preset.fixedPeriod.from), to: new Date(preset.fixedPeriod.to) });
-      if (preset.fixedComparison && !urlHas('cmp')) {
-        setComparison({ from: new Date(preset.fixedComparison.from), to: new Date(preset.fixedComparison.to) });
+  // Задача 2824 + 2881: применение пресета сохранённого отчёта к состоянию экрана,
+  // вынесено в отдельный callback (раньше было телом эффекта ниже) — тот же код
+  // теперь нужен из ДВУХ мест: (1) на монтировании/смене пресета — с приоритетом
+  // явного query-параметра диплинка (opts.respectUrl), (2) из кнопки «Вернуть
+  // исходный вид» плашки расхождения — целиком, БЕЗ оглядки на URL (осознанное
+  // действие пользователя, тот же принцип, что уже применяется в applyTabSnapshot
+  // ниже при явном выборе вкладки). metricIds — БЕЗ keep()-гейта вовсе: как
+  // объяснено у объявления состояния выше, набор метрик больше не живёт в URL.
+  const applyPreset = useCallback((p: SavedReport, opts?: { respectUrl?: boolean }) => {
+    const keep = (key: string) => !!opts?.respectUrl && urlHasRef.current.has(key);
+    if (p.periodMode === 'relative' && p.relativePeriod) {
+      const per = resolveRelativePeriod(p.relativePeriod);
+      const c = resolveComparison(per, p.comparisonMode, p.relativePeriod);
+      if (!keep('period')) setPeriod(per);
+      if (!keep('cmp')) setComparison(c);
+    } else if (p.fixedPeriod) {
+      if (!keep('period')) setPeriod({ from: new Date(p.fixedPeriod.from), to: new Date(p.fixedPeriod.to) });
+      if (p.fixedComparison && !keep('cmp')) {
+        setComparison({ from: new Date(p.fixedComparison.from), to: new Date(p.fixedComparison.to) });
       }
     }
-    if (!urlHas('dealScope')) setDealScope(preset.dealScope);
-    if (!urlHas('clientType')) setClientType(preset.clientType);
-    if (!urlHas('grouping')) setGrouping(preset.grouping);
-    if (!urlHas('cmpDisplay')) setComparisonDisplay(preset.comparisonDisplay);
-    setMetricDisplayModes(preset.metricDisplayModes ?? {});
-    setComparisonThreshold(preset.comparisonThreshold ?? 5);
-    if (!urlHas('productGroupMode')) setProductGroupMode(preset.productGroupMode);
-    // preset.departmentIds сознательно НЕ применяется: выбор отделов — настройка
+    if (!keep('dealScope')) setDealScope(p.dealScope);
+    if (!keep('clientType')) setClientType(p.clientType);
+    if (!keep('grouping')) setGrouping(p.grouping);
+    if (!keep('cmpDisplay')) setComparisonDisplay(p.comparisonDisplay);
+    setMetricDisplayModes(p.metricDisplayModes ?? {});
+    setComparisonThreshold(p.comparisonThreshold ?? 5);
+    if (!keep('productGroupMode')) setProductGroupMode(p.productGroupMode);
+    // p.departmentIds сознательно НЕ применяется: выбор отделов — настройка
     // аккаунта (useAccountDepartments), сохранённый отчёт её не перетирает.
-    const ids = preset.metricIds.length ? preset.metricIds : ['all_core'];
-    if (!urlHas('metrics')) setMetricIds(ids);
+    const ids = p.metricIds.length ? p.metricIds : ['all_core'];
+    setMetricIds(ids);
     setFetchedMetricIds(ids);
-    setHighlights(preset.metricHighlights ?? {});
-    setPinnedMetricIds(preset.pinnedMetricIds ?? []);
-    setMetricDecimalOverrides(preset.metricDecimalOverrides ?? {});
-    setMetricThresholdOverrides(preset.metricThresholdOverrides ?? {});
-    setAccentedMetricIds(preset.accentedMetricIds ?? []);
-    setBarMetricIds(preset.barMetricIds ?? []);
-    setHeatmapMetricIds(preset.heatmapMetricIds ?? []);
-    setHeatmapInvertedIds(preset.heatmapInvertedIds ?? []);
-    setColorizeMetrics(preset.colorizeMetrics ?? false);
-    setZebra(preset.zebra ?? false);
-    setBorderMode(preset.borderMode ?? 'grid');
-    setThemeAccent(preset.themeAccent ?? null);
-    setNumberAlign(preset.numberAlign ?? 'center');
-    if (!urlHas('accountType')) setAccountType(preset.accountType ?? 'managers');
-    setDrilldownDuplicate(preset.drilldownDuplicateMetrics ?? true);
-    setDrilldownMetricIds(preset.drilldownMetricIds ?? []);
-    setDealFields(preset.dealFields ?? undefined);
-    setDrilldownGrouped(preset.drilldownGrouped ?? true);
-    if (!urlHas('sourceDim')) setSourceDimension((preset.sourceDimension as SourceDimension) ?? 'brand');
-    setDrilldownDimension((preset.drilldownDimension as DrilldownDimension) ?? 'contact_type');
-    if (!urlHas('sortBy')) setSortBy(preset.sortBy ?? null);
-    if (!urlHas('sortDir')) setSortDir(preset.sortDir ?? 'desc');
-    setColumnGroups(preset.columnGroups ?? []);
-  }, [preset?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    setHighlights(p.metricHighlights ?? {});
+    setPinnedMetricIds(p.pinnedMetricIds ?? []);
+    setMetricDecimalOverrides(p.metricDecimalOverrides ?? {});
+    setMetricThresholdOverrides(p.metricThresholdOverrides ?? {});
+    setAccentedMetricIds(p.accentedMetricIds ?? []);
+    setBarMetricIds(p.barMetricIds ?? []);
+    setHeatmapMetricIds(p.heatmapMetricIds ?? []);
+    setHeatmapInvertedIds(p.heatmapInvertedIds ?? []);
+    setColorizeMetrics(p.colorizeMetrics ?? false);
+    setZebra(p.zebra ?? false);
+    setBorderMode(p.borderMode ?? 'grid');
+    setThemeAccent(p.themeAccent ?? null);
+    setNumberAlign(p.numberAlign ?? 'center');
+    if (!keep('accountType')) setAccountType(p.accountType ?? 'managers');
+    setDrilldownDuplicate(p.drilldownDuplicateMetrics ?? true);
+    setDrilldownMetricIds(p.drilldownMetricIds ?? []);
+    setDealFields(p.dealFields ?? undefined);
+    setDrilldownGrouped(p.drilldownGrouped ?? true);
+    if (!keep('sourceDim')) setSourceDimension((p.sourceDimension as SourceDimension) ?? 'brand');
+    setDrilldownDimension((p.drilldownDimension as DrilldownDimension) ?? 'contact_type');
+    if (!keep('sortBy')) setSortBy(p.sortBy ?? null);
+    if (!keep('sortDir')) setSortDir(p.sortDir ?? 'desc');
+    setColumnGroups(p.columnGroups ?? []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!preset) return;
+    applyPreset(preset, { respectUrl: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.id]);
+
+  // Плашка расхождения (задача 2881): показывается ТОЛЬКО для реального
+  // сохранённого отчёта из БД — встроенные пресеты (/sales/by-managers и т.п.)
+  // вообще не передают preset (сравнивать не с чем); синтетический пресет
+  // /marketing/[preset] (см. app/(app)/marketing/[preset]/page.tsx) собирается
+  // в коде на лету и не лежит в saved_reports — userLogin у него пустая строка
+  // (маркер «не настоящий сохранённый отчёт», реальные строки БД всегда с
+  // логином владельца), у такого пресета «вернуть исходный» не имеет смысла
+  // «вернуть к сохранённому», это и так текущий дефолт страницы.
+  const isSavedPreset = !!preset?.userLogin;
+  const presetDiff = useMemo(() => {
+    if (!isSavedPreset || !preset) return [];
+    return diffFromPreset(preset, {
+      metricIds, dealScope, clientType, grouping, comparisonDisplay,
+      productGroupMode, accountType, sourceDimension, sortBy, sortDir,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSavedPreset, preset, metricIds, dealScope, clientType, grouping, comparisonDisplay, productGroupMode, accountType, sourceDimension, sortBy, sortDir]);
+
+  function handleResetToPreset() {
+    if (!preset) return;
+    // Без opts — целиком, без оглядки на URL (осознанное действие пользователя).
+    // Обновляет React-состояние; персист-эффект вкладки (ниже) сам подхватит
+    // новый снапшот и перезапишет localStorage на следующем рендере — F5 после
+    // этого клика покажет ИМЕННО исходный вид, а не откат к прежнему состоянию
+    // вкладки (проверено ручным сценарием, см. WORKLOG).
+    applyPreset(preset);
+  }
 
   // ── Вкладки отчётов «как в браузере» (фича Серёги 01.08) ────────────────────
   // Вкладка = экземпляр отчёта со своим полным состоянием (reportTabs.ts),
@@ -591,8 +645,11 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     if (!keep('dealScope')) setDealScope(s.dealScope as DealScope);
     if (!keep('clientType')) setClientType(s.clientType as ClientType);
     if (!keep('grouping')) setGrouping(s.grouping as Grouping);
-    if (!keep('metrics')) { setMetricIds(s.metricIds ?? []); setFetchedMetricIds(s.metricIds ?? []); }
-    else setFetchedMetricIds(s.metricIds ?? []);
+    // metricIds — задача 2881: НЕ в URL (см. объявление состояния выше), keep()
+    // сюда больше не относится — снапшот вкладки применяется безусловно, как и
+    // остальные не-URL поля формата ниже.
+    setMetricIds(s.metricIds ?? []);
+    setFetchedMetricIds(s.metricIds ?? []);
     if (!keep('cmpDisplay')) setComparisonDisplay(s.comparisonDisplay as ComparisonDisplay);
     setMetricDisplayModes((s.metricDisplayModes ?? {}) as Record<string, ComparisonDisplay>);
     setComparisonThreshold(s.comparisonThreshold ?? 5);
@@ -1340,6 +1397,37 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           </div>
         )}
       </div>
+
+      {/* Плашка расхождения (задача 2881): текущий вид отличается от того, что
+          сохранено в БД для этого отчёта — снапшот вкладки в localStorage
+          (reportTabs.ts) по замыслу побеждает пресет на каждом монтировании,
+          и без этой строки пользователь не понимает, ПОЧЕМУ. Спокойный
+          информационный тон (тот же warning-токен, что «заявка у руководителя»
+          в ManagerTabs.tsx — не алярм-красный), один ряд на десктопе; на узких
+          экранах текст и кнопка переносятся друг под друга, не обрезаются и не
+          вылезают за край (проверено на 375px). */}
+      {isSavedPreset && presetDiff.length > 0 && (
+        <div
+          role="status"
+          className="flex flex-col sm:flex-row sm:items-center gap-x-3 gap-y-1.5 px-4 sm:px-6 py-2 border-b text-[13px] leading-snug"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--color-warning, #e8590c) 30%, transparent)',
+            backgroundColor: 'color-mix(in srgb, var(--color-warning, #e8590c) 8%, transparent)',
+          }}
+        >
+          <span className="flex items-center gap-1.5 min-w-0 text-[var(--color-text)]">
+            <Info size={14} style={{ color: 'var(--color-warning, #e8590c)' }} className="shrink-0" />
+            Вид изменён относительно сохранённого отчёта
+          </span>
+          <button
+            onClick={handleResetToPreset}
+            title={`Отличается: ${presetDiff.join(', ')}`}
+            className="self-start sm:self-auto sm:ml-auto shrink-0 font-medium text-[var(--color-accent)] hover:underline"
+          >
+            Вернуть исходный вид
+          </button>
+        </div>
+      )}
 
       {(() => {
         const filterBarProps = {
