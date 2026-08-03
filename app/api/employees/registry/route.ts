@@ -5,7 +5,8 @@ import { upsertRegistry } from '@/features/employees/engine/registry';
 import { validateManualStartDate } from '@/features/employees/engine/tenure';
 
 // Ручные поля реестра сотрудников: дата начала работы (стаж) + заметки.
-// Пишем ТОЛЬКО в sa.employee_registry — sa.employees ведёт синк, её не трогаем.
+// Пишем ТОЛЬКО в sa.employee_registry. sa.employees (мёртвая заготовка,
+// приложение её больше не читает нигде — задача 2820) не трогаем и подавно.
 export async function POST(req: Request) {
   const session = await getSession();
   const err = permError(session, 'section.employees');

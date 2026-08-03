@@ -854,9 +854,12 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
 
     // ── Квесты (миграция 125): экспирация, генерация всем активным, автозачёт
     // + квест-бейджи. ДО XP-тика: выполненные квесты дают XP в уровень.
+    // Задача 2820: раньше ростер брался из sa.employees (мёртвая заготовка
+    // 13.06) — 222 из 429 активных сотрудников (52%) НИКОГДА не получали
+    // квесты, т.к. их id не было в activeIds. Источник — sa.org_resolved_hierarchy.
     try {
       const activeIds = await analyticsDb().query<{ id: number }>(
-        `SELECT bitrix_id::int AS id FROM sa.employees WHERE is_active AND bitrix_id IS NOT NULL`,
+        `SELECT manager_bitrix_user_id::int AS id FROM sa.org_resolved_hierarchy WHERE is_active`,
       );
       const qt = await questTick(systemDb(), activeIds.rows.map(r => r.id));
       for (const a of qt.awards) {

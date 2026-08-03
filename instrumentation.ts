@@ -322,10 +322,12 @@ function scheduleBadgeRecompute() {
 }
 
 // Реестр сотрудников (задача 2654): суточный серверный детект переименований
-// битрикс-логинов (sa.employees.full_name vs sa.employee_name_history, SCD2).
-// Детект также срабатывает при обращении к странице «Сотрудники» (кэш ~6 ч в
-// features/employees/engine/registry.ts — общий и для тика, и для страницы).
-// Redis-замок — чтобы соседние инстансы на общей БД не гоняли детект дважды.
+// битрикс-логинов ВНЕ оргструктуры (sa.employees.full_name vs
+// sa.employee_name_history, SCD2) — ОТКЛЮЧЁН как no-op с задачи 2820
+// (источник sa.employees мёртв с 13.06, см. комментарий в
+// features/employees/engine/registry.ts::detectRenames). Вызов и Redis-замок
+// оставлены нетронутыми — на случай, если понадобится восстановить логику
+// на другом источнике «внешних» логинов.
 function scheduleEmployeeRenameCheck() {
   let lastRunDateMsk: string | null = null;
 

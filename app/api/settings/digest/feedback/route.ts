@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { superadminError } from '@/lib/auth/perms';
-import { analyticsDb, systemDb } from '@/lib/db/clients';
+import { systemDb } from '@/lib/db/clients';
+import { resolveEmployeeNames } from '@/lib/org/employeeDirectory';
 
 // «Обратная связь» (задача 2765, правка владельца 02.08): очередь кликов по
 // кнопкам «⚠️ Ошибка»/«👍 Полезно» под сообщениями «Аналитика». Бонус НЕ
@@ -30,13 +31,10 @@ export async function GET() {
     : { rows: [] as { id: string; text: string; msg_type: string; decision_trace: unknown }[] };
   const logById = new Map(logsRes.rows.map(r => [Number(r.id), r]));
 
+  // Задача 2820: было sa.employees (мёртвая заготовка) — теперь единая функция
+  // lib/org/employeeDirectory.ts (sa.org_resolved_hierarchy + фолбэк на историю имён).
   const bitrixIds = [...new Set(res.rows.map(r => r.bitrix_id))];
-  const namesRes = bitrixIds.length > 0
-    ? await analyticsDb().query<{ bitrix_id: number; full_name: string }>(
-        `SELECT bitrix_id, full_name FROM sa.employees WHERE bitrix_id = ANY($1::int[])`, [bitrixIds],
-      )
-    : { rows: [] as { bitrix_id: number; full_name: string }[] };
-  const nameById = new Map(namesRes.rows.map(r => [r.bitrix_id, r.full_name]));
+  const nameById = await resolveEmployeeNames(bitrixIds);
 
   return NextResponse.json({
     rows: res.rows.map(r => {

@@ -84,7 +84,8 @@ export type CustomerSection = 'regular' | 'once' | 'never';
 
 /** Один менеджер в истории клиента. Имя — НА МОМЕНТ работы с клиентом
  *  (sa.employee_name_history, SCD2: на логине люди меняются — слот-модель),
- *  фолбэк — текущее имя sa.employees. */
+ *  фолбэк — текущее имя из sa.org_resolved_hierarchy (задача 2820, было
+ *  sa.employees — мёртвая заготовка, см. lib/org/employeeDirectory.ts). */
 export interface ManagerHistoryItem {
   managerId: number;
   name: string | null;   // null → «Менеджер #id» в UI
@@ -255,10 +256,12 @@ mgr_hist AS (
   -- История менеджеров клиента (доработка 01.08): кто вёл сделки, по ИМЕНАМ НА
   -- МОМЕНТ работы. На одном bitrix-логине люди меняются (слот-модель), поэтому
   -- имя берём из sa.employee_name_history (SCD2, ведёт ночной org-sync) на дату
-  -- ПОСЛЕДНЕЙ сделки менеджера с клиентом; фолбэк — текущее имя sa.employees.
+  -- ПОСЛЕДНЕЙ сделки менеджера с клиентом; фолбэк — текущее имя из
+  -- sa.org_resolved_hierarchy (задача 2820, было sa.employees — мёртвая
+  -- заготовка 13.06, не обновляется, см. lib/org/employeeDirectory.ts).
   SELECT t.client_key,
          jsonb_agg(jsonb_build_object(
-           'managerId', t.mgr, 'name', coalesce(h.name, e.full_name),
+           'managerId', t.mgr, 'name', coalesce(h.name, org.manager_name),
            'deals', t.deals, 'sold', t.sold,
            'firstAt', t.first_at, 'lastAt', t.last_at) ORDER BY t.last_at DESC) AS manager_history
   FROM (
@@ -274,7 +277,7 @@ mgr_hist AS (
       AND (nh.valid_to IS NULL OR nh.valid_to > t.last_at)
     ORDER BY nh.valid_from DESC LIMIT 1
   ) h ON true
-  LEFT JOIN sa.employees e ON e.bitrix_id = t.mgr
+  LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = t.mgr::text
   GROUP BY t.client_key
 ),
 gaps AS (

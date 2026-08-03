@@ -26,6 +26,7 @@ import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 import { sendManagerBotMessage } from '@/features/badges/engine/notifications';
 import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
 import { getCurrencyName } from '@/features/badges/engine/coins';
+import { getActiveEmployeeRoster } from '@/lib/org/employeeDirectory';
 import {
   fetchManagerCustomers, fetchCategorySettings, classifyCategory,
   type CustomerRow, type CallSignal, type CustomerCategory,
@@ -263,12 +264,17 @@ function subscriptionBlockReason(prefs: ManagerBotPrefs, channel: 'daily' | 'wee
 export interface ManagerRef { bitrixId: number; name: string }
 
 export async function fetchActiveManagers(): Promise<ManagerRef[]> {
-  const res = await analyticsDb().query<{ bitrix_id: number; full_name: string }>(
-    `SELECT bitrix_id, full_name FROM sa.employees
-      WHERE bitrix_id IS NOT NULL AND is_active = true AND full_name IS NOT NULL AND full_name <> ''
-      ORDER BY full_name`,
-  );
-  return res.rows.map(r => ({ bitrixId: r.bitrix_id, name: r.full_name }));
+  // Задача 2820 (находка проверки 2818): раньше водило sa.employees — мёртвая
+  // заготовка 13.06.2026, ни разу не обновлялась. На проверке 03.08 в ней
+  // отсутствовало 222 из 429 активных сотрудников (52%) — значит 52% штата
+  // НИКОГДА не получали дневной/недельный дайджест «Аналитик», хотя правило
+  // владельца 02.08 («Пуш в Аналитик — обязателен», team/devops.md) требует
+  // уведомление на КАЖДОЕ событие геймификации. Источник — единая функция
+  // lib/org/employeeDirectory.ts (sa.org_resolved_hierarchy, ночной синк).
+  const roster = await getActiveEmployeeRoster();
+  return roster
+    .map(e => ({ bitrixId: e.bitrixId, name: e.name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 }
 
 // ── Отдел менеджера (для сравнения «со своим отделом» в гамбургере) ─────────

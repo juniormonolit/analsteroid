@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
-import { systemDb, analyticsDb } from '@/lib/db/clients';
+import { systemDb } from '@/lib/db/clients';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { resolveEmployeeNames } from '@/lib/org/employeeDirectory';
 
 // Заявки на активацию предметов инвентаря (MVP магазина, 31.07) — клон механики
 // payout_requests: менеджер просит активировать предмет (owned →
@@ -46,13 +47,10 @@ export async function GET(req: NextRequest) {
       LIMIT 200`,
     params,
   );
+  // Задача 2820: было sa.employees (мёртвая заготовка) — единая функция
+  // lib/org/employeeDirectory.ts (sa.org_resolved_hierarchy).
   const ids = [...new Set(res.rows.map(r => Number(r.bitrix_id)))];
-  const names = ids.length > 0
-    ? await analyticsDb().query<{ bitrix_id: number; full_name: string }>(
-        `SELECT bitrix_id, full_name FROM sa.employees WHERE bitrix_id = ANY($1::int[])`, [ids],
-      )
-    : { rows: [] as { bitrix_id: number; full_name: string }[] };
-  const nameBy = new Map(names.rows.map(n => [Number(n.bitrix_id), n.full_name]));
+  const nameBy = await resolveEmployeeNames(ids);
   return NextResponse.json({
     canManage: true,
     requests: res.rows.map(r => ({ ...r, managerName: nameBy.get(Number(r.bitrix_id)) ?? String(r.bitrix_id) })),

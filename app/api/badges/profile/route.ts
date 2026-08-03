@@ -24,11 +24,14 @@ export async function GET(req: NextRequest) {
 
   const id = Number(bitrixId);
   const [reg, ledger] = await Promise.all([
+    // Задача 2820: раньше водило sa.employees (мёртвая заготовка) — если id туда
+    // не попал (52% активных на проверке 03.08), запрос отдавал 0 строк и вкладка
+    // «Профиль» молча теряла стаж. hire_date у sa.employees на проде и так всегда
+    // пуст (см. features/employees/ui/EmployeesPage.tsx) — единственный реальный
+    // источник даты начала — sa.employee_registry, читаем её напрямую.
     analyticsDb().query<{ start_date: string | null }>(
-      `SELECT to_char(coalesce(r.manual_start_date, e.hire_date), 'YYYY-MM-DD') AS start_date
-         FROM sa.employees e
-         LEFT JOIN sa.employee_registry r ON r.bitrix_id = e.bitrix_id
-        WHERE e.bitrix_id = $1`,
+      `SELECT to_char(manual_start_date, 'YYYY-MM-DD') AS start_date
+         FROM sa.employee_registry WHERE bitrix_id = $1`,
       [id],
     ),
     // Единая «банковская выписка» (доп. Серёги 31.07): авто-начисления движка +

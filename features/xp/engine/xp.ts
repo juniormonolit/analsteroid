@@ -136,22 +136,25 @@ export interface XpTickResult {
 // ── границы людей (слот-модель) ──────────────────────────────────────────────
 
 async function fetchPersonStarts(): Promise<Map<number, string>> {
+  // Задача 2820: раньше водило `sa.employees` (мёртвая заготовка 13.06, не
+  // обновляется, 52% активных сотрудников отсутствовало — значит для них
+  // граница «человека на слоте» вообще не считалась). Теперь водит
+  // sa.org_resolved_hierarchy (актуальная оргструктура, ночной синк).
   const res = await analyticsDb().query<{
     bitrix_id: number; manual_start: string | null; hist_cnt: string; open_from: string | null;
   }>(
-    `SELECT e.bitrix_id,
+    `SELECT org.manager_bitrix_user_id::int AS bitrix_id,
             to_char(r.manual_start_date, 'YYYY-MM-DD') AS manual_start,
-            coalesce(h.cnt, 0)::text AS hist_cnt,
-            to_char(h.open_from, 'YYYY-MM-DD') AS open_from
-       FROM sa.employees e
-       LEFT JOIN sa.employee_registry r ON r.bitrix_id = e.bitrix_id
+            coalesce(nh.cnt, 0)::text AS hist_cnt,
+            to_char(nh.open_from, 'YYYY-MM-DD') AS open_from
+       FROM sa.org_resolved_hierarchy org
+       LEFT JOIN sa.employee_registry r ON r.bitrix_id = org.manager_bitrix_user_id::int
        LEFT JOIN LATERAL (
          SELECT count(*) AS cnt,
                 max(valid_from) FILTER (WHERE valid_to IS NULL) AS open_from
-           FROM sa.employee_name_history nh
-          WHERE nh.bitrix_user_id = e.bitrix_id::text
-       ) h ON true
-      WHERE e.bitrix_id IS NOT NULL`,
+           FROM sa.employee_name_history nh2
+          WHERE nh2.bitrix_user_id = org.manager_bitrix_user_id
+       ) nh ON true`,
   );
   const out = new Map<number, string>();
   for (const r of res.rows) {

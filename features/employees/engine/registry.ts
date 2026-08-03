@@ -1,118 +1,36 @@
 // Реестр сотрудников (задача 2654 Б): стаж и история переименований битрикс-логина.
 //
 // Модель данных (всё в аналитической БД sa, пул analyticsDb):
-//  * sa.employees        — ведёт внешний синк, приложение ЧИТАЕТ и никогда не пишет;
+//  * sa.org_resolved_hierarchy — актуальная оргструктура (ведёт ночной org-sync из
+//    Bitrix), источник ФИО/отдела (задача 2820, замена sa.employees — см. ниже);
 //  * sa.employee_registry — ручная дата начала (manual_start_date) + заметки, пишем мы
 //    (создана супер-юзером 31.07.2026, migrations/sa_org/002_employee_registry.sql);
-//  * sa.employee_name_history — SCD2 имён на логине (создана в sa_org/001, ведёт и
-//    org-sync из Битрикса, и наш детект ниже). Слот-модель: на одном bitrix_id люди
-//    меняются, история нужна, чтобы потом разделять данные по людям.
+//  * sa.employee_name_history — SCD2 имён на логине (создана в sa_org/001, ведёт
+//    org-sync из Битрикса). Слот-модель: на одном bitrix_id люди меняются, история
+//    нужна, чтобы потом разделять данные по людям.
 //
-// Детект переименований: сравниваем текущий sa.employees.full_name с открытой
-// (valid_to IS NULL) строкой истории. Нет строки → сеем текущим именем БЕЗ события.
-// Отличается → закрываем старую и открываем новую (это и есть событие переименования).
-// Анти-пинг-понг: org-sync пишет имена из Битрикса, синк employees — свои; если они
-// расходятся форматом, наивный детект зациклился бы A→B→A→B. Поэтому «переименование
-// назад в только что закрытое имя» пропускаем (planRenameOps, kind='skip-flip').
-// Запускается при обращении к странице (in-memory кэш ~6 ч) + суточным тиком в
-// instrumentation.ts. Идемпотентно: повторный прогон без изменений имён = 0 операций.
+// Детект переименований — ИСТОРИЧЕСКИ ОТКЛЮЧЁН (задача 2820, 03.08.2026): раньше
+// сравнивал sa.employees.full_name с открытой строкой sa.employee_name_history для
+// логинов ВНЕ оргструктуры (не покрытых org-sync). Источник (sa.employees) —
+// заготовка ~13.06.2026, ни разу не обновлялась (0 UPDATE/DELETE с создания,
+// owners-inbox/orgstructure-guide.md) — то есть НИКАКИХ новых «текущих» имён
+// оттуда прийти уже не может, детект по конструкции инертен. sa.org_resolved_hierarchy
+// покрывает практически всех живых Bitrix-логинов (429 активных на 03.08, включая
+// технические — им тоже назначен department, просто null), поэтому «логинов вне
+// оргструктуры» на практике не остаётся: их переименования и так ведёт org-sync
+// напрямую. Функция оставлена (сигнатура и вызовы в instrumentation.ts/
+// app/api/employees/route.ts не трогаем) как явный no-op, а не удалена — если
+// когда-нибудь появится реальный источник «внешних» логинов, реализацию можно
+// восстановить из git-истории (planRenameOps в ./tenure — чистая функция, не удалена).
 
-import { analyticsDb } from '@/lib/db/clients';
-import { planRenameOps } from './tenure';
 import { getAllRopAndDirectorIds } from '@/lib/org/callControlScope';
+import { analyticsDb } from '@/lib/db/clients';
 export { planRenameOps, normalizeName, type RenameOp } from './tenure';
 
 export interface DetectResult { seeded: number; renamed: number; skippedFlips: number; checkedAt: number }
 
-let _lastDetect: DetectResult | null = null;
-const DETECT_TTL_MS = 6 * 60 * 60 * 1000; // ~6 ч
-
-export async function detectRenames(force = false): Promise<DetectResult> {
-  if (!force && _lastDetect && Date.now() - _lastDetect.checkedAt < DETECT_TTL_MS) return _lastDetect;
-
-  const pool = analyticsDb();
-  const [emp, hist, org] = await Promise.all([
-    pool.query<{ bitrix_id: number; full_name: string }>(
-      `SELECT bitrix_id, full_name FROM sa.employees
-        WHERE bitrix_id IS NOT NULL AND full_name IS NOT NULL AND full_name <> ''`,
-    ),
-    pool.query<{ bitrix_user_id: string; name: string; is_open: boolean; rn: number }>(
-      // Для каждого логина: открытая строка (is_open) + последняя закрытая (rn=1 среди закрытых)
-      `SELECT bitrix_user_id, name, (valid_to IS NULL) AS is_open,
-              row_number() OVER (PARTITION BY bitrix_user_id, (valid_to IS NULL) ORDER BY valid_from DESC)::int AS rn
-         FROM sa.employee_name_history`,
-    ),
-    // Логины, которых авторитетно ведёт org-sync (их «переименования» мы не пишем —
-    // см. урок 31.07 в planRenameOps: employees.full_name часто логин, не ФИО).
-    pool.query<{ id: string }>(
-      `SELECT manager_bitrix_user_id AS id FROM sa.org_resolved_hierarchy`,
-    ),
-  ]);
-
-  const current = new Map<string, string>();
-  for (const r of emp.rows) current.set(String(r.bitrix_id), r.full_name);
-  const openHistory = new Map<string, string>();
-  const lastClosed = new Map<string, string>();
-  for (const r of hist.rows) {
-    if (r.is_open && r.rn === 1) openHistory.set(r.bitrix_user_id, r.name);
-    if (!r.is_open && r.rn === 1) lastClosed.set(r.bitrix_user_id, r.name);
-  }
-
-  // Fail-safe: пустая sa.org_resolved_hierarchy = защита orgManaged молча отключилась
-  // бы, и детект деградировал бы в наивный вариант (105 ложных переименований 31.07).
-  // Пустой org-таблицы в норме не бывает (org-sync ведёт её ежедневно) — не пишем
-  // ничего и НЕ кэшируем прогон, чтобы следующий запрос повторил попытку.
-  if (org.rows.length === 0) {
-    console.warn('[employees] sa.org_resolved_hierarchy пуста — детект переименований пропущен (fail-safe)');
-    return { seeded: 0, renamed: 0, skippedFlips: 0, checkedAt: 0 };
-  }
-  const orgManaged = new Set(org.rows.map(r => r.id));
-  const ops = planRenameOps(current, openHistory, lastClosed, orgManaged);
-  let seeded = 0; let renamed = 0; let skippedFlips = 0;
-
-  const toApply = ops.filter(o => o.kind !== 'skip-flip');
-  skippedFlips = ops.length - toApply.length;
-  if (toApply.length > 0) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      for (const op of toApply) {
-        if (op.kind === 'seed') {
-          // Гонка с org-sync: строка могла появиться между чтением и записью — не дублируем.
-          const ins = await client.query(
-            `INSERT INTO sa.employee_name_history (bitrix_user_id, name, valid_from)
-             SELECT $1, $2, now()
-              WHERE NOT EXISTS (SELECT 1 FROM sa.employee_name_history
-                                 WHERE bitrix_user_id = $1 AND valid_to IS NULL)`,
-            [op.bitrixId, op.name],
-          );
-          seeded += ins.rowCount ?? 0;
-        } else {
-          const upd = await client.query(
-            `UPDATE sa.employee_name_history SET valid_to = now()
-              WHERE bitrix_user_id = $1 AND valid_to IS NULL AND name = $2`,
-            [op.bitrixId, op.prevName],
-          );
-          if ((upd.rowCount ?? 0) > 0) {
-            await client.query(
-              `INSERT INTO sa.employee_name_history (bitrix_user_id, name, valid_from) VALUES ($1, $2, now())`,
-              [op.bitrixId, op.name],
-            );
-            renamed++;
-          }
-        }
-      }
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw e;
-    } finally {
-      client.release();
-    }
-  }
-
-  _lastDetect = { seeded, renamed, skippedFlips, checkedAt: Date.now() };
-  return _lastDetect;
+export async function detectRenames(_force = false): Promise<DetectResult> {
+  return { seeded: 0, renamed: 0, skippedFlips: 0, checkedAt: Date.now() };
 }
 
 // ---------- Список сотрудников для страницы ----------
@@ -127,7 +45,8 @@ export interface EmployeeListRow {
   departmentName: string | null;
   branch: string | null;
   isActive: boolean;
-  hireDate: string | null;          // sa.employees.hire_date (ISO date) — ведёт синк
+  hireDate: string | null;          // sa.employees больше не читаем (задача 2820) — всегда null,
+                                     // осталось только для совместимости формы; стаж живёт на manualStartDate
   manualStartDate: string | null;   // sa.employee_registry — правится в UI
   startDate: string | null;         // COALESCE(manual, hire) — база стажа
   notes: string;
@@ -144,18 +63,21 @@ export interface EmployeeListRow {
 export async function getEmployeesList(): Promise<EmployeeListRow[]> {
   const pool = analyticsDb();
   const [rows, hist, orgRoles] = await Promise.all([
+    // Задача 2820: раньше водило sa.employees (211 строк, мёртвая заготовка
+    // 13.06 — на проверке 03.08 отсутствовало 222 из 429 активных
+    // сотрудников). Теперь водит sa.org_resolved_hierarchy — актуальная
+    // оргструктура (ночной синк), hire_date там нет (в sa.employees он и так
+    // не заполнялся на проде — см. features/employees/ui/EmployeesPage.tsx).
     pool.query(
-      `SELECT e.bitrix_id, e.full_name, e.is_active,
-              to_char(e.hire_date, 'YYYY-MM-DD') AS hire_date,
+      `SELECT org.manager_bitrix_user_id::int AS bitrix_id, org.manager_name AS full_name, org.is_active,
+              NULL::date AS hire_date,
               to_char(r.manual_start_date, 'YYYY-MM-DD') AS manual_start_date,
               coalesce(r.notes, '') AS notes, r.updated_by,
               to_char(r.updated_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD HH24:MI') AS updated_at,
-              h.department_name, h.branch
-         FROM sa.employees e
-         LEFT JOIN sa.employee_registry r ON r.bitrix_id = e.bitrix_id
-         LEFT JOIN sa.org_resolved_hierarchy h ON h.manager_bitrix_user_id = e.bitrix_id::text
-        WHERE e.bitrix_id IS NOT NULL
-        ORDER BY e.full_name`,
+              org.department_name, org.branch
+         FROM sa.org_resolved_hierarchy org
+         LEFT JOIN sa.employee_registry r ON r.bitrix_id = org.manager_bitrix_user_id::int
+        ORDER BY org.manager_name`,
     ),
     pool.query(
       `SELECT bitrix_user_id, name,
