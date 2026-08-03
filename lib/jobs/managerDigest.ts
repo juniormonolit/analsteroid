@@ -553,14 +553,16 @@ export function buildCustomerLink(managerBitrixId: number, clientKey: string): s
   return `${MONOLITIKA_ORIGIN}/manager/${managerBitrixId}?tab=customers&customer=${encodeURIComponent(clientKey)}`;
 }
 
-// Мусорные имена (задача 2822, со скриншота: «-», «000») — не выводим вовсе,
-// pickAdvice берёт следующего кандидата по скору (см. ниже).
+// Мусорные имена (задача 2822, со скриншота: «-», «000»; живой прогон
+// доловил ещё «1» — голое число без единой буквы никого не идентифицирует,
+// реальных юрлиц/контактов с названием из одних цифр не бывает) — не
+// выводим вовсе, pickAdvice берёт следующего кандидата по скору (см. ниже).
 function isJunkName(raw: string | null): boolean {
   if (raw === null) return true;
   const t = raw.trim();
   if (t === '') return true;
   if (/^[\s\-–—.]*$/.test(t)) return true; // только тире/точки/пробелы
-  if (/^0+$/.test(t)) return true;          // «0», «000»
+  if (/^\d+$/.test(t)) return true;         // голое число: «0», «000», «1» — не идентифицирует человека/юрлицо
   return false;
 }
 
