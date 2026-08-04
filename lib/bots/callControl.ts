@@ -512,9 +512,18 @@ export async function runCallControlCycle(): Promise<string> {
           ? caseManagerChatUrl
           : null;
 
+      // Ссылку не вешаем отдельным пунктом — прячем в САМО ИМЯ менеджера BB-кодом
+      // Битрикса (решение Иосифа 04.08, после боевой проверки: строка «Написать
+      // менеджеру: <url>» выглядела приблудой). Шаблоны не трогаем: везде, где стоит
+      // {manager_name}, руководитель получает кликабельное имя, ведущее в чат с ним.
+      // Менеджеру самому себе — обычный текст, без ссылки.
+      const managerDisplay = org?.manager_name ?? c.manager_bitrix_user_id ?? '—';
+
       const body = templateById.get(rule.template_id as number) ?? '';
-      let message = renderTemplate(body, {
-        manager_name: org?.manager_name ?? c.manager_bitrix_user_id ?? '—',
+      const message = renderTemplate(body, {
+        manager_name: chatUrlForRecipient
+          ? `[URL=${chatUrlForRecipient}]${managerDisplay}[/URL]`
+          : managerDisplay,
         department: org?.department_name ?? '—',
         rop_name: effRopName ?? '—',
         director_name: effDirectorName ?? '—',
@@ -524,14 +533,9 @@ export async function runCallControlCycle(): Promise<string> {
         minutes: String(minutesSince),
         case_id: c.id,
         recipient_name: recipientName,
+        // Голый URL — на случай, если в шаблоне захочется своя формулировка.
         manager_chat_url: chatUrlForRecipient ?? '—',
       });
-
-      // Шаблоны кастомные (правятся в админке), поэтому не требуем вручную вставлять
-      // плейсхолдер: если его в шаблоне нет — дописываем ссылку отдельной строкой.
-      if (chatUrlForRecipient && !body.includes('{manager_chat_url}')) {
-        message += `\nНаписать менеджеру: ${chatUrlForRecipient}`;
-      }
 
       // UNIQUE (case_id, rule_id): правило по кейсу срабатывает один раз. Вставка
       // ДО отправки — при гонке двух тиков второй просто не пройдёт по конфликту.
