@@ -6,6 +6,78 @@
 
 ---
 
+## 2026-08-04 — Деплой на ПРОД: «Заполнятор товаров» (задачи #2960/#2988, Артём)
+
+**Контекст:** владелец смотрел конструктор на dev-стенде и дал добро катить на прод.
+Параллельно шла отдельная задача #2983 (редкость по цене + блюр карточек по
+`min_level`) в соседнем worktree `analsteroid-wt-2983` тем же коммитом `d23d9e9` —
+только локальные незакоммиченные правки (`ShopSettings.tsx`, `rarity.ts`,
+`app/api/shop/route.ts`, `app/api/settings/badges/shop/route.ts`,
+`ManagerTabs.tsx`, новая `migrations/140_...`), ничего не запушено. Перед
+сборкой и сразу перед `deploy.sh` дважды сверено `git fetch origin dev-asteroid`
+— `origin/dev-asteroid` оставался на `d23d9e9` (HEAD ветки `task-2960-shop-item-
+builder`) весь пролёт деплоя, коммитов #2983 в релиз не попало.
+
+**Коммит в проде:** `d23d9e9` (merge `task-2960-shop-item-builder` → tip
+`origin/dev-asteroid`, включает `6a3fdfb` — саму фичу). Собран из worktree
+`/home/user/apps/analsteroid-wt-2765` (чистое дерево, ровно на этом коммите).
+
+**Бэкап ПЕРЕД миграцией (данные ~200 сотрудников):** `pg_dump -Fc` таблицы
+`shop_items` (система YC, БД `system`) — на проде
+`/home/junior/prod-backups/shop_items-pre-2988-20260804-123821.dump`, копия
+`/home/user/life-os/owners-inbox/backups/shop_items-pre-2988-20260804-123821.dump`.
+Восстановление: `PGPASSWORD=$(cat /home/junior/anal_v2/.pg_password) PGSSLMODE=require
+PGSSLROOTCERT=/home/junior/analsteroid/certs/yandex-ca.pem pg_restore --host=
+rc1b-o2tqrr9j3gq09svq.mdb.yandexcloud.net --port=6432 --username=JanCloude
+--dbname=system --clean --if-exists <файл>.dump`.
+
+**Миграция 139** применена `node migrations/run_system.mjs
+migrations/139_shop_item_builder.sql` (сверен MD5 файла на проде с коммитом
+перед запуском) → `OK`. Проверено сразу: `shop_items` 16→16 строк (ни одна не
+потеряна), 11 новых колонок на месте, `category` только material/immaterial
+(boost — 0, новый), `buyer_scope` 13 all / 3 rop_only (бывшие `team`), RUB в
+`allowed_currencies` — 0 строк.
+
+**Код** — `deploy.sh` из `analsteroid-wt-2765` (гард свежести против
+`origin/dev-asteroid`, патч 9×ioredis + `pg` с сверкой file-count, тарбол,
+scp, kill/extract/restart). `Login: 200 | Static: 200 | BUILD:
+Kit9Cz7tQKociKBAqnwZh`, `pg module require(): ok`, `app.log` чист (только
+штатное «Redis-лок не проверить» — известный паттерн после каждого
+рестарта, не новый). **BUILD_ID проверен строго по
+`.next/standalone/.next/BUILD_ID`** — верхнеуровневый `.next/BUILD_ID`
+на сервере оказался старым (`Ggbu99Rrg3lochqBPLyK_`, файл не обновляется
+`deploy.sh`, ожидаемо — не смотреть на него).
+
+**Откат кода:** живого тар-снапшота ПЕРЕД деплоем не снял (пробел процесса,
+отмечен владельцу) — вместо этого пересобрал прошлый прод-коммит `2020e2f`
+(чистый `npm ci` + `npm run build` в одноразовом worktree) и заранее уложил
+готовый тарбол на сервер: `/home/junior/prod-backups/analsteroid-rollback-
+pre2988-20260804.tar.gz` (BUILD `rQOVw6cH04BSAriQNegCJ`, тот же паттерн
+`PACK_PATHS`, что у `deploy.sh`, включая пропатченный `pg`). Откат одной
+командой: `ssh junior@62.113.100.67 "cd /home/junior/analsteroid && kill \$(ss
+-tlnp | grep 8100 | grep -oP 'pid=\K[0-9]+') 2>/dev/null; sleep 1; rm -rf
+.next/standalone/.next/node_modules/pg-587764f78a6c7a9c && tar -xzf
+/home/junior/prod-backups/analsteroid-rollback-pre2988-20260804.tar.gz
+--overwrite && mkdir -p .next/standalone/.next/static && cp -r .next/static/*
+.next/standalone/.next/static/ && nohup bash start.sh >> app.log 2>&1 & disown"`.
+
+**Живая проверка:** одноразовый `zzz_deploy_check_2988` (superadmin,
+bcrypt-хеш, `POST /api/auth/login` для настоящей сессионной куки — не
+инсерт токена вручную), headless Chromium (puppeteer-core + `/snap/bin/
+chromium`, `--no-sandbox`). `/settings/rewards?tab=shop` (правильный ключ
+таба — `shop`, НЕ путать со старым примером `badges` из #2825) — список
+16 позиций отрисовался (эмодзи, тип, редкость/ур., цена MLT, кто покупает,
+сток), клик «+ Добавить товар / буст» открыл форму конструктора целиком
+(эмодзи-пикер 24 варианта + превью, название/описание, тип позиции, цена
+MLT, кол-во, срок годности, мин. уровень с автосчётом редкости — шкала
+Обычный/Необычный/Редкий/Эпический/Легендарный из migration 139, ссылка на
+маркетплейс, кто покупает, чекбокс подтверждения руководителя). Юзер и его
+сессия удалены сразу после (`DELETE FROM users`/`user_sessions`). Скрины —
+`scratchpad/shots-2988/` (сессия Артёма).
+
+**Реестр:** запись добавлена в `team/devops.md`, раздел analsteroid PROD
+(«Деплой #2960/#2988»).
+
 ## 2026-08-04 — «Заполнятор товаров»: конструктор магазина/бустов (задача 2960, Артём)
 
 **ТЗ владельца (Серёга, дословно из брифа):** «список призов… хочу заводить их вручную
