@@ -7,6 +7,9 @@
 
 import { Fragment, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { PinDialog } from '@/components/ui/PinDialog';
+import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
+import { fetchPinGated } from '@/lib/client/pinFetch';
 
 type Tier = 'white' | 'green' | 'blue' | 'epic' | 'legendary';
 type Slot = 'day' | 'week1' | 'week2' | 'month' | 'extra';
@@ -105,6 +108,14 @@ function QuestCard({ q, prices, isSelf, onReroll, busy }: {
 export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Реролл/доп. квест — списание с СВОЕГО кошелька под личный порог (спека §3):
+  // недорогая операция чаще проходит без пина, но выше порога/при исчерпанном
+  // суточном потолке бэк просит пин — тот же паттерн, что уже обкатан в
+  // покупке магазина и рублёвом кошельке. payload хранит тело последней
+  // попытки, чтобы дослать его же с полем pin.
+  const [pinSetupPayload, setPinSetupPayload] = useState<Record<string, unknown> | null>(null);
+  const [pinVerifyPayload, setPinVerifyPayload] = useState<Record<string, unknown> | null>(null);
   const { data, isLoading, isError } = useQuery<ApiResponse>({
     queryKey: ['quests', isSelf ? 'me' : managerId],
     queryFn: async () => {
@@ -116,6 +127,12 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
   });
+
+  const refreshQuests = () => {
+    void qc.invalidateQueries({ queryKey: ['quests'] });
+    void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
+    void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+  };
 
   const takeC = async (contractId: number) => {
     setBusy(true);
@@ -133,17 +150,13 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
 
   const act = async (payload: Record<string, unknown>) => {
     setBusy(true);
+    setError(null);
     try {
-      const res = await fetch('/api/quests/reroll', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => null);
-        alert((j as { error?: string } | null)?.error ?? `Ошибка ${res.status}`);
-      }
-      await qc.invalidateQueries({ queryKey: ['quests'] });
-      void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
-      void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+      const r = await fetchPinGated('/api/quests/reroll', 'POST', payload);
+      if (r.ok) { refreshQuests(); return; }
+      if (r.needsPinSetup) { setPinSetupPayload(payload); return; }
+      if (r.needsPinVerify) { setPinVerifyPayload(payload); return; }
+      setError(r.error ?? 'Ошибка');
     } finally { setBusy(false); }
   };
 
@@ -185,6 +198,7 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
           Ещё квест ({data.prices.extra})
         </button>
       )}
+      {error && <div className="text-xs text-[var(--color-negative,#e03131)]">{error}</div>}
 
       {/* Доска контрактов (миграция 126): общий пул, депозит, любой тир */}
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-3">
@@ -269,6 +283,25 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
           </div>
         )}
       </section>
+      <PinSetupDialog
+        open={!!pinSetupPayload}
+        onOpenChange={(o) => { if (!o) setPinSetupPayload(null); }}
+        onSuccess={() => { const p = pinSetupPayload; setPinSetupPayload(null); if (p) void act(p); }}
+      />
+      <PinDialog
+        open={!!pinVerifyPayload}
+        onOpenChange={(o) => { if (!o) setPinVerifyPayload(null); }}
+        title={pinVerifyPayload?.action === 'extra' ? 'Подтвердите доп. квест пином' : 'Подтвердите замену квеста пином'}
+        onConfirm={async (pin) => {
+          if (!pinVerifyPayload) return { ok: false, error: 'Нет операции' };
+          const r = await fetchPinGated('/api/quests/reroll', 'POST', { ...pinVerifyPayload, pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyPayload(null);
+          setError(null);
+          refreshQuests();
+          return { ok: true };
+        }}
+      />
     </div>
   );
 }
