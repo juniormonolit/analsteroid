@@ -208,7 +208,16 @@ export function MetricEditor({ initial, existingIds, onSave, onClose }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex">
       <div className={`flex-1 ${SLIDE_BACKDROP_BG} slide-backdrop-fade ${closing ? 'opacity-0' : 'opacity-100'}`} onClick={requestClose} />
-      <aside className={`relative w-[800px] max-w-full bg-[var(--color-bg-surface)] border-l border-[var(--color-border)] flex flex-col h-full shadow-2xl ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+      {/* Регресс #2999 (04.08): панель целиком сидела на прозрачном --color-bg-surface
+          (просвечивал контент страницы позади) — единственный дровер приложения без
+          собственного backdrop-filter, отличался от родственных ComparisonPanel/
+          MetricChartModal/ChartDrilldownPanel/CustomerCard/DrilldownDrawer, которые для
+          всей панели используют непрозрачный --color-bg (сплошной hex по теме, без
+          альфы) и держат --color-bg-surface только для внутренних sticky-полосок УЖЕ
+          поверх непрозрачного тела. Не заводили тут стекло — привели к тому же
+          непрозрачному паттерну, что и у соседей (проще и без риска для единственного
+          отличающегося места). */}
+      <aside className={`relative w-[800px] max-w-full bg-[var(--color-bg)] border-l border-[var(--color-border)] flex flex-col h-full shadow-2xl ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
         <PanelCloseTab onClick={requestClose} />
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-border)]">

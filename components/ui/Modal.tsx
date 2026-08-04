@@ -32,7 +32,17 @@ export function Modal({
         <Dialog.Content
           className={twMerge(
             // мобильный: bottom-sheet во всю ширину, с отступом под home-индикатор
-            'fixed z-50 inset-x-0 bottom-0 w-full max-h-[85dvh] overflow-y-auto rounded-t-xl bg-[var(--color-bg-surface)] shadow-xl outline-none pb-[env(safe-area-inset-bottom)]',
+            // Регресс #2999 (04.08): страница под модалкой просвечивала насквозь —
+            // --color-bg-surface (68%/60%/7.5% альфы по темам) без backdrop-filter
+            // давало полупрозрачную дыру, не стекло. Настоящий блюр — доказанно рабочий
+            // приём (см. AppShell.tsx/BottomTabBar.tsx, [backdrop-filter:var(--glass-blur)]
+            // как Tailwind-нативный arbitrary-property класс — компилируется движком
+            // Tailwind самим, а не хендрайтен-правилом в globals.css, поэтому не
+            // вытесняется, в отличие от ручного .bg-\[var\(...\)\]{} — см. WORKLOG) +
+            // заведомо плотный --color-bg-overlay (94-96% альфы, отдельный от
+            // --color-bg-surface токен, см. globals.css) — вместе гарантируют, что текста
+            // страницы за модалкой не видно ни в одной теме.
+            'fixed z-50 inset-x-0 bottom-0 w-full max-h-[85dvh] overflow-y-auto rounded-t-xl bg-[var(--color-bg-overlay)] [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)] shadow-xl outline-none pb-[env(safe-area-inset-bottom)]',
             // десктоп (sm+): центрированное окно
             'sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-lg sm:max-h-[85vh] sm:pb-0',
             desktopWidth,
@@ -40,7 +50,13 @@ export function Modal({
           )}
         >
           {title !== undefined && (
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-bg-surface)] rounded-t-xl sm:rounded-t-lg">
+            // Стекло-в-стекле (аудит #2999): раньше шапка и внешний лист сидели на ОДНОМ
+            // токене --color-bg-surface — два самостоятельных полупрозрачных слоя без
+            // общего backdrop-filter. Теперь у шапки СВОЙ backdrop-filter не нужен: она
+            // лежит поверх уже заблюренного+уплотнённого тела модалки (bg-[var(--color-bg-overlay)]
+            // выше), а не поверх страницы — повторный blur тут ничего не даёт, только
+            // расходует GPU и рискует артефактами вложенного backdrop-filter в Safari.
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-bg-overlay)] rounded-t-xl sm:rounded-t-lg">
               <Dialog.Title className="text-sm font-semibold">{title}</Dialog.Title>
               <Dialog.Close className="tap-target p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
                 <X size={16} />

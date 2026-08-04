@@ -30,6 +30,13 @@
      без единой правки в компонентах. */
   --color-bg: var(--surface-app);
   --color-bg-surface: var(--surface-card);
+  /* Регресс #2999 (04.08, Виктор): всплывающие поверхности (Modal.tsx/Popover.tsx —
+     модалки, дропдауны, поповеры) больше НЕ используют --color-bg-surface (68%/60%/
+     7.5% альфы по темам — плотности достаточно для карточек-соседей в grid, но
+     недостаточно, когда под поповером произвольный контент СТРАНИЦЫ, а не соседняя
+     карточка) — свой плотный токен --surface-overlay (тени/typography/effects.css без
+     изменений). См. app/styles/tokens/theme-*.css. */
+  --color-bg-overlay: var(--surface-overlay);
   --color-bg-hover: var(--gray-100);
   --color-border: var(--border-default);
   --color-border-focus: var(--border-focus);

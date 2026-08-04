@@ -103,8 +103,11 @@ export function IdeasPanel({ onClose }: Props) {
   return (
     <>
       <SlideBackdrop closing={closing} onClick={requestClose} />
+      {/* Регресс #2999 (04.08): та же дыра, что в MetricEditor.tsx — панель целиком на
+          прозрачном --color-bg-surface вместо непрозрачного --color-bg, которым живут
+          родственные правые дроверы приложения. См. комментарий в MetricEditor.tsx. */}
       <div
-        className={`fixed inset-y-0 right-0 z-50 w-full sm:w-[50vw] sm:min-w-[360px] sm:max-w-[800px] bg-[var(--color-bg-surface)] shadow-2xl flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}
+        className={`fixed inset-y-0 right-0 z-50 w-full sm:w-[50vw] sm:min-w-[360px] sm:max-w-[800px] bg-[var(--color-bg)] shadow-2xl flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}
       >
         <PanelCloseTab onClick={requestClose} />
 

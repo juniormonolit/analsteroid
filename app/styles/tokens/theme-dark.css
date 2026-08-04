@@ -31,4 +31,7 @@
 --shadow-toast:inset 0 1px 0 rgba(255,255,255,.08),0 12px 32px rgba(0,0,0,.5);
 --glass-border:rgba(255,255,255,.14);--glass-side:rgba(13,24,42,.55);
 --text-on-app:#e6e8ec;--text-on-app-secondary:rgba(230,232,236,.7);
+/* Задача #2999-регресс (Виктор, 04.08) — см. комментарий в theme-light.css:
+   отдельный плотный токен под всплывающие поверхности, не трогает --surface-card. */
+--surface-overlay:rgba(21,34,56,.94);
 }

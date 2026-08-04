@@ -52,7 +52,11 @@ export function Popover({
           sideOffset={4}
           collisionPadding={8}
           className={twMerge(
-            'z-[80] rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-lg outline-none max-w-[calc(100vw-16px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto',
+            // Регресс #2999 (04.08): та же дыра, что и у Modal.tsx — --color-bg-surface
+            // без backdrop-filter просвечивал контент страницы под дропдауном/датапикером.
+            // Тот же фикс: плотный --color-bg-overlay + реальный блюр (Tailwind arbitrary
+            // property, не хендрайтен CSS — см. комментарий в Modal.tsx).
+            'z-[80] rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-overlay)] [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)] shadow-lg outline-none max-w-[calc(100vw-16px)] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto',
             className,
           )}
         >

@@ -278,8 +278,10 @@ export function OffloadPage() {
         />
       )}
       {closing && (
+        {/* Регресс #2999 (04.08) — см. комментарий у ConfirmCloseModal ниже: тот же
+            самописный диалог с прозрачным фоном, тот же фикс. */}
         <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center">
-          <div className="rounded-xl bg-[var(--color-bg-surface)] border border-[var(--color-border)] px-6 py-5 text-sm text-[var(--color-text)] shadow-2xl">
+          <div className="rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] px-6 py-5 text-sm text-[var(--color-text)] shadow-2xl">
             Закрываем сделки в Битриксе… обработано <b>{closing.done}</b> из <b>{closing.total}</b>
             <div className="mt-2 h-1.5 rounded bg-[var(--color-border)] overflow-hidden">
               <div className="h-full bg-[var(--color-accent)] transition-all" style={{ width: `${closing.total ? Math.round(closing.done / closing.total * 100) : 0}%` }} />
@@ -301,8 +303,12 @@ function ConfirmCloseModal({ stats, sample, onCancel, onConfirm }: {
   onConfirm: () => void;
 }) {
   return (
+    // Регресс #2999 (04.08): самописный диалог подтверждения (не на <Modal>) с
+    // прозрачным --color-bg-surface без backdrop-filter — контент страницы позади
+    // просвечивал. Фикс — непрозрачный --color-bg, без стекла (владелец: если блюр не
+    // нужен точечно, проще и безопаснее просто убрать прозрачность).
     <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4" onClick={onCancel}>
-      <div className="w-full max-w-[520px] rounded-xl bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl p-5" onClick={e => e.stopPropagation()}>
+      <div className="w-full max-w-[520px] rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl p-5" onClick={e => e.stopPropagation()}>
         <h3 className="font-semibold text-[var(--color-text)] mb-2">Закрыть отмеченные сделки?</h3>
         <div className="text-sm text-[var(--color-text-muted)] space-y-1 mb-3">
           <div>Сделок: <b className="text-[var(--color-text)]">{stats.count.toLocaleString('ru-RU')}</b></div>

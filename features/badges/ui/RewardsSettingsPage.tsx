@@ -210,8 +210,12 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4" onClick={onClose}>
+      {/* Регресс #2999 (04.08): самописный диалог (не на <Modal>) с прозрачным
+          --color-bg-surface без backdrop-filter — контент страницы позади был виден.
+          Владелец: если блюр не нужен точечно — просто непрозрачный фон, без стекла;
+          здесь это самый дешёвый безопасный фикс для самописного (не Modal.tsx) диалога. */}
       <div
-        className="mt-8 w-full max-w-xl rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-5 shadow-xl"
+        className="mt-8 w-full max-w-xl rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] p-5 shadow-xl"
         onClick={e => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between">
