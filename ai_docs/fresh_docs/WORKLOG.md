@@ -13353,3 +13353,162 @@ company-wide, независимо от reports-движка — тот же р�
 Только дев-стенд. На ПРОД весь пакет #2992 (миграции 141+143 + фикс
 sqlGen.ts) — ждёт отдельного «ок» владельца, отдельно подтверждено
 координатором в этой же переписке.
+
+## 2026-08-04 — Прод-деплой пакета #2992 (фикс «В отказ из X» + «Отгрузка → отказ»), Софья
+
+**Слово владельца через координатора: «Кати.»**
+
+### 1. Развод веток от текущего прод-коммита (не от `dev-asteroid`)
+Прод на момент старта — релиз задачи #2990, ветка `origin/prod-release-2990`
+(`633f65b`), BUILD_ID **`bp89lj5mWrpsDuzCTFMcM`**. `dev-asteroid` в этот
+момент содержал незаконченные #2983/#2994 (магазин), #3004 (ребренд валюты),
+#2995 (пин-код) — ничего из этого катать было нельзя. Собрана отдельная
+ветка `prod-release-2992` от `origin/prod-release-2990`, cherry-pick ТОЛЬКО
+своих 4 коммитов по порядку: `6e06fda`→`9df08f5`, `bc7e32e`→`f2e3b39`,
+`7f9da95`→`89961ba`, `bd7bf64`→`e618eba` (новые SHA — cherry-pick меняет
+хеш). Два конфликта в `ai_docs/fresh_docs/WORKLOG.md` (append-only лог,
+разные хвосты истории у `dev-asteroid` и `prod-release-2990`) — оба
+разрешены вручную (взят весь текст обеих сторон, без потерь и без
+дублей, дубль секции «Дефолт «Обычная/Про»…» из bd7bf64 вычищен отдельно).
+`npx tsc --noEmit` на итоговой ветке — чисто.
+
+**Проверка чистоты диффа перед сборкой** (`git diff origin/prod-release-2990..HEAD --stat`):
+```
+ ai_docs/fresh_docs/WORKLOG.md                      | 171 ++
+ lib/metrics/sqlGen.ts                              |  15 ++
+ lib/metrics/types.ts                               |   2 +-
+ migrations/141_refusal_metrics_direct_transition.sql | 179 ++
+ migrations/143_shipped_to_lost_metric.sql          |  87 ++
+ 5 files changed, 453 insertions(+), 1 deletion(-)
+```
+Ровно 5 файлов, ничего чужого (#2983/#2994/#3004/#2995) не уехало. Push
+`prod-release-2992` в origin.
+
+### 2. Миграции — 141 и 143 общей БД `metrics` (YC analytics), НЕ переприменял
+Обе миграции физически применены РАНЬШЕ, в ходе дев-этапа этой же задачи
+(141 — при первом фиксе, 143 — по слову владельца «заведи отгрузка отказ»):
+эта БД ОДНА на дев и прод (не два экземпляра), так что «применить на проде»
+для конфига метрик было уже сделано — прод-код просто не видел эти строки,
+пока не приехал код. Перед прод-деплоем сделан **дамп текущего состояния**
+всех 27 затронутых строк (18 от 141 + 9 от 143) —
+`owners-inbox/otkaz-iz-broni-metrics-config-dump-20260804.json` (id,
+name_ru, filters, formula, dependencies, sort_order, category). Живой
+запрос `SELECT ... FROM metrics WHERE id IN (...)` перед деплоем подтвердил:
+конфиг не дрейфовал с момента применения на деве.
+
+### 3. Бэкап ДО перезаписи + сборка в чистом клоне
+- `/home/junior/prod-backups/analsteroid-prod-backup-2992-20260804-1400.tar.gz`
+  (964 МБ, полный каталог `/home/junior/analsteroid` без node_modules/.next
+  cache) — снят ДО какой-либо перезаписи.
+- `/home/junior/prod-backups/env.local.bak-2992-20260804-1400.md5` — контрольная
+  сумма `.env.local` до деплоя (`94bb573350e76950aabf282725182798`) — сверена
+  ПОСЛЕ деплоя, файл не тронут.
+- Сборка — в чистом клоне `/home/junior/analsteroid-prod-deploy-2992`
+  (`git clone` + `checkout prod-release-2992`, `.env.local`/`certs`
+  скопированы с прода, LIVE_DIR не трогался до успешного `npm run build`).
+  `npm ci` + `npm run typecheck` (чисто) + `npm run build` — успешно.
+  В логе сборки 7 записей `Ecmascript file had an error` — Edge Runtime
+  import-trace warning по `lib/cache/redis.ts`/`lib/db/clients.ts`
+  (Node-only API в edge/instrumentation-контексте) — файлы НЕ мои (не в
+  диффе выше), warning ПРЕДСУЩЕСТВУЮЩИЙ на baseline `prod-release-2990`,
+  не фатальный (`Failed to compile`/`Build error occurred` в логе нет,
+  BUILD_ID сгенерирован, таблица роутов допечаталась до конца).
+
+### 4. Выкатка
+Стандартная схема (backup standalone → swap → restart): бэкап
+`.next/standalone` в `/home/junior/prod-backups/analsteroid-standalone-
+backup-2992-20260804-1400`, новый `.next/standalone`+`public` разложены из
+чистой сборки. **Аномалия при рестарте:** старый процесс (PID 3705067)
+оказался уже мёртв к моменту явной команды `kill` (сам упал при подмене
+файлов под ним ИЛИ его убил кто-то параллельно — на сервере в этот день
+шли ещё минимум 2 чужих прод-обновления, systemd/cron-вотчдога для порта
+8100 нет, ничего не нашлось при проверке); новый процесс (PID 3786080) уже
+поднялся САМ и уже отдавал мой новый BUILD_ID. Для чистоты и точной
+фиксации момента переключения сделан контролируемый рестарт вручную —
+`kill` + `nohup bash start.sh >> app.log 2>&1 & disown`.
+**Момент переключения (для истории): `2026-08-04 14:10:18 МСК`** — именно
+с этого момента метрики семейства «В отказ из X» на проде считаются
+по-новому.
+- **BUILD_ID ДО:** `bp89lj5mWrpsDuzCTFMcM`
+- **BUILD_ID ПОСЛЕ:** `ev3aVh78oXNN_5jOxV6fq` (строго по
+  `.next/standalone/.next/BUILD_ID`, сверено дважды — сразу после swap и
+  после контролируемого рестарта, совпало)
+- PID на 8100 после контролируемого рестарта: 3798609, `/login` → 200.
+
+### 5. Живая проверка на боевом (одноразовый `zzz_check_2992b`,
+роль Администратор, удалён сразу после — `DELETE FROM users WHERE
+login='zzz_check_2992b'` подтверждён)
+`POST /api/reports/run` (by-sources, июль 2026, dealScope=all):
+
+| Метрика | Ожидалось | Прод после выкатки |
+|---|---|---|
+| `reservation_to_lost_count` | 2295 | **2295** |
+| `confirmed_to_lost_count` | 485 | **485** |
+| `sale_to_lost_count` | 613 | **613** |
+| `shipped_to_lost_count` | 11 | **11** |
+| Сумма четырёх | 3404 | **3404** |
+
+Точное совпадение по всем четырём. `deals_count`=18119 (контрольная,
+не из семейства — как и на дев-стенде до этого).
+
+**Отчёты не пустые** — `by-managers` (grouping=total): 169 строк менеджеров,
+`reservation_to_lost_count`=2249/`confirmed`=479/`sale`=604/`shipped`=10 (не
+0, чуть меньше by-sources за счёт исключения «Не определён» — тот же
+паттерн, что и на деве, не регрессия).
+
+**Соседний отчёт без метрик отказов не задет:** `sales_count`=3372,
+`reservations_count`=5012, `lost_deals_count`=15797, `shipments_count`=2663
+— живые ненулевые числа, ошибок нет, метрики вне семейства «X → Отказ»
+фикс не касается по построению (другие ID, другие filters-строки).
+
+`app.log` после рестарта — чисто (только предсуществующий безвредный
+`[widgetMetrics] Redis-лок не проверить`/`[cache] get failed` — тот же,
+что был до деплоя, к Redis-кешу коротких TTL, не к прод-БД).
+
+### 6. Что НЕ уехало
+`features/widget-constructor/`, `features/badges/`, `lib/emoji/`,
+`lib/images/shopItemImage.ts`, пин-код (`PIN_PEPPER`-функционал) — задачи
+#2983/#2988/#2994/#2995/#3004 остались только в `dev-asteroid`, в диффе
+прод-релиза их нет (см. `git diff --stat` в п.1).
+
+### 7. Откат — код и конфиг раздельно, одной командой каждый
+
+**Откат кода (полный, из тарбола каталога):**
+```bash
+ssh junior@62.113.100.67 '
+kill $(ss -tlnp | grep 8100 | grep -oP "pid=\K[0-9]+") 2>/dev/null
+cd /home/junior && rm -rf analsteroid.rolledback-2992 && mv analsteroid analsteroid.rolledback-2992 \
+  && tar -xzf prod-backups/analsteroid-prod-backup-2992-20260804-1400.tar.gz \
+  && cd analsteroid && nohup bash start.sh >> app.log 2>&1 & disown'
+```
+Быстрый вариант (только standalone, без полного тарбола):
+```bash
+ssh junior@62.113.100.67 '
+kill $(ss -tlnp | grep 8100 | grep -oP "pid=\K[0-9]+") 2>/dev/null
+rm -rf /home/junior/analsteroid/.next/standalone \
+  && mv /home/junior/prod-backups/analsteroid-standalone-backup-2992-20260804-1400 /home/junior/analsteroid/.next/standalone \
+  && cd /home/junior/analsteroid && nohup bash start.sh >> app.log 2>&1 & disown'
+```
+
+**Откат конфига метрик (независимо от кода):**
+- Вернуть 18 строк семейства «В отказ из X» к определению ДО задачи 2992
+  (просто `lost_at > X_at`, без `gt_field_or_null`) — повторно применить
+  оригинал: `node migrations/run_analytics.mjs migrations/034_refusal_metrics.sql`
+  (идемпотентный `ON CONFLICT DO UPDATE`, восстанавливает исходные `filters`).
+- Убрать метрику «Отгрузка → отказ» целиком (9 строк):
+  ```sql
+  DELETE FROM metrics WHERE id IN (
+    'primary_shipped_to_lost_count','repeat_shipped_to_lost_count','shipped_to_lost_count',
+    'primary_shipped_to_lost_amount','repeat_shipped_to_lost_amount','shipped_to_lost_amount',
+    'cr_shipped_to_lost_primary','cr_shipped_to_lost_repeat','cr_shipped_to_lost_all'
+  );
+  ```
+- Полный дамп состояния ДО этого прод-деплоя (для сверки после отката) —
+  `owners-inbox/otkaz-iz-broni-metrics-config-dump-20260804.json`.
+
+### 8. Про людей
+С 04.08.2026 14:10 МСК «Бронь → отказ» за июль у РОПов в отчётах покажет
+2295 вместо 3157 (было задвоение с «Продажа»/«Подтв.бронь») — цифра не
+сглажена и не подогнана, это математически корректное значение по новому
+определению. Дата/время зафиксированы явно в этой записи, чтобы при
+вопросах «откуда скачок» можно было точно сослаться на момент выкатки.
