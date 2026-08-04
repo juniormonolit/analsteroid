@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { systemDb, analyticsDb } from '@/lib/db/clients';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { actorFromSession, frozenMessage, isOutboundFrozen, verifyPin } from '@/lib/auth/pin';
 
 // Подарок предмета инвентаря коллеге (пакет Серёги 31.07): только owned, не в
 // заявке и не истёкший; предмет переходит получателю с СОХРАНЕНИЕМ expires_at,
@@ -12,7 +13,7 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.bitrixUserId) return NextResponse.json({ error: 'Аккаунт не связан с Битриксом' }, { status: 400 });
 
-  let body: { inventoryId?: unknown; toBitrixId?: unknown };
+  let body: { inventoryId?: unknown; toBitrixId?: unknown; pin?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   if (typeof body.inventoryId !== 'number' || !Number.isInteger(body.inventoryId)) {
     return NextResponse.json({ error: 'inventoryId обязателен' }, { status: 400 });
@@ -22,6 +23,16 @@ export async function POST(req: NextRequest) {
 
   const from = Number(session.bitrixUserId);
   if (to === from) return NextResponse.json({ error: 'Себе дарить нельзя' }, { status: 400 });
+
+  // Подарок — ценность уходит безвозвратно: пин ВСЕГДА (спека §3) + заморозка
+  // после недавнего сброса/смены пина (спека §5).
+  const frozenUntil = await isOutboundFrozen(systemDb(), from);
+  if (frozenUntil) return NextResponse.json({ error: frozenMessage(frozenUntil) }, { status: 423 });
+  const actor = actorFromSession(session, req);
+  const verified = await verifyPin(systemDb(), actor, body.pin, {
+    operation: 'shop_gift', targetRef: String(body.inventoryId),
+  });
+  if (!verified.ok) return NextResponse.json({ error: verified.error, pinRequired: true }, { status: verified.status });
 
   const rcpt = await analyticsDb().query<{ name: string }>(
     `SELECT manager_name AS name FROM sa.org_resolved_hierarchy

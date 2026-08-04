@@ -6,6 +6,7 @@ import {
   getGachaPool, getGachaSettings, getPityCount, getSpinCounts, runSpin,
   HARD_PITY_AT, SOFT_PITY_FROM,
 } from '@/features/badges/engine/gacha';
+import { actorFromSession, spendPinRequirement, verifyPin } from '@/lib/auth/pin';
 
 // Гача (фаза 2, 31.07). GET — витрина: пул с ОПУБЛИКОВАННЫМИ шансами, лимиты,
 // pity-счётчик, история своих круток. POST — крутка: результат определяется
@@ -59,11 +60,29 @@ export async function GET() {
   });
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.bitrixUserId) return NextResponse.json({ error: 'Аккаунт не связан с Битриксом' }, { status: 400 });
-  const result = await runSpin(systemDb(), Number(session.bitrixUserId));
+
+  let body: { pin?: unknown } = {};
+  try { body = await req.json(); } catch { /* тело необязательно, кроме пина */ }
+
+  const db = systemDb();
+  const id = Number(session.bitrixUserId);
+  const settings = await getGachaSettings(db);
+  const need = await spendPinRequirement(db, id, settings.spinCost);
+  let pinEventId: number | null = null;
+  if (need.required) {
+    const actor = actorFromSession(session, req);
+    const verified = await verifyPin(db, actor, body.pin, {
+      operation: 'gacha_spin', amount: settings.spinCost, currency: 'EBALL',
+    });
+    if (!verified.ok) return NextResponse.json({ error: verified.error, pinRequired: true, reason: need.reason }, { status: verified.status });
+    pinEventId = verified.pinEventId;
+  }
+
+  const result = await runSpin(db, id, pinEventId);
   if ('error' in result) return NextResponse.json({ error: result.error }, { status: 400 });
   return NextResponse.json({ ok: true, result });
 }

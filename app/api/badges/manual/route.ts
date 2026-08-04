@@ -5,6 +5,7 @@ import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { systemDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { actorFromSession, verifyPin } from '@/lib/auth/pin';
 
 // Ручные поощрения/штрафы валютой (доп. Серёги 31.07 к 2657).
 // Право: админ/директор — на всех; РОП и любой с managed-отделами — ТОЛЬКО на
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  let body: { bitrixId?: unknown; type?: unknown; amount?: unknown; penaltyTypeId?: unknown; comment?: unknown };
+  let body: { bitrixId?: unknown; type?: unknown; amount?: unknown; penaltyTypeId?: unknown; comment?: unknown; pin?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
 
   const bitrixId = typeof body.bitrixId === 'number' && Number.isInteger(body.bitrixId) && body.bitrixId > 0
@@ -111,6 +112,13 @@ export async function POST(req: NextRequest) {
 
   const db = systemDb();
   const comment = typeof body.comment === 'string' ? body.comment.trim().slice(0, 500) : '';
+
+  // Ручное поощрение/штраф — актор двигает ЧУЖОЙ кошелёк: пин ВСЕГДА (спека §3),
+  // это пин актора (session), не сотрудника, которого касается операция.
+  const actor = actorFromSession(session, req);
+  const pinVerified = await verifyPin(db, actor, body.pin, { operation: `manual_${body.type}`, targetRef: bitrixId });
+  if (!pinVerified.ok) return NextResponse.json({ error: pinVerified.error, pinRequired: true }, { status: pinVerified.status });
+  const pinEventId = pinVerified.pinEventId;
 
   if (body.type === 'bonus') {
     const amount = body.amount;
@@ -127,9 +135,9 @@ export async function POST(req: NextRequest) {
     }
     const r = await db.query<{ id: number }>(
       `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award,
-                                      source, actor_bitrix_id, actor_login, comment)
-       VALUES ($1, NULL, NULL, $2, $2, 'manual_bonus', $3, $4, $5) RETURNING id`,
-      [Number(bitrixId), amount, session.bitrixUserId ? Number(session.bitrixUserId) : null, session.login, comment],
+                                      source, actor_bitrix_id, actor_login, comment, pin_event_id)
+       VALUES ($1, NULL, NULL, $2, $2, 'manual_bonus', $3, $4, $5, $6) RETURNING id`,
+      [Number(bitrixId), amount, session.bitrixUserId ? Number(session.bitrixUserId) : null, session.login, comment, pinEventId],
     );
     // Пуш «Аналитиком» (задача 2759, п.3): сумма, причина, новый баланс.
     void (async () => {
@@ -159,9 +167,9 @@ export async function POST(req: NextRequest) {
     if (amount <= 0) return NextResponse.json({ error: 'Расчётная сумма штрафа — 0 (нулевой баланс), операция не создана' }, { status: 400 });
     const r = await db.query<{ id: number }>(
       `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award,
-                                      source, actor_bitrix_id, actor_login, comment, penalty_type_id)
-       VALUES ($1, NULL, NULL, $2, $3, 'manual_penalty', $4, $5, $6, $7) RETURNING id`,
-      [Number(bitrixId), -amount, amount, session.bitrixUserId ? Number(session.bitrixUserId) : null, session.login, comment, typeId],
+                                      source, actor_bitrix_id, actor_login, comment, penalty_type_id, pin_event_id)
+       VALUES ($1, NULL, NULL, $2, $3, 'manual_penalty', $4, $5, $6, $7, $8) RETURNING id`,
+      [Number(bitrixId), -amount, amount, session.bitrixUserId ? Number(session.bitrixUserId) : null, session.login, comment, typeId, pinEventId],
     );
     // Пуш «Аналитиком» (задача 2759, п.3): сумма, причина, новый баланс.
     void (async () => {

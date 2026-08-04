@@ -13,6 +13,7 @@ import { ReportsTrashCard } from './ReportsTrashCard';
 import { BotSubscriptionSettings } from './BotSubscriptionSettings';
 import { RopDigestSettings } from './RopDigestSettings';
 import { MyFeedbackLog } from './MyFeedbackLog';
+import { PinSettingsCard } from './PinSettingsCard';
 
 interface Me {
   user: {
@@ -287,6 +288,9 @@ export function ProfilePage() {
                     ))}
                   </div>
                 </div>
+
+                {/* Пин-код на денежные операции (задача #2995) */}
+                <PinSettingsCard ssoAccount={/^bx\d+$/.test(me?.user.login ?? '')} />
               </>
             )}
 

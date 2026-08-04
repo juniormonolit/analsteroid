@@ -5,6 +5,7 @@ import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { systemDb } from '@/lib/db/clients';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 import { resolveEmployeeNames } from '@/lib/org/employeeDirectory';
+import { actorFromSession, verifyPin } from '@/lib/auth/pin';
 
 // Заявки на активацию предметов инвентаря (MVP магазина, 31.07) — клон механики
 // payout_requests: менеджер просит активировать предмет (owned →
@@ -89,7 +90,7 @@ export async function PATCH(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  let body: { id?: unknown; action?: unknown; comment?: unknown };
+  let body: { id?: unknown; action?: unknown; comment?: unknown; pin?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   const id = body.id;
   if (typeof id !== 'number' || !Number.isInteger(id)) return NextResponse.json({ error: 'id обязателен' }, { status: 400 });
@@ -112,6 +113,15 @@ export async function PATCH(req: NextRequest) {
   const scope = await manageScope(session);
   if (scope === null || (scope !== 'all' && !scope.has(String(row.rows[0].bitrix_id)))) {
     return NextResponse.json({ error: 'Заявки этого сотрудника вам недоступны' }, { status: 403 });
+  }
+
+  // Одобрение — расход предмета менеджера, пин ВСЕГДА (спека §3); резолвера,
+  // а не заявителя (это резолвер сейчас списывает ценность). Отклонение денег
+  // не двигает — пин не нужен.
+  if (body.action === 'approve') {
+    const actor = actorFromSession(session, req);
+    const verified = await verifyPin(db, actor, body.pin, { operation: 'shop_activate_approve', targetRef: String(id) });
+    if (!verified.ok) return NextResponse.json({ error: verified.error, pinRequired: true }, { status: verified.status });
   }
 
   // approve → used (предмет исполнен: эффект — организационно, вне системы);

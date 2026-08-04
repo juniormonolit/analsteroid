@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { actorFromSession, verifyPin } from '@/lib/auth/pin';
 
 // Конвертация валют (доп. Серёги 31.07): ТОЛЬКО рубли → MLT (было «ебаллы»,
 // ребренд задачи 2747 — по курсу из настроек (badge_coin_settings.rub_to_eball_rate,
@@ -10,12 +11,12 @@ import { pushViaAnalitik } from '@/features/badges/engine/notifications';
 // где-либо в движке — запрет на уровне API: этот эндпоинт списывает строго RUB
 // и зачисляет строго EBALL двумя связанными записями (link_id), других путей
 // обмена нет.
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.bitrixUserId) return NextResponse.json({ error: 'Аккаунт не связан с Битриксом' }, { status: 400 });
 
-  let body: { amount?: unknown; direction?: unknown };
+  let body: { amount?: unknown; direction?: unknown; pin?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   // Явная защита от попытки обратной конвертации через параметр
   if (body.direction !== undefined && body.direction !== 'rub_to_eball') {
@@ -25,6 +26,14 @@ export async function POST(req: Request) {
   if (typeof amount !== 'number' || !Number.isInteger(amount) || amount <= 0) {
     return NextResponse.json({ error: 'Сумма — целое число больше нуля' }, { status: 400 });
   }
+
+  // Рубли — пин ВСЕГДА, вне зависимости от порога (спека §3).
+  const actor = actorFromSession(session, req);
+  const verified = await verifyPin(systemDb(), actor, body.pin, {
+    operation: 'convert', amount, currency: 'RUB',
+  });
+  if (!verified.ok) return NextResponse.json({ error: verified.error, pinRequired: true }, { status: verified.status });
+  const pinEventId = verified.pinEventId;
 
   const id = Number(session.bitrixUserId);
   const db = systemDb();
@@ -50,15 +59,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'По текущему курсу получится 0 — увеличьте сумму' }, { status: 400 });
     }
     const currencyName = await getCurrencyName(client);
+    // Обе строки (списание рублей + зачисление MLT) — одна операция с одним
+    // source='convert', триггер требует pin_event_id на КАЖДОЙ строке этого
+    // source (миграция 141) — проставляем на обеих одной и той же проверкой пина.
     const out = await client.query<{ id: number }>(
-      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment)
-       VALUES ($1, $2, $3, 'RUB', 'convert', $4, $5) RETURNING id`,
-      [id, -amount, amount, session.login, `Конвертация ${amount} ₽ → ${eballs} ${currencyName} (курс ${rate})`],
+      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment, pin_event_id)
+       VALUES ($1, $2, $3, 'RUB', 'convert', $4, $5, $6) RETURNING id`,
+      [id, -amount, amount, session.login, `Конвертация ${amount} ₽ → ${eballs} ${currencyName} (курс ${rate})`, pinEventId],
     );
     await client.query(
-      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment, link_id)
-       VALUES ($1, $2, $2, 'EBALL', 'convert', $3, $4, $5)`,
-      [id, eballs, session.login, `Конвертация ${amount} ₽ → ${eballs} ${currencyName} (курс ${rate})`, out.rows[0].id],
+      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment, link_id, pin_event_id)
+       VALUES ($1, $2, $2, 'EBALL', 'convert', $3, $4, $5, $6)`,
+      [id, eballs, session.login, `Конвертация ${amount} ₽ → ${eballs} ${currencyName} (курс ${rate})`, out.rows[0].id, pinEventId],
     );
     await client.query('COMMIT');
     // Пуш «Аналитиком» (задача 2759, п.9) — ПОСЛЕ коммита, best-effort.

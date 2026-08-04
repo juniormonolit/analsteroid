@@ -9,6 +9,7 @@ import { priceEball, recomputeFifoRemaining } from '@/features/badges/engine/wal
 import { loadXpSettings, levelFromXp } from '@/features/xp/engine/xp';
 import { rarityForPrice } from '@/features/shop/engine/rarity';
 import { pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { actorFromSession, spendPinRequirement, verifyPin } from '@/lib/auth/pin';
 
 // Магазин призов + «Заполнятор товаров» (задача 2960): витрина + покупка +
 // свой инвентарь. MLT — единственная валюта покупки (правка владельца
@@ -152,7 +153,7 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.bitrixUserId) return NextResponse.json({ error: 'Аккаунт не связан с Битриксом' }, { status: 400 });
 
-  let body: { itemId?: unknown };
+  let body: { itemId?: unknown; pin?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   const itemId = body.itemId;
   if (typeof itemId !== 'number' || !Number.isInteger(itemId)) {
@@ -161,6 +162,27 @@ export async function POST(req: NextRequest) {
 
   const id = Number(session.bitrixUserId);
   const db = systemDb();
+
+  // Пин по личному порогу (задача #2995): цена — только MLT в этом эндпоинте
+  // (RUB-покупки в магазине выключены владельцем, см. комментарий в шапке файла).
+  // Лёгкий пре-чек цены БЕЗ блокировки строки — решить, нужен ли пин, ДО того как
+  // открывать денежную транзакцию (verifyPin пишет свою). Реальная цена
+  // перепроверяется ниже под FOR UPDATE — если разошлась и это меняет требование
+  // пина, покупка отклоняется 409 (реже, чем гипотетическая гонка админской правки цены).
+  const probe = await db.query<{ price_units: string }>(`SELECT price_units FROM shop_items WHERE id = $1`, [itemId]);
+  if (!probe.rows.length) return NextResponse.json({ error: 'Позиция не найдена или выключена' }, { status: 404 });
+  const probePrice = priceEball(Number(probe.rows[0].price_units));
+  const actor = actorFromSession(session, req);
+  const need = await spendPinRequirement(db, id, probePrice);
+  let pinEventId: number | null = null;
+  if (need.required) {
+    const verified = await verifyPin(db, actor, body.pin, {
+      operation: 'shop_purchase', targetRef: String(itemId), amount: probePrice, currency: 'EBALL',
+    });
+    if (!verified.ok) return NextResponse.json({ error: verified.error, pinRequired: true, reason: need.reason }, { status: verified.status });
+    pinEventId = verified.pinEventId;
+  }
+
   const client = await db.connect();
   try {
     await client.query('BEGIN');
@@ -219,6 +241,16 @@ export async function POST(req: NextRequest) {
     }
 
     const price = priceEball(Number(item.price_units));
+    // Цена изменилась между пре-чеком пина и блокировкой строки, и требование
+    // сменилось (теперь нужен пин, а мы его не спросили/не проверили) — просим
+    // повторить, а не молча пропускаем списание без пина.
+    if (!pinEventId && price !== probePrice) {
+      const recheck = await spendPinRequirement(client, id, price);
+      if (recheck.required) {
+        await client.query('ROLLBACK');
+        return NextResponse.json({ error: 'Цена позиции изменилась — повторите покупку', pinRequired: true }, { status: 409 });
+      }
+    }
     const bal = await client.query<{ balance: string }>(
       `SELECT coalesce(sum(amount), 0) AS balance FROM badge_coin_ledger WHERE bitrix_id = $1 AND currency = 'EBALL'`,
       [id],
@@ -245,9 +277,9 @@ export async function POST(req: NextRequest) {
       [id, itemId, item.name, price, item.ttl_months, initialStatus],
     );
     const led = await client.query<{ id: number }>(
-      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, comment, inventory_item_id)
-       VALUES ($1, $2, $3, 'EBALL', 'shop_purchase', $4, $5) RETURNING id`,
-      [id, -price, price, `Покупка в магазине: ${item.name}`, inv.rows[0].id],
+      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, comment, inventory_item_id, pin_event_id)
+       VALUES ($1, $2, $3, 'EBALL', 'shop_purchase', $4, $5, $6) RETURNING id`,
+      [id, -price, price, `Покупка в магазине: ${item.name}`, inv.rows[0].id, pinEventId],
     );
     await client.query(`UPDATE inventory_items SET ledger_id = $2 WHERE id = $1`, [inv.rows[0].id, led.rows[0].id]);
     // FIFO (TTL MLT): списание расходует старейшие живые начисления —
