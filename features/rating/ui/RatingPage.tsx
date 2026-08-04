@@ -3,9 +3,9 @@
 // период: место, имя, отдел, итоговый балл и баллы по каждой оси шаблона карточки.
 // Цифры считает тот же движок, что и ЛК менеджера (ratings.ts) — расхождений быть
 // не может. Клик по строке ведёт в ЛК этого менеджера на том же периоде.
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Settings2 } from 'lucide-react';
 import Link from 'next/link';
 import { BadgeCard } from '@/features/badges/ui/BadgeShelf';
@@ -13,6 +13,7 @@ import type { ShelfItem } from '@/features/badges/engine/shelf';
 import { MltCoin } from '@/components/icons/MltCoin';
 import { MainPeriodControl } from '@/features/reports/ui/FilterBar';
 import { Seg } from '@/features/reports/ui/FiltersMenu';
+import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { defaultPeriod, type DateRange } from '@/lib/period';
 import type { CardSegment } from '@/features/manager-card/engine/managerCard';
 
@@ -79,6 +80,9 @@ function MedalOrRank({ rank }: { rank: number | null }) {
 
 export function RatingPage() {
   const router = useRouter();
+  const qc = useQueryClient();
+  // Pull-to-refresh (задача 2947) — тянем вниз, обновляем рейтинг+награды сразу.
+  const handlePullRefresh = useCallback(() => qc.invalidateQueries(), [qc]);
   // Единая точка дефолта периода (правка владельца 01.08: первая рабочая неделя
   // месяца → прошлый месяц, было локальное «startOfMonth(now) → now»).
   const [period, setPeriod] = useState<DateRange>(defaultPeriod);
@@ -171,7 +175,7 @@ export function RatingPage() {
   }, [rows, sort, balances, shelves, xpMap]);
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden">
+    <PullToRefresh onRefresh={handlePullRefresh} className="h-full overflow-y-auto overflow-x-hidden">
       <div className="p-4 sm:p-6 flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -324,6 +328,6 @@ export function RatingPage() {
           </div>
         )}
       </div>
-    </div>
+    </PullToRefresh>
   );
 }

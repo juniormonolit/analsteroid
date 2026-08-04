@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { RoleEditorModal } from './RoleEditorModal';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 export interface Role {
   id: string;
@@ -17,6 +18,11 @@ export default function RolesPage() {
   const [editing, setEditing] = useState<Role | null>(null);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // Подтверждение удаления — вместо window.confirm (задача 2947, дочистка
+  // системных окошек: тот же паттерн ConfirmDialog, что уже применён в ЛК
+  // менеджера, задача 2764).
+  const [deleteTarget, setDeleteTarget] = useState<Role | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -30,7 +36,7 @@ export default function RolesPage() {
   useEffect(() => { load(); }, [load]);
 
   async function deleteRole(role: Role) {
-    if (!window.confirm(`Удалить роль «${role.name}»?`)) return;
+    setDeleting(true);
     setMessage(null);
     try {
       const res = await fetch(`/api/admin/roles/${role.id}`, { method: 'DELETE' });
@@ -39,6 +45,9 @@ export default function RolesPage() {
       else { setMessage({ type: 'success', text: `Роль «${role.name}» удалена` }); load(); }
     } catch {
       setMessage({ type: 'error', text: 'Сетевая ошибка' });
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
     }
   }
 
@@ -103,7 +112,7 @@ export default function RolesPage() {
                     </button>
                     {!r.isSystem && (
                       <button
-                        onClick={() => deleteRole(r)}
+                        onClick={() => setDeleteTarget(r)}
                         className="text-xs text-red-500 hover:underline disabled:opacity-50"
                         disabled={r.userCount > 0}
                         title={r.userCount > 0 ? 'Роль назначена пользователям — сначала переназначьте их' : undefined}
@@ -131,6 +140,17 @@ export default function RolesPage() {
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Удалить роль?"
+        description={`Удалить роль «${deleteTarget?.name}»?`}
+        confirmLabel="Удалить"
+        tone="danger"
+        pending={deleting}
+        onConfirm={() => { if (deleteTarget) void deleteRole(deleteTarget); }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

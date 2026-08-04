@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Нет сети — Монолитика</title>
+<!--
+  Статичная офлайн-заглушка (задача 2947, П2.8 плана мобильной готовности).
+  Отдаётся service worker'ом (public/sw.template.js) вместо ошибки браузера,
+  когда навигационный запрос падает по сети. Специально НЕ Next-роут —
+  чистый HTML без рантайма, чтобы реально открывался без единого сетевого
+  запроса (кроме уже закэшированной иконки). Цвета — те же токены светлой/
+  тёмной темы, что app/globals.css (:root / [data-theme="dark"]), продублированы
+  тут напрямую, т.к. файл живёт вне сборки Tailwind.
+-->
+<style>
+  :root {
+    --bg: #f8f9fa; --surface: #ffffff; --border: #e9ecef;
+    --text: #212529; --text-muted: #5f6b76; --accent: #228be6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161b; --surface: #212530; --border: #2c313c;
+      --text: #e6e8ec; --text-muted: #9aa1ad; --accent: #3b82f6;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+             max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  }
+  .card {
+    width: 100%;
+    max-width: 360px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 32px 24px;
+    text-align: center;
+  }
+  .icon {
+    width: 56px; height: 56px; border-radius: 14px;
+    margin: 0 auto 20px; display: block;
+  }
+  h1 { font-size: 17px; font-weight: 700; margin: 0 0 8px; }
+  p { font-size: 14px; line-height: 1.5; color: var(--text-muted); margin: 0 0 22px; }
+  button {
+    appearance: none; border: none; cursor: pointer;
+    background: var(--accent); color: #fff;
+    font-size: 14px; font-weight: 600;
+    padding: 11px 20px; border-radius: 12px;
+    width: 100%;
+  }
+  button:active { opacity: 0.85; }
+  .status { margin-top: 14px; font-size: 12px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img class="icon" src="/icons/icon-192.png" alt="" width="56" height="56" />
+    <h1>Нет подключения к интернету</h1>
+    <p>Монолитика не смогла загрузить страницу — проверьте соединение и попробуйте ещё раз. Как только сеть появится, страница обновится сама.</p>
+    <button type="button" onclick="location.reload()">Повторить попытку</button>
+    <div class="status" id="status">Ожидаем сеть…</div>
+  </div>
+  <script>
+    // Автообновление при появлении сети — не заставляем пользователя
+    // самого догадываться нажать «Повторить». ВАЖНО: реагируем только на
+    // сам переход offline→online ('online' event), а не на текущий
+    // navigator.onLine в момент загрузки — эта страница могла попасть сюда
+    // и не из-за реального офлайна (например, сервер на секунду не ответил
+    // при живой сети). Если бы мы тут же перезагружали при
+    // navigator.onLine === true, а сервер всё ещё недоступен — получился бы
+    // бесконечный цикл перезагрузок вместо понятной заглушки.
+    var statusEl = document.getElementById('status');
+    window.addEventListener('online', function () {
+      if (statusEl) statusEl.textContent = 'Сеть есть — обновляем…';
+      location.reload();
+    });
+    window.addEventListener('offline', function () {
+      if (statusEl) statusEl.textContent = 'Сети всё ещё нет…';
+    });
+    if (navigator.onLine && statusEl) {
+      statusEl.textContent = 'Похоже, сеть есть — нажмите «Повторить попытку»';
+    }
+  </script>
+</body>
+</html>

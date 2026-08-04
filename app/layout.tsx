@@ -1,5 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister';
+import { APPLE_SPLASH_LINKS } from '@/lib/pwa/appleSplashScreens';
 
 // PWA-метаданные (задача 2764, «ЛК как мобильное приложение»). Манифест —
 // app/manifest.ts (Next сам линкует), иконки — app/apple-icon.png +
@@ -65,8 +67,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="ru" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_ANTI_FLASH_SCRIPT }} />
+        {/* iOS splash-экраны при запуске установленного приложения (задача
+            2947) — Next Metadata API не типизирует apple-touch-startup-image
+            (это не appleWebApp-опция), поэтому линкуем явными <link>,
+            данные — lib/pwa/appleSplashScreens.ts. */}
+        {APPLE_SPLASH_LINKS.map((s) => (
+          <link key={s.href} rel="apple-touch-startup-image" href={s.href} media={s.media} />
+        ))}
       </head>
-      <body>{children}</body>
+      <body>
+        <ServiceWorkerRegister />
+        {children}
+      </body>
     </html>
   );
 }

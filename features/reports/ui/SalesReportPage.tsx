@@ -727,7 +727,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   function handleTabSelect(tab: ReportTab) {
     if (!tabsStore) return;
     const cur = tabsStore.tabs.find(t => t.id === tabsStore.activeId);
-    if (cur && cur.route === pathname) cur.state = buildTabSnapshot(); // снапшот ДО ухода
+    // Снапшот ДО ухода — состояние отчёта И позиция скролла (задача 2947):
+    // tableContainerRef в этот момент ещё указывает на DOM уходящей вкладки.
+    if (cur && cur.route === pathname) {
+      cur.state = buildTabSnapshot();
+      cur.scrollTop = tableContainerRef.current?.scrollTop ?? cur.scrollTop;
+    }
     tabsStore.activeId = tab.id;
     tab.lastUsedAt = Date.now();
     saveTabsStore(tabsLogin ?? null, tabsStore);
@@ -743,7 +748,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     if (!tabsStore) return;
     const snap = buildTabSnapshot();
     const cur = tabsStore.tabs.find(t => t.id === tabsStore.activeId);
-    if (cur && cur.route === pathname) cur.state = snap;
+    if (cur && cur.route === pathname) {
+      cur.state = snap;
+      cur.scrollTop = tableContainerRef.current?.scrollTop ?? cur.scrollTop;
+    }
     const tab: ReportTab = { id: newTabId(), route: pathname, name: title, state: snap, lastUsedAt: Date.now() };
     tabsStore.tabs.push(tab);
     tabsStore.activeId = tab.id;
@@ -1202,6 +1210,25 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // (captureTableNode временно разворачивает его в overflow:visible на время снимка,
   // чтобы захватить ВЕСЬ скроллируемый контент длинного отчёта, не только вьюпорт).
   const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  // Восстановление позиции скролла при переключении вкладок отчётов (задача
+  // 2947, П2.12): захват — в handleTabSelect/handleTabAdd (ДО ухода со
+  // вкладки, пока containerRef ещё смотрит на её DOM). Здесь — только
+  // восстановление, один раз на каждую активацию вкладки, и не раньше, чем
+  // данные новой вкладки догрузились (иначе scrollHeight ещё не тот и
+  // scrollTop молча схлопнется в 0). lastScrollRestoredForRef — защита от
+  // повторной перемотки на ту же сохранённую позицию при каждом ре-рендере
+  // (иначе любая последующая прокрутка пользователем внутри той же вкладки
+  // откатывалась бы назад).
+  const lastScrollRestoredForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!tabsStore || isFetching) return;
+    const active = tabsStore.tabs.find(t => t.id === tabsStore.activeId);
+    if (!active || lastScrollRestoredForRef.current === active.id) return;
+    lastScrollRestoredForRef.current = active.id;
+    const node = tableContainerRef.current;
+    if (node) node.scrollTop = active.scrollTop ?? 0;
+  }, [tabsStore, isFetching]);
 
   const buildCurrentExportTable = useCallback(() => {
     return buildExportTable({

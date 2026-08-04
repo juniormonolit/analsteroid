@@ -6,6 +6,115 @@
 
 ---
 
+## 2026-08-04 — Дочистка системных окошек + 4 мобильных хвоста из аудита (задача 2947, Виктор)
+
+Владелец («да» на два блока бэклога): добить оставшиеся `window.confirm`/`window.prompt`
+на админских страницах + закрыть 4 пункта приоритета 2 из `owners-inbox/analsteroid-mobile-readiness.md`
+(офлайн-заглушка, iOS splash, pull-to-refresh, память скролла между вкладками). Архитектура под
+это уже была заложена в задаче 2764 (`useAppMode`, PWA-манифест+иконки, `components/ui/Modal`).
+
+### Блок 1 — системные окошки
+
+Грепом (`window\.confirm\|window\.prompt`) нашлось ровно 4 оставшихся вызова — все на
+админских страницах, ЛК менеджера была уже дочищена в 2764:
+- `app/(app)/settings/roles/page.tsx:33` — `window.confirm` на удаление роли →
+  `components/ui/ConfirmDialog.tsx` (тот же паттерн, что `PayoutManage.tsx`/`InventoryManage.tsx`).
+- `features/badges/ui/RewardsSettingsPage.tsx:704` — `window.confirm` на удаление кастомной
+  награды → `ConfirmDialog`, `tone="danger"`.
+- `features/badges/ui/ShopSettings.tsx:189,198` — «Релизный старт» (необратимая одноразовая
+  операция: обнулить все балансы + начислить старт), два `window.prompt` подряд (сумма → слово
+  «РЕЛИЗ» для подтверждения) → двухшаговый мастер в `Modal` (тот же паттерн, что
+  amountDialog/pendingConfirm в `ManagerTabs.tsx`: `releaseStep: 'amount'|'confirm'|null`,
+  мутация теперь принимает готовые `{amount, confirmWord}`, никакого `window.prompt` внутри
+  `mutationFn`).
+
+После правки — грепом по всему проекту (`--include="*.tsx" --include="*.ts" --include="*.jsx"
+--include="*.js"`, вне `node_modules`/`.next`) 0 живых вызовов `window.confirm(`/`window.prompt(`,
+остались только комментарии-ссылки на задачу 2764/2947 (сам паттерн задокументирован в шапке
+`ConfirmDialog.tsx`).
+
+### Блок 2 — мобильные хвосты
+
+**2.1. Офлайн-заглушка (service worker).** `public/sw.template.js` (источник) →
+`public/sw.js` (сборочный артефакт, `.gitignore`) через `scripts/generate-sw.mjs`,
+запускается автоматически `package.json` → `"prebuild"`/`"predev"` перед КАЖДЫМ
+`next build`/`next dev` — версия кэша (`Date.now()`) бампается сама, забыть невозможно
+(без скрипта сборка не стартует). Сознательно НЕ офлайн-first: SW перехватывает
+ТОЛЬКО навигационные запросы (`request.mode === 'navigate'`), на сетевой ошибке отдаёт
+закэшированный `public/offline.html` (статичный, без Next-рантайма, тема через
+`prefers-color-scheme`, автообновление по событию `online`, БЕЗ авто-reload по
+`navigator.onLine` при загрузке — иначе риск цикла перезагрузок, если причина показа
+заглушки не офлайн, а недоступный сервер). Все остальные запросы (JS/CSS/RSC/API/иконки)
+SW вообще не трогает — `event.respondWith()` для них не вызывается. Это осознанное
+решение по требованию владельца («сломанный SW хуже отсутствия»): раз SW не кэширует
+ни один хэшированный чанк/API-ответ приложения, ему физически нечем «подсунуть» старую
+версию после деплоя — классический баг PWA-заедания исключён архитектурно, а не
+только таймстемпом версии. Плюс стандартный skipWaiting()+clients.claim() в
+install/activate, и `components/pwa/ServiceWorkerRegister.tsx` (подключён в
+`app/layout.tsx`, вне `isBitrixIframe` — регистрация не имеет смысла в портале)
+слушает `controllerchange` и делает ОДИН reload при смене контроллера (флаг-защита
+от каскада).
+
+**2.2. iOS splash screens.** `scripts/generate-splash-screens.mjs` — тот же мастер-знак,
+что PWA-иконки/фавикон (`public/icons/icon-mark.svg`, `generate-pwa-icons.mjs`), но без
+белого фона (геометрия трёх столбиков продублирована в скрипте) — цвет фона берётся из
+темы (`prefers-color-scheme`), а не всегда белый. Детерминированная сборочная задача
+(как иконки) — коммитится, НЕ часть prebuild. Покрытие — 8 iPhone + 2 iPad «основных
+размеров» (SE2/3 → 16 Pro Max, iPad 9.7"/Pro 11") × светлая/тёмная = 20 PNG +
+`public/icons/splash/manifest.json` (href+media). `lib/pwa/appleSplashScreens.ts`
+статически импортирует manifest.json, `app/layout.tsx` рендерит `<link
+rel="apple-touch-startup-image">` в `<head>` (Next Metadata API не типизирует этот тег —
+не `appleWebApp`-опция). **Не проверено визуально на живом iPhone** — только по разметке
+(теги на месте, PNG сгенерированы и просмотрены — брендовый знак по центру, фон в
+тему) и логике Apple media-query формата; список устройств не исчерпывающий (основные
+активные модели, без древних/самых новых неанонсированных).
+
+**2.3. Pull-to-refresh.** `components/ui/PullToRefresh.tsx` — общий компонент (не разовая
+правка), форвардит ref на сам скролл-контейнер (`useImperativeHandle`) для восстановления
+позиции скролла на вызывающей стороне (см. 2.4). Направление жеста ЛОКАЕТСЯ на первых
+>8px движения: вертикально вниз → pull (preventDefault ТОЛЬКО с этого момента),
+преимущественно горизонтально/вверх → жест сразу отпускается, нативный
+скролл/горизонтальная прокрутка таблицы (`scroll-x`) не трогается. Тянуть можно только
+когда контейнер уже в `scrollTop === 0` — иначе обычный свайп списка. Активен только на
+`isMobileLayout` (`useAppMode` — единый источник правды, не свой `matchMedia`). Подключён
+к двум существующим полностраничным скролл-контейнерам (тот же паттерн, что
+`useAppMode`/`useUrlState` — оборачивать СВОЙ существующий контейнер, не писать заново):
+`features/manager-card/ui/ManagerCardPage.tsx` (ЛК, `onRefresh` = `queryClient.invalidateQueries()`
+без фильтра — обновляет карточку + активную вкладку разом) и `features/rating/ui/RatingPage.tsx`
+(рейтинг). **Сознательно НЕ трогал** `ReportTable.tsx`/`SalesReportPage.tsx` — там
+скролл-контейнер уже несёt сложную логику sticky-колонок/синхронизации скролла
+(`containerRef` используется в нескольких местах), ретрофит pull-to-refresh поверх неё —
+отдельная по риску задача, не стал трогать вслепую без глубокого разбора этого файла.
+
+**2.4. Память скролла между вкладками.** Два независимых механизма, т.к. два разных
+паттерна вкладок в проекте:
+- **ЛК менеджера** (`ManagerCardPage.tsx`) — все табы рендерятся в ОДНОМ общем
+  `PullToRefresh`-контейнере (`managerScrollRef` через новый forwardRef). Захват —
+  синхронно в `goToTab()` ДО `router.push` (пока `scrollTop` ещё принадлежит уходящему
+  табу), память — `useRef<Partial<Record<ManagerTabKey, number>>>`, восстановление —
+  `useLayoutEffect` по смене `tab`, один раз на активацию (`lastTabRestoredRef` — защита
+  от отката, если пользователь уже успел проскроллить).
+- **Вкладки отчётов** (`SalesReportPage.tsx`, фича «вкладки как в браузере» 01.08) — уже
+  есть персист-механизм `ReportTab`/`reportTabs.ts` (localStorage per-login). Добавил
+  туда `scrollTop?: number` (сознательно НЕ часть `ReportTabSnapshot` — это не
+  конфигурация отчёта, а навигационная память, как `lastUsedAt`). Захват — в
+  `handleTabSelect`/`handleTabAdd`, там же, где уже снимается `buildTabSnapshot()`
+  «ДО ухода». Восстановление — эффект по `[tabsStore, isFetching]` с тем же паттерном
+  «once per activation» (`lastScrollRestoredForRef`), ждёт `!isFetching`, чтобы
+  `scrollHeight` новой вкладки успел стать настоящим (иначе `scrollTop` молча
+  схлопывается в 0 на свежих неполных данных).
+
+### Проверки
+
+`npm run typecheck` — 0 ошибок. `npm run lint:responsive` — 1 нарушение (весь baseline,
+0 новых). `npm run build` (`output: standalone`, Turbopack) — все роуты собрались, включая
+`/settings/roles`, `/settings/rewards`, `/manager/me`, `/rating`; 9 предсуществующих Edge
+Runtime warning'ов (`lib/cache/redis.ts`/`lib/db/clients.ts`, `process.cwd()`) — не мои
+файлы, не трогал. `prebuild` подтверждён живьём — `sw.js` перегенерировался с новым
+`SW_VERSION` при каждом прогоне `npm run build`.
+
+Деплой на dev-стенд и прод — см. следующую запись (после живой проверки).
+
 ## 2026-08-03 — Плашка расхождения с пресетом + возврат волны 1 на прод (задача 2881, Виктор)
 
 **Контекст.** Владелец увидел в «Базовом минимуме» 9 метрик вместо 16 (пропали конверсии) →

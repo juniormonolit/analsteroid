@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useUrlState, enumParam } from '@/lib/hooks/useUrlState';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { PayoutManageBlock } from './PayoutManage';
 import { InventoryManageBlock } from './InventoryManage';
@@ -700,13 +701,11 @@ export function RewardsSettingsPage() {
       void qc.invalidateQueries({ queryKey: ['rating-badges'] });
     },
   });
-  const confirmDelete = (r: Row) => {
-    const ok = window.confirm(
-      `Удалить награду «${r.name}»?\n\nОна исчезнет из каталога и с полок менеджеров (наград: ${r.awards}). ` +
-      `Уже начисленные «${currencyName}» за неё НЕ отзываются и останутся на балансах — принцип леджера.`,
-    );
-    if (ok) remove.mutate(r.key);
-  };
+  // Подтверждение удаления — вместо window.confirm (задача 2947, дочистка
+  // системных окошек: тот же паттерн ConfirmDialog, что уже применён в ЛК
+  // менеджера, задача 2764).
+  const [deleteTarget, setDeleteTarget] = useState<Row | null>(null);
+  const confirmDelete = (r: Row) => setDeleteTarget(r);
 
   const rows = data?.rows ?? [];
   const byCategory = new Map<string, Row[]>();
@@ -843,6 +842,20 @@ export function RewardsSettingsPage() {
       {tab === 'digest' && <DigestSettingsBlock />}
       {tab === 'outbound' && <OutboundLogBlock />}
       {tab === 'feedback' && <FeedbackQueueBlock />}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Удалить награду?"
+        description={deleteTarget
+          ? `Удалить награду «${deleteTarget.name}»?\n\nОна исчезнет из каталога и с полок менеджеров (наград: ${deleteTarget.awards}). ` +
+            `Уже начисленные «${currencyName}» за неё НЕ отзываются и останутся на балансах — принцип леджера.`
+          : ''}
+        confirmLabel="Удалить"
+        tone="danger"
+        pending={remove.isPending}
+        onConfirm={() => { if (deleteTarget) { remove.mutate(deleteTarget.key); setDeleteTarget(null); } }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

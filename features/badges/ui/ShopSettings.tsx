@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MltCoin } from '@/components/icons/MltCoin';
+import { Modal } from '@/components/ui/Modal';
 
 interface ShopItemRow {
   id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'team';
@@ -184,37 +185,55 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
     refetchOnWindowFocus: false,
   });
   const [releaseResult, setReleaseResult] = useState<string | null>(null);
+  // «Релизный старт» — вместо window.prompt×2 (задача 2947, дочистка системных
+  // окошек): двухшаговая маленькая форма в Modal (сумма → слово-подтверждение),
+  // тот же паттерн, что amountDialog/pendingConfirm в ManagerTabs.tsx (задача
+  // 2764). Сама мутация теперь принимает готовые {amount, confirmWord} —
+  // никакого window.prompt внутри mutationFn.
+  const [releaseStep, setReleaseStep] = useState<'amount' | 'confirm' | null>(null);
+  const [releaseAmountInput, setReleaseAmountInput] = useState('3000');
+  const [releaseAmountError, setReleaseAmountError] = useState<string | null>(null);
+  const [releaseAmount, setReleaseAmount] = useState<number | null>(null);
+  const [releaseWordInput, setReleaseWordInput] = useState('');
+
   const releaseStart = useMutation({
-    mutationFn: async () => {
-      const raw = window.prompt(
-        'РЕЛИЗНЫЙ СТАРТ (необратимо, одноразово):\n' +
-        `— все текущие балансы «${currencyName}» будут ОБНУЛЕНЫ;\n` +
-        '— каждому активному менеджеру начислится одинаковый старт;\n' +
-        '— награды на полках и рубли НЕ трогаются.\n\n' +
-        'Сумма стартового начисления:', '3000');
-      if (raw === null) return false;
-      const amount = Number(raw);
-      if (!Number.isInteger(amount) || amount <= 0) throw new Error('Сумма — целое число больше нуля');
-      const word = window.prompt(`Для подтверждения введите слово РЕЛИЗ (начислится по ${amount} каждому):`);
-      if (word === null) return false;
+    mutationFn: async ({ amount, confirmWord }: { amount: number; confirmWord: string }) => {
       const res = await fetch('/api/settings/badges/release', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount, confirm: word.trim() }),
+        body: JSON.stringify({ amount, confirm: confirmWord }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
       const j = json as { zeroed: number; granted: number; amount: number };
       setReleaseResult(`Обнулено балансов: ${j.zeroed}, начислено ${j.amount} × ${j.granted} менеджерам`);
-      return true;
     },
-    onSuccess: (done) => {
-      if (done) {
-        void qc.invalidateQueries({ queryKey: ['settings-release'] });
-        void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
-      }
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['settings-release'] });
+      void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
     },
     onError: (e) => setReleaseResult(e instanceof Error ? e.message : String(e)),
   });
+
+  function openReleaseStart() {
+    setReleaseResult(null);
+    setReleaseAmountInput('3000');
+    setReleaseAmountError(null);
+    setReleaseStep('amount');
+  }
+  function submitReleaseAmount() {
+    const v = Number(releaseAmountInput);
+    if (!Number.isInteger(v) || v <= 0) { setReleaseAmountError('Сумма — целое число больше нуля'); return; }
+    setReleaseAmount(v);
+    setReleaseWordInput('');
+    setReleaseStep('confirm');
+  }
+  function submitReleaseConfirm() {
+    if (releaseAmount === null) return;
+    const amount = releaseAmount;
+    const confirmWord = releaseWordInput.trim();
+    setReleaseStep(null);
+    releaseStart.mutate({ amount, confirmWord });
+  }
 
   const items = data?.items ?? [];
   const byCat = new Map<string, ShopItemRow[]>();
@@ -257,7 +276,7 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
               Релизный старт выполнен {release.startedAt}
             </span>
           ) : (
-            <button type="button" onClick={() => { setReleaseResult(null); releaseStart.mutate(); }}
+            <button type="button" onClick={openReleaseStart}
               disabled={releaseStart.isPending}
               title="Одноразово: обнулить все ретро-балансы и начислить всем одинаковый старт (полки и рубли не трогаются). Запускается только на официальном релизе!"
               className="rounded-lg border border-[var(--color-negative,#e03131)] px-3 py-1 text-xs font-semibold text-[var(--color-negative,#e03131)] disabled:opacity-50">
@@ -311,6 +330,56 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
           onSaved={() => { setEditing(null); invalidate(); }}
         />
       )}
+
+      <Modal
+        open={releaseStep === 'amount'}
+        onOpenChange={(o) => { if (!o) setReleaseStep(null); }}
+        title="Релизный старт (необратимо, одноразово)"
+        desktopWidth="sm:max-w-sm"
+      >
+        <div className="text-sm text-[var(--color-text)] whitespace-pre-line">
+          {`— все текущие балансы «${currencyName}» будут ОБНУЛЕНЫ;\n— каждому активному менеджеру начислится одинаковый старт;\n— награды на полках и рубли НЕ трогаются.`}
+        </div>
+        <label className="mt-3 flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+          Сумма стартового начисления
+          <input
+            autoFocus type="number" inputMode="numeric" value={releaseAmountInput}
+            onChange={e => setReleaseAmountInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') submitReleaseAmount(); }}
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm text-right tabular-nums"
+          />
+        </label>
+        {releaseAmountError && <div className="mt-1.5 text-xs text-[var(--color-negative,#e03131)]">{releaseAmountError}</div>}
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={() => setReleaseStep(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" onClick={submitReleaseAmount} className="rounded-lg bg-[var(--color-negative,#e03131)] px-4 py-1.5 text-xs font-semibold text-white">Далее</button>
+        </div>
+      </Modal>
+
+      <Modal
+        open={releaseStep === 'confirm'}
+        onOpenChange={(o) => { if (!o) setReleaseStep(null); }}
+        title="Подтверждение релизного старта"
+        desktopWidth="sm:max-w-sm"
+      >
+        <div className="text-sm text-[var(--color-text)]">
+          Для подтверждения введите слово <strong>РЕЛИЗ</strong> (начислится по {releaseAmount} {currencyName} каждому активному менеджеру):
+        </div>
+        <input
+          autoFocus value={releaseWordInput}
+          onChange={e => setReleaseWordInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') submitReleaseConfirm(); }}
+          className="mt-2 w-full rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm"
+          placeholder="РЕЛИЗ"
+        />
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={() => setReleaseStep(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={releaseStart.isPending} onClick={submitReleaseConfirm}
+            className="rounded-lg bg-[var(--color-negative,#e03131)] px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+            {releaseStart.isPending ? 'Подождите…' : 'Подтвердить'}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

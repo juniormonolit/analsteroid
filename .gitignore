@@ -16,3 +16,8 @@ migrations/debug_*.sql
 /temp/
 # Scriptable iPhone widget scripts — plan_widget_core.js has WIDGET_API_TOKEN hardcoded
 scripts/scriptable/
+# Service worker — сборочный артефакт (задача 2947), генерируется из
+# public/sw.template.js скриптом scripts/generate-sw.mjs на КАЖДОЙ сборке
+# (package.json → "prebuild"/"predev") с новой версией кэша — коммитить
+# нечего, версия всё равно перезапишется, а таймстемп в диффе только шумит.
+/public/sw.js

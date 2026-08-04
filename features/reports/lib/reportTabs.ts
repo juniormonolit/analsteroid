@@ -57,6 +57,15 @@ export interface ReportTab {
   name: string;
   state: ReportTabSnapshot | null;
   lastUsedAt: number;
+  /**
+   * Позиция вертикального скролла таблицы отчёта (задача 2947, П2.12 плана
+   * мобильной готовности — «вернулся на вкладку, оказался там же»). Не часть
+   * ReportTabSnapshot сознательно: это не конфигурация отчёта, а чисто
+   * навигационная память «как в браузере», как lastUsedAt. Пишется в
+   * SalesReportPage.tsx ПЕРЕД уходом с вкладки (handleTabSelect/handleTabAdd),
+   * читается один раз после того, как данные новой вкладки догрузились.
+   */
+  scrollTop?: number;
 }
 
 export interface ReportTabsStore {

@@ -4,10 +4,11 @@
 // Разделы: hero (аватар/рейтинг/ранги) → фильтры → профиль эффективности
 // (шестиугольник + плитки) → звонки → товарные категории → график работы.
 // mode='department' — те же разделы на агрегате отдела (managerId = uuid отдела | 'all').
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { PullToRefresh } from '@/components/ui/PullToRefresh';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { ManagerActivityTab } from './ManagerActivityTab';
 import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
@@ -216,6 +217,13 @@ export interface ManagerCardPageProps {
 }
 
 export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo, showBadges = false, forceReadOnly = false }: ManagerCardPageProps) {
+  const qc = useQueryClient();
+  // Pull-to-refresh (задача 2947): «потянуть вниз» обновляет всё, что
+  // сейчас смонтировано на экране (карточка + активная вкладка) — проще и
+  // надёжнее, чем выбирать queryKey под каждую вкладку отдельно, а сама ЛК
+  // не настолько тяжёлая, чтобы инвалидация «всего» была заметно дороже.
+  const handlePullRefresh = useCallback(() => qc.invalidateQueries(), [qc]);
+
   const [period, setPeriod] = useState<DateRange>(() => {
     if (initialFrom && initialTo) {
       const from = new Date(initialFrom);
@@ -255,11 +263,32 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   const tab: ManagerTabKey = tabParam && validTabKeys.includes(tabParam)
     ? (tabParam as ManagerTabKey)
     : customerParam ? 'customers' : 'profile';
+  // Позиция скролла по вкладкам (задача 2947, П2.12 плана мобильной
+  // готовности) — все вкладки ЛК рендерятся в ОДНОМ общем скролл-контейнере
+  // (managerScrollRef, см. `<PullToRefresh>` ниже), поэтому переключение
+  // таба само по себе НЕ переключает scrollTop — без этой памяти вкладка
+  // открывалась бы там же по пикселям, где была прошлая, а не с начала/со
+  // своего места. Тот же паттерн, что restore скролла между вкладками
+  // отчётов (SalesReportPage.tsx): захват — синхронно ДО ухода (пока
+  // scrollTop ещё принадлежит уходящему табу), восстановление — эффектом на
+  // смену `tab`, один раз на активацию (lastTabRestoredRef — от повторного
+  // отката при каждом ре-рендере, если пользователь уже успел проскроллить).
+  const managerScrollRef = useRef<HTMLDivElement>(null);
+  const tabScrollMemory = useRef<Partial<Record<ManagerTabKey, number>>>({});
+  const lastTabRestoredRef = useRef<ManagerTabKey | null>(null);
   const goToTab = useCallback((next: ManagerTabKey) => {
+    const node = managerScrollRef.current;
+    if (node) tabScrollMemory.current[tab] = node.scrollTop;
     const params = new URLSearchParams(searchParams.toString());
     params.set('tab', next);
     router.push(`${pathname}?${params.toString()}`, { scroll: false });
-  }, [router, pathname, searchParams]);
+  }, [router, pathname, searchParams, tab]);
+  useLayoutEffect(() => {
+    if (lastTabRestoredRef.current === tab) return;
+    lastTabRestoredRef.current = tab;
+    const node = managerScrollRef.current;
+    if (node) node.scrollTop = tabScrollMemory.current[tab] ?? 0;
+  }, [tab]);
   // Деп-линк «Планёрка» → «Мои заказчики» (клик по цифре открывает список в
   // нужном срезе: filter/category — best-effort, читается один раз при заходе на таб).
   // Остаётся локальным состоянием (не в URL) — одноразовая передача среза при
@@ -383,7 +412,10 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
     // здесь делает страницу вертикально-only-скроллящейся раз и навсегда —
     // горизонтальный скролл должен жить ТОЛЬКО внутри собственных
     // scroll-контейнеров конкретных виджетов (scroll-x/полоса вкладок и т.п.).
-    <div className="h-full overflow-y-auto overflow-x-hidden bg-[var(--color-bg)]">
+    // PullToRefresh (задача 2947) оборачивает ИМЕННО этот скролл-контейнер —
+    // те же классы, что были на голом <div> раньше, компонент не меняет
+    // раскладку/скролл, только добавляет touch-обработчик поверх него.
+    <PullToRefresh ref={managerScrollRef} onRefresh={handlePullRefresh} className="h-full overflow-y-auto overflow-x-hidden bg-[var(--color-bg)]">
     <div className="p-4 sm:p-6 w-full flex flex-col gap-4 sm:gap-5">
       {/* ── Плашка «чужой кабинет» (задача 2771) — строго read-only просмотр:
           явно видно, чей это ЛК, и как вернуться к своему. forceReadOnly
@@ -668,6 +700,6 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       )}
       </>)}
     </div>
-    </div>
+    </PullToRefresh>
   );
 }
