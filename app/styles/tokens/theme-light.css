@@ -11,7 +11,7 @@
 --text-on-app:#123B60;--text-on-app-secondary:rgba(18,59,96,.62);
 --brand:#005CA9;--interactive:#1B7FD4;--interactive-hover:#0069BE;--interactive-active:#005CA9;
 --success:#34A853;--success-bg:#E6F4EA;--success-text:#1E8E3E;
---danger:#EA4335;--danger-bg:#FCE8E6;--danger-text:#D93025;
+--danger:#EA4335;--danger-bg:#FCE8E6;--danger-text:#D93025;--danger-fill:#D93025;
 --warning:#FBBC04;--warning-bg:#FEF7E0;--warning-text:#B26000;
 --info:#4285F4;--info-bg:#E8F0FE;--info-text:#1967D2;
 --chart-1:#4285F4;--chart-2:#EA4335;--chart-3:#FBBC04;--chart-4:#34A853;--chart-5:#FF6D01;--chart-6:#46BDC6;

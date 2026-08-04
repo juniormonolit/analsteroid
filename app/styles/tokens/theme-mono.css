@@ -23,7 +23,7 @@
 --brand:#7FB9E8;--interactive:#2B8DE0;--interactive-hover:#4A9CDE;--interactive-active:#7FB9E8;
 /* Статусы ОСТАЮТСЯ цветными (приглушённый пастель под тёмную базу, как в dark) — семантика важнее монохрома */
 --success:#7fd9a8;--success-bg:#22332a;--success-text:#7fd9a8;
---danger:#f0a3ab;--danger-bg:#3a2a2d;--danger-text:#f0a3ab;
+--danger:#f0a3ab;--danger-bg:#3a2a2d;--danger-text:#f0a3ab;--danger-fill:#C62F38;
 --warning:#eece8a;--warning-bg:#383322;--warning-text:#eece8a;
 --info:#8ab8f8;--info-bg:rgba(43,141,224,.18);--info-text:#8ab8f8;
 --chart-1:#2B8DE0;--chart-2:#6E747C;--chart-3:#9AA0A8;--chart-4:#41454C;--chart-5:#B4B9C1;--chart-6:#34373D;

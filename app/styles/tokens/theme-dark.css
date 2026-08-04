@@ -20,7 +20,7 @@
 /* Статусы — приглушённый пастель на тёмной базе (как в макете: «та же доля подмеса
    на тёмной базе давала бы слишком яркий результат») */
 --success:#7fd9a8;--success-bg:#1d3227;--success-text:#7fd9a8;
---danger:#f0a3ab;--danger-bg:#3a2024;--danger-text:#f0a3ab;
+--danger:#f0a3ab;--danger-bg:#3a2024;--danger-text:#f0a3ab;--danger-fill:#C62F38;
 --warning:#eece8a;--warning-bg:#3a331d;--warning-text:#eece8a;
 --info:#8ab8f8;--info-bg:#1c2c46;--info-text:#8ab8f8;
 /* Тени глубже, фокус-кольцо полупрозрачным синим */

@@ -24,3 +24,13 @@
 --glow-rare:0 0 16px rgba(27,127,212,.45);
 --glow-gold:0 0 16px rgba(212,160,23,.5);
 }
+
+/* Из пакета Glass2 (перенесено 04.08, задача 3045): фолбэк, когда backdrop-filter
+   не поддерживается ИЛИ сломан transform/overflow-предком — полупрозрачное стекло
+   без блюра превращается в кашу, поэтому поверхности становятся непрозрачными.
+   Держим ПОСЛЕ определения тем: @supports должен переопределять их значения. */
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+:root,[data-theme="light"]{--surface-card:#FFFFFF;--glass-side:#FFFFFF;}
+[data-theme="dark"]{--surface-card:#16202F;--glass-side:#121A28;}
+[data-theme="mono"]{--surface-card:#26282C;--glass-side:#202226;}
+}
