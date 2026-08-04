@@ -39,6 +39,7 @@ interface ItemRow {
   per_person_limit: number | null; per_person_limit_days: number | null;
   requires_approval: boolean;
   boost_metric: string | null; boost_multiplier: string | null; boost_window_days: number | null; boost_scope: string | null;
+  has_image: boolean;
 }
 
 async function viewerLevel(db: Pool | PoolClient, bitrixId: number): Promise<number> {
@@ -68,7 +69,8 @@ export async function GET(req: NextRequest) {
               enabled, stock, ttl_months, sort,
               emoji, min_level, marketplace_url, buyer_scope,
               per_person_limit, per_person_limit_days, requires_approval,
-              boost_metric, boost_multiplier, boost_window_days, boost_scope
+              boost_metric, boost_multiplier, boost_window_days, boost_scope,
+              (image_mime IS NOT NULL) AS has_image
          FROM shop_items WHERE enabled = true ORDER BY category, sort, id`,
     ),
     getCurrencyName(db),
@@ -141,6 +143,7 @@ export async function GET(req: NextRequest) {
         boostMetric: i.boost_metric, boostMultiplier: i.boost_multiplier !== null ? Number(i.boost_multiplier) : null,
         boostWindowDays: i.boost_window_days, boostScope: i.boost_scope,
         rarityKey: rarity.key, rarityLabel: rarity.label, rarityColor: rarity.color,
+        hasImage: i.has_image,
       };
     }),
     inventory: inventory.rows,

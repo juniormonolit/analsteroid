@@ -1043,6 +1043,7 @@ interface ShopItemView {
   requiresApproval: boolean;
   boostMetric: string | null; boostMultiplier: number | null; boostWindowDays: number | null; boostScope: string | null;
   rarityKey: string; rarityLabel: string; rarityColor: string;
+  hasImage: boolean;
 }
 interface GiftHop { from: number; fromName: string; to: number; toName: string; at: string }
 interface InventoryRow {
@@ -1217,9 +1218,11 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                     <div className="relative overflow-hidden rounded-lg">
                       <div className={locked ? 'pointer-events-none select-none blur-[5px]' : undefined}>
                         <div className="flex items-start gap-2">
-                          {/* Эмодзи вместо фото карточки — картинок нет нигде принципиально. */}
-                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-bg)] text-2xl">
-                            {item.emoji}
+                          {/* Своя картинка (задача 2994), если задана — иначе эмодзи вместо фото. */}
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[var(--color-bg)] text-2xl">
+                            {item.hasImage
+                              ? <img src={`/api/shop-item-image/${item.id}`} alt="" className="h-full w-full object-cover" />
+                              : item.emoji}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="font-semibold text-[var(--color-text)] text-[14px]">{item.name}</div>

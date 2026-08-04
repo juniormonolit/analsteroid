@@ -106,6 +106,21 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
     if (!/^[a-z_][a-z0-9_]*$/i.test(other) || !/^[a-z_][a-z0-9_]*$/i.test(f.field)) return '';
     return `${a}.${f.field} > ${a}.${other}`;
   }
+  // gt_field_or_null: «прямой переход, без промежуточной стадии» (задача 2992).
+  // ${field} — колонка ПОЗДНЕЙШЕЙ (по воронке) стадии, чем та, что проверяет базовый
+  // gt_field этой же метрики (напр. для reservation_to_lost это confirmed_at/sold_at/
+  // delivered_at). Условие: эта более поздняя стадия ЛИБО не достигнута НИКОГДА
+  // (${field} IS NULL) — деал ушёл в отказ, не пройдя её, — ЛИБО достигнута ПОСЛЕ
+  // ${value} (обычно lost_at) — то есть уже после того, как деал был зафиксирован
+  // в отказе (аномалия дат/повторный цикл, не «отказ из X» по прямому пути).
+  // Единая точка для ВСЕГО семейства «X → Отказ»: если появится новая метрика
+  // X_to_lost, ей нужно лишь добавить нужное число таких фильтров — новый SQL-код
+  // не пишется. НЕ путать с gt_field (тот требует обе колонки NOT NULL).
+  if (f.op === 'gt_field_or_null') {
+    const other = String(f.value);
+    if (!/^[a-z_][a-z0-9_]*$/i.test(other) || !/^[a-z_][a-z0-9_]*$/i.test(f.field)) return '';
+    return `(${a}.${f.field} IS NULL OR ${a}.${f.field} > ${a}.${other})`;
+  }
   // is_null / is_not_null: special handling for product_rows (also check empty jsonb array)
   if (f.op === 'is_null') {
     if (f.field === 'products') {

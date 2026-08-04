@@ -28,7 +28,7 @@ export type BorderMode = 'grid' | 'horizontal' | 'none';
 export interface MetricFilter {
   field: string;
   // gt_field: column-vs-column comparison — value is another column name (e.g. lost_at > sold_at)
-  op: 'eq' | 'neq' | 'in' | 'not_in' | 'is_null' | 'is_not_null' | 'gt_field';
+  op: 'eq' | 'neq' | 'in' | 'not_in' | 'is_null' | 'is_not_null' | 'gt_field' | 'gt_field_or_null';
   value: string | number | string[] | number[];
 }
 
