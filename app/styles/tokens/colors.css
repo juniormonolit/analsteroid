@@ -1,0 +1,26 @@
+:root{
+/* Бренд TDM — синяя шкала на базе #005CA9 */
+--blue-50:#EDF5FC;--blue-100:#D7E9F8;--blue-200:#AFD3F1;--blue-300:#7FB9E8;--blue-400:#4A9CDE;--blue-500:#1B7FD4;--blue-600:#0069BE;--blue-700:#005CA9;--blue-800:#004A8A;--blue-900:#003563;
+/* Нейтральные, холодный подтон */
+--gray-50:#F6F8FA;--gray-100:#EEF1F5;--gray-200:#E5E9EF;--gray-300:#D2D9E0;--gray-400:#9AA5B1;--gray-500:#6B7280;--gray-600:#4B5563;--gray-700:#374151;--gray-800:#1F2937;--gray-900:#1A202C;
+/* Семантические — только для статусов; базовые тона из стандартной палитры Google Sheets */
+--success:#34A853;--success-bg:#E6F4EA;--success-text:#1E8E3E;
+--danger:#EA4335;--danger-bg:#FCE8E6;--danger-text:#D93025;
+--warning:#FBBC04;--warning-bg:#FEF7E0;--warning-text:#B26000;
+--info:#4285F4;--info-bg:#E8F0FE;--info-text:#1967D2;
+/* Цвета стадий сделок (из кодовой базы, lib/metrics/entity-colors + BrandLogo) */
+--entity-sales:#3b82f6;--entity-refusals:#ef4444;--entity-shipments:#22c55e;
+/* Тиры квестов (из кодовой базы, QuestsTab) */
+--quest-white:#9ca3af;--quest-green:#2f9e44;--quest-blue:#1c7ed6;--quest-epic:#9c36b5;--quest-legendary:#e8590c;
+/* Тиры геймификации */
+--tier-bronze:#B08D57;--tier-silver:#9AA5B1;--tier-gold:#D4A017;--tier-platinum:#7DA7D9;
+/* Палитра серий графиков и индикаторов — дефолтная Google Sheets (как в текущем приложении) */
+--chart-1:#4285F4;--chart-2:#EA4335;--chart-3:#FBBC04;--chart-4:#34A853;--chart-5:#FF6D01;--chart-6:#46BDC6;
+/* Семантические алиасы (светлая тема) */
+--brand:var(--blue-700);--interactive:var(--blue-500);--interactive-hover:var(--blue-600);--interactive-active:var(--blue-700);
+--surface-app:#EAF2FA;--surface-card:rgba(255,255,255,.68);--surface-sunken:rgba(13,59,102,.07);--surface-selected:rgba(27,127,212,.14);--bg-app:linear-gradient(165deg,#F5F9FD 0%,#E4EEF9 45%,#CFE3F6 100%);/* @kind color */
+--border-default:var(--gray-200);--border-strong:var(--gray-300);--border-focus:var(--blue-500);
+--text-primary:var(--gray-900);--text-secondary:var(--gray-500);--text-tertiary:var(--gray-400);--text-on-brand:#FFFFFF;--text-link:var(--blue-500);--text-brand:var(--blue-700);
+/* Текст непосредственно на градиенте --bg-app (заголовки страниц, подписи вне карточек) */
+--text-on-app:#123B60;--text-on-app-secondary:rgba(18,59,96,.62);
+}

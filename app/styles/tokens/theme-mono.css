@@ -1,0 +1,36 @@
+/* Монохромная тема «как smart-home референс»: тёмное серое стекло, ЕДИНСТВЕННЫЙ акцент —
+   фирменный синий (интерактив, активные элементы, ключевые данные). Статусы теряют
+   цветовую семантику сознательно: success/warning/danger — серые, info — акцент.
+   Архитектура трёх тем приложения: light (по умолчанию, без атрибута) / dark / mono. */
+[data-theme="mono"]{
+--bg-app:linear-gradient(165deg,#303338 0%,#26282C 50%,#1C1E22 100%);
+/* --surface-app (сплошной фон, не градиент --bg-app) ОТСУТСТВОВАЛ в исходном пакете —
+   баг найден живьём (задача 2999, Виктор): любой полноэкранный wrapper на
+   bg-[var(--color-bg)] (--color-bg алиасится на --surface-app) падал обратно на
+   светлый дефолт colors.css поверх которого текст --text-primary (уже правильно
+   светлый, #ECEDEF) становился почти невидим — см. /login. Добавлено здесь же, тон —
+   как --gray-50 темы (тот же нейтральный тёмно-серый, что база остальной палитры). */
+--surface-app:#26282C;
+--surface-card:rgba(255,255,255,.075);--surface-sunken:rgba(255,255,255,.06);--surface-selected:rgba(43,141,224,.22);
+--gray-50:#26282C;--gray-100:#2C2F34;--gray-200:#34373D;--gray-300:#41454C;--gray-400:#6E747C;--gray-500:#9AA0A8;--gray-600:#B4B9C1;--gray-700:#C9CDD3;--gray-800:#DCDEE1;--gray-900:#ECEDEF;
+--blue-50:rgba(43,141,224,.14);--blue-100:rgba(43,141,224,.28);--blue-200:rgba(43,141,224,.42);
+--border-default:rgba(255,255,255,.09);--border-strong:rgba(255,255,255,.18);--border-focus:#4A9CDE;
+--text-primary:#ECEDEF;--text-secondary:#9AA0A8;--text-tertiary:#6E747C;--text-link:#6cb2e8;--text-brand:#7FB9E8;
+--text-on-app:#ECEDEF;--text-on-app-secondary:rgba(236,237,239,.65);
+--brand:#7FB9E8;--interactive:#2B8DE0;--interactive-hover:#4A9CDE;--interactive-active:#7FB9E8;
+/* Статусы ОСТАЮТСЯ цветными (приглушённый пастель под тёмную базу, как в dark) — семантика важнее монохрома */
+--success:#7fd9a8;--success-bg:#22332a;--success-text:#7fd9a8;
+--danger:#f0a3ab;--danger-bg:#3a2a2d;--danger-text:#f0a3ab;
+--warning:#eece8a;--warning-bg:#383322;--warning-text:#eece8a;
+--info:#8ab8f8;--info-bg:rgba(43,141,224,.18);--info-text:#8ab8f8;
+--chart-1:#2B8DE0;--chart-2:#6E747C;--chart-3:#9AA0A8;--chart-4:#41454C;--chart-5:#B4B9C1;--chart-6:#34373D;
+/* Тиры квестов и наград остаются цветными во всех темах — игровая семантика редкости */
+--grad-gacha:linear-gradient(135deg,#41454C 0%,#34373D 55%,#26282C 100%);/* @kind color */
+--glow-rare:0 0 16px rgba(43,141,224,.4);
+--shadow-card:inset 0 1px 0 rgba(255,255,255,.08),0 8px 24px rgba(0,0,0,.4);
+--shadow-hover:inset 0 1px 0 rgba(255,255,255,.1),0 16px 40px rgba(0,0,0,.5);
+--shadow-modal:inset 0 1px 0 rgba(255,255,255,.08),0 24px 64px rgba(0,0,0,.6);
+--shadow-toast:inset 0 1px 0 rgba(255,255,255,.08),0 12px 32px rgba(0,0,0,.5);
+--focus-ring:0 0 0 3px rgba(74,156,222,.35);
+--glass-border:rgba(255,255,255,.12);--glass-side:rgba(32,34,38,.55);
+}

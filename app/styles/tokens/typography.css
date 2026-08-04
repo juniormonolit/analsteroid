@@ -1,0 +1,18 @@
+/* Скопировано из team-inbox/monolitika-glass/tokens/typography.css (дизайн-система
+   «Монолитика Glass», задача 2999). Google Fonts @import вынесен в самую первую
+   строку app/globals.css (CSS требует, чтобы @import шёл раньше любых других
+   правил в файле — нельзя оставить его тут, внутри уже импортированного файла,
+   после других @import). */
+:root{
+--font-ui:'Inter',-apple-system,'Segoe UI',Roboto,sans-serif;
+--font-coin:Georgia,'Times New Roman',serif;
+/* Размерная шкала */
+--text-xs:12px;--text-sm:13px;--text-base:14px;--text-md:16px;--text-lg:20px;--text-xl:24px;--text-2xl:32px;
+/* KPI-цифры — главный герой дашбордов */
+--kpi-size:32px;--kpi-size-lg:36px;--kpi-weight:600;
+--leading-tight:1.2;--leading-normal:1.45;
+--weight-regular:400;--weight-medium:500;--weight-semibold:600;--weight-bold:700;
+}
+.tnum,[data-tnum]{font-variant-numeric:tabular-nums;font-feature-settings:'tnum';}
+a{color:var(--text-link);text-decoration:none;}
+a:hover{color:var(--interactive-hover);text-decoration:underline;}

@@ -37,7 +37,7 @@ export function BottomTabBar({ onMore }: { onMore: () => void }) {
 
   return (
     <nav
-      className="md:hidden shrink-0 flex items-stretch border-t border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-bg)] pb-[env(safe-area-inset-bottom)]"
+      className="md:hidden shrink-0 flex items-stretch border-t border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-bg)] pb-[env(safe-area-inset-bottom)] [backdrop-filter:var(--glass-blur)]"
       aria-label="Основная навигация"
     >
       {TABS.map((tab) => {
