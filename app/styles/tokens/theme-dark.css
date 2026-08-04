@@ -11,7 +11,11 @@
 /* Семантические алиасы */
 --surface-app:#0E1A2C;--surface-card:rgba(21,34,56,.6);--surface-sunken:rgba(255,255,255,.05);--surface-selected:rgba(74,156,222,.16);--bg-app:linear-gradient(160deg,#0F2136 0%,#0C1B30 38%,#0A2E56 72%,#003563 100%);
 --border-default:rgba(255,255,255,.09);--border-strong:rgba(255,255,255,.18);--border-focus:#4A9CDE;
---text-primary:#e6e8ec;--text-secondary:#9aa1ad;--text-tertiary:#6b7480;--text-on-brand:#eaf1ff;--text-link:#6cb2e8;--text-brand:#7FB9E8;
+/* text-secondary — задача 3029: было #9aa1ad, реальный рендер (glass-блюр карточек/чипов
+   подмешивает окружающие светлые пиксели) давал контраст ниже расчётного, вплоть до
+   2.47:1 на id-чипе «Метрик» (порог 4.5:1). Осветлено с запасом под непредсказуемость
+   blur-компоузинга, а не впритык к минимуму. */
+--text-primary:#e6e8ec;--text-secondary:#B0B6C0;--text-tertiary:#8791A0;--text-on-brand:#eaf1ff;--text-link:#6cb2e8;--text-brand:#7FB9E8;
 --brand:#7FB9E8;--interactive:#4A9CDE;--interactive-hover:#6cb2e8;--interactive-active:#7FB9E8;
 /* Статусы — приглушённый пастель на тёмной базе (как в макете: «та же доля подмеса
    на тёмной базе давала бы слишком яркий результат») */

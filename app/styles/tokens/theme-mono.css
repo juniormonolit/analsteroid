@@ -15,7 +15,10 @@
 --gray-50:#26282C;--gray-100:#2C2F34;--gray-200:#34373D;--gray-300:#41454C;--gray-400:#6E747C;--gray-500:#9AA0A8;--gray-600:#B4B9C1;--gray-700:#C9CDD3;--gray-800:#DCDEE1;--gray-900:#ECEDEF;
 --blue-50:rgba(43,141,224,.14);--blue-100:rgba(43,141,224,.28);--blue-200:rgba(43,141,224,.42);
 --border-default:rgba(255,255,255,.09);--border-strong:rgba(255,255,255,.18);--border-focus:#4A9CDE;
---text-primary:#ECEDEF;--text-secondary:#9AA0A8;--text-tertiary:#6E747C;--text-link:#6cb2e8;--text-brand:#7FB9E8;
+/* text-secondary — задача 3029: было #9AA0A8 (2.92:1 расчётно / 3.38:1 реальный рендер
+   на id-чипе «Метрик», порог 4.5:1) — стекло-карточка почти не отличима по яркости от
+   серого текста поверх неё («серым по серому»). См. colors.css :root. */
+--text-primary:#ECEDEF;--text-secondary:#C9CCD1;--text-tertiary:#9BA0A6;--text-link:#6cb2e8;--text-brand:#7FB9E8;
 --text-on-app:#ECEDEF;--text-on-app-secondary:rgba(236,237,239,.65);
 --brand:#7FB9E8;--interactive:#2B8DE0;--interactive-hover:#4A9CDE;--interactive-active:#7FB9E8;
 /* Статусы ОСТАЮТСЯ цветными (приглушённый пастель под тёмную базу, как в dark) — семантика важнее монохрома */

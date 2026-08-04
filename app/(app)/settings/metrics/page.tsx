@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useUrlState, stringParam, enumParam } from '@/lib/hooks/useUrlState';
 
 interface MetricRow {
   id: string;
@@ -19,11 +20,21 @@ interface MetricRow {
 
 type SavedState = Record<string, boolean>; // metricId -> shown
 
-function rowBg(m: MetricRow): string {
-  if (m.calc_ok && m.fill_ok) return 'bg-green-50/30';
-  if (m.calc_ok || m.fill_ok) return 'bg-yellow-50/30';
-  return 'bg-red-50/30';
+// Задача 3029: статусная заливка строки (верно считается/заполняется) + лёгкая зебра
+// (чередование интенсивности ТОЙ ЖЕ семантической заливки, не отдельный серый слой —
+// иначе статус-цвет и зебра спорят за внимание на 439 строках). odd-строки на пару
+// пунктов насыщеннее, этого достаточно, чтобы взгляд не терял текущую строку при
+// скролле, но статус остаётся главным сигналом.
+function rowBg(m: MetricRow, odd: boolean): string {
+  const tone = m.calc_ok && m.fill_ok ? 'green' : (m.calc_ok || m.fill_ok) ? 'yellow' : 'red';
+  return `bg-${tone}-50/${odd ? 45 : 28}`;
 }
+
+const TYPE_LABELS: Record<string, string> = {
+  collected: 'collected',
+  calculated: 'calculated',
+  external: 'external',
+};
 
 function EditableCell({
   value,
@@ -50,7 +61,7 @@ function EditableCell({
   if (!editing) {
     return (
       <div
-        className="cursor-text min-h-[1.5rem] px-1 py-0.5 rounded hover:bg-[var(--color-border)] transition-colors text-[var(--color-text)] whitespace-pre-wrap"
+        className="cursor-text min-h-[1.5rem] px-1 py-0.5 rounded hover:bg-[var(--color-bg-hover)] transition-colors text-[var(--color-text)] whitespace-pre-wrap break-words"
         onClick={() => { setDraft(value ?? ''); setEditing(true); }}
         title="Нажмите для редактирования"
       >
@@ -89,6 +100,14 @@ export default function MetricsPage() {
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState<SavedState>({});
 
+  // Поиск/фильтр по типу — в URL (replace: донастройка, не шаг истории), задача 3029:
+  // 439 строк без единого способа сузить список.
+  const [q, setQ] = useUrlState('q', stringParam(''));
+  const [typeFilter, setTypeFilter] = useUrlState(
+    'type',
+    enumParam(['all', 'collected', 'calculated', 'external'], 'all'),
+  );
+
   useEffect(() => {
     fetch('/api/settings/metrics')
       .then(r => r.json())
@@ -98,6 +117,20 @@ export default function MetricsPage() {
       })
       .catch(() => setLoading(false));
   }, []);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return metrics.filter(m => {
+      if (typeFilter !== 'all' && m.metric_type !== typeFilter) return false;
+      if (!needle) return true;
+      return (
+        m.id.toLowerCase().includes(needle) ||
+        m.name_ru.toLowerCase().includes(needle) ||
+        (m.name_short_ru ?? '').toLowerCase().includes(needle) ||
+        (m.description ?? '').toLowerCase().includes(needle)
+      );
+    });
+  }, [metrics, q, typeFilter]);
 
   function showSaved(id: string) {
     setSaved(prev => ({ ...prev, [id]: true }));
@@ -136,40 +169,83 @@ export default function MetricsPage() {
 
   return (
     <div className="p-4">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-[var(--color-text)]">Метрики</h2>
-        <p className="text-xs text-[var(--color-text-muted)]">{metrics.length} метрик</p>
+        <p className="text-xs text-[var(--color-text-muted)] whitespace-nowrap">
+          {filtered.length === metrics.length
+            ? `${metrics.length} метрик`
+            : `${filtered.length} из ${metrics.length} метрик`}
+        </p>
       </div>
 
-      <div className="overflow-auto rounded-lg border border-[var(--color-border)]">
-        <table className="w-full text-sm border-collapse">
+      <div className="mb-3 flex items-center gap-2">
+        <input
+          type="text"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          placeholder="Поиск по ID, названию, описанию…"
+          className="w-72 max-w-full px-2.5 py-1.5 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg-surface)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)]"
+        />
+        <select
+          value={typeFilter}
+          onChange={e => setTypeFilter(e.target.value as typeof typeFilter)}
+          className="px-2.5 py-1.5 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg-surface)] text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)]"
+        >
+          <option value="all">Все типы</option>
+          <option value="collected">collected</option>
+          <option value="calculated">calculated</option>
+          <option value="external">external</option>
+        </select>
+        {(q || typeFilter !== 'all') && (
+          <button
+            onClick={() => { setQ(''); setTypeFilter('all'); }}
+            className="text-xs text-[var(--color-accent)] hover:underline"
+          >
+            Сбросить
+          </button>
+        )}
+      </div>
+
+      <div className="overflow-auto rounded-lg border border-[var(--color-border)] max-h-[calc(100vh-220px)]">
+        <table className="text-sm border-collapse">
           <thead className="sticky top-0 z-10 bg-[var(--color-table-header)]">
             <tr>
-              <th className="text-left px-3 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">ID</th>
-              <th className="text-left px-3 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] min-w-[180px]">Название</th>
-              <th className="text-left px-3 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] min-w-[120px]">Краткое</th>
-              <th className="text-left px-3 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] min-w-[200px]">Описание</th>
-              <th className="text-left px-3 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Тип</th>
-              <th className="text-center px-3 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Считается верно</th>
-              <th className="text-center px-3 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Заполняется верно</th>
-              <th className="text-left px-3 py-2.5 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap w-20">Статус</th>
+              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">ID</th>
+              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] max-w-[220px]">Название</th>
+              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] max-w-[150px]">Краткое</th>
+              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] max-w-[380px]">Описание</th>
+              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Тип</th>
+              <th className="text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Считается верно</th>
+              <th className="text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Заполняется верно</th>
+              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap w-20">Статус</th>
             </tr>
           </thead>
           <tbody>
-            {metrics.map((m, i) => (
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-3 py-8 text-center text-sm text-[var(--color-text-muted)]">
+                  Ничего не найдено. Измените поиск или фильтр.
+                </td>
+              </tr>
+            )}
+            {filtered.map((m, i) => (
               <tr
                 key={m.id}
-                className={`border-b border-[var(--color-border)] hover:brightness-95 transition-all ${rowBg(m)}`}
+                className={`border-b border-[var(--color-border)] hover:brightness-95 transition-all ${rowBg(m, i % 2 === 1)}`}
               >
-                {/* ID */}
+                {/* ID — идентификатор читают и копируют, это ОСНОВНОЙ текст, не второстепенный
+                    (задача 3029: раньше --color-text-muted на --color-border давал 3.97:1
+                    в light / 2.47:1 в dark на реальном рендере, порог 4.5:1). Непрозрачная
+                    заливка --color-bg-hover вместо полупрозрачного --color-border — чтобы
+                    чип не «плыл» по контрасту от blur стеклянной подложки под ним. */}
                 <td className="px-3 py-2 align-top whitespace-nowrap">
-                  <code className="text-xs font-mono bg-[var(--color-border)] px-1.5 py-0.5 rounded text-[var(--color-text-muted)]">
+                  <code className="text-xs font-mono bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded text-[var(--color-text)]">
                     m_{m.id}
                   </code>
                 </td>
 
                 {/* name_ru */}
-                <td className="px-3 py-2 align-top">
+                <td className="px-3 py-2 align-top max-w-[220px]">
                   <EditableCell
                     value={m.name_ru}
                     onSave={val => patch(m.id, { name_ru: val })}
@@ -177,7 +253,7 @@ export default function MetricsPage() {
                 </td>
 
                 {/* name_short_ru */}
-                <td className="px-3 py-2 align-top">
+                <td className="px-3 py-2 align-top max-w-[150px]">
                   <EditableCell
                     value={m.name_short_ru}
                     onSave={val => patch(m.id, { name_short_ru: val || null })}
@@ -185,7 +261,7 @@ export default function MetricsPage() {
                 </td>
 
                 {/* description */}
-                <td className="px-3 py-2 align-top">
+                <td className="px-3 py-2 align-top max-w-[380px]">
                   <EditableCell
                     value={m.description}
                     multiline
@@ -202,7 +278,7 @@ export default function MetricsPage() {
                       ? 'bg-purple-100 text-purple-700'
                       : 'bg-orange-100 text-orange-700'
                   }`}>
-                    {m.metric_type}
+                    {TYPE_LABELS[m.metric_type] ?? m.metric_type}
                   </span>
                 </td>
 
