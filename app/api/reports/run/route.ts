@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadMetrics, resolveMetricIds, withDependencies } from '@/lib/metrics/catalog';
+import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { fetchBySources } from '@/features/reports/engine/bySources';
@@ -21,7 +22,7 @@ import { applyGrouping } from '@/features/reports/engine/grouping';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getWorkingDaysByMonthInRange } from '@/lib/plans/dailyPlan';
 import { periodDateStr } from '@/lib/period';
-import { formatInTimeZone } from 'date-fns-tz';
+import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 
 interface PeriodPlanEntry { planSales: number; planShipments: number }
@@ -105,6 +106,47 @@ async function computePeriodPlanByLogin(
   }
 
   return { byLogin, rangeToStr };
+}
+
+/**
+ * Суммы продаж/отгрузок по менеджерам за ФИКСИРОВАННОЕ окно дат (МСК), для процентов
+ * «(дневной)» / «(на текущий день)» / «(месяц)» — миграция 146. Окно задаётся датами
+ * YYYY-MM-DD включительно и НЕ зависит от периода отчёта: «сегодня» и «месяц» должны
+ * оставаться собой, какой бы период ни выбрал пользователь.
+ *
+ * Тот же приём, что features/manager-card/engine/planFact.ts: buildCollectedSQL по
+ * primary+repeat суммам, границы — московская полночь (fromZonedTime), поэтому «день»
+ * это рабочий день менеджера, а не сутки UTC.
+ */
+async function fetchPlanFactWindow(
+  fromDateStr: string,
+  toDateStr: string,
+): Promise<Map<string, { sales: number; shipments: number }>> {
+  const IDS = ['primary_sales_amount', 'repeat_sales_amount', 'primary_shipments_amount', 'repeat_shipments_amount'];
+  const all = await loadMetrics();
+  const metrics = all.filter(m => IDS.includes(m.id));
+  const sql = buildCollectedSQL(metrics, {
+    idExpr: 'd.current_manager_id::text',
+    groupBy: 'GROUP BY d.current_manager_id',
+    notNullWhere: 'd.current_manager_id IS NOT NULL',
+  });
+  const out = new Map<string, { sales: number; shipments: number }>();
+  if (!sql) return out;
+
+  const fromIso = fromZonedTime(`${fromDateStr} 00:00:00`, 'Europe/Moscow').toISOString();
+  const toExclDate = new Date(`${toDateStr}T00:00:00Z`);
+  toExclDate.setUTCDate(toExclDate.getUTCDate() + 1);
+  const toExclIso = fromZonedTime(`${toExclDate.toISOString().slice(0, 10)} 00:00:00`, 'Europe/Moscow').toISOString();
+
+  const res = await analyticsDb().query<Record<string, unknown> & { dimension_id: string }>(sql, [fromIso, toExclIso]);
+  const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
+  for (const row of res.rows) {
+    out.set(row.dimension_id, {
+      sales: num(row.primary_sales_amount) + num(row.repeat_sales_amount),
+      shipments: num(row.primary_shipments_amount) + num(row.repeat_shipments_amount),
+    });
+  }
+  return out;
 }
 
 export async function POST(req: NextRequest) {
@@ -426,9 +468,19 @@ export async function POST(req: NextRequest) {
   // группируем мы дни по месяцам или по неделям (сумма одна и та же) — оставляем оба ID
   // метрик (обратная совместимость сохранённых отчётов), они просто дают одно число.
   // Решение зафиксировано явно (см. отчёт по задаче 10.07), не скрытая ошибка.
+  // «(период)»: факт за выбранный период ÷ сумма дневных планов по будням периода.
+  // Метрики «(неделя)» удалены миграцией 146 — они давали то же число, что «(день)»,
+  // и были главной причиной путаницы («коллеги выбирают не очевидные метрики»).
   const periodRelativePlanMetricIds = [
-    'plan_execution_pct_sales_day', 'plan_execution_pct_sales_week',
-    'plan_execution_pct_shipments_day', 'plan_execution_pct_shipments_week',
+    'plan_execution_pct_sales_day', 'plan_execution_pct_shipments_day',
+  ];
+  // «(дневной)» и «(на текущий день)» (миграция 146): факт СВОЕГО окна — за сегодня
+  // и с 1 числа месяца по сегодня — не зависит от периода отчёта, поэтому считается
+  // отдельными запросами, и только если такая метрика реально запрошена.
+  const fixedWindowPlanMetricIds = [
+    'plan_exec_pct_sales_daily', 'plan_exec_pct_sales_current_day',
+    'plan_exec_pct_shipments_daily', 'plan_exec_pct_shipments_current_day',
+    'plan_execution_pct', 'plan_execution_pct_shipments_month',
   ];
   const hasPeriodRelativePlanMetric = withDeps.some(m => periodRelativePlanMetricIds.includes(m.id));
 
@@ -455,18 +507,45 @@ export async function POST(req: NextRequest) {
         metrics: {
           ...row.metrics,
           sales_fact_mtd: salesFact,
-          sales_fact_wtd: salesFact,
           shipments_fact_mtd: shipmentsFact,
-          shipments_fact_wtd: shipmentsFact,
           plan_sales_target_mtd: plan.planSales,
-          plan_sales_target_wtd: plan.planSales,
           plan_shipments_target_mtd: plan.planShipments,
-          plan_shipments_target_wtd: plan.planShipments,
         },
       };
     };
     currentRows = currentRows.map(r => enrichPeriodRelative(r, periodPlanCurrentPct.byLogin));
     compRows = compRows.map(r => enrichPeriodRelative(r, periodPlanCompPct.byLogin));
+  }
+
+  // ── Факты фиксированных окон для % (дневной)/(на текущий день)/(месяц) ──────────
+  // Миграция 146: у каждого процента свой знаменатель И свой числитель. «(месяц)»
+  // раньше делил факт ПЕРИОДА на месячный план — при недельном периоде это давало
+  // бессмыслицу («неделя ÷ месяц»). Теперь окна честные и от периода отчёта не зависят.
+  if (withDeps.some(m => fixedWindowPlanMetricIds.includes(m.id)) && reportSlug === 'by-managers') {
+    const monthStartStr = `${mskTodayStr.slice(0, 7)}-01`;
+    const [todayByMgr, monthByMgr] = await Promise.all([
+      fetchPlanFactWindow(mskTodayStr, mskTodayStr),
+      fetchPlanFactWindow(monthStartStr, mskTodayStr),
+    ]);
+    const enrichFixedWindows = (row: ReportRow): ReportRow => {
+      const t = todayByMgr.get(row.dimensionId);
+      const m = monthByMgr.get(row.dimensionId);
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          sales_fact_today: t?.sales ?? 0,
+          shipments_fact_today: t?.shipments ?? 0,
+          sales_fact_month: m?.sales ?? 0,
+          shipments_fact_month: m?.shipments ?? 0,
+        },
+      };
+    };
+    // Оба набора строк получают ОДНИ И ТЕ ЖЕ фиксированные окна (сегодня/месяц) —
+    // они не зависят от периода строки, поэтому сравнение по ним не имеет смысла
+    // и в колонке «к прошлому периоду» такие метрики покажут нулевую дельту.
+    currentRows = currentRows.map(enrichFixedWindows);
+    compRows = compRows.map(enrichFixedWindows);
   }
 
   // Метрики активности менеджеров «Дней в работе» / «% выхода» / «Сделок/день» —
