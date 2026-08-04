@@ -6,7 +6,8 @@
 --blue-50:#EDF5FC;--blue-100:#D7E9F8;--blue-200:#AFD3F1;
 --surface-app:#EAF2FA;--surface-card:rgba(255,255,255,.68);--surface-sunken:rgba(13,59,102,.07);--surface-selected:rgba(27,127,212,.14);--bg-app:linear-gradient(165deg,#F5F9FD 0%,#E4EEF9 45%,#CFE3F6 100%);/* @kind color */
 --border-default:#E5E9EF;--border-strong:#D2D9E0;--border-focus:#1B7FD4;
---text-primary:#1A202C;--text-secondary:#6B7280;--text-tertiary:#9AA5B1;--text-on-brand:#FFFFFF;--text-link:#1B7FD4;--text-brand:#005CA9;
+/* text-secondary/tertiary — см. комментарий в colors.css :root (задача 3029) */
+--text-primary:#1A202C;--text-secondary:#5B6472;--text-tertiary:#7C8592;--text-on-brand:#FFFFFF;--text-link:#1B7FD4;--text-brand:#005CA9;
 --text-on-app:#123B60;--text-on-app-secondary:rgba(18,59,96,.62);
 --brand:#005CA9;--interactive:#1B7FD4;--interactive-hover:#0069BE;--interactive-active:#005CA9;
 --success:#34A853;--success-bg:#E6F4EA;--success-text:#1E8E3E;

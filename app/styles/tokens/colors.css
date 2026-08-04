@@ -20,7 +20,16 @@
 --brand:var(--blue-700);--interactive:var(--blue-500);--interactive-hover:var(--blue-600);--interactive-active:var(--blue-700);
 --surface-app:#EAF2FA;--surface-card:rgba(255,255,255,.68);--surface-sunken:rgba(13,59,102,.07);--surface-selected:rgba(27,127,212,.14);--bg-app:linear-gradient(165deg,#F5F9FD 0%,#E4EEF9 45%,#CFE3F6 100%);/* @kind color */
 --border-default:var(--gray-200);--border-strong:var(--gray-300);--border-focus:var(--blue-500);
---text-primary:var(--gray-900);--text-secondary:var(--gray-500);--text-tertiary:var(--gray-400);--text-on-brand:#FFFFFF;--text-link:var(--blue-500);--text-brand:var(--blue-700);
+/* --text-secondary/--text-tertiary НЕ алиасятся на --gray-500/--gray-400 (задача 3029,
+   регрессия контраста найдена живьём в «Метриках»): та же схема, что у прод-токена
+   --color-text-muted:#5f6b76 (задача 1694, комментарий в globals.css прод-ветки) —
+   секондари-текст держит СОБСТВЕННОЕ калиброванное значение, а не общий шаг серой
+   шкалы, потому что у него другие требования к контрасту (читается поверх чипов/
+   бейджей на стеклянных поверхностях, не только на плоском фоне карточки). Замер
+   WCAG 2.1 (реальный рендер, chromium): было 3.97:1 на id-чипе (--border-default
+   поверх --surface-card) — FAIL порога 4.5:1; стало 5.4×:1. Тёмная/моно темы см.
+   theme-dark.css/theme-mono.css — там регрессия была ещё сильнее (2.47:1/3.38:1). */
+--text-primary:var(--gray-900);--text-secondary:#5B6472;--text-tertiary:#7C8592;--text-on-brand:#FFFFFF;--text-link:var(--blue-500);--text-brand:var(--blue-700);
 /* Текст непосредственно на градиенте --bg-app (заголовки страниц, подписи вне карточек) */
 --text-on-app:#123B60;--text-on-app-secondary:rgba(18,59,96,.62);
 }
