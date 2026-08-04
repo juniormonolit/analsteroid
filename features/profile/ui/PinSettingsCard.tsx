@@ -39,6 +39,14 @@ function fmtDateTime(v: string): string {
   return v;
 }
 
+// pinLockedUntil/pinFreezeUntil из GET /api/me/pin приходят ISO (Date.toISOString в
+// getPinState) — здесь только для баннеров, читаемый вид в МСК.
+function fmtIsoMsk(iso: string): string {
+  return new Date(iso).toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
 export function PinSettingsCard({ ssoAccount }: { ssoAccount: boolean }) {
   const qc = useQueryClient();
   const [setupOpen, setSetupOpen] = useState(false);
@@ -111,12 +119,12 @@ export function PinSettingsCard({ ssoAccount }: { ssoAccount: boolean }) {
         <>
           {locked && (
             <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
-              🔒 Пин заблокирован{pin.pinLockLevel >= 3 ? ' — обратитесь к администратору' : ` до ${pin.pinLockedUntil}`}.
+              🔒 Пин заблокирован{pin.pinLockLevel >= 3 ? ' — обратитесь к администратору' : ` до ${fmtIsoMsk(pin.pinLockedUntil!)}`}.
             </div>
           )}
           {frozen && (
             <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
-              ⏳ Переводы, подарки и вывод в ЗП временно заморожены до {pin.pinFreezeUntil} (после недавнего сброса/смены пина).
+              ⏳ Переводы, подарки и вывод в ЗП временно заморожены до {fmtIsoMsk(pin.pinFreezeUntil!)} (после недавнего сброса/смены пина).
               Покупки для себя доступны.
             </div>
           )}
