@@ -350,11 +350,21 @@ export async function POST(req: NextRequest) {
     // «полуденный» приём periodDateStrFromInstant внутри вернёт ровно эти даты.
     // null (календарь не заполнен на месяц) → «(на тек. день)» честно null.
     const mskMonthStartStr = `${mskTodayStr.slice(0, 7)}-01`;
-    const [planByLoginCurrent, planByLoginComp, workdayNum] = await Promise.all([
+    // Понедельник текущей недели (МСК) — для «(на текущий день недели)», миграция 147.
+    const mskWeekStartStr = (() => {
+      const d = new Date(`${mskTodayStr}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+      return d.toISOString().slice(0, 10);
+    })();
+    const [planByLoginCurrent, planByLoginComp, workdayNum, weekWorkdayNum] = await Promise.all([
       loadPlanByLogin(periodFromStr, periodToStr),
       loadPlanByLogin(compPeriodFromStr, compPeriodToStr),
       getCalendarWorkingDaysInPeriod({
         from: new Date(`${mskMonthStartStr}T00:00:00.000Z`),
+        to: new Date(`${mskTodayStr}T23:59:59.999Z`),
+      }),
+      getCalendarWorkingDaysInPeriod({
+        from: new Date(`${mskWeekStartStr}T00:00:00.000Z`),
         to: new Date(`${mskTodayStr}T23:59:59.999Z`),
       }),
     ]);
@@ -380,6 +390,9 @@ export async function POST(req: NextRequest) {
           plan_shipments_today: dailyShipments,
           plan_sales_current_day: workdayNum == null ? null : dailySales * workdayNum,
           plan_shipments_current_day: workdayNum == null ? null : dailyShipments * workdayNum,
+          // «(на текущий день недели)» — та же формула, окно [понедельник, сегодня]
+          plan_sales_current_week_day: weekWorkdayNum == null ? null : dailySales * weekWorkdayNum,
+          plan_shipments_current_week_day: weekWorkdayNum == null ? null : dailyShipments * weekWorkdayNum,
         }
       };
     };
@@ -481,6 +494,7 @@ export async function POST(req: NextRequest) {
     'plan_exec_pct_sales_daily', 'plan_exec_pct_sales_current_day',
     'plan_exec_pct_shipments_daily', 'plan_exec_pct_shipments_current_day',
     'plan_execution_pct', 'plan_execution_pct_shipments_month',
+    'plan_exec_pct_sales_current_week_day', 'plan_exec_pct_shipments_current_week_day',
   ];
   const hasPeriodRelativePlanMetric = withDeps.some(m => periodRelativePlanMetricIds.includes(m.id));
 
@@ -523,13 +537,20 @@ export async function POST(req: NextRequest) {
   // бессмыслицу («неделя ÷ месяц»). Теперь окна честные и от периода отчёта не зависят.
   if (withDeps.some(m => fixedWindowPlanMetricIds.includes(m.id)) && reportSlug === 'by-managers') {
     const monthStartStr = `${mskTodayStr.slice(0, 7)}-01`;
-    const [todayByMgr, monthByMgr] = await Promise.all([
+    const weekStartStr = (() => {
+      const d = new Date(`${mskTodayStr}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+      return d.toISOString().slice(0, 10);
+    })();
+    const [todayByMgr, monthByMgr, weekByMgr] = await Promise.all([
       fetchPlanFactWindow(mskTodayStr, mskTodayStr),
       fetchPlanFactWindow(monthStartStr, mskTodayStr),
+      fetchPlanFactWindow(weekStartStr, mskTodayStr),
     ]);
     const enrichFixedWindows = (row: ReportRow): ReportRow => {
       const t = todayByMgr.get(row.dimensionId);
       const m = monthByMgr.get(row.dimensionId);
+      const w = weekByMgr.get(row.dimensionId);
       return {
         ...row,
         metrics: {
@@ -538,6 +559,8 @@ export async function POST(req: NextRequest) {
           shipments_fact_today: t?.shipments ?? 0,
           sales_fact_month: m?.sales ?? 0,
           shipments_fact_month: m?.shipments ?? 0,
+          sales_fact_week: w?.sales ?? 0,
+          shipments_fact_week: w?.shipments ?? 0,
         },
       };
     };
