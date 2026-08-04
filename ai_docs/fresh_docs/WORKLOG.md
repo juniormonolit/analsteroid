@@ -13032,7 +13032,6 @@ ssh junior@62.113.100.67 "cd /home/junior/analsteroid && tar -xzf backup-2824wav
   git worktree `analsteroid-wt-2990` от `origin/dev-asteroid`, diff только
   по `features/reports/ui/{ReportToolbar,MobileReportBar,SalesReportPage}.tsx`.
 
-<<<<<<< HEAD
 ## 2026-08-04 — «В отказ из X» считала детур через продажу/подтв.бронь двойным отказом (задача 2992, Софья)
 
 ### 0. Контекст
