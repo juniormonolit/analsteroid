@@ -152,10 +152,12 @@ export async function verifyPin(
   if (!pinFeatureEnabled()) {
     return { ok: false, status: 503, error: 'Подтверждение пином временно недоступно' };
   }
-  if (typeof submittedPin !== 'string' || !PIN_RE.test(submittedPin)) {
-    return { ok: false, status: 400, error: 'Введите 4-значный пин' };
-  }
 
+  // ВАЖНО: проверка pin_hash IS NULL идёт ДО валидации формата введённого пина.
+  // Первый запрос операции с фронта всегда уходит БЕЗ поля pin (клиент ещё не
+  // знает, нужен ли он) — если сначала отбраковывать по формату, pin_hash IS
+  // NULL никогда не будет замечен на этом первом заходе, и фронт откроет
+  // диалог ВВОДА пина вместо диалога УСТАНОВКИ (в системе просто нет пина).
   const client = await systemDb.connect();
   try {
     await client.query('BEGIN');
@@ -169,9 +171,17 @@ export async function verifyPin(
     const u = row.rows[0];
 
     if (u.pin_hash === null) {
-      await bcrypt.compare(hmacPin(submittedPin), DUMMY_PIN_HASH); // холостой — не палим таймингом
+      // Холостой bcrypt.compare даже без валидного пина на входе — тайминг
+      // ответа не должен отличаться от случая с валидным форматом (спека §2).
+      const dummyInput = typeof submittedPin === 'string' && PIN_RE.test(submittedPin) ? submittedPin : '0000';
+      await bcrypt.compare(hmacPin(dummyInput), DUMMY_PIN_HASH);
       await client.query('ROLLBACK');
       return { ok: false, status: 428, error: 'Пин не установлен' };
+    }
+
+    if (typeof submittedPin !== 'string' || !PIN_RE.test(submittedPin)) {
+      await client.query('ROLLBACK');
+      return { ok: false, status: 400, error: 'Введите 4-значный пин' };
     }
 
     if (u.pin_locked_until && new Date(u.pin_locked_until).getTime() > Date.now()) {
