@@ -155,7 +155,8 @@ export function MobileReportBar(props: Props) {
                   <ComparisonTriggerButton onOpenComparison={onOpenComparison} comparisonCount={comparisonCount} />
                 )}
                 {props.userGroupsSlot}
-                {(!basic || forceShowSave) && <SaveButton onSaveReport={onSaveReport} />}
+                {/* Задача 2990: «Сохранить» — базовая функция, не гейтится Лайт-режимом (basic). */}
+                <SaveButton onSaveReport={onSaveReport} />
                 {onCopyTable && onExportExcel && onExportPdf && onExportPng && (
                   <ExportMenu
                     onCopyTable={onCopyTable}
