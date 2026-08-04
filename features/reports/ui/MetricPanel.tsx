@@ -170,7 +170,13 @@ function MetricSelector({
           )}
           {sortedCategories.map(cat => (
             <div key={cat} ref={el => { if (el) catRefs.current.set(cat, el); else catRefs.current.delete(cat); }}>
-              <div className="px-4 py-1 text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider sticky top-0 bg-[var(--color-bg-surface)] z-10">
+              {/* Липкий заголовок категории — тоже плотный фон: под ним
+                  прокручиваются строки метрик, с карточной альфой они просвечивали
+                  сквозь заголовок. СВОЙ backdrop-filter здесь не нужен — заголовок
+                  лежит поверх уже заблюренного тела панели (тот же приём, что в
+                  Modal.tsx: вложенный backdrop-filter зря жжёт GPU и рискует
+                  артефактами в Safari). */}
+              <div className="px-4 py-1 text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider sticky top-0 bg-[var(--color-bg-overlay)] z-10">
                 {cat} <span className="normal-case font-normal opacity-60">· {grouped.get(cat)!.length}</span>
               </div>
               {grouped.get(cat)!.map(m => (
@@ -310,8 +316,16 @@ export function MetricPanel(props: Props) {
       <div className="fixed inset-0 z-30 bg-black/30" onClick={onClose} />
       {/* Телефон: панель на весь экран; md+: слайд-панель правее сайдбара */}
       <div className="fixed inset-0 md:inset-y-0 md:right-auto md:left-[220px] z-40 flex shadow-2xl">
+        {/* Фон панели — ПЛОТНЫЙ --color-bg-overlay + блюр, а НЕ --color-bg-surface
+            (задача 3045, скриншот владельца: сквозь панель метрик читалась таблица
+            отчёта — фамилии менеджеров, «ИТОГО: 11 МЕНЕДЖЕРОВ», цифры колонок).
+            Причина та же, что у регресса #2999 в Modal/Popover: --color-bg-surface
+            это --surface-card, карточный токен с альфой 68% (light) / 60% (dark) /
+            7,5% (mono) — её достаточно для карточки среди таких же карточек, но не
+            когда под поверхностью лежит произвольный контент страницы. Тогда
+            перевели 4 самописных диалога, а эту панель пропустили. */}
         <div
-          className="flex flex-col bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] w-full md:w-[var(--metric-panel-w)] max-w-full"
+          className="flex flex-col bg-[var(--color-bg-overlay)] [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)] border-r border-[var(--color-border)] w-full md:w-[var(--metric-panel-w)] max-w-full"
           style={{ '--metric-panel-w': `${getMetricPanelWidth()}px` } as React.CSSProperties}
         >
           {/* Tabs + close. Крестик — вне скролла табов, чтобы на телефоне не уезжал за экран */}
