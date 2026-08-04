@@ -216,6 +216,27 @@ export function SaveReportModal({
     };
   }
 
+  // Можно ли ПЕРЕЗАПИСАТЬ открытый сейчас отчёт (currentReportId) — баг владельца
+  // 04.08: «зашёл в базовый минимум, покрутил, нажал Сохранить → Forbidden».
+  // Причина: модалка всегда слала mode:'update' на открытый отчёт. Если открыт
+  // ОБЩИЙ отчёт («Роп монитор»/«Отчёты Стаса»/витрина), а у пользователя нет
+  // action.shared_reports.manage — PUT /api/saved-reports/[id] честно отвечал 403,
+  // и человек вообще не мог сохранить своё состояние. Правильное поведение:
+  // перезаписывать только то, что человеку принадлежит в ЦЕЛЕВОМ разделе, иначе —
+  // создавать НОВЫЙ личный отчёт (это и есть «сохранить как личный в избранное»).
+  const currentRow = currentReportId ? existingReports.find(r => r.id === currentReportId) : undefined;
+  const canOverwriteCurrent = (() => {
+    if (!currentReportId) return false;
+    // Строки ещё не загрузились — не рискуем 403, сохраняем как новый личный.
+    if (!currentRow) return false;
+    if (currentRow.isShared) {
+      // Общий отчёт правим только с правом на витрины И когда сохраняем в витрину.
+      return canShare && effectiveSection !== 'personal';
+    }
+    // Личный — только свой и только когда цель тоже «личное».
+    return effectiveSection === 'personal' && (!currentRow.userLogin || currentRow.userLogin === myLogin);
+  })();
+
   async function handleSave() {
     if (!name.trim()) return;
     const trimmed = name.trim();
@@ -230,8 +251,8 @@ export function SaveReportModal({
     }
     setSaving(true);
     setError(null);
-    const result = currentReportId
-      ? await onSave(input, { mode: 'update', targetId: currentReportId })
+    const result = canOverwriteCurrent
+      ? await onSave(input, { mode: 'update', targetId: currentReportId! })
       : await onSave(input, { mode: 'create' });
     setSaving(false);
     // onSave может ничего не вернуть (старое поведение) — тогда считаем успехом,
@@ -356,6 +377,19 @@ export function SaveReportModal({
           {error && (
             <div className="text-xs text-[var(--color-error,#dc2626)]">
               {error}
+            </div>
+          )}
+          {/* Куда именно уйдёт сохранение (баг владельца 04.08): раньше человек,
+              открывший ОБЩИЙ отчёт, вообще не понимал, что произойдёт — и получал
+              Forbidden. Теперь честно пишем, что создастся личная копия. */}
+          {currentRow?.isShared && !canOverwriteCurrent && (
+            <div className="text-xs text-[var(--color-text-muted)]">
+              «{currentRow.name}» — общий отчёт. Сохранится <b className="text-[var(--color-text)]">ваша личная копия</b> в «Избранном», общий останется как есть.
+            </div>
+          )}
+          {currentRow && !currentRow.isShared && canOverwriteCurrent && (
+            <div className="text-xs text-[var(--color-text-muted)]">
+              Перезапишет ваш личный отчёт «{currentRow.name}».
             </div>
           )}
           {canShare && (
