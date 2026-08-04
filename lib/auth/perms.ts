@@ -94,13 +94,31 @@ export function isReportAdmin(session: SessionUser | null): boolean {
 
 export type UiMode = 'basic' | 'pro';
 
+// Задача 2990 (правка владельца 04.08, ответ на находку про basic-дефолт): «управленческий
+// уровень» — РОП и выше видят «Про» по умолчанию, рядовой менеджер (МОП) — «Обычную».
+// Прокси-право `section.plans` («Планы») выбрано осознанно вместо списка имён ролей — по
+// факту прод-каталога ролей (см. WORKLOG, задача 2990) оно ровно разделяет управленческие
+// роли (РОП, Директор, Администратор — у всех троих есть section.plans) от исполнительских
+// (МОП, «Пользователь» — {} / {section.sales,section.charts}, Логист — лателеральная
+// функция без section.plans, НЕ управленческая ступень над менеджером). hasPerm() сам
+// бесшовно пропускает is_superadmin. Если владелец заведёт новую роль без section.plans, но
+// управленческую по смыслу — довыдать ей право явно через «Настройки → Роли», а не
+// патчить этот список (тот же принцип, что уже используют section.offload/section.employees).
+export function isManagementTier(session: SessionUser | null): boolean {
+  return hasPerm(session, 'section.plans') || isReportAdmin(session);
+}
+
 // Пункт 3а спеки: тумблер «Обычная/Про». session.uiMode === null означает, что
-// пользователь ещё не переключал сам — тогда дефолт по роли (администратор → pro,
-// остальные → basic). Явное значение в БД всегда побеждает дефолт.
+// пользователь ещё не переключал сам — тогда дефолт по роли (управленческий уровень
+// — РОП/Директор/Администратор/супер-админ — → pro, МОП/«Пользователь»/Логист →
+// basic). Явное значение в БД (тумблер) ВСЕГДА побеждает дефолт — эта функция решает
+// только то, что видит человек, который тумблер ни разу не трогал; проверкой доступа
+// к чужим данным или админским действиям isManagementTier()/effectiveUiMode() нигде
+// не является (см. isReportAdmin/hasPerm — это отдельные, самостоятельные проверки).
 export function effectiveUiMode(session: SessionUser | null): UiMode {
   if (!session) return 'basic';
   if (session.uiMode === 'basic' || session.uiMode === 'pro') return session.uiMode;
-  return isReportAdmin(session) ? 'pro' : 'basic';
+  return isManagementTier(session) ? 'pro' : 'basic';
 }
 
 // Цель redirect'а с «/», после логина и из закрытых разделов (нет нужного
