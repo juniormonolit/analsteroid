@@ -278,8 +278,8 @@ export function OffloadPage() {
         />
       )}
       {closing && (
-        {/* Регресс #2999 (04.08) — см. комментарий у ConfirmCloseModal ниже: тот же
-            самописный диалог с прозрачным фоном, тот же фикс. */}
+        // Регресс #2999 (04.08) — см. комментарий у ConfirmCloseModal ниже: тот же
+        // самописный диалог с прозрачным фоном, тот же фикс.
         <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center">
           <div className="rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] px-6 py-5 text-sm text-[var(--color-text)] shadow-2xl">
             Закрываем сделки в Битриксе… обработано <b>{closing.done}</b> из <b>{closing.total}</b>
