@@ -336,8 +336,14 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
     // Modal вместо самописного fixed inset-0 (задача 2764, правило 3 CLAUDE.md).
     // Прячем это окно (не размонтируем — стейт/мутация живы), пока открыт
     // PinSetupDialog/PinDialog поверх него: иначе два модала складываются
-    // в стопку (живая находка при тестировании задачи #3020).
-    <Modal open={!pinSetupOpen && !pinVerifyOpen} onOpenChange={(o) => { if (!o) onClose(); }} title={`${kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}: ${managerName}`} desktopWidth="sm:max-w-md">
+    // в стопку (живая находка при тестировании задачи #3020). onOpenChange
+    // защищён тем же условием — иначе Radix закрывает родителя вместе с
+    // собой и PinDialog размонтируется, не успев отрисоваться (тоже поймано
+    // живьём).
+    <Modal
+      open={!pinSetupOpen && !pinVerifyOpen}
+      onOpenChange={(o) => { if (!o && !pinSetupOpen && !pinVerifyOpen) onClose(); }}
+      title={`${kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}: ${managerName}`} desktopWidth="sm:max-w-md">
         <div className="flex flex-col gap-3">
           {kind === 'bonus' ? (
             <>
@@ -1422,7 +1428,13 @@ function GiftModal({ row, meta, onClose, onDone }: {
     // Modal вместо самописного fixed inset-0 (задача 2764, правило 3 CLAUDE.md).
     // Прячем это окно (не размонтируем), пока открыт PinSetupDialog/PinDialog —
     // иначе два модала складываются в стопку (живая находка, задача #3020).
-    <Modal open={!pinSetupOpen && !pinVerifyOpen} onOpenChange={(o) => { if (!o) onClose(); }} title={`Подарить: ${row.item_name}`} desktopWidth="sm:max-w-sm">
+    // onOpenChange защищён тем же условием — иначе Radix закрывает родителя
+    // вместе с собой и PinDialog размонтируется, не успев отрисоваться
+    // (тоже поймано живьём).
+    <Modal
+      open={!pinSetupOpen && !pinVerifyOpen}
+      onOpenChange={(o) => { if (!o && !pinSetupOpen && !pinVerifyOpen) onClose(); }}
+      title={`Подарить: ${row.item_name}`} desktopWidth="sm:max-w-sm">
         <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Кому (активный менеджер)
           <select value={to} onChange={e => setTo(e.target.value === '' ? '' : Number(e.target.value))}
