@@ -244,6 +244,35 @@ function RubPill({ balance, big = false }: { balance: number; big?: boolean }) {
   );
 }
 
+// Блок денег в шапке ЛК (макет Glass2, ui_kits/monolitika/profile.html): «сункен»-
+// строка на всю ширину карточки — две половины с подписями и вертикальным
+// разделителем, вместо двух пилюль по краю. Отрицательный баланс (ручные штрафы)
+// красным — то же правило, что в RubPill/BalancePill, которые остались для
+// кошелька/магазина/инвентаря, где нужен именно компактный вид.
+function MoneyRow({ rub, mlt, currencyName }: { rub: number; mlt: number; currencyName: string }) {
+  const rubColor = rub < 0 ? 'var(--color-negative, #e03131)' : 'var(--color-positive, #2f9e44)';
+  const mltColor = mlt < 0 ? 'var(--color-negative, #e03131)' : 'var(--color-accent)';
+  return (
+    <div className="flex w-full items-stretch justify-between gap-3 rounded-2xl bg-[var(--color-bg-hover)] px-4 py-3">
+      <div className="flex min-w-0 flex-col items-start gap-0.5"
+        title="Рублёвый кошелёк: денежные бонусы; можно обменять на MLT или вывести в ЗП">
+        <span className="text-[11px] font-semibold text-[var(--color-text-muted)]">Рублёвый счёт</span>
+        <span className="text-xl font-extrabold tabular-nums" style={{ color: rubColor }}>
+          {rub.toLocaleString('ru-RU')} <span className="text-sm font-semibold text-[var(--color-text-muted)]">₽</span>
+        </span>
+      </div>
+      <div className="w-px shrink-0 self-stretch bg-[var(--color-border)]" />
+      <div className="flex min-w-0 flex-col items-end gap-0.5">
+        <span className="text-[11px] font-semibold text-[var(--color-text-muted)]">Баланс {currencyName}</span>
+        <span className="flex items-baseline gap-1.5">
+          <MltCoin variant="full" size={22} title={currencyName} />
+          <span className="text-xl font-extrabold tabular-nums" style={{ color: mltColor }}>{mlt.toLocaleString('ru-RU')}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // Плашка TTL MLT (31.07): «сгорит N через X дней» — живые FIFO-остатки
 // начислений, чей срок жизни (ttl_months из настроек) выходит в ближайшие 30 дней.
 function ExpiringPill({ expiring, currencyName }: {
@@ -469,13 +498,25 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
     ? Math.round((month.salesAmount / month.planSales) * 100) : null;
 
   return (
-    <div className="flex flex-col gap-4 sm:gap-5">
-      {/* Сводка: кто + стаж + баланс + место в рейтинге */}
+    <>
+    {/* Раскладка по макету Glass2 (ui_kits/monolitika/profile.html): ЦЕНТРИРОВАННАЯ
+        сетка 380px + 1fr, а не растяжка на всю ширину. Прежнее «ширина резиновая,
+        без max-w» было правкой владельца от 10.07 — 04.08 он её ОТМЕНИЛ («это
+        уебищно, делать надо красиво»), поэтому здесь max-w + mx-auto.
+        lg: — две колонки; ниже (планшет/телефон) колонки складываются в одну,
+        порядок сохраняется: личность → рейтинг → месяц → уровень → награды.
+        minmax(0,1fr) у правой колонки обязателен: без него широкий контент внутри
+        (таблицы наград, длинные имена классов XP) распирал бы сетку вместо
+        переноса/скролла — тот же класс бага, что чинили в задаче 2779. */}
+    <div className="mx-auto grid w-full max-w-[1360px] items-start gap-4 sm:gap-5 lg:grid-cols-[380px_minmax(0,1fr)]">
+
+      {/* ══ ЛЕВАЯ КОЛОНКА: кто это ══ */}
+      <div className="flex min-w-0 flex-col gap-4 sm:gap-5">
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-5">
-        <div className="flex items-center gap-4 flex-wrap">
-          <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={72} />
-          <div className="min-w-0 flex-1">
-            <h2 className="text-xl font-extrabold text-[var(--color-text)] truncate">
+        <div className="flex flex-col items-center gap-3.5 text-center">
+          <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={220} shape="rounded" />
+          <div className="min-w-0 w-full">
+            <h2 className="text-2xl font-extrabold leading-tight text-[var(--color-text)]">
               {card?.profile.name ?? '…'}
               {extra?.xp && extra.xp.level > 0 && (
                 <span className="ml-2 align-middle inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-[11px] font-bold text-[var(--color-accent)]"
@@ -484,7 +525,7 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
                 </span>
               )}
             </h2>
-            <div className="mt-1 text-[13px] text-[var(--color-text-muted)] flex items-center gap-2 flex-wrap">
+            <div className="mt-1.5 text-[13px] text-[var(--color-text-muted)] flex items-center justify-center gap-2 flex-wrap">
               {card?.profile.department && <span>{card.profile.department}</span>}
               {card?.profile.department && card?.profile.branch && <span>·</span>}
               {card?.profile.branch && <span>{card.profile.branch}</span>}
@@ -507,15 +548,18 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
               w-full на мобильном заставляет блок занять всю строку целиком —
               с flex-wrap на родителе это и есть перенос на новую строку; с sm —
               прежнее поведение (нерастяжимая группа справа). */}
-          <div className="flex flex-col items-end gap-2 w-full sm:w-auto sm:shrink-0">
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              {/* Рублёвый баланс — теперь ВСЕГДА виден, включая 0 (правка
-                  владельца 02.08: «не вижу рублевого счета вообще. Если 0
-                  пусть будет 0» — раньше плашка пряталась целиком при
-                  balance===0, из-за чего казалось, что кошелька нет вовсе). */}
-              <RubPill balance={extra?.rubBalance ?? 0} big />
-              <BalancePill balance={shelfData?.balance ?? 0} currencyName={shelfData?.currencyName ?? 'MLT'} big />
-            </div>
+          <div className="flex w-full flex-col items-center gap-2.5">
+            {/* Деньги — «сункен»-строка из макета: две половины с подписями и
+                разделителем, вместо двух пилюль. Рублёвый баланс виден ВСЕГДА,
+                включая 0 (правка владельца 02.08: «если 0 пусть будет 0» —
+                раньше плашка пряталась целиком при balance===0, и казалось, что
+                кошелька нет вовсе). Пилюли RubPill/BalancePill не удалены — они
+                по-прежнему используются в кошельке, магазине и инвентаре. */}
+            <MoneyRow
+              rub={extra?.rubBalance ?? 0}
+              mlt={shelfData?.balance ?? 0}
+              currencyName={shelfData?.currencyName ?? 'MLT'}
+            />
             <ExpiringPill expiring={extra?.expiring} currencyName={shelfData?.currencyName ?? 'MLT'} />
             {manualCtx?.canManual && (
               <div className="flex gap-2">
@@ -549,24 +593,71 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
             onDone={afterManual}
           />
         )}
-        {/* Место в рейтинге — те же ранги, что в hero «Статистики» (общий запрос карточки) */}
-        {(card?.ranks?.length ?? 0) > 0 && (
-          <div className="mt-4 pt-3 border-t border-[var(--color-border)] flex items-center gap-4 flex-wrap">
+      </section>
+
+      {/* Место в рейтинге — отдельная карточка чипами (макет: лесенка отдел →
+          департамент → филиал → страна под карточкой личности, а не строкой). */}
+      {(card?.ranks?.length ?? 0) > 0 && (
+        <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+          <div className="mb-2.5 flex items-baseline justify-between gap-3">
             <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Место в рейтинге</span>
-            {card!.ranks!.map(r => (
-              <span key={r.key} className="text-[13px] whitespace-nowrap">
-                <b className="text-[var(--color-accent)]">{r.rank ? `#${r.rank}` : '—'}</b>
-                <span className="text-[var(--color-text-muted)]"> из {r.size} {r.label}</span>
-              </span>
-            ))}
             {card?.rating.value != null && (
               <span className="text-[13px] whitespace-nowrap">
                 <span className="text-[var(--color-text-muted)]">рейтинг </span>
-                <b className="text-[var(--color-text)]">{card.rating.value.toFixed(1)}</b>
+                <b className="text-[var(--color-text)] tabular-nums">{card.rating.value.toFixed(1)}</b>
               </span>
             )}
           </div>
-        )}
+          <div className="flex flex-col gap-2">
+            {card!.ranks!.map(r => (
+              <span key={r.key}
+                className="inline-flex items-baseline gap-1.5 self-start rounded-full bg-[var(--color-accent-soft)] px-3.5 py-1.5 text-[13px] tabular-nums">
+                <b className="font-bold text-[var(--color-accent)]">{r.rank ? `#${r.rank}` : '—'}</b>
+                <span className="text-[var(--color-text-muted)]">из {r.size} {r.label}</span>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+      </div>
+
+      {/* ══ ПРАВАЯ КОЛОНКА: цифры ══ */}
+      <div className="flex min-w-0 flex-col gap-4 sm:gap-5">
+
+      {/* Ключевые цифры текущего месяца (тот же plan-fact, что «Статистика») */}
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+        <div className="mb-3 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Текущий месяц{month ? ` · с ${month.fromStr.split('-').reverse().slice(0, 2).join('.')}` : ''}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+            <div className="text-[11px] text-[var(--color-text-muted)]">Продажи</div>
+            <div className="text-xl font-extrabold text-[var(--color-text)] whitespace-nowrap">{fmtMoney(month?.salesAmount)}</div>
+            {month?.planSales != null && month.planSales > 0 && (
+              <div className="mt-1">
+                <div className="text-[11px] text-[var(--color-text-muted)]">план {fmtMoney(month.planSales)}{planPct !== null ? ` · ${planPct}%` : ''}</div>
+                <div className="h-1.5 mt-1 rounded-full bg-[var(--color-border)] overflow-hidden">
+                  <div className="h-full rounded-full" style={{
+                    width: `${Math.min(100, (month.salesAmount / month.planSales) * 100)}%`,
+                    backgroundColor: month.salesAmount >= month.planSales ? 'var(--color-positive, #2f9e44)' : 'var(--color-accent)',
+                  }} />
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+            <div className="text-[11px] text-[var(--color-text-muted)]">Кол-во продаж</div>
+            <div className="text-xl font-extrabold text-[var(--color-text)]">{month?.salesCount ?? '—'}</div>
+          </div>
+          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+            <div className="text-[11px] text-[var(--color-text-muted)]">Отгружено</div>
+            <div className="text-xl font-extrabold text-[var(--color-text)] whitespace-nowrap">{fmtMoney(month?.shipmentsAmount)}</div>
+          </div>
+          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+            <div className="text-[11px] text-[var(--color-text-muted)]">Брони</div>
+            <div className="text-xl font-extrabold text-[var(--color-text)]">{month?.reservationsCount ?? '—'}</div>
+          </div>
+        </div>
       </section>
 
       {/* XP: уровень, полоса до следующего уровня, классы (01.08, миграция 124) */}
@@ -613,42 +704,6 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
         </section>
       )}
 
-      {/* Ключевые цифры текущего месяца (тот же plan-fact, что «Статистика») */}
-      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
-        <div className="mb-3 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-          Текущий месяц{month ? ` · с ${month.fromStr.split('-').reverse().slice(0, 2).join('.')}` : ''}
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
-            <div className="text-[11px] text-[var(--color-text-muted)]">Продажи</div>
-            <div className="text-xl font-extrabold text-[var(--color-text)] whitespace-nowrap">{fmtMoney(month?.salesAmount)}</div>
-            {month?.planSales != null && month.planSales > 0 && (
-              <div className="mt-1">
-                <div className="text-[11px] text-[var(--color-text-muted)]">план {fmtMoney(month.planSales)}{planPct !== null ? ` · ${planPct}%` : ''}</div>
-                <div className="h-1.5 mt-1 rounded-full bg-[var(--color-border)] overflow-hidden">
-                  <div className="h-full rounded-full" style={{
-                    width: `${Math.min(100, (month.salesAmount / month.planSales) * 100)}%`,
-                    backgroundColor: month.salesAmount >= month.planSales ? 'var(--color-positive, #2f9e44)' : 'var(--color-accent)',
-                  }} />
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
-            <div className="text-[11px] text-[var(--color-text-muted)]">Кол-во продаж</div>
-            <div className="text-xl font-extrabold text-[var(--color-text)]">{month?.salesCount ?? '—'}</div>
-          </div>
-          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
-            <div className="text-[11px] text-[var(--color-text-muted)]">Отгружено</div>
-            <div className="text-xl font-extrabold text-[var(--color-text)] whitespace-nowrap">{fmtMoney(month?.shipmentsAmount)}</div>
-          </div>
-          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
-            <div className="text-[11px] text-[var(--color-text-muted)]">Брони</div>
-            <div className="text-xl font-extrabold text-[var(--color-text)]">{month?.reservationsCount ?? '—'}</div>
-          </div>
-        </div>
-      </section>
-
       {/* Последние награды */}
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
         <div className="mb-3 flex items-baseline justify-between gap-3">
@@ -659,15 +714,20 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
             </button>
           )}
         </div>
+        {/* Сетка наград — 2 в ряд, как в макете (было 4): в правой колонке сетки
+            380+1fr четыре карточки сжимались до ~90px и обрезали названия наград
+            на первом слове. */}
         {recent.length === 0 ? (
           <div className="text-sm text-[var(--color-text-muted)]">Наград пока нет — всё впереди!</div>
         ) : (
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
             {recent.map(item => <BadgeCard key={item.key} item={item} />)}
           </div>
         )}
       </section>
+      </div>
     </div>
+    </>
   );
 }
 
