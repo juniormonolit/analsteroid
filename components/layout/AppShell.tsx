@@ -730,7 +730,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             ручка по центру кромки, hover-reveal: на десктопе появляется при
             наведении на сайдбар, на таче видна всегда — правило CLAUDE.md №5). */}
         <aside
-          className="group relative hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] border-r border-[var(--color-sidebar-border)] transition-all duration-200"
+          className="group relative hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] border-r border-[var(--color-sidebar-border)] transition-all duration-200 [backdrop-filter:var(--glass-blur)]"
           style={{ width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED }}
         >
           <button
@@ -791,7 +791,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
         {mobileOpen && (
           <div className="fixed inset-0 z-50 md:hidden">
             <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
-            <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-[0_0_24px_rgba(0,0,0,0.12)]">
+            <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-[0_0_24px_rgba(0,0,0,0.12)] [backdrop-filter:var(--glass-blur)]">
               {/* Тот же двухрядный header, что у десктопного сайдбара — тумблер
                   Лайт/Про убран и здесь (правка Иосифа 16.07, остался в ЛК). */}
               <div className="flex flex-col border-b border-[var(--color-sidebar-border)] shrink-0">
@@ -823,7 +823,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           {/* Mobile topbar — гамбургер убран (задача 2764): его роль теперь
               у «Ещё» в нижнем таб-баре (BottomTabBar ниже), два разных
               контрола на одно и то же действие — лишний хром на 375px. */}
-          <div className="md:hidden flex items-center gap-1.5 h-12 px-3 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0">
+          <div className="md:hidden flex items-center gap-1.5 h-12 px-3 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0 [backdrop-filter:var(--glass-blur)]">
             <Link href="/home" className="flex items-center gap-1.5 min-w-0" title="На главную">
               <BrandLogo size={20} className="shrink-0" />
               <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>

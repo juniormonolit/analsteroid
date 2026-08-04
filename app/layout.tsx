@@ -47,19 +47,22 @@ export const viewport: Viewport = {
   ],
 };
 
-// Анти-вспышка тёмной темы (владелец утвердил макет, задача Николая): читает зеркало
-// localStorage.theme и ставит data-theme НА <html> ДО первой отрисовки — обычный
-// inline-script в <head>, выполняется синхронно раньше React/гидратации, поэтому нет
-// «моргания» светлым перед перекраской. Работает и на /login (неавторизован, но
-// зеркало в localStorage уже могло остаться от предыдущей сессии — п.4 брифа
-// «Логин-страница тоже темнеет при тёмной, если тема известна из localStorage»).
-// Дефолт (нет записи/ошибка) — светлая, атрибут не ставится вовсе.
+// Анти-вспышка темы (владелец утвердил макет, задача Николая; расширено до трёх тем —
+// light/dark/mono, задача 2999): читает зеркало localStorage.theme и ставит data-theme
+// НА <html> ДО первой отрисовки — обычный inline-script в <head>, выполняется синхронно
+// раньше React/гидратации, поэтому нет «моргания» светлым перед перекраской. Работает и
+// на /login (неавторизован, но зеркало в localStorage уже могло остаться от предыдущей
+// сессии — п.4 брифа «Логин-страница тоже темнеет при тёмной, если тема известна из
+// localStorage»). Дефолт (нет записи/невалидное значение/ошибка) — 'light', атрибут
+// всё равно ставится явно (см. комментарий в lib/hooks/useTheme.ts — 'light' больше не
+// «атрибут не ставится», т.к. mono и light должны различаться одним и тем же способом).
 const THEME_ANTI_FLASH_SCRIPT = `
 try {
-  if (localStorage.getItem('theme') === 'dark') {
-    document.documentElement.setAttribute('data-theme', 'dark');
-  }
-} catch (e) {}
+  var t = localStorage.getItem('theme');
+  document.documentElement.setAttribute('data-theme', ['light','dark','mono'].indexOf(t) !== -1 ? t : 'light');
+} catch (e) {
+  document.documentElement.setAttribute('data-theme', 'light');
+}
 `;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -1,0 +1,26 @@
+:root{
+--shadow-none:none;
+/* Liquid glass: верхний блик (inset) + мягкая синеватая тень */
+--shadow-card:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 .5px rgba(255,255,255,.35),0 8px 24px rgba(0,53,99,.08);
+--shadow-hover:inset 0 1px 0 rgba(255,255,255,.9),0 16px 40px rgba(0,53,99,.14);
+--shadow-modal:inset 0 1px 0 rgba(255,255,255,.85),0 24px 64px rgba(0,26,52,.28);
+--shadow-toast:inset 0 1px 0 rgba(255,255,255,.85),0 12px 32px rgba(0,26,52,.18);
+--focus-ring:0 0 0 3px var(--blue-100);
+/* Стеклянный флэт */
+--glass-blur:blur(28px) saturate(1.6);/* @kind other */
+--glass-border:rgba(255,255,255,.72);/* @kind color */
+--glass-side:rgba(255,255,255,.55);/* @kind color */
+--grad-brand:linear-gradient(135deg,#2B8DE0 0%,#1B7FD4 45%,#005CA9 100%);/* @kind color */
+/* Единый стандарт анимаций из кодовой базы («как у Эпл», DESIGN_GUIDELINES.md):
+   панели/шторки/появления — ТОЛЬКО --anim-duration/--anim-ease; ховеры остаются быстрыми */
+--anim-duration:280ms;/* @kind other */
+--anim-ease:cubic-bezier(0.32,0.72,0,1);/* @kind other */
+--transition-fast:120ms ease;/* @kind other */
+--transition-normal:200ms ease;/* @kind other */
+/* Геймификация — управляемое исключение */
+--grad-gacha:linear-gradient(135deg,#1B7FD4 0%,#005CA9 55%,#003563 100%);/* @kind color */
+--grad-gold:linear-gradient(135deg,#E8C15A 0%,#D4A017 60%,#A87D0E 100%);/* @kind color */
+--grad-platinum:linear-gradient(135deg,#A8C6E8 0%,#7DA7D9 60%,#5B84B5 100%);/* @kind color */
+--glow-rare:0 0 16px rgba(27,127,212,.45);
+--glow-gold:0 0 16px rgba(212,160,23,.5);
+}

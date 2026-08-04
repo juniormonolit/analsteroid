@@ -2,13 +2,17 @@
 import { useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-export type Theme = 'light' | 'dark';
+export type Theme = 'light' | 'dark' | 'mono';
 const STORAGE_KEY = 'theme';
+export const THEME_ORDER: Theme[] = ['light', 'dark', 'mono'];
+export const THEME_LABEL: Record<Theme, string> = { light: 'Светлая', dark: 'Тёмная', mono: 'Моно' };
 
-// Тёмная тема (задача Николая, макет owners-inbox/analsteroid-dark-theme-mock.html):
-// серверное состояние per-user (users.theme), общий queryKey ['theme'] — тот же
-// паттерн, что useTableScale/useUiMode. Переключатель — в ProfilePage, рядом с
-// «Масштаб таблиц».
+// Тёмная тема (задача Николая, макет owners-inbox/analsteroid-dark-theme-mock.html),
+// расширено до трёх тем (задача 2999, дизайн-система «Монолитика Glass» — light/dark/mono,
+// mono сворачивает палитру графиков в серую, но статусы/тиры остаются цветными, см.
+// tokens/theme-mono.css): серверное состояние per-user (users.theme), общий queryKey
+// ['theme'] — тот же паттерн, что useTableScale/useUiMode. Переключатель — в ProfilePage,
+// рядом с «Масштаб таблиц».
 //
 // Анти-вспышка: инлайн-скрипт в app/layout.tsx применяет data-theme из зеркала
 // localStorage.theme ДО первой отрисовки (страница логина в т.ч. — она не может
@@ -18,8 +22,12 @@ const STORAGE_KEY = 'theme';
 // переключении в ЛК.
 function applyTheme(theme: Theme) {
   if (typeof document === 'undefined') return;
-  if (theme === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-  else document.documentElement.removeAttribute('data-theme');
+  // data-theme ставится ЯВНО для всех трёх значений (в т.ч. 'light') — раньше при
+  // light атрибут просто снимался, т.к. :root-дефолты и так были светлыми; теперь
+  // третье значение 'mono' обязано перекрыть те же токены, поэтому атрибут нужен
+  // всегда одним и тем же способом (см. tokens/theme-light.css — есть и явный
+  // [data-theme="light"] блок для симметрии).
+  document.documentElement.setAttribute('data-theme', theme);
   try { localStorage.setItem(STORAGE_KEY, theme); } catch { /* приватный режим и т.п. — не критично */ }
 }
 
@@ -52,5 +60,10 @@ export function useTheme() {
     qc.invalidateQueries({ queryKey: ['theme'] });
   }
 
-  return { theme, setTheme };
+  function cycleTheme() {
+    const next = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length];
+    setTheme(next);
+  }
+
+  return { theme, setTheme, cycleTheme };
 }

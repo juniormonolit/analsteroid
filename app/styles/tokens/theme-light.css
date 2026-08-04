@@ -1,0 +1,29 @@
+/* Явная светлая тема: те же значения, что в :root, но под селектором [data-theme="light"].
+   Нужна, чтобы светлую панель можно было принудительно задать на контейнере (галереи
+   примеров) и чтобы внешний data-theme на <html> не «перекрашивал» её. */
+[data-theme="light"]{
+--gray-50:#F6F8FA;--gray-100:#EEF1F5;--gray-200:#E5E9EF;--gray-300:#D2D9E0;--gray-400:#9AA5B1;--gray-500:#6B7280;--gray-600:#4B5563;--gray-700:#374151;--gray-800:#1F2937;--gray-900:#1A202C;
+--blue-50:#EDF5FC;--blue-100:#D7E9F8;--blue-200:#AFD3F1;
+--surface-app:#EAF2FA;--surface-card:rgba(255,255,255,.68);--surface-sunken:rgba(13,59,102,.07);--surface-selected:rgba(27,127,212,.14);--bg-app:linear-gradient(165deg,#F5F9FD 0%,#E4EEF9 45%,#CFE3F6 100%);/* @kind color */
+--border-default:#E5E9EF;--border-strong:#D2D9E0;--border-focus:#1B7FD4;
+--text-primary:#1A202C;--text-secondary:#6B7280;--text-tertiary:#9AA5B1;--text-on-brand:#FFFFFF;--text-link:#1B7FD4;--text-brand:#005CA9;
+--text-on-app:#123B60;--text-on-app-secondary:rgba(18,59,96,.62);
+--brand:#005CA9;--interactive:#1B7FD4;--interactive-hover:#0069BE;--interactive-active:#005CA9;
+--success:#34A853;--success-bg:#E6F4EA;--success-text:#1E8E3E;
+--danger:#EA4335;--danger-bg:#FCE8E6;--danger-text:#D93025;
+--warning:#FBBC04;--warning-bg:#FEF7E0;--warning-text:#B26000;
+--info:#4285F4;--info-bg:#E8F0FE;--info-text:#1967D2;
+--chart-1:#4285F4;--chart-2:#EA4335;--chart-3:#FBBC04;--chart-4:#34A853;--chart-5:#FF6D01;--chart-6:#46BDC6;
+--quest-white:#9ca3af;--quest-green:#2f9e44;--quest-blue:#1c7ed6;--quest-epic:#9c36b5;--quest-legendary:#e8590c;
+--tier-bronze:#B08D57;--tier-silver:#9AA5B1;--tier-gold:#D4A017;--tier-platinum:#7DA7D9;
+--grad-gacha:linear-gradient(135deg,#1B7FD4 0%,#005CA9 55%,#003563 100%);/* @kind color */
+--grad-gold:linear-gradient(135deg,#E8C15A 0%,#D4A017 60%,#A87D0E 100%);/* @kind color */
+--grad-platinum:linear-gradient(135deg,#A8C6E8 0%,#7DA7D9 60%,#5B84B5 100%);/* @kind color */
+--glow-rare:0 0 16px rgba(27,127,212,.45);--glow-gold:0 0 16px rgba(212,160,23,.5);
+--shadow-card:inset 0 1px 0 rgba(255,255,255,.85),inset 0 0 0 .5px rgba(255,255,255,.35),0 8px 24px rgba(0,53,99,.08);
+--shadow-hover:inset 0 1px 0 rgba(255,255,255,.9),0 16px 40px rgba(0,53,99,.14);
+--shadow-modal:inset 0 1px 0 rgba(255,255,255,.85),0 24px 64px rgba(0,26,52,.28);
+--shadow-toast:inset 0 1px 0 rgba(255,255,255,.85),0 12px 32px rgba(0,26,52,.18);
+--focus-ring:0 0 0 3px #D7E9F8;
+--glass-border:rgba(255,255,255,.72);--glass-side:rgba(255,255,255,.55);
+}

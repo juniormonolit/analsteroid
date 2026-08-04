@@ -1,127 +1,103 @@
+/* Google Fonts — Inter (кириллица подхватывается автоматически CSS2-API по
+   unicode-range, отдельный subset указывать не нужно). ДОЛЖЕН быть самой первой
+   строкой файла — правило CSS: @import обязаны идти раньше любых других правил. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
+/* ===================================================================
+   Дизайн-система «Монолитика Glass» (задача 2999, пакет
+   team-inbox/monolitika-glass/, автор — Серёга/владелец приложения).
+   Токены копия 1:1 из tokens/*.css пакета — переопределять номерные/семантические
+   значения тут не нужно, править в самих файлах ниже при следующем обновлении
+   дизайн-системы. Порядок импорта — как в styles.css пакета.
+   =================================================================== */
+@import "./styles/tokens/colors.css";
+@import "./styles/tokens/typography.css";
+@import "./styles/tokens/spacing.css";
+@import "./styles/tokens/effects.css";
+@import "./styles/tokens/theme-light.css";
+@import "./styles/tokens/theme-dark.css";
+@import "./styles/tokens/theme-mono.css";
+
 @theme inline {
-  --color-bg: #f8f9fa;
-  --color-bg-surface: #ffffff;
-  --color-bg-hover: #f1f3f5;
-  --color-border: #e9ecef;
-  --color-border-focus: #228be6;
-  --color-text: #212529;
-  --color-text-muted: #5f6b76; /* было #868e96 (3.15:1) — контраст к --color-bg #f8f9fa не проходил WCAG AA;
-     #5f6b76 даёт 5.17:1 (задача 1694, кейс 8А UI/UX-аудита). Тёмная тема ниже переопределяет
-     --color-text-muted отдельно (#9aa1ad) — этой правкой не затронута. */
-  --color-text-inverse: #ffffff;
-  --color-accent: #228be6;
-  --color-accent-hover: #1c7ed6;
-  --color-accent-soft: #e7f1fb; /* opaque equivalent of accent/10 — for sticky cells */
-  --color-border-strong: #adb5bd; /* group separators */
-  --color-positive: #2f9e44;
-  --color-negative: #e03131;
-  --color-sidebar-bg: #ffffff;
+  /* ---- Алиасы на токены дизайн-системы (задача 2999) ----
+     Ключи ниже — старые имена, на которые уже завязан ВЕСЬ существующий Tailwind-код
+     приложения (`bg-[var(--color-bg)]` и т.п., 187+ мест). Меняем только ПРАВУЮ часть —
+     теперь она указывает на токены Монолитики Glass (colors.css/theme-*.css выше), которые
+     сами переопределяются под [data-theme="dark"]/[data-theme="mono"]. Это и есть механизм
+     «весь существующий код перекрасится сам» из readme пакета: раз --color-bg — это
+     var(--surface-app), а --surface-app меняется по теме, то и --color-bg меняется по теме
+     без единой правки в компонентах. */
+  --color-bg: var(--surface-app);
+  --color-bg-surface: var(--surface-card);
+  --color-bg-hover: var(--gray-100);
+  --color-border: var(--border-default);
+  --color-border-focus: var(--border-focus);
+  --color-text: var(--text-primary);
+  --color-text-muted: var(--text-secondary);
+  --color-text-inverse: var(--text-on-brand);
+  --color-accent: var(--interactive);
+  --color-accent-hover: var(--interactive-hover);
+  --color-accent-soft: var(--surface-selected);
+  --color-border-strong: var(--border-strong);
+  --color-positive: var(--success);
+  --color-negative: var(--danger);
+  --color-sidebar-bg: var(--glass-side);
   --color-sidebar-border: var(--color-border);
   --color-sidebar-text: var(--color-text);
   --color-sidebar-text-muted: var(--color-text-muted);
   --color-sidebar-hover-bg: var(--color-bg-hover);
   --color-sidebar-active: var(--color-accent);
   --color-sidebar-active-bg: var(--color-accent-soft);
-  --color-sidebar-guide: #dee2e6; /* направляющая вложенности — на полтона темнее --color-border */
-  --color-table-header: #fbfcfd; /* почти белая шапка — спокойный премиальный вид */
-  --color-totals-bg: #d0e4fb;    /* итоговая строка: заметная светло-синяя плашка (не инверсия) */
-  --color-table-row-hover: #dbe7fa; /* GS blue #4a86e8, подмес 0.8 — вариант C табл. отчёта (owners-inbox/table-colors-brief.md), общий токен для всех таблиц */
-  --color-table-stripe: #f6f7f9;    /* gentle zebra on white rows (not = bg) — зебра других таблиц (ComparisonPanel/DrilldownDrawer/settings), НЕ меняем */
-  --color-table-row-border: #efefef; /* GS grayscale — тонкий разделитель строк в таблице отчёта (без зебры), только ReportTable.tsx */
-  --color-report-zebra: #f8f9fa; /* «Зебра» ReportTable (правка владельца 09.07, opt-in в «Вид», по умолчанию выкл) — палитра варианта C; НЕ путать с --color-table-stripe (другие таблицы) */
+  --color-sidebar-guide: var(--border-strong);
+  --color-table-header: var(--gray-50);
+  --color-totals-bg: var(--blue-100);
+  --color-table-row-hover: var(--blue-50);
+  --color-table-stripe: var(--gray-50);
+  --color-table-row-border: var(--gray-100);
+  --color-report-zebra: var(--gray-50);
 
-  /* Токены, которых не было в @theme (использовались только через var(...,fallback) в
-     коде или не были заданы вовсе) — заводим здесь явно теми же значениями, чтобы
-     тёмная тема могла их переопределить (см. блок [data-theme="dark"] ниже). Светлая
-     тема визуально не меняется — значения совпадают с прежними fallback/дефолтами. */
-  --color-text-secondary: var(--color-text-muted); /* алиас — working-calendar, был не определён вовсе */
-  --color-warning: #f59e0b;  /* было только var(--color-warning,#f59e0b) в SaveReportModal */
-  --color-error: #dc2626;    /* было только var(--color-error,#dc2626) в SaveReportModal */
+  --color-text-secondary: var(--text-secondary);
+  --color-warning: var(--warning);
+  --color-error: var(--danger);
 
-  /* Тёмная тема (owners-inbox/analsteroid-dark-theme-mock.html, утверждённый макет) —
-     цифры/бейджи таблицы отчёта используют color-mix(), поэтому база подмеса и текст
-     значения тоже вынесены в токены (см. ReportTable.tsx/DrilldownDrawer.tsx):
-       --color-num             — цвет «голых» и подсвеченных числовых значений (было
-                                  хардкод text-[#000] в нескольких местах)
-       --color-mix-base        — база color-mix() для лёгких тинтов (white в светлой)
-       --color-highlight-pct   — доля подмеса hlColor в HlValue/бейдже стадии (68% даёт
-                                  светлый пастель на белой базе; та же доля на тёмной
-                                  базе давала бы слишком яркий/непастельный результат —
-                                  в тёмной теме доля меньше, см. переопределение) */
-  --color-num: #000;
-  --color-mix-base: #fff;
+  /* Цифры таблицы отчёта / heatmap-подмес (ReportTable.tsx, DrilldownDrawer.tsx) —
+     механизм специфичен для ЭТОГО приложения, в пакете дизайн-системы аналога нет.
+     --color-highlight-pct переопределяется ниже под [data-theme="dark"/"mono"]
+     (тот же приём, что был в прежнем :root[data-theme="dark"] блоке). */
+  --color-num: var(--text-primary);
+  --color-mix-base: var(--surface-app);
   --color-highlight-pct: 68%;
-  --color-negative-soft: #fcebeb; /* hover-фон опасных кнопок (удалить) — было хардкод в AppShell.tsx */
+  --color-negative-soft: var(--danger-bg);
 
   /* «Топ-1» карточка менеджера (DeptRosterGrid) — золотая рамка/бейдж лидера */
-  --color-top1-border: #e8c974;
-  --color-top1-glow: #fbf3dd33;
-  --color-top1-bg: #fbf3dd;
-  --color-top1-text: #a3781f;
+  --color-top1-border: var(--tier-gold);
+  --color-top1-glow: color-mix(in srgb, var(--tier-gold) 20%, transparent);
+  --color-top1-bg: color-mix(in srgb, var(--tier-gold) 12%, var(--surface-card));
+  --color-top1-text: var(--warning-text);
 
-  /* Обводка свотча в GsColorPicker — тёмная, чтобы светлые тона не терялись на
-     светлом фоне попапа; в тёмной теме должна стать светлой (иначе тёмные свотчи
-     сливаются с тёмным фоном попапа, границы не видно вовсе). */
-  --color-swatch-border: rgba(15, 23, 42, .16);
+  --color-swatch-border: var(--border-strong);
 
-  /* Тултип свёрнутой рельсы сайдбара (задача 1688, кейс 6 UI/UX-аудита) — тёмный
-     бабл независимо от темы (как в утверждённом макете case6-sidebar-variant-b-
-     rail-tooltip.png); в тёмной теме берём on-чуть светлее --color-sidebar-bg,
-     чтобы бабл не сливался с фоном сайдбара. */
+  /* Тултип рельсы сайдбара — намеренно вне темы (тёмный бабл на любом фоне, как
+     было исторически, дизайн-система такой токен не описывает). */
   --color-tooltip-bg: #1a1d23;
   --color-tooltip-text: #ffffff;
+
+  /* ---- Тени: перекрашиваем ВЕСЬ существующий shadow-sm/md/lg/xl/2xl (58+ мест)
+     в мягкие синеватые «liquid glass» тени пакета (effects.css --shadow-card/
+     -hover/-modal) без единой правки в компонентах — тот же приём алиасов. ---- */
+  --shadow-sm: var(--shadow-card);
+  --shadow-md: var(--shadow-card);
+  --shadow-lg: var(--shadow-hover);
+  --shadow-xl: var(--shadow-modal);
+  --shadow-2xl: var(--shadow-modal);
 }
 
-:root[data-theme="dark"] {
-  --color-bg: #14161b;
-  --color-bg-surface: #212530;      /* карточка/панель/модалка/таблица-контейнер */
-  --color-bg-hover: #262b38;        /* «второй слой карточки» из макета — hover/инпуты внутри карточек */
-  --color-border: #2c313c;
-  --color-border-focus: #3b82f6;
-  --color-border-strong: #3a4152;
-  --color-text: #e6e8ec;
-  --color-text-muted: #9aa1ad;
-  --color-text-secondary: #9aa1ad;
-  --color-text-inverse: #eaf1ff;
-  --color-accent: #3b82f6;
-  --color-accent-hover: #5b9dff;
-  --color-accent-soft: #1c2c46;
-  --color-positive: #7fd9a8;
-  --color-negative: #f0a3ab;
-  --color-warning: #eece8a;
-  --color-error: #f0a3ab;
-
-  --color-sidebar-bg: #1a1d23;      /* поверхность (сайдбар/шапка) из макета */
-  /* --color-sidebar-border/text/text-muted/hover-bg/active/active-bg — уже алиасы на
-     --color-border/--color-text/--color-text-muted/--color-bg-hover/--color-accent/
-     --color-accent-soft выше, переопределять их отдельно не нужно */
-  --color-sidebar-guide: #23272f;
-
-  --color-table-header: #1a1d23;    /* та же «поверхность», что и сайдбар — на ступень темнее карточки */
-  --color-totals-bg: #1f2f4d;
-  --color-table-row-hover: #1e2a45;
-  --color-table-stripe: #262b38;
-  --color-table-row-border: #23272f;
-  --color-report-zebra: #14161b;    /* = --color-bg, тот же приём, что в светлой теме */
-
-  --color-num: #e6e8ec;
-  --color-mix-base: #212530;        /* карточка/панель — вместо white */
-  --color-highlight-pct: 32%;       /* приглушённый пастель на тёмной базе (см. комментарий в :root) */
-  --color-negative-soft: #3a2024;   /* негатив bg из макета */
-
-  --color-top1-border: #d9a441;    /* стадии приглушённые — жёлтый, из макета */
-  --color-top1-glow: #3a331d80;
-  --color-top1-bg: #3a331d;        /* внимание bg из макета */
-  --color-top1-text: #eece8a;      /* внимание text из макета */
-
-  --color-swatch-border: rgba(255, 255, 255, .18);
-
-  /* Тултип рельсы в тёмной теме — на ступень светлее сайдбара (#1a1d23), иначе
-     бабл сливается с фоном сайдбара и границу не видно. */
-  --color-tooltip-bg: #33394a;
-  --color-tooltip-text: #eaf1ff;
+/* Тёмная/моно тема: единственный токен приложения без аналога в пакете (см. комментарий
+   у --color-highlight-pct выше) — доля пастельного подмеса меньше на тёмной базе. */
+:root[data-theme="dark"],
+:root[data-theme="mono"] {
+  --color-highlight-pct: 32%;
 }
 
 :root {
@@ -135,17 +111,72 @@
      панелей/шторок (быстрый старт, мягкое торможение к концу), а не линейный/
      стандартный CSS ease. Ховеры (transition-colors на кнопках/ссылках,
      .hover-reveal) сюда сознательно НЕ включены и остаются быстрыми — иначе
-     наведение курсора будет ощущаться заторможенным. */
-  --anim-duration: 280ms;
-  --anim-ease: cubic-bezier(0.32, 0.72, 0, 1);
+     наведение курсора будет ощущаться заторможенным. Значения совпадают с
+     --anim-duration/--anim-ease из tokens/effects.css (задача 2999) — не дублируем
+     разные источники истины, эффекты уже импортированы выше. */
 }
 
 * { box-sizing: border-box; }
 
+/* Фон приложения — «liquid glass» (задача 2999): градиент --bg-app (тёмно-синий TDM
+   в тёмной/моно теме, воздушный голубой в светлой) + мягкие амбиент-пятна радиальными
+   градиентами (1:1 из ui_kits/monolitika/index.html пакета). background-attachment:fixed —
+   пятна не едут при скролле страницы, остаются декором позади стеклянных карточек. */
 body {
-  background: var(--color-bg);
+  background: var(--bg-app);
+  background-attachment: fixed;
   color: var(--color-text);
   margin: 0;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: -10%;
+  pointer-events: none;
+  /* Отрицательный z-index (а не 0!) — по CSS stacking order позиционированные
+     потомки с z-index:0 красятся ПОВЕРХ обычного статичного контента (in-flow,
+     non-positioned), а с отрицательным — ПОД ним. У body/html нет своего
+     stacking context (нет position/transform/filter), поэтому это работает
+     глобально без единой правки в компонентах (не нужен аналог #root{z-index:1}
+     из throwaway-демки пакета — там React рендерился в site-wide #root, тут
+     Next.js App Router рендерит children прямо в <body> без обёртки). */
+  z-index: -1;
+  background:
+    radial-gradient(700px 460px at 14% 12%, rgba(127,185,232,.4), transparent 62%),
+    radial-gradient(640px 440px at 86% 24%, rgba(70,189,198,.22), transparent 60%),
+    radial-gradient(760px 560px at 70% 88%, rgba(27,127,212,.28), transparent 65%),
+    radial-gradient(520px 400px at 8% 82%, rgba(185,199,242,.35), transparent 60%);
+}
+[data-theme="dark"] body::before,
+[data-theme="mono"] body::before {
+  background:
+    radial-gradient(700px 480px at 82% 12%, rgba(43,141,224,.16), transparent 60%),
+    radial-gradient(820px 620px at 12% 88%, rgba(146,66,133,.12), transparent 65%);
+}
+
+/* Стеклянная поверхность (задача 2999, tokens/effects.css) — карточкам/панелям, которые
+   явно хотят морозное стекло с блюром. Класс доступен для новых/точечно правленных панелей
+   (уже подключён в AppShell.tsx/BottomTabBar.tsx на сайдбаре/шапке/нижнем таб-баре через
+   Tailwind arbitrary property [backdrop-filter:var(--glass-blur)] — тот же токен).
+   NB: массовую подмену фона/бордера/тени у ВСЕХ карточек (bg-[var(--color-bg-surface)],
+   187+ мест) даёт алиасинг токенов выше — они и так стали полупрозрачными + получили
+   синеватую liquid-glass тень (--shadow-sm/md/lg/xl/2xl). А вот сам backdrop-filter ТУДА
+   массово докинуть через CSS-селектор не вышло: пробовали объявить его для буквального
+   сгенерированного Tailwind-класса `.bg-\[var\(--color-bg-surface\)\]{...}` — Tailwind v4
+   компилирует любой селектор, похожий на его собственный arbitrary-value синтаксис, ЧЕРЕЗ
+   СВОЙ движок и молча вытесняет хендрайтен-правило с тем же селектором (без ошибки сборки,
+   проверено разбором собранного CSS). Добавлять блюр остальным карточкам — только точечно
+   через класс .glass или [backdrop-filter:var(--glass-blur)] в конкретном компоненте. */
+.glass {
+  background: var(--surface-card);
+  /* webkit-префикс ПЕРЕД стандартным свойством (иначе Lightning CSS при сборке молча
+     выпиливает «избыточное» стандартное объявление — проверено сборкой). */
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 
 /* Scrollbar */

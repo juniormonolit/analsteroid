@@ -7,7 +7,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 import { useTableScale, type TableScalePct } from '@/lib/hooks/useTableScale';
-import { useTheme, type Theme } from '@/lib/hooks/useTheme';
+import { useTheme, THEME_LABEL, type Theme } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
 import { ReportsTrashCard } from './ReportsTrashCard';
 import { BotSubscriptionSettings } from './BotSubscriptionSettings';
@@ -263,7 +263,10 @@ export function ProfilePage() {
                   </div>
                 </div>
 
-                {/* Тема оформления (макет утверждён владельцем, дефолт — светлая) */}
+                {/* Тема оформления (макет утверждён владельцем, дефолт — светлая).
+                    Три положения (задача 2999, дизайн-система «Монолитика Glass»):
+                    light/dark/mono — mono сворачивает палитру графиков в серую шкалу,
+                    но статусы и тиры остаются цветными (tokens/theme-mono.css пакета). */}
                 <div className={cardCls}>
                   <div className="flex items-center gap-2 mb-2">
                     <Moon size={15} className="text-[var(--color-text-muted)]" />
@@ -273,7 +276,7 @@ export function ProfilePage() {
                     Применяется сразу и запоминается на этом аккаунте.
                   </p>
                   <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm w-fit">
-                    {(['light', 'dark'] as Theme[]).map(t => (
+                    {(['light', 'dark', 'mono'] as Theme[]).map(t => (
                       <button
                         key={t}
                         onClick={() => setTheme(t)}
@@ -283,7 +286,7 @@ export function ProfilePage() {
                             : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                         }`}
                       >
-                        {t === 'light' ? 'Светлая' : 'Тёмная'}
+                        {THEME_LABEL[t]}
                       </button>
                     ))}
                   </div>

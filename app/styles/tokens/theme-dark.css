@@ -1,0 +1,34 @@
+/* Тёмная тема — по утверждённому макету из кодовой базы (globals.css [data-theme="dark"],
+   owners-inbox/analsteroid-dark-theme-mock.html). Включение: <html data-theme="dark">.
+   Поверхности и приглушённые пастельные статусы — 1:1 из макета; акценты — TDM-синий
+   редизайна, осветлённый для тёмного фона (вместо #3b82f6 старого UI). */
+/* Селектор без :root — тема работает и на <html data-theme>, и на любом контейнере (панели-примеры) */
+[data-theme="dark"]{
+/* Серые: перевёрнутая шкала под тёмные поверхности макета */
+--gray-50:#1d2129;--gray-100:#262b38;--gray-200:#2c313c;--gray-300:#3a4152;--gray-400:#6b7480;--gray-500:#9aa1ad;--gray-600:#b6bcc6;--gray-700:#ccd1d9;--gray-800:#dde0e6;--gray-900:#e6e8ec;
+/* Синие светлые ступени → тёмные тинты (selected/hover-подложки) */
+--blue-50:#1c2c46;--blue-100:#274067;--blue-200:#2f4f80;
+/* Семантические алиасы */
+--surface-app:#0E1A2C;--surface-card:rgba(21,34,56,.6);--surface-sunken:rgba(255,255,255,.05);--surface-selected:rgba(74,156,222,.16);--bg-app:linear-gradient(160deg,#0F2136 0%,#0C1B30 38%,#0A2E56 72%,#003563 100%);
+--border-default:rgba(255,255,255,.09);--border-strong:rgba(255,255,255,.18);--border-focus:#4A9CDE;
+--text-primary:#e6e8ec;--text-secondary:#9aa1ad;--text-tertiary:#6b7480;--text-on-brand:#eaf1ff;--text-link:#6cb2e8;--text-brand:#7FB9E8;
+--brand:#7FB9E8;--interactive:#4A9CDE;--interactive-hover:#6cb2e8;--interactive-active:#7FB9E8;
+/* Статусы — приглушённый пастель на тёмной базе (как в макете: «та же доля подмеса
+   на тёмной базе давала бы слишком яркий результат») */
+--success:#7fd9a8;--success-bg:#1d3227;--success-text:#7fd9a8;
+--danger:#f0a3ab;--danger-bg:#3a2024;--danger-text:#f0a3ab;
+--warning:#eece8a;--warning-bg:#3a331d;--warning-text:#eece8a;
+--info:#8ab8f8;--info-bg:#1c2c46;--info-text:#8ab8f8;
+/* Тени глубже, фокус-кольцо полупрозрачным синим */
+--shadow-card:0 1px 2px rgba(0,0,0,.45);/* переопределено ниже liquid-glass блоком */
+--shadow-hover:0 4px 12px rgba(0,0,0,.5);
+--shadow-modal:0 12px 32px rgba(0,0,0,.6);
+--shadow-toast:0 6px 20px rgba(0,0,0,.55);
+--focus-ring:0 0 0 3px rgba(74,156,222,.35);
+--shadow-card:inset 0 1px 0 rgba(255,255,255,.08),0 8px 24px rgba(0,0,0,.4);
+--shadow-hover:inset 0 1px 0 rgba(255,255,255,.1),0 16px 40px rgba(0,0,0,.5);
+--shadow-modal:inset 0 1px 0 rgba(255,255,255,.08),0 24px 64px rgba(0,0,0,.6);
+--shadow-toast:inset 0 1px 0 rgba(255,255,255,.08),0 12px 32px rgba(0,0,0,.5);
+--glass-border:rgba(255,255,255,.14);--glass-side:rgba(13,24,42,.55);
+--text-on-app:#e6e8ec;--text-on-app-secondary:rgba(230,232,236,.7);
+}
