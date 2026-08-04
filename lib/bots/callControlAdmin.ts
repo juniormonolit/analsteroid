@@ -4,6 +4,17 @@
 
 export const DEAL_URL_PREFIX = 'https://td.monolit-crm.ru/crm/deal/details/';
 
+// Ссылка «открыть личный чат с сотрудником» в Битриксе (тот же портал, что и сделки):
+// /online/?IM_DIALOG=<bitrix user id>. Нужна в эскалациях — руководитель, получивший
+// уведомление, пишет менеджеру в один клик, а не ищет его в мессенджере руками.
+export const MANAGER_CHAT_URL_PREFIX = 'https://td.monolit-crm.ru/online/?IM_DIALOG=';
+
+/** Ссылка на диалог с сотрудником; null, если Bitrix ID неизвестен/не числовой. */
+export function managerChatUrl(bitrixUserId: string | null | undefined): string | null {
+  const id = String(bitrixUserId ?? '').trim();
+  return /^[1-9]\d*$/.test(id) ? `${MANAGER_CHAT_URL_PREFIX}${id}` : null;
+}
+
 export const CALL_CONTROL_RECIPIENTS = ['manager', 'rop', 'department_director', 'company_director', 'fixed'] as const;
 export type CallControlRecipient = (typeof CALL_CONTROL_RECIPIENTS)[number];
 

@@ -19,7 +19,7 @@ import { systemDb, analyticsDb } from '@/lib/db/clients';
 import { sendCallControlBotMessage } from '@/lib/bitrix/notify';
 // DEAL_URL_PREFIX живёт в callControlAdmin (клиент-безопасный модуль): страница
 // отчёта импортирует его в браузерный бандл, а этот файл тянет pg/fs.
-import { DEAL_URL_PREFIX } from '@/lib/bots/callControlAdmin';
+import { DEAL_URL_PREFIX, managerChatUrl } from '@/lib/bots/callControlAdmin';
 
 export { DEAL_URL_PREFIX };
 
@@ -448,6 +448,8 @@ export async function runCallControlCycle(): Promise<string> {
   for (const c of cases) {
     const org = c.manager_bitrix_user_id ? orgByManager.get(c.manager_bitrix_user_id) : undefined;
     const minutesSince = c.last_missed_at ? minutesBetween(c.last_missed_at, now) : 0;
+    // Диалог с менеджером кейса (в кейсе id может быть пустой строкой — см. INSERT выше).
+    const caseManagerChatUrl = managerChatUrl(c.manager_bitrix_user_id);
 
     // Эффективные РОП/директор отдела менеджера: ручное назначение по отделу
     // (миграция 100) имеет приоритет НАД оргструктурой — и для маршрутизации,
@@ -502,8 +504,16 @@ export async function runCallControlCycle(): Promise<string> {
         (kind === 'manager' ? org?.manager_name ?? null : null) ||
         recipientId || '—';
 
+      // Ссылка на диалог с менеджером нужна тому, КОМУ эскалировали (РОП, директор,
+      // собственник, fixed): чтобы написать «возьми трубку» в один клик. Самому
+      // менеджеру ссылка на чат с собой бессмысленна — там '—'.
+      const chatUrlForRecipient =
+        caseManagerChatUrl && kind !== 'manager' && recipientId !== c.manager_bitrix_user_id
+          ? caseManagerChatUrl
+          : null;
+
       const body = templateById.get(rule.template_id as number) ?? '';
-      const message = renderTemplate(body, {
+      let message = renderTemplate(body, {
         manager_name: org?.manager_name ?? c.manager_bitrix_user_id ?? '—',
         department: org?.department_name ?? '—',
         rop_name: effRopName ?? '—',
@@ -514,7 +524,14 @@ export async function runCallControlCycle(): Promise<string> {
         minutes: String(minutesSince),
         case_id: c.id,
         recipient_name: recipientName,
+        manager_chat_url: chatUrlForRecipient ?? '—',
       });
+
+      // Шаблоны кастомные (правятся в админке), поэтому не требуем вручную вставлять
+      // плейсхолдер: если его в шаблоне нет — дописываем ссылку отдельной строкой.
+      if (chatUrlForRecipient && !body.includes('{manager_chat_url}')) {
+        message += `\nНаписать менеджеру: ${chatUrlForRecipient}`;
+      }
 
       // UNIQUE (case_id, rule_id): правило по кейсу срабатывает один раз. Вставка
       // ДО отправки — при гонке двух тиков второй просто не пройдёт по конфликту.
