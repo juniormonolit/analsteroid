@@ -287,7 +287,25 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
     if (lastTabRestoredRef.current === tab) return;
     lastTabRestoredRef.current = tab;
     const node = managerScrollRef.current;
-    if (node) node.scrollTop = tabScrollMemory.current[tab] ?? 0;
+    if (!node) return;
+    const target = tabScrollMemory.current[tab] ?? 0;
+    node.scrollTop = target;
+    // Живая проверка на dev-стенде (задача 2947) вскрыла реальный баг: каждый
+    // таб — свой независимый компонент со своим useQuery (ProfileTab/
+    // RewardsTab/...), не скоординированным с этим эффектом — при первом
+    // layout после переключения контент иногда ещё не дорос до полной высоты
+    // (даже при попадании в кэш react-query возможен один лишний кадр), и
+    // scrollTop молча клэмпится браузером ниже сохранённого значения. Один
+    // синхронный подход недостаточен — переприменяем target ещё несколько
+    // кадров подряд, пока контейнер не «дорастёт» (или не истечёт лимит).
+    let frames = 0;
+    const raf = () => {
+      if (frames++ > 15 || !managerScrollRef.current) return;
+      const n = managerScrollRef.current;
+      if (n.scrollTop < target && n.scrollHeight - n.clientHeight >= target) n.scrollTop = target;
+      requestAnimationFrame(raf);
+    };
+    requestAnimationFrame(raf);
   }, [tab]);
   // Деп-линк «Планёрка» → «Мои заказчики» (клик по цифре открывает список в
   // нужном срезе: filter/category — best-effort, читается один раз при заходе на таб).

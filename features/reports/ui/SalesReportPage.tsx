@@ -1227,7 +1227,22 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     if (!active || lastScrollRestoredForRef.current === active.id) return;
     lastScrollRestoredForRef.current = active.id;
     const node = tableContainerRef.current;
-    if (node) node.scrollTop = active.scrollTop ?? 0;
+    if (!node) return;
+    const target = active.scrollTop ?? 0;
+    node.scrollTop = target;
+    // Тот же приём, что и restore скролла между вкладками ЛК
+    // (ManagerCardPage.tsx) — живая проверка на dev-стенде задачи 2947
+    // показала, что даже после !isFetching таблица иногда дорастает по
+    // высоте на кадр позже (виртуализация строк/поздний layout), и scrollTop
+    // клэмпится ниже сохранённого. Переприменяем ещё несколько кадров.
+    let frames = 0;
+    const raf = () => {
+      if (frames++ > 15 || !tableContainerRef.current) return;
+      const n = tableContainerRef.current;
+      if (n.scrollTop < target && n.scrollHeight - n.clientHeight >= target) n.scrollTop = target;
+      requestAnimationFrame(raf);
+    };
+    requestAnimationFrame(raf);
   }, [tabsStore, isFetching]);
 
   const buildCurrentExportTable = useCallback(() => {
