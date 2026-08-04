@@ -4,6 +4,8 @@ import { superadminError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import { priceEball } from '@/features/badges/engine/wallet';
 import { rarityForPrice } from '@/features/shop/engine/rarity';
+import { graphemeClusters } from '@/lib/text/graphemes';
+import { decodeUploadedImage } from '@/lib/images/shopItemImage';
 
 // Управление каталогом магазина — «Заполнятор товаров» (задача 2960, ТЗ Серёги
 // 04.08: «хочу заводить всё сам» — эмодзи вместо фото, тип/ссылка на
@@ -33,6 +35,7 @@ export async function GET() {
               i.emoji, i.min_level, i.marketplace_url, i.buyer_scope,
               i.per_person_limit, i.per_person_limit_days, i.requires_approval,
               i.boost_metric, i.boost_multiplier, i.boost_window_days, i.boost_scope,
+              (i.image_mime IS NOT NULL) AS has_image,
               coalesce(p.purchases, 0)::int AS purchases
          FROM shop_items i
          LEFT JOIN (SELECT shop_item_id, count(*) AS purchases FROM inventory_items GROUP BY 1) p
@@ -70,10 +73,23 @@ export async function GET() {
         boostMetric: i.boost_metric, boostMultiplier: i.boost_multiplier !== null ? Number(i.boost_multiplier) : null,
         boostWindowDays: i.boost_window_days, boostScope: i.boost_scope,
         rarityKey: rarity.key, rarityLabel: rarity.label, rarityColor: rarity.color,
+        // Своя картинка (задача 2994) — байты НЕ гоняем в этом ответе, только
+        // флаг; сама картинка — GET /api/shop-item-image/[id] (кэшируемо).
+        hasImage: Boolean(i.has_image),
       };
     }),
   });
 }
+
+// Своя картинка (задача 2994) — три состояния правки:
+//  - 'keep'   — не трогать то, что уже сохранено (PATCH без поля image);
+//  - 'remove' — явно вернуться к эмодзи (image: null в body);
+//  - 'set'    — сохранить новые байты (image: {mime, dataBase64} в body,
+//    ПРИШЕДШИЕ либо из файла с клиента, либо из /fetch-image-url).
+type ImageAction =
+  | { kind: 'keep' }
+  | { kind: 'remove' }
+  | { kind: 'set'; mime: string; buffer: Buffer };
 
 interface ItemInput {
   name: string; description: string | null; category: 'material' | 'immaterial' | 'boost';
@@ -83,11 +99,17 @@ interface ItemInput {
   perPersonLimit: number | null; perPersonLimitDays: number | null;
   requiresApproval: boolean;
   boostMetric: string | null; boostMultiplier: number | null; boostWindowDays: number | null; boostScope: string | null;
+  image: ImageAction;
 }
 
 // Фолбэк-эмодзи, если поле пустое/не пришло — «просто поле для эмодзи», не
 // обязываем администратора вводить символ, если он спешит.
 const DEFAULT_EMOJI = '🎁';
+// Потолок ДО графемной сегментации — защита от мегабайтного paste, чтобы не
+// гонять Intl.Segmenter по гигантской строке. Сама «одно эмодзи» проверка —
+// в графемах ниже, не в code unit'ах (задача 2994, флаги/ZWJ/тон кожи).
+const EMOJI_RAW_SAFETY_CAP = 256;
+const EMOJI_MAX_GRAPHEMES = 8;
 
 function validate(body: Record<string, unknown>): ItemInput | string {
   const name = typeof body.name === 'string' ? body.name.trim().slice(0, 300) : '';
@@ -109,10 +131,35 @@ function validate(body: Record<string, unknown>): ItemInput | string {
   const sort = body.sort === undefined ? 100 : Number(body.sort);
   if (!Number.isInteger(sort)) return 'Сортировка — целое число';
 
-  // Эмодзи «вместо фото» — картинок не грузим и не храним нигде, только текст.
-  const emojiRaw = typeof body.emoji === 'string' ? body.emoji.trim() : '';
-  if (emojiRaw.length > 16) return 'Эмодзи — максимум 16 символов (это не поле для текста)';
-  const emoji = emojiRaw || DEFAULT_EMOJI;
+  // Эмодзи «вместо фото» (задача 2994: поле должно принимать ЛЮБОЙ символ из
+  // копипасты, включая составные — флаги/тон кожи/ZWJ-семьи — не разрезая их
+  // пополам). Считаем и режем ГРАФЕМАМИ (Intl.Segmenter), а не .length —
+  // тот же lib/text/graphemes.ts, что и на клиенте (превью=сохранение).
+  const emojiRawInput = typeof body.emoji === 'string' ? body.emoji.trim() : '';
+  if (emojiRawInput.length > EMOJI_RAW_SAFETY_CAP) {
+    return `Эмодзи — слишком длинная вставка (это не поле для текста)`;
+  }
+  const emojiGraphemes = graphemeClusters(emojiRawInput).slice(0, EMOJI_MAX_GRAPHEMES);
+  const emoji = emojiGraphemes.length > 0 ? emojiGraphemes.join('') : DEFAULT_EMOJI;
+
+  // Своя картинка — файл (клиент прислал base64) или ссылка (уже скачана
+  // клиентом через /fetch-image-url, тут только base64 дошедших байт).
+  // image === undefined → 'keep' (PATCH ничего не меняет в картинке);
+  // image === null → 'remove' (вернуться к эмодзи);
+  // image === {mime, dataBase64} → 'set' (проверяем сигнатуру/размер СНОВА —
+  // не доверяем тому, что клиент/предыдущий роут уже проверили).
+  let image: ImageAction = { kind: 'keep' };
+  if (body.image === null) {
+    image = { kind: 'remove' };
+  } else if (body.image && typeof body.image === 'object') {
+    const img = body.image as { dataBase64?: unknown };
+    if (typeof img.dataBase64 !== 'string' || !img.dataBase64) {
+      return 'Картинка: некорректные данные';
+    }
+    const decoded = decodeUploadedImage(img.dataBase64);
+    if (typeof decoded === 'string') return `Картинка: ${decoded}`;
+    image = { kind: 'set', mime: decoded.mime, buffer: decoded.buffer };
+  }
 
   const minLevel = body.minLevel === undefined ? 0 : Number(body.minLevel);
   if (!Number.isInteger(minLevel) || minLevel < 0 || minLevel > 200) return 'Минимальный уровень — целое число 0–200';
@@ -171,6 +218,7 @@ function validate(body: Record<string, unknown>): ItemInput | string {
     emoji, minLevel, marketplaceUrl, buyerScope,
     perPersonLimit, perPersonLimitDays, requiresApproval,
     boostMetric, boostMultiplier, boostWindowDays, boostScope,
+    image,
   };
 }
 
@@ -182,16 +230,22 @@ export async function POST(req: Request) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   const v = validate(body);
   if (typeof v === 'string') return NextResponse.json({ error: v }, { status: 400 });
+  // Новая позиция: image.kind — 'set' (сохранить присланные байты) либо
+  // 'keep'/'remove' (в обоих случаях — нет своей картинки, эмодзи).
+  const imageMime = v.image.kind === 'set' ? v.image.mime : null;
+  const imageData = v.image.kind === 'set' ? v.image.buffer : null;
   const r = await systemDb().query<{ id: number }>(
     `INSERT INTO shop_items (
        name, description, category, price_units, allowed_currencies, stock, ttl_months, sort,
        emoji, min_level, marketplace_url, buyer_scope, per_person_limit, per_person_limit_days,
-       requires_approval, boost_metric, boost_multiplier, boost_window_days, boost_scope
+       requires_approval, boost_metric, boost_multiplier, boost_window_days, boost_scope,
+       image_mime, image_data
      )
-     VALUES ($1,$2,$3,$4,'{EBALL}',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+     VALUES ($1,$2,$3,$4,'{EBALL}',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
     [v.name, v.description, v.category, v.priceUnits, v.stock, v.ttlMonths, v.sort,
      v.emoji, v.minLevel, v.marketplaceUrl, v.buyerScope, v.perPersonLimit, v.perPersonLimitDays,
-     v.requiresApproval, v.boostMetric, v.boostMultiplier, v.boostWindowDays, v.boostScope],
+     v.requiresApproval, v.boostMetric, v.boostMultiplier, v.boostWindowDays, v.boostScope,
+     imageMime, imageData],
   );
   return NextResponse.json({ ok: true, id: r.rows[0].id });
 }
@@ -218,6 +272,10 @@ export async function PATCH(req: Request) {
 
   const v = validate(body);
   if (typeof v === 'string') return NextResponse.json({ error: v }, { status: 400 });
+  // Картинка — три состояния (задача 2994): $21 — действие ('keep' не трогает
+  // image_mime/image_data вообще, 'remove' обнуляет оба, 'set' пишет новые
+  // байты) — CASE в SQL, а не JS-ветвление запроса, чтобы не городить
+  // динамическую сборку SQL-строки для одного поля.
   const r = await systemDb().query(
     `UPDATE shop_items
         SET name = $2, description = $3, category = $4, price_units = $5,
@@ -225,12 +283,15 @@ export async function PATCH(req: Request) {
             enabled = coalesce($9, enabled), updated_at = now(),
             emoji = $10, min_level = $11, marketplace_url = $12, buyer_scope = $13,
             per_person_limit = $14, per_person_limit_days = $15, requires_approval = $16,
-            boost_metric = $17, boost_multiplier = $18, boost_window_days = $19, boost_scope = $20
+            boost_metric = $17, boost_multiplier = $18, boost_window_days = $19, boost_scope = $20,
+            image_mime = CASE $21::text WHEN 'set' THEN $22::text WHEN 'remove' THEN NULL ELSE image_mime END,
+            image_data = CASE $21::text WHEN 'set' THEN $23::bytea WHEN 'remove' THEN NULL ELSE image_data END
       WHERE id = $1 RETURNING id`,
     [id, v.name, v.description, v.category, v.priceUnits,
      v.stock, v.ttlMonths, v.sort, typeof body.enabled === 'boolean' ? body.enabled : null,
      v.emoji, v.minLevel, v.marketplaceUrl, v.buyerScope, v.perPersonLimit, v.perPersonLimitDays,
-     v.requiresApproval, v.boostMetric, v.boostMultiplier, v.boostWindowDays, v.boostScope],
+     v.requiresApproval, v.boostMetric, v.boostMultiplier, v.boostWindowDays, v.boostScope,
+     v.image.kind, v.image.kind === 'set' ? v.image.mime : null, v.image.kind === 'set' ? v.image.buffer : null],
   );
   if (r.rowCount === 0) return NextResponse.json({ error: 'Позиция не найдена' }, { status: 404 });
   return NextResponse.json({ ok: true });

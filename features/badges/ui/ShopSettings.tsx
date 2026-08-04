@@ -16,14 +16,25 @@
 // («порог доступности», чтобы менеджер хитростью за два месяца не нафармил
 // айфон). Редкость показывается рядом с ценой; блок под «Порогом доступности»
 // больше не содержит превью редкости.
+//
+// Задача 2994 (правка владельца, тот же день): «мало эмодзи — добавь полный
+// список с поиском» + «можно свою картинку из интернета?». Полный пикер —
+// components/ui/EmojiPicker.tsx (unicode-emoji-json, без картинок). Поле
+// эмодзи теперь принимает ЛЮБУЮ вставку (флаги/тон кожи/ZWJ-семьи) без
+// разрезания графемы пополам — lib/text/graphemes.ts. Своя картинка — файл
+// или ссылка (сервер САМ скачивает и хранит байты в БД, SSRF-защита —
+// lib/images/shopItemImage.ts, отдаём GET /api/shop-item-image/[id]).
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 import { MltCoin } from '@/components/icons/MltCoin';
 import { Modal } from '@/components/ui/Modal';
+import { EmojiPicker } from '@/components/ui/EmojiPicker';
 import { useUrlModal } from '@/lib/hooks/useUrlState';
 import { RARITY_TIERS, rarityForPrice, nextRarityTier } from '@/features/shop/engine/rarity';
 import { priceEball as toPriceEball } from '@/features/badges/engine/wallet';
+import { firstGraphemes } from '@/lib/text/graphemes';
 
 interface ShopItemRow {
   id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'boost';
@@ -36,7 +47,15 @@ interface ShopItemRow {
   requiresApproval: boolean;
   boostMetric: string | null; boostMultiplier: number | null; boostWindowDays: number | null; boostScope: string | null;
   rarityKey: string; rarityLabel: string; rarityColor: string;
+  hasImage: boolean;
 }
+
+// Своя картинка (задача 2994) — принимаем только то, что умеем безопасно
+// показать: PNG/JPEG/WEBP. SVG сознательно нет — это XML, может нести
+// <script>/обработчики событий, санитайзера в проекте нет, тащить библиотеку
+// ради одного поля не стали (см. lib/images/shopItemImage.ts).
+const SHOP_IMAGE_ACCEPT = 'image/png,image/jpeg,image/webp';
+const SHOP_IMAGE_MAX_BYTES_CLIENT = 3 * 1024 * 1024;
 
 const TYPE_LABELS: Record<ShopItemRow['category'], string> = {
   material: 'Материальный', immaterial: 'Нематериальный', boost: 'Буст',
@@ -46,8 +65,9 @@ const SCOPE_LABELS: Record<ShopItemRow['buyerScope'], string> = {
 };
 
 // Быстрый выбор — «телефон, еда, велосипед, да похуй что» (дословно ТЗ
-// владельца): не полноценный пикер (новая зависимость ради этого не нужна),
-// просто россыпь частых вариантов поверх текстового поля.
+// владельца из 2960): россыпь частых вариантов ПОВЕРХ полноценного пикера
+// (EmojiPicker, задача 2994) — один клик без открытия поиска для самых
+// частых случаев, полный список — по кнопке «Ещё эмодзи…».
 const EMOJI_QUICK_PICKS = [
   '🎁', '📱', '🎧', '🖥️', '🪑', '☕', '🍕', '🚲', '🏖️', '🕙', '🧹', '⚡',
   '🎉', '🏷️', '💼', '🎓', '🚀', '🏆', '🎮', '📚', '🧘', '🍔', '🎬', '🌴',
@@ -89,6 +109,69 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
   const [boostScope, setBoostScope] = useState(item?.boostScope ?? '');
   const [error, setError] = useState<string | null>(null);
 
+  // Своя картинка (задача 2994): pendingImage — новые байты, ещё НЕ сохранённые
+  // (уйдут в теле того же save-запроса, что и остальные поля формы — единый
+  // сейв, без отдельного шага «сначала загрузить, потом сохранить товар»).
+  // imageRemoved — явное «вернуться к эмодзи» для СУЩЕСТВУЮЩЕГО item.hasImage.
+  const [pendingImage, setPendingImage] = useState<{ mime: string; dataBase64: string; previewUrl: string } | null>(null);
+  const [imageRemoved, setImageRemoved] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [imageUrlInput, setImageUrlInput] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const hasSavedImage = Boolean(item?.hasImage) && !imageRemoved;
+  const imagePreviewSrc = pendingImage
+    ? pendingImage.previewUrl
+    : hasSavedImage && item
+      ? `/api/shop-item-image/${item.id}`
+      : null;
+
+  function acceptDecodedImage(mime: string, dataBase64: string) {
+    setPendingImage({ mime, dataBase64, previewUrl: `data:${mime};base64,${dataBase64}` });
+    setImageRemoved(false);
+    setImageError(null);
+  }
+
+  function onFileChosen(file: File) {
+    setImageError(null);
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setImageError('Только PNG, JPEG или WEBP (SVG не поддерживается)');
+      return;
+    }
+    if (file.size > SHOP_IMAGE_MAX_BYTES_CLIENT) {
+      setImageError(`Файл больше ${Math.floor(SHOP_IMAGE_MAX_BYTES_CLIENT / 1024 / 1024)} МБ`);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') { setImageError('Не удалось прочитать файл'); return; }
+      const base64 = result.slice(result.indexOf(',') + 1);
+      acceptDecodedImage(file.type, base64);
+    };
+    reader.onerror = () => setImageError('Не удалось прочитать файл');
+    reader.readAsDataURL(file);
+  }
+
+  const fetchByUrl = useMutation({
+    mutationFn: async (url: string) => {
+      const res = await fetch('/api/settings/badges/shop/fetch-image-url', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      return json as { mime: string; dataBase64: string };
+    },
+    onSuccess: (r) => { acceptDecodedImage(r.mime, r.dataBase64); setImageUrlInput(''); },
+    onError: (e) => setImageError(e instanceof Error ? e.message : String(e)),
+  });
+
+  function removeImage() {
+    setPendingImage(null);
+    setImageRemoved(true);
+    setImageError(null);
+  }
+
   const minLevelNum = Number(minLevel) || 0;
   // Редкость — от ЦЕНЫ (задача 2983), не от minLevel.
   const priceNum = Number(price) || 0;
@@ -114,6 +197,14 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
         boostWindowDays: category === 'boost' && boostWindowDays.trim() !== '' ? Number(boostWindowDays) : null,
         boostScope: category === 'boost' ? (boostScope.trim() || null) : null,
       };
+      // Своя картинка (задача 2994): не указываем поле вообще → сервер трактует
+      // как 'keep' (не трогать сохранённую); pendingImage → новые байты;
+      // imageRemoved (без pendingImage) → null → сервер вернёт эмодзи.
+      if (pendingImage) {
+        body.image = { mime: pendingImage.mime, dataBase64: pendingImage.dataBase64 };
+      } else if (imageRemoved) {
+        body.image = null;
+      }
       if (item) body.id = item.id;
       const res = await fetch('/api/settings/badges/shop', {
         method: item ? 'PATCH' : 'POST',
@@ -132,24 +223,66 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
   return (
     <Modal open onOpenChange={(o) => { if (!o) onClose(); }} title={item ? `Позиция: ${item.name}` : 'Новая позиция — товар или буст'} desktopWidth="sm:max-w-lg">
       <div className="flex flex-col gap-3 text-xs text-[var(--color-text-muted)]">
-        {/* Эмодзи вместо фото — картинок не грузим и не храним нигде. */}
+        {/* Превью карточки — своя картинка (если есть) ИЛИ эмодзи. */}
         <div className="flex items-center gap-3">
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] text-4xl">
-            {emoji.trim() || '🎁'}
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] text-4xl">
+            {imagePreviewSrc
+              ? <img src={imagePreviewSrc} alt="" className="h-full w-full object-cover" />
+              : (emoji.trim() || '🎁')}
           </div>
           <div className="flex-1">
-            <label className={labelCls}>Эмодзи вместо фото карточки (не грузим и не храним картинки)
-              <input value={emoji} onChange={e => setEmoji(e.target.value)} maxLength={16} placeholder="🎁"
+            <label className={labelCls}>Эмодзи вместо фото карточки
+              <input value={emoji}
+                onChange={e => setEmoji(firstGraphemes(e.target.value, 8))}
+                maxLength={64} placeholder="🎁"
                 className={inputCls} />
             </label>
-            <div className="mt-1.5 flex flex-wrap gap-1">
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
               {EMOJI_QUICK_PICKS.map(em => (
                 <button key={em} type="button" onClick={() => setEmoji(em)}
                   className="rounded-lg border border-[var(--color-border)] px-1.5 py-0.5 text-base hover:bg-[var(--color-bg-hover)]">
                   {em}
                 </button>
               ))}
+              <EmojiPicker onPick={setEmoji} />
             </div>
+          </div>
+        </div>
+
+        {/* Своя картинка (задача 2994, правка владельца «а можно вставить
+            картинку из интернета?») — файл ИЛИ ссылка. Ссылку сервер САМ
+            скачивает и сохраняет байты у себя (не отображаем чужим доменом —
+            иначе отвалится, когда исходник удалят/переедет, и каждый показ
+            каталога стучался бы наружу). Приоритет над эмодзи в превью, если
+            задана — эмодзи-поле остаётся (фолбэк, если картинку уберут). */}
+        <div className="rounded-xl border border-[var(--color-border)] p-2.5">
+          <div className="mb-1.5">Своя картинка (необязательно) — приоритет над эмодзи на карточке</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input ref={fileInputRef} type="file" accept={SHOP_IMAGE_ACCEPT} className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) onFileChosen(f); e.target.value = ''; }} />
+            <button type="button" onClick={() => fileInputRef.current?.click()}
+              className="rounded-lg border border-[var(--color-border)] px-2.5 py-1 hover:bg-[var(--color-bg-hover)]">
+              Загрузить файл…
+            </button>
+            <input value={imageUrlInput} onChange={e => setImageUrlInput(e.target.value)}
+              placeholder="https://... (ссылка на картинку)" className={`${inputCls} min-w-[180px] flex-1`} />
+            <button type="button" disabled={fetchByUrl.isPending || !imageUrlInput.trim()}
+              onClick={() => fetchByUrl.mutate(imageUrlInput.trim())}
+              className="rounded-lg border border-[var(--color-border)] px-2.5 py-1 hover:bg-[var(--color-bg-hover)] disabled:opacity-50">
+              {fetchByUrl.isPending ? 'Скачиваем…' : 'Скачать и сохранить'}
+            </button>
+            {(pendingImage || hasSavedImage) && (
+              <button type="button" onClick={removeImage}
+                className="inline-flex items-center gap-1 rounded-lg border border-[var(--color-border)] px-2.5 py-1 hover:bg-[var(--color-bg-hover)]">
+                <X size={12} /> Убрать картинку
+              </button>
+            )}
+          </div>
+          {imageError && <div className="mt-1.5 text-[var(--color-negative,#e03131)]">{imageError}</div>}
+          <div className="mt-1.5 text-[10px]">
+            PNG/JPEG/WEBP, до {Math.floor(SHOP_IMAGE_MAX_BYTES_CLIENT / 1024 / 1024)} МБ. Картинку по ссылке качаем и
+            храним у себя — не показываем ссылкой на чужой сайт. SVG не поддерживается (нет безопасного санитайзера).
+            На карточке показывается квадратом (обрезка по центру), исходный файл не изменяется.
           </div>
         </div>
 
@@ -535,7 +668,11 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
             <tbody>
               {sortedItems.map((i, idx) => (
                 <tr key={i.id} className={`border-t border-[var(--color-border)] ${i.enabled ? '' : 'opacity-50'} ${idx % 2 === 1 ? 'bg-[var(--color-table-stripe)]' : ''}`}>
-                  <td className="px-2.5 py-2 text-xl">{i.emoji}</td>
+                  <td className="px-2.5 py-2 text-xl">
+                    {i.hasImage
+                      ? <img src={`/api/shop-item-image/${i.id}`} alt="" className="h-7 w-7 rounded-lg object-cover" />
+                      : i.emoji}
+                  </td>
                   <td className="px-2.5 py-2">
                     <div className="font-semibold text-[var(--color-text)]">{i.name}</div>
                     {i.description && <div className="max-w-[220px] truncate text-[var(--color-text-muted)]" title={i.description}>{i.description}</div>}
