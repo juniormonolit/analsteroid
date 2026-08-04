@@ -2,12 +2,20 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { superadminError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
-import { priceEball, priceRub } from '@/features/badges/engine/wallet';
+import { priceEball } from '@/features/badges/engine/wallet';
+import { rarityForLevel } from '@/features/shop/engine/rarity';
 
-// Управление каталогом магазина (MVP, 31.07) — админский паттерн, как штрафы.
-// Цены в единицах индексации (сейчас 1 ед = 1 ебалл, задел под индексацию —
-// см. wallet.ts / миграция 118). Удаления нет — только выключение (enabled),
-// история покупок ссылается на позиции.
+// Управление каталогом магазина — «Заполнятор товаров» (задача 2960, ТЗ Серёги
+// 04.08: «хочу заводить всё сам» — эмодзи вместо фото, тип/мин.уровень→редкость
+// автоматом, ссылка на маркетплейс «для примера», кто может покупать, лимит на
+// человека, подтверждение при активации, поля буста). Той же формой заводятся
+// и бусты (item_type='boost') — просто с дополнительными полями буста.
+//
+// MLT — единственная валюта покупки (правка владельца): allowed_currencies
+// колонку не трогаем структурно (история/задел), но форма больше не даёт
+// выбрать RUB — новые/отредактированные позиции всегда '{EBALL}'.
+// Цены — в единицах индексации (см. миграцию 118 / wallet.ts). Удаления нет —
+// только выключение (enabled), история покупок ссылается на позиции.
 
 export async function GET() {
   const session = await getSession();
@@ -17,45 +25,69 @@ export async function GET() {
   const [items, settings] = await Promise.all([
     db.query(
       `SELECT i.id::int AS id, i.name, i.description, i.category, i.price_units,
-              i.allowed_currencies, i.enabled, i.stock, i.ttl_months, i.sort,
+              i.enabled, i.stock, i.ttl_months, i.sort,
+              i.emoji, i.min_level, i.marketplace_url, i.buyer_scope,
+              i.per_person_limit, i.per_person_limit_days, i.requires_approval,
+              i.boost_metric, i.boost_multiplier, i.boost_window_days, i.boost_scope,
               coalesce(p.purchases, 0)::int AS purchases
          FROM shop_items i
          LEFT JOIN (SELECT shop_item_id, count(*) AS purchases FROM inventory_items GROUP BY 1) p
            ON p.shop_item_id = i.id
         ORDER BY i.category, i.sort, i.id`,
     ),
-    db.query<{ rate: string; ttl_months: number; fee: string; tlim: number }>(
-      `SELECT rub_to_eball_rate AS rate, ttl_months, transfer_fee_percent AS fee, transfer_daily_limit AS tlim
+    db.query<{ ttl_months: number; fee: string; tlim: number }>(
+      `SELECT ttl_months, transfer_fee_percent AS fee, transfer_daily_limit AS tlim
          FROM badge_coin_settings WHERE id = 1`,
     ),
   ]);
-  const rate = Number(settings.rows[0]?.rate ?? 1);
   return NextResponse.json({
     coinTtlMonths: settings.rows[0]?.ttl_months ?? 6,
-    transferFeePercent: Number((settings.rows[0] as { fee?: string } | undefined)?.fee ?? 5),
-    transferDailyLimit: (settings.rows[0] as { tlim?: number } | undefined)?.tlim ?? 500,
-    items: items.rows.map(i => ({
-      id: i.id, name: i.name, description: i.description, category: i.category,
-      priceUnits: Number(i.price_units), priceEball: priceEball(Number(i.price_units)),
-      priceRub: (i.allowed_currencies as string[]).includes('RUB') ? priceRub(Number(i.price_units), rate) : null,
-      allowedCurrencies: i.allowed_currencies, enabled: i.enabled, stock: i.stock,
-      ttlMonths: i.ttl_months, sort: i.sort, purchases: i.purchases,
-    })),
+    // Комиссия/лимит переводов MLT между коллегами — отдельная фича (не про
+    // цены каталога, RUB здесь ни при чём), ShopSettingsBlock читает её ОТСЮДА
+    // же — не убирать при чистке RUB-полей витрины.
+    transferFeePercent: Number(settings.rows[0]?.fee ?? 5),
+    transferDailyLimit: settings.rows[0]?.tlim ?? 500,
+    items: items.rows.map(i => {
+      const minLevel = Number(i.min_level);
+      const rarity = rarityForLevel(minLevel);
+      return {
+        id: i.id, name: i.name, description: i.description, category: i.category,
+        priceUnits: Number(i.price_units), priceEball: priceEball(Number(i.price_units)),
+        enabled: i.enabled, stock: i.stock,
+        ttlMonths: i.ttl_months, sort: i.sort, purchases: i.purchases,
+        emoji: i.emoji, minLevel, marketplaceUrl: i.marketplace_url,
+        buyerScope: i.buyer_scope,
+        perPersonLimit: i.per_person_limit, perPersonLimitDays: i.per_person_limit_days,
+        requiresApproval: i.requires_approval,
+        boostMetric: i.boost_metric, boostMultiplier: i.boost_multiplier !== null ? Number(i.boost_multiplier) : null,
+        boostWindowDays: i.boost_window_days, boostScope: i.boost_scope,
+        rarityKey: rarity.key, rarityLabel: rarity.label, rarityColor: rarity.color,
+      };
+    }),
   });
 }
 
 interface ItemInput {
-  name: string; description: string | null; category: 'material' | 'immaterial' | 'team';
-  priceUnits: number; allowRub: boolean; stock: number | null; ttlMonths: number; sort: number;
+  name: string; description: string | null; category: 'material' | 'immaterial' | 'boost';
+  priceUnits: number; stock: number | null; ttlMonths: number; sort: number;
+  emoji: string; minLevel: number; marketplaceUrl: string | null;
+  buyerScope: 'all' | 'rop_only';
+  perPersonLimit: number | null; perPersonLimitDays: number | null;
+  requiresApproval: boolean;
+  boostMetric: string | null; boostMultiplier: number | null; boostWindowDays: number | null; boostScope: string | null;
 }
+
+// Фолбэк-эмодзи, если поле пустое/не пришло — «просто поле для эмодзи», не
+// обязываем администратора вводить символ, если он спешит.
+const DEFAULT_EMOJI = '🎁';
 
 function validate(body: Record<string, unknown>): ItemInput | string {
   const name = typeof body.name === 'string' ? body.name.trim().slice(0, 300) : '';
   if (!name) return 'Название не может быть пустым';
   const description = typeof body.description === 'string' ? body.description.trim().slice(0, 1000) || null : null;
   const category = body.category;
-  if (category !== 'material' && category !== 'immaterial' && category !== 'team') {
-    return 'Категория: material | immaterial | team';
+  if (category !== 'material' && category !== 'immaterial' && category !== 'boost') {
+    return 'Тип позиции: material | immaterial | boost';
   }
   const priceUnits = body.priceUnits;
   if (typeof priceUnits !== 'number' || !Number.isFinite(priceUnits) || priceUnits <= 0 || priceUnits > 1_000_000) {
@@ -68,7 +100,70 @@ function validate(body: Record<string, unknown>): ItemInput | string {
   if (!Number.isInteger(ttlMonths) || ttlMonths <= 0 || ttlMonths > 60) return 'Срок годности — целое число месяцев 1–60';
   const sort = body.sort === undefined ? 100 : Number(body.sort);
   if (!Number.isInteger(sort)) return 'Сортировка — целое число';
-  return { name, description, category, priceUnits, allowRub: body.allowRub === true, stock, ttlMonths, sort };
+
+  // Эмодзи «вместо фото» — картинок не грузим и не храним нигде, только текст.
+  const emojiRaw = typeof body.emoji === 'string' ? body.emoji.trim() : '';
+  if (emojiRaw.length > 16) return 'Эмодзи — максимум 16 символов (это не поле для текста)';
+  const emoji = emojiRaw || DEFAULT_EMOJI;
+
+  const minLevel = body.minLevel === undefined ? 0 : Number(body.minLevel);
+  if (!Number.isInteger(minLevel) || minLevel < 0 || minLevel > 200) return 'Минимальный уровень — целое число 0–200';
+
+  let marketplaceUrl: string | null = null;
+  if (typeof body.marketplaceUrl === 'string' && body.marketplaceUrl.trim()) {
+    const v = body.marketplaceUrl.trim();
+    try {
+      const u = new URL(v);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('bad protocol');
+      marketplaceUrl = v.slice(0, 2000);
+    } catch {
+      return 'Ссылка на маркетплейс — некорректный URL (нужен http(s)://...)';
+    }
+  }
+
+  const buyerScope = body.buyerScope;
+  if (buyerScope !== 'all' && buyerScope !== 'rop_only') return 'Кто может покупать: all | rop_only';
+
+  const perPersonLimit = body.perPersonLimit === null || body.perPersonLimit === undefined || body.perPersonLimit === ''
+    ? null : Number(body.perPersonLimit);
+  if (perPersonLimit !== null && (!Number.isInteger(perPersonLimit) || perPersonLimit <= 0)) {
+    return 'Лимит на человека — целое число больше нуля или пусто (без лимита)';
+  }
+  const perPersonLimitDays = body.perPersonLimitDays === null || body.perPersonLimitDays === undefined || body.perPersonLimitDays === ''
+    ? null : Number(body.perPersonLimitDays);
+  if (perPersonLimitDays !== null && (!Number.isInteger(perPersonLimitDays) || perPersonLimitDays <= 0)) {
+    return 'Окно лимита (дней) — целое число больше нуля или пусто (лимит на всё время)';
+  }
+
+  const requiresApproval = body.requiresApproval !== false; // дефолт true, как раньше у ВСЕХ позиций
+
+  let boostMetric: string | null = null;
+  let boostMultiplier: number | null = null;
+  let boostWindowDays: number | null = null;
+  let boostScope: string | null = null;
+  if (category === 'boost') {
+    boostMetric = typeof body.boostMetric === 'string' ? body.boostMetric.trim().slice(0, 200) || null : null;
+    if (body.boostMultiplier !== undefined && body.boostMultiplier !== null && body.boostMultiplier !== '') {
+      boostMultiplier = Number(body.boostMultiplier);
+      if (!Number.isFinite(boostMultiplier) || boostMultiplier <= 0 || boostMultiplier > 100) {
+        return 'Множитель буста — число больше нуля (например 1.5 = ×1.5)';
+      }
+    }
+    if (body.boostWindowDays !== undefined && body.boostWindowDays !== null && body.boostWindowDays !== '') {
+      boostWindowDays = Number(body.boostWindowDays);
+      if (!Number.isInteger(boostWindowDays) || boostWindowDays <= 0 || boostWindowDays > 365) {
+        return 'Длительность окна буста — целое число дней 1–365';
+      }
+    }
+    boostScope = typeof body.boostScope === 'string' ? body.boostScope.trim().slice(0, 200) || null : null;
+  }
+
+  return {
+    name, description, category, priceUnits, stock, ttlMonths, sort,
+    emoji, minLevel, marketplaceUrl, buyerScope,
+    perPersonLimit, perPersonLimitDays, requiresApproval,
+    boostMetric, boostMultiplier, boostWindowDays, boostScope,
+  };
 }
 
 export async function POST(req: Request) {
@@ -80,9 +175,15 @@ export async function POST(req: Request) {
   const v = validate(body);
   if (typeof v === 'string') return NextResponse.json({ error: v }, { status: 400 });
   const r = await systemDb().query<{ id: number }>(
-    `INSERT INTO shop_items (name, description, category, price_units, allowed_currencies, stock, ttl_months, sort)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-    [v.name, v.description, v.category, v.priceUnits, v.allowRub ? '{EBALL,RUB}' : '{EBALL}', v.stock, v.ttlMonths, v.sort],
+    `INSERT INTO shop_items (
+       name, description, category, price_units, allowed_currencies, stock, ttl_months, sort,
+       emoji, min_level, marketplace_url, buyer_scope, per_person_limit, per_person_limit_days,
+       requires_approval, boost_metric, boost_multiplier, boost_window_days, boost_scope
+     )
+     VALUES ($1,$2,$3,$4,'{EBALL}',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+    [v.name, v.description, v.category, v.priceUnits, v.stock, v.ttlMonths, v.sort,
+     v.emoji, v.minLevel, v.marketplaceUrl, v.buyerScope, v.perPersonLimit, v.perPersonLimitDays,
+     v.requiresApproval, v.boostMetric, v.boostMultiplier, v.boostWindowDays, v.boostScope],
   );
   return NextResponse.json({ ok: true, id: r.rows[0].id });
 }
@@ -97,7 +198,8 @@ export async function PATCH(req: Request) {
   const id = body.id;
   if (typeof id !== 'number' || !Number.isInteger(id)) return NextResponse.json({ error: 'id обязателен' }, { status: 400 });
 
-  // Быстрый тумблер enabled без остальных полей.
+  // Быстрый тумблер enabled без остальных полей (видимость на витрине — без
+  // удаления, история покупок сохраняется).
   if (typeof body.enabled === 'boolean' && body.name === undefined) {
     const r = await systemDb().query(
       `UPDATE shop_items SET enabled = $2, updated_at = now() WHERE id = $1 RETURNING id`, [id, body.enabled],
@@ -111,11 +213,16 @@ export async function PATCH(req: Request) {
   const r = await systemDb().query(
     `UPDATE shop_items
         SET name = $2, description = $3, category = $4, price_units = $5,
-            allowed_currencies = $6, stock = $7, ttl_months = $8, sort = $9,
-            enabled = coalesce($10, enabled), updated_at = now()
+            allowed_currencies = '{EBALL}', stock = $6, ttl_months = $7, sort = $8,
+            enabled = coalesce($9, enabled), updated_at = now(),
+            emoji = $10, min_level = $11, marketplace_url = $12, buyer_scope = $13,
+            per_person_limit = $14, per_person_limit_days = $15, requires_approval = $16,
+            boost_metric = $17, boost_multiplier = $18, boost_window_days = $19, boost_scope = $20
       WHERE id = $1 RETURNING id`,
-    [id, v.name, v.description, v.category, v.priceUnits, v.allowRub ? '{EBALL,RUB}' : '{EBALL}',
-     v.stock, v.ttlMonths, v.sort, typeof body.enabled === 'boolean' ? body.enabled : null],
+    [id, v.name, v.description, v.category, v.priceUnits,
+     v.stock, v.ttlMonths, v.sort, typeof body.enabled === 'boolean' ? body.enabled : null,
+     v.emoji, v.minLevel, v.marketplaceUrl, v.buyerScope, v.perPersonLimit, v.perPersonLimitDays,
+     v.requiresApproval, v.boostMetric, v.boostMultiplier, v.boostWindowDays, v.boostScope],
   );
   if (r.rowCount === 0) return NextResponse.json({ error: 'Позиция не найдена' }, { status: 404 });
   return NextResponse.json({ ok: true });

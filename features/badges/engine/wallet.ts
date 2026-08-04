@@ -18,6 +18,9 @@ export function priceEball(priceUnits: number): number {
 }
 
 // Рублёвая цена: ебалльная по курсу конвертации (1 ₽ = rate ебаллов → ₽ = еб/rate).
+// НЕ используется с задачи 2960 (правка владельца «продаётся только в MLT») —
+// каталог/витрина больше не предлагают RUB. Оставлена (не удалена): дешёвый
+// откат, если решение передумают, и функция чистая/безвредная.
 export function priceRub(priceUnits: number, rubToEballRate: number): number {
   return Math.max(1, Math.round(priceEball(priceUnits) / rubToEballRate));
 }

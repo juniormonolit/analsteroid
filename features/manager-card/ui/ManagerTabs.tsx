@@ -996,9 +996,14 @@ export function RewardsTab({ managerId, isSelf, forceReadOnly = false }: { manag
 // Данные общие (/api/shop): витрина — таб «Магазин», предметы — таб «Инвентарь».
 
 interface ShopItemView {
-  id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'team';
-  priceEball: number; priceRub: number | null; allowedCurrencies: string[];
+  id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'boost';
+  emoji: string; priceEball: number;
   stock: number | null; ttlMonths: number;
+  minLevel: number; marketplaceUrl: string | null; buyerScope: 'all' | 'rop_only';
+  perPersonLimit: number | null; perPersonLimitDays: number | null; purchasedByViewer: number;
+  requiresApproval: boolean;
+  boostMetric: string | null; boostMultiplier: number | null; boostWindowDays: number | null; boostScope: string | null;
+  rarityKey: string; rarityLabel: string; rarityColor: string;
 }
 interface GiftHop { from: number; fromName: string; to: number; toName: string; at: string }
 interface InventoryRow {
@@ -1009,7 +1014,7 @@ interface InventoryRow {
   gift_history: GiftHop[];
 }
 interface ShopData {
-  currencyName: string; rate: number; balance: number; rubBalance: number;
+  currencyName: string; balance: number; rubBalance: number; viewerLevel: number; viewerIsRop: boolean;
   items: ShopItemView[]; inventory: InventoryRow[];
 }
 
@@ -1030,7 +1035,7 @@ function useShopData(managerId: string, isSelf: boolean) {
 const SHOP_CATEGORIES: { key: ShopItemView['category']; label: string }[] = [
   { key: 'immaterial', label: 'Нематериальные' },
   { key: 'material', label: 'Материальные' },
-  { key: 'team', label: 'Командные (складчина отдела)' },
+  { key: 'boost', label: 'Бусты' },
 ];
 
 const INVENTORY_STATUS: Record<InventoryRow['status'], { label: string; color: string }> = {
@@ -1071,6 +1076,7 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
   const [error, setError] = useState<string | null>(null);
   const { data } = useShopData(managerId, isSelf);
   const currencyName = data?.currencyName ?? 'MLT';
+  const viewerLevel = data?.viewerLevel ?? 0;
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['shop'] });
@@ -1078,25 +1084,25 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
     void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
   };
 
-  // Подтверждение покупки — вместо window.confirm (задача 2764).
-  const [pendingBuy, setPendingBuy] = useState<{ item: ShopItemView; currency: 'EBALL' | 'RUB'; text: string } | null>(null);
-  function requestBuy(item: ShopItemView, currency: 'EBALL' | 'RUB') {
-    const price = currency === 'RUB' ? item.priceRub! : item.priceEball;
-    const unit = currency === 'RUB' ? '₽' : currencyName;
-    const balance = currency === 'RUB' ? (data?.rubBalance ?? 0) : (data?.balance ?? 0);
+  // Подтверждение покупки — вместо window.confirm (задача 2764). MLT — единственная
+  // валюта (правка владельца «продаётся только в MLT»), рублёвой ветки больше нет.
+  const [pendingBuy, setPendingBuy] = useState<{ item: ShopItemView; text: string } | null>(null);
+  function requestBuy(item: ShopItemView) {
+    const price = item.priceEball;
+    const balance = data?.balance ?? 0;
     setPendingBuy({
-      item, currency,
-      text: `Купить «${item.name}» за ${price.toLocaleString('ru-RU')} ${unit}?\n\n` +
-        `Останется: ${(balance - price).toLocaleString('ru-RU')} ${unit}. ` +
+      item,
+      text: `Купить «${item.name}» за ${price.toLocaleString('ru-RU')} ${currencyName}?\n\n` +
+        `Останется: ${(balance - price).toLocaleString('ru-RU')} ${currencyName}. ` +
         `Предмет попадёт в инвентарь, срок годности ${item.ttlMonths} мес.`,
     });
   }
 
   const buy = useMutation({
-    mutationFn: async ({ item, currency }: { item: ShopItemView; currency: 'EBALL' | 'RUB' }) => {
+    mutationFn: async (item: ShopItemView) => {
       const res = await fetch('/api/shop', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId: item.id, currency }),
+        body: JSON.stringify({ itemId: item.id }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
@@ -1127,7 +1133,9 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
       {/* Гача (фаза 2): колесо, крутки только в своём ЛК */}
       <GachaBlock isSelf={isSelf} />
 
-      {/* Витрина по категориям */}
+      {/* Витрина по типам (материальные/нематериальные/бусты) — «командные»
+          позиции больше не отдельная группа, это доступ (buyerScope), сервер
+          их и так не отдаёт тем, кто не РОП/директор (правка владельца). */}
       {SHOP_CATEGORIES.map(cat => {
         const catItems = items.filter(i => i.category === cat.key);
         if (catItems.length === 0) return null;
@@ -1137,41 +1145,63 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
               {catItems.map(item => {
                 const soldOut = item.stock !== null && item.stock <= 0;
-                const canEball = (data?.balance ?? 0) >= item.priceEball;
-                const canRub = item.priceRub !== null && (data?.rubBalance ?? 0) >= item.priceRub;
+                const canAfford = (data?.balance ?? 0) >= item.priceEball;
+                const levelOk = viewerLevel >= item.minLevel;
+                const limitReached = item.perPersonLimit !== null && item.purchasedByViewer >= item.perPersonLimit;
+                const canBuy = !soldOut && canAfford && levelOk && !limitReached;
+                let blockedReason: string | null = null;
+                if (soldOut) blockedReason = 'Позиция закончилась';
+                else if (!levelOk) blockedReason = `Доступно с ${item.minLevel} уровня (у вас ${viewerLevel})`;
+                else if (limitReached) blockedReason = `Лимит покупок исчерпан (${item.perPersonLimit}${item.perPersonLimitDays ? ` за ${item.perPersonLimitDays} дн.` : ''})`;
+                else if (!canAfford) blockedReason = `Не хватает ${currencyName}`;
                 return (
-                  <div key={item.id} className="flex flex-col gap-1.5 rounded-xl border border-[var(--color-border)] px-3.5 py-3">
-                    <div className="font-semibold text-[var(--color-text)] text-[14px]">{item.name}</div>
+                  <div key={item.id}
+                    className="flex flex-col gap-1.5 rounded-xl border px-3.5 py-3"
+                    style={{ borderColor: item.rarityKey === 'common' ? 'var(--color-border)' : `${item.rarityColor}66` }}
+                  >
+                    <div className="flex items-start gap-2">
+                      {/* Эмодзи вместо фото карточки — картинок нет нигде принципиально. */}
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-bg)] text-2xl">
+                        {item.emoji}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-[var(--color-text)] text-[14px]">{item.name}</div>
+                        <span
+                          className="mt-0.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                          style={{ color: item.rarityColor, backgroundColor: `${item.rarityColor}1a` }}
+                        >
+                          {item.rarityLabel}
+                        </span>
+                      </div>
+                    </div>
                     {item.description && <div className="text-xs text-[var(--color-text-muted)]">{item.description}</div>}
                     <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
                       <span className="inline-flex items-center gap-1 font-extrabold tabular-nums text-[var(--color-accent)]">
                         <MltCoin variant="full" size={20} title={currencyName} />
                         {item.priceEball.toLocaleString('ru-RU')} <span className="text-[11px] font-semibold text-[var(--color-text-muted)]">{currencyName}</span>
                       </span>
-                      {item.priceRub !== null && (
-                        <span className="text-xs text-[var(--color-text-muted)] tabular-nums">или {item.priceRub.toLocaleString('ru-RU')} ₽</span>
-                      )}
                       {item.stock !== null && (
                         <span className="text-[11px] text-[var(--color-text-muted)]">осталось {item.stock}</span>
                       )}
+                      {item.minLevel > 0 && (
+                        <span className="text-[11px] text-[var(--color-text-muted)]">от {item.minLevel} ур.</span>
+                      )}
                     </div>
+                    {item.marketplaceUrl && (
+                      <a href={item.marketplaceUrl} target="_blank" rel="noopener noreferrer"
+                        className="text-[11px] text-[var(--color-accent)] hover:underline">
+                        Пример на маркетплейсе ↗
+                      </a>
+                    )}
                     <div className="text-[11px] text-[var(--color-text-muted)]">срок годности {item.ttlMonths} мес</div>
                     {isSelf && (
                       <div className="flex gap-2">
-                        <button type="button" disabled={buy.isPending || soldOut || !canEball}
-                          onClick={() => requestBuy(item, 'EBALL')}
-                          title={soldOut ? 'Позиция закончилась' : canEball ? undefined : `Не хватает ${currencyName}`}
+                        <button type="button" disabled={buy.isPending || !canBuy}
+                          onClick={() => requestBuy(item)}
+                          title={blockedReason ?? undefined}
                           className="rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-inverse)] disabled:opacity-40">
-                          {soldOut ? 'Нет в наличии' : 'Купить'}
+                          {soldOut ? 'Нет в наличии' : !levelOk ? `С ${item.minLevel} ур.` : limitReached ? 'Лимит исчерпан' : 'Купить'}
                         </button>
-                        {item.priceRub !== null && !soldOut && (
-                          <button type="button" disabled={buy.isPending || !canRub}
-                            onClick={() => requestBuy(item, 'RUB')}
-                            title={canRub ? undefined : 'Не хватает рублей'}
-                            className="rounded-lg border border-[var(--color-positive,#2f9e44)] px-3 py-1.5 text-xs font-semibold text-[var(--color-positive,#2f9e44)] disabled:opacity-40">
-                            За ₽
-                          </button>
-                        )}
                       </div>
                     )}
                   </div>
@@ -1183,7 +1213,8 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
       })}
       <div className="text-[11px] text-[var(--color-text-muted)]">
         Покупка списывает {currencyName} сразу (старейшие начисления первыми), предмет попадает в таб «Инвентарь» со
-        сроком годности. Активация — заявкой руководителю; отказ возвращает предмет. По истечении срока возвращается 50% цены.
+        сроком годности. Активация — заявкой руководителю (кроме позиций без подтверждения — выдаются сразу); отказ
+        возвращает предмет. По истечении срока возвращается 50% цены.
       </div>
       <ConfirmDialog
         open={!!pendingBuy}
@@ -1191,7 +1222,7 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
         description={pendingBuy?.text ?? ''}
         confirmLabel="Купить"
         pending={buy.isPending}
-        onConfirm={() => { if (pendingBuy) { const { item, currency } = pendingBuy; setPendingBuy(null); buy.mutate({ item, currency }); } }}
+        onConfirm={() => { if (pendingBuy) { const item = pendingBuy.item; setPendingBuy(null); buy.mutate(item); } }}
         onCancel={() => setPendingBuy(null)}
       />
     </div>
