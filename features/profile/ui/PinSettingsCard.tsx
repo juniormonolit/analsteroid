@@ -171,8 +171,13 @@ export function PinSettingsCard({ ssoAccount }: { ssoAccount: boolean }) {
             </button>
           </div>
 
+          {/* scroll-x вешаем на сам контейнер истории, а не отдельной обёрткой: он уже
+              скроллится по вертикали, а overflow-y:auto по спеке делает overflow-x тоже
+              auto — класс лишь фиксирует это явно (+ инерция iOS) и не плодит лишний div.
+              Дата в первой колонке — whitespace-nowrap, поэтому на 375px таблица упирается
+              в неё и уезжает горизонтально ВНУТРИ карточки, не ломая страницу (правило 2). */}
           {historyOpen && (
-            <div className="mt-3 max-h-72 overflow-y-auto rounded-lg border border-[var(--color-border)]">
+            <div className="mt-3 max-h-72 overflow-y-auto scroll-x rounded-lg border border-[var(--color-border)]">
               {!history ? (
                 <div className="p-3 text-xs text-[var(--color-text-muted)]">Загрузка…</div>
               ) : history.events.length === 0 ? (
