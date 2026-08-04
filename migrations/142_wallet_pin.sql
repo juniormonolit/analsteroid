@@ -6,6 +6,23 @@
 -- после того, как PIN_PEPPER выкачен в env процесса и процесс перезапущен.
 -- Без перца фича не включается — lib/auth/pin.ts проверяет process.env.PIN_PEPPER
 -- на старте и отключает все пин-эндпоинты, если его нет.
+--
+-- DOWN (чисто аддитивная миграция — новые nullable-колонки/таблица/триггер,
+-- ничего существующего не меняет и не удаляет; откат безопасен в любой момент,
+-- даже без восстановления из бэкапа — старый код эти объекты не читает):
+--   DROP TRIGGER IF EXISTS trg_ledger_require_pin ON badge_coin_ledger;
+--   DROP FUNCTION IF EXISTS trg_badge_coin_ledger_require_pin();
+--   ALTER TABLE badge_coin_ledger DROP COLUMN IF EXISTS pin_event_id;
+--   ALTER TABLE payout_requests DROP COLUMN IF EXISTS pin_event_id;
+--   DROP TABLE IF EXISTS wallet_pin_events;
+--   ALTER TABLE users
+--     DROP COLUMN IF EXISTS pin_hash, DROP COLUMN IF EXISTS pin_set_at,
+--     DROP COLUMN IF EXISTS pin_source, DROP COLUMN IF EXISTS pin_fail_count,
+--     DROP COLUMN IF EXISTS pin_lock_level, DROP COLUMN IF EXISTS pin_locked_until,
+--     DROP COLUMN IF EXISTS pin_freeze_until, DROP COLUMN IF EXISTS pin_threshold_mlt;
+-- Бэкапы ДО применения (pg_dump -Fc, восстановление pg_restore):
+--   дев:  /home/junior/anal_v2/junibaseone-backup-pre-141-20260804-133822.dump
+--   прод: /home/junior/anal_v2/system-backup-pre-142-20260804-140622.dump
 
 BEGIN;
 
