@@ -9,6 +9,9 @@ import { useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MltCoin } from '@/components/icons/MltCoin';
 import { Modal } from '@/components/ui/Modal';
+import { PinDialog } from '@/components/ui/PinDialog';
+import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
+import { fetchPinGated } from '@/lib/client/pinFetch';
 
 interface PoolTier {
   tierKey: string; name: string; icon: string; rarity: 'common' | 'rare' | 'jackpot';
@@ -175,28 +178,44 @@ export function GachaBlock({ isSelf }: { isSelf: boolean }) {
     refetchOnWindowFocus: false,
   });
 
+  // Пин по личному порогу (задача #2995/#3020): крутка недорогая и чаще всего
+  // проходит без пина (порог по умолчанию 30 MLT), но выше порога/при
+  // исчерпанном суточном потолке бэк отвечает pinRequired — тот же паттерн,
+  // что уже обкатан в покупке магазина и рублёвом кошельке.
+  const [pinSetupOpen, setPinSetupOpen] = useState(false);
+  const [pinVerifyOpen, setPinVerifyOpen] = useState(false);
+
+  // Запуск анимации колеса к уже известному результату — общий код для успеха
+  // первого запроса (без пина) и успеха после ввода пина в PinDialog.
+  function startSpin(result: SpinResultView) {
+    pendingResult.current = result;
+    // Крутим колесо к выпавшему сектору: 5 полных оборотов + доводка так,
+    // чтобы центр сектора встал под стрелку (стрелка сверху = 0°).
+    const tiers = data?.pool ?? [];
+    const idx = Math.max(0, tiers.findIndex(t => t.tierKey === result.tierKey));
+    const seg = 360 / Math.max(tiers.length, 1);
+    const target = 360 * 5 + (360 - (idx * seg + seg / 2));
+    setSpinning(true);
+    setReveal(null);
+    // от текущего угла — приводим к базе, затем в следующий кадр задаём цель
+    setRotation(r => r % 360);
+    requestAnimationFrame(() => requestAnimationFrame(() => setRotation(target)));
+  }
+
   const spin = useMutation({
     mutationFn: async () => {
-      // Тело не отправляется: серверу нечем «подыграть», исход только его.
-      const res = await fetch('/api/shop/gacha', { method: 'POST' });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
-      return (json as { result: SpinResultView }).result;
+      // Тело без pin: серверу нечем «подыграть» (исход только его), первый
+      // заход — без поля pin, дальше по ответу решаем нужен ли диалог.
+      const r = await fetchPinGated<{ result: SpinResultView }>('/api/shop/gacha', 'POST', {});
+      if (r.ok) return { done: true, result: r.data!.result } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: true } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: true } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: (result) => {
-      setError(null);
-      pendingResult.current = result;
-      // Крутим колесо к выпавшему сектору: 5 полных оборотов + доводка так,
-      // чтобы центр сектора встал под стрелку (стрелка сверху = 0°).
-      const tiers = data?.pool ?? [];
-      const idx = Math.max(0, tiers.findIndex(t => t.tierKey === result.tierKey));
-      const seg = 360 / Math.max(tiers.length, 1);
-      const target = 360 * 5 + (360 - (idx * seg + seg / 2));
-      setSpinning(true);
-      setReveal(null);
-      // от текущего угла — приводим к базе, затем в следующий кадр задаём цель
-      setRotation(r => r % 360);
-      requestAnimationFrame(() => requestAnimationFrame(() => setRotation(target)));
+    onSuccess: (res) => {
+      if (res.done) { setError(null); startSpin(res.result); return; }
+      if (res.needsSetup) setPinSetupOpen(true);
+      if (res.needsVerify) setPinVerifyOpen(true);
     },
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
@@ -287,6 +306,25 @@ export function GachaBlock({ isSelf }: { isSelf: boolean }) {
         </div>
       )}
       {showChances && <ChancesModal data={data} onClose={() => setShowChances(false)} />}
+      <PinSetupDialog
+        open={pinSetupOpen}
+        onOpenChange={setPinSetupOpen}
+        onSuccess={() => { setPinSetupOpen(false); spin.mutate(); }}
+      />
+      <PinDialog
+        open={pinVerifyOpen}
+        onOpenChange={setPinVerifyOpen}
+        title="Подтвердите крутку пином"
+        description={`${data.spinCost} ${data.currencyName}`}
+        onConfirm={async (pin) => {
+          const r = await fetchPinGated<{ result: SpinResultView }>('/api/shop/gacha', 'POST', { pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyOpen(false);
+          setError(null);
+          startSpin(r.data!.result);
+          return { ok: true };
+        }}
+      />
     </section>
   );
 }

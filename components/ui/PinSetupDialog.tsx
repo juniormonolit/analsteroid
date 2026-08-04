@@ -95,7 +95,7 @@ export function PinSetupDialog({ open, onOpenChange, ssoAccount: ssoAccountProp,
             />
           </div>
         )}
-        {error && <p className="text-xs text-red-500">{error}</p>}
+        {error && <p className="text-xs text-[var(--color-negative,#e03131)]">{error}</p>}
         <button
           type="button" disabled={pending} onClick={() => void submit()}
           className="w-full rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"

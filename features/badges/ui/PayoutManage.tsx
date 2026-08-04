@@ -9,6 +9,9 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { PinDialog } from '@/components/ui/PinDialog';
+import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
+import { fetchPinGated } from '@/lib/client/pinFetch';
 
 interface ManagedPayout {
   id: number; bitrix_id: number; managerName: string; amount: number;
@@ -23,6 +26,12 @@ export function PayoutManageBlock() {
   const [confirmingPaid, setConfirmingPaid] = useState<ManagedPayout | null>(null);
   const [rejecting, setRejecting] = useState<ManagedPayout | null>(null);
   const [rejectComment, setRejectComment] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  // «Выплачено» — резолвер списывает ЧУЖИЕ рубли, пин ВСЕГДА (спека §3, задача
+  // #2995/#3020); «Отклонить» деньги не двигает, бэк пин не спрашивает —
+  // fetchPinGated просто не сработает для этой ветки (r.ok сразу true).
+  const [pinSetupFor, setPinSetupFor] = useState<ManagedPayout | null>(null);
+  const [pinVerifyFor, setPinVerifyFor] = useState<ManagedPayout | null>(null);
   const { data } = useQuery<{ canManage: boolean; requests: ManagedPayout[] }>({
     queryKey: ['badges-payouts-manage'],
     queryFn: async () => {
@@ -34,19 +43,25 @@ export function PayoutManageBlock() {
     refetchOnWindowFocus: false,
   });
 
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['badges-payouts-manage'] });
+    void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+  };
+
   const act = useMutation({
-    mutationFn: async ({ id, action, comment }: { id: number; action: 'paid' | 'rejected'; comment?: string }) => {
-      const res = await fetch('/api/badges/payout', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, action, comment }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+    mutationFn: async ({ row, action, comment }: { row: ManagedPayout; action: 'paid' | 'rejected'; comment?: string }) => {
+      const r = await fetchPinGated('/api/badges/payout', 'PATCH', { id: row.id, action, comment });
+      if (r.ok) return { done: true } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: row } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: row } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['badges-payouts-manage'] });
-      void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+    onSuccess: (res) => {
+      if (res.done) { setError(null); refresh(); return; }
+      if (res.needsSetup) setPinSetupFor(res.needsSetup);
+      if (res.needsVerify) setPinVerifyFor(res.needsVerify);
     },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
   const requests = data?.requests ?? [];
@@ -59,6 +74,7 @@ export function PayoutManageBlock() {
       <div className="mb-2.5 flex items-baseline gap-2">
         <h2 className="text-base font-bold text-[var(--color-text)]">💸 Заявки на вывод в ЗП</h2>
         {pending.length > 0 && <span className="text-xs font-semibold text-[var(--color-accent)]">{pending.length} ждут решения</span>}
+        {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
       </div>
       <div className="flex flex-col">
         {pending.map(r => (
@@ -99,7 +115,7 @@ export function PayoutManageBlock() {
         description={confirmingPaid ? `Отметить выплаченным ${confirmingPaid.amount} ₽ для ${confirmingPaid.managerName}? Сумма спишется с рублёвого баланса.` : ''}
         confirmLabel="Выплачено"
         pending={act.isPending}
-        onConfirm={() => { if (confirmingPaid) { act.mutate({ id: confirmingPaid.id, action: 'paid' }); setConfirmingPaid(null); } }}
+        onConfirm={() => { if (confirmingPaid) { act.mutate({ row: confirmingPaid, action: 'paid' }); setConfirmingPaid(null); } }}
         onCancel={() => setConfirmingPaid(null)}
       />
       <Modal
@@ -116,12 +132,32 @@ export function PayoutManageBlock() {
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={() => setRejecting(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
           <button type="button" disabled={act.isPending || !rejectComment.trim()}
-            onClick={() => { if (rejecting) { act.mutate({ id: rejecting.id, action: 'rejected', comment: rejectComment.trim() }); setRejecting(null); } }}
+            onClick={() => { if (rejecting) { act.mutate({ row: rejecting, action: 'rejected', comment: rejectComment.trim() }); setRejecting(null); } }}
             className="rounded-lg bg-[var(--color-negative,#e03131)] px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
             Отклонить
           </button>
         </div>
       </Modal>
+      <PinSetupDialog
+        open={!!pinSetupFor}
+        onOpenChange={(o) => { if (!o) setPinSetupFor(null); }}
+        onSuccess={() => { const row = pinSetupFor; setPinSetupFor(null); if (row) act.mutate({ row, action: 'paid' }); }}
+      />
+      <PinDialog
+        open={!!pinVerifyFor}
+        onOpenChange={(o) => { if (!o) setPinVerifyFor(null); }}
+        title="Подтвердите выплату пином"
+        description={pinVerifyFor ? `${pinVerifyFor.amount.toLocaleString('ru-RU')} ₽ — ${pinVerifyFor.managerName}` : undefined}
+        onConfirm={async (pin) => {
+          if (!pinVerifyFor) return { ok: false, error: 'Нет заявки' };
+          const r = await fetchPinGated('/api/badges/payout', 'PATCH', { id: pinVerifyFor.id, action: 'paid', pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyFor(null);
+          setError(null);
+          refresh();
+          return { ok: true };
+        }}
+      />
     </div>
   );
 }

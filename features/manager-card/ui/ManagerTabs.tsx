@@ -284,16 +284,26 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
   const currency = ctx.currencyName ?? 'MLT';
   const selType = ctx.penaltyTypes?.find(t => t.id === typeId) ?? null;
 
+  // Ручное поощрение/штраф — актор двигает ЧУЖОЙ кошелёк: пин ВСЕГДА (спека §3,
+  // задача #2995/#3020). lastBody хранит тело последней попытки, чтобы дослать
+  // его же с полем pin после установки/ввода пина.
+  const [lastBody, setLastBody] = useState<Record<string, unknown> | null>(null);
+  const [pinSetupOpen, setPinSetupOpen] = useState(false);
+  const [pinVerifyOpen, setPinVerifyOpen] = useState(false);
+
   const submit = useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
-      const res = await fetch('/api/badges/manual', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
-      return true;
+      const r = await fetchPinGated('/api/badges/manual', 'POST', body);
+      if (r.ok) return { done: true } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: true } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: true } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: (done) => { if (done) onDone(); },
+    onSuccess: (res) => {
+      if (res.done) { onDone(); return; }
+      if (res.needsSetup) setPinSetupOpen(true);
+      if (res.needsVerify) setPinVerifyOpen(true);
+    },
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
@@ -390,8 +400,26 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
         confirmLabel={kind === 'bonus' ? 'Поощрить' : 'Оштрафовать'}
         tone={kind === 'bonus' ? 'default' : 'danger'}
         pending={submit.isPending}
-        onConfirm={() => { if (pendingConfirm) { const body = pendingConfirm.body; setPendingConfirm(null); submit.mutate(body); } }}
+        onConfirm={() => { if (pendingConfirm) { const body = pendingConfirm.body; setPendingConfirm(null); setLastBody(body); submit.mutate(body); } }}
         onCancel={() => setPendingConfirm(null)}
+      />
+      <PinSetupDialog
+        open={pinSetupOpen}
+        onOpenChange={setPinSetupOpen}
+        onSuccess={() => { setPinSetupOpen(false); if (lastBody) submit.mutate(lastBody); }}
+      />
+      <PinDialog
+        open={pinVerifyOpen}
+        onOpenChange={setPinVerifyOpen}
+        title={kind === 'bonus' ? 'Подтвердите поощрение пином' : 'Подтвердите штраф пином'}
+        onConfirm={async (pin) => {
+          if (!lastBody) return { ok: false, error: 'Нет операции' };
+          const r = await fetchPinGated('/api/badges/manual', 'POST', { ...lastBody, pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyOpen(false);
+          onDone();
+          return { ok: true };
+        }}
       />
     </Modal>
   );
@@ -929,21 +957,32 @@ export function RewardsTab({ managerId, isSelf, forceReadOnly = false }: { manag
   const ledger = extra?.ledger ?? [];
   // Подтверждение сторно — вместо window.confirm (задача 2764).
   const [reverseConfirmId, setReverseConfirmId] = useState<number | null>(null);
+  const [reverseError, setReverseError] = useState<string | null>(null);
+  // Сторно — пин ВСЕГДА (спека §3, задача #2995/#3020).
+  const [reversePinSetupId, setReversePinSetupId] = useState<number | null>(null);
+  const [reversePinVerifyId, setReversePinVerifyId] = useState<number | null>(null);
+
+  const reverseRefresh = () => {
+    void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+    void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
+    void qc.invalidateQueries({ queryKey: ['badges-manual-ctx'] });
+  };
 
   // Сторно (только админ): компенсирующая запись, история сохраняется.
   const reverse = useMutation({
     mutationFn: async (ledgerId: number) => {
-      const res = await fetch('/api/badges/manual/reverse', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ledgerId }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+      const r = await fetchPinGated('/api/badges/manual/reverse', 'POST', { ledgerId });
+      if (r.ok) return { done: true } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: ledgerId } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: ledgerId } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
-      void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
-      void qc.invalidateQueries({ queryKey: ['badges-manual-ctx'] });
+    onSuccess: (res) => {
+      if (res.done) { setReverseError(null); reverseRefresh(); return; }
+      if (res.needsSetup !== undefined) setReversePinSetupId(res.needsSetup);
+      if (res.needsVerify !== undefined) setReversePinVerifyId(res.needsVerify);
     },
+    onError: (e) => setReverseError(e instanceof Error ? e.message : String(e)),
   });
 
   return (
@@ -959,6 +998,7 @@ export function RewardsTab({ managerId, isSelf, forceReadOnly = false }: { manag
           <h2 className="text-base font-bold text-[var(--color-text)]">Выписка</h2>
           <span className="text-xs text-[var(--color-text-muted)]">награды, поощрения и штрафы</span>
           {ledger.length > 0 && <span className="text-xs text-[var(--color-text-muted)]">{ledger.length}</span>}
+          {reverseError && <span className="text-xs text-[var(--color-negative,#e03131)]">{reverseError}</span>}
         </div>
         {isLoading ? (
           <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>
@@ -1026,6 +1066,25 @@ export function RewardsTab({ managerId, isSelf, forceReadOnly = false }: { manag
         pending={reverse.isPending}
         onConfirm={() => { if (reverseConfirmId !== null) { reverse.mutate(reverseConfirmId); setReverseConfirmId(null); } }}
         onCancel={() => setReverseConfirmId(null)}
+      />
+      <PinSetupDialog
+        open={reversePinSetupId !== null}
+        onOpenChange={(o) => { if (!o) setReversePinSetupId(null); }}
+        onSuccess={() => { const id = reversePinSetupId; setReversePinSetupId(null); if (id !== null) reverse.mutate(id); }}
+      />
+      <PinDialog
+        open={reversePinVerifyId !== null}
+        onOpenChange={(o) => { if (!o) setReversePinVerifyId(null); }}
+        title="Подтвердите сторно пином"
+        onConfirm={async (pin) => {
+          if (reversePinVerifyId === null) return { ok: false, error: 'Нет операции' };
+          const r = await fetchPinGated('/api/badges/manual/reverse', 'POST', { ledgerId: reversePinVerifyId, pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setReversePinVerifyId(null);
+          setReverseError(null);
+          reverseRefresh();
+          return { ok: true };
+        }}
       />
     </div>
   );
@@ -1334,17 +1393,25 @@ function GiftModal({ row, meta, onClose, onDone }: {
   const [error, setError] = useState<string | null>(null);
   // Подтверждение — вместо window.confirm (задача 2764).
   const [confirming, setConfirming] = useState(false);
+  // Подарок — ценность уходит безвозвратно, пин ВСЕГДА (спека §3, задача
+  // #2995/#3020); может прилететь и «заморожено после сброса пина» (423 БЕЗ
+  // pinRequired) — тогда needsPinVerify=false и текст идёт прямо в error, без
+  // диалога пина (ввод пина тут не поможет).
+  const [pinSetupOpen, setPinSetupOpen] = useState(false);
+  const [pinVerifyOpen, setPinVerifyOpen] = useState(false);
   const gift = useMutation({
-    mutationFn: async () => {
-      const res = await fetch('/api/shop/gift', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ inventoryId: row.id, toBitrixId: to }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
-      return true;
+    mutationFn: async (pin?: string) => {
+      const r = await fetchPinGated('/api/shop/gift', 'POST', { inventoryId: row.id, toBitrixId: to, ...(pin ? { pin } : {}) });
+      if (r.ok) return { done: true } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: true } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: true } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: (done) => { if (done) onDone(); },
+    onSuccess: (res) => {
+      if (res.done) { onDone(); return; }
+      if (res.needsSetup) setPinSetupOpen(true);
+      if (res.needsVerify) setPinVerifyOpen(true);
+    },
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
   const toName = meta.managers.find(m => m.id === to)?.name ?? to;
@@ -1374,8 +1441,27 @@ function GiftModal({ row, meta, onClose, onDone }: {
         description={`Подарить «${row.item_name}» → ${toName}?\n\nПредмет уйдёт из вашего инвентаря, срок годности (до ${fmtDate(row.expires_at)}) сохранится.`}
         confirmLabel="Подарить"
         pending={gift.isPending}
-        onConfirm={() => { setConfirming(false); gift.mutate(); }}
+        onConfirm={() => { setConfirming(false); gift.mutate(undefined); }}
         onCancel={() => setConfirming(false)}
+      />
+      <PinSetupDialog
+        open={pinSetupOpen}
+        onOpenChange={setPinSetupOpen}
+        onSuccess={() => { setPinSetupOpen(false); gift.mutate(undefined); }}
+      />
+      <PinDialog
+        open={pinVerifyOpen}
+        onOpenChange={setPinVerifyOpen}
+        title="Подтвердите подарок пином"
+        description={`«${row.item_name}» → ${toName}`}
+        onConfirm={async (pin) => {
+          const r = await fetchPinGated('/api/shop/gift', 'POST', { inventoryId: row.id, toBitrixId: to, pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyOpen(false);
+          setError(null);
+          onDone();
+          return { ok: true };
+        }}
       />
     </Modal>
   );
@@ -1532,24 +1618,34 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
   const [okMsg, setOkMsg] = useState<string | null>(null);
   // Подтверждение перевода — вместо window.confirm (задача 2764).
   const [pendingTransfer, setPendingTransfer] = useState<string | null>(null);
+  // Перевод — ценность уходит безвозвратно, пин ВСЕГДА (спека §3, задача
+  // #2995/#3020); возможна и заморозка после сброса пина (423 без pinRequired) —
+  // тогда needsPinVerify=false, текст идёт прямо в error, диалог не открывается.
+  const [pinSetupOpen, setPinSetupOpen] = useState(false);
+  const [pinVerifyOpen, setPinVerifyOpen] = useState(false);
 
   const send = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (pin?: string) => {
       const v = Number(amount);
-      const res = await fetch('/api/shop/transfer', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ toBitrixId: to, amount: v, comment: comment.trim() }),
+      const r = await fetchPinGated<{ received: number; fee: number }>('/api/shop/transfer', 'POST', {
+        toBitrixId: to, amount: v, comment: comment.trim(), ...(pin ? { pin } : {}),
       });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
-      return json as { received: number; fee: number };
+      if (r.ok) return { done: true, ...r.data! } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: true } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: true } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: (r) => {
-      setError(null); setAmount(''); setComment(''); setTo('');
-      setOkMsg(`Готово: получателю дошло ${r.received}, комиссия ${r.fee} сожжена`);
-      void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
-      void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
-      void qc.invalidateQueries({ queryKey: ['shop-transfer-meta'] });
+    onSuccess: (res) => {
+      if (res.done) {
+        setError(null); setAmount(''); setComment(''); setTo('');
+        setOkMsg(`Готово: получателю дошло ${res.received}, комиссия ${res.fee} сожжена`);
+        void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
+        void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+        void qc.invalidateQueries({ queryKey: ['shop-transfer-meta'] });
+        return;
+      }
+      if (res.needsSetup) setPinSetupOpen(true);
+      if (res.needsVerify) setPinVerifyOpen(true);
     },
     onError: (e) => { setOkMsg(null); setError(e instanceof Error ? e.message : String(e)); },
   });
@@ -1616,8 +1712,33 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
         description={pendingTransfer ?? ''}
         confirmLabel="Перевести"
         pending={send.isPending}
-        onConfirm={() => { setPendingTransfer(null); send.mutate(); }}
+        onConfirm={() => { setPendingTransfer(null); send.mutate(undefined); }}
         onCancel={() => setPendingTransfer(null)}
+      />
+      <PinSetupDialog
+        open={pinSetupOpen}
+        onOpenChange={setPinSetupOpen}
+        onSuccess={() => { setPinSetupOpen(false); send.mutate(undefined); }}
+      />
+      <PinDialog
+        open={pinVerifyOpen}
+        onOpenChange={setPinVerifyOpen}
+        title="Подтвердите перевод пином"
+        description={`${amount} ${currencyName} → ${meta?.managers.find(m => m.id === to)?.name ?? to}`}
+        onConfirm={async (pin) => {
+          const v = Number(amount);
+          const r = await fetchPinGated<{ received: number; fee: number }>('/api/shop/transfer', 'POST', {
+            toBitrixId: to, amount: v, comment: comment.trim(), pin,
+          });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyOpen(false);
+          setError(null); setAmount(''); setComment(''); setTo('');
+          setOkMsg(`Готово: получателю дошло ${r.data!.received}, комиссия ${r.data!.fee} сожжена`);
+          void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
+          void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
+          void qc.invalidateQueries({ queryKey: ['shop-transfer-meta'] });
+          return { ok: true };
+        }}
       />
     </section>
   );

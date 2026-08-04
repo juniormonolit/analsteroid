@@ -9,6 +9,9 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { PinDialog } from '@/components/ui/PinDialog';
+import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
+import { fetchPinGated } from '@/lib/client/pinFetch';
 
 interface ManagedActivation {
   id: number; bitrix_id: number; managerName: string; item_name: string;
@@ -24,6 +27,11 @@ export function InventoryManageBlock() {
   const [approving, setApproving] = useState<ManagedActivation | null>(null);
   const [rejecting, setRejecting] = useState<ManagedActivation | null>(null);
   const [rejectComment, setRejectComment] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  // «Одобрить» — расход предмета менеджера, пин ВСЕГДА (спека §3, задача
+  // #2995/#3020); «Отклонить» деньги не двигает, пин бэк не спрашивает.
+  const [pinSetupFor, setPinSetupFor] = useState<ManagedActivation | null>(null);
+  const [pinVerifyFor, setPinVerifyFor] = useState<ManagedActivation | null>(null);
   const { data } = useQuery<{ canManage: boolean; requests: ManagedActivation[] }>({
     queryKey: ['shop-activations-manage'],
     queryFn: async () => {
@@ -35,19 +43,25 @@ export function InventoryManageBlock() {
     refetchOnWindowFocus: false,
   });
 
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['shop-activations-manage'] });
+    void qc.invalidateQueries({ queryKey: ['shop'] });
+  };
+
   const act = useMutation({
-    mutationFn: async ({ id, action, comment }: { id: number; action: 'approve' | 'reject'; comment?: string }) => {
-      const res = await fetch('/api/shop/activate', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, action, comment }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
+    mutationFn: async ({ row, action, comment }: { row: ManagedActivation; action: 'approve' | 'reject'; comment?: string }) => {
+      const r = await fetchPinGated('/api/shop/activate', 'PATCH', { id: row.id, action, comment });
+      if (r.ok) return { done: true } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: row } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: row } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['shop-activations-manage'] });
-      void qc.invalidateQueries({ queryKey: ['shop'] });
+    onSuccess: (res) => {
+      if (res.done) { setError(null); refresh(); return; }
+      if (res.needsSetup) setPinSetupFor(res.needsSetup);
+      if (res.needsVerify) setPinVerifyFor(res.needsVerify);
     },
+    onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
   const requests = data?.requests ?? [];
@@ -60,6 +74,7 @@ export function InventoryManageBlock() {
       <div className="mb-2.5 flex items-baseline gap-2">
         <h2 className="text-base font-bold text-[var(--color-text)]">🎟️ Заявки на активацию призов</h2>
         {pending.length > 0 && <span className="text-xs font-semibold text-[var(--color-accent)]">{pending.length} ждут решения</span>}
+        {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
       </div>
       <div className="flex flex-col">
         {pending.map(r => (
@@ -106,7 +121,7 @@ export function InventoryManageBlock() {
         description={approving ? `Одобрить «${approving.item_name}» для ${approving.managerName}? Предмет будет отмечен использованным.` : ''}
         confirmLabel="Одобрить"
         pending={act.isPending}
-        onConfirm={() => { if (approving) { act.mutate({ id: approving.id, action: 'approve' }); setApproving(null); } }}
+        onConfirm={() => { if (approving) { act.mutate({ row: approving, action: 'approve' }); setApproving(null); } }}
         onCancel={() => setApproving(null)}
       />
       <Modal
@@ -123,12 +138,32 @@ export function InventoryManageBlock() {
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={() => setRejecting(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
           <button type="button" disabled={act.isPending || !rejectComment.trim()}
-            onClick={() => { if (rejecting) { act.mutate({ id: rejecting.id, action: 'reject', comment: rejectComment.trim() }); setRejecting(null); } }}
+            onClick={() => { if (rejecting) { act.mutate({ row: rejecting, action: 'reject', comment: rejectComment.trim() }); setRejecting(null); } }}
             className="rounded-lg bg-[var(--color-negative,#e03131)] px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
             Отклонить
           </button>
         </div>
       </Modal>
+      <PinSetupDialog
+        open={!!pinSetupFor}
+        onOpenChange={(o) => { if (!o) setPinSetupFor(null); }}
+        onSuccess={() => { const row = pinSetupFor; setPinSetupFor(null); if (row) act.mutate({ row, action: 'approve' }); }}
+      />
+      <PinDialog
+        open={!!pinVerifyFor}
+        onOpenChange={(o) => { if (!o) setPinVerifyFor(null); }}
+        title="Подтвердите одобрение пином"
+        description={pinVerifyFor ? `«${pinVerifyFor.item_name}» — ${pinVerifyFor.managerName}` : undefined}
+        onConfirm={async (pin) => {
+          if (!pinVerifyFor) return { ok: false, error: 'Нет заявки' };
+          const r = await fetchPinGated('/api/shop/activate', 'PATCH', { id: pinVerifyFor.id, action: 'approve', pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyFor(null);
+          setError(null);
+          refresh();
+          return { ok: true };
+        }}
+      />
     </div>
   );
 }

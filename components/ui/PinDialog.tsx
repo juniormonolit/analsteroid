@@ -88,7 +88,7 @@ export function PinDialog({ open, onOpenChange, title = 'Подтвердите 
             />
           ))}
         </div>
-        {error && <p className="text-center text-xs text-red-500">{error}</p>}
+        {error && <p className="text-center text-xs text-[var(--color-negative,#e03131)]">{error}</p>}
         {pending && !error && <p className="text-center text-xs text-[var(--color-text-muted)]">Проверяем…</p>}
       </div>
     </Modal>
