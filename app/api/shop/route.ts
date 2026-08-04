@@ -7,7 +7,7 @@ import { systemDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { priceEball, recomputeFifoRemaining } from '@/features/badges/engine/wallet';
 import { loadXpSettings, levelFromXp } from '@/features/xp/engine/xp';
-import { rarityForLevel } from '@/features/shop/engine/rarity';
+import { rarityForPrice } from '@/features/shop/engine/rarity';
 import { pushViaAnalitik } from '@/features/badges/engine/notifications';
 
 // Магазин призов + «Заполнятор товаров» (задача 2960): витрина + покупка +
@@ -17,12 +17,16 @@ import { pushViaAnalitik } from '@/features/badges/engine/notifications';
 // ttl_months позиции. Цена фиксируется в момент покупки (price_paid) —
 // будущая индексация цен каталога оформленное не трогает.
 //
-// Гейты покупки (новое, 2960):
+// Гейты покупки (2960, min_level уточнён в 2983):
 //  - buyer_scope='rop_only' — товар вообще НЕ показывается тем, кто не РОП/
 //    директор (правка владельца: «командные — теперь только у РОПов»);
-//  - min_level — товар ВИДЕН всем (мотивирующая цель), но кнопка покупки
-//    заблокирована ниже уровня (levelFromXp, xp_ledger) — редкость считается
-//    от этого же порога, features/shop/engine/rarity.ts;
+//  - min_level — товар ВИДЕН всем (мотивирующая цель, карточка заблюрена на
+//    витрине с подписью «Доступен с N уровня»), но кнопка покупки
+//    заблокирована ниже уровня (levelFromXp, xp_ledger) — ЭТА ЖЕ проверка
+//    повторена на бэкенде ниже (POST), не только в UI. С 2983 min_level —
+//    ЧИСТО антифарм-защита («чтобы менеджер хитростью за два месяца не
+//    нафармил айфон»), редкость от него больше НЕ зависит — редкость теперь
+//    считается от ЦЕНЫ, features/shop/engine/rarity.ts (rarityForPrice);
 //  - per_person_limit/per_person_limit_days — сколько раз ОДНОМУ человеку
 //    можно купить эту позицию за окно (или за всё время, если дней нет).
 
@@ -121,10 +125,13 @@ export async function GET(req: NextRequest) {
     viewerLevel: level,
     viewerIsRop,
     items: visibleItems.map(i => {
-      const rarity = rarityForLevel(i.min_level);
+      const price = priceEball(Number(i.price_units));
+      // Редкость — от ЦЕНЫ (правка владельца 04.08, задача 2983), min_level —
+      // отдельная антифарм-защита, больше не влияет на бейдж/цвет карточки.
+      const rarity = rarityForPrice(price);
       return {
         id: i.id, name: i.name, description: i.description, category: i.category,
-        emoji: i.emoji, priceEball: priceEball(Number(i.price_units)),
+        emoji: i.emoji, priceEball: price,
         stock: i.stock, ttlMonths: i.ttl_months,
         minLevel: i.min_level, marketplaceUrl: i.marketplace_url, buyerScope: i.buyer_scope,
         perPersonLimit: i.per_person_limit, perPersonLimitDays: i.per_person_limit_days,

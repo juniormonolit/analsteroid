@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Lock } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -1147,11 +1148,19 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                 const soldOut = item.stock !== null && item.stock <= 0;
                 const canAfford = (data?.balance ?? 0) >= item.priceEball;
                 const levelOk = viewerLevel >= item.minLevel;
+                // Ниже порога доступности карточка блюрится (задача 2983,
+                // предложение владельца) — контент (эмодзи/название/описание/
+                // ссылка) скрыт под blur, цена и требование по уровню ОСТАЮТСЯ
+                // читаемыми (не блюрим карточку «в кашу»). Кнопка покупки
+                // неактивна — та же проверка levelOk, что и гейт на бэкенде
+                // (POST /api/shop блокирует покупку ниже min_level независимо
+                // от UI).
+                const locked = !levelOk;
                 const limitReached = item.perPersonLimit !== null && item.purchasedByViewer >= item.perPersonLimit;
                 const canBuy = !soldOut && canAfford && levelOk && !limitReached;
                 let blockedReason: string | null = null;
                 if (soldOut) blockedReason = 'Позиция закончилась';
-                else if (!levelOk) blockedReason = `Доступно с ${item.minLevel} уровня (у вас ${viewerLevel})`;
+                else if (locked) blockedReason = `Доступно с ${item.minLevel} уровня (у вас ${viewerLevel})`;
                 else if (limitReached) blockedReason = `Лимит покупок исчерпан (${item.perPersonLimit}${item.perPersonLimitDays ? ` за ${item.perPersonLimitDays} дн.` : ''})`;
                 else if (!canAfford) blockedReason = `Не хватает ${currencyName}`;
                 return (
@@ -1159,22 +1168,43 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                     className="flex flex-col gap-1.5 rounded-xl border px-3.5 py-3"
                     style={{ borderColor: item.rarityKey === 'common' ? 'var(--color-border)' : `${item.rarityColor}66` }}
                   >
-                    <div className="flex items-start gap-2">
-                      {/* Эмодзи вместо фото карточки — картинок нет нигде принципиально. */}
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-bg)] text-2xl">
-                        {item.emoji}
+                    <div className="relative overflow-hidden rounded-lg">
+                      <div className={locked ? 'pointer-events-none select-none blur-[5px]' : undefined}>
+                        <div className="flex items-start gap-2">
+                          {/* Эмодзи вместо фото карточки — картинок нет нигде принципиально. */}
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[var(--color-bg)] text-2xl">
+                            {item.emoji}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold text-[var(--color-text)] text-[14px]">{item.name}</div>
+                            <span
+                              className="mt-0.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                              style={{ color: item.rarityColor, backgroundColor: `${item.rarityColor}1a` }}
+                            >
+                              {item.rarityLabel}
+                            </span>
+                          </div>
+                        </div>
+                        {item.description && <div className="mt-1.5 text-xs text-[var(--color-text-muted)]">{item.description}</div>}
+                        {item.marketplaceUrl && (
+                          <a href={item.marketplaceUrl} target="_blank" rel="noopener noreferrer" tabIndex={locked ? -1 : undefined}
+                            className="mt-1.5 inline-block text-[11px] text-[var(--color-accent)] hover:underline">
+                            Пример на маркетплейсе ↗
+                          </a>
+                        )}
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-[var(--color-text)] text-[14px]">{item.name}</div>
-                        <span
-                          className="mt-0.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
-                          style={{ color: item.rarityColor, backgroundColor: `${item.rarityColor}1a` }}
-                        >
-                          {item.rarityLabel}
-                        </span>
-                      </div>
+                      {/* Оверлей поверх заблюренного контента — сама подпись НЕ
+                          блюрится, читается чётко (задача 2983). */}
+                      {locked && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-3 text-center">
+                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--color-text)] shadow-lg">
+                            <Lock size={12} className="shrink-0 text-[var(--color-text-muted)]" />
+                            Доступен с {item.minLevel} уровня
+                          </span>
+                        </div>
+                      )}
                     </div>
-                    {item.description && <div className="text-xs text-[var(--color-text-muted)]">{item.description}</div>}
+                    {/* Цена и требование по уровню — ВСЕГДА читаемы, не блюрятся. */}
                     <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
                       <span className="inline-flex items-center gap-1 font-extrabold tabular-nums text-[var(--color-accent)]">
                         <MltCoin variant="full" size={20} title={currencyName} />
@@ -1184,15 +1214,11 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                         <span className="text-[11px] text-[var(--color-text-muted)]">осталось {item.stock}</span>
                       )}
                       {item.minLevel > 0 && (
-                        <span className="text-[11px] text-[var(--color-text-muted)]">от {item.minLevel} ур.</span>
+                        <span className={`text-[11px] ${locked ? 'font-semibold' : 'text-[var(--color-text-muted)]'}`} style={locked ? { color: 'var(--color-warning, #e8590c)' } : undefined}>
+                          от {item.minLevel} ур.
+                        </span>
                       )}
                     </div>
-                    {item.marketplaceUrl && (
-                      <a href={item.marketplaceUrl} target="_blank" rel="noopener noreferrer"
-                        className="text-[11px] text-[var(--color-accent)] hover:underline">
-                        Пример на маркетплейсе ↗
-                      </a>
-                    )}
                     <div className="text-[11px] text-[var(--color-text-muted)]">срок годности {item.ttlMonths} мес</div>
                     {isSelf && (
                       <div className="flex gap-2">
@@ -1200,7 +1226,7 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                           onClick={() => requestBuy(item)}
                           title={blockedReason ?? undefined}
                           className="rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-inverse)] disabled:opacity-40">
-                          {soldOut ? 'Нет в наличии' : !levelOk ? `С ${item.minLevel} ур.` : limitReached ? 'Лимит исчерпан' : 'Купить'}
+                          {soldOut ? 'Нет в наличии' : locked ? `С ${item.minLevel} ур.` : limitReached ? 'Лимит исчерпан' : 'Купить'}
                         </button>
                       </div>
                     )}

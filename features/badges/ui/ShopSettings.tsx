@@ -1,7 +1,7 @@
 'use client';
 // Настройки магазина — «Заполнятор товаров» (задача 2960, ТЗ Серёги 04.08:
 // «хочу заводить всё сам» — форма для товаров И бустов одной и той же формой,
-// эмодзи вместо фото, тип позиции, минимальный уровень → редкость автоматом,
+// эмодзи вместо фото, тип позиции, минимальный уровень (антифарм-защита),
 // ссылка на маркетплейс, кто может покупать, лимит на человека, подтверждение
 // при активации, поля буста). MVP-основа (31.07): срок жизни ебаллов (TTL),
 // комиссия/лимит переводов, «Релизный старт» — НЕ трогаем, только добавляем
@@ -10,13 +10,20 @@
 //
 // MLT — единственная валюта покупки (правка владельца «продаётся только в
 // MLT») — рублёвой цены/чекбокса «можно за рубли» в форме больше нет.
+//
+// Правка владельца 04.08 (задача 2983): редкость считается от ЦЕНЫ, а не от
+// минимального уровня — минимальный уровень остался ЧИСТО антифарм-защитой
+// («порог доступности», чтобы менеджер хитростью за два месяца не нафармил
+// айфон). Редкость показывается рядом с ценой; блок под «Порогом доступности»
+// больше не содержит превью редкости.
 
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MltCoin } from '@/components/icons/MltCoin';
 import { Modal } from '@/components/ui/Modal';
 import { useUrlModal } from '@/lib/hooks/useUrlState';
-import { RARITY_TIERS, rarityForLevel, nextRarityTier } from '@/features/shop/engine/rarity';
+import { RARITY_TIERS, rarityForPrice, nextRarityTier } from '@/features/shop/engine/rarity';
+import { priceEball as toPriceEball } from '@/features/badges/engine/wallet';
 
 interface ShopItemRow {
   id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'boost';
@@ -46,13 +53,13 @@ const EMOJI_QUICK_PICKS = [
   '🎉', '🏷️', '💼', '🎓', '🚀', '🏆', '🎮', '📚', '🧘', '🍔', '🎬', '🌴',
 ];
 
-function RarityBadge({ minLevel }: { minLevel: number }) {
-  const r = rarityForLevel(minLevel);
+function RarityBadge({ priceEball }: { priceEball: number }) {
+  const r = rarityForPrice(priceEball);
   return (
     <span
       className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold"
       style={{ color: r.color, backgroundColor: `${r.color}1a`, border: `1px solid ${r.color}55` }}
-      title={`От уровня ${r.levelFrom}${minLevel > r.levelFrom ? ` (порог позиции — ${minLevel})` : ''}`}
+      title={`От ${r.priceFrom.toLocaleString('ru-RU')} MLT (${r.rubFrom.toLocaleString('ru-RU')} ₽ по курсу 1 MLT = 7,5 ₽)${priceEball > r.priceFrom ? ` — цена позиции ${priceEball.toLocaleString('ru-RU')} MLT` : ''}`}
     >
       {r.label}
     </span>
@@ -83,8 +90,11 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null);
 
   const minLevelNum = Number(minLevel) || 0;
-  const rarity = rarityForLevel(minLevelNum);
-  const next = nextRarityTier(minLevelNum);
+  // Редкость — от ЦЕНЫ (задача 2983), не от minLevel.
+  const priceNum = Number(price) || 0;
+  const priceEballNum = toPriceEball(priceNum);
+  const rarity = rarityForPrice(priceEballNum);
+  const next = nextRarityTier(priceEballNum);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -158,7 +168,7 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
               <option value="boost">Буст</option>
             </select>
           </label>
-          <label className={labelCls} title={`Цена в единицах индексации; сейчас 1 единица = 1 ${currencyName}`}>
+          <label className={labelCls} title={`Цена в единицах индексации; сейчас 1 единица = 1 ${currencyName}. Редкость считается от цены — автоматически, ниже.`}>
             Цена в {currencyName}
             <input value={price} onChange={e => setPrice(e.target.value)} className={`${inputCls} text-right tabular-nums`} />
           </label>
@@ -170,22 +180,37 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
           </label>
         </div>
 
-        {/* Минимальный уровень → редкость считается автоматически. */}
+        {/* Редкость — рядом с ценой, считается автоматически ОТ ЦЕНЫ (правка
+            владельца 04.08, задача 2983). Больше не зависит от минимального
+            уровня — тот теперь ниже, отдельным блоком «Порог доступности». */}
         <div className="rounded-xl border border-[var(--color-border)] p-2.5">
-          <label className={labelCls}>С какого уровня можно купить
-            <input value={minLevel} onChange={e => setMinLevel(e.target.value)} className={`${inputCls} text-right tabular-nums w-24`} />
-          </label>
-          <div className="mt-2 flex items-center gap-2">
-            <span>Редкость (считается автоматически):</span>
-            <RarityBadge minLevel={minLevelNum} />
+          <div className="flex items-center gap-2">
+            <span>Редкость (по цене, считается автоматически):</span>
+            <RarityBadge priceEball={priceEballNum} />
             {next && (
-              <span className="text-[10px]">до «{next.label}» ещё {next.levelFrom - minLevelNum} ур.</span>
+              <span className="text-[10px]">до «{next.label}» ещё {(next.priceFrom - priceEballNum).toLocaleString('ru-RU')} {currencyName}</span>
             )}
           </div>
           <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
             {RARITY_TIERS.map(t => (
-              <span key={t.key} style={{ color: t.color }}>{t.label} от {t.levelFrom} ур.</span>
+              <span key={t.key} style={{ color: t.color }}>{t.label} от {t.priceFrom.toLocaleString('ru-RU')} {currencyName}</span>
             ))}
+          </div>
+        </div>
+
+        {/* Порог доступности — ЧИСТО антифарм-защита (правка владельца 04.08,
+            задача 2983), НЕ влияет на редкость (та считается от цены выше).
+            На витрине ниже порога карточка блюрится, кнопка покупки
+            неактивна — гейт повторён и на бэкенде (app/api/shop POST). */}
+        <div className="rounded-xl border border-[var(--color-border)] p-2.5">
+          <label className={labelCls} title="Антифарм-защита: например, чтобы менеджер хитростью за пару месяцев не нафармил дорогой приз. НЕ влияет на редкость.">
+            Порог доступности — минимальный уровень для покупки
+            <input value={minLevel} onChange={e => setMinLevel(e.target.value)} className={`${inputCls} text-right tabular-nums w-24`} />
+          </label>
+          <div className="mt-1.5 text-[10px]">
+            {minLevelNum > 0
+              ? `На витрине ниже ${minLevelNum} ур. карточка показывается заблюренной с подписью «Доступен с ${minLevelNum} уровня», покупка заблокирована (и на сервере тоже).`
+              : 'Порог 0 — доступно с первого уровня, карточка не блюрится.'}
           </div>
         </div>
 
@@ -258,7 +283,9 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
 // ── Таблица каталога: сортировка по клику на заголовок (правило проекта
 // 01.08) — цикл убывание → возрастание → дефолт (образец: /rating). ─────────
 
-type SortKey = 'name' | 'category' | 'rarity' | 'price' | 'scope' | 'stock' | 'purchases';
+// 'rarity' сортирует по цене (редкость с 2983 считается от неё — совпадает
+// с колонкой «Цена»); 'threshold' — отдельно, по «Порогу доступности» (min_level).
+type SortKey = 'name' | 'category' | 'rarity' | 'price' | 'threshold' | 'scope' | 'stock' | 'purchases';
 type SortState = { key: SortKey; dir: 'desc' | 'asc' } | null;
 
 function SortableTh({ label, sortKey, sort, onSort, left, title }: {
@@ -411,8 +438,9 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
     const val = (i: ShopItemRow): number | string => {
       if (sort.key === 'name') return i.name.toLowerCase();
       if (sort.key === 'category') return TYPE_LABELS[i.category];
-      if (sort.key === 'rarity') return i.minLevel;
+      if (sort.key === 'rarity') return i.priceEball;
       if (sort.key === 'price') return i.priceEball;
+      if (sort.key === 'threshold') return i.minLevel;
       if (sort.key === 'scope') return SCOPE_LABELS[i.buyerScope];
       if (sort.key === 'stock') return i.stock ?? Infinity;
       return i.purchases;
@@ -480,7 +508,8 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
       </div>
       <div className="mb-2 text-xs text-[var(--color-text-muted)]">
         Всё продаётся только за {currencyName} — рублёвых цен на витрине больше нет. Эмодзи заменяет фото карточки:
-        картинок не грузим и не храним нигде принципиально. Минимальный уровень задаёт редкость автоматически.
+        картинок не грузим и не храним нигде принципиально. Редкость считается от цены автоматически; «Порог
+        доступности» (минимальный уровень) — отдельная антифарм-защита, на редкость не влияет.
         Удаления нет — выключайте позицию, история покупок сохраняется.
       </div>
 
@@ -494,8 +523,9 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
                 <th className="px-2.5 py-2 text-left font-medium text-[var(--color-text-muted)]"> </th>
                 <SortableTh label="Название" sortKey="name" sort={sort} onSort={onSort} left />
                 <SortableTh label="Тип" sortKey="category" sort={sort} onSort={onSort} left />
-                <SortableTh label="Редкость / ур." sortKey="rarity" sort={sort} onSort={onSort} title="От минимального уровня покупки · сортировать" />
+                <SortableTh label="Редкость" sortKey="rarity" sort={sort} onSort={onSort} title="Считается от цены (колонка справа) · сортировать" />
                 <SortableTh label={`Цена, ${currencyName}`} sortKey="price" sort={sort} onSort={onSort} />
+                <SortableTh label="Порог доступности" sortKey="threshold" sort={sort} onSort={onSort} title="Минимальный уровень для покупки (антифарм-защита, на редкость не влияет) · сортировать" />
                 <SortableTh label="Кто покупает" sortKey="scope" sort={sort} onSort={onSort} left />
                 <SortableTh label="Сток" sortKey="stock" sort={sort} onSort={onSort} title="Пустые значения (безлимит) — внизу при сортировке · сортировать" />
                 <SortableTh label="Покупок" sortKey="purchases" sort={sort} onSort={onSort} />
@@ -512,10 +542,13 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
                   </td>
                   <td className="px-2.5 py-2 whitespace-nowrap">{TYPE_LABELS[i.category]}</td>
                   <td className="px-2.5 py-2 text-right whitespace-nowrap">
-                    <RarityBadge minLevel={i.minLevel} /> <span className="text-[var(--color-text-muted)]">ур.{i.minLevel}</span>
+                    <RarityBadge priceEball={i.priceEball} />
                   </td>
                   <td className="px-2.5 py-2 text-right tabular-nums font-semibold text-[var(--color-accent)]">
                     <span className="inline-flex items-center gap-1"><MltCoin size={13} title={currencyName} />{i.priceEball.toLocaleString('ru-RU')}</span>
+                  </td>
+                  <td className="px-2.5 py-2 text-right tabular-nums whitespace-nowrap text-[var(--color-text-muted)]" title="Антифарм-защита — не влияет на редкость">
+                    {i.minLevel > 0 ? `с ${i.minLevel} ур.` : '—'}
                   </td>
                   <td className="px-2.5 py-2 whitespace-nowrap">{SCOPE_LABELS[i.buyerScope]}</td>
                   <td className="px-2.5 py-2 text-right tabular-nums" title="сток">{i.stock === null ? '∞' : i.stock}</td>

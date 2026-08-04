@@ -3,13 +3,17 @@ import { getSession } from '@/lib/auth/session';
 import { superadminError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import { priceEball } from '@/features/badges/engine/wallet';
-import { rarityForLevel } from '@/features/shop/engine/rarity';
+import { rarityForPrice } from '@/features/shop/engine/rarity';
 
 // Управление каталогом магазина — «Заполнятор товаров» (задача 2960, ТЗ Серёги
-// 04.08: «хочу заводить всё сам» — эмодзи вместо фото, тип/мин.уровень→редкость
-// автоматом, ссылка на маркетплейс «для примера», кто может покупать, лимит на
-// человека, подтверждение при активации, поля буста). Той же формой заводятся
+// 04.08: «хочу заводить всё сам» — эмодзи вместо фото, тип/ссылка на
+// маркетплейс «для примера», кто может покупать, лимит на человека,
+// подтверждение при активации, поля буста). Той же формой заводятся
 // и бусты (item_type='boost') — просто с дополнительными полями буста.
+// Редкость (правка владельца 04.08, задача 2983) считается от ЦЕНЫ товара —
+// rarityForPrice(priceEball), features/shop/engine/rarity.ts. min_level —
+// «порог доступности», отдельная антифарм-защита («чтобы менеджер хитростью
+// за два месяца не нафармил айфон»), НЕ влияет на редкость.
 //
 // MLT — единственная валюта покупки (правка владельца): allowed_currencies
 // колонку не трогаем структурно (история/задел), но форма больше не даёт
@@ -49,10 +53,14 @@ export async function GET() {
     transferDailyLimit: settings.rows[0]?.tlim ?? 500,
     items: items.rows.map(i => {
       const minLevel = Number(i.min_level);
-      const rarity = rarityForLevel(minLevel);
+      const price = priceEball(Number(i.price_units));
+      // Редкость — от ЦЕНЫ (правка владельца 04.08, задача 2983), min_level —
+      // отдельная антифарм-защита ( «порог доступности»), больше не влияет на
+      // бейдж/цвет редкости.
+      const rarity = rarityForPrice(price);
       return {
         id: i.id, name: i.name, description: i.description, category: i.category,
-        priceUnits: Number(i.price_units), priceEball: priceEball(Number(i.price_units)),
+        priceUnits: Number(i.price_units), priceEball: price,
         enabled: i.enabled, stock: i.stock,
         ttlMonths: i.ttl_months, sort: i.sort, purchases: i.purchases,
         emoji: i.emoji, minLevel, marketplaceUrl: i.marketplace_url,
