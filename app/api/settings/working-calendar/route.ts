@@ -26,6 +26,36 @@ export async function GET() {
   });
 }
 
+// Самопроверка построенного года перед записью в working_calendar:
+// - число дней = 365/366 (с учётом високосного года);
+// - ни одной даты вне запрошенного года;
+// - число нерабочих дней (выходные + праздники) в правдоподобном диапазоне
+//   104–119 — при перекосе часового пояса на сутки эта проверка не ловит
+//   сдвиг напрямую, но ловит усечение/задвоение дней, которое тем же багом
+//   и вызывалось (см. задачу 3066).
+function validateCalendarRows(
+  year: number,
+  rows: { date: string; isWorking: boolean }[]
+): string | null {
+  const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const expectedDays = isLeap ? 366 : 365;
+  if (rows.length !== expectedDays) {
+    return `ожидалось ${expectedDays} дней в ${year} году, получено ${rows.length}`;
+  }
+
+  const outOfYear = rows.find(r => !r.date.startsWith(String(year)));
+  if (outOfYear) {
+    return `дата вне запрошенного года: ${outOfYear.date}`;
+  }
+
+  const nonWorking = rows.filter(r => !r.isWorking).length;
+  if (nonWorking < 104 || nonWorking > 119) {
+    return `подозрительное число выходных/праздников: ${nonWorking} (ожидается 104–119)`;
+  }
+
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   const session = await getSession();
   const denied = permError(session, 'section.settings');
@@ -44,16 +74,34 @@ export async function POST(req: NextRequest) {
   }
   const data = await apiRes.text();
 
-  // Build date list: index 0 = Jan 1 of year
-  const startDate = new Date(year, 0, 1);
+  // Build date list: index 0 = Jan 1 of year.
+  // UTC-компоненты по всей цепочке (Date.UTC/setUTCDate/getUTCFullYear) —
+  // те же, что в lib/plans/dailyPlan.ts::countWeekdaysInclusive. Раньше даты
+  // строились локальным временем процесса (Europe/Moscow, UTC+3), а
+  // сохранялись через toISOString() (UTC) — полночь 1 января МСК уходила в
+  // 31 декабря 21:00 UTC, и весь год в working_calendar сдвигался на сутки
+  // (задача 3066).
+  const startDate = new Date(Date.UTC(year, 0, 1));
   const rows: { date: string; isWorking: boolean }[] = [];
   for (let i = 0; i < data.length; i++) {
     const d = new Date(startDate);
-    d.setDate(startDate.getDate() + i);
-    if (d.getFullYear() !== year) break;
+    d.setUTCDate(startDate.getUTCDate() + i);
+    if (d.getUTCFullYear() !== year) break;
     const isWorking = data[i] === '0'; // '0' = working, '1' = non-working
     const dateStr = d.toISOString().slice(0, 10);
     rows.push({ date: dateStr, isWorking });
+  }
+
+  // Дешёвая самопроверка перед записью: перекос часового пояса (или любой
+  // другой сбой построения дат) должен ловиться здесь, а не всплывать через
+  // месяц в метриках плана (см. диагноз задачи 3066). При провале — не
+  // трогаем БД и возвращаем ошибку.
+  const validationError = validateCalendarRows(year, rows);
+  if (validationError) {
+    return NextResponse.json(
+      { error: `Календарь не сохранён: самопроверка не пройдена — ${validationError}` },
+      { status: 422 }
+    );
   }
 
   const db = systemDb();
