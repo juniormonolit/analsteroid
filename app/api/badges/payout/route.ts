@@ -5,6 +5,7 @@ import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { systemDb } from '@/lib/db/clients';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 import { resolveEmployeeNames } from '@/lib/org/employeeDirectory';
+import { actorFromSession, frozenMessage, isOutboundFrozen, verifyPin } from '@/lib/auth/pin';
 
 // Вывод рублей в ЗП (доп. Серёги 31.07): менеджер подаёт заявку (сумма не
 // больше рублёвого баланса), РОП своих / админ отмечает «выплачено» (списание
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.bitrixUserId) return NextResponse.json({ error: 'Аккаунт не связан с Битриксом' }, { status: 400 });
 
-  let body: { amount?: unknown };
+  let body: { amount?: unknown; pin?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   const amount = body.amount;
   if (typeof amount !== 'number' || !Number.isInteger(amount) || amount <= 0) {
@@ -79,6 +80,15 @@ export async function POST(req: NextRequest) {
 
   const id = Number(session.bitrixUserId);
   const db = systemDb();
+
+  // Заявка на вывод — путь наружу: пин ВСЕГДА (спека §3) + заморозка после
+  // недавнего сброса/смены пина (спека §5) блокирует и саму заявку, не только подтверждение.
+  const frozenUntil = await isOutboundFrozen(db, id);
+  if (frozenUntil) return NextResponse.json({ error: frozenMessage(frozenUntil) }, { status: 423 });
+  const actor = actorFromSession(session, req);
+  const verified = await verifyPin(db, actor, body.pin, { operation: 'payout_request', amount, currency: 'RUB' });
+  if (!verified.ok) return NextResponse.json({ error: verified.error, pinRequired: true }, { status: verified.status });
+
   const bal = await db.query<{ balance: string }>(
     `SELECT coalesce(sum(amount), 0) AS balance FROM badge_coin_ledger WHERE bitrix_id = $1 AND currency = 'RUB'`,
     [id],
@@ -95,8 +105,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Доступно к выводу ${Math.max(0, available)} ₽ (с учётом уже поданных заявок)` }, { status: 400 });
   }
   const r = await db.query<{ id: number }>(
-    `INSERT INTO payout_requests (bitrix_id, amount) VALUES ($1, $2) RETURNING id`,
-    [id, amount],
+    `INSERT INTO payout_requests (bitrix_id, amount, pin_event_id) VALUES ($1, $2, $3) RETURNING id`,
+    [id, amount, verified.pinEventId],
   );
   return NextResponse.json({ ok: true, id: r.rows[0].id });
 }
@@ -106,7 +116,7 @@ export async function PATCH(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  let body: { id?: unknown; action?: unknown; comment?: unknown };
+  let body: { id?: unknown; action?: unknown; comment?: unknown; pin?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   const id = body.id;
   if (typeof id !== 'number' || !Number.isInteger(id)) return NextResponse.json({ error: 'id обязателен' }, { status: 400 });
@@ -131,6 +141,20 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Заявки этого сотрудника вам недоступны' }, { status: 403 });
   }
 
+  // Подтверждение выплаты — резолвер списывает ЧУЖИЕ рубли: пин ВСЕГДА (спека §3,
+  // это его пин, не заявителя) + заморозка проверяется по ЗАЯВИТЕЛЮ (p.bitrix_id) —
+  // именно с его кошелька уходят деньги (спека §5: «блокируются пути вывода —
+  // заявка И подтверждение»).
+  let pinEventId: number | null = null;
+  if (body.action === 'paid') {
+    const frozenUntil = await isOutboundFrozen(db, p.bitrix_id);
+    if (frozenUntil) return NextResponse.json({ error: frozenMessage(frozenUntil) }, { status: 423 });
+    const actor = actorFromSession(session, req);
+    const verified = await verifyPin(db, actor, body.pin, { operation: 'payout_paid', targetRef: String(id), amount: p.amount, currency: 'RUB' });
+    if (!verified.ok) return NextResponse.json({ error: verified.error, pinRequired: true }, { status: verified.status });
+    pinEventId = verified.pinEventId;
+  }
+
   const client = await db.connect();
   try {
     await client.query('BEGIN');
@@ -142,9 +166,9 @@ export async function PATCH(req: NextRequest) {
     if (body.action === 'paid') {
       // Списание рублей с баланса — фиксация выплаты в ЗП.
       await client.query(
-        `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment, payout_request_id)
-         VALUES ($1, $2, $3, 'RUB', 'payout', $4, $5, $6)`,
-        [p.bitrix_id, -p.amount, p.amount, session.login, `Вывод в ЗП (заявка #${id})`, id],
+        `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment, payout_request_id, pin_event_id)
+         VALUES ($1, $2, $3, 'RUB', 'payout', $4, $5, $6, $7)`,
+        [p.bitrix_id, -p.amount, p.amount, session.login, `Вывод в ЗП (заявка #${id})`, id, pinEventId],
       );
     }
     // Уведомление менеджеру (в той же транзакции) + пуш после коммита.

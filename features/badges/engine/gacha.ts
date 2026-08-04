@@ -8,6 +8,7 @@ import type { Pool, PoolClient } from 'pg';
 import { recomputeFifoRemaining } from './wallet';
 import { createNotification, pushViaAnalitik } from './notifications';
 import { getCurrencyName } from './coins';
+import { spendPinRequirement } from '@/lib/auth/pin';
 
 export const PPM_TOTAL = 1_000_000;
 export const SOFT_PITY_FROM = 61;      // с 61-й крутки шанс редкого растёт
@@ -125,7 +126,12 @@ export interface SpinResult {
 // Крутка целиком в одной транзакции: advisory-замок на юзера (двойной клик /
 // гонки), лимиты, списание FIFO, ролл, приз (ебаллы в леджер / предмет в
 // инвентарь через СУЩЕСТВУЮЩИЕ механизмы), лог крутки.
-export async function runSpin(db: Pool, bitrixId: number): Promise<SpinResult | { error: string }> {
+// pinEventId — успешная проверка пина, сделанная роутом ДО вызова (если была
+// нужна по порогу/потолку на момент пре-чека цены, задача #2995). Здесь —
+// защитный повторный чек: если стоимость крутки успела измениться настройками
+// админа между пре-чеком и этой транзакцией и это МЕНЯЕТ требование пина —
+// откатываем, а не молча пропускаем списание без пина.
+export async function runSpin(db: Pool, bitrixId: number, pinEventId: number | null = null): Promise<SpinResult | { error: string }> {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
@@ -133,6 +139,10 @@ export async function runSpin(db: Pool, bitrixId: number): Promise<SpinResult | 
 
     const settings = await getGachaSettings(client);
     if (!settings.enabled) { await client.query('ROLLBACK'); return { error: 'Гача выключена' }; }
+    if (!pinEventId) {
+      const recheck = await spendPinRequirement(client, bitrixId, settings.spinCost);
+      if (recheck.required) { await client.query('ROLLBACK'); return { error: 'Стоимость крутки изменилась — повторите ещё раз' }; }
+    }
 
     const counts = await getSpinCounts(client, bitrixId);
     if (counts.today >= settings.dailyLimit) {
@@ -160,9 +170,9 @@ export async function runSpin(db: Pool, bitrixId: number): Promise<SpinResult | 
 
     // Списание крутки (FIFO — как любая трата EBALL).
     const spend = await client.query<{ id: number }>(
-      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, comment)
-       VALUES ($1, $2, $3, 'EBALL', 'gacha_spin', $4) RETURNING id`,
-      [bitrixId, -settings.spinCost, settings.spinCost, `Крутка гачи`],
+      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, comment, pin_event_id)
+       VALUES ($1, $2, $3, 'EBALL', 'gacha_spin', $4, $5) RETURNING id`,
+      [bitrixId, -settings.spinCost, settings.spinCost, `Крутка гачи`, pinEventId],
     );
 
     let prizeLedgerId: number | null = null;

@@ -4,6 +4,7 @@ import { systemDb, analyticsDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { recomputeFifoRemaining } from '@/features/badges/engine/wallet';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { actorFromSession, frozenMessage, isOutboundFrozen, verifyPin } from '@/lib/auth/pin';
 
 // Переводы ебаллов между менеджерами (пакет Серёги 31.07): отправитель платит X,
 // получатель получает X − комиссия (transfer_fee_percent, дефолт 5%) — комиссия
@@ -51,7 +52,7 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!session.bitrixUserId) return NextResponse.json({ error: 'Аккаунт не связан с Битриксом' }, { status: 400 });
 
-  let body: { toBitrixId?: unknown; amount?: unknown; comment?: unknown };
+  let body: { toBitrixId?: unknown; amount?: unknown; comment?: unknown; pin?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Некорректный JSON' }, { status: 400 }); }
   const to = body.toBitrixId;
   const amount = body.amount;
@@ -63,6 +64,17 @@ export async function POST(req: NextRequest) {
 
   const from = Number(session.bitrixUserId);
   if (to === from) return NextResponse.json({ error: 'Себе переводить нельзя' }, { status: 400 });
+
+  // Перевод — ценность уходит безвозвратно: пин ВСЕГДА, вне зависимости от
+  // личного порога (спека §3), плюс заморозка после недавнего сброса/смены пина (спека §5).
+  const frozenUntil = await isOutboundFrozen(systemDb(), from);
+  if (frozenUntil) return NextResponse.json({ error: frozenMessage(frozenUntil) }, { status: 423 });
+  const actor = actorFromSession(session, req);
+  const verified = await verifyPin(systemDb(), actor, body.pin, {
+    operation: 'transfer_out', targetRef: String(to), amount, currency: 'EBALL',
+  });
+  if (!verified.ok) return NextResponse.json({ error: verified.error, pinRequired: true }, { status: verified.status });
+  const pinEventId = verified.pinEventId;
 
   // Получатель — только активный менеджер из оргструктуры (истина — аналитика).
   const rcpt = await analyticsDb().query<{ name: string }>(
@@ -113,9 +125,9 @@ export async function POST(req: NextRequest) {
 
     const note = comment ? ` — «${comment}»` : '';
     const out = await client.query<{ id: number }>(
-      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment)
-       VALUES ($1, $2, $3, 'EBALL', 'transfer_out', $4, $5) RETURNING id`,
-      [from, -received, received, session.login, `Перевод для ${toName}${note}`],
+      `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, actor_login, comment, pin_event_id)
+       VALUES ($1, $2, $3, 'EBALL', 'transfer_out', $4, $5, $6) RETURNING id`,
+      [from, -received, received, session.login, `Перевод для ${toName}${note}`, pinEventId],
     );
     if (fee > 0) {
       await client.query(

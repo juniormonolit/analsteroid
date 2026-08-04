@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { ensureAvatar } from '@/lib/bitrix/avatar';
+import { getPinState, pinFeatureEnabled } from '@/lib/auth/pin';
 
 // Профиль текущего пользователя для ЛК (/profile).
 export async function GET() {
@@ -9,7 +10,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   // users — в system; user_departments/departments переехали в sa (задача Серёги 13.07).
-  const [meta, deps] = await Promise.all([
+  const [meta, deps, pin] = await Promise.all([
     systemDb().query<{ avatar_synced_at: Date | null }>(
       `SELECT avatar_synced_at FROM users WHERE id = $1`,
       [session.id]
@@ -22,6 +23,9 @@ export async function GET() {
         ORDER BY d.name`,
       [session.id]
     ),
+    // Пин-код на денежные операции (задача #2995) — баннер «Установите пин» +
+    // проверка порога/заморозки на клиенте без лишнего запроса.
+    getPinState(systemDb(), session.id),
   ]);
 
   // Лениво подтягиваем аватар из Битрикса (TTL 7 дней); свежий URL — сразу в ответ
@@ -39,6 +43,11 @@ export async function GET() {
       isSuperadmin: session.isSuperadmin,
       avatarUrl: freshUrl ?? session.avatarUrl,
       bitrixUserId: session.bitrixUserId,
+      pinFeatureEnabled: pinFeatureEnabled(),
+      pinSet: pin.pinSet,
+      pinThresholdMlt: pin.pinThresholdMlt,
+      pinLockedUntil: pin.pinLockedUntil,
+      pinFreezeUntil: pin.pinFreezeUntil,
     },
     departments: deps.rows,
   });

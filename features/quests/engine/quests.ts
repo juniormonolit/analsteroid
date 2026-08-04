@@ -36,6 +36,12 @@ import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { isWorkingDayJs } from '@/lib/metrics/productionCalendar';
+import { spendPinRequirement, verifyPin, type PinActorCtx } from '@/lib/auth/pin';
+
+// Результат операций кошелька квестов (реролл/докуп) — error теперь может
+// нести HTTP-статус (задача #2995): без пина -> 428, неверный -> 403,
+// лок -> 423, иначе 400 (дефолт в самом роуте).
+type PinGatedResult<T> = { ok: true; quest: T } | { ok: false; error: string; status?: number };
 
 const MSK = 'Europe/Moscow';
 
@@ -765,8 +771,10 @@ async function completeQuest(system: Pool, q: QuestRow, progress: number): Promi
 
 // ── реролл и докупка ─────────────────────────────────────────────────────────
 
-export async function rerollQuest(system: Pool, mgr: number, questId: number, actorLogin: string):
-  Promise<{ ok: true; quest: QuestRow } | { ok: false; error: string }> {
+export async function rerollQuest(
+  system: Pool, mgr: number, questId: number, actorLogin: string,
+  pinActor: PinActorCtx, pin: unknown,
+): Promise<PinGatedResult<QuestRow>> {
   const settings = await loadQuestSettings(system);
   const r = await system.query(`SELECT * FROM quests WHERE id=$1 AND bitrix_id=$2`, [questId, mgr]);
   if (r.rows.length === 0) return { ok: false, error: 'Квест не найден' };
@@ -779,6 +787,16 @@ export async function rerollQuest(system: Pool, mgr: number, questId: number, ac
 
   const bal = await system.query<{ b: string }>(`SELECT coalesce(balance,0)::text AS b FROM badge_coin_balances WHERE bitrix_id=$1`, [mgr]);
   if (Number(bal.rows[0]?.b ?? 0) < price) return { ok: false, error: `Не хватает ${await getCurrencyName(system)} (нужно ${price})` };
+
+  // Личный порог (задача #2995) — считается и проверяется ДО открытия денежной
+  // транзакции ниже: verifyPin коммитит инкремент неудачи в СВОЁЙ транзакции.
+  const need = await spendPinRequirement(system, mgr, price);
+  let pinEventId: number | null = null;
+  if (need.required) {
+    const verified = await verifyPin(system, pinActor, pin, { operation: 'quest_reroll', targetRef: String(questId), amount: price, currency: 'EBALL' });
+    if (!verified.ok) return { ok: false, error: verified.error, status: verified.status };
+    pinEventId = verified.pinEventId;
+  }
 
   // Новый квест ТОГО ЖЕ тира (схема v2): генерим кандидатов, берём первый
   // другой категории с тем же расчётным тиром; если такого нет — ближайший.
@@ -806,9 +824,9 @@ export async function rerollQuest(system: Pool, mgr: number, questId: number, ac
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award, currency, source, actor_login, comment)
-       VALUES ($1, NULL, NULL, $2, $2, 'EBALL', 'quest_reroll', $3, $4)`,
-      [mgr, -price, actorLogin, `Замена квеста: ${q.title}`],
+      `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award, currency, source, actor_login, comment, pin_event_id)
+       VALUES ($1, NULL, NULL, $2, $2, 'EBALL', 'quest_reroll', $3, $4, $5)`,
+      [mgr, -price, actorLogin, `Замена квеста: ${q.title}`, pinEventId],
     );
     await client.query(`UPDATE quests SET status='rerolled' WHERE id=$1`, [q.id]);
     const inserted = await insertQuest(client, mgr, pick, q.slot,
@@ -824,8 +842,10 @@ export async function rerollQuest(system: Pool, mgr: number, questId: number, ac
   }
 }
 
-export async function buyExtraQuest(system: Pool, mgr: number, actorLogin: string):
-  Promise<{ ok: true; quest: QuestRow } | { ok: false; error: string }> {
+export async function buyExtraQuest(
+  system: Pool, mgr: number, actorLogin: string,
+  pinActor: PinActorCtx, pin: unknown,
+): Promise<PinGatedResult<QuestRow>> {
   const settings = await loadQuestSettings(system);
   const today = mskToday();
   if (!isWorkDay(today)) return { ok: false, error: 'Доп. квест доступен только в рабочий день' };
@@ -849,6 +869,14 @@ export async function buyExtraQuest(system: Pool, mgr: number, actorLogin: strin
   const bal = await system.query<{ b: string }>(`SELECT coalesce(balance,0)::text AS b FROM badge_coin_balances WHERE bitrix_id=$1`, [mgr]);
   if (Number(bal.rows[0]?.b ?? 0) < price) return { ok: false, error: `Не хватает ${await getCurrencyName(system)} (нужно ${price})` };
 
+  const need = await spendPinRequirement(system, mgr, price);
+  let pinEventId: number | null = null;
+  if (need.required) {
+    const verified = await verifyPin(system, pinActor, pin, { operation: 'quest_extra', amount: price, currency: 'EBALL' });
+    if (!verified.ok) return { ok: false, error: verified.error, status: verified.status };
+    pinEventId = verified.pinEventId;
+  }
+
   const cm = await fetchCompanyMedians();
   const xpLevel = await fetchXpLevel(system, mgr);
   const ps = await fetchPersonal(mgr);
@@ -863,9 +891,9 @@ export async function buyExtraQuest(system: Pool, mgr: number, actorLogin: strin
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award, currency, source, actor_login, comment)
-       VALUES ($1, NULL, NULL, $2, $2, 'EBALL', 'quest_extra', $3, 'Доп. дневной квест')`,
-      [mgr, -price, actorLogin],
+      `INSERT INTO badge_coin_ledger (bitrix_id, badge_award_id, badge_key, amount, price_at_award, currency, source, actor_login, comment, pin_event_id)
+       VALUES ($1, NULL, NULL, $2, $2, 'EBALL', 'quest_extra', $3, 'Доп. дневной квест', $4)`,
+      [mgr, -price, actorLogin, pinEventId],
     );
     const inserted = await insertQuest(client, mgr, g, 'extra', { start: today, end: today }, settings, cm, xpLevel);
     await client.query('COMMIT');

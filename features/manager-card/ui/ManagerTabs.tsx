@@ -11,6 +11,9 @@ import { Lock } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { PinDialog } from '@/components/ui/PinDialog';
+import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
+import { fetchPinGated } from '@/lib/client/pinFetch';
 import { BadgeCard, BadgeShelf, useShelfQuery } from '@/features/badges/ui/BadgeShelf';
 import { GachaBlock } from '@/features/badges/ui/GachaBlock';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
@@ -739,29 +742,39 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
     void qc.invalidateQueries({ queryKey: ['badges-payouts-my'] });
   };
 
+  // Рубли — пин ВСЕГДА, вне зависимости от порога (спека §3, задача #2995).
+  const [pinSetupFor, setPinSetupFor] = useState<{ kind: 'convert' | 'payout'; v: number } | null>(null);
+  const [pinVerifyFor, setPinVerifyFor] = useState<{ kind: 'convert' | 'payout'; v: number } | null>(null);
+
   const convert = useMutation({
     mutationFn: async (v: number) => {
-      const res = await fetch('/api/badges/convert', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: v }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
-      return true;
+      const r = await fetchPinGated('/api/badges/convert', 'POST', { amount: v });
+      if (r.ok) return { done: true } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: v } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: v } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: (done) => { if (done) { setError(null); refresh(); } },
+    onSuccess: (res) => {
+      if (res.done) { setError(null); refresh(); return; }
+      if (res.needsSetup !== undefined) setPinSetupFor({ kind: 'convert', v: res.needsSetup });
+      if (res.needsVerify !== undefined) setPinVerifyFor({ kind: 'convert', v: res.needsVerify });
+    },
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
   const payout = useMutation({
     mutationFn: async (v: number) => {
-      const res = await fetch('/api/badges/payout', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ amount: v }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
-      return true;
+      const r = await fetchPinGated('/api/badges/payout', 'POST', { amount: v });
+      if (r.ok) return { done: true } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: v } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: v } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: (done) => { if (done) { setError(null); refresh(); } },
+    onSuccess: (res) => {
+      if (res.done) { setError(null); refresh(); return; }
+      if (res.needsSetup !== undefined) setPinSetupFor({ kind: 'payout', v: res.needsSetup });
+      if (res.needsVerify !== undefined) setPinVerifyFor({ kind: 'payout', v: res.needsVerify });
+    },
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
@@ -875,6 +888,31 @@ function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
           if (kind === 'convert') convert.mutate(v); else payout.mutate(v);
         }}
         onCancel={() => setPendingConfirm(null)}
+      />
+      <PinSetupDialog
+        open={!!pinSetupFor}
+        onOpenChange={(o) => { if (!o) setPinSetupFor(null); }}
+        onSuccess={() => {
+          const f = pinSetupFor; setPinSetupFor(null);
+          if (f) (f.kind === 'convert' ? convert : payout).mutate(f.v);
+        }}
+      />
+      <PinDialog
+        open={!!pinVerifyFor}
+        onOpenChange={(o) => { if (!o) setPinVerifyFor(null); }}
+        title={pinVerifyFor?.kind === 'convert' ? 'Подтвердите обмен пином' : 'Подтвердите заявку на вывод пином'}
+        description={pinVerifyFor ? `${pinVerifyFor.v.toLocaleString('ru-RU')} ₽` : undefined}
+        onConfirm={async (pin) => {
+          if (!pinVerifyFor) return { ok: false, error: 'Нет операции' };
+          const { kind, v } = pinVerifyFor;
+          const url = kind === 'convert' ? '/api/badges/convert' : '/api/badges/payout';
+          const r = await fetchPinGated(url, 'POST', { amount: v, pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyFor(null);
+          setError(null);
+          refresh();
+          return { ok: true };
+        }}
       />
     </section>
   );
@@ -1099,17 +1137,25 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
     });
   }
 
+  // Пин по личному порогу (задача #2995): первый запрос без пина; если бэк
+  // просит пин — открываем PinSetupDialog (пин ещё не заведён) либо PinDialog
+  // (пин есть, нужен ввод/повтор) и досылаем ту же покупку с полем pin.
+  const [pinSetupItem, setPinSetupItem] = useState<ShopItemView | null>(null);
+  const [pinVerifyItem, setPinVerifyItem] = useState<ShopItemView | null>(null);
+
   const buy = useMutation({
     mutationFn: async (item: ShopItemView) => {
-      const res = await fetch('/api/shop', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId: item.id }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { error?: string }).error ?? `HTTP ${res.status}`);
-      return true;
+      const r = await fetchPinGated('/api/shop', 'POST', { itemId: item.id });
+      if (r.ok) return { done: true } as const;
+      if (r.needsPinSetup) return { done: false, needsSetup: item } as const;
+      if (r.needsPinVerify) return { done: false, needsVerify: item } as const;
+      throw new Error(r.error ?? 'Ошибка');
     },
-    onSuccess: (done) => { if (done) { setError(null); refresh(); } },
+    onSuccess: (res) => {
+      if (res.done) { setError(null); refresh(); return; }
+      if (res.needsSetup) setPinSetupItem(res.needsSetup);
+      if (res.needsVerify) setPinVerifyItem(res.needsVerify);
+    },
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
 
@@ -1250,6 +1296,27 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
         pending={buy.isPending}
         onConfirm={() => { if (pendingBuy) { const item = pendingBuy.item; setPendingBuy(null); buy.mutate(item); } }}
         onCancel={() => setPendingBuy(null)}
+      />
+      <PinSetupDialog
+        open={!!pinSetupItem}
+        onOpenChange={(o) => { if (!o) setPinSetupItem(null); }}
+        onSuccess={() => { const item = pinSetupItem; setPinSetupItem(null); if (item) buy.mutate(item); }}
+      />
+      <PinDialog
+        open={!!pinVerifyItem}
+        onOpenChange={(o) => { if (!o) setPinVerifyItem(null); }}
+        title="Подтвердите покупку пином"
+        description={pinVerifyItem ? `«${pinVerifyItem.name}» — ${pinVerifyItem.priceEball.toLocaleString('ru-RU')} ${currencyName}` : undefined}
+        onConfirm={async (pin) => {
+          if (!pinVerifyItem) return { ok: false, error: 'Нет позиции' };
+          const item = pinVerifyItem;
+          const r = await fetchPinGated('/api/shop', 'POST', { itemId: item.id, pin });
+          if (!r.ok) return { ok: false, error: r.error ?? 'Ошибка' };
+          setPinVerifyItem(null);
+          setError(null);
+          refresh();
+          return { ok: true };
+        }}
       />
     </div>
   );

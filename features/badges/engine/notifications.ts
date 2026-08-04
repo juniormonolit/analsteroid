@@ -11,7 +11,10 @@ import { systemDb } from '@/lib/db/clients';
 
 export type NotificationType =
   | 'transfer_in' | 'gift_in' | 'activation_resolved' | 'payout_resolved'
-  | 'expiry_soon' | 'gacha_rare' | 'gacha_jackpot' | 'quest_done';
+  | 'expiry_soon' | 'gacha_rare' | 'gacha_jackpot' | 'quest_done'
+  // Пин-код на денежные операции (задача #2995, спека монолитика-pin-code):
+  // лок по попыткам, изменение личного порога, сброс пина администратором.
+  | 'pin_locked' | 'pin_threshold_change' | 'pin_reset_by_admin';
 
 export interface NotificationInput {
   bitrixId: number;
