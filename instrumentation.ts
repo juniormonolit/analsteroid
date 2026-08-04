@@ -5,6 +5,24 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
 
+  // Фоновые джобы НЕ поднимаются при локальной разработке (задача 3045, найдено
+  // при подготовке к работе). Почему это важно: `.env.local` в рабочих копиях
+  // смотрит в БОЕВЫЕ базы (`YC_SYSTEM_DB=system`, `sa` на Supabase — те же, что
+  // у прода), а джобы ниже не читают, а ПИШУТ и РАССЫЛАЮТ: пересчёт наград
+  // делает `DELETE FROM xp_ledger` с полной перезаписью, дайджесты и отчёт
+  // «МОСКВА» отправляют сообщения живым людям в Битрикс. То есть любой
+  // `npm run dev` на машине разработчика мог отправить реальную рассылку и
+  // перетереть боевой леджер опыта — молча, через 30 секунд после старта.
+  //
+  // На стендах ничего не меняется: и дев, и прод запускаются собранной
+  // production-сборкой (`NODE_ENV=production`), поэтому там условие ложно и
+  // все джобы работают как раньше. Гасится ровно локальный `next dev`.
+  // Нужно погонять джобу локально осознанно — `RUN_JOBS_LOCALLY=1 npm run dev`.
+  if (process.env.NODE_ENV !== 'production' && process.env.RUN_JOBS_LOCALLY !== '1') {
+    console.log('[jobs] локальная разработка — фоновые джобы не запущены (RUN_JOBS_LOCALLY=1, чтобы включить)');
+    return;
+  }
+
   const { computeAndCachePlanSummary } = await import('./lib/jobs/planSummary');
 
   const run = () => computeAndCachePlanSummary().catch(err => console.error('[planSummary] job failed:', err));

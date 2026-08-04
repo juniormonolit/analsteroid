@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
-import { hasPerm, firstAllowedPath } from '@/lib/auth/perms';
+import { hasPerm } from '@/lib/auth/perms';
+import { AccessDenied } from '@/components/ui/AccessDenied';
 import { SettingsSidebar } from './SettingsSidebar';
 
 export default async function SettingsLayout({ children }: { children: React.ReactNode }) {
@@ -15,7 +16,13 @@ export default async function SettingsLayout({ children }: { children: React.Rea
   // потерять и управление пользователями. Теперь это два независимых входа —
   // конкретные вкладки (Таблицы/Метрики/...) внутри всё равно требуют
   // section.settings отдельно (см. их собственные layout.tsx и API-роуты).
-  if (!canViewSettings && !canManageUsers && !session.isSuperadmin) redirect(firstAllowedPath(session));
+  // Задача 3045, шаг 1: честный отказ на том же адресе вместо молчаливого
+  // redirect(firstAllowedPath(session)) — см. комментарий в section-layout'ах.
+  if (!canViewSettings && !canManageUsers && !session.isSuperadmin) {
+    return (
+      <AccessDenied reason="Системные настройки приложения — метрики, таблицы, роли, боты. Доступ выдаёт администратор в «Настройки → Роли»." />
+    );
+  }
 
   return (
     // Телефон: навигация настроек — горизонтальные табы над контентом; md+: сайдбар слева
