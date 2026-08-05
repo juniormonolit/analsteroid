@@ -1781,10 +1781,15 @@ export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf:
 
 // ── Перевод MLT коллеге (блок в табе «Награды») ──────────────────────────────
 
+const MAX_SUGGEST = 20;
+
 export function TransferBlock({ balance, currencyName }: { balance: number; currencyName: string }) {
   const qc = useQueryClient();
   const { data: meta } = useTransferMeta(true);
   const [to, setTo] = useState<number | ''>('');
+  // Поиск получателя (правка владельца 05.08): текст запроса + открытость панели.
+  const [toQuery, setToQuery] = useState('');
+  const [toOpen, setToOpen] = useState(false);
   const [amount, setAmount] = useState('');
   const [comment, setComment] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -1810,7 +1815,7 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
     },
     onSuccess: (res) => {
       if (res.done) {
-        setError(null); setAmount(''); setComment(''); setTo('');
+        setError(null); setAmount(''); setComment(''); setTo(''); setToQuery('');
         setOkMsg(`Готово: получателю дошло ${res.received}, комиссия ${res.fee} сожжена`);
         void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
         void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
@@ -1838,6 +1843,11 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
 
   if (!meta) return null;
   const left = Math.max(0, meta.dailyLimit - meta.sentToday);
+  // Подсказки получателя: нормализуем ё→е, пустой запрос — первые MAX_SUGGEST.
+  const nq = toQuery.trim().toLowerCase().replace(/ё/g, 'е');
+  const toMatches = meta.managers
+    .filter(m => !nq || m.name.toLowerCase().replace(/ё/g, 'е').includes(nq))
+    .slice(0, MAX_SUGGEST);
   return (
     <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
       <div className="mb-1 flex flex-wrap items-baseline gap-2">
@@ -1847,13 +1857,43 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
         </span>
       </div>
       <div className="flex flex-wrap items-end gap-2.5">
-        <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
+        {/* Получатель — ПОИСК с подсказками, а не <select> (правка владельца
+            05.08: нативный список на ~200 коллег разворачивался во весь экран).
+            Свой список, а не components/ui/Popover: поле остаётся текстовым
+            (ввод фильтрует), панель — фиксированной высоты со скроллом. */}
+        <label className="relative flex min-w-52 flex-1 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Кому
-          <select value={to} onChange={e => setTo(e.target.value === '' ? '' : Number(e.target.value))}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-[var(--color-text)]">
-            <option value="">— выберите менеджера —</option>
-            {meta.managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+          <input
+            value={toQuery}
+            onChange={e => { setToQuery(e.target.value); setTo(''); setToOpen(true); }}
+            onFocus={() => setToOpen(true)}
+            onBlur={() => setTimeout(() => setToOpen(false), 120)}
+            placeholder="Начните вводить имя…"
+            aria-label="Получатель перевода"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm text-[var(--color-text)]"
+          />
+          {toOpen && (
+            <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-overlay)] p-1 shadow-xl">
+              {toMatches.length === 0 ? (
+                <div className="px-2.5 py-2 text-[13px] text-[var(--color-text-muted)]">Никого не нашлось</div>
+              ) : toMatches.map(m => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => { setTo(m.id); setToQuery(m.name); setToOpen(false); }}
+                  className={`block w-full min-h-11 rounded-lg px-2.5 text-left text-[13px] transition-colors ${
+                    to === m.id ? 'bg-[var(--color-accent-soft)] text-[var(--color-accent)] font-semibold' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                  }`}
+                >
+                  {m.name}
+                </button>
+              ))}
+              {toMatches.length === MAX_SUGGEST && (
+                <div className="px-2.5 py-1.5 text-[11px] text-[var(--color-text-muted)]">Уточните запрос — показаны первые {MAX_SUGGEST}</div>
+              )}
+            </div>
+          )}
         </label>
         <label className="flex w-28 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Сумма
