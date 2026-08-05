@@ -8,7 +8,7 @@ export const CUSTOM_PREFIX = 'custom_';
 export type CustomMetric = 'sales_amount' | 'sales_count' | 'shipments_amount' | 'repeat_sales_count';
 export type CustomPeriod = 'day' | 'week' | 'month' | 'year';
 export type MilestoneKind = 'sales_count' | 'sales_amount' | 'deal_amount';
-export type CustomTemplate = 'top_metric' | 'threshold_period' | 'crosssell_pair' | 'streak' | 'milestone' | 'daily_bonus';
+export type CustomTemplate = 'top_metric' | 'threshold_period' | 'crosssell_pair' | 'streak' | 'milestone' | 'daily_bonus' | 'manual';
 
 // Метрики дня для «Ежедневного бонуса» (доп. Серёги 31.07): счётчики/суммы событий
 // дня менеджера; bookings_plus_sales_count — составная (брони reserved_at +
@@ -48,6 +48,10 @@ export const MILESTONE_KIND_LABELS: Record<MilestoneKind, string> = {
 };
 
 export const TEMPLATE_LABELS: Record<CustomTemplate, { name: string; hint: string }> = {
+  manual: {
+    name: 'Ручная ачивка (выдаёт админ)',
+    hint: 'Правила нет: движок такую награду не считает. Создаёт и присваивает только администратор — «Разозлил охранника в БЦ и сумел скрыться». Годится и для секретных ачивок.',
+  },
   top_metric: {
     name: 'Топ по метрике за период',
     hint: 'Лучший результат по выбранной метрике за завершённый период. Уровневая — бронза/серебро/золото/платина по масштабу победы (отдел/департамент/филиал/страна), или одноуровневая (лучший по всей стране).',
@@ -127,6 +131,11 @@ export function validateCustomCriteria(raw: unknown): { ok: true; criteria: Cust
   if (!TEMPLATE_LABELS[template]) return { ok: false, error: 'Неизвестный шаблон' };
 
   switch (template) {
+    // Ручная ачивка (задача владельца 05.08): правила нет вообще — «Разозлил
+    // охранника в БЦ и сумел скрыться». Создаёт и присваивает только админ,
+    // движок такие ключи не считает (см. computeCustomBadge → default).
+    case 'manual':
+      return { ok: true, criteria: { template } };
     case 'top_metric': {
       if (!METRICS.includes(c.metric as CustomMetric)) return { ok: false, error: 'Выберите метрику' };
       if (!PERIODS.includes(c.period as CustomPeriod)) return { ok: false, error: 'Выберите период' };
@@ -182,6 +191,8 @@ const fmt = (n: number) => n.toLocaleString('ru-RU');
 // Автоописание для каталога/полки, если создатель не написал своё.
 export function describeCustom(c: CustomCriteria): string {
   switch (c.template) {
+    case 'manual':
+      return 'Выдаётся администратором вручную.';
     case 'top_metric':
       return `${METRIC_LABELS[c.metric!]} — лучший результат ${PERIOD_GENITIVE[c.period!]}.` +
         (c.tieredScopes ? ' Бронза — лучший в отделе, серебро — в департаменте, золото — в филиале, платина — в стране.' : ' Лучший по всей стране.');

@@ -89,6 +89,8 @@ export async function POST(req: Request) {
     ? body.description.trim().slice(0, 1000)
     : describeCustom(criteria);
   const enabled = body.enabled !== false;
+  // Секретная ачивка (миграция 152): не показывается в списке неполученных.
+  const isSecret = (body as { isSecret?: unknown }).isSecret === true;
 
   // Цены при создании (по уровням для tiered): та же валидация, что в PATCH.
   const priceEntries: [string, number][] = [];
@@ -121,10 +123,10 @@ export async function POST(req: Request) {
   try {
     await client.query('BEGIN');
     await client.query(
-      `INSERT INTO badge_definitions (key, name, description, icon, category, tiered, criteria, enabled, sort_order)
-       VALUES ($1, $2, $3, $4, 'custom', $5, $6, $7,
+      `INSERT INTO badge_definitions (key, name, description, icon, category, tiered, criteria, enabled, is_secret, sort_order)
+       VALUES ($1, $2, $3, $4, 'custom', $5, $6, $7, $8,
                200 + (SELECT count(*) FROM badge_definitions WHERE key LIKE '${CUSTOM_PREFIX}%'))`,
-      [key, name, description, icon, tiered, JSON.stringify(criteria), enabled],
+      [key, name, description, icon, tiered, JSON.stringify(criteria), enabled, isSecret],
     );
     for (const [tier, price] of priceEntries) {
       await client.query(
