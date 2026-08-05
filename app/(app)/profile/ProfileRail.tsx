@@ -4,7 +4,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   IdCard, Users, UsersRound, Settings, ClipboardList, Contact,
-  Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet,
+  Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap,
 } from 'lucide-react';
 import { MANAGER_TABS, type ManagerTabKey } from '@/features/manager-card/ui/ManagerTabs';
 
@@ -79,6 +79,10 @@ export function ProfileRail({ mode }: { mode: 'manager' | 'department' | 'none' 
     {
       key: 'team', href: '/profile/team', label: 'Мой отдел', Icon: Users,
       active: pathname.startsWith('/profile/team'),
+    },
+    {
+      key: 'pulse', href: '/profile/pulse', label: 'Движуха', Icon: Zap,
+      active: pathname.startsWith('/profile/pulse'),
     },
     {
       key: 'people', href: '/profile/people', label: 'Коллеги', Icon: UsersRound,

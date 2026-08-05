@@ -5,8 +5,9 @@
 // прогресс-бар, награда «N MLT + M XP», таймер, реролл за MLT; ниже —
 // история 8 недель со счётчиками по тирам. РОПу — сводка по команде.
 
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Confetti } from '@/features/badges/ui/GachaBlock';
 import { PinDialog } from '@/components/ui/PinDialog';
 import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
 import { fetchPinGated } from '@/lib/client/pinFetch';
@@ -67,9 +68,11 @@ function daysLeft(endIso: string): string {
 }
 const fmtNum = (v: number) => v >= 10000 ? v.toLocaleString('ru-RU') : String(Math.round(v * 10) / 10);
 
-function QuestCard({ q, prices, isSelf, onReroll, busy }: {
+function QuestCard({ q, prices, isSelf, onReroll, busy, fresh = false }: {
   q: QuestRow; prices: ApiResponse['prices']; isSelf: boolean;
   onReroll: (id: number) => void; busy: boolean;
+  /** Выполнен после прошлого визита — светится рамкой (решение владельца 05.08). */
+  fresh?: boolean;
 }) {
   const color = TIER_COLORS[q.tier];
   const pctDone = Math.min(100, Math.round((q.progress / Math.max(q.target, 1)) * 100));
@@ -82,6 +85,7 @@ function QuestCard({ q, prices, isSelf, onReroll, busy }: {
         backgroundColor: done
           ? 'color-mix(in srgb, var(--color-positive, #2f9e44) 8%, transparent)'
           : `color-mix(in srgb, ${color} 6%, transparent)`,
+        ...(fresh ? { animation: 'quest-fresh-glow 1.4s ease-in-out infinite alternate' } : {}),
       }}>
       <div className="flex items-center gap-2">
         <span className="rounded-lg px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
@@ -149,6 +153,24 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
     void qc.invalidateQueries({ queryKey: ['badges-profile-extra'] });
   };
 
+  // Подсветка свежевыполненных (решение владельца 05.08: БЕЗ клейм-кнопок —
+  // награда начислена автоматом, а выполненный квест светится рамкой + даёт
+  // фейерверк ДО ПЕРВОГО ВХОДА в раздел). «Видел» запоминается в localStorage
+  // на устройстве (v1; серверный read-state придёт с общей механикой
+  // уведомлений). Отметка пишется сразу при показе — текущий визит светится
+  // целиком, следующий уже нет.
+  const [freshIds, setFreshIds] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    if (!data || !isSelf) return;
+    const key = 'quests-seen-ts';
+    const last = Number(localStorage.getItem(key) ?? 0);
+    const doneNow = data.current.filter(q => q.status === 'done' && q.doneAt);
+    const fresh = doneNow.filter(q => new Date(q.doneAt!).getTime() > last);
+    if (fresh.length > 0) setFreshIds(new Set(fresh.map(q => q.id)));
+    const maxDone = Math.max(last, ...doneNow.map(q => new Date(q.doneAt!).getTime()));
+    if (maxDone > last) localStorage.setItem(key, String(maxDone));
+  }, [data, isSelf]);
+
   const takeC = async (contractId: number) => {
     setBusy(true);
     try {
@@ -194,7 +216,13 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
     // секции: личные миссии / взятые с доски / доска контрактов.
     <div className="mx-auto w-full max-w-[1360px] flex flex-col gap-4 sm:gap-5">
       {/* ══ 1. Личные миссии (регулярные слоты) ══ */}
-      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+      <section className="relative rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+        {/* Пульс рамки свежевыполненного + фейерверк один раз при заходе. */}
+        <style>{`@keyframes quest-fresh-glow {
+          from { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-positive, #2f9e44) 55%, transparent); }
+          to { box-shadow: 0 0 0 7px color-mix(in srgb, var(--color-positive, #2f9e44) 12%, transparent); }
+        }`}</style>
+        {freshIds.size > 0 && <Confetti />}
         <div className="mb-3 flex flex-wrap items-baseline gap-2">
           <h3 className="text-base font-bold text-[var(--color-text)]">⚔️ Личные миссии</h3>
           <span className="text-[11px] text-[var(--color-text-muted)]">
@@ -209,7 +237,7 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {current.map(q => (
-              <QuestCard key={q.id} q={q} prices={data.prices} isSelf={isSelf} onReroll={id => void act({ questId: id })} busy={busy} />
+              <QuestCard key={q.id} q={q} prices={data.prices} isSelf={isSelf} onReroll={id => void act({ questId: id })} busy={busy} fresh={freshIds.has(q.id)} />
             ))}
           </div>
         )}

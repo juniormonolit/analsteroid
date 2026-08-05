@@ -48,7 +48,7 @@ const RARITY_COLOR: Record<string, string> = {
 // в таблице «Шансы», открывается кнопкой с витрины, требование прозрачности).
 const WHEEL_COLORS = ['#4dabf7', '#63e6be', '#ffd43b', '#ff922b', '#e599f7', '#74c0fc', '#8ce99a', '#ffa8a8', '#b197fc'];
 
-function Confetti() {
+export function Confetti() {
   const pieces = useMemo(() => Array.from({ length: 80 }, (_, i) => ({
     left: Math.random() * 100,
     delay: Math.random() * 0.6,

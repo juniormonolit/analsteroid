@@ -40,8 +40,12 @@ export async function getCallControlManagedDepts(bitrixUserId: string): Promise<
     seen.add(d.department_id);
     const effRop = overrideByDeptRole.get(`${d.department_id}:rop`) ?? d.rop_bitrix_user_id;
     const effDir = overrideByDeptRole.get(`${d.department_id}:department_director`) ?? d.department_director_bitrix_user_id;
-    if (effRop === bitrixUserId) managed.push({ deptId: d.department_id, deptName: d.department_name, role: 'rop' });
-    else if (effDir === bitrixUserId) managed.push({ deptId: d.department_id, deptName: d.department_name, role: 'department_director' });
+    // Правило высшей позиции (решение владельца 05.08): если человек в
+    // оргструктуре и РОП и директор — система везде считает его ДИРЕКТОРОМ.
+    // Раньше проверка РОПа шла первой и при двойной роли в одном отделе
+    // выигрывал РОП — перевёрнуто сознательно.
+    if (effDir === bitrixUserId) managed.push({ deptId: d.department_id, deptName: d.department_name, role: 'department_director' });
+    else if (effRop === bitrixUserId) managed.push({ deptId: d.department_id, deptName: d.department_name, role: 'rop' });
   }
   return managed;
 }
