@@ -1,19 +1,24 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { IdCard, Settings, Users } from 'lucide-react';
+import { IdCard, Settings, Users, UsersRound } from 'lucide-react';
 
 // Рельса ЛК (задача 3045, §1): три вкладки кабинета — ОТДЕЛЬНЫЕ маршруты, а не
 // локальный useState, как было в старом `/profile`. Смысл требования спеки: ссылку
 // на вкладку можно прислать коллеге, «назад» работает, состояние восстанавливается
 // из адреса.
 //
-// Полоса узкая и без скролла: три пункта укладываются в 375px (правило 12 CLAUDE.md
-// про горизонтальные ленты здесь не применяется — переноса и скролла не будет,
-// проверено на самой длинной подписи). `min-h-11` — правило 6 (тач-цель 44px).
+// Полоса узкая и без скролла: четыре пункта укладываются в 375px (правило 12 CLAUDE.md
+// про горизонтальные ленты здесь не применяется — переноса и скролла не будет;
+// после добавления «Людей» паддинги пунктов ужаты px-3→px-2 именно ради этого).
+// `min-h-11` — правило 6 (тач-цель 44px). С 05.08 полоса — мобильный вариант
+// навигации кабинета: на десктопе её заменяет левая рельса ProfileRail (layout
+// прячет полосу через lg:hidden), поэтому набор пунктов здесь минимальный —
+// вкладки самой карточки живут в её собственной горизонтальной ленте.
 const ITEMS = [
   { href: '/profile', label: 'Кабинет', Icon: IdCard },
   { href: '/profile/team', label: 'Мой отдел', Icon: Users },
+  { href: '/profile/people', label: 'Люди', Icon: UsersRound },
   { href: '/profile/settings', label: 'Настройки', Icon: Settings },
 ] as const;
 
@@ -30,7 +35,7 @@ export function ProfileNav() {
           <Link
             key={href}
             href={href}
-            className={`min-h-11 flex items-center gap-1.5 px-3 text-sm whitespace-nowrap border-b-2 -mb-px transition-colors ${
+            className={`min-h-11 flex items-center gap-1.5 px-2 sm:px-3 text-sm whitespace-nowrap border-b-2 -mb-px transition-colors ${
               active
                 ? 'border-[var(--color-accent)] text-[var(--color-accent)] font-medium'
                 : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'

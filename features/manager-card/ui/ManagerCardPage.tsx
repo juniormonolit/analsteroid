@@ -214,9 +214,15 @@ export interface ManagerCardPageProps {
    *  этого флага недоступен в чужой карточке — см. isSelf=showBadges выше,
    *  все такие кнопки/API работают только с session.bitrixUserId. */
   forceReadOnly?: boolean;
+  /** Навигация по вкладкам отдана внешней рельсе (задача 05.08, ЛК «а-ля VK»):
+   *  /profile на десктопе рисует слева ProfileRail с теми же ?tab=-ссылками,
+   *  поэтому собственная горизонтальная лента вкладок карточки прячется на lg+
+   *  (на телефоне рельсы нет — лента остаётся). Прочие входы (/manager/[id],
+   *  /bx/manager) прокидывают ничего — там лента как была. */
+  externalNav?: boolean;
 }
 
-export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo, showBadges = false, forceReadOnly = false }: ManagerCardPageProps) {
+export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo, showBadges = false, forceReadOnly = false, externalNav = false }: ManagerCardPageProps) {
   const qc = useQueryClient();
   // Pull-to-refresh (задача 2947): «потянуть вниз» обновляет всё, что
   // сейчас смонтировано на экране (карточка + активная вкладка) — проще и
@@ -471,8 +477,10 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
         // лишний невидимый min-w-0 избыток и утаскивал ВЕСЬ body по горизонтали,
         // а не оставался внутри scroll-контейнера самой полосы (тот scroll-x
         // формально был, но родитель не давал ему стать реальной границей).
-        <div className="flex min-w-0 items-stretch gap-2">
-          <div className="min-w-0 flex-1"><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
+        <div className={`flex min-w-0 items-stretch gap-2 ${externalNav && !showBadges ? 'lg:hidden' : ''}`}>
+          {/* externalNav: на lg+ вкладками рулит левая рельса ЛК — свою ленту прячем,
+              но колокольчик уведомлений (только свой ЛК, showBadges) должен остаться. */}
+          <div className={`min-w-0 flex-1 ${externalNav ? 'lg:hidden' : ''}`}><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
           {showBadges && <NotificationsBell />}
         </div>
       )}

@@ -43,6 +43,7 @@ export default async function Page() {
       mode={self.mode}
       managerName={self.managerName}
       showBadges
+      externalNav
     />
   );
 }

@@ -1291,6 +1291,17 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
   const items = data?.items ?? [];
   const activeCount = (data?.inventory ?? []).filter(i => i.status === 'owned' || i.status === 'activation_requested').length;
 
+  // «Магазин руководителя» (решение владельца 05.08): rop_only-позиции (награды
+  // для отдела, бустеры) — ОТДЕЛЬНАЯ витрина табом внутри магазина, а не вперемешку
+  // с личными. Сервер отдаёт rop_only только РОПу/директору (см. /api/shop), поэтому
+  // у рядового менеджера переключателя просто нет — есть только «свой» магазин.
+  const [shopScope, setShopScope] = useState<'personal' | 'leader'>('personal');
+  const leaderItems = items.filter(i => i.buyerScope === 'rop_only');
+  const hasLeaderShop = leaderItems.length > 0;
+  const shownItems = hasLeaderShop && shopScope === 'leader'
+    ? leaderItems
+    : items.filter(i => i.buyerScope !== 'rop_only');
+
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <div className="flex flex-wrap items-center gap-2">
@@ -1306,14 +1317,33 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
         {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
       </div>
 
-      {/* Гача (фаза 2): колесо, крутки только в своём ЛК */}
-      <GachaBlock isSelf={isSelf} />
+      {/* Переключатель витрин — только когда руководительская витрина непуста
+          (у рядового менеджера сервер rop_only не отдаёт — переключателя нет). */}
+      {hasLeaderShop && (
+        <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs self-start">
+          {([['personal', 'Для себя'], ['leader', 'Магазин руководителя']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setShopScope(key)}
+              className={`px-3 min-h-11 transition-colors whitespace-nowrap ${
+                shopScope === key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Гача (фаза 2): колесо, крутки только в своём ЛК; в руководительской
+          витрине гаче делать нечего — это витрина закупок для отдела. */}
+      {shopScope === 'personal' && <GachaBlock isSelf={isSelf} />}
 
       {/* Витрина по типам (материальные/нематериальные/бусты) — «командные»
-          позиции больше не отдельная группа, это доступ (buyerScope), сервер
-          их и так не отдаёт тем, кто не РОП/директор (правка владельца). */}
+          позиции с 05.08 снова отдельная витрина (таб «Магазин руководителя»
+          выше), внутри неё та же группировка по типам. */}
       {SHOP_CATEGORIES.map(cat => {
-        const catItems = items.filter(i => i.category === cat.key);
+        const catItems = shownItems.filter(i => i.category === cat.key);
         if (catItems.length === 0) return null;
         return (
           <section key={cat.key} className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
