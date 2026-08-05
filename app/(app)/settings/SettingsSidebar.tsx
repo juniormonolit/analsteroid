@@ -63,6 +63,10 @@ export function SettingsSidebar({
     {
       label: 'Справочники',
       items: [
+        // Корзина отчётов (задача 3045, §4): у общей корзины наконец есть адрес.
+        // Гейт — section.settings, как у самой страницы; витринные отчёты внутри
+        // всё равно фильтрует API по action.shared_reports.manage.
+        { href: '/settings/trash', label: 'Корзина отчётов', visible: canViewSettings },
         { href: '/settings/tables', label: 'Таблицы', visible: canViewSettings },
         { href: '/settings/metrics', label: 'Метрики', visible: canViewSettings },
         { href: '/settings/metric-colors', label: 'Цвета метрик', visible: canViewSettings },

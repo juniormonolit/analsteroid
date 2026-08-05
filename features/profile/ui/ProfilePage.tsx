@@ -9,7 +9,7 @@ import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 import { useTableScale, type TableScalePct } from '@/lib/hooks/useTableScale';
 import { useTheme, THEME_LABEL, THEME_ORDER } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
-import { ReportsTrashCard } from './ReportsTrashCard';
+import { ReportsTrashCard } from '@/features/reports/ui/ReportsTrashCard';
 import { BotSubscriptionSettings } from './BotSubscriptionSettings';
 import { RopDigestSettings } from './RopDigestSettings';
 import { MyFeedbackLog } from './MyFeedbackLog';
