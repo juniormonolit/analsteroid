@@ -1081,6 +1081,7 @@ export function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
 export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: boolean; forceReadOnly?: boolean }) {
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
+      <BadgeShelf managerId={isSelf ? undefined : managerId} />
     </div>
   );
 }
@@ -1128,7 +1129,6 @@ export function LedgerSection({ managerId, isSelf, forceReadOnly = false }: { ma
 
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
-      <BadgeShelf managerId={isSelf ? undefined : managerId} />
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
         <div className="mb-2.5 flex items-baseline gap-2">
           <h2 className="text-base font-bold text-[var(--color-text)]">Выписка</h2>
