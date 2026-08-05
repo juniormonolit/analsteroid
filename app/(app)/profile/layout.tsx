@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
 import { resolveSelfCard } from '@/lib/org/selfCard';
+import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import { ProfileNav } from './ProfileNav';
 import { ProfileRail } from './ProfileRail';
 
@@ -21,12 +22,14 @@ export default async function ProfileLayout({ children }: { children: React.Reac
 
   const self = await resolveSelfCard(session);
   const railMode = self.kind === 'no-bitrix' ? 'none' : self.mode;
+  // «Заявки» в рельсе — только тем, кому есть что решать (руководство/РОП).
+  const canManageRequests = hasFullManagerAccess(session) || (await managedDepartmentIds(session)).length > 0;
 
   return (
     // overflow-x-hidden рядом с overflow-y-auto — правило 13 CLAUDE.md (иначе любая
     // забытая ширина внутри вкладки утаскивает вбок всю страницу, а не себя).
     <div className="h-full flex overflow-hidden">
-      <div className="hidden lg:flex shrink-0"><ProfileRail mode={railMode} /></div>
+      <div className="hidden lg:flex shrink-0"><ProfileRail mode={railMode} canManageRequests={canManageRequests} /></div>
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         <div className="lg:hidden"><ProfileNav /></div>
         <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">{children}</div>

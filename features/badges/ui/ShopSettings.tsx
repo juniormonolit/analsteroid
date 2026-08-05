@@ -37,7 +37,7 @@ import { priceEball as toPriceEball } from '@/features/badges/engine/wallet';
 import { firstGraphemes } from '@/lib/text/graphemes';
 
 interface ShopItemRow {
-  id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'boost';
+  id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'boost' | 'team';
   priceUnits: number; priceEball: number;
   enabled: boolean; stock: number | null;
   ttlMonths: number; sort: number; purchases: number;
@@ -59,6 +59,7 @@ const SHOP_IMAGE_MAX_BYTES_CLIENT = 3 * 1024 * 1024;
 
 const TYPE_LABELS: Record<ShopItemRow['category'], string> = {
   material: 'Материальный', immaterial: 'Нематериальный', boost: 'Буст',
+  team: 'Командный',
 };
 const SCOPE_LABELS: Record<ShopItemRow['buyerScope'], string> = {
   all: 'Все сотрудники', rop_only: 'Только РОП/директор',
@@ -299,6 +300,7 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
               <option value="immaterial">Нематериальный (отгул, поздний старт…)</option>
               <option value="material">Материальный (физический приз)</option>
               <option value="boost">Буст</option>
+              <option value="team">Командный (пицца на отдел, командные бусты)</option>
             </select>
           </label>
           <label className={labelCls} title={`Цена в единицах индексации; сейчас 1 единица = 1 ${currencyName}. Редкость считается от цены — автоматически, ниже.`}>

@@ -20,7 +20,7 @@ interface ManagedPayout {
   rub_balance: number;
 }
 
-export function PayoutManageBlock() {
+export function PayoutManageBlock({ standalone = false }: { standalone?: boolean } = {}) {
   const qc = useQueryClient();
   // Подтверждение/отклонение — вместо window.confirm+window.prompt (задача 2764).
   const [confirmingPaid, setConfirmingPaid] = useState<ManagedPayout | null>(null);
@@ -65,9 +65,10 @@ export function PayoutManageBlock() {
   });
 
   const requests = data?.requests ?? [];
-  if (!data?.canManage || requests.length === 0) return null;
+  if (!data?.canManage) return null;
+  if (!standalone && requests.length === 0) return null;
   const pending = requests.filter(r => r.status === 'requested');
-  const resolved = requests.filter(r => r.status !== 'requested').slice(0, 10);
+  const resolved = requests.filter(r => r.status !== 'requested').slice(0, standalone ? 100 : 10);
 
   return (
     <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4">

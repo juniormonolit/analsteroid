@@ -1230,7 +1230,7 @@ export function LedgerSection({ managerId, isSelf, forceReadOnly = false }: { ma
 // Данные общие (/api/shop): витрина — таб «Магазин», предметы — таб «Инвентарь».
 
 interface ShopItemView {
-  id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'boost';
+  id: number; name: string; description: string | null; category: 'material' | 'immaterial' | 'boost' | 'team';
   emoji: string; priceEball: number;
   stock: number | null; ttlMonths: number;
   minLevel: number; marketplaceUrl: string | null; buyerScope: 'all' | 'rop_only';
@@ -1271,6 +1271,10 @@ const SHOP_CATEGORIES: { key: ShopItemView['category']; label: string }[] = [
   { key: 'immaterial', label: 'Нематериальные' },
   { key: 'material', label: 'Материальные' },
   { key: 'boost', label: 'Бусты' },
+  // «Командные» (правка владельца 05.08): пицца на отдел, командные бусты.
+  // Это ПОЛКА витрины, а не ограничение доступа — покупать может кто угодно
+  // (владелец: «не вижу смысла запрещать покупать командные бусты кому угодно»).
+  { key: 'team', label: 'Командные' },
 ];
 
 const INVENTORY_STATUS: Record<InventoryRow['status'], { label: string; color: string }> = {
@@ -1358,17 +1362,10 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
   const items = data?.items ?? [];
   const activeCount = (data?.inventory ?? []).filter(i => i.status === 'owned' || i.status === 'activation_requested').length;
 
-  // «Магазин руководителя» (решение владельца 05.08): rop_only-позиции (награды
-  // для отдела, бустеры) — ОТДЕЛЬНАЯ витрина табом внутри магазина, а не вперемешку
-  // с личными. Сервер отдаёт rop_only только РОПу/директору (см. /api/shop), поэтому
-  // у рядового менеджера переключателя просто нет — есть только «свой» магазин.
-  const [shopScope, setShopScope] = useState<'personal' | 'leader'>('personal');
-  const leaderItems = items.filter(i => i.buyerScope === 'rop_only');
-  const hasLeaderShop = leaderItems.length > 0;
-  const shownItems = hasLeaderShop && shopScope === 'leader'
-    ? leaderItems
-    : items.filter(i => i.buyerScope !== 'rop_only');
-
+  // Командные позиции (пицца, командные бусты) больше НЕ прячутся в отдельную
+  // витрину руководителя — они просто категория «Командные» (правка владельца
+  // 05.08). buyer_scope остаётся в модели как редкая настройка доступа, сервер
+  // по-прежнему не отдаёт rop_only тем, кому нельзя.
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <div className="flex flex-wrap items-center gap-2">
@@ -1384,24 +1381,6 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
         {error && <span className="text-xs text-[var(--color-negative,#e03131)]">{error}</span>}
       </div>
 
-      {/* Переключатель витрин — только когда руководительская витрина непуста
-          (у рядового менеджера сервер rop_only не отдаёт — переключателя нет). */}
-      {hasLeaderShop && (
-        <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs self-start">
-          {([['personal', 'Для себя'], ['leader', 'Магазин руководителя']] as const).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setShopScope(key)}
-              className={`px-3 min-h-11 transition-colors whitespace-nowrap ${
-                shopScope === key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-
       {/* Гача уехала из магазина в собственный раздел «Колесо фортуны»
           (правка владельца 05.08) — см. вкладку wheel в ManagerCardPage. */}
 
@@ -1409,7 +1388,7 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
           позиции с 05.08 снова отдельная витрина (таб «Магазин руководителя»
           выше), внутри неё та же группировка по типам. */}
       {SHOP_CATEGORIES.map(cat => {
-        const catItems = shownItems.filter(i => i.category === cat.key);
+        const catItems = items.filter(i => i.category === cat.key);
         if (catItems.length === 0) return null;
         return (
           <section key={cat.key} className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">

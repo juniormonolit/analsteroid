@@ -92,7 +92,7 @@ type ImageAction =
   | { kind: 'set'; mime: string; buffer: Buffer };
 
 interface ItemInput {
-  name: string; description: string | null; category: 'material' | 'immaterial' | 'boost';
+  name: string; description: string | null; category: 'material' | 'immaterial' | 'boost' | 'team';
   priceUnits: number; stock: number | null; ttlMonths: number; sort: number;
   emoji: string; minLevel: number; marketplaceUrl: string | null;
   buyerScope: 'all' | 'rop_only';
@@ -116,7 +116,7 @@ function validate(body: Record<string, unknown>): ItemInput | string {
   if (!name) return 'Название не может быть пустым';
   const description = typeof body.description === 'string' ? body.description.trim().slice(0, 1000) || null : null;
   const category = body.category;
-  if (category !== 'material' && category !== 'immaterial' && category !== 'boost') {
+  if (category !== 'material' && category !== 'immaterial' && category !== 'boost' && category !== 'team') {
     return 'Тип позиции: material | immaterial | boost';
   }
   const priceUnits = body.priceUnits;

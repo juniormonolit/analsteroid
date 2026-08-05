@@ -21,7 +21,7 @@ interface ManagedActivation {
   requested_at: string | null; expires_at: string; resolved_at: string | null;
 }
 
-export function InventoryManageBlock() {
+export function InventoryManageBlock({ standalone = false }: { standalone?: boolean } = {}) {
   const qc = useQueryClient();
   // Подтверждение/отклонение — вместо window.confirm+window.prompt (задача 2764).
   const [approving, setApproving] = useState<ManagedActivation | null>(null);
@@ -65,9 +65,10 @@ export function InventoryManageBlock() {
   });
 
   const requests = data?.requests ?? [];
-  if (!data?.canManage || requests.length === 0) return null;
+  if (!data?.canManage) return null;
+  if (!standalone && requests.length === 0) return null;
   const pending = requests.filter(r => r.status === 'activation_requested');
-  const resolved = requests.filter(r => r.status !== 'activation_requested').slice(0, 10);
+  const resolved = requests.filter(r => r.status !== 'activation_requested').slice(0, standalone ? 100 : 10);
 
   return (
     <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4">

@@ -4,7 +4,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   IdCard, Users, UsersRound, Settings, ClipboardList, Contact,
-  Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap, Bell,
+  Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap, Bell, ClipboardCheck,
 } from 'lucide-react';
 import { MANAGER_TABS, type ManagerTabKey } from '@/features/manager-card/ui/ManagerTabs';
 import { useNotifications } from '@/features/profile/ui/NotificationsPage';
@@ -37,7 +37,12 @@ const TAB_ICONS: Record<ManagerTabKey, typeof IdCard> = {
   inventory: Package,
 };
 
-export function ProfileRail({ mode }: { mode: 'manager' | 'department' | 'none' }) {
+export function ProfileRail({ mode, canManageRequests = false }: {
+  mode: 'manager' | 'department' | 'none';
+  /** «Заявки» — только руководителям (решает сервер в layout, чтобы не гонять
+   *  лишний запрос с клиента): активации покупок и выводы MLT подчинённых. */
+  canManageRequests?: boolean;
+}) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -87,6 +92,10 @@ export function ProfileRail({ mode }: { mode: 'manager' | 'department' | 'none' 
       key: 'team', href: '/profile/team', label: 'Мой отдел', Icon: Users,
       active: pathname.startsWith('/profile/team'),
     },
+    ...(canManageRequests ? [{
+      key: 'requests', href: '/profile/requests', label: 'Заявки', Icon: ClipboardCheck,
+      active: pathname.startsWith('/profile/requests'),
+    }] : []),
     {
       key: 'pulse', href: '/profile/pulse', label: 'Движуха', Icon: Zap,
       active: pathname.startsWith('/profile/pulse'),
