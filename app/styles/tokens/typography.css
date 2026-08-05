@@ -14,5 +14,18 @@
 --weight-regular:400;--weight-medium:500;--weight-semibold:600;--weight-bold:700;
 }
 .tnum,[data-tnum]{font-variant-numeric:tabular-nums;font-feature-settings:'tnum';}
-a{color:var(--text-link);text-decoration:none;}
-a:hover{color:var(--interactive-hover);text-decoration:underline;}
+/* ── ПОЧЕМУ ЭТО ПРАВИЛО ЗАСКОУПЛЕНО (баг владельца 04.08: «даже после выката
+   Классической темы пункты меню синие») ──────────────────────────────────────────
+   В пакете дизайн-системы было безусловное `a{color:var(--text-link)}`. В вёрстке
+   пакета это безопасно, а в приложении — нет: это СЕЛЕКТОР ЭЛЕМЕНТА, он идёт после
+   Tailwind-preflight (`a{color:inherit}`) и потому побеждает ВСЮДУ, где цвет ссылки
+   приходит по наследованию от родителя, а не задан классом на самой <a>. Именно так
+   свёрстан сайдбар (цвет на строке-обёртке, ссылка внутри наследует) — из-за этого
+   ВСЕ пункты меню и названия сохранённых отчётов красились в --text-link (синий),
+   независимо от темы. Вторая половина бага: классическая тема переопределяет
+   --color-*, но --text-link — токен Glass, в классике он не был задан вовсе, то есть
+   даже в «виде до редизайна» ссылки брали синий из colors.css.
+   :where() даёт нулевую специфичность, а :not([class]) оставляет правило только для
+   действительно неоформленных ссылок (в приложении их нет — все с классами). */
+:where(a:not([class])){color:var(--text-link);text-decoration:none;}
+:where(a:not([class])):hover{color:var(--interactive-hover);text-decoration:underline;}
