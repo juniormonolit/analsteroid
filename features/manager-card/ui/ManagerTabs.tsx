@@ -520,14 +520,19 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
       {/* ══ ЛЕВАЯ КОЛОНКА: кто это ══ */}
       <div className="flex min-w-0 flex-col gap-4 sm:gap-5">
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden">
-        {/* Обложка (ЛК-соцсетка этап 2): генеративный CSS-паттерн из каталога,
-            аватар наезжает на неё по-вконтактовски. Сменить может только сам
-            владелец профиля — у зрителя кнопки нет. */}
-        <div className="relative h-24 sm:h-28 w-full" style={coverStyle(extra?.coverId)}>
+        {/* Обложка (ЛК-соцсетка этап 2): генеративный CSS-паттерн из каталога.
+            Вёрстка — классика Facebook/VK (правка владельца 05.08 по скрину
+            «перекрывает аватарку»): аватар наезжает на НИЖНЮЮ кромку обложки
+            ровно наполовину, с кольцом цвета карточки (ring отделяет фото от
+            паттерна). Пропорции выправлены: обложка выше (9rem/11rem), аватар
+            160px вместо прежних 220 — раньше обложка выглядела приклеенной
+            полоской за гигантским фото. Кнопка смены — низ-право обложки, как
+            «Изменить обложку» в FB; только у владельца профиля. */}
+        <div className="relative h-36 sm:h-44 w-full" style={coverStyle(extra?.coverId)}>
           {isSelf && !forceReadOnly && (
             <button
               onClick={() => setCoverPickerOpen(true)}
-              className="tap-target absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
+              className="tap-target absolute right-2 bottom-2 inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
               title="Сменить обложку"
             >
               <Camera size={13} /> Обложка
@@ -535,9 +540,16 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
           )}
         </div>
         {isSelf && !forceReadOnly && <CoverPicker open={coverPickerOpen} onOpenChange={setCoverPickerOpen} />}
-        <div className="px-4 sm:px-5 pb-5 -mt-14">
+        {/* relative ОБЯЗАТЕЛЕН (живой баг со скрина владельца): обложка выше —
+            position:relative и по правилам stacking-порядка рисуется ПОВЕРХ
+            непозиционированного соседа; без relative здесь паттерн обложки
+            перекрывал верх аватара. */}
+        <div className="relative px-4 sm:px-5 pb-5 -mt-20">
         <div className="flex flex-col items-center gap-3.5 text-center">
-          <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={220} shape="rounded" />
+          {/* Радиус обёртки = радиус Avatar (size×0.11 ≈ 18px) + 4px кольца. */}
+          <div className="rounded-[22px] ring-4 ring-[var(--color-bg-surface)] bg-[var(--color-bg-surface)] shadow-md">
+            <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={160} shape="rounded" />
+          </div>
           <div className="min-w-0 w-full">
             <h2 className="text-2xl font-extrabold leading-tight text-[var(--color-text)]">
               {card?.profile.name ?? '…'}
