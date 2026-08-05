@@ -99,7 +99,17 @@ export async function computeDisciplineAwards(todayYmd: string): Promise<Plannin
       const cur = byManager.get(r.manager_id) ?? true;
       byManager.set(r.manager_id, cur && called);
     }
+    // Правило релевантной выборки (решение владельца 05.08): «ВСЕ брони
+    // прозвонены» при одной брони за неделю — не дисциплина. Живой случай:
+    // менеджер с 24 бронями за всю историю (1-2 в неделю) собрал 5 наград.
+    // Требуем минимальный объём броней за неделю.
+    const bookingsByMgr = new Map<number, number>();
+    for (const r of res.rows) {
+      if (r.manager_id === null) continue;
+      bookingsByMgr.set(r.manager_id, (bookingsByMgr.get(r.manager_id) ?? 0) + 1);
+    }
     for (const mgr of hasBooking) {
+      if ((bookingsByMgr.get(mgr) ?? 0) < MIN_BOOKINGS_FOR_DISCIPLINE) continue;
       if (byManager.get(mgr)) {
         out.push({ bitrixId: mgr, badgeKey: 'planning_discipline', tier: null, periodType: 'week', periodDate: weekStart, value: null });
       }
@@ -111,16 +121,16 @@ export async function computeDisciplineAwards(todayYmd: string): Promise<Plannin
 // ── «Камбэк» ───────────────────────────────────────────────────────────────────
 
 export async function computeComebackAwards(todayYmd: string, retroStart: string): Promise<PlanningAwardRow[]> {
-  const res = await analyticsDb().query<{ mgr: number; ym: string; sum: string }>(
-    `SELECT current_manager_id AS mgr, to_char(sold_at, 'YYYY-MM') AS ym, sum(amount) AS sum
+  const res = await analyticsDb().query<{ mgr: number; ym: string; sum: string; cnt: string }>(
+    `SELECT current_manager_id AS mgr, to_char(sold_at, 'YYYY-MM') AS ym, sum(amount) AS sum, count(*) AS cnt
      FROM sa.deals WHERE current_manager_id IS NOT NULL AND sold_at >= $1
      GROUP BY 1, 2`,
     [retroStart],
   );
-  const byMgr = new Map<number, Map<string, number>>();
+  const byMgr = new Map<number, Map<string, { sum: number; cnt: number }>>();
   for (const r of res.rows) {
-    const m = byMgr.get(r.mgr) ?? new Map<string, number>();
-    m.set(r.ym, Number(r.sum)); byMgr.set(r.mgr, m);
+    const m = byMgr.get(r.mgr) ?? new Map<string, { sum: number; cnt: number }>();
+    m.set(r.ym, { sum: Number(r.sum), cnt: Number(r.cnt) }); byMgr.set(r.mgr, m);
   }
   const thisMonth = todayYmd.slice(0, 7);
   const out: PlanningAwardRow[] = [];
@@ -132,7 +142,13 @@ export async function computeComebackAwards(todayYmd: string, retroStart: string
       const m1 = sorted[i - 1], m0 = sorted[i - 2];
       // Последовательные месяцы без разрыва (иначе "падение" не сравнимо честно)
       if (nextMonth(m0) !== m1 || nextMonth(m1) !== m2) continue;
-      const sM = months.get(m2)!, sM1 = months.get(m1)!, sM0 = months.get(m0)!;
+      const rM = months.get(m2)!, rM1 = months.get(m1)!, rM0 = months.get(m0)!;
+      // Правило релевантной выборки (05.08): «спад → рост» на одной сделке в
+      // месяц (100 → 50 → 200 ₽) — не камбэк. Каждый из трёх месяцев обязан
+      // быть представительным по числу сделок.
+      if (rM.cnt < MIN_DEALS_PER_MONTH_FOR_COMEBACK || rM1.cnt < MIN_DEALS_PER_MONTH_FOR_COMEBACK
+        || rM0.cnt < MIN_DEALS_PER_MONTH_FOR_COMEBACK) continue;
+      const sM = rM.sum, sM1 = rM1.sum, sM0 = rM0.sum;
       if (sM1 < sM0 && sM > sM1) {
         out.push({ bitrixId: mgr, badgeKey: 'comeback', tier: null, periodType: 'month', periodDate: `${m2}-01`, value: null });
       }
@@ -145,6 +161,11 @@ export async function computeComebackAwards(todayYmd: string, retroStart: string
 
 interface PlanRow { manager_login: string; month: string; plan_shipments: string }
 
+// Пороги релевантной выборки (решение владельца 05.08). Вынесены константами:
+// движок читает их напрямую, у этих бейджей нет criteria-настроек в каталоге.
+const MIN_BOOKINGS_FOR_DISCIPLINE = 3;
+const MIN_DEALS_PER_MONTH_FOR_COMEBACK = 3;
+
 export async function computeEarlyBirdAwards(todayYmd: string): Promise<PlanningAwardRow[]> {
   const plans = await systemDb().query<PlanRow>(
     `SELECT manager_login, to_char(month, 'YYYY-MM') AS month, plan_shipments FROM manager_plans`,
@@ -152,9 +173,12 @@ export async function computeEarlyBirdAwards(todayYmd: string): Promise<Planning
   if (plans.rows.length === 0) return [];
   const thisMonth = todayYmd.slice(0, 7);
   // только месяцы, у которых 20-е число уже наступило (закрытый порог)
+  // Правило релевантной выборки (05.08): план 0 делает условие «отгрузил план
+  // до 20-го» вакуумно истинным — «Досрочник» падал всем, у кого просто стоит
+  // нулевая строка плана (РОПы, снабженцы). Нулевые/пустые планы отбрасываем.
   const eligible = plans.rows.filter(p => {
     const day20 = `${p.month}-20`;
-    return day20 <= todayYmd;
+    return day20 <= todayYmd && Number(p.plan_shipments) > 0;
   });
   if (eligible.length === 0) return [];
 
@@ -176,7 +200,7 @@ export async function computeEarlyBirdAwards(todayYmd: string): Promise<Planning
       [bitrixId, monthStart, day20],
     );
     const shipped = Number(shipRes.rows[0]?.sum ?? 0);
-    if (shipped >= Number(p.plan_shipments)) {
+    if (Number(p.plan_shipments) > 0 && shipped >= Number(p.plan_shipments)) {
       out.push({ bitrixId, badgeKey: 'early_bird', tier: null, periodType: 'month', periodDate: monthStart, value: null });
     }
   }

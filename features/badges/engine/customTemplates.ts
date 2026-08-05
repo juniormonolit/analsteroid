@@ -80,6 +80,12 @@ export interface CustomCriteria {
   metric?: CustomMetric;
   period?: CustomPeriod;
   tieredScopes?: boolean;   // top_metric: уровни по масштабу победы
+  /** top_metric: минимальный результат, чтобы вообще претендовать (раньше был
+   *  жёсткий литерал 1 в движке — одна продажа на рубль выигрывала период). */
+  minValue?: number;
+  /** top_metric: минимум кандидатов в группе — правило релевантной выборки
+   *  (решение владельца 05.08, «лучший из одного» не награждается). */
+  minCompetitors?: number;
   threshold?: number;       // threshold_period / milestone
   // crosssell_pair
   firstGroup?: string;
@@ -124,7 +130,11 @@ export function validateCustomCriteria(raw: unknown): { ok: true; criteria: Cust
     case 'top_metric': {
       if (!METRICS.includes(c.metric as CustomMetric)) return { ok: false, error: 'Выберите метрику' };
       if (!PERIODS.includes(c.period as CustomPeriod)) return { ok: false, error: 'Выберите период' };
-      return { ok: true, criteria: { template, metric: c.metric as CustomMetric, period: c.period as CustomPeriod, tieredScopes: c.tieredScopes === true } };
+      if (c.minValue !== undefined && !posNum(c.minValue)) return { ok: false, error: 'Минимальный результат — число больше нуля' };
+      if (c.minCompetitors !== undefined && !posInt(c.minCompetitors)) return { ok: false, error: 'Минимум участников — целое число больше нуля' };
+      return { ok: true, criteria: { template, metric: c.metric as CustomMetric, period: c.period as CustomPeriod, tieredScopes: c.tieredScopes === true,
+        ...(c.minValue !== undefined ? { minValue: c.minValue as number } : {}),
+        ...(c.minCompetitors !== undefined ? { minCompetitors: c.minCompetitors as number } : {}) } };
     }
     case 'threshold_period': {
       if (!METRICS.includes(c.metric as CustomMetric)) return { ok: false, error: 'Выберите метрику' };

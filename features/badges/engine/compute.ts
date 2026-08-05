@@ -167,7 +167,13 @@ interface TopOpts {
   periodTypes?: ReadonlySet<string>;
   tiered?: boolean;                  // default true
   value?: (s: DaySum) => number;     // default amount
+  /** Минимум кандидатов в группе, чтобы победа считалась победой (правило
+   *  релевантной выборки, решение владельца 05.08). Дефолт 2 — «лучший из
+   *  одного» не награждается. Переопределяется через criteria бейджа. */
+  minCompetitors?: number;
 }
+
+export const DEFAULT_MIN_COMPETITORS = 2;
 
 function computeTopAwards(
   badgeKey: string,
@@ -178,6 +184,7 @@ function computeTopAwards(
   opts?: TopOpts,
 ): AwardRow[] {
   const value = opts?.value ?? ((s: DaySum) => s.amount);
+  const minCompetitors = Math.max(1, opts?.minCompetitors ?? DEFAULT_MIN_COMPETITORS);
   // Суммы по (менеджер, период)
   const byPeriod = new Map<string, Map<number, number>>(); // `${type}:${start}` -> mgr -> sum
   for (const s of daySums) {
@@ -198,16 +205,30 @@ function computeTopAwards(
     // День/неделя раньше ретро-старта не начисляем (месяц/год — если пересекаются с ретро-окном)
     if ((type === 'day' || type === 'week') && start < RETRO_START) continue;
     // Победители по масштабам
-    const best = (group: (s: ManagerScope | undefined) => string | null): Map<string, { max: number; winners: number[] }> => {
-      const acc = new Map<string, { max: number; winners: number[] }>();
+    // ПРАВИЛО РЕЛЕВАНТНОЙ ВЫБОРКИ (решение владельца 05.08): «лучший из одного» —
+    // не победа. Живой случай: у менеджера 5 продаж за всю историю и «Топ продаж» ×5,
+    // потому что в маленьком отделе за день/неделю продавал он один. Считаем не
+    // только максимум, но и ЧИСЛО КАНДИДАТОВ группы (кто прошёл minAmount); группы
+    // с одним кандидатом награду не дают. Порог настраивается через criteria
+    // (minCompetitors) — тем же способом, что уже переопределяется minAmount.
+    const best = (group: (s: ManagerScope | undefined) => string | null): Map<string, { max: number; winners: number[]; count: number }> => {
+      const acc = new Map<string, { max: number; winners: number[]; count: number }>();
       for (const [mgr, sum] of sums) {
         if (sum < minAmount) continue;
         const g = group(scopes.get(mgr));
         if (g === null) continue;
         const cur = acc.get(g);
-        if (!cur || sum > cur.max) acc.set(g, { max: sum, winners: [mgr] });
-        else if (sum === cur.max) cur.winners.push(mgr);
+        if (!cur) acc.set(g, { max: sum, winners: [mgr], count: 1 });
+        else {
+          cur.count += 1;
+          if (sum > cur.max) { cur.max = sum; cur.winners = [mgr]; }
+          else if (sum === cur.max) cur.winners.push(mgr);
+        }
       }
+      // Группы без конкуренции отбрасываем целиком: на каждом уровне лесенки
+      // (отдел → департамент → филиал → страна) проверка своя, поэтому подавленная
+      // бронза не мешает выиграть серебро, если выше по структуре конкуренты есть.
+      for (const [g, v] of acc) if (v.count < minCompetitors) acc.delete(g);
       return acc;
     };
     // Одноуровневый кастомный топ: только победитель по всей стране, tier=null.
@@ -222,7 +243,7 @@ function computeTopAwards(
       }
       continue;
     }
-    const tiers: [BadgeTier, Map<string, { max: number; winners: number[] }>][] = [
+    const tiers: [BadgeTier, Map<string, { max: number; winners: number[]; count: number }>][] = [
       ['bronze', best(s => s?.deptKey ?? null)],
       ['silver', best(s => s?.parentKey ?? null)],
       ['gold', best(s => s?.branchKey ?? null)],
@@ -386,9 +407,13 @@ function computeCustomBadge(key: string, c: CustomCriteria, ctx: CustomCtx): Awa
     // 1. «Топ по метрике за период» — тот же computeTopAwards, что у пресетов,
     //    но с одним типом периода и опциональной одноуровневостью.
     case 'top_metric': {
-      awards.push(...computeTopAwards(key, ctx.metricSums[c.metric!], ctx.scopes, 1, ctx.today, {
+      // minValue — минимальная планка результата (раньше был жёсткий литерал 1:
+      // одна продажа на рубль позволяла в одиночку выиграть период); minCompetitors
+      // — правило релевантной выборки, см. computeTopAwards.
+      awards.push(...computeTopAwards(key, ctx.metricSums[c.metric!], ctx.scopes, c.minValue ?? 1, ctx.today, {
         periodTypes: new Set([c.period!]),
         tiered: c.tieredScopes === true,
+        minCompetitors: c.minCompetitors ?? DEFAULT_MIN_COMPETITORS,
         value: metricValue(c.metric!),
       }));
       break;
@@ -586,7 +611,8 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
       if (spec.kind === 'shipments') shipmentDaySums = sums;
       if (spec.kind === 'repeat_sales') repeatDaySums = sums;
       if (!enabled(spec.key)) continue;
-      awards.push(...computeTopAwards(spec.key, sums, scopes, num(crit(spec.key), 'minAmount', 1), today));
+      awards.push(...computeTopAwards(spec.key, sums, scopes, num(crit(spec.key), 'minAmount', 1), today,
+        { minCompetitors: num(crit(spec.key), 'minCompetitors', DEFAULT_MIN_COMPETITORS) }));
     }
 
     // 2. Кросс-селл пары + «Мастер комбо»
@@ -718,6 +744,10 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
         if (!dept) continue;
         const pool = deptPools.get(`${month}:${dept}`);
         if (!pool || pool.length <= arr.length) continue; // в отделе должен быть кто-то ещё
+        // Правило релевантной выборки (05.08): медиана отдела не может опираться
+        // на одну случайную сделку коллеги — требуем от ОСТАЛЬНЫХ не меньше
+        // наблюдений, чем требуем от самого менеджера (minDeals).
+        if (pool.length - arr.length < minDeals) continue;
         if (median(arr) < median(pool)) {
           awards.push({ bitrixId: mgr, badgeKey: 'faster_than_median', tier: null, periodType: 'month', periodDate: month, value: median(arr) });
         }
@@ -732,14 +762,20 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     for (const list of dayByMgr.values()) list.sort((a, b) => a.day.localeCompare(b.day));
 
     if (enabled('personal_day_record')) {
+      // Правило релевантной выборки (05.08): «рекорд» относительно ОДНОГО
+      // предыдущего дня — не рекорд (аналог «100% конверсии с одной сделки»).
+      // Нужна база: минимум minPriorDays прошедших дней С ПРОДАЖЕЙ. Порог по
+      // умолчанию 5 — согласован со streak_5. Максимум обновляем на ВСЕХ днях,
+      // включая добазовые, чтобы после набора базы сравнение шло со всей историей.
+      const minPriorDays = num(crit('personal_day_record'), 'minPriorDays', 5);
       for (const [mgr, list] of dayByMgr) {
-        let best = 0; let seenPrior = false;
+        let best = 0; let priorSaleDays = 0;
         for (const { day, amount } of list) {
-          if (seenPrior && day >= RETRO_START && day < today && amount > best) {
+          if (priorSaleDays >= minPriorDays && day >= RETRO_START && day < today && amount > best) {
             awards.push({ bitrixId: mgr, badgeKey: 'personal_day_record', tier: null, periodType: 'day', periodDate: day, value: amount });
           }
           if (amount > best) best = amount;
-          seenPrior = true;
+          if (amount > 0) priorSaleDays++;
         }
       }
     }
@@ -801,6 +837,8 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
 
     // «Чистая воронка» (недели)
     if (enabled('clean_week')) {
+      // Минимальный живой пайплайн недели — порог настраивается через criteria.
+      const minPipeline = num(crit('clean_week'), 'minPipeline', 3);
       const lifecycles = await fetchDealLifecycles();
       const byMgr = new Map<number, OpenDealRow[]>();
       for (const d of lifecycles) {
@@ -814,6 +852,13 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
         const weekEnd = addDays(ws, 6); // воскресенье
         for (const [mgr, deals] of byMgr) {
           if (!soldWeekByMgr.get(`${mgr}:${ws}`)) continue; // активность недели обязательна
+          // Правило релевантной выборки (05.08): «ни одной просрочки» из НУЛЯ
+          // рассмотренных — вакуумная истина (тот же класс, что «дисциплина
+          // броней» без броней). Знаменатель — сделки, ЖИВЫЕ на этой неделе
+          // (созданы не позже конца недели и ещё не закрыты к её началу);
+          // «чисто» теперь значит «чисто при реальном пайплайне недели».
+          const inScope = deals.filter(d => d.createdDay <= weekEnd && (d.closedDay === null || d.closedDay >= ws));
+          if (inScope.length < minPipeline) continue;
           let overdue = false;
           for (const d of deals) {
             if (d.createdDay > weekEnd) continue;

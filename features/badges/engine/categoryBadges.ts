@@ -62,6 +62,9 @@ interface DealRow {
 }
 
 const DAY_MS = 86_400_000;
+// Порог релевантной выборки для «Хранителя ключей» (решение владельца 05.08):
+// удержание ОДНОГО ключевого клиента — не портфель.
+const MIN_KEY_CLIENTS_FOR_KEEPER = 3;
 const ymd = (v: string | Date) => (v instanceof Date ? v : new Date(v)).toISOString().slice(0, 10);
 const ts = (v: string | Date) => (v instanceof Date ? v : new Date(v)).getTime();
 
@@ -187,7 +190,7 @@ export async function computeCategoryBadgeAwards(todayYmd: string): Promise<Cate
     const firstMonth = keyClients.reduce((m, c) => (c.firstKeyYmd < m ? c.firstKeyYmd : m), todayYmd).slice(0, 7);
     const thisMonth = todayYmd.slice(0, 7);
     // (manager, month) → { hasKey, violated }
-    const byMgrMonth = new Map<string, { bitrixId: number; month: string; violated: boolean }>();
+    const byMgrMonth = new Map<string, { bitrixId: number; month: string; violated: boolean; keys: Set<string> }>();
     for (let m = firstMonth; m < thisMonth; m = nextMonth(m)) {
       const startTs = new Date(`${m}-01T00:00:00+03:00`).getTime();
       const endTs = new Date(`${nextMonth(m)}-01T00:00:00+03:00`).getTime() - 1;
@@ -196,13 +199,17 @@ export async function computeCategoryBadgeAwards(todayYmd: string): Promise<Cate
         const mgr = managerAsOf(c.deals, endTs);
         if (mgr === null) continue;
         const k = `${mgr}:${m}`;
-        const entry = byMgrMonth.get(k) ?? { bitrixId: mgr, month: m, violated: false };
+        const entry = byMgrMonth.get(k) ?? { bitrixId: mgr, month: m, violated: false, keys: new Set<string>() };
+        entry.keys.add(c.clientKey);
         if (atRiskInMonth(c.soldTs, cycleOf(c.soldTs), startTs, endTs)) entry.violated = true;
         byMgrMonth.set(k, entry);
       }
     }
     for (const e of byMgrMonth.values()) {
       if (e.violated) continue;
+      // Правило релевантной выборки (05.08): «удержал ВСЕХ ключевых» при одном
+      // ключевом клиенте — не заслуга «хранителя». Требуем портфель.
+      if (e.keys.size < MIN_KEY_CLIENTS_FOR_KEEPER) continue;
       awards.push({
         bitrixId: e.bitrixId, badgeKey: 'category_keykeeper', tier: null,
         periodType: 'month', periodDate: `${e.month}-01`, value: null,

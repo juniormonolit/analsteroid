@@ -409,15 +409,29 @@ export async function computeXpTick(
   // наградной системы (03.04.2026). Награда per (менеджер, день); несколько
   // дебютов в один день сливаются в одну награду (value = сколько групп).
   if (isBadgeEnabled('xp_first_group')) {
-    const firstByMgrGroup = new Map<string, string>(); // `${mgr}:${group}` -> день
-    for (const d of dealsRes.rows) {
-      if (d.sold_day === null) continue;
-      for (const g of d.grps ?? []) {
-        const k = `${d.mgr}:${g}`;
-        const cur = firstByMgrGroup.get(k);
-        if (!cur || d.sold_day < cur) firstByMgrGroup.set(k, d.sold_day);
-      }
-    }
+    // Правило релевантной выборки (решение владельца 05.08): «дебют» надо
+    // ДЕТЕКТИРОВАТЬ по всей истории, а не по урезанному XP-окну. Иначе ветеран,
+    // продавший группу X ещё до XP_RETRO_START (01.01.2025) и вернувшийся к ней
+    // сейчас, получает «Первую кровь» повторно — при том что группа для него
+    // давно не новая. Окно НАЧИСЛЕНИЯ (ретро-старт наград) остаётся как было —
+    // обрезается только оно, но не окно детекции.
+    const debutRes = await analyticsDb().query<{ mgr: number; grp: string; first_day: string }>(
+      // Группы разворачиваем ТЕМ ЖЕ выражением, что DEALS_SQL (jsonb products,
+      // без услуг/доставки) — иначе детекция считала бы другие группы, чем награда.
+      `SELECT d.current_manager_id AS mgr, g.grp,
+              min((d.sold_at AT TIME ZONE 'Europe/Moscow')::date)::text AS first_day
+         FROM sa.deals d
+         CROSS JOIN LATERAL (
+           SELECT DISTINCT (p->>'head_group_name') AS grp
+             FROM jsonb_array_elements(d.products) p
+            WHERE coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL
+              AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)'
+         ) g
+        WHERE d.current_manager_id IS NOT NULL AND d.sold_at IS NOT NULL
+        GROUP BY 1, 2`,
+    );
+    const firstByMgrGroup = new Map<string, string>(); // `${mgr}:${group}` -> день дебюта (вся история)
+    for (const r of debutRes.rows) firstByMgrGroup.set(`${r.mgr}:${r.grp}`, r.first_day);
     const perDay = new Map<string, number>(); // `${mgr}:${day}` -> новых групп
     for (const [k, day] of firstByMgrGroup) {
       if (day < AWARD_RETRO_START) continue;
