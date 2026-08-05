@@ -6,7 +6,7 @@
 import { useQuery } from '@tanstack/react-query';
 
 interface FeedEvent {
-  type: 'badge' | 'quest' | 'sale';
+  type: 'badge' | 'quest' | 'sale' | 'level' | 'first_sale';
   ts: string;
   title: string;
   emoji: string;
@@ -33,6 +33,8 @@ const TYPE_LABEL: Record<FeedEvent['type'], string> = {
   badge: 'Получена награда',
   quest: 'Выполнен квест',
   sale: 'Крупная продажа',
+  level: 'Новый уровень',
+  first_sale: 'Первая продажа в группе',
 };
 
 function fmtFeedDate(iso: string): string {
