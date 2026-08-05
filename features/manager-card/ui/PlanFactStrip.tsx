@@ -4,6 +4,7 @@
 // брони/подтв./отгрузки/звонки. Не зависит от периода фильтров карточки — это
 // всегда «прямо сейчас» (день/неделя/месяц по МСК), как в референсе.
 import { useQuery } from '@tanstack/react-query';
+import { NoData } from '@/components/ui/NoData';
 import type { PlanFactResult, PlanFactBucket } from '@/features/manager-card/engine/planFact';
 
 function fmtMoney(v: number | null | undefined): string {
@@ -147,6 +148,22 @@ export function PlanFactStrip({ managerId, mode }: { managerId: string; mode: 'm
   }
   if (error || !data) {
     return <div className="text-sm text-[var(--color-text-muted)]">План/факт недоступен: {error instanceof Error ? error.message : '—'}</div>;
+  }
+
+  // «Нет данных» вместо частокола нулей (правило владельца 05.08): у сотрудника
+  // вне продаж (маркетинг, снабжение, логистика, HR — 100+ человек по
+  // оргструктуре) ни плана, ни фактов не бывает в принципе, и три карточки с
+  // нулями выглядят как «он ничего не продал», а не как «ему нечего продавать».
+  const monthEmpty = !data.month.planSales && !data.month.salesAmount
+    && !data.month.shipmentsAmount && !data.month.reservationsAmount;
+  const weekEmpty = !data.week.salesAmount && !data.week.shipmentsAmount && !data.week.reservationsAmount;
+  const dayEmpty = !data.day.salesAmount && !data.day.shipmentsAmount && !data.day.reservationsAmount;
+  if (monthEmpty && weekEmpty && dayEmpty) {
+    return (
+      <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+        <NoData what="продаж, отгрузок и планов за период" hint="Похоже, эта роль не участвует в продажах — цифры появятся, если появятся сделки." />
+      </div>
+    );
   }
 
   return (

@@ -15,6 +15,7 @@
 // ПДн: телефоны в UI не показываются — звонить менеджер идёт в Битрикс.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { NoData } from '@/components/ui/NoData';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { HelpCircle, MoreHorizontal, ExternalLink } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
@@ -526,7 +527,9 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
       ) : isLoading && rows.length === 0 ? (
         <div className="text-sm text-[var(--color-text-muted)]">Считаем заказчиков… (первое открытие может занять до минуты)</div>
       ) : rows.length === 0 ? (
-        <div className="text-sm text-[var(--color-text-muted)]">Ничего не найдено.</div>
+        <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+          <NoData what="заказчиков" hint="Либо фильтры слишком узкие, либо у этой роли нет своих клиентов — например, у маркетинга или логистики." />
+        </div>
       ) : (
         <div className="overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
           <table className="w-full text-[12.5px]">
