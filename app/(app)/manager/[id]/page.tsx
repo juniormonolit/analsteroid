@@ -17,6 +17,23 @@ export default async function Page({ params, searchParams }: {
   const { id } = await params;
   const sp = await searchParams;
   const mode = sp.mode === 'department' ? 'department' as const : 'manager' as const;
+
+  // Свой собственный id → ЛК (задача 3045). Закрывает сразу три вещи:
+  //   • §6 п.6 спеки: ссылка в дайджесте бота (`/manager/{bitrixId}?tab=...`) у самого
+  //     менеджера ведёт на его карточку — теперь она приводит в кабинет, а не создаёт
+  //     второй вход в него. Шаблон дайджеста при этом НЕ трогаем: он один и тот же для
+  //     менеджера и для админа, открывающего чужой дайджест на превью, — а редирект
+  //     срабатывает ровно у того, чей это id;
+  //   • давнюю занозу (задача 2771): человек, вручную открывший `/manager/<свой_id>`,
+  //     получал карточку с isSelf=false — без магазина, гачи и переводов;
+  //   • закладки на собственную карточку, оставшиеся до переезда адресов.
+  // Параметры сохраняем — на них завязаны точки входа из отчётов и дайджеста.
+  if (mode === 'manager' && session.bitrixUserId && session.bitrixUserId === id) {
+    const qs = new URLSearchParams(
+      Object.entries(sp).flatMap(([k, v]) => (typeof v === 'string' ? [[k, v] as [string, string]] : [])),
+    ).toString();
+    redirect(qs ? `/profile?${qs}` : '/profile');
+  }
   const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v : undefined);
 
   // Доступ (задача 30.07, «Вариант Б»): менеджер — только себя, РОП — свой отдел,
@@ -28,7 +45,7 @@ export default async function Page({ params, searchParams }: {
   if (!allowed) {
     return (
       <div className="p-6 text-sm text-[var(--color-text-muted)]">
-        Эта карточка вам недоступна. Своя — в разделе «Мой ЛК».
+        Эта карточка вам недоступна. Своя — в личном кабинете (пункт «Мой кабинет» в меню).
       </div>
     );
   }

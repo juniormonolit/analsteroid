@@ -1,5 +1,5 @@
 import { getSession } from '@/lib/auth/session';
-import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
+import { resolveSelfCard } from '@/lib/org/selfCard';
 import { hasPerm } from '@/lib/auth/perms';
 import { ManagerCardPage } from '@/features/manager-card/ui/ManagerCardPage';
 
@@ -61,16 +61,19 @@ export default async function Page() {
     );
   }
 
-  const managed = await getCallControlManagedDepts(session.bitrixUserId);
-  if (managed.length > 0) {
-    return (
-      <ManagerCardPage
-        managerId="my"
-        mode="department"
-        managerName={managed.length === 1 ? (managed[0].deptName ?? 'Мой отдел') : `Мои отделы (${managed.length})`}
-        showBadges
-      />
-    );
-  }
-  return <ManagerCardPage managerId={session.bitrixUserId} mode="manager" managerName={session.displayName} showBadges />;
+  // Кто и что видит — общий с /profile резолвер (задача 3045, п.10 спеки): пока это
+  // решение было скопировано в двух файлах, они успели разъехаться (забытый showBadges,
+  // см. выше). Ветка no-bitrix обработана отдельно ВЫШЕ — здесь она уже невозможна,
+  // но резолвер типизирован честно, поэтому проверяем.
+  const self = await resolveSelfCard(session);
+  if (self.kind === 'no-bitrix') return null;
+
+  return (
+    <ManagerCardPage
+      managerId={self.managerId}
+      mode={self.mode}
+      managerName={self.managerName}
+      showBadges
+    />
+  );
 }

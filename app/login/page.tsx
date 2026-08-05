@@ -20,7 +20,10 @@ export default function LoginPage() {
       body: JSON.stringify({ login, password }),
     });
     if (res.ok) {
-      router.push('/home');
+      // На «/», а не на «/home»: стартовый адрес считает сервер (landingFor) —
+      // у рядового без прав это ЛК, иначе Главная. Клиенту знать правило незачем,
+      // и дублировать его тут нельзя: разъедется (задача 3045, §5).
+      router.push('/');
     } else {
       const data = await res.json().catch(() => ({}));
       setError(data.error ?? 'Неверный логин или пароль');

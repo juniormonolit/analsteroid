@@ -177,7 +177,7 @@ export async function PATCH(req: NextRequest) {
       bitrixId: Number(p.bitrix_id), type: 'payout_resolved',
       title: paid ? `Выплата ${p.amount} ₽ подтверждена` : `Заявка на вывод ${p.amount} ₽ отклонена`,
       body: paid ? `Подтвердил: ${session.login}. Сумма списана с рублёвого кошелька.` : `Причина: ${comment}`,
-      link: '/manager/me',
+      link: '/profile',
     });
     await client.query('COMMIT');
     void pushViaAnalitik(Number(p.bitrix_id),

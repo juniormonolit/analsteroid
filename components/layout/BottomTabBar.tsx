@@ -28,7 +28,9 @@ import { Home, User, Trophy, MoreHorizontal } from 'lucide-react';
  */
 const TABS: { href: string; label: string; icon: React.ReactNode; match: (p: string) => boolean }[] = [
   { href: '/home', label: 'Главная', icon: <Home size={20} />, match: (p) => p === '/home' },
-  { href: '/manager/me', label: 'Мой кабинет', icon: <User size={20} />, match: (p) => p.startsWith('/manager') },
+  // Задача 3045: адрес ЛК — /profile (раньше /manager/me). match по /profile, чтобы
+  // пункт светился и на вложенных вкладках кабинета (/profile/team, /profile/settings).
+  { href: '/profile', label: 'Мой кабинет', icon: <User size={20} />, match: (p) => p.startsWith('/profile') },
   { href: '/rating', label: 'Рейтинг', icon: <Trophy size={20} />, match: (p) => p.startsWith('/rating') },
 ];
 

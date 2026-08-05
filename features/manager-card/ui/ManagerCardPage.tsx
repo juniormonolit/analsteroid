@@ -455,7 +455,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
               <Lock size={11} /> только чтение
             </span>
           )}
-          <Link href="/manager/me" className="ml-auto tap-target text-xs font-semibold text-[var(--color-accent)] hover:underline whitespace-nowrap">
+          <Link href="/profile" className="ml-auto tap-target text-xs font-semibold text-[var(--color-accent)] hover:underline whitespace-nowrap">
             ← Вернуться к себе
           </Link>
         </div>

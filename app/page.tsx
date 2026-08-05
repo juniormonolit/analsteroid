@@ -1,8 +1,11 @@
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
-import { firstAllowedPath } from '@/lib/auth/perms';
+import { landingFor } from '@/lib/auth/perms';
 
+// Корень: единственная точка, где решается стартовый адрес (задача 3045, §5).
+// Сюда же ведут страница логина и приём инвайта — им не нужно дублировать правило,
+// достаточно отправить человека на «/».
 export default async function Root() {
   const session = await getSession();
-  redirect(firstAllowedPath(session));
+  redirect(landingFor(session));
 }

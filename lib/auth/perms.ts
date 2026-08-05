@@ -121,11 +121,28 @@ export function effectiveUiMode(session: SessionUser | null): UiMode {
   return isManagementTier(session) ? 'pro' : 'basic';
 }
 
-// Цель redirect'а с «/», после логина и из закрытых разделов (нет нужного
-// section.*-права). Раньше вело на первый доступный раздел по списку прав;
-// с появлением Главной (owners-inbox/home-page брифа) она сама адаптируется
-// под права пользователя (пустые колонки, если прав нет), поэтому это
-// универсальный безопасный fallback для любого залогиненного пользователя.
-export function firstAllowedPath(session: SessionUser | null): string {
-  return session ? '/home' : '/login';
+// Стартовый адрес — единственное место, решающее «куда человек попадает» с «/»,
+// после логина и после приёма инвайта (задача 3045, §5 спеки
+// owners-inbox/monolitika-navigation-3045.md).
+//
+// Правило: нет НИ ОДНОГО раздела (`section.*`) — человеку нечего делать на Главной,
+// она будет пустой; его место — личный кабинет. Есть хотя бы один — `/home`, она сама
+// адаптируется под права (пустые колонки не рисует).
+//
+// Раньше здесь был `firstAllowedPath()`, который ВСЕГДА отдавал `/home`: приглашённый
+// без прав (в т.ч. автосозданный аккаунт из Битрикса — `lib/bitrix/appAuth.ts`, роль
+// «Пользователь» с пустым набором прав) попадал на пустую главную и решал, что
+// приложение сломано.
+//
+// Режим запуска (`lib/hooks/useAppMode.ts`) здесь СОЗНАТЕЛЬНО не участвует, хотя §5
+// спеки описывает поведение по режимам: это серверная функция, а режим — клиентское
+// понятие (iframe/standalone видно только в браузере). Две режимные ветки закрыты
+// там, где им место: Битрикс — обработчиком входа (`/api/bitrix/app` уводит на
+// `/bx/manager`, вне `/bx/*` портал получит белый экран из-за CSP frame-ancestors),
+// установленное PWA — `start_url` в `app/manifest.ts`. Для mobile/desktop таблица §5
+// совпадает с правилом ниже, отдельная ветка не нужна.
+export function landingFor(session: SessionUser | null): string {
+  if (!session) return '/login';
+  const hasAnySection = PERM_SECTIONS.some((p) => hasPerm(session, p.key));
+  return hasAnySection ? '/home' : '/profile';
 }

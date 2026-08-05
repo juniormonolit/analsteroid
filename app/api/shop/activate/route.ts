@@ -139,7 +139,7 @@ export async function PATCH(req: NextRequest) {
   const bodyText = approved
     ? `Одобрил: ${session.login}`
     : `Причина: ${comment}. Предмет вернулся в ваш инвентарь — можно подать заявку на другую дату.`;
-  await createNotification(db, { bitrixId: Number(row.rows[0].bitrix_id), type: 'activation_resolved', title, body: bodyText, link: '/manager/me' });
+  await createNotification(db, { bitrixId: Number(row.rows[0].bitrix_id), type: 'activation_resolved', title, body: bodyText, link: '/profile' });
   void pushViaAnalitik(Number(row.rows[0].bitrix_id), title, bodyText);
   return NextResponse.json({ ok: true });
 }

@@ -228,7 +228,7 @@ export async function runSpin(db: Pool, bitrixId: number, pinEventId: number | n
         body: tier.rarity === 'jackpot'
           ? 'Приз в инвентаре, заявка на выдачу уже у руководителя.'
           : 'Приз упал в ваш инвентарь.',
-        link: '/manager/me',
+        link: '/profile',
       });
     }
     // Название валюты — ДО коммита (client после client.release() в finally

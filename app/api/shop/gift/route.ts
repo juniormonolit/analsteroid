@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     bitrixId: to, type: 'gift_in',
     title: `Вам подарили: ${r.rows[0].item_name}`,
     body: `От: ${fromName}. Предмет уже в вашем инвентаре (срок годности сохранён).`,
-    link: '/manager/me',
+    link: '/profile',
   });
   void pushViaAnalitik(to, `Вам подарили: ${r.rows[0].item_name}`, `От: ${fromName}`);
   return NextResponse.json({ ok: true, itemName: r.rows[0].item_name, toName });

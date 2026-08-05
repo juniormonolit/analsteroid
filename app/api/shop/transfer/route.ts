@@ -148,7 +148,7 @@ export async function POST(req: NextRequest) {
       bitrixId: to, type: 'transfer_in',
       title: `Вам перевели ${received} ${currencyName}`,
       body: `От: ${fromName}${note}`,
-      link: '/manager/me',
+      link: '/profile',
     });
     await client.query('COMMIT');
     void pushViaAnalitik(to, `Вам перевели ${received} ${currencyName}`, `От: ${fromName}${note}`);

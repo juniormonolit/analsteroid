@@ -127,7 +127,7 @@ export async function runWalletTick(client: PoolClient): Promise<WalletTickStats
        SELECT w.bitrix_id, 'expiry_soon',
               'Скоро сгорит ' || w.amt || ' ' || s.currency_name,
               'Через ' || w.days || ' дн. истечёт срок жизни части начислений — потратьте их в магазине.',
-              '/manager/me'
+              '/profile'
          FROM soon w, s
         WHERE w.amt > 0
           AND NOT EXISTS (SELECT 1 FROM notifications n
