@@ -428,7 +428,9 @@ export async function sendDailyMoscowReport(dialogId?: string, reportDate?: stri
   const recipient = dialogId || process.env.DAILY_REPORT_BITRIX_USER_ID || '';
   if (!recipient) throw new Error('DAILY_REPORT_BITRIX_USER_ID не задан — некому отправлять ежедневный отчёт');
   const report = await buildDailyMoscowReport(reportDate);
-  await sendBitrixBotMessage(recipient, report.message);
-  await sendBitrixBotMessage(recipient, report.discrepancyMessage);
+  // channel:'report' — ежедневные отчёты продолжают ходить и в режиме тишины
+  // до релиза («отчёты пусть шлёт, но ничего больше», владелец 05.08).
+  await sendBitrixBotMessage(recipient, report.message, undefined, 'report');
+  await sendBitrixBotMessage(recipient, report.discrepancyMessage, undefined, 'report');
   return report;
 }

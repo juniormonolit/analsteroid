@@ -420,7 +420,8 @@ export async function sendGroupReport(
   dialogId: string, config: GroupReportConfig, reportDate?: string,
 ): Promise<GroupReportData> {
   const report = await buildGroupReport(config, reportDate);
-  await sendBitrixBotMessage(dialogId, report.message);
-  await sendBitrixBotMessage(dialogId, report.discrepancyMessage);
+  // channel:'report' — см. комментарий в dailyMoscowReport.ts (режим тишины).
+  await sendBitrixBotMessage(dialogId, report.message, undefined, 'report');
+  await sendBitrixBotMessage(dialogId, report.discrepancyMessage, undefined, 'report');
   return report;
 }
