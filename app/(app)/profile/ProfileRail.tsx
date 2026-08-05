@@ -4,9 +4,10 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   IdCard, Users, UsersRound, Settings, ClipboardList, Contact,
-  Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap,
+  Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap, Bell,
 } from 'lucide-react';
 import { MANAGER_TABS, type ManagerTabKey } from '@/features/manager-card/ui/ManagerTabs';
+import { useNotifications } from '@/features/profile/ui/NotificationsPage';
 
 // Левая рельса ЛК «а-ля VK/Facebook» (задача владельца 05.08: «левое меню как у нас
 // всегда, справа контент»). Десктоп-only (`hidden lg:flex` ставит layout): на телефоне
@@ -54,7 +55,13 @@ export function ProfileRail({ mode }: { mode: 'manager' | 'department' | 'none' 
   const planyorkaEnabled = features?.planyorka ?? false;
 
   const tab = searchParams.get('tab');
-  const items: { key: string; href: string; label: string; Icon: typeof IdCard; active: boolean }[] = [];
+  // Счётчик непрочитанного у пункта «Уведомления» (механика владельца: «где-то
+  // есть новое — кружочек с цифрой; увидел — погас»). Тот же queryKey, что у
+  // страницы уведомлений, — React Query дедуплицирует запрос.
+  const { data: notif } = useNotifications();
+  const unread = notif?.unread ?? 0;
+
+  const items: { key: string; href: string; label: string; Icon: typeof IdCard; active: boolean; badge?: number }[] = [];
 
   if (mode === 'manager') {
     for (const t of MANAGER_TABS) {
@@ -89,6 +96,10 @@ export function ProfileRail({ mode }: { mode: 'manager' | 'department' | 'none' 
       active: pathname.startsWith('/profile/people'),
     },
     {
+      key: 'notifications', href: '/profile/notifications', label: 'Уведомления', Icon: Bell,
+      active: pathname.startsWith('/profile/notifications'), badge: unread,
+    },
+    {
       key: 'settings', href: '/profile/settings', label: 'Настройки', Icon: Settings,
       active: pathname.startsWith('/profile/settings'),
     },
@@ -96,7 +107,7 @@ export function ProfileRail({ mode }: { mode: 'manager' | 'department' | 'none' 
 
   return (
     <nav className="w-56 shrink-0 flex flex-col gap-0.5 border-r border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-bg)] px-2 py-3 overflow-y-auto">
-      {items.map(({ key, href, label, Icon, active }) => (
+      {items.map(({ key, href, label, Icon, active, badge }) => (
         <Link
           key={key}
           href={href}
@@ -108,6 +119,11 @@ export function ProfileRail({ mode }: { mode: 'manager' | 'department' | 'none' 
         >
           <Icon size={18} className="shrink-0" />
           {label}
+          {badge ? (
+            <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--color-positive)] px-1 text-[10px] font-bold text-white tabular-nums">
+              {badge > 99 ? '99+' : badge}
+            </span>
+          ) : null}
         </Link>
       ))}
     </nav>

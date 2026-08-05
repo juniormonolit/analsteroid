@@ -57,29 +57,36 @@ export interface BotKeyboardButton {
 }
 
 /** Возвращает id отправленного сообщения (нужен для корреляции ответов по REPLY_ID). */
-// ── ГЛОБАЛЬНАЯ ГЛУШИЛКА БОТОВ (распоряжение владельца 05.08) ─────────────────
-// «До тех пор, пока я не скажу, мы не запускаем релиз и не должны отправлять
-// Аналитиком (роботом) никаких сообщений никому». Полагаться на то, что никто
-// не дёрнет отправку, нельзя: в instrumentation.ts живут ПЛАНИРОВЩИКИ (ежедневные
-// отчёты в 18:00 МСК на 2098 и 1923, дайджесты, «Контроль звонков») — они
-// отправят сами, без участия человека.
+// ── РЕЖИМ ТИШИНЫ ДО РЕЛИЗА (распоряжение владельца 05.08, уточнённое) ────────
+// «Не должны отправлять Аналитиком никаких сообщений никому» → уточнение:
+// «Не-не, ОТЧЁТЫ пусть шлёт. Но ничего больше. По умолчанию у нас задуманы
+// уведомления через него».
 //
-// Дефолт — МОЛЧАНИЕ: даже если переменной нет на сервере (а на проде env
-// задаётся только через start.sh, см. память проекта), бот молчит. Включение
-// обратно — ЯВНОЕ: BOT_SEND_ENABLED=1 в start.sh + рестарт, по слову владельца.
-// Вызовы не падают (иначе планировщики уйдут в ретраи и лог-шум) — тихо
-// логируем и возвращаем фиктивный id.
-function botSendingDisabled(): boolean {
-  return process.env.BOT_SEND_ENABLED !== '1';
+// То есть глушится ВСЁ, кроме ежедневных отчётов: уведомления геймификации
+// (награды/квесты/переводы/заявки), дайджесты РОПам, «Контроль звонков», чаты
+// по сделкам. Полагаться на «никто не дёрнет» нельзя — часть этого шлют
+// ПЛАНИРОВЩИКИ из instrumentation.ts сами, без участия человека.
+//
+// Реализация: канал указывает ВЫЗЫВАЮЩИЙ (channel: 'report' | 'notify'), дефолт —
+// 'notify' (то есть молчание): любой новый или забытый вызов по умолчанию тихий,
+// а не прорывается наружу. Снять тишину целиком — BOT_SEND_ENABLED=1 в start.sh
+// + рестарт, по слову владельца. Вызовы не бросают исключение (иначе
+// планировщики уйдут в ретраи и лог-шум) — тихо логируют и отдают фиктивный id.
+export type BotChannel = 'report' | 'notify';
+
+function botChannelMuted(channel: BotChannel): boolean {
+  if (process.env.BOT_SEND_ENABLED === '1') return false; // релиз — шлём всё
+  return channel !== 'report';                            // до релиза — только отчёты
 }
 
 export async function sendBitrixBotMessage(
   bitrixUserId: string,
   message: string,
   keyboard?: BotKeyboardButton[],
+  channel: BotChannel = 'notify',
 ): Promise<number> {
-  if (botSendingDisabled()) {
-    console.warn(`[bot] МОЛЧАНИЕ (BOT_SEND_ENABLED≠1): сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
+  if (botChannelMuted(channel)) {
+    console.warn(`[bot] ТИШИНА ДО РЕЛИЗА (канал ${channel}): сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
     return 0;
   }
   const webhook = process.env.BITRIX_BOT_WEBHOOK_URL || '';
@@ -102,10 +109,10 @@ export async function sendBitrixBotMessage(
 // missedcalls-робота. Свой вебхук/CLIENT_ID (env CALL_CONTROL_*), НЕ переиспользует
 // креды «Аналитика»: у ботов разные владельцы-вебхуки и разные аватары/имена в чате.
 export async function sendCallControlBotMessage(bitrixUserId: string, message: string): Promise<void> {
-  // Та же глушилка, что у «Аналитика» — распоряжение владельца про ЛЮБЫЕ
-  // сообщения роботом (см. комментарий у sendBitrixBotMessage).
-  if (botSendingDisabled()) {
-    console.warn(`[bot:call-control] МОЛЧАНИЕ (BOT_SEND_ENABLED≠1): сообщение для ${bitrixUserId} не отправлено`);
+  // «Контроль звонков» — уведомления, не отчёты: до релиза молчит целиком
+  // (см. комментарий про режим тишины у sendBitrixBotMessage).
+  if (botChannelMuted('notify')) {
+    console.warn(`[bot:call-control] ТИШИНА ДО РЕЛИЗА: сообщение для ${bitrixUserId} не отправлено`);
     return;
   }
   const webhook = process.env.CALL_CONTROL_WEBHOOK_URL || '';

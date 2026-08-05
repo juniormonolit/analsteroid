@@ -16,7 +16,7 @@ import { ManagerActivityTab } from './ManagerActivityTab';
 import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
 import { PayoutManageBlock } from '@/features/badges/ui/PayoutManage';
 import { InventoryManageBlock } from '@/features/badges/ui/InventoryManage';
-import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, NotificationsBell, MANAGER_TABS, type ManagerTabKey } from './ManagerTabs';
+import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, MANAGER_TABS, type ManagerTabKey } from './ManagerTabs';
 import { CustomersTab, TeamCustomersBlock, type Filter as CustomerFilter } from '@/features/customers/ui/CustomersTab';
 import { PlanyorkaTab, TeamPlanyorkaBlock } from '@/features/planyorka/ui/PlanyorkaTab';
 import { QuestsTab, TeamQuestsBlock } from '@/features/quests/ui/QuestsTab';
@@ -483,7 +483,8 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           {/* externalNav: на lg+ вкладками рулит левая рельса ЛК — свою ленту прячем,
               но колокольчик уведомлений (только свой ЛК, showBadges) должен остаться. */}
           <div className={`min-w-0 flex-1 ${externalNav ? 'lg:hidden' : ''}`}><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
-          {showBadges && <NotificationsBell />}
+          {/* Колокольчик убран (правка владельца 05.08): уведомления живут
+              отдельным разделом /profile/notifications со счётчиком в рельсе. */}
         </div>
       )}
 
