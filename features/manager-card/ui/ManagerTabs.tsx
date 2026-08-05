@@ -7,8 +7,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Lock } from 'lucide-react';
+import { Lock, Camera } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
+import { coverStyle } from '@/lib/profile/covers';
+import { CoverPicker } from '@/features/profile/ui/CoverPicker';
+import { ProfileFeed } from '@/features/profile/ui/ProfileFeed';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { PinDialog } from '@/components/ui/PinDialog';
@@ -165,6 +168,8 @@ interface ProfileExtra {
     classes: { name: string; xp: number; level: number; progress: number }[];
     topClass: { name: string; level: number } | null;
   } | null;
+  // Обложка профиля (ЛК-соцсетка этап 2, миграция 149): null = дефолтная.
+  coverId: string | null;
 }
 
 // Контекст ручных операций: право, бюджет, справочник с рассчитанными суммами.
@@ -484,6 +489,8 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
   // forceReadOnly — даже не запрашиваем контекст, не только прячем кнопки.
   const { data: manualCtx } = useManualContext(managerId, !isSelf && !forceReadOnly);
   const [manualKind, setManualKind] = useState<'bonus' | 'penalty' | null>(null);
+  // Пикер обложки (ЛК-соцсетка этап 2) — только в собственном ЛК.
+  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
   const afterManual = () => {
     setManualKind(null);
     void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
@@ -512,7 +519,23 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
 
       {/* ══ ЛЕВАЯ КОЛОНКА: кто это ══ */}
       <div className="flex min-w-0 flex-col gap-4 sm:gap-5">
-      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-5">
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden">
+        {/* Обложка (ЛК-соцсетка этап 2): генеративный CSS-паттерн из каталога,
+            аватар наезжает на неё по-вконтактовски. Сменить может только сам
+            владелец профиля — у зрителя кнопки нет. */}
+        <div className="relative h-24 sm:h-28 w-full" style={coverStyle(extra?.coverId)}>
+          {isSelf && !forceReadOnly && (
+            <button
+              onClick={() => setCoverPickerOpen(true)}
+              className="tap-target absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
+              title="Сменить обложку"
+            >
+              <Camera size={13} /> Обложка
+            </button>
+          )}
+        </div>
+        {isSelf && !forceReadOnly && <CoverPicker open={coverPickerOpen} onOpenChange={setCoverPickerOpen} />}
+        <div className="px-4 sm:px-5 pb-5 -mt-14">
         <div className="flex flex-col items-center gap-3.5 text-center">
           <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={220} shape="rounded" />
           <div className="min-w-0 w-full">
@@ -593,6 +616,7 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
             onDone={afterManual}
           />
         )}
+        </div>{/* /обёртка контента под обложкой (-mt-14) */}
       </section>
 
       {/* Место в рейтинге — отдельная карточка чипами (макет: лесенка отдел →
@@ -725,6 +749,10 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
           </div>
         )}
       </section>
+
+      {/* Лента событий (этап 2, 05.08): награды/квесты/крупные продажи постами,
+          «чтоб профиль был живым». Правая колонка, под наградами. */}
+      <ProfileFeed managerId={managerId} />
       </div>
     </div>
     </>

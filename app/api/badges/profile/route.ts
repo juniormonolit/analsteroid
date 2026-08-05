@@ -61,12 +61,16 @@ export async function GET(req: NextRequest) {
 
   // Рублёвый кошелёк (миграция 116) + курс конвертации — для профиля/выписки.
   // expiring — плашка TTL (31.07): «сгорит N ебаллов через X дней», горизонт 30 дней.
-  const [rub, rate, expiring, xp] = await Promise.all([
+  const [rub, rate, expiring, xp, cover] = await Promise.all([
     systemDb().query<{ balance: string }>(`SELECT balance FROM badge_rub_balances WHERE bitrix_id = $1`, [id]),
     systemDb().query<{ rate: string }>(`SELECT rub_to_eball_rate AS rate FROM badge_coin_settings WHERE id = 1`),
     getExpiringSoon(systemDb(), id),
     // XP-профиль (миграция 124): уровень/титул/классы — таб «Профиль».
     fetchXpProfile(systemDb(), id).catch(() => null),
+    // Обложка профиля (миграция 149, ЛК-соцсетка этап 2); до миграции — null (дефолт).
+    systemDb().query<{ cover_id: string }>(`SELECT cover_id FROM profile_covers WHERE bitrix_id = $1`, [id])
+      .then(r => r.rows[0]?.cover_id ?? null)
+      .catch(() => null),
   ]);
 
   const startDate = reg.rows[0]?.start_date ?? null;
@@ -77,5 +81,6 @@ export async function GET(req: NextRequest) {
     rubToEballRate: Number(rate.rows[0]?.rate ?? 1),
     expiring,
     xp,
+    coverId: cover,
   });
 }

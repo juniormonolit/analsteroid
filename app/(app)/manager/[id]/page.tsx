@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getSession } from '@/lib/auth/session';
 import { canViewManager, hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
@@ -43,9 +44,21 @@ export default async function Page({ params, searchParams }: {
     : hasFullManagerAccess(session) || id === 'my' || id === 'all'
       || (await managedDepartmentIds(session)).includes(id);
   if (!allowed) {
+    // ЛК-соцсетка (05.08): аналитическая карточка закрыта, но ПУБЛИЧНЫЙ профиль
+    // коллеги открыт всем — вместо тупика (клик по строке «Рейтинга» у рядового
+    // менеджера вёл ровно сюда) даём дорогу дальше.
     return (
       <div className="p-6 text-sm text-[var(--color-text-muted)]">
         Эта карточка вам недоступна. Своя — в личном кабинете (пункт «Мой кабинет» в меню).
+        {mode === 'manager' && /^\d+$/.test(id) && (
+          <>
+            {' '}Зато открыт{' '}
+            <Link href={`/profile/${id}`} className="text-[var(--color-accent)] hover:underline font-semibold">
+              публичный профиль
+            </Link>{' '}
+            этого сотрудника.
+          </>
+        )}
       </div>
     );
   }
