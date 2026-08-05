@@ -7,7 +7,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { useUiMode, type UiMode } from '@/lib/hooks/useUiMode';
 import { useTableScale, type TableScalePct } from '@/lib/hooks/useTableScale';
-import { useTheme, THEME_LABEL, type Theme } from '@/lib/hooks/useTheme';
+import { useTheme, THEME_LABEL, THEME_ORDER } from '@/lib/hooks/useTheme';
 import { DeptRosterGrid } from './DeptRosterGrid';
 import { ReportsTrashCard } from './ReportsTrashCard';
 import { BotSubscriptionSettings } from './BotSubscriptionSettings';
@@ -97,7 +97,7 @@ export function ProfilePage() {
   // Тёмная тема (макет owners-inbox/analsteroid-dark-theme-mock.html, утверждён
   // владельцем) — тот же серверный паттерн, что и масштаб таблиц (users.theme,
   // migration 070). Анти-вспышка при загрузке — инлайн-скрипт в app/layout.tsx.
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, error: themeError } = useTheme();
 
   const { data: me, isLoading: meLoading } = useQuery<Me>({
     queryKey: ['me'],
@@ -263,10 +263,16 @@ export function ProfilePage() {
                   </div>
                 </div>
 
-                {/* Тема оформления (макет утверждён владельцем, дефолт — светлая).
-                    Три положения (задача 2999, дизайн-система «Монолитика Glass»):
-                    light/dark/mono — mono сворачивает палитру графиков в серую шкалу,
-                    но статусы и тиры остаются цветными (tokens/theme-mono.css пакета). */}
+                {/* Тема оформления. ЧЕТЫРЕ положения (04.08, решение владельца):
+                    «Классическая» — вид приложения до редизайна, она же по умолчанию
+                    у всех; три стеклянные темы дизайн-системы «Монолитика Glass»
+                    (задача 2999) — светлая, тёмно-синяя и серая, у серой палитра
+                    графиков сворачивается в серую шкалу, но статусы и тиры остаются
+                    цветными. Значения в БД прежние (classic/light/dark/mono), в
+                    интерфейсе — названия владельца, см. THEME_LABEL.
+                    Плитками с переносом, а не сегментированной полосой: четыре
+                    длинных названия в одну строку на 375px не влезают (CLAUDE.md,
+                    правило 12 — flex-wrap вместо горизонтального скролла). */}
                 <div className={cardCls}>
                   <div className="flex items-center gap-2 mb-2">
                     <Moon size={15} className="text-[var(--color-text-muted)]" />
@@ -275,21 +281,28 @@ export function ProfilePage() {
                   <p className="text-sm text-[var(--color-text-muted)] mb-3">
                     Применяется сразу и запоминается на этом аккаунте.
                   </p>
-                  <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm w-fit">
-                    {(['light', 'dark', 'mono'] as Theme[]).map(t => (
+                  <div className="flex flex-wrap gap-2 text-sm">
+                    {THEME_ORDER.map(t => (
                       <button
                         key={t}
                         onClick={() => setTheme(t)}
-                        className={`px-4 py-1.5 transition-colors ${
+                        className={`min-h-11 rounded-lg border px-4 py-1.5 transition-colors ${
                           theme === t
-                            ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
-                            : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                            ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                            : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
                         }`}
                       >
                         {THEME_LABEL[t]}
                       </button>
                     ))}
                   </div>
+                  {/* Ошибка сохранения раньше была невидимой: тема мигала и
+                      откатывалась, и это выглядело как баг темы, а не как отказ
+                      сервера (живой инцидент с «Серым стеклом» — в БД не было
+                      значения в CHECK, PATCH падал 500). */}
+                  {themeError && (
+                    <p className="mt-2 text-xs text-[var(--color-negative)]">{themeError}</p>
+                  )}
                 </div>
 
                 {/* Пин-код на денежные операции (задача #2995) */}

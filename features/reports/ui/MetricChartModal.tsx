@@ -198,7 +198,9 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
                       const p0 = (payload as unknown as { payload?: { cmpLabel?: string | null } }[])?.[0]?.payload;
                       return p0?.cmpLabel ? `${String(l)} (сравн.: ${p0.cmpLabel})` : String(l);
                     }}
-                    contentStyle={{ background: 'var(--color-bg-surface)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }} />
+                    // Тултип висит над линиями графика — плотная поверхность, не карточная
+                    // (регресс #2999: сквозь него читались сами линии).
+                    contentStyle={{ background: 'var(--color-bg-overlay)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }} />
                   {hasComparison && data.comparison?.supported && <Legend wrapperStyle={{ fontSize: 12 }} />}
                   <Line type="monotone" dataKey="current" name="Текущий период" stroke="var(--color-accent)" strokeWidth={2}
                     dot={rows.length <= 62} isAnimationActive={false} connectNulls />

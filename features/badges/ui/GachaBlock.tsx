@@ -106,12 +106,15 @@ function Wheel({ tiers, rotation, spinning, onDone }: {
           transition: spinning ? 'transform 4.6s cubic-bezier(0.12, 0.75, 0.12, 1)' : 'none',
           filter: 'drop-shadow(0 4px 14px rgba(0,0,0,0.18))',
         }}>
-        <circle cx={150} cy={150} r={R + 8} fill="var(--color-bg-surface)" stroke="var(--color-border)" strokeWidth={2} />
+        {/* Диск и ступица (ниже) — НЕ карточная поверхность: ступица обязана ПЕРЕКРЫТЬ
+            сходящиеся вершины секторов, а на 7.5% альфы серой темы они просвечивали
+            насквозь и колесо теряло центр (регресс #2999, 04.08). */}
+        <circle cx={150} cy={150} r={R + 8} fill="var(--color-bg-overlay)" stroke="var(--color-border)" strokeWidth={2} />
         {paths.map((p, i) => <path key={i} d={p.d} fill={p.color} stroke="#fff" strokeWidth={2} opacity={0.92} />)}
         {paths.map((p, i) => (
           <text key={`t${i}`} x={p.mx} y={p.my} fontSize={22} textAnchor="middle" dominantBaseline="central">{p.icon}</text>
         ))}
-        <circle cx={150} cy={150} r={30} fill="var(--color-bg-surface)" stroke="var(--color-border)" strokeWidth={2} />
+        <circle cx={150} cy={150} r={30} fill="var(--color-bg-overlay)" stroke="var(--color-border)" strokeWidth={2} />
         <text x={150} y={150} fontSize={22} textAnchor="middle" dominantBaseline="central">🎰</text>
       </svg>
     </div>

@@ -48,20 +48,22 @@ export const viewport: Viewport = {
 };
 
 // Анти-вспышка темы (владелец утвердил макет, задача Николая; расширено до трёх тем —
-// light/dark/mono, задача 2999): читает зеркало localStorage.theme и ставит data-theme
+// light/dark/mono, задача 2999; до четырёх — 'classic', 04.08): читает зеркало
+// localStorage.theme и ставит data-theme
 // НА <html> ДО первой отрисовки — обычный inline-script в <head>, выполняется синхронно
 // раньше React/гидратации, поэтому нет «моргания» светлым перед перекраской. Работает и
 // на /login (неавторизован, но зеркало в localStorage уже могло остаться от предыдущей
 // сессии — п.4 брифа «Логин-страница тоже темнеет при тёмной, если тема известна из
-// localStorage»). Дефолт (нет записи/невалидное значение/ошибка) — 'light', атрибут
+// localStorage»). Дефолт (нет записи/невалидное значение/ошибка) — 'classic' (решение
+// владельца: по умолчанию у всех вид до редизайна), атрибут
 // всё равно ставится явно (см. комментарий в lib/hooks/useTheme.ts — 'light' больше не
 // «атрибут не ставится», т.к. mono и light должны различаться одним и тем же способом).
 const THEME_ANTI_FLASH_SCRIPT = `
 try {
   var t = localStorage.getItem('theme');
-  document.documentElement.setAttribute('data-theme', ['light','dark','mono'].indexOf(t) !== -1 ? t : 'light');
+  document.documentElement.setAttribute('data-theme', ['classic','light','dark','mono'].indexOf(t) !== -1 ? t : 'classic');
 } catch (e) {
-  document.documentElement.setAttribute('data-theme', 'light');
+  document.documentElement.setAttribute('data-theme', 'classic');
 }
 `;
 

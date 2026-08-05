@@ -41,6 +41,9 @@
 @import "./styles/tokens/theme-light.css";
 @import "./styles/tokens/theme-dark.css";
 @import "./styles/tokens/theme-mono.css";
+/* Классическая — ПОСЛЕДНЯЯ: переопределяет --color-* напрямую, поэтому должна идти
+   после всех стеклянных тем (одинаковая специфичность → побеждает порядок). */
+@import "./styles/tokens/theme-classic.css";
 
 @theme inline {
   /* ---- Алиасы на токены дизайн-системы (задача 2999) ----
@@ -181,6 +184,10 @@ body {
   color: var(--color-text);
   margin: 0;
 }
+
+/* Амбиент-пятна — часть «стекла». В классике их не было, гасим (задача 04.08:
+   классическая тема = вид до редизайна, плоский фон без декора). */
+:root[data-theme="classic"] body::before { display: none; }
 
 body::before {
   content: '';

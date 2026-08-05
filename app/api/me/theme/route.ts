@@ -4,12 +4,13 @@ import { systemDb } from '@/lib/db/clients';
 
 // Тема оформления (ЛК, рядом с «Масштаб таблиц») — серверное состояние per-user
 // (users.theme, migration 070, расширено до 3 значений migration 145 — задача 2999
-// «Монолитика Glass»), тот же паттерн, что /api/me/table-scale.
+// «Монолитика Glass», до 4 значений migration 148 — 'classic', вид до редизайна,
+// он же дефолт по решению владельца 04.08), тот же паттерн, что /api/me/table-scale.
 //
 // НАМЕРЕННО не в lib/auth/session.ts (см. комментарий в table-scale/route.ts и в
 // самой миграции 070) — getSession() на пути КАЖДОГО запроса, отдельный SELECT здесь
 // падает только на этом эндпоинте, если колонки ещё нет (до наката миграции Артёмом).
-const ALLOWED = new Set(['light', 'dark', 'mono']);
+const ALLOWED = new Set(['classic', 'light', 'dark', 'mono']);
 
 export async function GET() {
   const session = await getSession();
@@ -18,7 +19,7 @@ export async function GET() {
     `SELECT theme FROM users WHERE id = $1`,
     [session.id]
   );
-  return NextResponse.json({ theme: res.rows[0]?.theme ?? 'light' });
+  return NextResponse.json({ theme: res.rows[0]?.theme ?? 'classic' });
 }
 
 export async function PATCH(req: NextRequest) {
@@ -28,7 +29,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const theme = String(body.theme ?? '');
   if (!ALLOWED.has(theme)) {
-    return NextResponse.json({ error: 'theme must be light, dark or mono' }, { status: 400 });
+    return NextResponse.json({ error: 'theme must be classic, light, dark or mono' }, { status: 400 });
   }
 
   await systemDb().query(`UPDATE users SET theme = $1 WHERE id = $2`, [theme, session.id]);

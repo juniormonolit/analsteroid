@@ -1,0 +1,86 @@
+/* ТЕМА «КЛАССИЧЕСКАЯ» — вид приложения ДО редизайна «Монолитика Glass».
+   Задача 04.08: владелец попросил четыре темы и КЛАССИЧЕСКУЮ ПО УМОЛЧАНИЮ у всех,
+   стеклянные — по желанию («кто захочет — переставит»).
+
+   Почему переопределяются --color-* НАПРЯМУЮ, а не токены дизайн-системы (как в
+   theme-dark/theme-mono): при переносе на Glass часть РАЗНЫХ прикладных токенов
+   схлопнулась на общие дизайн-токены — например --color-table-header (#fbfcfd) и
+   --color-table-stripe (#f6f7f9) оба стали var(--gray-50). Через дизайн-токены
+   классику точно не восстановить, разошлись бы полутона таблиц. Значения ниже —
+   ДОСЛОВНО из globals.css коммита 5f66093^ (последнего перед редизайном),
+   извлечены скриптом, а не перенабраны.
+
+   Специфичность: :root[data-theme="classic"] бьёт :root из @theme inline, поэтому
+   компоненты (bg-[var(--color-*)], 187+ мест) перекрашиваются сами, без правок.
+   Работает потому, что приложение обращается к токенам через arbitrary-значения
+   var(--color-*), а не через сгенерированные Tailwind классы (те инлайнятся на
+   сборке и на рантайм-переопределение не реагировали бы). */
+:root[data-theme="classic"] {
+  --color-bg: #f8f9fa;
+  --color-bg-surface: #ffffff;
+  --color-bg-hover: #f1f3f5;
+  --color-border: #e9ecef;
+  --color-border-focus: #228be6;
+  --color-text: #212529;
+  --color-text-muted: #5f6b76;
+  --color-text-inverse: #ffffff;
+  --color-accent: #228be6;
+  --color-accent-hover: #1c7ed6;
+  --color-accent-soft: #e7f1fb;
+  --color-border-strong: #adb5bd;
+  --color-positive: #2f9e44;
+  --color-negative: #e03131;
+  --color-sidebar-bg: #ffffff;
+  --color-sidebar-border: var(--color-border);
+  --color-sidebar-text: var(--color-text);
+  --color-sidebar-text-muted: var(--color-text-muted);
+  --color-sidebar-hover-bg: var(--color-bg-hover);
+  --color-sidebar-active: var(--color-accent);
+  --color-sidebar-active-bg: var(--color-accent-soft);
+  --color-sidebar-guide: #dee2e6;
+  --color-table-header: #fbfcfd;
+  --color-totals-bg: #d0e4fb;
+  --color-table-row-hover: #dbe7fa;
+  --color-table-stripe: #f6f7f9;
+  --color-table-row-border: #efefef;
+  --color-report-zebra: #f8f9fa;
+  --color-text-secondary: var(--color-text-muted);
+  --color-warning: #f59e0b;
+  --color-error: #dc2626;
+  --color-num: #000;
+  --color-mix-base: #fff;
+  --color-highlight-pct: 68%;
+  --color-negative-soft: #fcebeb;
+  --color-top1-border: #e8c974;
+  --color-top1-glow: #fbf3dd33;
+  --color-top1-bg: #fbf3dd;
+  --color-top1-text: #a3781f;
+  --color-swatch-border: rgba(15, 23, 42, .16);
+  --color-tooltip-bg: #1a1d23;
+  --color-tooltip-text: #ffffff;
+  /* ── Гасим стекло: классика плоская ────────────────────────────────────────
+     Эти токены живут вне --color-*, но именно они делают «стекло»: градиентный
+     фон страницы, блюр поверхностей, полупрозрачные рамки и мягкие синие тени.
+     Амбиент-пятна (body::before) гасятся в globals.css — там же, где заданы. */
+  --bg-app: var(--color-bg);
+  --glass-blur: none;
+  /* Шрифт — системный, как до редизайна (Inter пришёл вместе с Glass; :root в
+     globals.css ставит font-family: var(--font-ui), поэтому достаточно
+     переопределить сам токен). Размеры кегля НЕ трогаем: --text-base пакета
+     (14px) в приложение так и не завели, значит по кеглю классика и стекло уже
+     совпадают. */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --glass-border: var(--color-border);
+  --glass-side: var(--color-sidebar-bg);
+  --surface-app: var(--color-bg);
+  --surface-card: var(--color-bg-surface);
+  --surface-overlay: var(--color-bg-surface);
+  --surface-sunken: var(--color-bg-hover);
+  --surface-selected: var(--color-accent-soft);
+
+  /* Тени — плоские, как были до редизайна (тогда использовались дефолтные
+     Tailwind shadow-*; в @theme inline они переалиасены на glass-тени). */
+  --shadow-card: 0 1px 2px 0 rgb(0 0 0 / .05);
+  --shadow-hover: 0 4px 6px -1px rgb(0 0 0 / .1), 0 2px 4px -2px rgb(0 0 0 / .1);
+  --shadow-modal: 0 20px 25px -5px rgb(0 0 0 / .1), 0 8px 10px -6px rgb(0 0 0 / .1);
+}

@@ -245,9 +245,13 @@ export function OffloadPage() {
         )}
       </div>
 
-      {/* Плашка выбора — фиксирована снизу, появляется при отмеченных сделках */}
+      {/* Плашка выбора — фиксирована снизу, появляется при отмеченных сделках.
+          Регресс #2999 (04.08, проход по всплывающим поверхностям): под плашкой
+          СКРОЛЛИТСЯ таблица сделок, а карточный --color-bg-surface прозрачен (68/60/
+          7.5% по темам) — строки просвечивали сквозь суммы. Плотный --color-bg-overlay
+          + блюр, как у BottomTabBar (та же роль: фиксированная полоса над контентом). */}
       {selectionStats.count > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl">
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--color-border)] bg-[var(--color-bg-overlay)] [backdrop-filter:var(--glass-blur)] shadow-2xl">
           <div className="max-w-[1500px] mx-auto px-3 sm:px-6 py-2.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-sm">
             <span className="text-[var(--color-text-muted)]">Отмечено: <b className="text-[var(--color-text)]">{selectionStats.count.toLocaleString('ru-RU')}</b></span>
             <span className="text-[var(--color-text-muted)]">Σ сумма: <b className="text-[var(--color-text)]">{fmtRub(selectionStats.amount)}</b></span>
@@ -337,7 +341,9 @@ function CloseResultsModal({ results, onClose }: { results: CloseResultItem[]; o
   const errors = results.filter(r => r.status === 'error');
   return (
     <div className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="w-full max-w-[560px] max-h-[80vh] overflow-y-auto rounded-xl bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl p-5" onClick={e => e.stopPropagation()}>
+      {/* Тот же регресс, что у ConfirmModal выше (см. комментарий там) — при первом
+          фиксе этот диалог-сосед пропустили. Решение то же: непрозрачный --color-bg. */}
+      <div className="w-full max-w-[560px] max-h-[80vh] overflow-y-auto rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl p-5" onClick={e => e.stopPropagation()}>
         <h3 className="font-semibold text-[var(--color-text)] mb-2">Результат закрытия</h3>
         <div className="text-sm text-[var(--color-text-muted)] mb-3">
           Закрыто: <b className="text-[var(--color-text)]">{closed}</b> · Пропущено: <b className="text-[var(--color-text)]">{skipped.length}</b> · Ошибок: <b className={errors.length ? 'text-[var(--color-negative)]' : 'text-[var(--color-text)]'}>{errors.length}</b>

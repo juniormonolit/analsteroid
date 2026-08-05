@@ -1374,7 +1374,7 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                           блюрится, читается чётко (задача 2983). */}
                       {locked && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-3 text-center">
-                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--color-text)] shadow-lg">
+                          <span className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-overlay)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--color-text)] shadow-lg">
                             <Lock size={12} className="shrink-0 text-[var(--color-text-muted)]" />
                             Доступен с {item.minLevel} уровня
                           </span>
@@ -1866,7 +1866,11 @@ export function NotificationsBell() {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 z-40 mt-2 w-96 max-w-[90vw] rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 shadow-xl">
+        // Регресс #2999 (04.08): панель висит над произвольным контентом карточки,
+        // поэтому плотный --color-bg-overlay + блюр, а не карточный токен.
+        // ДОЛГ: по CLAUDE.md (правило 4) это должен быть components/ui/Popover —
+        // самописный absolute-дропдаун на узких экранах может уехать за край.
+        <div className="absolute right-0 z-40 mt-2 w-96 max-w-[90vw] rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-overlay)] [backdrop-filter:var(--glass-blur)] p-3 shadow-xl">
           <div className="mb-2 flex items-baseline justify-between gap-2">
             <span className="text-sm font-bold text-[var(--color-text)]">Уведомления</span>
             {unread > 0 && (

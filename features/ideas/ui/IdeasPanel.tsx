@@ -198,7 +198,7 @@ function AttachmentThumbs({ idea, canDelete, onView, onChanged }: {
               <button
                 onClick={() => remove(a.id)}
                 disabled={busyId === a.id}
-                className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm disabled:opacity-40"
+                className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[var(--color-bg-overlay)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm disabled:opacity-40"
                 title="Удалить скриншот"
               >
                 <Trash2 size={11} />
@@ -506,7 +506,7 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
                 <img src={src} alt="" className="h-16 w-16 object-cover rounded-md border border-[var(--color-border)]" />
                 <button
                   onClick={() => removeFile(i)}
-                  className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm"
+                  className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[var(--color-bg-overlay)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm"
                   title="Убрать"
                 >
                   <X size={11} />

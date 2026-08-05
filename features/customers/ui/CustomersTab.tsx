@@ -131,7 +131,7 @@ function LegendPopover() {
         <HelpCircle size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-[380px] max-w-[85vw] rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 text-xs leading-relaxed text-[var(--color-text-muted)] shadow-xl">
+        <div className="absolute right-0 top-full z-30 mt-1 w-[380px] max-w-[85vw] rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-overlay)] [backdrop-filter:var(--glass-blur)] p-3 text-xs leading-relaxed text-[var(--color-text-muted)] shadow-xl">
           Клиенты, где вы вели последнюю сделку. <b>Постоянники</b> (2+ покупок за всю историю клиента) — сверху,
           <b> ⚠ под угрозой</b> — постоянник молчит дольше двух своих циклов повторки и активных сделок нет; ниже —
           купившие один раз; не купившие — во вкладке «Ещё не купили». Сигналы: <b>📞 сделка молчит</b> — по активной
@@ -193,7 +193,7 @@ export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkS
       <button type="button" disabled={busy} className={iconBtn} onClick={() => { setReason(null); setComment(''); setOpen('nocall'); }}
         title="Больше не звонить этому клиенту — уйдёт во вкладку «Отказались» (причина обязательна)">🚫 Не звонить</button>
       {open === 'snooze' && (
-        <div className="absolute right-0 top-full z-10 mt-1 flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1.5 shadow-lg min-w-[140px]">
+        <div className="absolute right-0 top-full z-10 mt-1 flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-overlay)] [backdrop-filter:var(--glass-blur)] p-1.5 shadow-lg min-w-[140px]">
           <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(1))}>На месяц</button>
           <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(3))}>На квартал</button>
           <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(6))}>На полгода</button>
@@ -250,7 +250,7 @@ function RowMenu({ r, send, busy, onOpenCard }: { r: ApiRow; send: MarkSender; b
         <MoreHorizontal size={15} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 flex w-48 flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1.5 shadow-xl">
+        <div className="absolute right-0 top-full z-30 mt-1 flex w-48 flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-overlay)] [backdrop-filter:var(--glass-blur)] p-1.5 shadow-xl">
           <button type="button" onClick={() => { setOpen(false); onOpenCard(); }}
             className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-left text-[11px] font-semibold hover:bg-[var(--color-bg-hover)]">
             👤 Карточка клиента
