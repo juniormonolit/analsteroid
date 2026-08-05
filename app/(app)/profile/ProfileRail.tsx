@@ -4,7 +4,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
   IdCard, Users, UsersRound, Settings, ClipboardList, Contact,
-  Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel,
+  Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet,
 } from 'lucide-react';
 import { MANAGER_TABS, type ManagerTabKey } from '@/features/manager-card/ui/ManagerTabs';
 
@@ -30,6 +30,7 @@ const TAB_ICONS: Record<ManagerTabKey, typeof IdCard> = {
   quests: Swords,
   stats: BarChart3,
   rewards: Medal,
+  wallet: Wallet,
   shop: ShoppingBag,
   wheel: FerrisWheel,
   inventory: Package,

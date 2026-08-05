@@ -23,7 +23,7 @@ import { usePlanFact } from './PlanFactStrip';
 import { MltCoin } from '@/components/icons/MltCoin';
 import type { ManagerCardResult } from '@/features/manager-card/engine/managerCard';
 
-export type ManagerTabKey = 'profile' | 'planyorka' | 'customers' | 'quests' | 'stats' | 'rewards' | 'shop' | 'wheel' | 'inventory';
+export type ManagerTabKey = 'profile' | 'planyorka' | 'customers' | 'quests' | 'stats' | 'rewards' | 'wallet' | 'shop' | 'wheel' | 'inventory';
 
 export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'profile', label: 'Профиль' },
@@ -36,6 +36,9 @@ export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'quests', label: 'Квесты' },
   { key: 'stats', label: 'Статистика' },
   { key: 'rewards', label: 'Награды' },
+  // «Кошелёк» (правка владельца 05.08): все финансы в одном разделе — балансы,
+  // обмен/вывод, переводы, график начислений, выписка (features/wallet).
+  { key: 'wallet', label: 'Кошелёк' },
   { key: 'shop', label: 'Магазин' },
   // «Колесо фортуны» (правка владельца 05.08): гача выделена из магазина в
   // собственный раздел с полноэкранным колесом.
@@ -142,7 +145,7 @@ export function ManagerTabBar({ active, onChange, hidden }: {
 
 // ── общие данные табов ───────────────────────────────────────────────────────
 
-interface LedgerRow {
+export interface LedgerRow {
   id: number; date: string; badge_name: string | null; icon: string | null;
   tier: string | null; amount: number;
   // Выписка (доп. Серёги 31.07): source auto/manual_bonus/manual_penalty/convert/payout,
@@ -155,7 +158,7 @@ interface LedgerRow {
   actor_login: string | null; comment: string | null;
   penalty_name: string | null; reversal_of: number | null; reversed: boolean;
 }
-interface ProfileExtra {
+export interface ProfileExtra {
   tenure: { startDate: string; label: string | null } | null;
   ledger: LedgerRow[];
   rubBalance: number;
@@ -220,7 +223,7 @@ function fmtMoney(v: number | null | undefined): string {
   return `${v.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
 }
 
-function BalancePill({ balance, currencyName, big = false }: { balance: number; currencyName: string; big?: boolean }) {
+export function BalancePill({ balance, currencyName, big = false }: { balance: number; currencyName: string; big?: boolean }) {
   // Баланс может уходить в минус (ручные штрафы) — минус красным.
   const neg = balance < 0;
   const color = neg ? 'var(--color-negative, #e03131)' : 'var(--color-accent)';
@@ -236,7 +239,7 @@ function BalancePill({ balance, currencyName, big = false }: { balance: number; 
   );
 }
 
-function RubPill({ balance, big = false }: { balance: number; big?: boolean }) {
+export function RubPill({ balance, big = false }: { balance: number; big?: boolean }) {
   const neg = balance < 0;
   const color = neg ? 'var(--color-negative, #e03131)' : 'var(--color-positive, #2f9e44)';
   return (
@@ -791,7 +794,7 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
 // ── Таб «Награды»: полная полка + история начислений ─────────────────────────
 
 // Описание строки выписки: авто — награда; ручные — кем и за что; сторно — «отмена…».
-function ledgerTitle(r: LedgerRow): { title: string; sub: string | null } {
+export function ledgerTitle(r: LedgerRow): { title: string; sub: string | null } {
   if (r.reversal_of !== null) {
     return { title: r.comment ?? 'Отмена операции', sub: r.actor_login ? `админ: ${r.actor_login}` : null };
   }
@@ -870,7 +873,7 @@ const PAYOUT_STATUS: Record<string, { label: string; color: string }> = {
   rejected: { label: 'отклонено', color: 'var(--color-negative, #e03131)' },
 };
 
-function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
+export function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
   managerId: string; isSelf: boolean; extra: ProfileExtra | undefined; currencyName: string;
 }) {
   const qc = useQueryClient();
