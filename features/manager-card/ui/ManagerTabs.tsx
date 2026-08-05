@@ -19,6 +19,7 @@ import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
 import { fetchPinGated } from '@/lib/client/pinFetch';
 import { BadgeCard, BadgeShelf, useShelfQuery } from '@/features/badges/ui/BadgeShelf';
 import { AchievementsPage } from '@/features/badges/ui/AchievementsPage';
+import { LeaderSkills } from './LeaderSkills';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 import { usePlanFact } from './PlanFactStrip';
 import { MltCoin } from '@/components/icons/MltCoin';
@@ -716,6 +717,10 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
           </div>
         </div>
       </section>
+
+      {/* Скиллы РУКОВОДИТЕЛЯ (05.08): показатели отдела вместо товарных классов.
+          Блок сам решает, показываться ли — у не-руководителя API отдаёт null. */}
+      <LeaderSkills bitrixId={isSelf ? undefined : managerId} />
 
       {/* XP: уровень, полоса до следующего уровня, классы (01.08, миграция 124) */}
       {extra?.xp && (
