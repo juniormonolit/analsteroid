@@ -75,8 +75,11 @@ function Confetti() {
   );
 }
 
-function Wheel({ tiers, rotation, spinning, onDone }: {
+function Wheel({ tiers, rotation, spinning, onDone, size = 300 }: {
   tiers: PoolTier[]; rotation: number; spinning: boolean; onDone: () => void;
+  /** CSS-размер колеса; viewBox 300 масштабируется сам («Колесо фортуны» —
+   *  во весь экран, правка владельца 05.08). */
+  size?: number | string;
 }) {
   const n = Math.max(tiers.length, 1);
   const seg = 360 / n;
@@ -92,14 +95,14 @@ function Wheel({ tiers, rotation, spinning, onDone }: {
     return { d: `M150,150 L${x0},${y0} A${R},${R} 0 0 1 ${x1},${y1} Z`, color: WHEEL_COLORS[i % WHEEL_COLORS.length], icon: t.icon, mx, my };
   });
   return (
-    <div className="relative mx-auto" style={{ width: 300, height: 300 }}>
+    <div className="relative mx-auto" style={{ width: size, height: size, maxWidth: '100%', aspectRatio: '1' }}>
       {/* стрелка-указатель сверху */}
       <div style={{
         position: 'absolute', top: -4, left: '50%', transform: 'translateX(-50%)', zIndex: 2,
         width: 0, height: 0, borderLeft: '12px solid transparent', borderRight: '12px solid transparent',
         borderTop: '20px solid var(--color-negative, #e03131)',
       }} />
-      <svg viewBox="0 0 300 300" width={300} height={300}
+      <svg viewBox="0 0 300 300" width="100%" height="100%"
         onTransitionEnd={e => { if (e.propertyName === 'transform') onDone(); }}
         style={{
           transform: `rotate(${rotation}deg)`,
@@ -161,7 +164,7 @@ function ChancesModal({ data, onClose }: { data: GachaData; onClose: () => void 
   );
 }
 
-export function GachaBlock({ isSelf }: { isSelf: boolean }) {
+export function GachaBlock({ isSelf, big = false }: { isSelf: boolean; big?: boolean }) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [showChances, setShowChances] = useState(false);
@@ -198,11 +201,20 @@ export function GachaBlock({ isSelf }: { isSelf: boolean }) {
     const idx = Math.max(0, tiers.findIndex(t => t.tierKey === result.tierKey));
     const seg = 360 / Math.max(tiers.length, 1);
     const target = 360 * 5 + (360 - (idx * seg + seg / 2));
-    setSpinning(true);
+    // Баг «не всегда раскручивается по полной» (скрин-репорт владельца 05.08):
+    // раньше setSpinning(true) и нормализация угла попадали в ОДИН рендер
+    // (автобатчинг React) — сброс к r%360 сам ехал с transition 4.6s, второй
+    // setRotation прерывал его, и итоговый путь мог оказаться коротким («доезд
+    // до соседней позиции» вместо 5 оборотов). Порядок обязан быть строгим:
+    // (1) рендер БЕЗ transition с нормализованным углом, (2) через два кадра —
+    // включить transition и задать цель: полные 5 оборотов гарантированы всегда.
+    setSpinning(false);
     setReveal(null);
-    // от текущего угла — приводим к базе, затем в следующий кадр задаём цель
     setRotation(r => r % 360);
-    requestAnimationFrame(() => requestAnimationFrame(() => setRotation(target)));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      setSpinning(true);
+      setRotation(target);
+    }));
   }
 
   const spin = useMutation({
@@ -240,10 +252,12 @@ export function GachaBlock({ isSelf }: { isSelf: boolean }) {
     && data.limits.dayLeft > 0 && data.limits.weekLeft > 0;
 
   return (
-    <section className="relative rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+    // big — «Колесо фортуны» отдельным разделом (правка владельца 05.08):
+    // колесо во весь экран по высоте, секция растянута на высоту вьюпорта.
+    <section className={`relative rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4 ${big ? 'flex flex-col min-h-[calc(100dvh-160px)]' : ''}`}>
       {(reveal && reveal.rarity !== 'common') && <Confetti />}
       <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-base font-bold text-[var(--color-text)]">🎰 Гача</h2>
+        <h2 className="text-base font-bold text-[var(--color-text)]">🎡 Колесо фортуны</h2>
         <span className="inline-flex items-center gap-1 text-xs text-[var(--color-text-muted)]">
           <MltCoin size={13} title={data.currencyName} />
           крутка {data.spinCost} {data.currencyName} · сегодня осталось {data.limits.dayLeft} из {data.limits.daily},
@@ -259,8 +273,9 @@ export function GachaBlock({ isSelf }: { isSelf: boolean }) {
         {data.pity.counter >= data.pity.softFrom - 1 && <span className="ml-1" style={{ color: '#e8590c' }}>— шанс редкого уже повышен!</span>}
       </div>
 
-      <div className="mt-4 flex flex-col items-center gap-3">
-        <Wheel tiers={data.pool} rotation={rotation} spinning={spinning} onDone={onWheelDone} />
+      <div className={`mt-4 flex flex-col items-center gap-3 ${big ? 'flex-1 justify-center' : ''}`}>
+        <Wheel tiers={data.pool} rotation={rotation} spinning={spinning} onDone={onWheelDone}
+          size={big ? 'min(64dvh, 92vw, 720px)' : 300} />
         {isSelf && (
           <button type="button" disabled={!canSpin} onClick={() => spin.mutate()}
             title={data.limits.dayLeft <= 0 ? 'Лимит на сегодня исчерпан'
@@ -281,7 +296,7 @@ export function GachaBlock({ isSelf }: { isSelf: boolean }) {
                 ? `+${reveal.eballAmount} ${data.currencyName} на баланс`
                 : reveal.rarity === 'jackpot'
                   ? 'Приз в инвентаре, заявка на выдачу уже у руководителя'
-                  : 'Приз упал в инвентарь (таб «Магазин»)'}
+                  : 'Приз упал в «Инвентарь»'}
               {reveal.forcedByPity && ' · сработала гарантия'}
             </div>
           </div>

@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { PullToRefresh } from '@/components/ui/PullToRefresh';
+import { GachaBlock } from '@/features/badges/ui/GachaBlock';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { ManagerActivityTab } from './ManagerActivityTab';
 import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
@@ -508,6 +509,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {tabbed && tab === 'quests' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
       {tabbed && tab === 'rewards' && <div className="mx-auto w-full max-w-[1360px]"><RewardsTab managerId={managerId} isSelf={showBadges} forceReadOnly={forceReadOnly} /></div>}
       {tabbed && tab === 'shop' && <div className="mx-auto w-full max-w-[1360px]"><ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => goToTab('inventory')} /></div>}
+      {tabbed && tab === 'wheel' && <div className="mx-auto w-full max-w-[1360px]"><GachaBlock isSelf={showBadges} big /></div>}
       {tabbed && tab === 'inventory' && <div className="mx-auto w-full max-w-[1360px]"><InventoryTab managerId={managerId} isSelf={showBadges} /></div>}
 
       {showStats && (<>

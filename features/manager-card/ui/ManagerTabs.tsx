@@ -18,13 +18,12 @@ import { PinDialog } from '@/components/ui/PinDialog';
 import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
 import { fetchPinGated } from '@/lib/client/pinFetch';
 import { BadgeCard, BadgeShelf, useShelfQuery } from '@/features/badges/ui/BadgeShelf';
-import { GachaBlock } from '@/features/badges/ui/GachaBlock';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 import { usePlanFact } from './PlanFactStrip';
 import { MltCoin } from '@/components/icons/MltCoin';
 import type { ManagerCardResult } from '@/features/manager-card/engine/managerCard';
 
-export type ManagerTabKey = 'profile' | 'planyorka' | 'customers' | 'quests' | 'stats' | 'rewards' | 'shop' | 'inventory';
+export type ManagerTabKey = 'profile' | 'planyorka' | 'customers' | 'quests' | 'stats' | 'rewards' | 'shop' | 'wheel' | 'inventory';
 
 export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'profile', label: 'Профиль' },
@@ -38,6 +37,9 @@ export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'stats', label: 'Статистика' },
   { key: 'rewards', label: 'Награды' },
   { key: 'shop', label: 'Магазин' },
+  // «Колесо фортуны» (правка владельца 05.08): гача выделена из магазина в
+  // собственный раздел с полноэкранным колесом.
+  { key: 'wheel', label: 'Колесо фортуны' },
   { key: 'inventory', label: 'Инвентарь' },
 ];
 
@@ -1390,9 +1392,8 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
         </div>
       )}
 
-      {/* Гача (фаза 2): колесо, крутки только в своём ЛК; в руководительской
-          витрине гаче делать нечего — это витрина закупок для отдела. */}
-      {shopScope === 'personal' && <GachaBlock isSelf={isSelf} />}
+      {/* Гача уехала из магазина в собственный раздел «Колесо фортуны»
+          (правка владельца 05.08) — см. вкладку wheel в ManagerCardPage. */}
 
       {/* Витрина по типам (материальные/нематериальные/бусты) — «командные»
           позиции с 05.08 снова отдельная витрина (таб «Магазин руководителя»
