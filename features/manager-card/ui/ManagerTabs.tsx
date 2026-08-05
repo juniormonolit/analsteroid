@@ -530,13 +530,20 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
             «Изменить обложку» в FB; только у владельца профиля. */}
         <div className="relative h-36 sm:h-44 w-full" style={coverStyle(extra?.coverId)}>
           {isSelf && !forceReadOnly && (
-            <button
-              onClick={() => setCoverPickerOpen(true)}
-              className="tap-target absolute right-2 bottom-2 inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
-              title="Сменить обложку"
-            >
-              <Camera size={13} /> Обложка
-            </button>
+            /* Позиционирует ОБЁРТКА, а не сама кнопка (живой баг со скрина
+               владельца: кнопка оказывалась в левом верхнем углу): .tap-target
+               задаёт position:relative и, идя в globals.css ПОЗЖЕ утилит
+               Tailwind, молча перебивает .absolute — кнопка выпадала в поток.
+               Обёртке tap-target не нужен, кнопке внутри — нужен (зона 44px). */
+            <div className="absolute right-2 bottom-2">
+              <button
+                onClick={() => setCoverPickerOpen(true)}
+                className="tap-target inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
+                title="Сменить обложку"
+              >
+                <Camera size={13} /> Обложка
+              </button>
+            </div>
           )}
         </div>
         {isSelf && !forceReadOnly && <CoverPicker open={coverPickerOpen} onOpenChange={setCoverPickerOpen} />}
@@ -546,15 +553,23 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
             перекрывал верх аватара. */}
         <div className="relative px-4 sm:px-5 pb-5 -mt-20">
         <div className="flex flex-col items-center gap-3.5 text-center">
-          {/* Радиус обёртки = радиус Avatar (size×0.11 ≈ 18px) + 4px кольца. */}
-          <div className="rounded-[22px] ring-4 ring-[var(--color-bg-surface)] bg-[var(--color-bg-surface)] shadow-md">
+          {/* Радиус обёртки РАВЕН радиусу Avatar (size×0.11 ≈ 18px), не больше:
+              ring — это box-shadow, он сам рисуется снаружи и сам добавляет свои
+              +4px к радиусу. Прежний rounded-[22px] давал белые клинья в углах
+              (скрин владельца: «скругления рамки не повторяют аватар»). */}
+          <div className="rounded-[18px] ring-4 ring-[var(--color-bg-surface)] shadow-md">
             <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={160} shape="rounded" />
           </div>
           <div className="min-w-0 w-full">
-            <h2 className="text-2xl font-extrabold leading-tight text-[var(--color-text)]">
-              {card?.profile.name ?? '…'}
+            {/* Правка владельца 05.08: чип уровня НЕ должен липнуть ко второй
+                строке ФИО. flex-wrap даёт ровно нужное поведение: имя — ОДИН
+                flex-элемент (внутри переносится само), чип — второй; пока имя
+                в одну строку — чип рядом, имя в две — элемент имени занимает
+                всю ширину и чип уезжает на отдельную (третью) строку. */}
+            <h2 className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-2xl font-extrabold leading-tight text-[var(--color-text)]">
+              <span className="min-w-0">{card?.profile.name ?? '…'}</span>
               {extra?.xp && extra.xp.level > 0 && (
-                <span className="ml-2 align-middle inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-[11px] font-bold text-[var(--color-accent)]"
+                <span className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-[11px] font-bold text-[var(--color-accent)]"
                   title={`Уровень ${extra.xp.level} — ${extra.xp.title}${extra.xp.topClass ? ` · топ-класс: ${extra.xp.topClass.name} ${extra.xp.topClass.level} ур.` : ''}`}>
                   {extra.xp.level} ур.{extra.xp.topClass ? ` · ${extra.xp.topClass.name}` : ''}
                 </span>
