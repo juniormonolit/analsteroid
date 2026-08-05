@@ -18,6 +18,7 @@ import { PinDialog } from '@/components/ui/PinDialog';
 import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
 import { fetchPinGated } from '@/lib/client/pinFetch';
 import { BadgeCard, BadgeShelf, useShelfQuery } from '@/features/badges/ui/BadgeShelf';
+import { AchievementsPage } from '@/features/badges/ui/AchievementsPage';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 import { usePlanFact } from './PlanFactStrip';
 import { MltCoin } from '@/components/icons/MltCoin';
@@ -1079,11 +1080,10 @@ export function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
 // «мы оставили функционал кошелька в разделе награды? убери») — только полка.
 // Полный редизайн в ачивки (редкость/блеклые/конструктор) — отдельная задача.
 export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: boolean; forceReadOnly?: boolean }) {
-  return (
-    <div className="flex flex-col gap-4 sm:gap-5">
-      <BadgeShelf managerId={isSelf ? undefined : managerId} />
-    </div>
-  );
+  // С 05.08 «Награды» — коллекция ачивок (редкость, счётчики по ступеням,
+  // блеклые неполученные, секретки скрыты). Прежняя полка BadgeShelf осталась
+  // в «Профиле» как витрина последних наград.
+  return <AchievementsPage managerId={managerId} isSelf={isSelf} />;
 }
 
 // Выписка со сторно-механикой и справочником штрафов — жила в «Наградах»,
