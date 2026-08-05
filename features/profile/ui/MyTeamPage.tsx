@@ -15,6 +15,7 @@
 // Роль-гейт по ИМЕНИ роли (прежний `ROSTER_ROLES`) здесь не используется намеренно:
 // переименование роли в справочнике не должно отбирать людям доступ (требование §3).
 
+import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { Users } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
@@ -230,12 +231,15 @@ function PeerView() {
                     {p.place ?? '—'}
                   </td>
                   <td className="py-2 pr-3">
-                    <div className="flex items-center gap-2 min-w-0">
+                    {/* Имя → публичный профиль коллеги (ЛК-соцсетка, 05.08);
+                        своя строка ведёт в собственный ЛК (страница /profile/<свой id>
+                        сама редиректит на /profile). */}
+                    <Link href={`/profile/${p.managerId}`} className="flex items-center gap-2 min-w-0 min-h-11 -my-2 py-2 hover:opacity-80 transition-opacity">
                       <Avatar name={p.name} url={p.avatarUrl} size={28} />
                       <span className={`truncate ${p.isMe ? 'font-semibold text-[var(--color-text)]' : 'text-[var(--color-text)]'}`}>
                         {p.name}{p.isMe && ' — вы'}
                       </span>
-                    </div>
+                    </Link>
                   </td>
                   <td className={`py-2 pl-3 text-right whitespace-nowrap tabular-nums ${pctClass(p.planPct)}`}>
                     {p.planPct === null ? '—' : `${p.planPct}%`}
