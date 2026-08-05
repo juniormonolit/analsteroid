@@ -57,11 +57,31 @@ export interface BotKeyboardButton {
 }
 
 /** Возвращает id отправленного сообщения (нужен для корреляции ответов по REPLY_ID). */
+// ── ГЛОБАЛЬНАЯ ГЛУШИЛКА БОТОВ (распоряжение владельца 05.08) ─────────────────
+// «До тех пор, пока я не скажу, мы не запускаем релиз и не должны отправлять
+// Аналитиком (роботом) никаких сообщений никому». Полагаться на то, что никто
+// не дёрнет отправку, нельзя: в instrumentation.ts живут ПЛАНИРОВЩИКИ (ежедневные
+// отчёты в 18:00 МСК на 2098 и 1923, дайджесты, «Контроль звонков») — они
+// отправят сами, без участия человека.
+//
+// Дефолт — МОЛЧАНИЕ: даже если переменной нет на сервере (а на проде env
+// задаётся только через start.sh, см. память проекта), бот молчит. Включение
+// обратно — ЯВНОЕ: BOT_SEND_ENABLED=1 в start.sh + рестарт, по слову владельца.
+// Вызовы не падают (иначе планировщики уйдут в ретраи и лог-шум) — тихо
+// логируем и возвращаем фиктивный id.
+function botSendingDisabled(): boolean {
+  return process.env.BOT_SEND_ENABLED !== '1';
+}
+
 export async function sendBitrixBotMessage(
   bitrixUserId: string,
   message: string,
   keyboard?: BotKeyboardButton[],
 ): Promise<number> {
+  if (botSendingDisabled()) {
+    console.warn(`[bot] МОЛЧАНИЕ (BOT_SEND_ENABLED≠1): сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
+    return 0;
+  }
   const webhook = process.env.BITRIX_BOT_WEBHOOK_URL || '';
   const botId = process.env.BITRIX_BOT_ID || '';
   const clientId = process.env.BITRIX_BOT_CLIENT_ID || '';
@@ -82,6 +102,12 @@ export async function sendBitrixBotMessage(
 // missedcalls-робота. Свой вебхук/CLIENT_ID (env CALL_CONTROL_*), НЕ переиспользует
 // креды «Аналитика»: у ботов разные владельцы-вебхуки и разные аватары/имена в чате.
 export async function sendCallControlBotMessage(bitrixUserId: string, message: string): Promise<void> {
+  // Та же глушилка, что у «Аналитика» — распоряжение владельца про ЛЮБЫЕ
+  // сообщения роботом (см. комментарий у sendBitrixBotMessage).
+  if (botSendingDisabled()) {
+    console.warn(`[bot:call-control] МОЛЧАНИЕ (BOT_SEND_ENABLED≠1): сообщение для ${bitrixUserId} не отправлено`);
+    return;
+  }
   const webhook = process.env.CALL_CONTROL_WEBHOOK_URL || '';
   const botId = process.env.CALL_CONTROL_BOT_ID || '';
   const clientId = process.env.CALL_CONTROL_CLIENT_ID || '';

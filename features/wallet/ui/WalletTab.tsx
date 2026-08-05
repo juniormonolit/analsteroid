@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import { useShelfQuery } from '@/features/badges/ui/BadgeShelf';
 import {
-  useProfileExtra, BalancePill, RubPill, RubWalletBlock, TransferBlock, ledgerTitle,
+  useProfileExtra, BalancePill, RubPill, RubWalletBlock, TransferBlock, LedgerSection,
   type LedgerRow,
 } from '@/features/manager-card/ui/ManagerTabs';
 
@@ -114,39 +114,9 @@ export function WalletTab({ managerId, isSelf }: { managerId: string; isSelf: bo
         )}
       </section>
 
-      {/* ══ Выписка ══ */}
-      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
-        <div className="mb-2 flex flex-wrap items-baseline gap-2">
-          <h3 className="text-sm font-bold text-[var(--color-text)]">🧾 История операций</h3>
-          <span className="text-[11px] text-[var(--color-text-muted)]">последние {Math.min(ledger.length, 300)} операций, свежие сверху</span>
-        </div>
-        {ledger.length === 0 ? (
-          <div className="text-sm text-[var(--color-text-muted)]">Операций пока нет.</div>
-        ) : (
-          <div className="flex flex-col">
-            {ledger.map(r => {
-              const { title, sub } = ledgerTitle(r);
-              const neg = r.amount < 0;
-              return (
-                <div key={r.id} className={`flex items-start gap-3 border-b border-[var(--color-border)] py-2 last:border-0 ${r.reversed ? 'opacity-50' : ''}`}>
-                  <span className="w-16 shrink-0 pt-0.5 text-[11px] tabular-nums text-[var(--color-text-muted)]">
-                    {r.date.split('-').reverse().slice(0, 2).join('.')}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className={`text-[13px] text-[var(--color-text)] ${r.reversed ? 'line-through' : ''}`}>
-                      {r.icon && <span className="mr-1">{r.icon}</span>}{title}
-                    </div>
-                    {sub && <div className="text-[11px] text-[var(--color-text-muted)]">{sub}</div>}
-                  </div>
-                  <span className={`shrink-0 text-[13px] font-bold tabular-nums ${neg ? 'text-[var(--color-negative)]' : 'text-[var(--color-positive)]'}`}>
-                    {neg ? '' : '+'}{r.amount.toLocaleString('ru-RU')}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
+      {/* ══ Выписка (переехала из «Наград» целиком, со сторно для админов и
+             справочником штрафов — правка владельца 05.08) ══ */}
+      <LedgerSection managerId={managerId} isSelf={isSelf} />
     </div>
   );
 }

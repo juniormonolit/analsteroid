@@ -1075,7 +1075,19 @@ export function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
   );
 }
 
-export function RewardsTab({ managerId, isSelf, forceReadOnly = false }: { managerId: string; isSelf: boolean; forceReadOnly?: boolean }) {
+// «Награды» после выноса финансов в «Кошелёк» (правка владельца 05.08:
+// «мы оставили функционал кошелька в разделе награды? убери») — только полка.
+// Полный редизайн в ачивки (редкость/блеклые/конструктор) — отдельная задача.
+export function RewardsTab({ managerId, isSelf }: { managerId: string; isSelf: boolean; forceReadOnly?: boolean }) {
+  return (
+    <div className="flex flex-col gap-4 sm:gap-5">
+    </div>
+  );
+}
+
+// Выписка со сторно-механикой и справочником штрафов — жила в «Наградах»,
+// с 05.08 рендерится «Кошельком» (features/wallet/ui/WalletTab.tsx).
+export function LedgerSection({ managerId, isSelf, forceReadOnly = false }: { managerId: string; isSelf: boolean; forceReadOnly?: boolean }) {
   const qc = useQueryClient();
   const { data: shelfData } = useShelfQuery(isSelf ? undefined : managerId);
   const { data: extra, isLoading } = useProfileExtra(managerId, isSelf);
@@ -1117,11 +1129,6 @@ export function RewardsTab({ managerId, isSelf, forceReadOnly = false }: { manag
   return (
     <div className="flex flex-col gap-4 sm:gap-5">
       <BadgeShelf managerId={isSelf ? undefined : managerId} />
-      {extra?.expiring && extra.expiring.amount > 0 && (
-        <div><ExpiringPill expiring={extra.expiring} currencyName={currencyName} /></div>
-      )}
-      <RubWalletBlock managerId={managerId} isSelf={isSelf} extra={extra} currencyName={currencyName} />
-      {isSelf && <TransferBlock balance={shelfData?.balance ?? 0} currencyName={currencyName} />}
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
         <div className="mb-2.5 flex items-baseline gap-2">
           <h2 className="text-base font-bold text-[var(--color-text)]">Выписка</h2>
