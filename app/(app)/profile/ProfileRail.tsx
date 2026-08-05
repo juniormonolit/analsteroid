@@ -79,7 +79,7 @@ export function ProfileRail({ mode }: { mode: 'manager' | 'department' | 'none' 
       active: pathname.startsWith('/profile/team'),
     },
     {
-      key: 'people', href: '/profile/people', label: 'Люди', Icon: UsersRound,
+      key: 'people', href: '/profile/people', label: 'Коллеги', Icon: UsersRound,
       active: pathname.startsWith('/profile/people'),
     },
     {

@@ -57,7 +57,7 @@ export function PeoplePage() {
   return (
     <div className="mx-auto w-full max-w-[1100px] p-3 sm:p-5 flex flex-col gap-4">
       <div className="flex items-center gap-2.5">
-        <h1 className="text-xl font-extrabold text-[var(--color-text)]">Люди</h1>
+        <h1 className="text-xl font-extrabold text-[var(--color-text)]">Коллеги</h1>
         {data && (
           <span className="text-[13px] text-[var(--color-text-muted)] tabular-nums">
             {filtered.length === people.length ? people.length : `${filtered.length} из ${people.length}`}

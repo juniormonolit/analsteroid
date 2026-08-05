@@ -18,7 +18,7 @@ import { IdCard, Settings, Users, UsersRound } from 'lucide-react';
 const ITEMS = [
   { href: '/profile', label: 'Кабинет', Icon: IdCard },
   { href: '/profile/team', label: 'Мой отдел', Icon: Users },
-  { href: '/profile/people', label: 'Люди', Icon: UsersRound },
+  { href: '/profile/people', label: 'Коллеги', Icon: UsersRound },
   { href: '/profile/settings', label: 'Настройки', Icon: Settings },
 ] as const;
 
@@ -35,7 +35,7 @@ export function ProfileNav() {
           <Link
             key={href}
             href={href}
-            className={`min-h-11 flex items-center gap-1.5 px-2 sm:px-3 text-sm whitespace-nowrap border-b-2 -mb-px transition-colors ${
+            className={`min-h-11 flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 text-sm whitespace-nowrap border-b-2 -mb-px transition-colors ${
               active
                 ? 'border-[var(--color-accent)] text-[var(--color-accent)] font-medium'
                 : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'

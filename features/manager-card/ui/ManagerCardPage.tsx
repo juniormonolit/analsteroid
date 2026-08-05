@@ -495,15 +495,20 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           onGoCustomers={(filter, category) => { setCustomersDeepLink({ filter, category }); goToTab('customers'); }}
         />
       )}
+      {/* Центрированная колонка как у «Профиля» (правка владельца 05.08:
+          «привести в порядок все разделы, не растянутые на весь экран») —
+          общая обёртка для вкладок, у которых нет своего max-w. «Профиль» и
+          «Квесты» держат ограничитель сами, «Статистика» остаётся широкой
+          сознательно (радар + плотные таблицы). */}
       {tabbed && tab === 'customers' && (
         <CustomersTab managerId={managerId} isSelf={showBadges}
           initialFilter={customersDeepLink?.filter} initialCategory={customersDeepLink?.category}
           initialCustomerKey={customerParam ?? undefined} />
       )}
       {tabbed && tab === 'quests' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
-      {tabbed && tab === 'rewards' && <RewardsTab managerId={managerId} isSelf={showBadges} forceReadOnly={forceReadOnly} />}
-      {tabbed && tab === 'shop' && <ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => goToTab('inventory')} />}
-      {tabbed && tab === 'inventory' && <InventoryTab managerId={managerId} isSelf={showBadges} />}
+      {tabbed && tab === 'rewards' && <div className="mx-auto w-full max-w-[1360px]"><RewardsTab managerId={managerId} isSelf={showBadges} forceReadOnly={forceReadOnly} /></div>}
+      {tabbed && tab === 'shop' && <div className="mx-auto w-full max-w-[1360px]"><ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => goToTab('inventory')} /></div>}
+      {tabbed && tab === 'inventory' && <div className="mx-auto w-full max-w-[1360px]"><InventoryTab managerId={managerId} isSelf={showBadges} /></div>}
 
       {showStats && (<>
       {/* ── Hero ── */}

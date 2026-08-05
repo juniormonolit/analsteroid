@@ -46,6 +46,18 @@ const SLOT_LABELS: Record<Slot, string> = {
   day: 'Дневной', week1: 'Недельный', week2: 'Недельный', month: 'Месячный', extra: 'Доп. квест',
 };
 
+// Эмодзи по категории квеста/контракта («сделать повеселей» — правка владельца
+// 05.08). Ключи — category из миграции 125 (quests) и 126 (quest_contracts).
+const CATEGORY_EMOJI: Record<string, string> = {
+  sales_count: '🤝',
+  sales_amount: '💰',
+  group_sales: '📦',
+  repeat_sales: '🔁',
+  crosssell: '🧲',
+  distinct_groups: '🧩',
+};
+const categoryEmoji = (category: string) => CATEGORY_EMOJI[category] ?? '⚔️';
+
 function daysLeft(endIso: string): string {
   const end = new Date(`${endIso.slice(0, 10)}T23:59:59+03:00`).getTime();
   const d = Math.max(0, Math.ceil((end - Date.now()) / 86_400_000));
@@ -82,7 +94,10 @@ function QuestCard({ q, prices, isSelf, onReroll, busy }: {
           {done ? '✅ выполнен' : q.status === 'failed' ? 'сгорел' : daysLeft(q.periodEnd)}
         </span>
       </div>
-      <div className="text-sm font-bold text-[var(--color-text)]">{q.title}</div>
+      <div className="flex items-start gap-2">
+        <span className="text-2xl leading-none select-none" aria-hidden>{categoryEmoji(q.category)}</span>
+        <span className="text-sm font-bold text-[var(--color-text)]">{q.title}</span>
+      </div>
       <div>
         <div className="mb-1 flex justify-between text-[11px] tabular-nums text-[var(--color-text-muted)]">
           <span>{fmtNum(q.progress)} из {fmtNum(q.target)}</span>
@@ -174,47 +189,55 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
   const dayDone = current.some(q => q.slot === 'day' && q.status === 'done');
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="text-xs text-[var(--color-text-muted)]">
-        Личные миссии: цели считаются от вашей собственной истории продаж (120% вашей медианы), тир —
-        от сложности относительно медианного менеджера компании. Выполнил — MLT и XP сразу; провалил —
-        ничего не теряешь, квест просто сгорает. Замена квеста и доп. квест — за MLT.
-      </div>
-      {current.length === 0 ? (
-        <div className="text-sm text-[var(--color-text-muted)]">
-          Квестов пока нет{data.workday ? ' — обновите страницу' : ' (сегодня не рабочий день; недельные и месячный появятся при генерации)'}.
-        </div>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {current.map(q => (
-            <QuestCard key={q.id} q={q} prices={data.prices} isSelf={isSelf} onReroll={id => void act({ questId: id })} busy={busy} />
-          ))}
-        </div>
-      )}
-      {isSelf && dayDone && data.workday && (
-        <button type="button" disabled={busy} onClick={() => void act({ action: 'extra' })}
-          className="w-fit rounded-xl border border-[var(--color-accent)] px-3 py-1.5 text-sm font-semibold text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
-          title="Дневной выполнен — можно докупить ещё один квест на сегодня (цена удваивается за каждый следующий на неделе)">
-          Ещё квест ({data.prices.extra})
-        </button>
-      )}
-      {error && <div className="text-xs text-[var(--color-negative,#e03131)]">{error}</div>}
-
-      {/* Доска контрактов (миграция 126): общий пул, депозит, любой тир */}
-      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-3">
-        <div className="mb-1 flex flex-wrap items-baseline gap-2">
-          <h3 className="text-sm font-bold text-[var(--color-text)]">📜 Доска контрактов</h3>
+    // Центрированная колонка как у «Профиля» (правка владельца 05.08: «привести
+    // к той же вёрстке, не растянутой на весь экран») + три ВИЗУАЛЬНО разные
+    // секции: личные миссии / взятые с доски / доска контрактов.
+    <div className="mx-auto w-full max-w-[1360px] flex flex-col gap-4 sm:gap-5">
+      {/* ══ 1. Личные миссии (регулярные слоты) ══ */}
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+        <div className="mb-3 flex flex-wrap items-baseline gap-2">
+          <h3 className="text-base font-bold text-[var(--color-text)]">⚔️ Личные миссии</h3>
           <span className="text-[11px] text-[var(--color-text-muted)]">
-            общий пул: бери любой тир добровольно; при взятии замораживается депозит — выполнил: депозит назад + награда (+ шанс лутдропа), провалил — депозит сгорает
+            цели — от вашей истории продаж (120% медианы), тир — от сложности против медианного менеджера.
+            Выполнил — MLT и XP сразу; провалил — ничего не теряешь. Замена и доп. квест — за MLT
           </span>
         </div>
-        {(data.contracts?.mine ?? []).length > 0 && (
-          <div className="mb-2 flex flex-col gap-1.5">
+        {current.length === 0 ? (
+          <div className="text-sm text-[var(--color-text-muted)]">
+            Квестов пока нет{data.workday ? ' — обновите страницу' : ' (сегодня не рабочий день; недельные и месячный появятся при генерации)'}.
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {current.map(q => (
+              <QuestCard key={q.id} q={q} prices={data.prices} isSelf={isSelf} onReroll={id => void act({ questId: id })} busy={busy} />
+            ))}
+          </div>
+        )}
+        {isSelf && dayDone && data.workday && (
+          <button type="button" disabled={busy} onClick={() => void act({ action: 'extra' })}
+            className="mt-3 w-fit rounded-xl border border-[var(--color-accent)] px-3 py-1.5 text-sm font-semibold text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
+            title="Дневной выполнен — можно докупить ещё один квест на сегодня (цена удваивается за каждый следующий на неделе)">
+            ✨ Ещё квест ({data.prices.extra})
+          </button>
+        )}
+        {error && <div className="mt-2 text-xs text-[var(--color-negative,#e03131)]">{error}</div>}
+      </section>
+
+      {/* ══ 2. Взятые с доски — отдельно от пула (правка владельца 05.08):
+             раньше «мои» контракты лежали строчками ВНУТРИ доски и сливались с ней ══ */}
+      {(data.contracts?.mine ?? []).length > 0 && (
+        <section className="rounded-2xl border-2 border-[var(--color-accent-soft)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+          <div className="mb-2.5 flex flex-wrap items-baseline gap-2">
+            <h3 className="text-base font-bold text-[var(--color-text)]">🎯 Взятые с доски</h3>
+            <span className="text-[11px] text-[var(--color-text-muted)]">ваши контракты в работе: депозит заморожен до развязки</span>
+          </div>
+          <div className="flex flex-col gap-1.5">
             {data.contracts.mine.map(c => (
-              <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-1.5 text-[12px]"
+              <div key={c.id} className="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-[12px]"
                 style={{ borderColor: `color-mix(in srgb, ${TIER_COLORS[c.tier]} 60%, transparent)`,
                   backgroundColor: c.status === 'done' ? 'color-mix(in srgb, var(--color-positive,#2f9e44) 8%, transparent)'
                     : `color-mix(in srgb, ${TIER_COLORS[c.tier]} 6%, transparent)` }}>
+                <span className="text-lg leading-none select-none" aria-hidden>{categoryEmoji(c.category)}</span>
                 <span className="rounded px-1 text-[10px] font-bold text-white" style={{ backgroundColor: TIER_COLORS[c.tier] }}>{TIER_LABELS[c.tier]}</span>
                 <span className={c.status === 'failed' ? 'line-through text-[var(--color-text-muted)]' : 'font-semibold text-[var(--color-text)]'}>{c.title}</span>
                 <span className="ml-auto tabular-nums text-[var(--color-text-muted)]">
@@ -225,20 +248,32 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
               </div>
             ))}
           </div>
-        )}
+        </section>
+      )}
+
+      {/* ══ 3. Доска контрактов (миграция 126): общий пул, депозит, любой тир ══ */}
+      <section className="rounded-2xl border border-dashed border-[var(--color-border-strong)] bg-[var(--color-bg)] px-4 sm:px-5 py-4">
+        <div className="mb-2.5 flex flex-wrap items-baseline gap-2">
+          <h3 className="text-base font-bold text-[var(--color-text)]">📜 Доска контрактов</h3>
+          <span className="text-[11px] text-[var(--color-text-muted)]">
+            общий пул: бери любой тир добровольно; при взятии замораживается депозит — выполнил: депозит назад + награда (+ шанс лутдропа), провалил — депозит сгорает
+          </span>
+        </div>
         {(data.contracts?.open ?? []).length === 0 ? (
           <div className="text-xs text-[var(--color-text-muted)]">Доска пуста — новый пул появится с генерацией.</div>
         ) : (
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             {data.contracts.open.map(c => (
-              <div key={c.id} className="flex flex-col gap-1.5 rounded-xl border-2 p-2.5"
-                style={{ borderColor: `color-mix(in srgb, ${TIER_COLORS[c.tier]} 60%, transparent)`,
-                  backgroundColor: `color-mix(in srgb, ${TIER_COLORS[c.tier]} 6%, transparent)` }}>
+              <div key={c.id} className="flex flex-col gap-1.5 rounded-xl border-2 p-2.5 bg-[var(--color-bg-surface)]"
+                style={{ borderColor: `color-mix(in srgb, ${TIER_COLORS[c.tier]} 60%, transparent)` }}>
                 <div className="flex items-center gap-1.5">
                   <span className="rounded px-1 text-[10px] font-bold text-white" style={{ backgroundColor: TIER_COLORS[c.tier] }}>{TIER_LABELS[c.tier]}</span>
                   <span className="ml-auto text-[11px] tabular-nums text-[var(--color-text-muted)]">{c.days} дн.</span>
                 </div>
-                <div className="text-[12px] font-semibold text-[var(--color-text)]">{c.title}</div>
+                <div className="flex items-start gap-1.5">
+                  <span className="text-xl leading-none select-none" aria-hidden>{categoryEmoji(c.category)}</span>
+                  <span className="text-[12px] font-semibold text-[var(--color-text)]">{c.title}</span>
+                </div>
                 <div className="text-[11px] tabular-nums text-[var(--color-text-muted)]">
                   +{c.rewardEballs} еб · +{c.rewardXp} XP · депозит <b>{c.deposit}</b>
                 </div>
@@ -254,9 +289,9 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
         )}
       </section>
 
-      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-3">
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
         <div className="mb-2 flex flex-wrap items-baseline gap-2">
-          <h3 className="text-sm font-bold text-[var(--color-text)]">История за 8 недель</h3>
+          <h3 className="text-sm font-bold text-[var(--color-text)]">🗂️ История за 8 недель</h3>
           <span className="text-[11px] text-[var(--color-text-muted)]">
             закрыто: {(['white', 'green', 'blue', 'epic', 'legendary'] as Tier[])
               .filter(t => (doneByTier[t] ?? 0) > 0)

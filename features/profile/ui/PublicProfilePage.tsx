@@ -53,7 +53,7 @@ export function PublicProfilePage({ bitrixId }: { bitrixId: string }) {
   if (isError) {
     return (
       <div className="p-6 text-sm text-[var(--color-text-muted)]">
-        Сотрудник не найден. <Link href="/profile/people" className="text-[var(--color-accent)] hover:underline font-semibold">К списку людей</Link>
+        Сотрудник не найден. <Link href="/profile/people" className="text-[var(--color-accent)] hover:underline font-semibold">К коллегам</Link>
       </div>
     );
   }
@@ -65,7 +65,7 @@ export function PublicProfilePage({ bitrixId }: { bitrixId: string }) {
           href="/profile/people"
           className="min-h-11 inline-flex items-center gap-1.5 rounded-lg px-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors shrink-0"
         >
-          <ArrowLeft size={16} /> Люди
+          <ArrowLeft size={16} /> Коллеги
         </Link>
         <span className="text-sm font-semibold text-[var(--color-text)] truncate">
           {isLoading ? 'Загрузка…' : data?.profile.name}
