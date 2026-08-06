@@ -28,6 +28,25 @@ export interface CoverDef {
 
 export const DEFAULT_COVER_ID = 'base-sky';
 
+/**
+ * Обложка-замощение из эмодзи. Тёмная подложка + полупрозрачные глифы: на светлой
+ * подложке эмодзи спорят с белым текстом шапки, который лежит поверх.
+ */
+function emojiCover(id: string, name: string, emoji: string[], backdrop: string): CoverDef {
+  const cell = 96;
+  const w = cell * emoji.length;
+  const h = Math.round(cell * 0.8);
+  const glyphs = emoji
+    .map((e, i) => `<text x="${cell * i + cell / 2}" y="${i % 2 === 0 ? h * 0.45 : h * 0.85}" font-size="30" text-anchor="middle" opacity="0.30">${e}</text>`)
+    .join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${glyphs}</svg>`;
+  return {
+    id, name,
+    css: `${backdrop} url("data:image/svg+xml,${encodeURIComponent(svg)}") repeat`,
+    size: `${w}px ${h}px`,
+  };
+}
+
 export const COVERS: CoverDef[] = [
   // ── Базовые: доступны всем ─────────────────────────────────────────────────
   { id: 'base-sky', name: 'Небо', css: 'linear-gradient(135deg,#4a90d9 0%,#1b4f8a 100%)' },
@@ -62,6 +81,16 @@ export const COVERS: CoverDef[] = [
     id: 'class-uteplenie', name: 'Утеплитель', requiresClass: 'Утепление', minClassLevel: 10,
     css: '#d9b45e repeating-linear-gradient(180deg, rgba(255,255,255,.28) 0 6px, transparent 6px 22px), repeating-linear-gradient(90deg, rgba(140,105,35,.25) 0 3px, transparent 3px 30px)',
   },
+  // ── Эмодзи-обложки: доступны всем (правка владельца 06.08 «накинь обложки из
+  // эмодзи»). Замощение — SVG в data-URI, как у фонов профиля: ни картинок, ни
+  // внешних запросов. Плотность ниже, чем у фонов: обложка — крупное полотно,
+  // на нём частая сетка выглядит рябью.
+  emojiCover('emoji-skulls', 'Черепа', ['💀', '☠️'], '#26262b'),
+  emojiCover('emoji-fire', 'Пламя', ['🔥', '⚡'], '#2a1206'),
+  emojiCover('emoji-money', 'Богатство', ['💰', '💎', '🪙'], '#0f3d2e'),
+  emojiCover('emoji-build', 'Стройка', ['🧱', '🏗️', '🔨'], '#3a332a'),
+  emojiCover('emoji-champion', 'Чемпион', ['🏆', '👑', '🥇'], '#3d3410'),
+  emojiCover('emoji-space', 'Космос', ['🚀', '🛸', '⭐'], '#141833'),
 ];
 
 export function coverById(id: string | null | undefined): CoverDef {

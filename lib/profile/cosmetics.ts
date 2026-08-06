@@ -42,6 +42,30 @@ export const COSMETICS: CosmeticDef[] = [
   { id: 'frame-rainbow', kind: 'frame', name: 'Радуга', price: 1200,
     ring: 'conic-gradient(#ff5c5c,#ffb347,#ffe66d,#5cd68a,#4aa3e0,#8f7ae5,#ff5c5c)' },
 
+  // Пастельные — самые дешёвые: спокойные, «на каждый день» (правило владельца
+  // 06.08: «простенькие пастельные — дешёвые, крутые модные яркие — дорогие»).
+  { id: 'frame-pastel-mint', kind: 'frame', name: 'Мята', price: 80,
+    ring: 'linear-gradient(135deg,#cdeee0,#a8d8c6)' },
+  { id: 'frame-pastel-lavender', kind: 'frame', name: 'Лаванда', price: 80,
+    ring: 'linear-gradient(135deg,#e2dcf5,#c3b7e8)' },
+  { id: 'frame-pastel-peach', kind: 'frame', name: 'Персик', price: 80,
+    ring: 'linear-gradient(135deg,#fbdcc8,#f3bfa2)' },
+  { id: 'frame-pastel-sky', kind: 'frame', name: 'Незабудка', price: 80,
+    ring: 'linear-gradient(135deg,#d3e7fb,#a9caf0)' },
+
+  // Яркие и «понтовые» — дорогие. Анимации нет намеренно: рамка на аватаре
+  // мелькает в каждом списке коллег, движущаяся деталь там утомляет.
+  { id: 'frame-neon', kind: 'frame', name: 'Неон', price: 1000,
+    ring: 'conic-gradient(from 45deg,#00e5ff,#7a5cff,#ff2ea6,#00e5ff)' },
+  { id: 'frame-lava', kind: 'frame', name: 'Лава', price: 1100,
+    ring: 'conic-gradient(from 200deg,#ffd166,#ff6b35,#c1121f,#ff6b35,#ffd166)' },
+  { id: 'frame-toxic', kind: 'frame', name: 'Кислота', price: 1000,
+    ring: 'conic-gradient(from 90deg,#c9ff3d,#3dff88,#00d4a0,#c9ff3d)' },
+  { id: 'frame-void', kind: 'frame', name: 'Бездна', price: 1500,
+    ring: 'conic-gradient(from 0deg,#0b0b12,#3a1c71,#d76d77,#3a1c71,#0b0b12)' },
+  { id: 'frame-chrome', kind: 'frame', name: 'Хром', price: 1300,
+    ring: 'conic-gradient(#f5f7fa,#8b98a8,#ffffff,#5c6a7a,#f5f7fa)' },
+
   // ── Эмодзи-фоны ────────────────────────────────────────────────────────────
   { id: 'bg-none', kind: 'background', name: 'Без фона', price: 0 },
   { id: 'bg-build', kind: 'background', name: 'Стройка', price: 200,
@@ -54,6 +78,28 @@ export const COSMETICS: CosmeticDef[] = [
     emoji: ['🚀', '⭐', '🛸'], backdrop: '#e9ecf7' },
   { id: 'bg-champion', kind: 'background', name: 'Чемпион', price: 900,
     emoji: ['🏆', '🥇', '👑'], backdrop: '#fdf6e3' },
+
+  // Пастельные, спокойные — дешёвые.
+  { id: 'bg-clouds', kind: 'background', name: 'Облака', price: 120,
+    emoji: ['☁️', '🌤️'], backdrop: '#f0f6fd' },
+  { id: 'bg-plants', kind: 'background', name: 'Зелень', price: 120,
+    emoji: ['🌿', '🍃'], backdrop: '#f1f8f1' },
+  { id: 'bg-coffee', kind: 'background', name: 'Кофе', price: 150,
+    emoji: ['☕', '🥐'], backdrop: '#f7f1e8' },
+  { id: 'bg-cats', kind: 'background', name: 'Коты', price: 200,
+    emoji: ['🐱', '🐾'], backdrop: '#f8f4f0' },
+
+  // Яркие и «понтовые» — дорогие.
+  { id: 'bg-skulls', kind: 'background', name: 'Черепа', price: 800,
+    emoji: ['💀', '☠️'], backdrop: '#ecebef' },
+  { id: 'bg-lightning', kind: 'background', name: 'Молнии', price: 750,
+    emoji: ['⚡', '🌩️'], backdrop: '#eef0fb' },
+  { id: 'bg-diamonds', kind: 'background', name: 'Алмазы', price: 1000,
+    emoji: ['💎', '✨'], backdrop: '#eaf4fb' },
+  { id: 'bg-dragon', kind: 'background', name: 'Дракон', price: 1200,
+    emoji: ['🐉', '🔥', '⚔️'], backdrop: '#f3ebe6' },
+  { id: 'bg-crown', kind: 'background', name: 'Корона', price: 1400,
+    emoji: ['👑', '💠', '🦁'], backdrop: '#fbf4e0' },
 ];
 
 export const DEFAULT_FRAME_ID = 'frame-none';
