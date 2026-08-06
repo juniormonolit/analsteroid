@@ -215,9 +215,13 @@ export async function getRubEconomics(db: Pool): Promise<RubEconomics> {
         WHERE currency = 'EBALL' AND amount > 0 AND created_at >= ${MONTH_START}`),
     // Инвентарь: цена покупки в MLT по статусам. used = выданное (реальная трата),
     // owned/activation_requested = обязательство, ещё не выданное.
-    db.query<{ material_used: string; immaterial_used: string; pending: string }>(
+    // ВАЖНО: материальное считаем по СЕБЕСТОИМОСТИ (миграция 155), если она
+    // задана — это и есть «реальные деньги». Где не задана, падаем на цену
+    // продажи × курс: оценка сверху, о чём UI предупреждает.
+    db.query<{ material_used: string; material_cost: string; immaterial_used: string; pending: string }>(
       `SELECT
-         coalesce(sum(i.price_paid) FILTER (WHERE i.status = 'used' AND s.category IN ('material','team')), 0) AS material_used,
+         coalesce(sum(i.price_paid) FILTER (WHERE i.status = 'used' AND s.category IN ('material','team') AND s.cost_rub IS NULL), 0) AS material_used,
+         coalesce(sum(s.cost_rub) FILTER (WHERE i.status = 'used' AND s.category IN ('material','team') AND s.cost_rub IS NOT NULL), 0) AS material_cost,
          coalesce(sum(i.price_paid) FILTER (WHERE i.status = 'used' AND s.category NOT IN ('material','team')), 0) AS immaterial_used,
          coalesce(sum(i.price_paid) FILTER (WHERE i.status IN ('owned','activation_requested')), 0) AS pending
        FROM inventory_items i
@@ -233,11 +237,12 @@ export async function getRubEconomics(db: Pool): Promise<RubEconomics> {
   const onHandMlt = Number(circ.rows[0]?.mlt ?? 0);
   const emittedAllMlt = Number(emitAll.rows[0]?.mlt ?? 0);
   const emittedMonthMlt = Number(emitMonth.rows[0]?.mlt ?? 0);
-  const materialUsed = Number(inv.rows[0]?.material_used ?? 0);
+  const materialUsed = Number(inv.rows[0]?.material_used ?? 0);   // без себестоимости → по цене
+  const materialCostRub = Number(inv.rows[0]?.material_cost ?? 0); // с себестоимостью → уже в ₽
   const immaterialUsed = Number(inv.rows[0]?.immaterial_used ?? 0);
   const pendingMlt = Number(inv.rows[0]?.pending ?? 0);
   const spentPayoutRub = Number(payout.rows[0]?.rub ?? 0);
-  const spentMaterialRub = materialUsed * rate;
+  const spentMaterialRub = materialUsed * rate + materialCostRub;
 
   // Прогноз: линейная экстраполяция по прошедшей доле месяца. Грубо, но
   // честно — и достаточно, чтобы вовремя увидеть перерасход.

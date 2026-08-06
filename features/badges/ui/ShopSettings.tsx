@@ -45,6 +45,7 @@ interface ShopItemRow {
   buyerScope: 'all' | 'rop_only';
   perPersonLimit: number | null; perPersonLimitDays: number | null;
   requiresApproval: boolean;
+  costRub: number | null;
   boostMetric: string | null; boostMultiplier: number | null; boostWindowDays: number | null; boostScope: string | null;
   rarityKey: string; rarityLabel: string; rarityColor: string;
   hasImage: boolean;
@@ -87,8 +88,11 @@ function RarityBadge({ priceEball }: { priceEball: number }) {
   );
 }
 
-function ItemEditor({ item, currencyName, onClose, onSaved }: {
-  item: ShopItemRow | null; currencyName: string; onClose: () => void; onSaved: () => void;
+function ItemEditor({ item, currencyName, mltRate, onClose, onSaved }: {
+  item: ShopItemRow | null; currencyName: string;
+  /** Курс MLT→₽ из настроек (миграция 153) — по нему считается цена из себестоимости. */
+  mltRate: number;
+  onClose: () => void; onSaved: () => void;
 }) {
   const [name, setName] = useState(item?.name ?? '');
   const [description, setDescription] = useState(item?.description ?? '');
@@ -104,6 +108,10 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
   const [perPersonLimit, setPerPersonLimit] = useState(item?.perPersonLimit === null || item?.perPersonLimit === undefined ? '' : String(item.perPersonLimit));
   const [perPersonLimitDays, setPerPersonLimitDays] = useState(item?.perPersonLimitDays === null || item?.perPersonLimitDays === undefined ? '' : String(item.perPersonLimitDays));
   const [requiresApproval, setRequiresApproval] = useState(item?.requiresApproval ?? true);
+  // Себестоимость в рублях (задача владельца): вводится ОНА, цена в MLT
+  // считается автоматом по курсу и остаётся редактируемой — курс может
+  // измениться, а уже назначенную цену переоценивать задним числом нельзя.
+  const [costRub, setCostRub] = useState(item?.costRub != null ? String(item.costRub) : '');
   const [boostMetric, setBoostMetric] = useState(item?.boostMetric ?? '');
   const [boostMultiplier, setBoostMultiplier] = useState(item?.boostMultiplier === null || item?.boostMultiplier === undefined ? '' : String(item.boostMultiplier));
   const [boostWindowDays, setBoostWindowDays] = useState(item?.boostWindowDays === null || item?.boostWindowDays === undefined ? '' : String(item.boostWindowDays));
@@ -193,6 +201,7 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
         perPersonLimit: perPersonLimit.trim() === '' ? null : Number(perPersonLimit),
         perPersonLimitDays: perPersonLimitDays.trim() === '' ? null : Number(perPersonLimitDays),
         requiresApproval,
+        costRub: costRub.trim() === '' ? null : Number(costRub),
         boostMetric: category === 'boost' ? (boostMetric.trim() || null) : null,
         boostMultiplier: category === 'boost' && boostMultiplier.trim() !== '' ? Number(boostMultiplier) : null,
         boostWindowDays: category === 'boost' && boostWindowDays.trim() !== '' ? Number(boostWindowDays) : null,
@@ -302,6 +311,29 @@ function ItemEditor({ item, currencyName, onClose, onSaved }: {
               <option value="boost">Буст</option>
               <option value="team">Командный (пицца на отдел, командные бусты)</option>
             </select>
+          </label>
+          {/* Себестоимость → цена: вводим рубли, цена в MLT подставляется по курсу
+              и остаётся редактируемой (курс может измениться — переоценивать
+              витрину задним числом нельзя). Себестоимость нужна дашборду, чтобы
+              считать РЕАЛЬНЫЕ затраты, а не оценку по цене продажи. */}
+          <label className={labelCls} title="Во сколько позиция обходится компании. Для нематериальных (отгул, обучение) можно 0 — это рабочее время, а не деньги.">
+            Себестоимость, ₽
+            <input
+              value={costRub}
+              onChange={e => {
+                const v = e.target.value;
+                setCostRub(v);
+                const n = Number(v);
+                if (v.trim() !== '' && Number.isFinite(n) && n > 0 && mltRate > 0) {
+                  setPrice(String(Math.round(n / mltRate)));
+                }
+              }}
+              placeholder="напр. 1500"
+              className={`${inputCls} text-right tabular-nums`}
+            />
+            <span className="text-[11px] text-[var(--color-text-muted)]">
+              курс {mltRate} ₽ за 1 {currencyName} → цена подставится сама, её можно поправить
+            </span>
           </label>
           <label className={labelCls} title={`Цена в единицах индексации; сейчас 1 единица = 1 ${currencyName}. Редкость считается от цены — автоматически, ниже.`}>
             Цена в {currencyName}
@@ -445,7 +477,7 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
   // коллеге прямую ссылку на редактирование конкретного товара (задача 2824,
   // useUrlModal — тот же паттерн, что уже используют «Шансы гачи» и т.п.).
   const editModal = useUrlModal('item');
-  const { data } = useQuery<{ items: ShopItemRow[]; coinTtlMonths: number; transferFeePercent: number; transferDailyLimit: number }>({
+  const { data } = useQuery<{ items: ShopItemRow[]; coinTtlMonths: number; transferFeePercent: number; transferDailyLimit: number; mltRate: number }>({
     queryKey: ['settings-shop'],
     queryFn: async () => {
       const res = await fetch('/api/settings/badges/shop');
@@ -716,6 +748,7 @@ export function ShopSettingsBlock({ currencyName }: { currencyName: string }) {
         <ItemEditor
           item={editingItem}
           currencyName={currencyName}
+          mltRate={data?.mltRate ?? 5}
           onClose={() => editModal.close()}
           onSaved={() => { editModal.close(); invalidate(); }}
         />

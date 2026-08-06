@@ -33,7 +33,7 @@ export async function GET() {
       `SELECT i.id::int AS id, i.name, i.description, i.category, i.price_units,
               i.enabled, i.stock, i.ttl_months, i.sort,
               i.emoji, i.min_level, i.marketplace_url, i.buyer_scope,
-              i.per_person_limit, i.per_person_limit_days, i.requires_approval,
+              i.per_person_limit, i.per_person_limit_days, i.requires_approval, i.cost_rub,
               i.boost_metric, i.boost_multiplier, i.boost_window_days, i.boost_scope,
               (i.image_mime IS NOT NULL) AS has_image,
               coalesce(p.purchases, 0)::int AS purchases
@@ -48,6 +48,8 @@ export async function GET() {
     ),
   ]);
   return NextResponse.json({
+    // Курс MLT→₽ (миграция 153) — редактор считает по нему цену из себестоимости.
+    mltRate: Number((await systemDb().query('SELECT COALESCE(mlt_rub_rate, 5) r FROM badge_coin_settings WHERE id = 1')).rows[0]?.r ?? 5),
     coinTtlMonths: settings.rows[0]?.ttl_months ?? 6,
     // Комиссия/лимит переводов MLT между коллегами — отдельная фича (не про
     // цены каталога, RUB здесь ни при чём), ShopSettingsBlock читает её ОТСЮДА
@@ -70,6 +72,7 @@ export async function GET() {
         buyerScope: i.buyer_scope,
         perPersonLimit: i.per_person_limit, perPersonLimitDays: i.per_person_limit_days,
         requiresApproval: i.requires_approval,
+        costRub: i.cost_rub === null ? null : Number(i.cost_rub),
         boostMetric: i.boost_metric, boostMultiplier: i.boost_multiplier !== null ? Number(i.boost_multiplier) : null,
         boostWindowDays: i.boost_window_days, boostScope: i.boost_scope,
         rarityKey: rarity.key, rarityLabel: rarity.label, rarityColor: rarity.color,
@@ -98,6 +101,8 @@ interface ItemInput {
   buyerScope: 'all' | 'rop_only';
   perPersonLimit: number | null; perPersonLimitDays: number | null;
   requiresApproval: boolean;
+  /** Себестоимость для компании, ₽ (миграция 155). null — не задана. */
+  costRub: number | null;
   boostMetric: string | null; boostMultiplier: number | null; boostWindowDays: number | null; boostScope: string | null;
   image: ImageAction;
 }
@@ -115,6 +120,14 @@ function validate(body: Record<string, unknown>): ItemInput | string {
   const name = typeof body.name === 'string' ? body.name.trim().slice(0, 300) : '';
   if (!name) return 'Название не может быть пустым';
   const description = typeof body.description === 'string' ? body.description.trim().slice(0, 1000) || null : null;
+  // Себестоимость (миграция 155): не задана — null (дашборд тогда оценивает
+  // затраты по цене продажи и честно предупреждает, что это оценка сверху).
+  const costRaw = body.costRub;
+  if (costRaw !== undefined && costRaw !== null && costRaw !== '' &&
+      (typeof costRaw !== 'number' || !Number.isFinite(costRaw) || costRaw < 0)) {
+    return 'Себестоимость — число не меньше нуля';
+  }
+  const costRub = typeof costRaw === 'number' ? costRaw : null;
   const category = body.category;
   if (category !== 'material' && category !== 'immaterial' && category !== 'boost' && category !== 'team') {
     return 'Тип позиции: material | immaterial | boost';
@@ -216,7 +229,7 @@ function validate(body: Record<string, unknown>): ItemInput | string {
   return {
     name, description, category, priceUnits, stock, ttlMonths, sort,
     emoji, minLevel, marketplaceUrl, buyerScope,
-    perPersonLimit, perPersonLimitDays, requiresApproval,
+    perPersonLimit, perPersonLimitDays, requiresApproval, costRub,
     boostMetric, boostMultiplier, boostWindowDays, boostScope,
     image,
   };
@@ -239,13 +252,13 @@ export async function POST(req: Request) {
        name, description, category, price_units, allowed_currencies, stock, ttl_months, sort,
        emoji, min_level, marketplace_url, buyer_scope, per_person_limit, per_person_limit_days,
        requires_approval, boost_metric, boost_multiplier, boost_window_days, boost_scope,
-       image_mime, image_data
+       image_mime, image_data, cost_rub
      )
-     VALUES ($1,$2,$3,$4,'{EBALL}',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+     VALUES ($1,$2,$3,$4,'{EBALL}',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
     [v.name, v.description, v.category, v.priceUnits, v.stock, v.ttlMonths, v.sort,
      v.emoji, v.minLevel, v.marketplaceUrl, v.buyerScope, v.perPersonLimit, v.perPersonLimitDays,
      v.requiresApproval, v.boostMetric, v.boostMultiplier, v.boostWindowDays, v.boostScope,
-     imageMime, imageData],
+     imageMime, imageData, v.costRub],
   );
   return NextResponse.json({ ok: true, id: r.rows[0].id });
 }
@@ -285,13 +298,15 @@ export async function PATCH(req: Request) {
             per_person_limit = $14, per_person_limit_days = $15, requires_approval = $16,
             boost_metric = $17, boost_multiplier = $18, boost_window_days = $19, boost_scope = $20,
             image_mime = CASE $21::text WHEN 'set' THEN $22::text WHEN 'remove' THEN NULL ELSE image_mime END,
-            image_data = CASE $21::text WHEN 'set' THEN $23::bytea WHEN 'remove' THEN NULL ELSE image_data END
+            image_data = CASE $21::text WHEN 'set' THEN $23::bytea WHEN 'remove' THEN NULL ELSE image_data END,
+            cost_rub = $24
       WHERE id = $1 RETURNING id`,
     [id, v.name, v.description, v.category, v.priceUnits,
      v.stock, v.ttlMonths, v.sort, typeof body.enabled === 'boolean' ? body.enabled : null,
      v.emoji, v.minLevel, v.marketplaceUrl, v.buyerScope, v.perPersonLimit, v.perPersonLimitDays,
      v.requiresApproval, v.boostMetric, v.boostMultiplier, v.boostWindowDays, v.boostScope,
-     v.image.kind, v.image.kind === 'set' ? v.image.mime : null, v.image.kind === 'set' ? v.image.buffer : null],
+     v.image.kind, v.image.kind === 'set' ? v.image.mime : null, v.image.kind === 'set' ? v.image.buffer : null,
+     v.costRub],
   );
   if (r.rowCount === 0) return NextResponse.json({ error: 'Позиция не найдена' }, { status: 404 });
   return NextResponse.json({ ok: true });
