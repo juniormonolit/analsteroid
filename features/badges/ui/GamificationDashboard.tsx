@@ -172,12 +172,18 @@ export function GamificationDashboard() {
           return (
             <div className="mb-3 rounded-xl border px-3.5 py-3" style={{ borderColor: `color-mix(in srgb, ${color} 45%, transparent)` }}>
               <div className="flex flex-wrap items-baseline gap-2">
-                <span className="text-[13px] font-bold text-[var(--color-text)]">Бюджет месяца</span>
+                <span className="text-[13px] font-bold text-[var(--color-text)]">Эмиссия месяца против потолка</span>
                 <span className="text-[13px] tabular-nums" style={{ color }}>
                   {rubFmt(used)} из {rubFmt(plan)} · {pct}%
                 </span>
                 <span className="ml-auto text-[12px] tabular-nums text-[var(--color-text-muted)]">
                   прогноз до конца месяца: <b style={{ color }}>{rubFmt(fc)}</b> ({fcPct}%)
+                </span>
+                {/* Потолок задан по ЭМИССИИ (решение владельца 06.08). Живыми
+                    деньгами компания заплатит меньше: около трети уходит в
+                    нематериальное (отгулы, обучение) и денег не стоит. */}
+                <span className="w-full text-[11px] text-[var(--color-text-muted)]">
+                  живыми деньгами из этого ≈ {rubFmt(used * 2 / 3)} (треть уходит в отгулы, обучение и прочее нематериальное)
                 </span>
               </div>
               <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
