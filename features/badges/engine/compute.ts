@@ -611,8 +611,16 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
       if (spec.kind === 'shipments') shipmentDaySums = sums;
       if (spec.kind === 'repeat_sales') repeatDaySums = sums;
       if (!enabled(spec.key)) continue;
+      // criteria.periodTypes — какие периоды вообще награждать (задача экономики
+      // 06.08: ежедневные топы печатали баллы в каждом отделе каждый день и
+      // размазывали бюджет тонким слоем; оставляем месяц/год, чтобы победа
+      // что-то значила). Пусто/не задано — прежнее поведение: все периоды.
+      const pt = crit(spec.key)?.periodTypes;
+      const periodTypes = Array.isArray(pt) && pt.length > 0
+        ? new Set(pt.filter((x): x is string => typeof x === 'string'))
+        : undefined;
       awards.push(...computeTopAwards(spec.key, sums, scopes, num(crit(spec.key), 'minAmount', 1), today,
-        { minCompetitors: num(crit(spec.key), 'minCompetitors', DEFAULT_MIN_COMPETITORS) }));
+        { minCompetitors: num(crit(spec.key), 'minCompetitors', DEFAULT_MIN_COMPETITORS), periodTypes }));
     }
 
     // 2. Кросс-селл пары + «Мастер комбо»
