@@ -1004,7 +1004,18 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
           const def = defs.get(a.badgeKey);
           const silent = def?.criteria?.silent === true || a.badgeKey === 'xp_level_up';
           if (def && !silent) {
-            const price = priceByKeyTier.get(`${a.badgeKey}:${a.tier ?? '-'}`) ?? 0;
+            // ЦЕНА = БАЗА × МНОЖИТЕЛЬ ПЕРИОДА (решение владельца 06.08: «за день
+            // бронза, неделя — серебро, месяц — золото, год — платина»). В
+            // движке тир — это МАСШТАБ победы (отдел → департамент → филиал →
+            // страна), и терять его нельзя: победа над страной честно дороже
+            // победы в своём отделе. Поэтому вторая ось — период — приходит
+            // множителем из criteria.periodMultipliers ({day, week, month, year}).
+            // Так дневная победа остаётся частым мелким «ништяком», а годовая —
+            // событием. Нет множителей в criteria — прежнее поведение (×1).
+            const basePrice = priceByKeyTier.get(`${a.badgeKey}:${a.tier ?? '-'}`) ?? 0;
+            const pm = def.criteria?.periodMultipliers as Record<string, number> | undefined;
+            const mult = pm && a.periodType && typeof pm[a.periodType] === 'number' ? pm[a.periodType] : 1;
+            const price = Math.round(basePrice * mult);
             const list = freshAwardsByMgr.get(a.bitrixId) ?? [];
             list.push({ name: def.name, tier: a.tier as BadgeTier | null, price });
             freshAwardsByMgr.set(a.bitrixId, list);
