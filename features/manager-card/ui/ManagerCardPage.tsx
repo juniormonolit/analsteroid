@@ -14,8 +14,6 @@ import { WalletTab } from '@/features/wallet/ui/WalletTab';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { ManagerActivityTab } from './ManagerActivityTab';
 import { BadgeShelf, TeamBadgesBlock } from '@/features/badges/ui/BadgeShelf';
-import { PayoutManageBlock } from '@/features/badges/ui/PayoutManage';
-import { InventoryManageBlock } from '@/features/badges/ui/InventoryManage';
 import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, MANAGER_TABS, type ManagerTabKey } from './ManagerTabs';
 import { CustomersTab, TeamCustomersBlock, type Filter as CustomerFilter } from '@/features/customers/ui/CustomersTab';
 import { PlanyorkaTab, TeamPlanyorkaBlock } from '@/features/planyorka/ui/PlanyorkaTab';
@@ -25,6 +23,7 @@ import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
 import { Avatar } from '@/components/ui/Avatar';
 import { PlanFactStrip, usePlanFact } from './PlanFactStrip';
+import { LeaderSkills } from './LeaderSkills';
 import { ManagerDailySalesCard } from './ManagerDailySalesCard';
 import { buildManagerReportText } from '@/features/manager-card/engine/managerReportText';
 import { Copy, Check, Eye, Lock } from 'lucide-react';
@@ -347,14 +346,26 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     }
   }, [planyorkaEnabled, tab, pathname, router, searchParams]);
-  const tabbed = mode === 'manager';
-  const showStats = !tabbed || tab === 'stats';
+  // Вкладки есть в ОБОИХ режимах (правка владельца 05.08: «показатели,
+  // статистика, награды и квесты руководителя должны быть агрегированными
+  // вариантами менеджерских»). Раньше карточка отдела была одной простынёй без
+  // вкладок, а командные блоки висели внизу — человек не понимал, что это те же
+  // разделы, только по команде. Набор вкладок у руководителя урезан: личные
+  // «Мои заказчики»/«Планёрка» заменены командными, а магазин/колесо/инвентарь/
+  // кошелёк остаются ЛИЧНЫМИ (они про человека, а не про отдел) — см. hiddenTabs.
+  const tabbed = true;
+  const showStats = tab === 'stats';
   // Читаете чужой кабинет (задача 2771) — плашка + «вернуться к себе».
   // mode==='manager' — только персональная карточка, не агрегат отдела (у него
   // и так своя структура «Моя команда», путать нечего). !showBadges === «не я
   // сам» (см. showBadges на месте вызова — /manager/me/bx всегда true для
   // своей, /manager/[id] — только если id буквально совпал с твоим).
   const viewingOther = tabbed && !showBadges;
+  // «Планёрка» — за фиче-флагом; у руководителя личная «Планёрка» не нужна
+  // (есть командная), остальные разделы существуют в агрегатном виде.
+  const hiddenTabs: ManagerTabKey[] = [
+    ...(planyorkaEnabled && mode === 'manager' ? [] : ['planyorka' as ManagerTabKey]),
+  ];
 
   function handlePeriodChange(p: DateRange) {
     setPeriod(p);
@@ -488,8 +499,34 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
         </div>
       )}
 
-      {tabbed && tab === 'profile' && (
+      {tabbed && tab === 'profile' && mode === 'manager' && (
         <ProfileTab managerId={managerId} isSelf={showBadges} card={data} onGoRewards={() => goToTab('rewards')} forceReadOnly={forceReadOnly} />
+      )}
+      {/* «Профиль» РУКОВОДИТЕЛЯ — агрегат: кто это, скиллы по показателям
+          отдела, план/факт команды, своя полка наград. Менеджерский ProfileTab
+          сюда не годится: он завязан на личный id (план/факт по числовому
+          bitrixId, XP-классы по товарным группам), а здесь managerId='my'. */}
+      {tabbed && tab === 'profile' && mode === 'department' && (
+        <div className="mx-auto w-full max-w-[1360px] flex flex-col gap-4 sm:gap-5">
+          <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-5">
+            <div className="flex flex-wrap items-center gap-4">
+              <Avatar name={data?.profile.name ?? managerName ?? '?'} url={data?.profile.avatarUrl} size={96} shape="rounded" />
+              <div className="min-w-0">
+                <h2 className="text-2xl font-extrabold leading-tight text-[var(--color-text)]">
+                  {data?.profile.name ?? managerName ?? '…'}
+                </h2>
+                <div className="mt-1 text-[13px] text-[var(--color-text-muted)]">
+                  {data?.deptComparison?.aggregateOf
+                    ? `Агрегат по ${data.deptComparison.aggregateOf} отделам`
+                    : 'Показатели отдела'}
+                </div>
+              </div>
+            </div>
+          </section>
+          <LeaderSkills />
+          <PlanFactStrip managerId={managerId} mode={mode} />
+          <BadgeShelf compactIfEmpty />
+        </div>
       )}
       {tabbed && planyorkaEnabled && tab === 'planyorka' && (
         <PlanyorkaTab
@@ -503,13 +540,33 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           общая обёртка для вкладок, у которых нет своего max-w. «Профиль» и
           «Квесты» держат ограничитель сами, «Статистика» остаётся широкой
           сознательно (радар + плотные таблицы). */}
-      {tabbed && tab === 'customers' && (
+      {/* Заказчики: у менеджера свои, у руководителя — командные (агрегат). */}
+      {tabbed && tab === 'customers' && mode === 'manager' && (
         <CustomersTab managerId={managerId} isSelf={showBadges}
           initialFilter={customersDeepLink?.filter} initialCategory={customersDeepLink?.category}
           initialCustomerKey={customerParam ?? undefined} />
       )}
-      {tabbed && tab === 'quests' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
-      {tabbed && tab === 'rewards' && <div className="mx-auto w-full max-w-[1360px]"><RewardsTab managerId={managerId} isSelf={showBadges} forceReadOnly={forceReadOnly} /></div>}
+      {tabbed && tab === 'customers' && mode === 'department' && (
+        <div className="mx-auto w-full max-w-[1360px]"><TeamCustomersBlock /></div>
+      )}
+      {/* Квесты: у менеджера свои, у руководителя — сводка по команде. */}
+      {tabbed && tab === 'quests' && mode === 'manager' && <QuestsTab managerId={managerId} isSelf={showBadges} />}
+      {tabbed && tab === 'quests' && mode === 'department' && (
+        <div className="mx-auto w-full max-w-[1360px] flex flex-col gap-4 sm:gap-5">
+          <TeamQuestsBlock />
+          {planyorkaEnabled && <TeamPlanyorkaBlock />}
+        </div>
+      )}
+      {/* Награды: у менеджера коллекция ачивок, у руководителя — полки команды. */}
+      {tabbed && tab === 'rewards' && mode === 'manager' && (
+        <div className="mx-auto w-full max-w-[1360px]"><RewardsTab managerId={managerId} isSelf={showBadges} forceReadOnly={forceReadOnly} /></div>
+      )}
+      {tabbed && tab === 'rewards' && mode === 'department' && (
+        <div className="mx-auto w-full max-w-[1360px] flex flex-col gap-4 sm:gap-5">
+          <BadgeShelf compactIfEmpty />
+          <TeamBadgesBlock />
+        </div>
+      )}
       {tabbed && tab === 'shop' && <div className="mx-auto w-full max-w-[1360px]"><ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => goToTab('inventory')} /></div>}
       {tabbed && tab === 'wallet' && <div className="mx-auto w-full max-w-[1360px]"><WalletTab managerId={managerId} isSelf={showBadges} /></div>}
       {tabbed && tab === 'wheel' && <div className="mx-auto w-full max-w-[1360px]"><GachaBlock isSelf={showBadges} big /></div>}
@@ -620,9 +677,10 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {/* ── Бейджи (задача 2655): у менеджера полка переехала в таб «Награды»
           (табы ЛК, доп. Серёги 31.07); у РОПа-департамента — по-прежнему своя
           полка + «Моя команда» с полками подчинённых (managed-depts). ── */}
-      {showBadges && mode === 'department' && (<><BadgeShelf compactIfEmpty /><PayoutManageBlock /><InventoryManageBlock /><TeamCustomersBlock /><TeamQuestsBlock /><TeamBadgesBlock /></>)}
-      {/* «Планёрка команды» спрятана флагом (01.08) — код жив в features/planyorka, не подключён сюда. */}
-      {showBadges && mode === 'department' && planyorkaEnabled && <TeamPlanyorkaBlock />}
+      {/* Командные блоки переехали в СВОИ вкладки (правка владельца 05.08):
+          награды → «Награды», квесты/планёрка → «Квесты», заказчики → «Мои
+          заказчики». Заявки на активацию и выплаты живут в разделе «Заявки»
+          (/profile/requests) — здесь их больше нет. */}
 
       {isLoading ? (
         <div className="space-y-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-24 bg-[var(--color-border)] rounded-2xl animate-pulse" />)}</div>

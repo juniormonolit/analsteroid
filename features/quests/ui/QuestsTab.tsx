@@ -5,8 +5,10 @@
 // прогресс-бар, награда «N MLT + M XP», таймер, реролл за MLT; ниже —
 // история 8 недель со счётчиками по тирам. РОПу — сводка по команде.
 
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { NoData } from '@/components/ui/NoData';
 import { Confetti } from '@/features/badges/ui/GachaBlock';
 import { PinDialog } from '@/components/ui/PinDialog';
 import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
@@ -378,7 +380,6 @@ interface TeamQuestRow {
 }
 
 export function TeamQuestsBlock() {
-  const [open, setOpen] = useState<number | null>(null);
   const { data, isLoading } = useQuery<{ team: TeamQuestRow[] }>({
     queryKey: ['quests-team'],
     queryFn: async () => {
@@ -390,54 +391,117 @@ export function TeamQuestsBlock() {
     refetchOnWindowFocus: false,
   });
   const team = data?.team ?? [];
-  if (isLoading || team.length === 0) return null;
+
+  if (isLoading) return <div className="text-sm text-[var(--color-text-muted)]">Загружаем квесты команды…</div>;
+  if (team.length === 0) {
+    return (
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+        <NoData what="квестов команды" hint="Квесты появятся, когда у подчинённых начнётся их период." />
+      </section>
+    );
+  }
+
+  // Разбивка ПО ТИПАМ КВЕСТА, а не по людям (уточнение владельца 05.08:
+  // «он должен видеть не свои квесты, а квесты всего отдела с разбивкой на
+  // ежедневные и так далее по своим менеджерам. Цель — помогать достигать
+  // выполнения квестов»). Поэтому внутри каждого типа строки отсортированы
+  // «кому нужнее помощь»: активные с наименьшим прогрессом сверху, выполненные —
+  // в конец.
+  const GROUPS: { key: 'day' | 'week' | 'month'; label: string; slots: Slot[] }[] = [
+    { key: 'day', label: '☀️ Ежедневные', slots: ['day', 'extra'] },
+    { key: 'week', label: '📅 Недельные', slots: ['week1', 'week2'] },
+    { key: 'month', label: '🗓️ Месячные', slots: ['month'] },
+  ];
+
+  type Line = { name: string; bitrixId: number; q: TeamQuestRow['current'][number] };
+  const linesOf = (slots: Slot[]): Line[] => {
+    const out: Line[] = [];
+    for (const m of team) {
+      for (const q of m.current) {
+        if (!slots.includes(q.slot)) continue;
+        out.push({ name: m.name, bitrixId: m.bitrixId, q });
+      }
+    }
+    return out.sort((a, b) => {
+      const doneA = a.q.status === 'done' ? 1 : 0, doneB = b.q.status === 'done' ? 1 : 0;
+      if (doneA !== doneB) return doneA - doneB;                 // невыполненные выше
+      const pa = a.q.target > 0 ? a.q.progress / a.q.target : 0;
+      const pb = b.q.target > 0 ? b.q.progress / b.q.target : 0;
+      return pa - pb;                                            // кому нужнее помощь
+    });
+  };
 
   return (
     <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
-      <div className="mb-2.5 flex items-baseline gap-2">
+      <div className="mb-3 flex flex-wrap items-baseline gap-2">
         <h2 className="text-base font-bold text-[var(--color-text)]">🗺️ Квесты команды</h2>
-        <span className="text-xs text-[var(--color-text-muted)]">кто что выполняет; счётчики — за 8 недель</span>
+        <span className="text-xs text-[var(--color-text-muted)]">
+          кому нужна помощь — выше; выполненные внизу группы
+        </span>
       </div>
-      <div className="flex flex-col gap-1.5">
-        {team.map(m => {
-          const active = m.current.filter(q => q.status === 'active').length;
-          const doneNow = m.current.filter(q => q.status === 'done').length;
+
+      <div className="flex flex-col gap-4">
+        {GROUPS.map(g => {
+          const lines = linesOf(g.slots);
+          if (lines.length === 0) return null;
+          const done = lines.filter(l => l.q.status === 'done').length;
           return (
-            <Fragment key={m.bitrixId}>
-              <button type="button" onClick={() => setOpen(v => (v === m.bitrixId ? null : m.bitrixId))}
-                className="flex w-full flex-wrap items-center gap-2 rounded-xl border border-[var(--color-border)] px-3 py-2 text-left hover:bg-[var(--color-bg-hover)]">
-                <span className="text-sm font-semibold text-[var(--color-text)]">{m.name}</span>
-                <span className="text-[11px] text-[var(--color-text-muted)]">в работе {active} · выполнено сейчас {doneNow}</span>
-                <span className="ml-auto flex items-center gap-1.5 text-[11px] tabular-nums">
-                  {(['white', 'green', 'blue', 'epic', 'legendary'] as Tier[]).map(t => {
-                    const n = m.stats.done[t] ?? 0;
-                    if (n === 0) return null;
-                    return (
-                      <span key={t} className="inline-flex items-center gap-0.5" title={`Закрыто ${TIER_LABELS[t].toLowerCase()}: ${n}`}>
-                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: TIER_COLORS[t] }} />{n}
-                      </span>
-                    );
-                  })}
-                  {m.stats.failed > 0 && <span className="text-[var(--color-text-muted)]">✕ {m.stats.failed}</span>}
+            <div key={g.key}>
+              <div className="mb-1.5 flex items-baseline gap-2">
+                <span className="text-[12px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">{g.label}</span>
+                <span className="text-[12px] tabular-nums text-[var(--color-text-muted)]">
+                  {done} из {lines.length} выполнено
                 </span>
-              </button>
-              {open === m.bitrixId && (
-                <div className="ml-3 flex flex-col gap-1 pb-1">
-                  {m.current.length === 0 && <span className="text-xs text-[var(--color-text-muted)]">Активных квестов нет.</span>}
-                  {m.current.map((q, i) => (
-                    <div key={i} className="flex items-center gap-2 text-[12px]">
-                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: TIER_COLORS[q.tier] }} title={TIER_LABELS[q.tier]} />
-                      <span className="text-[var(--color-text)]">{q.title}</span>
-                      <span className="ml-auto tabular-nums text-[var(--color-text-muted)]">
-                        {q.status === 'done' ? '✅' : `${fmtNum(q.progress)} / ${fmtNum(q.target)}`}
+              </div>
+              <div className="flex flex-col">
+                {lines.map((l, i) => {
+                  const pct = l.q.target > 0 ? Math.min(100, Math.round((l.q.progress / l.q.target) * 100)) : 0;
+                  const isDone = l.q.status === 'done';
+                  return (
+                    <div key={`${l.bitrixId}-${i}`}
+                      className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-t border-[var(--color-border)] py-2 first:border-t-0 text-[12.5px]">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: TIER_COLORS[l.q.tier] }} title={TIER_LABELS[l.q.tier]} />
+                      <Link href={`/profile/${l.bitrixId}`}
+                        className="font-semibold text-[var(--color-text)] hover:underline shrink-0">
+                        {l.name}
+                      </Link>
+                      <span className="text-[var(--color-text-muted)] min-w-0 flex-1 truncate" title={l.q.title}>{l.q.title}</span>
+                      <span className="w-24 shrink-0">
+                        <span className="block h-1.5 rounded-full bg-[var(--color-bg-hover)]">
+                          <span className="block h-1.5 rounded-full"
+                            style={{ width: `${Math.max(pct, 2)}%`, backgroundColor: isDone ? 'var(--color-positive)' : TIER_COLORS[l.q.tier] }} />
+                        </span>
+                      </span>
+                      <span className="w-24 shrink-0 text-right tabular-nums text-[var(--color-text-muted)]">
+                        {isDone ? '✅ готово' : `${fmtNum(l.q.progress)} / ${fmtNum(l.q.target)}`}
                       </span>
                     </div>
-                  ))}
-                </div>
-              )}
-            </Fragment>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
+      </div>
+
+      {/* Итоги за 8 недель — кто сколько закрыл (было основным видом, теперь сводка). */}
+      <div className="mt-4 border-t border-[var(--color-border)] pt-3">
+        <div className="mb-1.5 text-[12px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Закрыто за 8 недель
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {team.map(m => {
+            const total = (['white', 'green', 'blue', 'epic', 'legendary'] as Tier[])
+              .reduce((sum, t) => sum + (m.stats.done[t] ?? 0), 0);
+            return (
+              <span key={m.bitrixId} className="text-[12px] text-[var(--color-text-muted)] whitespace-nowrap">
+                <Link href={`/profile/${m.bitrixId}`} className="text-[var(--color-text)] hover:underline">{m.name}</Link>
+                <b className="ml-1 tabular-nums text-[var(--color-text)]">{total}</b>
+                {m.stats.failed > 0 && <span className="ml-1">· ✕{m.stats.failed}</span>}
+              </span>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
