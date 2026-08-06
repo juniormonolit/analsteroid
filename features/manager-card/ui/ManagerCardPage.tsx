@@ -21,6 +21,7 @@ import { QuestsTab, TeamQuestsBlock } from '@/features/quests/ui/QuestsTab';
 import { previousPeriodSameLength, defaultPeriod, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
+import { NoData } from '@/components/ui/NoData';
 import { Avatar } from '@/components/ui/Avatar';
 import { PlanFactStrip, usePlanFact } from './PlanFactStrip';
 import { LeaderSkills } from './LeaderSkills';
@@ -393,6 +394,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
+
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? await res.text());
       // deptComparison приходит только с department-card; aggregateOf добавляет роут
       // (сколько отделов объединено) — см. respondAggregate там же.
@@ -407,6 +409,17 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
     key: a.key, label: a.label, periodValue: a.period.normalized, comparisonValue: a.comparison.normalized, dataAvailable: a.dataAvailable,
   }));
   const tiles = data?.tiles ?? [];
+
+  // «Где нет данных — так и написать: нет данных» (правило владельца 05.08).
+  // Признак — не оргструктура, а пустота ВСЕХ источников цифр вкладки: рейтинг,
+  // плитки итогов, доли категорий. Так же решает PlanFactStrip, и так же это
+  // покрывает не только сотрудников вне продаж, но и пустой период у продавца.
+  // Без этого вкладка показывает аккуратные нули и графики в ноль — человек
+  // читает их как «я ничего не продал», а не как «мне нечего продавать».
+  const statsEmpty = !!data
+    && data.rating.value === null
+    && tiles.every(t => !t.current)
+    && data.categories.length === 0;
 
   const rating = data?.rating.value ?? null;
   const RING_R = 33;
@@ -572,6 +585,14 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
       {tabbed && tab === 'wheel' && <div className="mx-auto w-full max-w-[1360px]"><GachaBlock isSelf={showBadges} big /></div>}
       {tabbed && tab === 'inventory' && <div className="mx-auto w-full max-w-[1360px]"><InventoryTab managerId={managerId} isSelf={showBadges} /></div>}
 
+      {showStats && statsEmpty && (
+        <SectionCard>
+          <NoData
+            what="продаж за выбранный период"
+            hint="Похоже, эта роль не участвует в продажах. Вкладка ниже показана как есть — цифры в ней появятся, если появятся сделки."
+          />
+        </SectionCard>
+      )}
       {showStats && (<>
       {/* ── Hero ── */}
       <SectionCard className="!py-5">

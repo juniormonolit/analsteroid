@@ -3,6 +3,7 @@
 // классов XP, которых у РОПа быть не может, — четыре показателя ОТДЕЛА и
 // сложенный из них уровень с титулом тяги (Дрезина → … → Атомный ледокол).
 import { useQuery } from '@tanstack/react-query';
+import { NoData } from '@/components/ui/NoData';
 
 interface Skill {
   key: string; label: string; value: number;
@@ -37,6 +38,22 @@ export function LeaderSkills({ bitrixId }: { bitrixId?: string }) {
 
   const r = data?.skills;
   if (!r) return null; // не руководитель — блока нет
+
+  // Все показатели по нулям — это «отделу нечего показывать за окно», а не
+  // «отдел работал и наработал ноль». Разница принципиальная: шкалы в ноль и
+  // «лучше 0% отделов» читаются как провал, хотя данных просто нет (правило
+  // владельца 05.08 «где нет данных — так и написать»). Живой случай —
+  // руководитель подразделения вне продаж: сделок нет ни у кого в отделе.
+  if (r.skills.length === 0 || r.skills.every(s => !s.value)) {
+    return (
+      <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
+        <NoData
+          what={`показателей отдела за ${r.windowDays} дней`}
+          hint="Уровень и шкалы строятся сравнением с другими отделами — сравнивать пока нечего."
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
