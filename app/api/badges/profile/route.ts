@@ -73,6 +73,14 @@ export async function GET(req: NextRequest) {
       .catch(() => null),
   ]);
 
+  // Оформление профиля: рамка аватара и эмодзи-фон (миграция 157, задача #34).
+  // До миграции — дефолты, как у обложки: раздел не должен падать из-за неё.
+  const cosmetics = await systemDb()
+    .query<{ frame_id: string | null; background_id: string | null }>(
+      `SELECT frame_id, background_id FROM profile_cosmetics WHERE bitrix_id = $1`, [id])
+    .then(r => ({ frameId: r.rows[0]?.frame_id ?? null, backgroundId: r.rows[0]?.background_id ?? null }))
+    .catch(() => ({ frameId: null, backgroundId: null }));
+
   const startDate = reg.rows[0]?.start_date ?? null;
   return NextResponse.json({
     tenure: startDate ? { startDate, label: tenureLabel(startDate) } : null,
@@ -82,5 +90,7 @@ export async function GET(req: NextRequest) {
     expiring,
     xp,
     coverId: cover,
+    frameId: cosmetics.frameId,
+    backgroundId: cosmetics.backgroundId,
   });
 }

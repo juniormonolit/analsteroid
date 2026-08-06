@@ -7,10 +7,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Lock, Camera } from 'lucide-react';
+import { Lock, Camera, Sparkles } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { coverStyle } from '@/lib/profile/covers';
 import { CoverPicker } from '@/features/profile/ui/CoverPicker';
+import { CosmeticsPicker } from '@/features/profile/ui/CosmeticsPicker';
+import { backgroundCss, cosmeticById } from '@/lib/profile/cosmetics';
 import { ProfileFeed } from '@/features/profile/ui/ProfileFeed';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -177,6 +179,9 @@ export interface ProfileExtra {
   } | null;
   // Обложка профиля (ЛК-соцсетка этап 2, миграция 149): null = дефолтная.
   coverId: string | null;
+  // Оформление за MLT (задача #34, миграция 157): null = ничего не надето.
+  frameId: string | null;
+  backgroundId: string | null;
 }
 
 // Контекст ручных операций: право, бюджет, справочник с рассчитанными суммами.
@@ -498,6 +503,10 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
   const [manualKind, setManualKind] = useState<'bonus' | 'penalty' | null>(null);
   // Пикер обложки (ЛК-соцсетка этап 2) — только в собственном ЛК.
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+  const [cosmeticsOpen, setCosmeticsOpen] = useState(false);
+  // Оформление профиля (задача #34): рамка аватара и эмодзи-фон под шапкой.
+  const frameRing = cosmeticById(extra?.frameId)?.ring ?? null;
+  const profileBg = backgroundCss(cosmeticById(extra?.backgroundId));
   const afterManual = () => {
     setManualKind(null);
     void qc.invalidateQueries({ queryKey: ['badges-shelf'] });
@@ -542,7 +551,14 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
                задаёт position:relative и, идя в globals.css ПОЗЖЕ утилит
                Tailwind, молча перебивает .absolute — кнопка выпадала в поток.
                Обёртке tap-target не нужен, кнопке внутри — нужен (зона 44px). */
-            <div className="absolute right-2 bottom-2">
+            <div className="absolute right-2 bottom-2 flex gap-1.5">
+              <button
+                onClick={() => setCosmeticsOpen(true)}
+                className="tap-target inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
+                title="Рамка аватара и фон профиля"
+              >
+                <Sparkles size={13} /> Оформление
+              </button>
               <button
                 onClick={() => setCoverPickerOpen(true)}
                 className="tap-target inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
@@ -554,18 +570,35 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
           )}
         </div>
         {isSelf && !forceReadOnly && <CoverPicker open={coverPickerOpen} onOpenChange={setCoverPickerOpen} />}
+        {isSelf && !forceReadOnly && <CosmeticsPicker open={cosmeticsOpen} onOpenChange={setCosmeticsOpen} />}
         {/* relative ОБЯЗАТЕЛЕН (живой баг со скрина владельца): обложка выше —
             position:relative и по правилам stacking-порядка рисуется ПОВЕРХ
             непозиционированного соседа; без relative здесь паттерн обложки
             перекрывал верх аватара. */}
-        <div className="relative px-4 sm:px-5 pb-5 -mt-20">
+        {/* Эмодзи-фон (задача #34) — на теле карточки под шапкой, а не на всей
+            странице: так он виден и в чужом профиле, но не мешает читать данные
+            во вкладках. Без купленного фона стиль пустой. */}
+        <div
+          className="relative px-4 sm:px-5 pb-5 -mt-20"
+          style={profileBg ? { background: profileBg.background, backgroundSize: profileBg.backgroundSize } : undefined}
+        >
         <div className="flex flex-col items-center gap-3.5 text-center">
           {/* Радиус обёртки РАВЕН радиусу Avatar (size×0.11 ≈ 18px), не больше:
               ring — это box-shadow, он сам рисуется снаружи и сам добавляет свои
               +4px к радиусу. Прежний rounded-[22px] давал белые клинья в углах
               (скрин владельца: «скругления рамки не повторяют аватар»). */}
-          <div className="rounded-[18px] ring-4 ring-[var(--color-bg-surface)] shadow-md">
-            <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={160} shape="rounded" />
+          {/* Рамка (задача #34) ЗАМЕНЯЕТ белое кольцо, а не добавляется к нему.
+              Первая версия клала рамку слоем снаружи — и её не было видно
+              вообще: ring-4 это box-shadow, он рисуется НАРУЖУ от аватара и
+              своими 4px полностью закрывал 3px рамки. Одна окантовка вместо
+              двух и читается лучше: золотая обводка, а не золото под белым. */}
+          <div
+            className="rounded-[22px] p-1"
+            style={frameRing ? { background: frameRing } : undefined}
+          >
+            <div className={`rounded-[18px] shadow-md ${frameRing ? '' : 'ring-4 ring-[var(--color-bg-surface)]'}`}>
+              <Avatar name={card?.profile.name ?? '?'} url={card?.profile.avatarUrl} size={160} shape="rounded" />
+            </div>
           </div>
           <div className="min-w-0 w-full">
             {/* Правка владельца 05.08: чип уровня НЕ должен липнуть ко второй
