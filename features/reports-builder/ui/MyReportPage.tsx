@@ -248,7 +248,7 @@ export function MyReportPage() {
               // её смена не снимает отметку с шаблона — только сбрасывает сборку.
               onChange={e => { setDate(e.target.value); assembly.reset(); }}
               // text-base на мобильном — иначе iOS зумит страницу при фокусе (правило 9).
-              className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-base sm:text-sm"
+              className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-[16px] sm:text-sm"
             />
           </label>
 
@@ -491,13 +491,13 @@ function TemplateBar({ templates, storageReady, activeId, onApply, onSave, onDel
               onKeyDown={e => { if (e.key === 'Enter') void submit(); }}
               placeholder="Название шаблона"
               autoFocus
-              className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-base sm:text-sm outline-none"
+              className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-[16px] sm:text-sm outline-none"
             />
             <label className="flex min-h-11 items-center gap-2 text-sm">
               <input type="checkbox" checked={asDefault} onChange={e => setAsDefault(e.target.checked)} />
               Открывать по умолчанию
             </label>
-            {saveError && <p className="text-xs text-[var(--color-negative)]">{saveError}</p>}
+            {saveError && <p className="text-[16px] sm:text-xs text-[var(--color-negative)]">{saveError}</p>}
             <button
               type="button"
               onClick={submit}
@@ -544,7 +544,7 @@ function MetricPicker({ metrics, selected, onToggle }: {
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Поиск показателя"
-          className="min-h-11 border-b border-[var(--color-border)] bg-transparent px-3 text-base sm:text-sm outline-none"
+          className="min-h-11 border-b border-[var(--color-border)] bg-transparent px-3 text-[16px] sm:text-sm outline-none"
         />
         <div className="max-h-64 overflow-y-auto p-1">
           {filtered.length === 0 && (

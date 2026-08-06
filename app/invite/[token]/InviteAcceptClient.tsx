@@ -50,8 +50,10 @@ export function InviteAcceptClient({ token }: { token: string }) {
     setLoading(false);
   }
 
+  // min-h-dvh — правило 7 CLAUDE.md (тот же фикс, что на /login): ссылку-инвайт
+  // почти всегда открывают с телефона, из мессенджера.
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)]">
+    <div className="min-h-dvh flex items-center justify-center bg-[var(--color-bg)]">
       <div className="w-full max-w-sm bg-[var(--color-bg-surface)] rounded-xl shadow-lg p-8">
         <h1 className="flex flex-col items-center gap-2.5 text-xl font-semibold text-[var(--color-text)] mb-6">
           <span className="flex items-center gap-2.5">
@@ -78,7 +80,7 @@ export function InviteAcceptClient({ token }: { token: string }) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3 py-2 border border-[var(--color-border)] rounded-lg text-sm outline-none focus:border-[var(--color-border-focus)]"
+                className="w-full px-3 py-2 border border-[var(--color-border)] rounded-lg text-[16px] sm:text-sm outline-none focus:border-[var(--color-border-focus)]"
                 autoFocus
                 required
               />
@@ -89,7 +91,7 @@ export function InviteAcceptClient({ token }: { token: string }) {
                 type="password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
-                className="w-full px-3 py-2 border border-[var(--color-border)] rounded-lg text-sm outline-none focus:border-[var(--color-border-focus)]"
+                className="w-full px-3 py-2 border border-[var(--color-border)] rounded-lg text-[16px] sm:text-sm outline-none focus:border-[var(--color-border-focus)]"
                 required
               />
             </div>

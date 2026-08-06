@@ -200,7 +200,7 @@ export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkS
           <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(6))}>На полгода</button>
           <div className="flex items-center gap-1">
             <input type="date" value={customDate} onChange={e => setCustomDate(e.target.value)}
-              className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-1 py-0.5 text-[11px]" />
+              className="min-w-0 flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-1 py-0.5 text-[16px] sm:text-[11px]" />
             <button type="button" className={btn} disabled={!customDate} onClick={() => snoozeTo(customDate)}>ОК</button>
           </div>
         </div>
@@ -217,7 +217,7 @@ export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkS
             ))}
             <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2}
               placeholder={reason === 'other' ? 'Комментарий (обязателен для «Прочее»)' : 'Комментарий (необязательно)'}
-              className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm" />
+              className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-sm" />
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" className={btn} onClick={() => setOpen(null)}>Отмена</button>
@@ -486,7 +486,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
           ))}
         </div>
         <input value={searchInput} onChange={e => setSearchInput(e.target.value)} placeholder="Поиск по имени или id"
-          className="min-w-[160px] flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-sm sm:max-w-xs" />
+          className="min-w-[160px] flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-[16px] sm:text-sm sm:max-w-xs" />
         {/* Фильтр по категории клиента (дополнение Серёги 01.08) */}
         <select value={category} onChange={e => { setCategory(e.target.value); setPage(1); }}
           title="Фильтр по категории клиента (правила — в Настройки → Категории клиентов)"

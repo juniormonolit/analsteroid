@@ -42,7 +42,7 @@ export function EmojiPicker({ onPick, trigger }: {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Поиск по названию (англ.) — cake, fire, rocket…"
-            className="w-full bg-transparent text-sm outline-none text-[var(--color-text)] placeholder:text-[var(--color-text-muted)]"
+            className="w-full bg-transparent text-[16px] sm:text-sm outline-none text-[var(--color-text)] placeholder:text-[var(--color-text-muted)]"
           />
         </div>
       </div>

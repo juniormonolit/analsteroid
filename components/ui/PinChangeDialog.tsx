@@ -82,7 +82,7 @@ export function PinChangeDialog({ open, onOpenChange, ssoAccount, onSuccess }: P
               className={fieldClass} />
           </div>
         )}
-        {error && <p className="text-xs text-red-500">{error}</p>}
+        {error && <p className="text-[16px] sm:text-xs text-red-500">{error}</p>}
         <button type="button" disabled={pending} onClick={() => void submit()}
           className="w-full rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
           {pending ? 'Сохраняем…' : 'Сменить пин'}

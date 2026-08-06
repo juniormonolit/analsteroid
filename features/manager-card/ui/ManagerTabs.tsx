@@ -395,7 +395,7 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
               <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
                 Сумма, {currency}
                 <input value={amount} onChange={e => setAmount(e.target.value)}
-                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-right tabular-nums" placeholder="100" />
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-sm text-right tabular-nums" placeholder="100" />
               </label>
               {ctx.budget && (
                 <div className="text-xs text-[var(--color-text-muted)]">
@@ -405,7 +405,7 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
               <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
                 Комментарий (обязателен — за что поощрение)
                 <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} maxLength={500}
-                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm" />
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-sm" />
               </label>
             </>
           ) : (
@@ -433,7 +433,7 @@ function ManualOpsModal({ managerId, managerName, kind, ctx, onClose, onDone }: 
               <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
                 Комментарий (опционально)
                 <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} maxLength={500}
-                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm" />
+                  className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-sm" />
               </label>
             </>
           )}
@@ -1072,7 +1072,7 @@ export function RubWalletBlock({ managerId, isSelf, extra, currencyName }: {
             autoFocus type="number" inputMode="numeric" value={amountInput}
             onChange={e => setAmountInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submitAmount(); }}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm text-right tabular-nums"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-sm text-right tabular-nums"
             placeholder="1000"
           />
         </label>
@@ -1792,7 +1792,7 @@ export function InventoryTab({ managerId, isSelf }: { managerId: string; isSelf:
         <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Пожелание (дата и т.п.) — необязательно
           <textarea autoFocus value={activateComment} onChange={e => setActivateComment(e.target.value)} rows={3}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm" />
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-sm" />
         </label>
         <div className="mt-3 flex justify-end gap-2">
           <button type="button" onClick={() => setActivatingRow(null)} className="rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">Отмена</button>
@@ -1898,7 +1898,7 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
             onBlur={() => setTimeout(() => setToOpen(false), 120)}
             placeholder="Начните вводить имя…"
             aria-label="Получатель перевода"
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-base sm:text-sm text-[var(--color-text)]"
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-sm text-[var(--color-text)]"
           />
           {toOpen && (
             <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-overlay)] p-1 shadow-xl">
@@ -1926,12 +1926,12 @@ export function TransferBlock({ balance, currencyName }: { balance: number; curr
         <label className="flex w-28 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Сумма
           <input value={amount} onChange={e => setAmount(e.target.value)} placeholder="100"
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-right text-sm tabular-nums text-[var(--color-text)]" />
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-right text-[16px] sm:text-sm tabular-nums text-[var(--color-text)]" />
         </label>
         <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Комментарий (получатель увидит)
           <input value={comment} onChange={e => setComment(e.target.value)} maxLength={300} placeholder="С днём рождения!"
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-[var(--color-text)]" />
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-sm text-[var(--color-text)]" />
         </label>
         <button type="button" disabled={send.isPending || to === '' || !amount.trim() || balance <= 0}
           onClick={requestTransferConfirm}

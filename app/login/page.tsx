@@ -31,8 +31,12 @@ export default function LoginPage() {
     setLoading(false);
   }
 
+  // min-h-dvh, а не min-h-screen — правило 7 CLAUDE.md: на мобильном Safari
+  // 100vh считается БЕЗ адресной строки, и центрированная карточка входа уезжает
+  // частично под неё. Экран входа — первое, что видит человек при холодном старте
+  // PWA, поэтому здесь это не мелочь.
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)]">
+    <div className="min-h-dvh flex items-center justify-center bg-[var(--color-bg)]">
       <div className="w-full max-w-sm bg-[var(--color-bg-surface)] rounded-xl shadow-lg p-8">
         <h1 className="flex flex-col items-center gap-2.5 text-xl font-semibold text-[var(--color-text)] mb-6">
           <span className="flex items-center gap-2.5">
@@ -51,7 +55,11 @@ export default function LoginPage() {
               type="text"
               value={login}
               onChange={e => setLogin(e.target.value)}
-              className="w-full px-3 py-2 border border-[var(--color-border)] rounded-lg text-sm outline-none focus:border-[var(--color-border-focus)]"
+              // text-[16px] sm:text-sm — правило 9 CLAUDE.md: кегль ниже 16px
+              // заставляет iOS зумить страницу при фокусе, и человек попадает на
+              // увеличенную форму входа, из которой ещё надо выщипываться.
+              // min-h-11 — тач-цель 44px (правило 6): py-2 давало 37px.
+              className="w-full min-h-11 px-3 py-2 border border-[var(--color-border)] rounded-lg text-[16px] sm:text-sm outline-none focus:border-[var(--color-border-focus)]"
               autoFocus
               required
             />
@@ -63,7 +71,11 @@ export default function LoginPage() {
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-[var(--color-border)] rounded-lg text-sm outline-none focus:border-[var(--color-border-focus)]"
+              // text-[16px] sm:text-sm — правило 9 CLAUDE.md: кегль ниже 16px
+              // заставляет iOS зумить страницу при фокусе, и человек попадает на
+              // увеличенную форму входа, из которой ещё надо выщипываться.
+              // min-h-11 — тач-цель 44px (правило 6): py-2 давало 37px.
+              className="w-full min-h-11 px-3 py-2 border border-[var(--color-border)] rounded-lg text-[16px] sm:text-sm outline-none focus:border-[var(--color-border-focus)]"
               required
             />
           </div>
@@ -71,7 +83,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-text-inverse)] rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
+            className="w-full min-h-11 py-2 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-[var(--color-text-inverse)] rounded-lg text-sm font-medium transition-colors disabled:opacity-60"
           >
             {loading ? 'Вход...' : 'Войти'}
           </button>

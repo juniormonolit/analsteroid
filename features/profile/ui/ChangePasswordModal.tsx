@@ -35,7 +35,7 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   }
 
   const inputCls =
-    'w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-base sm:text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]';
+    'w-full border border-[var(--color-border)] rounded-lg px-3 py-2 text-[16px] sm:text-sm bg-[var(--color-bg)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]';
 
   return (
     <Modal
@@ -71,14 +71,14 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
               Новый пароль
             </label>
             <input type="password" autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className={inputCls} />
-            {tooShort && <span className="text-xs text-red-500">Не короче 8 символов</span>}
+            {tooShort && <span className="text-[16px] sm:text-xs text-red-500">Не короче 8 символов</span>}
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
               Новый пароль ещё раз
             </label>
             <input type="password" autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }} className={inputCls} />
-            {mismatch && <span className="text-xs text-red-500">Пароли не совпадают</span>}
+            {mismatch && <span className="text-[16px] sm:text-xs text-red-500">Пароли не совпадают</span>}
           </div>
 
           {error && <div className="text-sm text-red-500">{error}</div>}
