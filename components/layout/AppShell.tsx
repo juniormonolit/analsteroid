@@ -9,6 +9,7 @@ import {
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users,
 } from 'lucide-react';
+import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
 import { Avatar } from '@/components/ui/Avatar';
@@ -697,6 +698,14 @@ function SidebarBody({
 
 export function AppShell({ children, user }: { children: React.ReactNode; user: SessionUser }) {
   const pathname = usePathname();
+  // Внутри Битрикса основное меню приложения НЕ показываем (правка владельца
+  // 05.08: «зачем-то основное меню показывается… внутри Битрикса не надо,
+  // только ЛК»): у портала своя навигация, а наша сюда добавляет второй уровень
+  // меню и уводит человека из ЛК на страницы, которые всё равно не фреймятся
+  // (CSP разрешает порталу только /profile/*). Режим спрашиваем у useAppMode —
+  // правило CLAUDE.md №11, никаких собственных проверок window.self.
+  const { mode } = useAppMode();
+  const embedded = mode === 'bitrix-iframe';
   // Дефолт — сайдбар всегда развёрнут, включая Главную (задача 1688, кейс 6
   // UI/UX-аудита: владелец отменил спецкейс «Главная — свёрнутая рельса» из
   // брифа Главной, чтобы поведение было одинаковым на всех страницах). Ручной
@@ -724,11 +733,14 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           авторизованный контур — дальше везде лёгкий <MltCoin/> через <use>. */}
       <MltCoinDefs />
       <div className="flex h-dvh overflow-hidden">
-        {/* Desktop sidebar (на <md скрыт — вместо него drawer) */}
+        {/* Desktop sidebar (на <md скрыт — вместо него drawer).
+            Внутри Битрикса не рисуем вовсе: там своя навигация портала, а ЛК
+            имеет собственную рельсу разделов. */}
         {/* group + relative — для ручки сворачивания на правой кромке (правка
             Иосифа 16.07: кнопка в шапке «бесила»; паттерн Notion/Linear — круглая
             ручка по центру кромки, hover-reveal: на десктопе появляется при
             наведении на сайдбар, на таче видна всегда — правило CLAUDE.md №5). */}
+        {!embedded && (
         <aside
           className="group relative hidden md:flex flex-col shrink-0 bg-[var(--color-sidebar-bg)] border-r border-[var(--color-sidebar-border)] transition-all duration-200 [backdrop-filter:var(--glass-blur)]"
           style={{ width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED }}
@@ -786,9 +798,11 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
           />
         </aside>
+        )}
 
-        {/* Mobile drawer */}
-        {mobileOpen && (
+        {/* Mobile drawer — тоже только вне Битрикса (иначе бургер в топбаре
+            открывал бы меню, которого внутри портала быть не должно). */}
+        {!embedded && mobileOpen && (
           <div className="fixed inset-0 z-50 md:hidden">
             <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
             <aside className="relative flex flex-col h-full w-[260px] max-w-[80vw] bg-[var(--color-sidebar-bg)] shadow-[0_0_24px_rgba(0,0,0,0.12)] [backdrop-filter:var(--glass-blur)]">
@@ -823,7 +837,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           {/* Mobile topbar — гамбургер убран (задача 2764): его роль теперь
               у «Ещё» в нижнем таб-баре (BottomTabBar ниже), два разных
               контрола на одно и то же действие — лишний хром на 375px. */}
-          <div className="md:hidden flex items-center gap-1.5 h-12 px-3 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0 [backdrop-filter:var(--glass-blur)]">
+          <div className={`${embedded ? 'hidden' : 'md:hidden'} flex items-center gap-1.5 h-12 px-3 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0 [backdrop-filter:var(--glass-blur)]`}>
             <Link href="/home" className="flex items-center gap-1.5 min-w-0" title="На главную">
               <BrandLogo size={20} className="shrink-0" />
               <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
