@@ -15,8 +15,11 @@
 -- хранится — отчёт всегда про «сегодня», иначе сохранённый шаблон однажды
 -- соберёт отчёт за прошлый март и человек этого не заметит.
 --
--- СИСТЕМНАЯ БД (YC), вручную через migrations/run_system.mjs, ОТДЕЛЬНО на dev
--- (junibaseone) и prod (system).
+-- СИСТЕМНАЯ БД (YC), вручную, ОТДЕЛЬНО на dev (junibaseone) и prod (system):
+--   с ноутбука: node migrations/run_local.mjs migrations/156_report_templates.sql
+--   с сервера:  node migrations/run_system.mjs migrations/156_report_templates.sql
+-- run_system.mjs — СЕРВЕРНЫЙ (внутри зашиты пути /home/junior/…), на ноутбуке
+-- падает с MODULE_NOT_FOUND про pg.
 -- DOWN: DROP TABLE report_templates;
 
 CREATE TABLE IF NOT EXISTS report_templates (
