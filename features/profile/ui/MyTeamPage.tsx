@@ -21,6 +21,8 @@ import { Users } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { useUrlState, enumParam } from '@/lib/hooks/useUrlState';
 import { DeptRosterGrid } from './DeptRosterGrid';
+import { LeaderSkills } from '@/features/manager-card/ui/LeaderSkills';
+import { PlanFactStrip } from '@/features/manager-card/ui/PlanFactStrip';
 import type { PeerRosterResult } from '@/features/profile/engine/peerRoster';
 
 interface DeptSummary {
@@ -146,6 +148,16 @@ function LeadView() {
           <div className="text-sm text-red-500">Не удалось собрать сводку</div>
         )}
       </div>
+
+      {/* Агрегат отдела переехал СЮДА из вкладки «Профиль» (правка владельца
+          06.08: «у меня не может быть своего профиля?»). Раньше /profile у
+          любого руководителя подменялся агрегатом отдела — решение от 29.07,
+          когда отдельной страницы «Мой отдел» ещё не было. С её появлением
+          отдел показывался ДВАЖДЫ, а личного профиля у руководителя не
+          оставалось вовсе: ни наград, ни кошелька, ни магазина, ни оформления.
+          Теперь /profile — всегда своя карточка, а отдел живёт здесь. */}
+      <LeaderSkills />
+      <PlanFactStrip managerId="my" mode="department" />
 
       {/* ФИФА-сетка подчинённых — свой селектор отдела/периода и ссылка
           «Карточка отдела» внутри компонента. */}
