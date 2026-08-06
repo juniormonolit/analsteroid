@@ -47,7 +47,15 @@ export function BadgeCard({ item }: { item: ShelfItem }) {
               <span className="text-xs font-bold text-[var(--color-accent)]">×{item.count}</span>
             )}
           </div>
-          <div className="text-xs text-[var(--color-text-muted)] line-clamp-2" title={item.description}>{item.description}</div>
+          {/* Описание ЦЕЛИКОМ, без обрезки (правка владельца 05.08: «текст в
+              наградах обрезается… не так много там не влезает-то»). Замер по
+              боевому каталогу: самое длинное описание — 161 символ, среднее 89,
+              самое длинное имя — 29. В самой узкой сетке (карточка ~300px,
+              текст 12px ≈ 42 знака в строке) 161 символ укладывается в 4 строки,
+              поэтому min-h держит место под 4 строки — карточки в ряду не пляшут
+              по высоте, а текст не режется. Лимит на ввод новых — 200 символов
+              (см. app/api/settings/badges/route.ts), запас к текущему максимуму. */}
+          <div className="text-xs text-[var(--color-text-muted)] min-h-[4.2em]">{item.description}</div>
         </div>
       </div>
       {item.tiered && item.tiers.length > 0 && (

@@ -61,6 +61,9 @@ function slugify(name: string): string {
   return slug || 'badge';
 }
 
+/** Максимум символов в описании награды — см. комментарий у description. */
+export const BADGE_DESC_MAX = 200;
+
 export async function POST(req: Request) {
   const session = await getSession();
   const err = superadminError(session);
@@ -85,8 +88,12 @@ export async function POST(req: Request) {
 
   const tiered = criteria.template === 'top_metric' && criteria.tieredScopes === true;
   const icon = typeof body.icon === 'string' && body.icon.trim() ? body.icon.trim().slice(0, 16) : '🏅';
+  // Лимит описания — 200 символов (правка владельца 05.08: «при создании новой
+  // введи лимит на символы»). Порог взят с запасом к боевому максимуму (161) и
+  // согласован с вёрсткой карточки: 200 знаков — те же 4 строки в узкой сетке,
+  // ничего не режется. Раньше стояло 1000 — такой текст карточку бы разорвал.
   const description = typeof body.description === 'string' && body.description.trim()
-    ? body.description.trim().slice(0, 1000)
+    ? body.description.trim().slice(0, BADGE_DESC_MAX)
     : describeCustom(criteria);
   const enabled = body.enabled !== false;
   // Секретная ачивка (миграция 152): не показывается в списке неполученных.

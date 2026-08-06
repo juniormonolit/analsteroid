@@ -355,7 +355,12 @@ function CreateBadgeModal({ currencyName, onClose, onCreated }: {
             ))}
           </div>
           <Field label="Описание (пусто — сгенерируется из параметров)">
-            <textarea value={description} onChange={e => setDescription(e.target.value)} maxLength={1000} rows={2} className={inputCls} />
+            {/* Лимит 200 символов (правка владельца 05.08): столько гарантированно
+                влезает в карточку награды без обрезки — боевой максимум 161. */}
+            <textarea value={description} onChange={e => setDescription(e.target.value)} maxLength={200} rows={3} className={inputCls} />
+            <span className={`text-[11px] ${description.length > 180 ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`}>
+              {description.length} / 200 — столько влезает в карточку без обрезки
+            </span>
           </Field>
 
           <div className="flex flex-wrap items-end gap-3">

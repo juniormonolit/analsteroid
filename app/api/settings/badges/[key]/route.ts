@@ -27,7 +27,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ key: s
 
   if (typeof body.enabled === 'boolean') push('enabled', body.enabled);
   if (typeof body.name === 'string' && body.name.trim()) push('name', body.name.trim().slice(0, 200));
-  if (typeof body.description === 'string') push('description', body.description.slice(0, 1000));
+  // Тот же лимит, что при создании (правка владельца 05.08): 200 символов —
+  // столько гарантированно влезает в карточку награды без обрезки.
+  if (typeof body.description === 'string') push('description', body.description.slice(0, 200));
   if (typeof body.icon === 'string' && body.icon.trim()) push('icon', body.icon.trim().slice(0, 16));
   if (body.criteria !== undefined) {
     if (typeof body.criteria !== 'object' || body.criteria === null || Array.isArray(body.criteria)) {

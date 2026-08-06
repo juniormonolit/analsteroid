@@ -45,7 +45,9 @@ function AchievementCard({ item }: { item: CollectionItem }) {
           {item.count > 1 && <span className="text-[11px] font-bold text-[var(--color-accent)]">×{item.count}</span>}
           {item.isSecret && <span className="text-[11px]" title="Секретная ачивка">🤫</span>}
         </div>
-        <div className="text-[12px] text-[var(--color-text-muted)] line-clamp-2">{item.description}</div>
+        {/* Без обрезки — см. BadgeCard: 161 символ максимум по боевому каталогу,
+            min-h под 4 строки держит ровную высоту карточек в ряду. */}
+        <div className="text-[12px] text-[var(--color-text-muted)] min-h-[4.2em]">{item.description}</div>
         <div className="mt-1 flex items-center gap-2 flex-wrap">
           <span
             className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
