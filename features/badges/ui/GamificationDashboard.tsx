@@ -39,7 +39,8 @@ interface DashboardData {
   circulation: { totalEball: number; totalRub: number };
   // Рублёвая смета (правка владельца 05.08): фактическая стоимость геймификации.
   rubEconomics: {
-    rate: number; onHandMlt: number; onHandRub: number;
+    rate: number; budgetRub: number; budgetUsedRub: number; budgetForecastRub: number;
+    onHandMlt: number; onHandRub: number;
     emittedAllMlt: number; emittedAllRub: number;
     emittedMonthMlt: number; emittedMonthRub: number;
     spentMaterialRub: number; spentPayoutRub: number; spentTotalRub: number;
@@ -159,6 +160,38 @@ export function GamificationDashboard() {
             по курсу {rub.rate.toLocaleString('ru-RU')} ₽ за 1 {currencyName} (Настройки → Награды)
           </span>
         </div>
+        {/* Счётчик бюджета (запрос владельца 06.08): сколько из месячного потолка
+            уже «напечатано» эмиссией и куда идём по текущему темпу. Сравниваем
+            именно с эмиссией: каждый начисленный балл — обещание, за которым
+            рано или поздно придут. */}
+        {(() => {
+          const used = rub.budgetUsedRub, plan = rub.budgetRub, fc = rub.budgetForecastRub;
+          const pct = plan > 0 ? Math.round((used / plan) * 100) : 0;
+          const fcPct = plan > 0 ? Math.round((fc / plan) * 100) : 0;
+          const color = fcPct > 100 ? 'var(--color-negative)' : fcPct > 85 ? '#e8590c' : 'var(--color-positive)';
+          return (
+            <div className="mb-3 rounded-xl border px-3.5 py-3" style={{ borderColor: `color-mix(in srgb, ${color} 45%, transparent)` }}>
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="text-[13px] font-bold text-[var(--color-text)]">Бюджет месяца</span>
+                <span className="text-[13px] tabular-nums" style={{ color }}>
+                  {rubFmt(used)} из {rubFmt(plan)} · {pct}%
+                </span>
+                <span className="ml-auto text-[12px] tabular-nums text-[var(--color-text-muted)]">
+                  прогноз до конца месяца: <b style={{ color }}>{rubFmt(fc)}</b> ({fcPct}%)
+                </span>
+              </div>
+              <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
+                <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, pct)}%`, backgroundColor: color }} />
+              </div>
+              {fcPct > 100 && (
+                <div className="mt-1.5 text-[11px]" style={{ color }}>
+                  Идём с перерасходом на {rubFmt(fc - plan)} — стоит подрезать самые массовые награды либо поднять потолок.
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
             <div className="text-[11px] text-[var(--color-text-muted)]">Реально потрачено</div>

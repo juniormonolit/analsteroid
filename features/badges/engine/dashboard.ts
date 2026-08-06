@@ -179,6 +179,12 @@ export async function getBalanceRows(db: Pool): Promise<BalanceRow[]> {
 
 export interface RubEconomics {
   rate: number;
+  /** Месячный потолок расходов в рублях (миграция 154). */
+  budgetRub: number;
+  /** Эмиссия ТЕКУЩЕГО месяца в рублях — она и сравнивается с бюджетом. */
+  budgetUsedRub: number;
+  /** Прогноз эмиссии до конца месяца по текущему темпу. */
+  budgetForecastRub: number;
   onHandMlt: number;      // MLT на руках у сотрудников
   onHandRub: number;      // они же в рублях — обязательство компании
   emittedAllMlt: number;
@@ -193,10 +199,11 @@ export interface RubEconomics {
 }
 
 export async function getRubEconomics(db: Pool): Promise<RubEconomics> {
-  const rateRes = await db.query<{ rate: string }>(
-    'SELECT COALESCE(mlt_rub_rate, 7.5) AS rate FROM badge_coin_settings WHERE id = 1',
-  ).catch(() => ({ rows: [{ rate: '7.5' }] }));
-  const rate = Number(rateRes.rows[0]?.rate ?? 7.5);
+  const rateRes = await db.query<{ rate: string; budget: string }>(
+    'SELECT COALESCE(mlt_rub_rate, 5) AS rate, COALESCE(monthly_budget_rub, 175000) AS budget FROM badge_coin_settings WHERE id = 1',
+  ).catch(() => ({ rows: [{ rate: '5', budget: '175000' }] }));
+  const rate = Number(rateRes.rows[0]?.rate ?? 5);
+  const budgetRub = Number(rateRes.rows[0]?.budget ?? 175000);
 
   const [circ, emitAll, emitMonth, inv, payout] = await Promise.all([
     db.query<{ mlt: string }>(
@@ -232,8 +239,18 @@ export async function getRubEconomics(db: Pool): Promise<RubEconomics> {
   const spentPayoutRub = Number(payout.rows[0]?.rub ?? 0);
   const spentMaterialRub = materialUsed * rate;
 
+  // Прогноз: линейная экстраполяция по прошедшей доле месяца. Грубо, но
+  // честно — и достаточно, чтобы вовремя увидеть перерасход.
+  const now = new Date();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const monthProgress = Math.max(0.05, now.getDate() / daysInMonth);
+  const budgetUsedRub = emittedMonthMlt * rate;
+
   return {
     rate,
+    budgetRub,
+    budgetUsedRub,
+    budgetForecastRub: budgetUsedRub / monthProgress,
     onHandMlt,
     onHandRub: onHandMlt * rate,
     emittedAllMlt,
