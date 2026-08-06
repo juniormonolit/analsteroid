@@ -13,11 +13,17 @@
 
 const CANDIDATES = ['.ts', '.tsx', '/index.ts', '/index.tsx'];
 
+/** Алиас `@/*` из tsconfig — корень проекта. */
+const ROOT = new URL('../', import.meta.url).href;
+
 export async function resolve(specifier, context, nextResolve) {
+  if (specifier.startsWith('@/')) {
+    return resolve(ROOT + specifier.slice(2), context, nextResolve);
+  }
   try {
     return await nextResolve(specifier, context);
   } catch (err) {
-    if (!specifier.startsWith('.') && !specifier.startsWith('/')) throw err;
+    if (!specifier.startsWith('.') && !specifier.startsWith('/') && !specifier.startsWith('file:')) throw err;
     for (const ext of CANDIDATES) {
       try {
         return await nextResolve(specifier + ext, context);

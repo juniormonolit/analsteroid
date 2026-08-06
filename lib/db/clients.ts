@@ -1,4 +1,4 @@
-import { Pool, PoolConfig } from 'pg';
+import { Pool, type PoolConfig } from 'pg';
 import fs from 'fs';
 import path from 'path';
 

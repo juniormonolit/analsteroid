@@ -22,12 +22,20 @@ export type ValueFormat =
   | 'rub'
   /** авто: млн / тыс / ₽ по величине — личный отчёт менеджера */
   | 'money'
-  /** 87% */
+  /** 87% — считается из доли {num, den} */
   | 'pct0'
-  /** 87,3% */
+  /** 87,3% — считается из доли {num, den} */
   | 'pct1'
+  /** 87% — процент уже посчитан (так отдаёт каталог метрик) */
+  | 'pctv0'
+  /** 87,3% — процент уже посчитан */
+  | 'pctv1'
   /** 12 */
-  | 'count';
+  | 'count'
+  /** 12,3 */
+  | 'dec1'
+  /** 12,34 */
+  | 'dec2';
 
 /**
  * Доля, из которой считается процент. Знаменатель отдельным полем, а не
@@ -86,8 +94,9 @@ export function fmtPct1Value(v: number | null): string {
 
 export function formatValue(value: MetricValue, format: ValueFormat): string {
   if (format === 'pct0' || format === 'pct1') {
-    // Процент без знаменателя посчитать нельзя — это ошибка вызова, а не «0%».
-    if (!isRatio(value)) return value === null ? DASH : fmtPct1Value(value as number);
+    // Доля обязана прийти знаменателем: «нет плана» и «план не выполнен» —
+    // разные ответы, и различить их можно только по den.
+    if (!isRatio(value)) return DASH;
     return format === 'pct0' ? fmtPct0(value.num, value.den) : fmtPct1(value.num, value.den);
   }
   if (value === null) return DASH;
@@ -97,7 +106,11 @@ export function formatValue(value: MetricValue, format: ValueFormat): string {
     case 'mln2': return fmtMln(n, 2);
     case 'rub': return fmtRub(n);
     case 'money': return fmtMoney(n);
+    case 'pctv0': return `${Math.round(n)}%`;
+    case 'pctv1': return fmtPct1Value(n);
     case 'count': return String(Math.round(n));
+    case 'dec1': return comma(n, 1);
+    case 'dec2': return comma(n, 2);
   }
 }
 
