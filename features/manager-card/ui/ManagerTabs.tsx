@@ -7,11 +7,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Lock, Camera, Sparkles } from 'lucide-react';
+import Link from 'next/link';
+import { Lock, Sparkles } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { coverStyle } from '@/lib/profile/covers';
-import { CoverPicker } from '@/features/profile/ui/CoverPicker';
-import { CosmeticsPicker } from '@/features/profile/ui/CosmeticsPicker';
 import { backgroundCss, cosmeticById } from '@/lib/profile/cosmetics';
 import { ProfileFeed } from '@/features/profile/ui/ProfileFeed';
 import { Modal } from '@/components/ui/Modal';
@@ -502,8 +501,6 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
   const { data: manualCtx } = useManualContext(managerId, !isSelf && !forceReadOnly);
   const [manualKind, setManualKind] = useState<'bonus' | 'penalty' | null>(null);
   // Пикер обложки (ЛК-соцсетка этап 2) — только в собственном ЛК.
-  const [coverPickerOpen, setCoverPickerOpen] = useState(false);
-  const [cosmeticsOpen, setCosmeticsOpen] = useState(false);
   // Оформление профиля (задача #34): рамка аватара и эмодзи-фон под шапкой.
   const frameRing = cosmeticById(extra?.frameId)?.ring ?? null;
   const profileBg = backgroundCss(cosmeticById(extra?.backgroundId));
@@ -559,26 +556,23 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
                кнопки видно, а клик забирает оно. Оба элемента с z-index:auto, и
                спор решает порядок в DOM; положительный z-index у потомка обложки
                поднимает кнопки над телом карточки, не меняя ничего визуально. */
-            <div className="absolute right-2 bottom-2 z-10 flex gap-1.5">
-              <button
-                onClick={() => setCosmeticsOpen(true)}
+            <div className="absolute right-2 bottom-2 z-10">
+              {/* Одна кнопка-ССЫЛКА вместо двух модалок (решение владельца 06.08:
+                  «почему не вынести обложку и так далее в настройки в оформление?
+                  там выбираешь всё спокойно с превьюшкой»). Точку входа на
+                  обложке сохранили — её здесь и ищут глазами, как в соцсетях, —
+                  но выбор переехал туда, где есть место на сетку превью и видно
+                  СОЧЕТАНИЕ обложки, рамки и фона. */}
+              <Link
+                href="/profile/settings?tab=appearance"
                 className="tap-target inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
-                title="Рамка аватара и фон профиля"
+                title="Обложка, рамка аватара и фон профиля"
               >
                 <Sparkles size={13} /> Оформление
-              </button>
-              <button
-                onClick={() => setCoverPickerOpen(true)}
-                className="tap-target inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
-                title="Сменить обложку"
-              >
-                <Camera size={13} /> Обложка
-              </button>
+              </Link>
             </div>
           )}
         </div>
-        {isSelf && !forceReadOnly && <CoverPicker open={coverPickerOpen} onOpenChange={setCoverPickerOpen} />}
-        {isSelf && !forceReadOnly && <CosmeticsPicker open={cosmeticsOpen} onOpenChange={setCosmeticsOpen} />}
         {/* relative ОБЯЗАТЕЛЕН (живой баг со скрина владельца): обложка выше —
             position:relative и по правилам stacking-порядка рисуется ПОВЕРХ
             непозиционированного соседа; без relative здесь паттерн обложки

@@ -14,6 +14,7 @@ import { RopDigestSettings } from './RopDigestSettings';
 import { MyFeedbackLog } from './MyFeedbackLog';
 import { PinSettingsCard } from './PinSettingsCard';
 import { DirectAccessCard } from './DirectAccessCard';
+import { AppearanceSettings } from './AppearanceSettings';
 
 // Личные настройки (задача 3045, §1: `/profile/settings?tab=personal|notifications`,
 // модалка пароля — `?modal=password`). Раньше это была вся страница `/profile` с
@@ -45,7 +46,7 @@ const cardCls = 'rounded-lg border border-[var(--color-border)] bg-[var(--color-
 // 3045 — вкладок осталось две, «Мой отдел» и корзина уехали на свои адреса). Навигация —
 // тот же паттерн, что SettingsSidebar в /settings: вертикальная рельса на md+,
 // горизонтальные табы на телефоне.
-const PROFILE_TABS = ['personal', 'notifications'] as const;
+const PROFILE_TABS = ['personal', 'appearance', 'notifications'] as const;
 type ProfileTab = (typeof PROFILE_TABS)[number];
 
 export function ProfileSettingsPage() {
@@ -82,6 +83,10 @@ export function ProfileSettingsPage() {
 
   const tabs: { key: ProfileTab; label: string }[] = [
     { key: 'personal', label: 'Персонализация' },
+    // «Оформление» — слово владельца (06.08). Отдельно от «Персонализации»
+    // намеренно: та про ИНТЕРФЕЙС (режим отчётов, масштаб таблиц, тема), а эта
+    // про то, как выглядит профиль для коллег — обложка, рамка, фон.
+    { key: 'appearance', label: 'Оформление' },
     { key: 'notifications', label: 'Уведомления' },
   ];
 
@@ -262,6 +267,13 @@ export function ProfileSettingsPage() {
                     показывал витринные только админу, сервер фильтрует сам. */}
                 <ReportsTrashCard />
               </>
+            )}
+
+            {tab === 'appearance' && (
+              <AppearanceSettings
+                name={me?.user.displayName ?? '?'}
+                avatarUrl={me?.user.avatarUrl ?? null}
+              />
             )}
 
             {tab === 'notifications' && (
