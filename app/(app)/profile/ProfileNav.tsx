@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useNotifications } from '@/features/profile/ui/NotificationsPage';
-import { IdCard, Settings, Users, UsersRound, Zap, Bell } from 'lucide-react';
+import { IdCard, Settings, Users, UsersRound, Zap, Bell, FileText } from 'lucide-react';
 
 // Мобильная навигация кабинета (задача 3045, §1): отдельные МАРШРУТЫ, а не
 // локальный useState — ссылку на вкладку можно прислать коллеге, «назад»
@@ -14,12 +14,19 @@ import { IdCard, Settings, Users, UsersRound, Zap, Bell } from 'lucide-react';
 // перешла на компактные пункты «иконка сверху, подпись 10px снизу» — паттерн
 // нижней навигации соцсетей; пять пунктов по ~72px укладываются в 360px.
 // `min-h-11` — правило 6 (тач-цель 44px), фактическая высота пункта ~50px.
+//
+// С «Мои отчётом» (06.08) пунктов семь, на 375px это ~53px на пункт. Поэтому
+// подписи здесь КОРОЧЕ, чем в десктопной рельсе: «Отчёт» и «Отдел» вместо
+// «Мой отчёт»/«Мой отдел» — иначе 10px-текст начинает переноситься. Следующий
+// пункт в эту полосу уже не влезет: понадобится — переносить на скролл по
+// правилу 12 (с градиентом и автоскроллом активной вкладки) или на «Ещё».
 const ITEMS = [
   { href: '/profile', label: 'Кабинет', Icon: IdCard },
-  { href: '/profile/team', label: 'Мой отдел', Icon: Users },
+  { href: '/profile/report', label: 'Отчёт', Icon: FileText },
+  { href: '/profile/team', label: 'Отдел', Icon: Users },
   { href: '/profile/pulse', label: 'Движуха', Icon: Zap },
   { href: '/profile/people', label: 'Коллеги', Icon: UsersRound },
-  { href: '/profile/notifications', label: 'Уведомл.', Icon: Bell, badge: 'unread' as const },
+  { href: '/profile/notifications', label: 'Увед.', Icon: Bell, badge: 'unread' as const },
   { href: '/profile/settings', label: 'Настройки', Icon: Settings },
 ] as const;
 
@@ -41,7 +48,7 @@ export function ProfileNav() {
           <Link
             key={href}
             href={href}
-            className={`min-h-11 flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 border-b-2 -mb-px transition-colors ${
+            className={`min-h-11 flex-1 flex flex-col items-center justify-center gap-0.5 px-0.5 py-1.5 border-b-2 -mb-px transition-colors ${
               active
                 ? 'border-[var(--color-accent)] text-[var(--color-accent)] font-medium'
                 : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'

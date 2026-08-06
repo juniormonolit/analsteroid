@@ -14,15 +14,15 @@
 
 import {
   fmtDateRu,
-  formatValue,
   weekdayRu,
   type MetricValue,
   type ValueFormat,
 } from './format';
 import {
-  metricRow,
+  metricLine,
   renderDocument,
   type Block,
+  type Line,
   type ReportDocument,
   type Section,
 } from './document';
@@ -89,17 +89,17 @@ export function headerBlock(title: string, subtitle: SubtitleSpec): Block {
 /** Сводный блок: «[b]Метрика — итог[/b]» + строка на каждую сущность. */
 function overviewBlock(metric: ReportMetric, entities: ReportEntity[]): Block {
   return {
-    title: `${metric.label} — ${formatValue(metric.values[TOTAL] ?? null, metric.format)}`,
-    lines: entities.map(e => metricRow(e.title, formatValue(metric.values[e.key] ?? null, metric.format))),
+    title: metricLine(metric.label, metric.values[TOTAL] ?? null, metric.format),
+    lines: entities.map(e => metricLine(e.title, metric.values[e.key] ?? null, metric.format)),
   };
 }
 
 /** Блок одной колонки (сущности или итога): все метрики подряд. */
 function columnBlock(title: string, metrics: ReportMetric[], columnKey: string): Block {
-  const lines: string[] = [];
+  const lines: Line[] = [];
   for (const m of metrics) {
     if (m.gapBefore) lines.push('');
-    lines.push(metricRow(m.label, formatValue(m.values[columnKey] ?? null, m.format)));
+    lines.push(metricLine(m.label, m.values[columnKey] ?? null, m.format));
   }
   return { title, lines };
 }

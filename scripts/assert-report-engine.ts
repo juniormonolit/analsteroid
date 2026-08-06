@@ -16,9 +16,12 @@
  * Запуск: node --import ./scripts/ts-resolve-register.mjs scripts/assert-report-engine.ts
  */
 import {
-  buildReportText, TOTAL,
+  buildReportDocument, buildReportText, TOTAL,
   type ReportMetric, type ReportEntity,
 } from '../features/reports-builder/engine/buildReportText.ts';
+import {
+  buildAnimationPlan, renderPlanAt, renderPlanFull, TIMING,
+} from '../features/reports-builder/engine/animation.ts';
 import {
   buildPersonalReportText,
   type PersonalBucket, type PersonalReportInput,
@@ -26,6 +29,12 @@ import {
 
 let failures = 0;
 let passed = 0;
+
+function check(cond: boolean, label: string) {
+  if (cond) { passed++; return; }
+  failures++;
+  console.error(`FAIL ${label}`);
+}
 
 function eqText(actual: string, expected: string, label: string) {
   if (actual === expected) { passed++; return; }
@@ -573,6 +582,83 @@ personalCase('отрицательные суммы и шкала млн/тыс/
   week: bucket({ salesAmount: 1_000_000, planSales: 999_999 }),
   month: bucket({ salesAmount: 12_500_000, planSales: 10_000_000, reservationsAmount: 0 }),
   monthExtras: { primarySalesAmount: 12_000_000, repeatSalesAmount: 500_000, repeatSharePct: 4.0, convDealToSalePct: 0.05 },
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// АНИМАЦИЯ: собранный текст обязан совпасть с копируемым
+// ═══════════════════════════════════════════════════════════════════════════════
+// Главный инвариант анимации. Человек читает то, что «печатается», а копирует
+// то, что отдаёт движок — если эти два текста разойдутся хоть на пробел, он
+// отправит начальству не то, что видел. Проверяем на тех же данных, что и
+// эталоны выше.
+
+function animationCase(name: string, spec: Parameters<typeof buildReportDocument>[0]) {
+  const doc = buildReportDocument(spec);
+  const plan = buildAnimationPlan(doc);
+
+  eqText(renderPlanFull(plan), buildReportText(spec), `Анимация — собранный текст = копируемый (${name})`);
+
+  // Финальный кадр = готовый текст (иначе последнее слово повиснет недорисованным).
+  eqText(renderPlanAt(plan, plan.totalMs + 1).join('\n'), buildReportText(spec), `Анимация — финальный кадр (${name})`);
+
+  // Бюджет: пропуска нет, значит потолок обязан соблюдаться всегда.
+  check(plan.totalMs <= TIMING.budgetMs + 1, `Анимация — укладывается в ${TIMING.budgetMs / 1000} с (${name}): ${Math.round(plan.totalMs)} мс`);
+
+  // Монотонность: текст только прибавляется, ничего не пропадает и не мигает.
+  let prevLines = 0;
+  for (let t = 0; t <= plan.totalMs; t += Math.max(1, Math.floor(plan.totalMs / 40))) {
+    const lines = renderPlanAt(plan, t);
+    check(lines.length >= prevLines, `Анимация — строки не убывают (${name}, t=${t})`);
+    prevLines = lines.length;
+  }
+
+  // Нулевой момент: ничего, кроме первого слова, ещё не показано.
+  const first = renderPlanAt(plan, 0);
+  check(first.length === 1 && first[0].split(' ').length === 1, `Анимация — старт с одного слова (${name})`);
+}
+
+const animEntities = [
+  { key: 'ОС', title: 'Общестрой' },
+  { key: 'НЦ', title: 'Нулевой' },
+];
+const animValues = (a: number, b: number, total: number) => ({ 'ОС': a, 'НЦ': b, [TOTAL]: total });
+
+animationCase('короткий отчёт', {
+  title: 'Отчет МОСКВА',
+  subtitle: { style: 'za', date: '2026-08-05' },
+  entities: animEntities,
+  overview: [[{
+    label: '% ПЛАНА (ДЕНЬ)', format: 'pct0',
+    values: { 'ОС': { num: 9_900_000, den: 11_300_000 }, 'НЦ': { num: 6_450_000, den: 4_884_000 }, [TOTAL]: { num: 16_350_000, den: 16_184_000 } },
+  }]],
+  entityBlock: [
+    { label: 'План продаж', format: 'mln', values: animValues(11_300_000, 4_884_000, 16_184_000) },
+    { label: 'Сумма продаж', format: 'mln', values: animValues(9_900_000, 6_450_000, 16_350_000) },
+  ],
+  aggregate: { title: 'ИТОГО (ОС+НЦ)' },
+});
+
+// Длинный отчёт — тот случай, ради которого и вводился потолок: без сжатия
+// 40 метрик × 12 сущностей собирались бы заметно дольше 20 секунд.
+animationCase('длинный отчёт (12 сущностей × 40 метрик)', {
+  title: 'Отчет БОЛЬШОЙ',
+  subtitle: { style: 'weekday', date: '2026-08-05' },
+  entities: Array.from({ length: 12 }, (_, i) => ({ key: `e${i}`, title: `Подразделение ${i + 1}` })),
+  overview: [Array.from({ length: 3 }, (_, i) => ({
+    label: `% ПЛАНА (ОКНО ${i})`, format: 'pct1' as const,
+    values: Object.fromEntries([
+      ...Array.from({ length: 12 }, (_, k) => [`e${k}`, { num: k * 1000, den: 5000 }]),
+      [TOTAL, { num: 66_000, den: 60_000 }],
+    ]),
+  }))],
+  entityBlock: Array.from({ length: 40 }, (_, i) => ({
+    label: `Показатель номер ${i + 1}`, format: 'mln' as const,
+    values: Object.fromEntries([
+      ...Array.from({ length: 12 }, (_, k) => [`e${k}`, (k + 1) * 1_000_000]),
+      [TOTAL, 78_000_000],
+    ]),
+  })),
+  aggregate: { title: 'ИТОГО (ВСЁ)' },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

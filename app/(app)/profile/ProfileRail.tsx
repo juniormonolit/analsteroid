@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   IdCard, Users, UsersRound, Settings, ClipboardList, Contact,
   Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap, Bell, ClipboardCheck,
+  FileText,
 } from 'lucide-react';
 import { MANAGER_TABS, type ManagerTabKey } from '@/features/manager-card/ui/ManagerTabs';
 import { useNotifications } from '@/features/profile/ui/NotificationsPage';
@@ -88,6 +89,10 @@ export function ProfileRail({ mode, canManageRequests = false }: {
   }
 
   items.push(
+    {
+      key: 'report', href: '/profile/report', label: 'Мой отчёт', Icon: FileText,
+      active: pathname.startsWith('/profile/report'),
+    },
     {
       key: 'team', href: '/profile/team', label: 'Мой отдел', Icon: Users,
       active: pathname.startsWith('/profile/team'),
