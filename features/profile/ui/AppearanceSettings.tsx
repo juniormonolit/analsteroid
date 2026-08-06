@@ -108,7 +108,10 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
       }
       const it = items.find(x => x.id === id);
       if (!it) return { ok: false, reason: 'вариант не найден' };
-      return it.owned ? { ok: true, reason: null } : { ok: false, reason: `«${it.name}» не куплено` };
+      // Некупленное НЕ блокирует: кнопка ниже покупает и применяет одним кликом
+      // (правка владельца 06.08). Блокирует только незаработанная обложка — её
+      // за MLT не купить, она открывается уровнем класса XP.
+      return { ok: true, reason: null };
     };
     const results = (['cover', 'frame', 'background'] as Slot[]).map(s => ({ slot: s, ...check(s) }));
     return {
@@ -116,6 +119,14 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
       blockers: results.filter(r => !r.ok).map(r => r.reason).filter((v): v is string => !!v),
     };
   }, [tryOn, coverList, items, saved.cover, saved.frame, saved.background]);
+
+  // Что из примеренного ещё не куплено и во сколько это встанет.
+  const toBuy = (['frame', 'background'] as Slot[])
+    .map(slot => tryOn[slot])
+    .filter((id): id is string => !!id)
+    .map(id => items.find(x => x.id === id))
+    .filter((it): it is CosmeticItem => !!it && !it.owned);
+  const totalPrice = toBuy.reduce((sum, it) => sum + it.price, 0);
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['cosmetics-catalog'] });
@@ -126,7 +137,22 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
   };
 
   const apply = useMutation({
-    mutationFn: async () => {
+    // «Купить за столько-то и применить» одной кнопкой (правка владельца 06.08:
+    // «чтобы можно было выбрать комбинацию и в один клик купить и применить»).
+    // Порядок важен: сначала покупки, потом надевание — сервер не даст надеть
+    // то, чем человек ещё не владеет.
+    mutationFn: async (pinCode?: string) => {
+      for (const it of toBuy) {
+        const res = await fetch('/api/profile/cosmetics', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'buy', id: it.id, ...(pinCode ? { pin: pinCode } : {}) }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (json.pinRequired) { setPinFor('apply'); throw new Error('Подтвердите покупку пин-кодом'); }
+          throw new Error(json.error ?? `Не удалось купить «${it.name}»`);
+        }
+      }
       // Обложка и косметика — разные ручки; отправляем только изменённое.
       if (tryOn.cover && tryOn.cover !== saved.cover) {
         const res = await fetch('/api/profile/cover', {
@@ -148,7 +174,7 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
         if (!res.ok) throw new Error(json.error ?? 'Не удалось применить');
       }
     },
-    onSuccess: () => { setError(null); setTryOn({}); refresh(); },
+    onSuccess: () => { setError(null); setTryOn({}); setPinFor(null); setPin(''); refresh(); },
     onError: e => setError(e instanceof Error ? e.message : String(e)),
   });
 
@@ -179,10 +205,20 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
       <div className="sticky top-0 z-10 -mx-3 flex flex-col gap-2 bg-[var(--color-bg)] px-3 pb-2 pt-1 sm:-mx-6 sm:px-6">
         <section className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
           <div className="h-24 w-full" style={coverStyle(shown.cover)} />
-          <div
-            className="-mt-10 px-4 pb-3"
-            style={shownBg ? { background: shownBg.background, backgroundSize: shownBg.backgroundSize } : undefined}
-          >
+          {/* Фон рисуется ОТДЕЛЬНЫМ слоем от top-10 вниз, а не фоном самого
+              блока (баг со скрина владельца «выбор кастомного фона меняет
+              верстку»): блок поднят на -mt-10, и его собственный фон закрашивал
+              эти 40px обложки — при выборе фона обложка визуально становилась
+              ниже. Слой начинается там, где обложка заканчивается. */}
+          <div className="relative -mt-10 px-4 pb-3">
+            {shownBg && (
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 bottom-0 top-10"
+                style={{ background: shownBg.background, backgroundSize: shownBg.backgroundSize }}
+              />
+            )}
+            <div className="relative">
             <div className="flex flex-col items-center gap-1.5 text-center">
               <div className="rounded-[14px] p-1" style={frameRing ? { background: frameRing } : undefined}>
                 <div className={`rounded-[11px] shadow-md ${frameRing ? '' : 'ring-4 ring-[var(--color-bg-surface)]'}`}>
@@ -190,6 +226,7 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
                 </div>
               </div>
               <span className="text-sm font-semibold text-[var(--color-text)]">{name}</span>
+            </div>
             </div>
           </div>
         </section>
@@ -212,11 +249,16 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
             )}
             <button
               type="button"
-              disabled={!availability.dirty || availability.blockers.length > 0 || busy}
-              onClick={() => apply.mutate()}
+              disabled={!availability.dirty || availability.blockers.length > 0 || busy || totalPrice > balance}
+              onClick={() => apply.mutate(undefined)}
+              title={totalPrice > balance ? 'Не хватает MLT' : undefined}
               className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-medium text-white disabled:opacity-40"
             >
-              {apply.isPending ? 'Применяю…' : 'Применить'}
+              {apply.isPending
+                ? (toBuy.length > 0 ? 'Покупаю…' : 'Применяю…')
+                : totalPrice > 0
+                  ? `Купить за ${totalPrice} и применить`
+                  : 'Применить'}
             </button>
           </span>
         </div>
@@ -224,6 +266,11 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
         {availability.dirty && availability.blockers.length === 0 && (
           <p className="inline-flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)]">
             <Eye size={12} /> Это примерка — на профиле пока прежнее оформление.
+          </p>
+        )}
+        {totalPrice > 0 && totalPrice > balance && (
+          <p className="text-[12px] text-[var(--color-negative)]">
+            На примерку нужно {totalPrice} MLT, на балансе {balance}. Снимите часть выбора или заработайте.
           </p>
         )}
         {availability.blockers.length > 0 && (
@@ -249,7 +296,7 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
             <button
               type="button"
               disabled={!pin.trim() || busy}
-              onClick={() => buy.mutate({ id: pinFor, pinCode: pin.trim() })}
+              onClick={() => (pinFor === 'apply' ? apply.mutate(pin.trim()) : buy.mutate({ id: pinFor, pinCode: pin.trim() }))}
               className="min-h-11 rounded-lg bg-[var(--color-accent)] px-3 text-sm font-medium text-white disabled:opacity-50"
             >
               Подтвердить

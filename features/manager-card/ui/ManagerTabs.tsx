@@ -580,11 +580,20 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
         {/* Эмодзи-фон (задача #34) — на теле карточки под шапкой, а не на всей
             странице: так он виден и в чужом профиле, но не мешает читать данные
             во вкладках. Без купленного фона стиль пустой. */}
-        <div
-          className="relative px-4 sm:px-5 pb-5 -mt-20"
-          style={profileBg ? { background: profileBg.background, backgroundSize: profileBg.backgroundSize } : undefined}
-        >
-        <div className="flex flex-col items-center gap-3.5 text-center">
+        <div className="relative px-4 sm:px-5 pb-5 -mt-20">
+          {/* Фон — ОТДЕЛЬНЫМ слоем от top-20 вниз, а не фоном самого блока
+              (баг со скрина владельца «выбор кастомного фона меняет верстку»):
+              блок поднят на -mt-20, и его собственный фон закрашивал эти 80px
+              обложки — при выборе фона обложка визуально становилась ниже.
+              Слой начинается ровно там, где заканчивается обложка. */}
+          {profileBg && (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 bottom-0 top-20"
+              style={{ background: profileBg.background, backgroundSize: profileBg.backgroundSize }}
+            />
+          )}
+        <div className="relative flex flex-col items-center gap-3.5 text-center">
           {/* Радиус обёртки РАВЕН радиусу Avatar (size×0.11 ≈ 18px), не больше:
               ring — это box-shadow, он сам рисуется снаружи и сам добавляет свои
               +4px к радиусу. Прежний rounded-[22px] давал белые клинья в углах
