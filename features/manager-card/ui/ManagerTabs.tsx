@@ -550,8 +550,16 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
                владельца: кнопка оказывалась в левом верхнем углу): .tap-target
                задаёт position:relative и, идя в globals.css ПОЗЖЕ утилит
                Tailwind, молча перебивает .absolute — кнопка выпадала в поток.
-               Обёртке tap-target не нужен, кнопке внутри — нужен (зона 44px). */
-            <div className="absolute right-2 bottom-2 flex gap-1.5">
+               Обёртке tap-target не нужен, кнопке внутри — нужен (зона 44px).
+
+               z-10 ОБЯЗАТЕЛЕН (баг с живого прода 06.08: «Обложка не
+               нажимается»). Тело карточки ниже поднято на -mt-20 и имеет
+               position:relative — по DOM-порядку оно рисуется ПОВЕРХ нижних 80px
+               обложки, то есть поверх этих кнопок. Фон у него прозрачный, поэтому
+               кнопки видно, а клик забирает оно. Оба элемента с z-index:auto, и
+               спор решает порядок в DOM; положительный z-index у потомка обложки
+               поднимает кнопки над телом карточки, не меняя ничего визуально. */
+            <div className="absolute right-2 bottom-2 z-10 flex gap-1.5">
               <button
                 onClick={() => setCosmeticsOpen(true)}
                 className="tap-target inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur-sm hover:bg-black/50 transition-colors"
