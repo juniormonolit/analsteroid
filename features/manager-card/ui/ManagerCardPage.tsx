@@ -475,8 +475,14 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           </Link>
         </div>
       )}
-      {/* ── Табы ЛК (только карточка менеджера) ── */}
-      {tabbed && (
+      {/* ── Табы ЛК (только карточка менеджера) ──
+          externalNav — это свой ЛК (/profile), где навигацией рулит layout:
+          на десктопе левая рельса, на телефоне строка-селектор со шторкой
+          (ProfileMobileNav, задача «три уровня меню одновременно» 06.08). Своя
+          лента вкладок там не нужна ни на одной ширине — до 06.08 она пряталась
+          только на lg+, и на телефоне получалось ДВА неполных списка разделов
+          сразу. Чужие карточки (externalNav=false) свою ленту сохраняют. */}
+      {tabbed && !externalNav && (
         // min-w-0 — задача 2779 (владелец: свайп по табам утащил ВСЮ страницу
         // вбок, не только полосу вкладок). Причина: flex-item без min-w-0
         // держится за content-based минимальную ширину ребёнка — у ManagerTabBar
@@ -486,10 +492,8 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
         // лишний невидимый min-w-0 избыток и утаскивал ВЕСЬ body по горизонтали,
         // а не оставался внутри scroll-контейнера самой полосы (тот scroll-x
         // формально был, но родитель не давал ему стать реальной границей).
-        <div className={`flex min-w-0 items-stretch gap-2 ${externalNav && !showBadges ? 'lg:hidden' : ''}`}>
-          {/* externalNav: на lg+ вкладками рулит левая рельса ЛК — свою ленту прячем,
-              но колокольчик уведомлений (только свой ЛК, showBadges) должен остаться. */}
-          <div className={`min-w-0 flex-1 ${externalNav ? 'lg:hidden' : ''}`}><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
+        <div className="flex min-w-0 items-stretch gap-2">
+          <div className="min-w-0 flex-1"><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
           {/* Колокольчик убран (правка владельца 05.08): уведомления живут
               отдельным разделом /profile/notifications со счётчиком в рельсе. */}
         </div>
