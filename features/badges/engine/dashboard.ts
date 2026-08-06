@@ -226,7 +226,7 @@ export async function getRubEconomics(db: Pool): Promise<RubEconomics> {
          coalesce(sum(i.price_paid) FILTER (WHERE i.status IN ('owned','activation_requested')), 0) AS pending
        FROM inventory_items i
        LEFT JOIN shop_items s ON s.id = i.shop_item_id
-       WHERE i.currency = 'EBALL'`).catch(() => ({ rows: [{ material_used: '0', immaterial_used: '0', pending: '0' }] })),
+       WHERE i.currency = 'EBALL'`).catch(() => ({ rows: [{ material_used: '0', material_cost: '0', immaterial_used: '0', pending: '0' }] })),
     // Рублёвый кошелёк: выплаты в ЗП — уже настоящие рубли, курс не применяем.
     db.query<{ rub: string }>(
       `SELECT coalesce(-sum(amount), 0) AS rub FROM badge_coin_ledger
