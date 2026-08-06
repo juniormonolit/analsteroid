@@ -10,9 +10,9 @@
 // Адаптив: одна колонка до lg, две — на десктопе. Область печати на телефоне
 // идёт под конструктором, а не рядом (правило 9 CLAUDE.md).
 
-import { useCallback, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Check, ClipboardCheck, Copy, Play, Plus, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, ClipboardCheck, Copy, Play, Plus, Save, Star, Trash2, X } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import type { ReportSpec } from '@/features/reports-builder/engine/buildReportText';
 import { useReportAssembly } from './useReportAssembly';
@@ -41,8 +41,21 @@ interface CatalogMetric {
   isCore: boolean;
 }
 
-// Стартовый набор — то, из чего состоит ежедневный отчёт владельца. Человек,
-// открывший раздел впервые, сразу видит осмысленный отчёт, а не пустой лист.
+interface TemplateState {
+  period: PeriodKey;
+  entities: EntityInput[];
+  metricIds: string[];
+}
+interface Template {
+  id: string;
+  name: string;
+  kind: 'preset' | 'personal';
+  isDefault: boolean;
+  state: TemplateState;
+}
+
+// Запасной набор на случай, если пресетов по роли не пришло вовсе (аккаунт без
+// привязки к Битриксу и без отделов). Пустой лист человек читает как поломку.
 const DEFAULT_METRICS = ['primary_sales_amount', 'repeat_sales_amount', 'primary_deals_count'];
 
 function todayStr(): string {
@@ -62,8 +75,10 @@ export function MyReportPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [activeTemplate, setActiveTemplate] = useState<string | null>(null);
 
   const assembly = useReportAssembly();
+  const queryClient = useQueryClient();
 
   const { data: available } = useQuery<EntitiesResponse>({
     queryKey: ['my-report-entities'],
@@ -85,22 +100,90 @@ export function MyReportPage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  const { data: templatesData } = useQuery<{ templates: Template[]; storageReady: boolean }>({
+    queryKey: ['my-report-templates'],
+    queryFn: async () => {
+      const res = await fetch('/api/my-report/templates');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60 * 1000,
+  });
+
   const chosenKeys = useMemo(() => new Set(entities.map(e => entityKey(e.input))), [entities]);
+
+  // Подпись сущности берём из доступного человеку списка: шаблон хранит только
+  // id, а название отдела могло измениться (или доступ к нему пропасть).
+  const labelFor = useCallback((input: EntityInput): string | null => {
+    if (input.kind === 'self') return available?.self?.name ?? null;
+    const list = input.kind === 'department' ? available?.departments : available?.branches;
+    return list?.find(x => x.id === input.id)?.name ?? null;
+  }, [available]);
+
+  const applyTemplate = useCallback((tpl: Template) => {
+    const resolved = tpl.state.entities
+      .map(input => ({ input, label: labelFor(input) }))
+      .filter((e): e is ChosenEntity => e.label !== null);
+    if (resolved.length === 0) return;
+    setPeriod(tpl.state.period);
+    setEntities(resolved);
+    setMetricIds(tpl.state.metricIds);
+    setActiveTemplate(tpl.id);
+    assembly.reset();
+  }, [assembly, labelFor]);
+
+  // Шаблон по умолчанию применяется ОДИН раз на монтирование: иначе он
+  // затирал бы то, что человек уже настроил руками (или после каждого refetch
+  // отбрасывал бы его правки — ровно то, за что интерфейсы ненавидят).
+  const presetApplied = useRef(false);
+  useEffect(() => {
+    if (presetApplied.current || !templatesData || !available) return;
+    const list = templatesData.templates;
+    const chosen = list.find(t => t.isDefault) ?? list[0];
+    presetApplied.current = true;
+    if (chosen) applyTemplate(chosen);
+  }, [templatesData, available, applyTemplate]);
+
+  // Любая правка руками снимает отметку с шаблона: подсвеченный чип при уже
+  // изменённом наборе — прямая ложь о том, что сейчас соберётся.
+  const touched = useCallback(() => {
+    setActiveTemplate(null);
+    assembly.reset();
+  }, [assembly]);
 
   const addEntity = useCallback((input: EntityInput, label: string) => {
     setEntities(prev => (prev.some(e => entityKey(e.input) === entityKey(input)) ? prev : [...prev, { input, label }]));
-    assembly.reset();
-  }, [assembly]);
+    touched();
+  }, [touched]);
 
   const removeEntity = useCallback((key: string) => {
     setEntities(prev => (prev.length <= 1 ? prev : prev.filter(e => entityKey(e.input) !== key)));
-    assembly.reset();
-  }, [assembly]);
+    touched();
+  }, [touched]);
 
   const toggleMetric = useCallback((id: string) => {
     setMetricIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
-    assembly.reset();
-  }, [assembly]);
+    touched();
+  }, [touched]);
+
+  const saveTemplate = useCallback(async (name: string, isDefault: boolean) => {
+    const res = await fetch('/api/my-report/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, isDefault, state: { period, entities: entities.map(e => e.input), metricIds } }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+    await queryClient.invalidateQueries({ queryKey: ['my-report-templates'] });
+    setActiveTemplate(body.id as string);
+  }, [entities, metricIds, period, queryClient]);
+
+  const deleteTemplate = useCallback(async (id: string) => {
+    const res = await fetch(`/api/my-report/templates?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!res.ok) return;
+    await queryClient.invalidateQueries({ queryKey: ['my-report-templates'] });
+    if (activeTemplate === id) setActiveTemplate(null);
+  }, [activeTemplate, queryClient]);
 
   const build = useCallback(async () => {
     setError(null);
@@ -147,11 +230,22 @@ export function MyReportPage() {
       <div className="grid gap-4 lg:grid-cols-[340px_1fr] items-start">
         {/* ── Шаблон ─────────────────────────────────────────────── */}
         <div className="flex flex-col gap-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 sm:p-4">
+          <TemplateBar
+            templates={templatesData?.templates ?? []}
+            storageReady={templatesData?.storageReady ?? true}
+            activeId={activeTemplate}
+            onApply={applyTemplate}
+            onSave={saveTemplate}
+            onDelete={deleteTemplate}
+          />
+
           <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-[var(--color-text-muted)]">Дата</span>
             <input
               type="date"
               value={date}
+              // Дата в шаблон НЕ входит (отчёт всегда про «сегодня»), поэтому
+              // её смена не снимает отметку с шаблона — только сбрасывает сборку.
               onChange={e => { setDate(e.target.value); assembly.reset(); }}
               // text-base на мобильном — иначе iOS зумит страницу при фокусе (правило 9).
               className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-base sm:text-sm"
@@ -165,7 +259,7 @@ export function MyReportPage() {
                 <button
                   key={p.key}
                   type="button"
-                  onClick={() => { setPeriod(p.key); assembly.reset(); }}
+                  onClick={() => { setPeriod(p.key); touched(); }}
                   className={`min-h-11 flex-1 text-sm transition-colors ${
                     period === p.key
                       ? 'bg-[var(--color-accent)] text-white font-medium'
@@ -306,6 +400,120 @@ export function MyReportPage() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Полоса шаблонов. Пресеты по роли — слева, личные с крестиком, справа
+ * «Сохранить». Без скролла: шаблонов у человека единицы, а `flex-wrap` вообще
+ * снимает класс багов правила 12 (уехавшая вбок страница на свайпе).
+ */
+function TemplateBar({ templates, storageReady, activeId, onApply, onSave, onDelete }: {
+  templates: Template[];
+  storageReady: boolean;
+  activeId: string | null;
+  onApply: (tpl: Template) => void;
+  onSave: (name: string, isDefault: boolean) => Promise<void>;
+  onDelete: (id: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const [asDefault, setAsDefault] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(trimmed, asDefault);
+      setOpen(false);
+      setName('');
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Не удалось сохранить');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-[var(--color-text-muted)]">Шаблон</span>
+      <div className="flex flex-wrap gap-1.5">
+        {templates.map(t => {
+          const active = t.id === activeId;
+          return (
+            <span
+              key={t.id}
+              className={`inline-flex items-center gap-1 rounded-full border pl-2.5 pr-1 py-1 text-sm ${
+                active
+                  ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white'
+                  : 'border-[var(--color-border)] bg-[var(--color-bg)]'
+              }`}
+            >
+              <button type="button" onClick={() => onApply(t)} className="tap-target">
+                {t.isDefault && <Star size={11} className="mr-1 inline shrink-0" />}
+                {t.name}
+              </button>
+              {t.kind === 'personal' ? (
+                <button
+                  type="button"
+                  onClick={() => onDelete(t.id)}
+                  aria-label={`Удалить шаблон ${t.name}`}
+                  className={`tap-target ${active ? 'text-white/70 hover:text-white' : 'text-[var(--color-text-muted)] hover:text-[var(--color-negative)]'}`}
+                >
+                  <Trash2 size={12} />
+                </button>
+              ) : (
+                <span className="w-1" />
+              )}
+            </span>
+          );
+        })}
+
+        <Popover
+          open={open}
+          onOpenChange={setOpen}
+          className="w-[260px] max-w-[calc(100vw-24px)]"
+          trigger={
+            <button type="button" className="tap-target inline-flex items-center gap-1 rounded-full border border-dashed border-[var(--color-border)] px-2.5 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+              <Save size={13} /> Сохранить
+            </button>
+          }
+        >
+          <div className="flex flex-col gap-2 p-3">
+            <input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') void submit(); }}
+              placeholder="Название шаблона"
+              autoFocus
+              className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-base sm:text-sm outline-none"
+            />
+            <label className="flex min-h-11 items-center gap-2 text-sm">
+              <input type="checkbox" checked={asDefault} onChange={e => setAsDefault(e.target.checked)} />
+              Открывать по умолчанию
+            </label>
+            {saveError && <p className="text-xs text-[var(--color-negative)]">{saveError}</p>}
+            <button
+              type="button"
+              onClick={submit}
+              disabled={saving || !name.trim()}
+              className="min-h-11 rounded-lg bg-[var(--color-accent)] px-3 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {saving ? 'Сохраняю…' : 'Сохранить'}
+            </button>
+          </div>
+        </Popover>
+      </div>
+      {!storageReady && (
+        <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">
+          Свои шаблоны пока не сохраняются — не применена миграция 156. Пресеты по роли работают.
+        </span>
+      )}
     </div>
   );
 }

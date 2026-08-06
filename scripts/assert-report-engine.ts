@@ -2,12 +2,17 @@
  * Assert-скрипт: движок конструктора отчётов воспроизводит три существующих
  * формата БАЙТ-В-БАЙТ (шаг 1 спеки ai_docs/fresh_docs/REPORT_CONSTRUCTOR_SPEC.md).
  *
- * Как устроена проверка. Эталоны — ДОСЛОВНЫЕ КОПИИ старых рендереров, вклеенные
- * ниже (блок «ЭТАЛОНЫ»). Копии, а не импорт, потому что оригиналы лежат внутри
- * async-модулей, которые тянут пул Postgres и вебхук Битрикса: подключиться к
- * ним из assert-скрипта нельзя, а формат проверять надо. Копии помечены
- * источником и правятся только вместе с оригиналом — до шага 4 спеки, когда
- * ботовские джобы переедут на движок и оригиналы исчезнут совсем.
+ * Как устроена проверка. Эталоны — ДОСЛОВНЫЕ КОПИИ рендереров, которые раньше
+ * жили в lib/jobs/dailyMoscowReport.ts, lib/jobs/dailyGroupReport.ts и
+ * features/manager-card/engine/managerReportText.ts. С шагом 6 спеки (06.08.2026)
+ * оригиналов больше НЕТ — все три переведены на движок, и эти копии остались
+ * единственным независимым описанием формата. Поэтому их НЕЛЬЗЯ «причёсывать»:
+ * это снимок того, что владелец читает в боте каждый день, и любая правка здесь
+ * означает сознательное изменение формата отчёта, а не рефакторинг.
+ *
+ * Сторона движка собирается ТЕМ ЖЕ buildDailyReportSpec, который вызывает прод, —
+ * своей копии сборки в тесте нет намеренно, иначе прод и тест могли бы разойтись
+ * при зелёном тесте.
  *
  * Числа синтетические и намеренно злые: нулевые планы (должен быть прочерк, а
  * не 0% и не Infinity), нулевые знаменатели конверсий, отрицательные суммы,
@@ -17,8 +22,8 @@
  */
 import {
   buildReportDocument, buildReportText, TOTAL,
-  type ReportMetric, type ReportEntity,
 } from '../features/reports-builder/engine/buildReportText.ts';
+import { buildDailyReportSpec } from '../lib/reports-builder/dailySpecs.ts';
 import {
   buildAnimationPlan, renderPlanAt, renderPlanFull, TIMING,
 } from '../features/reports-builder/engine/animation.ts';
@@ -279,119 +284,49 @@ function legacyPersonal(i: PersonalReportInput): string {
 // ═══════════════════════════════════════════════════════════════════════════════
 // СБОРКА ТОГО ЖЕ ЧЕРЕЗ ДВИЖОК
 // ═══════════════════════════════════════════════════════════════════════════════
-
-/** Значения метрики «факт/план» по всем колонкам сразу. */
-function ratioValues(keys: string[], fact: Sums, plan: Sums): ReportMetric['values'] {
-  const out: ReportMetric['values'] = {};
-  for (const k of keys) out[k] = { num: fact[k] ?? 0, den: plan[k] ?? 0 };
-  return out;
-}
-function numberValues(keys: string[], sums: Sums): ReportMetric['values'] {
-  const out: ReportMetric['values'] = {};
-  for (const k of keys) out[k] = sums[k] ?? 0;
-  return out;
-}
-function convValues(
-  keys: string[], conv: Record<string, ConversionRow>,
-  num: (r: ConversionRow) => number, den: (r: ConversionRow) => number,
-): ReportMetric['values'] {
-  const out: ReportMetric['values'] = {};
-  for (const k of keys) out[k] = { num: num(conv[k]), den: den(conv[k]) };
-  return out;
-}
-
-const CONVERSIONS: { label: string; num: (r: ConversionRow) => number; den: (r: ConversionRow) => number }[] = [
-  { label: 'Конверсия в бронь (месяц)', num: r => r.primaryReservations, den: r => r.primaryDeals },
-  { label: 'Конверсия в продажу (месяц)', num: r => r.primarySales, den: r => r.primaryDeals },
-  { label: 'Конверсия ППП (месяц)', num: r => r.ppp, den: r => r.primarySales },
-  { label: '% повторных продаж (месяц)', num: r => r.repeatSales, den: r => r.primarySales + r.repeatSales },
-];
+// Спека собирается ТЕМ ЖЕ buildDailyReportSpec, который вызывают
+// dailyMoscowReport/dailyGroupReport в проде. Своей копии сборки здесь нет
+// намеренно: иначе прод и тест могли бы разойтись при зелёном тесте.
 
 function engineMoscow(i: MoscowInput): string {
-  const entities: ReportEntity[] = DEPTS.map(cat => ({ key: cat, title: DEPT_TITLES[cat] }));
-  const keys = [...DEPTS, 'total'];
-  const asSums = (s: DeptSums): Sums => ({ ...s, [TOTAL]: s.total });
-  const allKeys = [...keys, TOTAL];
-
-  const planPct = (label: string, fact: DeptSums, plan: DeptSums): ReportMetric => ({
-    label, format: 'pct0', values: ratioValues(allKeys, asSums(fact), asSums(plan)),
-  });
-
-  const money = (label: string, sums: DeptSums, gapBefore?: boolean): ReportMetric => ({
-    label, format: 'mln', gapBefore, values: numberValues(allKeys, asSums(sums)),
-  });
-  const pct = (label: string, fact: DeptSums, plan: DeptSums): ReportMetric => ({
-    label, format: 'pct0', values: ratioValues(allKeys, asSums(fact), asSums(plan)),
-  });
-
-  const blockMetrics: ReportMetric[] = [
-    money('План продаж', i.planSales.mtd),
-    money('Сумма продаж', i.factSales.month),
-    pct('% выполнения', i.factSales.month, i.planSales.mtd),
-    money('План отгрузок', i.planShipMtd, true),
-    money('Сумма отгрузок', i.factShipMonth),
-    pct('% выполнения', i.factShipMonth, i.planShipMtd),
-  ];
-
-  return buildReportText({
+  const asSums = (s: DeptSums): Sums => ({ 'ОС': s['ОС'], 'НЦ': s['НЦ'], 'ЖБИ': s['ЖБИ'], [TOTAL]: s.total });
+  return buildReportText(buildDailyReportSpec({
+    dateStr: i.dateStr,
+    entities: DEPTS.map(cat => ({ key: cat, title: DEPT_TITLES[cat] })),
+    factSales: { day: asSums(i.factSales.day), week: asSums(i.factSales.week), month: asSums(i.factSales.month) },
+    factShipMonth: asSums(i.factShipMonth),
+    planSales: { day: asSums(i.planSales.day), week: asSums(i.planSales.week), mtd: asSums(i.planSales.mtd) },
+    planShipMtd: asSums(i.planShipMtd),
+    conv: { ...i.conv, [TOTAL]: i.conv.total },
+  }, {
     title: 'Отчет МОСКВА',
-    subtitle: { style: 'za', date: i.dateStr },
-    entities,
-    overview: [
-      [
-        planPct('% ПЛАНА (ДЕНЬ)', i.factSales.day, i.planSales.day),
-        planPct('% ПЛАНА (НЕДЕЛЯ)', i.factSales.week, i.planSales.week),
-        planPct('% ПЛАНА (МЕСЯЦ)', i.factSales.month, i.planSales.mtd),
-      ],
-      CONVERSIONS.map(c => ({
-        label: c.label, format: 'pct1' as const,
-        values: convValues(allKeys, { ...i.conv, [TOTAL]: i.conv.total }, c.num, c.den),
-      })),
-    ],
-    entityBlock: blockMetrics,
-    aggregate: { title: 'ИТОГО (ОС+НЦ+ЖБИ)' },
-  });
+    subtitle: 'za',
+    planPctFormat: 'pct0',
+    entityBlocks: true,
+    aggregateTitle: 'ИТОГО (ОС+НЦ+ЖБИ)',
+    aggregateMoney: 'mln',
+  }));
 }
 
 function engineGroup(i: GroupInput): string {
-  const keys = [...i.groups.map(g => g.key), TOTAL];
-  // В движке итоговая колонка называется TOTAL, в старом коде — TOTAL_KEY;
-  // значения одни и те же, ключи совпадают по значению строки.
-  const money = (label: string, sums: Sums, gapBefore?: boolean): ReportMetric => ({
-    label, format: i.totalsInRubles ? 'rub' : 'mln', gapBefore, values: numberValues(keys, sums),
-  });
-  const pct = (label: string, fact: Sums, plan: Sums): ReportMetric => ({
-    label, format: 'pct1', values: ratioValues(keys, fact, plan),
-  });
-
-  return buildReportText({
-    title: i.header,
-    subtitle: { style: 'weekday', date: i.dateStr },
+  return buildReportText(buildDailyReportSpec({
+    dateStr: i.dateStr,
     entities: i.groups.map(g => ({ key: g.key, title: g.title })),
-    overview: [
-      [
-        { label: '% ПЛАНА (ДЕНЬ)', format: 'pct1', values: ratioValues(keys, i.factSales.day, i.planSales.day) },
-        { label: '% ПЛАНА (НЕДЕЛЯ)', format: 'pct1', values: ratioValues(keys, i.factSales.week, i.planSales.week) },
-        { label: '% ПЛАНА (МЕСЯЦ)', format: 'pct1', values: ratioValues(keys, i.factSales.month, i.planSales.mtd) },
-      ],
-      CONVERSIONS.map(c => ({
-        label: c.label, format: 'pct1' as const,
-        values: convValues(keys, i.conv, c.num, c.den),
-      })),
-    ],
-    aggregate: {
-      title: i.totalTitle,
-      metrics: [
-        money('План продаж', i.planSales.mtd),
-        money('Сумма продаж', i.factSales.month),
-        pct('% выполнения', i.factSales.month, i.planSales.mtd),
-        money('План отгрузок', i.planShipMtd, true),
-        money('Сумма отгрузок', i.factShipMonth),
-        pct('% выполнения', i.factShipMonth, i.planShipMtd),
-      ],
-    },
-  });
+    factSales: i.factSales,
+    factShipMonth: i.factShipMonth,
+    planSales: i.planSales,
+    planShipMtd: i.planShipMtd,
+    conv: i.conv,
+  }, {
+    title: i.header,
+    subtitle: 'weekday',
+    planPctFormat: 'pct1',
+    entityBlocks: false,
+    aggregateTitle: i.totalTitle,
+    aggregateMoney: i.totalsInRubles ? 'rub' : 'mln',
+  }));
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ДАННЫЕ

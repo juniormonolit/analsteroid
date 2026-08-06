@@ -17,6 +17,8 @@ import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { getManagerOrgMap } from '@/lib/org/deptCategories';
 import { bx, sendBitrixBotMessage } from '@/lib/bitrix/notify';
 import { getMonthWorkingDays, getWeekWorkingDays } from '@/lib/plans/dailyPlan';
+import { buildReportText, TOTAL } from '@/features/reports-builder/engine/buildReportText';
+import { buildDailyReportSpec, type Sums } from '@/lib/reports-builder/dailySpecs';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 
 const TZ = 'Europe/Moscow';
@@ -81,16 +83,6 @@ function fmtDateRu(dateStr: string): string {
 
 function fmtMln(v: number, decimals = 1): string {
   return `${(v / 1e6).toFixed(decimals).replace('.', ',')} млн`;
-}
-
-function fmtPctInt(fact: number, plan: number): string {
-  if (plan <= 0) return '—';
-  return `${Math.round((fact / plan) * 100)}%`;
-}
-
-function fmtPct1(numerator: number, denominator: number): string {
-  if (denominator <= 0) return '—';
-  return `${((numerator / denominator) * 100).toFixed(1).replace('.', ',')}%`;
 }
 
 // ── Битрикс: продажи/отгрузки за период ────────────────────────────────────────────
@@ -298,29 +290,16 @@ function collectDiscrepancies(
 
 // ── Сборка отчёта ──────────────────────────────────────────────────────────────────
 
-function planPercentSection(title: string, fact: DeptSums, plan: DeptSums): string {
-  const lines = [`[b]% ПЛАНА (${title}) — ${fmtPctInt(fact.total, plan.total)}[/b]`];
-  for (const cat of DEPTS) lines.push(`${DEPT_TITLES[cat]} — ${fmtPctInt(fact[cat], plan[cat])}`);
-  return lines.join('\n');
-}
-
-function conversionSection(title: string, conv: Conversions, num: (r: ConversionRow) => number, den: (r: ConversionRow) => number): string {
-  const lines = [`[b]${title} — ${fmtPct1(num(conv.total), den(conv.total))}[/b]`];
-  for (const cat of DEPTS) lines.push(`${DEPT_TITLES[cat]} — ${fmtPct1(num(conv[cat]), den(conv[cat]))}`);
-  return lines.join('\n');
-}
-
-function deptBlock(title: string, planSales: number, factSales: number, planShip: number, factShip: number): string {
-  return [
-    `[b]${title}[/b]`,
-    `План продаж — ${fmtMln(planSales)}`,
-    `Сумма продаж — ${fmtMln(factSales)}`,
-    `% выполнения — ${fmtPctInt(factSales, planSales)}`,
-    '',
-    `План отгрузок — ${fmtMln(planShip)}`,
-    `Сумма отгрузок — ${fmtMln(factShip)}`,
-    `% выполнения — ${fmtPctInt(factShip, planShip)}`,
-  ].join('\n');
+// Вёрстка отчёта переехала в общий движок (шаг 6 спеки конструктора):
+// lib/reports-builder/dailySpecs.ts + features/reports-builder/engine.
+// Здесь остались только сбор чисел и блок расхождений. Совпадение текста с
+// прежним — байт-в-байт, закреплено в scripts/assert-report-engine.ts
+// (дифф против дословных копий рендереров, которые тут были).
+//
+// Ключ итоговой колонки в движке — TOTAL ('__total__'), у местных DeptSums —
+// 'total'; переводим на границе.
+function toSums(s: DeptSums): Sums {
+  return { 'ОС': s['ОС'], 'НЦ': s['НЦ'], 'ЖБИ': s['ЖБИ'], [TOTAL]: s.total };
 }
 
 /**
@@ -386,32 +365,23 @@ export async function buildDailyMoscowReport(reportDate?: string): Promise<Daily
     ...collectDiscrepancies('Отгрузки', bxShip, dbShipSums),
   ];
 
-  // Вёрстка по эталону владельца: шапка и блоки «% ПЛАНА» без разделителя между собой;
-  // «————» на отдельной строке, ВПЛОТНУЮ к следующей секции (пустая строка только сверху).
-  const message = [
-    [
-      `[b]Отчет МОСКВА[/b]\n[i]за ${fmtDateRu(dateStr)}[/i]`,
-      planPercentSection('ДЕНЬ', bxSales.day, dayPlanSales),
-      planPercentSection('НЕДЕЛЯ', bxSales.week, weekPlanSales),
-      planPercentSection('МЕСЯЦ', bxSales.month, mtdPlanSales),
-    ].join('\n\n'),
-    [
-      conversionSection('Конверсия в бронь (месяц)', dbConv, r => r.primaryReservations, r => r.primaryDeals),
-      conversionSection('Конверсия в продажу (месяц)', dbConv, r => r.primarySales, r => r.primaryDeals),
-      conversionSection('Конверсия ППП (месяц)', dbConv, r => r.ppp, r => r.primarySales),
-      conversionSection('% повторных продаж (месяц)', dbConv, r => r.repeatSales, r => r.primarySales + r.repeatSales),
-    ].join('\n\n'),
-    DEPTS.map(cat => deptBlock(
-      DEPT_TITLES[cat].toUpperCase(),
-      mtdPlanSales[cat], bxSales.month[cat],
-      mtdPlanShip[cat], bxShip.month[cat],
-    )).join('\n\n'),
-    deptBlock(
-      'ИТОГО (ОС+НЦ+ЖБИ)',
-      mtdPlanSales.total, bxSales.month.total,
-      mtdPlanShip.total, bxShip.month.total,
-    ),
-  ].join('\n\n————\n');
+  const message = buildReportText(buildDailyReportSpec({
+    dateStr,
+    entities: DEPTS.map(cat => ({ key: cat, title: DEPT_TITLES[cat] })),
+    factSales: { day: toSums(bxSales.day), week: toSums(bxSales.week), month: toSums(bxSales.month) },
+    factShipMonth: toSums(bxShip.month),
+    planSales: { day: toSums(dayPlanSales), week: toSums(weekPlanSales), mtd: toSums(mtdPlanSales) },
+    planShipMtd: toSums(mtdPlanShip),
+    conv: { ...dbConv, [TOTAL]: dbConv.total },
+  }, {
+    title: 'Отчет МОСКВА',
+    subtitle: 'za',
+    // Целые проценты — как в эталоне владельца.
+    planPctFormat: 'pct0',
+    entityBlocks: true,
+    aggregateTitle: 'ИТОГО (ОС+НЦ+ЖБИ)',
+    aggregateMoney: 'mln',
+  }));
 
   const discrepancyMessage = `[b]Сверка Битрикс ↔ БД за ${fmtDateRu(dateStr)}[/b]\n` + (
     discrepancies.length > 0

@@ -20,6 +20,8 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { bx, sendBitrixBotMessage } from '@/lib/bitrix/notify';
 import { getMonthWorkingDays, getWeekWorkingDays } from '@/lib/plans/dailyPlan';
+import { buildReportText } from '@/features/reports-builder/engine/buildReportText';
+import { buildDailyReportSpec } from '@/lib/reports-builder/dailySpecs';
 import { fromZonedTime, toZonedTime } from 'date-fns-tz';
 
 const TZ = 'Europe/Moscow';
@@ -82,27 +84,11 @@ function fmtDateRu(dateStr: string): string {
   const [y, m, d] = dateStr.split('-');
   return `${d}.${m}.${y}`;
 }
-const WEEKDAYS = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
-function weekdayRu(dateStr: string): string {
-  return WEEKDAYS[new Date(`${dateStr}T00:00:00Z`).getUTCDay()];
-}
 
 // ── Форматирование ─────────────────────────────────────────────────────────────────
 
 function fmtMln(v: number, decimals = 1): string {
   return `${(v / 1e6).toFixed(decimals).replace('.', ',')} млн`;
-}
-function fmtRub(v: number): string {
-  return `${Math.round(v).toLocaleString('ru-RU').replace(/ /g, ' ')} ₽`;
-}
-/** % выполнения плана — 1 знак после запятой (как в ручном отчёте Коваленко). */
-function fmtPct1OfPlan(fact: number, plan: number): string {
-  if (plan <= 0) return '—';
-  return `${((fact / plan) * 100).toFixed(1).replace('.', ',')}%`;
-}
-function fmtPct1(numerator: number, denominator: number): string {
-  if (denominator <= 0) return '—';
-  return `${((numerator / denominator) * 100).toFixed(1).replace('.', ',')}%`;
 }
 
 // ── Битрикс ────────────────────────────────────────────────────────────────────────
@@ -298,36 +284,10 @@ function collectDiscrepancies(label: string, bitrix: PeriodSums, db: PeriodSums,
 
 // ── Сборка ─────────────────────────────────────────────────────────────────────────
 
-function planPercentSection(title: string, fact: Sums, plan: Sums, groups: ReportGroup[]): string {
-  const lines = [`[b]% ПЛАНА (${title}) — ${fmtPct1OfPlan(fact[TOTAL_KEY], plan[TOTAL_KEY])}[/b]`];
-  for (const g of groups) lines.push(`${g.title} — ${fmtPct1OfPlan(fact[g.key], plan[g.key])}`);
-  return lines.join('\n');
-}
-
-function conversionSection(
-  title: string, conv: Record<string, ConversionRow>, groups: ReportGroup[],
-  num: (r: ConversionRow) => number, den: (r: ConversionRow) => number,
-): string {
-  const lines = [`[b]${title} — ${fmtPct1(num(conv[TOTAL_KEY]), den(conv[TOTAL_KEY]))}[/b]`];
-  for (const g of groups) lines.push(`${g.title} — ${fmtPct1(num(conv[g.key]), den(conv[g.key]))}`);
-  return lines.join('\n');
-}
-
-function totalsBlock(
-  title: string, planSales: number, factSales: number, planShip: number, factShip: number, inRubles: boolean,
-): string {
-  const money = (v: number) => (inRubles ? fmtRub(v) : fmtMln(v));
-  return [
-    `[b]${title}[/b]`,
-    `План продаж — ${money(planSales)}`,
-    `Сумма продаж — ${money(factSales)}`,
-    `% выполнения — ${fmtPct1OfPlan(factSales, planSales)}`,
-    '',
-    `План отгрузок — ${money(planShip)}`,
-    `Сумма отгрузок — ${money(factShip)}`,
-    `% выполнения — ${fmtPct1OfPlan(factShip, planShip)}`,
-  ].join('\n');
-}
+// Вёрстка отчёта переехала в общий движок (шаг 6 спеки конструктора):
+// lib/reports-builder/dailySpecs.ts + features/reports-builder/engine. Здесь
+// остались только сбор чисел и блок расхождений. Байт-в-байт совпадение с
+// прежним текстом закреплено в scripts/assert-report-engine.ts.
 
 export async function buildGroupReport(config: GroupReportConfig, reportDate?: string): Promise<GroupReportData> {
   const { groups } = config;
@@ -385,26 +345,24 @@ export async function buildGroupReport(config: GroupReportConfig, reportDate?: s
     ...collectDiscrepancies('Отгрузки', bxShip, dbShipSums, groups),
   ];
 
-  const message = [
-    [
-      `[b]${config.header}[/b]\n[i]${weekdayRu(dateStr)}, ${fmtDateRu(dateStr)}[/i]`,
-      planPercentSection('ДЕНЬ', bxSales.day, dayPlanSales, groups),
-      planPercentSection('НЕДЕЛЯ', bxSales.week, weekPlanSales, groups),
-      planPercentSection('МЕСЯЦ', bxSales.month, mtdPlanSales, groups),
-    ].join('\n\n'),
-    [
-      conversionSection('Конверсия в бронь (месяц)', dbConv, groups, r => r.primaryReservations, r => r.primaryDeals),
-      conversionSection('Конверсия в продажу (месяц)', dbConv, groups, r => r.primarySales, r => r.primaryDeals),
-      conversionSection('Конверсия ППП (месяц)', dbConv, groups, r => r.ppp, r => r.primarySales),
-      conversionSection('% повторных продаж (месяц)', dbConv, groups, r => r.repeatSales, r => r.primarySales + r.repeatSales),
-    ].join('\n\n'),
-    totalsBlock(
-      config.totalTitle,
-      mtdPlanSales[TOTAL_KEY], bxSales.month[TOTAL_KEY],
-      mtdPlanShip[TOTAL_KEY], bxShip.month[TOTAL_KEY],
-      config.totalsInRubles ?? false,
-    ),
-  ].join('\n\n————\n');
+  const message = buildReportText(buildDailyReportSpec({
+    dateStr,
+    entities: groups.map(g => ({ key: g.key, title: g.title })),
+    factSales: { day: bxSales.day, week: bxSales.week, month: bxSales.month },
+    factShipMonth: bxShip.month,
+    planSales: { day: dayPlanSales, week: weekPlanSales, mtd: mtdPlanSales },
+    planShipMtd: mtdPlanShip,
+    conv: dbConv,
+  }, {
+    title: config.header,
+    subtitle: 'weekday',
+    // Проценты с десятой — как в ручном отчёте владельца отдела.
+    planPctFormat: 'pct1',
+    // Блоков по командам в этом отчёте нет, только итог по Общестрою.
+    entityBlocks: false,
+    aggregateTitle: config.totalTitle,
+    aggregateMoney: config.totalsInRubles ? 'rub' : 'mln',
+  }));
 
   const discrepancyMessage = `[b]Сверка Битрикс ↔ БД за ${fmtDateRu(dateStr)}[/b]\n` + (
     discrepancies.length > 0
