@@ -104,11 +104,60 @@ async function seedDefinitions(client: PoolClient): Promise<void> {
   }
 }
 
-interface DefRow { key: string; name: string; enabled: boolean; criteria: Record<string, unknown> }
+interface DefRow {
+  key: string; name: string; enabled: boolean; criteria: Record<string, unknown>;
+  /** Комплект: ключи наград, которые нужно собрать целиком (миграция 152). */
+  set_of?: string[];
+}
 
 async function loadDefs(client: PoolClient): Promise<Map<string, DefRow>> {
-  const res = await client.query<DefRow>(`SELECT key, name, enabled, criteria FROM badge_definitions`);
-  return new Map(res.rows.map(r => [r.key, r]));
+  // set_of через COALESCE и в try: до миграции 152 колонки нет, и падать из-за
+  // неё весь пересчёт наград не должен.
+  try {
+    const res = await client.query<DefRow>(
+      `SELECT key, name, enabled, criteria, COALESCE(set_of, '{}') AS set_of FROM badge_definitions`,
+    );
+    return new Map(res.rows.map(r => [r.key, r]));
+  } catch {
+    const res = await client.query<DefRow>(`SELECT key, name, enabled, criteria FROM badge_definitions`);
+    return new Map(res.rows.map(r => [r.key, { ...r, set_of: [] }]));
+  }
+}
+
+/**
+ * Выдаёт награды-комплекты: у кого есть ВСЕ ключи из set_of — получает секретку.
+ *
+ * Считается одним SQL на комплект, а не выборкой всех наград в память: наград
+ * десятки тысяч строк, и тянуть их сюда ради пересечения множеств незачем.
+ * Идемпотентность — тем же ON CONFLICT DO NOTHING, что у обычных наград, так что
+ * повторный прогон (ретро, кнопка «пересчитать») ничего не дублирует.
+ */
+async function grantSetBadges(
+  client: PoolClient,
+  defs: Map<string, DefRow>,
+): Promise<{ bitrixId: number; badgeKey: string; name: string }[]> {
+  const sets = [...defs.values()].filter(d => d.enabled && (d.set_of?.length ?? 0) > 0);
+  const granted: { bitrixId: number; badgeKey: string; name: string }[] = [];
+
+  for (const def of sets) {
+    const keys = def.set_of!;
+    const res = await client.query<{ bitrix_id: number }>(
+      `INSERT INTO badge_awards (bitrix_id, badge_key, tier, period_type, period_date, value)
+       SELECT a.bitrix_id, $1, NULL, NULL, NULL, NULL
+         FROM badge_awards a
+        WHERE a.badge_key = ANY($2::text[])
+        GROUP BY a.bitrix_id
+       HAVING count(DISTINCT a.badge_key) = $3
+       ON CONFLICT (bitrix_id, badge_key, coalesce(tier,'-'), coalesce(period_type,'-'), coalesce(period_date,'0001-01-01'::date))
+         DO NOTHING
+       RETURNING bitrix_id`,
+      [def.key, keys, keys.length],
+    );
+    for (const row of res.rows) {
+      granted.push({ bitrixId: Number(row.bitrix_id), badgeKey: def.key, name: def.name });
+    }
+  }
+  return granted;
 }
 
 function num(criteria: Record<string, unknown> | undefined, key: string, dflt: number): number {
@@ -1023,6 +1072,19 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
         } else updated++;
       }
     }
+    // Комплекты (миграция 152, задача владельца 05.08): секретка выдаётся сама,
+    // когда собраны ВСЕ награды из set_of. Проход идёт ЗДЕСЬ, после записи
+    // наград этого тика и ДО начисления монет — иначе за секретку не начислилась
+    // бы её цена (accrueCoins платит за то, что уже лежит в badge_awards).
+    const setAwards = await grantSetBadges(client, defs);
+    for (const s of setAwards) {
+      const list = freshAwardsByMgr.get(s.bitrixId) ?? [];
+      list.push({ name: s.name, tier: null, price: priceByKeyTier.get(`${s.badgeKey}:-`) ?? 0 });
+      freshAwardsByMgr.set(s.bitrixId, list);
+      inserted++;
+      byBadge[s.badgeKey] = (byBadge[s.badgeKey] ?? 0) + 1;
+    }
+
     // Валюта (задача 2657): начисление за все награды без транзакции в леджере —
     // в ТОЙ ЖЕ транзакции, что и запись наград (ретро и ночной тик — один путь,
     // идемпотентно через UNIQUE badge_award_id, по цене на момент начисления).

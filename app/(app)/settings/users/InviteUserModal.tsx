@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { Modal } from '@/components/ui/Modal';
+import { InviteLinkNotice } from './InviteLinkNotice';
 import type { Role } from './page';
 import { resolveRoleNameByLogin } from '@/lib/auth/roleByLogin';
 
@@ -36,6 +37,8 @@ export function InviteUserModal({ roles, onInvited, onClose }: Props) {
   const [roleTouched, setRoleTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Результат приглашения: ссылка + дошло ли сообщение бота.
+  const [invite, setInvite] = useState<{ link: string; delivered: boolean } | null>(null);
 
   useEffect(() => {
     fetch('/api/admin/org-employees')
@@ -85,6 +88,10 @@ export function InviteUserModal({ roles, onInvited, onClose }: Props) {
       if (!res.ok) {
         setError(data.error ?? 'Не удалось отправить приглашение');
       } else {
+        // Модалку НЕ закрываем сразу: сначала показываем ссылку. Закроется
+        // по «Готово» — иначе единственный шанс скопировать её пропадал бы
+        // за долю секунды (а бот в тишине ничего не доставил).
+        setInvite({ link: data.inviteLink as string, delivered: !!data.inviteDelivered });
         onInvited();
       }
     } catch {
@@ -102,6 +109,9 @@ export function InviteUserModal({ roles, onInvited, onClose }: Props) {
       desktopWidth="sm:max-w-[440px]"
     >
       <div className="flex flex-col gap-5">
+        {invite && (
+          <InviteLinkNotice link={invite.link} delivered={invite.delivered} name={selected?.manager_name} />
+        )}
         <div className="flex flex-col gap-1.5 relative">
           <label className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
             Сотрудник (из Bitrix)
@@ -171,13 +181,22 @@ export function InviteUserModal({ roles, onInvited, onClose }: Props) {
           >
             Отмена
           </button>
-          <button
-            onClick={handleInvite}
-            disabled={!selected || !login.trim() || saving}
-            className="px-5 py-2 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            {saving ? 'Отправка...' : 'Пригласить'}
-          </button>
+          {invite ? (
+            <button
+              onClick={onClose}
+              className="px-5 py-2 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity"
+            >
+              Готово
+            </button>
+          ) : (
+            <button
+              onClick={handleInvite}
+              disabled={!selected || !login.trim() || saving}
+              className="px-5 py-2 text-sm bg-[var(--color-accent)] text-[var(--color-text-inverse)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {saving ? 'Отправка...' : 'Пригласить'}
+            </button>
+          )}
         </div>
       </div>
     </Modal>

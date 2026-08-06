@@ -3,7 +3,8 @@ import { getSession, type SessionUser } from '@/lib/auth/session';
 import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { systemDb } from '@/lib/db/clients';
-import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { createNotification, notifyAndPush, pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { approversFor } from '@/lib/org/approvers';
 import { resolveEmployeeNames } from '@/lib/org/employeeDirectory';
 import { actorFromSession, frozenMessage, isOutboundFrozen, verifyPin } from '@/lib/auth/pin';
 
@@ -108,7 +109,30 @@ export async function POST(req: NextRequest) {
     `INSERT INTO payout_requests (bitrix_id, amount, pin_event_id) VALUES ($1, $2, $3) RETURNING id`,
     [id, amount, verified.pinEventId],
   );
+  // Уведомить решающих — та же дыра, что была в заявках на активацию: заявка
+  // ложилась в раздел и ждала, пока руководитель случайно туда зайдёт.
+  // Кнопок «Выплатить»/«Отклонить» в боте нет по той же причине: отметка о
+  // выплате — денежная операция под пином, а отклонение требует причины.
+  void notifyPayoutApprovers(id, session.displayName, amount);
+
   return NextResponse.json({ ok: true, id: r.rows[0].id });
+}
+
+async function notifyPayoutApprovers(requesterId: number, requesterName: string, amount: number): Promise<void> {
+  try {
+    const approvers = await approversFor(requesterId);
+    for (const approverId of approvers) {
+      void notifyAndPush(systemDb(), {
+        bitrixId: Number(approverId),
+        type: 'payout_requested',
+        title: `Заявка на выплату: ${amount} ₽`,
+        body: requesterName,
+        link: '/profile/requests',
+      });
+    }
+  } catch (e) {
+    console.warn('[payout] не удалось уведомить решающих:', e instanceof Error ? e.message : e);
+  }
 }
 
 // PATCH: {id, action:'paid'|'rejected', comment?} — РОП своих / админ.

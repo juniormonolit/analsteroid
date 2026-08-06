@@ -120,14 +120,13 @@ export async function POST(req: NextRequest) {
   );
   const userId = inserted.rows[0].id;
 
-  try {
-    await createAndSendInvite(userId, bitrixUserId, displayName, getPublicOrigin(req));
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'Не удалось отправить приглашение в Bitrix' },
-      { status: 502 }
-    );
-  }
+  // Ссылка возвращается ВСЕГДА, а не только при сбое бота: приглашение
+  // одноразовое, и админу должно быть чем поделиться, если человек говорит
+  // «ничего не приходило» (в режиме тишины бот молчит по определению).
+  const invite = await createAndSendInvite(userId, bitrixUserId, displayName, getPublicOrigin(req));
 
-  return NextResponse.json({ ok: true, id: userId }, { status: 201 });
+  return NextResponse.json(
+    { ok: true, id: userId, inviteLink: invite.link, inviteDelivered: invite.delivered },
+    { status: 201 },
+  );
 }

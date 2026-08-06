@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { InviteUserModal } from './InviteUserModal';
+import { InviteLinkNotice } from './InviteLinkNotice';
 import { AssignDepartmentsModal } from './AssignDepartmentsModal';
 import { PersonalOverridesModal } from './PersonalOverridesModal';
 
@@ -51,6 +52,9 @@ export default function UsersPage() {
   const [overridesUser, setOverridesUser] = useState<AppUser | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // Ссылка после повторной отправки приглашения (показываем на экране, а не
+  // надеемся на бота — см. InviteLinkNotice).
+  const [resentInvite, setResentInvite] = useState<{ link: string; delivered: boolean } | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -76,7 +80,13 @@ export default function UsersPage() {
       const res = await fetch(`/api/admin/users/${id}/resend`, { method: 'POST' });
       const data = await res.json();
       if (!res.ok) setMessage({ type: 'error', text: data.error ?? 'Не удалось переслать приглашение' });
-      else { setMessage({ type: 'success', text: 'Приглашение отправлено повторно' }); load(); }
+      else {
+        // Ссылку показываем всегда: бот в режиме тишины ничего не доставит, и
+        // «отправлено повторно» без ссылки — обещание, которое не выполнено.
+        setResentInvite({ link: data.inviteLink as string, delivered: !!data.inviteDelivered });
+        setMessage(null);
+        load();
+      }
     } catch {
       setMessage({ type: 'error', text: 'Сетевая ошибка' });
     } finally {
@@ -115,6 +125,11 @@ export default function UsersPage() {
         </button>
       </div>
 
+      {resentInvite && (
+        <div className="mb-4">
+          <InviteLinkNotice link={resentInvite.link} delivered={resentInvite.delivered} />
+        </div>
+      )}
       {message && (
         <p className={`mb-4 text-sm ${message.type === 'success' ? 'text-green-600' : 'text-red-500'}`}>
           {message.text}

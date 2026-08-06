@@ -3,7 +3,8 @@ import { getSession, type SessionUser } from '@/lib/auth/session';
 import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { systemDb } from '@/lib/db/clients';
-import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
+import { approversFor } from '@/lib/org/approvers';
+import { createNotification, notifyAndPush, pushViaAnalitik } from '@/features/badges/engine/notifications';
 import { resolveEmployeeNames } from '@/lib/org/employeeDirectory';
 import { actorFromSession, verifyPin } from '@/lib/auth/pin';
 
@@ -82,7 +83,61 @@ export async function POST(req: NextRequest) {
   if (r.rowCount === 0) {
     return NextResponse.json({ error: 'Предмет не найден, не ваш, уже в заявке или срок истёк' }, { status: 400 });
   }
+
+  // Уведомить того, кто заявку решает. Раньше НИКТО не уведомлялся: менеджер
+  // подавал заявку, и она лежала, пока руководитель случайно не зайдёт в раздел.
+  // Уведомление о РЕШЕНИИ заявителю было (см. PATCH ниже), а о ПОЯВЛЕНИИ —
+  // никому.
+  //
+  // Кнопок «Одобрить»/«Отклонить» в сообщении бота сознательно НЕТ, хотя
+  // просили именно их:
+  //   * одобрение ВСЕГДА требует пин-код (см. PATCH — это расход ценности), а
+  //     клик по кнопке чата пин передать не может; предлагать вводить пин
+  //     сообщением в чат Битрикса — значит гонять секрет в открытом виде через
+  //     переписку, чего проект не делает нигде;
+  //   * отклонение требует обязательной причины, которую увидит менеджер, —
+  //     кнопка её тоже не несёт.
+  // Поэтому решение остаётся в приложении, где для пина и причины есть поля, а
+  // уведомление закрывает настоящую дыру: раньше о заявке не узнавал НИКТО.
+  // Ссылка на раздел лежит в самом уведомлении — клик по колокольчику ведёт
+  // прямо на /profile/requests.
+  void notifyApprovers(Number(session.bitrixUserId), session.displayName, body.inventoryId, comment);
+
   return NextResponse.json({ ok: true });
+}
+
+async function notifyApprovers(
+  requesterId: number,
+  requesterName: string,
+  inventoryId: number,
+  comment: string,
+): Promise<void> {
+  try {
+    const [approvers, item] = await Promise.all([
+      approversFor(requesterId),
+      systemDb().query<{ item_name: string }>(`SELECT item_name FROM inventory_items WHERE id = $1`, [inventoryId]),
+    ]);
+    if (approvers.length === 0) return; // некому решать — тишина лучше, чем спам всем
+    const itemName = item.rows[0]?.item_name ?? 'предмет';
+
+    // notifyAndPush, а не sendBitrixBotMessage напрямую: это единственный путь,
+    // который уважает dry-run, персональные настройки бота и пишет в
+    // bot_outbound_log. Ссылка на раздел живёт в самом уведомлении (клик по
+    // колокольчику ведёт на /profile/requests) — отдельная кнопка в чате не
+    // нужна, а обход общего пути стоил бы потери всего перечисленного.
+    for (const approverId of approvers) {
+      void notifyAndPush(systemDb(), {
+        bitrixId: Number(approverId),
+        type: 'activation_requested',
+        title: `Заявка на активацию: ${itemName}`,
+        body: `${requesterName}${comment ? ` · ${comment}` : ''}`,
+        link: '/profile/requests',
+      });
+    }
+  } catch (e) {
+    // Уведомление — не часть подачи заявки: заявка уже создана и видна в разделе.
+    console.warn('[shop-activate] не удалось уведомить решающих:', e instanceof Error ? e.message : e);
+  }
 }
 
 // PATCH: {id, action:'approve'|'reject', comment?} — РОП своих / админ.

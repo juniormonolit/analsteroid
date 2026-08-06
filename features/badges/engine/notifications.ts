@@ -14,7 +14,11 @@ export type NotificationType =
   | 'expiry_soon' | 'gacha_rare' | 'gacha_jackpot' | 'quest_done'
   // Пин-код на денежные операции (задача #2995, спека монолитика-pin-code):
   // лок по попыткам, изменение личного порога, сброс пина администратором.
-  | 'pin_locked' | 'pin_threshold_change' | 'pin_reset_by_admin';
+  | 'pin_locked' | 'pin_threshold_change' | 'pin_reset_by_admin'
+  // Заявка на активацию ПОЯВИЛАСЬ — тому, кто её решает. Раньше решающий не
+  // узнавал о заявке никак, и она лежала до случайного захода в раздел
+  // (activation_resolved выше — обратное уведомление, заявителю о решении).
+  | 'activation_requested' | 'payout_requested';
 
 export interface NotificationInput {
   bitrixId: number;
@@ -109,7 +113,50 @@ function feedbackButtons(logId: number): BotKeyboardButton[] {
   ];
 }
 
+// ── Чистка лога исходящих ────────────────────────────────────────────────────
+// bot_outbound_log растёт вечно: каждое сообщение бота — строка с полным текстом
+// и decision_trace. Отдельного крона под это не заводим (лишний токен, лишняя
+// строка в crontab, лишнее место, где всё сломается молча) — чистим здесь же,
+// при записи, не чаще раза в час на процесс.
+//
+// Два срока: dry_run-строки живут 30 дней (это отладка, которую никто не читает
+// через месяц), реальные отправки — 180. Строки с фидбеком («⚠️ Ошибка» /
+// «👍 Полезно») НЕ удаляются никогда: bot_feedback.log_id ссылается на них
+// внешним ключом, и это самый ценный сигнал в таблице — из-за него удаление
+// вслепую и упало бы на констрейнте.
+const PRUNE_EVERY_MS = 60 * 60 * 1000;
+const DRY_RUN_KEEP_DAYS = 30;
+const SENT_KEEP_DAYS = 180;
+const PRUNE_BATCH = 5000; // потолок на проход: не держать длинную блокировку
+
+let _lastPruneAt = 0;
+
+async function pruneOutboundLog(): Promise<void> {
+  if (Date.now() - _lastPruneAt < PRUNE_EVERY_MS) return;
+  _lastPruneAt = Date.now(); // ставим ДО запроса: неудачная чистка не должна
+                             // повторяться на каждом сообщении
+  try {
+    const res = await systemDb().query(
+      `DELETE FROM bot_outbound_log
+        WHERE id IN (
+          SELECT l.id FROM bot_outbound_log l
+           WHERE l.created_at < now() - make_interval(days => CASE WHEN l.dry_run THEN $1 ELSE $2 END)
+             AND NOT EXISTS (SELECT 1 FROM bot_feedback f WHERE f.log_id = l.id)
+           ORDER BY l.id
+           LIMIT $3
+        )`,
+      [DRY_RUN_KEEP_DAYS, SENT_KEEP_DAYS, PRUNE_BATCH],
+    );
+    if (res.rowCount) console.log(`[bot-log] вычищено ${res.rowCount} строк bot_outbound_log`);
+  } catch (e) {
+    // Нет таблицы bot_feedback (миграция 136) или прав — не повод ломать отправку.
+    console.warn('[bot-log] чистка не выполнилась:', e instanceof Error ? e.message : e);
+  }
+}
+
 async function insertOutbound(bitrixId: number, msgType: string, baseText: string, triggerReason: string | null, decisionTrace: unknown): Promise<number | null> {
+  // Не блокирует запись: чистка — обслуживание, а не часть отправки сообщения.
+  void pruneOutboundLog();
   try {
     const res = await systemDb().query<{ id: string }>(
       `INSERT INTO bot_outbound_log (bitrix_id, msg_type, text, trigger_reason, dry_run, sent, decision_trace)

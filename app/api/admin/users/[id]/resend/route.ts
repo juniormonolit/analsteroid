@@ -22,14 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (user.is_active) return NextResponse.json({ error: 'Пользователь уже активен' }, { status: 400 });
   if (!user.bitrix_user_id) return NextResponse.json({ error: 'У пользователя не привязан Bitrix' }, { status: 400 });
 
-  try {
-    await createAndSendInvite(id, user.bitrix_user_id, user.display_name, getPublicOrigin(req));
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'Не удалось отправить приглашение в Bitrix' },
-      { status: 502 }
-    );
-  }
+  const invite = await createAndSendInvite(id, user.bitrix_user_id, user.display_name, getPublicOrigin(req));
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, inviteLink: invite.link, inviteDelivered: invite.delivered });
 }
