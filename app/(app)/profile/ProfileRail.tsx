@@ -119,11 +119,33 @@ export function ProfileRail({ mode, canManageRequests = false }: {
     },
   );
 
+  // Порядок и группировка (правка владельца 06.08: «расположи пункты меню в
+  // каком-то логическом порядке. Профиль сверху настройки снизу. Отчёт и
+  // статистика рядом. Можно чуть разделить тематические разделы межстрочным
+  // отступом»). Ключ → номер группы; внутри группы сохраняется порядок сборки
+  // выше. Незнакомый ключ (новая вкладка карточки) падает в группу «работа» —
+  // это лучше, чем исчезнуть из меню.
+  const GROUP: Record<string, number> = {
+    'tab:profile': 0,
+    'report': 1, 'tab:stats': 1,
+    'tab:planyorka': 2, 'tab:customers': 2, 'tab:quests': 2,
+    'tab:rewards': 3, 'tab:wallet': 3, 'tab:shop': 3, 'tab:wheel': 3, 'tab:inventory': 3,
+    'team': 4, 'requests': 4, 'people': 4, 'pulse': 4,
+    'notifications': 5,
+    'settings': 6,
+  };
+  const grouped = items
+    .map((it, idx) => ({ it, idx, g: GROUP[it.key] ?? 2 }))
+    .sort((a, b) => (a.g - b.g) || (a.idx - b.idx));
+
   return (
     <nav className="w-56 shrink-0 flex flex-col gap-0.5 border-r border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-bg)] px-2 py-3 overflow-y-auto">
-      {items.map(({ key, href, label, Icon, active, badge }) => (
+      {grouped.map(({ it: { key, href, label, Icon, active, badge }, g }, i) => (
         <Link
           key={key}
+          // Межстрочный отступ + тонкая линия на стыке групп: разделяет
+          // смысловые блоки, не добавляя в меню лишних заголовков.
+          style={i > 0 && grouped[i - 1].g !== g ? { marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--color-sidebar-border)' } : undefined}
           href={href}
           className={`min-h-11 flex items-center gap-2.5 rounded-lg px-3 text-sm transition-colors ${
             active

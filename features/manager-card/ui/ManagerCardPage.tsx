@@ -26,8 +26,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { PlanFactStrip, usePlanFact } from './PlanFactStrip';
 import { LeaderSkills } from './LeaderSkills';
 import { ManagerDailySalesCard } from './ManagerDailySalesCard';
-import { buildManagerReportText } from '@/features/manager-card/engine/managerReportText';
-import { Copy, Check, Eye, Lock } from 'lucide-react';
+import { Check, Eye, Lock } from 'lucide-react';
 import type { CardSegment, ManagerCardResult, AxisUnit } from '@/features/manager-card/engine/managerCard';
 
 // Ответ карточки: у отдела к нему добавляется deptComparison (peerCount/
@@ -426,22 +425,6 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   const CIRC = 2 * Math.PI * RING_R;
   const ringOffset = rating === null ? CIRC : CIRC * (1 - rating / 10);
 
-  // «Копировать для отчёта» — BB-текст в стиле ежедневного отчёта владельца,
-  // собирается из тех же план/факт-данных, что и полоса ниже (запрос общий).
-  const { data: planFact } = usePlanFact(managerId, mode);
-  const [copied, setCopied] = useState(false);
-  function copyReport() {
-    if (!planFact) return;
-    const text = buildManagerReportText({
-      name: data?.profile.name ?? managerName ?? `#${managerId}`,
-      department: data?.profile.department,
-      pf: planFact,
-    });
-    void navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    });
-  }
 
   if (error) {
     return (
@@ -593,7 +576,12 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           />
         </SectionCard>
       )}
-      {showStats && (<>
+      {/* Ограничитель как у «Профиля» (правка владельца 06.08: «Статистика всё
+          ещё распидорашенная на всю ширину, не в едином стиле»). Раньше вкладка
+          сознательно оставалась широкой ради радара и плотных таблиц — но
+          1360px их держат, а на широком мониторе full-bleed выбивался из всех
+          остальных вкладок. Внутренние таблицы и так в .scroll-x. */}
+      {showStats && (<div className="mx-auto w-full max-w-[1360px] flex flex-col gap-4 sm:gap-5">
       {/* ── Hero ── */}
       <SectionCard className="!py-5">
         <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -622,15 +610,10 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
               Поэтому на мобильном блок занимает всю ширину и переносится, а с sm —
               прежнее поведение (нерастяжимая группа справа). */}
           <div className="flex items-center gap-3 sm:gap-4 flex-wrap w-full sm:w-auto sm:shrink-0">
-            <button
-              onClick={copyReport}
-              disabled={!planFact}
-              className="tap-target flex items-center gap-2 px-3.5 py-2 text-sm font-semibold border border-[var(--color-border)] rounded-xl text-[var(--color-text)] hover:border-[var(--color-border-focus)] disabled:opacity-40 transition-colors"
-              title="Скопировать отчёт по менеджеру (BB-код для чата Битрикса)"
-            >
-              {copied ? <Check size={15} className="text-[var(--color-positive,#2f9e44)]" /> : <Copy size={15} />}
-              {copied ? 'Скопировано' : 'Копировать для отчёта'}
-            </button>
+            {/* Кнопка «Копировать для отчёта» убрана (правка владельца 06.08:
+                «убери оттуда, у нас есть спец раздел для этого»): сборка отчёта
+                живёт в /profile/report, где для неё есть шаблоны, период и выбор
+                показателей. Две точки сборки одного текста — это две правды. */}
             <div className="flex flex-col items-center gap-1">
               <div className="relative w-[78px] h-[78px]">
                 <svg width={78} height={78} viewBox="0 0 78 78" className="-rotate-90">
@@ -813,7 +796,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           )}
         </>
       )}
-      </>)}
+      </div>)}
     </div>
     </PullToRefresh>
   );
