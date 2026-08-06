@@ -13,6 +13,7 @@ import { BotSubscriptionSettings } from './BotSubscriptionSettings';
 import { RopDigestSettings } from './RopDigestSettings';
 import { MyFeedbackLog } from './MyFeedbackLog';
 import { PinSettingsCard } from './PinSettingsCard';
+import { DirectAccessCard } from './DirectAccessCard';
 
 // Личные настройки (задача 3045, §1: `/profile/settings?tab=personal|notifications`,
 // модалка пароля — `?modal=password`). Раньше это была вся страница `/profile` с
@@ -247,6 +248,12 @@ export function ProfileSettingsPage() {
 
                 {/* Пин-код на денежные операции (задача #2995) */}
                 <PinSettingsCard ssoAccount={/^bx\d+$/.test(me?.user.login ?? '')} />
+
+                {/* Доступ по прямой ссылке (сценарий владельца 05.08): вошёл через
+                    Битрикс → получил ссылку → задал пароль → сохранил как приложение.
+                    Показываем ВСЕМ: у людей, заведённых из Битрикса (логин bx<id>),
+                    пароля нет вовсе, а остальным даёт способ перевыпустить свой. */}
+                <DirectAccessCard />
 
                 {/* Корзина СВОИХ отчётов (задача 3045, §4). Общая корзина уехала на
                     /settings/trash под право section.settings — но рядовой менеджер

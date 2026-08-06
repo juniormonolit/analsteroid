@@ -25,6 +25,19 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        // ЛК целиком (правка владельца 05.08: «в локальное приложение Битрикса
+        // надо выводить по сути /profile»). Раньше внутри портала жила ОТДЕЛЬНАЯ
+        // страница /bx/manager с одной карточкой — все новые разделы (Движуха,
+        // Коллеги, Кошелёк, Награды, Заявки, Уведомления) внутри Битрикса были
+        // недостижимы, потому что ссылки ведут на /profile/*, а фреймить их
+        // запрещал CSP ниже. Открываем портлу именно ЛК — и только его:
+        // /home, /settings и отчёты по-прежнему не фреймятся.
+        source: '/profile/:path*',
+        headers: [
+          { key: 'Content-Security-Policy', value: `frame-ancestors 'self' ${portalOrigin}` },
+        ],
+      },
+      {
         // Обработчик входа тоже открывается ВНУТРИ iframe портала — под общий
         // запрет ниже он попасть не должен, иначе приложение не откроется вовсе.
         source: '/api/bitrix/app',
@@ -35,7 +48,7 @@ const nextConfig: NextConfig = {
       {
         // Всё остальное фреймить нельзя — до сих пор заголовка не было вообще,
         // то есть встроить приложение в свой сайт мог любой (кликджекинг).
-        source: '/((?!bx/|api/bitrix/app).*)',
+        source: '/((?!bx/|profile|api/bitrix/app).*)',
         headers: [
           { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },

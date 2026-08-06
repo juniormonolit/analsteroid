@@ -37,6 +37,14 @@ interface DashboardData {
   absorption: AbsorptionBySource;
   health: { emission: number; absorption: number; freeSinkAmount: number; freeSinkShare: number | null; toBurn30d: number };
   circulation: { totalEball: number; totalRub: number };
+  // Рублёвая смета (правка владельца 05.08): фактическая стоимость геймификации.
+  rubEconomics: {
+    rate: number; onHandMlt: number; onHandRub: number;
+    emittedAllMlt: number; emittedAllRub: number;
+    emittedMonthMlt: number; emittedMonthRub: number;
+    spentMaterialRub: number; spentPayoutRub: number; spentTotalRub: number;
+    immaterialRub: number; pendingRub: number;
+  };
   xp: { summary: XpSummary; rows: XpRow[] };
 }
 
@@ -132,13 +140,63 @@ export function GamificationDashboard() {
   if (isLoading) return <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>;
   if (isError || !data) return <p className="text-sm text-[var(--color-negative)]">Не удалось загрузить дашборд.</p>;
 
-  const { currencyName, emission, absorption, health, circulation, emissionMomPct, xp } = data;
+  const { currencyName, emission, absorption, health, circulation, emissionMomPct, xp, rubEconomics: rub } = data;
   const freeSinkPct = health.freeSinkShare === null ? null : Math.round(health.freeSinkShare * 1000) / 10;
   const freeSinkOk = freeSinkPct !== null && freeSinkPct >= 25 && freeSinkPct <= 35;
   const netFlow = health.emission - health.absorption;
 
+  const rubFmt = (v: number) => `${Math.round(v).toLocaleString('ru-RU')} ₽`;
+
   return (
     <div className="flex flex-col gap-4">
+      {/* ── Рублёвая смета (правка владельца 05.08): «сколько потрачено, сколько
+             за текущий месяц, сколько в эквиваленте на руках». Три РАЗНЫЕ вещи
+             намеренно разведены: обязательство ≠ выдано ≠ реально оплачено. ── */}
+      <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-4">
+        <div className="mb-3 flex flex-wrap items-baseline gap-2">
+          <h2 className="text-base font-bold text-[var(--color-text)]">💰 Сколько это стоит в рублях</h2>
+          <span className="text-[11px] text-[var(--color-text-muted)]">
+            по курсу {rub.rate.toLocaleString('ru-RU')} ₽ за 1 {currencyName} (Настройки → Награды)
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+            <div className="text-[11px] text-[var(--color-text-muted)]">Реально потрачено</div>
+            <div className="text-2xl font-extrabold tabular-nums text-[var(--color-negative)]">{rubFmt(rub.spentTotalRub)}</div>
+            <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+              призы {rubFmt(rub.spentMaterialRub)} · выплаты в ЗП {rubFmt(rub.spentPayoutRub)}
+            </div>
+          </div>
+          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+            <div className="text-[11px] text-[var(--color-text-muted)]">На руках у сотрудников</div>
+            <div className="text-2xl font-extrabold tabular-nums text-[var(--color-text)]">{rubFmt(rub.onHandRub)}</div>
+            <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+              {num(rub.onHandMlt)} {currencyName} — обязательство, не трата
+            </div>
+          </div>
+          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+            <div className="text-[11px] text-[var(--color-text-muted)]">Начислено за месяц</div>
+            <div className="text-2xl font-extrabold tabular-nums text-[var(--color-text)]">{rubFmt(rub.emittedMonthRub)}</div>
+            <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+              за всё время {rubFmt(rub.emittedAllRub)}
+            </div>
+          </div>
+          <div className="rounded-xl border border-[var(--color-border)] px-3.5 py-3">
+            <div className="text-[11px] text-[var(--color-text-muted)]">Куплено, но не выдано</div>
+            <div className="text-2xl font-extrabold tabular-nums text-[var(--color-text)]">{rubFmt(rub.pendingRub)}</div>
+            <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
+              лежит в инвентарях · привилегии {rubFmt(rub.immaterialRub)}
+            </div>
+          </div>
+        </div>
+        <p className="mt-2.5 text-[11px] text-[var(--color-text-muted)] max-w-[92ch]">
+          «Реально потрачено» — деньги, которые компания отдала: выданные материальные призы и выплаты
+          рублёвого кошелька. Отгулы и прочие привилегии показаны отдельно: это рабочее время, а не деньги.
+          Материальные считаются по цене продажи в {currencyName} — оценка сверху; станет точной, когда у
+          товаров появится себестоимость в рублях.
+        </p>
+      </div>
+
       {/* Агрегаты в обращении */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card title={`Всего в обращении, ${currencyName}`}>

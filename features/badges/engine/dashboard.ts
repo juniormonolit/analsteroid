@@ -157,3 +157,93 @@ export async function getBalanceRows(db: Pool): Promise<BalanceRow[]> {
     spent30: Number(x.spent30),
   }));
 }
+
+// ── Рублёвая смета геймификации (правка владельца 05.08: «админ на дашборде
+// должен видеть фактическую стоимость в рублях: сколько потрачено, сколько за
+// текущий месяц, сколько в эквиваленте на руках у пользователей») ─────────────
+//
+// Курс — badge_coin_settings.mlt_rub_rate (миграция 153, дефолт 7.5 ₽ за 1 MLT).
+// Считаем ЧЕТЫРЕ разные вещи и НЕ смешиваем их: это принципиально, иначе смета
+// врёт в обе стороны.
+//   1) Обязательство — MLT на руках × курс. Деньги ещё не потрачены, но обещаны.
+//   2) Начислено — эмиссия (за всё время и за текущий месяц) × курс: сколько
+//      обещаний выдано.
+//   3) Реально потрачено — то, за что компания заплатила деньгами: активированные
+//      МАТЕРИАЛЬНЫЕ предметы (по цене покупки) + выплаты рублёвого кошелька в ЗП.
+//   4) Нематериальное — активированные привилегии (отгул, поздний старт): это
+//      рабочее время, а не деньги; показываем отдельной строкой, в «потрачено» НЕ
+//      включаем, чтобы не раздувать цифру затрат.
+// Пока у товаров нет поля себестоимости (задача «магазин как интернет-магазин»),
+// материальные считаем по цене продажи в MLT × курс — это ОЦЕНКА сверху, о чём
+// UI честно предупреждает.
+
+export interface RubEconomics {
+  rate: number;
+  onHandMlt: number;      // MLT на руках у сотрудников
+  onHandRub: number;      // они же в рублях — обязательство компании
+  emittedAllMlt: number;
+  emittedAllRub: number;
+  emittedMonthMlt: number;
+  emittedMonthRub: number;
+  spentMaterialRub: number;   // активированные материальные призы
+  spentPayoutRub: number;     // выплаты рублёвого кошелька в ЗП
+  spentTotalRub: number;      // 3) реальные деньги
+  immaterialRub: number;      // 4) привилегии — время, не деньги
+  pendingRub: number;         // куплено, но ещё не активировано (в инвентаре)
+}
+
+export async function getRubEconomics(db: Pool): Promise<RubEconomics> {
+  const rateRes = await db.query<{ rate: string }>(
+    'SELECT COALESCE(mlt_rub_rate, 7.5) AS rate FROM badge_coin_settings WHERE id = 1',
+  ).catch(() => ({ rows: [{ rate: '7.5' }] }));
+  const rate = Number(rateRes.rows[0]?.rate ?? 7.5);
+
+  const [circ, emitAll, emitMonth, inv, payout] = await Promise.all([
+    db.query<{ mlt: string }>(
+      `SELECT coalesce(sum(amount), 0) AS mlt FROM badge_coin_ledger WHERE currency = 'EBALL'`),
+    db.query<{ mlt: string }>(
+      `SELECT coalesce(sum(amount), 0) AS mlt FROM badge_coin_ledger WHERE currency = 'EBALL' AND amount > 0`),
+    db.query<{ mlt: string }>(
+      `SELECT coalesce(sum(amount), 0) AS mlt FROM badge_coin_ledger
+        WHERE currency = 'EBALL' AND amount > 0 AND created_at >= ${MONTH_START}`),
+    // Инвентарь: цена покупки в MLT по статусам. used = выданное (реальная трата),
+    // owned/activation_requested = обязательство, ещё не выданное.
+    db.query<{ material_used: string; immaterial_used: string; pending: string }>(
+      `SELECT
+         coalesce(sum(i.price_paid) FILTER (WHERE i.status = 'used' AND s.category IN ('material','team')), 0) AS material_used,
+         coalesce(sum(i.price_paid) FILTER (WHERE i.status = 'used' AND s.category NOT IN ('material','team')), 0) AS immaterial_used,
+         coalesce(sum(i.price_paid) FILTER (WHERE i.status IN ('owned','activation_requested')), 0) AS pending
+       FROM inventory_items i
+       LEFT JOIN shop_items s ON s.id = i.shop_item_id
+       WHERE i.currency = 'EBALL'`).catch(() => ({ rows: [{ material_used: '0', immaterial_used: '0', pending: '0' }] })),
+    // Рублёвый кошелёк: выплаты в ЗП — уже настоящие рубли, курс не применяем.
+    db.query<{ rub: string }>(
+      `SELECT coalesce(-sum(amount), 0) AS rub FROM badge_coin_ledger
+        WHERE currency = 'RUB' AND source = 'payout' AND amount < 0`)
+      .catch(() => ({ rows: [{ rub: '0' }] })),
+  ]);
+
+  const onHandMlt = Number(circ.rows[0]?.mlt ?? 0);
+  const emittedAllMlt = Number(emitAll.rows[0]?.mlt ?? 0);
+  const emittedMonthMlt = Number(emitMonth.rows[0]?.mlt ?? 0);
+  const materialUsed = Number(inv.rows[0]?.material_used ?? 0);
+  const immaterialUsed = Number(inv.rows[0]?.immaterial_used ?? 0);
+  const pendingMlt = Number(inv.rows[0]?.pending ?? 0);
+  const spentPayoutRub = Number(payout.rows[0]?.rub ?? 0);
+  const spentMaterialRub = materialUsed * rate;
+
+  return {
+    rate,
+    onHandMlt,
+    onHandRub: onHandMlt * rate,
+    emittedAllMlt,
+    emittedAllRub: emittedAllMlt * rate,
+    emittedMonthMlt,
+    emittedMonthRub: emittedMonthMlt * rate,
+    spentMaterialRub,
+    spentPayoutRub,
+    spentTotalRub: spentMaterialRub + spentPayoutRub,
+    immaterialRub: immaterialUsed * rate,
+    pendingRub: pendingMlt * rate,
+  };
+}

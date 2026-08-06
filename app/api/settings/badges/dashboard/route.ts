@@ -5,7 +5,7 @@ import { systemDb, analyticsDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import {
   getMonthlyEmission, getPrevMonthlyEmission, getMonthlyAbsorption,
-  getCirculation, getBalanceRows,
+  getCirculation, getBalanceRows, getRubEconomics,
 } from '@/features/badges/engine/dashboard';
 import { getExpiringSoonTotal } from '@/features/badges/engine/wallet';
 import { getXpDashboard } from '@/features/badges/engine/xpDashboard';
@@ -23,7 +23,7 @@ export async function GET() {
   const db = systemDb();
   const [
     currencyName, emission, prevEmission, { abs: absorption, freeSinkAmount },
-    circulation, toBurn30d, balanceRows, orgRes, xp,
+    circulation, toBurn30d, balanceRows, orgRes, xp, rubEconomics,
   ] = await Promise.all([
     getCurrencyName(db),
     getMonthlyEmission(db),
@@ -38,6 +38,8 @@ export async function GET() {
          FROM sa.org_resolved_hierarchy WHERE is_active = true`,
     ),
     getXpDashboard(db),
+    // Рублёвая смета (правка владельца 05.08): фактическая стоимость геймификации.
+    getRubEconomics(db),
   ]);
 
   const orgById = new Map(orgRes.rows.map(r => [r.manager_id, r]));
@@ -74,6 +76,7 @@ export async function GET() {
   }).sort((a, b) => b.totalXp - a.totalXp);
 
   return NextResponse.json({
+    rubEconomics,
     currencyName,
     balances,
     emission,
