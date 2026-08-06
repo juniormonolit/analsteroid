@@ -5,7 +5,7 @@
 // (useUnreadCount) и эта страница. Данные — те же /api/notifications (GET
 // список + PATCH «прочитать»), новых ручек не заводим.
 import Link from 'next/link';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 export interface NotificationRow {
@@ -52,9 +52,30 @@ export function NotificationsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
   });
 
+  // Подсветка нового ЗА ЭТОТ ЗАХОД. Раньше её фактически не было, хотя код был
+  // написан: открытие раздела сразу помечало всё прочитанным, список
+  // перезапрашивался с unread=false, и синие точки гасли на глазах — человек не
+  // успевал увидеть, что именно пришло нового. Теперь id, пришедшие
+  // непрочитанными, запоминаются на время визита и подсвечиваются, даже когда
+  // сервер уже считает их прочитанными. Накапливаем, а не снимаем снимок один
+  // раз: страница опрашивается каждые 2 минуты, и уведомление, прилетевшее пока
+  // человек её читает, тоже обязано подсветиться.
+  const [newIds, setNewIds] = useState<Set<number>>(() => new Set());
+  useEffect(() => {
+    if (!data) return;
+    setNewIds(prev => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const n of data.notifications) {
+        if (n.unread && !next.has(n.id)) { next.add(n.id); changed = true; }
+      }
+      return changed ? next : prev; // без changed — бесконечный цикл рендеров
+    });
+  }, [data]);
+
   // «Увидел — счётчик погас» (механика владельца): открытие раздела помечает
-  // всё прочитанным. Список при этом никуда не девается — гаснет только
-  // подсветка и кружок у пункта меню.
+  // всё прочитанным. Гаснет кружок у пункта меню; подсветка в списке живёт до
+  // ухода со страницы (см. newIds выше).
   useEffect(() => {
     if (unread > 0 && !markAll.isPending) markAll.mutate();
     // намеренно только по unread: повторный вызов при том же значении не нужен
@@ -78,9 +99,12 @@ export function NotificationsPage() {
         ) : (
           <div className="flex flex-col">
             {list.map(n => {
+              // Подсветка — по newIds, а не по n.unread: сервер гасит unread
+              // сразу при входе, а человеку нужно успеть увидеть новое.
+              const isNew = newIds.has(n.id);
               const row = (
-                <div className={`flex items-start gap-2.5 border-b border-[var(--color-border)] py-3 last:border-0 ${n.unread ? '' : 'opacity-70'}`}>
-                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${n.unread ? 'bg-[var(--color-accent)]' : 'bg-transparent'}`} />
+                <div className={`flex items-start gap-2.5 border-b border-[var(--color-border)] py-3 last:border-0 ${isNew ? '' : 'opacity-70'}`}>
+                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${isNew ? 'bg-[var(--color-accent)]' : 'bg-transparent'}`} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-2">
                       <span className="text-[14px] font-semibold text-[var(--color-text)]">{n.title}</span>
