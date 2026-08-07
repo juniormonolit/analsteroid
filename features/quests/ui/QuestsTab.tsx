@@ -272,7 +272,7 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
                 <span className={c.status === 'failed' ? 'line-through text-[var(--color-text-muted)]' : 'font-semibold text-[var(--color-text)]'}>{c.title}</span>
                 <span className="ml-auto tabular-nums text-[var(--color-text-muted)]">
                   {c.status === 'taken' && `${fmtNum(c.progress)} / ${fmtNum(c.target)} · до ${c.deadline?.split('-').reverse().join('.')}`}
-                  {c.status === 'done' && `✅ +${c.rewardEballs} (депозит вернулся)`}
+                  {c.status === 'done' && `✅ +${c.rewardEballs} MLT (депозит вернулся)`}
                   {c.status === 'failed' && `✕ депозит ${c.deposit} сгорел`}
                 </span>
               </div>
@@ -305,7 +305,7 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
                   <span className="text-[12px] font-semibold text-[var(--color-text)]">{c.title}</span>
                 </div>
                 <div className="text-[11px] tabular-nums text-[var(--color-text-muted)]">
-                  +{c.rewardEballs} еб · +{c.rewardXp} XP · депозит <b>{c.deposit}</b>
+                  +{c.rewardEballs} MLT · +{c.rewardXp} XP · депозит <b>{c.deposit}</b>
                 </div>
                 {isSelf && (
                   <button type="button" disabled={busy} onClick={() => void takeC(c.id)}
@@ -341,7 +341,7 @@ export function QuestsTab({ managerId, isSelf }: { managerId: string; isSelf: bo
                 </span>
                 <span className="ml-auto whitespace-nowrap tabular-nums text-[var(--color-text-muted)]">
                   {h.periodEnd.slice(0, 10).split('-').reverse().join('.')} ·
-                  {h.status === 'done' ? ` +${h.rewardEballs}` : ' сгорел'}
+                  {h.status === 'done' ? ` +${h.rewardEballs} MLT` : ' сгорел'}
                 </span>
               </div>
             ))}
