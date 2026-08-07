@@ -44,6 +44,8 @@ export interface ReportTabSnapshot {
   sortDir: string;
   columnGroups: { name: string; metricIds: string[] }[];
   metricFilters: Record<string, unknown>;
+  /** «Фильтр сделок» (задача 07.08) — условия, режущие набор сделок отчёта. */
+  dealFilters: unknown[];
   createdTimeFilter: string;
   firstTouchFilter: string;
   search: string;

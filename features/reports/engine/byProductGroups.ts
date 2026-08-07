@@ -7,6 +7,7 @@ import { buildProductGroupFilter, productGroupCacheKey } from './productGroupFil
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ReportRow, ProductGroupMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
+import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
 
 // ── Funnel metadata ───────────────────────────────────────────────────────
@@ -121,6 +122,8 @@ export interface ByProductGroupsOptions {
   // lib/metrics/offHoursFilters.ts) — не funnel-based, идут прямо в SQL WHERE.
   createdTimeFilter?: CreatedTimeFilter;
   firstTouchFilter?: FirstTouchFilter;
+  /** «Фильтр сделок» (задача 07.08): режет сам набор сделок отчёта. */
+  dealFilters?: DealFilter[];
 }
 
 export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promise<ReportRow[]> {
@@ -165,10 +168,13 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
   if (deptManagerWhere) whereParts.push(deptManagerWhere);
   // Задача 1569: фильтры по нерабочему времени — не funnel-based, идут в WHERE
   // (как managerId/deptManagerWhere), а не в постфактум-фильтр по funnel_id ниже.
-  const offhWhereStr = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter)]
+  // Тем же путём идёт «Фильтр сделок» (задача 07.08): он тоже режет конкретные
+  // сделки, а не воронки, поэтому обязан быть и в WHERE, и в ключе кэша строк.
+  const df = buildDealFilterWhere(opts.dealFilters);
+  const offhWhereStr = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter), df.sql]
     .filter(Boolean).join(' AND ');
   if (offhWhereStr) whereParts.push(offhWhereStr);
-  const offhKey = `${createdTimeFilter}:${firstTouchFilter}`;
+  const offhKey = `${createdTimeFilter}:${firstTouchFilter}|df:${df.key}`;
 
   // Фильтр товарных групп (мультиселект раздела «Графики», задача 29.07) —
   // параметризованный (см. productGroupFilter.ts). Здесь этот отчёт УЖЕ группирует

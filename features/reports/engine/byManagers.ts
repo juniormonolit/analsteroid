@@ -8,6 +8,7 @@ import { buildProductGroupFilter, productGroupCacheKey } from './productGroupFil
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ReportRow, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
+import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
 
 // ── Funnel metadata ───────────────────────────────────────────────────────
@@ -125,6 +126,8 @@ export interface ByManagersOptions {
   // SQL WHERE (как pgWhere/srcWhere), а не в память вместе с dealScope/clientType.
   createdTimeFilter?: CreatedTimeFilter;
   firstTouchFilter?: FirstTouchFilter;
+  /** «Фильтр сделок» (задача 07.08): режет сам набор сделок отчёта. */
+  dealFilters?: DealFilter[];
 }
 
 export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRow[]> {
@@ -219,9 +222,10 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   // Задача 1569: фильтры по нерабочему времени НЕ funnel-based (в отличие от
   // dealScope/clientType ниже) — режут конкретные сделки, значит идут прямо в SQL
   // WHERE (как pgWhere/srcWhere) и обязаны быть частью ключа кэша строк.
-  const offhWhere = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter)]
+  const df = buildDealFilterWhere(opts.dealFilters);
+  const offhWhere = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter), df.sql]
     .filter(Boolean).join(' AND ');
-  const offhKey = `${createdTimeFilter}:${firstTouchFilter}`;
+  const offhKey = `${createdTimeFilter}:${firstTouchFilter}|df:${df.key}`;
 
   // Общий WHERE для сделок этого разреза (менеджер IS NOT NULL + пг/источник/
   // нерабочее время) — переиспользуется И обычным collected-запросом, И снимком

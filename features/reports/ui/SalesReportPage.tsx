@@ -1,9 +1,11 @@
 'use client';
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { DealFilterButton } from './DealFilterButton';
+import { describeDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import { useUrlState, dateRangeParam, enumParam, stringParam, type UrlDateRange } from '@/lib/hooks/useUrlState';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Trash2, Info } from 'lucide-react';
+import { Pencil, Trash2, Info, Filter } from 'lucide-react';
 import { hasPerm } from '@/lib/auth/perms';
 import type { SessionUser } from '@/lib/auth/session';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
@@ -492,6 +494,23 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const [firstTouchFilter, setFirstTouchFilter] = useUrlState<FirstTouchFilter>('firstTouch', enumParam(
     ['all', 'off_hours', 'business_hours'], 'all',
   ));
+  // «Фильтр сделок» (задача владельца 07.08): условия, режущие набор сделок ВСЕГО
+  // отчёта. В отличие от createdTimeFilter выше, персистится и в URL, и в
+  // сохранённом отчёте (решение владельца: «сохранять и в ссылке, и в отчёте» —
+  // чтобы можно было сделать постоянный «Отчёт по крупным сделкам» и скинуть его
+  // РОПу ссылкой). JSON в query-параметре: условий немного, а собственный
+  // компактный формат пришлось бы парсить в двух местах.
+  const [dealFilters, setDealFilters] = useUrlState<DealFilter[]>('dealFilters', {
+    parse: (raw) => {
+      if (!raw) return [];
+      try {
+        const v = JSON.parse(raw);
+        return Array.isArray(v) ? v as DealFilter[] : [];
+      } catch { return []; }
+    },
+    serialize: (v) => (v.length ? JSON.stringify(v) : null),
+    default: [],
+  });
   const [columnGroups, setColumnGroups] = useState<{ name: string; metricIds: string[] }[]>([]);
   const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
 
@@ -629,6 +648,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped,
     sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups,
     metricFilters: metricFilters as Record<string, unknown>,
+    dealFilters,
     createdTimeFilter, firstTouchFilter, search,
   }), [period, comparison, dealScope, clientType, grouping, metricIds, comparisonDisplay, metricDisplayModes, comparisonThreshold, productGroupMode, highlights, pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides, accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, numberAlign, accountType, drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped, sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups, metricFilters, createdTimeFilter, firstTouchFilter, search]);
 
@@ -677,6 +697,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     if (!keep('sortDir')) setSortDir((s.sortDir ?? 'desc') as 'asc' | 'desc');
     setColumnGroups(s.columnGroups ?? []);
     setMetricFilters((s.metricFilters ?? {}) as MetricFilters);
+    // «Фильтр сделок» — как и остальные настройки отчёта, применяется из пресета,
+    // но keep() уважает уже стоящий в URL фильтр: ссылка с фильтром важнее
+    // сохранённого в отчёте (человек прислал конкретный срез — показываем его).
+    if (!keep('dealFilters')) setDealFilters((s.dealFilters ?? []) as DealFilter[]);
     if (!keep('createdTime')) setCreatedTimeFilter((s.createdTimeFilter ?? 'all') as CreatedTimeFilter);
     if (!keep('firstTouch')) setFirstTouchFilter((s.firstTouchFilter ?? 'all') as FirstTouchFilter);
     if (!keep('q')) setSearch(s.search ?? '');
@@ -803,7 +827,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // fetchedMetricIds only grows — removals don't trigger re-fetch, additions do
   const metricIdsForQuery = fetchedMetricIds.includes('all_core') ? ['all_core'] : [...fetchedMetricIds].sort();
   const sourceMode = reportSlug === 'by-sources';
-  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter];
+  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters];
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey,
@@ -824,6 +848,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           sourceDimension: sourceMode ? sourceDimension : undefined,
           createdTimeFilter,
           firstTouchFilter,
+          dealFilters: dealFilters.length ? dealFilters : undefined,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -1537,12 +1562,20 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           // «Создать группу» в одном ряду с «Настройки отчёта»/«Сравнение»
           // (правка Серёги 31.07); в source-режиме группы не поддерживаются.
           // Кнопка — тумблер режима выбора чекбоксами (31.07 №2).
-          userGroupsSlot: !sourceMode ? (
-            <CreateGroupButton
-              active={groupSelectMode}
-              onClick={() => (groupSelectMode ? exitGroupSelect() : setGroupSelectMode(true))}
-            />
-          ) : undefined,
+          // «Фильтр сделок» (задача владельца 07.08) — тем же слотом, рядом со
+          // «Сравнением» и «Создать группу», как он и просил. В source-режиме
+          // тоже доступен: фильтр режет сделки, а не сущности строк.
+          userGroupsSlot: (
+            <>
+              <DealFilterButton value={dealFilters} onChange={setDealFilters} />
+              {!sourceMode && (
+                <CreateGroupButton
+                  active={groupSelectMode}
+                  onClick={() => (groupSelectMode ? exitGroupSelect() : setGroupSelectMode(true))}
+                />
+              )}
+            </>
+          ),
         };
 
         // Задача 1714 (мобильный тулбар, <768px): владелец прислал скрин — управление
@@ -1560,6 +1593,26 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           </>
         );
       })()}
+
+      {/* Плашка активного «Фильтра сделок» (задача 07.08). Фильтр режет весь
+          отчёт и живёт в URL/сохранённом отчёте — значит его легко не заметить и
+          решить, что упали продажи. Показываем условия словами прямо над
+          таблицей, со сбросом в один клик. */}
+      {dealFilters.length > 0 && (
+        <div className="mx-3 sm:mx-6 mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border px-3 py-2 text-xs"
+          style={{
+            borderColor: 'color-mix(in srgb, var(--color-accent) 40%, transparent)',
+            backgroundColor: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
+          }}>
+          <Filter size={13} className="shrink-0 text-[var(--color-accent)]" />
+          <span className="font-semibold text-[var(--color-text)]">Отчёт построен не по всем сделкам:</span>
+          <span className="min-w-0 text-[var(--color-text-muted)]">{describeDealFilters(dealFilters).join(' · ')}</span>
+          <button type="button" onClick={() => setDealFilters([])}
+            className="tap-target ml-auto shrink-0 font-semibold text-[var(--color-accent)] hover:underline">
+            Сбросить
+          </button>
+        </div>
+      )}
 
       {isNew && selectedMetricIds.length === 0 && (
         <div className="mx-6 mt-3 flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3 rounded-lg border border-dashed border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-4 py-3">

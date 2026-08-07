@@ -4,6 +4,7 @@ import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { buildProductGroupFilter } from './productGroupFilter';
 import { computeCalculated } from './calculated';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
+import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
 import type { Metric, DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 
@@ -39,6 +40,8 @@ export interface MetricSeriesOptions {
   productGroupIds?: string[];
   createdTimeFilter?: CreatedTimeFilter;
   firstTouchFilter?: FirstTouchFilter;
+  /** «Фильтр сделок» (задача 07.08): режет сам набор сделок отчёта. */
+  dealFilters?: DealFilter[];
 }
 
 export interface SeriesBucket { bucket: string; value: number | null }
@@ -135,6 +138,7 @@ export async function fetchMetricSeries(opts: MetricSeriesOptions): Promise<Metr
   const offhWhere = [
     createdTimeWhere('d', opts.createdTimeFilter ?? 'all'),
     firstTouchWhere('d', opts.firstTouchFilter ?? 'all'),
+    buildDealFilterWhere(opts.dealFilters).sql,
   ].filter(Boolean).join(' AND ');
 
   // sums[bucket][depId]

@@ -1,3 +1,4 @@
+import type { DealFilter } from '@/lib/metrics/dealFilters';
 import type { DealScope, ClientType, Grouping, ProductGroupMode, ComparisonDisplay, AccountType, BorderMode } from '@/lib/metrics/types';
 
 export type PeriodAnchor = 'current' | 'previous';
@@ -89,6 +90,9 @@ export interface SavedReport {
   sortDir?: 'asc' | 'desc';
   // Visual column groups (super-headers). Pinned columns always render left, outside groups.
   columnGroups?: { name: string; metricIds: string[] }[];
+  // «Фильтр сделок» (задача 07.08, миграция 162): условия, режущие набор сделок
+  // всего отчёта. Формат и разбор — lib/metrics/dealFilters.ts.
+  dealFilters?: DealFilter[];
   periodMode: PeriodMode;
   relativePeriod: RelativePeriod | null;
   comparisonMode: ComparisonMode;

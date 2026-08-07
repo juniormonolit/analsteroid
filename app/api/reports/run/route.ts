@@ -24,6 +24,7 @@ import { getWorkingDaysByMonthInRange } from '@/lib/plans/dailyPlan';
 import { periodDateStr } from '@/lib/period';
 import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
+import { validateDealFilters } from '@/lib/metrics/dealFilters';
 
 interface PeriodPlanEntry { planSales: number; planShipments: number }
 
@@ -174,6 +175,12 @@ export async function POST(req: NextRequest) {
     // НЕ персистится в SavedReport — см. FiltersMenu.tsx/SalesReportPage.tsx).
     createdTimeFilter = 'all' as CreatedTimeFilter,
     firstTouchFilter = 'all' as FirstTouchFilter,
+    // «Фильтр сделок» (задача владельца 07.08): условия, режущие сам набор
+    // сделок отчёта — до расчёта метрик, одинаково для числителя и знаменателя
+    // конверсий. Валидация формы — validateDealFilters, разбор в SQL —
+    // buildDealFilterWhere (lib/metrics/dealFilters.ts): поля и операторы из
+    // белого списка, значения экранируются, потому что приходят от человека.
+    dealFilters,
   } = body;
 
   if (!isValidPeriodInput(period)) {
@@ -188,6 +195,9 @@ export async function POST(req: NextRequest) {
   if (productGroupIds !== undefined && (!Array.isArray(productGroupIds) || productGroupIds.length > 200 || productGroupIds.some((v: unknown) => typeof v !== 'string' || v.length > 200))) {
     return NextResponse.json({ error: 'productGroupIds должен быть массивом строк (макс. 200 элементов, каждая ≤200 символов)' }, { status: 400 });
   }
+
+  const dealFiltersError = validateDealFilters(dealFilters);
+  if (dealFiltersError) return NextResponse.json({ error: dealFiltersError }, { status: 400 });
 
   const start = Date.now();
 
@@ -204,6 +214,7 @@ export async function POST(req: NextRequest) {
     accountType,
     createdTimeFilter,
     firstTouchFilter,
+    dealFilters,
   };
   const compOpts = {
     period: { from: new Date(comparisonPeriod.from), to: new Date(comparisonPeriod.to) },
@@ -213,6 +224,7 @@ export async function POST(req: NextRequest) {
     accountType,
     createdTimeFilter,
     firstTouchFilter,
+    dealFilters,
   };
 
   // Задача 10.07/1595: общие для обеих групп план-метрик даты — "сегодня" МСК и
