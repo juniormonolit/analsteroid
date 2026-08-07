@@ -692,12 +692,26 @@ async function expireOverdueQuests(system: Pool, today: string): Promise<void> {
 }
 
 /** Пересчёт прогресса активных квестов менеджера + автозачёт выполненных +
- *  провал просроченных. Возвращает свежие квесты текущих периодов + историю. */
-export async function refreshQuests(system: Pool, mgr: number): Promise<{ current: QuestRow[]; history: QuestRow[] }> {
+ *  провал просроченных. Возвращает свежие квесты текущих периодов + историю.
+ *
+ *  ПОРЯДОК ОПЕРАЦИЙ ВАЖЕН (баг найден 06.08.2026). Раньше просроченные гасились
+ *  ПЕРВЫМИ — до пересчёта прогресса. Ночной тик идёт в 03:00, то есть вчерашний
+ *  дневной квест к этому моменту уже `period_end < today` и улетал в `failed`,
+ *  так и не узнав, что человек вчера продал. Замер на живых данных: из 174
+ *  случаев «продажа в день квеста реально была» закрылось 11. Закрыться квест
+ *  мог только если человек сам открыл вкладку до полуночи.
+ *  Теперь: сперва считаем прогресс по ВСЕМ активным (включая просроченные —
+ *  questProgress фильтрует сделки по границам периода квеста, так что задним
+ *  числом считается корректно), и только потом гасим то, что не дотянуло.
+ *
+ *  `expire: false` — для тика, который крутит цикл по всем менеджерам: гашение
+ *  глобальное (один UPDATE на всю таблицу), поэтому внутри цикла оно убило бы
+ *  чужие квесты до того, как до них дойдёт очередь считать прогресс. Тик гасит
+ *  сам, один раз, в самом конце. */
+export async function refreshQuests(
+  system: Pool, mgr: number, opts: { expire?: boolean } = {},
+): Promise<{ current: QuestRow[]; history: QuestRow[] }> {
   const today = mskToday();
-  // Просроченные активные — в failed (молча по деньгам — ничего не списывается;
-  // не молча по уведомлению — задача 2759 добавила пуш, см. expireOverdueQuests).
-  await expireOverdueQuests(system, today);
   await ensureQuests(system, mgr);
 
   const act = await system.query(`SELECT * FROM quests WHERE bitrix_id=$1 AND status='active'`, [mgr]);
@@ -714,6 +728,9 @@ export async function refreshQuests(system: Pool, mgr: number): Promise<{ curren
       }
     }
   }
+  // Просроченные и не дотянувшие — в failed (молча по деньгам, ничего не
+  // списывается; с пушем — задача 2759). Только ПОСЛЕ пересчёта, см. коммент выше.
+  if (opts.expire !== false) await expireOverdueQuests(system, today);
   const cur = await system.query(
     `SELECT * FROM quests WHERE bitrix_id=$1 AND status<>'rerolled' AND period_end >= $2 ORDER BY
        CASE slot WHEN 'day' THEN 0 WHEN 'week1' THEN 1 WHEN 'week2' THEN 2 WHEN 'month' THEN 3 ELSE 4 END`,
@@ -946,7 +963,6 @@ export interface QuestAwardRow {
 
 export async function questTick(system: Pool, activeManagerIds: number[]): Promise<{ awards: QuestAwardRow[]; generatedFor: number }> {
   const today = mskToday();
-  await expireOverdueQuests(system, today);
   // Доска контрактов (миграция 126): пул недели + прогресс/дедлайны взятых.
   try {
     const { ensureContractPool, refreshContracts } = await import('./contracts');
@@ -959,12 +975,17 @@ export async function questTick(system: Pool, activeManagerIds: number[]): Promi
   let generatedFor = 0;
   for (const mgr of activeManagerIds) {
     try {
-      await refreshQuests(system, mgr); // генерация + прогресс + автозачёт
+      // expire:false — гасим ОДИН раз после цикла, иначе первый же менеджер
+      // своим глобальным UPDATE похоронит просрочку остальных до их пересчёта.
+      await refreshQuests(system, mgr, { expire: false }); // генерация + прогресс + автозачёт
       generatedFor++;
     } catch (e) {
       console.warn(`[quests] тик менеджера ${mgr} упал:`, e instanceof Error ? e.message : e);
     }
   }
+  // Всё, что не дотянуло до цели за свой период, — в failed. Строго после
+  // пересчёта всех менеджеров.
+  await expireOverdueQuests(system, today);
 
   // Квест-бейджи (активированы миграцией 125):
   const awards: QuestAwardRow[] = [];

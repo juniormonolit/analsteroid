@@ -960,8 +960,24 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     // 13.06) — 222 из 429 активных сотрудников (52%) НИКОГДА не получали
     // квесты, т.к. их id не было в activeIds. Источник — sa.org_resolved_hierarchy.
     try {
+      // Задача 2999 (06.08.2026): раньше квесты генерились ВСЕМ активным
+      // сотрудникам — включая логистику, маркетинг, снабжение и руководство.
+      // У непродающего личная медиана продаж = 0, а цель квеста считается как
+      // clamp(1.2 × медиана, 1, p90) → зажимается в 1. Отсюда каталог, забитый
+      // «Продай 1 сделку»: 1 091 из 1 770 дневных квестов (62%) уходили людям,
+      // которые не продают в принципе, и молча сгорали. Теперь квесты получают
+      // только те, у кого есть продажи за последние 90 дней: новичок попадает
+      // в выборку сразу после первой сделки, уволенный выпадает через 90 дней.
+      // ЛК у остальных не отнимается (решение владельца 05.08) — просто не
+      // выдаём им продажные задания, которые они физически не могут выполнить.
       const activeIds = await analyticsDb().query<{ id: number }>(
-        `SELECT manager_bitrix_user_id::int AS id FROM sa.org_resolved_hierarchy WHERE is_active`,
+        `SELECT h.manager_bitrix_user_id::int AS id
+           FROM sa.org_resolved_hierarchy h
+          WHERE h.is_active
+            AND EXISTS (SELECT 1 FROM sa.deals d
+                         WHERE d.current_manager_id = h.manager_bitrix_user_id::int
+                           AND d.sold_at >= now() - interval '90 days'
+                           AND coalesce(d.amount, 0) > 0)`,
       );
       const qt = await questTick(systemDb(), activeIds.rows.map(r => r.id));
       for (const a of qt.awards) {
