@@ -187,9 +187,30 @@ export async function PATCH(req: NextRequest) {
       : `UPDATE inventory_items SET status = 'owned', resolved_at = now(), resolver_login = $2, resolve_comment = $3, requested_at = NULL WHERE id = $1 RETURNING item_name`,
     [id, session.login, comment],
   );
-  // Уведомление менеджеру + пуш «Аналитиком» (Bitrix imbot, best-effort).
   const itemName = upd.rows[0]?.item_name ?? 'предмет';
   const approved = body.action === 'approve';
+
+  // Антифарм (задача 2997): товар, облегчающий условие награды, не должен эту
+  // награду приносить. «Почистить хвосты» снимает зависшие сделки, а «Чистая
+  // воронка» платит за неделю без просрочек — без блокировки получалась петля
+  // «купил чистку за MLT → получил награду в MLT». Какие именно сделки сняты
+  // «по купону», система знать не может (чистит РОП руками в Битриксе), зато
+  // достоверно знает факт и дату активации — глушим награду на окно.
+  if (approved) {
+    await db.query(
+      `INSERT INTO badge_award_blocks (bitrix_id, badge_key, blocked_from, blocked_to, reason, inventory_item_id)
+       SELECT $2::int, s.blocks_badge_key,
+              (now() AT TIME ZONE 'Europe/Moscow')::date - 7,
+              (now() AT TIME ZONE 'Europe/Moscow')::date + s.blocks_days,
+              'активация товара: ' || i.item_name, i.id
+         FROM inventory_items i
+         JOIN shop_items s ON s.name = i.item_name
+        WHERE i.id = $1 AND s.blocks_badge_key IS NOT NULL AND s.blocks_days IS NOT NULL`,
+      [id, Number(row.rows[0].bitrix_id)],
+    ).catch(e => console.warn('[shop] блокировка награды не записана:', e instanceof Error ? e.message : e));
+  }
+
+  // Уведомление менеджеру + пуш «Аналитиком» (Bitrix imbot, best-effort).
   const title = approved ? `Заявка одобрена: ${itemName}` : `Заявка отклонена: ${itemName}`;
   const bodyText = approved
     ? `Одобрил: ${session.login}`

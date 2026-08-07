@@ -1042,6 +1042,34 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     );
     const priceByKeyTier = new Map<string, number>(pricesRes.rows.map(r => [`${r.badge_key}:${r.tier}`, r.price]));
 
+    // Антифарм-блокировки (миграция 161, задача 2997): окна, в которые человеку
+    // не начисляется конкретная награда, потому что он купил товар, облегчающий
+    // её условие («Почистить хвосты» против «Чистой воронки»). Отсекаем ПЕРЕД
+    // записью, а не в каждом вычислителе: правило одно для всех наград, и в
+    // движке не должно появляться второе место, где его можно забыть.
+    // Период награды без даты (`periodDate === null`) — награда за событие
+    // «вообще», привязать её к окну нельзя, поэтому такие не режем.
+    const blocksRes = await client.query<{ bitrix_id: number; badge_key: string; from: string; to: string }>(
+      `SELECT bitrix_id, badge_key, blocked_from::text AS from, blocked_to::text AS to FROM badge_award_blocks`,
+    ).catch(() => ({ rows: [] as { bitrix_id: number; badge_key: string; from: string; to: string }[] }));
+    let blocked = 0;
+    if (blocksRes.rows.length > 0) {
+      const byKey = new Map<string, { from: string; to: string }[]>();
+      for (const b of blocksRes.rows) {
+        const k = `${b.badge_key}:${b.bitrix_id}`;
+        (byKey.get(k) ?? byKey.set(k, []).get(k)!).push({ from: b.from, to: b.to });
+      }
+      const before = awards.length;
+      const kept = awards.filter(a => {
+        const wins = byKey.get(`${a.badgeKey}:${a.bitrixId}`);
+        if (!wins || a.periodDate === null) return true;
+        return !wins.some(w => a.periodDate! >= w.from && a.periodDate! <= w.to);
+      });
+      blocked = before - kept.length;
+      awards.length = 0; awards.push(...kept);
+      if (blocked > 0) console.log(`[badges] антифарм: отброшено ${blocked} наград по blocked-окнам`);
+    }
+
     // ── запись в БД ──────────────────────────────────────────────────────────
     let inserted = 0; let updated = 0;
     const byBadge: Record<string, number> = {};
