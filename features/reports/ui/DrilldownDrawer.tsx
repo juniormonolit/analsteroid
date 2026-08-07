@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { DateRange } from '@/lib/period';
 import { recomputeComparison } from '@/lib/period';
+import type { DealFilter } from '@/lib/metrics/dealFilters';
 import type { Metric, ComparisonDisplay, DealScope, ClientType, ProductGroupMode, AccountType, TotalsMetricValue, BorderMode, Grouping } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
@@ -84,6 +85,8 @@ interface Props {
   departmentIds?: string[];
   accountType?: AccountType;
   dealFields?: string[];
+  /** «Фильтр сделок» отчёта — дрилл-даун обязан резать тем же условием. */
+  dealFilters?: DealFilter[];
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
   // Report-level «Группировка в drilldown» setting (true = grouped mini-report, false = flat deals)
@@ -479,7 +482,7 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
 // Общие query-параметры дрилл-даун сделок. ВАЖНО: фильтр отделов передаётся всегда
 // (отчёт применяет его к цифрам — сделки обязаны совпадать); тип аккаунтов — только
 // для отчёта по менеджерам (в остальных отчётах движок его игнорирует).
-function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | 'productGroupMode' | 'departmentIds' | 'accountType' | 'dimensionType'>): Record<string, string> {
+function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | 'productGroupMode' | 'departmentIds' | 'accountType' | 'dimensionType' | 'dealFilters'>): Record<string, string> {
   return {
     from: p.period.from.toISOString(),
     to: p.period.to.toISOString(),
@@ -488,11 +491,17 @@ function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | '
     ...(p.clientType ? { clientType: p.clientType } : {}),
     ...(p.dimensionType !== 'source' && p.departmentIds?.length ? { departmentIds: p.departmentIds.join(',') } : {}),
     ...(p.dimensionType === 'manager' && p.accountType && p.accountType !== 'all' ? { accountType: p.accountType } : {}),
+    // «Фильтр сделок» отчёта (задача 07.08) — ЕДИНАЯ точка для всех трёх сборщиков
+    // параметров дрилл-дауна (плоский список, суб-дрилл, мини-отчёт). Живой баг с
+    // прода: в ячейке 9 сделок, а по клику открывались все 17 — агрегат фильтр
+    // применял, а список сделок нет. Добавлять фильтр в каждый сборщик по
+    // отдельности нельзя: следующий забудут ровно так же.
+    ...(p.dealFilters?.length ? { dealFilters: JSON.stringify(p.dealFilters) } : {}),
   };
 }
 
 // ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
-function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen, tableScale }: Props) {
+function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen, tableScale, dealFilters }: Props) {
   // Групповые цели: отдел → teamId; филиал → менеджерское измерение branch;
   // «Итого» → весь срез (фильтры отчёта по отделам/типу аккаунтов — в baseDealParams)
   const dimensionParams: Record<string, string> =
@@ -507,7 +516,7 @@ function FlatDealsView({ target, dimensionType, period, dealScope, clientType, p
     : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
     : { productGroup: target.id };
   const params = new URLSearchParams({
-    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType }),
+    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFilters }),
     ...dimensionParams,
     ...(target.metricId ? { metricFilter: target.metricId } : {}),
   });
@@ -516,9 +525,9 @@ function FlatDealsView({ target, dimensionType, period, dealScope, clientType, p
 
 // ── Суб-дрилл: сделки по паре «цель × строка мини-отчёта» + метрика ─────────
 function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
-  const { sub, onBack, period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFields, onDealOpen, tableScale } = props;
+  const { sub, onBack, period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFields, onDealOpen, tableScale, dealFilters } = props;
   const params = new URLSearchParams({
-    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType }),
+    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFilters }),
     ...(sub.managerId ? { managerId: sub.managerId } : {}),
     ...(sub.productGroup !== undefined ? { productGroup: sub.productGroup } : {}),
     ...(sub.sourceDim && sub.sourceVal !== undefined ? { sourceDim: sub.sourceDim, sourceVal: sub.sourceVal } : {}),
@@ -674,7 +683,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   const {
     target, dimensionType, period, comparison, dealScope, clientType, productGroupMode,
     metricIds, departmentIds, dealFields, sourceDimension, drilldownDimension,
-    onDealOpen, onCellDrill, sort, onSortChange,
+    onDealOpen, onCellDrill, sort, onSortChange, dealFilters,
   } = props;
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const mainDim = sourceDimension ?? 'brand';
@@ -720,7 +729,9 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
     };
 
   const { data: runData, isLoading } = useQuery({
-    queryKey: ['drill-mini', dimensionType, dim, target.id, fromIso, toIso, cmpFromIso, cmpToIso, dealScope, clientType, productGroupMode, metricIds, departmentIds],
+    // dealFilters — и в ключе, и в теле: без ключа React Query отдал бы
+    // закэшированный НЕотфильтрованный мини-отчёт при смене фильтра.
+    queryKey: ['drill-mini', dimensionType, dim, target.id, fromIso, toIso, cmpFromIso, cmpToIso, dealScope, clientType, productGroupMode, metricIds, departmentIds, dealFilters],
     queryFn: async () => {
       const res = await fetch('/api/reports/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -731,6 +742,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
           metricIds,
           dealScope,
           clientType,
+          dealFilters: dealFilters?.length ? dealFilters : undefined,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -746,7 +758,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
       : { sourceDim: mainDim, sourceVal: target.id }),
   });
   const { data: dealData } = useQuery({
-    queryKey: ['drill-mini-deals', dimensionType, mainDim, target.id, fromIso, toIso, dealScope, clientType, productGroupMode, departmentIds],
+    queryKey: ['drill-mini-deals', dimensionType, mainDim, target.id, fromIso, toIso, dealScope, clientType, productGroupMode, departmentIds, dealFilters],
     queryFn: () => fetch(`/api/reports/deals?${dealParams}`).then(r => r.json()),
   });
 

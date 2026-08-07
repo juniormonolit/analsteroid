@@ -281,13 +281,13 @@ export async function POST(req: NextRequest) {
     ]);
   } else if (reportSlug === 'by-product-groups') {
     [currentRows, compRows] = await Promise.all([
-      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, productGroupIds, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
-      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, productGroupIds, managerId, departmentIds, createdTimeFilter, firstTouchFilter }),
+      fetchByProductGroups({ period: opts.period, dealScope, clientType, productGroupMode, productGroupIds, managerId, departmentIds, createdTimeFilter, firstTouchFilter, dealFilters }),
+      fetchByProductGroups({ period: compOpts.period, dealScope, clientType, productGroupMode, productGroupIds, managerId, departmentIds, createdTimeFilter, firstTouchFilter, dealFilters }),
     ]);
   } else if (reportSlug === 'by-sources') {
     [currentRows, compRows] = await Promise.all([
-      fetchBySources({ period: opts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter }),
-      fetchBySources({ period: compOpts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter }),
+      fetchBySources({ period: opts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter, dealFilters }),
+      fetchBySources({ period: compOpts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter, dealFilters }),
     ]);
   }
 

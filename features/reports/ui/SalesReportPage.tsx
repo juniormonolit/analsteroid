@@ -1754,6 +1754,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           departmentIds={departmentIds}
           accountType={accountType}
           dealFields={dealFields}
+          dealFilters={dealFilters}
           sortBy={sortBy}
           sortDir={sortDir}
           grouped={drilldownGrouped}

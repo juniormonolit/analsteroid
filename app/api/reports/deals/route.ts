@@ -7,6 +7,7 @@ import { resolveFilterClause } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
 import { STAGE_SNAPSHOT_GROUPS, DEALS_IN_WORK_METRIC_IDS } from '@/features/reports/engine/stageSnapshot';
 import type { Metric } from '@/lib/metrics/types';
+import { buildDealFilterWhere, validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
 
 // Снимок «Стадии (сейчас)» (задача 2059) — metricId → stage_id этой группы.
@@ -109,10 +110,31 @@ export async function GET(req: NextRequest) {
   const all            = sp.get('all') === '1';     // drilldown строки «Итого» — весь срез
   const departmentIds  = (sp.get('departmentIds') ?? '').split(',').filter(Boolean);
   const accountType    = sp.get('accountType');     // managers | logists (фильтр отчёта)
+  // «Фильтр сделок» отчёта (задача 07.08) — дрилл-даун ОБЯЗАН резать тем же
+  // условием, что агрегат. Живой баг с прода: в отчёте у Ворониной 9 сделок с
+  // фильтром «чек > 50 000 + утеплитель», а по клику открывались все 17 —
+  // список ходит в этот роут, а фильтр туда не доезжал. Разбор тот же
+  // (buildDealFilterWhere), поэтому разъехаться уже не может.
+  const dealFiltersRaw = sp.get('dealFilters');
 
   if ((!managerId && !managerIds.length && !productGroup && !productGroups.length && !sourceDim && !teamId && !all) || !from || !to) {
     return NextResponse.json({ error: 'managerId, productGroup, sourceDim+sourceVal, teamId or all=1, plus from/to required' }, { status: 400 });
   }
+
+  let dealFilters: DealFilter[] = [];
+  if (dealFiltersRaw) {
+    try {
+      const parsed = JSON.parse(dealFiltersRaw);
+      if (Array.isArray(parsed)) dealFilters = parsed as DealFilter[];
+    } catch { /* битый параметр в ссылке — не роняем дрилл-даун, см. ниже */ }
+    const err = validateDealFilters(dealFilters);
+    // Невалидный фильтр — 400, а НЕ «показать все сделки»: молча отдать полный
+    // список вместо отфильтрованного здесь особенно вредно, человек как раз
+    // проверяет, из чего сложилось число в ячейке.
+    if (err) return NextResponse.json({ error: err }, { status: 400 });
+  }
+  const dealFilterSql = buildDealFilterWhere(dealFilters).sql;
+  const dealFilterWhere = dealFilterSql ? `AND ${dealFilterSql}` : '';
 
   const fromDate = new Date(from);
   const toExcl   = addDays(startOfDay(new Date(to)), 1);
@@ -354,6 +376,7 @@ export async function GET(req: NextRequest) {
       ${dimensionFilter}
       ${funnelFilter}
       ${clientFilter}
+      ${dealFilterWhere}
     ORDER BY COALESCE(d.sold_at, d.delivered_at, d.created_at) DESC
     LIMIT 1000
   `;
@@ -372,6 +395,7 @@ export async function GET(req: NextRequest) {
       ${dimensionFilter}
       ${funnelFilter}
       ${clientFilter}
+      ${dealFilterWhere}
   `;
 
   const [res, countRes, mgrInfo, srcMap] = await Promise.all([
