@@ -308,17 +308,32 @@ async function fetchDeptMedians(deptId: string | null): Promise<{ repShare: numb
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi));
 
-function targetFrom(series: number[], antiAbuseTarget = true): { target: number; median: number; p75: number; p90: number } {
+/** Цель квеста из личного ряда результатов.
+ *
+ *  Планка — ЛИЧНЫЙ p75 («лучше трёх четвертей своих же периодов»), но не ниже
+ *  «медиана + 1»: у ровного исполнителя p75 совпадает с медианой, и без этого
+ *  пола квест был бы «повтори обычный день».
+ *
+ *  Было `1.2 × медиана` (решение владельца 06.08.2026 поднять до Q3): при
+ *  недельной медиане 6 это давало цель 7 — прибавка, которую человек не
+ *  замечает. Сверка планки с компанией (замер 06.08 по 116 активным): продажи
+ *  день медиана 1 / Q3 2, неделя 6 / 10, месяц 27 / 42; брони неделя 9 / 15,
+ *  месяц 41 / 65. То есть личный p75 у среднего менеджера ложится ровно на
+ *  общекомпанейский Q3, а у слабого остаётся достижимым — чего фиксированный
+ *  порог «10 продаж в неделю всем» не дал бы (у Q1-менеджера это 3 продажи,
+ *  цель была бы недосягаема весь год). */
+function targetFrom(series: number[], antiAbuseTarget = true, floor = 0): { target: number; median: number; p75: number; p90: number } {
   const med = median(series) ?? 0;
   const p75 = pct(series, 0.75) ?? med;
   const p90 = pct(series, 0.90) ?? Math.max(med * 2, 1);
-  let target = clamp(Math.round(1.2 * med), 1, Math.max(Math.round(p90), 1));
+  const ceiling = Math.max(Math.round(p90), Math.round(med) + 1, Math.round(floor), 1);
+  let target = clamp(Math.max(Math.round(p75), Math.round(med) + 1, Math.round(floor)), 1, ceiling);
   if (antiAbuseTarget) {
     // Перевыполняющий (факт >= цели в 3 из 4 последних периодов) — цель выше.
     const last4 = series.slice(-4);
     const hits = last4.filter(v => v >= target).length;
     if (last4.length === 4 && hits >= 3) {
-      target = Math.max(target, Math.round(Math.max(1.2 * med, 1.15 * p75)));
+      target = Math.max(target, Math.round(1.15 * p75));
     }
   }
   return { target: Math.max(target, 1), median: med, p75, p90 };
@@ -425,8 +440,14 @@ async function buildCandidates(mgr: number, period: QuestPeriod): Promise<GenQue
     }
   }
 
-  // Просадка объёма / дефолтные продажные цели (вес 1.0)
-  const cntT = targetFrom(series.cnt);
+  // Просадка объёма / дефолтные продажные цели (вес 1.0).
+  // Пол = медиана компании за этот период (решение владельца 06.08.2026: «все
+  // награды строить на превышении медианного значения»). Личный p75 сам по себе
+  // у слабого менеджера опускается ниже общей медианы — пол не даёт цели стать
+  // «повтори свой обычный результат», а потолок p90 не даёт ей стать
+  // недосягаемой. Медианы кэшируются в Redis на 6 часов, вызов дешёвый.
+  const cmed = await fetchCompanyMedians().catch(() => ({} as CompanyMedians));
+  const cntT = targetFrom(series.cnt, true, cmed[period]?.sales_count ?? 0);
   const qCnt: GenQuest = {
     slot: 'week1', period, category: 'sales_count', target: cntT.target,
     targetGroup: null, pairFirst: null, title: '', meta: { weakness: 'volume', ...cntT },
@@ -585,12 +606,16 @@ export async function ensureQuests(system: Pool | PoolClient, mgr: number): Prom
     if (cands[0]) await insertQuest(system, mgr, cands[0], 'month', bounds, settings, cm, xpLevel);
   }
   if (needDay) {
-    // Дневной: ротация простых продажных целей (чёт/нечет дня — количество/сумма).
+    // Дневной: цель от личного ряда, пол — дневная медиана компании.
+    // Было: чёт/нечет дня → «личная цель» / жёстко target=1. Ротация давала
+    // сильному продавцу халяву через день, а у непродающего вырождалась в
+    // вечное «продай 1». Теперь цель считается всегда, а единица остаётся
+    // только там, где личная дневная медиана нулевая — то есть у человека,
+    // который продаёт реже чем через день, и для него это честный вызов.
     const ps = await fetchPersonal(mgr);
-    const t = targetFrom(ps.daily.cnt, false);
-    const even = Number(today.slice(8, 10)) % 2 === 0;
+    const t = targetFrom(ps.daily.cnt, false, cm.day?.sales_count ?? 0);
     const bounds = periodBounds('day', today);
-    const g: GenQuest = even && (median(ps.daily.cnt) ?? 0) >= 1
+    const g: GenQuest = (median(ps.daily.cnt) ?? 0) >= 1
       ? { slot: 'day', period: 'day', category: 'sales_count', target: Math.max(t.target, 1), targetGroup: null, pairFirst: null, title: '', meta: { rotation: 'count', ...t } }
       : { slot: 'day', period: 'day', category: 'sales_count', target: 1, targetGroup: null, pairFirst: null, title: '', meta: { rotation: 'simple' } };
     g.title = buildTitle({ ...g }, 'сегодня');
