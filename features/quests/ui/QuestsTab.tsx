@@ -53,6 +53,7 @@ const SLOT_LABELS: Record<Slot, string> = {
 // 05.08). Ключи — category из миграции 125 (quests) и 126 (quest_contracts).
 const CATEGORY_EMOJI: Record<string, string> = {
   sales_count: '🤝',
+  bookings_count: '🔖',
   sales_amount: '💰',
   group_sales: '📦',
   repeat_sales: '🔁',

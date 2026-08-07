@@ -209,6 +209,18 @@ export async function takeContract(system: Pool, mgr: number, contractId: number
 
 async function contractProgress(c: ContractRow): Promise<number> {
   const fromDay = c.takenAt ? new Date(c.takenAt).toLocaleDateString('sv-SE', { timeZone: MSK }) : mskToday();
+  // Брони (задача 59) — своя выборка по reserved_at, тяжёлый запрос по продажам
+  // ниже для них не нужен. В пуле контрактов эта категория пока не генерится,
+  // но справочник категорий общий с квестами, и считаться она обязана честно.
+  if (c.category === 'bookings_count') {
+    const b = await analyticsDb().query<{ n: string }>(`
+      SELECT count(*)::text AS n FROM sa.deals d
+      WHERE d.reserved_at IS NOT NULL AND d.current_manager_id = $1
+        AND (d.reserved_at AT TIME ZONE '${MSK}')::date >= $2::date
+        AND ($3::date IS NULL OR (d.reserved_at AT TIME ZONE '${MSK}')::date <= $3::date)
+    `, [c.takenBy, fromDay, c.deadline]);
+    return Number(b.rows[0]?.n ?? 0);
+  }
   const res = await analyticsDb().query<{ sold_day: string; amount: string; grps: string[] | null; prev_grps: string[] | null }>(`
     WITH seq AS (
       SELECT d.deal_id, d.current_manager_id, d.sold_at, coalesce(d.amount,0) AS amount, dg.grps,
@@ -236,6 +248,8 @@ async function contractProgress(c: ContractRow): Promise<number> {
       && c.pairFirst !== null && (d.prev_grps ?? []).includes(c.pairFirst)).length;
     case 'repeat_sales': return deals.length; // в пуле не генерится
     case 'distinct_groups': return new Set(deals.flatMap(d => d.grps ?? [])).size;
+    // 'bookings_count' сюда не доходит — обработана выше, до выборки продаж
+    // (TS это видит по раннему return и не требует ветки).
   }
 }
 

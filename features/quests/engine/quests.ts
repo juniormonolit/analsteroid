@@ -47,7 +47,7 @@ const MSK = 'Europe/Moscow';
 
 export type QuestSlot = 'day' | 'week1' | 'week2' | 'month' | 'extra';
 export type QuestPeriod = 'day' | 'week' | 'month';
-export type QuestCategory = 'sales_count' | 'sales_amount' | 'group_sales' | 'repeat_sales' | 'crosssell' | 'distinct_groups';
+export type QuestCategory = 'sales_count' | 'sales_amount' | 'group_sales' | 'repeat_sales' | 'crosssell' | 'distinct_groups' | 'bookings_count';
 export type QuestTier = 'white' | 'green' | 'blue' | 'epic' | 'legendary';
 export type QuestStatus = 'active' | 'done' | 'failed' | 'rerolled';
 
@@ -128,7 +128,8 @@ export interface CompanyMedians {
  *  Считаются по менеджеро-периодам с активностью за последние 8 недель /
  *  6 месяцев (как в калибровке дизайн-дока), Redis 6ч. */
 export async function fetchCompanyMedians(): Promise<CompanyMedians> {
-  return cached('quests:company-medians:v2', 6 * 3600, async () => {
+  // v3 — добавлены брони (задача 59), форма кэша изменилась.
+  return cached('quests:company-medians:v3', 6 * 3600, async () => {
     const res = await analyticsDb().query<{
       period: string; mgr: number; cnt: string; amt: string; rep: string; grp: string;
     }>(`
@@ -158,12 +159,35 @@ export async function fetchCompanyMedians(): Promise<CompanyMedians> {
       FROM sold WHERE day >= (now() AT TIME ZONE '${MSK}')::date - 30
       GROUP BY 2, day
     `);
-    const acc: Record<string, { cnt: number[]; amt: number[]; rep: number[]; grp: number[] }> = {};
+    // Брони (задача 59) — отдельным запросом, а не колонкой в предыдущем:
+    // менеджеро-период с бронями и без продаж (и наоборот) существует, при
+    // джойне такие строки либо пропали бы, либо принесли фиктивные нули в
+    // чужие ряды. Оба запроса под общим кэшем на 6 часов.
+    const bkgRes = await analyticsDb().query<{ period: string; mgr: number; bkg: string }>(`
+      WITH booked AS (
+        SELECT d.current_manager_id AS mgr, (d.reserved_at AT TIME ZONE '${MSK}')::date AS day
+        FROM sa.deals d
+        WHERE d.reserved_at IS NOT NULL AND d.current_manager_id IS NOT NULL
+          AND d.reserved_at >= now() - interval '190 days' AND coalesce(d.amount,0) < 100000000
+      )
+      SELECT 'week' AS period, mgr, count(*)::text AS bkg
+      FROM booked WHERE day >= (now() AT TIME ZONE '${MSK}')::date - 56
+      GROUP BY 2, date_trunc('week', day)
+      UNION ALL
+      SELECT 'month', mgr, count(*)::text FROM booked GROUP BY 2, date_trunc('month', day)
+      UNION ALL
+      SELECT 'day', mgr, count(*)::text
+      FROM booked WHERE day >= (now() AT TIME ZONE '${MSK}')::date - 30
+      GROUP BY 2, day
+    `);
+    const acc: Record<string, { cnt: number[]; amt: number[]; rep: number[]; grp: number[]; bkg: number[] }> = {};
+    const bucket = (p: string) => (acc[p] ??= { cnt: [], amt: [], rep: [], grp: [], bkg: [] });
     for (const r of res.rows) {
-      const a = (acc[r.period] ??= { cnt: [], amt: [], rep: [], grp: [] });
+      const a = bucket(r.period);
       a.cnt.push(Number(r.cnt)); a.amt.push(Number(r.amt));
       a.rep.push(Number(r.rep)); a.grp.push(Number(r.grp));
     }
+    for (const r of bkgRes.rows) bucket(r.period).bkg.push(Number(r.bkg));
     const out: CompanyMedians = {};
     // Полы редких категорий (v2 калибровки): у «продай группу Y» и «допродай
     // пару» медианная база на менеджера < 1 за период — без пола цель «1 штука»
@@ -186,6 +210,9 @@ export async function fetchCompanyMedians(): Promise<CompanyMedians> {
         group_sales: Math.max((median(a.cnt) ?? 1) / Math.max(median(a.grp) ?? 1, 1), fl.group_sales ?? 0.5),
         crosssell: Math.max((median(a.rep) ?? 1) / 2, fl.crosssell ?? 0.5),
         distinct_groups: Math.max(median(a.grp) ?? 1, 1),
+        // Брони: свой ряд, пол 1 — как у продаж, без искусственных подпорок
+        // (замер 07.08: неделя 8, месяц 15, день 2 — база и так не вырожденная).
+        bookings_count: Math.max(median(a.bkg) ?? 1, 1),
       };
     }
     return out;
@@ -205,9 +232,12 @@ export function tierForTarget(category: QuestCategory, period: QuestPeriod, targ
 // ── персональная калибровка менеджера ────────────────────────────────────────
 
 interface PersonalStats {
-  weekly: { cnt: number[]; amt: number[]; rep: number[] };   // 6 последних ПОЛНЫХ недель
-  monthly: { cnt: number[]; amt: number[]; rep: number[]; grp: number[] }; // 6 полных месяцев
+  weekly: { cnt: number[]; amt: number[]; rep: number[]; bkg: number[] };   // 6 последних ПОЛНЫХ недель
+  monthly: { cnt: number[]; amt: number[]; rep: number[]; grp: number[]; bkg: number[] }; // 6 полных месяцев
   daily: { cnt: number[] };                                   // рабочие дни за 30 дн
+  // Дневного ряда броней тут нет намеренно: дневной слот брони не выдаёт
+  // (buildCandidates зовётся только с 'week'/'month'), а тянуть ряд «на будущее»
+  // — лишний UNION в горячем запросе. Понадобится — вернуть три строки.
   groups: { group: string; leads90: number; sales90: number; weeklyRate: number }[];
   pairClients: Map<string, number>;   // first_group -> клиентов, купивших её за 60 дн
   deptId: string | null;
@@ -222,6 +252,12 @@ async function fetchPersonal(mgr: number): Promise<PersonalStats> {
         FROM sa.deals d LEFT JOIN sa.funnels f ON f.id = d.funnel_id
         WHERE d.sold_at IS NOT NULL AND d.current_manager_id = $1
           AND d.sold_at >= now() - interval '200 days' AND coalesce(d.amount,0) < 100000000
+      ), booked AS (
+        -- Брони (задача 59): та же нарезка периодов, дата — reserved_at.
+        SELECT (d.reserved_at AT TIME ZONE '${MSK}')::date AS day
+        FROM sa.deals d
+        WHERE d.reserved_at IS NOT NULL AND d.current_manager_id = $1
+          AND d.reserved_at >= now() - interval '200 days' AND coalesce(d.amount,0) < 100000000
       )
       SELECT 'week' AS period, date_trunc('week', day)::date::text AS k, count(*)::text AS cnt,
              sum(amount)::text AS amt, count(*) FILTER (WHERE is_repeat)::text AS rep, '0' AS grp
@@ -236,6 +272,15 @@ async function fetchPersonal(mgr: number): Promise<PersonalStats> {
       UNION ALL
       SELECT 'day', day::text, count(*)::text, sum(amount)::text, '0', '0'
       FROM sold WHERE day >= (now() AT TIME ZONE '${MSK}')::date - 30 GROUP BY 2
+      UNION ALL
+      SELECT 'week_b', date_trunc('week', day)::date::text, count(*)::text, '0', '0', '0'
+      FROM booked WHERE day >= date_trunc('week', (now() AT TIME ZONE '${MSK}')::date)::date - 42
+             AND day < date_trunc('week', (now() AT TIME ZONE '${MSK}')::date)::date
+      GROUP BY 2
+      UNION ALL
+      SELECT 'month_b', date_trunc('month', day)::date::text, count(*)::text, '0', '0', '0'
+      FROM booked WHERE day < date_trunc('month', (now() AT TIME ZONE '${MSK}')::date)::date
+      GROUP BY 2
     `, [mgr]),
     analyticsDb().query<{ g: string; leads90: string; sales90: string }>(`
       SELECT p->>'head_group_name' AS g,
@@ -262,18 +307,21 @@ async function fetchPersonal(mgr: number): Promise<PersonalStats> {
       SELECT department_id::text FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = $1::text LIMIT 1
     `, [mgr]),
   ]);
-  const weekly = { cnt: [] as number[], amt: [] as number[], rep: [] as number[] };
-  const monthly = { cnt: [] as number[], amt: [] as number[], rep: [] as number[], grp: [] as number[] };
+  const weekly = { cnt: [] as number[], amt: [] as number[], rep: [] as number[], bkg: [] as number[] };
+  const monthly = { cnt: [] as number[], amt: [] as number[], rep: [] as number[], grp: [] as number[], bkg: [] as number[] };
   const daily = { cnt: [] as number[] };
   const monthsSorted = series.rows.filter(r => r.period === 'month').sort((a, b) => a.k.localeCompare(b.k)).slice(-6);
+  const monthsBkgSorted = series.rows.filter(r => r.period === 'month_b').sort((a, b) => a.k.localeCompare(b.k)).slice(-6);
   for (const r of series.rows) {
     if (r.period === 'week') { weekly.cnt.push(Number(r.cnt)); weekly.amt.push(Number(r.amt)); weekly.rep.push(Number(r.rep)); }
     if (r.period === 'day') daily.cnt.push(Number(r.cnt));
+    if (r.period === 'week_b') weekly.bkg.push(Number(r.cnt));
   }
   for (const r of monthsSorted) {
     monthly.cnt.push(Number(r.cnt)); monthly.amt.push(Number(r.amt));
     monthly.rep.push(Number(r.rep)); monthly.grp.push(Number(r.grp));
   }
+  for (const r of monthsBkgSorted) monthly.bkg.push(Number(r.cnt));
   return {
     weekly, monthly, daily,
     groups: groups.rows.map(r => ({
@@ -285,22 +333,40 @@ async function fetchPersonal(mgr: number): Promise<PersonalStats> {
   };
 }
 
-/** Медианы отдела (для профиля слабостей) — Redis 6ч на отдел. */
-async function fetchDeptMedians(deptId: string | null): Promise<{ repShare: number; grp: number }> {
-  const key = `quests:dept-medians:${deptId ?? 'none'}`;
+/** Медианы отдела (для профиля слабостей) — Redis 6ч на отдел.
+ *  `bkgWeek` — брони отдела в пересчёте на неделю (задача 59): медиана по
+ *  менеджерам от их броней за 90 дней, делённая на 90/7. */
+async function fetchDeptMedians(deptId: string | null): Promise<{ repShare: number; grp: number; bkgWeek: number }> {
+  const key = `quests:dept-medians:v2:${deptId ?? 'none'}`;
+  const deptJoin = deptId
+    ? `JOIN sa.org_resolved_hierarchy h ON h.manager_bitrix_user_id = d.current_manager_id::text AND h.department_id::text = '${deptId.replace(/'/g, '')}'`
+    : '';
   return cached(key, 6 * 3600, async () => {
-    const res = await analyticsDb().query<{ mgr: number; cnt: string; rep: string; grp: string }>(`
-      SELECT d.current_manager_id AS mgr, count(*)::text AS cnt,
-             count(*) FILTER (WHERE coalesce(f.is_repeat,false))::text AS rep,
-             count(DISTINCT d.head_group_name)::text AS grp
-      FROM sa.deals d LEFT JOIN sa.funnels f ON f.id = d.funnel_id
-      ${deptId ? `JOIN sa.org_resolved_hierarchy h ON h.manager_bitrix_user_id = d.current_manager_id::text AND h.department_id::text = '${deptId.replace(/'/g, '')}'` : ''}
-      WHERE d.sold_at >= now() - interval '90 days' AND d.current_manager_id IS NOT NULL
-      GROUP BY 1 HAVING count(*) >= 3
-    `);
+    // Брони — отдельным запросом: у общего WHERE здесь sold_at, и подмешивать в
+    // него reserved_at значило бы переопределить знаменатель repShare/grp,
+    // на которых профиль слабостей откалиброван.
+    const [res, bkg] = await Promise.all([
+      analyticsDb().query<{ mgr: number; cnt: string; rep: string; grp: string }>(`
+        SELECT d.current_manager_id AS mgr, count(*)::text AS cnt,
+               count(*) FILTER (WHERE coalesce(f.is_repeat,false))::text AS rep,
+               count(DISTINCT d.head_group_name)::text AS grp
+        FROM sa.deals d LEFT JOIN sa.funnels f ON f.id = d.funnel_id
+        ${deptJoin}
+        WHERE d.sold_at >= now() - interval '90 days' AND d.current_manager_id IS NOT NULL
+        GROUP BY 1 HAVING count(*) >= 3
+      `),
+      analyticsDb().query<{ mgr: number; bkg: string }>(`
+        SELECT d.current_manager_id AS mgr, count(*)::text AS bkg
+        FROM sa.deals d
+        ${deptJoin}
+        WHERE d.reserved_at >= now() - interval '90 days' AND d.current_manager_id IS NOT NULL
+        GROUP BY 1 HAVING count(*) >= 3
+      `),
+    ]);
     const shares = res.rows.map(r => Number(r.rep) / Math.max(Number(r.cnt), 1));
     const grps = res.rows.map(r => Number(r.grp));
-    return { repShare: median(shares) ?? 0.2, grp: median(grps) ?? 6 };
+    const bkgs = bkg.rows.map(r => Number(r.bkg) / (90 / 7));
+    return { repShare: median(shares) ?? 0.2, grp: median(grps) ?? 6, bkgWeek: median(bkgs) ?? 8 };
   });
 }
 
@@ -347,12 +413,25 @@ interface GenQuest {
 
 const fmtMoney = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1).replace('.0', '')} млн ₽` : `${Math.round(v / 1000)} тыс ₽`;
 
+/** Русское склонение по числу: [1, 2-4, 5+]. Простое `n < 5 ? 'сделки' :
+ *  'сделок'` врало на втором десятке — «41 сделок», «42 сделок». Раньше это не
+ *  всплывало (месячные цели по продажам редко переваливали за 20), но месячная
+ *  цель по броням — сорок с лишним, там видно сразу. */
+function plural(n: number, forms: [string, string, string]): string {
+  const a = Math.abs(Math.round(n)) % 100;
+  if (a >= 11 && a <= 14) return forms[2];
+  const d = a % 10;
+  return d === 1 ? forms[0] : d >= 2 && d <= 4 ? forms[1] : forms[2];
+}
+const DEALS_FORMS: [string, string, string] = ['сделку', 'сделки', 'сделок'];
+
 function buildTitle(q: GenQuest, endLabel: string): string {
   switch (q.category) {
-    case 'sales_count': return `Продай ${q.target} ${q.target === 1 ? 'сделку' : q.target < 5 ? 'сделки' : 'сделок'} ${endLabel}`;
+    case 'sales_count': return `Продай ${q.target} ${plural(q.target, DEALS_FORMS)} ${endLabel}`;
+    case 'bookings_count': return `Забронируй ${q.target} ${plural(q.target, DEALS_FORMS)} ${endLabel}`;
     case 'sales_amount': return `Продай на ${fmtMoney(q.target)} ${endLabel}`;
     case 'group_sales': return `Продай «${q.targetGroup}» ${q.target} раз${q.target < 5 && q.target > 1 ? 'а' : ''} ${endLabel}`;
-    case 'repeat_sales': return `Сделай ${q.target} повторн${q.target === 1 ? 'ую продажу' : q.target < 5 ? 'ые продажи' : 'ых продаж'} ${endLabel}`;
+    case 'repeat_sales': return `Сделай ${q.target} ${plural(q.target, ['повторную продажу', 'повторные продажи', 'повторных продаж'])} ${endLabel}`;
     case 'crosssell': return `Допродай «${q.targetGroup}» клиенту, купившему «${q.pairFirst}» (${q.target} шт.) ${endLabel}`;
     case 'distinct_groups': return `Продай ${q.target} разных товарных групп ${endLabel}`;
   }
@@ -440,13 +519,40 @@ async function buildCandidates(mgr: number, period: QuestPeriod): Promise<GenQue
     }
   }
 
-  // Просадка объёма / дефолтные продажные цели (вес 1.0).
-  // Пол = медиана компании за этот период (решение владельца 06.08.2026: «все
+  // Медианы компании — пол для целей (решение владельца 06.08.2026: «все
   // награды строить на превышении медианного значения»). Личный p75 сам по себе
   // у слабого менеджера опускается ниже общей медианы — пол не даёт цели стать
   // «повтори свой обычный результат», а потолок p90 не даёт ей стать
-  // недосягаемой. Медианы кэшируются в Redis на 6 часов, вызов дешёвый.
+  // недосягаемой. Кэшируются в Redis на 6 часов, вызов дешёвый.
   const cmed = await fetchCompanyMedians().catch(() => ({} as CompanyMedians));
+
+  // Брони (вес 1.25, задача 59). Владелец называет брони одним из ДВУХ главных
+  // целевых действий, а до 07.08.2026 в квестах их не было ни одной штуки —
+  // выдавать было нечего. Вес чуть ниже повторки (1.3) и чуть выше допродажи
+  // (1.2): бронь — ведущее действие воронки, но не «умение», которого у
+  // человека может не быть.
+  //
+  // База отдела — брони в пересчёте на неделю, личная — тот же ряд периодов,
+  // что у продаж. Кандидат кладётся ВСЕГДА, а не только при слабости: базовый
+  // балл 0.4 выше дефолтного продажного 0.3, поэтому у ровного менеджера два
+  // недельных слота — это «брони + продажи», ровно два целевых действия.
+  const bkgSeries = series.bkg;
+  const deptBkg = period === 'week' ? dept.bkgWeek : dept.bkgWeek * (30 / 7);
+  const persBkg = median(bkgSeries) ?? 0;
+  const bkgT = targetFrom(bkgSeries, true, cmed[period]?.bookings_count ?? 0);
+  const lastBkg = bkgSeries[bkgSeries.length - 1] ?? 0;
+  const bkgSlump = persBkg > 0 && lastBkg < 0.8 * persBkg;
+  const qBkg: GenQuest = {
+    slot: 'week1', period, category: 'bookings_count', target: Math.max(bkgT.target, 1),
+    targetGroup: null, pairFirst: null, title: '',
+    meta: { weakness: 'bookings', persBkg, deptBkg, ...bkgT },
+  };
+  qBkg.title = buildTitle(qBkg, endLabel);
+  const bkgWeak = deptBkg > 0 && persBkg < 0.8 * deptBkg
+    ? (1 - persBkg / deptBkg) * 1.25 : 0;
+  out.push({ score: Math.max(bkgWeak, bkgSlump ? 0.9 : 0.4), q: qBkg });
+
+  // Просадка объёма / дефолтные продажные цели (вес 1.0).
   const cntT = targetFrom(series.cnt, true, cmed[period]?.sales_count ?? 0);
   const qCnt: GenQuest = {
     slot: 'week1', period, category: 'sales_count', target: cntT.target,
@@ -629,7 +735,15 @@ interface PeriodDeal {
   soldDay: string; amount: number; isRepeat: boolean; grps: string[]; prevGrps: string[] | null;
 }
 
-async function fetchPeriodDeals(mgr: number, fromDay: string): Promise<PeriodDeal[]> {
+/** Факты периода: проданные сделки (sold_at) и брони (reserved_at).
+ *  Брони — отдельный ряд, а не флаг на сделке: одна и та же сделка может быть
+ *  забронирована в одном периоде, а продана в другом (или не продана вовсе),
+ *  и оба события засчитываются каждое в свой квест. Определение брони —
+ *  метрика каталога `reservations_count`: заполнен `reserved_at`, без фильтра
+ *  по воронке. */
+interface PeriodFacts { sold: PeriodDeal[]; booked: { day: string }[] }
+
+async function fetchPeriodDeals(mgr: number, fromDay: string): Promise<PeriodFacts> {
   const res = await analyticsDb().query<{
     sold_day: string; amount: string; is_repeat: boolean; grps: string[] | null; prev_grps: string[] | null;
   }>(`
@@ -661,16 +775,27 @@ async function fetchPeriodDeals(mgr: number, fromDay: string): Promise<PeriodDea
       AND (d.sold_at AT TIME ZONE '${MSK}')::date >= $2::date
       AND NOT (d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) IS NOT NULL)
   `, [mgr, fromDay]);
-  return res.rows.map(r => ({
-    soldDay: r.sold_day, amount: Number(r.amount), isRepeat: r.is_repeat,
-    grps: r.grps ?? [], prevGrps: r.prev_grps,
-  }));
+  const bkg = await analyticsDb().query<{ day: string }>(`
+    SELECT (d.reserved_at AT TIME ZONE '${MSK}')::date::text AS day
+    FROM sa.deals d
+    WHERE d.reserved_at IS NOT NULL AND d.current_manager_id = $1
+      AND (d.reserved_at AT TIME ZONE '${MSK}')::date >= $2::date
+  `, [mgr, fromDay]);
+  return {
+    sold: res.rows.map(r => ({
+      soldDay: r.sold_day, amount: Number(r.amount), isRepeat: r.is_repeat,
+      grps: r.grps ?? [], prevGrps: r.prev_grps,
+    })),
+    booked: bkg.rows.map(r => ({ day: r.day })),
+  };
 }
 
-function questProgress(q: QuestRow, deals: PeriodDeal[]): number {
-  const inPeriod = deals.filter(d => d.soldDay >= q.periodStart && d.soldDay <= q.periodEnd);
+function questProgress(q: QuestRow, facts: PeriodFacts): number {
+  const inPeriod = facts.sold.filter(d => d.soldDay >= q.periodStart && d.soldDay <= q.periodEnd);
   switch (q.category) {
     case 'sales_count': return inPeriod.length;
+    case 'bookings_count':
+      return facts.booked.filter(b => b.day >= q.periodStart && b.day <= q.periodEnd).length;
     case 'sales_amount': return inPeriod.reduce((s, d) => s + d.amount, 0);
     case 'repeat_sales': return inPeriod.filter(d => d.isRepeat).length;
     case 'group_sales': return inPeriod.filter(d => q.targetGroup !== null && d.grps.includes(q.targetGroup)).length;
@@ -743,9 +868,9 @@ export async function refreshQuests(
   const active = act.rows.map(rowFromDb);
   if (active.length > 0) {
     const minStart = active.map(q => q.periodStart).sort()[0];
-    const deals = await fetchPeriodDeals(mgr, minStart);
+    const facts = await fetchPeriodDeals(mgr, minStart);
     for (const q of active) {
-      const progress = questProgress(q, deals);
+      const progress = questProgress(q, facts);
       if (progress >= q.target) {
         await completeQuest(system, q, progress);
       } else if (progress !== q.progress) {
