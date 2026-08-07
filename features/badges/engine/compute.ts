@@ -386,8 +386,9 @@ interface OpenDealRow {
 }
 
 async function fetchDealLifecycles(): Promise<OpenDealRow[]> {
-  const res = await analyticsDb().query<{ manager_id: number; created_day: string; closed_day: string | null; head_group: string | null }>(
-    `SELECT d.current_manager_id AS manager_id,
+  const res = await analyticsDb().query<{ deal_id: string; manager_id: number; created_day: string; closed_day: string | null; head_group: string | null }>(
+    `SELECT d.deal_id::text AS deal_id,
+            d.current_manager_id AS manager_id,
             (d.created_at AT TIME ZONE '${MSK}')::date::text AS created_day,
             (LEAST(d.sold_at, d.delivered_at, d.lost_at) AT TIME ZONE '${MSK}')::date::text AS closed_day,
             d.head_group_name AS head_group
@@ -395,8 +396,33 @@ async function fetchDealLifecycles(): Promise<OpenDealRow[]> {
       WHERE d.current_manager_id IS NOT NULL AND d.created_at IS NOT NULL
         AND d.created_at >= '2025-06-01'`,
   );
+
+  // АНТИФАРМ «Чистой воронки» (задача 2997, подсказка владельца 06.08 про
+  // сервис /offload). Сделки, закрытые через сервис массовой чистки, для
+  // награды считаются ВСЁ ЕЩЁ ОТКРЫТЫМИ. Иначе получается, что человек (или РОП
+  // за него) списывает зависшие сделки в LOSS-стадию — и тем самым покупает
+  // себе «неделю без просрочек». Награда должна означать «у меня не зависают»,
+  // а не «я их массово списал».
+  // Это точнее блокировки по окну (миграция 161): сервис ведёт лог, поэтому
+  // известны КОНКРЕТНЫЕ сделки. Блокировка остаётся как общий механизм для
+  // товаров, чей эффект в логах не виден.
+  // Таблицы в разных БД (offload_close_log — system, deals — analytics), джойн
+  // невозможен: тянем id отдельно. Лог небольшой (ручные чистки), фильтруем в JS.
+  let offloaded = new Set<string>();
+  try {
+    const off = await systemDb().query<{ deal_id: string }>(
+      `SELECT DISTINCT deal_id::text AS deal_id FROM offload_close_log WHERE status = 'closed'`,
+    );
+    offloaded = new Set(off.rows.map(r => r.deal_id));
+  } catch (e) {
+    console.warn('[badges] лог offload недоступен, «Чистая воронка» считается без него:',
+      e instanceof Error ? e.message : e);
+  }
+
   return res.rows.map(r => ({
-    managerId: r.manager_id, createdDay: r.created_day, closedDay: r.closed_day, headGroup: r.head_group,
+    managerId: r.manager_id, createdDay: r.created_day,
+    closedDay: offloaded.has(r.deal_id) ? null : r.closed_day,
+    headGroup: r.head_group,
   }));
 }
 
