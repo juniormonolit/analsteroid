@@ -57,7 +57,19 @@ function nextDay(ymd: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-interface Sample { mgr: number; bucket: string; value: number }
+export interface Sample { mgr: number; bucket: string; value: number }
+
+/** Значения метрики каталога по (менеджер × период) за окно — публичная обёртка.
+ *  Ею пользуется движок веток скиллов (задача 49): четыре новые оси считаются
+ *  теми же метриками каталога, что и квесты, чтобы «награда за конверсию» и
+ *  «конверсия в отчёте» были одним числом. */
+export async function sampleMetricByManagerPeriod(
+  metricId: string, unit: MetricUnit, fromYmd: string, toYmdIncl: string,
+): Promise<Sample[]> {
+  const r = await resolveQuestMetric(metricId);
+  if (!r) return [];
+  return sampleMetric(r.metric, r.deps, unit, fromYmd, toYmdIncl);
+}
 
 /** Значения метрики по (менеджер × бакет) за окно [fromYmd, toYmd] включительно.
  *

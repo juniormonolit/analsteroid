@@ -211,8 +211,12 @@ export async function computeCategoryBadgeAwards(todayYmd: string): Promise<Cate
       // ключевом клиенте — не заслуга «хранителя». Требуем портфель.
       if (e.keys.size < MIN_KEY_CLIENTS_FOR_KEEPER) continue;
       awards.push({
+        // value — размер портфеля ключевых. Раньше был null; нужен ветке
+        // «Ключевые клиенты» (задача 49): ступени различаются именно им,
+        // и без записанного значения ротация не смогла бы решить, какая
+        // ступень заслужена.
         bitrixId: e.bitrixId, badgeKey: 'category_keykeeper', tier: null,
-        periodType: 'month', periodDate: `${e.month}-01`, value: null,
+        periodType: 'month', periodDate: `${e.month}-01`, value: e.keys.size,
       });
     }
   }

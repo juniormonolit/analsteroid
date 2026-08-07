@@ -18,6 +18,7 @@ import { cutoffForHeadGroup } from '@/features/offload/engine/cutoffs';
 import { BADGE_CATALOG, CROSS_SELL_PAIRS, TIER_LABELS, type BadgeTier } from './catalog';
 import { getManagerScopes, type ManagerScope } from './orgScopes';
 import { accrueCoins, getCurrencyName } from './coins';
+import { loadSkillContext, computeAxisAwards, rotateAward, type SkillContext } from './skills';
 import { runWalletTick } from './wallet';
 import { CUSTOM_PREFIX, validateCustomCriteria, type CustomCriteria, type CustomMetric, type CustomPeriod } from './customTemplates';
 import { computeXpTick, writeXpLedger, titleForLevel, levelFromXp, loadXpSettings, fetchQuestXp } from '@/features/xp/engine/xp';
@@ -648,6 +649,12 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     const defs = await loadDefs(client);
     const enabled = (key: string) => defs.get(key)?.enabled !== false;
     const crit = (key: string) => defs.get(key)?.criteria ?? {};
+    // Дерево скиллов (задача 49): у прокачанного менеджера порог ветвевой
+    // награды ЛИЧНЫЙ. Спрашиваем его ДО расчёта — у наград-счётчиков порог
+    // решает, какие клиенты/пары вообще попадут в счёт, и поверх готовой
+    // награды его наложить нельзя. Пустой контекст (нет миграций/уровней) =
+    // прежнее поведение с общими порогами.
+    const skills: SkillContext = await loadSkillContext(client);
     // Название валюты — один раз на весь прогон, все пуши ниже читают отсюда
     // (getCurrencyName(), НЕ литерал — задача 2747/2759).
     const currencyName = await getCurrencyName(client);
@@ -725,8 +732,9 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
         awards.push({ bitrixId: mgr, badgeKey: pairKey, tier: null, periodType: null, periodDate: null, value: count, counter: true });
       }
       if (enabled('combo_master')) {
-        const minPairs = num(crit('combo_master'), 'minPairs', 5);
+        const minPairsBase = num(crit('combo_master'), 'minPairs', 5);
         for (const [mgr, set] of pairKeysByMgr) {
+          const minPairs = skills.thresholdFor(mgr, 'combo_master', 'minPairs', minPairsBase);
           if (set.size >= minPairs) {
             awards.push({ bitrixId: mgr, badgeKey: 'combo_master', tier: null, periodType: null, periodDate: null, value: set.size, counter: true });
           }
@@ -774,11 +782,14 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
         }
       }
       if (enabled('loyal_client')) {
-        const minRepeats = num(crit('loyal_client'), 'minRepeats', 3);
+        const minRepeatsBase = num(crit('loyal_client'), 'minRepeats', 3);
         const loyal = new Map<number, number>();
         for (const [k, n] of repeatsByMgrContact) {
-          if (n >= minRepeats) {
-            const mgr = Number(k.slice(0, k.indexOf(':')));
+          const mgr = Number(k.slice(0, k.indexOf(':')));
+          // Порог — личный: у прокачавшего ветку «Повторные» в счёт идут только
+          // клиенты с бОльшим числом возвратов. Именно это владелец и называл
+          // «повышать пороги уже полученных низкоуровневых наград».
+          if (n >= skills.thresholdFor(mgr, 'loyal_client', 'minRepeats', minRepeatsBase)) {
             loyal.set(mgr, (loyal.get(mgr) ?? 0) + 1);
           }
         }
@@ -801,7 +812,7 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
 
     // «Быстрее медианы группы» (месяц, отдел)
     if (enabled('faster_than_median')) {
-      const minDeals = num(crit('faster_than_median'), 'minDeals', 3);
+      const minDealsBase = num(crit('faster_than_median'), 'minDeals', 3);
       const byMonthMgr = new Map<string, number[]>(); // `${month}:${mgr}` -> дни до продажи
       for (const d of sold) {
         if (d.soldDay < RETRO_START || d.createdDay === null) continue;
@@ -821,8 +832,9 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
         (deptPools.get(dk) ?? deptPools.set(dk, []).get(dk)!).push(...arr);
       }
       for (const [k, arr] of byMonthMgr) {
-        if (arr.length < minDeals) continue;
         const [month, mgr] = [k.slice(0, 10), Number(k.slice(11))];
+        const minDeals = skills.thresholdFor(mgr, 'faster_than_median', 'minDeals', minDealsBase);
+        if (arr.length < minDeals) continue;
         const dept = scopes.get(mgr)?.deptKey;
         if (!dept) continue;
         const pool = deptPools.get(`${month}:${dept}`);
@@ -1072,6 +1084,82 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     // не начисляется конкретная награда, потому что он купил товар, облегчающий
     // её условие («Почистить хвосты» против «Чистой воронки»). Отсекаем ПЕРЕД
     // записью, а не в каждом вычислителе: правило одно для всех наград, и в
+    // ── дерево скиллов: новые оси + ротация ступеней (задача 49) ────────────
+    // Один проход перед записью, как и антифарм ниже: правило общее, и второго
+    // места, где его можно забыть, быть не должно.
+    //
+    // Ротация = «пройдя порог, человек перестаёт получать младшую награду и
+    // начинает получать старшую». Технически это две разные операции, потому
+    // что награды устроены по-разному:
+    //   * где значение награды И ЕСТЬ измеряемая величина — сравниваем с
+    //     порогом ступени и при недоборе выбрасываем награду совсем;
+    //   * где порог фильтрует ВХОД расчёта (счётчики: клиенты с N возвратами,
+    //     пары кросс-селла, сделки быстрее медианы) — порог уже применён выше,
+    //     здесь остаётся только проставить тир.
+    {
+      const axisAwards = await computeAxisAwards(skills, RETRO_START, today).catch(e => {
+        console.warn('[skills] новые оси пропущены:', e instanceof Error ? e.message : e);
+        return [];
+      });
+      for (const a of axisAwards) {
+        if (!enabled(a.badgeKey)) continue;
+        awards.push({ bitrixId: a.bitrixId, badgeKey: a.badgeKey, tier: a.tier as BadgeTier | null,
+          periodType: a.periodType, periodDate: a.periodDate, value: a.value });
+      }
+
+      // «Дисциплина броней» — награда недельная и бинарная, ступени считаются
+      // НЕДЕЛЯМИ ПОДРЯД (миграция 166). Длину серии знает только этот проход,
+      // где видны все недели разом.
+      const planWeeks = new Map<number, string[]>();
+      for (const a of awards) {
+        if (a.badgeKey !== 'planning_discipline' || !a.periodDate) continue;
+        (planWeeks.get(a.bitrixId) ?? planWeeks.set(a.bitrixId, []).get(a.bitrixId)!).push(a.periodDate);
+      }
+      const streakAt = new Map<string, number>();   // `${mgr}:${week}` → длина серии
+      for (const [mgr, weeks] of planWeeks) {
+        weeks.sort();
+        let run = 0; let prev: string | null = null;
+        for (const w of weeks) {
+          run = prev !== null && addDays(prev, 7) === w ? run + 1 : 1;
+          prev = w;
+          streakAt.set(`${mgr}:${w}`, run);
+        }
+      }
+
+      const VALUE_ROTATED: Record<string, string> = {
+        primary_week: 'minCount', shipments_month: 'minAmount',
+        ppp_month: 'minPpp', booking_conv_month: 'minConv',
+        category_keykeeper: 'minKeyClients', quest_streak_10: 'count',
+      };
+      const TIER_ONLY = new Set(['loyal_client', 'combo_master', 'faster_than_median']);
+      const rotated: AwardRow[] = [];
+      let dropped = 0;
+      for (const a of awards) {
+        if (!skills.isBranchBadge(a.badgeKey)) { rotated.push(a); continue; }
+        if (a.badgeKey === 'planning_discipline') {
+          const step = skills.stepFor(a.bitrixId, 'planning_discipline');
+          if (!step) { rotated.push(a); continue; }
+          const need = Number(step.threshold?.minStreakWeeks ?? 0);
+          const have = streakAt.get(`${a.bitrixId}:${a.periodDate}`) ?? 0;
+          if (need > 0 && have < need) { dropped++; continue; }
+          rotated.push({ ...a, tier: step.tier as BadgeTier });
+          continue;
+        }
+        if (TIER_ONLY.has(a.badgeKey)) {
+          const t = skills.tierFor(a.bitrixId, a.badgeKey);
+          rotated.push(t ? { ...a, tier: t as BadgeTier } : a);
+          continue;
+        }
+        const field = VALUE_ROTATED[a.badgeKey];
+        if (!field) { rotated.push(a); continue; }
+        const r = rotateAward(skills, { ...a, value: a.value ?? 0 }, field);
+        if (r === null) { dropped++; continue; }
+        rotated.push({ ...a, tier: r.tier as BadgeTier | null });
+      }
+      awards.length = 0; awards.push(...rotated);
+      if (dropped > 0) console.log(`[skills] ротация: ${dropped} наград не дотянули до открытой ступени`);
+    }
+
     // движке не должно появляться второе место, где его можно забыть.
     // Период награды без даты (`periodDate === null`) — награда за событие
     // «вообще», привязать её к окну нельзя, поэтому такие не режем.
@@ -1104,7 +1192,15 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     // level up обрабатывается отдельным, точным пушем (см. ниже), не отсюда.
     const freshAwardsByMgr = new Map<number, { name: string; tier: BadgeTier | null; price: number }[]>();
     await client.query('BEGIN');
-    await writeXpLedger(client, xp.ledger);
+    // Множитель XP за пройденные пороги веток (задача 49): +5 % за порог,
+    // до +25 % на полностью прокачанной ветке. Применяется ЗДЕСЬ, а не внутри
+    // xp-движка: тот считает XP сделки, а множитель — свойство человека.
+    // В строку леджера идёт и в `mult` (аудит «почему столько»), и в total.
+    const xpLedgerRows = xp.ledger.map(r => {
+      const m = skills.multipliers(r.bitrixId).xp;
+      return m === 1 ? r : { ...r, mult: Math.round(r.mult * m * 1e4) / 1e4, totalXp: Math.round(r.totalXp * m) };
+    });
+    await writeXpLedger(client, xpLedgerRows);
     for (const a of awards) {
       const onConflict = a.counter
         ? `DO UPDATE SET value = EXCLUDED.value WHERE badge_awards.value IS DISTINCT FROM EXCLUDED.value`

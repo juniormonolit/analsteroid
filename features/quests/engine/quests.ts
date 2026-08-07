@@ -1446,13 +1446,17 @@ export async function questTick(system: Pool, activeManagerIds: number[]): Promi
     (byMgr.get(r.b) ?? byMgr.set(r.b, []).get(r.b)!).push({ slot: r.slot, pt: r.period_type, ps: r.ps, pe: r.pe, st: r.status });
   }
   for (const [mgr, list] of byMgr) {
-    // «Квестоман»: 10 выполненных подряд без провала (хронология по period_end)
-    let run = 0; let streaks = 0;
+    // «Квестоман»: 10 выполненных подряд без провала (хронология по period_end).
+    // value — САМАЯ ДЛИННАЯ серия, а не число десяток (задача 49): ступени ветки
+    // «Квесты» различаются именно длиной (10/20/35/60/100), и по счётчику
+    // десяток их не различить. Условие выдачи не изменилось: «есть десятка»
+    // и «максимальная серия >= 10» — это одно и то же.
+    let run = 0; let maxRun = 0;
     for (const q of list) {
-      if (q.st === 'done') { run++; if (run > 0 && run % 10 === 0) streaks++; }
+      if (q.st === 'done') { run++; if (run > maxRun) maxRun = run; }
       else run = 0;
     }
-    if (streaks > 0) awards.push({ bitrixId: mgr, badgeKey: 'quest_streak_10', tier: null, periodType: null, periodDate: null, value: streaks, counter: true });
+    if (maxRun >= 10) awards.push({ bitrixId: mgr, badgeKey: 'quest_streak_10', tier: null, periodType: null, periodDate: null, value: maxRun, counter: true });
     // «Пятилетка за неделю»: все недельные квесты недели закрыты (оба слота)
     const weeks = new Map<string, { done: number; total: number }>();
     for (const q of list.filter(x => x.pt === 'week')) {
