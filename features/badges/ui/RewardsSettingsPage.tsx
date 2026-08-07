@@ -15,6 +15,7 @@ import { ShopSettingsBlock } from './ShopSettings';
 import { GachaSettingsBlock } from './GachaSettings';
 import { XpSettingsBlock } from './XpSettings';
 import { QuestSettingsBlock } from './QuestSettings';
+import { QuestTemplatesBlock } from './QuestTemplates';
 import { GamificationDashboard } from './GamificationDashboard';
 import { DigestSettingsBlock } from './DigestSettings';
 import { OutboundLogBlock } from './OutboundLog';
@@ -839,6 +840,8 @@ export function RewardsSettingsPage() {
       {tab === 'xp' && !isLoading && <XpSettingsBlock />}
       {/* Квесты (миграция 125): номиналы, тиры, реролл */}
       {tab === 'quests' && !isLoading && <QuestSettingsBlock />}
+      {/* Конструктор шаблонов выдачи (задача 60, миграция 164) */}
+      {tab === 'quests' && !isLoading && <QuestTemplatesBlock />}
       {/* Магазин призов (MVP 31.07): каталог + TTL валюты + «Релизный старт» (заложен, не запускался) */}
       {tab === 'shop' && !isLoading && <ShopSettingsBlock currencyName={currencyName} />}
       {/* Гача (фаза 2): пул, шансы (валидация 100%), счётчик джекпотов */}

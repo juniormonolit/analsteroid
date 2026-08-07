@@ -37,6 +37,10 @@ import { createNotification, pushViaAnalitik } from '@/features/badges/engine/no
 import { getCurrencyName } from '@/features/badges/engine/coins';
 import { isWorkingDayJs } from '@/lib/metrics/productionCalendar';
 import { spendPinRequirement, verifyPin, type PinActorCtx } from '@/lib/auth/pin';
+import { loadQuestTemplates, matchesAudience, type QuestTemplate } from './templates';
+import {
+  metricCompanyMedian, metricPersonalSeries, metricQuestProgress, resolveQuestMetric,
+} from './metricQuests';
 
 // Результат операций кошелька квестов (реролл/докуп) — error теперь может
 // нести HTTP-статус (задача #2995): без пина -> 428, неверный -> 403,
@@ -47,7 +51,10 @@ const MSK = 'Europe/Moscow';
 
 export type QuestSlot = 'day' | 'week1' | 'week2' | 'month' | 'extra';
 export type QuestPeriod = 'day' | 'week' | 'month';
-export type QuestCategory = 'sales_count' | 'sales_amount' | 'group_sales' | 'repeat_sales' | 'crosssell' | 'distinct_groups' | 'bookings_count';
+// 'metric' — квест на произвольную метрику каталога (конструктор, задача 60):
+// не отдельная логика, а дискриминатор «цель и прогресс считает универсальный
+// вычислитель из metricQuests.ts по `quests.metric_id`».
+export type QuestCategory = 'sales_count' | 'sales_amount' | 'group_sales' | 'repeat_sales' | 'crosssell' | 'distinct_groups' | 'bookings_count' | 'metric';
 export type QuestTier = 'white' | 'green' | 'blue' | 'epic' | 'legendary';
 export type QuestStatus = 'active' | 'done' | 'failed' | 'rerolled';
 
@@ -219,8 +226,14 @@ export async function fetchCompanyMedians(): Promise<CompanyMedians> {
   });
 }
 
-export function tierForTarget(category: QuestCategory, period: QuestPeriod, target: number, cm: CompanyMedians): QuestTier {
-  const base = cm[period]?.[category] ?? 1;
+/** Тир = сложность цели относительно медианного менеджера компании.
+ *  `baseOverride` — для квестов на произвольной метрике (задача 60): их базы нет
+ *  в `CompanyMedians`, она считается отдельно в metricQuests.metricCompanyMedian. */
+export function tierForTarget(
+  category: QuestCategory, period: QuestPeriod, target: number, cm: CompanyMedians,
+  baseOverride?: number | null,
+): QuestTier {
+  const base = baseOverride != null && baseOverride > 0 ? baseOverride : (cm[period]?.[category] ?? 1);
   const ratio = target / Math.max(base, 0.0001);
   if (ratio <= 0.5) return 'white';
   if (ratio <= 0.8) return 'green';
@@ -388,18 +401,23 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi
  *  общекомпанейский Q3, а у слабого остаётся достижимым — чего фиксированный
  *  порог «10 продаж в неделю всем» не дал бы (у Q1-менеджера это 3 продажи,
  *  цель была бы недосягаема весь год). */
-function targetFrom(series: number[], antiAbuseTarget = true, floor = 0): { target: number; median: number; p75: number; p90: number } {
+function targetFrom(
+  series: number[], antiAbuseTarget = true, floor = 0,
+  // Шаг округления цели. Штуки — до единицы; деньги — до 10 тысяч (задача 60:
+  // метрика каталога может быть денежной, «продай на 517 384 ₽» — не цель).
+  round: (v: number) => number = Math.round,
+): { target: number; median: number; p75: number; p90: number } {
   const med = median(series) ?? 0;
   const p75 = pct(series, 0.75) ?? med;
   const p90 = pct(series, 0.90) ?? Math.max(med * 2, 1);
-  const ceiling = Math.max(Math.round(p90), Math.round(med) + 1, Math.round(floor), 1);
-  let target = clamp(Math.max(Math.round(p75), Math.round(med) + 1, Math.round(floor)), 1, ceiling);
+  const ceiling = Math.max(round(p90), round(med) + 1, round(floor), 1);
+  let target = clamp(Math.max(round(p75), round(med) + 1, round(floor)), 1, ceiling);
   if (antiAbuseTarget) {
     // Перевыполняющий (факт >= цели в 3 из 4 последних периодов) — цель выше.
     const last4 = series.slice(-4);
     const hits = last4.filter(v => v >= target).length;
     if (last4.length === 4 && hits >= 3) {
-      target = Math.max(target, Math.round(1.15 * p75));
+      target = Math.max(target, round(1.15 * p75));
     }
   }
   return { target: Math.max(target, 1), median: med, p75, p90 };
@@ -409,6 +427,14 @@ interface GenQuest {
   slot: QuestSlot; period: QuestPeriod; category: QuestCategory;
   target: number; targetGroup: string | null; pairFirst: string | null;
   title: string; meta: Record<string, unknown>;
+  // Ниже — только для квестов из конструктора (задача 60); у встроенных пусто.
+  metricId?: string | null;      // category='metric': какая метрика каталога
+  metricLabel?: string;          // её человеческое имя — для заголовка
+  money?: boolean;               // dataType='money' → цель печатается рублями
+  pct?: boolean;                 // dataType='percent' → к цели дописывается «%»
+  templateId?: number | null;    // из какого шаблона выдан
+  rewardOverride?: number | null; // шаблон задал награду жёстко, мимо тира
+  tierBase?: number | null;      // база тира (медиана компании по этой метрике)
 }
 
 const fmtMoney = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1).replace('.0', '')} млн ₽` : `${Math.round(v / 1000)} тыс ₽`;
@@ -434,11 +460,178 @@ function buildTitle(q: GenQuest, endLabel: string): string {
     case 'repeat_sales': return `Сделай ${q.target} ${plural(q.target, ['повторную продажу', 'повторные продажи', 'повторных продаж'])} ${endLabel}`;
     case 'crosssell': return `Допродай «${q.targetGroup}» клиенту, купившему «${q.pairFirst}» (${q.target} шт.) ${endLabel}`;
     case 'distinct_groups': return `Продай ${q.target} разных товарных групп ${endLabel}`;
+    // Квест из конструктора на произвольной метрике: имя метрики берём из
+    // каталога, чтобы формулировка совпадала с тем, как показатель называется
+    // в отчётах. Владелец может перебить своей формулировкой (title_template).
+    case 'metric': return `${q.metricLabel ?? 'Показатель'}: ${fmtTarget(q)} ${endLabel}`;
   }
 }
 
+/** Цель в тексте: деньги — рублями, проценты — с «%», остальное числом. */
+function fmtTarget(q: GenQuest): string {
+  if (q.money) return fmtMoney(q.target);
+  const n = String(Math.round(q.target * 100) / 100);
+  return q.pct ? `${n} %` : n;
+}
+
+/** Подстановки в пользовательскую формулировку шаблона.
+ *
+ *  `{target}` — цель, `{metric}` — имя показателя, `{when}` — «до воскресенья».
+ *  Отдельно `{target:бронь|брони|броней}` — цель со склонением по числу: без
+ *  этого владелец пишет «{target} броней» и получает «3 броней» (поймано на
+ *  первом же живом предпросмотре). Формы задаются в порядке 1 / 2-4 / 5+. */
+function applyTitleTemplate(tpl: string, q: GenQuest, endLabel: string): string {
+  const target = fmtTarget(q);
+  return tpl
+    .replace(/\{target:([^|}]+)\|([^|}]+)\|([^}]+)\}/g,
+      (_, one: string, few: string, many: string) =>
+        `${target} ${plural(q.target, [one.trim(), few.trim(), many.trim()])}`)
+    .replaceAll('{target}', target)
+    .replaceAll('{metric}', q.metricLabel ?? '')
+    .replaceAll('{when}', endLabel)
+    .trim();
+}
+
+const endLabelFor = (p: QuestPeriod) =>
+  p === 'day' ? 'сегодня' : p === 'week' ? 'до воскресенья' : 'за месяц';
+
+/** Кандидаты из шаблонов конструктора (задача 60).
+ *
+ *  Шаблон не подменяет движок, а параметризует его: правила подбора цели
+ *  (личный p75 / медиана / фикс), пол, потолок и тир остаются здесь, шаблон
+ *  говорит только «на чём», «за какой период», «кому» и «с каким весом».
+ *
+ *  Балл кандидата = `weight` шаблона. Встроенные баллы лежат в диапазоне
+ *  0.25–1.3, поэтому дефолтная единица ставит шаблон выше любой дефолтной
+ *  продажной цели, но ниже ярко выраженной слабости — это и имелось в виду под
+ *  «весом в выдаче».
+ *
+ *  Падение одного шаблона (метрику удалили из каталога, БД моргнула) не должно
+ *  лишать человека всех квестов: такой шаблон просто пропускается. */
+async function templateCandidates(
+  db: Pool | PoolClient, mgr: number, period: QuestPeriod,
+  ctx: { deptId: string | null; xpLevel: number }, cmed: CompanyMedians,
+  ps: PersonalStats, today: string,
+): Promise<{ score: number; q: GenQuest }[]> {
+  const templates = (await loadQuestTemplates(db, period))
+    .filter(t => matchesAudience(t, { deptId: ctx.deptId, xpLevel: ctx.xpLevel, mgr }));
+  if (templates.length === 0) return [];
+  const endLabel = endLabelFor(period);
+  const out: { score: number; q: GenQuest }[] = [];
+
+  for (const t of templates) {
+    try {
+      const q = t.kind === 'metric'
+        ? await metricTemplateQuest(t, mgr, period, endLabel, today)
+        : categoryTemplateQuest(t, period, endLabel, cmed, ps);
+      if (q) out.push({ score: t.weight, q });
+    } catch (e) {
+      console.warn(`[quests] шаблон ${t.id} «${t.name}» пропущен:`, e instanceof Error ? e.message : e);
+    }
+  }
+  return out;
+}
+
+/** Цель по способу расчёта шаблона. */
+function targetByMode(
+  t: QuestTemplate, series: number[], companyMedian: number, round: (v: number) => number,
+): { target: number; meta: Record<string, unknown> } {
+  const floor = t.targetFloor ?? companyMedian;
+  if (t.targetMode === 'fixed') {
+    return { target: Math.max(t.targetFixed ?? 1, 1), meta: { mode: 'fixed' } };
+  }
+  if (t.targetMode === 'company_median') {
+    const v = Math.max(round(companyMedian), 1);
+    return { target: v, meta: { mode: 'company_median', companyMedian } };
+  }
+  const stat = targetFrom(series, t.targetMode === 'personal_p75', floor, round);
+  const target = t.targetMode === 'personal_median'
+    ? Math.max(round(stat.median) + 1, round(floor), 1)
+    : stat.target;
+  const capped = t.targetCeiling != null ? Math.min(target, t.targetCeiling) : target;
+  return { target: Math.max(capped, 1), meta: { mode: t.targetMode, floor, ...stat } };
+}
+
+/** Шаблон на произвольной метрике каталога. */
+async function metricTemplateQuest(
+  t: QuestTemplate, mgr: number, period: QuestPeriod, endLabel: string, today: string,
+): Promise<GenQuest | null> {
+  if (!t.metricId) return null;
+  const resolved = await resolveQuestMetric(t.metricId);
+  if (!resolved) return null;  // метрику удалили или она не поддержана
+  const money = resolved.metric.dataType === 'money';
+  const round = money ? (v: number) => Math.round(v / 10000) * 10000 : Math.round;
+
+  const [series, companyMedian] = await Promise.all([
+    t.targetMode === 'fixed' ? Promise.resolve([] as number[]) : metricPersonalSeries(t.metricId, mgr, period, today),
+    metricCompanyMedian(t.metricId, period, today),
+  ]);
+  const { target, meta } = targetByMode(t, series, companyMedian, round);
+  const q: GenQuest = {
+    slot: period === 'day' ? 'day' : period === 'month' ? 'month' : 'week1',
+    period, category: 'metric', target,
+    targetGroup: null, pairFirst: null, title: '',
+    metricId: t.metricId, metricLabel: resolved.metric.nameShortRu || resolved.metric.nameRu,
+    money, pct: resolved.metric.dataType === 'percent',
+    templateId: t.id, rewardOverride: t.rewardEballs, tierBase: companyMedian,
+    meta: { template: t.id, templateName: t.name, metricId: t.metricId, titleTemplate: t.titleTemplate,
+      companyMedian, series, ...meta },
+  };
+  q.title = t.titleTemplate ? applyTitleTemplate(t.titleTemplate, q, endLabel) : buildTitle(q, endLabel);
+  return q;
+}
+
+/** Личный ряд менеджера под конкретную встроенную категорию.
+ *
+ *  Дневных рядов в `PersonalStats` только один — продажи; поэтому у дневного
+ *  шаблона на любой другой категории ряд пустой, и цель падает на пол (медиану
+ *  компании за день) — то есть у всех одинаковая. Это осознанный компромисс, а
+ *  не забытая ветка: тянуть ещё четыре дневных ряда в горячий запрос ради
+ *  редкого шаблона дороже, чем честно поставить общую планку. */
+function categorySeries(ps: PersonalStats, cat: QuestCategory, period: QuestPeriod): number[] {
+  if (period === 'day') return cat === 'sales_count' ? ps.daily.cnt : [];
+  const s = period === 'week' ? ps.weekly : ps.monthly;
+  switch (cat) {
+    case 'sales_count': return s.cnt;
+    case 'sales_amount': return s.amt;
+    case 'repeat_sales': return s.rep;
+    case 'bookings_count': return s.bkg;
+    case 'distinct_groups': return period === 'month' ? ps.monthly.grp : [];
+    default: return [];
+  }
+}
+
+/** Шаблон на встроенной категории: тот же расчёт, что у автокандидатов, но
+ *  параметры (пол, потолок, способ, награда) задал владелец. Категории с
+ *  подбором товарной группы (`group_sales`, `crosssell`) шаблоном не
+ *  выдаются — им нужна пара «группа × клиенты», которую выбирает движок по
+ *  данным менеджера, а не форма. */
+function categoryTemplateQuest(
+  t: QuestTemplate, period: QuestPeriod, endLabel: string,
+  cmed: CompanyMedians, ps: PersonalStats,
+): GenQuest | null {
+  const cat = t.category;
+  if (cat === null || cat === 'group_sales' || cat === 'crosssell' || cat === 'metric') return null;
+  const series = categorySeries(ps, cat, period);
+  const money = cat === 'sales_amount';
+  const round = money ? (v: number) => Math.round(v / 10000) * 10000 : Math.round;
+  const companyMedian = cmed[period]?.[cat] ?? 0;
+  const { target, meta } = targetByMode(t, series, companyMedian, round);
+  const q: GenQuest = {
+    slot: period === 'day' ? 'day' : period === 'month' ? 'month' : 'week1',
+    period, category: cat, target, targetGroup: null, pairFirst: null, title: '',
+    money, templateId: t.id, rewardOverride: t.rewardEballs,
+    meta: { template: t.id, templateName: t.name, titleTemplate: t.titleTemplate, companyMedian, ...meta },
+  };
+  q.title = t.titleTemplate ? applyTitleTemplate(t.titleTemplate, q, endLabel) : buildTitle(q, endLabel);
+  return q;
+}
+
 /** Кандидаты квестов менеджера по слабостям (по приоритету). */
-async function buildCandidates(mgr: number, period: QuestPeriod): Promise<GenQuest[]> {
+async function buildCandidates(
+  mgr: number, period: QuestPeriod,
+  tplCtx?: { db: Pool | PoolClient; xpLevel: number; today: string },
+): Promise<GenQuest[]> {
   const ps = await fetchPersonal(mgr);
   const dept = await fetchDeptMedians(ps.deptId);
   const matrix = await fetchCrossSellMatrix();
@@ -582,6 +775,14 @@ async function buildCandidates(mgr: number, period: QuestPeriod): Promise<GenQue
     out.push({ score: grpMed < dept.grp ? 0.6 : 0.2, q });
   }
 
+  // Шаблоны конструктора (задача 60) — в тот же список кандидатов, сортировка
+  // общая. Без tplCtx (старые вызовы/тесты) движок работает как раньше.
+  if (tplCtx) {
+    out.push(...await templateCandidates(
+      tplCtx.db, mgr, period, { deptId: ps.deptId, xpLevel: tplCtx.xpLevel }, cmed, ps, tplCtx.today,
+    ));
+  }
+
   out.sort((a, b) => b.score - a.score);
   return out.map(x => x.q);
 }
@@ -608,6 +809,10 @@ export interface QuestRow {
   target: number; targetGroup: string | null; pairFirst: string | null;
   title: string; tier: QuestTier; rewardEballs: number; rewardXp: number;
   status: QuestStatus; progress: number; doneAt: string | null; rerollOf: number | null;
+  /** category='metric': метрика каталога, по которой считается прогресс. */
+  metricId: string | null;
+  /** Из какого шаблона конструктора выдан (null — встроенный кандидат). */
+  templateId: number | null;
 }
 
 // pg отдаёт date-колонки объектами Date (та же грабля, что с timestamptz в
@@ -635,38 +840,111 @@ function rowFromDb(r: Record<string, unknown>): QuestRow {
     status: r.status as QuestStatus, progress: Number(r.progress),
     doneAt: r.done_at ? new Date(r.done_at as string).toISOString() : null,
     rerollOf: r.reroll_of !== null && r.reroll_of !== undefined ? Number(r.reroll_of) : null,
+    metricId: (r.metric_id as string) ?? null,
+    templateId: r.template_id !== null && r.template_id !== undefined ? Number(r.template_id) : null,
   };
+}
+
+/** Тир, цель и награда квеста. Вынесено из insertQuest, потому что ровно то же
+ *  нужно предпросмотру шаблона в конструкторе (задача 60) — а расходиться этим
+ *  двум местам нельзя: предпросмотр обязан показывать то, что реально выдастся.
+ *  МУТИРУЕТ g.title, если легендарный гейт прижал цель. */
+function resolveTierAndReward(
+  g: GenQuest, settings: QuestSettings, cm: CompanyMedians, xpLevel: number,
+): { target: number; tier: QuestTier; reward: number; rewardXp: number; tierBase: number | null } {
+  let target = g.target;
+  // База тира: у встроенных категорий — медиана компании из CompanyMedians,
+  // у квеста на произвольной метрике её там нет, шаблон приносит свою в tierBase.
+  const tierBase = g.tierBase ?? cm[g.period]?.[g.category] ?? null;
+  let tier = tierForTarget(g.category, g.period, target, cm, g.tierBase);
+  // Легендарный — мягкий гейт: без титула Мастер+ (XP-уровень >= 15) цель
+  // прижимается к верхней границе эпик-полосы (1.5× медианы компании).
+  if (tier === 'legendary' && xpLevel < 15) {
+    const base = tierBase ?? 1;
+    target = (g.category === 'sales_amount' || g.money)
+      ? Math.max(Math.round((1.5 * base) / 10000) * 10000, 50000)
+      : Math.max(Math.floor(1.5 * base), 1);
+    tier = tierForTarget(g.category, g.period, target, cm, g.tierBase);
+    const endLabel = endLabelFor(g.period);
+    const withTarget = { ...g, target };
+    g.title = g.meta.titleTemplate
+      ? applyTitleTemplate(String(g.meta.titleTemplate), withTarget, endLabel)
+      : buildTitle(withTarget, endLabel);
+  }
+  const baseReward = g.period === 'day' ? settings.rewardDay : g.period === 'week' ? settings.rewardWeek : settings.rewardMonth;
+  // Шаблон может задать награду жёстко (поле «Награда» в конструкторе) — тогда
+  // тир остаётся только меткой сложности и на деньги не влияет.
+  const reward = g.rewardOverride != null
+    ? Math.max(0, Math.round(g.rewardOverride))
+    : Math.max(1, Math.round(baseReward * settings.tierMult[tier]));
+  return { target, tier, reward, rewardXp: Math.round(reward * settings.xpMult), tierBase };
 }
 
 async function insertQuest(system: Pool | PoolClient, mgr: number, g: GenQuest, slot: QuestSlot,
   bounds: { start: string; end: string }, settings: QuestSettings, cm: CompanyMedians,
   xpLevel: number, rerollOf: number | null = null): Promise<QuestRow | null> {
-  let target = g.target;
-  let tier = tierForTarget(g.category, g.period, target, cm);
-  // Легендарный — мягкий гейт: без титула Мастер+ (XP-уровень >= 15) цель
-  // прижимается к верхней границе эпик-полосы (1.5× медианы компании).
-  if (tier === 'legendary' && xpLevel < 15) {
-    const base = cm[g.period]?.[g.category] ?? 1;
-    target = g.category === 'sales_amount'
-      ? Math.max(Math.round((1.5 * base) / 10000) * 10000, 50000)
-      : Math.max(Math.floor(1.5 * base), 1);
-    tier = tierForTarget(g.category, g.period, target, cm);
-    g.title = buildTitle({ ...g, target }, g.period === 'week' ? 'до воскресенья' : g.period === 'month' ? 'за месяц' : 'сегодня');
-  }
-  const baseReward = g.period === 'day' ? settings.rewardDay : g.period === 'week' ? settings.rewardWeek : settings.rewardMonth;
-  const reward = Math.max(1, Math.round(baseReward * settings.tierMult[tier]));
-  const rewardXp = Math.round(reward * settings.xpMult);
+  const { target, tier, reward, rewardXp, tierBase } = resolveTierAndReward(g, settings, cm, xpLevel);
   const res = await system.query(
     `INSERT INTO quests (bitrix_id, slot, period_type, period_start, period_end, category,
-       target, target_group, pair_first, title, tier, reward_eballs, reward_xp, reroll_of, meta)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       target, target_group, pair_first, title, tier, reward_eballs, reward_xp, reroll_of, meta,
+       metric_id, template_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      ON CONFLICT DO NOTHING
      RETURNING *`,
     [mgr, slot, g.period, bounds.start, bounds.end, g.category, target, g.targetGroup, g.pairFirst,
       g.title, tier, reward, rewardXp, rerollOf,
-      JSON.stringify({ ...g.meta, companyMedian: cm[g.period]?.[g.category] ?? null, xpLevel })],
+      JSON.stringify({ ...g.meta, companyMedian: tierBase, xpLevel }),
+      g.metricId ?? null, g.templateId ?? null],
   );
   return res.rows[0] ? rowFromDb(res.rows[0]) : null;
+}
+
+// ── предпросмотр шаблона для конструктора (задача 60) ────────────────────────
+
+export interface TemplatePreviewRow {
+  mgr: number; ok: boolean; title: string; target: number;
+  tier: QuestTier; reward: number; rewardXp: number; note: string | null;
+}
+
+/** Что этот шаблон выдал бы прямо сейчас нескольким живым менеджерам.
+ *
+ *  Считается ТЕМ ЖЕ путём, что реальная выдача (кандидат → resolveTierAndReward),
+ *  ничего не пишет в БД. Смысл — не дать владельцу включить шаблон, который
+ *  ставит всем «продай 1» или, наоборот, легендарку на пустом месте: цифры
+ *  видны до включения, а не по жалобам через неделю. */
+export async function previewTemplate(
+  system: Pool | PoolClient, t: QuestTemplate, mgrs: number[],
+): Promise<TemplatePreviewRow[]> {
+  const today = mskToday();
+  const endLabel = endLabelFor(t.periodType);
+  const [settings, cm] = await Promise.all([loadQuestSettings(system), fetchCompanyMedians()]);
+  const out: TemplatePreviewRow[] = [];
+  for (const mgr of mgrs) {
+    const empty = { mgr, ok: false, title: '', target: 0, tier: 'white' as QuestTier, reward: 0, rewardXp: 0 };
+    try {
+      const ps = await fetchPersonal(mgr);
+      const xpLevel = await fetchXpLevel(system, mgr);
+      if (!matchesAudience(t, { deptId: ps.deptId, xpLevel, mgr })) {
+        out.push({ ...empty, note: 'не подходит под аудиторию' });
+        continue;
+      }
+      const g = t.kind === 'metric'
+        ? await metricTemplateQuest(t, mgr, t.periodType, endLabel, today)
+        : categoryTemplateQuest(t, t.periodType, endLabel, cm, ps);
+      if (!g) {
+        out.push({ ...empty, note: t.kind === 'metric'
+          ? 'метрика не поддержана вычислителем'
+          : 'эта категория шаблоном не выдаётся (нужен подбор товарной группы)' });
+        continue;
+      }
+      const r = resolveTierAndReward(g, settings, cm, xpLevel);
+      out.push({ mgr, ok: true, title: g.title, target: r.target, tier: r.tier,
+        reward: r.reward, rewardXp: r.rewardXp, note: null });
+    } catch (e) {
+      out.push({ ...empty, note: e instanceof Error ? e.message : 'ошибка расчёта' });
+    }
+  }
+  return out;
 }
 
 /** Догенерировать недостающие слоты менеджера на текущие периоды. Идемпотентно
@@ -689,43 +967,54 @@ export async function ensureQuests(system: Pool | PoolClient, mgr: number): Prom
   if (!needWeek && !needMonth && !needDay) return;
 
   const xpLevel = await fetchXpLevel(system, mgr);
+  const tplCtx = { db: system, xpLevel, today };
   if (needWeek) {
-    const cands = await buildCandidates(mgr, 'week');
+    const cands = await buildCandidates(mgr, 'week', tplCtx);
     const bounds = periodBounds('week', today);
     let idx = 0;
     for (const slot of ['week1', 'week2'] as const) {
       if (haveSlots.has(slot)) continue;
-      // не дублировать категорию во второй слот
-      const used = new Set((await system.query<{ category: string }>(
-        `SELECT category FROM quests WHERE bitrix_id=$1 AND slot IN ('week1','week2') AND period_start=$2 AND status<>'rerolled'`,
-        [mgr, bounds.start])).rows.map(r => r.category));
+      // Не дублировать категорию во второй слот. У квестов из конструктора
+      // категория у всех одна ('metric'), поэтому различаем по метрике —
+      // иначе два разных шаблона считались бы одним и тем же квестом.
+      const used = new Set((await system.query<{ category: string; metric_id: string | null }>(
+        `SELECT category, metric_id FROM quests WHERE bitrix_id=$1 AND slot IN ('week1','week2') AND period_start=$2 AND status<>'rerolled'`,
+        [mgr, bounds.start])).rows.map(r => r.category === 'metric' ? `metric:${r.metric_id}` : r.category));
+      const key = (c: GenQuest) => c.category === 'metric' ? `metric:${c.metricId}` : c.category;
       let g = cands[idx];
-      while (g && used.has(g.category)) { idx++; g = cands[idx]; }
+      while (g && used.has(key(g))) { idx++; g = cands[idx]; }
       if (!g) break;
       idx++;
       await insertQuest(system, mgr, g, slot, bounds, settings, cm, xpLevel);
     }
   }
   if (needMonth) {
-    const cands = await buildCandidates(mgr, 'month');
+    const cands = await buildCandidates(mgr, 'month', tplCtx);
     const bounds = periodBounds('month', today);
     if (cands[0]) await insertQuest(system, mgr, cands[0], 'month', bounds, settings, cm, xpLevel);
   }
   if (needDay) {
-    // Дневной: цель от личного ряда, пол — дневная медиана компании.
-    // Было: чёт/нечет дня → «личная цель» / жёстко target=1. Ротация давала
-    // сильному продавцу халяву через день, а у непродающего вырождалась в
-    // вечное «продай 1». Теперь цель считается всегда, а единица остаётся
-    // только там, где личная дневная медиана нулевая — то есть у человека,
-    // который продаёт реже чем через день, и для него это честный вызов.
-    const ps = await fetchPersonal(mgr);
-    const t = targetFrom(ps.daily.cnt, false, cm.day?.sales_count ?? 0);
     const bounds = periodBounds('day', today);
-    const g: GenQuest = (median(ps.daily.cnt) ?? 0) >= 1
-      ? { slot: 'day', period: 'day', category: 'sales_count', target: Math.max(t.target, 1), targetGroup: null, pairFirst: null, title: '', meta: { rotation: 'count', ...t } }
-      : { slot: 'day', period: 'day', category: 'sales_count', target: 1, targetGroup: null, pairFirst: null, title: '', meta: { rotation: 'simple' } };
-    g.title = buildTitle({ ...g }, 'сегодня');
-    await insertQuest(system, mgr, g, 'day', bounds, settings, cm, xpLevel);
+    // Дневной слот: если владелец завёл дневные шаблоны в конструкторе — берём
+    // самый весомый подходящий; иначе прежнее поведение (продажи).
+    const dayTpl = (await buildCandidates(mgr, 'day', tplCtx)).find(c => c.templateId != null);
+    if (dayTpl) {
+      await insertQuest(system, mgr, dayTpl, 'day', bounds, settings, cm, xpLevel);
+    } else {
+      // Цель от личного ряда, пол — дневная медиана компании.
+      // Было: чёт/нечет дня → «личная цель» / жёстко target=1. Ротация давала
+      // сильному продавцу халяву через день, а у непродающего вырождалась в
+      // вечное «продай 1». Теперь цель считается всегда, а единица остаётся
+      // только там, где личная дневная медиана нулевая — то есть у человека,
+      // который продаёт реже чем через день, и для него это честный вызов.
+      const ps = await fetchPersonal(mgr);
+      const t = targetFrom(ps.daily.cnt, false, cm.day?.sales_count ?? 0);
+      const g: GenQuest = (median(ps.daily.cnt) ?? 0) >= 1
+        ? { slot: 'day', period: 'day', category: 'sales_count', target: Math.max(t.target, 1), targetGroup: null, pairFirst: null, title: '', meta: { rotation: 'count', ...t } }
+        : { slot: 'day', period: 'day', category: 'sales_count', target: 1, targetGroup: null, pairFirst: null, title: '', meta: { rotation: 'simple' } };
+      g.title = buildTitle({ ...g }, 'сегодня');
+      await insertQuest(system, mgr, g, 'day', bounds, settings, cm, xpLevel);
+    }
   }
 }
 
@@ -790,7 +1079,14 @@ async function fetchPeriodDeals(mgr: number, fromDay: string): Promise<PeriodFac
   };
 }
 
-function questProgress(q: QuestRow, facts: PeriodFacts): number {
+async function questProgress(q: QuestRow, facts: PeriodFacts): Promise<number> {
+  // Квест из конструктора (задача 60): считает универсальный вычислитель по
+  // metric_id, записанному в самой строке квеста. Именно из строки, а не из
+  // шаблона: шаблон могли отредактировать или выключить, а уже выданный квест
+  // обязан дожить свой период с той метрикой, под которую человеку его дали.
+  if (q.category === 'metric') {
+    return q.metricId ? metricQuestProgress(q.metricId, q.bitrixId, q.periodStart, q.periodEnd) : 0;
+  }
   const inPeriod = facts.sold.filter(d => d.soldDay >= q.periodStart && d.soldDay <= q.periodEnd);
   switch (q.category) {
     case 'sales_count': return inPeriod.length;
@@ -870,7 +1166,7 @@ export async function refreshQuests(
     const minStart = active.map(q => q.periodStart).sort()[0];
     const facts = await fetchPeriodDeals(mgr, minStart);
     for (const q of active) {
-      const progress = questProgress(q, facts);
+      const progress = await questProgress(q, facts);
       if (progress >= q.target) {
         await completeQuest(system, q, progress);
       } else if (progress !== q.progress) {
@@ -970,11 +1266,13 @@ export async function rerollQuest(
   const cm = await fetchCompanyMedians();
   const xpLevel = await fetchXpLevel(system, mgr);
   const cands = (q.periodType === 'day')
-    ? [] : await buildCandidates(mgr, q.periodType);
+    ? [] : await buildCandidates(mgr, q.periodType, { db: system, xpLevel, today: mskToday() });
   let pick: GenQuest | null = null;
   for (const c of cands) {
-    if (c.category === q.category && c.targetGroup === q.targetGroup) continue;
-    if (tierForTarget(c.category, c.period, c.target, cm) === q.tier) { pick = c; break; }
+    // Тот же квест не предлагаем: для встроенных сравниваем категорию и группу,
+    // для квестов конструктора — метрику (категория у всех них одна).
+    if (c.category === q.category && c.targetGroup === q.targetGroup && c.metricId === q.metricId) continue;
+    if (tierForTarget(c.category, c.period, c.target, cm, c.tierBase) === q.tier) { pick = c; break; }
   }
   if (!pick) pick = cands.find(c => c.category !== q.category) ?? null;
   if (q.periodType === 'day' || !pick) {

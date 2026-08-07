@@ -248,8 +248,11 @@ async function contractProgress(c: ContractRow): Promise<number> {
       && c.pairFirst !== null && (d.prev_grps ?? []).includes(c.pairFirst)).length;
     case 'repeat_sales': return deals.length; // в пуле не генерится
     case 'distinct_groups': return new Set(deals.flatMap(d => d.grps ?? [])).size;
-    // 'bookings_count' сюда не доходит — обработана выше, до выборки продаж
-    // (TS это видит по раннему return и не требует ветки).
+    // 'bookings_count' сюда не доходит — обработана выше, до выборки продаж.
+    // 'metric' (квест из конструктора, задача 60) в пул контрактов не попадает
+    // вовсе: CHECK у quest_contracts такого значения не допускает, шаблоны
+    // контрактов не генерируют. Ветка нужна только для полноты switch.
+    default: return 0;
   }
 }
 
