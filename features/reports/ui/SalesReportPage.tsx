@@ -24,7 +24,10 @@ import type { DrilldownTarget } from './DrilldownDrawer';
 import { ComparisonPanel } from './ComparisonPanel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
 import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay, BorderMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
-import type { DateRange } from '@/lib/period';
+import type { DateRange, CalendarUnit } from '@/lib/period';
+import type { PeriodsDimension, CompareMode } from '@/features/reports/engine/byPeriods';
+import { PeriodReportControls } from './PeriodReportControls';
+import { bucketRange, comparisonBucketOf } from '@/features/reports/lib/periodBuckets';
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
 import type { MetricFilters, MetricConditionFilter } from '@/lib/reports/metricFilter';
@@ -401,6 +404,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const [dealScope, setDealScope]       = useUrlState<DealScope>('dealScope', enumParam(['primary', 'repeat', 'all'], 'all'));
   const [clientType, setClientType]     = useUrlState<ClientType>('clientType', enumParam(['all', 'b2c', 'b2b'], 'all'));
   const [grouping, setGrouping]         = useUrlState<Grouping>('grouping', enumParam(['none', 'team', 'branch', 'total'], 'none'));
+  // Отчёт «По периодам» (задача владельца 09.08): шаг группировки, разрез дрилла и
+  // база сравнения. Все три определяют «какой это отчёт» — значит в URL, как период
+  // и срез (та же граница, что описана выше). В остальных отчётах не используются.
+  const [periodUnit, setPeriodUnit]           = useUrlState<CalendarUnit>('unit', enumParam(['day', 'week', 'month', 'quarter', 'year'], 'month'));
+  const [periodDimension, setPeriodDimension] = useUrlState<PeriodsDimension>('dim', enumParam(['managers', 'product-groups'], 'managers'));
+  const [compareMode, setCompareMode]         = useUrlState<CompareMode>('cmpMode', enumParam(['prev', 'yoy', 'none'], 'prev'));
   // «Создать отчёт» (задача 1572): новый отчёт стартует БЕЗ метрик (пустая
   // колонка сущности + подсказка ниже) — preset (если он всё же передан,
   // например прямой заход на /sales/saved/[id]) всегда выигрывает у isNew
@@ -578,6 +587,11 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     if (!keep('sortBy')) setSortBy(p.sortBy ?? null);
     if (!keep('sortDir')) setSortDir(p.sortDir ?? 'desc');
     setColumnGroups(p.columnGroups ?? []);
+    // «По периодам» (миграция 170): у отчётов остальных типов колонки пустые —
+    // дефолты те же, что у нового отчёта.
+    if (!keep('unit')) setPeriodUnit((p.periodUnit as CalendarUnit) ?? 'month');
+    if (!keep('dim')) setPeriodDimension(p.periodDimension ?? 'managers');
+    if (!keep('cmpMode')) setCompareMode(p.compareMode ?? 'prev');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -650,7 +664,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     metricFilters: metricFilters as Record<string, unknown>,
     dealFilters,
     createdTimeFilter, firstTouchFilter, search,
-  }), [period, comparison, dealScope, clientType, grouping, metricIds, comparisonDisplay, metricDisplayModes, comparisonThreshold, productGroupMode, highlights, pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides, accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, numberAlign, accountType, drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped, sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups, metricFilters, createdTimeFilter, firstTouchFilter, search]);
+    periodUnit, periodDimension, compareMode,
+  }), [period, comparison, dealScope, clientType, grouping, metricIds, comparisonDisplay, metricDisplayModes, comparisonThreshold, productGroupMode, highlights, pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides, accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, numberAlign, accountType, drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped, sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups, metricFilters, createdTimeFilter, firstTouchFilter, search, periodUnit, periodDimension, compareMode]);
 
   // Задача 2824: respectUrl=true — только для ПЕРВОГО restore на монтировании
   // (см. вызов ниже) — там URL-параметр диплинка должен победить сохранённую
@@ -704,6 +719,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     if (!keep('createdTime')) setCreatedTimeFilter((s.createdTimeFilter ?? 'all') as CreatedTimeFilter);
     if (!keep('firstTouch')) setFirstTouchFilter((s.firstTouchFilter ?? 'all') as FirstTouchFilter);
     if (!keep('q')) setSearch(s.search ?? '');
+    if (!keep('unit')) setPeriodUnit((s.periodUnit ?? 'month') as CalendarUnit);
+    if (!keep('dim')) setPeriodDimension((s.periodDimension ?? 'managers') as PeriodsDimension);
+    if (!keep('cmpMode')) setCompareMode((s.compareMode ?? 'prev') as CompareMode);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Смена route без ремоунта (см. шапку блока) — форсим повторный restore.
@@ -827,12 +845,17 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // fetchedMetricIds only grows — removals don't trigger re-fetch, additions do
   const metricIdsForQuery = fetchedMetricIds.includes('all_core') ? ['all_core'] : [...fetchedMetricIds].sort();
   const sourceMode = reportSlug === 'by-sources';
-  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters];
+  // «По периодам» (задача 09.08): строки — сами периоды. Свой роут (см. шапку
+  // app/api/reports/by-periods/route.ts): у него другой контракт сравнения и
+  // не нужна тяжёлая план/звонковая обвязка /api/reports/run.
+  const periodMode = reportSlug === 'by-periods';
+  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters,
+    periodMode ? periodUnit : null, periodMode ? periodDimension : null, periodMode ? compareMode : null];
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
-      const res = await fetch('/api/reports/run', {
+      const res = await fetch(periodMode ? '/api/reports/by-periods' : '/api/reports/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -849,6 +872,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           createdTimeFilter,
           firstTouchFilter,
           dealFilters: dealFilters.length ? dealFilters : undefined,
+          ...(periodMode ? { unit: periodUnit, dimension: periodDimension, compareMode } : {}),
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -991,7 +1015,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       .filter(Boolean);
   }, [availableMetrics, catalogMetrics, metricIds, columnGroups]);
 
-  const dimensionType = sourceMode ? 'source' : reportSlug === 'by-product-groups' ? 'product-group' : 'manager';
+  const dimensionType = periodMode ? 'period' : sourceMode ? 'source' : reportSlug === 'by-product-groups' ? 'product-group' : 'manager';
 
   // Пользовательские группы (задача 2653): per-user, per-шкала (для товарных
   // групп kc/by_max несовместимы — dimensionKey включает режим).
@@ -1003,7 +1027,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    enabled: !sourceMode,
+    // В «По периодам» строки — бакеты времени, объединять их в пользовательские
+    // группы нечего (и незачем грузить справочник групп).
+    enabled: !sourceMode && !periodMode,
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
   });
@@ -1042,7 +1068,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     // строки группы). Строка группы с общим отделом/филиалом остаётся внутри
     // него; «сборная» из разных — поднимается на верхний уровень с пометкой.
     let grouped: GroupedMergedRow[];
-    if (!sourceMode && userGroups.length > 0) {
+    if (!sourceMode && !periodMode && userGroups.length > 0) {
       // «Без группы» — только при grouping='none' (решение выше, у applyUserGroups).
       const applied = applyUserGroups(data?.rows ?? [], userGroups, catalogMetrics, grouping === 'none');
       if (grouping === 'none' || grouping === 'total') {
@@ -1196,7 +1222,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       let managerIds: string[] | undefined;
       let pgRowId: string | undefined;
       const baseRows: MergedRow[] = (data?.rows ?? []) as MergedRow[];
-      if (sourceMode) {
+      if (periodMode) {
+        // Строка — сам период: график «динамика одного месяца» смысла не имеет,
+        // вся таблица УЖЕ является этой динамикой. Для «Итого» — обычный график
+        // метрики за весь диапазон отчёта.
+        if (id !== '__total__') {
+          alert('Строка этого отчёта — сам период; график динамики есть в заголовке метрики («Итого»)');
+          return;
+        }
+      } else if (sourceMode) {
         // Разрез источников: строка ≠ менеджер/группа — поддержан только «Итого»
         // (фильтры источников в серию пока не транслируются — осознанное ограничение v1).
         if (id !== '__total__') { alert('График по строкам источников пока не поддержан — используйте иконку в заголовке метрики («Итого»)'); return; }
@@ -1218,7 +1252,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       }
       setChartTarget({ metricId, dimensionId: id, dimensionName: name, managerIds, productGroupId: pgRowId, cellValue });
     },
-    [data?.rows, data?.totals, displayRows, reportSlug, sourceMode, productGroupMode, userGroups, userGroupFreeIds],
+    [data?.rows, data?.totals, displayRows, reportSlug, sourceMode, periodMode, productGroupMode, userGroups, userGroupFreeIds],
   );
 
   // Экспорт отчёта (задача 1706): буфер (TSV)/Excel/PDF/PNG — единый снимок таблицы
@@ -1227,7 +1261,27 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // экспорта — раньше «Копировать» форматировал проценты как «человеческое» число
   // (14.5), из-за чего в Excel с процентным форматом ячейки оно домножалось ещё раз на
   // 100 (1450%). Теперь проценты — доля (0.145) везде.
-  const dimensionColumnLabel = sourceMode
+  // Окно дрилл-дауна в отчёте «По периодам»: границы самого бакета, обрезанные
+  // периодом отчёта (крайний бакет бывает неполным — тогда и в ячейке, и в списке
+  // сделок должна быть одна и та же часть месяца). Сравнение — ПОЛНЫЙ сдвинутый
+  // бакет, ровно та же база, что у колонки «Пред.» в строке (см. роут by-periods).
+  const drilldownPeriod = useMemo(() => {
+    if (!periodMode || !drilldown || !/^\d{4}-\d{2}-\d{2}$/.test(drilldown.id)) return null;
+    const b = bucketRange(drilldown.id, periodUnit);
+    return {
+      from: b.from > period.from ? b.from : period.from,
+      to: b.to < period.to ? b.to : period.to,
+    };
+  }, [periodMode, drilldown, periodUnit, period]);
+  const drilldownComparison = useMemo(() => {
+    if (!periodMode || !drilldown || !/^\d{4}-\d{2}-\d{2}$/.test(drilldown.id)) return null;
+    const cmp = comparisonBucketOf(drilldown.id, periodUnit, compareMode);
+    return cmp ? bucketRange(cmp, periodUnit) : null;
+  }, [periodMode, drilldown, periodUnit, compareMode]);
+
+  const dimensionColumnLabel = periodMode
+    ? 'Период'
+    : sourceMode
     ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
     : reportSlug === 'by-product-groups' ? 'Товарная группа' : 'Менеджер';
 
@@ -1499,13 +1553,18 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       {(() => {
         const filterBarProps = {
           period, comparison, departmentIds, search,
-          grouping: sourceMode ? undefined : grouping,
+          // Группировки по отделам/филиалам у строк-периодов нет: подытог «отдела»
+          // внутри месяца — это уже другой отчёт (в него и ведёт дрилл бакета).
+          grouping: sourceMode || periodMode ? undefined : grouping,
           onPeriodChange: handlePeriodChange,
           onComparisonChange: setComparison,
           onDepartmentIdsChange: setDepartmentIds,
           onSearchChange: setSearch,
-          onGroupingChange: sourceMode ? undefined : setGrouping,
+          onGroupingChange: sourceMode || periodMode ? undefined : setGrouping,
           showDepartments: !sourceMode,
+          // «По периодам»: второго диапазона нет — база сравнения построчная
+          // (переключатель «Сравнение» в шапке отчёта, PeriodReportControls).
+          showComparison: !periodMode,
           sourceDimension: sourceMode ? sourceDimension : undefined,
           onSourceDimensionChange: sourceMode ? setSourceDimension : undefined,
           // Кнопка настройки метрик доступна в обоих режимах (задача 1564: вернуть в
@@ -1530,7 +1589,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           numberAlign,
           onNumberAlignChange: setNumberAlign,
           accountType,
-          onAccountTypeChange: reportSlug === 'by-managers' ? setAccountType : undefined,
+          // Тип аккаунта режет сделки по менеджеру — значит имеет смысл там, где
+          // строка (или разрез дрилла) менеджерская.
+          onAccountTypeChange: reportSlug === 'by-managers' || (periodMode && periodDimension === 'managers')
+            ? setAccountType : undefined,
           drilldownGrouped,
           onDrilldownGroupedChange: setDrilldownGrouped,
           colorizeMetrics,
@@ -1568,7 +1630,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           userGroupsSlot: (
             <>
               <DealFilterButton value={dealFilters} onChange={setDealFilters} />
-              {!sourceMode && (
+              {!sourceMode && !periodMode && (
                 <CreateGroupButton
                   active={groupSelectMode}
                   onClick={() => (groupSelectMode ? exitGroupSelect() : setGroupSelectMode(true))}
@@ -1593,6 +1655,22 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           </>
         );
       })()}
+
+      {/* Шапка отчёта «По периодам» (задача 09.08): шаг группировки, разрез дрилла
+          и база сравнения — три контрола, которых нет у остальных отчётов. */}
+      {periodMode && (
+        <PeriodReportControls
+          unit={periodUnit}
+          onUnitChange={setPeriodUnit}
+          dimension={periodDimension}
+          onDimensionChange={setPeriodDimension}
+          compareMode={compareMode}
+          onCompareModeChange={setCompareMode}
+          bucketCount={data?.meta?.bucketCount}
+          unsupportedNames={((data?.unsupported ?? []) as string[]).map((id: string) =>
+            (catalogMetrics.find((m: { id: string }) => m.id === id) as Metric | undefined)?.nameRu ?? id)}
+        />
+      )}
 
       {/* Плашка активного «Фильтра сделок» (задача 07.08). Фильтр режет весь
           отчёт и живёт в URL/сохранённом отчёте — значит его легко не заметить и
@@ -1745,8 +1823,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           key={`${drilldown.id}:${drilldown.metricId ?? ''}`}
           target={drilldown}
           dimensionType={dimensionType}
-          period={period}
-          comparison={comparison}
+          periodDimension={periodMode ? periodDimension : undefined}
+          // «По периодам»: цель дрилла — бакет, поэтому в ящик уходит окно САМОГО
+          // бакета, а не весь период отчёта. Дальше всё работает существующими
+          // движками: мини-отчёт по менеджерам/товарным группам и списки сделок
+          // просто считаются за узкое окно. Границы обрезаются периодом отчёта —
+          // иначе у неполного крайнего бакета список сделок был бы шире цифры
+          // в ячейке (в ячейке — только часть месяца, попавшая в период).
+          period={drilldownPeriod ?? period}
+          comparison={drilldownComparison ?? comparison}
           dealScope={dealScope}
           clientType={clientType}
           productGroupMode={productGroupMode}
@@ -1942,6 +2027,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           drilldownGrouped={drilldownGrouped}
           sourceDimension={sourceMode ? sourceDimension : undefined}
           drilldownDimension={sourceMode ? drilldownDimension : undefined}
+          periodUnit={periodMode ? periodUnit : undefined}
+          periodDimension={periodMode ? periodDimension : undefined}
+          compareMode={periodMode ? compareMode : undefined}
           sortBy={sortBy}
           sortDir={sortDir}
           columnGroups={columnGroups}

@@ -6,6 +6,12 @@ import { buildProductGroupFilter, productGroupCacheKey } from './productGroupFil
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
 import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters';
 import { periodDateStrFromInstant, type DateRange, type CalendarUnit } from '@/lib/period';
+// Арифметика и подписи бакетов — в чистом модуле без импортов БД: те же функции
+// нужны странице отчёта в браузере (границы бакета для дрилл-дауна), а этот файл
+// тянет пул Postgres и в клиентский бандл попасть не может.
+import {
+  bucketStartOf, nextBucket, bucketLabel, bucketSubtitle,
+} from '@/features/reports/lib/periodBuckets';
 import type {
   DealScope, ClientType, ReportRow, ProductGroupMode, AccountType,
   CreatedTimeFilter, FirstTouchFilter,
@@ -47,6 +53,11 @@ const MSK = 'Europe/Moscow';
  *   - product-groups: все сделки среза — как byProductGroups (там менеджер не обязателен). */
 export type PeriodsDimension = 'managers' | 'product-groups';
 
+/** База сравнения строки-бакета: предыдущий такой же бакет (мес/мес), тот же бакет
+ *  год назад (LFL) или без сравнения. Глобального «периода сравнения», как в
+ *  остальных отчётах, здесь нет — строки САМИ являются периодами. */
+export type CompareMode = 'prev' | 'yoy' | 'none';
+
 export interface ByPeriodsOptions {
   period: DateRange;
   unit: CalendarUnit;
@@ -60,133 +71,6 @@ export interface ByPeriodsOptions {
   createdTimeFilter?: CreatedTimeFilter;
   firstTouchFilter?: FirstTouchFilter;
   dealFilters?: DealFilter[];
-}
-
-// ── Арифметика бакетов ───────────────────────────────────────────────────────
-// Ключ бакета — МСК-календарная дата его НАЧАЛА в виде 'YYYY-MM-DD' (ровно то, что
-// отдаёт SQL-выражение ниже). Вся арифметика — на UTC-датах этих строк: время суток
-// в ключе не участвует, поэтому переходов через DST здесь нет по построению.
-
-function ymdToUtc(ymd: string): Date {
-  const [y, m, d] = ymd.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d));
-}
-
-function utcToYmd(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-/** Начало бакета, которому принадлежит календарная дата. */
-export function bucketStartOf(ymd: string, unit: CalendarUnit): string {
-  const d = ymdToUtc(ymd);
-  switch (unit) {
-    case 'day':
-      return ymd;
-    case 'week': {
-      const dow = (d.getUTCDay() + 6) % 7; // 0 = понедельник, как date_trunc('week') в PG
-      d.setUTCDate(d.getUTCDate() - dow);
-      return utcToYmd(d);
-    }
-    case 'month':
-      return `${ymd.slice(0, 7)}-01`;
-    case 'quarter': {
-      const q = Math.floor(d.getUTCMonth() / 3) * 3;
-      return `${d.getUTCFullYear()}-${String(q + 1).padStart(2, '0')}-01`;
-    }
-    case 'year':
-      return `${ymd.slice(0, 4)}-01-01`;
-  }
-}
-
-/** Следующий бакет (для непрерывной шкалы). */
-export function nextBucket(ymd: string, unit: CalendarUnit): string {
-  const d = ymdToUtc(ymd);
-  switch (unit) {
-    case 'day':     d.setUTCDate(d.getUTCDate() + 1); break;
-    case 'week':    d.setUTCDate(d.getUTCDate() + 7); break;
-    case 'month':   d.setUTCMonth(d.getUTCMonth() + 1); break;
-    case 'quarter': d.setUTCMonth(d.getUTCMonth() + 3); break;
-    case 'year':    d.setUTCFullYear(d.getUTCFullYear() + 1); break;
-  }
-  return utcToYmd(d);
-}
-
-/** Предыдущий бакет — база сравнения «к предыдущему периоду». */
-export function prevBucket(ymd: string, unit: CalendarUnit): string {
-  const d = ymdToUtc(ymd);
-  switch (unit) {
-    case 'day':     d.setUTCDate(d.getUTCDate() - 1); break;
-    case 'week':    d.setUTCDate(d.getUTCDate() - 7); break;
-    case 'month':   d.setUTCMonth(d.getUTCMonth() - 1); break;
-    case 'quarter': d.setUTCMonth(d.getUTCMonth() - 3); break;
-    case 'year':    d.setUTCFullYear(d.getUTCFullYear() - 1); break;
-  }
-  return utcToYmd(d);
-}
-
-/** Тот же бакет годом раньше — база сравнения «к прошлому году» (LFL).
- *
- *  Для дня/месяца/квартала/года — календарный сдвиг на год: «9 августа 2026» против
- *  «9 августа 2025», как человек и ожидает. Для НЕДЕЛИ календарный год не годится:
- *  «понедельник минус год» — это середина недели, такого бакета не существует.
- *  Поэтому неделя сдвигается на 52 недели (364 дня) — так сравниваются понедельник
- *  с понедельником, ровно как в рознице считают LFL. Расплата известна и осознанна:
- *  за 5–6 лет накапливается сдвиг в неделю относительно календаря. */
-export function yoyBucket(ymd: string, unit: CalendarUnit): string {
-  const d = ymdToUtc(ymd);
-  if (unit === 'week') {
-    d.setUTCDate(d.getUTCDate() - 364);
-    return utcToYmd(d);
-  }
-  d.setUTCFullYear(d.getUTCFullYear() - 1);
-  return bucketStartOf(utcToYmd(d), unit);
-}
-
-const MONTHS_RU = [
-  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
-];
-const WEEKDAYS_RU = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
-const ROMAN_Q = ['I', 'II', 'III', 'IV'];
-
-/** Номер ISO-недели (для подписи «нед. 32»). */
-function isoWeekNumber(ymd: string): number {
-  const d = ymdToUtc(ymd);
-  // Четверг той же недели определяет её год и номер (ISO 8601).
-  d.setUTCDate(d.getUTCDate() + 3 - ((d.getUTCDay() + 6) % 7));
-  const jan4 = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
-  const jan4Thu = new Date(jan4);
-  jan4Thu.setUTCDate(jan4.getUTCDate() + 3 - ((jan4.getUTCDay() + 6) % 7));
-  return 1 + Math.round((d.getTime() - jan4Thu.getTime()) / (7 * 86_400_000));
-}
-
-const dm = (ymd: string) => `${ymd.slice(8, 10)}.${ymd.slice(5, 7)}`;
-
-/** Человеческая подпись бакета (используется и в таблице, и в экспортах). */
-export function bucketLabel(ymd: string, unit: CalendarUnit): string {
-  const d = ymdToUtc(ymd);
-  switch (unit) {
-    case 'day':
-      return `${dm(ymd)}.${ymd.slice(0, 4)}`;
-    case 'week': {
-      const end = ymdToUtc(nextBucket(ymd, 'week'));
-      end.setUTCDate(end.getUTCDate() - 1);
-      return `${dm(ymd)} – ${dm(utcToYmd(end))}.${end.getUTCFullYear()}`;
-    }
-    case 'month':
-      return `${MONTHS_RU[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-    case 'quarter':
-      return `${ROMAN_Q[Math.floor(d.getUTCMonth() / 3)]} кв. ${d.getUTCFullYear()}`;
-    case 'year':
-      return String(d.getUTCFullYear());
-  }
-}
-
-/** Уточнение под подписью: день недели / номер недели / ничего. */
-function bucketSubtitle(ymd: string, unit: CalendarUnit): string | undefined {
-  if (unit === 'day') return WEEKDAYS_RU[(ymdToUtc(ymd).getUTCDay() + 6) % 7];
-  if (unit === 'week') return `нед. ${isoWeekNumber(ymd)}`;
-  return undefined;
 }
 
 // ── Кэш строк (как в byManagers/byProductGroups: L1 Map + L2 Redis) ──────────
@@ -303,7 +187,7 @@ export async function fetchByPeriods(opts: ByPeriodsOptions): Promise<PeriodBuck
   const managerScope = await resolveManagerScope(opts.departmentIds ?? [], accountType);
 
   const pgFilterInput = { productGroupMode: pgMode, productGroupIds: opts.productGroupIds };
-  const pgFilter = buildProductGroupFilter(pgFilterInput, 3); // после [$1 from, $2 toExcl]
+  const pgFilter = buildProductGroupFilter(pgFilterInput, 2); // уже занято два: [$1 from, $2 toExcl]
   const pgKey = productGroupCacheKey(pgFilterInput);
 
   const df = buildDealFilterWhere(opts.dealFilters);

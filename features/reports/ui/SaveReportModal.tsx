@@ -53,6 +53,11 @@ interface Props {
   drilldownGrouped?: boolean;
   sourceDimension?: string;
   drilldownDimension?: string;
+  // Отчёт «По периодам» (задача 09.08): шаг/разрез/база сравнения. Передаются
+  // только со страницы by-periods, у остальных отчётов undefined.
+  periodUnit?: SavedReportInput['periodUnit'];
+  periodDimension?: SavedReportInput['periodDimension'];
+  compareMode?: SavedReportInput['compareMode'];
   sortBy: string | null;
   sortDir: 'asc' | 'desc';
   columnGroups: { name: string; metricIds: string[] }[];
@@ -85,6 +90,7 @@ export function SaveReportModal({
   accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, themeAccent, numberAlign, accountType,
   drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped,
   sourceDimension, drilldownDimension,
+  periodUnit, periodDimension, compareMode,
   sortBy, sortDir, columnGroups,
   currentPeriod, currentComparison,
   initialName, currentReportId,
@@ -199,6 +205,9 @@ export function SaveReportModal({
       drilldownGrouped,
       sourceDimension,
       drilldownDimension,
+      periodUnit,
+      periodDimension,
+      compareMode,
       isShared: effectiveSection !== 'personal',
       sharedSection: effectiveSection !== 'personal' ? effectiveSection : null,
       sortBy,

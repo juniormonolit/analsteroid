@@ -50,7 +50,7 @@ export function MobileReportBar(props: Props) {
   const {
     period, comparison, departmentIds, search = '', grouping,
     onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange,
-    onOpenMetricPanel, metricsBadge, showDepartments = true, sourceDimension, onSourceDimensionChange,
+    onOpenMetricPanel, metricsBadge, showDepartments = true, showComparison = true, sourceDimension, onSourceDimensionChange,
     dealScope, onDealScopeChange, clientType, onClientTypeChange,
     productGroupMode, onProductGroupModeChange, showProductGroupPicker,
     comparisonDisplay, onComparisonDisplayChange, hasMixedDisplay,
@@ -130,7 +130,9 @@ export function MobileReportBar(props: Props) {
 
             <div className="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-4" data-testid="mobile-filters-body">
               <div className="flex flex-wrap items-center gap-2">
-                <ComparisonPeriodControl comparison={comparison} onComparisonChange={onComparisonChange} />
+                {showComparison && (
+                  <ComparisonPeriodControl comparison={comparison} onComparisonChange={onComparisonChange} />
+                )}
                 {showDepartments && (
                   <DepartmentPicker departmentIds={departmentIds} onDepartmentIdsChange={onDepartmentIdsChange} />
                 )}

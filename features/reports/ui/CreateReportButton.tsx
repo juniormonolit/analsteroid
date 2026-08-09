@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, Users, Package, ChevronRight } from 'lucide-react';
+import { Plus, Users, Package, CalendarRange, ChevronRight } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 
 /**
@@ -14,6 +14,9 @@ import { Modal } from '@/components/ui/Modal';
 export const NEW_REPORT_ENTITIES: { slug: string; label: string; description: string; icon: React.ReactNode }[] = [
   { slug: 'by-managers', label: 'По менеджерам', description: 'Пустой отчёт с разбивкой по менеджерам', icon: <Users size={16} /> },
   { slug: 'by-product-groups', label: 'По товарным группам', description: 'Пустой отчёт с разбивкой по товарным группам', icon: <Package size={16} /> },
+  // Задача 09.08: строки — сами периоды (день/неделя/месяц/квартал/год), дрилл
+  // бакета уходит в менеджеров или товарные группы — переключателем в шапке.
+  { slug: 'by-periods', label: 'По периодам', description: 'Динамика: строки — дни/недели/месяцы/кварталы/годы', icon: <CalendarRange size={16} /> },
   // 'По клиентам' — будущая сущность, см. WORKLOG 10.07 — сознательно скрыта.
 ];
 

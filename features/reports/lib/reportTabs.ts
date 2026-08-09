@@ -49,6 +49,12 @@ export interface ReportTabSnapshot {
   createdTimeFilter: string;
   firstTouchFilter: string;
   search: string;
+  /** Отчёт «По периодам» (задача 09.08): шаг группировки, разрез дрилла и база
+   *  сравнения. Опциональны — вкладки, сохранённые до появления отчёта, читаются
+   *  без миграции (дефолты подставляет applyTabSnapshot). */
+  periodUnit?: string;
+  periodDimension?: string;
+  compareMode?: string;
 }
 
 export interface ReportTab {

@@ -38,6 +38,9 @@ export interface FilterBarProps {
   onOpenMetricPanel?: () => void;
   metricsBadge?: number;
   showDepartments?: boolean; // false = скрыть выбор отделов (маркетинг)
+  // false = скрыть второй диапазон «Сравнение» (отчёт «По периодам», 09.08:
+  // база сравнения там построчная, своим переключателем в шапке отчёта)
+  showComparison?: boolean;
   // Маркетинг: селектор главной сущности (вместо «Группировки»)
   sourceDimension?: SourceDimension;
   onSourceDimensionChange?: (d: SourceDimension) => void;
@@ -244,10 +247,14 @@ export function ComparisonPeriodControl({ comparison, onComparisonChange }: {
 // ── Период + период сравнения вместе — используется там, где оба живут рядом в одной
 // строке (десктоп FilterBar, ManagerCardPanel, DrilldownDrawer): просто композиция двух
 // кусков выше, поведение и разметка не изменились относительно прежней версии.
-export function PeriodRangeControls({ period, comparison, onPeriodChange, onComparisonChange, manualComparisonFn = recomputeComparison }: {
+export function PeriodRangeControls({ period, comparison, onPeriodChange, onComparisonChange, manualComparisonFn = recomputeComparison, showComparison = true }: {
   period: DateRange; comparison: DateRange;
   onPeriodChange: (p: DateRange) => void; onComparisonChange: (p: DateRange) => void;
   manualComparisonFn?: (p: DateRange) => DateRange;
+  /** Отчёт «По периодам» (09.08): второй диапазон не показываем — строки САМИ
+   *  являются периодами, база сравнения там построчная (предыдущий бакет / год
+   *  назад), её переключатель живёт в PeriodReportControls. */
+  showComparison?: boolean;
 }) {
   return (
     <>
@@ -257,7 +264,9 @@ export function PeriodRangeControls({ period, comparison, onPeriodChange, onComp
         onComparisonChange={onComparisonChange}
         manualComparisonFn={manualComparisonFn}
       />
-      <ComparisonPeriodControl comparison={comparison} onComparisonChange={onComparisonChange} />
+      {showComparison && (
+        <ComparisonPeriodControl comparison={comparison} onComparisonChange={onComparisonChange} />
+      )}
     </>
   );
 }
@@ -560,7 +569,7 @@ export function GroupingSelector({ grouping, onGroupingChange, stacked = false }
   );
 }
 
-export function FilterBar({ period, comparison, departmentIds, search = '', grouping, onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange, onOpenMetricPanel, metricsBadge, showDepartments = true, sourceDimension, onSourceDimensionChange }: Props) {
+export function FilterBar({ period, comparison, departmentIds, search = '', grouping, onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange, onOpenMetricPanel, metricsBadge, showDepartments = true, showComparison = true, sourceDimension, onSourceDimensionChange }: Props) {
   return (
     <div className="flex items-center gap-2 px-3 sm:px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
 
@@ -569,6 +578,7 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
         comparison={comparison}
         onPeriodChange={onPeriodChange}
         onComparisonChange={onComparisonChange}
+        showComparison={showComparison}
       />
 
       {/* ── Department picker ── */}

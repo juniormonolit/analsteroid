@@ -80,6 +80,14 @@ export interface SavedReport {
   sourceDimension?: string;
   // Marketing: dimension used in the drilldown mini-report. undefined = 'contact_type'.
   drilldownDimension?: string;
+  // Отчёт «По периодам» (задача 09.08, миграция 170). Заполнены только у
+  // reportSlug='by-periods'; у остальных типов остаются пустыми.
+  // Шаг группировки строк-периодов. undefined = 'month'.
+  periodUnit?: PeriodUnit;
+  // Разрез дрилл-дауна бакета (он же охват строки). undefined = 'managers'.
+  periodDimension?: 'managers' | 'product-groups';
+  // База сравнения строки: предыдущий такой же период / год назад / без. undefined = 'prev'.
+  compareMode?: 'prev' | 'yoy' | 'none';
   // «Смекалочная»: общий отчёт — виден всем, пересохранять может только админ.
   isShared?: boolean;
   // Пункт 3б спеки: раздел общей витрины (одна механика, два раздела в сайдбаре).

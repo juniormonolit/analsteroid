@@ -10,6 +10,7 @@ import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 const REPORT_SLUG_LABEL: Record<string, string> = {
   'by-managers': 'По менеджерам',
   'by-product-groups': 'По товарным группам',
+  'by-periods': 'По периодам',
 };
 function slugLabel(slug: string): string {
   return REPORT_SLUG_LABEL[slug] ?? slug;

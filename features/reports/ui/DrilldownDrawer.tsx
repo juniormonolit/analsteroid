@@ -75,7 +75,13 @@ interface SubDrill {
 
 interface Props {
   target: DrilldownTarget;
-  dimensionType: 'manager' | 'product-group' | 'source';
+  // 'period' — отчёт «По периодам» (задача 09.08): цель дрилла — БАКЕТ времени.
+  // Отдельного запроса под него не нужно: страница передаёт сюда `period`, уже
+  // суженный до границ бакета, поэтому мини-отчёт и списки сделок строятся
+  // существующими движками «по менеджерам»/«по товарным группам» за это окно.
+  dimensionType: 'manager' | 'product-group' | 'source' | 'period';
+  /** «По периодам»: в какой разрез проваливается бакет (он же — строки мини-отчёта). */
+  periodDimension?: 'managers' | 'product-groups';
   period: DateRange;
   comparison?: DateRange;
   dealScope: DealScope;
@@ -482,7 +488,7 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
 // Общие query-параметры дрилл-даун сделок. ВАЖНО: фильтр отделов передаётся всегда
 // (отчёт применяет его к цифрам — сделки обязаны совпадать); тип аккаунтов — только
 // для отчёта по менеджерам (в остальных отчётах движок его игнорирует).
-function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | 'productGroupMode' | 'departmentIds' | 'accountType' | 'dimensionType' | 'dealFilters'>): Record<string, string> {
+function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | 'productGroupMode' | 'departmentIds' | 'accountType' | 'dimensionType' | 'periodDimension' | 'dealFilters'>): Record<string, string> {
   return {
     from: p.period.from.toISOString(),
     to: p.period.to.toISOString(),
@@ -490,7 +496,11 @@ function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | '
     productGroupMode: p.productGroupMode,
     ...(p.clientType ? { clientType: p.clientType } : {}),
     ...(p.dimensionType !== 'source' && p.departmentIds?.length ? { departmentIds: p.departmentIds.join(',') } : {}),
-    ...(p.dimensionType === 'manager' && p.accountType && p.accountType !== 'all' ? { accountType: p.accountType } : {}),
+    // Тип аккаунтов — там, где срез отчёта менеджерский: «по менеджерам» и
+    // «по периодам» в менеджерском разрезе (иначе список сделок бакета шире
+    // цифры в ячейке ровно на сделки логистов).
+    ...((p.dimensionType === 'manager' || (p.dimensionType === 'period' && p.periodDimension !== 'product-groups'))
+      && p.accountType && p.accountType !== 'all' ? { accountType: p.accountType } : {}),
     // «Фильтр сделок» отчёта (задача 07.08) — ЕДИНАЯ точка для всех трёх сборщиков
     // параметров дрилл-дауна (плоский список, суб-дрилл, мини-отчёт). Живой баг с
     // прода: в ячейке 9 сделок, а по клику открывались все 17 — агрегат фильтр
@@ -501,7 +511,7 @@ function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | '
 }
 
 // ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
-function FlatDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen, tableScale, dealFilters }: Props) {
+function FlatDealsView({ target, dimensionType, periodDimension, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen, tableScale, dealFilters }: Props) {
   // Групповые цели: отдел → teamId; филиал → менеджерское измерение branch;
   // «Итого» → весь срез (фильтры отчёта по отделам/типу аккаунтов — в baseDealParams)
   const dimensionParams: Record<string, string> =
@@ -512,11 +522,14 @@ function FlatDealsView({ target, dimensionType, period, dealScope, clientType, p
     // через запятую — объединение их сделок (менеджеры / товарные группы).
     : target.kind === 'managers' ? { managerIds: target.id }
     : target.kind === 'productGroups' ? { productGroups: target.id }
+    // Бакет времени: сам по себе он не режет сделки по сущности — окно уже
+    // сужено до его границ в `period`, берём весь срез внутри него.
+    : dimensionType === 'period' ? { all: '1' }
     : dimensionType === 'manager' ? { managerId: target.id }
     : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
     : { productGroup: target.id };
   const params = new URLSearchParams({
-    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFilters }),
+    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, periodDimension, dealFilters }),
     ...dimensionParams,
     ...(target.metricId ? { metricFilter: target.metricId } : {}),
   });
@@ -527,10 +540,14 @@ function FlatDealsView({ target, dimensionType, period, dealScope, clientType, p
 function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
   const { sub, onBack, period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFields, onDealOpen, tableScale, dealFilters } = props;
   const params = new URLSearchParams({
-    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFilters }),
+    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, periodDimension: props.periodDimension, dealFilters }),
     ...(sub.managerId ? { managerId: sub.managerId } : {}),
     ...(sub.productGroup !== undefined ? { productGroup: sub.productGroup } : {}),
     ...(sub.sourceDim && sub.sourceVal !== undefined ? { sourceDim: sub.sourceDim, sourceVal: sub.sourceVal } : {}),
+    // «Итого» бакета: строка мини-отчёта не выбрана, сущностного фильтра нет —
+    // /api/reports/deals требует хотя бы одно измерение, для этого случая all=1
+    // (окно уже сужено до границ бакета в `period`).
+    ...(dimensionType === 'period' && !sub.managerId && sub.productGroup === undefined ? { all: '1' } : {}),
     metricFilter: sub.metricId,
   });
   return (
@@ -681,10 +698,12 @@ function applyMiniGrouping(rows: MiniGroupRow[], grouping: Grouping, metrics: Me
 
 function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: MiniReportSort; onSortChange: (s: MiniReportSort) => void }) {
   const {
-    target, dimensionType, period, comparison, dealScope, clientType, productGroupMode,
-    metricIds, departmentIds, dealFields, sourceDimension, drilldownDimension,
+    target, dimensionType, periodDimension, period, comparison, dealScope, clientType, productGroupMode,
+    metricIds, departmentIds, accountType, dealFields, sourceDimension, drilldownDimension,
     onDealOpen, onCellDrill, sort, onSortChange, dealFilters,
   } = props;
+  // «По периодам»: строки мини-отчёта — менеджеры (дефолт) или товарные группы.
+  const periodRowsAreManagers = periodDimension !== 'product-groups';
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const mainDim = sourceDimension ?? 'brand';
   const dim: DrilldownDimension = drilldownDimension ?? 'contact_type';
@@ -703,7 +722,9 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   // случаях (target=менеджер → rows=товарные группы; прочие маркетинговые разбивки)
   // у строк нет team/branch — селектор скрыт, поведение как раньше.
   const [miniGrouping, setMiniGrouping] = useState<Grouping>('none');
-  const rowsAreManagers = dimensionType === 'product-group' || (dimensionType === 'source' && dim === 'manager');
+  const rowsAreManagers = dimensionType === 'product-group'
+    || (dimensionType === 'source' && dim === 'manager')
+    || (dimensionType === 'period' && periodRowsAreManagers);
 
   const fromIso = period.from.toISOString();
   const toIso   = period.to.toISOString();
@@ -713,6 +734,16 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   const cmpToIso   = (comparison ?? period).to.toISOString();
 
   const runBody =
+    // Бакет времени: сущностного фильтра нет, весь срез за окно бакета —
+    // это ровно обычный отчёт «по менеджерам»/«по товарным группам», просто
+    // за узкий период. accountType передаём явно: в основной таблице охват
+    // строки-бакета такой же (см. byPeriods.ts, dimension='managers').
+    dimensionType === 'period' ? {
+      reportSlug: periodRowsAreManagers ? 'by-managers' : 'by-product-groups',
+      productGroupMode,
+      departmentIds: departmentIds?.length ? departmentIds : undefined,
+      ...(periodRowsAreManagers ? { accountType: accountType ?? 'all' } : {}),
+    } :
     dimensionType === 'manager' ? {
       reportSlug: 'by-product-groups',
       managerId: target.id,
@@ -731,7 +762,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   const { data: runData, isLoading } = useQuery({
     // dealFilters — и в ключе, и в теле: без ключа React Query отдал бы
     // закэшированный НЕотфильтрованный мини-отчёт при смене фильтра.
-    queryKey: ['drill-mini', dimensionType, dim, target.id, fromIso, toIso, cmpFromIso, cmpToIso, dealScope, clientType, productGroupMode, metricIds, departmentIds, dealFilters],
+    queryKey: ['drill-mini', dimensionType, periodDimension, dim, target.id, fromIso, toIso, cmpFromIso, cmpToIso, dealScope, clientType, productGroupMode, metricIds, departmentIds, accountType, dealFilters],
     queryFn: async () => {
       const res = await fetch('/api/reports/run', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -753,12 +784,13 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   // Сделки цели (без фильтра по метрике) — для раскрытия строк мини-отчёта
   const dealParams = new URLSearchParams({
     ...baseDealParams(props),
-    ...(dimensionType === 'manager' ? { managerId: target.id }
+    ...(dimensionType === 'period' ? { all: '1' }
+      : dimensionType === 'manager' ? { managerId: target.id }
       : dimensionType === 'product-group' ? { productGroup: target.id }
       : { sourceDim: mainDim, sourceVal: target.id }),
   });
   const { data: dealData } = useQuery({
-    queryKey: ['drill-mini-deals', dimensionType, mainDim, target.id, fromIso, toIso, dealScope, clientType, productGroupMode, departmentIds, dealFilters],
+    queryKey: ['drill-mini-deals', dimensionType, periodDimension, mainDim, target.id, fromIso, toIso, dealScope, clientType, productGroupMode, departmentIds, accountType, dealFilters],
     queryFn: () => fetch(`/api/reports/deals?${dealParams}`).then(r => r.json()),
   });
 
@@ -779,14 +811,19 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   const deals: Deal[] = dealData?.deals ?? [];
 
   // Ключ бакета сделки = dimensionId (или dimensionName для товарных групп) строки
+  // Строки-товарные-группы сопоставляются со сделками ПО ИМЕНИ (product_group_display),
+  // строки-менеджеры — по id. У бакета это зависит от выбранного разреза.
+  const rowsAreProductGroups = dimensionType === 'manager'
+    || (dimensionType === 'period' && !periodRowsAreManagers);
   const bucketKey = (row: { dimensionId: string; dimensionName: string }) =>
-    dimensionType === 'manager' ? row.dimensionName : row.dimensionId;
+    rowsAreProductGroups ? row.dimensionName : row.dimensionId;
 
   const dealsByRow = useMemo(() => {
     const m = new Map<string, Deal[]>();
     for (const d of deals) {
       let key: string;
-      if (dimensionType === 'manager') key = d.product_group_display;          // строки = товарные группы
+      if (dimensionType === 'period') key = periodRowsAreManagers ? d.manager_id : d.product_group_display;
+      else if (dimensionType === 'manager') key = d.product_group_display;     // строки = товарные группы
       else if (dimensionType === 'product-group') key = d.manager_id;          // строки = менеджеры
       else if (dim === 'manager') key = d.manager_id;
       else if (dim === 'branch') key = mgrBranches[d.manager_id] ?? UNDEFINED_LABEL; // филиал = по менеджеру сделки
@@ -800,7 +837,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
       m.get(key)!.push(d);
     }
     return m;
-  }, [deals, dimensionType, dim, srcMap, mgrBranches]);
+  }, [deals, dimensionType, periodRowsAreManagers, dim, srcMap, mgrBranches]);
 
   // Счётчик сделок строки — в подзаголовок измерения
   const rows = useMemo(() => rawRows.map(r => {
@@ -834,7 +871,11 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
       metricId,
       metricName: m?.nameRu,
     };
-    if (dimensionType === 'manager') {
+    if (dimensionType === 'period') {
+      // Цель — бакет; сущностный фильтр даёт только строка мини-отчёта
+      // (окно уже сужено до границ бакета в `period`).
+      onCellDrill({ ...base, ...(isTotal ? {} : periodRowsAreManagers ? { managerId: dimensionId } : { productGroup: dimensionId }) });
+    } else if (dimensionType === 'manager') {
       onCellDrill({ ...base, managerId: target.id, ...(isTotal ? {} : { productGroup: dimensionId }) });
     } else if (dimensionType === 'product-group') {
       onCellDrill({ ...base, productGroup: target.id, ...(isTotal ? {} : { managerId: dimensionId }) });
@@ -843,7 +884,8 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
     }
   }
 
-  const label = dimensionType === 'manager' ? 'Товарная группа'
+  const label = dimensionType === 'period' ? (periodRowsAreManagers ? 'Менеджер' : 'Товарная группа')
+    : dimensionType === 'manager' ? 'Товарная группа'
     : dimensionType === 'product-group' ? 'Менеджер'
     : dimensionLabel(dim);
 
