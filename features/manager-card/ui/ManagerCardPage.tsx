@@ -18,6 +18,7 @@ import { ManagerTabBar, ProfileTab, RewardsTab, ShopTab, InventoryTab, MANAGER_T
 import { CustomersTab, TeamCustomersBlock, type Filter as CustomerFilter } from '@/features/customers/ui/CustomersTab';
 import { PlanyorkaTab, TeamPlanyorkaBlock } from '@/features/planyorka/ui/PlanyorkaTab';
 import { QuestsTab, TeamQuestsBlock } from '@/features/quests/ui/QuestsTab';
+import { SkillsTab } from '@/features/badges/ui/SkillsTab';
 import { previousPeriodSameLength, defaultPeriod, type DateRange } from '@/lib/period';
 import type { ProductGroupMode } from '@/lib/metrics/types';
 import { ManagerCardRadar, type RadarAxisInput } from './ManagerCardRadar';
@@ -567,6 +568,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           <TeamBadgesBlock />
         </div>
       )}
+      {tabbed && tab === 'skills' && mode === 'manager' && <SkillsTab managerId={managerId} isSelf={showBadges} />}
       {tabbed && tab === 'shop' && <div className="mx-auto w-full max-w-[1360px]"><ShopTab managerId={managerId} isSelf={showBadges} onGoInventory={() => goToTab('inventory')} /></div>}
       {tabbed && tab === 'wallet' && <div className="mx-auto w-full max-w-[1360px]"><WalletTab managerId={managerId} isSelf={showBadges} /></div>}
       {tabbed && tab === 'wheel' && <div className="mx-auto w-full max-w-[1360px]"><GachaBlock isSelf={showBadges} big /></div>}

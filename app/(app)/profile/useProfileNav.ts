@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   IdCard, Users, UsersRound, Settings, ClipboardList, Contact,
   Swords, BarChart3, Medal, ShoppingBag, Package, FerrisWheel, Wallet, Zap, Bell, ClipboardCheck,
-  FileText,
+  FileText, Sprout,
 } from 'lucide-react';
 import { MANAGER_TABS, type ManagerTabKey } from '@/features/manager-card/ui/ManagerTabs';
 import { useNotifications } from '@/features/profile/ui/NotificationsPage';
@@ -42,6 +42,7 @@ const TAB_ICONS: Record<ManagerTabKey, typeof IdCard> = {
   quests: Swords,
   stats: BarChart3,
   rewards: Medal,
+  skills: Sprout,
   wallet: Wallet,
   shop: ShoppingBag,
   wheel: FerrisWheel,
@@ -58,7 +59,7 @@ const GROUP: Record<string, number> = {
   'tab:profile': 0,
   'report': 1, 'tab:stats': 1,
   'tab:planyorka': 2, 'tab:customers': 2, 'tab:quests': 2,
-  'tab:rewards': 3, 'tab:wallet': 3, 'tab:shop': 3, 'tab:wheel': 3, 'tab:inventory': 3,
+  'tab:rewards': 3, 'tab:skills': 3, 'tab:wallet': 3, 'tab:shop': 3, 'tab:wheel': 3, 'tab:inventory': 3,
   'team': 4, 'requests': 4, 'people': 4, 'pulse': 4,
   'notifications': 5,
   'settings': 6,

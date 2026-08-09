@@ -26,7 +26,7 @@ import { usePlanFact } from './PlanFactStrip';
 import { MltCoin } from '@/components/icons/MltCoin';
 import type { ManagerCardResult } from '@/features/manager-card/engine/managerCard';
 
-export type ManagerTabKey = 'profile' | 'planyorka' | 'customers' | 'quests' | 'stats' | 'rewards' | 'wallet' | 'shop' | 'wheel' | 'inventory';
+export type ManagerTabKey = 'profile' | 'planyorka' | 'customers' | 'quests' | 'stats' | 'rewards' | 'skills' | 'wallet' | 'shop' | 'wheel' | 'inventory';
 
 export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'profile', label: 'Профиль' },
@@ -39,6 +39,11 @@ export const MANAGER_TABS: { key: ManagerTabKey; label: string }[] = [
   { key: 'quests', label: 'Квесты' },
   { key: 'stats', label: 'Статистика' },
   { key: 'rewards', label: 'Награды' },
+  // «Прокачка» (задача 50, миграции 159/165/166): дерево скиллов — десять веток
+  // по пять ступеней. Стоит рядом с «Наградами» не для порядка: ступень ветки
+  // это и есть тир награды, разносить их по разным концам полосы значило бы
+  // прятать связь.
+  { key: 'skills', label: 'Прокачка' },
   // «Кошелёк» (правка владельца 05.08): все финансы в одном разделе — балансы,
   // обмен/вывод, переводы, график начислений, выписка (features/wallet).
   { key: 'wallet', label: 'Кошелёк' },
