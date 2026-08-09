@@ -42,9 +42,12 @@ export async function getXpDashboard(db: Pool): Promise<{ rows: XpDashboardRow[]
   const [settings, totals, monthXpRes, clsRes, questXp] = await Promise.all([
     loadXpSettings(db),
     db.query<{ bitrix_id: number; total: string; xp30: string }>(
+      // Рейтинг — по ЧИСТОМУ XP: `total_xp - boost_xp` (задача 51, решение
+      // владельца). Уровень и титул считаются по полному, а таблицу лидеров
+      // должен выигрывать тот, кто продал, а не тот, кто купил буст.
       `SELECT bitrix_id::int AS bitrix_id,
-              coalesce(sum(total_xp), 0)::text AS total,
-              coalesce(sum(total_xp) FILTER (
+              coalesce(sum(total_xp - coalesce(boost_xp, 0)), 0)::text AS total,
+              coalesce(sum(total_xp - coalesce(boost_xp, 0)) FILTER (
                 WHERE greatest(coalesce(sold_day, '0001-01-01'::date), coalesce(ship_day, '0001-01-01'::date))
                       >= (current_date - 30)
               ), 0)::text AS xp30
@@ -52,7 +55,7 @@ export async function getXpDashboard(db: Pool): Promise<{ rows: XpDashboardRow[]
         GROUP BY 1`,
     ),
     db.query<{ month_xp: string }>(
-      `SELECT coalesce(sum(total_xp), 0)::text AS month_xp
+      `SELECT coalesce(sum(total_xp - coalesce(boost_xp, 0)), 0)::text AS month_xp
          FROM xp_ledger
         WHERE greatest(coalesce(sold_day, '0001-01-01'::date), coalesce(ship_day, '0001-01-01'::date))
               >= date_trunc('month', now())::date`,

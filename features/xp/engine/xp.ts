@@ -31,6 +31,10 @@
 import type { Pool, PoolClient } from 'pg';
 import { analyticsDb } from '@/lib/db/clients';
 import { fetchCrossSellMatrix, recommendFor } from '@/features/customers/engine/crossSell';
+import {
+  loadActiveBoosts, loadConsumptions, applyBoosts,
+  type BoostApplication, type BoostDealFacts,
+} from '@/features/badges/engine/boosts';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 
 const MSK = 'Europe/Moscow';
@@ -127,6 +131,10 @@ export interface XpLedgerRow {
   shipXp: number;
   mult: number;
   bonusXp: number;
+  /** Прибавка от буста (задача 51). ВКЛЮЧЕНА в totalXp: так уровень и титул
+   *  считаются по полному XP без правок во всех читателях, а рейтингам
+   *  достаточно вычесть это поле — «выигрывает продавший, а не купивший». */
+  boostXp: number;
   totalXp: number;
   classes: Record<string, number>;
 }
@@ -150,6 +158,9 @@ export interface XpTickResult {
   // задача 2759 (level up push): нужен для сравнения со «старым» уровнем ДО
   // перезаписи xp_ledger, без пересчёта той же формулы дважды в двух модулях.
   totalsByMgr: Map<number, number>;
+  /** Расход бустов этого тика — записывает вызывающий, в своей транзакции
+   *  (features/badges/engine/compute.ts), рядом с записью леджера. */
+  boosts: BoostApplication | null;
 }
 
 // ── границы людей (слот-модель) ──────────────────────────────────────────────
@@ -288,6 +299,9 @@ export async function fetchQuestXp(system: Pool | PoolClient): Promise<Map<numbe
 export async function computeXpTick(
   system: Pool | PoolClient,
   isBadgeEnabled: (key: string) => boolean,
+  // Отдел менеджера — нужен только командным бустам (задача 51). Не передали —
+  // командные просто не применятся, личные работают как обычно.
+  deptOf: Map<number, string> = new Map(),
 ): Promise<XpTickResult> {
   const [settings, classMap, starts, matrix, dealsRes] = await Promise.all([
     loadXpSettings(system),
@@ -316,6 +330,7 @@ export async function computeXpTick(
   };
 
   const ledger: XpLedgerRow[] = [];
+  const boostFacts: BoostDealFacts[] = [];
   let boundedManagers = 0;
   const boundedSeen = new Set<number>();
 
@@ -371,8 +386,47 @@ export async function computeXpTick(
     ledger.push({
       dealId: d.deal_id, bitrixId: mgr,
       soldDay: soldIn ? d.sold_day : null, shipDay: shipIn ? d.ship_day : null,
-      saleXp, shipXp, mult: Math.round(mult * 100) / 100, bonusXp: bonus, totalXp: total, classes,
+      saleXp, shipXp, mult: Math.round(mult * 100) / 100, bonusXp: bonus,
+      boostXp: 0, totalXp: total, classes,
     });
+    // Признаки для бустов считаем ЗДЕСЬ, а не заново в движке бустов: «что
+    // такое допродажа» и «быстрее медианы» должны быть теми же, что в XP.
+    const medForBoost = d.work_days !== null ? speedMedian(d.head_group) : null;
+    boostFacts.push({
+      dealId: d.deal_id, bitrixId: mgr,
+      soldDay: soldIn ? d.sold_day : null, shipDay: shipIn ? d.ship_day : null,
+      amount, isRepeat: Boolean(d.is_repeat), crossSold,
+      fasterThanMedian: medForBoost !== null && d.work_days !== null && Number(d.work_days) < medForBoost,
+      baseXp: total,
+    });
+  }
+
+  // ── бусты (задача 51): только XP, MLT не трогают ───────────────────────────
+  // Применяются ДО расчёта наград и итогов: уровень и титул считаются по
+  // ПОЛНОМУ XP, значит прибавка должна быть в строке до того, как из неё
+  // посчитают totalsByMgr и Level Up.
+  let boosts: BoostApplication | null = null;
+  try {
+    const [active, already] = await Promise.all([loadActiveBoosts(system), loadConsumptions(system)]);
+    if (active.length > 0) {
+      boosts = applyBoosts(active, boostFacts, already, deptOf, new Date().toISOString());
+      const byId = new Map(ledger.map(r => [r.dealId, r]));
+      for (const [dealId, boostXp] of boosts.byDeal) {
+        const row = byId.get(dealId);
+        if (!row || boostXp <= 0) continue;
+        row.boostXp = boostXp;
+        row.totalXp += boostXp;
+        // Классы делят ПОЛНЫЙ XP сделки — иначе «Мастер класса» отставал бы от
+        // уровня на величину бустов, и два счётчика разошлись бы.
+        const keys = Object.keys(row.classes);
+        if (keys.length > 0) {
+          const share = Math.floor(boostXp / keys.length);
+          keys.forEach((c, i) => { row.classes[c] += share + (i === 0 ? boostXp - share * keys.length : 0); });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[xp] бусты пропущены:', e instanceof Error ? e.message : e);
   }
 
   // ── награды ────────────────────────────────────────────────────────────────
@@ -492,6 +546,7 @@ export async function computeXpTick(
       boundedManagers,
     },
     totalsByMgr,
+    boosts,
   };
 }
 
@@ -502,13 +557,14 @@ export async function writeXpLedger(client: PoolClient, rows: XpLedgerRow[]): Pr
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK);
     await client.query(
-      `INSERT INTO xp_ledger (deal_id, bitrix_id, sold_day, ship_day, sale_xp, ship_xp, mult, bonus_xp, total_xp, classes)
-       SELECT * FROM unnest($1::bigint[], $2::bigint[], $3::date[], $4::date[], $5::int[], $6::int[], $7::numeric[], $8::int[], $9::int[], $10::jsonb[])`,
+      `INSERT INTO xp_ledger (deal_id, bitrix_id, sold_day, ship_day, sale_xp, ship_xp, mult, bonus_xp, boost_xp, total_xp, classes)
+       SELECT * FROM unnest($1::bigint[], $2::bigint[], $3::date[], $4::date[], $5::int[], $6::int[], $7::numeric[], $8::int[], $9::int[], $10::int[], $11::jsonb[])`,
       [
         chunk.map(r => r.dealId), chunk.map(r => r.bitrixId),
         chunk.map(r => r.soldDay), chunk.map(r => r.shipDay),
         chunk.map(r => r.saleXp), chunk.map(r => r.shipXp),
-        chunk.map(r => r.mult), chunk.map(r => r.bonusXp), chunk.map(r => r.totalXp),
+        chunk.map(r => r.mult), chunk.map(r => r.bonusXp),
+        chunk.map(r => r.boostXp), chunk.map(r => r.totalXp),
         chunk.map(r => JSON.stringify(r.classes)),
       ],
     );

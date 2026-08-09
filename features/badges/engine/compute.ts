@@ -19,6 +19,7 @@ import { BADGE_CATALOG, CROSS_SELL_PAIRS, TIER_LABELS, type BadgeTier } from './
 import { getManagerScopes, type ManagerScope } from './orgScopes';
 import { accrueCoins, getCurrencyName } from './coins';
 import { loadSkillContext, computeAxisAwards, rotateAward, type SkillContext } from './skills';
+import { persistBoostUsage } from './boosts';
 import { runWalletTick } from './wallet';
 import { CUSTOM_PREFIX, validateCustomCriteria, type CustomCriteria, type CustomMetric, type CustomPeriod } from './customTemplates';
 import { computeXpTick, writeXpLedger, titleForLevel, levelFromXp, loadXpSettings, fetchQuestXp } from '@/features/xp/engine/xp';
@@ -1070,7 +1071,10 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
     }
 
     // ── XP-система (миграция 124): леджер + награды XP-пула в общем тике ─────
-    const xp = await computeXpTick(client, enabled);
+    // Отдел менеджера — командным бустам (задача 51); scopes уже загружены выше.
+    const deptOf = new Map<number, string>();
+    for (const [mgr, sc] of scopes) if (sc.deptKey) deptOf.set(mgr, sc.deptKey);
+    const xp = await computeXpTick(client, enabled, deptOf);
     awards.push(...xp.awards);
 
     // Цены наград (задача 2759, пуш «начислена награда») — читаем ДО транзакции,
@@ -1201,6 +1205,9 @@ export async function runBadgeRecompute(): Promise<RecomputeStats> {
       return m === 1 ? r : { ...r, mult: Math.round(r.mult * m * 1e4) / 1e4, totalXp: Math.round(r.totalXp * m) };
     });
     await writeXpLedger(client, xpLedgerRows);
+    // Расход бустов — в ТОЙ ЖЕ транзакции, что леджер: иначе при откате записи
+    // XP заряды остались бы потраченными, а прибавки не было бы (и наоборот).
+    if (xp.boosts) await persistBoostUsage(client, xp.boosts);
     for (const a of awards) {
       const onConflict = a.counter
         ? `DO UPDATE SET value = EXCLUDED.value WHERE badge_awards.value IS DISTINCT FROM EXCLUDED.value`
