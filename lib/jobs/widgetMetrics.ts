@@ -1,5 +1,5 @@
 import { systemDb } from '@/lib/db/clients';
-import { getRedis } from '@/lib/cache/redis';
+import { redisReady } from '@/lib/cache/redis';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { computePeriodPlanByLogin } from '@/lib/plans/dailyPlan';
 import { WIDGET_PERIOD_PRESETS, resolveWidgetPeriod, type WidgetPeriodPreset } from '@/lib/widget/periods';
@@ -150,7 +150,7 @@ async function computePeriod(preset: WidgetPeriodPreset, loginToDept: Map<string
 }
 
 export async function computeAndCacheWidgetMetrics(): Promise<void> {
-  const client = getRedis();
+  const client = await redisReady();
   if (!client) {
     console.warn('[widgetMetrics] Redis не настроен, пропускаю расчёт');
     return;
@@ -171,7 +171,7 @@ export async function computeAndCacheWidgetMetrics(): Promise<void> {
 }
 
 export async function getCachedWidgetMetrics(): Promise<WidgetMetricsBlob | null> {
-  const client = getRedis();
+  const client = await redisReady();
   if (!client) return null;
   const raw = await client.get(REDIS_KEY);
   if (!raw) return null;

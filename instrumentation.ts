@@ -82,8 +82,8 @@ export async function register() {
 async function runOnceADayMsk(lockKey: string, dateStr: string, job: () => Promise<void>): Promise<'ran' | 'already' | 'busy' | 'lock-error'> {
   let redis: Awaited<ReturnType<typeof import('./lib/cache/redis')['getRedis']>> = null;
   try {
-    const { getRedis } = await import('./lib/cache/redis');
-    redis = getRedis();
+    const { redisReady } = await import('./lib/cache/redis');
+    redis = await redisReady();
     if (redis) {
       if (await redis.get(`${lockKey}:sent:${dateStr}`)) return 'already';
       const attempt = await redis.set(`${lockKey}:attempt:${dateStr}`, '1', 'EX', 900, 'NX');
@@ -156,8 +156,8 @@ function scheduleAdviceFeedback() {
     running = true;
     try {
       try {
-        const { getRedis } = await import('./lib/cache/redis');
-        const redis = getRedis();
+        const { redisReady } = await import('./lib/cache/redis');
+        const redis = await redisReady();
         if (redis) {
           const acquired = await redis.set('advice-feedback:tick', '1', 'EX', 14 * 60, 'NX');
           if (acquired !== 'OK') return;
@@ -249,8 +249,8 @@ function scheduleRopAdviceFeedback() {
     running = true;
     try {
       try {
-        const { getRedis } = await import('./lib/cache/redis');
-        const redis = getRedis();
+        const { redisReady } = await import('./lib/cache/redis');
+        const redis = await redisReady();
         if (redis) {
           const acquired = await redis.set('rop-advice-feedback:tick', '1', 'EX', 14 * 60, 'NX');
           if (acquired !== 'OK') return;
@@ -333,8 +333,8 @@ function scheduleBadgeRecompute() {
 
       if (hour < 3 || lastRunDateMsk === date) return;
       try {
-        const { getRedis } = await import('./lib/cache/redis');
-        const redis = getRedis();
+        const { redisReady } = await import('./lib/cache/redis');
+        const redis = await redisReady();
         if (redis) {
           const acquired = await redis.set(`badges:recompute:${date}`, '1', 'EX', 20 * 60 * 60, 'NX');
           if (acquired !== 'OK') { lastRunDateMsk = date; return; }
@@ -378,8 +378,8 @@ function scheduleEmployeeRenameCheck() {
       const hour = Number(time.slice(0, 2));
       if (hour < 5 || lastRunDateMsk === date) return; // окно: с 05:00 МСК, раз в день
       try {
-        const { getRedis } = await import('./lib/cache/redis');
-        const redis = getRedis();
+        const { redisReady } = await import('./lib/cache/redis');
+        const redis = await redisReady();
         if (redis) {
           const acquired = await redis.set(`employees:rename-check:${date}`, '1', 'EX', 20 * 60 * 60, 'NX');
           if (acquired !== 'OK') { lastRunDateMsk = date; return; }
@@ -414,8 +414,8 @@ function scheduleWidgetMetrics() {
     running = true;
     try {
       try {
-        const { getRedis } = await import('./lib/cache/redis');
-        const redis = getRedis();
+        const { redisReady } = await import('./lib/cache/redis');
+        const redis = await redisReady();
         if (redis) {
           const acquired = await redis.set('widget:metrics:tick', '1', 'EX', 570, 'NX');
           if (acquired !== 'OK') return;
@@ -450,8 +450,8 @@ function scheduleCallControl() {
     running = true;
     try {
       try {
-        const { getRedis } = await import('./lib/cache/redis');
-        const redis = getRedis();
+        const { redisReady } = await import('./lib/cache/redis');
+        const redis = await redisReady();
         if (redis) {
           const acquired = await redis.set('call-control:tick', '1', 'EX', 55, 'NX');
           if (acquired !== 'OK') return;
@@ -524,8 +524,8 @@ function scheduleDailyReport(job: DailyReportJob) {
     try {
       let redis: Awaited<ReturnType<typeof import('./lib/cache/redis')['getRedis']>> = null;
       try {
-        const { getRedis } = await import('./lib/cache/redis');
-        redis = getRedis();
+        const { redisReady } = await import('./lib/cache/redis');
+        redis = await redisReady();
         if (redis) {
           // Уже отправлен другим инстансом сегодня?
           if (await redis.get(`${job.lockPrefix}:sent:${date}`)) { lastSentDate = date; return; }

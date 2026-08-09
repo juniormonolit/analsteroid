@@ -60,6 +60,20 @@ let _client: Redis | null = null;
 let _initTried = false;
 let _lastWarnAt = 0;
 
+// Первое подключение процесса — ОДНО на всю его жизнь (см. redisReady ниже).
+// ioredis подключается асинхронно, а `enableOfflineQueue: false` означает, что
+// команда, выданная ДО установления TCP-соединения, падает сразу же
+// («Stream isn't writeable»). На проде это стреляло на КАЖДОМ рестарте: сразу
+// после `✓ Ready` инструментация дёргает Redis-лок джобы, а первый отчёт —
+// кэш; обе команды приходили раньше соединения. В логе — 123 такие строки на
+// 76 рестартов (ровно по 1–2 на старт), и каждый раз пропускался тик
+// widgetMetrics. Сам Redis при этом жив: PONG, ключи пишутся.
+let _initialConnect: Promise<void> | null = null;
+// Больше, чем connectTimeout (500 мс), чтобы хватило на пару попыток
+// retryStrategy. Ждём максимум один раз за процесс — при реально лежащем
+// Redis это разовая задержка на старте, а не на каждом запросе.
+const INITIAL_CONNECT_WAIT_MS = 2_000;
+
 function warnThrottled(msg: string, err: unknown) {
   const now = Date.now();
   if (now - _lastWarnAt < 30_000) return;
@@ -87,8 +101,45 @@ export function getRedis(): Redis | null {
   // reconnects on its own.
   client.on('error', (err) => warnThrottled('redis connection error', err));
 
+  // Промис первого подключения: разрешается по первому 'ready' либо по
+  // таймауту. Создаётся здесь, а не при первом запросе, чтобы отсчёт шёл с
+  // момента реального старта соединения.
+  _initialConnect = new Promise<void>((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      client.removeListener('ready', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, INITIAL_CONNECT_WAIT_MS);
+    // Таймер не должен держать процесс живым (важно для скриптов/джобов).
+    (timer as unknown as { unref?: () => void }).unref?.();
+    client.once('ready', finish);
+  });
+
   _client = client;
   return client;
+}
+
+/**
+ * Клиент, которым прямо сейчас можно пользоваться, — или null, и тогда вызывающий
+ * считает без кэша.
+ *
+ * Отличие от getRedis(): на САМОМ ПЕРВОМ обращении после старта процесса ждёт
+ * установления соединения (до INITIAL_CONNECT_WAIT_MS), вместо того чтобы
+ * выдать команду в ещё не открытый сокет и получить «Stream isn't writeable».
+ * Дальше — прежняя политика fail-fast: не 'ready' значит реальный обрыв, ждать
+ * нечего, отдаём null и идём в БД. Ожидание бывает не более одного раза за
+ * процесс: `_initialConnect` после первого срабатывания уже разрешён.
+ */
+export async function redisReady(): Promise<Redis | null> {
+  const client = getRedis();
+  if (!client) return null; // кэш выключен (REDIS_URL не задан)
+  if (client.status !== 'ready' && _initialConnect) await _initialConnect;
+  if (client.status === 'ready') return client;
+  // Сюда попадаем при настоящей недоступности Redis — это стоит видеть в логе,
+  // но не чаще раза в 30 секунд (warnThrottled).
+  warnThrottled('Redis недоступен, считаем без кэша', `status=${client.status}`);
+  return null;
 }
 
 /**
@@ -97,7 +148,7 @@ export function getRedis(): Redis | null {
  * Any Redis failure is swallowed and `producer()` is used directly.
  */
 export async function cached<T>(key: string, ttlSec: number, producer: () => Promise<T>): Promise<T> {
-  const client = getRedis();
+  const client = await redisReady();
   const fullKey = NS + key;
 
   if (client) {
@@ -138,7 +189,7 @@ export function reportTtl(toExclIso: string): number {
  * Returns the number of keys removed (0 if caching is disabled or Redis is unreachable).
  */
 export async function invalidateReports(): Promise<number> {
-  const client = getRedis();
+  const client = await redisReady();
   if (!client) return 0;
 
   const pattern = `${NS}rpt:*`;

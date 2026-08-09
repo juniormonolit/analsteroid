@@ -1,5 +1,5 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
-import { getRedis } from '@/lib/cache/redis';
+import { redisReady } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { loadManagerBranchMap } from '@/lib/marketing/sources';
@@ -219,7 +219,7 @@ function computeMetrics(name: string, factYtd: number, targetYear: number | null
 }
 
 export async function computeAndCachePlanSummary(): Promise<void> {
-  const client = getRedis();
+  const client = await redisReady();
   if (!client) {
     console.warn('[planSummary] Redis не настроен, пропускаю расчёт');
     return;
@@ -279,7 +279,7 @@ export async function computeAndCachePlanSummary(): Promise<void> {
 }
 
 export async function getCachedPlanSummary(): Promise<PlanSummary | null> {
-  const client = getRedis();
+  const client = await redisReady();
   if (!client) return null;
   const raw = await client.get(REDIS_KEY);
   if (!raw) return null;
