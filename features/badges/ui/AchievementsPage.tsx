@@ -1,8 +1,17 @@
 'use client';
-// Раздел «Награды» как КОЛЛЕКЦИЯ АЧИВОК (задача владельца 05.08): вверху счётчик
+// Раздел «Награды и ачивки» — коллекция (задача владельца 05.08): вверху счётчик
 // собранного по ступеням редкости, дальше полученные (свежие сверху), в конце —
 // блеклые неполученные. Секретные до получения не показываются вовсе.
 // Редкость — реальная частота владения среди «играющих» (см. /api/badges/collection).
+//
+// РАЗДЕЛЕНИЕ НА НАГРАДЫ И АЧИВКИ (задача 63, п.5, решение владельца 07.08:
+// «награды переименовать в ачивки. А можно и разделить как-то по смыслу:
+// награды и ачивки. Да, пожалуй, можно и то и то»).
+//
+// Граница не выдумана, она уже лежит в данных: есть цена в `badge_prices` —
+// за событие платят MLT, это НАГРАДА; цены нет — это чистый статус, АЧИВКА.
+// Признак приходит с сервера полем `paid`, чтобы фронт не догадывался по
+// косвенным признакам и не разошёлся с тем, за что реально начисляют.
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
@@ -12,6 +21,10 @@ interface CollectionItem {
   key: string; name: string; description: string; icon: string; category: string;
   tiered: boolean; isSecret: boolean; setOf: string[];
   owned: boolean; count: number; ownersPct: number; rarity: Rarity; lastAwardedAt: string | null;
+  /** Цена в MLT (максимум по тирам); 0 — за неё не платят. */
+  price: number;
+  /** true — награда (платят MLT), false — ачивка (только статус). */
+  paid: boolean;
 }
 interface CollectionResponse {
   items: CollectionItem[];
@@ -58,6 +71,14 @@ function AchievementCard({ item }: { item: CollectionItem }) {
           <span className="text-[11px] text-[var(--color-text-muted)] tabular-nums">
             есть у {item.ownersPct}% коллег
           </span>
+          {/* Цена — единственное, чем награда отличается от ачивки, поэтому она
+              на карточке, а не только в фильтре: иначе разделение выглядело бы
+              произвольным. */}
+          {item.paid && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--color-bg)] px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-[var(--color-text)]">
+              +{item.price} MLT
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -79,14 +100,22 @@ export function AchievementsPage({ managerId, isSelf }: { managerId: string; isS
     refetchOnWindowFocus: false,
   });
 
-  const { owned, locked } = useMemo(() => {
-    const items = data?.items ?? [];
+  // Фильтр «награды / ачивки» (задача 63, п.5). Дефолт — «всё»: разделение
+  // должно объяснять коллекцию, а не прятать её половину от человека, который
+  // просто открыл раздел посмотреть.
+  const [split, setSplit] = useState<'all' | 'paid' | 'status'>('all');
+
+  const { owned, locked, paidCount, statusCount } = useMemo(() => {
+    const all = data?.items ?? [];
+    const items = split === 'all' ? all : all.filter(i => (split === 'paid' ? i.paid : !i.paid));
     const rank = (i: CollectionItem) => RARITY_ORDER.indexOf(i.rarity);
     return {
       owned: items.filter(i => i.owned).sort((a, b) => rank(a) - rank(b) || b.count - a.count),
       locked: items.filter(i => !i.owned).sort((a, b) => rank(b) - rank(a) || a.name.localeCompare(b.name, 'ru')),
+      paidCount: all.filter(i => i.paid).length,
+      statusCount: all.filter(i => !i.paid).length,
     };
-  }, [data]);
+  }, [data, split]);
 
   if (isLoading) return <div className="text-sm text-[var(--color-text-muted)]">Загрузка коллекции…</div>;
 
@@ -95,7 +124,7 @@ export function AchievementsPage({ managerId, isSelf }: { managerId: string; isS
       {/* ══ Счётчик коллекции ══ */}
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 sm:px-5 py-4">
         <div className="mb-3 flex flex-wrap items-baseline gap-2">
-          <h2 className="text-base font-bold text-[var(--color-text)]">🏅 Коллекция</h2>
+          <h2 className="text-base font-bold text-[var(--color-text)]">🏅 Награды и ачивки</h2>
           <span className="text-sm font-bold tabular-nums text-[var(--color-accent)]">
             {data?.ownedCount ?? 0} из {data?.totalCount ?? 0}
           </span>
@@ -103,6 +132,32 @@ export function AchievementsPage({ managerId, isSelf }: { managerId: string; isS
             редкость — доля коллег, у которых награда есть (считаем по {data?.players ?? 0} участникам)
           </span>
         </div>
+        {/* Награды и ачивки — разные вещи, и человек должен видеть, какие
+            именно приносят MLT. Граница берётся из цены в каталоге, а не из
+            категории: категория — про тему, цена — про деньги. */}
+        <div className="mb-3 flex flex-wrap gap-1">
+          {([
+            ['all', `Всё · ${(data?.totalCount ?? 0)}`],
+            ['paid', `💰 Награды · ${paidCount}`],
+            ['status', `🏅 Ачивки · ${statusCount}`],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key} type="button" onClick={() => setSplit(key)}
+              className={`min-h-11 rounded-lg px-3 text-[13px] sm:min-h-9 ${
+                split === key
+                  ? 'bg-[var(--color-accent)] text-white'
+                  : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="mb-3 text-[11px] leading-snug text-[var(--color-text-muted)]">
+          {split === 'paid' && 'Награды — за них начисляют MLT в кошелёк. Цена указана на карточке.'}
+          {split === 'status' && 'Ачивки — только статус и коллекция, MLT за них не платят.'}
+          {split === 'all' && 'Награды приносят MLT, ачивки — только статус. Переключитесь, чтобы увидеть отдельно.'}
+        </p>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           {RARITY_ORDER.map(key => {
             const t = data?.totals[key] ?? { owned: 0, total: 0 };

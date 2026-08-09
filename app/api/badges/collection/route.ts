@@ -29,6 +29,10 @@ export interface CollectionItem {
   /** Собран ли комплект-условие (для set_of), иначе null. */
   setOf: string[];
   owned: boolean;
+  /** Цена в MLT (максимум по тирам). 0 — за неё не платят. */
+  price: number;
+  /** true — НАГРАДА (платят MLT), false — АЧИВКА (только статус). Задача 63, п.5. */
+  paid: boolean;
   count: number;                 // сколько раз получена этим человеком
   ownersPct: number;             // % владельцев среди «играющих»
   rarity: Rarity;
@@ -53,7 +57,7 @@ export async function GET(req: NextRequest) {
   const id = Number(bitrixId);
 
   const db = systemDb();
-  const [defsRes, mineRes, ownersRes, playersRes] = await Promise.all([
+  const [defsRes, mineRes, ownersRes, playersRes, pricesRes] = await Promise.all([
     db.query<{
       key: string; name: string; description: string; icon: string; category: string;
       tiered: boolean; is_secret: boolean; set_of: string[]; criteria: Record<string, unknown> | null;
@@ -73,11 +77,20 @@ export async function GET(req: NextRequest) {
       `SELECT badge_key, count(DISTINCT bitrix_id)::text AS owners FROM badge_awards GROUP BY 1`,
     ),
     db.query<{ n: string }>(`SELECT count(DISTINCT bitrix_id)::text AS n FROM badge_awards`),
+    // Цена — граница между НАГРАДОЙ и АЧИВКОЙ (задача 63, п.5, решение
+    // владельца 07.08). Она уже есть в данных, изобретать признак не нужно:
+    // есть строка в badge_prices с ценой > 0 — за событие платят MLT, это
+    // награда; нет — это чистый статус, ачивка. Берём максимум по тирам:
+    // у ступенчатых цена разная, а на карточке нужна одна.
+    db.query<{ badge_key: string; price: string }>(
+      `SELECT badge_key, max(price)::text AS price FROM badge_prices GROUP BY 1`,
+    ).catch(() => ({ rows: [] as { badge_key: string; price: string }[] })),
   ]);
 
   const players = Math.max(1, Number(playersRes.rows[0]?.n ?? 1));
   const mine = new Map(mineRes.rows.map(r => [r.badge_key, { n: Number(r.n), last: r.last_at }]));
   const owners = new Map(ownersRes.rows.map(r => [r.badge_key, Number(r.owners)]));
+  const priceOf = new Map(pricesRes.rows.map(r => [r.badge_key, Number(r.price)]));
 
   const items: CollectionItem[] = [];
   for (const d of defsRes.rows) {
@@ -93,6 +106,8 @@ export async function GET(req: NextRequest) {
       category: d.category, tiered: d.tiered, isSecret: d.is_secret, setOf: d.set_of ?? [],
       owned, count: own?.n ?? 0, ownersPct: pct, rarity: rarityOf(pct),
       lastAwardedAt: own?.last ?? null,
+      price: priceOf.get(d.key) ?? 0,
+      paid: (priceOf.get(d.key) ?? 0) > 0,
     });
   }
 
