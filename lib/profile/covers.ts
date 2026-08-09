@@ -12,6 +12,7 @@
 // Утепление). «Газобетон» из примера владельца — это класс «Стеновые».
 
 import type { CSSProperties } from 'react';
+import { generatedCover, isGeneratedId } from './generated';
 
 export interface CoverDef {
   id: string;
@@ -94,6 +95,11 @@ export const COVERS: CoverDef[] = [
 ];
 
 export function coverById(id: string | null | undefined): CoverDef {
+  // Сгенерированные рандомайзером обложки (задача 63) в каталоге не лежат —
+  // их вид считается из самого id. Владение проверяется отдельно, на записи
+  // выбора; здесь только рендер, и он обязан уметь нарисовать чужой профиль
+  // по одному тексту, без запроса в БД.
+  if (id && isGeneratedId(id)) return generatedCover(id);
   return COVERS.find(c => c.id === id) ?? COVERS.find(c => c.id === DEFAULT_COVER_ID)!;
 }
 

@@ -3,6 +3,8 @@ import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import { fetchXpProfile } from '@/features/xp/engine/xp';
 import { COVERS, DEFAULT_COVER_ID, coverById, isCoverUnlocked, coverRequirementLabel } from '@/lib/profile/covers';
+import { isGeneratedId } from '@/lib/profile/generated';
+import { ownsGenerated } from '@/features/profile/engine/randomizer';
 
 // Обложка СВОЕГО профиля (ЛК-соцсетка, этап 2). GET — каталог с признаком
 // разблокировки (для пикера), POST — установка выбранной. Разблокировка
@@ -50,6 +52,21 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const coverId = String(body.coverId ?? '');
+  // Обложка из рандомайзера (задача 63): в каталоге её нет, но она «своя»,
+  // если этот сид человек прокрутил. Условия по классам к ней не применяются —
+  // она куплена, а не заслужена, и в этом вся разница между двумя путями.
+  if (isGeneratedId(coverId)) {
+    if (!(await ownsGenerated(systemDb(), idNum, coverId))) {
+      return NextResponse.json({ error: 'Этот вариант вам не выпадал' }, { status: 403 });
+    }
+    await systemDb().query(
+      `INSERT INTO profile_covers (bitrix_id, cover_id, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (bitrix_id) DO UPDATE SET cover_id = EXCLUDED.cover_id, updated_at = now()`,
+      [idNum, coverId],
+    );
+    return NextResponse.json({ ok: true, coverId });
+  }
+
   const def = COVERS.find(c => c.id === coverId);
   if (!def) return NextResponse.json({ error: 'Неизвестная обложка' }, { status: 400 });
 

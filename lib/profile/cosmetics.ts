@@ -12,6 +12,8 @@
 // Поэтому косметика намеренно дешёвая: это не конкурент отгулу за 3000, а то,
 // на что не жалко спустить сдачу. Дорогие позиции — только «понтовые».
 
+import { generatedBackground, generatedFrame, generatedKind, isGeneratedId } from './generated';
+
 export type CosmeticKind = 'frame' | 'background';
 
 export interface CosmeticDef {
@@ -108,7 +110,13 @@ export const DEFAULT_BACKGROUND_ID = 'bg-none';
 const BY_ID = new Map(COSMETICS.map(c => [c.id, c]));
 
 export function cosmeticById(id: string | null | undefined): CosmeticDef | null {
-  return id ? BY_ID.get(id) ?? null : null;
+  if (!id) return null;
+  // Варианты рандомайзера (задача 63) — не в каталоге, вид считается из id.
+  if (isGeneratedId(id)) {
+    const k = generatedKind(id);
+    return k === 'frame' ? generatedFrame(id) : k === 'background' ? generatedBackground(id) : null;
+  }
+  return BY_ID.get(id) ?? null;
 }
 
 export function cosmeticsOfKind(kind: CosmeticKind): CosmeticDef[] {

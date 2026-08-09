@@ -29,6 +29,8 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Coins, Eye, Lock, RotateCcw } from 'lucide-react';
+import { isGeneratedId } from '@/lib/profile/generated';
+import { RandomizerBlock } from './RandomizerBlock';
 import { Avatar } from '@/components/ui/Avatar';
 import { coverStyle } from '@/lib/profile/covers';
 import { backgroundCss, cosmeticById, type CosmeticKind } from '@/lib/profile/cosmetics';
@@ -101,6 +103,9 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
     const check = (slot: Slot): { ok: boolean; reason: string | null } => {
       const id = tryOn[slot];
       if (!id) return { ok: true, reason: null }; // не примеряли — нечего применять
+      // Варианты рандомайзера (задача 63) в каталогах не лежат: их владение
+      // проверяет сервер по факту прокрута. Здесь блокировать нечего.
+      if (isGeneratedId(id)) return { ok: true, reason: null };
       if (slot === 'cover') {
         const c = coverList.find(x => x.id === id);
         if (!c) return { ok: false, reason: 'обложка не найдена' };
@@ -419,6 +424,8 @@ export function AppearanceSettings({ name, avatarUrl }: { name: string; avatarUr
           })}
         </div>
       )}
+
+      <RandomizerBlock onEquip={(kind, id) => { setTryOn(p => ({ ...p, [kind]: id })); setError(null); }} />
 
       <p className="text-[11px] text-[var(--color-text-muted)]">
         Примерять можно всё, включая некупленное. Купленное остаётся навсегда — переодеваться

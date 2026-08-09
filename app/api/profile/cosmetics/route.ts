@@ -21,6 +21,8 @@ import {
   DEFAULT_BACKGROUND_ID,
   DEFAULT_FRAME_ID,
 } from '@/lib/profile/cosmetics';
+import { isGeneratedId } from '@/lib/profile/generated';
+import { fetchMyGenerated } from '@/features/profile/engine/randomizer';
 
 /** true — таблиц ещё нет (миграция 157 не накатана). */
 function isMissingTable(err: unknown): boolean {
@@ -173,6 +175,11 @@ async function equip(bitrixId: number, body: Record<string, unknown>) {
     return NextResponse.json({ error: 'Оформление профиля ещё не готово (миграция 157 не применена)' }, { status: 503 });
   }
 
+  // Варианты рандомайзера (задача 63) лежат не в profile_cosmetics_owned, а в
+  // profile_generated_cosmetics — их «владение» это факт прокрута.
+  const myGenerated = new Set(
+    (await fetchMyGenerated(systemDb(), bitrixId)).map(g => g.cosmeticId),
+  );
   const pick = (raw: unknown, kind: 'frame' | 'background', fallback: string): string | null | 'invalid' => {
     if (raw === undefined) return null;               // поле не прислали — не трогаем
     if (raw === null) return fallback;                // явный null — снять
@@ -180,6 +187,7 @@ async function equip(bitrixId: number, body: Record<string, unknown>) {
     const def = cosmeticById(raw);
     if (!def || def.kind !== kind) return 'invalid';
     // Надеть можно только своё: гейт здесь, замочек в пикере — лишь отображение.
+    if (isGeneratedId(def.id)) { if (!myGenerated.has(def.id)) return 'invalid'; return def.id; }
     if (!isFree(def) && !state.owned.has(def.id)) return 'invalid';
     return def.id;
   };
