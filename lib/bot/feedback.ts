@@ -44,7 +44,9 @@ export async function handleAdviceFeedback(opts: { fromUserId: string; logIdRaw:
   }
 
   try {
-    await sendBitrixBotMessage(opts.fromUserId, THANKS[opts.signal]);
+    // Ответ-«спасибо» на кнопку под сообщением геймификации — тот же канал:
+    // включили награды, значит и подтверждение реакции должно доходить.
+    await sendBitrixBotMessage(opts.fromUserId, THANKS[opts.signal], undefined, 'gamification');
   } catch (e) {
     console.warn('[bot/feedback] ответ-спасибо не ушёл:', e instanceof Error ? e.message : e);
   }

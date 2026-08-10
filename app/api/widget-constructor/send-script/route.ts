@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     '```\n' + script + '\n```';
 
   try {
-    await sendBitrixBotMessage(session.bitrixUserId, message);
+    await sendBitrixBotMessage(session.bitrixUserId, message, undefined, 'service');
   } catch {
     return NextResponse.json({ error: 'send_failed', message: 'Не удалось отправить сообщение через бота' }, { status: 502 });
   }

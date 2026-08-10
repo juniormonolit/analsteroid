@@ -6,7 +6,7 @@
 // уведомление в ЛК создаётся всегда.
 
 import type { Pool, PoolClient } from 'pg';
-import { sendBitrixBotMessage, type BotKeyboardButton } from '@/lib/bitrix/notify';
+import { sendBitrixBotMessage, type BotChannel, type BotKeyboardButton } from '@/lib/bitrix/notify';
 import { systemDb } from '@/lib/db/clients';
 
 export type NotificationType =
@@ -201,6 +201,12 @@ export async function sendManagerBotMessage(
   bitrixId: number, text: string, msgType: string, triggerReason?: string | null,
   opts: SendManagerBotMessageOpts = {},
 ): Promise<void> {
+  // Канал поканальной глушилки (задача 09.08). Геймификация и рабочие дайджесты
+  // разведены намеренно: «награда за квест» и «сводка по отделу за вчера» — это
+  // разные разговоры с человеком, и владелец должен уметь включить одно без
+  // другого. Тип сообщения у нас уже есть — по нему и разводим, второго
+  // справочника заводить не надо.
+  const channel: BotChannel = msgType === 'gamification' ? 'gamification' : 'manager_digest';
   const dryRun = await isManagerDryRunEnabled();
   const willSend = !dryRun && !opts.suppressReason;
 
@@ -215,7 +221,7 @@ export async function sendManagerBotMessage(
     return;
   }
   try {
-    await sendBitrixBotMessage(String(bitrixId), finalText, logId !== null ? feedbackButtons(logId) : undefined);
+    await sendBitrixBotMessage(String(bitrixId), finalText, logId !== null ? feedbackButtons(logId) : undefined, channel);
   } catch (e) {
     console.warn(`[notify] пуш менеджеру ${bitrixId} не ушёл:`, e instanceof Error ? e.message : e);
   }

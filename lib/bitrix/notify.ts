@@ -57,36 +57,66 @@ export interface BotKeyboardButton {
 }
 
 /** Возвращает id отправленного сообщения (нужен для корреляции ответов по REPLY_ID). */
-// ── РЕЖИМ ТИШИНЫ ДО РЕЛИЗА (распоряжение владельца 05.08, уточнённое) ────────
-// «Не должны отправлять Аналитиком никаких сообщений никому» → уточнение:
-// «Не-не, ОТЧЁТЫ пусть шлёт. Но ничего больше. По умолчанию у нас задуманы
-// уведомления через него».
+// ── ПОКАНАЛЬНАЯ ГЛУШИЛКА (задача 09.08.2026) ────────────────────────────────
+// Было: один флаг `BOT_SEND_ENABLED` в env — не задан, значит молчит ВСЁ, кроме
+// ежедневных отчётов. Под это «всё» попал и «Контроль звонков», который к
+// геймификации отношения не имеет, а поменять что-либо можно было только
+// правкой start.sh с рестартом.
 //
-// То есть глушится ВСЁ, кроме ежедневных отчётов: уведомления геймификации
-// (награды/квесты/переводы/заявки), дайджесты РОПам, «Контроль звонков», чаты
-// по сделкам. Полагаться на «никто не дёрнет» нельзя — часть этого шлют
-// ПЛАНИРОВЩИКИ из instrumentation.ts сами, без участия человека.
+// Стало: у каждого отправителя канал, у каждого канала флажок в `bot_channels`,
+// правится в админке. Разбиение ПО СМЫСЛУ, а не по ботам: у «Аналитика» под
+// одним ботом живут и отчёт владельцу, и «ты получил награду», и вопрос РОПа по
+// сделке — глушить их одним рубильником значило терять нужное вместе с ненужным.
 //
-// Реализация: канал указывает ВЫЗЫВАЮЩИЙ (channel: 'report' | 'notify'), дефолт —
-// 'notify' (то есть молчание): любой новый или забытый вызов по умолчанию тихий,
-// а не прорывается наружу. Снять тишину целиком — BOT_SEND_ENABLED=1 в start.sh
-// + рестарт, по слову владельца. Вызовы не бросают исключение (иначе
-// планировщики уйдут в ретраи и лог-шум) — тихо логируют и отдают фиктивный id.
-export type BotChannel = 'report' | 'notify';
+// Два правила, которые важно не потерять при правках:
+//   1. Канал указывает ВЫЗЫВАЮЩИЙ, а дефолт — 'gamification' (самый глухой из
+//      реально используемых). Забытый канал в новом коде должен молчать, а не
+//      прорываться наружу.
+//   2. Не смогли прочитать настройки (БД недоступна, миграции нет) — считаем
+//      канал ВЫКЛЮЧЕННЫМ. Fail-safe в сторону тишины, а не рассылки.
+//
+// `BOT_SEND_ENABLED=1` остаётся аварийным «включить всё» поверх БД: если
+// админка недоступна, а разослать надо. Обратного (`=0`) намеренно нет —
+// выключить всё можно флажками, и одно место управления лучше двух.
+export type BotChannel = 'report' | 'call_control' | 'gamification' | 'manager_digest' | 'deal_chats' | 'service';
 
-function botChannelMuted(channel: BotChannel): boolean {
-  if (process.env.BOT_SEND_ENABLED === '1') return false; // релиз — шлём всё
-  return channel !== 'report';                            // до релиза — только отчёты
+let _channelCache: { map: Map<string, boolean>; at: number } | null = null;
+const CHANNEL_CACHE_TTL_MS = 30_000;
+
+/** Сбросить кэш каналов — зовётся из админки сразу после сохранения, чтобы
+ *  владелец увидел эффект переключателя, а не ждал 30 секунд. */
+export function invalidateBotChannelCache(): void { _channelCache = null; }
+
+async function channelEnabled(channel: BotChannel): Promise<boolean> {
+  if (process.env.BOT_SEND_ENABLED === '1') return true;   // аварийное «включить всё»
+  if (_channelCache && Date.now() - _channelCache.at < CHANNEL_CACHE_TTL_MS) {
+    return _channelCache.map.get(channel) ?? false;
+  }
+  const map = new Map<string, boolean>();
+  try {
+    // Динамический импорт: notify.ts тянут и сборщики, которым пул БД не нужен.
+    const { systemDb } = await import('@/lib/db/clients');
+    const r = await systemDb().query<{ key: string; enabled: boolean }>(
+      'SELECT key, enabled FROM bot_channels',
+    );
+    for (const row of r.rows) map.set(row.key, row.enabled);
+    _channelCache = { map, at: Date.now() };
+  } catch {
+    // Миграции 170 ещё нет или БД недоступна — молчим. Кэш НЕ ставим: иначе
+    // при разовом сбое связи бот замолчал бы на полминуты уже после починки.
+    return false;
+  }
+  return map.get(channel) ?? false;
 }
 
 export async function sendBitrixBotMessage(
   bitrixUserId: string,
   message: string,
   keyboard?: BotKeyboardButton[],
-  channel: BotChannel = 'notify',
+  channel: BotChannel = 'gamification',
 ): Promise<number> {
-  if (botChannelMuted(channel)) {
-    console.warn(`[bot] ТИШИНА ДО РЕЛИЗА (канал ${channel}): сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
+  if (!(await channelEnabled(channel))) {
+    console.warn(`[bot] канал «${channel}» выключен: сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
     return 0;
   }
   const webhook = process.env.BITRIX_BOT_WEBHOOK_URL || '';
@@ -109,10 +139,10 @@ export async function sendBitrixBotMessage(
 // missedcalls-робота. Свой вебхук/CLIENT_ID (env CALL_CONTROL_*), НЕ переиспользует
 // креды «Аналитика»: у ботов разные владельцы-вебхуки и разные аватары/имена в чате.
 export async function sendCallControlBotMessage(bitrixUserId: string, message: string): Promise<void> {
-  // «Контроль звонков» — уведомления, не отчёты: до релиза молчит целиком
-  // (см. комментарий про режим тишины у sendBitrixBotMessage).
-  if (botChannelMuted('notify')) {
-    console.warn(`[bot:call-control] ТИШИНА ДО РЕЛИЗА: сообщение для ${bitrixUserId} не отправлено`);
+  // Свой канал: «Контроль звонков» к геймификации отношения не имеет и глохнуть
+  // вместе с ней не должен — ровно это и просил владелец 09.08.
+  if (!(await channelEnabled('call_control'))) {
+    console.warn(`[bot:call-control] канал выключен: сообщение для ${bitrixUserId} не отправлено`);
     return;
   }
   const webhook = process.env.CALL_CONTROL_WEBHOOK_URL || '';

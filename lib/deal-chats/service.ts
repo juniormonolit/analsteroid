@@ -73,7 +73,7 @@ export async function sendDealChatMessage(opts: {
     '[i]Ответьте на это сообщение (стрелка «Ответить») — ответ уйдёт автору вопроса.[/i]',
   ].join('\n');
 
-  const bitrixMessageId = await sendBitrixBotMessage(manager_id, message);
+  const bitrixMessageId = await sendBitrixBotMessage(manager_id, message, undefined, 'deal_chats');
 
   await db.query(
     `INSERT INTO deal_chat_messages (chat_id, direction, author_name, text, bitrix_message_id)
@@ -203,7 +203,7 @@ export async function handleIncomingBotMessage(opts: {
     );
     if (res.rows.length) {
       await attachReply(res.rows[0].chat_id, await managerDisplayName(fromUserId), text);
-      await sendBitrixBotMessage(fromUserId, '✅ Передал автору вопроса.');
+      await sendBitrixBotMessage(fromUserId, '✅ Передал автору вопроса.', undefined, 'deal_chats');
       return true;
     }
   }
@@ -216,14 +216,14 @@ export async function handleIncomingBotMessage(opts: {
   const byId = open.find(c => idMatches.includes(c.deal_id));
   if (byId) {
     await attachReply(byId.id, await managerDisplayName(fromUserId), text);
-    await sendBitrixBotMessage(fromUserId, `✅ Передал автору вопроса (сделка #${byId.deal_id}).`);
+    await sendBitrixBotMessage(fromUserId, `✅ Передал автору вопроса (сделка #${byId.deal_id}).`, undefined, 'deal_chats');
     return true;
   }
 
   // 3. Единственный открытый тред — привязываем без вопросов.
   if (open.length === 1) {
     await attachReply(open[0].id, await managerDisplayName(fromUserId), text);
-    await sendBitrixBotMessage(fromUserId, `✅ Передал автору вопроса (сделка #${open[0].deal_id}).`);
+    await sendBitrixBotMessage(fromUserId, `✅ Передал автору вопроса (сделка #${open[0].deal_id}).`, undefined, 'deal_chats');
     return true;
   }
 
@@ -242,7 +242,7 @@ export async function handleIncomingBotMessage(opts: {
     BG_COLOR: '#29619b',
     TEXT_COLOR: '#fff',
   }));
-  await sendBitrixBotMessage(fromUserId, '❓ У вас несколько открытых вопросов. К какой сделке относится ответ?', buttons);
+  await sendBitrixBotMessage(fromUserId, '❓ У вас несколько открытых вопросов. К какой сделке относится ответ?', buttons, 'deal_chats');
   return true;
 }
 
@@ -256,7 +256,7 @@ export async function handleBindDealCommand(opts: { fromUserId: string; chatId: 
     [fromUserId],
   );
   if (!pending.rows.length) {
-    await sendBitrixBotMessage(fromUserId, 'Не нашёл ответа для привязки — напишите его ещё раз, пожалуйста.');
+    await sendBitrixBotMessage(fromUserId, 'Не нашёл ответа для привязки — напишите его ещё раз, пожалуйста.', undefined, 'deal_chats');
     return;
   }
 
@@ -265,10 +265,10 @@ export async function handleBindDealCommand(opts: { fromUserId: string; chatId: 
     [chatId, fromUserId],
   );
   if (!chat.rows.length) {
-    await sendBitrixBotMessage(fromUserId, 'Этот вопрос уже не активен. Напишите ответ ещё раз, пожалуйста.');
+    await sendBitrixBotMessage(fromUserId, 'Этот вопрос уже не активен. Напишите ответ ещё раз, пожалуйста.', undefined, 'deal_chats');
     return;
   }
 
   await attachReply(chatId, await managerDisplayName(fromUserId), pending.rows[0].text);
-  await sendBitrixBotMessage(fromUserId, `✅ Передал автору вопроса (сделка #${chat.rows[0].deal_id}).`);
+  await sendBitrixBotMessage(fromUserId, `✅ Передал автору вопроса (сделка #${chat.rows[0].deal_id}).`, undefined, 'deal_chats');
 }
