@@ -308,6 +308,14 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
         </div>
       )}
 
+      {/* «Товарная матрица» (задача владельца 10.08) — фиксированный спец-раздел:
+          вероятности перехода категория → категория (движок productMatrix.ts). */}
+      <div className="mx-1 mb-2">
+        <Link href="/sales/product-matrix" className={linkCls('/sales/product-matrix')} draggable={false}>
+          <span className="flex-1 min-w-0 break-words line-clamp-2">Товарная матрица</span>
+        </Link>
+      </div>
+
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
