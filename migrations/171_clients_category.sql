@@ -52,6 +52,19 @@
 
 BEGIN;
 
+-- ── 0. Резервная копия затрагиваемых определений ─────────────────────────────
+-- Тот же приём, что в миграциях 165/166: ниже идут UPDATE'ы, переписывающие
+-- метрики необратимо (имена, тип, фильтры). Если что-то посчитается не так,
+-- вернуть исходные определения можно из этой таблицы, а не из памяти.
+CREATE TABLE IF NOT EXISTS metrics_backup_171 AS SELECT * FROM metrics WHERE false;
+INSERT INTO metrics_backup_171
+  SELECT * FROM metrics
+   WHERE id IN ('all_clients_delivered', 'repeat_clients_delivered', 'repeat_rate_clients',
+                'complex_clients', 'complex_clients_pct', 'delivered_deals_count',
+                'avg_orders_per_client', 'avg_groups_per_client', 'avg_groups_per_order',
+                'avg_products_per_order')
+     AND NOT EXISTS (SELECT 1 FROM metrics_backup_171);
+
 -- ── 1. Вся семья переезжает в новую категорию «Клиенты» ──────────────────────
 UPDATE metrics SET category = 'Клиенты' WHERE id IN (
   'all_clients_delivered', 'repeat_clients_delivered', 'repeat_rate_clients',
