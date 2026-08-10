@@ -1,15 +1,13 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, Users, Package, CalendarRange, ChevronRight } from 'lucide-react';
+import { Plus, Users, Package, CalendarRange, Contact, ChevronRight } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 
 /**
  * «Создать отчёт» (задача 1572, Серёга): стартовые сущности пустого отчёта.
- * Расширяемо на будущее — «По клиентам» уже проектировался Серёгой, но по его
- * же просьбе НЕ показываем в UI, пока сущность не готова на бэкенде. Когда
- * появится — добавить строку сюда, ничего больше менять не нужно (роутинг и
- * пустое состояние SalesReportPage уже общие для любого reportSlug).
+ * Расширяемо: роутинг и пустое состояние SalesReportPage общие для любого
+ * reportSlug — новая сущность это строка в списке ниже + движок в run/route.ts.
  */
 export const NEW_REPORT_ENTITIES: { slug: string; label: string; description: string; icon: React.ReactNode }[] = [
   { slug: 'by-managers', label: 'По менеджерам', description: 'Пустой отчёт с разбивкой по менеджерам', icon: <Users size={16} /> },
@@ -17,7 +15,8 @@ export const NEW_REPORT_ENTITIES: { slug: string; label: string; description: st
   // Задача 09.08: строки — сами периоды (день/неделя/месяц/квартал/год), дрилл
   // бакета уходит в менеджеров или товарные группы — переключателем в шапке.
   { slug: 'by-periods', label: 'По периодам', description: 'Динамика: строки — дни/недели/месяцы/кварталы/годы', icon: <CalendarRange size={16} /> },
-  // 'По клиентам' — будущая сущность, см. WORKLOG 10.07 — сознательно скрыта.
+  // «По клиентам» — та самая «будущая сущность» из WORKLOG 10.07, дожила (задача 10.08).
+  { slug: 'by-clients', label: 'По клиентам', description: 'Строки — клиенты периода: LTV, частота заказов, риск ухода', icon: <Contact size={16} /> },
 ];
 
 /**

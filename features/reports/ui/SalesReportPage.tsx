@@ -849,6 +849,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // app/api/reports/by-periods/route.ts): у него другой контракт сравнения и
   // не нужна тяжёлая план/звонковая обвязка /api/reports/run.
   const periodMode = reportSlug === 'by-periods';
+  // «По клиентам» (задача 10.08): строка = клиент. Группировки/группы/тип
+  // аккаунта неприменимы; дрилл строки — плоский список сделок клиента.
+  const clientMode = reportSlug === 'by-clients';
   const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters,
     periodMode ? periodUnit : null, periodMode ? periodDimension : null, periodMode ? compareMode : null];
 
@@ -1015,7 +1018,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       .filter(Boolean);
   }, [availableMetrics, catalogMetrics, metricIds, columnGroups]);
 
-  const dimensionType = periodMode ? 'period' : sourceMode ? 'source' : reportSlug === 'by-product-groups' ? 'product-group' : 'manager';
+  const dimensionType = clientMode ? 'client' : periodMode ? 'period' : sourceMode ? 'source' : reportSlug === 'by-product-groups' ? 'product-group' : 'manager';
 
   // Пользовательские группы (задача 2653): per-user, per-шкала (для товарных
   // групп kc/by_max несовместимы — dimensionKey включает режим).
@@ -1029,7 +1032,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     },
     // В «По периодам» строки — бакеты времени, объединять их в пользовательские
     // группы нечего (и незачем грузить справочник групп).
-    enabled: !sourceMode && !periodMode,
+    enabled: !sourceMode && !periodMode && !clientMode,
     staleTime: 60 * 1000,
     refetchOnWindowFocus: false,
   });
@@ -1068,7 +1071,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     // строки группы). Строка группы с общим отделом/филиалом остаётся внутри
     // него; «сборная» из разных — поднимается на верхний уровень с пометкой.
     let grouped: GroupedMergedRow[];
-    if (!sourceMode && !periodMode && userGroups.length > 0) {
+    if (!sourceMode && !periodMode && !clientMode && userGroups.length > 0) {
       // «Без группы» — только при grouping='none' (решение выше, у applyUserGroups).
       const applied = applyUserGroups(data?.rows ?? [], userGroups, catalogMetrics, grouping === 'none');
       if (grouping === 'none' || grouping === 'total') {
@@ -1222,7 +1225,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       let managerIds: string[] | undefined;
       let pgRowId: string | undefined;
       const baseRows: MergedRow[] = (data?.rows ?? []) as MergedRow[];
-      if (periodMode) {
+      if (clientMode) {
+        if (id !== '__total__') {
+          alert('График по строке-клиенту пока не поддержан — используйте иконку в заголовке метрики («Итого»)');
+          return;
+        }
+      } else if (periodMode) {
         // Строка — сам период: график «динамика одного месяца» смысла не имеет,
         // вся таблица УЖЕ является этой динамикой. Для «Итого» — обычный график
         // метрики за весь диапазон отчёта.
@@ -1279,7 +1287,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     return cmp ? bucketRange(cmp, periodUnit) : null;
   }, [periodMode, drilldown, periodUnit, compareMode]);
 
-  const dimensionColumnLabel = periodMode
+  const dimensionColumnLabel = clientMode
+    ? 'Клиент'
+    : periodMode
     ? 'Период'
     : sourceMode
     ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
@@ -1555,12 +1565,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           period, comparison, departmentIds, search,
           // Группировки по отделам/филиалам у строк-периодов нет: подытог «отдела»
           // внутри месяца — это уже другой отчёт (в него и ведёт дрилл бакета).
-          grouping: sourceMode || periodMode ? undefined : grouping,
+          grouping: sourceMode || periodMode || clientMode ? undefined : grouping,
           onPeriodChange: handlePeriodChange,
           onComparisonChange: setComparison,
           onDepartmentIdsChange: setDepartmentIds,
           onSearchChange: setSearch,
-          onGroupingChange: sourceMode || periodMode ? undefined : setGrouping,
+          onGroupingChange: sourceMode || periodMode || clientMode ? undefined : setGrouping,
           showDepartments: !sourceMode,
           // «По периодам»: второго диапазона нет — база сравнения построчная
           // (переключатель «Сравнение» в шапке отчёта, PeriodReportControls).
@@ -1630,7 +1640,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           userGroupsSlot: (
             <>
               <DealFilterButton value={dealFilters} onChange={setDealFilters} />
-              {!sourceMode && !periodMode && (
+              {!sourceMode && !periodMode && !clientMode && (
                 <CreateGroupButton
                   active={groupSelectMode}
                   onClick={() => (groupSelectMode ? exitGroupSelect() : setGroupSelectMode(true))}

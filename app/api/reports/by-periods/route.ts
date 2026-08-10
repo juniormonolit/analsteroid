@@ -15,6 +15,7 @@ import {
   fetchClientFollowupMetrics, clientFollowupToRecord, CLIENT_FOLLOWUP_METRIC_IDS,
   fetchClientCohortMetrics, clientCohortToRecord, CLIENT_COHORT_METRIC_IDS,
   fetchActiveClients, clientActiveToRecord, CLIENT_ACTIVE_METRIC_IDS,
+  clientShareOf, CLIENT_SHARE_METRIC_IDS, CLIENT_BUYERS_METRIC_IDS,
 } from '@/features/reports/engine/clientMetrics';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { periodDateStrFromInstant, type CalendarUnit } from '@/lib/period';
@@ -149,7 +150,7 @@ export async function POST(req: NextRequest) {
   // external, поэтому seriesDeps их не признаёт, но неподдержанными они НЕ
   // являются: правило владельца «метрика работает во всех трёх стартовых
   // сущностях» (10.08) — здесь это третья.
-  const clientIds = new Set<string>([...CLIENT_METRIC_IDS, ...CLIENT_COHORT_METRIC_IDS]);
+  const clientIds = new Set<string>([...CLIENT_METRIC_IDS, ...CLIENT_COHORT_METRIC_IDS, ...CLIENT_SHARE_METRIC_IDS, ...CLIENT_BUYERS_METRIC_IDS]);
   const unsupported = explicitMetrics
     ? requested.filter(m => seriesDeps(m, allMetrics) === null && !clientIds.has(m.id)).map(m => m.id)
     : [];
@@ -232,8 +233,37 @@ export async function POST(req: NextRequest) {
       calculatedMetrics,
     ),
   });
-  const currentRows = currentRaw.map(r => enrich(r, curClients, curTime, curFollow, curCohort, curActive));
-  const compRows = compRaw.map(r => enrich(r, compClients, compTime, compFollow, compCohort, compActive));
+  let currentRows = currentRaw.map(r => enrich(r, curClients, curTime, curFollow, curCohort, curActive));
+  let compRows = compRaw.map(r => enrich(r, compClients, compTime, compFollow, compCohort, compActive));
+
+  // «Клиенты» в «Итого» — из общего итога движка, не суммой бакетов (клиент,
+  // купивший в мае и в июле, за полугодие один). Считается ДО сборки строк:
+  // долям каждой строки нужен итог (та же логика, что в run/route.ts).
+  let clientTotals = clientsFor(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime, curFollow, curCohort, curActive);
+  let clientTotalsComp = clientsFor(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime, compFollow, compCohort, compActive);
+  const needShares = withDeps.some(m => (CLIENT_SHARE_METRIC_IDS as readonly string[]).includes(m.id));
+  const needBuyers = withDeps.some(m => (CLIENT_BUYERS_METRIC_IDS as readonly string[]).includes(m.id));
+  if (needShares || needBuyers) {
+    const patch = (r: PeriodBucketRow, totals: Record<string, number | null>): PeriodBucketRow => ({
+      ...r,
+      metrics: {
+        ...r.metrics,
+        ...(needShares ? clientShareOf(r.metrics, totals) : {}),
+        // Строка здесь — бакет времени: «купившие клиенты» = клиенты бакета.
+        ...(needBuyers ? { group_buyers_count: r.metrics.all_clients_delivered ?? null } : {}),
+      },
+    });
+    currentRows = currentRows.map(r => patch(r, clientTotals));
+    compRows = compRows.map(r => patch(r, clientTotalsComp));
+    if (needShares) {
+      clientTotals = { ...clientTotals, client_share_count_pct: 100, client_share_amount_pct: 100 };
+      clientTotalsComp = { ...clientTotalsComp, client_share_count_pct: 100, client_share_amount_pct: 100 };
+    }
+    if (needBuyers) {
+      clientTotals = { ...clientTotals, group_buyers_count: clientTotals.all_clients_delivered ?? null };
+      clientTotalsComp = { ...clientTotalsComp, group_buyers_count: clientTotalsComp.all_clients_delivered ?? null };
+    }
+  }
   const compByBucket = new Map(compRows.map(r => [r.bucket, r]));
 
   const shiftOf = (b: string) => comparisonBucketOf(b, unit, compareMode);
@@ -260,12 +290,6 @@ export async function POST(req: NextRequest) {
     };
   });
 
-  // «Клиенты» в «Итого» — из общего итога движка, не суммой бакетов: клиент,
-  // купивший в мае и в июле, — один клиент за полугодие, а медиана вообще не
-  // складывается. Подмена до computeCalculated, чтобы доли считались от честных
-  // чисел (та же логика, что в /api/reports/run).
-  const clientTotals = clientsFor(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime, curFollow, curCohort, curActive);
-  const clientTotalsComp = clientsFor(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime, compFollow, compCohort, compActive);
   const totalsCurrent = computeCalculated(
     { ...computeTotals(currentRows, allMetrics), ...clientTotals }, calculatedMetrics);
   const totalsComparison = computeCalculated(

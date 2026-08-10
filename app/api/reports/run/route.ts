@@ -5,6 +5,7 @@ import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { fetchBySources } from '@/features/reports/engine/bySources';
+import { fetchByClients } from '@/features/reports/engine/byClients';
 import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features/reports/engine/managerActivity';
 import { fetchBookingCallRate } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/features/reports/engine/stageConversions';
@@ -22,6 +23,7 @@ import {
   fetchClientFollowupMetrics, clientFollowupToRecord, CLIENT_FOLLOWUP_METRIC_IDS,
   fetchClientCohortMetrics, clientCohortToRecord, CLIENT_COHORT_METRIC_IDS,
   fetchActiveClients, clientActiveToRecord, CLIENT_ACTIVE_METRIC_IDS,
+  fetchGroupBuyers, clientShareOf, CLIENT_SHARE_METRIC_IDS, CLIENT_BUYERS_METRIC_IDS,
   type ClientMetricsDimension,
 } from '@/features/reports/engine/clientMetrics';
 import { computeRatingValues } from '@/features/manager-card/engine/ratings';
@@ -296,6 +298,12 @@ export async function POST(req: NextRequest) {
     [currentRows, compRows] = await Promise.all([
       fetchBySources({ period: opts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter, dealFilters }),
       fetchBySources({ period: compOpts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter, dealFilters }),
+    ]);
+  } else if (reportSlug === 'by-clients') {
+    // Четвёртая стартовая сущность (задача 10.08): строка = клиент.
+    [currentRows, compRows] = await Promise.all([
+      fetchByClients({ period: opts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, createdTimeFilter, firstTouchFilter, dealFilters }),
+      fetchByClients({ period: compOpts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, createdTimeFilter, firstTouchFilter, dealFilters }),
     ]);
   }
 
@@ -991,7 +999,8 @@ export async function POST(req: NextRequest) {
   let clientGrandTotals: { cur?: Record<string, number | null>; comp?: Record<string, number | null> } | null = null;
   const clientDimension: ClientMetricsDimension | null =
     reportSlug === 'by-managers' ? 'manager'
-    : reportSlug === 'by-product-groups' ? 'product-group' : null;
+    : reportSlug === 'by-product-groups' ? 'product-group'
+    : reportSlug === 'by-clients' ? 'client' : null;
   if (clientDimension && withDeps.some(m => (CLIENT_METRIC_IDS as readonly string[]).includes(m.id))) {
     // Для менеджеров ограничиваем движок теми, кто реально в отчёте (фильтры
     // отделов/типа аккаунта уже применены к строкам) — тогда «Итого» движка
@@ -1051,6 +1060,37 @@ export async function POST(req: NextRequest) {
       cur: merge(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime, curFollow, curCohort, curActive),
       comp: merge(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime, compFollow, compCohort, compActive),
     };
+
+    // «Доля клиентов по количеству/сумме» (задача 10.08) — доля строки от итога.
+    // Формулой каталога не выражается (формулы не видят итог), поэтому здесь.
+    if (withDeps.some(m => (CLIENT_SHARE_METRIC_IDS as readonly string[]).includes(m.id))) {
+      const cur = clientGrandTotals.cur!, comp = clientGrandTotals.comp!;
+      currentRows = currentRows.map(r => ({ ...r, metrics: { ...r.metrics, ...clientShareOf(r.metrics, cur) } }));
+      compRows = compRows.map(r => ({ ...r, metrics: { ...r.metrics, ...clientShareOf(r.metrics, comp) } }));
+      clientGrandTotals.cur = { ...cur, client_share_count_pct: 100, client_share_amount_pct: 100 };
+      clientGrandTotals.comp = { ...comp, client_share_count_pct: 100, client_share_amount_pct: 100 };
+    }
+
+    // «Количество купивших клиентов» (задача 10.08): в отчёте по товарным
+    // группам клиент засчитывается КАЖДОЙ группе из позиций сделки; в остальных
+    // разрезах совпадает с «Клиенты с отгрузкой» строки.
+    if (withDeps.some(m => (CLIENT_BUYERS_METRIC_IDS as readonly string[]).includes(m.id))) {
+      if (reportSlug === 'by-product-groups') {
+        const [curB, compB] = await Promise.all([
+          fetchGroupBuyers(curOpts), fetchGroupBuyers(compOptsClients),
+        ]);
+        currentRows = currentRows.map(r => ({ ...r, metrics: { ...r.metrics, group_buyers_count: curB.get(r.dimensionId) ?? 0 } }));
+        compRows = compRows.map(r => ({ ...r, metrics: { ...r.metrics, group_buyers_count: compB.get(r.dimensionId) ?? 0 } }));
+        clientGrandTotals.cur = { ...clientGrandTotals.cur, group_buyers_count: curB.get(CLIENTS_GRAND_TOTAL_KEY) ?? 0 };
+        clientGrandTotals.comp = { ...clientGrandTotals.comp, group_buyers_count: compB.get(CLIENTS_GRAND_TOTAL_KEY) ?? 0 };
+      } else {
+        const dup = (r: ReportRow) => ({ ...r, metrics: { ...r.metrics, group_buyers_count: r.metrics.all_clients_delivered ?? null } });
+        currentRows = currentRows.map(dup);
+        compRows = compRows.map(dup);
+        clientGrandTotals.cur = { ...clientGrandTotals.cur, group_buyers_count: clientGrandTotals.cur!.all_clients_delivered ?? null };
+        clientGrandTotals.comp = { ...clientGrandTotals.comp, group_buyers_count: clientGrandTotals.comp!.all_clients_delivered ?? null };
+      }
+    }
   }
 
   // Add calculated metrics to each row (after plan enrichment so plan-dependent metrics work)

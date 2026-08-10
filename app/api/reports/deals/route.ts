@@ -107,6 +107,8 @@ export async function GET(req: NextRequest) {
   const sourceDim      = sp.get('sourceDim') as SourceDimension | null; // marketing dimension
   const sourceVal      = sp.get('sourceVal');                           // its value
   const teamId         = sp.get('teamId');          // drilldown подытога отдела
+  // Отчёт «По клиентам» (задача 10.08): сделки одного клиента (contact_id).
+  const contactId      = sp.get('contactId');
   const all            = sp.get('all') === '1';     // drilldown строки «Итого» — весь срез
   const departmentIds  = (sp.get('departmentIds') ?? '').split(',').filter(Boolean);
   const accountType    = sp.get('accountType');     // managers | logists (фильтр отчёта)
@@ -117,8 +119,8 @@ export async function GET(req: NextRequest) {
   // (buildDealFilterWhere), поэтому разъехаться уже не может.
   const dealFiltersRaw = sp.get('dealFilters');
 
-  if ((!managerId && !managerIds.length && !productGroup && !productGroups.length && !sourceDim && !teamId && !all) || !from || !to) {
-    return NextResponse.json({ error: 'managerId, productGroup, sourceDim+sourceVal, teamId or all=1, plus from/to required' }, { status: 400 });
+  if ((!managerId && !managerIds.length && !productGroup && !productGroups.length && !sourceDim && !teamId && !contactId && !all) || !from || !to) {
+    return NextResponse.json({ error: 'managerId, productGroup, sourceDim+sourceVal, teamId, contactId or all=1, plus from/to required' }, { status: 400 });
   }
 
   let dealFilters: DealFilter[] = [];
@@ -222,6 +224,10 @@ export async function GET(req: NextRequest) {
   // из мини-отчёта шлёт оба).
   const params: unknown[] = [fromDate.toISOString(), toExcl.toISOString()];
   let dimensionFilter = '';
+  if (contactId && /^\d+$/.test(contactId)) {
+    params.push(Number(contactId));
+    dimensionFilter += ` AND d.contact_id = $${params.length}`;
+  }
 
   if (managerId) {
     params.push(managerId);

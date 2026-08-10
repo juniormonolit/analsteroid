@@ -55,7 +55,7 @@ export const CLIENTS_GRAND_TOTAL_KEY = '__grand_total__';
  *  задвоились бы. Клиент при этом честно считается в каждой группе, где он
  *  покупал, — это то же поведение, что и у менеджеров, и «Итого» по-прежнему
  *  берётся из общего итога движка, а не суммой строк. */
-export type ClientMetricsDimension = 'manager' | 'product-group' | 'period' | 'none';
+export type ClientMetricsDimension = 'manager' | 'product-group' | 'period' | 'client' | 'none';
 
 export interface ClientMetricsRow {
   /** Уникальные клиенты с товарной отгрузкой в периоде. */
@@ -82,6 +82,13 @@ export interface ClientMetricsRow {
   medianCycleDays: number | null;
   /** Медиана месяцев жизни клиента (первая заявка → последняя отгрузка). */
   medianLifetimeMonths: number | null;
+  /** Клиентские метрики (в сущности «Клиент» — значение клиента, в остальных —
+   *  медиана по клиентам строки). */
+  daysSinceLast: number | null;
+  orderFreqDays: number | null;
+  clientLtv: number | null;
+  clientCats: number | null;
+  churnRiskPct: number | null;
 }
 
 /** id метрик каталога, которые заполняет этот движок (миграции 171 и 172). Роут
@@ -124,6 +131,8 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
       delivered_deals_count: 0, new_clients_amount: 0, repeat_clients_amount: 0,
       complex_clients: 0, avg_groups_per_client: null, avg_groups_per_order: null,
       avg_products_per_order: null, median_cycle_time_days: null, median_client_lifetime_months: null,
+      client_days_since_last: null, client_order_frequency_days: null, client_ltv: null,
+      client_categories_count: null, client_churn_risk_pct: null,
     };
   }
   return {
@@ -142,6 +151,11 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
     avg_products_per_order: row.productsPerOrder,
     median_cycle_time_days: row.medianCycleDays,
     median_client_lifetime_months: row.medianLifetimeMonths,
+    client_days_since_last: row.daysSinceLast,
+    client_order_frequency_days: row.orderFreqDays,
+    client_ltv: row.clientLtv,
+    client_categories_count: row.clientCats,
+    client_churn_risk_pct: row.churnRiskPct,
   };
 }
 
@@ -184,6 +198,8 @@ function pillWhere(dealScope: DealScope, clientType: ClientType): string {
 
 function dimExprOf(opts: ClientMetricsOptions): string {
   if (opts.dimension === 'manager') return 'd.current_manager_id::text';
+  // Сущность «Клиент» (задача 10.08): строка отчёта — сам клиент.
+  if (opts.dimension === 'client') return 'd.contact_id::text';
   if (opts.dimension === 'product-group') {
     // Те же выражения, что в byProductGroups.ts, — иначе строки не совпадут с
     // остальными колонками того же отчёта.
@@ -330,12 +346,19 @@ ranked AS (
      AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
 ),
 client_bounds AS (
-  -- «Время жизни клиента» (4-я пачка, определение владельца): первая created_at
-  -- ЛЮБОЙ его сделки → последняя ТОВАРНАЯ отгрузка. Только клиенты периода.
+  -- История клиента одним проходом: «Время жизни» (первая created_at любой
+  -- сделки → последняя товарная отгрузка) + опоры клиентских метрик сущности
+  -- «Клиент» (первая/последняя отгрузка, счётчик отгрузок, LTV за всю историю).
   SELECT d.contact_id,
          min(d.created_at) AS first_created,
          max(d.delivered_at) FILTER (WHERE d.delivered_at IS NOT NULL
-           AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})) AS last_deliv
+           AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})) AS last_deliv,
+         min(d.delivered_at) FILTER (WHERE d.delivered_at IS NOT NULL
+           AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})) AS first_deliv,
+         count(*) FILTER (WHERE d.delivered_at IS NOT NULL
+           AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})) AS n_ships,
+         COALESCE(sum(d.amount) FILTER (WHERE d.delivered_at IS NOT NULL
+           AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})), 0) AS ltv_sum
     FROM sa.deals d
    WHERE d.contact_id IN (SELECT contact_id FROM period_clients)
      AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
@@ -347,7 +370,13 @@ src AS (
          COALESCE(c.groups_cnt, 0) AS client_groups,
          -- месяцы по 30.44 дн — как в исходном определении median_client_lifetime_months
          EXTRACT(EPOCH FROM (cb.last_deliv - cb.first_created)) / 86400.0 / 30.44 AS lifetime_months,
-         (rk.rn = 2) AS is_first_repeat
+         (rk.rn = 2) AS is_first_repeat,
+         -- Клиентские метрики сущности «Клиент» (миграция 175):
+         EXTRACT(EPOCH FROM (now() - cb.last_deliv)) / 86400.0 AS days_since_last,
+         CASE WHEN cb.n_ships >= 2
+              THEN EXTRACT(EPOCH FROM (cb.last_deliv - cb.first_deliv)) / 86400.0 / (cb.n_ships - 1)
+              ELSE NULL END AS order_freq_days,
+         cb.ltv_sum AS client_ltv
     FROM deal_goods dg
     LEFT JOIN first_goods   f  ON f.contact_id  = dg.contact_id
     LEFT JOIN client_groups c  ON c.contact_id  = dg.contact_id
@@ -358,8 +387,8 @@ src AS (
 -- считаются ПО СДЕЛКАМ, а клиенты/комплексность/группы на клиента — сначала
 -- сворачиваются ПО КЛИЕНТУ (клиент с десятью заказами весит столько же, сколько
 -- клиент с одним), и только потом усредняются.
-pc_dim  AS (SELECT dim_id, contact_id, bool_or(is_new) AS is_new, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime FROM src GROUP BY 1, 2),
-pc_all  AS (SELECT contact_id, bool_or(is_new) AS is_new, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime FROM src GROUP BY 1),
+pc_dim  AS (SELECT dim_id, contact_id, bool_or(is_new) AS is_new, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1, 2),
+pc_all  AS (SELECT contact_id, bool_or(is_new) AS is_new, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1),
 deal_dim AS (
   SELECT dim_id, count(*) AS orders,
          COALESCE(SUM(amount) FILTER (WHERE is_new), 0)     AS new_amount,
@@ -380,7 +409,12 @@ client_dim AS (
          count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
          AVG(cg) AS groups_per_client,
-         percentile_cont(0.5) WITHIN GROUP (ORDER BY lifetime) AS median_lifetime
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY lifetime) AS median_lifetime,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY dsl)  AS med_dsl,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY freq) AS med_freq,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY ltv)  AS med_ltv,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY cg)   AS med_cats,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY (CASE WHEN freq > 0 THEN dsl / freq * 100 END)) AS med_risk
     FROM pc_dim GROUP BY 1),
 client_all AS (
   SELECT count(*) AS clients_total,
@@ -388,16 +422,23 @@ client_all AS (
          count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
          AVG(cg) AS groups_per_client,
-         percentile_cont(0.5) WITHIN GROUP (ORDER BY lifetime) AS median_lifetime
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY lifetime) AS median_lifetime,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY dsl)  AS med_dsl,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY freq) AS med_freq,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY ltv)  AS med_ltv,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY cg)   AS med_cats,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY (CASE WHEN freq > 0 THEN dsl / freq * 100 END)) AS med_risk
     FROM pc_all)
 SELECT d.dim_id, c.clients_total, c.new_clients, c.first_repeat_clients, d.orders, d.new_amount, d.repeat_amount,
        c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
-       d.median_cycle, c.median_lifetime
+       d.median_cycle, c.median_lifetime,
+       c.med_dsl, c.med_freq, c.med_ltv, c.med_cats, c.med_risk
   FROM deal_dim d JOIN client_dim c ON c.dim_id IS NOT DISTINCT FROM d.dim_id
 UNION ALL
 SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.first_repeat_clients, d.orders, d.new_amount,
        d.repeat_amount, c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
-       d.median_cycle, c.median_lifetime
+       d.median_cycle, c.median_lifetime,
+       c.med_dsl, c.med_freq, c.med_ltv, c.med_cats, c.med_risk
   FROM deal_all d CROSS JOIN client_all c
 `;
 
@@ -428,6 +469,11 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.first_rep
       productsPerOrder: numOrNull(r.products_per_order),
       medianCycleDays: numOrNull(r.median_cycle),
       medianLifetimeMonths: numOrNull(r.median_lifetime),
+      daysSinceLast: numOrNull(r.med_dsl),
+      orderFreqDays: numOrNull(r.med_freq),
+      clientLtv: numOrNull(r.med_ltv),
+      clientCats: numOrNull(r.med_cats),
+      churnRiskPct: numOrNull(r.med_risk),
     });
   }
   return out;
@@ -1056,5 +1102,108 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(DISTINCT d.contact_id)
 
   const out = new Map<string, number>();
   for (const r of rows) out.set(String(r.dim_id), num(r.active));
+  return out;
+}
+
+// ── Долевые метрики и «купившие клиенты группы» (задача владельца 10.08) ─────
+//
+// «Доля клиентов по количеству/сумме» — доля строки от ИТОГА отчёта (пример
+// владельца: у Володи 5 компаний из 10 → 50 %). Формулой каталога это не
+// выражается — формулы не видят итог, — поэтому доли досчитываются в роуте
+// после обогащения строк (clientShareOf ниже). В «Итого» всегда 100 %.
+
+export const CLIENT_SHARE_METRIC_IDS = ['client_share_count_pct', 'client_share_amount_pct'] as const;
+
+/** Доли строки от итога: клиентов — по count, суммы — по (новые + повторные). */
+export function clientShareOf(
+  row: Record<string, number | null>,
+  totals: Record<string, number | null>,
+): Record<string, number | null> {
+  const cnt = row.all_clients_delivered;
+  const cntTotal = totals.all_clients_delivered;
+  const amt = (row.new_clients_amount ?? 0) + (row.repeat_clients_amount ?? 0);
+  const amtTotal = (totals.new_clients_amount ?? 0) + (totals.repeat_clients_amount ?? 0);
+  return {
+    client_share_count_pct: cnt != null && cntTotal ? (cnt / cntTotal) * 100 : null,
+    client_share_amount_pct: amtTotal ? (amt / amtTotal) * 100 : null,
+  };
+}
+
+// «Количество купивших клиентов» — уникальные клиенты, у которых группа
+// «так или иначе встречалась» в товарной отгрузке периода. Отличие от строки
+// отчёта по группам: та привязывает сделку к ОДНОЙ главной группе, а здесь
+// клиент засчитывается КАЖДОЙ группе из позиций сделки — «купил утеплитель с
+// доборами» пополняет и утеплитель, и доборы. Работает на шкале by_max
+// (в позициях products есть только head_group_id); на kc — по главной группе.
+
+export const CLIENT_BUYERS_METRIC_IDS = ['group_buyers_count'] as const;
+
+export async function fetchGroupBuyers(
+  opts: ClientMetricsOptions,
+): Promise<Map<string, number>> {
+  const fromIso = opts.period.from.toISOString();
+  const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
+  const { managerIds, deptEmpty } = await resolveScope(opts);
+  const df = buildDealFilterWhere(opts.dealFilters);
+  const goods = goodsPositionWhere('p');
+
+  const scope: string[] = [
+    `d.delivered_at >= $1`, `d.delivered_at < $2`,
+    `d.contact_id IS NOT NULL`,
+    `d.funnel_id NOT IN ${EXCLUDED_FUNNELS}`,
+  ];
+  if (deptEmpty) scope.push('1=0');
+  else if (managerIds.length) scope.push(`d.current_manager_id IN (${managerIds.join(',')})`);
+  const pills = pillWhere(opts.dealScope ?? 'all', opts.clientType ?? 'all');
+  if (pills) scope.push(pills);
+  const offh = [
+    createdTimeWhere('d', opts.createdTimeFilter ?? 'all'),
+    firstTouchWhere('d', opts.firstTouchFilter ?? 'all'),
+    df.sql,
+  ].filter(Boolean).join(' AND ');
+  if (offh) scope.push(offh);
+  const where = scope.join('\n     AND ');
+
+  const byMax = (opts.productGroupMode ?? 'kc') === 'by_max';
+  const sql = byMax
+    ? `
+SELECT COALESCE(p->>'head_group_name', 'Без группы') AS dim_id,
+       count(DISTINCT d.contact_id) AS buyers
+  FROM sa.deals d, jsonb_array_elements(d.products) p
+ WHERE ${where}
+   AND ${goods}
+ GROUP BY 1
+UNION ALL
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(DISTINCT d.contact_id)
+  FROM sa.deals d
+ WHERE ${where}
+   AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})`
+    : `
+SELECT COALESCE(d.product_group_id::text, '__none__') AS dim_id,
+       count(DISTINCT d.contact_id) AS buyers
+  FROM sa.deals d
+ WHERE ${where}
+   AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
+ GROUP BY 1
+UNION ALL
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(DISTINCT d.contact_id)
+  FROM sa.deals d
+ WHERE ${where}
+   AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})`;
+
+  const key = [
+    'buyers', fromIso, toExclIso, byMax ? 'by_max' : 'kc',
+    opts.dealScope ?? 'all', opts.clientType ?? 'all',
+    deptEmpty ? 'none' : (managerIds.length ? managerIds.join(',') : 'all'),
+    `${opts.createdTimeFilter ?? 'all'}:${opts.firstTouchFilter ?? 'all'}|df:${df.key}`,
+  ].join('|');
+
+  const rows = await cached(`rpt:clients:${key}`, reportTtl(toExclIso), async () => {
+    const res = await analyticsDb().query<Record<string, unknown>>(sql, [fromIso, toExclIso]);
+    return res.rows;
+  });
+
+  const out = new Map<string, number>();
+  for (const r of rows) out.set(String(r.dim_id), num(r.buyers));
   return out;
 }

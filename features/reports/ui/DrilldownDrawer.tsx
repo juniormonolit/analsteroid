@@ -79,7 +79,9 @@ interface Props {
   // Отдельного запроса под него не нужно: страница передаёт сюда `period`, уже
   // суженный до границ бакета, поэтому мини-отчёт и списки сделок строятся
   // существующими движками «по менеджерам»/«по товарным группам» за это окно.
-  dimensionType: 'manager' | 'product-group' | 'source' | 'period';
+  // 'client' — отчёт «По клиентам» (задача 10.08): цель — клиент, дрилл всегда
+  // плоский список его сделок (мини-отчёт «клиент × вторая сущность» не строим).
+  dimensionType: 'manager' | 'product-group' | 'source' | 'period' | 'client';
   /** «По периодам»: в какой разрез проваливается бакет (он же — строки мини-отчёта). */
   periodDimension?: 'managers' | 'product-groups';
   period: DateRange;
@@ -525,6 +527,7 @@ function FlatDealsView({ target, dimensionType, periodDimension, period, dealSco
     // Бакет времени: сам по себе он не режет сделки по сущности — окно уже
     // сужено до его границ в `period`, берём весь срез внутри него.
     : dimensionType === 'period' ? { all: '1' }
+    : dimensionType === 'client' ? { contactId: target.id }
     : dimensionType === 'manager' ? { managerId: target.id }
     : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
     : { productGroup: target.id };
@@ -1106,7 +1109,9 @@ export function DrilldownDrawer(props: Props) {
           />
         </div>
         <div className="flex-1 overflow-hidden">
-          {localGrouped && !isGroupTarget
+          {/* Клиент — всегда плоский список его сделок: мини-отчёт «клиент ×
+              вторая сущность» здесь не строится (задача 10.08, v1). */}
+          {localGrouped && !isGroupTarget && dimensionType !== 'client'
             ? (sub
                 ? <SubDealsView {...viewProps} sub={sub} onBack={() => setSub(null)} />
                 : <MiniReport {...viewProps} onCellDrill={setSub} sort={miniSort} onSortChange={setMiniSort} />)
