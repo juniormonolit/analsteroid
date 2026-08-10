@@ -138,12 +138,17 @@ export async function sendBitrixBotMessage(
 // Бот «Контроль звонков» (BOT_ID 15010) — отдельный, давно зарегистрированный бот
 // missedcalls-робота. Свой вебхук/CLIENT_ID (env CALL_CONTROL_*), НЕ переиспользует
 // креды «Аналитика»: у ботов разные владельцы-вебхуки и разные аватары/имена в чате.
-export async function sendCallControlBotMessage(bitrixUserId: string, message: string): Promise<void> {
+/** Возвращает false, если канал выключен и сообщение НЕ ушло.
+ *  Раньше метод молча возвращал управление, и вызывающий записывал доставку как
+ *  успешную: 10.08 журнал показывал 75 «доставок» за день, ни одна из которых не
+ *  ушла. Из-за этого нельзя было отличить «бот заглушен» от «бот сломался» —
+ *  ровно тот вопрос, с которым владелец и пришёл. */
+export async function sendCallControlBotMessage(bitrixUserId: string, message: string): Promise<boolean> {
   // Свой канал: «Контроль звонков» к геймификации отношения не имеет и глохнуть
   // вместе с ней не должен — ровно это и просил владелец 09.08.
   if (!(await channelEnabled('call_control'))) {
     console.warn(`[bot:call-control] канал выключен: сообщение для ${bitrixUserId} не отправлено`);
-    return;
+    return false;
   }
   const webhook = process.env.CALL_CONTROL_WEBHOOK_URL || '';
   const botId = process.env.CALL_CONTROL_BOT_ID || '';
@@ -157,4 +162,5 @@ export async function sendCallControlBotMessage(bitrixUserId: string, message: s
     DIALOG_ID: bitrixUserId,
     MESSAGE: message,
   });
+  return true;
 }

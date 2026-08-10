@@ -555,8 +555,12 @@ export async function runCallControlCycle(): Promise<string> {
           sendError = !body ? 'шаблон не задан' : 'получатель не разрешился (нет в оргструктуре)';
         } else {
           try {
-            await sendCallControlBotMessage(recipientId, message);
-            sent++;
+            // Канал может быть выключен в «Настройки → Боты». Раньше это
+            // выглядело в журнале как успешная доставка — теперь пишем причину,
+            // иначе «почему не пришло» опять придётся выяснять по логам сервера.
+            const delivered = await sendCallControlBotMessage(recipientId, message);
+            if (delivered) sent++;
+            else sendError = 'канал «Контроль звонков» выключен в настройках — не отправлено';
           } catch (e) {
             sendError = e instanceof Error ? e.message : String(e);
           }
