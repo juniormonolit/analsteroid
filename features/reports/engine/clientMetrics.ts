@@ -87,6 +87,8 @@ export const CLIENT_METRIC_IDS = [
   // Вторая пачка (миграция 172) — медианные времена между заказами.
   'median_time_to_2nd', 'median_time_between_orders',
   'median_time_to_2nd_diff_cat', 'median_time_between_orders_diff_cat',
+  // Третья пачка (миграция 173) — обзвон после отгрузки.
+  'followup_clients_due', 'followup_clients_called',
 ] as const;
 
 /** Метрики второй пачки считаются отдельным запросом (своя популяция — интервалы,
@@ -548,6 +550,161 @@ SELECT COALESCE(a.dim_id, c.dim_id) AS dim_id,
       toSecondDiffCat: numOrNull(r.to_second_cat),
       betweenAllDiffCat: numOrNull(r.between_all_cat),
     });
+  }
+  return out;
+}
+
+// ── Третья пачка: обзвон после отгрузки (задача владельца 10.08) ─────────────
+//
+// Гипотеза владельца: клиенту нужно позвонить вскоре после отгрузки. Метрики
+// отвечают на два вопроса — скольким ДОЛЖНЫ были позвонить и скольким позвонили.
+//
+// ОКНО — ДВЕ НЕДЕЛИ ОТ ОТГРУЗКИ, фиксированное (владелец 10.08 отказался от
+// настраиваемого интервала: «просто посчитаем сколько должны были получить
+// звонок в течение 2х недель»). Одна константа ниже — менять здесь.
+//
+// ТРИ РЕШЕНИЯ, КОТОРЫЕ ПРИШЛОСЬ ПРИНЯТЬ (все продублированы в описаниях метрик,
+// миграция 173):
+//
+// 1. «После ПОСЛЕДНЕЙ отгрузки»: обязанность возникает, только если до конца
+//    окна клиент не отгрузился снова. Вернулся сам — звонить незачем, а держать
+//    такого в знаменателе значит занижать контактируемость на ровном месте.
+// 2. Обязанность относится к периоду, в котором окно ЗАКОНЧИЛОСЬ. Только тогда
+//    ответ окончателен: две недели прошли, звонок либо был, либо нет. По дате
+//    отгрузки привязывать нельзя — у отгрузки 25 июля окно целиком в августе.
+// 3. «Позвонили» = исходящий состоявшийся звонок (`direction='outbound'`,
+//    `result='completed'`) по любой сделке этого клиента внутри окна. Недозвон
+//    обязанность не закрывает. Клиент звонка определяется через сделку
+//    (`va.calls.deal_id` → `sa.deals.contact_id`): собственная колонка
+//    `contact_id` в звонках заполнена лишь у 26 % записей.
+
+/** Окно обзвона после отгрузки, дни. Владелец 10.08: две недели. */
+export const FOLLOWUP_WINDOW_DAYS = 14;
+
+export const CLIENT_FOLLOWUP_METRIC_IDS = [
+  'followup_clients_due', 'followup_clients_called',
+] as const;
+
+export interface ClientFollowupRow {
+  /** Клиенты, у которых окно обзвона закрылось в периоде. */
+  due: number;
+  /** Из них те, кому в окне реально дозвонились исходящим. */
+  called: number;
+}
+
+export function clientFollowupToRecord(row: ClientFollowupRow | undefined): Record<string, number | null> {
+  return {
+    followup_clients_due: row?.due ?? 0,
+    followup_clients_called: row?.called ?? 0,
+  };
+}
+
+export async function fetchClientFollowupMetrics(
+  opts: ClientMetricsOptions,
+): Promise<Map<string, ClientFollowupRow>> {
+  const days = FOLLOWUP_WINDOW_DAYS;
+  const fromIso = opts.period.from.toISOString();
+  const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
+  const { managerIds, deptEmpty } = await resolveScope(opts);
+  const df = buildDealFilterWhere(opts.dealFilters);
+  const goods = goodsPositionWhere('p');
+  const dimExpr = dimExprOf(opts);
+
+  // Фильтры отчёта применяются к ОТГРУЗКЕ, породившей обязанность (её менеджер,
+  // её товарная группа), но без ограничения по дате: в период должен попасть
+  // конец окна, а не сама отгрузка.
+  const scope: string[] = [];
+  if (opts.dimension === 'manager') scope.push('d.current_manager_id IS NOT NULL');
+  if (deptEmpty) scope.push('1=0');
+  else if (managerIds.length) scope.push(`d.current_manager_id IN (${managerIds.join(',')})`);
+  const pills = pillWhere(opts.dealScope ?? 'all', opts.clientType ?? 'all');
+  if (pills) scope.push(pills);
+  const offh = [
+    createdTimeWhere('d', opts.createdTimeFilter ?? 'all'),
+    firstTouchWhere('d', opts.firstTouchFilter ?? 'all'),
+    df.sql,
+  ].filter(Boolean).join(' AND ');
+  if (offh) scope.push(offh);
+  const inScope = scope.length ? scope.join(' AND ') : 'TRUE';
+
+  // Для разреза «по периодам» бакет считается по КОНЦУ окна, а не по дате
+  // отгрузки: обязанность живёт в том периоде, где её можно предъявить.
+  const dimSql = opts.dimension === 'period'
+    ? dimExpr.replace('d.delivered_at', `(d.delivered_at + interval '${days} days')`)
+    : dimExpr;
+
+  const sql = `
+WITH dl AS (
+  -- Границы по дате отгрузки — главное, что держит запрос быстрым. Обязанность
+  -- попадает в период, только если окно закончилось внутри него, значит отгрузка
+  -- лежит в [$1 − ${days} дн, $2). Тот же диапазон закрывает и проверку «не
+  -- вернулся ли клиент»: следующая отгрузка не позже конца окна, то есть тоже < $2.
+  SELECT d.contact_id, d.delivered_at, ${dimSql} AS dim_id, (${inScope}) AS in_scope
+    FROM sa.deals d
+   WHERE d.delivered_at >= $1::timestamptz - interval '${days} days'
+     AND d.delivered_at <  $2::timestamptz
+     AND d.contact_id IS NOT NULL
+     AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
+),
+nxt AS (
+  -- lead() вместо NOT EXISTS по той же таблице: проверка «клиент вернулся сам»
+  -- становится одним проходом окна вместо самосоединения.
+  SELECT dl.*, lead(delivered_at) OVER (PARTITION BY contact_id ORDER BY delivered_at) AS next_at
+    FROM dl
+),
+due AS (
+  SELECT contact_id, dim_id, delivered_at AS win_from,
+         delivered_at + interval '${days} days' AS win_to
+    FROM nxt
+   WHERE in_scope
+     AND delivered_at + interval '${days} days' >= $1
+     AND delivered_at + interval '${days} days' <  $2
+     AND (next_at IS NULL OR next_at > delivered_at + interval '${days} days')
+),
+calls_in AS (
+  -- Звонки одним проходом по узкому окну дат (есть индекс idx_calls_called_at),
+  -- а не коррелированным подзапросом на каждого клиента: va.calls — миллион строк.
+  SELECT DISTINCT cd.contact_id, c.called_at
+    FROM va.calls c
+    JOIN sa.deals cd ON cd.deal_id = c.deal_id
+   WHERE c.direction = 'outbound' AND c.result = 'completed'
+     AND c.called_at >= $1::timestamptz - interval '${days} days'
+     AND c.called_at <  $2::timestamptz
+     AND cd.contact_id IS NOT NULL
+),
+marked AS (
+  SELECT due.dim_id, due.contact_id,
+         bool_or(ci.called_at IS NOT NULL) AS called
+    FROM due
+    LEFT JOIN calls_in ci
+      ON ci.contact_id = due.contact_id
+     AND ci.called_at >= due.win_from AND ci.called_at <= due.win_to
+   GROUP BY 1, 2
+)
+SELECT dim_id, count(*) AS due_cnt, count(*) FILTER (WHERE called) AS called_cnt
+  FROM marked GROUP BY 1
+UNION ALL
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), count(*) FILTER (WHERE called)
+  FROM (SELECT contact_id, bool_or(called) AS called FROM marked GROUP BY 1) _a
+`;
+
+  const key = [
+    'followup', fromIso, toExclIso, days, opts.dimension,
+    opts.periodUnit ?? '-', opts.productGroupMode ?? '-',
+    opts.dealScope ?? 'all', opts.clientType ?? 'all',
+    deptEmpty ? 'none' : (managerIds.length ? managerIds.join(',') : 'all'),
+    `${opts.createdTimeFilter ?? 'all'}:${opts.firstTouchFilter ?? 'all'}|df:${df.key}`,
+  ].join('|');
+
+  const rows = await cached(`rpt:clients:${key}`, reportTtl(toExclIso), async () => {
+    const res = await analyticsDb().query<Record<string, unknown>>(sql, [fromIso, toExclIso]);
+    return res.rows;
+  });
+
+  const out = new Map<string, ClientFollowupRow>();
+  for (const r of rows) {
+    out.set(String(r.dim_id), { due: num(r.due_cnt), called: num(r.called_cnt) });
   }
   return out;
 }

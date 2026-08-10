@@ -12,6 +12,7 @@ import { seriesDeps } from '@/features/reports/engine/metricSeries';
 import {
   fetchClientMetrics, clientMetricsToRecord, CLIENT_METRIC_IDS, CLIENTS_GRAND_TOTAL_KEY,
   fetchClientTimeMetrics, clientTimeMetricsToRecord, CLIENT_TIME_METRIC_IDS,
+  fetchClientFollowupMetrics, clientFollowupToRecord, CLIENT_FOLLOWUP_METRIC_IDS,
 } from '@/features/reports/engine/clientMetrics';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { periodDateStrFromInstant, type CalendarUnit } from '@/lib/period';
@@ -185,34 +186,40 @@ export async function POST(req: NextRequest) {
   const compRange = compWindow
     ? { from: new Date(compWindow.fromIso), to: new Date(compWindow.toIso) }
     : periodRange;
-  const [curClients, compClients, curTime, compTime] = await Promise.all([
+  const needFollowup = withDeps.some(m => (CLIENT_FOLLOWUP_METRIC_IDS as readonly string[]).includes(m.id));
+  const [curClients, compClients, curTime, compTime, curFollow, compFollow] = await Promise.all([
     needClients ? fetchClientMetrics({ ...clientCommon, period: periodRange }) : Promise.resolve(null),
     needClients && compWindow ? fetchClientMetrics({ ...clientCommon, period: compRange }) : Promise.resolve(null),
     needTime ? fetchClientTimeMetrics({ ...clientCommon, period: periodRange }) : Promise.resolve(null),
     needTime && compWindow ? fetchClientTimeMetrics({ ...clientCommon, period: compRange }) : Promise.resolve(null),
+    needFollowup ? fetchClientFollowupMetrics({ ...clientCommon, period: periodRange }) : Promise.resolve(null),
+    needFollowup && compWindow ? fetchClientFollowupMetrics({ ...clientCommon, period: compRange }) : Promise.resolve(null),
   ]);
   const clientsFor = (
     bucket: string,
     base: Awaited<ReturnType<typeof fetchClientMetrics>> | null,
     time: Awaited<ReturnType<typeof fetchClientTimeMetrics>> | null,
+    follow: Awaited<ReturnType<typeof fetchClientFollowupMetrics>> | null,
   ): Record<string, number | null> => ({
     ...(needClients ? clientMetricsToRecord(base?.get(bucket)) : {}),
     ...(needTime ? clientTimeMetricsToRecord(time?.get(bucket)) : {}),
+    ...(needFollowup ? clientFollowupToRecord(follow?.get(bucket)) : {}),
   });
 
   const enrich = (
     row: PeriodBucketRow,
     base: Awaited<ReturnType<typeof fetchClientMetrics>> | null,
     time: Awaited<ReturnType<typeof fetchClientTimeMetrics>> | null,
+    follow: Awaited<ReturnType<typeof fetchClientFollowupMetrics>> | null,
   ): PeriodBucketRow => ({
     ...row,
     metrics: computeCalculated(
-      { ...row.metrics, ...clientsFor(row.bucket, base, time) },
+      { ...row.metrics, ...clientsFor(row.bucket, base, time, follow) },
       calculatedMetrics,
     ),
   });
-  const currentRows = currentRaw.map(r => enrich(r, curClients, curTime));
-  const compRows = compRaw.map(r => enrich(r, compClients, compTime));
+  const currentRows = currentRaw.map(r => enrich(r, curClients, curTime, curFollow));
+  const compRows = compRaw.map(r => enrich(r, compClients, compTime, compFollow));
   const compByBucket = new Map(compRows.map(r => [r.bucket, r]));
 
   const shiftOf = (b: string) => comparisonBucketOf(b, unit, compareMode);
@@ -243,8 +250,8 @@ export async function POST(req: NextRequest) {
   // купивший в мае и в июле, — один клиент за полугодие, а медиана вообще не
   // складывается. Подмена до computeCalculated, чтобы доли считались от честных
   // чисел (та же логика, что в /api/reports/run).
-  const clientTotals = clientsFor(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime);
-  const clientTotalsComp = clientsFor(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime);
+  const clientTotals = clientsFor(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime, curFollow);
+  const clientTotalsComp = clientsFor(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime, compFollow);
   const totalsCurrent = computeCalculated(
     { ...computeTotals(currentRows, allMetrics), ...clientTotals }, calculatedMetrics);
   const totalsComparison = computeCalculated(

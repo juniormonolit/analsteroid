@@ -19,6 +19,7 @@ import {
 import {
   fetchClientMetrics, clientMetricsToRecord, CLIENT_METRIC_IDS, CLIENTS_GRAND_TOTAL_KEY,
   fetchClientTimeMetrics, clientTimeMetricsToRecord, CLIENT_TIME_METRIC_IDS,
+  fetchClientFollowupMetrics, clientFollowupToRecord, CLIENT_FOLLOWUP_METRIC_IDS,
   type ClientMetricsDimension,
 } from '@/features/reports/engine/clientMetrics';
 import { computeRatingValues } from '@/features/manager-card/engine/ratings';
@@ -1012,25 +1013,31 @@ export async function POST(req: NextRequest) {
     // поэтому отдельный запрос и зовём его только когда такие метрики запрошены:
     // он проходит по всей истории клиентов периода и заметно тяжелее.
     const needTime = withDeps.some(m => (CLIENT_TIME_METRIC_IDS as readonly string[]).includes(m.id));
-    const [curClients, compClients, curTime, compTime] = await Promise.all([
+    // Обзвон — третий запрос со своей популяцией (обязанности, а не сделки).
+    const needFollowup = withDeps.some(m => (CLIENT_FOLLOWUP_METRIC_IDS as readonly string[]).includes(m.id));
+    const [curClients, compClients, curTime, compTime, curFollow, compFollow] = await Promise.all([
       fetchClientMetrics(curOpts),
       fetchClientMetrics(compOptsClients),
       needTime ? fetchClientTimeMetrics(curOpts) : Promise.resolve(null),
       needTime ? fetchClientTimeMetrics(compOptsClients) : Promise.resolve(null),
+      needFollowup ? fetchClientFollowupMetrics(curOpts) : Promise.resolve(null),
+      needFollowup ? fetchClientFollowupMetrics(compOptsClients) : Promise.resolve(null),
     ]);
     const merge = (
       id: string,
       base: Awaited<ReturnType<typeof fetchClientMetrics>>,
       time: Awaited<ReturnType<typeof fetchClientTimeMetrics>> | null,
+      follow: Awaited<ReturnType<typeof fetchClientFollowupMetrics>> | null,
     ) => ({
       ...clientMetricsToRecord(base.get(id)),
       ...(needTime ? clientTimeMetricsToRecord(time?.get(id)) : {}),
+      ...(needFollowup ? clientFollowupToRecord(follow?.get(id)) : {}),
     });
-    currentRows = currentRows.map(r => ({ ...r, metrics: { ...r.metrics, ...merge(r.dimensionId, curClients, curTime) } }));
-    compRows = compRows.map(r => ({ ...r, metrics: { ...r.metrics, ...merge(r.dimensionId, compClients, compTime) } }));
+    currentRows = currentRows.map(r => ({ ...r, metrics: { ...r.metrics, ...merge(r.dimensionId, curClients, curTime, curFollow) } }));
+    compRows = compRows.map(r => ({ ...r, metrics: { ...r.metrics, ...merge(r.dimensionId, compClients, compTime, compFollow) } }));
     clientGrandTotals = {
-      cur: merge(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime),
-      comp: merge(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime),
+      cur: merge(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime, curFollow),
+      comp: merge(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime, compFollow),
     };
   }
 
