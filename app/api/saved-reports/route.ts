@@ -62,7 +62,7 @@ export async function GET() {
   return NextResponse.json(res.rows);
 }
 
-type SharedSection = 'rop_monitor' | 'smekalochnaya' | null;
+type SharedSection = 'rop_monitor' | 'smekalochnaya' | 'repeat' | null;
 
 // Общие для INSERT/UPDATE колонки (без identity-полей user_login/report_slug/name,
 // которые ведут себя по-разному в личном/общем сценарии — см. POST ниже).
@@ -211,7 +211,7 @@ export async function POST(req: NextRequest) {
   const isAdmin = isReportAdmin(session);
   const requested = body.sharedSection;
   const sharedSection: SharedSection =
-    isAdmin && (requested === 'rop_monitor' || requested === 'smekalochnaya') ? requested : null;
+    isAdmin && (requested === 'rop_monitor' || requested === 'smekalochnaya' || requested === 'repeat') ? requested : null;
 
   const fields = buildCommonFields(body, sharedSection);
 

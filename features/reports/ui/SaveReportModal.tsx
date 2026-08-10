@@ -112,7 +112,7 @@ export function SaveReportModal({
   const [canShare, setCanShare] = useState(false);
   // Раздел сохранения (п.3б спеки): личное избранное (по умолчанию) либо один из
   // двух управляемых общих разделов — одна механика, разные названия.
-  const [section, setSection] = useState<'personal' | 'rop_monitor' | 'smekalochnaya'>('personal');
+  const [section, setSection] = useState<'personal' | 'rop_monitor' | 'smekalochnaya' | 'repeat'>('personal');
   // Диалог конфликта имён (правка владельца 10.07 — «сохранение отчётов работает
   // хуево»): раньше при совпадении имени в ДРУГОМ скоупе (не там, где имя реально
   // занято — например уже открытый отчёт «Товары» из «Смекалочной» пересохраняли в
@@ -147,13 +147,13 @@ export function SaveReportModal({
   // При обнаружении существующего ВИТРИННОГО отчёта с таким именем раздел
   // подхватывается автоматически — просто удобство, не влияет на конфликт-логику.
   useEffect(() => {
-    if (existing?.sharedSection === 'rop_monitor' || existing?.sharedSection === 'smekalochnaya') {
+    if (existing?.sharedSection === 'rop_monitor' || existing?.sharedSection === 'smekalochnaya' || existing?.sharedSection === 'repeat') {
       setSection(existing.sharedSection);
     }
   }, [existing?.sharedSection]);
 
   const relativePeriod: RelativePeriod = { anchor, unit };
-  const effectiveSection: 'personal' | 'rop_monitor' | 'smekalochnaya' = canShare && section !== 'personal' ? section : 'personal';
+  const effectiveSection: 'personal' | 'rop_monitor' | 'smekalochnaya' | 'repeat' = canShare && section !== 'personal' ? section : 'personal';
 
   // Ищет РЕАЛЬНЫЙ конфликт имени в целевом скоупе сохранения:
   // - personal → мой же личный отчёт с этим именем (владелец = я);
@@ -274,6 +274,7 @@ export function SaveReportModal({
   function sectionLabel(s: string | null): string {
     if (s === 'rop_monitor') return '«Роп монитор»';
     if (s === 'smekalochnaya') return '«Отчёты Стаса»';
+    if (s === 'repeat') return '«Повторные продажи»';
     return 'в личных отчётах';
   }
 
@@ -409,6 +410,7 @@ export function SaveReportModal({
                   { value: 'personal' as const, label: 'Личное' },
                   { value: 'rop_monitor' as const, label: 'Роп монитор' },
                   { value: 'smekalochnaya' as const, label: 'Отчёты Стаса' },
+                  { value: 'repeat' as const, label: 'Повторные продажи' },
                 ]).map(o => (
                   <button
                     key={o.value}

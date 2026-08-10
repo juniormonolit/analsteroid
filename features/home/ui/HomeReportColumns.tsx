@@ -79,6 +79,7 @@ export function HomeReportColumns({ canSales, userLogin }: { canSales: boolean; 
 
   const ropMonitorShared = savedReports.filter(r => r.isShared && r.sharedSection === 'rop_monitor');
   const smekalochnayaShared = savedReports.filter(r => r.isShared && r.sharedSection === 'smekalochnaya');
+  const repeatShared = savedReports.filter(r => r.isShared && r.sharedSection === 'repeat');
   const ownReports = savedReports.filter(r => !r.isShared && r.userLogin === userLogin);
 
   return (
@@ -91,7 +92,7 @@ export function HomeReportColumns({ canSales, userLogin }: { canSales: boolean; 
         className="tap-target flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] hover:opacity-90 transition-opacity shadow-sm"
       />
 
-      <div className="w-full grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-11 items-start">
+      <div className="w-full grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8 md:gap-11 items-start">
       {/* Роп монитор · Продажи. Доработка задачи 1572: стартовые заглушки
           «По менеджерам»/«По товарным группам» убраны и отсюда (владелец —
           «из списка ВООБЩЕ», фокус на подготовленных отчётах) — остаются
@@ -117,6 +118,20 @@ export function HomeReportColumns({ canSales, userLogin }: { canSales: boolean; 
           <div className="text-[13px] text-[var(--color-text-muted)] py-1 px-1">Пока нет общих отчётов</div>
         )}
         {smekalochnayaShared.map(r => (
+          <Row
+            key={r.id} href={`/sales/saved/${r.id}`}
+            title={r.name} subtitle={slugLabel(r.reportSlug)}
+          />
+        ))}
+      </div>
+
+      {/* Повторные продажи (задача 10.08) — третья витрина, механика Смекалочной */}
+      <div>
+        <ColumnEyebrow>Повторные продажи</ColumnEyebrow>
+        {!isLoading && repeatShared.length === 0 && (
+          <div className="text-[13px] text-[var(--color-text-muted)] py-1 px-1">Пока нет общих отчётов</div>
+        )}
+        {repeatShared.map(r => (
           <Row
             key={r.id} href={`/sales/saved/${r.id}`}
             title={r.name} subtitle={slugLabel(r.reportSlug)}

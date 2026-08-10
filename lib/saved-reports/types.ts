@@ -92,7 +92,7 @@ export interface SavedReport {
   isShared?: boolean;
   // Пункт 3б спеки: раздел общей витрины (одна механика, два раздела в сайдбаре).
   // null/undefined = личный отчёт (не общий); при isShared=true всегда заполнено.
-  sharedSection?: 'rop_monitor' | 'smekalochnaya' | null;
+  sharedSection?: 'rop_monitor' | 'smekalochnaya' | 'repeat' | null;
   // Sorting state
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
@@ -130,7 +130,7 @@ export interface TrashedReport {
   reportSlug: string;
   userLogin: string;
   isShared: boolean;
-  sharedSection: 'rop_monitor' | 'smekalochnaya' | null;
+  sharedSection: 'rop_monitor' | 'smekalochnaya' | 'repeat' | null;
   deletedAt: string;
   deletedBy: string | null;
 }

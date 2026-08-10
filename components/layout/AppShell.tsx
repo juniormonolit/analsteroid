@@ -117,6 +117,7 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   const [openStd, setOpenStd] = useState(true);
   const [openFav, setOpenFav] = useState(true);
   const [openShared, setOpenShared] = useState(true);
+  const [openRepeat, setOpenRepeat] = useState(true);
   const qc = useQueryClient();
 
   const { data: savedReports = [] } = useQuery<SavedReport[]>({
@@ -198,6 +199,10 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   // обратимой (корзина), планку снизили (см. app/api/saved-reports/[id]/route.ts).
   const ropMonitorShared = savedReports.filter(r => r.isShared && r.sharedSection === 'rop_monitor');
   const smekalochnayaShared = savedReports.filter(r => r.isShared && r.sharedSection === 'smekalochnaya');
+  // «Повторные продажи» (задача 10.08): третья витрина. Секция 'repeat' в БД
+  // существовала с 13.07 (ТЗ #1725), но сайдбар её не рендерил — отчёты были
+  // невидимы. Миграция 176 пересобрала их на живых метриках раздела «Клиенты».
+  const repeatShared = savedReports.filter(r => r.isShared && r.sharedSection === 'repeat');
   const ownReports = savedReports.filter(r => !r.isShared && r.userLogin === user.login);
   const canDeleteShared = isReportAdmin(user);
 
@@ -343,6 +348,17 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
             <span className="flex-1 text-left">Отчёты Стаса</span>
           </button>
           {openShared && smekalochnayaShared.map(r => renderReportRow(r, canDeleteShared, smekalochnayaShared))}
+        </div>
+      )}
+
+      {/* Повторные продажи — общие отчёты (та же механика, что Смекалочная) */}
+      {repeatShared.length > 0 && (
+        <div className={subgroupCls}>
+          <button onClick={() => setOpenRepeat(v => !v)} className={subgroupLabelCls}>
+            <span className={subgroupChevronCls}>{openRepeat ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
+            <span className="flex-1 text-left">Повторные продажи</span>
+          </button>
+          {openRepeat && repeatShared.map(r => renderReportRow(r, canDeleteShared, repeatShared))}
         </div>
       )}
 

@@ -35,7 +35,7 @@ export async function PUT(
   }
 
   const requestedSection = body.sharedSection;
-  const sharedSection = isAdmin && (requestedSection === 'rop_monitor' || requestedSection === 'smekalochnaya')
+  const sharedSection = isAdmin && (requestedSection === 'rop_monitor' || requestedSection === 'smekalochnaya' || requestedSection === 'repeat')
     ? requestedSection
     : null;
 
