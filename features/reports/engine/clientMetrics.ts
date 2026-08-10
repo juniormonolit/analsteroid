@@ -3,9 +3,10 @@ import { cached, reportTtl } from '@/lib/cache/redis';
 import { goodsPositionWhere } from '@/lib/metrics/serviceGroups';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
 import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters';
-import type { DateRange } from '@/lib/period';
+import { periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import type { DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { addDays, startOfDay } from 'date-fns';
+import { nextBucket, bucketStartOf } from '@/features/reports/lib/periodBuckets';
 
 // ── Раздел «Клиенты» (задача владельца 10.08.2026) ───────────────────────────
 //
@@ -61,6 +62,8 @@ export interface ClientMetricsRow {
   clientsTotal: number;
   /** Из них те, у кого эта отгрузка — первая товарная за всю историю. */
   newClients: number;
+  /** Клиенты, чья ВТОРАЯ товарная отгрузка (первая повторная) попала в период. */
+  firstRepeatClients: number;
   /** Товарные отгрузки периода (заказы). */
   orders: number;
   /** Сумма первых товарных отгрузок клиентов. */
@@ -75,6 +78,10 @@ export interface ClientMetricsRow {
   groupsPerOrder: number | null;
   /** Среднее число товарных позиций в одном заказе периода. */
   productsPerOrder: number | null;
+  /** Медиана дней от created_at до delivered_at по заказам периода. */
+  medianCycleDays: number | null;
+  /** Медиана месяцев жизни клиента (первая заявка → последняя отгрузка). */
+  medianLifetimeMonths: number | null;
 }
 
 /** id метрик каталога, которые заполняет этот движок (миграции 171 и 172). Роут
@@ -89,6 +96,13 @@ export const CLIENT_METRIC_IDS = [
   'median_time_to_2nd_diff_cat', 'median_time_between_orders_diff_cat',
   // Третья пачка (миграция 173) — обзвон после отгрузки.
   'followup_clients_due', 'followup_clients_called',
+  // Четвёртая пачка (миграция 174): времена — базовым запросом, LTV — когортным.
+  'median_cycle_time_days', 'median_client_lifetime_months',
+  // Пятая пачка: первая повторная — базовым, активные 90 дн — своим запросом.
+  'first_repeat_clients', 'active_clients_90d',
+  'cohort_repeat_clients', 'cohort_first_revenue',
+  'cohort_repeat_revenue_30', 'cohort_repeat_revenue_60', 'cohort_repeat_revenue_90',
+  'cohort_repeat_revenue_180', 'cohort_repeat_revenue_360', 'cohort_ltv_total_revenue',
 ] as const;
 
 /** Метрики второй пачки считаются отдельным запросом (своя популяция — интервалы,
@@ -106,9 +120,10 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
   if (!row) {
     return {
       new_clients_count: 0, all_clients_delivered: 0, repeat_clients_delivered: 0,
+      first_repeat_clients: 0,
       delivered_deals_count: 0, new_clients_amount: 0, repeat_clients_amount: 0,
       complex_clients: 0, avg_groups_per_client: null, avg_groups_per_order: null,
-      avg_products_per_order: null,
+      avg_products_per_order: null, median_cycle_time_days: null, median_client_lifetime_months: null,
     };
   }
   return {
@@ -117,6 +132,7 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
     // Повторные — остаток: клиент периода либо новый, либо покупал раньше.
     // Так эти две метрики не пересекаются и в сумме дают всех клиентов.
     repeat_clients_delivered: row.clientsTotal - row.newClients,
+    first_repeat_clients: row.firstRepeatClients,
     delivered_deals_count: row.orders,
     new_clients_amount: row.newAmount,
     repeat_clients_amount: row.repeatAmount,
@@ -124,6 +140,8 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
     avg_groups_per_client: row.groupsPerClient,
     avg_groups_per_order: row.groupsPerOrder,
     avg_products_per_order: row.productsPerOrder,
+    median_cycle_time_days: row.medianCycleDays,
+    median_client_lifetime_months: row.medianLifetimeMonths,
   };
 }
 
@@ -267,7 +285,10 @@ WITH deal_goods AS (
          (SELECT count(DISTINCT (p->>'head_group_id'))
             FROM jsonb_array_elements(d.products) p WHERE ${goods}) AS groups_cnt,
          (SELECT count(*)
-            FROM jsonb_array_elements(d.products) p WHERE ${goods}) AS items_cnt
+            FROM jsonb_array_elements(d.products) p WHERE ${goods}) AS items_cnt,
+         -- «Время от заявки до отгрузки» (4-я пачка): дни между created_at и
+         -- delivered_at ЭТОЙ сделки — метрика уровня сделки, медиана в deal_dim.
+         EXTRACT(EPOCH FROM (d.delivered_at - d.created_at)) / 86400.0 AS cycle_days
     FROM deals d
    WHERE ${where.join('\n     AND ')}
      AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
@@ -296,50 +317,87 @@ client_groups AS (
      AND ${goods}
    GROUP BY 1
 ),
+ranked AS (
+  -- Порядковый номер отгрузки в истории клиента: rn=2 — «первая повторная».
+  -- «Повторно купившие» (5-я пачка): клиент, чья ВТОРАЯ товарная отгрузка
+  -- попала в период (не путать с repeat_clients_delivered — там любая повторная).
+  SELECT d.deal_id,
+         row_number() OVER (PARTITION BY d.contact_id ORDER BY d.delivered_at, d.deal_id) AS rn
+    FROM sa.deals d
+   WHERE d.delivered_at IS NOT NULL
+     AND d.contact_id IN (SELECT contact_id FROM period_clients)
+     AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
+),
+client_bounds AS (
+  -- «Время жизни клиента» (4-я пачка, определение владельца): первая created_at
+  -- ЛЮБОЙ его сделки → последняя ТОВАРНАЯ отгрузка. Только клиенты периода.
+  SELECT d.contact_id,
+         min(d.created_at) AS first_created,
+         max(d.delivered_at) FILTER (WHERE d.delivered_at IS NOT NULL
+           AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})) AS last_deliv
+    FROM sa.deals d
+   WHERE d.contact_id IN (SELECT contact_id FROM period_clients)
+     AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
+   GROUP BY 1
+),
 src AS (
-  SELECT dg.dim_id, dg.contact_id, dg.amount, dg.groups_cnt, dg.items_cnt,
+  SELECT dg.dim_id, dg.contact_id, dg.amount, dg.groups_cnt, dg.items_cnt, dg.cycle_days,
          (f.first_at >= $1::timestamptz AND f.first_at < $2::timestamptz) AS is_new,
-         COALESCE(c.groups_cnt, 0) AS client_groups
+         COALESCE(c.groups_cnt, 0) AS client_groups,
+         -- месяцы по 30.44 дн — как в исходном определении median_client_lifetime_months
+         EXTRACT(EPOCH FROM (cb.last_deliv - cb.first_created)) / 86400.0 / 30.44 AS lifetime_months,
+         (rk.rn = 2) AS is_first_repeat
     FROM deal_goods dg
-    LEFT JOIN first_goods   f ON f.contact_id = dg.contact_id
-    LEFT JOIN client_groups c ON c.contact_id = dg.contact_id
+    LEFT JOIN first_goods   f  ON f.contact_id  = dg.contact_id
+    LEFT JOIN client_groups c  ON c.contact_id  = dg.contact_id
+    LEFT JOIN client_bounds cb ON cb.contact_id = dg.contact_id
+    LEFT JOIN ranked        rk ON rk.deal_id    = dg.deal_id
 ),
 -- Две ступени агрегации, и это принципиально. Заказы/суммы/средние по заказу
 -- считаются ПО СДЕЛКАМ, а клиенты/комплексность/группы на клиента — сначала
 -- сворачиваются ПО КЛИЕНТУ (клиент с десятью заказами весит столько же, сколько
 -- клиент с одним), и только потом усредняются.
-pc_dim  AS (SELECT dim_id, contact_id, bool_or(is_new) AS is_new, max(client_groups) AS cg FROM src GROUP BY 1, 2),
-pc_all  AS (SELECT contact_id, bool_or(is_new) AS is_new, max(client_groups) AS cg FROM src GROUP BY 1),
+pc_dim  AS (SELECT dim_id, contact_id, bool_or(is_new) AS is_new, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime FROM src GROUP BY 1, 2),
+pc_all  AS (SELECT contact_id, bool_or(is_new) AS is_new, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime FROM src GROUP BY 1),
 deal_dim AS (
   SELECT dim_id, count(*) AS orders,
          COALESCE(SUM(amount) FILTER (WHERE is_new), 0)     AS new_amount,
          COALESCE(SUM(amount) FILTER (WHERE NOT is_new), 0) AS repeat_amount,
-         AVG(groups_cnt) AS groups_per_order, AVG(items_cnt) AS products_per_order
+         AVG(groups_cnt) AS groups_per_order, AVG(items_cnt) AS products_per_order,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY cycle_days) AS median_cycle
     FROM src GROUP BY 1),
 deal_all AS (
   SELECT count(*) AS orders,
          COALESCE(SUM(amount) FILTER (WHERE is_new), 0)     AS new_amount,
          COALESCE(SUM(amount) FILTER (WHERE NOT is_new), 0) AS repeat_amount,
-         AVG(groups_cnt) AS groups_per_order, AVG(items_cnt) AS products_per_order
+         AVG(groups_cnt) AS groups_per_order, AVG(items_cnt) AS products_per_order,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY cycle_days) AS median_cycle
     FROM src),
 client_dim AS (
   SELECT dim_id, count(*) AS clients_total,
          count(*) FILTER (WHERE is_new)  AS new_clients,
+         count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
-         AVG(cg) AS groups_per_client
+         AVG(cg) AS groups_per_client,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY lifetime) AS median_lifetime
     FROM pc_dim GROUP BY 1),
 client_all AS (
   SELECT count(*) AS clients_total,
          count(*) FILTER (WHERE is_new)  AS new_clients,
+         count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
-         AVG(cg) AS groups_per_client
+         AVG(cg) AS groups_per_client,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY lifetime) AS median_lifetime
     FROM pc_all)
-SELECT d.dim_id, c.clients_total, c.new_clients, d.orders, d.new_amount, d.repeat_amount,
-       c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order
+SELECT d.dim_id, c.clients_total, c.new_clients, c.first_repeat_clients, d.orders, d.new_amount, d.repeat_amount,
+       c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
+       d.median_cycle, c.median_lifetime
   FROM deal_dim d JOIN client_dim c ON c.dim_id IS NOT DISTINCT FROM d.dim_id
 UNION ALL
-SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, d.orders, d.new_amount,
-       d.repeat_amount, c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.first_repeat_clients, d.orders, d.new_amount,
+       d.repeat_amount, c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
+       d.median_cycle, c.median_lifetime
   FROM deal_all d CROSS JOIN client_all c
 `;
 
@@ -360,6 +418,7 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, d.orders, d
     out.set(String(r.dim_id), {
       clientsTotal: num(r.clients_total),
       newClients: num(r.new_clients),
+      firstRepeatClients: num(r.first_repeat_clients),
       orders: num(r.orders),
       newAmount: num(r.new_amount),
       repeatAmount: num(r.repeat_amount),
@@ -367,6 +426,8 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, d.orders, d
       groupsPerClient: numOrNull(r.groups_per_client),
       groupsPerOrder: numOrNull(r.groups_per_order),
       productsPerOrder: numOrNull(r.products_per_order),
+      medianCycleDays: numOrNull(r.median_cycle),
+      medianLifetimeMonths: numOrNull(r.median_lifetime),
     });
   }
   return out;
@@ -706,5 +767,294 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), count(*) FILTER (WHERE called)
   for (const r of rows) {
     out.set(String(r.dim_id), { due: num(r.due_cnt), called: num(r.called_cnt) });
   }
+  return out;
+}
+
+// ── Четвёртая пачка: когортный LTV (задача владельца 10.08) ──────────────────
+//
+// КОГОРТА (решение владельца): клиенты, чья ПЕРВАЯ товарная отгрузка попала в
+// период. Клиент навсегда принадлежит одной когорте, поэтому LTV разных месяцев
+// можно сравнивать между собой. «Клиентов в когорте» отдельной метрикой не
+// нужно — это ровно уже живая `new_clients_count` (та же популяция).
+//
+// ПОПУЛЯЦИЯ ВСЕХ СУММ — ПОВТОРНЫЕ КЛИЕНТЫ КОГОРТЫ (2+ товарные отгрузки за всю
+// историю), решение владельца: и суммы, и знаменатели средних — только по ним.
+// Окна 30/60/… дней отсчитываются от первой отгрузки клиента, суммы
+// накопительные и ВКЛЮЧАЮТ первый заказ (пример владельца: первая отгрузка
+// 100 тыс., всего миллион → коэффициент 10 = всё/первая).
+//
+// НЕЗРЕЛЫЕ ОКНА (решение владельца) — null, пока окно не прожито ВСЕЙ когортой:
+// LTV 360 у свежей когорты выглядел бы катастрофой рядом с прошлогодней, и это
+// читается как падение бизнеса, а не как «ещё не время». Судим по КОНЦУ строки
+// (для разреза по периодам — конец бакета): последний клиент когорты прожил
+// окно, когда конец бакета + X дней уже позади. «За всё время» показывается
+// всегда — оно по определению накопительное.
+//
+// АТРИБУЦИЯ строки — менеджер/группа/бакет ПЕРВОЙ отгрузки клиента: когорта
+// принадлежит тому, кто клиента привёл, дальнейшие покупки могут уходить другим
+// менеджерам, но LTV меряет ценность привлечения.
+
+export const LTV_WINDOWS_DAYS = [30, 60, 90, 180, 360] as const;
+
+export const CLIENT_COHORT_METRIC_IDS = [
+  'cohort_repeat_clients', 'cohort_first_revenue',
+  'cohort_repeat_revenue_30', 'cohort_repeat_revenue_60', 'cohort_repeat_revenue_90',
+  'cohort_repeat_revenue_180', 'cohort_repeat_revenue_360', 'cohort_ltv_total_revenue',
+] as const;
+
+export interface ClientCohortRow {
+  /** Клиенты когорты с 2+ товарными отгрузками за всю историю. */
+  repeatClients: number;
+  /** Сумма первых отгрузок этих клиентов. */
+  firstRevenue: number;
+  /** Накопительные суммы отгрузок в окнах от первой (включая её); null = окно не прожито. */
+  ltv: Record<(typeof LTV_WINDOWS_DAYS)[number], number | null>;
+  /** Сумма всех отгрузок этих клиентов за всю историю. */
+  ltvTotal: number;
+}
+
+export function clientCohortToRecord(row: ClientCohortRow | undefined): Record<string, number | null> {
+  return {
+    cohort_repeat_clients: row?.repeatClients ?? 0,
+    cohort_first_revenue: row?.firstRevenue ?? 0,
+    cohort_repeat_revenue_30: row?.ltv[30] ?? null,
+    cohort_repeat_revenue_60: row?.ltv[60] ?? null,
+    cohort_repeat_revenue_90: row?.ltv[90] ?? null,
+    cohort_repeat_revenue_180: row?.ltv[180] ?? null,
+    cohort_repeat_revenue_360: row?.ltv[360] ?? null,
+    cohort_ltv_total_revenue: row?.ltvTotal ?? 0,
+  };
+}
+
+export async function fetchClientCohortMetrics(
+  opts: ClientMetricsOptions,
+): Promise<Map<string, ClientCohortRow>> {
+  const fromIso = opts.period.from.toISOString();
+  const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
+  const { managerIds, deptEmpty } = await resolveScope(opts);
+  const df = buildDealFilterWhere(opts.dealFilters);
+  const goods = goodsPositionWhere('p');
+  const dimExpr = dimExprOf(opts); // для 'period' использует d.delivered_at = дате первой отгрузки ✓
+
+  // Фильтры отчёта применяются к ПЕРВОЙ сделке клиента — она определяет
+  // принадлежность когорты (см. «атрибуция» в шапке блока).
+  const scope: string[] = [];
+  if (opts.dimension === 'manager') scope.push('d.current_manager_id IS NOT NULL');
+  if (deptEmpty) scope.push('1=0');
+  else if (managerIds.length) scope.push(`d.current_manager_id IN (${managerIds.join(',')})`);
+  const pills = pillWhere(opts.dealScope ?? 'all', opts.clientType ?? 'all');
+  if (pills) scope.push(pills);
+  const offh = [
+    createdTimeWhere('d', opts.createdTimeFilter ?? 'all'),
+    firstTouchWhere('d', opts.firstTouchFilter ?? 'all'),
+    df.sql,
+  ].filter(Boolean).join(' AND ');
+  if (offh) scope.push(offh);
+  const inScope = scope.length ? scope.join(' AND ') : 'TRUE';
+
+  const winSums = LTV_WINDOWS_DAYS
+    .map(w => `SUM(amount) FILTER (WHERE delivered_at < first_at + interval '${w} days') AS ltv_${w}`)
+    .join(',\n         ');
+
+  const sql = `
+WITH firsts AS (
+  SELECT d.contact_id, min(d.delivered_at) AS first_at
+    FROM sa.deals d
+   WHERE d.delivered_at IS NOT NULL AND d.contact_id IS NOT NULL
+     AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
+   GROUP BY 1
+  HAVING min(d.delivered_at) >= $1 AND min(d.delivered_at) < $2
+),
+-- Сделка первой отгрузки задаёт строку отчёта; при нескольких сделках в один
+-- момент берётся младший deal_id — детерминированно.
+first_deal AS (
+  SELECT DISTINCT ON (d.contact_id)
+         d.contact_id, f.first_at, ${dimExpr} AS dim_id, (${inScope}) AS in_scope
+    FROM firsts f
+    JOIN sa.deals d ON d.contact_id = f.contact_id AND d.delivered_at = f.first_at
+   WHERE d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
+   ORDER BY d.contact_id, d.deal_id
+),
+ships AS (
+  SELECT fd.contact_id, fd.dim_id, fd.first_at, d.delivered_at, d.amount
+    FROM first_deal fd
+    JOIN sa.deals d ON d.contact_id = fd.contact_id
+   WHERE fd.in_scope
+     AND d.delivered_at IS NOT NULL
+     AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
+),
+per_client AS (
+  SELECT contact_id, dim_id,
+         count(*) AS n_ships,
+         COALESCE(SUM(amount) FILTER (WHERE delivered_at = first_at), 0) AS first_rev,
+         ${winSums},
+         SUM(amount) AS ltv_total
+    FROM ships GROUP BY 1, 2
+),
+rep AS (SELECT * FROM per_client WHERE n_ships >= 2)
+SELECT dim_id, count(*) AS repeat_clients, COALESCE(SUM(first_rev), 0) AS first_revenue,
+       ${LTV_WINDOWS_DAYS.map(w => `COALESCE(SUM(ltv_${w}), 0) AS ltv_${w}`).join(', ')},
+       COALESCE(SUM(ltv_total), 0) AS ltv_total
+  FROM rep GROUP BY 1
+UNION ALL
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), COALESCE(SUM(first_rev), 0),
+       ${LTV_WINDOWS_DAYS.map(w => `COALESCE(SUM(ltv_${w}), 0)`).join(', ')},
+       COALESCE(SUM(ltv_total), 0)
+  FROM rep
+`;
+
+  const key = [
+    'cohort', fromIso, toExclIso, opts.dimension, opts.periodUnit ?? '-', opts.productGroupMode ?? '-',
+    opts.dealScope ?? 'all', opts.clientType ?? 'all',
+    deptEmpty ? 'none' : (managerIds.length ? managerIds.join(',') : 'all'),
+    `${opts.createdTimeFilter ?? 'all'}:${opts.firstTouchFilter ?? 'all'}|df:${df.key}`,
+  ].join('|');
+
+  const rows = await cached(`rpt:clients:${key}`, reportTtl(toExclIso), async () => {
+    const res = await analyticsDb().query<Record<string, unknown>>(sql, [fromIso, toExclIso]);
+    return res.rows;
+  });
+
+  // Зрелость окна: конец строки + X дней уже позади «сейчас». Для разреза по
+  // периодам конец — у каждого бакета свой; для остальных — конец периода отчёта.
+  const now = Date.now();
+  const unit = (['day', 'week', 'month', 'quarter', 'year'].includes(opts.periodUnit ?? '')
+    ? opts.periodUnit : 'month') as Parameters<typeof nextBucket>[1];
+  const rowEndMs = (dimId: string): number => {
+    if (opts.dimension === 'period' && /^\d{4}-\d{2}-\d{2}$/.test(dimId)) {
+      return new Date(`${nextBucket(dimId, unit)}T00:00:00+03:00`).getTime();
+    }
+    return new Date(toExclIso).getTime();
+  };
+
+  const out = new Map<string, ClientCohortRow>();
+  for (const r of rows) {
+    const dimId = String(r.dim_id);
+    const end = rowEndMs(dimId);
+    const ltv = {} as ClientCohortRow['ltv'];
+    for (const w of LTV_WINDOWS_DAYS) {
+      ltv[w] = end + w * 86_400_000 <= now ? num(r[`ltv_${w}`]) : null;
+    }
+    out.set(dimId, {
+      repeatClients: num(r.repeat_clients),
+      firstRevenue: num(r.first_revenue),
+      ltv,
+      ltvTotal: num(r.ltv_total),
+    });
+  }
+  return out;
+}
+
+// ── Пятая пачка: «Активные компании» — отгрузка за последние 90 дней ─────────
+//
+// Окно СКОЛЬЗИТ от конца строки: для обычных разрезов — 90 дней до конца периода
+// отчёта, для разреза по периодам — 90 дней до конца КАЖДОГО бакета. Это
+// снапшотная метрика («сколько живой базы на эту дату»), поэтому суммировать её
+// по строкам нельзя — «Итого» считается своим окном от конца периода.
+
+export const ACTIVE_WINDOW_DAYS = 90;
+export const CLIENT_ACTIVE_METRIC_IDS = ['active_clients_90d'] as const;
+
+export function clientActiveToRecord(active: number | undefined): Record<string, number | null> {
+  return { active_clients_90d: active ?? 0 };
+}
+
+export async function fetchActiveClients(
+  opts: ClientMetricsOptions,
+): Promise<Map<string, number>> {
+  const days = ACTIVE_WINDOW_DAYS;
+  const fromIso = opts.period.from.toISOString();
+  const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
+  const { managerIds, deptEmpty } = await resolveScope(opts);
+  const df = buildDealFilterWhere(opts.dealFilters);
+  const goods = goodsPositionWhere('p');
+
+  const scope: string[] = [
+    `d.contact_id IS NOT NULL`,
+    `d.funnel_id NOT IN ${EXCLUDED_FUNNELS}`,
+    `EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})`,
+  ];
+  if (opts.dimension === 'manager') scope.push('d.current_manager_id IS NOT NULL');
+  if (deptEmpty) scope.push('1=0');
+  else if (managerIds.length) scope.push(`d.current_manager_id IN (${managerIds.join(',')})`);
+  const pills = pillWhere(opts.dealScope ?? 'all', opts.clientType ?? 'all');
+  if (pills) scope.push(pills);
+  const offh = [
+    createdTimeWhere('d', opts.createdTimeFilter ?? 'all'),
+    firstTouchWhere('d', opts.firstTouchFilter ?? 'all'),
+    df.sql,
+  ].filter(Boolean).join(' AND ');
+  if (offh) scope.push(offh);
+  const where = scope.join('\n     AND ');
+
+  let sql: string;
+  let params: unknown[];
+  if (opts.dimension === 'period') {
+    // Свой конец окна у каждого бакета — бакеты и их правые границы считаются в
+    // JS (та же арифметика periodBuckets, что строит строки отчёта) и передаются
+    // массивами: одна выборка отгрузок покрывает все окна.
+    const unit = (['day', 'week', 'month', 'quarter', 'year'].includes(opts.periodUnit ?? '')
+      ? opts.periodUnit : 'month') as Parameters<typeof nextBucket>[1];
+    const fromYmd = periodDateStrFromInstant(opts.period.from, 'from');
+    const toYmd = periodDateStrFromInstant(opts.period.to, 'to');
+    const keys: string[] = [];
+    const ends: string[] = [];
+    const last = bucketStartOf(toYmd, unit);
+    for (let b = bucketStartOf(fromYmd, unit); b <= last && keys.length < 1000; b = nextBucket(b, unit)) {
+      keys.push(b);
+      ends.push(`${nextBucket(b, unit)}T00:00:00+03:00`);
+    }
+    sql = `
+WITH b AS (SELECT * FROM unnest($1::text[], $2::timestamptz[]) AS t(key, win_end))
+SELECT b.key AS dim_id, count(DISTINCT d.contact_id) AS active
+  FROM b
+  JOIN sa.deals d
+    ON d.delivered_at >= b.win_end - interval '${days} days'
+   AND d.delivered_at <  b.win_end
+ WHERE ${where}
+ GROUP BY 1
+UNION ALL
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(DISTINCT d.contact_id)
+  FROM sa.deals d
+ WHERE d.delivered_at >= $3::timestamptz - interval '${days} days'
+   AND d.delivered_at <  $3::timestamptz
+   AND ${where}
+`;
+    params = [keys, ends, toExclIso];
+  } else {
+    const dimExpr = dimExprOf(opts);
+    sql = `
+SELECT ${dimExpr} AS dim_id, count(DISTINCT d.contact_id) AS active
+  FROM sa.deals d
+ WHERE d.delivered_at >= $1::timestamptz - interval '${days} days'
+   AND d.delivered_at <  $1::timestamptz
+   AND ${where}
+ GROUP BY 1
+UNION ALL
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(DISTINCT d.contact_id)
+  FROM sa.deals d
+ WHERE d.delivered_at >= $1::timestamptz - interval '${days} days'
+   AND d.delivered_at <  $1::timestamptz
+   AND ${where}
+`;
+    params = [toExclIso];
+  }
+
+  const key = [
+    'active', fromIso, toExclIso, days, opts.dimension, opts.periodUnit ?? '-',
+    opts.productGroupMode ?? '-', opts.dealScope ?? 'all', opts.clientType ?? 'all',
+    deptEmpty ? 'none' : (managerIds.length ? managerIds.join(',') : 'all'),
+    `${opts.createdTimeFilter ?? 'all'}:${opts.firstTouchFilter ?? 'all'}|df:${df.key}`,
+  ].join('|');
+
+  const rows = await cached(`rpt:clients:${key}`, reportTtl(toExclIso), async () => {
+    const res = await analyticsDb().query<Record<string, unknown>>(sql, params);
+    return res.rows;
+  });
+
+  const out = new Map<string, number>();
+  for (const r of rows) out.set(String(r.dim_id), num(r.active));
   return out;
 }

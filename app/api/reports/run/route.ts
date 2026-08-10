@@ -20,6 +20,8 @@ import {
   fetchClientMetrics, clientMetricsToRecord, CLIENT_METRIC_IDS, CLIENTS_GRAND_TOTAL_KEY,
   fetchClientTimeMetrics, clientTimeMetricsToRecord, CLIENT_TIME_METRIC_IDS,
   fetchClientFollowupMetrics, clientFollowupToRecord, CLIENT_FOLLOWUP_METRIC_IDS,
+  fetchClientCohortMetrics, clientCohortToRecord, CLIENT_COHORT_METRIC_IDS,
+  fetchActiveClients, clientActiveToRecord, CLIENT_ACTIVE_METRIC_IDS,
   type ClientMetricsDimension,
 } from '@/features/reports/engine/clientMetrics';
 import { computeRatingValues } from '@/features/manager-card/engine/ratings';
@@ -1015,29 +1017,39 @@ export async function POST(req: NextRequest) {
     const needTime = withDeps.some(m => (CLIENT_TIME_METRIC_IDS as readonly string[]).includes(m.id));
     // Обзвон — третий запрос со своей популяцией (обязанности, а не сделки).
     const needFollowup = withDeps.some(m => (CLIENT_FOLLOWUP_METRIC_IDS as readonly string[]).includes(m.id));
-    const [curClients, compClients, curTime, compTime, curFollow, compFollow] = await Promise.all([
+    const needCohort = withDeps.some(m => (CLIENT_COHORT_METRIC_IDS as readonly string[]).includes(m.id));
+    const needActive = withDeps.some(m => (CLIENT_ACTIVE_METRIC_IDS as readonly string[]).includes(m.id));
+    const [curClients, compClients, curTime, compTime, curFollow, compFollow, curCohort, compCohort, curActive, compActive] = await Promise.all([
       fetchClientMetrics(curOpts),
       fetchClientMetrics(compOptsClients),
       needTime ? fetchClientTimeMetrics(curOpts) : Promise.resolve(null),
       needTime ? fetchClientTimeMetrics(compOptsClients) : Promise.resolve(null),
       needFollowup ? fetchClientFollowupMetrics(curOpts) : Promise.resolve(null),
       needFollowup ? fetchClientFollowupMetrics(compOptsClients) : Promise.resolve(null),
+      needCohort ? fetchClientCohortMetrics(curOpts) : Promise.resolve(null),
+      needCohort ? fetchClientCohortMetrics(compOptsClients) : Promise.resolve(null),
+      needActive ? fetchActiveClients(curOpts) : Promise.resolve(null),
+      needActive ? fetchActiveClients(compOptsClients) : Promise.resolve(null),
     ]);
     const merge = (
       id: string,
       base: Awaited<ReturnType<typeof fetchClientMetrics>>,
       time: Awaited<ReturnType<typeof fetchClientTimeMetrics>> | null,
       follow: Awaited<ReturnType<typeof fetchClientFollowupMetrics>> | null,
+      cohort: Awaited<ReturnType<typeof fetchClientCohortMetrics>> | null,
+      active: Awaited<ReturnType<typeof fetchActiveClients>> | null,
     ) => ({
       ...clientMetricsToRecord(base.get(id)),
       ...(needTime ? clientTimeMetricsToRecord(time?.get(id)) : {}),
       ...(needFollowup ? clientFollowupToRecord(follow?.get(id)) : {}),
+      ...(needCohort ? clientCohortToRecord(cohort?.get(id)) : {}),
+      ...(needActive ? clientActiveToRecord(active?.get(id)) : {}),
     });
-    currentRows = currentRows.map(r => ({ ...r, metrics: { ...r.metrics, ...merge(r.dimensionId, curClients, curTime, curFollow) } }));
-    compRows = compRows.map(r => ({ ...r, metrics: { ...r.metrics, ...merge(r.dimensionId, compClients, compTime, compFollow) } }));
+    currentRows = currentRows.map(r => ({ ...r, metrics: { ...r.metrics, ...merge(r.dimensionId, curClients, curTime, curFollow, curCohort, curActive) } }));
+    compRows = compRows.map(r => ({ ...r, metrics: { ...r.metrics, ...merge(r.dimensionId, compClients, compTime, compFollow, compCohort, compActive) } }));
     clientGrandTotals = {
-      cur: merge(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime, curFollow),
-      comp: merge(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime, compFollow),
+      cur: merge(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime, curFollow, curCohort, curActive),
+      comp: merge(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime, compFollow, compCohort, compActive),
     };
   }
 
