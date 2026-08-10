@@ -77,13 +77,23 @@ export interface ClientMetricsRow {
   productsPerOrder: number | null;
 }
 
-/** id метрик каталога, которые заполняет этот движок (миграция 171). Роут по
- *  этому списку решает, звать ли движок вообще. */
+/** id метрик каталога, которые заполняет этот движок (миграции 171 и 172). Роут
+ *  по этому списку решает, звать ли движок вообще. */
 export const CLIENT_METRIC_IDS = [
   'new_clients_count', 'all_clients_delivered', 'repeat_clients_delivered',
   'delivered_deals_count', 'new_clients_amount', 'repeat_clients_amount',
   'complex_clients', 'avg_groups_per_client', 'avg_groups_per_order',
   'avg_products_per_order',
+  // Вторая пачка (миграция 172) — медианные времена между заказами.
+  'median_time_to_2nd', 'median_time_between_orders',
+  'median_time_to_2nd_diff_cat', 'median_time_between_orders_diff_cat',
+] as const;
+
+/** Метрики второй пачки считаются отдельным запросом (своя популяция — интервалы,
+ *  а не сделки), поэтому у роута есть способ спросить только их. */
+export const CLIENT_TIME_METRIC_IDS = [
+  'median_time_to_2nd', 'median_time_between_orders',
+  'median_time_to_2nd_diff_cat', 'median_time_between_orders_diff_cat',
 ] as const;
 
 /** Значения движка → метрики каталога. Пустая строка среза (клиент есть в отчёте,
@@ -169,6 +179,50 @@ function dimExprOf(opts: ClientMetricsOptions): string {
   return `'${CLIENTS_GRAND_TOTAL_KEY}'`;
 }
 
+/** Менеджеры, которыми ограничен срез. Если строки — не менеджеры (товарные
+ *  группы, периоды), список вывести неоткуда, и фильтр отделов резолвится здесь
+ *  тем же запросом, что в byProductGroups.ts. Оргструктура — из sa, НЕ из YC
+ *  system (задача 2065: YC-копия протухла). */
+async function resolveScope(opts: ClientMetricsOptions): Promise<{ managerIds: string[]; deptEmpty: boolean }> {
+  const managerIds = (opts.managerIds ?? []).filter(id => /^\d+$/.test(id));
+  const deptIds = opts.departmentIds ?? [];
+  if (managerIds.length || !deptIds.length) return { managerIds, deptEmpty: false };
+  const res = await analyticsDb().query<{ bitrix_user_id: string }>(
+    `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
+       FROM sa.org_resolved_hierarchy orh
+      WHERE orh.department_id IN (
+        SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1)
+      ) AND orh.is_active = true`,
+    [deptIds],
+  );
+  const ids = res.rows.map(r => r.bitrix_user_id).filter(id => /^\d+$/.test(id));
+  // Отдел без единого менеджера — честный ноль, а не молча снятый фильтр.
+  return { managerIds: ids, deptEmpty: ids.length === 0 };
+}
+
+/** Общий кусок WHERE: сделки периода, прошедшие фильтры отчёта. Вынесен, потому
+ *  что нужен обоим запросам движка (метрики по сделкам и медианные времена). */
+function periodWhere(opts: ClientMetricsOptions, managerIds: string[], deptEmpty: boolean, dfSql: string): string {
+  const where: string[] = [
+    `d.delivered_at >= $1`,
+    `d.delivered_at < $2`,
+    `d.contact_id IS NOT NULL`,
+    `d.funnel_id NOT IN ${EXCLUDED_FUNNELS}`,
+  ];
+  if (opts.dimension === 'manager') where.push('d.current_manager_id IS NOT NULL');
+  if (deptEmpty) where.push('1=0');
+  else if (managerIds.length) where.push(`d.current_manager_id IN (${managerIds.join(',')})`);
+  const pills = pillWhere(opts.dealScope ?? 'all', opts.clientType ?? 'all');
+  if (pills) where.push(pills);
+  const offh = [
+    createdTimeWhere('d', opts.createdTimeFilter ?? 'all'),
+    firstTouchWhere('d', opts.firstTouchFilter ?? 'all'),
+    dfSql,
+  ].filter(Boolean).join(' AND ');
+  if (offh) where.push(offh);
+  return where.join('\n     AND ');
+}
+
 function num(v: unknown): number {
   return v === null || v === undefined ? 0 : Number(v);
 }
@@ -190,43 +244,9 @@ export async function fetchClientMetrics(
   const fromIso = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
 
-  let managerIds = (opts.managerIds ?? []).filter(id => /^\d+$/.test(id));
-  const deptIds = opts.departmentIds ?? [];
-  let deptEmpty = false;
-  if (!managerIds.length && deptIds.length) {
-    // Оргструктура — из sa, НЕ из YC system (задача 2065, тот же фикс, что в
-    // byManagers.ts/byProductGroups.ts: YC-копия протухла).
-    const res = await analyticsDb().query<{ bitrix_user_id: string }>(
-      `SELECT DISTINCT manager_bitrix_user_id::text AS bitrix_user_id
-         FROM sa.org_resolved_hierarchy orh
-        WHERE orh.department_id IN (
-          SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1)
-        ) AND orh.is_active = true`,
-      [deptIds],
-    );
-    managerIds = res.rows.map(r => r.bitrix_user_id).filter(id => /^\d+$/.test(id));
-    // Отдел без единого менеджера — честный ноль, а не молча снятый фильтр.
-    deptEmpty = managerIds.length === 0;
-  }
+  const { managerIds, deptEmpty } = await resolveScope(opts);
   const df = buildDealFilterWhere(opts.dealFilters);
-
-  const where: string[] = [
-    `d.delivered_at >= $1`,
-    `d.delivered_at < $2`,
-    `d.contact_id IS NOT NULL`,
-    `d.funnel_id NOT IN ${EXCLUDED_FUNNELS}`,
-  ];
-  if (opts.dimension === 'manager') where.push('d.current_manager_id IS NOT NULL');
-  if (deptEmpty) where.push('1=0');
-  else if (managerIds.length) where.push(`d.current_manager_id IN (${managerIds.join(',')})`);
-  const pills = pillWhere(dealScope, clientType);
-  if (pills) where.push(pills);
-  const offh = [
-    createdTimeWhere('d', opts.createdTimeFilter ?? 'all'),
-    firstTouchWhere('d', opts.firstTouchFilter ?? 'all'),
-    df.sql,
-  ].filter(Boolean).join(' AND ');
-  if (offh) where.push(offh);
+  const where = periodWhere(opts, managerIds, deptEmpty, df.sql).split('\n     AND ');
 
   const goods = goodsPositionWhere('p');
   const dimExpr = dimExprOf(opts);
@@ -345,6 +365,188 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, d.orders, d
       groupsPerClient: numOrNull(r.groups_per_client),
       groupsPerOrder: numOrNull(r.groups_per_order),
       productsPerOrder: numOrNull(r.products_per_order),
+    });
+  }
+  return out;
+}
+
+// ── Вторая пачка: медианные времена между заказами (задача владельца 10.08) ──
+//
+// ЧТО ТАКОЕ «ЗАКАЗ». Владелец: «не учитывать интервал 1 день между заказами, то
+// есть считать такие заказы как 1 заказ». Поэтому отгрузки, идущие не дальше
+// суток друг от друга, склеиваются в ОДИН заказ, и время заказа — время первой
+// отгрузки склейки. Склейка цепная (0:00, +20ч, +20ч — это один заказ длиной
+// 40 часов, а не три): классическая задача «островов», решается через флаг
+// разрыва + бегущую сумму. Важно, что это именно склейка, а не выбрасывание
+// коротких интервалов: при отгрузках 1-го, 1-го и 11-го числа ответ 10 дней,
+// а не 9,5.
+//
+// ЧТО ТАКОЕ «ДРУГАЯ ТОВАРНАЯ ГРУППА». Заказ считается «новой категорией», если
+// он принёс клиенту группу, которой в его прошлых заказах не было. Определяется
+// без рекурсии: для пары (клиент, группа) берём НОМЕР ПЕРВОГО заказа, где она
+// встретилась; заказ «новый по категории», если он и есть этот первый для
+// какой-то своей группы. Сервисные группы, как и везде в разделе, не считаются.
+// «Время до второго заказа другой группы» — это первый интервал такой цепочки,
+// «время между заказами разных групп» — все её интервалы.
+//
+// ПРИВЯЗКА К ПЕРИОДУ И СТРОКЕ. Интервал относится к тому периоду/менеджеру/
+// товарной группе, где стоит ЗАКРЫВАЮЩИЙ его заказ (поздний из пары) — только
+// такая привязка делает метрику периодной: «сколько ждали те, кто вернулся в
+// июле». История при этом читается целиком, иначе первый заказ клиента,
+// сделанный до периода, потерялся бы и интервал не с чем было бы считать.
+//
+// МЕДИАНА, А НЕ СРЕДНЕЕ — хвост длинных возвратов задирает среднее. Медиана не
+// складывается, поэтому «Итого» считается percentile'ем по ВСЕЙ совокупности
+// интервалов тем же запросом (GROUPING SETS), а не усреднением строк.
+
+export interface ClientTimeMetricsRow {
+  /** Медиана дней между 1-м и 2-м заказом. */
+  toSecond: number | null;
+  /** Медиана дней между всеми соседними заказами. */
+  betweenAll: number | null;
+  /** Медиана дней до первого заказа с новой для клиента товарной группой. */
+  toSecondDiffCat: number | null;
+  /** Медиана дней между заказами, приносящими новые группы. */
+  betweenAllDiffCat: number | null;
+}
+
+export function clientTimeMetricsToRecord(row: ClientTimeMetricsRow | undefined): Record<string, number | null> {
+  return {
+    median_time_to_2nd: row?.toSecond ?? null,
+    median_time_between_orders: row?.betweenAll ?? null,
+    median_time_to_2nd_diff_cat: row?.toSecondDiffCat ?? null,
+    median_time_between_orders_diff_cat: row?.betweenAllDiffCat ?? null,
+  };
+}
+
+export async function fetchClientTimeMetrics(
+  opts: ClientMetricsOptions,
+): Promise<Map<string, ClientTimeMetricsRow>> {
+  const fromIso = opts.period.from.toISOString();
+  const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
+  const { managerIds, deptEmpty } = await resolveScope(opts);
+  const df = buildDealFilterWhere(opts.dealFilters);
+  const goods = goodsPositionWhere('p');
+  const dimExpr = dimExprOf(opts);
+  const where = periodWhere(opts, managerIds, deptEmpty, df.sql);
+
+  const sql = `
+WITH period_deals AS (
+  SELECT d.deal_id, d.contact_id
+    FROM deals d
+   WHERE ${where}
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
+),
+hist AS (
+  SELECT d.deal_id, d.contact_id, d.delivered_at
+    FROM sa.deals d
+   WHERE d.delivered_at IS NOT NULL
+     AND d.contact_id IN (SELECT contact_id FROM period_deals)
+     AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
+),
+flagged AS (
+  SELECT h.*,
+         CASE WHEN lag(h.delivered_at) OVER w IS NULL
+                OR h.delivered_at - lag(h.delivered_at) OVER w > interval '1 day'
+              THEN 1 ELSE 0 END AS starts_order
+    FROM hist h
+  WINDOW w AS (PARTITION BY h.contact_id ORDER BY h.delivered_at)
+),
+numbered AS (
+  SELECT f.*,
+         sum(f.starts_order) OVER (PARTITION BY f.contact_id ORDER BY f.delivered_at
+           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS ord_no
+    FROM flagged f
+),
+orders AS (
+  SELECT contact_id, ord_no, min(delivered_at) AS at,
+         (array_agg(deal_id ORDER BY delivered_at))[1] AS lead_deal_id
+    FROM numbered GROUP BY 1, 2
+),
+order_dim AS (
+  SELECT o.contact_id, o.ord_no, o.at, ${dimExpr} AS dim_id,
+         (o.lead_deal_id IN (SELECT deal_id FROM period_deals)) AS lead_in_report
+    FROM orders o JOIN sa.deals d ON d.deal_id = o.lead_deal_id
+),
+seq AS (
+  SELECT od.*, lag(od.at) OVER (PARTITION BY od.contact_id ORDER BY od.ord_no) AS prev_at,
+         row_number() OVER (PARTITION BY od.contact_id ORDER BY od.ord_no) AS rn
+    FROM order_dim od
+),
+all_intervals AS (
+  SELECT dim_id, rn, EXTRACT(EPOCH FROM (at - prev_at)) / 86400.0 AS days
+    FROM seq
+   WHERE prev_at IS NOT NULL AND at >= $1 AND at < $2 AND lead_in_report
+),
+order_groups AS (
+  SELECT n.contact_id, n.ord_no, (p->>'head_group_id') AS grp
+    FROM numbered n
+    JOIN sa.deals d ON d.deal_id = n.deal_id,
+         jsonb_array_elements(d.products) p
+   WHERE ${goods}
+   GROUP BY 1, 2, 3
+),
+first_group_order AS (
+  SELECT contact_id, grp, min(ord_no) AS first_ord FROM order_groups GROUP BY 1, 2
+),
+new_cat_orders AS (
+  SELECT DISTINCT og.contact_id, og.ord_no
+    FROM order_groups og
+    JOIN first_group_order f
+      ON f.contact_id = og.contact_id AND f.grp = og.grp AND f.first_ord = og.ord_no
+),
+cat_seq AS (
+  SELECT od.dim_id, od.at, od.lead_in_report,
+         lag(od.at) OVER (PARTITION BY od.contact_id ORDER BY od.ord_no) AS prev_at,
+         row_number() OVER (PARTITION BY od.contact_id ORDER BY od.ord_no) AS rn
+    FROM order_dim od
+    JOIN new_cat_orders nc ON nc.contact_id = od.contact_id AND nc.ord_no = od.ord_no
+),
+cat_intervals AS (
+  SELECT dim_id, rn, EXTRACT(EPOCH FROM (at - prev_at)) / 86400.0 AS days
+    FROM cat_seq
+   WHERE prev_at IS NOT NULL AND at >= $1 AND at < $2 AND lead_in_report
+),
+agg_all AS (
+  -- COALESCE, а не NULL из GROUPING SETS: Postgres не умеет FULL JOIN по
+  -- IS NOT DISTINCT FROM («only supported with merge-joinable conditions»),
+  -- поэтому итоговая строка получает явный ключ и джойнится обычным равенством.
+  SELECT COALESCE(dim_id, '${CLIENTS_GRAND_TOTAL_KEY}') AS dim_id,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY days) FILTER (WHERE rn = 2) AS to_second,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY days)                       AS between_all
+    FROM all_intervals GROUP BY GROUPING SETS ((dim_id), ())
+),
+agg_cat AS (
+  SELECT COALESCE(dim_id, '${CLIENTS_GRAND_TOTAL_KEY}') AS dim_id,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY days) FILTER (WHERE rn = 2) AS to_second_cat,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY days)                       AS between_all_cat
+    FROM cat_intervals GROUP BY GROUPING SETS ((dim_id), ())
+)
+SELECT COALESCE(a.dim_id, c.dim_id) AS dim_id,
+       a.to_second, a.between_all, c.to_second_cat, c.between_all_cat
+  FROM agg_all a FULL JOIN agg_cat c ON c.dim_id = a.dim_id
+`;
+
+  const key = [
+    'time', fromIso, toExclIso, opts.dimension, opts.periodUnit ?? '-', opts.productGroupMode ?? '-',
+    opts.dealScope ?? 'all', opts.clientType ?? 'all',
+    deptEmpty ? 'none' : (managerIds.length ? managerIds.join(',') : 'all'),
+    `${opts.createdTimeFilter ?? 'all'}:${opts.firstTouchFilter ?? 'all'}|df:${df.key}`,
+  ].join('|');
+
+  const rows = await cached(`rpt:clients:${key}`, reportTtl(toExclIso), async () => {
+    const res = await analyticsDb().query<Record<string, unknown>>(sql, [fromIso, toExclIso]);
+    return res.rows;
+  });
+
+  const out = new Map<string, ClientTimeMetricsRow>();
+  for (const r of rows) {
+    out.set(String(r.dim_id), {
+      toSecond: numOrNull(r.to_second),
+      betweenAll: numOrNull(r.between_all),
+      toSecondDiffCat: numOrNull(r.to_second_cat),
+      betweenAllDiffCat: numOrNull(r.between_all_cat),
     });
   }
   return out;

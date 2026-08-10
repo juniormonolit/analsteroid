@@ -9,6 +9,10 @@ import {
   bucketStartOf, nextBucket, prevBucket, yoyBucket, bucketLabel, comparisonBucketOf,
 } from '@/features/reports/lib/periodBuckets';
 import { seriesDeps } from '@/features/reports/engine/metricSeries';
+import {
+  fetchClientMetrics, clientMetricsToRecord, CLIENT_METRIC_IDS, CLIENTS_GRAND_TOTAL_KEY,
+  fetchClientTimeMetrics, clientTimeMetricsToRecord, CLIENT_TIME_METRIC_IDS,
+} from '@/features/reports/engine/clientMetrics';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { periodDateStrFromInstant, type CalendarUnit } from '@/lib/period';
 import { validateDealFilters } from '@/lib/metrics/dealFilters';
@@ -138,8 +142,13 @@ export async function POST(req: NextRequest) {
   // При 'all_core' список не отдаём: человек не выбирал эти метрики поимённо,
   // колонок с ними в ответе нет — предупреждать не о чем, вышел бы шум на пол-экрана.
   const explicitMetrics = !metricIds.includes('all_core');
+  // Метрики раздела «Клиенты» считает свой движок (clientMetrics.ts) — они
+  // external, поэтому seriesDeps их не признаёт, но неподдержанными они НЕ
+  // являются: правило владельца «метрика работает во всех трёх стартовых
+  // сущностях» (10.08) — здесь это третья.
+  const clientIds = new Set<string>(CLIENT_METRIC_IDS);
   const unsupported = explicitMetrics
-    ? requested.filter(m => seriesDeps(m, allMetrics) === null).map(m => m.id)
+    ? requested.filter(m => seriesDeps(m, allMetrics) === null && !clientIds.has(m.id)).map(m => m.id)
     : [];
   const unsupportedSet = new Set(unsupported);
 
@@ -164,12 +173,46 @@ export async function POST(req: NextRequest) {
       : Promise.resolve([] as PeriodBucketRow[]),
   ]);
 
-  const enrich = (row: PeriodBucketRow): PeriodBucketRow => ({
-    ...row,
-    metrics: computeCalculated(row.metrics, calculatedMetrics),
+  // Метрики раздела «Клиенты» — своим движком, с измерением «бакет периода».
+  // Считаются по тем же двум окнам, что и всё остальное (текущее и сдвинутое),
+  // поэтому построчное сравнение работает для них так же, как для обычных метрик.
+  const needClients = withDeps.some(m => (CLIENT_METRIC_IDS as readonly string[]).includes(m.id));
+  const needTime = withDeps.some(m => (CLIENT_TIME_METRIC_IDS as readonly string[]).includes(m.id));
+  const clientCommon = {
+    dimension: 'period' as const, periodUnit: unit, dealScope, clientType,
+    departmentIds, createdTimeFilter, firstTouchFilter, dealFilters,
+  };
+  const compRange = compWindow
+    ? { from: new Date(compWindow.fromIso), to: new Date(compWindow.toIso) }
+    : periodRange;
+  const [curClients, compClients, curTime, compTime] = await Promise.all([
+    needClients ? fetchClientMetrics({ ...clientCommon, period: periodRange }) : Promise.resolve(null),
+    needClients && compWindow ? fetchClientMetrics({ ...clientCommon, period: compRange }) : Promise.resolve(null),
+    needTime ? fetchClientTimeMetrics({ ...clientCommon, period: periodRange }) : Promise.resolve(null),
+    needTime && compWindow ? fetchClientTimeMetrics({ ...clientCommon, period: compRange }) : Promise.resolve(null),
+  ]);
+  const clientsFor = (
+    bucket: string,
+    base: Awaited<ReturnType<typeof fetchClientMetrics>> | null,
+    time: Awaited<ReturnType<typeof fetchClientTimeMetrics>> | null,
+  ): Record<string, number | null> => ({
+    ...(needClients ? clientMetricsToRecord(base?.get(bucket)) : {}),
+    ...(needTime ? clientTimeMetricsToRecord(time?.get(bucket)) : {}),
   });
-  const currentRows = currentRaw.map(enrich);
-  const compRows = compRaw.map(enrich);
+
+  const enrich = (
+    row: PeriodBucketRow,
+    base: Awaited<ReturnType<typeof fetchClientMetrics>> | null,
+    time: Awaited<ReturnType<typeof fetchClientTimeMetrics>> | null,
+  ): PeriodBucketRow => ({
+    ...row,
+    metrics: computeCalculated(
+      { ...row.metrics, ...clientsFor(row.bucket, base, time) },
+      calculatedMetrics,
+    ),
+  });
+  const currentRows = currentRaw.map(r => enrich(r, curClients, curTime));
+  const compRows = compRaw.map(r => enrich(r, compClients, compTime));
   const compByBucket = new Map(compRows.map(r => [r.bucket, r]));
 
   const shiftOf = (b: string) => comparisonBucketOf(b, unit, compareMode);
@@ -196,8 +239,16 @@ export async function POST(req: NextRequest) {
     };
   });
 
-  const totalsCurrent = computeCalculated(computeTotals(currentRows, allMetrics), calculatedMetrics);
-  const totalsComparison = computeCalculated(computeTotals(usedComp, allMetrics), calculatedMetrics);
+  // «Клиенты» в «Итого» — из общего итога движка, не суммой бакетов: клиент,
+  // купивший в мае и в июле, — один клиент за полугодие, а медиана вообще не
+  // складывается. Подмена до computeCalculated, чтобы доли считались от честных
+  // чисел (та же логика, что в /api/reports/run).
+  const clientTotals = clientsFor(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime);
+  const clientTotalsComp = clientsFor(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime);
+  const totalsCurrent = computeCalculated(
+    { ...computeTotals(currentRows, allMetrics), ...clientTotals }, calculatedMetrics);
+  const totalsComparison = computeCalculated(
+    { ...computeTotals(usedComp, allMetrics), ...clientTotalsComp }, calculatedMetrics);
   const totals: Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }> = {};
   for (const id of new Set([...Object.keys(totalsCurrent), ...Object.keys(totalsComparison)])) {
     const current = totalsCurrent[id] ?? null;
