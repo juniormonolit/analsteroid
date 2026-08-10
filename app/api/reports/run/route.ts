@@ -16,6 +16,10 @@ import {
   GRAND_TOTAL_KEY,
   type Bucket, type CallsBaseRow, type DealCallAdditiveRow, type TouchAndFirstCallRow,
 } from '@/features/reports/engine/callsMetrics';
+import {
+  fetchClientMetrics, clientMetricsToRecord, CLIENT_METRIC_IDS, CLIENTS_GRAND_TOTAL_KEY,
+  type ClientMetricsDimension,
+} from '@/features/reports/engine/clientMetrics';
 import { computeRatingValues } from '@/features/manager-card/engine/ratings';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
@@ -971,6 +975,52 @@ export async function POST(req: NextRequest) {
     compRows = compRows.map(r => enrichCalls(r, compBase, compAdditive, compTouch, compSilence));
   }
 
+  // ── Раздел «Клиенты» (задача владельца 10.08, миграция 171) ────────────────
+  // Свой движок, а не конструктор: COUNT(DISTINCT contact_id) нельзя складывать
+  // по воронкам, а обычные collected-метрики именно складываются (замер: у
+  // #1930 32 клиента превращались в 44). Подробности — в шапке clientMetrics.ts.
+  //
+  // Поддержаны «по менеджерам» и «по товарным группам» (в последнем сделка
+  // привязывается к ОДНОЙ главной группе, как и остальные колонки того отчёта —
+  // см. dimExprOf). Разрез источников не поддержан: там строка — не сущность,
+  // по которой у сделки есть однозначная привязка.
+  let clientGrandTotals: { cur?: Record<string, number | null>; comp?: Record<string, number | null> } | null = null;
+  const clientDimension: ClientMetricsDimension | null =
+    reportSlug === 'by-managers' ? 'manager'
+    : reportSlug === 'by-product-groups' ? 'product-group' : null;
+  if (clientDimension && withDeps.some(m => (CLIENT_METRIC_IDS as readonly string[]).includes(m.id))) {
+    // Для менеджеров ограничиваем движок теми, кто реально в отчёте (фильтры
+    // отделов/типа аккаунта уже применены к строкам) — тогда «Итого» движка
+    // совпадёт с тем, что видит человек. Для товарных групп список менеджеров
+    // вывести неоткуда, поэтому отдаём фильтр отделов и движок резолвит сам.
+    const byMgr = clientDimension === 'manager';
+    const common = {
+      dimension: clientDimension, dealScope, clientType, productGroupMode,
+      createdTimeFilter, firstTouchFilter, dealFilters,
+      ...(byMgr ? {} : { departmentIds }),
+    };
+    const [curClients, compClients] = await Promise.all([
+      fetchClientMetrics({
+        ...common, period: opts.period,
+        ...(byMgr ? { managerIds: currentRows.map(r => r.dimensionId).filter(id => /^\d+$/.test(id)) } : {}),
+      }),
+      fetchClientMetrics({
+        ...common, period: compOpts.period,
+        ...(byMgr ? { managerIds: compRows.map(r => r.dimensionId).filter(id => /^\d+$/.test(id)) } : {}),
+      }),
+    ]);
+    currentRows = currentRows.map(r => ({
+      ...r, metrics: { ...r.metrics, ...clientMetricsToRecord(curClients.get(r.dimensionId)) },
+    }));
+    compRows = compRows.map(r => ({
+      ...r, metrics: { ...r.metrics, ...clientMetricsToRecord(compClients.get(r.dimensionId)) },
+    }));
+    clientGrandTotals = {
+      cur: clientMetricsToRecord(curClients.get(CLIENTS_GRAND_TOTAL_KEY)),
+      comp: clientMetricsToRecord(compClients.get(CLIENTS_GRAND_TOTAL_KEY)),
+    };
+  }
+
   // Add calculated metrics to each row (after plan enrichment so plan-dependent metrics work)
   const enrich = (row: ReportRow): ReportRow => ({
     ...row,
@@ -1006,9 +1056,13 @@ export async function POST(req: NextRequest) {
   // Не-суммируемые метрики (проценты/CR) корректны в обеих колонках одинаково: они не
   // усредняются построчно, а пересчитываются по формуле из суммированных компонентов
   // (см. computeTotals → computeCalculated) — ровно так же для «Тек.» и для «Пред.».
-  const totalsCurrentRaw = computeTotals(currentRows, allMetrics);
+  // «Клиенты» в «Итого» — ТОЛЬКО из общего итога движка, не суммой строк: клиент,
+  // купивший у двух менеджеров, в каждой строке свой, а в итоге он один. Подмена
+  // делается ДО computeCalculated, чтобы Repeat Rate и доли в «Итого» считались
+  // от честных чисел, а не от завышенной суммы.
+  const totalsCurrentRaw = { ...computeTotals(currentRows, allMetrics), ...(clientGrandTotals?.cur ?? {}) };
   const totalsCurrent = computeCalculated(totalsCurrentRaw, calculatedMetrics);
-  const totalsComparisonRaw = computeTotals(compRows, allMetrics);
+  const totalsComparisonRaw = { ...computeTotals(compRows, allMetrics), ...(clientGrandTotals?.comp ?? {}) };
   const totalsComparison = computeCalculated(totalsComparisonRaw, calculatedMetrics);
   const totalIds = new Set([...Object.keys(totalsCurrent), ...Object.keys(totalsComparison)]);
   const totals: Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }> = {};

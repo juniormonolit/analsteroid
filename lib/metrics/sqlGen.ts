@@ -1,4 +1,5 @@
 import type { Metric, MetricFilter } from './types';
+import { dealHasGoodsWhere } from './serviceGroups';
 
 // ── Реестр «виртуальных» полей повторности / n-й сделки клиента ──────────────
 // Ключ — имя поля в фильтре метрики (по конвенции с ведущим «_»). Значение —
@@ -46,6 +47,28 @@ function clientHistorySubquery(field: string, cfg: { orderBy: string; rn: string
 // товаров)», категория «Повторные», count_distinct contact_id по delivered_at,
 // числитель «% комплексных клиентов», ТЗ #1725). Фильтр по воронкам (funnel_id NOT IN
 // (4,7)) метрика несёт ОТДЕЛЬНЫМ фильтром — он обрабатывается общим путём not_in ниже.
+// ── Виртуальные поля раздела «Клиенты» (задача владельца 10.08.2026) ─────────
+// Отличие от CLIENT_HISTORY_FIELDS выше: там порядок сделок клиента считается по
+// ВСЕМ отгрузкам, здесь — только по ТОВАРНЫМ (в сделке есть хотя бы одна
+// несервисная позиция, см. lib/metrics/serviceGroups.ts). Это принципиально:
+// на проде у 220 клиентов из 19 728 самая первая отгрузка — чистая перевозка,
+// и по общему счёту их первая реальная покупка получала rn=2, то есть клиент
+// никогда не попадал в «новых» и сразу считался повторным.
+//
+//   _has_goods           — в сделке есть хотя бы одна товарная позиция;
+//   _first_goods_deliv   — это ПЕРВАЯ товарная отгрузка клиента за всю историю;
+//   _repeat_goods_deliv  — вторая и далее (rn >= 2).
+function goodsDeliverySubquery(rn: string): string {
+  return `d.deal_id IN (
+      SELECT deal_id FROM (
+        SELECT deal_id, ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY delivered_at) AS rn
+        FROM sa.deals _gd
+        WHERE _gd.delivered_at IS NOT NULL AND _gd.contact_id IS NOT NULL
+          AND ${dealHasGoodsWhere('_gd')}
+      ) _goods_ranked WHERE rn ${rn}
+    )`;
+}
+
 function complexClientSubquery(): string {
   return `d.contact_id IN (
       SELECT contact_id FROM sa.deals
@@ -75,6 +98,11 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   // «Комплексный» клиент (2+ товарных группы за историю отгрузок) — своя логика по
   // DISTINCT-категориям, тоже через подзапрос (см. complexClientSubquery).
   if (f.field === '_complex_client') return complexClientSubquery();
+  // Раздел «Клиенты»: товарность сделки и порядок ТОВАРНЫХ отгрузок клиента
+  // (см. goodsDeliverySubquery выше).
+  if (f.field === '_has_goods') return dealHasGoodsWhere('d');
+  if (f.field === '_first_goods_deliv') return goodsDeliverySubquery('= 1');
+  if (f.field === '_repeat_goods_deliv') return goodsDeliverySubquery('>= 2');
   // Защита: любое иное поле с ведущим «_» — тоже виртуальное и НЕ является колонкой БД.
   // Если оно дошло сюда — его забыли добавить в CLIENT_HISTORY_FIELDS. Бросаем явную
   // ошибку вместо тихого битого SQL «d.<field>» (регрессия #repeat_deliv: 42703 без
