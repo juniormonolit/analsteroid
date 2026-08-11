@@ -124,8 +124,20 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   if (f.field === 'event_type') {
     return `de.stage_id IN (SELECT id FROM stages WHERE event_type = '${f.value}')`;
   }
+  // stage_type — это КОЛОНКА stages.stage_type (NEW/WORK/WON/LOSS), а не event_type.
+  // Баг, найденный по жалобе владельца 11.08: здесь стояло `event_type = '<value>'`,
+  // а метрики «Кол-во необраб. сделок» приходят из каталога со значением 'new' —
+  // ни одна стадия не имеет event_type='new' (там created/called/reserved/confirmed/
+  // sold/shipped/lost), поэтому предикат не совпадал НИ С ЧЕМ и метрика показывала
+  // ровно 0 всегда. Проверено на живой sa.stages: event_type='new' → 0 стадий,
+  // stage_type='NEW' → 6 стадий, а по сделкам с 01.07.2026 — 0 против 982.
+  // Регистр приводим с обеих сторон: в каталоге значение записано строчными
+  // ('new'), в БД — прописными ('NEW'), и переучивать одно под другое значит
+  // ждать той же ошибки при следующей метрике.
   if (f.field === 'stage_type') {
-    return `${a}.stage_id IN (SELECT id FROM stages WHERE event_type = '${f.value}')`;
+    const v = String(f.value);
+    if (!/^[a-z_]+$/i.test(v)) return '';
+    return `${a}.stage_id IN (SELECT id FROM stages WHERE UPPER(stage_type) = UPPER('${v}'))`;
   }
   // gt_field: column-vs-column comparison, value = other column name (e.g. lost_at > sold_at).
   // Implies both NOT NULL (SQL comparison with NULL is never true).

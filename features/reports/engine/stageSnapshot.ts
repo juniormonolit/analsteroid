@@ -38,7 +38,14 @@ import type { DimensionConfig } from '@/lib/metrics/sqlGen';
 export const STAGE_SNAPSHOT_GROUPS: Record<string, { metricId: string; stageIds: string[] }> = {
   // «Необработанные» (исключение из «точь-в-точь»): NEW/C1:NEW «Срочно
   // обработать» + C2:NEW/C3:NEW «Сделка» — все входные created-стадии.
-  unprocessed:        { metricId: 'stage_now_unprocessed_count',         stageIds: ['NEW', 'C1:NEW', 'C2:NEW', 'C3:NEW'] },
+  // C4:NEW «Новая сделка (срочно обработать)» и C7:NEW «Новый тендер» добавлены
+  // 11.08 по жалобе владельца: список был зафиксирован по воронкам 0-3 (17.07), а
+  // воронки 4 и 7 появились позже — 441 сделка со stage_type='NEW' не попадала в
+  // метрику вовсе (1428 против 1869 на живых данных). Правило владельца: в
+  // «Необработанные» входит ВСЁ, у чего stage_type = NEW. Ниже в fetchStageSnapshot
+  // это же правило продублировано по КОЛОНКЕ stage_type — чтобы следующая новая
+  // воронка не потребовала правки этого списка.
+  unprocessed:        { metricId: 'stage_now_unprocessed_count',         stageIds: ['NEW', 'C1:NEW', 'C2:NEW', 'C3:NEW', 'C4:NEW', 'C7:NEW'] },
   // «Не дозвонился» — расщеплено из прежней 2059-группы taken.
   no_answer:          { metricId: 'stage_now_no_answer_count',           stageIds: ['PREPARATION', 'C1:PREPARATION'] },
   // «Взял в работу» — прежняя taken минус «Не дозвонился».
@@ -155,7 +162,7 @@ export async function fetchStageSnapshot(dim: DimensionConfig, extraParams: unkn
     FROM deals d
     JOIN stages s ON s.id = d.stage_id
     ${dim.extraJoins ?? ''}
-    WHERE (s.stage_type = 'WORK' OR d.stage_id = ANY($1::text[]))
+    WHERE (s.stage_type IN ('WORK', 'NEW') OR d.stage_id = ANY($1::text[]))
       ${notNull}
     GROUP BY ${dim.idExpr}${nameGroup}, d.funnel_id, d.stage_id, s.stage_type
   `.trim();
@@ -174,7 +181,13 @@ export async function fetchStageSnapshot(dim: DimensionConfig, extraParams: unkn
   for (const row of res.rows) {
     const cnt = Number(row.cnt);
 
-    const metricId = STAGE_TO_METRIC.get(row.stage_id);
+    // Любая стадия со stage_type='NEW' — «Необработанные», даже если её id нет в
+    // курируемом списке выше (новая воронка). Правило владельца 11.08; конфликта с
+    // курируемым списком нет — все перечисленные там NEW-стадии и так ведут в эту же
+    // метрику, проверено по живой sa.stages.
+    const metricId = row.stage_type === 'NEW'
+      ? 'stage_now_unprocessed_count'
+      : STAGE_TO_METRIC.get(row.stage_id);
     if (metricId) {
       const key = `${row.dimension_id}|${row.funnel_id}`;
       let entry = pillByKey.get(key);
