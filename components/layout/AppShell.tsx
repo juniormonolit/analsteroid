@@ -7,7 +7,7 @@ import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
-  MessageCircle, LineChart, Trophy, PackageOpen, Users,
+  MessageCircle, LineChart, Trophy, PackageOpen, Users, Presentation,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -438,6 +438,9 @@ function SidebarBody({
     // «Сотрудники» (задача 2654) — реестр: стаж + история переименований логина;
     // закрытый раздел по паттерну section.offload (только супер-админ + роли).
     { href: '/employees', label: 'Сотрудники', icon: <Users size={18} />, ok: hasPerm(user, 'section.employees') },
+    // «Презентация» (ТЗ владельца 11.08) — слайды еженедельного собрания;
+    // закрытый раздел по паттерну section.offload (только супер-админ + роли).
+    { href: '/presentation', label: 'Презентация', icon: <Presentation size={18} />, ok: hasPerm(user, 'section.presentation') },
     { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: hasPerm(user, 'section.summary') },
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },
@@ -612,7 +615,7 @@ function SidebarBody({
               (авто-раскрыт, когда открыт один из его разделов), видимыми остались
               только «Настройки» и «Что изменилось?». «Идеи и планы» переехали
               кнопкой в шапку панели ченджлога, «Корзина» — в ЛК. */}
-          {(showSummaryBlock || showMetricsBlock) && (
+          {(showSummaryBlock || showMetricsBlock || hasPerm(user, 'section.presentation')) && (
             <div className="border-t border-[var(--color-sidebar-border)] pt-1 px-2">
               {moreItems.length > 0 && (
                 <>
