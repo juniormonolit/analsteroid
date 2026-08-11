@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AdviceLogBlock } from './AdviceLogBlock';
 
 interface ScoringSettings {
   scoreThreshold: number;
@@ -54,6 +55,8 @@ export function DigestSettingsBlock() {
   const [hourDraft, setHourDraft] = useState<Record<string, string>>({});
   const [scoringDraft, setScoringDraft] = useState<Record<string, string>>({});
   if (!data) return null;
+  // Закрытые = те, у кого исход уже известен. Именно они — знаменатель доли.
+  const closedCount = data.stats.success + data.stats.closedNoContact + data.stats.closedNoDeal;
   const s = data.settings;
   const sc = data.scoring;
 
@@ -188,18 +191,50 @@ export function DigestSettingsBlock() {
       </section>
 
       <section className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4">
-        <h2 className="mb-3 text-sm font-semibold">Журнал подсказок — статистика попаданий</h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        <h2 className="mb-1 text-sm font-semibold">Журнал подсказок — статистика попаданий</h2>
+        {/* «% попаданий» считается от ЗАКРЫТЫХ подсказок, а не от выданных, и
+            это надо говорить вслух. Пока промахов ноль, знаменатель равен
+            числителю, и показатель механически равен 100 % — цифра, которая
+            выглядит как успех, а означает «ещё нечего мерить» (владелец
+            11.08: «почему если выдано 1025 а сработало 39, то попадание 100%?»).
+            Поэтому: «в работе» показываем отдельно, а процент прячем, пока
+            закрытых мало. */}
+        <p className="mb-3 text-[11px] leading-snug text-[var(--color-text-muted)]">
+          Доля считается от ЗАКРЫТЫХ подсказок (сработало + промахи), а не от выданных:
+          у висящих в работе исхода ещё нет. Подсказка закрывается как промах не раньше
+          чем через 9 дней без контакта или через 21 день после контакта без сделки.
+        </p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <Stat label="Всего выдано" value={data.stats.total} />
+          <Stat label="В работе" value={data.stats.open} />
           <Stat label="Сработало" value={data.stats.success} accent="green" />
           <Stat label="Не дозвонились" value={data.stats.closedNoContact} />
           <Stat label="Контакт без сделки" value={data.stats.closedNoDeal} />
-          <Stat label="% попаданий" value={data.stats.successRatePct !== null ? `${data.stats.successRatePct}%` : '—'} accent="green" />
+          <Stat
+            label={closedCount > 0 ? `% от закрытых (${closedCount})` : '% попаданий'}
+            value={closedCount >= MIN_CLOSED_FOR_RATE && data.stats.successRatePct !== null
+              ? `${data.stats.successRatePct}%`
+              : 'рано считать'}
+            accent={closedCount >= MIN_CLOSED_FOR_RATE ? 'green' : undefined}
+          />
         </div>
+        {closedCount < MIN_CLOSED_FOR_RATE && (
+          <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+            Закрыто {closedCount} подсказок из {data.stats.total} — этого мало для доли.
+            Промахи начнут закрываться по мере исчерпания напоминаний.
+          </p>
+        )}
       </section>
+
+      <AdviceLogBlock />
     </div>
   );
 }
+
+// Ниже этого числа закрытых подсказок доля не показывается: на пяти-десяти
+// исходах она скачет на десятки процентов и вводит в заблуждение сильнее, чем
+// прочерк.
+const MIN_CLOSED_FOR_RATE = 20;
 
 function Stat({ label, value, accent }: { label: string; value: number | string; accent?: 'green' }) {
   return (

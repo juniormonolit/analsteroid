@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { Pool, PoolClient } from 'pg';
 import { getSession } from '@/lib/auth/session';
 import { canViewManager } from '@/lib/org/managerAccess';
+import { fetchTeamScope } from '@/features/shop/engine/teamScope';
+import { fetchTeamBudget, spendTeamBudget, teamPrice } from '@/features/shop/engine/teamBudget';
 import { getAllRopAndDirectorIds } from '@/lib/org/callControlScope';
 import { systemDb } from '@/lib/db/clients';
 import { getCurrencyName } from '@/features/badges/engine/coins';
@@ -33,7 +35,7 @@ import { actorFromSession, spendPinRequirement, verifyPin } from '@/lib/auth/pin
 
 interface ItemRow {
   id: number; name: string; description: string | null; category: string;
-  price_units: string; enabled: boolean;
+  price_units: string; enabled: boolean; price_scales_with_team?: boolean;
   stock: number | null; ttl_months: number; sort: number;
   emoji: string; min_level: number; marketplace_url: string | null; buyer_scope: string;
   per_person_limit: number | null; per_person_limit_days: number | null;
@@ -67,7 +69,7 @@ export async function GET(req: NextRequest) {
     db.query<ItemRow>(
       `SELECT id::int AS id, name, description, category, price_units,
               enabled, stock, ttl_months, sort,
-              emoji, min_level, marketplace_url, buyer_scope,
+              emoji, min_level, marketplace_url, buyer_scope, price_scales_with_team,
               per_person_limit, per_person_limit_days, requires_approval,
               boost_metric, boost_multiplier, boost_window_days, boost_scope,
               (image_mime IS NOT NULL) AS has_image
@@ -86,6 +88,11 @@ export async function GET(req: NextRequest) {
   const visibleItems = items.rows.filter(i => i.buyer_scope !== 'rop_only' || viewerIsRop);
 
   const level = bitrixId ? await viewerLevel(db, Number(bitrixId)) : 0;
+  // Отдел зрителя и его бюджет: командные позиции покупаются НЕ из личного
+  // кошелька (иначе руководитель платит за всех из своего), а из бюджета
+  // отдела, который наполняется долей от начислений участников.
+  const team = viewerIsRop ? await fetchTeamScope(String(bitrixId)) : { deptKey: null, deptName: null, size: 0 };
+  const teamBudget = await fetchTeamBudget(db, team.deptKey);
 
   // Счётчик покупок этой позиции ЭТИМ зрителем — для UI лимита «куплено N/M».
   const purchaseCounts = bitrixId && visibleItems.length > 0
@@ -127,8 +134,16 @@ export async function GET(req: NextRequest) {
     rubBalance: balanceBy.get('RUB') ?? 0,
     viewerLevel: level,
     viewerIsRop,
+    // Командный бюджет: витрина обязана показывать, ИЗ ЧЕГО платится командная
+    // позиция — иначе РОП видит цену вдвое выше базовой и не понимает, почему
+    // его личный баланс её «не берёт».
+    team: { deptKey: team.deptKey, deptName: team.deptName, size: team.size, budget: teamBudget },
     items: visibleItems.map(i => {
-      const price = priceEball(Number(i.price_units));
+      // Командная цена — от размера отдела зрителя (задача 10.08, §6 черновика).
+      // Считаем ЗДЕСЬ, а не на клиенте: цена участвует в проверке баланса на
+      // сервере, и второе место, где её выводят, немедленно разойдётся с первым.
+      const base = priceEball(Number(i.price_units));
+      const price = i.price_scales_with_team && team.size > 0 ? teamPrice(base, team.size) : base;
       // Редкость — от ЦЕНЫ (правка владельца 04.08, задача 2983), min_level —
       // отдельная антифарм-защита, больше не влияет на бейдж/цвет карточки.
       const rarity = rarityForPrice(price);
@@ -142,6 +157,9 @@ export async function GET(req: NextRequest) {
         requiresApproval: i.requires_approval,
         boostMetric: i.boost_metric, boostMultiplier: i.boost_multiplier !== null ? Number(i.boost_multiplier) : null,
         boostWindowDays: i.boost_window_days, boostScope: i.boost_scope,
+        // Клиенту важно не только «сколько», но и «почему столько» и «откуда платим».
+        priceScalesWithTeam: i.price_scales_with_team === true,
+        priceBase: base,
         rarityKey: rarity.key, rarityLabel: rarity.label, rarityColor: rarity.color,
         hasImage: i.has_image,
       };
@@ -193,7 +211,7 @@ export async function POST(req: NextRequest) {
     const itemRes = await client.query<ItemRow>(
       `SELECT id::int AS id, name, description, category, price_units,
               enabled, stock, ttl_months, sort,
-              emoji, min_level, marketplace_url, buyer_scope,
+              emoji, min_level, marketplace_url, buyer_scope, price_scales_with_team,
               per_person_limit, per_person_limit_days, requires_approval,
               boost_metric, boost_multiplier, boost_window_days, boost_scope
          FROM shop_items WHERE id = $1 FOR UPDATE`,
@@ -243,7 +261,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const price = priceEball(Number(item.price_units));
+    // Командная позиция: цена от размера отдела, платит бюджет отдела.
+    const teamScope = item.price_scales_with_team ? await fetchTeamScope(String(id)) : null;
+    if (item.price_scales_with_team && !teamScope?.deptKey) {
+      await client.query('ROLLBACK');
+      return NextResponse.json(
+        { error: 'Командную позицию покупает руководитель отдела — ваш отдел не определён' }, { status: 403 });
+    }
+    const basePrice = priceEball(Number(item.price_units));
+    const price = teamScope ? teamPrice(basePrice, teamScope.size) : basePrice;
     // Цена изменилась между пре-чеком пина и блокировкой строки, и требование
     // сменилось (теперь нужен пин, а мы его не спросили/не проверили) — просим
     // повторить, а не молча пропускаем списание без пина.
@@ -254,14 +280,31 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Цена позиции изменилась — повторите покупку', pinRequired: true }, { status: 409 });
       }
     }
-    const bal = await client.query<{ balance: string }>(
-      `SELECT coalesce(sum(amount), 0) AS balance FROM badge_coin_ledger WHERE bitrix_id = $1 AND currency = 'EBALL'`,
-      [id],
-    );
-    const balance = Number(bal.rows[0]?.balance ?? 0);
-    if (price > balance) {
-      await client.query('ROLLBACK');
-      return NextResponse.json({ error: `Не хватает средств: цена ${price}, на балансе ${balance}` }, { status: 400 });
+    // Из бюджета отдела — если позиция командная. Личный кошелёк при этом НЕ
+    // трогается вовсе: смысл бюджета ровно в том, что руководитель не платит
+    // за отдел своими MLT (§6 черновика, открытый вопрос «откуда у РОПа MLT»).
+    if (teamScope?.deptKey) {
+      const okBudget = await spendTeamBudget(client, teamScope.deptKey, price, {
+        bitrixId: Number(id), shopItemId: itemId,
+        comment: `${item.name} (отдел ${teamScope.size} чел., база ${basePrice})`,
+      });
+      if (!okBudget) {
+        await client.query('ROLLBACK');
+        return NextResponse.json({
+          error: `Не хватает командного бюджета отдела: нужно ${price} MLT. `
+            + `Бюджет наполняется долей от начислений участников отдела.`,
+        }, { status: 400 });
+      }
+    } else {
+      const bal = await client.query<{ balance: string }>(
+        `SELECT coalesce(sum(amount), 0) AS balance FROM badge_coin_ledger WHERE bitrix_id = $1 AND currency = 'EBALL'`,
+        [id],
+      );
+      const balance = Number(bal.rows[0]?.balance ?? 0);
+      if (price > balance) {
+        await client.query('ROLLBACK');
+        return NextResponse.json({ error: `Не хватает средств: цена ${price}, на балансе ${balance}` }, { status: 400 });
+      }
     }
 
     if (item.stock !== null) {
@@ -279,10 +322,19 @@ export async function POST(req: NextRequest) {
        RETURNING id`,
       [id, itemId, item.name, price, item.ttl_months, initialStatus],
     );
+    // Личный кошелёк списывается только за личные покупки. Командную оплатил
+    // бюджет отдела, но строка в выписке всё равно нужна — с нулевой суммой и
+    // явной причиной: иначе в инвентаре появляется предмет, за который в
+    // выписке человека нет ни одной записи, и «откуда это взялось» выясняется
+    // по логам. Тот же приём, что у сгоревшего депозита контракта.
+    const personalAmount = teamScope?.deptKey ? 0 : -price;
+    const purchaseComment = teamScope?.deptKey
+      ? `Покупка для отдела: ${item.name} (${price} MLT из бюджета отдела)`
+      : `Покупка в магазине: ${item.name}`;
     const led = await client.query<{ id: number }>(
       `INSERT INTO badge_coin_ledger (bitrix_id, amount, price_at_award, currency, source, comment, inventory_item_id, pin_event_id)
        VALUES ($1, $2, $3, 'EBALL', 'shop_purchase', $4, $5, $6) RETURNING id`,
-      [id, -price, price, `Покупка в магазине: ${item.name}`, inv.rows[0].id, pinEventId],
+      [id, personalAmount, price, purchaseComment, inv.rows[0].id, pinEventId],
     );
     await client.query(`UPDATE inventory_items SET ledger_id = $2 WHERE id = $1`, [inv.rows[0].id, led.rows[0].id]);
     // FIFO (TTL MLT): списание расходует старейшие живые начисления —
