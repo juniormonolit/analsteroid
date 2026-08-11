@@ -8,14 +8,39 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { format, subDays, startOfDay, endOfDay, differenceInCalendarDays, addDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Maximize, Loader2 } from 'lucide-react';
+import { Maximize, Loader2, SlidersHorizontal } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from 'recharts';
 import type { DateRange } from '@/lib/period';
 import { previousPeriodSameLength, periodDateStrFromInstant } from '@/lib/period';
 import { DepartmentPicker, PeriodRangeControls } from '@/features/reports/ui/FilterBar';
+import { Modal } from '@/components/ui/Modal';
 import type { MetricWindow, PresentationData } from '../engine/presentation';
+
+// ── Послайдовая настройка показателей (ТЗ: «показатели слайдов 4+ задаются
+// послайдово в настройках»). Колонка — единица выбора; слайд без записи в
+// хранилище показывает все. Персист — localStorage: настройка личная и
+// экранная, сервер ей не нужен.
+export type ColKey = 'sales_p' | 'sales_r' | 'ship_p' | 'ship_r' | 'inbound' | 'cr_sale' | 'cr_ship' | 'rep_share';
+const COL_GROUPS: { label: string; cols: { key: ColKey; label: string }[] }[] = [
+  { label: 'Продажи, млн', cols: [{ key: 'sales_p', label: 'перв.' }, { key: 'sales_r', label: 'повт.' }] },
+  { label: 'Отгрузки, млн', cols: [{ key: 'ship_p', label: 'перв.' }, { key: 'ship_r', label: 'повт.' }] },
+  { label: 'Входящих', cols: [{ key: 'inbound', label: '' }] },
+  { label: 'CR первичная', cols: [{ key: 'cr_sale', label: 'в продажу' }, { key: 'cr_ship', label: 'в отгрузку' }] },
+  { label: 'Доля повт.', cols: [{ key: 'rep_share', label: '' }] },
+];
+const ALL_COLS: ColKey[] = COL_GROUPS.flatMap(g => g.cols.map(c => c.key));
+const COLS_LS_KEY = 'presentation.slideCols.v1';
+type SlideCols = Record<string, ColKey[]>; // ключ слайда → видимые колонки; нет записи = все
+
+function loadSlideCols(): SlideCols {
+  if (typeof window === 'undefined') return {};
+  try { return JSON.parse(localStorage.getItem(COLS_LS_KEY) ?? '{}'); } catch { return {}; }
+}
+function colsFor(slideCols: SlideCols, slideKey: string): Set<ColKey> {
+  return new Set(slideCols[slideKey] ?? ALL_COLS);
+}
 
 // ── Форматирование ───────────────────────────────────────────────────────────
 const mln = (v: number) => (v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 });
@@ -71,10 +96,13 @@ function SlideHead({ title, sub, right }: { title: string; sub?: string; right?:
   );
 }
 
-// ── Таблица метрик менеджеров/товарных групп (согласованный макет v2) ────────
+// ── Таблица метрик менеджеров/товарных групп (согласованный макет v2).
+// Колонки — из послайдовой настройки; onRowClick — дрилл-даун (клик по
+// менеджеру → его сделки, ТЗ владельца).
 interface NamedRow extends MetricWindow { name: string }
-function MetricTable({ label, rows, total, topN = 11 }: {
+function MetricTable({ label, rows, total, topN = 11, cols, onRowClick }: {
   label: string; rows: NamedRow[]; total: MetricWindow; topN?: number;
+  cols: Set<ColKey>; onRowClick?: (row: NamedRow) => void;
 }) {
   const top = rows.slice(0, topN);
   const rest = rows.slice(topN);
@@ -85,43 +113,58 @@ function MetricTable({ label, rows, total, topN = 11 }: {
       }, { sales_p: 0, sales_r: 0, sales_n_p: 0, sales_n_r: 0, ship_p: 0, ship_r: 0, ship_n_p: 0, inbound: 0, inbound_p: 0, ppo: 0 })
     : null;
 
-  const cells = (w: MetricWindow) => (
-    <>
-      <td className={`${TDNUM} ${GSEP}`}><NumCell v={w.sales_p} strong /></td>
-      <td className={TDNUM}><NumCell v={w.sales_r} /></td>
-      <td className={`${TDNUM} ${GSEP}`}><NumCell v={w.ship_p} strong /></td>
-      <td className={TDNUM}><NumCell v={w.ship_r} /></td>
-      <td className={`${TDNUM} ${GSEP}`}><NumCell v={w.inbound} f={String} /></td>
-      <td className={`${TDNUM} ${GSEP}`}><CrCell n={w.sales_n_p} d={w.inbound_p} /></td>
-      <td className={TDNUM}><CrCell n={w.ship_n_p} d={w.inbound_p} /></td>
-      <td className={`${TDNUM} ${GSEP}`}><CrCell n={w.sales_n_r} d={w.sales_n_p + w.sales_n_r} /></td>
-    </>
-  );
+  // Видимые группы колонок; первая колонка каждой группы несёт разделитель.
+  const groups = COL_GROUPS
+    .map(g => ({ ...g, cols: g.cols.filter(c => cols.has(c.key)) }))
+    .filter(g => g.cols.length > 0);
+  const twoRows = groups.some(g => g.cols.length > 1);
+
+  const cell = (w: MetricWindow, key: ColKey) => {
+    switch (key) {
+      case 'sales_p': return <NumCell v={w.sales_p} strong />;
+      case 'sales_r': return <NumCell v={w.sales_r} />;
+      case 'ship_p': return <NumCell v={w.ship_p} strong />;
+      case 'ship_r': return <NumCell v={w.ship_r} />;
+      case 'inbound': return <NumCell v={w.inbound} f={String} />;
+      case 'cr_sale': return <CrCell n={w.sales_n_p} d={w.inbound_p} />;
+      case 'cr_ship': return <CrCell n={w.ship_n_p} d={w.inbound_p} />;
+      case 'rep_share': return <CrCell n={w.sales_n_r} d={w.sales_n_p + w.sales_n_r} />;
+    }
+  };
+  const TOTAL_TD = 'text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)]';
+  const cells = (w: MetricWindow, totalRow = false) => groups.flatMap(g =>
+    g.cols.map((c, i) => (
+      <td key={c.key} className={`${totalRow ? TOTAL_TD : TDNUM} ${i === 0 ? GSEP : ''}`}>
+        {cell(w, c.key)}
+      </td>
+    )));
 
   return (
     <div className="scroll-x">
       <table className="w-full border-collapse text-[clamp(13px,1.15vw,21px)] min-w-[820px]">
         <thead>
           <tr>
-            <th rowSpan={2} className={`${TD} ${TH} text-left align-bottom`}>{label}</th>
-            <th colSpan={2} className={`${TH} ${GSEP} text-center pb-0.5`}>Продажи, млн</th>
-            <th colSpan={2} className={`${TH} ${GSEP} text-center pb-0.5`}>Отгрузки, млн</th>
-            <th rowSpan={2} className={`${TD} ${TH} ${GSEP} text-right align-bottom`}>Входящих</th>
-            <th colSpan={2} className={`${TH} ${GSEP} text-center pb-0.5`}>CR первичная</th>
-            <th rowSpan={2} className={`${TD} ${TH} ${GSEP} text-right align-bottom`}>Доля повт.</th>
+            <th rowSpan={twoRows ? 2 : 1} className={`${TD} ${TH} text-left align-bottom`}>{label}</th>
+            {groups.map(g => g.cols.length > 1
+              ? <th key={g.label} colSpan={g.cols.length} className={`${TH} ${GSEP} text-center pb-0.5`}>{g.label}</th>
+              : <th key={g.label} rowSpan={twoRows ? 2 : 1} className={`${TD} ${TH} ${GSEP} text-right align-bottom`}>{g.label}</th>)}
           </tr>
-          <tr>
-            <th className={`${TDNUM} ${TH} ${GSEP} pt-0.5`}>перв.</th>
-            <th className={`${TDNUM} ${TH} pt-0.5`}>повт.</th>
-            <th className={`${TDNUM} ${TH} ${GSEP} pt-0.5`}>перв.</th>
-            <th className={`${TDNUM} ${TH} pt-0.5`}>повт.</th>
-            <th className={`${TDNUM} ${TH} ${GSEP} pt-0.5`}>в продажу</th>
-            <th className={`${TDNUM} ${TH} pt-0.5`}>в отгрузку</th>
-          </tr>
+          {twoRows && (
+            <tr>
+              {groups.filter(g => g.cols.length > 1).flatMap(g =>
+                g.cols.map((c, i) => (
+                  <th key={c.key} className={`${TDNUM} ${TH} ${i === 0 ? GSEP : ''} pt-0.5`}>{c.label}</th>
+                )))}
+            </tr>
+          )}
         </thead>
         <tbody>
           {top.map(r => (
-            <tr key={r.name} className="odd:bg-[var(--color-report-zebra)]">
+            <tr
+              key={r.name}
+              className={`odd:bg-[var(--color-report-zebra)] ${onRowClick ? 'cursor-pointer hover:bg-[var(--color-table-row-hover)]' : ''}`}
+              onClick={onRowClick ? () => onRowClick(r) : undefined}
+            >
               <td className={`${TD} text-[var(--color-text)]`}>{r.name}</td>
               {cells(r)}
             </tr>
@@ -134,19 +177,107 @@ function MetricTable({ label, rows, total, topN = 11 }: {
           )}
           <tr className="font-bold">
             <td className="py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)]">ИТОГО</td>
-            {/* та же строка ячеек, но с жирной верхней границей */}
-            <td className={`text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)] ${GSEP}`}><NumCell v={total.sales_p} strong /></td>
-            <td className="text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)]"><NumCell v={total.sales_r} /></td>
-            <td className={`text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)] ${GSEP}`}><NumCell v={total.ship_p} strong /></td>
-            <td className="text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)]"><NumCell v={total.ship_r} /></td>
-            <td className={`text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)] ${GSEP}`}><NumCell v={total.inbound} f={String} /></td>
-            <td className={`text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)] ${GSEP}`}><CrCell n={total.sales_n_p} d={total.inbound_p} /></td>
-            <td className="text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)]"><CrCell n={total.ship_n_p} d={total.inbound_p} /></td>
-            <td className={`text-right tabular-nums whitespace-nowrap py-[0.5em] pr-[0.9em] border-t-2 border-[var(--color-text)] ${GSEP}`}><CrCell n={total.sales_n_r} d={total.sales_n_p + total.sales_n_r} /></td>
+            {cells(total, true)}
           </tr>
         </tbody>
       </table>
     </div>
+  );
+}
+
+// ── Дрилл-даун: сделки менеджера за период (тот же /api/reports/deals, что и
+// дрилл в отчётах/карточке менеджера; scope=all — и продажи, и отгрузки).
+interface DrillDeal {
+  deal_id: number; deal_name: string; amount: string;
+  created_at: string; sold_at: string | null; delivered_at: string | null;
+}
+function ManagerDealsModal({ managerId, name, period, onClose }: {
+  managerId: number; name: string; period: DateRange; onClose: () => void;
+}) {
+  const qs = new URLSearchParams({
+    from: period.from.toISOString(), to: period.to.toISOString(),
+    scope: 'all', clientType: 'all', managerId: String(managerId),
+  }).toString();
+  const { data, isLoading } = useQuery({
+    queryKey: ['presentation-manager-deals', managerId, qs],
+    queryFn: () => fetch(`/api/reports/deals?${qs}`).then(r => r.json()),
+  });
+  const deals: DrillDeal[] = data?.deals ?? [];
+  const shown = deals.slice(0, 100);
+  const dt = (s: string | null) => (s ? format(new Date(s), 'dd.MM', { locale: ru }) : null);
+  return (
+    <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`${name} — сделки за период`} desktopWidth="sm:max-w-2xl">
+      {isLoading && <div className="py-6 text-center text-sm text-[var(--color-text-muted)]">Загрузка…</div>}
+      {!isLoading && deals.length === 0 && (
+        <div className="py-6 text-center text-sm text-[var(--color-text-muted)]">Сделок за период нет</div>
+      )}
+      {!isLoading && shown.map(d => (
+        <div key={d.deal_id} className="flex items-center gap-3 py-2 text-sm border-b border-[var(--color-border)] last:border-b-0">
+          <span className="text-[var(--color-text-muted)] tabular-nums w-11 shrink-0">
+            {dt(d.sold_at ?? d.delivered_at ?? d.created_at)}
+          </span>
+          <span className="flex-1 min-w-0 truncate text-[var(--color-text)]" title={d.deal_name}>{d.deal_name || '—'}</span>
+          <span className="flex gap-1 shrink-0">
+            {d.sold_at && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-accent-soft)] text-[var(--color-accent)]">продана</span>}
+            {d.delivered_at && <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">отгружена</span>}
+          </span>
+          <span className="tabular-nums font-medium text-[var(--color-text)] shrink-0">{mln(Number(d.amount))} млн</span>
+        </div>
+      ))}
+      {deals.length > 100 && (
+        <div className="py-2 text-xs text-[var(--color-text-muted)]">Показаны первые 100 из {deals.length}</div>
+      )}
+    </Modal>
+  );
+}
+
+// ── Настройка показателей слайдов 4+ ─────────────────────────────────────────
+function SlideColsModal({ slides, slideCols, onChange, onClose }: {
+  slides: { key: string; name: string }[];
+  slideCols: SlideCols;
+  onChange: (next: SlideCols) => void;
+  onClose: () => void;
+}) {
+  const toggle = (slideKey: string, col: ColKey) => {
+    const cur = new Set(slideCols[slideKey] ?? ALL_COLS);
+    if (cur.has(col)) { if (cur.size > 1) cur.delete(col); } // последнюю колонку не гасим
+    else cur.add(col);
+    onChange({ ...slideCols, [slideKey]: ALL_COLS.filter(k => cur.has(k)) });
+  };
+  return (
+    <Modal open onOpenChange={o => { if (!o) onClose(); }} title="Показатели слайдов" desktopWidth="sm:max-w-lg">
+      <p className="text-xs text-[var(--color-text-muted)] mb-3">
+        Какие колонки показывать на слайдах по менеджерам и товарным группам. Настройка запоминается в этом браузере.
+      </p>
+      {slides.map(s => {
+        const cur = new Set(slideCols[s.key] ?? ALL_COLS);
+        return (
+          <div key={s.key} className="mb-4">
+            <div className="text-sm font-semibold text-[var(--color-text)] mb-1.5">{s.name}</div>
+            <div className="flex flex-wrap gap-1.5">
+              {COL_GROUPS.flatMap(g => g.cols.map(c => {
+                const on = cur.has(c.key);
+                const lbl = c.label ? `${g.label}: ${c.label}` : g.label;
+                return (
+                  <button
+                    key={c.key}
+                    onClick={() => toggle(s.key, c.key)}
+                    aria-pressed={on}
+                    className={`px-2.5 py-1.5 min-h-9 rounded-lg border text-xs transition-colors ${
+                      on
+                        ? 'border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-soft)]'
+                        : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    {lbl}
+                  </button>
+                );
+              }))}
+            </div>
+          </div>
+        );
+      })}
+    </Modal>
   );
 }
 
@@ -195,6 +326,14 @@ export function PresentationPage() {
   const deckRef = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
+  // Дрилл-даун и послайдовые показатели (доделка ТЗ 11.08)
+  const [drill, setDrill] = useState<{ managerId: number; name: string } | null>(null);
+  const [colsOpen, setColsOpen] = useState(false);
+  const [slideCols, setSlideCols] = useState<SlideCols>(loadSlideCols);
+  const saveSlideCols = (next: SlideCols) => {
+    setSlideCols(next);
+    try { localStorage.setItem(COLS_LS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+  };
 
   const params = useMemo(() => ({
     departmentIds,
@@ -268,6 +407,30 @@ export function PresentationPage() {
   const periodLabel = `${fmtD(period.from)} — ${fmtD(period.to)}`;
   const comparisonLabel = `${fmtD(comparison.from)} — ${fmtD(comparison.to)}`;
 
+  // «Выводы»: сохранение (доделка ТЗ) — localStorage с ключом от периода и
+  // выбора отделов: собрание следующей недели начинает с чистого листа, а
+  // повторное открытие ТОГО ЖЕ собрания видит свои записи.
+  const notesKey = `presentation.notes.v1:${params.period.from}_${params.period.to}:${[...departmentIds].sort().join(',')}`;
+  const notesRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = notesRef.current;
+    if (!el) return;
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(notesKey); } catch { /* private mode */ }
+    el.innerHTML = saved && saved.trim() ? saved : '•&nbsp;';
+  }, [notesKey, data]);
+  const saveNotes = () => {
+    const el = notesRef.current;
+    if (!el) return;
+    try { localStorage.setItem(notesKey, el.innerHTML); } catch { /* private mode */ }
+  };
+
+  // Слайды 4+ для настройки показателей: менеджерские (по группам) + товарные группы.
+  const configurableSlides = useMemo(() => [
+    ...(data?.groups.filter(g => data.managers[g.key]?.length) ?? []).map(g => ({ key: `mgr:${g.key}`, name: `${g.name} — по менеджерам` })),
+    { key: 'pg', name: 'По товарным группам' },
+  ], [data]);
+
   return (
     <div className="h-full flex flex-col overflow-x-hidden bg-[var(--color-bg)]">
       {/* Тулбар настройки — вне полноэкранного контейнера, в fullscreen не попадает */}
@@ -279,6 +442,12 @@ export function PresentationPage() {
           manualComparisonFn={previousPeriodSameLength}
         />
         <div className="flex-1" />
+        <button
+          onClick={() => setColsOpen(true)}
+          className="flex items-center gap-2 px-3 min-h-11 border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] hover:border-[var(--color-border-focus)] transition-colors"
+        >
+          <SlidersHorizontal size={15} /> Показатели
+        </button>
         <button
           onClick={() => {
             const el = deckRef.current?.parentElement;
@@ -436,9 +605,22 @@ export function PresentationPage() {
                 <Slide key={g.key}>
                   <SlideHead
                     title={`${g.name} — по менеджерам`}
-                    sub={`${periodLabel} · первичные/повторные — по воронке · CR = первичные продажи (отгрузки) к первичным входящим`}
+                    sub={`${periodLabel} · первичные/повторные — по воронке · CR = первичные продажи (отгрузки) к первичным входящим · клик по менеджеру — его сделки`}
                   />
-                  <MetricTable label="Менеджер" rows={data.managers[g.key]} total={data.period.byGroup[g.key]} />
+                  <MetricTable
+                    label="Менеджер"
+                    rows={data.managers[g.key]}
+                    total={data.period.byGroup[g.key]}
+                    cols={colsFor(slideCols, `mgr:${g.key}`)}
+                    onRowClick={r => {
+                      const m = data.managers[g.key].find(x => x.name === r.name);
+                      if (!m) return;
+                      // Модалка портится в body и в fullscreen-элементе не видна —
+                      // дрилл выводит из полноэкранного режима.
+                      if (document.fullscreenElement) document.exitFullscreen();
+                      setDrill({ managerId: m.managerId, name: m.name });
+                    }}
+                  />
                 </Slide>
               ))}
 
@@ -466,19 +648,20 @@ export function PresentationPage() {
                     </div>
                   }
                 />
-                <MetricTable label="Группа" rows={data.productGroups[pgMode]} total={data.period.total} topN={10} />
+                <MetricTable label="Группа" rows={data.productGroups[pgMode]} total={data.period.total} topN={10} cols={colsFor(slideCols, 'pg')} />
               </Slide>
 
-              {/* Выводы */}
+              {/* Выводы — сохраняются в браузере, ключ = период + отделы */}
               <Slide>
-                <SlideHead title="Выводы и идеи" sub="Кликните и пишите — текст остаётся на экране до закрытия страницы" />
+                <SlideHead title="Выводы и идеи" sub="Кликните и пишите — текст сохраняется в этом браузере для этого периода и выбора отделов" />
                 <div
+                  ref={notesRef}
                   contentEditable
                   suppressContentEditableWarning
+                  onInput={saveNotes}
+                  onBlur={saveNotes}
                   className={`${CARD} border-dashed p-[clamp(14px,1.6vw,28px)] min-h-[42vh] outline-none focus:border-[var(--color-accent)] text-[clamp(17px,1.8vw,32px)] text-[var(--color-text)]`}
-                >
-                  •&nbsp;
-                </div>
+                />
               </Slide>
             </>
           )}
@@ -489,6 +672,13 @@ export function PresentationPage() {
           </div>
         )}
       </div>
+
+      {drill && (
+        <ManagerDealsModal managerId={drill.managerId} name={drill.name} period={period} onClose={() => setDrill(null)} />
+      )}
+      {colsOpen && (
+        <SlideColsModal slides={configurableSlides} slideCols={slideCols} onChange={saveSlideCols} onClose={() => setColsOpen(false)} />
+      )}
     </div>
   );
 }
