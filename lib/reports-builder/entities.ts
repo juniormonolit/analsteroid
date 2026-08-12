@@ -8,7 +8,7 @@
 import type { SessionUser } from '@/lib/auth/session';
 import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import {
-  getAllDepartmentOptions,
+  getSalesDepartmentOptions,
   resolveManagersForDepartments,
   type DeptOption,
 } from '@/lib/org/teamRoster';
@@ -61,16 +61,16 @@ export async function availableEntities(session: SessionUser): Promise<{
   branches: { id: string; name: string }[];
 }> {
   const full = hasFullManagerAccess(session);
-  // Список отделов — ВСЯ оргструктура (getAllDepartmentOptions), а не только
-  // отделы с назначенным в приложении руководителем (правка владельца 07.08:
-  // «должно быть можно выбрать любую команду по структуре. Например, „Отдел
-  // металлопроката“ отсутствует в списке» — таких отсутствовало 64 из 80).
-  // Права не меняются: руководству доступна вся структура, РОПу — только его
-  // отделы, как и было.
+  // Список отделов — ПОДДЕРЕВО «Отдела продаж» целиком (28 отделов вместо
+  // прежних 16 «с назначенным руководителем»): правка владельца 07.08 — «должно
+  // быть можно выбрать любую команду по структуре… „Отдел металлопроката“
+  // отсутствует» + «пикер должен быть ограничен „Отделом продаж“, маркетинг и
+  // дирекция нас в продажах не интересуют». Права не меняются: руководству —
+  // все продажи, РОПу — только его отделы.
   const [departments, branches] = await Promise.all([
-    full ? getAllDepartmentOptions() : managedDepartmentIds(session).then(async ids => {
+    full ? getSalesDepartmentOptions() : managedDepartmentIds(session).then(async ids => {
       if (ids.length === 0) return [] as DeptOption[];
-      const all = await getAllDepartmentOptions();
+      const all = await getSalesDepartmentOptions();
       const allowed = new Set(ids);
       return all.filter(d => allowed.has(d.id));
     }),
@@ -96,7 +96,7 @@ export async function resolveEntities(
   const allowedDepts = full ? null : new Set(await managedDepartmentIds(session));
   // Имена — из той же полной структуры, что и пикер: иначе у отдела, которого нет
   // в user_departments, подпись схлопывалась бы в фолбэк «Отдел».
-  const deptOptions = new Map((await getAllDepartmentOptions()).map(d => [d.id, d.name]));
+  const deptOptions = new Map((await getSalesDepartmentOptions()).map(d => [d.id, d.name]));
   const branches = entities.some(e => e.kind === 'branch') ? await branchManagers() : null;
 
   const out: ResolvedEntity[] = [];

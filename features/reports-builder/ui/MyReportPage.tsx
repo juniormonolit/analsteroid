@@ -323,16 +323,14 @@ export function MyReportPage() {
                   </button>
                 }
               >
-                {/* Поиск — обязателен с тех пор, как список стал ВСЕЙ оргструктурой
-                    (правка владельца 07.08: «должно быть можно выбрать любую команду
-                    по структуре»): 80 отделов пролистывать глазами невозможно.
-                    Ищем и по названию, и по пути в структуре — «нц» находит все
-                    отделы департамента НЦ. */}
+                {/* Поиск — список теперь всё поддерево «Отдела продаж» (28 отделов
+                    вместо 16, правка владельца 07.08). Ищем и по названию, и по пути
+                    в структуре: «нц» находит все отделы департамента НЦ. */}
                 <div className="p-1">
                   <input
                     value={entitySearch}
                     onChange={e => setEntitySearch(e.target.value)}
-                    placeholder="Поиск по структуре…"
+                    placeholder="Поиск по отделам продаж…"
                     className="mb-1 min-h-11 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-sm outline-none"
                   />
                   <div className="max-h-64 overflow-y-auto">

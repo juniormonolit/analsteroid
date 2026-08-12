@@ -125,38 +125,47 @@ export async function getAllManagedDepartmentIds(): Promise<DeptOption[]> {
 }
 
 /**
- * ВСЕ отделы оргструктуры деревом (порядок = обход структуры, depth = уровень).
+ * Отделы ПРОДАЖ деревом (порядок = обход структуры, depth = уровень).
  *
  * Задача владельца 07.08 по конструктору «Мой отчёт»: «в „Кто в отчёте“ должно
  * быть можно выбрать любую команду по структуре. Например, „Отдел
- * металлопроката“ отсутствует в списке». Причина отсутствия —
- * getAllManagedDepartmentIds выше отдаёт только отделы, у которых КТО-ТО назначен
- * руководителем в user_departments, плюс корневые узлы: 16 из 80. Для выбора
- * сущности отчёта это неверный критерий — человека интересует структура, а не то,
- * заведён ли у отдела руководитель в приложении.
+ * металлопроката“ отсутствует в списке» и уточнение: «пикер отделов должен быть
+ * ограничен „Отделом продаж“. Маркетинг, дирекция и прочее нас в „продажах“ не
+ * интересует».
  *
- * Рекурсивный обход по parent_bitrix_department_id + UNION-хвост для «сирот»
- * (родитель которых не найден): иначе отдел с битой ссылкой на родителя тихо
- * исчезал бы из списка — тот же класс проблемы, что чиним.
+ * Что было не так: список питался getAllManagedDepartmentIds — только отделы, у
+ * которых КТО-ТО назначен руководителем в user_departments, плюс корневые узлы
+ * (16 из 80). Не попадали ни «Отдел Металлопроката», ни команды, ни КРД-отделы.
+ *
+ * Ограничение поддеревом «Отдел продаж» — не новое правило, а УЖЕ принятое в
+ * проекте (правка Иосифа 14.07): тем же рекурсивным обходом ограничены таблица
+ * получателей «Контроля звонков» (app/api/settings/bots/call-control/departments)
+ * и справочник оргструктуры (app/api/catalog/org-structure). Третьего понятия
+ * «какие отделы относятся к продажам» не заводим.
+ *
+ * Как складываются два источника (формулировка владельца: ручная структура
+ * «главенствует… дополняет»): ФОРМУ и охват даёт дерево sa.departments из
+ * Битрикса, а ЛЮДЕЙ по отделам — ручная sa.org_resolved_hierarchy (её читает
+ * resolveManagersForDepartments). Поэтому отдел, где напрямую никого нет
+ * («Отдел стажировки»), в списке остаётся: его отчёт соберёт людей дочерних
+ * отделов, как это делает resolveAssignedDept.
+ *
+ * UNION-хвост для «сирот» здесь не нужен: анкер обхода — сам «Отдел продаж», и
+ * всё, что к нему не подцеплено, в продажи по определению не входит.
  */
-export async function getAllDepartmentOptions(): Promise<DeptOption[]> {
+export async function getSalesDepartmentOptions(): Promise<DeptOption[]> {
   const res = await analyticsDb().query<{ id: string; name: string; depth: number; path: string }>(
-    `WITH RECURSIVE tree AS (
+    `WITH RECURSIVE sales_tree AS (
        SELECT d.id, d.name, d.bitrix_department_id, 0 AS depth, d.name::text AS path
          FROM sa.departments d
-        WHERE d.parent_bitrix_department_id IS NULL AND d.is_active = true
+        WHERE d.name = 'Отдел продаж' AND d.is_active = true
        UNION ALL
        SELECT d.id, d.name, d.bitrix_department_id, t.depth + 1, t.path || ' / ' || d.name
          FROM sa.departments d
-         JOIN tree t ON d.parent_bitrix_department_id = t.bitrix_department_id
+         JOIN sales_tree t ON d.parent_bitrix_department_id = t.bitrix_department_id
         WHERE d.is_active = true
      )
-     SELECT id::text AS id, name, depth, path FROM tree
-     UNION ALL
-     SELECT d.id::text, d.name, 0 AS depth, d.name::text AS path
-       FROM sa.departments d
-      WHERE d.is_active = true AND d.id NOT IN (SELECT id FROM tree)
-     ORDER BY path`,
+     SELECT id::text AS id, name, depth, path FROM sales_tree ORDER BY path`,
   );
   return res.rows;
 }
