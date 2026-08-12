@@ -121,7 +121,10 @@ function MetricSelector({
   return (
     // Телефон: каталог и «Выбрано» друг под другом (50/50), md+: две колонки
     <div className="flex flex-col md:flex-row flex-1 min-h-0">
-      <div className="flex flex-col flex-1 md:flex-none min-h-0 w-full md:w-[360px] shrink-0 border-b md:border-b-0 md:border-r border-[var(--color-border)]">
+      {/* 440px вместо 360: имена метрик вида «Выполнение плана продаж, % (на
+          текущий день недели)» в 360 не влезали и обрезались (правка владельца
+          11.08). Вместе с переносом на вторую строку ниже — имя видно целиком. */}
+      <div className="flex flex-col flex-1 md:flex-none min-h-0 w-full md:w-[440px] shrink-0 border-b md:border-b-0 md:border-r border-[var(--color-border)]">
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--color-border)]">
           <Search size={14} className="text-[var(--color-text-muted)] shrink-0" />
           <input autoFocus value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск по названию или категории"
@@ -183,7 +186,9 @@ function MetricSelector({
                 <label key={m.id} className="flex items-start gap-2.5 px-4 py-1.5 hover:bg-[var(--color-bg-hover)] cursor-pointer">
                   <input type="checkbox" checked={selectedSet.has(m.id)} onChange={() => toggleMetric(m.id)} className="mt-0.5 accent-[var(--color-accent)]" />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-[var(--color-text)] truncate" title={m.nameRu}>{m.nameRu}</div>
+                    {/* Не truncate: длинные имена («…% (на текущий день недели)»)
+                        переносятся на вторую строку целиком — правка владельца 11.08. */}
+                    <div className="text-sm text-[var(--color-text)] break-words">{m.nameRu}</div>
                     <div className="text-xs text-[var(--color-text-muted)]">{cat} · {m.dataType}</div>
                   </div>
                 </label>
@@ -231,7 +236,8 @@ function MetricSelector({
               className={`flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-bg-hover)] transition-colors ${draggingIdx === i ? 'opacity-40' : ''} ${dragOverIdx === i && draggingIdx !== i ? 'border-t-2 border-[var(--color-accent)]' : ''}`}>
               <GripVertical size={14} className="text-[var(--color-text-muted)] cursor-grab shrink-0" />
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-[var(--color-text)] truncate">{m.nameRu}</div>
+                {/* Как в списке слева: имя переносится, а не обрезается (11.08). */}
+                <div className="text-sm text-[var(--color-text)] break-words">{m.nameRu}</div>
                 <div className="text-xs text-[var(--color-text-muted)] truncate">{m.category ?? 'Прочие'}</div>
               </div>
               {withGroups && (
