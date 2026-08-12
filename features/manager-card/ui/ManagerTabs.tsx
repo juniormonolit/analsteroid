@@ -24,6 +24,7 @@ import { LeaderSkills } from './LeaderSkills';
 import { TIER_LABELS, type BadgeTier } from '@/features/badges/engine/catalog';
 import { usePlanFact } from './PlanFactStrip';
 import { MltCoin } from '@/components/icons/MltCoin';
+import { TeamBudgetCard } from '@/features/shop/ui/TeamBudgetCard';
 import type { ManagerCardResult } from '@/features/manager-card/engine/managerCard';
 
 export type ManagerTabKey = 'profile' | 'planyorka' | 'customers' | 'quests' | 'stats' | 'rewards' | 'skills' | 'wallet' | 'shop' | 'wheel' | 'inventory';
@@ -1296,6 +1297,9 @@ interface ShopItemView {
   boostMetric: string | null; boostMultiplier: number | null; boostWindowDays: number | null; boostScope: string | null;
   rarityKey: string; rarityLabel: string; rarityColor: string;
   hasImage: boolean;
+  /** Цена посчитана от размера отдела (и платит бюджет отдела). */
+  priceScalesWithTeam?: boolean;
+  priceBase?: number;
 }
 interface GiftHop { from: number; fromName: string; to: number; toName: string; at: string }
 interface InventoryRow {
@@ -1308,6 +1312,9 @@ interface InventoryRow {
 interface ShopData {
   currencyName: string; balance: number; rubBalance: number; viewerLevel: number; viewerIsRop: boolean;
   items: ShopItemView[]; inventory: InventoryRow[];
+  /** Командный бюджет отдела (задача 11.08): командные позиции платятся им,
+   *  а не личным кошельком. null-ключ = зритель не руководитель отдела. */
+  team?: { deptKey: string | null; deptName: string | null; size: number; budget: number };
 }
 
 function useShopData(managerId: string, isSelf: boolean) {
@@ -1385,11 +1392,18 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
   const [pendingBuy, setPendingBuy] = useState<{ item: ShopItemView; text: string } | null>(null);
   function requestBuy(item: ShopItemView) {
     const price = item.priceEball;
-    const balance = data?.balance ?? 0;
+    // Командная позиция списывается с бюджета отдела — в подтверждении должен
+    // стоять ТОТ кошелёк, из которого реально уйдут деньги.
+    const fromTeam = item.priceScalesWithTeam === true;
+    const balance = fromTeam ? (data?.team?.budget ?? 0) : (data?.balance ?? 0);
+    const wallet = fromTeam ? 'в бюджете отдела' : 'на балансе';
+    const base = fromTeam && item.priceBase && item.priceBase !== price
+      ? ` Базовая цена ${item.priceBase.toLocaleString('ru-RU')}, отдел ${data?.team?.size ?? 0} чел.`
+      : '';
     setPendingBuy({
       item,
-      text: `Купить «${item.name}» за ${price.toLocaleString('ru-RU')} ${currencyName}?\n\n` +
-        `Останется: ${(balance - price).toLocaleString('ru-RU')} ${currencyName}. ` +
+      text: `Купить «${item.name}» за ${price.toLocaleString('ru-RU')} ${currencyName}?${base}\n\n` +
+        `Останется ${wallet}: ${(balance - price).toLocaleString('ru-RU')} ${currencyName}. ` +
         `Предмет попадёт в инвентарь, срок годности ${item.ttlMonths} мес.`,
     });
   }
@@ -1444,6 +1458,11 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
       {/* Витрина по типам (материальные/нематериальные/бусты) — «командные»
           позиции с 05.08 снова отдельная витрина (таб «Магазин руководителя»
           выше), внутри неё та же группировка по типам. */}
+      {/* Бюджет отдела — над витриной: командные позиции ниже стоят дороже
+          базовой цены и платятся ИМ, и это надо объяснить до того, как человек
+          увидит ценник, а не после. */}
+      <TeamBudgetCard currencyName={currencyName} />
+
       {SHOP_CATEGORIES.map(cat => {
         const catItems = items.filter(i => i.category === cat.key);
         if (catItems.length === 0) return null;
@@ -1453,7 +1472,11 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
               {catItems.map(item => {
                 const soldOut = item.stock !== null && item.stock <= 0;
-                const canAfford = (data?.balance ?? 0) >= item.priceEball;
+                // Командную позицию оплачивает бюджет отдела — сравнивать её
+                // цену с личным балансом значило бы гасить кнопку у РОПа,
+                // у которого в бюджете деньги есть.
+                const wallet = item.priceScalesWithTeam ? (data?.team?.budget ?? 0) : (data?.balance ?? 0);
+                const canAfford = wallet >= item.priceEball;
                 const levelOk = viewerLevel >= item.minLevel;
                 // Ниже порога доступности карточка блюрится (задача 2983,
                 // предложение владельца) — контент (эмодзи/название/описание/
@@ -1469,7 +1492,9 @@ export function ShopTab({ managerId, isSelf, onGoInventory }: {
                 if (soldOut) blockedReason = 'Позиция закончилась';
                 else if (locked) blockedReason = `Доступно с ${item.minLevel} уровня (у вас ${viewerLevel})`;
                 else if (limitReached) blockedReason = `Лимит покупок исчерпан (${item.perPersonLimit}${item.perPersonLimitDays ? ` за ${item.perPersonLimitDays} дн.` : ''})`;
-                else if (!canAfford) blockedReason = `Не хватает ${currencyName}`;
+                else if (!canAfford) blockedReason = item.priceScalesWithTeam
+                  ? `Не хватает бюджета отдела (${(data?.team?.budget ?? 0).toLocaleString('ru-RU')} из ${item.priceEball.toLocaleString('ru-RU')})`
+                  : `Не хватает ${currencyName}`;
                 return (
                   <div key={item.id}
                     className="flex flex-col gap-1.5 rounded-xl border px-3.5 py-3"
