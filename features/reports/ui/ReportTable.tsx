@@ -233,11 +233,30 @@ function ReportEmptyState({ info }: { info: NonNullable<Props['emptyStateInfo']>
     `Отделы: ${emptyStateDepartmentsLabel(departmentIds, totalDepartments)}`,
   ].filter((p): p is string => Boolean(p));
 
+  // Заголовок называет НАСТОЯЩУЮ причину пустоты, а не всегда период (правка
+  // владельца 07.08: «при таком выборе отделов и группировке отчёт ломается и
+  // данные не показываются вообще» — на скрине в поиске стояло «альц», и таблицу
+  // опустошал именно он, но подпись винила период, поэтому это и читалось как
+  // поломка). Приоритет: сначала то, что человек сам только что ввёл (поиск),
+  // потом сужение по отделам, и лишь в остатке — период.
+  const q = search.trim();
+  const narrowed = totalDepartments !== undefined && departmentIds.length > 0 && departmentIds.length < totalDepartments;
+  const title = q
+    ? `По запросу «${q}» ничего не найдено`
+    : narrowed
+      ? 'Нет данных по выбранным отделам за этот период'
+      : 'Нет данных за выбранный период';
+  const hint = q
+    ? 'Поиск режет строки уже готового отчёта — очистите его, чтобы увидеть остальные'
+    : narrowed
+      ? 'Проверьте набор отделов или расширьте период'
+      : 'Попробуйте расширить период';
+
   return (
     <div className="p-10 flex flex-col items-center text-center gap-1">
       <Search size={48} strokeWidth={1.5} className="text-[var(--color-text-muted)] opacity-50 mb-2" />
-      <div className="text-sm text-[var(--color-text)]">Нет данных за выбранный период</div>
-      <div className="text-xs text-[var(--color-text-muted)]">Попробуйте расширить период или сбросить поиск</div>
+      <div className="text-sm text-[var(--color-text)]">{title}</div>
+      <div className="text-xs text-[var(--color-text-muted)]">{hint}</div>
       <button
         type="button"
         onClick={onResetFilters}

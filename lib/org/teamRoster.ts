@@ -25,6 +25,12 @@ export interface RosterManager {
 export interface DeptOption {
   id: string;
   name: string;
+  /** Глубина в дереве отделов — для отступов в пикере. Есть только у
+   *  getAllDepartmentOptions (остальные списки плоские). */
+  depth?: number;
+  /** Путь «Дирекция / Отдел продаж / Департамент НЦ / Отдел ЖБИ» — для поиска
+   *  и подсказки, чей это отдел, когда имён-тёзок несколько. */
+  path?: string;
 }
 
 /** Тот же алгоритм, что resolveAssignedDept в lib/profile/deptSummary.ts. */
@@ -114,6 +120,43 @@ export async function getAllManagedDepartmentIds(): Promise<DeptOption[]> {
        FROM sa.user_departments ud JOIN sa.departments d ON d.id = ud.department_id
       UNION
      SELECT id::text AS id, name FROM sa.departments WHERE parent_bitrix_department_id IS NULL`,
+  );
+  return res.rows;
+}
+
+/**
+ * ВСЕ отделы оргструктуры деревом (порядок = обход структуры, depth = уровень).
+ *
+ * Задача владельца 07.08 по конструктору «Мой отчёт»: «в „Кто в отчёте“ должно
+ * быть можно выбрать любую команду по структуре. Например, „Отдел
+ * металлопроката“ отсутствует в списке». Причина отсутствия —
+ * getAllManagedDepartmentIds выше отдаёт только отделы, у которых КТО-ТО назначен
+ * руководителем в user_departments, плюс корневые узлы: 16 из 80. Для выбора
+ * сущности отчёта это неверный критерий — человека интересует структура, а не то,
+ * заведён ли у отдела руководитель в приложении.
+ *
+ * Рекурсивный обход по parent_bitrix_department_id + UNION-хвост для «сирот»
+ * (родитель которых не найден): иначе отдел с битой ссылкой на родителя тихо
+ * исчезал бы из списка — тот же класс проблемы, что чиним.
+ */
+export async function getAllDepartmentOptions(): Promise<DeptOption[]> {
+  const res = await analyticsDb().query<{ id: string; name: string; depth: number; path: string }>(
+    `WITH RECURSIVE tree AS (
+       SELECT d.id, d.name, d.bitrix_department_id, 0 AS depth, d.name::text AS path
+         FROM sa.departments d
+        WHERE d.parent_bitrix_department_id IS NULL AND d.is_active = true
+       UNION ALL
+       SELECT d.id, d.name, d.bitrix_department_id, t.depth + 1, t.path || ' / ' || d.name
+         FROM sa.departments d
+         JOIN tree t ON d.parent_bitrix_department_id = t.bitrix_department_id
+        WHERE d.is_active = true
+     )
+     SELECT id::text AS id, name, depth, path FROM tree
+     UNION ALL
+     SELECT d.id::text, d.name, 0 AS depth, d.name::text AS path
+       FROM sa.departments d
+      WHERE d.is_active = true AND d.id NOT IN (SELECT id FROM tree)
+     ORDER BY path`,
   );
   return res.rows;
 }

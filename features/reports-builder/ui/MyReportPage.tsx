@@ -29,7 +29,9 @@ interface ChosenEntity { input: EntityInput; label: string }
 
 interface EntitiesResponse {
   self: { managerId: string; name: string } | null;
-  departments: { id: string; name: string }[];
+  // depth/path приходят из getAllDepartmentOptions — отступ по дереву и поиск
+  // по пути в структуре (правка владельца 07.08).
+  departments: { id: string; name: string; depth?: number; path?: string }[];
   branches: { id: string; name: string }[];
 }
 
@@ -72,6 +74,8 @@ export function MyReportPage() {
   const [period, setPeriod] = useState<PeriodKey>('month');
   const [entities, setEntities] = useState<ChosenEntity[]>([{ input: { kind: 'self' }, label: 'Я' }]);
   const [metricIds, setMetricIds] = useState<string[]>(DEFAULT_METRICS);
+  // Поиск в пикере «Кто в отчёте» — список стал всей оргструктурой (80 отделов).
+  const [entitySearch, setEntitySearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -111,6 +115,21 @@ export function MyReportPage() {
   });
 
   const chosenKeys = useMemo(() => new Set(entities.map(e => entityKey(e.input))), [entities]);
+
+  // Поиск по пикеру: без учёта регистра, по названию И по пути в структуре
+  // («нц» находит все отделы департамента НЦ). Пустой запрос пропускает всё.
+  const matchesEntitySearch = useCallback((text: string) => {
+    const q = entitySearch.trim().toLowerCase();
+    return q === '' || text.toLowerCase().includes(q);
+  }, [entitySearch]);
+
+  const noEntityMatches = useMemo(() => {
+    if (!available) return false;
+    const selfOk = available.self && !chosenKeys.has('self') && matchesEntitySearch(available.self.name);
+    const branchOk = available.branches.some(b => !chosenKeys.has(`branch:${b.id}`) && matchesEntitySearch(b.name));
+    const deptOk = available.departments.some(d => !chosenKeys.has(`department:${d.id}`) && matchesEntitySearch(d.path ?? d.name));
+    return !selfOk && !branchOk && !deptOk;
+  }, [available, chosenKeys, matchesEntitySearch]);
 
   // Подпись сущности берём из доступного человеку списка: шаблон хранит только
   // id, а название отдела могло измениться (или доступ к нему пропасть).
@@ -304,25 +323,46 @@ export function MyReportPage() {
                   </button>
                 }
               >
-                <div className="max-h-64 overflow-y-auto p-1">
-                  {available?.self && !chosenKeys.has('self') && (
-                    <button type="button" onClick={() => addEntity({ kind: 'self' }, available.self!.name)}
-                      className="min-h-11 w-full rounded-md px-2 text-left text-sm hover:bg-[var(--color-bg-hover)]">
-                      {available.self.name} (я)
-                    </button>
-                  )}
-                  {available?.departments.map(d => chosenKeys.has(`department:${d.id}`) ? null : (
-                    <button key={d.id} type="button" onClick={() => addEntity({ kind: 'department', id: d.id }, d.name)}
-                      className="min-h-11 w-full rounded-md px-2 text-left text-sm hover:bg-[var(--color-bg-hover)]">
-                      {d.name}
-                    </button>
-                  ))}
-                  {available?.branches.map(b => chosenKeys.has(`branch:${b.id}`) ? null : (
-                    <button key={b.id} type="button" onClick={() => addEntity({ kind: 'branch', id: b.id }, b.name)}
-                      className="min-h-11 w-full rounded-md px-2 text-left text-sm hover:bg-[var(--color-bg-hover)]">
-                      {b.name}
-                    </button>
-                  ))}
+                {/* Поиск — обязателен с тех пор, как список стал ВСЕЙ оргструктурой
+                    (правка владельца 07.08: «должно быть можно выбрать любую команду
+                    по структуре»): 80 отделов пролистывать глазами невозможно.
+                    Ищем и по названию, и по пути в структуре — «нц» находит все
+                    отделы департамента НЦ. */}
+                <div className="p-1">
+                  <input
+                    value={entitySearch}
+                    onChange={e => setEntitySearch(e.target.value)}
+                    placeholder="Поиск по структуре…"
+                    className="mb-1 min-h-11 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-sm outline-none"
+                  />
+                  <div className="max-h-64 overflow-y-auto">
+                    {available?.self && !chosenKeys.has('self') && matchesEntitySearch(available.self.name) && (
+                      <button type="button" onClick={() => addEntity({ kind: 'self' }, available.self!.name)}
+                        className="min-h-11 w-full rounded-md px-2 text-left text-sm hover:bg-[var(--color-bg-hover)]">
+                        {available.self.name} (я)
+                      </button>
+                    )}
+                    {available?.branches.map(b => chosenKeys.has(`branch:${b.id}`) || !matchesEntitySearch(b.name) ? null : (
+                      <button key={b.id} type="button" onClick={() => addEntity({ kind: 'branch', id: b.id }, b.name)}
+                        className="min-h-11 w-full rounded-md px-2 text-left text-sm hover:bg-[var(--color-bg-hover)]">
+                        {b.name}
+                      </button>
+                    ))}
+                    {available?.departments.map(d => chosenKeys.has(`department:${d.id}`) || !matchesEntitySearch(d.path ?? d.name) ? null : (
+                      // Отступ по глубине в структуре — видно, что «Отдел ЖБИ» это
+                      // отдел департамента НЦ, а не корневой. При поиске отступы
+                      // сохраняются: они же подсказывают, чей это отдел.
+                      <button key={d.id} type="button" onClick={() => addEntity({ kind: 'department', id: d.id }, d.name)}
+                        title={d.path ?? d.name}
+                        style={{ paddingLeft: 8 + (d.depth ?? 0) * 12 }}
+                        className="min-h-11 w-full rounded-md pr-2 text-left text-sm hover:bg-[var(--color-bg-hover)]">
+                        {d.name}
+                      </button>
+                    ))}
+                    {noEntityMatches && (
+                      <div className="px-2 py-3 text-center text-xs text-[var(--color-text-muted)]">Ничего не нашлось</div>
+                    )}
+                  </div>
                 </div>
               </Popover>
             </div>
