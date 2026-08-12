@@ -18,7 +18,8 @@
 -- может объявить, какую награду и на сколько дней он глушит. Появится следующий
 -- товар с таким же конфликтом — админ настроит его сам, без миграции.
 --
--- СИСТЕМНАЯ БД (YC). 06.08.2026 применена ТОЛЬКО НА DEV (junibaseone).
+-- СИСТЕМНАЯ БД (YC). 06.08.2026 применена на dev (junibaseone), 11.08.2026 —
+-- на прод (system).
 -- DOWN: DROP TABLE badge_award_blocks;
 --   ALTER TABLE shop_items DROP COLUMN blocks_badge_key, DROP COLUMN blocks_days;
 
