@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, Presentation,
-  Lightbulb,
+  Lightbulb, Repeat2, Grid3x3,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -118,7 +118,8 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
   const [openStd, setOpenStd] = useState(true);
   const [openFav, setOpenFav] = useState(true);
   const [openShared, setOpenShared] = useState(true);
-  const [openRepeat, setOpenRepeat] = useState(true);
+  // Свёрнута по умолчанию — правка владельца 17.08 (остальные группы как были).
+  const [openRepeat, setOpenRepeat] = useState(false);
   const qc = useQueryClient();
 
   const { data: savedReports = [] } = useQuery<SavedReport[]>({
@@ -300,27 +301,8 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
           (правка Иосифа 16.07 — жирная dashed-кнопка рвала связь заголовка с
           группами отчётов). См. isSales-ветку в SidebarBody. */}
 
-      {/* «Повторные» (#1725, возвращена задачей владельца 27.07) — фиксированный
-          раздел отчётов по повторным продажам (Repeat Rate, комплексность, время
-          до/между заказами, касания). Раньше был виден всем в «Продажи», владелец
-          скрыл его полностью; теперь возвращается ТОЛЬКО для супер-админов —
-          серверная сторона (layout + API) проверяет isSuperadmin независимо от
-          этого пункта меню, здесь только скрытие лишнего пункта у остальных. */}
-      {user.isSuperadmin && (
-        <div className="mx-1 mb-2">
-          <Link href="/sales/repeat" className={linkCls('/sales/repeat')} draggable={false}>
-            <span className="flex-1 min-w-0 break-words line-clamp-2">Повторные</span>
-          </Link>
-        </div>
-      )}
-
-      {/* «Товарная матрица» (задача владельца 10.08) — фиксированный спец-раздел:
-          вероятности перехода категория → категория (движок productMatrix.ts). */}
-      <div className="mx-1 mb-2">
-        <Link href="/sales/product-matrix" className={linkCls('/sales/product-matrix')} draggable={false}>
-          <span className="flex-1 min-w-0 break-words line-clamp-2">Товарная матрица</span>
-        </Link>
-      </div>
+      {/* «Повторные» и «Товарная матрица» переехали в «Ещё» (правка владельца
+          17.08) — блок «Продажи» остаётся витринам отчётов. */}
 
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
@@ -428,6 +410,11 @@ function SidebarBody({
 
   // «Ещё ▸» (оптимизация 16.07): второстепенные разделы одним свёрнутым пунктом.
   const moreItems = [
+    // «Повторные» и «Товарная матрица» — из блока «Продажи» (правка владельца 17.08:
+    // «убери эти пункты в Ещё»). Гейты прежние: «Повторные» — только супер-админ
+    // (сервер проверяет isSuperadmin сам, тут лишь скрытие пункта), матрица — всем.
+    { href: '/sales/repeat', label: 'Повторные', icon: <Repeat2 size={18} />, ok: user.isSuperadmin },
+    { href: '/sales/product-matrix', label: 'Товарная матрица', icon: <Grid3x3 size={18} />, ok: true },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: hasPerm(user, 'action.deal_chats') },
