@@ -109,6 +109,8 @@ export async function GET(req: NextRequest) {
   const teamId         = sp.get('teamId');          // drilldown подытога отдела
   // Отчёт «По клиентам» (задача 10.08): сделки одного клиента (contact_id).
   const contactId      = sp.get('contactId');
+  // Карточка заказчика-юрлица (задача 17.08, раздел «Сделки»): clientKey k<company_id>.
+  const companyId      = sp.get('companyId');
   const all            = sp.get('all') === '1';     // drilldown строки «Итого» — весь срез
   const departmentIds  = (sp.get('departmentIds') ?? '').split(',').filter(Boolean);
   const accountType    = sp.get('accountType');     // managers | logists (фильтр отчёта)
@@ -119,7 +121,7 @@ export async function GET(req: NextRequest) {
   // (buildDealFilterWhere), поэтому разъехаться уже не может.
   const dealFiltersRaw = sp.get('dealFilters');
 
-  if ((!managerId && !managerIds.length && !productGroup && !productGroups.length && !sourceDim && !teamId && !contactId && !all) || !from || !to) {
+  if ((!managerId && !managerIds.length && !productGroup && !productGroups.length && !sourceDim && !teamId && !contactId && !companyId && !all) || !from || !to) {
     return NextResponse.json({ error: 'managerId, productGroup, sourceDim+sourceVal, teamId, contactId or all=1, plus from/to required' }, { status: 400 });
   }
 
@@ -224,6 +226,10 @@ export async function GET(req: NextRequest) {
   // из мини-отчёта шлёт оба).
   const params: unknown[] = [fromDate.toISOString(), toExcl.toISOString()];
   let dimensionFilter = '';
+  if (companyId && /^\d+$/.test(companyId)) {
+    params.push(Number(companyId));
+    dimensionFilter += ` AND d.company_id = $${params.length}`;
+  }
   if (contactId && /^\d+$/.test(contactId)) {
     params.push(Number(contactId));
     dimensionFilter += ` AND d.contact_id = $${params.length}`;

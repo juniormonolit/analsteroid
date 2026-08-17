@@ -13,6 +13,14 @@ import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
 import { dealsCountLabel } from '@/lib/format/pluralize';
 import { CLIENT_DRILL_METRIC_IDS } from '@/features/reports/engine/clientDrilldownShared';
+import dynamic from 'next/dynamic';
+
+// Карточка заказчика из дрилла (задача 17.08) — динамически: она сама умеет
+// открывать карточку сделки, статический импорт дал бы цикл модулей.
+const CustomerCardLoader = dynamic(
+  () => import('@/features/customers/ui/CustomerCardLoader').then(m => m.CustomerCardLoader),
+  { ssr: false },
+);
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
@@ -527,8 +535,11 @@ interface ClientDrillDealRow {
 interface ClientDrillCustomerRow {
   contactId: string; name: string; dealsCount: number; amount: number; deals: ClientDrillDealRow[];
 }
-function ClientDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, departmentIds, onDealOpen, dealFilters }: Props) {
+function ClientDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, departmentIds, onDealOpen, dealFilters, grouped = true }: Props & { grouped?: boolean }) {
   const [openIds, setOpenIds] = useState<Set<string>>(new Set());
+  // Карточка заказчика по клику на имя (задача 17.08). Открываем глазами текущего
+  // менеджера ПЕРВОЙ сделки заказчика — у строк-групп/периодов своего менеджера нет.
+  const [openCustomer, setOpenCustomer] = useState<{ key: string; managerId: string } | null>(null);
   const dimension =
     target.kind === 'total' ? 'total'
     : dimensionType === 'period' ? 'period'
@@ -572,21 +583,59 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
         {data!.truncated && <span className="ml-2">(показаны первые {customers.length} по сумме)</span>}
       </div>
       <div className="flex-1 overflow-y-auto">
-        {customers.map(c => {
+        {/* «Группировка: Нет» — те же сделки плоским списком с колонкой заказчика
+            (правка владельца 17.08: тумблер дрилла группирует/разгруппирует по
+            заказчикам). Население ТО ЖЕ — меняется только вид. */}
+        {!grouped && customers.flatMap(c => c.deals.map(d => ({ c, d })))
+          .sort((a, b) => (b.d.deliveredAt ?? '').localeCompare(a.d.deliveredAt ?? ''))
+          .map(({ c, d }) => (
+            <div key={d.dealId} className="flex items-center gap-2 px-4 sm:px-6 py-1.5 border-b border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] transition-colors">
+              <span className="shrink-0 text-xs text-[var(--color-text-muted)] tabular-nums w-20">
+                {d.deliveredAt ? format(new Date(d.deliveredAt), 'd MMM yy', { locale: ru }) : '—'}
+              </span>
+              <button onClick={() => onDealOpen?.(d.dealId)} className="shrink-0 text-xs font-mono text-[var(--color-accent)] hover:underline">#{d.dealId}</button>
+              <button onClick={() => onDealOpen?.(d.dealId)} className="flex-1 min-w-0 text-left text-xs text-[var(--color-text)] truncate hover:underline">{d.dealName ?? '—'}</button>
+              {d.managerId ? (
+                <button
+                  onClick={() => setOpenCustomer({ key: `c${c.contactId}`, managerId: d.managerId! })}
+                  className="shrink-0 max-w-[180px] text-xs text-[var(--color-accent)] hover:underline truncate"
+                  title="Открыть карточку заказчика"
+                >{c.name}</button>
+              ) : (
+                <span className="shrink-0 max-w-[180px] text-xs text-[var(--color-text-muted)] truncate">{c.name}</span>
+              )}
+              <span className="shrink-0 text-xs text-[var(--color-text)] whitespace-nowrap tabular-nums">{fmtMoney(d.amount)}</span>
+            </div>
+          ))}
+        {grouped && customers.map(c => {
           const open = openIds.has(c.contactId);
           return (
             <div key={c.contactId} className="border-b border-[var(--color-border)]">
-              <button
+              {/* div, не button: внутри — кнопка-имя (вложенные кнопки невалидны). */}
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => toggle(c.contactId)}
-                className="w-full min-h-11 flex items-center gap-2 px-4 sm:px-6 py-2 text-left hover:bg-[var(--color-bg-hover)] transition-colors"
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(c.contactId); } }}
+                className="w-full min-h-11 flex items-center gap-2 px-4 sm:px-6 py-2 text-left cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
               >
                 <span className="text-[var(--color-text-muted)] shrink-0">
                   {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </span>
-                <span className="flex-1 min-w-0 text-sm text-[var(--color-text)] truncate">{c.name}</span>
+                {/* Имя — в карточку заказчика (задача 17.08: «контакт сам по себе не
+                    кликабельный»). Менеджер для доступа — с первой сделки строки. */}
+                {c.deals[0]?.managerId ? (
+                  <button
+                    onClick={e => { e.stopPropagation(); setOpenCustomer({ key: `c${c.contactId}`, managerId: c.deals[0].managerId! }); }}
+                    className="flex-1 min-w-0 text-left text-sm text-[var(--color-accent)] hover:underline truncate"
+                    title="Открыть карточку заказчика"
+                  >{c.name}</button>
+                ) : (
+                  <span className="flex-1 min-w-0 text-sm text-[var(--color-text)] truncate">{c.name}</span>
+                )}
                 <span className="shrink-0 text-xs text-[var(--color-text-muted)] whitespace-nowrap">{dealsCountLabel(c.dealsCount)}</span>
                 <span className="shrink-0 text-sm text-[var(--color-text)] font-medium whitespace-nowrap tabular-nums">{fmtMoney(c.amount)}</span>
-              </button>
+              </div>
               {open && (
                 <div className="pb-2">
                   {c.deals.map(d => (
@@ -609,6 +658,14 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
           );
         })}
       </div>
+      {openCustomer && (
+        <CustomerCardLoader
+          clientKey={openCustomer.key}
+          managerId={openCustomer.managerId}
+          onClose={() => setOpenCustomer(null)}
+          zIndex={80}
+        />
+      )}
     </div>
   );
 }
@@ -1218,7 +1275,7 @@ export function DrilldownDrawer(props: Props) {
               список врут — у метрик нет date_field каталога, фильтр по ним не
               применялся и показывались все сделки периода. */}
           {target.metricId && CLIENT_DRILL_METRIC_IDS.includes(target.metricId) && dimensionType !== 'client'
-            ? <ClientDealsView {...viewProps} />
+            ? <ClientDealsView {...viewProps} grouped={localGrouped} />
             : localGrouped && !isGroupTarget && dimensionType !== 'client'
             ? (sub
                 ? <SubDealsView {...viewProps} sub={sub} onBack={() => setSub(null)} />

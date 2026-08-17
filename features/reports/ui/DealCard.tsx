@@ -8,6 +8,14 @@ import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { branchLabel } from '@/lib/org/branchLabel';
+import dynamic from 'next/dynamic';
+
+// Карточка заказчика — динамически: карточки ссылаются друг на друга (сделка →
+// заказчик → сделка, задача 17.08), статический импорт в обе стороны — цикл модулей.
+const CustomerCardLoader = dynamic(
+  () => import('@/features/customers/ui/CustomerCardLoader').then(m => m.CustomerCardLoader),
+  { ssr: false },
+);
 
 interface Product {
   name: string; type?: string; price: number; quantity: number; sum: number;
@@ -153,6 +161,9 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const isLostDeal = deal?.stage_event_type === 'lost';
   const { closing, requestClose } = useSlideClose(onClose);
   const [tab, setTab] = useState<DealCardTab>('main');
+  // Карточка заказчика поверх карточки сделки (задача 17.08). Ключ: c<contact_id>
+  // или k<company_id>; открываем глазами текущего менеджера сделки.
+  const [openCustomerKey, setOpenCustomerKey] = useState<string | null>(null);
 
   // Список звонков — лениво, только когда таб «Звонки» реально открыт (enabled),
   // чтобы не бить va.calls на каждое открытие карточки (счётчик N в лейбле таба
@@ -362,8 +373,26 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
 
                     <Section title="Служебное">
                       <Row label="Лид" value={deal.lead_id ? `#${deal.lead_id}` : null} />
-                      <Row label="Контакт" value={deal.contact_id ? `#${deal.contact_id}` : null} />
-                      <Row label="Компания" value={deal.company_id ? `#${deal.company_id}` : null} />
+                      {/* Контакт/Компания — ссылки в карточку заказчика (задача 17.08:
+                          «в карточке сделки создай поле Контакта, чтобы из одного другое
+                          выгружать»). Ключ заказчика: юрлицо — k<company_id>, физик —
+                          c<contact_id> (та же схема, что в разделе «Мои заказчики»).
+                          Открываем глазами ТЕКУЩЕГО менеджера сделки — доступ проверит
+                          сервер (canViewManager). */}
+                      <Row label="Контакт" value={deal.contact_id ? (deal.manager_id ? (
+                        <button
+                          onClick={() => setOpenCustomerKey(`c${deal.contact_id}`)}
+                          className="text-[var(--color-accent)] hover:underline tap-target"
+                          title="Открыть карточку заказчика"
+                        >#{deal.contact_id}</button>
+                      ) : `#${deal.contact_id}`) : null} />
+                      <Row label="Компания" value={deal.company_id ? (deal.manager_id ? (
+                        <button
+                          onClick={() => setOpenCustomerKey(`k${deal.company_id}`)}
+                          className="text-[var(--color-accent)] hover:underline tap-target"
+                          title="Открыть карточку заказчика (юрлицо)"
+                        >#{deal.company_id}</button>
+                      ) : `#${deal.company_id}`) : null} />
                       <Row label="Обновлена" value={fmtDate(deal.updated_at)} />
                     </Section>
 
@@ -474,6 +503,14 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
           </>
         )}
       </div>
+      {openCustomerKey && deal?.manager_id && (
+        <CustomerCardLoader
+          clientKey={openCustomerKey}
+          managerId={deal.manager_id}
+          onClose={() => setOpenCustomerKey(null)}
+          zIndex={80}
+        />
+      )}
     </>
   );
 }

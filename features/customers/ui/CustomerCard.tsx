@@ -5,9 +5,16 @@
 // (таймлайн покупок, звонки, отказы, история отметок) — /api/customers/card.
 // ПДн: телефонов нет by construction — звонить менеджер идёт в Битрикс по ссылке.
 
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { format } from 'date-fns';
+import { ru } from 'date-fns/locale';
+import dynamic from 'next/dynamic';
 import { X, ExternalLink } from 'lucide-react';
+
+// DealCard — динамически: карточки ссылаются друг на друга (сделка → заказчик →
+// сделка, задача 17.08), статический импорт в обе стороны дал бы цикл модулей.
+const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 import type { CustomerCardData } from '@/features/customers/engine/card';
 import {
   type ApiRow, REASON_LABELS, fmtMoney, fmtDate, daysAgo,
@@ -64,14 +71,35 @@ const ACTION_LABELS: Record<string, string> = {
   snooze: '⏸ Отложен', no_call: '🚫 Не звонить', wake: '⏰ Возвращён из спящих', clear: '↩ Отметка снята',
 };
 
-export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: {
+export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zIndex }: {
   row: ApiRow;
   managerId: string;
   isSelf: boolean;
   onClose: () => void;
   /** Кнопки «Отложить»/«Не звонить»/«Вернуть» — те же контролы, что в списке. */
   markControls: React.ReactNode;
+  /** Поверх чего открылись: из карточки сделки (z-70) нужен z выше её дефолтных 50. */
+  zIndex?: number;
 }) {
+  const [openDealId, setOpenDealId] = useState<number | null>(null);
+
+  // «Сделки» клиента (задача 17.08: из карточки заказчика — в карточку сделки).
+  // Окно широкое (вся история): раздел про навигацию, не про период отчёта.
+  // Юрлицо (clientKey k<id>) фильтруется по company_id, остальное — по contact_id
+  // (ключ x<id> — юр.сделка без карточки компании, клиент определён по контакту).
+  const dealsQs = new URLSearchParams({
+    from: '2015-01-01T00:00:00.000Z',
+    to: new Date().toISOString(),
+    scope: 'all',
+    ...(row.clientKey.startsWith('k') ? { companyId: String(row.clientId) } : { contactId: String(row.clientId) }),
+  }).toString();
+  const { data: dealsData } = useQuery<{ deals: { deal_id: number; deal_name: string | null; amount: number | string | null; created_at: string | null; stage_name: string | null }[]; total_count: number }>({
+    queryKey: ['customer-deals', row.clientKey],
+    queryFn: () => fetch(`/api/reports/deals?${dealsQs}`).then(r => r.json()),
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+  const clientDeals = dealsData?.deals ?? [];
   const { data, isLoading, isError } = useQuery<CustomerCardData>({
     queryKey: ['customer-card', row.clientKey, isSelf ? 'me' : managerId],
     queryFn: async () => {
@@ -101,7 +129,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
     i === 0 ? null : Math.round((new Date(d.soldAt).getTime() - new Date(timeline[i - 1].soldAt).getTime()) / DAY_MS));
 
   return (
-    <div className="fixed inset-0 z-50 flex">
+    <div className="fixed inset-0 z-50 flex" style={zIndex ? { zIndex } : undefined}>
       <div className="hidden sm:block flex-1 min-w-[10%] bg-black/40 cursor-pointer" onClick={onClose} />
       <div className="w-full sm:w-[720px] sm:max-w-[85vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
         {/* Шапка — полиш 01.08 (правка владельца через Серёгу): имя+статусные чипы в
@@ -240,6 +268,34 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
           </Section>
 
           {/* Звонки */}
+          {/* «Сделки» — ВСЕ сделки клиента за историю, включая непроданные (задача
+              17.08: сквозная навигация заказчик → сделка). Не путать с «Покупками»
+              выше (там только проданные, из движка карточки) и «Активными» (текущие
+              открытые). Клик — карточка сделки прямо поверх этой. */}
+          <Section title={`Сделки · ${dealsData?.total_count ?? '…'}`} hint="Все сделки клиента за всю историю; клик открывает карточку сделки">
+            {clientDeals.length === 0 ? (
+              <div className="text-[12px] text-[var(--color-text-muted)]">Сделок не найдено.</div>
+            ) : (
+              <div className="flex flex-col">
+                {clientDeals.map(d => (
+                  <button
+                    key={d.deal_id}
+                    onClick={() => setOpenDealId(d.deal_id)}
+                    className="flex items-center gap-2 py-1 text-left rounded hover:bg-[var(--color-bg-hover)] transition-colors"
+                  >
+                    <span className="shrink-0 w-[72px] text-[11px] text-[var(--color-text-muted)] tabular-nums">
+                      {d.created_at ? format(new Date(d.created_at), 'd MMM yy', { locale: ru }) : '—'}
+                    </span>
+                    <span className="shrink-0 text-[11px] font-mono text-[var(--color-accent)]">#{d.deal_id}</span>
+                    <span className="flex-1 min-w-0 text-[12px] text-[var(--color-text)] truncate">{d.deal_name ?? '—'}</span>
+                    {d.stage_name && <span className="shrink-0 text-[11px] text-[var(--color-text-muted)] truncate max-w-[140px]">{d.stage_name}</span>}
+                    <span className="shrink-0 text-[12px] text-[var(--color-text)] tabular-nums whitespace-nowrap">{fmtMoney(Number(d.amount ?? 0))}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </Section>
+
           <Section title="Звонки">
             {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div> : (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] tabular-nums">
@@ -345,6 +401,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls }: 
           </Section>
         </div>
       </div>
+      {openDealId !== null && <DealCard dealId={openDealId} onClose={() => setOpenDealId(null)} />}
     </div>
   );
 }
