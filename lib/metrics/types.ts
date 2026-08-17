@@ -37,6 +37,9 @@ export interface Metric {
   nameRu: string;
   nameShortRu: string | null;
   description?: string | null;
+  /** «Как считается» человеческим языком — для «?» у метрики (миграция 179).
+      Пусто → UI падает на description. */
+  humanDescription?: string | null;
   calcOk: boolean;
   fillOk: boolean;
   metricType: MetricType;

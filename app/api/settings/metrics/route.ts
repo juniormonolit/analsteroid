@@ -10,7 +10,7 @@ export async function GET() {
 
   const db = ycAnalyticsDb();
   const res = await db.query(`
-    SELECT id, name_ru, name_short_ru, description, calc_ok, fill_ok,
+    SELECT id, name_ru, name_short_ru, description, human_description, calc_ok, fill_ok,
            metric_type, data_type, formula, sort_order, is_core, is_hidden_in_ui, is_active
     FROM metrics
     ORDER BY sort_order, name_ru

@@ -28,7 +28,8 @@ export async function loadMetrics(): Promise<Metric[]> {
   } catch { /* таблицы может не быть до миграции 043 */ }
   const res = await db.query<{
     id: string; name_ru: string; name_short_ru: string | null;
-    description: string | null; calc_ok: boolean; fill_ok: boolean;
+    description: string | null; human_description: string | null;
+    calc_ok: boolean; fill_ok: boolean;
     metric_type: string; data_type: string; formula: string | null;
     dependencies: string[] | null; decimal_places: number;
     aggregation_fn: string; category: string | null;
@@ -38,7 +39,7 @@ export async function loadMetrics(): Promise<Metric[]> {
     date_field: string | null; filters: string | null; tags: string[] | null;
     is_collect_ok: boolean; is_calc_ok: boolean;
   }>(`
-    SELECT id, name_ru, name_short_ru, description, calc_ok, fill_ok,
+    SELECT id, name_ru, name_short_ru, description, human_description, calc_ok, fill_ok,
            metric_type, data_type, formula,
            dependencies, decimal_places, aggregation_fn, category,
            sort_order, is_core, is_hidden_in_ui, is_active,
@@ -59,6 +60,7 @@ export async function loadMetrics(): Promise<Metric[]> {
     nameRu: r.name_ru,
     nameShortRu: r.name_short_ru,
     description: r.description,
+    humanDescription: r.human_description,
     calcOk: r.calc_ok ?? false,
     fillOk: r.fill_ok ?? false,
     metricType: r.metric_type as Metric['metricType'],

@@ -7,6 +7,7 @@ interface MetricRow {
   name_ru: string;
   name_short_ru: string | null;
   description: string | null;
+  human_description: string | null;
   calc_ok: boolean;
   fill_ok: boolean;
   metric_type: string;
@@ -127,7 +128,8 @@ export default function MetricsPage() {
         m.id.toLowerCase().includes(needle) ||
         m.name_ru.toLowerCase().includes(needle) ||
         (m.name_short_ru ?? '').toLowerCase().includes(needle) ||
-        (m.description ?? '').toLowerCase().includes(needle)
+        (m.description ?? '').toLowerCase().includes(needle) ||
+        (m.human_description ?? '').toLowerCase().includes(needle)
       );
     });
   }, [metrics, q, typeFilter]);
@@ -213,7 +215,12 @@ export default function MetricsPage() {
               <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">ID</th>
               <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] max-w-[220px]">Название</th>
               <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] max-w-[150px]">Краткое</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] max-w-[380px]">Описание</th>
+              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] max-w-[380px]">Описание (техн.)</th>
+              {/* «Как считается» — текст для менеджера, показывается по «?» у метрики
+                  в отчётах (задача 11.08, миграция 179). Заполнен генератором
+                  scripts/fill-human-descriptions.mjs из определения метрики; ручная
+                  правка здесь побеждает — скрипт непустые значения не трогает. */}
+              <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] max-w-[380px]">Как считается (по-человечески)</th>
               <th className="text-left px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Тип</th>
               <th className="text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Считается верно</th>
               <th className="text-center px-3 py-2 font-medium text-[var(--color-text)] border-b border-[var(--color-border)] whitespace-nowrap">Заполняется верно</th>
@@ -266,6 +273,15 @@ export default function MetricsPage() {
                     value={m.description}
                     multiline
                     onSave={val => patch(m.id, { description: val || null })}
+                  />
+                </td>
+
+                {/* human_description — «Как считается» для «?» в отчётах */}
+                <td className="px-3 py-2 align-top max-w-[380px]">
+                  <EditableCell
+                    value={m.human_description}
+                    multiline
+                    onSave={val => patch(m.id, { human_description: val || null })}
                   />
                 </td>
 

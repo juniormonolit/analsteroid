@@ -4,7 +4,7 @@ import { permError } from '@/lib/auth/perms';
 import { ycAnalyticsDb } from '@/lib/db/clients';
 import { invalidateMetricsCache } from '@/lib/metrics/catalog';
 
-const ALLOWED_FIELDS = ['name_ru', 'name_short_ru', 'description', 'calc_ok', 'fill_ok'] as const;
+const ALLOWED_FIELDS = ['name_ru', 'name_short_ru', 'description', 'human_description', 'calc_ok', 'fill_ok'] as const;
 type AllowedField = typeof ALLOWED_FIELDS[number];
 
 export async function PATCH(

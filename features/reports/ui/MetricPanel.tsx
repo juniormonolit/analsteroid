@@ -1,6 +1,7 @@
 'use client';
 import { useState, useRef } from 'react';
-import { X, Search, GripVertical, Settings2 } from 'lucide-react';
+import { X, Search, GripVertical, Settings2, HelpCircle } from 'lucide-react';
+import { Popover } from '@/components/ui/Popover';
 import type { Metric } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
@@ -45,6 +46,34 @@ const SCOPE_LABELS: { key: Scope; label: string; title: string }[] = [
   { key: 'repeat',  label: 'Повт.', title: 'Только повторные' },
   { key: 'total',   label: 'Все',   title: 'Общие метрики (без разбивки на перв./повт.)' },
 ];
+
+// «?» у метрики: как считается — человеческим языком (задача владельца 11.08,
+// metrics.human_description, миграция 179; тексты — генератор
+// scripts/fill-human-descriptions.mjs + ручные правки в «Настройки → Метрики»).
+// Поповер, не title-тултип: на таче hover-подсказок нет (CLAUDE.md, правило 5),
+// а Radix Popover сам не уезжает за край экрана (правило 4).
+function MetricHelp({ m }: { m: Metric }) {
+  const text = m.humanDescription || m.description;
+  if (!text) return null;
+  return (
+    <Popover
+      align="end"
+      className="w-[340px] max-w-[calc(100vw-16px)] p-3"
+      trigger={
+        <button
+          onClick={e => e.stopPropagation()}
+          title="Как считается"
+          className="tap-target p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)] transition-colors shrink-0"
+        >
+          <HelpCircle size={13} />
+        </button>
+      }
+    >
+      <div className="text-sm font-semibold text-[var(--color-text)] mb-1.5">{m.nameRu}</div>
+      <div className="text-xs leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">{text}</div>
+    </Popover>
+  );
+}
 
 // ── Reusable two-column metric selector (catalogue + ordered selection) ─────
 function MetricSelector({
@@ -191,6 +220,7 @@ function MetricSelector({
                     <div className="text-sm text-[var(--color-text)] break-words">{m.nameRu}</div>
                     <div className="text-xs text-[var(--color-text-muted)]">{cat} · {m.dataType}</div>
                   </div>
+                  <MetricHelp m={m} />
                 </label>
               ))}
             </div>
@@ -247,6 +277,7 @@ function MetricSelector({
                   {columnGroups.map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
                 </select>
               )}
+              <MetricHelp m={m} />
               {onMetricConfigure && (
                 <button onClick={() => onMetricConfigure(m.id)} title="Настройки метрики"
                   className={`tap-target p-1 rounded transition-colors ${highlights?.[m.id] ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
