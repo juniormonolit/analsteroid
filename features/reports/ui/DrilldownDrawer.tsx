@@ -537,9 +537,10 @@ interface ClientDrillCustomerRow {
 }
 function ClientDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, departmentIds, onDealOpen, dealFilters, grouped = true }: Props & { grouped?: boolean }) {
   const [openIds, setOpenIds] = useState<Set<string>>(new Set());
-  // Карточка заказчика по клику на имя (задача 17.08). Открываем глазами текущего
-  // менеджера ПЕРВОЙ сделки заказчика — у строк-групп/периодов своего менеджера нет.
-  const [openCustomer, setOpenCustomer] = useState<{ key: string; managerId: string } | null>(null);
+  // Карточка заказчика по клику на имя (задача 17.08). Отдаём сырой contact_id —
+  // правильный ключ (юр-сделки: k/x, не c!) и менеджера-владельца (по последней
+  // сделке клиента) считает /api/customers/resolve, см. CustomerCardLoader.
+  const [openCustomer, setOpenCustomer] = useState<string | null>(null);
   const dimension =
     target.kind === 'total' ? 'total'
     : dimensionType === 'period' ? 'period'
@@ -595,15 +596,11 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
               </span>
               <button onClick={() => onDealOpen?.(d.dealId)} className="shrink-0 text-xs font-mono text-[var(--color-accent)] hover:underline">#{d.dealId}</button>
               <button onClick={() => onDealOpen?.(d.dealId)} className="flex-1 min-w-0 text-left text-xs text-[var(--color-text)] truncate hover:underline">{d.dealName ?? '—'}</button>
-              {d.managerId ? (
-                <button
-                  onClick={() => setOpenCustomer({ key: `c${c.contactId}`, managerId: d.managerId! })}
-                  className="shrink-0 max-w-[180px] text-xs text-[var(--color-accent)] hover:underline truncate"
-                  title="Открыть карточку заказчика"
-                >{c.name}</button>
-              ) : (
-                <span className="shrink-0 max-w-[180px] text-xs text-[var(--color-text-muted)] truncate">{c.name}</span>
-              )}
+              <button
+                onClick={() => setOpenCustomer(c.contactId)}
+                className="shrink-0 max-w-[180px] text-xs text-[var(--color-accent)] hover:underline truncate"
+                title="Открыть карточку заказчика"
+              >{c.name}</button>
               <span className="shrink-0 text-xs text-[var(--color-text)] whitespace-nowrap tabular-nums">{fmtMoney(d.amount)}</span>
             </div>
           ))}
@@ -624,15 +621,11 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
                 </span>
                 {/* Имя — в карточку заказчика (задача 17.08: «контакт сам по себе не
                     кликабельный»). Менеджер для доступа — с первой сделки строки. */}
-                {c.deals[0]?.managerId ? (
-                  <button
-                    onClick={e => { e.stopPropagation(); setOpenCustomer({ key: `c${c.contactId}`, managerId: c.deals[0].managerId! }); }}
-                    className="flex-1 min-w-0 text-left text-sm text-[var(--color-accent)] hover:underline truncate"
-                    title="Открыть карточку заказчика"
-                  >{c.name}</button>
-                ) : (
-                  <span className="flex-1 min-w-0 text-sm text-[var(--color-text)] truncate">{c.name}</span>
-                )}
+                <button
+                  onClick={e => { e.stopPropagation(); setOpenCustomer(c.contactId); }}
+                  className="flex-1 min-w-0 text-left text-sm text-[var(--color-accent)] hover:underline truncate"
+                  title="Открыть карточку заказчика"
+                >{c.name}</button>
                 <span className="shrink-0 text-xs text-[var(--color-text-muted)] whitespace-nowrap">{dealsCountLabel(c.dealsCount)}</span>
                 <span className="shrink-0 text-sm text-[var(--color-text)] font-medium whitespace-nowrap tabular-nums">{fmtMoney(c.amount)}</span>
               </div>
@@ -660,8 +653,7 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
       </div>
       {openCustomer && (
         <CustomerCardLoader
-          clientKey={openCustomer.key}
-          managerId={openCustomer.managerId}
+          contactId={openCustomer}
           onClose={() => setOpenCustomer(null)}
           zIndex={80}
         />

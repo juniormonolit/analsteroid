@@ -93,7 +93,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
     scope: 'all',
     ...(row.clientKey.startsWith('k') ? { companyId: String(row.clientId) } : { contactId: String(row.clientId) }),
   }).toString();
-  const { data: dealsData } = useQuery<{ deals: { deal_id: number; deal_name: string | null; amount: number | string | null; created_at: string | null; stage_name: string | null }[]; total_count: number }>({
+  const { data: dealsData } = useQuery<{ deals: { deal_id: number; deal_name: string | null; amount: number | string | null; created_at: string | null; stage_name: string | null; head_group_name: string | null }[]; total_count: number }>({
     queryKey: ['customer-deals', row.clientKey],
     queryFn: () => fetch(`/api/reports/deals?${dealsQs}`).then(r => r.json()),
     staleTime: 5 * 60 * 1000,
@@ -131,7 +131,9 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
   return (
     <div className="fixed inset-0 z-50 flex" style={zIndex ? { zIndex } : undefined}>
       <div className="hidden sm:block flex-1 min-w-[10%] bg-black/40 cursor-pointer" onClick={onClose} />
-      <div className="w-full sm:w-[720px] sm:max-w-[85vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
+      {/* 920px вместо прежних 720 (правка владельца 17.08 «очень зажата по
+          ширине»): в «Сделках» длинные названия + стадия + группа не умещались. */}
+      <div className="w-full sm:w-[920px] sm:max-w-[92vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
         {/* Шапка — полиш 01.08 (правка владельца через Серёгу): имя+статусные чипы в
             ОДНУ строку в логичном порядке (тип → категория → модификаторы →
             статус → Битрикс), менеджер отдельной строкой, метрики покупок —
@@ -288,6 +290,12 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
                     </span>
                     <span className="shrink-0 text-[11px] font-mono text-[var(--color-accent)]">#{d.deal_id}</span>
                     <span className="flex-1 min-w-0 text-[12px] text-[var(--color-text)] truncate">{d.deal_name ?? '—'}</span>
+                    {/* Товарная группа по наибольшему (правка владельца 17.08). */}
+                    {d.head_group_name && (
+                      <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] truncate max-w-[160px]">
+                        {d.head_group_name}
+                      </span>
+                    )}
                     {d.stage_name && <span className="shrink-0 text-[11px] text-[var(--color-text-muted)] truncate max-w-[140px]">{d.stage_name}</span>}
                     <span className="shrink-0 text-[12px] text-[var(--color-text)] tabular-nums whitespace-nowrap">{fmtMoney(Number(d.amount ?? 0))}</span>
                   </button>

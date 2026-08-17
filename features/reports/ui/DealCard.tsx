@@ -161,9 +161,11 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const isLostDeal = deal?.stage_event_type === 'lost';
   const { closing, requestClose } = useSlideClose(onClose);
   const [tab, setTab] = useState<DealCardTab>('main');
-  // Карточка заказчика поверх карточки сделки (задача 17.08). Ключ: c<contact_id>
-  // или k<company_id>; открываем глазами текущего менеджера сделки.
-  const [openCustomerKey, setOpenCustomerKey] = useState<string | null>(null);
+  // Карточка заказчика поверх карточки сделки (задача 17.08). Сырые id — правильный
+  // ключ (c/k/x) и менеджера-владельца считает /api/customers/resolve: слать ключ и
+  // менеджера отсюда нельзя (живой баг «не найден в списке» — юр-ключи и владелец
+  // по последней сделке, см. CustomerCardLoader).
+  const [openCustomer, setOpenCustomer] = useState<{ contactId?: number; companyId?: number } | null>(null);
 
   // Список звонков — лениво, только когда таб «Звонки» реально открыт (enabled),
   // чтобы не бить va.calls на каждое открытие карточки (счётчик N в лейбле таба
@@ -379,20 +381,20 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                           c<contact_id> (та же схема, что в разделе «Мои заказчики»).
                           Открываем глазами ТЕКУЩЕГО менеджера сделки — доступ проверит
                           сервер (canViewManager). */}
-                      <Row label="Контакт" value={deal.contact_id ? (deal.manager_id ? (
+                      <Row label="Контакт" value={deal.contact_id ? (
                         <button
-                          onClick={() => setOpenCustomerKey(`c${deal.contact_id}`)}
+                          onClick={() => setOpenCustomer({ contactId: deal.contact_id! })}
                           className="text-[var(--color-accent)] hover:underline tap-target"
                           title="Открыть карточку заказчика"
                         >#{deal.contact_id}</button>
-                      ) : `#${deal.contact_id}`) : null} />
-                      <Row label="Компания" value={deal.company_id ? (deal.manager_id ? (
+                      ) : null} />
+                      <Row label="Компания" value={deal.company_id ? (
                         <button
-                          onClick={() => setOpenCustomerKey(`k${deal.company_id}`)}
+                          onClick={() => setOpenCustomer({ companyId: deal.company_id! })}
                           className="text-[var(--color-accent)] hover:underline tap-target"
                           title="Открыть карточку заказчика (юрлицо)"
                         >#{deal.company_id}</button>
-                      ) : `#${deal.company_id}`) : null} />
+                      ) : null} />
                       <Row label="Обновлена" value={fmtDate(deal.updated_at)} />
                     </Section>
 
@@ -503,11 +505,11 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
           </>
         )}
       </div>
-      {openCustomerKey && deal?.manager_id && (
+      {openCustomer && (
         <CustomerCardLoader
-          clientKey={openCustomerKey}
-          managerId={deal.manager_id}
-          onClose={() => setOpenCustomerKey(null)}
+          contactId={openCustomer.contactId}
+          companyId={openCustomer.companyId}
+          onClose={() => setOpenCustomer(null)}
           zIndex={80}
         />
       )}
