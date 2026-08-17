@@ -1,7 +1,7 @@
 'use client';
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, ArrowLeft, Copy, Check, MessageCircle } from 'lucide-react';
+import { X, ArrowLeft, Copy, Check, MessageCircle, ChevronDown, ChevronRight } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { DateRange } from '@/lib/period';
@@ -12,6 +12,7 @@ import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
 import { dealsCountLabel } from '@/lib/format/pluralize';
+import { CLIENT_DRILL_METRIC_IDS } from '@/features/reports/engine/clientDrilldown';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
@@ -510,6 +511,106 @@ function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | '
     // отдельности нельзя: следующий забудут ровно так же.
     ...(p.dealFilters?.length ? { dealFilters: JSON.stringify(p.dealFilters) } : {}),
   };
+}
+
+// ── Клиентский дрилл: заказчики со свёрнутыми сделками (задача 17.08) ───────
+// Для метрик раздела «Клиенты»/когорт плоский список сделок бесполезен (у них нет
+// date_field каталога — фильтр не применялся, показывались ВСЕ сделки периода).
+// Здесь строки — заказчики, свёрнутые по умолчанию; раскрытие показывает ровно те
+// сделки, из которых сложилось число ячейки (LTV-90 → отгрузки когорты в 90 дней
+// от первой). Население восстанавливает /api/reports/client-deals теми же
+// правилами, что движок метрик, — суммы сходятся с ячейкой.
+interface ClientDrillDealRow {
+  dealId: number; dealName: string | null; amount: number;
+  deliveredAt: string | null; managerId: string | null; groupName: string | null;
+}
+interface ClientDrillCustomerRow {
+  contactId: string; name: string; dealsCount: number; amount: number; deals: ClientDrillDealRow[];
+}
+function ClientDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, departmentIds, onDealOpen, dealFilters }: Props) {
+  const [openIds, setOpenIds] = useState<Set<string>>(new Set());
+  const dimension =
+    target.kind === 'total' ? 'total'
+    : dimensionType === 'period' ? 'period'
+    : dimensionType === 'product-group' ? 'product-group'
+    : 'manager';
+  const params = new URLSearchParams({
+    metricId: target.metricId ?? '',
+    from: period.from.toISOString(),
+    to: period.to.toISOString(),
+    dimension,
+    scope: dealScope,
+    productGroupMode,
+    ...(clientType ? { clientType } : {}),
+    ...(target.kind === 'managers' ? { dimValues: target.id } : dimension !== 'total' && dimension !== 'period' ? { dimValue: target.id } : {}),
+    ...(dimension === 'manager' && target.kind !== 'managers' ? { dimValue: target.id } : {}),
+    ...(departmentIds?.length ? { departmentIds: departmentIds.join(',') } : {}),
+    ...(dealFilters?.length ? { dealFilters: JSON.stringify(dealFilters) } : {}),
+  });
+  const qs = params.toString();
+  const { data, isLoading } = useQuery<{ customers: ClientDrillCustomerRow[]; totalCustomers: number; totalDeals: number; totalAmount: number; truncated: boolean }>({
+    queryKey: ['client-drill', qs],
+    queryFn: () => fetch(`/api/reports/client-deals?${qs}`).then(r => r.json()),
+  });
+
+  if (isLoading) {
+    return <div className="p-6 space-y-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-8 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
+  }
+  const customers = data?.customers ?? [];
+  if (customers.length === 0) {
+    return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">Нет заказчиков по этой метрике за период</div>;
+  }
+  const toggle = (id: string) => setOpenIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  return (
+    <div className="h-full flex flex-col">
+      <div className="px-4 sm:px-6 py-2 text-xs text-[var(--color-text-muted)] border-b border-[var(--color-border)] shrink-0">
+        Итого: {data!.totalCustomers.toLocaleString('ru-RU')} заказчиков · {dealsCountLabel(data!.totalDeals)} · {fmtMoney(data!.totalAmount)}
+        {data!.truncated && <span className="ml-2">(показаны первые {customers.length} по сумме)</span>}
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {customers.map(c => {
+          const open = openIds.has(c.contactId);
+          return (
+            <div key={c.contactId} className="border-b border-[var(--color-border)]">
+              <button
+                onClick={() => toggle(c.contactId)}
+                className="w-full min-h-11 flex items-center gap-2 px-4 sm:px-6 py-2 text-left hover:bg-[var(--color-bg-hover)] transition-colors"
+              >
+                <span className="text-[var(--color-text-muted)] shrink-0">
+                  {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </span>
+                <span className="flex-1 min-w-0 text-sm text-[var(--color-text)] truncate">{c.name}</span>
+                <span className="shrink-0 text-xs text-[var(--color-text-muted)] whitespace-nowrap">{dealsCountLabel(c.dealsCount)}</span>
+                <span className="shrink-0 text-sm text-[var(--color-text)] font-medium whitespace-nowrap tabular-nums">{fmtMoney(c.amount)}</span>
+              </button>
+              {open && (
+                <div className="pb-2">
+                  {c.deals.map(d => (
+                    <button
+                      key={d.dealId}
+                      onClick={() => onDealOpen?.(d.dealId)}
+                      className="w-full flex items-center gap-2 pl-10 sm:pl-12 pr-4 sm:pr-6 py-1.5 text-left hover:bg-[var(--color-bg-hover)] transition-colors"
+                    >
+                      <span className="shrink-0 text-xs text-[var(--color-text-muted)] tabular-nums w-20">
+                        {d.deliveredAt ? format(new Date(d.deliveredAt), 'd MMM yy', { locale: ru }) : '—'}
+                      </span>
+                      <span className="shrink-0 text-xs font-mono text-[var(--color-accent)]">#{d.dealId}</span>
+                      <span className="flex-1 min-w-0 text-xs text-[var(--color-text)] truncate">{d.dealName ?? '—'}</span>
+                      <span className="shrink-0 text-xs text-[var(--color-text)] whitespace-nowrap tabular-nums">{fmtMoney(d.amount)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
@@ -1110,8 +1211,15 @@ export function DrilldownDrawer(props: Props) {
         </div>
         <div className="flex-1 overflow-hidden">
           {/* Клиент — всегда плоский список его сделок: мини-отчёт «клиент ×
-              вторая сущность» здесь не строится (задача 10.08, v1). */}
-          {localGrouped && !isGroupTarget && dimensionType !== 'client'
+              вторая сущность» здесь не строится (задача 10.08, v1).
+              Клиентские метрики (раздел «Повторные»: LTV-окна, новые/повторные,
+              когорты) — свой вид «заказчики со свёрнутыми сделками» (задача 17.08):
+              он идёт ПЕРВЫМ, потому что для этих метрик и мини-отчёт, и плоский
+              список врут — у метрик нет date_field каталога, фильтр по ним не
+              применялся и показывались все сделки периода. */}
+          {target.metricId && CLIENT_DRILL_METRIC_IDS.includes(target.metricId) && dimensionType !== 'client'
+            ? <ClientDealsView {...viewProps} />
+            : localGrouped && !isGroupTarget && dimensionType !== 'client'
             ? (sub
                 ? <SubDealsView {...viewProps} sub={sub} onBack={() => setSub(null)} />
                 : <MiniReport {...viewProps} onCellDrill={setSub} sort={miniSort} onSortChange={setMiniSort} />)
