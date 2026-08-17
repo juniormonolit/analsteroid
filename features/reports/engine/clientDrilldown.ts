@@ -5,8 +5,10 @@ import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters
 import { getCachedClientNames } from '@/lib/bitrix/clientNames';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
-import { LTV_WINDOWS_DAYS } from './clientMetrics';
+import { CLIENT_DRILL_RULES, CLIENT_DRILL_METRIC_IDS } from './clientDrilldownShared';
 import { addDays, startOfDay } from 'date-fns';
+
+export { CLIENT_DRILL_METRIC_IDS };
 
 // ── Дрилл-даун клиентских метрик: заказчики со свёрнутыми сделками ───────────
 // (задача владельца 17.08: «нажимая на сумму ЛТВ 90 дней — показывать заказчиков
@@ -34,31 +36,8 @@ import { addDays, startOfDay } from 'date-fns';
 const EXCLUDED_FUNNELS = '(4, 7)';
 const MSK = 'Europe/Moscow';
 
-// Метрика → правило населения. rnCond — какие отгрузки клиента берём (по порядку
-// в его истории), clientCond — доп. условие на клиента целиком.
-type BaseRule = { kind: 'base'; rnCond?: string; complexOnly?: boolean };
-type CohortRule = { kind: 'cohort'; windowDays?: number; firstOnly?: boolean };
-const RULES: Record<string, BaseRule | CohortRule> = {
-  all_clients_delivered:    { kind: 'base' },
-  delivered_deals_count:    { kind: 'base' },
-  group_buyers_count:       { kind: 'base' },
-  new_clients_count:        { kind: 'base', rnCond: '= 1' },
-  new_clients_amount:       { kind: 'base', rnCond: '= 1' },
-  repeat_clients_delivered: { kind: 'base', rnCond: '>= 2' },
-  repeat_clients_amount:    { kind: 'base', rnCond: '>= 2' },
-  // repeat_rate_clients — формула повторные/все: население числителя.
-  repeat_rate_clients:      { kind: 'base', rnCond: '>= 2' },
-  first_repeat_clients:     { kind: 'base', rnCond: '= 2' },
-  complex_clients:          { kind: 'base', complexOnly: true },
-  cohort_repeat_clients:    { kind: 'cohort' },
-  cohort_first_revenue:     { kind: 'cohort', firstOnly: true },
-  cohort_ltv_total_revenue: { kind: 'cohort' },
-  ...Object.fromEntries(LTV_WINDOWS_DAYS.map(w => [
-    `cohort_repeat_revenue_${w}`, { kind: 'cohort', windowDays: w } as CohortRule,
-  ])),
-};
-
-export const CLIENT_DRILL_METRIC_IDS = Object.keys(RULES);
+// Правила населения — в clientDrilldownShared.ts (общий с UI модуль без
+// серверных импортов, см. его шапку).
 
 export interface ClientDrillDeal {
   dealId: number;
@@ -159,7 +138,7 @@ async function reportScopeWhere(opts: ClientDrillOptions): Promise<string> {
 }
 
 export async function fetchClientMetricDeals(opts: ClientDrillOptions): Promise<ClientDrillResult | null> {
-  const rule = RULES[opts.metricId];
+  const rule = CLIENT_DRILL_RULES[opts.metricId];
   if (!rule) return null;
 
   const fromIso = opts.period.from.toISOString();

@@ -12,7 +12,7 @@ import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
 import { dealsCountLabel } from '@/lib/format/pluralize';
-import { CLIENT_DRILL_METRIC_IDS } from '@/features/reports/engine/clientDrilldown';
+import { CLIENT_DRILL_METRIC_IDS } from '@/features/reports/engine/clientDrilldownShared';
 import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
