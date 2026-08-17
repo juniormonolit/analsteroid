@@ -2,6 +2,7 @@
 import { useState, useRef } from 'react';
 import { X, Search, GripVertical, Settings2, HelpCircle } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
+import { metricFormulaLine } from '@/lib/metrics/formulaText';
 import type { Metric } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
@@ -71,6 +72,12 @@ function MetricHelp({ m }: { m: Metric }) {
     >
       <div className="text-sm font-semibold text-[var(--color-text)] mb-1.5">{m.nameRu}</div>
       <div className="text-xs leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">{text}</div>
+      {/* Формула расчёта (правка владельца 17.08) */}
+      {metricFormulaLine(m) && (
+        <div className="mt-2 pt-2 border-t border-[var(--color-border)] text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+          <span className="font-semibold">Формула:</span> <span className="font-mono">{metricFormulaLine(m)}</span>
+        </div>
+      )}
     </Popover>
   );
 }

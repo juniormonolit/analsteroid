@@ -91,6 +91,19 @@ export async function loadMetrics(): Promise<Metric[]> {
       (r.category ? catColors.get(r.category) : null) ??
       resolveAutoColor({ id: r.id, category: r.category, nameRu: r.name_ru }),
   }));
+
+  // Формула с русскими названиями — для «?» у метрик (правка владельца 17.08).
+  // Считается здесь, а не в UI: только у каталога гарантированно есть ПОЛНЫЙ список
+  // имён (в отчёт метрики-зависимости формулы могут быть не выбраны).
+  const nameById = new Map(_cache.map(m => [m.id, m.nameRu]));
+  for (const m of _cache) {
+    if (m.metricType === 'calculated' && m.formula) {
+      m.formulaHuman = m.formula
+        .replace(/\[([a-z0-9_]+)\]/gi, (_all: string, id: string) =>
+          `«${(nameById.get(id) ?? id).replace(/\s*\(служебная\)\s*$/, '')}»`)
+        .replace(/\*/g, '×').replace(/\//g, '÷');
+    }
+  }
   _cacheAt = Date.now();
   return _cache;
 }

@@ -40,6 +40,10 @@ export interface Metric {
   /** «Как считается» человеческим языком — для «?» у метрики (миграция 179).
       Пусто → UI падает на description. */
   humanDescription?: string | null;
+  /** Формула с русскими названиями метрик («X» ÷ «Y» × 100) — считает catalog.ts
+      для calculated-метрик; для остальных null (правка владельца 17.08: «добавь в
+      вопросик ещё и формулу расчёта»). */
+  formulaHuman?: string | null;
   calcOk: boolean;
   fillOk: boolean;
   metricType: MetricType;

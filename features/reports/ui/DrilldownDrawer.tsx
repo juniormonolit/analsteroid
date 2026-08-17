@@ -12,7 +12,7 @@ import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 import { ENTITY_COLOR } from '@/lib/metrics/entity-colors';
 import { dealsCountLabel } from '@/lib/format/pluralize';
-import { CLIENT_DRILL_METRIC_IDS } from '@/features/reports/engine/clientDrilldownShared';
+import { CLIENT_FAMILY_METRIC_IDS } from '@/features/reports/engine/clientDrilldownShared';
 import dynamic from 'next/dynamic';
 
 // Карточка заказчика из дрилла (задача 17.08) — динамически: она сама умеет
@@ -547,7 +547,9 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
     : dimensionType === 'product-group' ? 'product-group'
     : 'manager';
   const params = new URLSearchParams({
-    metricId: target.metricId ?? '',
+    // '__row__' — клик по строке/итогу без конкретной метрики: сервер разворачивает
+    // в население «все отгрузки клиентов периода» (фолбэк, см. client-deals route).
+    metricId: target.metricId ?? '__row__',
     from: period.from.toISOString(),
     to: period.to.toISOString(),
     dimension,
@@ -1099,7 +1101,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
 }
 
 export function DrilldownDrawer(props: Props) {
-  const { target, dimensionType, grouped, onGroupedChange, toolbarExtras, drilldownDimension, onDrilldownDimensionChange, onClose } = props;
+  const { target, dimensionType, grouped, onGroupedChange, toolbarExtras, drilldownDimension, onDrilldownDimensionChange, onClose, metricIds } = props;
   // Карточка сделки (клик по строке в любом списке сделок)
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   // Суб-дрилл из мини-отчёта (клик по цифре)
@@ -1266,7 +1268,17 @@ export function DrilldownDrawer(props: Props) {
               он идёт ПЕРВЫМ, потому что для этих метрик и мини-отчёт, и плоский
               список врут — у метрик нет date_field каталога, фильтр по ним не
               применялся и показывались все сделки периода. */}
-          {target.metricId && CLIENT_DRILL_METRIC_IDS.includes(target.metricId) && dimensionType !== 'client'
+          {/* Клиентский дрилл ловит: (а) клик по ЛЮБОЙ метрике клиентской семьи —
+              включая медианы/доли, у которых нет точного населения (сервер
+              подставит «все отгрузки клиентов»); (б) клик по строке БЕЗ метрики в
+              отчёте, где все выбранные метрики клиентские (витрина «Повторные») —
+              раньше такие клики уводили в мини-отчёт по группам/менеджерам,
+              бесполезный для клиентских чисел (баг-репорт владельца 17.08). */}
+          {dimensionType !== 'client'
+            && (
+              (target.metricId && CLIENT_FAMILY_METRIC_IDS.includes(target.metricId))
+              || (!target.metricId && metricIds.length > 0 && metricIds.every(id => CLIENT_FAMILY_METRIC_IDS.includes(id)))
+            )
             ? <ClientDealsView {...viewProps} grouped={localGrouped} />
             : localGrouped && !isGroupTarget && dimensionType !== 'client'
             ? (sub

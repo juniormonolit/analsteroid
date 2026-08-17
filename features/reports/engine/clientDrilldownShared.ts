@@ -33,3 +33,25 @@ export const CLIENT_DRILL_RULES: Record<string, ClientDrillRule> = {
 };
 
 export const CLIENT_DRILL_METRIC_IDS = Object.keys(CLIENT_DRILL_RULES);
+
+// ВСЯ клиентская семья (копия списков clientMetrics.ts — тот файл серверный,
+// импортировать нельзя; меняются вместе). Нужна дриллу, чтобы клик по метрике,
+// у которой НЕТ точного правила населения (медианы, средние, доли, снимки,
+// обзвон), всё равно открывал заказчиков — с населением «все отгрузки периода»
+// (баг-репорт владельца 17.08: «дрилл на заказчиков в повторных поломался —
+// там сделки, сгруппированные в товарные группы или менеджеров» — такие метрики
+// проваливались в мини-отчёт, бесполезный для клиентских чисел).
+export const CLIENT_FAMILY_METRIC_IDS: string[] = [
+  ...CLIENT_DRILL_METRIC_IDS,
+  'avg_groups_per_client', 'avg_groups_per_order', 'avg_products_per_order',
+  'median_time_to_2nd', 'median_time_between_orders',
+  'median_time_to_2nd_diff_cat', 'median_time_between_orders_diff_cat',
+  'followup_clients_due', 'followup_clients_called',
+  'median_cycle_time_days', 'median_client_lifetime_months',
+  'active_clients_90d', 'client_share_count_pct', 'client_share_amount_pct',
+  'client_days_since_last', 'client_order_frequency_days', 'client_ltv',
+  'client_categories_count', 'client_churn_risk_pct',
+];
+
+/** Метрика дрилла с фолбэком: без точного правила — «все отгрузки клиентов периода». */
+export const CLIENT_DRILL_FALLBACK_ID = 'all_clients_delivered';

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { fetchClientMetricDeals, CLIENT_DRILL_METRIC_IDS } from '@/features/reports/engine/clientDrilldown';
+import { CLIENT_FAMILY_METRIC_IDS, CLIENT_DRILL_FALLBACK_ID } from '@/features/reports/engine/clientDrilldownShared';
 import type { DealFilter } from '@/lib/metrics/dealFilters';
 
 // Дрилл-даун клиентских метрик — заказчики со свёрнутыми сделками (задача
@@ -18,7 +19,14 @@ export async function GET(req: NextRequest) {
   if (!from || !to || !metricId) {
     return NextResponse.json({ error: 'metricId, from, to обязательны' }, { status: 400 });
   }
-  if (!CLIENT_DRILL_METRIC_IDS.includes(metricId)) {
+  // Метрики без точного правила населения (медианы/доли/снимки) — фолбэк на
+  // «все отгрузки клиентов периода»; '__row__' — клик по строке без метрики.
+  const effectiveId = CLIENT_DRILL_METRIC_IDS.includes(metricId)
+    ? metricId
+    : (metricId === '__row__' || CLIENT_FAMILY_METRIC_IDS.includes(metricId))
+      ? CLIENT_DRILL_FALLBACK_ID
+      : null;
+  if (!effectiveId) {
     return NextResponse.json({ error: `метрика ${metricId} не поддерживает клиентский дрилл` }, { status: 400 });
   }
 
@@ -37,7 +45,7 @@ export async function GET(req: NextRequest) {
   }
 
   const result = await fetchClientMetricDeals({
-    metricId,
+    metricId: effectiveId,
     period: { from: new Date(from), to: new Date(to) },
     dimension,
     dimValue: sp.get('dimValue') ?? undefined,
