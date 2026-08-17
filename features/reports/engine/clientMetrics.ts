@@ -62,6 +62,11 @@ export interface ClientMetricsRow {
   clientsTotal: number;
   /** Из них те, у кого эта отгрузка — первая товарная за всю историю. */
   newClients: number;
+  /** Клиенты периода, у которых в периоде есть НЕпервая (в их истории) отгрузка.
+      Может пересекаться с newClients: новый клиент, купивший в периоде дважды, —
+      и новый, и повторный. Это сознательно: «повторные = все − новые» на периоде
+      «всё время» давало ноль (первая покупка каждого — внутри периода). */
+  repeatClients: number;
   /** Клиенты, чья ВТОРАЯ товарная отгрузка (первая повторная) попала в период. */
   firstRepeatClients: number;
   /** Товарные отгрузки периода (заказы). */
@@ -138,9 +143,10 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
   return {
     new_clients_count: row.newClients,
     all_clients_delivered: row.clientsTotal,
-    // Повторные — остаток: клиент периода либо новый, либо покупал раньше.
-    // Так эти две метрики не пересекаются и в сумме дают всех клиентов.
-    repeat_clients_delivered: row.clientsTotal - row.newClients,
+    // Повторные — НЕ остаток «все − новые» (тот на «всём времени» давал ноль:
+    // первая покупка каждого клиента лежит внутри периода). Клиент повторный,
+    // если в периоде есть его непервая отгрузка; с новыми может пересекаться.
+    repeat_clients_delivered: row.repeatClients,
     first_repeat_clients: row.firstRepeatClients,
     delivered_deals_count: row.orders,
     new_clients_amount: row.newAmount,
@@ -371,6 +377,12 @@ src AS (
          -- месяцы по 30.44 дн — как в исходном определении median_client_lifetime_months
          EXTRACT(EPOCH FROM (cb.last_deliv - cb.first_created)) / 86400.0 / 30.44 AS lifetime_months,
          (rk.rn = 2) AS is_first_repeat,
+         -- «Повторная покупка» на уровне СДЕЛКИ: отгрузка не первая в истории
+         -- клиента. Баг-репорт владельца 11.08 («Менеджеры — Repeat Rate: по всем
+         -- менеджерам за всё время нули»): прежнее «повторные = все клиенты − новые»
+         -- на периоде «всё время» давало гарантированный ноль — первая покупка
+         -- КАЖДОГО клиента лежит внутри такого периода, все клиенты «новые».
+         COALESCE(rk.rn >= 2, false) AS is_repeat_deal,
          -- Клиентские метрики сущности «Клиент» (миграция 175):
          EXTRACT(EPOCH FROM (now() - cb.last_deliv)) / 86400.0 AS days_since_last,
          CASE WHEN cb.n_ships >= 2
@@ -387,25 +399,29 @@ src AS (
 -- считаются ПО СДЕЛКАМ, а клиенты/комплексность/группы на клиента — сначала
 -- сворачиваются ПО КЛИЕНТУ (клиент с десятью заказами весит столько же, сколько
 -- клиент с одним), и только потом усредняются.
-pc_dim  AS (SELECT dim_id, contact_id, bool_or(is_new) AS is_new, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1, 2),
-pc_all  AS (SELECT contact_id, bool_or(is_new) AS is_new, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1),
+pc_dim  AS (SELECT dim_id, contact_id, bool_or(is_new) AS is_new, bool_or(is_repeat_deal) AS is_repeat, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1, 2),
+pc_all  AS (SELECT contact_id, bool_or(is_new) AS is_new, bool_or(is_repeat_deal) AS is_repeat, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1),
 deal_dim AS (
+  -- Суммы «новые/повторные» — по СДЕЛКЕ (первая покупка клиента / повторная), а не
+  -- по новизне клиента: прежний FILTER (WHERE is_new) на «всём времени» относил
+  -- ВСЮ выручку к новым (повторные — ноль), та же болезнь, что у счётчика выше.
   SELECT dim_id, count(*) AS orders,
-         COALESCE(SUM(amount) FILTER (WHERE is_new), 0)     AS new_amount,
-         COALESCE(SUM(amount) FILTER (WHERE NOT is_new), 0) AS repeat_amount,
+         COALESCE(SUM(amount) FILTER (WHERE NOT is_repeat_deal), 0) AS new_amount,
+         COALESCE(SUM(amount) FILTER (WHERE is_repeat_deal), 0)     AS repeat_amount,
          AVG(groups_cnt) AS groups_per_order, AVG(items_cnt) AS products_per_order,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY cycle_days) AS median_cycle
     FROM src GROUP BY 1),
 deal_all AS (
   SELECT count(*) AS orders,
-         COALESCE(SUM(amount) FILTER (WHERE is_new), 0)     AS new_amount,
-         COALESCE(SUM(amount) FILTER (WHERE NOT is_new), 0) AS repeat_amount,
+         COALESCE(SUM(amount) FILTER (WHERE NOT is_repeat_deal), 0) AS new_amount,
+         COALESCE(SUM(amount) FILTER (WHERE is_repeat_deal), 0)     AS repeat_amount,
          AVG(groups_cnt) AS groups_per_order, AVG(items_cnt) AS products_per_order,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY cycle_days) AS median_cycle
     FROM src),
 client_dim AS (
   SELECT dim_id, count(*) AS clients_total,
          count(*) FILTER (WHERE is_new)  AS new_clients,
+         count(*) FILTER (WHERE is_repeat) AS repeat_clients,
          count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
          AVG(cg) AS groups_per_client,
@@ -419,6 +435,7 @@ client_dim AS (
 client_all AS (
   SELECT count(*) AS clients_total,
          count(*) FILTER (WHERE is_new)  AS new_clients,
+         count(*) FILTER (WHERE is_repeat) AS repeat_clients,
          count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
          AVG(cg) AS groups_per_client,
@@ -429,13 +446,13 @@ client_all AS (
          percentile_cont(0.5) WITHIN GROUP (ORDER BY cg)   AS med_cats,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY (CASE WHEN freq > 0 THEN dsl / freq * 100 END)) AS med_risk
     FROM pc_all)
-SELECT d.dim_id, c.clients_total, c.new_clients, c.first_repeat_clients, d.orders, d.new_amount, d.repeat_amount,
+SELECT d.dim_id, c.clients_total, c.new_clients, c.repeat_clients, c.first_repeat_clients, d.orders, d.new_amount, d.repeat_amount,
        c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
        d.median_cycle, c.median_lifetime,
        c.med_dsl, c.med_freq, c.med_ltv, c.med_cats, c.med_risk
   FROM deal_dim d JOIN client_dim c ON c.dim_id IS NOT DISTINCT FROM d.dim_id
 UNION ALL
-SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.first_repeat_clients, d.orders, d.new_amount,
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.repeat_clients, c.first_repeat_clients, d.orders, d.new_amount,
        d.repeat_amount, c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
        d.median_cycle, c.median_lifetime,
        c.med_dsl, c.med_freq, c.med_ltv, c.med_cats, c.med_risk
@@ -459,6 +476,7 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.first_rep
     out.set(String(r.dim_id), {
       clientsTotal: num(r.clients_total),
       newClients: num(r.new_clients),
+      repeatClients: num(r.repeat_clients),
       firstRepeatClients: num(r.first_repeat_clients),
       orders: num(r.orders),
       newAmount: num(r.new_amount),
