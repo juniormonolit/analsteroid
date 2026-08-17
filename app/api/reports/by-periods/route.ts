@@ -180,7 +180,14 @@ export async function POST(req: NextRequest) {
   // Метрики раздела «Клиенты» — своим движком, с измерением «бакет периода».
   // Считаются по тем же двум окнам, что и всё остальное (текущее и сдвинутое),
   // поэтому построчное сравнение работает для них так же, как для обычных метрик.
-  const needClients = withDeps.some(m => (CLIENT_METRIC_IDS as readonly string[]).includes(m.id));
+  // Доли и «Кол-во купивших клиентов» не считают ничего сами — копируют/делят
+  // значения БАЗОВЫХ клиентских метрик, поэтому обязаны включать их расчёт, даже
+  // когда базовые не выбраны в отчёте (иначе прочерки — тот же баг, что в
+  // run/route.ts, баг-репорт владельца 17.08).
+  const needShares = withDeps.some(m => (CLIENT_SHARE_METRIC_IDS as readonly string[]).includes(m.id));
+  const needBuyers = withDeps.some(m => (CLIENT_BUYERS_METRIC_IDS as readonly string[]).includes(m.id));
+  const needClients = needShares || needBuyers
+    || withDeps.some(m => (CLIENT_METRIC_IDS as readonly string[]).includes(m.id));
   const needTime = withDeps.some(m => (CLIENT_TIME_METRIC_IDS as readonly string[]).includes(m.id));
   const clientCommon = {
     dimension: 'period' as const, periodUnit: unit, dealScope, clientType,
@@ -241,8 +248,6 @@ export async function POST(req: NextRequest) {
   // долям каждой строки нужен итог (та же логика, что в run/route.ts).
   let clientTotals = clientsFor(CLIENTS_GRAND_TOTAL_KEY, curClients, curTime, curFollow, curCohort, curActive);
   let clientTotalsComp = clientsFor(CLIENTS_GRAND_TOTAL_KEY, compClients, compTime, compFollow, compCohort, compActive);
-  const needShares = withDeps.some(m => (CLIENT_SHARE_METRIC_IDS as readonly string[]).includes(m.id));
-  const needBuyers = withDeps.some(m => (CLIENT_BUYERS_METRIC_IDS as readonly string[]).includes(m.id));
   if (needShares || needBuyers) {
     const patch = (r: PeriodBucketRow, totals: Record<string, number | null>): PeriodBucketRow => ({
       ...r,

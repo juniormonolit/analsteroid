@@ -1001,7 +1001,15 @@ export async function POST(req: NextRequest) {
     reportSlug === 'by-managers' ? 'manager'
     : reportSlug === 'by-product-groups' ? 'product-group'
     : reportSlug === 'by-clients' ? 'client' : null;
-  if (clientDimension && withDeps.some(m => (CLIENT_METRIC_IDS as readonly string[]).includes(m.id))) {
+  // Гейт по ВСЕМ клиентским спискам, не только базовому: «Кол-во купивших клиентов»
+  // (CLIENT_BUYERS) и доли (CLIENT_SHARE) живут в отдельных списках, и отчёт с
+  // ЕДИНСТВЕННОЙ такой метрикой раньше пропускал весь блок — прочерки во всех
+  // строках (баг-репорт владельца 17.08, «Товарные группы — Частота»).
+  const anyClientMetric = withDeps.some(m =>
+    (CLIENT_METRIC_IDS as readonly string[]).includes(m.id)
+    || (CLIENT_SHARE_METRIC_IDS as readonly string[]).includes(m.id)
+    || (CLIENT_BUYERS_METRIC_IDS as readonly string[]).includes(m.id));
+  if (clientDimension && anyClientMetric) {
     // Для менеджеров ограничиваем движок теми, кто реально в отчёте (фильтры
     // отделов/типа аккаунта уже применены к строкам) — тогда «Итого» движка
     // совпадёт с тем, что видит человек. Для товарных групп список менеджеров

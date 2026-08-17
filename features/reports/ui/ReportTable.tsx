@@ -1,6 +1,7 @@
 'use client';
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
-import { ArrowUp, ArrowDown, ChartLine, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, Search } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChartLine, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, Search, HelpCircle } from 'lucide-react';
+import { Popover } from '@/components/ui/Popover';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
@@ -1615,7 +1616,7 @@ export function ReportTable({
                       (класс .group уже на <th> выше), на таче — всегда (hover-reveal). */}
                   {(onMetricQuickCompareToggle || hasConfigureButton || onMetricReorder) && (
                     <div
-                      className={`hover-reveal mt-1 flex items-stretch h-5 rounded-[7px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)] mx-auto ${span > 1 ? 'w-full' : 'w-[92px]'}`}
+                      className={`hover-reveal mt-1 flex items-stretch h-5 rounded-[7px] border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden shadow-[0_1px_2px_rgba(33,37,41,0.06)] mx-auto ${span > 1 ? 'w-full' : 'w-fit max-w-full'}`}
                       onClick={e => e.stopPropagation()}
                     >
                       {onMetricQuickCompareToggle && (
@@ -1653,6 +1654,27 @@ export function ReportTable({
                         >
                           <ChartLine size={12} />
                         </button>
+                      )}
+                      {/* «Как считается» — человеческим языком (та же human_description,
+                          что у «?» в панели метрик; правка владельца 17.08 — вопросик
+                          нужен и в шапке колонки). Поповер, не title: на таче hover нет. */}
+                      {(m.humanDescription || m.description) && (
+                        <Popover
+                          align="center"
+                          className="w-[340px] max-w-[calc(100vw-16px)] p-3"
+                          trigger={
+                            <button
+                              onClick={e => e.stopPropagation()}
+                              className="w-6 flex-shrink-0 flex items-center justify-center border-l border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg)] hover:text-[var(--color-accent)] transition-colors"
+                              title="Как считается"
+                            >
+                              <HelpCircle size={12} />
+                            </button>
+                          }
+                        >
+                          <div className="text-sm font-semibold text-[var(--color-text)] mb-1.5">{m.nameRu}</div>
+                          <div className="text-xs leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">{m.humanDescription || m.description}</div>
+                        </Popover>
                       )}
                       {/* Шестерёнка ведёт сразу в панель настроек метрики (HighlightEditor) —
                           промежуточное контекстное меню (MetricMenu) упразднено 09.07, ←/→/
