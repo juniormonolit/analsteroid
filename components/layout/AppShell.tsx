@@ -8,6 +8,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, Presentation,
+  Lightbulb,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -408,7 +409,7 @@ const NAV: NavItem[] = [
    <aside> и мобильного off-canvas drawer, поэтому вынесено из AppShell. */
 function SidebarBody({
   collapsed, pathname, user, expanded, setExpanded, logout,
-  changelogOpen, onOpenChangelog,
+  changelogOpen, onOpenChangelog, ideasOpen, onOpenIdeas,
 }: {
   collapsed: boolean;
   pathname: string;
@@ -418,6 +419,8 @@ function SidebarBody({
   logout: () => void;
   changelogOpen: boolean;
   onOpenChangelog: () => void;
+  ideasOpen: boolean;
+  onOpenIdeas: () => void;
 }) {
   const salesActive = pathname.startsWith('/sales');
   const showSummaryBlock = hasPerm(user, 'section.summary') || hasPerm(user, 'section.plans') || hasPerm(user, 'section.decomposition');
@@ -665,9 +668,25 @@ function SidebarBody({
             </div>
           )}
 
-          {/* «Что изменилось?» — ченджлог, виден всем независимо от прав (п.4 задачи);
-              «Есть идея?» живёт в шапке его панели (оптимизация 16.07). */}
+          {/* «Что изменилось?» — ченджлог, виден всем независимо от прав (п.4 задачи).
+              «Есть идея?» — снова ОТДЕЛЬНЫЙ пункт рядом (правка владельца 11.08:
+              «перемести в основное меню рядом со Что изменилось»). С 16.07 она жила
+              только кнопкой в шапке панели ченджлога — чтобы предложить идею, надо
+              было сначала догадаться открыть ченджлог; кнопка в шапке оставлена,
+              оба входа ведут в одну IdeasPanel. */}
           <div className="pb-1 px-2">
+            <RailTooltip collapsed={collapsed} label="Есть идея?">
+              <button
+                type="button"
+                onClick={onOpenIdeas}
+                className={`w-full ${navItemBase(collapsed)} ${ideasOpen ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+              >
+                <span className={navIconCls(ideasOpen)}><Lightbulb size={18} /></span>
+                {!collapsed && (
+                  <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">Есть идея?</span>
+                )}
+              </button>
+            </RailTooltip>
             <RailTooltip
               collapsed={collapsed}
               label={unreadCount > 0 ? `Что изменилось? · ${unreadCount > 99 ? '99+' : unreadCount}` : 'Что изменилось?'}
@@ -823,6 +842,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             collapsed={collapsed} pathname={pathname} user={user}
             expanded={expanded} setExpanded={setExpanded} logout={logout}
             changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
+            ideasOpen={ideasOpen} onOpenIdeas={() => setIdeasOpen(true)}
           />
         </aside>
         )}
@@ -854,6 +874,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                 collapsed={false} pathname={pathname} user={user}
                 expanded={expanded} setExpanded={setExpanded} logout={logout}
                 changelogOpen={changelogOpen} onOpenChangelog={() => setChangelogOpen(true)}
+                ideasOpen={ideasOpen} onOpenIdeas={() => { setIdeasOpen(true); setMobileOpen(false); }}
               />
             </aside>
           </div>
