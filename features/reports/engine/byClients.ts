@@ -24,8 +24,16 @@ import { addDays, startOfDay } from 'date-fns';
 // REST-вызовов на открытие. Пока имени нет в кэше — «Контакт #id»; имена
 // доезжают по мере пользования разделом заказчиков.
 //
-// Ограничения строк нет намеренно: дефолтный период — месяц (~2–4 тыс. строк).
-// «Всё время» по всем клиентам будет тяжёлым — осознанный компромисс v1.
+// ПОТОЛОК СТРОК — ОБЯЗАТЕЛЕН (инцидент 17.08, прод упал 502): «осознанный компромисс
+// v1» («всё время будет тяжёлым, ограничения нет») закончился OOM боевого процесса.
+// Владелец открыл «По заказчикам» за 01.01.2025—17.08.2026: SQL вернул 222 652 строки
+// (клиент × воронка) × 84 колонки метрик ≈ гигабайты в куче Node; Redis-кэш упал на
+// JSON.stringify («Invalid string length», >512 МБ), сериализация HTTP-ответа добила
+// кучу (лимит 2 ГБ) — FATAL heap out of memory, прод лежал до ручного рестарта
+// (запущен через nohup, авторестарта нет). Теперь в отчёт попадает ТОП-5000 клиентов
+// по числу сделок в периоде — сам SQL режет население ДО того, как строки доедут до
+// JS. Итоги отчёта НЕ страдают: «Итого» по клиентам считает движок clientMetrics
+// своим GROUPING SETS-запросом, без потолка.
 
 interface FunnelMeta { id: number; isRepeat: boolean }
 let _funnels: FunnelMeta[] | null = null;
@@ -42,6 +50,10 @@ async function loadFunnels(): Promise<FunnelMeta[]> {
 }
 
 type FlatRow = Record<string, unknown> & { dimension_id: string; funnel_id: number };
+
+// Потолок клиентов в отчёте (см. инцидент в шапке). 5000 строк × ~85 колонок ≈
+// 15-20 МБ JSON — переживают и Redis, и HTTP-ответ, и браузер.
+const CLIENT_ROWS_LIMIT = 5000;
 
 const _rowCache = new Map<string, { rows: FlatRow[]; at: number }>();
 const ROW_TTL = 10 * 60 * 1000;
@@ -120,14 +132,27 @@ export async function fetchByClients(opts: ByClientsOptions): Promise<ReportRow[
     collected.filter(m => m.tags.includes('scope_independent')).map(m => m.id),
   );
 
+  // Топ-клиенты периода — подзапросом прямо в notNullWhere: население режется в
+  // Postgres, до материализации строк в JS (в этом суть защиты от OOM). Ранжируем по
+  // числу сделок с ЛЮБОЙ активностью в окне (создание/продажа/отгрузка) — так клиент,
+  // у которого в периоде только продажа старой сделки, не выпадает из отчёта.
+  const topClientsSub = `d.contact_id IN (
+    SELECT _tc.contact_id FROM deals _tc
+     WHERE _tc.contact_id IS NOT NULL
+       AND ((_tc.created_at >= $1 AND _tc.created_at < $2)
+         OR (_tc.sold_at >= $1 AND _tc.sold_at < $2)
+         OR (_tc.delivered_at >= $1 AND _tc.delivered_at < $2))
+     GROUP BY 1 ORDER BY count(*) DESC LIMIT ${CLIENT_ROWS_LIMIT}
+  )`;
+
   const dim = {
     idExpr: 'd.contact_id::text',
     groupBy: 'GROUP BY d.contact_id, d.funnel_id',
-    notNullWhere: whereParts.join(' AND '),
+    notNullWhere: [...whereParts, topClientsSub].join(' AND '),
     funnelBreakdown: true as const,
   };
 
-  const key = `${fromIso}|${toExclIso}|${pgKey}|${deptKey ?? 'all'}|${offhKey}|${[...metricIds].sort().join(',')}`;
+  const key = `${fromIso}|${toExclIso}|${pgKey}|${deptKey ?? 'all'}|${offhKey}|cap${CLIENT_ROWS_LIMIT}|${[...metricIds].sort().join(',')}`;
   let entry = _rowCache.get(key);
   if (!entry || Date.now() - entry.at > ROW_TTL) {
     const rows = await cached(`rpt:cli:${key}`, reportTtl(toExclIso), async () => {

@@ -162,11 +162,22 @@ export async function cached<T>(key: string, ttlSec: number, producer: () => Pro
 
   const value = await producer();
 
-  if (client) {
+  // Предохранитель (инцидент 17.08, OOM прода): не пытаться сериализовать заведомо
+  // необъятное. JSON.stringify гигантского массива сам аллоцирует гигабайты и до
+  // своего «Invalid string length» успевает продавить кучу к OOM. 100 тыс. элементов —
+  // с запасом выше любого легитимного кэшируемого результата (потолки движков — до
+  // 10 тыс. строк); в лог пишем ключ и размер, чтобы виновник был виден сразу, а не
+  // как обезличенное «set failed».
+  const oversized = Array.isArray(value) && value.length > 100_000;
+  if (oversized) {
+    warnThrottled(`skip oversized set: ${key} (${(value as unknown[]).length} элементов)`, null);
+  }
+
+  if (client && !oversized) {
     try {
       await client.set(fullKey, JSON.stringify(value), 'EX', ttlSec);
     } catch (err) {
-      warnThrottled('set failed', err);
+      warnThrottled(`set failed: ${key}`, err);
     }
   }
   return value;
