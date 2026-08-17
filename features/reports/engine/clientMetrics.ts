@@ -916,8 +916,15 @@ export async function fetchClientCohortMetrics(
   if (offh) scope.push(offh);
   const inScope = scope.length ? scope.join(' AND ') : 'TRUE';
 
+  // Зрелость — ПО КЛИЕНТУ, не по строке (баг-репорт владельца 17.08: «LTV за
+  // периоды считается неверно» — в отчёте по менеджерам с периодом «по сегодня»
+  // ВСЕ окна стояли прочерком). Прежний фильтр брал окно у всех клиентов когорты,
+  // а TS-слой затем занулял всё окно целиком, если строка не прожила его до конца;
+  // у отчёта, чей период включает сегодня, это «никогда». Теперь в сумму окна
+  // входят только клиенты, чья первая отгрузка была ≥ N дней назад — прожитые
+  // окна видны сразу, свежие клиенты не занижают сумму недожитым хвостом.
   const winSums = LTV_WINDOWS_DAYS
-    .map(w => `SUM(amount) FILTER (WHERE delivered_at < first_at + interval '${w} days') AS ltv_${w}`)
+    .map(w => `SUM(amount) FILTER (WHERE delivered_at < first_at + interval '${w} days' AND first_at + interval '${w} days' <= now()) AS ltv_${w}`)
     .join(',\n         ');
 
   const sql = `
@@ -981,8 +988,10 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), COALESCE(SUM(first_rev), 0),
     return res.rows;
   });
 
-  // Зрелость окна: конец строки + X дней уже позади «сейчас». Для разреза по
-  // периодам конец — у каждого бакета свой; для остальных — конец периода отчёта.
+  // Прочерк незрелого окна оставлен ТОЛЬКО разрезу по периодам: там строки — сами
+  // когорты, и половинное окно свежего месяца рядом с прожитым прошлогодним
+  // читается как обвал бизнеса (исходное решение владельца). В разрезе менеджеров/
+  // групп сумма уже честная — SQL выше включает только проживших клиентов.
   const now = Date.now();
   const unit = (['day', 'week', 'month', 'quarter', 'year'].includes(opts.periodUnit ?? '')
     ? opts.periodUnit : 'month') as Parameters<typeof nextBucket>[1];
@@ -999,7 +1008,8 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), COALESCE(SUM(first_rev), 0),
     const end = rowEndMs(dimId);
     const ltv = {} as ClientCohortRow['ltv'];
     for (const w of LTV_WINDOWS_DAYS) {
-      ltv[w] = end + w * 86_400_000 <= now ? num(r[`ltv_${w}`]) : null;
+      const immature = opts.dimension === 'period' && end + w * 86_400_000 > now;
+      ltv[w] = immature ? null : num(r[`ltv_${w}`]);
     }
     out.set(dimId, {
       repeatClients: num(r.repeat_clients),
