@@ -71,6 +71,135 @@ const ACTION_LABELS: Record<string, string> = {
   snooze: '⏸ Отложен', no_call: '🚫 Не звонить', wake: '⏰ Возвращён из спящих', clear: '↩ Отметка снята',
 };
 
+// ── «Путь клиента» (задача владельца 17.08): дерево развития заказчика ────────
+// Читается сверху вниз: с чего клиент ЗАШЁЛ (категория КЦ первой сделки против
+// фактически проданного), как покупки шли дальше (все группы каждой сделки с
+// суммами по позициям), чем ритм закончился, и ВИЛКА вероятностей следующей
+// покупки (матрица переходов «купил X → следом покупают Y» — та же, что в
+// «Что предложить»). Внизу — клиентские показатели, посчитанные из этой же
+// цепочки (LTV = сумма отгрузок и т.д. — определения те же, что в метриках
+// сущности «Клиент»).
+function fmtGap(days: number): string {
+  if (days < 1) return 'в тот же день';
+  if (days < 60) return `через ${Math.round(days)} дн.`;
+  return `через ${(days / 30.44).toFixed(1).replace('.0', '')} мес.`;
+}
+
+function JourneyTab({ purchases, loading, recommend, onDealOpen }: {
+  purchases: { dealId: number; dealName: string | null; amount: number; deliveredAt: string;
+    headGroup: string | null; kcCategory: string | null; groups: { name: string | null; sum: number }[] }[];
+  loading: boolean;
+  recommend: ApiRow['recommend'];
+  onDealOpen: (id: number) => void;
+}) {
+  if (loading) {
+    return <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 text-sm text-[var(--color-text-muted)]">Собираем путь клиента…</div>;
+  }
+  if (purchases.length === 0) {
+    return <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 text-sm text-[var(--color-text-muted)]">Отгрузок ещё не было — путь начнётся с первой покупки.</div>;
+  }
+
+  const first = purchases[0];
+  const last = purchases[purchases.length - 1];
+  const ltv = purchases.reduce((s, p) => s + p.amount, 0);
+  const distinctGroups = new Set(purchases.flatMap(p => p.groups.map(g => g.name ?? 'Без группы'))).size;
+  const firstMs = new Date(first.deliveredAt).getTime();
+  const lastMs = new Date(last.deliveredAt).getTime();
+  const freqDays = purchases.length >= 2 ? (lastMs - firstMs) / DAY_MS / (purchases.length - 1) : null;
+  const daysSince = (Date.now() - lastMs) / DAY_MS;
+  const lifetimeMonths = (lastMs - firstMs) / DAY_MS / 30.44;
+  const churnPct = freqDays && freqDays > 0 ? Math.round((daysSince / freqDays) * 100) : null;
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 flex flex-col gap-5">
+      {/* Вход: с чего зашёл (КЦ первой сделки) против фактически проданного. */}
+      <Section title="Как зашёл" hint="Категория КЦ первой сделки — то, по чему клиент пришёл; группы по позициям — что реально продали">
+        <div className="text-[12.5px] flex flex-col gap-0.5">
+          <div>Зашёл по КЦ: <b className="text-[var(--color-text)]">{first.kcCategory ?? '—'}</b></div>
+          <div>Продали: <b className="text-[var(--color-text)]">{first.groups.map(g => g.name ?? 'Без группы').join(', ') || first.headGroup || '—'}</b></div>
+        </div>
+      </Section>
+
+      <Section title={`Цепочка покупок · ${purchases.length}`} hint="Каждая отгрузка со всеми товарными группами и суммами по позициям; между покупками — прошедшее время">
+        <div className="flex flex-col">
+          {purchases.map((p, i) => {
+            const gapDays = i === 0 ? null : (new Date(p.deliveredAt).getTime() - new Date(purchases[i - 1].deliveredAt).getTime()) / DAY_MS;
+            return (
+              <Fragment key={p.dealId}>
+                {gapDays !== null && (
+                  <div className="pl-[7px] py-0.5 flex items-center gap-2">
+                    <span className="block w-px h-4 bg-[var(--color-border-strong)]" />
+                    <span className="text-[11px] text-[var(--color-text-muted)]">{fmtGap(gapDays)}</span>
+                  </div>
+                )}
+                <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-[var(--color-text-muted)] tabular-nums shrink-0">{fmtDate(p.deliveredAt)}</span>
+                    <button onClick={() => onDealOpen(p.dealId)} className="text-[11px] font-mono text-[var(--color-accent)] hover:underline shrink-0">#{p.dealId}</button>
+                    {i === 0 && p.kcCategory && (
+                      <span className="text-[10.5px] px-1.5 py-0.5 rounded bg-[var(--color-accent-soft,#e7f1fb)] text-[var(--color-accent)] shrink-0" title="Категория КЦ — с чего клиент зашёл">
+                        КЦ: {p.kcCategory}
+                      </span>
+                    )}
+                    <span className="flex-1" />
+                    <span className="text-[12.5px] font-bold text-[var(--color-text)] tabular-nums whitespace-nowrap">{fmtMoney(p.amount)}</span>
+                  </div>
+                  {/* Все группы сделки с суммами по позициям (правка владельца:
+                      «если товарных групп несколько — отображать все и суммы») */}
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {p.groups.length === 0 ? (
+                      <span className="text-[11px] text-[var(--color-text-muted)]">{p.headGroup ?? 'Без товарных строк'}</span>
+                    ) : p.groups.map(g => (
+                      <span key={g.name ?? '—'} className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-bg-hover)] text-[var(--color-text)]">
+                        {g.name ?? 'Без группы'}
+                        <b className="tabular-nums text-[var(--color-text-muted)]">{fmtMoney(g.sum)}</b>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </Fragment>
+            );
+          })}
+        </div>
+      </Section>
+
+      {/* Вилка вероятностей следующей покупки — финал дерева (та же матрица
+          переходов, что «Что предложить», проценты по последним купленным группам). */}
+      <Section title="Вероятная следующая покупка" hint="Матрица переходов «купил X → следом покупают Y» по истории продаж всей базы">
+        {!recommend || recommend.items.length === 0 ? (
+          <div className="text-sm text-[var(--color-text-muted)]">Статистики переходов пока нет.</div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {recommend.fallback && <div className="text-[11px] text-[var(--color-text-muted)]">по группе клиента мало статистики — общий топ по базе</div>}
+            {recommend.items.slice(0, 5).map(it => (
+              <div key={it.group} className="flex items-center gap-2 text-[12.5px]">
+                <span className="font-semibold tabular-nums text-[var(--color-accent)] w-10 shrink-0">{it.pct}%</span>
+                <div className="flex-1 h-1.5 rounded bg-[var(--color-bg-hover)] overflow-hidden max-w-[220px]">
+                  <div className="h-full bg-[var(--color-accent)]" style={{ width: `${Math.min(100, it.pct)}%` }} />
+                </div>
+                <span className="truncate">{it.group}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Показатели клиента" hint="Считаются из цепочки выше — те же определения, что у метрик сущности «Клиент»">
+        <div className="flex flex-wrap gap-2">
+          <StatTile label="LTV (вся история)" value={fmtMoney(ltv)} hint="Сумма всех отгрузок клиента" />
+          <StatTile label="Покупок" value={String(purchases.length)} />
+          <StatTile label="Средний чек" value={fmtMoney(Math.round(ltv / purchases.length))} />
+          <StatTile label="Категорий куплено" value={String(distinctGroups)} />
+          <StatTile label="Частота заказов" value={freqDays ? `${Math.round(freqDays)} дн.` : '—'} hint="Средний интервал между отгрузками" />
+          <StatTile label="Дней с последней" value={`${Math.round(daysSince)}`} />
+          <StatTile label="Время жизни" value={lifetimeMonths >= 1 ? `${lifetimeMonths.toFixed(1)} мес.` : '< месяца'} hint="От первой отгрузки до последней" />
+          <StatTile label="Риск ухода" value={churnPct !== null ? `${churnPct}%` : '—'} hint="Дней с последней ÷ частота × 100: больше 100% — пора звонить" />
+        </div>
+      </Section>
+    </div>
+  );
+}
+
 export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zIndex }: {
   row: ApiRow;
   managerId: string;
@@ -82,6 +211,12 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
   zIndex?: number;
 }) {
   const [openDealId, setOpenDealId] = useState<number | null>(null);
+  // Вкладки карточки (задача владельца 17.08): «Обзор» — всё, что было; «Путь
+  // клиента» — цепочка покупок по товарным группам («дерево развития»): вход по КЦ
+  // против фактически проданного, каждая покупка со ВСЕМИ группами и суммами по
+  // ним, интервалы между покупками, в конце — вилка вероятностей следующей покупки
+  // (та же матрица переходов, что «Что предложить») и клиентские показатели.
+  const [cardTab, setCardTab] = useState<'overview' | 'journey'>('overview');
 
   // «Сделки» клиента (задача 17.08: из карточки заказчика — в карточку сделки).
   // Окно широкое (вся история): раздел про навигацию, не про период отчёта.
@@ -100,6 +235,23 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
     refetchOnWindowFocus: false,
   });
   const clientDeals = dealsData?.deals ?? [];
+
+  // «Путь клиента» — лениво, только при открытии вкладки (разбор jsonb-позиций
+  // всех отгрузок клиента; в «Обзоре» он не нужен).
+  interface JourneyPurchase {
+    dealId: number; dealName: string | null; amount: number; deliveredAt: string;
+    headGroup: string | null; kcCategory: string | null;
+    groups: { name: string | null; sum: number }[];
+  }
+  const journeyQs = row.clientKey.startsWith('k')
+    ? `companyId=${row.clientId}` : `contactId=${row.clientId}`;
+  const { data: journey, isLoading: journeyLoading } = useQuery<{ purchases: JourneyPurchase[] }>({
+    queryKey: ['customer-journey', row.clientKey],
+    enabled: cardTab === 'journey',
+    queryFn: () => fetch(`/api/customers/journey?${journeyQs}`).then(r => r.json()),
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
   const { data, isLoading, isError } = useQuery<CustomerCardData>({
     queryKey: ['customer-card', row.clientKey, isSelf ? 'me' : managerId],
     queryFn: async () => {
@@ -193,7 +345,34 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
           </div>
         </div>
 
+        {/* Вкладки: Обзор / Путь клиента (задача 17.08) */}
+        <div className="shrink-0 flex gap-1 px-4 sm:px-6 pt-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+          {([['overview', 'Обзор'], ['journey', 'Путь клиента']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setCardTab(key)}
+              className={`px-3 py-1.5 text-[13px] border-b-2 -mb-px transition-colors ${
+                cardTab === key
+                  ? 'border-[var(--color-accent)] text-[var(--color-accent)] font-semibold'
+                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {cardTab === 'journey' && (
+          <JourneyTab
+            purchases={journey?.purchases ?? []}
+            loading={journeyLoading}
+            recommend={row.recommend}
+            onDealOpen={setOpenDealId}
+          />
+        )}
+
         {/* Тело */}
+        {cardTab === 'overview' && (
         <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 flex flex-col gap-5">
           {isError && <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить карточку клиента.</div>}
 
@@ -408,6 +587,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
             )}
           </Section>
         </div>
+        )}
       </div>
       {openDealId !== null && <DealCard dealId={openDealId} onClose={() => setOpenDealId(null)} />}
     </div>
