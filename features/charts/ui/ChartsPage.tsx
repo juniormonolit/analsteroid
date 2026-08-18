@@ -480,6 +480,17 @@ export function ChartsPage() {
           clientType={clientType}
           departmentIds={departmentIds}
           departmentsReady={departmentsReady}
+          onApplyPageFilters={cfg => {
+            // Загрузка сохранённого графика восстанавливает и пилюли страницы —
+            // без них график «не тот» (сохранённые «первичные» на пилюле «все»
+            // дали бы другие числа). Период не сохраняется сознательно.
+            if (cfg.dealScope === 'primary' || cfg.dealScope === 'repeat' || cfg.dealScope === 'all') setDealScope(cfg.dealScope);
+            if (cfg.clientType === 'all' || cfg.clientType === 'b2c' || cfg.clientType === 'b2b') setClientType(cfg.clientType);
+            if (cfg.productGroupMode === 'kc' || cfg.productGroupMode === 'by_max') {
+              setProductGroupMode(cfg.productGroupMode);
+              setProductGroupIds(cfg.productGroupIds ?? []);
+            }
+          }}
           productGroupMode={productGroupMode}
           productGroupIds={productGroupIds}
         />
