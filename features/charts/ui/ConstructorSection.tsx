@@ -15,7 +15,24 @@ import {
 
 // Конструктор графиков (раздел «Графики», задача 28.07): любой известной метрике —
 // ось; данные — тот же /api/reports/run, что у отчётов (никакого второго расчёта).
-type ChartMode = 'by-managers' | 'by-product-groups' | 'by-amount-buckets';
+type ChartMode = string; // 'by-managers' | 'by-product-groups' | 'bucket:<поле из X_FIELDS>'
+
+// Зеркало реестра осей движка (features/reports/engine/byDealBuckets.ts X_FIELDS):
+// здесь только id+подпись для пикера, SQL живёт на сервере. Новая ось = строка
+// там и строка здесь.
+const BUCKET_FIELDS: { id: string; label: string }[] = [
+  { id: 'amount',        label: 'Сумма сделки' },
+  { id: 'created_hour',  label: 'Час создания сделки' },
+  { id: 'created_dow',   label: 'День недели создания' },
+  { id: 'created_week',  label: 'Неделя создания' },
+  { id: 'created_month', label: 'Месяц создания' },
+  { id: 'sold_month',    label: 'Месяц продажи' },
+];
+const X_AXIS_OPTIONS: { id: ChartMode; label: string }[] = [
+  { id: 'by-managers',       label: 'Менеджеры' },
+  { id: 'by-product-groups', label: 'Товарные группы' },
+  ...BUCKET_FIELDS.map(f => ({ id: `bucket:${f.id}`, label: f.label })),
+];
 type ChartType = 'bar' | 'line' | 'scatter';
 type ChartGrouping = 'none' | 'team' | 'branch';
 
@@ -174,7 +191,7 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
   // Дефолт (задача владельца 18.08): зависимость конверсии в продажу от суммы
   // сделки. Пилюли страницы уже по умолчанию «Первичные»; шкалу групп «по
   // наибольшему» при первом входе слать не пытаемся — это настройка страницы.
-  const [mode, setMode] = useState<ChartMode>('by-amount-buckets');
+  const [mode, setMode] = useState<ChartMode>('bucket:amount');
   const [chartType, setChartType] = useState<ChartType>('bar');
   const [grouping, setGrouping] = useState<ChartGrouping>('none');
   const [yMetricIds, setYMetricIds] = useState<string[]>(['cr_deal_to_sale_all']);
@@ -217,7 +234,8 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
 
   function loadChart(c: SavedChart) {
     const cfg = c.config;
-    if (cfg.mode === 'by-managers' || cfg.mode === 'by-product-groups' || cfg.mode === 'by-amount-buckets') setMode(cfg.mode);
+    const m = cfg.mode === 'by-amount-buckets' ? 'bucket:amount' : cfg.mode; // алиас первой итерации
+    if (X_AXIS_OPTIONS.some(o => o.id === m)) setMode(m);
     if (cfg.chartType === 'bar' || cfg.chartType === 'line' || cfg.chartType === 'scatter') setChartType(cfg.chartType);
     if (cfg.grouping === 'none' || cfg.grouping === 'team' || cfg.grouping === 'branch') setGrouping(cfg.grouping);
     if (cfg.yMetricIds?.length) setYMetricIds(cfg.yMetricIds);
@@ -244,9 +262,11 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
   const catalog = useMemo(() => catalogData?.metrics ?? [], [catalogData]);
   const pickerMetrics = useMemo(() => catalog.filter(m => m.isActive), [catalog]);
 
-  // Рассеяние по корзинам сумм смысла не имеет (X там и есть сумма сделки) —
+  const isBucket = mode.startsWith('bucket:');
+  const bucketField = isBucket ? mode.slice('bucket:'.length) : null;
+  // Рассеяние по корзинам смысла не имеет (X там и есть выбранное поле) —
   // при переключении на корзины скаттер мягко падает в полосы.
-  const effectiveChartType = mode === 'by-amount-buckets' && chartType === 'scatter' ? 'bar' : chartType;
+  const effectiveChartType = isBucket && chartType === 'scatter' ? 'bar' : chartType;
 
   const requestedIds = useMemo(() => {
     const ids = [...yMetricIds];
@@ -261,7 +281,8 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          reportSlug: mode,
+          reportSlug: isBucket ? 'by-deal-buckets' : mode,
+          bucketField,
           period: { from: period.from, to: period.to },
           // сравнение конструктору не нужно, но run его требует — шлём тот же период
           comparisonPeriod: { from: period.from, to: period.to },
@@ -295,8 +316,8 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
     }));
     // Корзины сумм — ФИКСИРОВАННЫЙ порядок по номеру корзины (от дешёвых к дорогим),
     // сортировка по значению превратила бы ось X в кашу.
-    if (mode === 'by-amount-buckets') {
-      return list.sort((a, b) => Number(a.id) - Number(b.id));
+    if (isBucket) {
+      return list.sort((a, b) => a.id.localeCompare(b.id));
     }
     const sorted = list.sort((a, b) => (b.values[0] ?? -Infinity) - (a.values[0] ?? -Infinity));
     if (effectiveChartType === 'scatter') return sorted;
@@ -366,14 +387,33 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
 
       {/* панель управления конструктором */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <Seg<ChartMode>
-          options={['by-managers', 'by-product-groups', 'by-amount-buckets']}
-          value={mode}
-          onChange={m => { setMode(m); if (m !== 'by-managers') setGrouping('none'); }}
-          labels={{ 'by-managers': 'По менеджерам', 'by-product-groups': 'По товарам', 'by-amount-buckets': 'По сумме сделки' }}
-        />
+        <Popover
+          className="w-[240px] p-1"
+          trigger={
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 border border-[var(--color-border)] rounded-lg px-2.5 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"
+            >
+              <span className="text-[var(--color-text-muted)]">Ось X:</span>
+              <span>{X_AXIS_OPTIONS.find(o => o.id === mode)?.label ?? mode}</span>
+              <ChevronDown size={13} className="text-[var(--color-text-muted)]" />
+            </button>
+          }
+        >
+          {X_AXIS_OPTIONS.map(o => (
+            <button
+              key={o.id}
+              type="button"
+              onClick={() => { setMode(o.id); if (o.id !== 'by-managers') setGrouping('none'); }}
+              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-xs ${mode === o.id ? 'bg-[var(--color-sidebar-active-bg)] text-[var(--color-sidebar-active)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+            >
+              <span className={`w-3.5 shrink-0 ${mode === o.id ? '' : 'opacity-0'}`}><Check size={14} /></span>
+              {o.label}
+            </button>
+          ))}
+        </Popover>
         <Seg<ChartType>
-          options={mode === 'by-amount-buckets' ? ['bar', 'line'] : ['bar', 'line', 'scatter']}
+          options={isBucket ? ['bar', 'line'] : ['bar', 'line', 'scatter']}
           value={effectiveChartType}
           onChange={setChartType}
           labels={{ bar: 'Полосы', line: 'Линия', scatter: 'Рассеяние' }}
@@ -391,7 +431,7 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
           selected={yMetricIds}
           onChange={ids => setYMetricIds(ids.length ? ids : yMetricIds)}
           multi={effectiveChartType !== 'scatter'}
-          label={effectiveChartType === 'scatter' ? 'Ось Y' : mode === 'by-amount-buckets' ? 'Ось Y (по корзинам чека)' : 'Метрики'}
+          label={effectiveChartType === 'scatter' ? 'Ось Y' : isBucket ? 'Ось Y' : 'Метрики'}
         />
         {effectiveChartType === 'scatter' && (
           <MetricPicker
@@ -414,7 +454,7 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
         <p className="text-sm text-[var(--color-text-muted)] py-8 text-center">
           Нет данных под выбранные фильтры и метрики.
           {mode === 'by-product-groups' && ' Часть метрик (планы, звонки, стадии) считается только по менеджерам.'}
-          {mode === 'by-amount-buckets' && ' Часть метрик (планы, звонки, стадии) по корзинам чека не считается.'}
+          {isBucket && ' Часть метрик (планы, звонки, стадии) по корзинам сделок не считается.'}
         </p>
       ) : effectiveChartType === 'bar' ? (
         <HBarChart entities={entities} metrics={yMetrics} />
@@ -426,13 +466,14 @@ export function ConstructorSection({ period, dealScope, clientType, departmentId
         <p className="text-sm text-[var(--color-text-muted)]">Выберите метрики для осей.</p>
       )}
 
-      {mode === 'by-amount-buckets' && (
+      {isBucket && (
         <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">
-          Корзина — по сумме сделки. Конверсии читаются как «доля сделок этого чека,
-          созданных и проданных в выбранном периоде».
+          Строка — корзина сделок по выбранной оси X. Конверсии читаются как «доля
+          сделок корзины, созданных и проданных в выбранном периоде»; на временных
+          осях это когорта — «что стало с созданными тогда».
         </p>
       )}
-      {mode !== 'by-amount-buckets' && effectiveChartType !== 'scatter' && entities.length === TOP_N && (
+      {!isBucket && effectiveChartType !== 'scatter' && entities.length === TOP_N && (
         <p className="mt-3 text-[11px] text-[var(--color-text-muted)]">Показан топ-{TOP_N} по первой метрике.</p>
       )}
     </section>

@@ -5,7 +5,7 @@ import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { fetchByProductGroups } from '@/features/reports/engine/byProductGroups';
 import { fetchBySources } from '@/features/reports/engine/bySources';
-import { fetchByAmountBuckets } from '@/features/reports/engine/byAmountBuckets';
+import { fetchByDealBuckets } from '@/features/reports/engine/byDealBuckets';
 import { fetchByClients } from '@/features/reports/engine/byClients';
 import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features/reports/engine/managerActivity';
 import { fetchBookingCallRate } from '@/features/reports/engine/bookingCallRate';
@@ -306,12 +306,16 @@ export async function POST(req: NextRequest) {
       fetchByClients({ period: opts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, createdTimeFilter, firstTouchFilter, dealFilters }),
       fetchByClients({ period: compOpts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, createdTimeFilter, firstTouchFilter, dealFilters }),
     ]);
-  } else if (reportSlug === 'by-amount-buckets') {
+  } else if (reportSlug === 'by-deal-buckets' || reportSlug === 'by-amount-buckets') {
     // Пятое измерение (конструктор графиков, задача 18.08): строка = корзина по
-    // сумме сделки d.amount. Все метрики каталога и фильтры работают per-корзина.
+    // ПОЛЮ сделки из реестра X_FIELDS (сумма, час/день недели/неделя/месяц
+    // создания, месяц продажи). Все метрики каталога и фильтры — per-корзина.
+    // 'by-amount-buckets' — алиас первой итерации (сохранённые графики того дня).
+    const xField = reportSlug === 'by-amount-buckets' ? 'amount'
+      : (typeof body.bucketField === 'string' ? body.bucketField : 'amount');
     [currentRows, compRows] = await Promise.all([
-      fetchByAmountBuckets({ period: opts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, managerId, createdTimeFilter, firstTouchFilter, dealFilters }),
-      fetchByAmountBuckets({ period: compOpts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, managerId, createdTimeFilter, firstTouchFilter, dealFilters }),
+      fetchByDealBuckets({ xField, period: opts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, managerId, createdTimeFilter, firstTouchFilter, dealFilters }),
+      fetchByDealBuckets({ xField, period: compOpts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, managerId, createdTimeFilter, firstTouchFilter, dealFilters }),
     ]);
   }
 
