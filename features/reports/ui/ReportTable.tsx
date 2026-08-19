@@ -401,13 +401,23 @@ export function ReportTable({
   // каждом ПОЯВЛЕНИИ строки (ушла при сбросе групп → пришла снова = снова
   // свёрнута), ручное раскрытие пользователем при живой строке не трогаем.
   const NOGROUP_ID = '__ugroup__nogroup__';
-  const nogroupSeenRef = useRef(false);
+  // Пер-отдельные «Без группы» (18.08) вложены в строки отделов и имеют id с
+  // суффиксом `:<teamKey>` — ищем префиксом и на верхнем уровне, и в детях.
+  const nogroupSeenRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const has = rows.some(r => r.dimensionId === NOGROUP_ID);
-    if (has && !nogroupSeenRef.current) {
-      setCollapsed(prev => new Set(prev).add(NOGROUP_ID));
+    const present = new Set<string>();
+    const scan = (rs: typeof rows) => {
+      for (const r of rs) {
+        if (r.dimensionId.startsWith(NOGROUP_ID)) present.add(r.dimensionId);
+        if (r.children?.length) scan(r.children as typeof rows);
+      }
+    };
+    scan(rows);
+    const fresh = [...present].filter(id => !nogroupSeenRef.current.has(id));
+    if (fresh.length > 0) {
+      setCollapsed(prev => { const n = new Set(prev); for (const id of fresh) n.add(id); return n; });
     }
-    nogroupSeenRef.current = has;
+    nogroupSeenRef.current = present;
   }, [rows]);
 
   function collapseAll() {

@@ -218,6 +218,10 @@ function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Met
           deltas: aggregateGroupDeltas(tm, metrics),
         };
       });
+      // Ручные группы — в конец списка отделов филиала (18.08): раньше строка
+      // группы вставала по позиции первого участника, посреди отделов.
+      teamRows.sort((a, b) =>
+        Number(a.dimensionId.startsWith('__ugroup__')) - Number(b.dimensionId.startsWith('__ugroup__')));
       return {
         dimensionId: `__branch__${branch}`,
         // Display-слой (п.5 правок 09.07/2): «СПб»→«Санкт-Петербург» и т.п. — ключ
@@ -245,6 +249,33 @@ function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Met
   return order.map(key => {
     const members = groups.get(key)!;
     const name = members[0]?.teamName ?? 'Без отдела';
+    // Ручные группы внутри отдела (правка владельца 18.08): раньше строка группы
+    // вставала ПОСРЕДИ менеджеров отдела — на месте своего первого участника по
+    // исходному порядку строк, — а остальные менеджеры оставались россыпью, и
+    // «Итого» по ручной разбивке не читалось. Теперь при наличии хотя бы одной
+    // ручной группы в отделе свободные менеджеры схлопываются в «Без группы»
+    // с тем же агрегатом. Инвариант: Σ(ручные группы) + «Без группы» = подытог
+    // отдела — каждый менеджер ровно в одном наборе. Порядок «группы сверху,
+    // „Без группы“ последней» — тот же, что в режиме «Без группировки».
+    const ugroups = members.filter(m => m.dimensionId.startsWith('__ugroup__'));
+    let children: MergedRow[] = members;
+    if (ugroups.length > 0) {
+      const loose = members.filter(m => !m.dimensionId.startsWith('__ugroup__'));
+      children = [
+        ...ugroups,
+        ...(loose.length > 0 ? [{
+          // id уникален В ПРЕДЕЛАХ отдела — по нему же дрилл находит свободных
+          // менеджеров именно этого отдела (см. handleCellClick).
+          dimensionId: `${NOGROUP_ROW_ID}:${key}`,
+          dimensionName: `Без группы (${loose.length})`,
+          teamId: key, teamName: name,
+          branchName: members[0]?.branchName ?? null,
+          ugroupSize: loose.length,
+          deltas: aggregateGroupDeltas(loose, metrics),
+          isGroup: true, children: loose,
+        } as MergedRow] : []),
+      ];
+    }
     return {
       dimensionId: `__team__${key}`,
       dimensionName: name,
@@ -252,7 +283,7 @@ function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Met
       teamName: name,
       deltas: aggregateGroupDeltas(members, metrics),
       isGroup: true,
-      children: members,
+      children,
     };
   });
 }
@@ -1186,7 +1217,14 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         // тот же механизм managerIds/productGroups, что у обычных user-групп.
         const memberIds = id === NOGROUP_ROW_ID
           ? userGroupFreeIds
-          : userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [];
+          : id.startsWith(`${NOGROUP_ROW_ID}:`)
+            // «Без группы» ВНУТРИ отдела (18.08): свободные сущности именно этого
+            // отдела — ключ отдела зашит в id строки после двоеточия.
+            ? (data?.rows ?? [])
+                .filter((r: MergedRow) => !userGroupBusy.has(r.dimensionId)
+                  && (r.teamId ?? '__no_team__') === id.slice(NOGROUP_ROW_ID.length + 1))
+                .map((r: MergedRow) => r.dimensionId)
+            : userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [];
         if (memberIds.length === 0) return;
         setDrilldown({ id: memberIds.join(','), name, metricId, metricName: m?.nameRu, kind: dimensionType === 'manager' ? 'managers' : 'productGroups' });
         return;
@@ -1260,7 +1298,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
       }
       setChartTarget({ metricId, dimensionId: id, dimensionName: name, managerIds, productGroupId: pgRowId, cellValue });
     },
-    [data?.rows, data?.totals, displayRows, reportSlug, sourceMode, periodMode, productGroupMode, userGroups, userGroupFreeIds],
+    [data?.rows, data?.totals, displayRows, reportSlug, sourceMode, periodMode, productGroupMode, userGroups, userGroupFreeIds, userGroupBusy],
   );
 
   // Экспорт отчёта (задача 1706): буфер (TSV)/Excel/PDF/PNG — единый снимок таблицы
