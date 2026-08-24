@@ -101,6 +101,21 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   // Раздел «Клиенты»: товарность сделки и порядок ТОВАРНЫХ отгрузок клиента
   // (см. goodsDeliverySubquery выше).
   if (f.field === '_has_goods') return dealHasGoodsWhere('d');
+  // «Доля прозвона повторных продаж» (задача владельца 24.08, миграция 184):
+  // _has_call — по сделке есть хотя бы один звонок (va.calls, та же SA-БД).
+  // Определение владельца дословно («есть хотя бы 1 звонок») — направление и
+  // результат сознательно не фильтруются; захочет «исходящий состоявшийся» —
+  // добавить сюда direction/result (замеры июля: любой 47,3 %, исходящий
+  // 44,2 %, исходящий состоявшийся 39,5 %).
+  if (f.field === '_has_call') {
+    return `EXISTS (SELECT 1 FROM va.calls _hc WHERE _hc.deal_id = ${a}.deal_id)`;
+  }
+  // _lost_within_1h — сделка забракована в течение часа после создания
+  // (автобраковка повторки: июль — 290 из 1 369 отказов, 210 из них в первые
+  // 5 минут, звонок был лишь у 8).
+  if (f.field === '_lost_within_1h') {
+    return `(${a}.lost_at IS NOT NULL AND ${a}.lost_at < ${a}.created_at + interval '1 hour')`;
+  }
   if (f.field === '_first_goods_deliv') return goodsDeliverySubquery('= 1');
   if (f.field === '_repeat_goods_deliv') return goodsDeliverySubquery('>= 2');
   // Защита: любое иное поле с ведущим «_» — тоже виртуальное и НЕ является колонкой БД.
