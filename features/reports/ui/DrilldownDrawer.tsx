@@ -562,11 +562,24 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
     ...(dealFilters?.length ? { dealFilters: JSON.stringify(dealFilters) } : {}),
   });
   const qs = params.toString();
-  const { data, isLoading } = useQuery<{ customers: ClientDrillCustomerRow[]; totalCustomers: number; totalDeals: number; totalAmount: number; truncated: boolean }>({
+  const { data, isLoading, error } = useQuery<{ customers: ClientDrillCustomerRow[]; totalCustomers: number; totalDeals: number; totalAmount: number; truncated: boolean }>({
     queryKey: ['client-drill', qs],
-    queryFn: () => fetch(`/api/reports/client-deals?${qs}`).then(r => r.json()),
+    // r.ok обязателен: 400 роута («метрика не поддерживает клиентский дрилл»)
+    // раньше молча превращался в {error} → customers=[] → «Нет заказчиков» —
+    // человек видел ложную пустоту вместо настоящей причины (баг-репорт 24.08).
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/client-deals?${qs}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
   });
 
+  if (error) {
+    return <div className="p-10 text-center text-[var(--color-negative,#d33)] text-sm">Дрилл-даун не открылся: {String(error instanceof Error ? error.message : error)}</div>;
+  }
   if (isLoading) {
     return <div className="p-6 space-y-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-8 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
   }

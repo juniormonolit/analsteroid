@@ -11,7 +11,11 @@ const LTV_WINDOWS = [30, 60, 90, 180, 360] as const;
 // (порядковый номер в его истории), windowDays — окно когорты от первой отгрузки.
 export type ClientDrillRule =
   | { kind: 'base'; rnCond?: string; complexOnly?: boolean }
-  | { kind: 'cohort'; windowDays?: number; firstOnly?: boolean };
+  | { kind: 'cohort'; windowDays?: number; firstOnly?: boolean;
+      // allClients — вся когорта, не только повторные (cohort_clients, #4996);
+      // returnedOnly — повторные, у кого ВТОРАЯ отгрузка уложилась в окно
+      // (население «% вернувшихся N дн»: 2+ отгрузки именно внутри окна).
+      allClients?: boolean; returnedOnly?: boolean };
 
 export const CLIENT_DRILL_RULES: Record<string, ClientDrillRule> = {
   all_clients_delivered:    { kind: 'base' },
@@ -29,6 +33,19 @@ export const CLIENT_DRILL_RULES: Record<string, ClientDrillRule> = {
   cohort_ltv_total_revenue: { kind: 'cohort' },
   ...Object.fromEntries(LTV_WINDOWS.map(w => [
     `cohort_repeat_revenue_${w}`, { kind: 'cohort', windowDays: w } as ClientDrillRule,
+  ])),
+  // #4994: коэффициент = всё/первый заказ — население то же, что у LTV за всё время.
+  cohort_repeat_ratio:      { kind: 'cohort' },
+  // Средние LTV (на повторного клиента) — то же население, что их суммы.
+  cohort_ltv_total:         { kind: 'cohort' },
+  ...Object.fromEntries(LTV_WINDOWS.map(w => [
+    `cohort_ltv_${w}`, { kind: 'cohort', windowDays: w } as ClientDrillRule,
+  ])),
+  // #4996: «Клиентов» — ВСЯ когорта; «% вернувшихся N дн» — вернувшиеся в окне.
+  cohort_clients:           { kind: 'cohort', allClients: true },
+  cohort_return_rate_total: { kind: 'cohort' },
+  ...Object.fromEntries(LTV_WINDOWS.map(w => [
+    `cohort_return_rate_${w}`, { kind: 'cohort', windowDays: w, returnedOnly: true } as ClientDrillRule,
   ])),
 };
 
@@ -51,6 +68,10 @@ export const CLIENT_FAMILY_METRIC_IDS: string[] = [
   'active_clients_90d', 'client_share_count_pct', 'client_share_amount_pct',
   'client_days_since_last', 'client_order_frequency_days', 'client_ltv',
   'client_categories_count', 'client_churn_risk_pct',
+  // Проценты/средние без точного населения — фолбэк «все отгрузки периода».
+  // Пропущены при первичной сборке словаря (баг-репорт владельца 24.08: клик по
+  // ним отвечал 400, а UI показывал «Нет заказчиков»).
+  'complex_clients_pct', 'repeat_amount_share', 'contactability_pct', 'avg_orders_per_client',
 ];
 
 /** Метрика дрилла с фолбэком: без точного правила — «все отгрузки клиентов периода». */

@@ -195,6 +195,16 @@ SELECT pd.*
          AND f.first_at + interval '${rule.windowDays} days' <= now()`
       : '';
     const firstCond = rule.firstOnly ? `AND s.delivered_at = f.first_at` : '';
+    // «% вернувшихся N дн» (#4996): повторным считается клиент, у которого 2+
+    // отгрузки УЛОЖИЛИСЬ в окно — иначе в дрилле показались бы клиенты,
+    // вернувшиеся позже окна, и список был бы шире числа в ячейке.
+    const repeatHaving = rule.returnedOnly && rule.windowDays
+      ? `count(*) FILTER (WHERE delivered_at < first_at + interval '${rule.windowDays} days') >= 2`
+      : `count(*) >= 2`;
+    // cohort_clients — ВСЯ когорта, включая купивших один раз.
+    const repeatJoin = rule.allClients
+      ? ''
+      : `JOIN repeat_clients rc ON rc.contact_id = s.contact_id`;
     sql = `
 WITH firsts AS (
   SELECT d.contact_id, min(d.delivered_at) AS first_at
@@ -222,12 +232,12 @@ ships AS (
      AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
 ),
 repeat_clients AS (
-  SELECT contact_id FROM ships GROUP BY 1 HAVING count(*) >= 2
+  SELECT contact_id FROM ships GROUP BY 1 HAVING ${repeatHaving}
 )
 SELECT s.deal_id, s.contact_id, s.deal_name, s.amount, s.delivered_at,
        s.manager_id, s.head_group_name
   FROM ships s
-  JOIN repeat_clients rc ON rc.contact_id = s.contact_id
+  ${repeatJoin}
   JOIN first_deal f ON f.contact_id = s.contact_id
  WHERE TRUE ${windowCond} ${firstCond}
  ORDER BY s.contact_id, s.delivered_at`;
