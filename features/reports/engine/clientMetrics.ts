@@ -864,6 +864,33 @@ export const CLIENT_COHORT_METRIC_IDS = [
   'cohort_repeat_clients', 'cohort_first_revenue',
   'cohort_repeat_revenue_30', 'cohort_repeat_revenue_60', 'cohort_repeat_revenue_90',
   'cohort_repeat_revenue_180', 'cohort_repeat_revenue_360', 'cohort_ltv_total_revenue',
+  // Задача #4996 (заказчик Серёга): «% вернувшихся клиентов» — числители-счётчики
+  // для calculated cohort_return_rate_* (миграция 182). Та же когорта, то же
+  // определение окон 30/60/90/180/360 и та же зрелость, что у LTV-блока выше —
+  // «вернулся через N дней» = ППО (вторая отгрузка, первая повторная) клиента
+  // случилась в пределах N дней от его первой отгрузки (накопительно). Считаются
+  // ПО ВСЕЙ когорте (не только по repeat-популяции LTV-блока: одноразовые
+  // клиенты просто дают false на каждое окно).
+  'cohort_returned_30', 'cohort_returned_60', 'cohort_returned_90',
+  'cohort_returned_180', 'cohort_returned_360',
+  // Знаменатель доли — cohort_clients, НЕ new_clients_count (комментарий блока
+  // LTV выше «отдельная метрика размера когорты не нужна — это new_clients_count»
+  // здесь не подтвердился на реальных данных: new_clients_count в разрезе
+  // 'period'/'product-group' считает bool_or(is_new) по КАЖДОЙ сделке клиента
+  // внутри отчётного периода (fetchClientMetrics), поэтому клиент с первой
+  // отгрузкой в январе и повторной в марте засчитывается «новым» И в январском,
+  // И в мартовском бакете (и аналогично — в обеих товарных группах, если купил
+  // в разных). Прямая проверка (задача #4996, разрез «Периоды», март 2026):
+  // new_clients_count=832, честный размер когорты марта (кто ВПЕРВЫЕ купил
+  // именно в марте) — 775; знаменатель «% вернувшихся» обязан считаться ТОЙ ЖЕ
+  // выборкой, что числитель (иначе доля бьётся с несогласованной базой), а не
+  // «удобной» уже готовой метрикой. Для 'manager' на практике почти совпадает
+  // (менеджер первой сделки обычно ведёт клиента и дальше), поэтому баг не
+  // проявлялся на разрезе «Менеджеры» — но в 'period'/'product-group' он
+  // структурный, не редкий случай. `cohort_clients` — тот самый ID, что уже был
+  // в каталоге под ТЗ #1725 (задизейблен в 174 как «дубль new_clients_count» —
+  // дубликат он не для всех разрезов), реактивируется миграцией 182.
+  'cohort_clients',
 ] as const;
 
 export interface ClientCohortRow {
@@ -875,6 +902,13 @@ export interface ClientCohortRow {
   ltv: Record<(typeof LTV_WINDOWS_DAYS)[number], number | null>;
   /** Сумма всех отгрузок этих клиентов за всю историю. */
   ltvTotal: number;
+  /** Клиенты когорты (ВСЕ, не только повторные), у кого ППО (вторая отгрузка)
+   *  случилась в пределах окна от первой; null = окно не прожито всей когортой
+   *  (только для dimension='period', см. rowEndMs ниже). */
+  returned: Record<(typeof LTV_WINDOWS_DAYS)[number], number | null>;
+  /** Все клиенты когорты (знаменатель «% вернувшихся») — см. комментарий у
+   *  CLIENT_COHORT_METRIC_IDS про несовпадение с new_clients_count. */
+  cohortClients: number;
 }
 
 export function clientCohortToRecord(row: ClientCohortRow | undefined): Record<string, number | null> {
@@ -887,6 +921,15 @@ export function clientCohortToRecord(row: ClientCohortRow | undefined): Record<s
     cohort_repeat_revenue_180: row?.ltv[180] ?? null,
     cohort_repeat_revenue_360: row?.ltv[360] ?? null,
     cohort_ltv_total_revenue: row?.ltvTotal ?? 0,
+    cohort_clients: row?.cohortClients ?? 0,
+    // ?? null (не 0): различаем «окно не прожито» (immature, из rowEndMs) от
+    // «прожито, вернувшихся 0» — оба в итоге дают formula null → «—» у доли,
+    // но 0 сломал бы null-протяжку сквозь evalFormula для immature-случая.
+    cohort_returned_30: row?.returned[30] ?? null,
+    cohort_returned_60: row?.returned[60] ?? null,
+    cohort_returned_90: row?.returned[90] ?? null,
+    cohort_returned_180: row?.returned[180] ?? null,
+    cohort_returned_360: row?.returned[360] ?? null,
   };
 }
 
@@ -926,6 +969,28 @@ export async function fetchClientCohortMetrics(
   const winSums = LTV_WINDOWS_DAYS
     .map(w => `SUM(amount) FILTER (WHERE delivered_at < first_at + interval '${w} days' AND first_at + interval '${w} days' <= now()) AS ltv_${w}`)
     .join(',\n         ');
+  // «Вернулся через N дней» = ППО этого клиента (вторая отгрузка, rn=2 по
+  // delivered_at — тот же приём rn=2, что и median_time_to_2nd выше в файле)
+  // случилась строго до first_at+N дней.
+  //
+  // НЕ копируем сюда maturity-условие winSums (first_at+N<=now()) — оно там
+  // нужно, потому что СУММА выручки окна ещё может вырасти новыми отгрузками
+  // до конца окна (наблюдение неполное, число может увеличиться). У булева
+  // «вернулся/нет» это не так: если ППО УЖЕ случилась внутри N дней — это
+  // свершившийся факт, дальнейшее время его не отменит, ждать «дожития» окна
+  // незачем. Баг найден на живом скриншоте (проверка задачи #4996): с этим
+  // условием колонка «360 дн» была 0,0% у ВСЕХ строк (когорта 2026 года ещё
+  // не старше 360 дней ни у одного клиента), а «180 дн» проваливалась НИЖЕ
+  // «90 дн» — нарушение монотонности 30≤60≤90≤180≤360≤итого. Единственное,
+  // что зрелость окна законно даёt, — это отрицательный результат «ещё не
+  // вернулся» СЕЙЧАС может стать «вернулся» позже (клиент донабирает время);
+  // это ожидаемый снапшот-эффект (то же поведение, что у LTV-сумм в разрезах
+  // менеджеров/групп — «уже честная», не нулится), а не повод занулять уже
+  // подтверждённые «да». Разрез «Периоды» по-прежнему прячет незрелые окна
+  // целиком через rowEndMs ниже — там достаточно.
+  const retFlags = LTV_WINDOWS_DAYS
+    .map(w => `(second_at IS NOT NULL AND second_at < first_at + interval '${w} days') AS ret_${w}`)
+    .join(',\n         ');
 
   const sql = `
 WITH firsts AS (
@@ -956,28 +1021,61 @@ ships AS (
      AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
      AND EXISTS (SELECT 1 FROM jsonb_array_elements(d.products) p WHERE ${goods})
 ),
+ships_rn AS (
+  SELECT *, row_number() OVER (PARTITION BY contact_id ORDER BY delivered_at) AS rn
+    FROM ships
+),
 per_client AS (
-  SELECT contact_id, dim_id,
+  SELECT contact_id, dim_id, first_at,
          count(*) AS n_ships,
          COALESCE(SUM(amount) FILTER (WHERE delivered_at = first_at), 0) AS first_rev,
          ${winSums},
-         SUM(amount) AS ltv_total
-    FROM ships GROUP BY 1, 2
+         SUM(amount) AS ltv_total,
+         MIN(delivered_at) FILTER (WHERE rn = 2) AS second_at
+    FROM ships_rn GROUP BY 1, 2, 3
 ),
-rep AS (SELECT * FROM per_client WHERE n_ships >= 2)
-SELECT dim_id, count(*) AS repeat_clients, COALESCE(SUM(first_rev), 0) AS first_revenue,
-       ${LTV_WINDOWS_DAYS.map(w => `COALESCE(SUM(ltv_${w}), 0) AS ltv_${w}`).join(', ')},
-       COALESCE(SUM(ltv_total), 0) AS ltv_total
-  FROM rep GROUP BY 1
-UNION ALL
-SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), COALESCE(SUM(first_rev), 0),
-       ${LTV_WINDOWS_DAYS.map(w => `COALESCE(SUM(ltv_${w}), 0)`).join(', ')},
-       COALESCE(SUM(ltv_total), 0)
-  FROM rep
+returned_flags AS (
+  SELECT contact_id, dim_id, ${retFlags}
+    FROM per_client
+),
+rep AS (SELECT * FROM per_client WHERE n_ships >= 2),
+rep_agg AS (
+  SELECT dim_id, count(*) AS repeat_clients, COALESCE(SUM(first_rev), 0) AS first_revenue,
+         ${LTV_WINDOWS_DAYS.map(w => `COALESCE(SUM(ltv_${w}), 0) AS ltv_${w}`).join(', ')},
+         COALESCE(SUM(ltv_total), 0) AS ltv_total
+    FROM rep GROUP BY 1
+  UNION ALL
+  SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), COALESCE(SUM(first_rev), 0),
+         ${LTV_WINDOWS_DAYS.map(w => `COALESCE(SUM(ltv_${w}), 0)`).join(', ')},
+         COALESCE(SUM(ltv_total), 0)
+    FROM rep
+),
+ret_agg AS (
+  -- count(*) = «Клиентов в когорте» (cohort_clients): per_client/returned_flags —
+  -- ровно один ряд на contact_id (dim_id/first_at функционально зависят от него
+  -- через first_deal), поэтому это честный размер бакета — в отличие от
+  -- new_clients_count (fetchClientMetrics), который в разрезах 'period' и
+  -- 'product-group' считает клиента новым в КАЖДОМ бакете, где у него есть
+  -- отгрузка внутри отчётного периода, а не только в бакете первой отгрузки
+  -- (см. комментарий у CLIENT_COHORT_METRIC_IDS).
+  SELECT dim_id, count(*) AS cohort_clients,
+         ${LTV_WINDOWS_DAYS.map(w => `count(*) FILTER (WHERE ret_${w}) AS returned_${w}`).join(', ')}
+    FROM returned_flags GROUP BY 1
+  UNION ALL
+  SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*),
+         ${LTV_WINDOWS_DAYS.map(w => `count(*) FILTER (WHERE ret_${w})`).join(', ')}
+    FROM returned_flags
+)
+SELECT COALESCE(a.dim_id, b.dim_id) AS dim_id,
+       a.repeat_clients, a.first_revenue,
+       ${LTV_WINDOWS_DAYS.map(w => `a.ltv_${w}`).join(', ')}, a.ltv_total,
+       b.cohort_clients,
+       ${LTV_WINDOWS_DAYS.map(w => `b.returned_${w}`).join(', ')}
+  FROM rep_agg a FULL JOIN ret_agg b ON b.dim_id = a.dim_id
 `;
 
   const key = [
-    'cohort', fromIso, toExclIso, opts.dimension, opts.periodUnit ?? '-', opts.productGroupMode ?? '-',
+    'cohort3', fromIso, toExclIso, opts.dimension, opts.periodUnit ?? '-', opts.productGroupMode ?? '-',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
     deptEmpty ? 'none' : (managerIds.length ? managerIds.join(',') : 'all'),
     `${opts.createdTimeFilter ?? 'all'}:${opts.firstTouchFilter ?? 'all'}|df:${df.key}`,
@@ -1007,15 +1105,21 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), COALESCE(SUM(first_rev), 0),
     const dimId = String(r.dim_id);
     const end = rowEndMs(dimId);
     const ltv = {} as ClientCohortRow['ltv'];
+    const returned = {} as ClientCohortRow['returned'];
     for (const w of LTV_WINDOWS_DAYS) {
       const immature = opts.dimension === 'period' && end + w * 86_400_000 > now;
       ltv[w] = immature ? null : num(r[`ltv_${w}`]);
+      // Та же зрелость, что у LTV: колонка «% вернувшихся через N дн.» в разрезе
+      // по периодам гасится (null → «—»), пока окно не прожито всем бакетом.
+      returned[w] = immature ? null : num(r[`returned_${w}`]);
     }
     out.set(dimId, {
       repeatClients: num(r.repeat_clients),
       firstRevenue: num(r.first_revenue),
       ltv,
       ltvTotal: num(r.ltv_total),
+      returned,
+      cohortClients: num(r.cohort_clients),
     });
   }
   return out;
