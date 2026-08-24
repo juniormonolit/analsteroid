@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { exportNodeToPng } from '@/features/reports/lib/exportImage';
 import type { Metric, DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
+import type { DealFilter } from '@/lib/metrics/dealFilters';
 import type { DateRange } from '@/lib/period';
 
 export interface MetricChartTarget {
@@ -70,6 +71,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
     dealScope: DealScope; clientType: ClientType;
     productGroupMode: ProductGroupMode; productGroupIds?: string[];
     createdTimeFilter: CreatedTimeFilter; firstTouchFilter: FirstTouchFilter;
+    /** «Фильтр сделок» отчёта — график обязан считаться по тому же срезу, что ячейка. */
+    dealFilters?: DealFilter[];
   };
   onClose: () => void;
 }) {
@@ -95,6 +98,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           productGroupIds: filters.productGroupIds,
           createdTimeFilter: filters.createdTimeFilter,
           firstTouchFilter: filters.firstTouchFilter,
+          dealFilters: filters.dealFilters?.length ? filters.dealFilters : undefined,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

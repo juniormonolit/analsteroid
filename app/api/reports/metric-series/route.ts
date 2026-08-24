@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { fetchMetricSeries, type SeriesGranularity } from '@/features/reports/engine/metricSeries';
+import { fetchBookingCallRateSeries, BOOKING_SERIES_METRICS } from '@/features/reports/engine/bookingCallRate';
+import { validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import type { DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 
 // График метрики из отчёта (фича Серёги 01.08): серия значений одной метрики
@@ -44,16 +46,31 @@ export async function POST(req: NextRequest) {
     productGroupIds: body.productGroupIds as string[] | undefined,
     createdTimeFilter: (body.createdTimeFilter ?? 'all') as CreatedTimeFilter,
     firstTouchFilter: (body.firstTouchFilter ?? 'all') as FirstTouchFilter,
+    // «Фильтр сделок» отчёта — график ОБЯЗАН считаться по тому же срезу, что
+    // ячейка (контракт metricSeries: сумма бакетов сходится с ячейкой).
+    dealFilters: body.dealFilters as DealFilter[] | undefined,
   };
+  const dfError = validateDealFilters(body.dealFilters);
+  if (dfError) return NextResponse.json({ error: dfError }, { status: 400 });
 
-  const current = await fetchMetricSeries({
-    ...common,
+  // «Доля прозвона броней / подтв. броней» — свой движок (bookingCallRate, вне
+  // сделочного SQL), но тенденцию по времени он строить умеет: перебирает сделки
+  // поштучно, бакет = дата вехи (правка владельца 24.08 — «хочу смотреть
+  // тенденцию в виде графика»). Замечание: фильтры отчёта, кроме списка
+  // менеджеров, на эту метрику не действуют и в ячейке — расхождения с ячейкой
+  // здесь нет.
+  const fetchSeries = BOOKING_SERIES_METRICS[common.metricId]
+    ? (o: { period: { from: Date; to: Date } }) => fetchBookingCallRateSeries({
+        metricId: common.metricId, granularity, managerIds, period: o.period,
+      })
+    : (o: { period: { from: Date; to: Date } }) => fetchMetricSeries({ ...common, period: o.period });
+
+  const current = await fetchSeries({
     period: { from: new Date(body.period.from), to: new Date(body.period.to) },
   });
   let comparison = null;
   if (current.supported && validPeriod(body.comparisonPeriod)) {
-    comparison = await fetchMetricSeries({
-      ...common,
+    comparison = await fetchSeries({
       period: { from: new Date(body.comparisonPeriod.from), to: new Date(body.comparisonPeriod.to) },
     });
   }

@@ -1861,7 +1861,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             period={period}
             comparison={comparison}
             hasComparison={comparisonDisplay !== 'current'}
-            filters={{ dealScope, clientType, productGroupMode, createdTimeFilter, firstTouchFilter }}
+            filters={{ dealScope, clientType, productGroupMode, createdTimeFilter, firstTouchFilter, dealFilters }}
             onClose={() => setChartTarget(null)}
           />
         );

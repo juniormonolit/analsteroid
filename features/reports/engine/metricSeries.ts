@@ -72,7 +72,7 @@ export function seriesDeps(metric: Metric, all: Metric[]): { deps: Metric[]; rea
 
 const MSK = 'Europe/Moscow';
 
-function bucketStartYmd(d: Date, unit: SeriesGranularity): string {
+export function bucketStartYmd(d: Date, unit: SeriesGranularity): string {
   // Дата в МСК
   const msk = new Date(d.getTime() + 3 * 3600_000);
   let y = msk.getUTCFullYear(), mo = msk.getUTCMonth(), day = msk.getUTCDate();
@@ -85,7 +85,7 @@ function bucketStartYmd(d: Date, unit: SeriesGranularity): string {
   return `${y}-${String(mo + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function nextBucketYmd(ymd: string, unit: SeriesGranularity): string {
+export function nextBucketYmd(ymd: string, unit: SeriesGranularity): string {
   const [y, m, d] = ymd.split('-').map(Number);
   const t = unit === 'month' ? new Date(Date.UTC(y, m, 1))
     : new Date(Date.UTC(y, m - 1, d + (unit === 'week' ? 7 : 1)));
