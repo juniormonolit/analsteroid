@@ -151,8 +151,19 @@ export async function POST(req: NextRequest) {
   // являются: правило владельца «метрика работает во всех трёх стартовых
   // сущностях» (10.08) — здесь это третья.
   const clientIds = new Set<string>([...CLIENT_METRIC_IDS, ...CLIENT_COHORT_METRIC_IDS, ...CLIENT_SHARE_METRIC_IDS, ...CLIENT_BUYERS_METRIC_IDS]);
+  // calculated-метрики, построенные ЦЕЛИКОМ поверх клиентских зависимостей (например
+  // cohort_repeat_ratio = LTV за всё время / выручка первого заказа, задача #4994) —
+  // тоже посчитаны движком «Клиентов» per-bucket через computeCalculated, значит
+  // поддержаны здесь так же, как и сами клиентские метрики. seriesDeps() их не
+  // распознаёт (deps не 'collected'), из-за чего баннер «не считаются в разрезе по
+  // времени» раньше показывался ПОВЕРХ фактически рабочей колонки — вводил в
+  // заблуждение при живых, корректных значениях.
+  const isCalculatedOverClientDeps = (m: (typeof requested)[number]) =>
+    m.metricType === 'calculated' && m.dependencies.length > 0 && m.dependencies.every(dep => clientIds.has(dep));
   const unsupported = explicitMetrics
-    ? requested.filter(m => seriesDeps(m, allMetrics) === null && !clientIds.has(m.id)).map(m => m.id)
+    ? requested
+        .filter(m => seriesDeps(m, allMetrics) === null && !clientIds.has(m.id) && !isCalculatedOverClientDeps(m))
+        .map(m => m.id)
     : [];
   const unsupportedSet = new Set(unsupported);
 
