@@ -49,6 +49,12 @@ export interface MetricSeriesResult {
   supported: boolean;
   reason?: string;
   buckets: SeriesBucket[];
+  /** Режим «С накоплением» (правка владельца 24.08): значение бакета i — метрика
+   *  по НАКОПЛЕННЫМ с начала периода суммам зависимостей. Для collected это
+   *  обычная нарастающая сумма; для calculated — формула от накопленных сумм
+   *  (складывать сами проценты по точкам нельзя). Считается сервером в том же
+   *  проходе, что buckets — клиентский тумблер не перезапрашивает данные. */
+  cumulativeBuckets: SeriesBucket[];
   /** Итог за период ТЕМ ЖЕ способом, что в отчёте: сумма для collected,
    *  формула от сумм для calculated (проценты НЕ суммируются по бакетам). */
   total: number | null;
@@ -106,13 +112,13 @@ function allowedFunnels(funnels: FunnelMeta[], dealScope: DealScope, clientType:
 export async function fetchMetricSeries(opts: MetricSeriesOptions): Promise<MetricSeriesResult> {
   const all = await loadMetrics();
   const metric = all.find(m => m.id === opts.metricId);
-  if (!metric) return { supported: false, reason: 'Метрика не найдена', buckets: [], total: null };
+  if (!metric) return { supported: false, reason: 'Метрика не найдена', buckets: [], cumulativeBuckets: [], total: null };
   const sup = seriesDeps(metric, all);
   if (!sup) {
     return {
       supported: false,
       reason: 'Эта метрика считается вне сделок (звонки/стадии/планы/медианы) — у неё свой движок без универсальной разбивки по времени',
-      buckets: [], total: null,
+      buckets: [], cumulativeBuckets: [], total: null,
     };
   }
   const deps = sup.deps;
@@ -185,15 +191,23 @@ export async function fetchMetricSeries(opts: MetricSeriesOptions): Promise<Metr
   // день периода (пойман сверкой: сумма дневных бакетов < ячейки на день).
   const endExclYmd = bucketStartYmd(new Date(toExclIso), "day");
   const buckets: SeriesBucket[] = [];
+  const cumulativeBuckets: SeriesBucket[] = [];
+  const cumSums: Record<string, number> = {};
   for (let b = startYmd; b < endExclYmd && buckets.length < 500; b = nextBucketYmd(b, unit)) {
     const entry = sums.get(b) ?? {};
+    for (const dep of deps) cumSums[dep.id] = (cumSums[dep.id] ?? 0) + (entry[dep.id] ?? 0);
     if (metric.metricType === 'calculated') {
       const filled: Record<string, number | null> = {};
       for (const dep of deps) filled[dep.id] = entry[dep.id] ?? 0;
       const calc = computeCalculated(filled, [metric]);
       buckets.push({ bucket: b, value: calc[metric.id] ?? null });
+      // Накопление: формула от НАКОПЛЕННЫХ сумм зависимостей, а не сумма точек.
+      const cumFilled: Record<string, number | null> = {};
+      for (const dep of deps) cumFilled[dep.id] = cumSums[dep.id];
+      cumulativeBuckets.push({ bucket: b, value: computeCalculated(cumFilled, [metric])[metric.id] ?? null });
     } else {
       buckets.push({ bucket: b, value: entry[metric.id] ?? 0 });
+      cumulativeBuckets.push({ bucket: b, value: cumSums[metric.id] ?? 0 });
     }
   }
 
@@ -206,5 +220,5 @@ export async function fetchMetricSeries(opts: MetricSeriesOptions): Promise<Metr
     total = totalSums[metric.id] ?? 0;
   }
 
-  return { supported: true, buckets, total };
+  return { supported: true, buckets, cumulativeBuckets, total };
 }

@@ -144,12 +144,12 @@ export async function fetchBookingCallRateSeries(opts: {
   managerIds?: string[];
 }): Promise<MetricSeriesResult> {
   const milestone = BOOKING_SERIES_METRICS[opts.metricId];
-  if (!milestone) return { supported: false, reason: 'Не метрика прозвона броней', buckets: [], total: null };
+  if (!milestone) return { supported: false, reason: 'Не метрика прозвона броней', buckets: [], cumulativeBuckets: [], total: null };
 
   const fromStr = periodDateStrFromInstant(opts.period.from, 'from');
   const toStr = periodDateStrFromInstant(opts.period.to, 'to');
   if (toStr < CALLS_DATA_START) {
-    return { supported: false, reason: `Данные звонков собираются с ${CALLS_DATA_START} — весь период раньше`, buckets: [], total: null };
+    return { supported: false, reason: `Данные звонков собираются с ${CALLS_DATA_START} — весь период раньше`, buckets: [], cumulativeBuckets: [], total: null };
   }
 
   const sa = analyticsDb();
@@ -207,11 +207,18 @@ export async function fetchBookingCallRateSeries(opts: {
   endExcl.setUTCDate(endExcl.getUTCDate() + 1);
   const endExclYmd = bucketStartYmd(endExcl, 'day');
   const buckets: SeriesBucket[] = [];
+  // «С накоплением» (правка владельца 24.08): накапливаются ЧИСЛИТЕЛЬ и
+  // ЗНАМЕНАТЕЛЬ, процент считается от накопленного — «доля прозвона нарастающим
+  // итогом с начала периода». Складывать сами проценты по дням нельзя.
+  const cumulativeBuckets: SeriesBucket[] = [];
+  let cumNum = 0, cumDenom = 0;
   for (let b = startYmd; b < endExclYmd && buckets.length < 500; b = nextBucketYmd(b, opts.granularity)) {
     const e = agg.get(b);
     const beforeCalls = nextBucketYmd(b, opts.granularity) <= CALLS_DATA_START;
     buckets.push({ bucket: b, value: !beforeCalls && e && e.denom > 0 ? (e.num / e.denom) * 100 : null });
+    if (!beforeCalls && e) { cumNum += e.num; cumDenom += e.denom; }
+    cumulativeBuckets.push({ bucket: b, value: cumDenom > 0 ? (cumNum / cumDenom) * 100 : null });
   }
 
-  return { supported: true, buckets, total: totDenom > 0 ? (totNum / totDenom) * 100 : null };
+  return { supported: true, buckets, cumulativeBuckets, total: totDenom > 0 ? (totNum / totDenom) * 100 : null };
 }

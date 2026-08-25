@@ -31,7 +31,7 @@ export interface MetricChartTarget {
 
 type Gran = 'day' | 'week' | 'month';
 interface Bucket { bucket: string; value: number | null }
-interface SeriesRes { supported: boolean; reason?: string; buckets: Bucket[]; total: number | null }
+interface SeriesRes { supported: boolean; reason?: string; buckets: Bucket[]; cumulativeBuckets?: Bucket[]; total: number | null }
 interface ApiRes { granularity: Gran; current: SeriesRes; comparison: SeriesRes | null }
 
 function autoGran(period: DateRange): Gran {
@@ -77,6 +77,12 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   onClose: () => void;
 }) {
   const [gran, setGran] = useState<Gran>(() => autoGran(period));
+  // «С накоплением» и «Линия тренда» (правка владельца 24.08). Накопление
+  // приходит с сервера отдельной серией в том же ответе (cumulativeBuckets):
+  // для расчётных метрик это формула от накопленных сумм зависимостей, а не
+  // сумма точек — проценты складывать нельзя. Тумблеры не перезапрашивают данные.
+  const [cumulative, setCumulative] = useState(false);
+  const [showTrend, setShowTrend] = useState(false);
   const chartRef = useRef<HTMLDivElement | null>(null);
 
   const { data, isLoading, isError } = useQuery<ApiRes>({
@@ -109,17 +115,40 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   });
 
   const rows = useMemo(() => {
-    const cur = data?.current.buckets ?? [];
-    const cmp = data?.comparison?.buckets ?? [];
+    const pick = (r: SeriesRes | null | undefined): Bucket[] =>
+      (cumulative ? r?.cumulativeBuckets ?? r?.buckets : r?.buckets) ?? [];
+    const cur = pick(data?.current);
+    const cmp = pick(data?.comparison);
     // Сравнительная линия совмещается ПО ИНДЕКСУ бакета (периоды разной длины —
     // хвост без пары просто без второй линии).
-    return cur.map((b, i) => ({
+    const out = cur.map((b, i) => ({
       label: fmtBucketLabel(b.bucket, gran),
       current: b.value,
       comparison: cmp[i]?.value ?? null,
       cmpLabel: cmp[i] ? fmtBucketLabel(cmp[i].bucket, gran) : null,
+      trend: null as number | null,
     }));
-  }, [data, gran]);
+    // Линия тренда — МНК по ВИДИМОЙ линии текущего периода (включён режим
+    // накопления — тренд по накоплению). Рисуем только между первой и последней
+    // точками с данными: экстраполяция в хвост, где срок метрики ещё не
+    // наступил (прозвон броней), выглядела бы как прогноз, которым не является.
+    if (showTrend) {
+      const pts = out.map((r, i) => [i, r.current] as const).filter((p): p is readonly [number, number] => p[1] !== null);
+      if (pts.length >= 2) {
+        const n = pts.length;
+        const sx = pts.reduce((a, p) => a + p[0], 0), sy = pts.reduce((a, p) => a + p[1], 0);
+        const sxx = pts.reduce((a, p) => a + p[0] * p[0], 0), sxy = pts.reduce((a, p) => a + p[0] * p[1], 0);
+        const denom = n * sxx - sx * sx;
+        if (denom !== 0) {
+          const slope = (n * sxy - sx * sy) / denom;
+          const intercept = (sy - slope * sx) / n;
+          const first = pts[0][0], last = pts[n - 1][0];
+          for (let i = first; i <= last; i++) out[i].trend = intercept + slope * i;
+        }
+      }
+    }
+    return out;
+  }, [data, gran, cumulative, showTrend]);
 
   const sumBuckets = useMemo(() => {
     const cur = data?.current.buckets ?? [];
@@ -148,7 +177,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
             <p className="mt-1 text-xs tabular-nums">
               Итого за период: <b>{data ? fmtVal(data.current.total, metric) : '…'}</b>
               {target.cellValue !== null && <span className="ml-2 text-[var(--color-text-muted)]">в ячейке: {fmtVal(target.cellValue, metric)}</span>}
-              {matchesCell !== null && (
+              {matchesCell !== null && !cumulative && (
                 <span className="ml-2 font-semibold" style={{ color: matchesCell ? 'var(--color-positive,#2f9e44)' : 'var(--color-negative,#e03131)' }}>
                   {matchesCell ? '✓ сумма точек сходится' : '≠ расходится с ячейкой'}
                 </span>
@@ -180,6 +209,30 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           </div>
         </div>
 
+        {/* Тумблеры вида (правка владельца 24.08) — отдельным рядом под шапкой:
+            в шапку на 375px уже не влезает, а flex-wrap здесь безопасен. */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 sm:px-6 py-2 shrink-0">
+          <button type="button" onClick={() => setCumulative(v => !v)}
+            title="Каждая точка — значение с начала периода по этот день. Для процентов накапливаются числитель и знаменатель, а не сами проценты."
+            className={`tap-target min-h-8 rounded-full border px-3 text-[11px] font-semibold transition-colors ${
+              cumulative ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+            С накоплением
+          </button>
+          <button type="button" onClick={() => setShowTrend(v => !v)}
+            title="Прямая по методу наименьших квадратов через точки текущего периода"
+            className={`tap-target min-h-8 rounded-full border px-3 text-[11px] font-semibold transition-colors ${
+              showTrend ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+            Линия тренда
+          </button>
+          {cumulative && (
+            <span className="text-[11px] text-[var(--color-text-muted)]">
+              точка = значение с начала периода по этот {gran === 'day' ? 'день' : gran === 'week' ? 'неделю' : 'месяц'} включительно
+            </span>
+          )}
+        </div>
+
         <div className="flex-1 overflow-y-auto p-4 sm:p-6" ref={chartRef}>
           {isError ? (
             <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось построить график.</div>
@@ -205,12 +258,19 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
                     // Тултип висит над линиями графика — плотная поверхность, не карточная
                     // (регресс #2999: сквозь него читались сами линии).
                     contentStyle={{ background: 'var(--color-bg-overlay)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }} />
-                  {hasComparison && data.comparison?.supported && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                  {((hasComparison && data.comparison?.supported) || showTrend) && <Legend wrapperStyle={{ fontSize: 12 }} />}
                   <Line type="monotone" dataKey="current" name="Текущий период" stroke="var(--color-accent)" strokeWidth={2}
                     dot={rows.length <= 62} isAnimationActive={false} connectNulls />
                   {hasComparison && data.comparison?.supported && (
                     <Line type="monotone" dataKey="comparison" name="Период сравнения" stroke="var(--color-text-muted)"
                       strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
+                  )}
+                  {showTrend && (
+                    // linear, не monotone: тренд — прямая по определению, сглаживание
+                    // изогнуло бы её на неравномерных пропусках.
+                    <Line type="linear" dataKey="trend" name="Тренд" stroke="var(--color-warning, #e8590c)"
+                      strokeWidth={1.5} strokeDasharray="2 4" dot={false} isAnimationActive={false} connectNulls
+                      activeDot={false} />
                   )}
                 </LineChart>
               </ResponsiveContainer>
