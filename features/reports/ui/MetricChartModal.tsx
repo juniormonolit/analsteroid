@@ -60,6 +60,66 @@ function fmtDateRu(d: Date): string {
   return d.toLocaleDateString('ru-RU');
 }
 
+/** Разница между точками: для процентных метрик — п.п., иначе абсолют + %. */
+function fmtDelta(cur: number | null, base: number | null, m: Metric): string | null {
+  if (cur === null || base === null) return null;
+  const d = cur - base;
+  const sign = d > 0 ? '+' : d < 0 ? '−' : '±';
+  const abs = Math.abs(d);
+  if (m.dataType === 'percent') {
+    return `${sign}${abs.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} п.п.`;
+  }
+  const rel = base !== 0
+    ? ` (${sign}${Math.abs((d / base) * 100).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%)`
+    : '';
+  return `${sign}${fmtVal(abs, m)}${rel}`;
+}
+
+interface ChartRow {
+  label: string; value: number | null;
+  previous: number | null; prevLabel: string | null;
+  comparison: number | null; cmpLabel: string | null;
+  isPrev: boolean;
+}
+
+/** Тултип с разницей между периодами (правка владельца 25.08: «навожусь на июль
+ *  и сразу вижу этот год, тот год и рост/падение»). Свой компонент вместо
+ *  formatter: стандартный рендерит строки по сериям и не умеет строку-дельту. */
+function DeltaTooltip({ active, payload, metric }: {
+  active?: boolean;
+  payload?: { payload?: ChartRow }[];
+  metric: Metric;
+}) {
+  const row = payload?.[0]?.payload;
+  if (!active || !row) return null;
+  const dPrev = fmtDelta(row.value, row.previous, metric);
+  const dCmp = fmtDelta(row.value, row.comparison, metric);
+  return (
+    <div style={{ background: 'var(--color-bg-overlay)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12, padding: '8px 10px' }}>
+      <div className="font-semibold text-[var(--color-text)]">
+        {row.label}{row.isPrev ? ' · предыдущий период' : ''}
+      </div>
+      {row.value !== null && (
+        <div className="mt-1 tabular-nums" style={{ color: 'var(--color-accent)' }}>
+          {row.isPrev ? 'Значение' : 'Текущий'}: <b>{fmtVal(row.value, metric)}</b>
+        </div>
+      )}
+      {row.previous !== null && (
+        <div className="tabular-nums" style={{ color: 'var(--color-positive, #2f9e44)' }}>
+          Пред. ({row.prevLabel}): <b>{fmtVal(row.previous, metric)}</b>
+        </div>
+      )}
+      {row.comparison !== null && (
+        <div className="tabular-nums text-[var(--color-text-muted)]">
+          Сравн. ({row.cmpLabel}): <b>{fmtVal(row.comparison, metric)}</b>
+        </div>
+      )}
+      {dPrev && <div className="mt-1 tabular-nums text-[var(--color-text)]">к пред.: <b>{dPrev}</b></div>}
+      {dCmp && <div className="tabular-nums text-[var(--color-text)]">к сравн.: <b>{dCmp}</b></div>}
+    </div>
+  );
+}
+
 export function MetricChartModal({ target, metric, reportSlug, period, comparison, hasComparison, filters, onClose }: {
   target: MetricChartTarget;
   metric: Metric;
@@ -84,6 +144,12 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   // сумма точек — проценты складывать нельзя. Тумблеры не перезапрашивают данные.
   const [cumulative, setCumulative] = useState(false);
   const [showTrend, setShowTrend] = useState(false);
+  // Режим компоновки (правка владельца 25.08 №5): «Последовательно» — предыдущий
+  // период перетекает в текущий на общей оси; «С наложением» — периоды друг под
+  // другом на оси ТЕКУЩЕГО периода, наведение на дату показывает обе точки и
+  // разницу (кейс владельца: «строю выручку помесячно, навожусь на июль и сразу
+  // вижу этот год, тот год и рост/падение»).
+  const [layout, setLayout] = useState<'seq' | 'overlay'>('seq');
   const chartRef = useRef<HTMLDivElement | null>(null);
 
   // Полотно графика — предыдущий период + текущий (правка владельца 25.08:
@@ -104,11 +170,17 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   const cmpOnCanvas = hasComparison
     && comparison.to.getTime() >= prevRange.from.getTime()
     && comparison.from.getTime() <= period.to.getTime();
-  const showCmpOverlay = hasComparison && !cmpOnCanvas;
+  // В наложении сравнение прячем только при ТОЧНОМ совпадении с предыдущим
+  // (иначе две одинаковые линии), в последовательном — при любом пересечении с
+  // полотном (дни уже нарисованы).
+  const prevIsCmpExact = hasComparison
+    && prevRange.from.toDateString() === comparison.from.toDateString()
+    && prevRange.to.toDateString() === comparison.to.toDateString();
+  const showCmpOverlay = hasComparison && (layout === 'overlay' ? !prevIsCmpExact : !cmpOnCanvas);
 
   const { data, isLoading, isError } = useQuery<ApiRes>({
     queryKey: ['metric-series', target.metricId, target.dimensionId, gran, reportSlug,
-      period.from.toISOString(), period.to.toISOString(), hasComparison, showCmpOverlay, JSON.stringify(filters), target.managerIds, target.productGroupId],
+      period.from.toISOString(), period.to.toISOString(), hasComparison, showCmpOverlay, layout, JSON.stringify(filters), target.managerIds, target.productGroupId],
     queryFn: async () => {
       const res = await fetch('/api/reports/metric-series', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -116,8 +188,12 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           metricId: target.metricId,
           period: { from: period.from.toISOString(), to: period.to.toISOString() },
           comparisonPeriod: showCmpOverlay ? { from: comparison.from.toISOString(), to: comparison.to.toISOString() } : undefined,
-          // «previous» в ответе = серия ПОЛОТНА целиком (пред.from … тек.to).
-          previousPeriod: { from: prevRange.from.toISOString(), to: period.to.toISOString() },
+          // Последовательно: «previous» = серия ПОЛОТНА целиком (пред.from…тек.to),
+          // стыковый бакет — одна полная точка. Наложение: чистый предыдущий
+          // период — его бакеты совмещаются с текущими по индексу.
+          previousPeriod: layout === 'seq'
+            ? { from: prevRange.from.toISOString(), to: period.to.toISOString() }
+            : { from: prevRange.from.toISOString(), to: prevRange.to.toISOString() },
           granularity: gran,
           dealScope: filters.dealScope,
           clientType: filters.clientType,
@@ -140,6 +216,47 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   const chart = useMemo(() => {
     const pick = (r: SeriesRes | null | undefined): Bucket[] =>
       (cumulative ? r?.cumulativeBuckets ?? r?.buckets : r?.buckets) ?? [];
+    // МНК-прямая по точкам [from, to) исходного ключа src → в ключ dst.
+    const fitKey = (
+      out: Record<string, number | string | null | boolean>[],
+      from: number, to: number, src: string, dst: string,
+    ) => {
+      const pts: [number, number][] = [];
+      for (let i = from; i < to; i++) if (out[i][src] !== null) pts.push([i, out[i][src] as number]);
+      if (pts.length < 2) return;
+      const n = pts.length;
+      const sx = pts.reduce((a, q) => a + q[0], 0), sy = pts.reduce((a, q) => a + q[1], 0);
+      const sxx = pts.reduce((a, q) => a + q[0] * q[0], 0), sxy = pts.reduce((a, q) => a + q[0] * q[1], 0);
+      const d = n * sxx - sx * sx;
+      if (d === 0) return;
+      const slope = (n * sxy - sx * sy) / d, intercept = (sy - slope * sx) / n;
+      for (let i = pts[0][0]; i <= pts[n - 1][0]; i++) out[i][dst] = intercept + slope * i;
+    };
+
+    if (layout === 'overlay') {
+      // Наложение: ось = бакеты ТЕКУЩЕГО периода, предыдущий и сравнение
+      // совмещаются по индексу (i-й бакет к i-му — как в отчётной таблице).
+      const cur = pick(data?.current);
+      const prev = pick(data?.previous);
+      const cmp = showCmpOverlay ? pick(data?.comparison) : [];
+      const out = cur.map((b, i) => ({
+        x: String(i),
+        label: fmtBucketLabel(b.bucket, gran),
+        value: b.value,
+        previous: prev[i]?.value ?? null,
+        prevLabel: prev[i] ? fmtBucketLabel(prev[i].bucket, gran) : null,
+        comparison: cmp[i]?.value ?? null,
+        cmpLabel: cmp[i] ? fmtBucketLabel(cmp[i].bucket, gran) : null,
+        isPrev: false,
+        trendPrev: null as number | null,
+        trendCur: null as number | null,
+      }));
+      if (showTrend) {
+        fitKey(out, 0, out.length, 'value', 'trendCur');
+        fitKey(out, 0, out.length, 'previous', 'trendPrev');
+      }
+      return { rows: out, seam: 0 };
+    }
     // Полотно — union-серия (data.previous, запрошена за пред.from…тек.to одним
     // куском): стыковый недельный/месячный бакет — ОДНА полная точка, а не два
     // огрызка по границе периодов (скрин владельца 25.08 с «ямой»). Фолбэк на
@@ -169,6 +286,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
         x: String(i),
         label: fmtBucketLabel(b.bucket, gran),
         value: b.value,
+        previous: null as number | null,
+        prevLabel: null as string | null,
         comparison: ov?.value ?? null,
         cmpLabel: ov?.label ?? null,
         isPrev: i < seam,
@@ -181,23 +300,11 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
     // и последней точками с данными своего отрезка (экстраполяция в
     // незавершённый хвост — это прогноз, которым линия не является).
     if (showTrend) {
-      const fit = (from: number, to: number, key: 'trendPrev' | 'trendCur') => {
-        const pts: [number, number][] = [];
-        for (let i = from; i < to; i++) if (out[i].value !== null) pts.push([i, out[i].value as number]);
-        if (pts.length < 2) return;
-        const n = pts.length;
-        const sx = pts.reduce((a, p) => a + p[0], 0), sy = pts.reduce((a, p) => a + p[1], 0);
-        const sxx = pts.reduce((a, p) => a + p[0] * p[0], 0), sxy = pts.reduce((a, p) => a + p[0] * p[1], 0);
-        const d = n * sxx - sx * sx;
-        if (d === 0) return;
-        const slope = (n * sxy - sx * sy) / d, intercept = (sy - slope * sx) / n;
-        for (let i = pts[0][0]; i <= pts[n - 1][0]; i++) out[i][key] = intercept + slope * i;
-      };
-      fit(0, seam, 'trendPrev');
-      fit(seam, out.length, 'trendCur');
+      fitKey(out, 0, seam, 'value', 'trendPrev');
+      fitKey(out, seam, out.length, 'value', 'trendCur');
     }
     return { rows: out, seam };
-  }, [data, gran, cumulative, showTrend, showCmpOverlay, period]);
+  }, [data, gran, cumulative, showTrend, showCmpOverlay, period, layout]);
   const rows = chart.rows;
   const seam = chart.seam;
 
@@ -223,7 +330,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
             </h2>
             <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
               {fmtDateRu(period.from)} — {fmtDateRu(period.to)}
-              {hasComparison && <> · сравнение: {fmtDateRu(comparison.from)} — {fmtDateRu(comparison.to)}{cmpOnCanvas ? ' (эти дни уже на полотне)' : ''}</>}
+              {hasComparison && <> · сравнение: {fmtDateRu(comparison.from)} — {fmtDateRu(comparison.to)}{layout === 'seq' && cmpOnCanvas ? ' (эти дни уже на полотне)' : ''}</>}
               <> · пред.: {fmtDateRu(prevRange.from)} — {fmtDateRu(prevRange.to)}</>
             </p>
             <p className="mt-1 text-xs tabular-nums">
@@ -264,6 +371,19 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
         {/* Тумблеры вида (правка владельца 24.08) — отдельным рядом под шапкой:
             в шапку на 375px уже не влезает, а flex-wrap здесь безопасен. */}
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 sm:px-6 py-2 shrink-0">
+          <div className="flex overflow-hidden rounded-full border border-[var(--color-border)]">
+            {([['seq', 'Последовательно'], ['overlay', 'С наложением']] as const).map(([k, label]) => (
+              <button key={k} type="button" onClick={() => setLayout(k)}
+                title={k === 'seq'
+                  ? 'Предыдущий период слева, перетекает в текущий на общей оси времени'
+                  : 'Периоды друг под другом: наведи на дату — видно обе точки и разницу'}
+                className={`tap-target min-h-8 px-3 text-[11px] font-semibold transition-colors ${
+                  layout === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                    : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
           <button type="button" onClick={() => setCumulative(v => !v)}
             title="Каждая точка — накопление с НАЧАЛА ПОЛОТНА (предыдущий период + текущий). Для процентов накапливаются числитель и знаменатель, а не сами проценты."
             className={`tap-target min-h-8 rounded-full border px-3 text-[11px] font-semibold transition-colors ${
@@ -280,7 +400,9 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           </button>
           {cumulative && (
             <span className="text-[11px] text-[var(--color-text-muted)]">
-              накопление с начала полотна (включая предыдущий период) по этот {gran === 'day' ? 'день' : gran === 'week' ? 'неделю' : 'месяц'}
+              {layout === 'seq'
+                ? 'накопление с начала полотна (включая предыдущий период)'
+                : 'каждая линия копит с начала СВОЕГО периода'}
             </span>
           )}
         </div>
@@ -302,34 +424,29 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
                   <YAxis tick={{ fontSize: 11 }} width={70}
                     tickFormatter={(v: number) => Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}М`
                       : Math.abs(v) >= 1_000 ? `${(v / 1_000).toLocaleString('ru-RU', { maximumFractionDigits: 0 })}т` : String(v)} />
-                  <Tooltip
-                    formatter={(v, name) => [fmtVal(typeof v === "number" ? v : null, metric), String(name)]}
-                    labelFormatter={(_l, payload) => {
-                      const p0 = (payload as unknown as { payload?: { label?: string; cmpLabel?: string | null; isPrev?: boolean } }[])?.[0]?.payload;
-                      const parts = [p0?.label ?? ''];
-                      if (p0?.isPrev) parts.push('предыдущий период');
-                      if (p0?.cmpLabel) parts.push(`сравн.: ${p0.cmpLabel}`);
-                      return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(' · ')})` : parts[0];
-                    }}
-                    // Тултип висит над линиями графика — плотная поверхность, не карточная
-                    // (регресс #2999: сквозь него читались сами линии).
-                    contentStyle={{ background: 'var(--color-bg-overlay)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }} />
-                  {(showTrend || (showCmpOverlay && data.comparison?.supported) || seam > 0) && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                  {/* Свой контент: строки значений + разница между периодами.
+                      Плотная поверхность, не карточная (регресс #2999). */}
+                  <Tooltip content={<DeltaTooltip metric={metric} />} />
+                  {(layout === 'overlay' || showTrend || (showCmpOverlay && data.comparison?.supported) || seam > 0) && <Legend wrapperStyle={{ fontSize: 12 }} />}
                   {/* Предыдущий период — фоном слева + линия стыка: одна серия value
                       непрерывно перетекает из отрезка в отрезок (правка владельца
                       25.08 №2), а где кончился предыдущий и начался текущий, видно
                       по подложке, не по разрыву линии. */}
-                  {seam > 0 && rows.length > seam && (
+                  {layout === 'seq' && seam > 0 && rows.length > seam && (
                     <ReferenceArea x1={rows[0].x} x2={rows[seam - 1].x}
                       fill="var(--color-text-muted)" fillOpacity={0.07} ifOverflow="extendDomain" />
                   )}
-                  {seam > 0 && rows.length > seam && (
+                  {layout === 'seq' && seam > 0 && rows.length > seam && (
                     <ReferenceLine x={rows[seam].x} stroke="var(--color-border-strong, var(--color-border))"
                       strokeDasharray="4 3"
                       label={{ value: 'текущий период →', position: 'insideTopLeft', fontSize: 10, fill: 'var(--color-text-muted)' }} />
                   )}
-                  <Line type="monotone" dataKey="value" name="Значение" stroke="var(--color-accent)" strokeWidth={2}
+                  <Line type="monotone" dataKey="value" name={layout === 'overlay' ? 'Текущий период' : 'Значение'} stroke="var(--color-accent)" strokeWidth={2}
                     dot={rows.length <= 62} isAnimationActive={false} connectNulls />
+                  {layout === 'overlay' && data.previous?.supported && (
+                    <Line type="monotone" dataKey="previous" name="Предыдущий период" stroke="var(--color-positive, #2f9e44)"
+                      strokeWidth={1.5} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
+                  )}
                   {showCmpOverlay && data.comparison?.supported && (
                     <Line type="monotone" dataKey="comparison" name="Период сравнения (наложен)" stroke="var(--color-text-muted)"
                       strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
