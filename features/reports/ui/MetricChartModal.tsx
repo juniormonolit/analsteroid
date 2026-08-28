@@ -15,7 +15,7 @@ import {
 import { exportNodeToPng } from '@/features/reports/lib/exportImage';
 import type { Metric, DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 import type { DealFilter } from '@/lib/metrics/dealFilters';
-import type { DateRange } from '@/lib/period';
+import { previousPeriodSameLength, type DateRange } from '@/lib/period';
 
 export interface MetricChartTarget {
   metricId: string;
@@ -32,7 +32,7 @@ export interface MetricChartTarget {
 type Gran = 'day' | 'week' | 'month';
 interface Bucket { bucket: string; value: number | null }
 interface SeriesRes { supported: boolean; reason?: string; buckets: Bucket[]; cumulativeBuckets?: Bucket[]; total: number | null }
-interface ApiRes { granularity: Gran; current: SeriesRes; comparison: SeriesRes | null }
+interface ApiRes { granularity: Gran; current: SeriesRes; comparison: SeriesRes | null; previous: SeriesRes | null }
 
 function autoGran(period: DateRange): Gran {
   const days = (period.to.getTime() - period.from.getTime()) / 86_400_000 + 1;
@@ -85,9 +85,19 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   const [showTrend, setShowTrend] = useState(false);
   const chartRef = useRef<HTMLDivElement | null>(null);
 
+  // Третья линия — период, НЕПОСРЕДСТВЕННО предшествующий текущему (правка
+  // владельца 25.08: «и период сравнения, и предыдущий — прям на одном
+  // графике»). Тот же хелпер, что у дефолта карточки менеджера. Если период
+  // сравнения отчёта и есть предыдущий (совпал день в день) — третью линию не
+  // рисуем: две одинаковые линии друг на друге читались бы как баг.
+  const prevRange = useMemo(() => previousPeriodSameLength(period), [period]);
+  const prevIsComparison = hasComparison
+    && prevRange.from.toDateString() === comparison.from.toDateString()
+    && prevRange.to.toDateString() === comparison.to.toDateString();
+
   const { data, isLoading, isError } = useQuery<ApiRes>({
     queryKey: ['metric-series', target.metricId, target.dimensionId, gran, reportSlug,
-      period.from.toISOString(), period.to.toISOString(), hasComparison, JSON.stringify(filters), target.managerIds, target.productGroupId],
+      period.from.toISOString(), period.to.toISOString(), hasComparison, prevIsComparison, JSON.stringify(filters), target.managerIds, target.productGroupId],
     queryFn: async () => {
       const res = await fetch('/api/reports/metric-series', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -95,6 +105,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           metricId: target.metricId,
           period: { from: period.from.toISOString(), to: period.to.toISOString() },
           comparisonPeriod: hasComparison ? { from: comparison.from.toISOString(), to: comparison.to.toISOString() } : undefined,
+          previousPeriod: prevIsComparison ? undefined : { from: prevRange.from.toISOString(), to: prevRange.to.toISOString() },
           granularity: gran,
           dealScope: filters.dealScope,
           clientType: filters.clientType,
@@ -119,6 +130,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
       (cumulative ? r?.cumulativeBuckets ?? r?.buckets : r?.buckets) ?? [];
     const cur = pick(data?.current);
     const cmp = pick(data?.comparison);
+    const prev = pick(data?.previous);
     // Сравнительная линия совмещается ПО ИНДЕКСУ бакета (периоды разной длины —
     // хвост без пары просто без второй линии).
     const out = cur.map((b, i) => ({
@@ -126,6 +138,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
       current: b.value,
       comparison: cmp[i]?.value ?? null,
       cmpLabel: cmp[i] ? fmtBucketLabel(cmp[i].bucket, gran) : null,
+      previous: prev[i]?.value ?? null,
+      prevLabel: prev[i] ? fmtBucketLabel(prev[i].bucket, gran) : null,
       trend: null as number | null,
     }));
     // Линия тренда — МНК по ВИДИМОЙ линии текущего периода (включён режим
@@ -164,7 +178,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   return (
     <div className="fixed inset-0 z-50 flex" onClick={onClose}>
       <div className="hidden sm:block flex-1 min-w-[8%] bg-black/40 cursor-pointer" />
-      <div className="w-full sm:w-[860px] sm:max-w-[90vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+      <div className="w-full sm:w-[1100px] sm:max-w-[94vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 px-4 sm:px-6 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
           <div className="min-w-0">
             <h2 className="text-base font-bold text-[var(--color-text)] truncate">
@@ -173,6 +187,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
             <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
               {fmtDateRu(period.from)} — {fmtDateRu(period.to)}
               {hasComparison && <> · сравнение: {fmtDateRu(comparison.from)} — {fmtDateRu(comparison.to)}</>}
+              {!prevIsComparison && <> · пред.: {fmtDateRu(prevRange.from)} — {fmtDateRu(prevRange.to)}</>}
             </p>
             <p className="mt-1 text-xs tabular-nums">
               Итого за период: <b>{data ? fmtVal(data.current.total, metric) : '…'}</b>
@@ -252,18 +267,25 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
                   <Tooltip
                     formatter={(v, name) => [fmtVal(typeof v === "number" ? v : null, metric), String(name)]}
                     labelFormatter={(l, payload) => {
-                      const p0 = (payload as unknown as { payload?: { cmpLabel?: string | null } }[])?.[0]?.payload;
-                      return p0?.cmpLabel ? `${String(l)} (сравн.: ${p0.cmpLabel})` : String(l);
+                      const p0 = (payload as unknown as { payload?: { cmpLabel?: string | null; prevLabel?: string | null } }[])?.[0]?.payload;
+                      const parts = [String(l)];
+                      if (p0?.cmpLabel) parts.push(`сравн.: ${p0.cmpLabel}`);
+                      if (p0?.prevLabel) parts.push(`пред.: ${p0.prevLabel}`);
+                      return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(' · ')})` : parts[0];
                     }}
                     // Тултип висит над линиями графика — плотная поверхность, не карточная
                     // (регресс #2999: сквозь него читались сами линии).
                     contentStyle={{ background: 'var(--color-bg-overlay)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }} />
-                  {((hasComparison && data.comparison?.supported) || showTrend) && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                  {((hasComparison && data.comparison?.supported) || (!prevIsComparison && data.previous?.supported) || showTrend) && <Legend wrapperStyle={{ fontSize: 12 }} />}
                   <Line type="monotone" dataKey="current" name="Текущий период" stroke="var(--color-accent)" strokeWidth={2}
                     dot={rows.length <= 62} isAnimationActive={false} connectNulls />
                   {hasComparison && data.comparison?.supported && (
                     <Line type="monotone" dataKey="comparison" name="Период сравнения" stroke="var(--color-text-muted)"
                       strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
+                  )}
+                  {!prevIsComparison && data.previous?.supported && (
+                    <Line type="monotone" dataKey="previous" name="Предыдущий период" stroke="var(--color-positive, #2f9e44)"
+                      strokeWidth={1.5} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
                   )}
                   {showTrend && (
                     // linear, не monotone: тренд — прямая по определению, сглаживание

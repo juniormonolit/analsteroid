@@ -68,12 +68,20 @@ export async function POST(req: NextRequest) {
   const current = await fetchSeries({
     period: { from: new Date(body.period.from), to: new Date(body.period.to) },
   });
+  // Доп. линии (правка владельца 25.08: «показывал и период сравнения и
+  // предыдущий, прям на одном графике») — параллельно: серии независимы.
   let comparison = null;
-  if (current.supported && validPeriod(body.comparisonPeriod)) {
-    comparison = await fetchSeries({
-      period: { from: new Date(body.comparisonPeriod.from), to: new Date(body.comparisonPeriod.to) },
-    });
+  let previous = null;
+  if (current.supported) {
+    [comparison, previous] = await Promise.all([
+      validPeriod(body.comparisonPeriod)
+        ? fetchSeries({ period: { from: new Date(body.comparisonPeriod.from), to: new Date(body.comparisonPeriod.to) } })
+        : Promise.resolve(null),
+      validPeriod(body.previousPeriod)
+        ? fetchSeries({ period: { from: new Date(body.previousPeriod.from), to: new Date(body.previousPeriod.to) } })
+        : Promise.resolve(null),
+    ]);
   }
 
-  return NextResponse.json({ granularity, current, comparison });
+  return NextResponse.json({ granularity, current, comparison, previous });
 }
