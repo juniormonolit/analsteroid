@@ -11,6 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import { X, Download } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
+  ReferenceArea, ReferenceLine,
 } from 'recharts';
 import { exportNodeToPng } from '@/features/reports/lib/exportImage';
 import type { Metric, DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
@@ -130,39 +131,65 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
       (cumulative ? r?.cumulativeBuckets ?? r?.buckets : r?.buckets) ?? [];
     const cur = pick(data?.current);
     const cmp = pick(data?.comparison);
-    const prev = pick(data?.previous);
-    // Сравнительная линия совмещается ПО ИНДЕКСУ бакета (периоды разной длины —
-    // хвост без пары просто без второй линии).
-    const out = cur.map((b, i) => ({
+    // Предыдущий период — СЛЕВА на той же оси времени, перетекает в текущий
+    // (правка владельца 25.08: «пусть предыдущий график переходит в текущий, а
+    // не накладывается сверху»). Обе половины — ОДНА серия value: линия
+    // непрерывна через стык. Если период сравнения отчёта и есть предыдущий
+    // (prevIsComparison), левым отрезком служит серия сравнения — данные те же,
+    // второй раз не запрашиваем.
+    const prev = prevIsComparison ? cmp : pick(data?.previous);
+    const overlayCmp = hasComparison && !prevIsComparison ? cmp : [];
+
+    const prevRows = prev.map(b => ({
       label: fmtBucketLabel(b.bucket, gran),
-      current: b.value,
-      comparison: cmp[i]?.value ?? null,
-      cmpLabel: cmp[i] ? fmtBucketLabel(cmp[i].bucket, gran) : null,
-      previous: prev[i]?.value ?? null,
-      prevLabel: prev[i] ? fmtBucketLabel(prev[i].bucket, gran) : null,
-      trend: null as number | null,
+      value: b.value,
+      comparison: null as number | null,
+      cmpLabel: null as string | null,
+      isPrev: true,
+      trendPrev: null as number | null,
+      trendCur: null as number | null,
     }));
-    // Линия тренда — МНК по ВИДИМОЙ линии текущего периода (включён режим
-    // накопления — тренд по накоплению). Рисуем только между первой и последней
-    // точками с данными: экстраполяция в хвост, где срок метрики ещё не
-    // наступил (прозвон броней), выглядела бы как прогноз, которым не является.
+    const curRows = cur.map((b, i) => ({
+      label: fmtBucketLabel(b.bucket, gran),
+      value: b.value,
+      // Наложенное сравнение осталось только для НЕсоседнего периода сравнения:
+      // совмещается по индексу бакета текущего отрезка, как раньше.
+      comparison: overlayCmp[i]?.value ?? null,
+      cmpLabel: overlayCmp[i] ? fmtBucketLabel(overlayCmp[i].bucket, gran) : null,
+      isPrev: false,
+      trendPrev: null as number | null,
+      trendCur: null as number | null,
+    }));
+    const out = [...prevRows, ...curRows];
+
+    // Тренды — ДВА, по одному на каждый отрезок (правка владельца там же):
+    // МНК по видимым значениям внутри своего отрезка, между первой и последней
+    // точками с данными (экстраполяция в незавершённый хвост — это прогноз,
+    // которым линия не является).
     if (showTrend) {
-      const pts = out.map((r, i) => [i, r.current] as const).filter((p): p is readonly [number, number] => p[1] !== null);
-      if (pts.length >= 2) {
+      const fit = (from: number, to: number, key: 'trendPrev' | 'trendCur') => {
+        const pts: [number, number][] = [];
+        for (let i = from; i < to; i++) if (out[i].value !== null) pts.push([i, out[i].value as number]);
+        if (pts.length < 2) return;
         const n = pts.length;
         const sx = pts.reduce((a, p) => a + p[0], 0), sy = pts.reduce((a, p) => a + p[1], 0);
         const sxx = pts.reduce((a, p) => a + p[0] * p[0], 0), sxy = pts.reduce((a, p) => a + p[0] * p[1], 0);
-        const denom = n * sxx - sx * sx;
-        if (denom !== 0) {
-          const slope = (n * sxy - sx * sy) / denom;
-          const intercept = (sy - slope * sx) / n;
-          const first = pts[0][0], last = pts[n - 1][0];
-          for (let i = first; i <= last; i++) out[i].trend = intercept + slope * i;
-        }
-      }
+        const d = n * sxx - sx * sx;
+        if (d === 0) return;
+        const slope = (n * sxy - sx * sy) / d, intercept = (sy - slope * sx) / n;
+        for (let i = pts[0][0]; i <= pts[n - 1][0]; i++) out[i][key] = intercept + slope * i;
+      };
+      fit(0, prevRows.length, 'trendPrev');
+      fit(prevRows.length, out.length, 'trendCur');
     }
     return out;
-  }, [data, gran, cumulative, showTrend]);
+  }, [data, gran, cumulative, showTrend, hasComparison, prevIsComparison]);
+
+  // Индекс первого бакета текущего периода — для фона и линии стыка.
+  const prevLen = useMemo(() => {
+    const pick = (r: SeriesRes | null | undefined): Bucket[] => r?.buckets ?? [];
+    return (prevIsComparison ? pick(data?.comparison) : pick(data?.previous)).length;
+  }, [data, prevIsComparison]);
 
   const sumBuckets = useMemo(() => {
     const cur = data?.current.buckets ?? [];
@@ -235,7 +262,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
             С накоплением
           </button>
           <button type="button" onClick={() => setShowTrend(v => !v)}
-            title="Прямая по методу наименьших квадратов через точки текущего периода"
+            title="Две прямые по методу наименьших квадратов — отдельно для предыдущего и текущего отрезков: видно, как сменился наклон"
             className={`tap-target min-h-8 rounded-full border px-3 text-[11px] font-semibold transition-colors ${
               showTrend ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
                 : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
@@ -267,30 +294,44 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
                   <Tooltip
                     formatter={(v, name) => [fmtVal(typeof v === "number" ? v : null, metric), String(name)]}
                     labelFormatter={(l, payload) => {
-                      const p0 = (payload as unknown as { payload?: { cmpLabel?: string | null; prevLabel?: string | null } }[])?.[0]?.payload;
+                      const p0 = (payload as unknown as { payload?: { cmpLabel?: string | null; isPrev?: boolean } }[])?.[0]?.payload;
                       const parts = [String(l)];
+                      if (p0?.isPrev) parts.push('предыдущий период');
                       if (p0?.cmpLabel) parts.push(`сравн.: ${p0.cmpLabel}`);
-                      if (p0?.prevLabel) parts.push(`пред.: ${p0.prevLabel}`);
                       return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(' · ')})` : parts[0];
                     }}
                     // Тултип висит над линиями графика — плотная поверхность, не карточная
                     // (регресс #2999: сквозь него читались сами линии).
                     contentStyle={{ background: 'var(--color-bg-overlay)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }} />
-                  {((hasComparison && data.comparison?.supported) || (!prevIsComparison && data.previous?.supported) || showTrend) && <Legend wrapperStyle={{ fontSize: 12 }} />}
-                  <Line type="monotone" dataKey="current" name="Текущий период" stroke="var(--color-accent)" strokeWidth={2}
+                  {(showTrend || (hasComparison && !prevIsComparison && data.comparison?.supported) || prevLen > 0) && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                  {/* Предыдущий период — фоном слева + линия стыка: одна серия value
+                      непрерывно перетекает из отрезка в отрезок (правка владельца
+                      25.08 №2), а где кончился предыдущий и начался текущий, видно
+                      по подложке, не по разрыву линии. */}
+                  {prevLen > 0 && rows.length > prevLen && (
+                    <ReferenceArea x1={rows[0].label} x2={rows[prevLen - 1].label}
+                      fill="var(--color-text-muted)" fillOpacity={0.07} ifOverflow="extendDomain" />
+                  )}
+                  {prevLen > 0 && rows.length > prevLen && (
+                    <ReferenceLine x={rows[prevLen].label} stroke="var(--color-border-strong, var(--color-border))"
+                      strokeDasharray="4 3"
+                      label={{ value: 'текущий период →', position: 'insideTopLeft', fontSize: 10, fill: 'var(--color-text-muted)' }} />
+                  )}
+                  <Line type="monotone" dataKey="value" name="Значение" stroke="var(--color-accent)" strokeWidth={2}
                     dot={rows.length <= 62} isAnimationActive={false} connectNulls />
-                  {hasComparison && data.comparison?.supported && (
-                    <Line type="monotone" dataKey="comparison" name="Период сравнения" stroke="var(--color-text-muted)"
+                  {hasComparison && !prevIsComparison && data.comparison?.supported && (
+                    <Line type="monotone" dataKey="comparison" name="Период сравнения (наложен)" stroke="var(--color-text-muted)"
                       strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
                   )}
-                  {!prevIsComparison && data.previous?.supported && (
-                    <Line type="monotone" dataKey="previous" name="Предыдущий период" stroke="var(--color-positive, #2f9e44)"
-                      strokeWidth={1.5} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
+                  {showTrend && (
+                    // linear, не monotone: тренд — прямая по определению. Трендов ДВА,
+                    // по одному на отрезок — видно, как сменился наклон между периодами.
+                    <Line type="linear" dataKey="trendPrev" name="Тренд (пред.)" stroke="var(--color-warning, #e8590c)"
+                      strokeOpacity={0.45} strokeWidth={1.5} strokeDasharray="2 4" dot={false} isAnimationActive={false} connectNulls
+                      activeDot={false} />
                   )}
                   {showTrend && (
-                    // linear, не monotone: тренд — прямая по определению, сглаживание
-                    // изогнуло бы её на неравномерных пропусках.
-                    <Line type="linear" dataKey="trend" name="Тренд" stroke="var(--color-warning, #e8590c)"
+                    <Line type="linear" dataKey="trendCur" name="Тренд (тек.)" stroke="var(--color-warning, #e8590c)"
                       strokeWidth={1.5} strokeDasharray="2 4" dot={false} isAnimationActive={false} connectNulls
                       activeDot={false} />
                   )}
