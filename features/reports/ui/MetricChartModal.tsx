@@ -131,6 +131,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   filters: {
     dealScope: DealScope; clientType: ClientType;
     productGroupMode: ProductGroupMode; productGroupIds?: string[];
+    /** Фильтр отчёта по отделам — график обязан считаться по тому же срезу. */
+    departmentIds?: string[];
     createdTimeFilter: CreatedTimeFilter; firstTouchFilter: FirstTouchFilter;
     /** «Фильтр сделок» отчёта — график обязан считаться по тому же срезу, что ячейка. */
     dealFilters?: DealFilter[];
@@ -170,13 +172,13 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   const cmpOnCanvas = hasComparison
     && comparison.to.getTime() >= prevRange.from.getTime()
     && comparison.from.getTime() <= period.to.getTime();
-  // В наложении сравнение прячем только при ТОЧНОМ совпадении с предыдущим
-  // (иначе две одинаковые линии), в последовательном — при любом пересечении с
-  // полотном (дни уже нарисованы).
-  const prevIsCmpExact = hasComparison
-    && prevRange.from.toDateString() === comparison.from.toDateString()
-    && prevRange.to.toDateString() === comparison.to.toDateString();
-  const showCmpOverlay = hasComparison && (layout === 'overlay' ? !prevIsCmpExact : !cmpOnCanvas);
+  // Наложение — ДВЕ линии, не три (правка владельца 27.08: «зачем три линии?
+  // ограничься двумя»): текущий период + одна базовая. Базовая — период
+  // сравнения отчёта, а без включённого сравнения — предыдущий период.
+  const baseIsCmp = layout === 'overlay' && hasComparison;
+  // В последовательном режиме наложенное сравнение рисуем только когда его дни
+  // не лежат на полотне (иначе дубль данных — скрин владельца 25.08).
+  const showCmpOverlay = layout === 'overlay' ? baseIsCmp : hasComparison && !cmpOnCanvas;
 
   const { data, isLoading, isError } = useQuery<ApiRes>({
     queryKey: ['metric-series', target.metricId, target.dimensionId, gran, reportSlug,
@@ -189,11 +191,12 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           period: { from: period.from.toISOString(), to: period.to.toISOString() },
           comparisonPeriod: showCmpOverlay ? { from: comparison.from.toISOString(), to: comparison.to.toISOString() } : undefined,
           // Последовательно: «previous» = серия ПОЛОТНА целиком (пред.from…тек.to),
-          // стыковый бакет — одна полная точка. Наложение: чистый предыдущий
-          // период — его бакеты совмещаются с текущими по индексу.
+          // стыковый бакет — одна полная точка. Наложение: предыдущий период
+          // нужен только когда он и есть базовая линия (сравнение выключено).
           previousPeriod: layout === 'seq'
             ? { from: prevRange.from.toISOString(), to: period.to.toISOString() }
-            : { from: prevRange.from.toISOString(), to: prevRange.to.toISOString() },
+            : baseIsCmp ? undefined : { from: prevRange.from.toISOString(), to: prevRange.to.toISOString() },
+          departmentIds: filters.departmentIds?.length ? filters.departmentIds : undefined,
           granularity: gran,
           dealScope: filters.dealScope,
           clientType: filters.clientType,
@@ -234,26 +237,72 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
     };
 
     if (layout === 'overlay') {
-      // Наложение: ось = бакеты ТЕКУЩЕГО периода, предыдущий и сравнение
-      // совмещаются по индексу (i-й бакет к i-му — как в отчётной таблице).
+      // ДВЕ линии: текущий период + базовая (сравнение отчёта, иначе предыдущий).
       const cur = pick(data?.current);
-      const prev = pick(data?.previous);
-      const cmp = showCmpOverlay ? pick(data?.comparison) : [];
-      const out = cur.map((b, i) => ({
-        x: String(i),
-        label: fmtBucketLabel(b.bucket, gran),
-        value: b.value,
-        previous: prev[i]?.value ?? null,
-        prevLabel: prev[i] ? fmtBucketLabel(prev[i].bucket, gran) : null,
-        comparison: cmp[i]?.value ?? null,
-        cmpLabel: cmp[i] ? fmtBucketLabel(cmp[i].bucket, gran) : null,
-        isPrev: false,
-        trendPrev: null as number | null,
-        trendCur: null as number | null,
-      }));
+      const base = baseIsCmp ? pick(data?.comparison) : pick(data?.previous);
+      const baseFrom = baseIsCmp ? comparison.from : prevRange.from;
+
+      // Выравнивание (правка владельца 27.08: «подгоняй 25 число к 25 числу, и
+      // пусть хвосты висят»). Дни: дата базовой линии сдвигается на целое число
+      // МЕСЯЦЕВ между стартами периодов — 25.07 к 25.08, 25.07.25 к 25.07.26.
+      // Числа, которых нет в целевом месяце (31-е к февралю), честно выпадают.
+      // Недели/месяцы уже выровнены календарём — там совмещение по индексу.
+      // Если совпало меньше половины точек (периоды внутри одного месяца:
+      // прошлая неделя против этой), откатываемся на совмещение по индексу.
+      const shiftMonths = (period.from.getFullYear() - baseFrom.getFullYear()) * 12
+        + (period.from.getMonth() - baseFrom.getMonth());
+      const mapKey = (bucket: string): string | null => {
+        if (gran !== 'day') return null;
+        const [y, m, d] = bucket.split('-').map(Number);
+        const t = new Date(Date.UTC(y, m - 1 + shiftMonths, d));
+        return t.getUTCDate() === d ? t.toISOString().slice(0, 10) : null;
+      };
+
+      let mapped: { key: string; value: number | null; label: string }[] = [];
+      if (gran === 'day') {
+        mapped = base.flatMap(b => {
+          const key = mapKey(b.bucket);
+          return key ? [{ key, value: b.value, label: fmtBucketLabel(b.bucket, gran) }] : [];
+        });
+        const curKeys = new Set(cur.map(b => b.bucket));
+        const matches = mapped.filter(mb => curKeys.has(mb.key)).length;
+        if (matches < Math.min(cur.length, base.length) / 2) mapped = [];
+      }
+      if (mapped.length === 0) {
+        // по индексу: i-й бакет к i-му (недели/месяцы, либо фолбэк для дней)
+        mapped = base.map((b, i) => ({
+          key: cur[i]?.bucket ?? `~tail${i}`,
+          value: b.value,
+          label: fmtBucketLabel(b.bucket, gran),
+        }));
+      }
+      const baseByKey = new Map(mapped.map(mb => [mb.key, mb]));
+
+      // Ось = бакеты текущего периода + висящие хвосты базовой линии.
+      const tailKeys = mapped.map(mb => mb.key).filter(k => !cur.some(b => b.bucket === k));
+      const axis: { key: string; curValue: number | null }[] = [
+        ...cur.map(b => ({ key: b.bucket, curValue: b.value })),
+        ...tailKeys.map(k => ({ key: k, curValue: null })),
+      ].sort((a, b) => a.key.localeCompare(b.key));
+
+      const out = axis.map((a, i) => {
+        const mb = baseByKey.get(a.key);
+        return {
+          x: String(i),
+          label: a.key.startsWith('~tail') ? (mb?.label ?? '') : fmtBucketLabel(a.key, gran),
+          value: a.curValue,
+          previous: !baseIsCmp ? mb?.value ?? null : null,
+          prevLabel: !baseIsCmp ? mb?.label ?? null : null,
+          comparison: baseIsCmp ? mb?.value ?? null : null,
+          cmpLabel: baseIsCmp ? mb?.label ?? null : null,
+          isPrev: false,
+          trendPrev: null as number | null,
+          trendCur: null as number | null,
+        };
+      });
       if (showTrend) {
         fitKey(out, 0, out.length, 'value', 'trendCur');
-        fitKey(out, 0, out.length, 'previous', 'trendPrev');
+        fitKey(out, 0, out.length, baseIsCmp ? 'comparison' : 'previous', 'trendPrev');
       }
       return { rows: out, seam: 0 };
     }
@@ -448,7 +497,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
                       strokeWidth={1.5} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
                   )}
                   {showCmpOverlay && data.comparison?.supported && (
-                    <Line type="monotone" dataKey="comparison" name="Период сравнения (наложен)" stroke="var(--color-text-muted)"
+                    <Line type="monotone" dataKey="comparison" name={layout === 'overlay' ? 'Период сравнения' : 'Период сравнения (наложен)'} stroke="var(--color-text-muted)"
                       strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
                   )}
                   {showTrend && (

@@ -35,6 +35,12 @@ export interface MetricSeriesOptions {
   dealScope?: DealScope;
   clientType?: ClientType;
   managerIds?: string[];          // явное ограничение строк (см. шапку)
+  /** Фильтр отчёта по отделам. Обязателен для разрезов, где клиент НЕ знает
+   *  список менеджеров (by-product-groups): без него график «Итого» и строк
+   *  товарных групп считался по ВСЕМ менеджерам, игнорируя выбранные отделы
+   *  (живой баг со скрина владельца 27.08: в ячейке 36,5 млн, на графике 54,7).
+   *  Разворачивается в manager id тем же запросом, что byProductGroups (2065). */
+  departmentIds?: string[];
   productGroupMode?: ProductGroupMode;
   productGroupId?: string;
   productGroupIds?: string[];
@@ -140,7 +146,28 @@ export async function fetchMetricSeries(opts: MetricSeriesOptions): Promise<Metr
   };
   const pgFilter = buildProductGroupFilter(pgFilterInput, 2); // после [$1=from, $2=toExcl]
   const managerParamIdx = 3 + (pgFilter?.params.length ?? 0);
-  const managerIds = (opts.managerIds ?? []).filter(v => /^\d+$/.test(v));
+  let managerIds = (opts.managerIds ?? []).filter(v => /^\d+$/.test(v));
+  // Отделы → manager id (оргструктура из sa, НЕ из YC — синк пишет только в sa,
+  // задача 2065; тот же запрос, что byProductGroups.ts). Отдел без менеджеров
+  // означает пустой отчёт, а не «фильтр молча снят».
+  const deptIds = (opts.departmentIds ?? []).filter(Boolean);
+  if (deptIds.length > 0) {
+    const res = await analyticsDb().query<{ id: string }>(
+      `SELECT DISTINCT manager_bitrix_user_id::text AS id
+         FROM sa.org_resolved_hierarchy
+        WHERE department_id IN (SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1))
+          AND is_active = true`,
+      [deptIds],
+    );
+    const deptManagers = res.rows.map(r => r.id).filter(v => /^\d+$/.test(v));
+    managerIds = managerIds.length > 0
+      ? managerIds.filter(v => deptManagers.includes(v))
+      : deptManagers;
+    if (managerIds.length === 0) {
+      // Ни одного менеджера в выбранных отделах — честные нули, не полный срез.
+      managerIds = ['-1'];
+    }
+  }
   const offhWhere = [
     createdTimeWhere('d', opts.createdTimeFilter ?? 'all'),
     firstTouchWhere('d', opts.firstTouchFilter ?? 'all'),

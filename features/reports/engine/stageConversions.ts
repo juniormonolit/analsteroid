@@ -163,3 +163,132 @@ ORDER BY g.group_name, de.deal_id, de.event_at ASC
 
   return map;
 }
+
+// ── График CR стадий по времени (правка владельца 27.08: «по относительным
+// метрикам графики не строятся, можем сделать?») ─────────────────────────────
+// Семейство cr_stage_* — ~70 видимых метрик, крупнейшая группа без графика.
+// Универсальная разбивка им не подходит (числители из deal_events со своей
+// логикой «впервые вошёл в группу стадий»), но цикл выше и так перебирает
+// сделки поштучно с датой первого входа на руках — бакетим по ней, тем же
+// приёмом, что fetchBookingCallRateSeries.
+//
+// Семантика точки: «из сделок, впервые вошедших в стадию X в этот день/неделю/
+// месяц, N% дошли (когда-либо после) до Y» — когортная, как ячейка отчёта;
+// сумма num/denom бакетов сходится с ячейкой.
+
+import { bucketStartYmd, nextBucketYmd, type SeriesGranularity, type MetricSeriesResult, type SeriesBucket } from './metricSeries';
+
+/** cr_stage_<pair>[_all|_repeat] → пара матрицы; null = не наша метрика. */
+export function stagePairForMetric(metricId: string): StagePairDef | null {
+  const m = /^cr_stage_(.+?)(?:_all|_repeat)?$/.exec(metricId);
+  if (!m) return null;
+  return STAGE_PAIRS.find(p => p.id === m[1]) ?? null;
+}
+
+export async function fetchStageConversionSeries(opts: {
+  metricId: string;
+  period: DateRange;
+  granularity: SeriesGranularity;
+  managerIds?: string[];
+  departmentIds?: string[];
+}): Promise<MetricSeriesResult> {
+  const pair = stagePairForMetric(opts.metricId);
+  if (!pair) return { supported: false, reason: 'Не метрика CR стадий', buckets: [], cumulativeBuckets: [], total: null };
+
+  const periodToStr = periodDateStrFromInstant(opts.period.to, 'to');
+  if (periodToStr < DEAL_EVENTS_DATA_START) {
+    return { supported: false, reason: `События стадий собираются с ${DEAL_EVENTS_DATA_START} — весь период раньше`, buckets: [], cumulativeBuckets: [], total: null };
+  }
+
+  // Ограничение менеджерами: явный список от клиента ∩ менеджеры выбранных
+  // отделов (оргструктура из sa — задача 2065, тот же запрос, что byProductGroups).
+  let mgrSet: Set<string> | null = opts.managerIds?.length ? new Set(opts.managerIds) : null;
+  const deptIds = (opts.departmentIds ?? []).filter(Boolean);
+  if (deptIds.length > 0) {
+    const res = await analyticsDb().query<{ id: string }>(
+      `SELECT DISTINCT manager_bitrix_user_id::text AS id
+         FROM sa.org_resolved_hierarchy
+        WHERE department_id IN (SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1))
+          AND is_active = true`,
+      [deptIds],
+    );
+    const dept = new Set(res.rows.map(r => r.id));
+    mgrSet = mgrSet ? new Set([...mgrSet].filter(v => dept.has(v))) : dept;
+  }
+
+  const { from, toExcl } = toSqlInterval(opts.period);
+  const fromMs = new Date(from).getTime();
+  const toMs = new Date(toExcl).getTime();
+
+  // Первые входы в ДВЕ нужные группы (или одну + lost_at) — не во все 8, как в
+  // матрице: серия строится по одной паре, тянуть остальное незачем.
+  const groups = [pair.from, ...(pair.to === 'lost' ? [] : [pair.to])] as (keyof typeof STAGE_GROUPS)[];
+  const groupValues = groups.flatMap(g => STAGE_GROUPS[g].map(id => `('${g}', '${id.replace(/'/g, "''")}')`)).join(',\n    ');
+  const feRes = await analyticsDb().query<{ group_name: string; deal_id: number; first_at: string; manager_id: number }>(`
+WITH groups(group_name, stage_id) AS (
+  VALUES
+    ${groupValues}
+)
+SELECT DISTINCT ON (g.group_name, de.deal_id)
+  g.group_name, de.deal_id, de.event_at AS first_at, de.manager_id
+FROM deal_events de
+JOIN groups g ON g.stage_id = de.stage_id
+ORDER BY g.group_name, de.deal_id, de.event_at ASC
+  `.trim());
+
+  const fromByDeal = new Map<number, { at: number; mgr: string }>();
+  const toByDeal = new Map<number, number>();
+  for (const r of feRes.rows) {
+    const at = new Date(r.first_at).getTime();
+    if (r.group_name === pair.from) fromByDeal.set(r.deal_id, { at, mgr: String(r.manager_id) });
+    else toByDeal.set(r.deal_id, at);
+  }
+
+  // Когорта: первый вход в X внутри периода (+ фильтр по менеджерам).
+  const cohort = [...fromByDeal.entries()].filter(([, e]) =>
+    e.at >= fromMs && e.at < toMs && (!mgrSet || mgrSet.has(e.mgr)));
+
+  let lostAtByDeal = new Map<number, number | null>();
+  if (pair.to === 'lost' && cohort.length > 0) {
+    const res = await analyticsDb().query<{ deal_id: number; lost_at: string | null }>(
+      'SELECT deal_id, lost_at FROM deals WHERE deal_id = ANY($1::int[])',
+      [cohort.map(([id]) => id)],
+    );
+    lostAtByDeal = new Map(res.rows.map(r => [r.deal_id, r.lost_at ? new Date(r.lost_at).getTime() : null]));
+  }
+
+  const agg = new Map<string, { num: number; denom: number }>();
+  let totNum = 0, totDenom = 0;
+  for (const [dealId, e] of cohort) {
+    const b = bucketStartYmd(new Date(e.at), opts.granularity);
+    let a = agg.get(b);
+    if (!a) { a = { num: 0, denom: 0 }; agg.set(b, a); }
+    a.denom++; totDenom++;
+    let reached: boolean;
+    if (pair.to === 'lost') {
+      const lostAt = lostAtByDeal.get(dealId) ?? null;
+      reached = lostAt !== null && lostAt >= e.at;
+    } else {
+      const toAt = toByDeal.get(dealId);
+      reached = toAt !== undefined && toAt >= e.at;
+    }
+    if (reached) { a.num++; totNum++; }
+  }
+
+  const startYmd = bucketStartYmd(opts.period.from, opts.granularity);
+  const endExcl = new Date(`${periodToStr}T00:00:00+03:00`);
+  endExcl.setUTCDate(endExcl.getUTCDate() + 1);
+  const endExclYmd = bucketStartYmd(endExcl, 'day');
+  const buckets: SeriesBucket[] = [];
+  const cumulativeBuckets: SeriesBucket[] = [];
+  let cumNum = 0, cumDenom = 0;
+  for (let b = startYmd; b < endExclYmd && buckets.length < 500; b = nextBucketYmd(b, opts.granularity)) {
+    const a = agg.get(b);
+    const beforeData = nextBucketYmd(b, opts.granularity) <= DEAL_EVENTS_DATA_START;
+    buckets.push({ bucket: b, value: !beforeData && a && a.denom > 0 ? (a.num / a.denom) * 100 : null });
+    if (!beforeData && a) { cumNum += a.num; cumDenom += a.denom; }
+    cumulativeBuckets.push({ bucket: b, value: cumDenom > 0 ? (cumNum / cumDenom) * 100 : null });
+  }
+
+  return { supported: true, buckets, cumulativeBuckets, total: totDenom > 0 ? (totNum / totDenom) * 100 : null };
+}

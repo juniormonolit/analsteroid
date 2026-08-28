@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { fetchMetricSeries, type SeriesGranularity } from '@/features/reports/engine/metricSeries';
 import { fetchBookingCallRateSeries, BOOKING_SERIES_METRICS } from '@/features/reports/engine/bookingCallRate';
+import { fetchStageConversionSeries, stagePairForMetric } from '@/features/reports/engine/stageConversions';
 import { validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import type { DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 
@@ -30,6 +31,11 @@ export async function POST(req: NextRequest) {
   const managerIds = Array.isArray(body.managerIds)
     ? (body.managerIds as unknown[]).filter((v): v is string => typeof v === 'string' && /^\d+$/.test(v)).slice(0, 1000)
     : undefined;
+  // Фильтр отчёта по отделам — без него график в разрезах без явного списка
+  // менеджеров (товарные группы) игнорировал выбранные отделы (баг 27.08).
+  const departmentIds = Array.isArray(body.departmentIds)
+    ? (body.departmentIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.length <= 64).slice(0, 200)
+    : undefined;
   if (body.productGroupIds !== undefined && (!Array.isArray(body.productGroupIds) || body.productGroupIds.length > 200
     || (body.productGroupIds as unknown[]).some(v => typeof v !== 'string' || (v as string).length > 200))) {
     return NextResponse.json({ error: 'productGroupIds: массив строк ≤200' }, { status: 400 });
@@ -41,6 +47,7 @@ export async function POST(req: NextRequest) {
     dealScope: (body.dealScope ?? 'all') as DealScope,
     clientType: (body.clientType ?? 'all') as ClientType,
     managerIds,
+    departmentIds,
     productGroupMode: (body.productGroupMode ?? 'kc') as ProductGroupMode,
     productGroupId: typeof body.productGroupId === 'string' ? body.productGroupId : undefined,
     productGroupIds: body.productGroupIds as string[] | undefined,
@@ -59,11 +66,17 @@ export async function POST(req: NextRequest) {
   // тенденцию в виде графика»). Замечание: фильтры отчёта, кроме списка
   // менеджеров, на эту метрику не действуют и в ячейке — расхождения с ячейкой
   // здесь нет.
+  // «CR стадий» (cr_stage_*) — свой движок по deal_events (правка владельца
+  // 27.08: крупнейшее семейство «относительных» метрик без графика).
   const fetchSeries = BOOKING_SERIES_METRICS[common.metricId]
     ? (o: { period: { from: Date; to: Date } }) => fetchBookingCallRateSeries({
         metricId: common.metricId, granularity, managerIds, period: o.period,
       })
-    : (o: { period: { from: Date; to: Date } }) => fetchMetricSeries({ ...common, period: o.period });
+    : stagePairForMetric(common.metricId)
+      ? (o: { period: { from: Date; to: Date } }) => fetchStageConversionSeries({
+          metricId: common.metricId, granularity, managerIds, departmentIds, period: o.period,
+        })
+      : (o: { period: { from: Date; to: Date } }) => fetchMetricSeries({ ...common, period: o.period });
 
   const current = await fetchSeries({
     period: { from: new Date(body.period.from), to: new Date(body.period.to) },
