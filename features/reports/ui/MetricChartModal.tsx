@@ -86,36 +86,38 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   const [showTrend, setShowTrend] = useState(false);
   const chartRef = useRef<HTMLDivElement | null>(null);
 
-  // Третья линия — период, НЕПОСРЕДСТВЕННО предшествующий текущему (правка
-  // владельца 25.08: «и период сравнения, и предыдущий — прям на одном
-  // графике»). Тот же хелпер, что у дефолта карточки менеджера. Если период
-  // сравнения отчёта и есть предыдущий (совпал день в день) — третью линию не
-  // рисуем: две одинаковые линии друг на друге читались бы как баг.
+  // Полотно графика — предыдущий период + текущий (правка владельца 25.08:
+  // «предыдущий переходит в текущий»). Предыдущий — НЕПОСРЕДСТВЕННО
+  // предшествующий той же длины (хелпер дефолта карточки менеджера).
+  //
+  // Полотно считается ОДНИМ запросом за весь диапазон [пред.from, тек.to], а не
+  // склейкой двух серий (правка владельца 25.08 №3, скрин с «ямой»): при
+  // недельных/месячных бакетах граница периодов режет стыковый бакет на два
+  // ОГРЫЗКА — хвост у предыдущего (27–31.07) и голову у текущего (01–02.08),
+  // оба неполные, на графике одна и та же неделя стояла двумя точками с ямой
+  // между ними. Единый запрос даёт стыковому бакету одно полное значение —
+  // артефакту неоткуда взяться, включая формулы расчётных метрик.
   const prevRange = useMemo(() => previousPeriodSameLength(period), [period]);
-  const prevIsComparison = hasComparison
-    && prevRange.from.toDateString() === comparison.from.toDateString()
-    && prevRange.to.toDateString() === comparison.to.toDateString();
-  // Наложенную линию сравнения рисуем только когда её дни НЕ лежат на полотне
-  // (полотно = [пред.from, тек.to]). Живой баг со скрина владельца 25.08: период
-  // сравнения «весь июль» и предыдущий «28 дней июля» почти совпадали — июльские
-  // данные рисовались дважды, отрезком слева и пунктиром поверх августа. Точного
-  // совпадения дат мало: любое пересечение с полотном = дубль данных.
+  // Наложенную линию сравнения рисуем только когда её дни НЕ лежат на полотне:
+  // период сравнения «весь июль» при предыдущем «28 дней июля» рисовался дважды
+  // (скрин владельца 25.08) — любое пересечение с полотном означает дубль данных.
   const cmpOnCanvas = hasComparison
     && comparison.to.getTime() >= prevRange.from.getTime()
     && comparison.from.getTime() <= period.to.getTime();
-  const showCmpOverlay = hasComparison && !prevIsComparison && !cmpOnCanvas;
+  const showCmpOverlay = hasComparison && !cmpOnCanvas;
 
   const { data, isLoading, isError } = useQuery<ApiRes>({
     queryKey: ['metric-series', target.metricId, target.dimensionId, gran, reportSlug,
-      period.from.toISOString(), period.to.toISOString(), hasComparison, prevIsComparison, showCmpOverlay, JSON.stringify(filters), target.managerIds, target.productGroupId],
+      period.from.toISOString(), period.to.toISOString(), hasComparison, showCmpOverlay, JSON.stringify(filters), target.managerIds, target.productGroupId],
     queryFn: async () => {
       const res = await fetch('/api/reports/metric-series', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           metricId: target.metricId,
           period: { from: period.from.toISOString(), to: period.to.toISOString() },
-          comparisonPeriod: (prevIsComparison || showCmpOverlay) ? { from: comparison.from.toISOString(), to: comparison.to.toISOString() } : undefined,
-          previousPeriod: prevIsComparison ? undefined : { from: prevRange.from.toISOString(), to: prevRange.to.toISOString() },
+          comparisonPeriod: showCmpOverlay ? { from: comparison.from.toISOString(), to: comparison.to.toISOString() } : undefined,
+          // «previous» в ответе = серия ПОЛОТНА целиком (пред.from … тек.to).
+          previousPeriod: { from: prevRange.from.toISOString(), to: period.to.toISOString() },
           granularity: gran,
           dealScope: filters.dealScope,
           clientType: filters.clientType,
@@ -135,50 +137,49 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
     refetchOnWindowFocus: false,
   });
 
-  const rows = useMemo(() => {
+  const chart = useMemo(() => {
     const pick = (r: SeriesRes | null | undefined): Bucket[] =>
       (cumulative ? r?.cumulativeBuckets ?? r?.buckets : r?.buckets) ?? [];
-    const cur = pick(data?.current);
-    const cmp = pick(data?.comparison);
-    // Предыдущий период — СЛЕВА на той же оси времени, перетекает в текущий
-    // (правка владельца 25.08: «пусть предыдущий график переходит в текущий, а
-    // не накладывается сверху»). Обе половины — ОДНА серия value: линия
-    // непрерывна через стык. Если период сравнения отчёта и есть предыдущий
-    // (prevIsComparison), левым отрезком служит серия сравнения — данные те же,
-    // второй раз не запрашиваем.
-    const prev = prevIsComparison ? cmp : pick(data?.previous);
-    const overlayCmp = showCmpOverlay ? cmp : [];
+    // Полотно — union-серия (data.previous, запрошена за пред.from…тек.to одним
+    // куском): стыковый недельный/месячный бакет — ОДНА полная точка, а не два
+    // огрызка по границе периодов (скрин владельца 25.08 с «ямой»). Фолбэк на
+    // серию текущего периода — если union не пришла (старый кэш, сбой запроса).
+    const canvas = data?.previous?.supported ? pick(data.previous) : pick(data?.current);
+    // Шов: первый бакет, начавшийся не раньше старта текущего периода. Стыковый
+    // бакет, начавшийся в предыдущем периоде и захвативший начало текущего,
+    // остаётся в затенённой зоне — он начался там.
+    const fromYmd = period.from.toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
+    let seam = data?.previous?.supported ? canvas.findIndex(b => b.bucket >= fromYmd) : 0;
+    if (seam < 0) seam = 0;
 
-    const prevRows = prev.map(b => ({
-      label: fmtBucketLabel(b.bucket, gran),
-      value: b.value,
-      comparison: null as number | null,
-      cmpLabel: null as string | null,
-      isPrev: true,
-      trendPrev: null as number | null,
-      trendCur: null as number | null,
-    }));
-    const curRows = cur.map((b, i) => ({
-      label: fmtBucketLabel(b.bucket, gran),
-      value: b.value,
-      // Наложенное сравнение осталось только для НЕсоседнего периода сравнения:
-      // совмещается по индексу бакета текущего отрезка, как раньше.
-      comparison: overlayCmp[i]?.value ?? null,
-      cmpLabel: overlayCmp[i] ? fmtBucketLabel(overlayCmp[i].bucket, gran) : null,
-      isPrev: false,
-      trendPrev: null as number | null,
-      trendCur: null as number | null,
-    }));
-    // Уникальный x на каждую точку: на стыке недельных/месячных бакетов ярлык
-    // может ПОВТОРИТЬСЯ (неделя 27.07 есть и у предыдущего периода, и у
-    // текущего) — категорийная ось по label якорила подложку и линию стыка по
-    // ПЕРВОМУ совпадению, и они съезжали (скрин владельца 25.08).
-    const out = [...prevRows, ...curRows].map((r, i) => ({ ...r, x: String(i) }));
+    // Наложенное сравнение совмещается с бакетами ТЕКУЩЕГО периода по КЛЮЧУ
+    // бакета: полотно длиннее серии текущего периода, индексы не годятся.
+    const cmp = showCmpOverlay ? pick(data?.comparison) : [];
+    const curBuckets = pick(data?.current);
+    const overlayByBucket = new Map<string, { value: number | null; label: string }>();
+    curBuckets.forEach((b, i) => {
+      if (cmp[i]) overlayByBucket.set(b.bucket, { value: cmp[i].value, label: fmtBucketLabel(cmp[i].bucket, gran) });
+    });
 
-    // Тренды — ДВА, по одному на каждый отрезок (правка владельца там же):
-    // МНК по видимым значениям внутри своего отрезка, между первой и последней
-    // точками с данными (экстраполяция в незавершённый хвост — это прогноз,
-    // которым линия не является).
+    const out = canvas.map((b, i) => {
+      const ov = overlayByBucket.get(b.bucket);
+      return {
+        // Уникальный x на точку: ярлыки бакетов на полотне могут повторяться,
+        // категорийная ось по label якорила подложку/шов по первому совпадению.
+        x: String(i),
+        label: fmtBucketLabel(b.bucket, gran),
+        value: b.value,
+        comparison: ov?.value ?? null,
+        cmpLabel: ov?.label ?? null,
+        isPrev: i < seam,
+        trendPrev: null as number | null,
+        trendCur: null as number | null,
+      };
+    });
+
+    // Тренды — ДВА, по одному на отрезок: МНК по видимым значениям между первой
+    // и последней точками с данными своего отрезка (экстраполяция в
+    // незавершённый хвост — это прогноз, которым линия не является).
     if (showTrend) {
       const fit = (from: number, to: number, key: 'trendPrev' | 'trendCur') => {
         const pts: [number, number][] = [];
@@ -192,17 +193,13 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
         const slope = (n * sxy - sx * sy) / d, intercept = (sy - slope * sx) / n;
         for (let i = pts[0][0]; i <= pts[n - 1][0]; i++) out[i][key] = intercept + slope * i;
       };
-      fit(0, prevRows.length, 'trendPrev');
-      fit(prevRows.length, out.length, 'trendCur');
+      fit(0, seam, 'trendPrev');
+      fit(seam, out.length, 'trendCur');
     }
-    return out;
-  }, [data, gran, cumulative, showTrend, showCmpOverlay, prevIsComparison]);
-
-  // Индекс первого бакета текущего периода — для фона и линии стыка.
-  const prevLen = useMemo(() => {
-    const pick = (r: SeriesRes | null | undefined): Bucket[] => r?.buckets ?? [];
-    return (prevIsComparison ? pick(data?.comparison) : pick(data?.previous)).length;
-  }, [data, prevIsComparison]);
+    return { rows: out, seam };
+  }, [data, gran, cumulative, showTrend, showCmpOverlay, period]);
+  const rows = chart.rows;
+  const seam = chart.seam;
 
   const sumBuckets = useMemo(() => {
     const cur = data?.current.buckets ?? [];
@@ -226,8 +223,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
             </h2>
             <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
               {fmtDateRu(period.from)} — {fmtDateRu(period.to)}
-              {hasComparison && <> · сравнение: {fmtDateRu(comparison.from)} — {fmtDateRu(comparison.to)}{cmpOnCanvas && !prevIsComparison ? ' (эти дни уже на полотне)' : ''}</>}
-              {!prevIsComparison && <> · пред.: {fmtDateRu(prevRange.from)} — {fmtDateRu(prevRange.to)}</>}
+              {hasComparison && <> · сравнение: {fmtDateRu(comparison.from)} — {fmtDateRu(comparison.to)}{cmpOnCanvas ? ' (эти дни уже на полотне)' : ''}</>}
+              <> · пред.: {fmtDateRu(prevRange.from)} — {fmtDateRu(prevRange.to)}</>
             </p>
             <p className="mt-1 text-xs tabular-nums">
               Итого за период: <b>{data ? fmtVal(data.current.total, metric) : '…'}</b>
@@ -268,7 +265,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
             в шапку на 375px уже не влезает, а flex-wrap здесь безопасен. */}
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 sm:px-6 py-2 shrink-0">
           <button type="button" onClick={() => setCumulative(v => !v)}
-            title="Каждая точка — значение с начала периода по этот день. Для процентов накапливаются числитель и знаменатель, а не сами проценты."
+            title="Каждая точка — накопление с НАЧАЛА ПОЛОТНА (предыдущий период + текущий). Для процентов накапливаются числитель и знаменатель, а не сами проценты."
             className={`tap-target min-h-8 rounded-full border px-3 text-[11px] font-semibold transition-colors ${
               cumulative ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
                 : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
@@ -283,7 +280,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           </button>
           {cumulative && (
             <span className="text-[11px] text-[var(--color-text-muted)]">
-              точка = значение с начала периода по этот {gran === 'day' ? 'день' : gran === 'week' ? 'неделю' : 'месяц'} включительно
+              накопление с начала полотна (включая предыдущий период) по этот {gran === 'day' ? 'день' : gran === 'week' ? 'неделю' : 'месяц'}
             </span>
           )}
         </div>
@@ -317,17 +314,17 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
                     // Тултип висит над линиями графика — плотная поверхность, не карточная
                     // (регресс #2999: сквозь него читались сами линии).
                     contentStyle={{ background: 'var(--color-bg-overlay)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 12 }} />
-                  {(showTrend || (showCmpOverlay && data.comparison?.supported) || prevLen > 0) && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                  {(showTrend || (showCmpOverlay && data.comparison?.supported) || seam > 0) && <Legend wrapperStyle={{ fontSize: 12 }} />}
                   {/* Предыдущий период — фоном слева + линия стыка: одна серия value
                       непрерывно перетекает из отрезка в отрезок (правка владельца
                       25.08 №2), а где кончился предыдущий и начался текущий, видно
                       по подложке, не по разрыву линии. */}
-                  {prevLen > 0 && rows.length > prevLen && (
-                    <ReferenceArea x1={rows[0].x} x2={rows[prevLen - 1].x}
+                  {seam > 0 && rows.length > seam && (
+                    <ReferenceArea x1={rows[0].x} x2={rows[seam - 1].x}
                       fill="var(--color-text-muted)" fillOpacity={0.07} ifOverflow="extendDomain" />
                   )}
-                  {prevLen > 0 && rows.length > prevLen && (
-                    <ReferenceLine x={rows[prevLen].x} stroke="var(--color-border-strong, var(--color-border))"
+                  {seam > 0 && rows.length > seam && (
+                    <ReferenceLine x={rows[seam].x} stroke="var(--color-border-strong, var(--color-border))"
                       strokeDasharray="4 3"
                       label={{ value: 'текущий период →', position: 'insideTopLeft', fontSize: 10, fill: 'var(--color-text-muted)' }} />
                   )}
