@@ -46,8 +46,29 @@ const tintHead = (m: MetricDef): string =>
 // должен быть меньше, иначе полоса скролла уезжает в пустоту.
 const TAIL = 'min-w-[62vw]';
 
+// Живые комментарии из файла владельца почти все начинаются с температуры
+// («t +19...+30, жара - июль, рост цен на топливо») — а температура теперь и так
+// стоит в свёрнутой строке из метеоданных. Убираем ведущий префикс ПРИ ВЫВОДЕ
+// (правка владельца 28.08: «всё равно вижу температуру там, где коммент»);
+// сам текст в БД не трогаем — если шаблон не совпал, ничего не потеряется.
+const TEMP_PREFIX = /^\s*t\s*[+\-−]?\d+\s*(?:\.{2,3}|…|-{1,2})\s*[+\-−]?\d+\s*[,.;:—-]?\s*/i;
+const stripTemp = (text: string | null | undefined): string => {
+  if (!text) return '';
+  const out = text.replace(TEMP_PREFIX, '').trim();
+  // Если после срезки не осталось ничего осмысленного — показываем как было.
+  return out.length >= 3 ? out.charAt(0).toUpperCase() + out.slice(1) : text.trim();
+};
+
 // Непрозрачная подложка закреплённых ячеек (шапка и колонки года/недели).
 const OPAQUE = 'bg-[var(--color-bg-overlay)] [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)]';
+// Подложка закреплённых ячеек в строке ИТОГО: та же серая заливка, что у всей
+// строки (правка владельца 28.08: «в фиксированных столбцах окраска должна быть
+// та же, что и у всей вертикали, то есть у ИТОГО тоже серенькая»). Сразу
+// НЕПРОЗРАЧНАЯ — иначе сквозь закреплённые колонки при горизонтальном скролле
+// просвечивали бы цифры (тот же класс бага, что «прозрачная шапка»):
+// --color-bg-hover в теме mono сам альфа-цвет, поэтому мешаем его в overlay.
+const OPAQUE_TOTAL = '[-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)]';
+const TOTAL_STICKY_BG = 'color-mix(in srgb, var(--color-bg-hover) 65%, var(--color-bg-overlay))';
 // СПБ/МСК ИТОГО в файле — только продажи и отгрузки.
 const TOTAL_METRICS = METRICS.filter(m => m.key === 'salesSum' || m.key === 'shipSum');
 
@@ -375,8 +396,10 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                   const boundary = r.monthBoundary ? 'border-t-[6px] border-t-[var(--color-border)]' : '';
                   return (
                     <tr key={idx} className={rowBg}>
-                      <td className={`sticky left-0 z-20 w-[52px] min-w-[52px] ${stickyBg} ${boundary} whitespace-nowrap border-b border-r border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-muted)] ${r.isTotal ? 'font-semibold' : ''}`}>{r.yearLabel}</td>
-                      <td className={`sticky left-[52px] z-20 ${stickyBg} ${boundary} whitespace-nowrap border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1 ${r.kind === 'cur' ? 'font-semibold text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}>{r.weekLabel}</td>
+                      <td style={r.isTotal ? { background: TOTAL_STICKY_BG } : undefined}
+                        className={`sticky left-0 z-20 w-[52px] min-w-[52px] ${r.isTotal ? OPAQUE_TOTAL : stickyBg} ${boundary} whitespace-nowrap border-b border-r border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-muted)] ${r.isTotal ? 'font-semibold' : ''}`}>{r.yearLabel}</td>
+                      <td style={r.isTotal ? { background: TOTAL_STICKY_BG } : undefined}
+                        className={`sticky left-[52px] z-20 ${r.isTotal ? OPAQUE_TOTAL : stickyBg} ${boundary} whitespace-nowrap border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1 ${r.kind === 'cur' ? 'font-semibold text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}>{r.weekLabel}</td>
                       {entities.flatMap(e => {
                         const ms = e.total ? TOTAL_METRICS : METRICS;
                         const cells: React.ReactNode[] = [];
@@ -409,7 +432,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                                         строке, дублировать их незачем. */}
                                     {opened && (
                                       <span className="mt-1 block whitespace-pre-wrap text-[11px] leading-snug text-[var(--color-text)]">
-                                        {w?.manual}
+                                        {stripTemp(w?.manual)}
                                       </span>
                                     )}
                                   </button>

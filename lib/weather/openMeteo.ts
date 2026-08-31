@@ -25,8 +25,9 @@ export interface WeekWeatherAuto {
   snowfallCm: number;
   /** Полная строка: «t 12…22, осадки 71 мм» — для развёрнутого вида. */
   summary: string;
-  /** КОРОТКАЯ строка в одну строчку ячейки: «+5, пасмурно, дожди»
-   *  (правка владельца 28.08). */
+  /** КОРОТКАЯ строка: «температура, одно слово» — «+5, пасмурно» / «−8, снег»
+   *  (правка владельца 28.08: «в свёрнутом виде погода писалась коротко:
+   *  „температура, 1 слово“»). */
   short: string;
 }
 
@@ -41,7 +42,7 @@ function cloudWord(pct: number): string {
 
 /** Слово по осадкам недели: снег/дожди/мокрый снег, с оговоркой «местами»,
  *  если осадков было мало. Порог 3 мм за НЕДЕЛЮ — ниже этого «без осадков»:
- *  0.4 мм за семь дней — это не «дожди». */
+ *  0.4 мм за семь дней — это не «дожди». Используется в ПОЛНОЙ сводке. */
 function precipWord(rainMm: number, snowCm: number): string {
   const snowy = snowCm >= 0.5;
   const rainy = rainMm >= 3;
@@ -49,6 +50,15 @@ function precipWord(rainMm: number, snowCm: number): string {
   if (snowy) return snowCm >= 5 ? 'снег' : 'немного снега';
   if (rainy) return rainMm >= 20 ? 'дожди' : 'местами дожди';
   return 'без осадков';
+}
+
+/** ОДНО слово для короткой сводки: заметные осадки важнее облачности («снег» /
+ *  «дожди»), иначе — облачность. Пороги заметности: снег от 2 см или дождь от
+ *  10 мм за неделю; ниже этого погоду определяет небо, а не осадки. */
+function headlineWord(cloudPct: number, rainMm: number, snowCm: number): string {
+  if (snowCm >= 2) return 'снег';
+  if (rainMm >= 10) return 'дожди';
+  return cloudWord(cloudPct);
 }
 
 /** «+5» / «−8» / «0» — средняя температура со знаком, как в примере владельца. */
@@ -99,6 +109,6 @@ export async function fetchWeekWeather(city: WeatherCity, monday: string, sunday
   const parts = [`t ${tMin}…${tMax}`];
   parts.push(precipitationMm > 0 ? `осадки ${precipitationMm} мм` : 'без осадков');
   if (snowfallCm > 0) parts.push(`снег ${snowfallCm} см`);
-  const short = `${tempWord(tMean)}, ${cloudWord(cloudPct)}, ${precipWord(rainMm, snowfallCm)}`;
+  const short = `${tempWord(tMean)}, ${headlineWord(cloudPct, rainMm, snowfallCm)}`;
   return { tMin, tMax, tMean, cloudPct, precipitationMm, rainMm, snowfallCm, summary: parts.join(', '), short };
 }
