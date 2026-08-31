@@ -42,9 +42,17 @@ const ANCHORS = {
 interface Agg {
   deals: number; dealsPrim: number;
   salesSum: number; salesCnt: number; salesPrimCnt: number;
-  shipSum: number; shipPrimCnt: number;
+  // shipPrimSum/shipPrimCnt — ПЕРВИЧНЫЕ отгрузки: на них считается средний чек
+  // (правка владельца 31.08: «средний чек везде должен считаться только по
+  // первичным отгрузкам»). shipSum остаётся суммой ВСЕХ отгрузок — это
+  // отдельная колонка отчёта.
+  shipSum: number; shipPrimSum: number; shipPrimCnt: number;
 }
-const zeroAgg = (): Agg => ({ deals: 0, dealsPrim: 0, salesSum: 0, salesCnt: 0, salesPrimCnt: 0, shipSum: 0, shipPrimCnt: 0 });
+const zeroAgg = (): Agg => ({
+  deals: 0, dealsPrim: 0,
+  salesSum: 0, salesCnt: 0, salesPrimCnt: 0,
+  shipSum: 0, shipPrimSum: 0, shipPrimCnt: 0,
+});
 
 
 
@@ -205,7 +213,7 @@ async function fetchWeeklyFacts(fromYmd: string, toExclYmd: string): Promise<Map
   for (const r of delivered.rows) {
     const a = at(r.wk, r.mgr);
     a.shipSum += Number(r.amt);
-    if (!r.rep) a.shipPrimCnt += Number(r.cnt);
+    if (!r.rep) { a.shipPrimSum += Number(r.amt); a.shipPrimCnt += Number(r.cnt); }
   }
   return out;
 }
@@ -217,7 +225,7 @@ function sumForEntity(week: Map<string, Agg> | undefined, managers: Set<string>)
     if (!managers.has(mgr)) continue;
     t.deals += a.deals; t.dealsPrim += a.dealsPrim;
     t.salesSum += a.salesSum; t.salesCnt += a.salesCnt; t.salesPrimCnt += a.salesPrimCnt;
-    t.shipSum += a.shipSum; t.shipPrimCnt += a.shipPrimCnt;
+    t.shipSum += a.shipSum; t.shipPrimSum += a.shipPrimSum; t.shipPrimCnt += a.shipPrimCnt;
   }
   return t;
 }
@@ -229,14 +237,16 @@ function toMetrics(a: Agg): EntityMetrics {
     shipSum: Math.round(a.shipSum),
     crSale: a.dealsPrim > 0 ? a.salesPrimCnt / a.dealsPrim : null,
     crShip: a.dealsPrim > 0 ? a.shipPrimCnt / a.dealsPrim : null,
-    avgCheck: a.salesCnt > 0 ? Math.round(a.salesSum / a.salesCnt) : null,
+    // Средний чек — ТОЛЬКО первичные отгрузки (правка владельца 31.08). Раньше
+    // считался по всем продажам (salesSum/salesCnt) и был заметно выше.
+    avgCheck: a.shipPrimCnt > 0 ? Math.round(a.shipPrimSum / a.shipPrimCnt) : null,
   };
 }
 
 function addAgg(dst: Agg, src: Agg): void {
   dst.deals += src.deals; dst.dealsPrim += src.dealsPrim;
   dst.salesSum += src.salesSum; dst.salesCnt += src.salesCnt; dst.salesPrimCnt += src.salesPrimCnt;
-  dst.shipSum += src.shipSum; dst.shipPrimCnt += src.shipPrimCnt;
+  dst.shipSum += src.shipSum; dst.shipPrimSum += src.shipPrimSum; dst.shipPrimCnt += src.shipPrimCnt;
 }
 
 // ── сборка ───────────────────────────────────────────────────────────────────
@@ -284,13 +294,22 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
   // их пары в 2025-м приходятся на 30.12.2024 и 06.01.2025, а сделки в sa.deals
   // начинаются с 08.01.2025). Этим же правилом отчёт сам начинается с той
   // недели, с которой начат ручной файл владельца («12-18 января» = W03).
+  //
+  // ИСКЛЮЧЕНИЕ — самый первый год данных (2025): его прошлогодняя пара (2024)
+  // лежит вне sa.deals ЦЕЛИКОМ, и правило выше вырезало из отчёта все недели —
+  // год просто не открывался (жалоба владельца 31.08: «нельзя выбрать 2025 год
+  // отдельно»). Для такого года сравнение не строим вовсе (comparable = false,
+  // строки прошлого года в таблице не рисуются), а недели фильтруем по их
+  // СОБСТВЕННОМУ началу.
+  const comparable = year - 1 >= 2025;
   const todayMsk = new Date().toLocaleDateString('sv-SE', { timeZone: MSK });
   const mondays: string[] = [];
   for (let w = 1; w <= 53; w++) {
     const mon = isoWeekMonday(year, w);
     if (isoWeekOf(mon).year !== year) break; // W53 бывает не каждый год
     if (mon > todayMsk) break;
-    if (isoWeekMonday(year - 1, w) < DATA_START) continue;
+    if (mon < DATA_START) continue;
+    if (comparable && isoWeekMonday(year - 1, w) < DATA_START) continue;
     mondays.push(mon);
   }
 
@@ -386,5 +405,5 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
     monthBlocks.push({ month: mo, label: `ИТОГО ${MONTH_NOM[mo - 1]}`, cur, prev, planSales, planShip, planOther });
   }
 
-  return { year, entities: ENTITY_DEFS, weeks, months: monthBlocks, weather };
+  return { year, comparable, entities: ENTITY_DEFS, weeks, months: monthBlocks, weather };
 }

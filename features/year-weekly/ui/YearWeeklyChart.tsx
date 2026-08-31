@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceArea,
 } from 'recharts';
 import { X, Thermometer, MessageSquareText } from 'lucide-react';
-import { ENTITY_DEFS, type EntityKey, type EntityMetrics, type YearWeeklyResult } from '@/features/year-weekly/shared';
+import { type EntityKey, type EntityMetrics, type YearWeeklyResult } from '@/features/year-weekly/shared';
 import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 
 // Интерактивный график отчёта «Данные по годам» (задача владельца 28.08: «строй
@@ -31,13 +31,9 @@ const METRIC_DEFS: { key: ChartMetric; label: string; kind: 'count' | 'money' | 
 const COLORS = ['#2f6fed', '#2f9e44', '#e8590c', '#9c36b5', '#0c8599', '#e03131', '#5f3dc4', '#1098ad', '#f08c00', '#495057', '#c2255c'];
 const TEMP_COLOR = '#f59f00';
 
-const CITY_LABEL: Record<string, string> = { spb: 'СПб', msk: 'Москва', krd: 'Краснодар' };
-const PRESETS: { label: string; keys: EntityKey[] }[] = [
-  { label: 'По филиалам', keys: ['spb_total', 'msk_total', 'krd'] },
-  { label: 'Отделы СПб', keys: ['spb_os', 'spb_nc', 'spb_nerudka', 'spb_zhbi', 'spb_metal'] },
-  { label: 'Отделы МСК', keys: ['msk_os', 'msk_nc', 'msk_zhbi'] },
-  { label: 'Всё', keys: ENTITY_DEFS.map(e => e.key) },
-];
+export type City = 'spb' | 'msk' | 'krd';
+const CITY_LABEL: Record<City, string> = { spb: 'СПб', msk: 'Москва', krd: 'Краснодар' };
+const CITIES: City[] = ['spb', 'msk', 'krd'];
 
 const TEMP_PREFIX = /^\s*t\s*[+\-−]?\d+\s*(?:\.{2,3}|…|-{1,2})\s*[+\-−]?\d+\s*[,.;:—-]?\s*/i;
 const stripTemp = (text: string | null | undefined): string => {
@@ -80,21 +76,39 @@ interface Row {
   [seriesKey: string]: number | string | null;
 }
 
-export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onClose: () => void }) {
+export function YearWeeklyChart({ data, year, years, onYearChange, initialCity, onClose }: {
+  data: YearWeeklyResult;
+  year: number;
+  years: number[];
+  onYearChange: (y: number) => void;
+  initialCity: City;
+  onClose: () => void;
+}) {
   const isMobile = useIsMobile();
   const canvasRef = useRef<HTMLDivElement>(null);
   const [metric, setMetric] = useState<ChartMetric>('deals');
-  const [selected, setSelected] = useState<EntityKey[]>(['spb_total', 'msk_total', 'krd']);
+  // Филиал — ГЛАВНЫЙ переключатель графика (правка владельца 31.08: «график
+  // должен принципиально разбиваться по филиалам и температуру показывать того
+  // филиала, который выбран. Наносить все 3 филиала на 1 график смысла нет,
+  // разные климатические зоны, разные температуры»). Отсюда: линии — только
+  // отделы выбранного филиала, температура — его города.
+  const [city, setCity] = useState<City>(initialCity);
+  const cityEntities = useMemo(() => data.entities.filter(e => e.city === city), [data.entities, city]);
+  const [hidden, setHidden] = useState<Set<EntityKey>>(new Set());
   const [showPrev, setShowPrev] = useState(true);
   const [showTemp, setShowTemp] = useState(true);
+  // «Усреднить по годам» (правка владельца 31.08): линии строим по среднему
+  // текущего и прошлого года той же ISO-недели — сезонность видно без скачков
+  // отдельного года. Доступно только когда есть с чем усреднять.
+  const [avgYears, setAvgYears] = useState(false);
   const [pinned, setPinned] = useState<number | null>(null);
 
   const mDef = METRIC_DEFS.find(m => m.key === metric)!;
   const entityById = useMemo(() => new Map(data.entities.map(e => [e.key, e])), [data.entities]);
-  // Температура — города первой выбранной сущности: смешивать погоду трёх
-  // городов в одну линию бессмысленно, а выбор «города погоды» отдельным
-  // контролом только плодит ручки.
-  const tempCity = entityById.get(selected[0] ?? 'spb_total')?.city ?? 'spb';
+  const tempCity = city;
+  const averaging = avgYears && data.comparable;
+  // Выбранные сущности = все отделы филиала минус снятые галкой.
+  const selected = useMemo(() => cityEntities.filter(e => !hidden.has(e.key)).map(e => e.key), [cityEntities, hidden]);
 
   const weatherBy = useMemo(() => {
     const m = new Map<string, { temp: number | null; cloud: number | null; short: string | null; manual: string | null }>();
@@ -106,17 +120,36 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
 
   const rows = useMemo((): Row[] => data.weeks.map((w, i) => {
     const wx = weatherBy.get(`${tempCity}:${w.weekStart}`);
+    const wxPrev = weatherBy.get(`${tempCity}:${w.prevWeekStart}`);
     const row: Row = {
       i, label: w.label, weekStart: w.weekStart, month: w.month,
       temp: wx?.temp ?? null, cloud: wx?.cloud ?? null, short: wx?.short ?? null,
       comment: stripTemp(wx?.manual),
     };
+    // В режиме усреднения температуру тоже усредняем — иначе линия погоды
+    // относилась бы к одному году, а столбцы метрик к двум.
+    if (averaging) {
+      const pair = [wx?.temp, wxPrev?.temp].filter((v): v is number => typeof v === 'number');
+      row.temp = pair.length ? pair.reduce((a, b) => a + b, 0) / pair.length : null;
+    }
     for (const key of selected) {
-      row[`cur_${key}`] = (w.cur[key] as EntityMetrics | undefined)?.[metric] ?? null;
-      row[`prev_${key}`] = (w.prev[key] as EntityMetrics | undefined)?.[metric] ?? null;
+      const cur = (w.cur[key] as EntityMetrics | undefined)?.[metric] ?? null;
+      const prev = (w.prev[key] as EntityMetrics | undefined)?.[metric] ?? null;
+      // raw_* — значения по годам как есть (нужны подсказке и в режиме
+      // усреднения); cur_/prev_ — то, что реально рисуется линиями.
+      row[`raw_cur_${key}`] = cur;
+      row[`raw_prev_${key}`] = prev;
+      if (averaging) {
+        const pair = [cur, prev].filter((v): v is number => typeof v === 'number');
+        row[`cur_${key}`] = pair.length ? pair.reduce((a, b) => a + b, 0) / pair.length : null;
+        row[`prev_${key}`] = null;
+      } else {
+        row[`cur_${key}`] = cur;
+        row[`prev_${key}`] = prev;
+      }
     }
     return row;
-  }), [data.weeks, selected, metric, weatherBy, tempCity]);
+  }), [data.weeks, selected, metric, weatherBy, tempCity, averaging]);
 
   // Полосы месяцев: подложка через неделю, чтобы глаз видел границы месяцев.
   const monthBands = useMemo(() => {
@@ -129,8 +162,11 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
     return out.filter((_, idx) => idx % 2 === 1);
   }, [rows]);
 
-  const toggleEntity = (key: EntityKey) => setSelected(prev =>
-    prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  const toggleEntity = (key: EntityKey) => setHidden(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
 
   // Закрепление недели считаем по координате указателя, а не по состоянию
   // recharts: тот отдаёт активную точку только после mousemove (на тапе с
@@ -161,7 +197,19 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
         {/* На узком экране заголовок и крестик держим одной строкой, чипы метрик
             переносим ниже: иначе ml-auto уносил крестик на отдельную строку. */}
         <div className="flex items-center gap-2">
-          <h2 className="text-base font-bold text-[var(--color-text)]">График · {data.year}</h2>
+          <h2 className="text-base font-bold text-[var(--color-text)]">График</h2>
+          {/* Год — прямо в графике, чтобы не закрывать его ради переключения
+              (правка владельца 31.08: «нельзя выбрать 2025 год отдельно»). */}
+          <div className="flex shrink-0 overflow-hidden rounded-lg border border-[var(--color-border)]">
+            {years.map(y => (
+              <button key={y} type="button" onClick={() => onYearChange(y)}
+                className={`tap-target min-h-8 px-2.5 text-[11px] font-semibold ${
+                  year === y ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                             : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                {y}
+              </button>
+            ))}
+          </div>
           <div className="hidden flex-wrap gap-1 sm:flex">
             {METRIC_DEFS.map(m => (
               <button key={m.key} type="button" onClick={() => setMetric(m.key)} className={chipCls(metric === m.key)}>
@@ -182,26 +230,47 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
           ))}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          {PRESETS.map(p => (
-            <button key={p.label} type="button" onClick={() => setSelected(p.keys)}
-              className="tap-target min-h-8 rounded-lg border border-dashed border-[var(--color-border-strong,var(--color-border))] px-2.5 text-[11px] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
-              {p.label}
-            </button>
-          ))}
+          {/* Филиал — главный переключатель: климат у трёх городов разный,
+              смешивать их на одном полотне бессмысленно. */}
+          <div className="flex shrink-0 overflow-hidden rounded-lg border border-[var(--color-border)]">
+            {CITIES.map(c => (
+              <button key={c} type="button" onClick={() => { setCity(c); setHidden(new Set()); setPinned(null); }}
+                className={`tap-target min-h-8 px-3 text-[11px] font-semibold ${
+                  city === c ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                             : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                {CITY_LABEL[c]}
+              </button>
+            ))}
+          </div>
           <span className="mx-1 h-5 w-px bg-[var(--color-border)]" />
-          <button type="button" onClick={() => setShowPrev(v => !v)} className={chipCls(showPrev)}>
-            {data.year - 1} год пунктиром
-          </button>
+          {data.comparable && (
+            <button type="button" onClick={() => setAvgYears(v => !v)} className={chipCls(averaging)}
+              title={`Линии по среднему значению ${year - 1} и ${year} на той же ISO-неделе`}>
+              Усреднить по годам
+            </button>
+          )}
+          {data.comparable && !averaging && (
+            <button type="button" onClick={() => setShowPrev(v => !v)} className={chipCls(showPrev)}>
+              {year - 1} год пунктиром
+            </button>
+          )}
           <button type="button" onClick={() => setShowTemp(v => !v)} className={chipCls(showTemp)}>
             <Thermometer size={11} className="mr-1 inline align-[-1px]" />
             Температура ({CITY_LABEL[tempCity]})
           </button>
+          <span className="text-[11px] text-[var(--color-text-muted)]">
+            {averaging
+              ? `среднее ${year - 1} и ${year}`
+              : data.comparable ? `${year} к ${year - 1}` : `${year}`}
+            {metric === 'avgCheck' && ' · ср. чек — по первичным отгрузкам'}
+          </span>
         </div>
       </div>
 
       {/* Сущности */}
       <div className="shrink-0 scroll-x scrollbar-none flex gap-1.5 border-b border-[var(--color-border)] px-3 py-2 sm:px-5">
-        {data.entities.map((e, idx) => {
+        {cityEntities.map((e) => {
+          const idx = data.entities.findIndex(x => x.key === e.key);
           const on = selected.includes(e.key);
           return (
             <button key={e.key} type="button" onClick={() => toggleEntity(e.key)}
@@ -241,10 +310,14 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
                 <YAxis yAxisId="temp" orientation="right" tick={{ fontSize: 10, fill: TEMP_COLOR }} width={44}
                   tickFormatter={(v: number) => `${Math.round(v)}°`} />
               )}
-              <Tooltip content={<ChartTooltip selected={selected} entityById={entityById} mDef={mDef} showPrev={showPrev} showTemp={showTemp} year={data.year} />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Tooltip content={<ChartTooltip selected={selected} entityById={entityById} mDef={mDef}
+                showPrev={showPrev && data.comparable} showTemp={showTemp} year={year} averaging={averaging} />} />
+              {/* На телефоне легенда занимает три строки и наезжает на подписи
+                  оси — цвета и так видны на чипах отделов выше. */}
+              {!isMobile && <Legend wrapperStyle={{ fontSize: 11 }} />}
               {showTemp && (
-                <Line yAxisId="temp" type="monotone" dataKey="temp" name={`Температура, ${CITY_LABEL[tempCity]}`}
+                <Line yAxisId="temp" type="monotone" dataKey="temp"
+                  name={`Температура, ${CITY_LABEL[tempCity]}${averaging ? ' (среднее)' : ''}`}
                   stroke={TEMP_COLOR} strokeWidth={1.5} strokeDasharray="1 3" dot={false} isAnimationActive={false} connectNulls />
               )}
               {selected.map(key => {
@@ -252,16 +325,16 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
                 const color = COLORS[(idx < 0 ? 0 : idx) % COLORS.length];
                 return (
                   <Line key={`cur_${key}`} yAxisId="left" type="monotone" dataKey={`cur_${key}`}
-                    name={entityById.get(key)?.label ?? key} stroke={color} strokeWidth={2}
+                    name={`${entityById.get(key)?.label ?? key}${averaging ? ' (среднее)' : ''}`} stroke={color} strokeWidth={2}
                     dot={!isMobile && rows.length <= 40} isAnimationActive={false} connectNulls />
                 );
               })}
-              {showPrev && selected.map(key => {
+              {showPrev && !averaging && data.comparable && selected.map(key => {
                 const idx = data.entities.findIndex(e => e.key === key);
                 const color = COLORS[(idx < 0 ? 0 : idx) % COLORS.length];
                 return (
                   <Line key={`prev_${key}`} yAxisId="left" type="monotone" dataKey={`prev_${key}`}
-                    name={`${entityById.get(key)?.label ?? key} · ${data.year - 1}`} stroke={color}
+                    name={`${entityById.get(key)?.label ?? key} · ${year - 1}`} stroke={color}
                     strokeOpacity={0.45} strokeWidth={1.5} strokeDasharray="4 4" dot={false}
                     isAnimationActive={false} connectNulls legendType="none" />
                 );
@@ -277,8 +350,10 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
           <div className="flex flex-col gap-1.5">
             <div className="flex flex-wrap items-baseline gap-2">
               <span className="text-sm font-bold text-[var(--color-text)]">{pinnedRow.label}</span>
-              <span className="text-[11px] text-[var(--color-text-muted)]">{MONTH_NOM[pinnedRow.month - 1]} · {data.year}</span>
-              {pinnedRow.short && (
+              <span className="text-[11px] text-[var(--color-text-muted)]">
+                {MONTH_NOM[pinnedRow.month - 1]} · {averaging ? `среднее ${year - 1} и ${year}` : year}
+              </span>
+              {pinnedRow.short && !averaging && (
                 <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold"
                   style={{ background: `color-mix(in srgb, ${TEMP_COLOR} 16%, transparent)`, color: TEMP_COLOR }}>
                   {pinnedRow.short} · {CITY_LABEL[tempCity]}
@@ -298,8 +373,8 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
             <div className="scroll-x scrollbar-none flex gap-3 pt-0.5">
               {selected.map(key => {
                 const cur = pinnedRow[`cur_${key}`] as number | null;
-                const prev = pinnedRow[`prev_${key}`] as number | null;
-                const d = fmtDelta(cur, prev, mDef.kind);
+                const prev = pinnedRow[`raw_prev_${key}`] as number | null;
+                const d = averaging || !data.comparable ? null : fmtDelta(pinnedRow[`raw_cur_${key}`] as number | null, prev, mDef.kind);
                 return (
                   <span key={key} className="shrink-0 whitespace-nowrap text-[11px] text-[var(--color-text-muted)]">
                     {entityById.get(key)?.label}: <b className="text-[var(--color-text)] tabular-nums">{fmtVal(cur, mDef.kind)}</b>
@@ -319,7 +394,7 @@ export function YearWeeklyChart({ data, onClose }: { data: YearWeeklyResult; onC
   );
 }
 
-function ChartTooltip({ active, payload, selected, entityById, mDef, showPrev, showTemp, year }: {
+function ChartTooltip({ active, payload, selected, entityById, mDef, showPrev, showTemp, year, averaging }: {
   active?: boolean;
   payload?: { payload?: Row }[];
   selected: EntityKey[];
@@ -328,6 +403,7 @@ function ChartTooltip({ active, payload, selected, entityById, mDef, showPrev, s
   showPrev: boolean;
   showTemp: boolean;
   year: number;
+  averaging: boolean;
 }) {
   const row = payload?.[0]?.payload;
   if (!active || !row) return null;
@@ -336,19 +412,29 @@ function ChartTooltip({ active, payload, selected, entityById, mDef, showPrev, s
       style={{ background: 'var(--color-bg-overlay)', backdropFilter: 'var(--glass-blur)' }}>
       <div className="mb-1 flex items-baseline gap-2">
         <b className="text-[12px] text-[var(--color-text)]">{row.label}</b>
-        {showTemp && row.short && <span style={{ color: TEMP_COLOR }}>{row.short}</span>}
+        {showTemp && row.short && !averaging && <span style={{ color: TEMP_COLOR }}>{row.short}</span>}
+        {showTemp && averaging && typeof row.temp === 'number' && (
+          <span style={{ color: TEMP_COLOR }}>{Math.round(row.temp)}° в среднем</span>
+        )}
       </div>
       <div className="flex flex-col gap-0.5">
         {selected.map(key => {
-          const cur = row[`cur_${key}`] as number | null;
-          const prev = row[`prev_${key}`] as number | null;
-          const d = showPrev ? fmtDelta(cur, prev, mDef.kind) : null;
+          const plotted = row[`cur_${key}`] as number | null;
+          const rawCur = row[`raw_cur_${key}`] as number | null;
+          const rawPrev = row[`raw_prev_${key}`] as number | null;
+          const d = !averaging && showPrev ? fmtDelta(rawCur, rawPrev, mDef.kind) : null;
           return (
             <div key={key} className="flex items-baseline justify-between gap-3 tabular-nums">
               <span className="text-[var(--color-text-muted)]">{entityById.get(key)?.label}</span>
               <span className="text-[var(--color-text)]">
-                {fmtVal(cur, mDef.kind)}
-                {showPrev && <span className="ml-1 text-[var(--color-text-muted)]">/ {fmtVal(prev, mDef.kind)} ({year - 1})</span>}
+                {fmtVal(plotted, mDef.kind)}
+                {averaging ? (
+                  <span className="ml-1 text-[var(--color-text-muted)]">
+                    ({year - 1}: {fmtVal(rawPrev, mDef.kind)} · {year}: {fmtVal(rawCur, mDef.kind)})
+                  </span>
+                ) : (
+                  showPrev && <span className="ml-1 text-[var(--color-text-muted)]">/ {fmtVal(rawPrev, mDef.kind)} ({year - 1})</span>
+                )}
                 {d && <b className="ml-1">{d}</b>}
               </span>
             </div>

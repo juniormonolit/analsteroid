@@ -250,6 +250,10 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
   // Строки: недели месяца → ИТОГО месяца → следующая тройка.
   const rows = useMemo((): TriRow[] => {
     if (!data) return [];
+    // У самого первого года данных (2025) прошлого года нет вовсе — строки
+    // «2024г» были бы нулями, а «Откл» — мусором (правка владельца 31.08:
+    // «нельзя выбрать 2025 год отдельно»).
+    const cmp = data.comparable;
     const out: TriRow[] = [];
     let lastMonth = 0;
     for (const w of data.weeks) {
@@ -257,20 +261,20 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
       if (w.month !== lastMonth && lastMonth !== 0) {
         const mb = data.months.find(m => m.month === lastMonth);
         if (mb) {
-          out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: `${mb.label} ${year - 1}`, isTotal: true, get: e => mb.prev[e] });
+          if (cmp) out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: `${mb.label} ${year - 1}`, isTotal: true, get: e => mb.prev[e] });
           out.push({ kind: 'cur', yearLabel: `${year}г`, weekLabel: `${mb.label} ${year}`, isTotal: true, get: e => mb.cur[e] });
           out.push({ kind: 'plan', yearLabel: 'План', weekLabel: 'ИТОГО план', isTotal: true, get: () => null, getPlan: e => ({ sales: mb.planSales[e], ship: mb.planShip[e], other: mb.planOther[e] }) });
         }
       }
       lastMonth = w.month;
-      out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: w.prevLabel, monthBoundary: boundary, get: e => w.prev[e] });
-      out.push({ kind: 'cur', yearLabel: `${year}г`, weekLabel: w.label, weekStart: w.weekStart, get: e => w.cur[e] });
+      if (cmp) out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: w.prevLabel, monthBoundary: boundary, get: e => w.prev[e] });
+      out.push({ kind: 'cur', yearLabel: `${year}г`, weekLabel: w.label, weekStart: w.weekStart, monthBoundary: cmp ? undefined : boundary, get: e => w.cur[e] });
       out.push({ kind: 'plan', yearLabel: '', weekLabel: 'План', get: () => null, getPlan: e => ({ sales: w.planSales[e], ship: w.planShip[e], other: w.planOther[e] }) });
     }
     // хвостовой ИТОГО текущего месяца
     const mb = data.months.find(m => m.month === lastMonth);
     if (mb) {
-      out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: `${mb.label} ${year - 1}`, isTotal: true, monthBoundary: true, get: e => mb.prev[e] });
+      if (cmp) out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: `${mb.label} ${year - 1}`, isTotal: true, monthBoundary: true, get: e => mb.prev[e] });
       out.push({ kind: 'cur', yearLabel: `${year}г`, weekLabel: `${mb.label} ${year}`, isTotal: true, get: e => mb.cur[e] });
       out.push({ kind: 'plan', yearLabel: 'План', weekLabel: 'ИТОГО план', isTotal: true, get: () => null, getPlan: e => ({ sales: mb.planSales[e], ship: mb.planShip[e], other: mb.planOther[e] }) });
     }
@@ -307,13 +311,6 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
               </button>
             ))}
           </div>
-          {/* График (задача владельца 28.08) — тот же payload, другой взгляд:
-              данные для него уже загружены таблицей, запрос не повторяется. */}
-          <button type="button" onClick={() => setChartOpen(true)} disabled={!data}
-            title="Интерактивный график: метрики по неделям, сравнение с прошлым годом, температура, комментарии"
-            className="tap-target min-h-8 flex items-center gap-1.5 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent)]/10 px-3 text-xs font-semibold text-[var(--color-accent)] disabled:opacity-40">
-            <BarChart3 size={13} /> График
-          </button>
           {/* Якорные ссылки по городам (правка владельца 28.08) — полотно
               шириной ~7800px, доскроллить до Краснодара мышью утомительно. */}
           <div className="flex items-center gap-1">
@@ -328,8 +325,22 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
               </button>
             ))}
           </div>
-          <span className="text-xs text-[var(--color-text-muted)]">
-            неделя {year}-го против той же ISO-недели {year - 1}-го · план = месяц / 4 · конверсии — первичные
+          {/* График (задача владельца 28.08) — тот же payload, другой взгляд:
+              данные для него уже загружены таблицей, запрос не повторяется.
+              Правка 31.08: обычная синяя кнопка у правого края. */}
+          <button type="button" onClick={() => setChartOpen(true)} disabled={!data}
+            title="Интерактивный график: метрики по неделям, филиалы, температура, комментарии"
+            className="tap-target ml-auto min-h-9 flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-4 text-xs font-semibold text-[var(--color-text-inverse)] transition-opacity hover:opacity-90 disabled:opacity-40">
+            <BarChart3 size={14} /> График
+          </button>
+          {/* Подсказка — всегда отдельной строкой (basis-full), иначе она
+              делила первую строку с кнопкой и «правый край» получался разным
+              при разной длине текста. */}
+          <span className="basis-full text-xs text-[var(--color-text-muted)]">
+            {data?.comparable === false
+              ? `${year}-й — первый год данных, сравнивать не с чем`
+              : `неделя ${year}-го против той же ISO-недели ${year - 1}-го`}
+            {' · '}план = месяц / 4 · конверсии — первичные · ср. чек — по первичным отгрузкам
             {' · '}погода: свёрнуто — метеоданные (Open-Meteo), развёрнуто — комментарий ответственного
           </span>
         </div>
@@ -505,7 +516,16 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
         )}
       </div>
 
-      {chartOpen && data && <YearWeeklyChart data={data} onClose={() => setChartOpen(false)} />}
+      {chartOpen && data && (
+        <YearWeeklyChart
+          data={data}
+          year={year}
+          years={[nowYear - 1, nowYear]}
+          onYearChange={setYear}
+          initialCity={activeCity}
+          onClose={() => setChartOpen(false)}
+        />
+      )}
 
       {editWeather && (
         <Modal open onOpenChange={o => { if (!o) setEditWeather(null); }} title="Погода за неделю" desktopWidth="sm:max-w-md">

@@ -27,7 +27,8 @@ export interface EntityMetrics {
   /** Первичная конверсия в продажу/отгрузку, доли (0.27). null = знаменатель 0. */
   crSale: number | null;
   crShip: number | null;
-  /** Ср. чек = сумма продаж (все) / кол-во продаж (все). */
+  /** Ср. чек = сумма ПЕРВИЧНЫХ отгрузок / их количество (правка владельца 31.08:
+   *  «средний чек везде должен считаться только по первичным отгрузкам»). */
   avgCheck: number | null;
 }
 
@@ -79,6 +80,9 @@ export interface YearWeeklyWeatherRow {
 
 export interface YearWeeklyResult {
   year: number;
+  /** Есть ли с чем сравнивать: у первого года данных (2025) прошлого года нет,
+   *  строки «год назад» и «Откл» в таком отчёте не рисуются. */
+  comparable: boolean;
   entities: typeof ENTITY_DEFS;
   weeks: WeekBlock[];
   months: MonthBlock[];
