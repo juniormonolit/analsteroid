@@ -28,7 +28,7 @@ export async function loadMetrics(): Promise<Metric[]> {
   } catch { /* таблицы может не быть до миграции 043 */ }
   const res = await db.query<{
     id: string; name_ru: string; name_short_ru: string | null;
-    description: string | null; human_description: string | null;
+    description: string | null; human_description: string | null; formula_human: string | null;
     calc_ok: boolean; fill_ok: boolean;
     metric_type: string; data_type: string; formula: string | null;
     dependencies: string[] | null; decimal_places: number;
@@ -39,7 +39,7 @@ export async function loadMetrics(): Promise<Metric[]> {
     date_field: string | null; filters: string | null; tags: string[] | null;
     is_collect_ok: boolean; is_calc_ok: boolean;
   }>(`
-    SELECT id, name_ru, name_short_ru, description, human_description, calc_ok, fill_ok,
+    SELECT id, name_ru, name_short_ru, description, human_description, formula_human, calc_ok, fill_ok,
            metric_type, data_type, formula,
            dependencies, decimal_places, aggregation_fn, category,
            sort_order, is_core, is_hidden_in_ui, is_active,
@@ -61,6 +61,8 @@ export async function loadMetrics(): Promise<Metric[]> {
     nameShortRu: r.name_short_ru,
     description: r.description,
     humanDescription: r.human_description,
+    // Ручная формула из каталога (миграция 185) — в UI побеждает автогенерацию ниже.
+    formulaHuman: r.formula_human,
     calcOk: r.calc_ok ?? false,
     fillOk: r.fill_ok ?? false,
     metricType: r.metric_type as Metric['metricType'],
@@ -97,7 +99,7 @@ export async function loadMetrics(): Promise<Metric[]> {
   // имён (в отчёт метрики-зависимости формулы могут быть не выбраны).
   const nameById = new Map(_cache.map(m => [m.id, m.nameRu]));
   for (const m of _cache) {
-    if (m.metricType === 'calculated' && m.formula) {
+    if (m.metricType === 'calculated' && m.formula && !m.formulaHuman) {
       m.formulaHuman = m.formula
         .replace(/\[([a-z0-9_]+)\]/gi, (_all: string, id: string) =>
           `«${(nameById.get(id) ?? id).replace(/\s*\(служебная\)\s*$/, '')}»`)
