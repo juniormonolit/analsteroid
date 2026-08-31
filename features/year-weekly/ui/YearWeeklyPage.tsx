@@ -39,6 +39,13 @@ const tintHead = (m: MetricDef): string =>
     ? `color-mix(in srgb, ${m.tintC} ${m.tintP}%, var(--color-bg-overlay))`
     : 'var(--color-bg-overlay)';
 
+// Колонка-запас в конце таблицы (правка владельца 28.08: «на Краснодар просто
+// не наехать, так как таблица заканчивается и скролл дальше не идёт»). Пустая
+// колонка шириной в экран продлевает полотно, и последний блок можно подтянуть
+// к левому краю, как любой другой. Ширина во vw, а не в px: на узком окне запас
+// должен быть меньше, иначе полоса скролла уезжает в пустоту.
+const TAIL = 'min-w-[62vw]';
+
 // Непрозрачная подложка закреплённых ячеек (шапка и колонки года/недели).
 const OPAQUE = 'bg-[var(--color-bg-overlay)] [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)]';
 // СПБ/МСК ИТОГО в файле — только продажи и отгрузки.
@@ -48,7 +55,7 @@ const TOTAL_METRICS = METRICS.filter(m => m.key === 'salesSum' || m.key === 'shi
 // владельца 28.08). Ставится на ПОСЛЕДНЮЮ ячейку блока во ВСЕХ рядах шапки и
 // тела, иначе линия рвётся построчно. Цвет — border-strong: на широкой таблице
 // в 7800px обычный hairline между блоками не читался.
-const BLOCK_EDGE = 'border-r-[4px] border-r-[var(--color-text-muted)]';
+const BLOCK_EDGE = 'border-r-[3px] border-r-[var(--color-border-strong,var(--color-text-muted))]';
 
 // Плавный горизонтальный скролл к блоку города (правка владельца 28.08:
 // «якорные ссылки на горизонтальный скролл по городам… автоскролл должен быть
@@ -161,19 +168,22 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
   const [editWeather, setEditWeather] = useState<{ city: string; weekStart: string; text: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const cornerRef = useRef<HTMLTableCellElement | null>(null);
+  const tableRef = useRef<HTMLTableElement | null>(null);
   const [activeCity, setActiveCity] = useState<'spb' | 'msk' | 'krd'>('spb');
 
   // Ручной скролл тоже переключает активную кнопку: иначе подсветка врёт
   // («СПб» горит, когда на экране Краснодар).
   const onScroll = () => {
     const box = scrollRef.current;
-    if (!box) return;
-    const stickyW = cornerRef.current?.offsetWidth ?? 150;
-    const x = box.scrollLeft + stickyW + 8;
+    const corner = cornerRef.current;
+    const table = tableRef.current;
+    if (!box || !corner || !table) return;
+    // Та же система координат, что в jumpToCity: смещения от левого края таблицы.
+    const x = box.scrollLeft + corner.offsetWidth + 8;
     let cur: 'spb' | 'msk' | 'krd' = 'spb';
     for (const c of ['spb', 'msk', 'krd'] as const) {
       const th = box.querySelector<HTMLElement>(`[data-city-anchor="${c}"]`);
-      if (th && th.offsetLeft <= x) cur = c;
+      if (th && th.offsetLeft - table.offsetLeft <= x) cur = c;
     }
     setActiveCity(prev => (prev === cur ? prev : cur));
   };
@@ -182,10 +192,17 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
   // колонок (они перекрывают контент, и без вычета блок уезжает под них).
   const jumpToCity = (city: 'spb' | 'msk' | 'krd') => {
     const box = scrollRef.current;
+    const corner = cornerRef.current;
+    const table = tableRef.current;
     const th = box?.querySelector<HTMLElement>(`[data-city-anchor="${city}"]`);
-    if (!box || !th) return;
-    const stickyW = cornerRef.current?.offsetWidth ?? 150;
-    animateScrollLeft(box, Math.max(0, th.offsetLeft - stickyW));
+    if (!box || !th || !corner || !table) return;
+    // Опора — САМА ТАБЛИЦА, а не угловая ячейка: угловая ячейка sticky, и её
+    // offsetLeft растёт вместе со scrollLeft. Из-за этого первый прыжок работал
+    // (скролл был в нуле), а следующий считался от съехавшей точки — «на
+    // Краснодар просто не наехать» (скрин владельца 28.08). offsetLeft таблицы
+    // от скролла не зависит; corner.offsetWidth — ширина обеих закреплённых
+    // колонок (colSpan=2), её вычитаем, чтобы блок встал ПРАВЕЕ них.
+    animateScrollLeft(box, Math.max(0, th.offsetLeft - table.offsetLeft - corner.offsetWidth));
     setActiveCity(city);
   };
 
@@ -278,6 +295,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
           </div>
           <span className="text-xs text-[var(--color-text-muted)]">
             неделя {year}-го против той же ISO-недели {year - 1}-го · план = месяц / 4 · конверсии — первичные
+            {' · '}погода: свёрнуто — метеоданные (Open-Meteo), развёрнуто — комментарий ответственного
           </span>
         </div>
 
@@ -290,7 +308,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
           // Правило 2 CLAUDE.md соблюдено: горизонтальный скролл остаётся внутри
           // своего контейнера, страница вбок не едет.
           <div ref={scrollRef} onScroll={onScroll} className="scroll-x max-h-[calc(100dvh-190px)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-            <table className="border-separate border-spacing-0 text-[12px] leading-tight tabular-nums">
+            <table ref={tableRef} className="border-separate border-spacing-0 text-[12px] leading-tight tabular-nums">
               <thead>
                 {/* ряд 1: сущности */}
                 <tr style={{ height: HEAD_H[0] }}>
@@ -308,6 +326,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                       </th>
                     );
                   })}
+                  <th style={headTop(0)} className={`${headCell} ${OPAQUE} ${TAIL} border-b border-[var(--color-border)]`} />
                 </tr>
                 {/* ряд 2: метрики */}
                 <tr style={{ height: HEAD_H[1] }}>
@@ -330,6 +349,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                       </Fragment>
                     );
                   })}
+                  <th rowSpan={2} style={headTop(1)} className={`${headCell} ${OPAQUE} ${TAIL} border-b border-[var(--color-border)]`} />
                 </tr>
                 {/* ряд 3: Факт/Откл */}
                 <tr style={{ height: HEAD_H[2] }}>
@@ -377,10 +397,14 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                                         {w?.short ?? w?.auto ?? '—'}
                                       </span>
                                     </span>
+                                    {/* Развёрнуто — ТОЛЬКО живой комментарий человека, без
+                                        метео-приписок (правка владельца 28.08: «не надо
+                                        там в комменте отсебятины по температуре и
+                                        осадкам»). Цифры метеоданных живут в свёрнутой
+                                        строке, дублировать их незачем. */}
                                     {opened && (
                                       <span className="mt-1 block whitespace-pre-wrap text-[11px] leading-snug text-[var(--color-text)]">
                                         {w?.manual}
-                                        {w?.auto && <span className="mt-0.5 block text-[var(--color-text-muted)]">{w.auto}</span>}
                                       </span>
                                     )}
                                   </button>
@@ -434,6 +458,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                         }
                         return cells;
                       })}
+                      <td className={`${boundary} ${TAIL} border-b border-[var(--color-border)]`} />
                     </tr>
                   );
                 })}
