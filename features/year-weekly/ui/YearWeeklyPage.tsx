@@ -3,7 +3,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
-import type { EntityKey, EntityMetrics, YearWeeklyResult } from '@/features/year-weekly/shared';
+import type { EntityKey, EntityMetrics, NonMoneyPlan, YearWeeklyResult } from '@/features/year-weekly/shared';
 
 // Спец-отчёт «Данные по годам» — зеркало ручного файла владельца (скрин 28.08):
 // понедельный «год к году», строки 2025г/2026г/План на каждую неделю + месячные
@@ -68,7 +68,7 @@ interface TriRow {
   isTotal?: boolean;         // месячные ИТОГО — фон
   weekStart?: string;        // у cur-строки — ключ погоды
   get: (e: EntityKey) => EntityMetrics | null;
-  getPlan?: (e: EntityKey) => { sales: number | null; ship: number | null };
+  getPlan?: (e: EntityKey) => { sales: number | null; ship: number | null; other: NonMoneyPlan };
 }
 
 export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
@@ -106,20 +106,20 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
         if (mb) {
           out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: `${mb.label} ${year - 1}`, isTotal: true, get: e => mb.prev[e] });
           out.push({ kind: 'cur', yearLabel: `${year}г`, weekLabel: `${mb.label} ${year}`, isTotal: true, get: e => mb.cur[e] });
-          out.push({ kind: 'plan', yearLabel: 'План', weekLabel: 'ИТОГО план', isTotal: true, get: () => null, getPlan: e => ({ sales: mb.planSales[e], ship: mb.planShip[e] }) });
+          out.push({ kind: 'plan', yearLabel: 'План', weekLabel: 'ИТОГО план', isTotal: true, get: () => null, getPlan: e => ({ sales: mb.planSales[e], ship: mb.planShip[e], other: mb.planOther[e] }) });
         }
       }
       lastMonth = w.month;
       out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: w.prevLabel, monthBoundary: boundary, get: e => w.prev[e] });
       out.push({ kind: 'cur', yearLabel: `${year}г`, weekLabel: w.label, weekStart: w.weekStart, get: e => w.cur[e] });
-      out.push({ kind: 'plan', yearLabel: '', weekLabel: 'План', get: () => null, getPlan: e => ({ sales: w.planSales[e], ship: w.planShip[e] }) });
+      out.push({ kind: 'plan', yearLabel: '', weekLabel: 'План', get: () => null, getPlan: e => ({ sales: w.planSales[e], ship: w.planShip[e], other: w.planOther[e] }) });
     }
     // хвостовой ИТОГО текущего месяца
     const mb = data.months.find(m => m.month === lastMonth);
     if (mb) {
       out.push({ kind: 'prev', yearLabel: `${year - 1}г`, weekLabel: `${mb.label} ${year - 1}`, isTotal: true, monthBoundary: true, get: e => mb.prev[e] });
       out.push({ kind: 'cur', yearLabel: `${year}г`, weekLabel: `${mb.label} ${year}`, isTotal: true, get: e => mb.cur[e] });
-      out.push({ kind: 'plan', yearLabel: 'План', weekLabel: 'ИТОГО план', isTotal: true, get: () => null, getPlan: e => ({ sales: mb.planSales[e], ship: mb.planShip[e] }) });
+      out.push({ kind: 'plan', yearLabel: 'План', weekLabel: 'ИТОГО план', isTotal: true, get: () => null, getPlan: e => ({ sales: mb.planSales[e], ship: mb.planShip[e], other: mb.planOther[e] }) });
     }
     return out;
   }, [data, year]);
@@ -129,6 +129,12 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
 
   const entities = data?.entities ?? [];
   const stickyBg = 'bg-[var(--color-bg-surface)]';
+  // Закрепление шапки: три ряда прилипают друг под другом. Высоты заданы явно
+  // (h-*), иначе top второго и третьего ряда пришлось бы угадывать — при
+  // расхождении ряды наезжают друг на друга при скролле.
+  const HEAD_H = [28, 26, 18];
+  const headCell = `sticky ${stickyBg} z-20`;
+  const headTop = (i: number) => ({ top: HEAD_H.slice(0, i).reduce((a, b) => a + b, 0) });
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden bg-[var(--color-bg)]">
@@ -151,38 +157,43 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
         {error ? <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось построить отчёт.</div>
         : isLoading || !data ? <div className="text-sm text-[var(--color-text-muted)]">Считаем год…</div>
         : (
-          <div className="scroll-x rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+          // Контейнер таблицы — скроллер по ОБЕИМ осям с ограниченной высотой:
+          // без этого sticky-шапке прилипать не к чему (у .scroll-x высота не
+          // ограничена, вертикально он не скроллится, и sticky top мёртв).
+          // Правило 2 CLAUDE.md соблюдено: горизонтальный скролл остаётся внутри
+          // своего контейнера, страница вбок не едет.
+          <div className="scroll-x max-h-[calc(100dvh-190px)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
             <table className="border-separate border-spacing-0 text-[12px] leading-tight tabular-nums">
               <thead>
                 {/* ряд 1: сущности */}
-                <tr>
-                  <th className={`sticky left-0 z-30 ${stickyBg} border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1`} colSpan={2} />
+                <tr style={{ height: HEAD_H[0] }}>
+                  <th style={headTop(0)} className={`sticky left-0 z-40 ${stickyBg} border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1`} colSpan={2} />
                   {entities.map(e => {
                     const ms = e.total ? TOTAL_METRICS : METRICS;
                     const weatherCol = e.total || e.key === 'krd' ? 1 : 0;
                     return (
-                      <th key={e.key} colSpan={ms.length * 2 + weatherCol}
-                        className={`border-b border-[var(--color-border)] ${BLOCK_EDGE} bg-[var(--color-bg-hover)] px-2 py-1.5 text-center font-bold text-[var(--color-text)] whitespace-nowrap`}>
+                      <th key={e.key} colSpan={ms.length * 2 + weatherCol} style={headTop(0)}
+                        className={`${headCell} border-b border-[var(--color-border)] ${BLOCK_EDGE} bg-[var(--color-bg-hover)] px-2 py-1.5 text-center font-bold text-[var(--color-text)] whitespace-nowrap`}>
                         {e.label}
                       </th>
                     );
                   })}
                 </tr>
                 {/* ряд 2: метрики */}
-                <tr>
-                  <th className={`sticky left-0 z-30 ${stickyBg} border-b border-[var(--color-border)] ${BLOCK_EDGE}`} colSpan={2} />
+                <tr style={{ height: HEAD_H[1] }}>
+                  <th style={headTop(1)} className={`sticky left-0 z-40 ${stickyBg} border-b border-[var(--color-border)] ${BLOCK_EDGE}`} colSpan={2} />
                   {entities.map(e => {
                     const ms = e.total ? TOTAL_METRICS : METRICS;
                     return (
                       <Fragment key={e.key}>
                         {(e.total || e.key === 'krd') && (
-                          <th key={`${e.key}-w`} rowSpan={2} className="border-b border-r border-[var(--color-border)] px-2 py-1 align-bottom text-[11px] font-semibold text-[var(--color-text-muted)] min-w-[180px]">
+                          <th key={`${e.key}-w`} rowSpan={2} style={headTop(1)} className={`${headCell} border-b border-r border-[var(--color-border)] px-2 py-1 align-bottom text-[11px] font-semibold text-[var(--color-text-muted)] min-w-[180px]`}>
                             {CITY_LABEL[e.city]}
                           </th>
                         )}
                         {ms.map((m, mi) => (
-                          <th key={`${e.key}-${m.key}`} colSpan={2} style={{ background: m.tint }}
-                            className={`border-b border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-2 py-1 text-center font-semibold text-[var(--color-text)] whitespace-nowrap`}>
+                          <th key={`${e.key}-${m.key}`} colSpan={2} style={{ background: m.tint, ...headTop(1) }}
+                            className={`sticky z-20 border-b border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-2 py-1 text-center font-semibold text-[var(--color-text)] whitespace-nowrap`}>
                             {m.label}
                           </th>
                         ))}
@@ -191,13 +202,13 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                   })}
                 </tr>
                 {/* ряд 3: Факт/Откл */}
-                <tr>
-                  <th className={`sticky left-0 z-30 ${stickyBg} border-b-2 border-[var(--color-border)] ${BLOCK_EDGE}`} colSpan={2} />
+                <tr style={{ height: HEAD_H[2] }}>
+                  <th style={headTop(2)} className={`sticky left-0 z-40 ${stickyBg} border-b-2 border-[var(--color-border)] ${BLOCK_EDGE}`} colSpan={2} />
                   {entities.flatMap(e => {
                     const ms = e.total ? TOTAL_METRICS : METRICS;
                     return ms.flatMap((m, mi) => [
-                      <th key={`${e.key}-${m.key}-f`} style={{ background: m.tint }} className="border-b-2 border-[var(--color-border)] px-2 py-0.5 text-right text-[10px] font-medium text-[var(--color-text-muted)]">Факт</th>,
-                      <th key={`${e.key}-${m.key}-d`} style={{ background: m.tint }} className={`border-b-2 border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-1 py-0.5 text-center text-[10px] font-medium text-[var(--color-text-muted)]`}>Откл</th>,
+                      <th key={`${e.key}-${m.key}-f`} style={{ background: m.tint, ...headTop(2) }} className="sticky z-20 border-b-2 border-[var(--color-border)] px-2 py-0.5 text-right text-[10px] font-medium text-[var(--color-text-muted)]">Факт</th>,
+                      <th key={`${e.key}-${m.key}-d`} style={{ background: m.tint, ...headTop(2) }} className={`sticky z-20 border-b-2 border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-1 py-0.5 text-center text-[10px] font-medium text-[var(--color-text-muted)]`}>Откл</th>,
                     ]);
                   })}
                 </tr>
@@ -242,7 +253,16 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                           let fact: string;
                           if (r.kind === 'plan') {
                             const p = r.getPlan!(e.key);
-                            fact = m.key === 'salesSum' ? fmt(p.sales, 'money') : m.key === 'shipSum' ? fmt(p.ship, 'money') : '—';
+                            // Деньги — из manager_plans, остальное — из
+                            // year_weekly_plans (миграция 166, файл владельца).
+                            const other = p.other ?? { deals: null, crSale: null, crShip: null, avgCheck: null };
+                            fact = m.key === 'salesSum' ? fmt(p.sales, 'money')
+                              : m.key === 'shipSum' ? fmt(p.ship, 'money')
+                              : m.key === 'deals' ? fmt(other.deals, 'count')
+                              : m.key === 'crSale' ? fmt(other.crSale, 'pct')
+                              : m.key === 'crShip' ? fmt(other.crShip, 'pct')
+                              : m.key === 'avgCheck' ? fmt(other.avgCheck, 'money')
+                              : '—';
                           } else {
                             const v = r.get(e.key);
                             fact = fmt(v?.[m.key] ?? null, m.kind);

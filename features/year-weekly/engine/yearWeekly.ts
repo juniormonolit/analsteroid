@@ -1,10 +1,10 @@
-import { analyticsDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getMonthPlansByManager } from '@/lib/reports-builder/plans';
 import { listWeatherForYear } from '@/lib/weather/weeklyWeather';
-import { ENTITY_DEFS, type EntityKey, type EntityMetrics, type WeekBlock, type MonthBlock, type YearWeeklyResult } from '@/features/year-weekly/shared';
+import { ENTITY_DEFS, type EntityKey, type EntityMetrics, type WeekBlock, type MonthBlock, type NonMoneyPlan, type YearWeeklyResult } from '@/features/year-weekly/shared';
 
 export { ENTITY_DEFS };
-export type { EntityKey, EntityMetrics, WeekBlock, MonthBlock, YearWeeklyResult };
+export type { EntityKey, EntityMetrics, WeekBlock, MonthBlock, NonMoneyPlan, YearWeeklyResult };
 
 // Движок спец-отчёта «Данные по годам» (решения владельца 28.08, дословно в
 // BACKLOG): понедельный «год к году» по 12 блокам сущностей, зеркало ручного
@@ -236,6 +236,39 @@ function addAgg(dst: Agg, src: Agg): void {
 
 // ── сборка ───────────────────────────────────────────────────────────────────
 
+/**
+ * Планы по неденежным метрикам из year_weekly_plans (миграция 166, источник —
+ * ручной файл владельца): в приложении планов по количеству сделок, конверсиям
+ * и ср. чеку нет вообще, manager_plans знает только деньги.
+ * Возвращает Map<`${month}:${entity}`, NonMoneyPlan> уже в НЕДЕЛЬНОМ виде:
+ * deals делится на 4 (как деньги — решение владельца «план = месяц / 4»),
+ * уровневые метрики берутся как есть.
+ */
+async function loadNonMoneyPlans(year: number): Promise<Map<string, NonMoneyPlan>> {
+  const out = new Map<string, NonMoneyPlan>();
+  try {
+    const res = await systemDb().query<{ month: number; entity_key: string; metric: string; value: string }>(
+      'SELECT month, entity_key, metric, value FROM year_weekly_plans WHERE year = $1',
+      [year],
+    );
+    for (const r of res.rows) {
+      const k = `${r.month}:${r.entity_key}`;
+      const cur = out.get(k) ?? { deals: null, crSale: null, crShip: null, avgCheck: null };
+      const v = Number(r.value);
+      if (r.metric === 'deals') cur.deals = Math.round(v / 4);
+      if (r.metric === 'cr_sale') cur.crSale = v;
+      if (r.metric === 'cr_ship') cur.crShip = v;
+      if (r.metric === 'avg_check') cur.avgCheck = Math.round(v);
+      out.set(k, cur);
+    }
+  } catch {
+    // Миграции 166 ещё нет — отчёт работает без этих планов (прочерки), а не падает.
+  }
+  return out;
+}
+
+const EMPTY_PLAN: NonMoneyPlan = { deals: null, crSale: null, crShip: null, avgCheck: null };
+
 export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
   // Недели года: все ISO-недели с четвергом в этом году, не позже текущей.
   const todayMsk = new Date().toLocaleDateString('sv-SE', { timeZone: MSK });
@@ -257,10 +290,11 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
   // последней недели текущего года.
   const factsFrom = prevMondays[0] ?? `${year - 1}-01-01`;
   const factsToExcl = addDays(mondays[mondays.length - 1] ?? `${year}-01-01`, 7);
-  const [managers, facts, weather] = await Promise.all([
+  const [managers, facts, weather, nonMoneyPlans] = await Promise.all([
     resolveEntityManagers(),
     fetchWeeklyFacts(factsFrom, factsToExcl),
     listWeatherForYear(year),
+    loadNonMoneyPlans(year),
   ]);
 
   // Планы: месячные суммы по сущностям (по месяцам года). Кэш по месяцу.
@@ -291,14 +325,16 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
     const prev = {} as Record<EntityKey, EntityMetrics>;
     const planSales = {} as Record<EntityKey, number | null>;
     const planShip = {} as Record<EntityKey, number | null>;
+    const planOther = {} as Record<EntityKey, NonMoneyPlan>;
     for (const e of ENTITY_DEFS) {
+      planOther[e.key] = nonMoneyPlans.get(`${month}:${e.key}`) ?? EMPTY_PLAN;
       cur[e.key] = toMetrics(sumForEntity(facts.get(mon), managers[e.key]));
       prev[e.key] = toMetrics(sumForEntity(facts.get(prevMon), managers[e.key]));
       // План недели = месяц / 4 (решение владельца 28.08).
       planSales[e.key] = plan?.sales[e.key] != null ? Math.round(plan.sales[e.key]! / 4) : null;
       planShip[e.key] = plan?.ship[e.key] != null ? Math.round(plan.ship[e.key]! / 4) : null;
     }
-    return { weekStart: mon, label: weekLabel(mon), prevWeekStart: prevMon, prevLabel: weekLabel(prevMon), month, cur, prev, planSales, planShip };
+    return { weekStart: mon, label: weekLabel(mon), prevWeekStart: prevMon, prevLabel: weekLabel(prevMon), month, cur, prev, planSales, planShip, planOther };
   });
 
   // Месячные ИТОГО: суммы сырых агрегатов недель месяца (конверсии/чек — от
@@ -313,7 +349,15 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
     const prev = {} as Record<EntityKey, EntityMetrics>;
     const planSales = {} as Record<EntityKey, number | null>;
     const planShip = {} as Record<EntityKey, number | null>;
+    const planOther = {} as Record<EntityKey, NonMoneyPlan>;
     for (const e of ENTITY_DEFS) {
+      const weekPlan = nonMoneyPlans.get(`${mo}:${e.key}`) ?? EMPTY_PLAN;
+      // deals — сумма недельных планов месяца (как деньги); конверсии и ср. чек
+      // уровневые: месячный план равен недельному, складывать нельзя.
+      planOther[e.key] = {
+        deals: weekPlan.deals != null ? weekPlan.deals * weeksOfMonth.length : null,
+        crSale: weekPlan.crSale, crShip: weekPlan.crShip, avgCheck: weekPlan.avgCheck,
+      };
       const aggCur = zeroAgg(); const aggPrev = zeroAgg();
       for (const w of weeksOfMonth) {
         addAgg(aggCur, sumForEntity(facts.get(w.weekStart), managers[e.key]));
@@ -325,7 +369,7 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
       planSales[e.key] = anyPlan ? weeksOfMonth.reduce((s, w) => s + (w.planSales[e.key] ?? 0), 0) : null;
       planShip[e.key] = anyPlan ? weeksOfMonth.reduce((s, w) => s + (w.planShip[e.key] ?? 0), 0) : null;
     }
-    monthBlocks.push({ month: mo, label: `ИТОГО ${MONTH_NOM[mo - 1]}`, cur, prev, planSales, planShip });
+    monthBlocks.push({ month: mo, label: `ИТОГО ${MONTH_NOM[mo - 1]}`, cur, prev, planSales, planShip, planOther });
   }
 
   return { year, entities: ENTITY_DEFS, weeks, months: monthBlocks, weather };

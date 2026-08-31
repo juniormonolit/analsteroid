@@ -31,6 +31,15 @@ export interface EntityMetrics {
   avgCheck: number | null;
 }
 
+/** План недели/месяца по неденежным метрикам (year_weekly_plans, миграция 166):
+ *  deals — месячный ÷ 4 в неделю; конверсии и ср. чек — уровневые, как есть. */
+export interface NonMoneyPlan {
+  deals: number | null;
+  crSale: number | null;
+  crShip: number | null;
+  avgCheck: number | null;
+}
+
 export interface WeekBlock {
   weekStart: string;
   label: string;
@@ -41,6 +50,7 @@ export interface WeekBlock {
   prev: Record<EntityKey, EntityMetrics>;
   planSales: Record<EntityKey, number | null>;
   planShip: Record<EntityKey, number | null>;
+  planOther: Record<EntityKey, NonMoneyPlan>;
 }
 
 export interface MonthBlock {
@@ -50,6 +60,7 @@ export interface MonthBlock {
   prev: Record<EntityKey, EntityMetrics>;
   planSales: Record<EntityKey, number | null>;
   planShip: Record<EntityKey, number | null>;
+  planOther: Record<EntityKey, NonMoneyPlan>;
 }
 
 export interface YearWeeklyWeatherRow {
