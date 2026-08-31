@@ -415,7 +415,12 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                   const rowBg = r.isTotal ? 'bg-[var(--color-bg-hover)] font-semibold' : '';
                   const boundary = r.monthBoundary ? 'border-t-[6px] border-t-[var(--color-border)]' : '';
                   return (
-                    <tr key={idx} className={rowBg}>
+                    // report-row (globals.css) — та же подсветка строки при
+                    // наведении, что в обычных отчётах: фон всей строки + акцентная
+                    // полоска слева, !important поверх фонов ячеек (правка владельца
+                    // 31.08: «хочу, чтобы при наведении строка подсвечивалась как в
+                    // обычных отчётах»).
+                    <tr key={idx} className={`report-row ${rowBg}`}>
                       <td style={r.isTotal ? { background: TOTAL_STICKY_BG } : undefined}
                         className={`sticky left-0 z-20 w-[52px] min-w-[52px] ${r.isTotal ? OPAQUE_TOTAL : stickyBg} ${boundary} whitespace-nowrap border-b border-r border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-muted)] ${r.isTotal ? 'font-semibold' : ''}`}>{r.yearLabel}</td>
                       <td style={r.isTotal ? { background: TOTAL_STICKY_BG } : undefined}
