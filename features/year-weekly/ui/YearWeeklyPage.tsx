@@ -267,8 +267,13 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
   const headTop = (i: number) => ({ top: HEAD_H.slice(0, i).reduce((a, b) => a + b, 0) });
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden bg-[var(--color-bg)]">
-      <div className="p-4 sm:p-6 flex flex-col gap-3">
+    // Высота таблицы — ОСТАТОК по флексу, а не «экран минус N пикселей»
+    // (правка владельца 28.08: «че за отступ внизу появился?»). Прежний
+    // max-h-[calc(100dvh-190px)] был догадкой о высоте шапки: реальная шапка
+    // ниже, и снизу оставалась пустая полоса. Флекс считает сам и не врёт при
+    // любой длине подписей и переносе кнопок на вторую строку.
+    <div className="h-full flex flex-col overflow-hidden bg-[var(--color-bg)]">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 sm:p-6">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-bold text-[var(--color-text)]">Данные по годам</h1>
           <div className="flex overflow-hidden rounded-lg border border-[var(--color-border)]">
@@ -307,7 +312,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
           // ограничена, вертикально он не скроллится, и sticky top мёртв).
           // Правило 2 CLAUDE.md соблюдено: горизонтальный скролл остаётся внутри
           // своего контейнера, страница вбок не едет.
-          <div ref={scrollRef} onScroll={onScroll} className="scroll-x max-h-[calc(100dvh-190px)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+          <div ref={scrollRef} onScroll={onScroll} className="scroll-x min-h-0 flex-1 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
             <table ref={tableRef} className="border-separate border-spacing-0 text-[12px] leading-tight tabular-nums">
               <thead>
                 {/* ряд 1: сущности */}
