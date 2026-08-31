@@ -2,7 +2,7 @@
 import { useState, useRef } from 'react';
 import { X, Search, GripVertical, Settings2, HelpCircle } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
-import { metricFormulaLine } from '@/lib/metrics/formulaText';
+import { MetricInfoBody } from './MetricInfoBody';
 import type { Metric } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
@@ -54,8 +54,7 @@ const SCOPE_LABELS: { key: Scope; label: string; title: string }[] = [
 // Поповер, не title-тултип: на таче hover-подсказок нет (CLAUDE.md, правило 5),
 // а Radix Popover сам не уезжает за край экрана (правило 4).
 function MetricHelp({ m }: { m: Metric }) {
-  const text = m.humanDescription || m.description;
-  if (!text) return null;
+  if (!(m.humanDescription || m.description)) return null;
   return (
     <Popover
       align="end"
@@ -70,14 +69,9 @@ function MetricHelp({ m }: { m: Metric }) {
         </button>
       }
     >
-      <div className="text-sm font-semibold text-[var(--color-text)] mb-1.5">{m.nameRu}</div>
-      <div className="text-xs leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">{text}</div>
-      {/* Формула расчёта (правка владельца 17.08) */}
-      {metricFormulaLine(m) && (
-        <div className="mt-2 pt-2 border-t border-[var(--color-border)] text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-          <span className="font-semibold">Формула:</span> <span className="font-mono">{metricFormulaLine(m)}</span>
-        </div>
-      )}
+      {/* Тело общее с шапкой колонки отчёта; имена метрик в формуле кликабельны —
+          проваливание внутрь формулы (задача владельца 24.08). */}
+      <MetricInfoBody metric={m} />
     </Popover>
   );
 }

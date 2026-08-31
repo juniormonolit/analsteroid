@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { ArrowUp, ArrowDown, ChartLine, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, Search, HelpCircle } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
-import { metricFormulaLine } from '@/lib/metrics/formulaText';
+import { MetricInfoBody } from './MetricInfoBody';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
@@ -1683,13 +1683,9 @@ export function ReportTable({
                             </button>
                           }
                         >
-                          <div className="text-sm font-semibold text-[var(--color-text)] mb-1.5">{m.nameRu}</div>
-                          <div className="text-xs leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">{m.humanDescription || m.description}</div>
-                          {metricFormulaLine(m) && (
-                            <div className="mt-2 pt-2 border-t border-[var(--color-border)] text-[11px] leading-relaxed text-[var(--color-text-muted)]">
-                              <span className="font-semibold">Формула:</span> <span className="font-mono">{metricFormulaLine(m)}</span>
-                            </div>
-                          )}
+                          {/* Тело общее с «?» панели метрик; имена в формуле
+                              кликабельны — проваливание (задача 24.08). */}
+                          <MetricInfoBody metric={m} />
                         </Popover>
                       )}
                       {/* Шестерёнка ведёт сразу в панель настроек метрики (HighlightEditor) —
