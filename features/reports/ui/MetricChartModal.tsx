@@ -172,17 +172,21 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   const cmpOnCanvas = hasComparison
     && comparison.to.getTime() >= prevRange.from.getTime()
     && comparison.from.getTime() <= period.to.getTime();
-  // Наложение — ДВЕ линии, не три (правка владельца 27.08: «зачем три линии?
-  // ограничься двумя»): текущий период + одна базовая. Базовая — период
-  // сравнения отчёта, а без включённого сравнения — предыдущий период.
-  const baseIsCmp = layout === 'overlay' && hasComparison;
+  // Наложение — ДВЕ линии (правка владельца 27.08): текущий период + период
+  // сравнения ИЗ ШАПКИ ОТЧЁТА. Именно всегда из шапки (правка владельца 27.08
+  // №2: «ставлю сравнение июнь, а всё равно 5.07») — раньше сравнение бралось
+  // только при включённом РЕЖИМЕ отображения сравнения в таблице (hasComparison),
+  // а при виде «Текущий» график молча подменял выбранный июнь на «предыдущий
+  // период». Пикер сравнения виден в шапке всегда — его значение и есть правда.
   // В последовательном режиме наложенное сравнение рисуем только когда его дни
   // не лежат на полотне (иначе дубль данных — скрин владельца 25.08).
-  const showCmpOverlay = layout === 'overlay' ? baseIsCmp : hasComparison && !cmpOnCanvas;
+  const showCmpOverlay = layout === 'overlay' ? true : hasComparison && !cmpOnCanvas;
 
   const { data, isLoading, isError } = useQuery<ApiRes>({
     queryKey: ['metric-series', target.metricId, target.dimensionId, gran, reportSlug,
-      period.from.toISOString(), period.to.toISOString(), hasComparison, showCmpOverlay, layout, JSON.stringify(filters), target.managerIds, target.productGroupId],
+      period.from.toISOString(), period.to.toISOString(),
+      comparison.from.toISOString(), comparison.to.toISOString(),
+      hasComparison, showCmpOverlay, layout, JSON.stringify(filters), target.managerIds, target.productGroupId],
     queryFn: async () => {
       const res = await fetch('/api/reports/metric-series', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -195,7 +199,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           // нужен только когда он и есть базовая линия (сравнение выключено).
           previousPeriod: layout === 'seq'
             ? { from: prevRange.from.toISOString(), to: period.to.toISOString() }
-            : baseIsCmp ? undefined : { from: prevRange.from.toISOString(), to: prevRange.to.toISOString() },
+            : undefined,
           departmentIds: filters.departmentIds?.length ? filters.departmentIds : undefined,
           granularity: gran,
           dealScope: filters.dealScope,
@@ -239,8 +243,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
     if (layout === 'overlay') {
       // ДВЕ линии: текущий период + базовая (сравнение отчёта, иначе предыдущий).
       const cur = pick(data?.current);
-      const base = baseIsCmp ? pick(data?.comparison) : pick(data?.previous);
-      const baseFrom = baseIsCmp ? comparison.from : prevRange.from;
+      const base = pick(data?.comparison);
+      const baseFrom = comparison.from;
 
       // Выравнивание (правка владельца 27.08: «подгоняй 25 число к 25 числу, и
       // пусть хвосты висят»). Дни: дата базовой линии сдвигается на целое число
@@ -291,10 +295,10 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           x: String(i),
           label: a.key.startsWith('~tail') ? (mb?.label ?? '') : fmtBucketLabel(a.key, gran),
           value: a.curValue,
-          previous: !baseIsCmp ? mb?.value ?? null : null,
-          prevLabel: !baseIsCmp ? mb?.label ?? null : null,
-          comparison: baseIsCmp ? mb?.value ?? null : null,
-          cmpLabel: baseIsCmp ? mb?.label ?? null : null,
+          previous: null,
+          prevLabel: null,
+          comparison: mb?.value ?? null,
+          cmpLabel: mb?.label ?? null,
           isPrev: false,
           trendPrev: null as number | null,
           trendCur: null as number | null,
@@ -302,7 +306,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
       });
       if (showTrend) {
         fitKey(out, 0, out.length, 'value', 'trendCur');
-        fitKey(out, 0, out.length, baseIsCmp ? 'comparison' : 'previous', 'trendPrev');
+        fitKey(out, 0, out.length, 'comparison', 'trendPrev');
       }
       return { rows: out, seam: 0 };
     }
@@ -379,8 +383,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
             </h2>
             <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
               {fmtDateRu(period.from)} — {fmtDateRu(period.to)}
-              {hasComparison && <> · сравнение: {fmtDateRu(comparison.from)} — {fmtDateRu(comparison.to)}{layout === 'seq' && cmpOnCanvas ? ' (эти дни уже на полотне)' : ''}</>}
-              <> · пред.: {fmtDateRu(prevRange.from)} — {fmtDateRu(prevRange.to)}</>
+              {(layout === 'overlay' || hasComparison) && <> · сравнение: {fmtDateRu(comparison.from)} — {fmtDateRu(comparison.to)}{layout === 'seq' && cmpOnCanvas ? ' (эти дни уже на полотне)' : ''}</>}
+              {layout === 'seq' && <> · пред.: {fmtDateRu(prevRange.from)} — {fmtDateRu(prevRange.to)}</>}
             </p>
             <p className="mt-1 text-xs tabular-nums">
               Итого за период: <b>{data ? fmtVal(data.current.total, metric) : '…'}</b>
@@ -492,10 +496,6 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
                   )}
                   <Line type="monotone" dataKey="value" name={layout === 'overlay' ? 'Текущий период' : 'Значение'} stroke="var(--color-accent)" strokeWidth={2}
                     dot={rows.length <= 62} isAnimationActive={false} connectNulls />
-                  {layout === 'overlay' && data.previous?.supported && (
-                    <Line type="monotone" dataKey="previous" name="Предыдущий период" stroke="var(--color-positive, #2f9e44)"
-                      strokeWidth={1.5} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
-                  )}
                   {showCmpOverlay && data.comparison?.supported && (
                     <Line type="monotone" dataKey="comparison" name={layout === 'overlay' ? 'Период сравнения' : 'Период сравнения (наложен)'} stroke="var(--color-text-muted)"
                       strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
