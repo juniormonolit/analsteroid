@@ -37,7 +37,11 @@ const FILTER_RU: Record<string, string> = {
   _repeat_deliv_hist: 'повторная отгрузка заказчика по истории',
   _complex_client: 'заказчик покупал 2+ разные товарные группы',
   _has_goods: 'в сделке есть товарная (несервисная) позиция',
+  'stage_type:new': 'сделка сейчас в стадии «Новая/Необработанная»',
+  'head_group_name:—is_null': 'главная товарная группа не заполнена',
 };
+// Человеческие имена не-датовых полей сделок для generic-веток ниже.
+const FIELD_RU: Record<string, string> = { amount: 'сумма сделки' };
 
 function filterRu(field: string, op: string, value: unknown): string {
   const byPair = FILTER_RU[`${field}:${value}`];
@@ -46,11 +50,14 @@ function filterRu(field: string, op: string, value: unknown): string {
   if (byField) return byField;
   if (field === 'products' && op === 'is_null') return 'в сделке нет товаров';
   if (field === 'products' && op === 'is_not_null') return 'в сделке есть товары';
+  if (field === 'head_group_name' && op === 'is_null') return 'главная товарная группа не заполнена';
   if (op === 'gt_field') return `${DATE_RU[field] ?? field} позже, чем ${DATE_RU[String(value)] ?? value}`;
-  if (op === 'is_null') return `${field} пусто`;
-  if (op === 'is_not_null') return `${field} заполнено`;
+  // «прямой переход в отказ»: поздняя стадия либо не наступала, либо уже после отказа
+  if (op === 'gt_field_or_null') return `${DATE_RU[field] ?? field} не наступала или была позже, чем ${DATE_RU[String(value)] ?? value}`;
+  if (op === 'is_null') return `${DATE_RU[field] ? `${DATE_RU[field]} отсутствует` : `${field} пусто`}`;
+  if (op === 'is_not_null') return `${DATE_RU[field] ? `есть ${DATE_RU[field]}` : `${field} заполнено`}`;
   const v = Array.isArray(value) ? value.join(', ') : String(value ?? '');
-  return `${field} ${op === 'neq' || op === 'not_in' ? '≠' : '='} ${v}`;
+  return `${FIELD_RU[field] ?? DATE_RU[field] ?? field} ${op === 'neq' || op === 'not_in' ? '≠' : '='} ${v}`;
 }
 
 export function metricFormulaLine(m: Metric): string | null {
