@@ -130,9 +130,9 @@ export async function askWeeklyWeatherAll(): Promise<{ asked: number; autoFilled
     const auto = await fetchWeekWeather(city, weekStart, weekEnd);
     if (auto) {
       const r = await db.query(
-        `UPDATE weekly_weather SET auto_summary = $3, auto_data = $4, updated_at = now()
+        `UPDATE weekly_weather SET auto_summary = $3, auto_short = $4, auto_data = $5, updated_at = now()
           WHERE city = $1 AND week_start = $2 AND auto_summary IS NULL`,
-        [city, weekStart, auto.summary, JSON.stringify(auto)],
+        [city, weekStart, auto.summary, auto.short, JSON.stringify(auto)],
       );
       if (r.rowCount) autoFilled++;
     }
@@ -206,16 +206,23 @@ export async function recordWeatherAnswer(fromUserId: string, text: string): Pro
 
 export interface WeekWeatherRow {
   city: WeatherCity; weekStart: string;
-  manualText: string | null; autoSummary: string | null;
+  manualText: string | null;
+  /** Полная сводка: «t 12…22, осадки 71 мм» — видна в развёрнутом виде. */
+  autoSummary: string | null;
+  /** Короткая, в одну строчку ячейки: «+5, пасмурно, дожди». */
+  autoShort: string | null;
 }
 
 export async function listWeatherForYear(year: number): Promise<WeekWeatherRow[]> {
-  const res = await systemDb().query<{ city: WeatherCity; week_start: string; manual_text: string | null; auto_summary: string | null }>(
-    `SELECT city, to_char(week_start, 'YYYY-MM-DD') AS week_start, manual_text, auto_summary
+  const res = await systemDb().query<{ city: WeatherCity; week_start: string; manual_text: string | null; auto_summary: string | null; auto_short: string | null }>(
+    `SELECT city, to_char(week_start, 'YYYY-MM-DD') AS week_start, manual_text, auto_summary, auto_short
        FROM weekly_weather
       WHERE week_start >= make_date($1, 1, 1) - interval '7 days'
         AND week_start < make_date($1 + 1, 1, 1)`,
     [year],
   );
-  return res.rows.map(r => ({ city: r.city, weekStart: r.week_start, manualText: r.manual_text, autoSummary: r.auto_summary }));
+  return res.rows.map(r => ({
+    city: r.city, weekStart: r.week_start, manualText: r.manual_text,
+    autoSummary: r.auto_summary, autoShort: r.auto_short,
+  }));
 }

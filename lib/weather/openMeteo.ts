@@ -16,10 +16,45 @@ export const WEATHER_CITIES: Record<WeatherCity, { label: string; lat: number; l
 export interface WeekWeatherAuto {
   tMin: number;
   tMax: number;
+  /** Средняя температура недели (среднее суточных средних), °C. */
+  tMean: number;
+  /** Средняя облачность недели, %. */
+  cloudPct: number;
   precipitationMm: number;
+  rainMm: number;
   snowfallCm: number;
-  /** Готовая строка в стиле ручного файла: «t 12…22, осадки 71 мм». */
+  /** Полная строка: «t 12…22, осадки 71 мм» — для развёрнутого вида. */
   summary: string;
+  /** КОРОТКАЯ строка в одну строчку ячейки: «+5, пасмурно, дожди»
+   *  (правка владельца 28.08). */
+  short: string;
+}
+
+/** Слово по средней облачности недели. Границы — стандартная шкала: до 20% —
+ *  ясно, до 60% — переменная облачность, дальше пасмурно. */
+function cloudWord(pct: number): string {
+  if (pct < 20) return 'ясно';
+  if (pct < 45) return 'малооблачно';
+  if (pct < 70) return 'переменно';
+  return 'пасмурно';
+}
+
+/** Слово по осадкам недели: снег/дожди/мокрый снег, с оговоркой «местами»,
+ *  если осадков было мало. Порог 3 мм за НЕДЕЛЮ — ниже этого «без осадков»:
+ *  0.4 мм за семь дней — это не «дожди». */
+function precipWord(rainMm: number, snowCm: number): string {
+  const snowy = snowCm >= 0.5;
+  const rainy = rainMm >= 3;
+  if (snowy && rainy) return 'снег с дождём';
+  if (snowy) return snowCm >= 5 ? 'снег' : 'немного снега';
+  if (rainy) return rainMm >= 20 ? 'дожди' : 'местами дожди';
+  return 'без осадков';
+}
+
+/** «+5» / «−8» / «0» — средняя температура со знаком, как в примере владельца. */
+function tempWord(tMean: number): string {
+  const r = Math.round(tMean);
+  return r > 0 ? `+${r}` : r < 0 ? `−${Math.abs(r)}` : '0';
 }
 
 /** Погода за неделю [monday..sunday] (даты YYYY-MM-DD, обе включительно). */
@@ -28,7 +63,7 @@ export async function fetchWeekWeather(city: WeatherCity, monday: string, sunday
   const url = 'https://archive-api.open-meteo.com/v1/archive'
     + `?latitude=${c.lat}&longitude=${c.lon}`
     + `&start_date=${monday}&end_date=${sunday}`
-    + '&daily=temperature_2m_min,temperature_2m_max,precipitation_sum,snowfall_sum'
+    + '&daily=temperature_2m_min,temperature_2m_max,temperature_2m_mean,cloud_cover_mean,precipitation_sum,rain_sum,snowfall_sum'
     + '&timezone=Europe%2FMoscow';
   let res: Response;
   try {
@@ -38,19 +73,32 @@ export async function fetchWeekWeather(city: WeatherCity, monday: string, sunday
   }
   if (!res.ok) return null;
   const data = await res.json() as {
-    daily?: { temperature_2m_min?: (number | null)[]; temperature_2m_max?: (number | null)[]; precipitation_sum?: (number | null)[]; snowfall_sum?: (number | null)[] };
+    daily?: {
+      temperature_2m_min?: (number | null)[]; temperature_2m_max?: (number | null)[];
+      temperature_2m_mean?: (number | null)[]; cloud_cover_mean?: (number | null)[];
+      precipitation_sum?: (number | null)[]; rain_sum?: (number | null)[]; snowfall_sum?: (number | null)[];
+    };
   };
   const d = data.daily;
-  const mins = (d?.temperature_2m_min ?? []).filter((v): v is number => v !== null);
-  const maxs = (d?.temperature_2m_max ?? []).filter((v): v is number => v !== null);
+  const nums = (a?: (number | null)[]) => (a ?? []).filter((v): v is number => v !== null);
+  const mins = nums(d?.temperature_2m_min);
+  const maxs = nums(d?.temperature_2m_max);
   if (mins.length === 0 || maxs.length === 0) return null; // архив ещё не готов (лаг ~2-5 дней)
+  const means = nums(d?.temperature_2m_mean);
+  const clouds = nums(d?.cloud_cover_mean);
+  const avg = (a: number[], fallback: number) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : fallback);
   const tMin = Math.round(Math.min(...mins));
   const tMax = Math.round(Math.max(...maxs));
-  const precipitationMm = Math.round((d?.precipitation_sum ?? []).reduce<number>((s, v) => s + (v ?? 0), 0));
-  const snowfallCm = Math.round((d?.snowfall_sum ?? []).reduce<number>((s, v) => s + (v ?? 0), 0) * 10) / 10;
+  const tMean = Math.round(avg(means, (tMin + tMax) / 2) * 10) / 10;
+  const cloudPct = Math.round(avg(clouds, 50));
+  const sum = (a?: (number | null)[]) => (a ?? []).reduce<number>((s, v) => s + (v ?? 0), 0);
+  const precipitationMm = Math.round(sum(d?.precipitation_sum));
+  const rainMm = Math.round(sum(d?.rain_sum));
+  const snowfallCm = Math.round(sum(d?.snowfall_sum) * 10) / 10;
 
   const parts = [`t ${tMin}…${tMax}`];
   parts.push(precipitationMm > 0 ? `осадки ${precipitationMm} мм` : 'без осадков');
   if (snowfallCm > 0) parts.push(`снег ${snowfallCm} см`);
-  return { tMin, tMax, precipitationMm, snowfallCm, summary: parts.join(', ') };
+  const short = `${tempWord(tMean)}, ${cloudWord(cloudPct)}, ${precipWord(rainMm, snowfallCm)}`;
+  return { tMin, tMax, tMean, cloudPct, precipitationMm, rainMm, snowfallCm, summary: parts.join(', '), short };
 }

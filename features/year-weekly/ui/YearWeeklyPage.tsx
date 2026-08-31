@@ -1,7 +1,7 @@
 'use client';
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Pencil } from 'lucide-react';
+import { ChevronDown, ChevronRight, Pencil } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import type { EntityKey, EntityMetrics, NonMoneyPlan, YearWeeklyResult } from '@/features/year-weekly/shared';
 
@@ -13,14 +13,34 @@ import type { EntityKey, EntityMetrics, NonMoneyPlan, YearWeeklyResult } from '@
 // первые колонки (год/неделя) — sticky.
 
 type MetricKey = 'deals' | 'salesSum' | 'shipSum' | 'crSale' | 'crShip' | 'avgCheck';
-const METRICS: { key: MetricKey; label: string; kind: 'count' | 'money' | 'pct'; tint: string }[] = [
-  { key: 'deals', label: 'Кол-во сделок', kind: 'count', tint: 'transparent' },
-  { key: 'salesSum', label: 'Сумма продаж', kind: 'money', tint: 'color-mix(in srgb, #4aa3e0 12%, transparent)' },
-  { key: 'shipSum', label: 'Сумма отгрузок', kind: 'money', tint: 'color-mix(in srgb, #2f9e44 10%, transparent)' },
-  { key: 'crSale', label: 'Конв. продажа', kind: 'pct', tint: 'color-mix(in srgb, #f5c518 16%, transparent)' },
-  { key: 'crShip', label: 'Конв. отгрузка', kind: 'pct', tint: 'color-mix(in srgb, #e8930c 14%, transparent)' },
-  { key: 'avgCheck', label: 'Средний чек', kind: 'money', tint: 'transparent' },
+interface MetricDef { key: MetricKey; label: string; kind: 'count' | 'money' | 'pct'; tintC?: string; tintP?: number }
+const METRICS: MetricDef[] = [
+  { key: 'deals', label: 'Кол-во сделок', kind: 'count' },
+  { key: 'salesSum', label: 'Сумма продаж', kind: 'money', tintC: '#4aa3e0', tintP: 12 },
+  { key: 'shipSum', label: 'Сумма отгрузок', kind: 'money', tintC: '#2f9e44', tintP: 10 },
+  { key: 'crSale', label: 'Конв. продажа', kind: 'pct', tintC: '#f5c518', tintP: 16 },
+  { key: 'crShip', label: 'Конв. отгрузка', kind: 'pct', tintC: '#e8930c', tintP: 14 },
+  { key: 'avgCheck', label: 'Средний чек', kind: 'money' },
 ];
+
+// ЗАЛИВКА КОЛОНКИ в теле — поверх фона строки, полупрозрачная (так видно
+// «зебру» и подсветку ИТОГО).
+const tintBody = (m: MetricDef): string =>
+  m.tintC ? `color-mix(in srgb, ${m.tintC} ${m.tintP}%, transparent)` : 'transparent';
+
+// ЗАЛИВКА В ШАПКЕ — тот же оттенок, но замешанный в НЕПРОЗРАЧНУЮ подложку.
+// «Наш любимый баг с прозрачной шапкой» (владелец 28.08, скрин: сквозь
+// закреплённую шапку читались цифры таблицы): --color-bg-surface в этом проекте
+// имеет альфу (68%/60%/7.5% по темам), а color-mix(..., transparent) прозрачен
+// вообще. Лечение — то же, что в components/ui/Modal.tsx (регресс #2999):
+// заведомо плотный --color-bg-overlay (94-96%) + backdrop-filter.
+const tintHead = (m: MetricDef): string =>
+  m.tintC
+    ? `color-mix(in srgb, ${m.tintC} ${m.tintP}%, var(--color-bg-overlay))`
+    : 'var(--color-bg-overlay)';
+
+// Непрозрачная подложка закреплённых ячеек (шапка и колонки года/недели).
+const OPAQUE = 'bg-[var(--color-bg-overlay)] [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)]';
 // СПБ/МСК ИТОГО в файле — только продажи и отгрузки.
 const TOTAL_METRICS = METRICS.filter(m => m.key === 'salesSum' || m.key === 'shipSum');
 
@@ -28,7 +48,59 @@ const TOTAL_METRICS = METRICS.filter(m => m.key === 'salesSum' || m.key === 'shi
 // владельца 28.08). Ставится на ПОСЛЕДНЮЮ ячейку блока во ВСЕХ рядах шапки и
 // тела, иначе линия рвётся построчно. Цвет — border-strong: на широкой таблице
 // в 7800px обычный hairline между блоками не читался.
-const BLOCK_EDGE = 'border-r-[3px] border-r-[var(--color-border-strong,var(--color-text-muted))]';
+const BLOCK_EDGE = 'border-r-[4px] border-r-[var(--color-text-muted)]';
+
+// Плавный горизонтальный скролл к блоку города (правка владельца 28.08:
+// «якорные ссылки на горизонтальный скролл по городам… автоскролл должен быть
+// плавным как у Эпл»). Нативный scrollTo({behavior:'smooth'}) рисует СВОЮ
+// кривую браузера — здесь взята эталонная кривая проекта из
+// app/styles/tokens/effects.css: --anim-duration 280ms,
+// --anim-ease cubic-bezier(0.32,0.72,0,1) (тот самый iOS-деселерейт: быстрый
+// старт, мягкое торможение). JS не читает CSS-переменные, поэтому значения
+// продублированы — при изменении токена поправить и здесь.
+const EASE = [0.32, 0.72, 0, 1] as const;
+const ANIM_MS = 280;
+
+/** cubic-bezier(x1,y1,x2,y2) в точке t по X — методом Ньютона, как в браузере. */
+function cubicBezier(t: number): number {
+  const [, y1, , y2] = EASE;
+  const [x1, , x2] = [EASE[0], 0, EASE[2]];
+  const cx = (u: number) => 3 * x1 * (1 - u) ** 2 * u + 3 * x2 * (1 - u) * u ** 2 + u ** 3;
+  const cy = (u: number) => 3 * y1 * (1 - u) ** 2 * u + 3 * y2 * (1 - u) * u ** 2 + u ** 3;
+  let u = t;
+  for (let i = 0; i < 6; i++) {
+    const err = cx(u) - t;
+    if (Math.abs(err) < 1e-4) break;
+    const d = 3 * x1 * (1 - u) * (1 - 3 * u) + 3 * x2 * u * (2 - 3 * u) + 3 * u ** 2;
+    if (Math.abs(d) < 1e-6) break;
+    u -= err / d;
+  }
+  return cy(Math.min(1, Math.max(0, u)));
+}
+
+function animateScrollLeft(el: HTMLElement, to: number): void {
+  const from = el.scrollLeft;
+  const dist = to - from;
+  if (Math.abs(dist) < 2) return;
+  // Длинный прыжок по полотну в 7800px за 280мс читается как рывок, поэтому
+  // длительность растёт с расстоянием, но не дольше 600мс — иначе ожидание.
+  const dur = Math.min(600, Math.max(ANIM_MS, Math.abs(dist) / 4));
+  // prefers-reduced-motion — переносим мгновенно (правило доступности проекта).
+  // document.hidden — тоже мгновенно: в скрытой вкладке requestAnimationFrame не
+  // вызывается вообще, и без этой ветки клик по якорю не делал бы НИЧЕГО
+  // (поймано на превью 28.08: панель браузера была скрыта, rAF не срабатывал).
+  if (document.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    el.scrollLeft = to;
+    return;
+  }
+  const t0 = performance.now();
+  const step = (now: number) => {
+    const p = Math.min(1, (now - t0) / dur);
+    el.scrollLeft = from + dist * cubicBezier(p);
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
 
 const CITY_LABEL: Record<string, string> = { spb: 'Погода СПБ', msk: 'Погода МСК', krd: 'Погода КРД' };
 
@@ -87,12 +159,53 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
   });
 
   const [editWeather, setEditWeather] = useState<{ city: string; weekStart: string; text: string } | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const cornerRef = useRef<HTMLTableCellElement | null>(null);
+  const [activeCity, setActiveCity] = useState<'spb' | 'msk' | 'krd'>('spb');
+
+  // Ручной скролл тоже переключает активную кнопку: иначе подсветка врёт
+  // («СПб» горит, когда на экране Краснодар).
+  const onScroll = () => {
+    const box = scrollRef.current;
+    if (!box) return;
+    const stickyW = cornerRef.current?.offsetWidth ?? 150;
+    const x = box.scrollLeft + stickyW + 8;
+    let cur: 'spb' | 'msk' | 'krd' = 'spb';
+    for (const c of ['spb', 'msk', 'krd'] as const) {
+      const th = box.querySelector<HTMLElement>(`[data-city-anchor="${c}"]`);
+      if (th && th.offsetLeft <= x) cur = c;
+    }
+    setActiveCity(prev => (prev === cur ? prev : cur));
+  };
+
+  // Якорь города = левый край его ПЕРВОГО блока минус ширина закреплённых
+  // колонок (они перекрывают контент, и без вычета блок уезжает под них).
+  const jumpToCity = (city: 'spb' | 'msk' | 'krd') => {
+    const box = scrollRef.current;
+    const th = box?.querySelector<HTMLElement>(`[data-city-anchor="${city}"]`);
+    if (!box || !th) return;
+    const stickyW = cornerRef.current?.offsetWidth ?? 150;
+    animateScrollLeft(box, Math.max(0, th.offsetLeft - stickyW));
+    setActiveCity(city);
+  };
 
   const weatherBy = useMemo(() => {
-    const m = new Map<string, { manual: string | null; auto: string | null }>();
-    for (const w of data?.weather ?? []) m.set(`${w.city}:${w.weekStart}`, { manual: w.manualText, auto: w.autoSummary });
+    const m = new Map<string, { manual: string | null; auto: string | null; short: string | null }>();
+    for (const w of data?.weather ?? []) {
+      m.set(`${w.city}:${w.weekStart}`, { manual: w.manualText, auto: w.autoSummary, short: w.autoShort });
+    }
     return m;
   }, [data]);
+  // Развёрнутые погодные ячейки (правка владельца 28.08: «свёрнутыми в 1
+  // строчку с возможностью развернуть и прочитать»). Свёрнутый вид — короткая
+  // метеосводка «+5, пасмурно, дожди», она влезает в строку и одинаково узкая
+  // у всех недель, поэтому строки таблицы не пляшут по высоте.
+  const [openWeather, setOpenWeather] = useState<Set<string>>(new Set());
+  const toggleWeather = (k: string) => setOpenWeather(prev => {
+    const next = new Set(prev);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
 
   // Строки: недели месяца → ИТОГО месяца → следующая тройка.
   const rows = useMemo((): TriRow[] => {
@@ -128,7 +241,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
   const prevOf = (idx: number): TriRow | null => (rows[idx]?.kind === 'cur' && rows[idx - 1]?.kind === 'prev' ? rows[idx - 1] : null);
 
   const entities = data?.entities ?? [];
-  const stickyBg = 'bg-[var(--color-bg-surface)]';
+  const stickyBg = OPAQUE;
   // Закрепление шапки: три ряда прилипают друг под другом. Высоты заданы явно
   // (h-*), иначе top второго и третьего ряда пришлось бы угадывать — при
   // расхождении ряды наезжают друг на друга при скролле.
@@ -149,6 +262,20 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
               </button>
             ))}
           </div>
+          {/* Якорные ссылки по городам (правка владельца 28.08) — полотно
+              шириной ~7800px, доскроллить до Краснодара мышью утомительно. */}
+          <div className="flex items-center gap-1">
+            {([['spb', 'СПб'], ['msk', 'Москва'], ['krd', 'Краснодар']] as const).map(([c, label]) => (
+              <button key={c} type="button" onClick={() => jumpToCity(c)}
+                title={`Перейти к блокам «${label}»`}
+                className={`tap-target min-h-8 rounded-full border px-3 text-xs font-semibold transition-colors ${
+                  activeCity === c
+                    ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+                    : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
           <span className="text-xs text-[var(--color-text-muted)]">
             неделя {year}-го против той же ISO-недели {year - 1}-го · план = месяц / 4 · конверсии — первичные
           </span>
@@ -162,18 +289,21 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
           // ограничена, вертикально он не скроллится, и sticky top мёртв).
           // Правило 2 CLAUDE.md соблюдено: горизонтальный скролл остаётся внутри
           // своего контейнера, страница вбок не едет.
-          <div className="scroll-x max-h-[calc(100dvh-190px)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+          <div ref={scrollRef} onScroll={onScroll} className="scroll-x max-h-[calc(100dvh-190px)] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
             <table className="border-separate border-spacing-0 text-[12px] leading-tight tabular-nums">
               <thead>
                 {/* ряд 1: сущности */}
                 <tr style={{ height: HEAD_H[0] }}>
-                  <th style={headTop(0)} className={`sticky left-0 z-40 ${stickyBg} border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1`} colSpan={2} />
-                  {entities.map(e => {
+                  <th ref={cornerRef} style={headTop(0)} className={`sticky left-0 z-40 ${stickyBg} border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1`} colSpan={2} />
+                  {entities.map((e, ei) => {
                     const ms = e.total ? TOTAL_METRICS : METRICS;
                     const weatherCol = e.total || e.key === 'krd' ? 1 : 0;
+                    // Якорь ставим на ПЕРВЫЙ блок города (первое вхождение).
+                    const firstOfCity = entities.findIndex(x => x.city === e.city) === ei;
                     return (
                       <th key={e.key} colSpan={ms.length * 2 + weatherCol} style={headTop(0)}
-                        className={`${headCell} border-b border-[var(--color-border)] ${BLOCK_EDGE} bg-[var(--color-bg-hover)] px-2 py-1.5 text-center font-bold text-[var(--color-text)] whitespace-nowrap`}>
+                        data-city-anchor={firstOfCity ? e.city : undefined}
+                        className={`${headCell} ${OPAQUE} border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1.5 text-center font-bold text-[var(--color-text)] whitespace-nowrap`}>
                         {e.label}
                       </th>
                     );
@@ -187,13 +317,13 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                     return (
                       <Fragment key={e.key}>
                         {(e.total || e.key === 'krd') && (
-                          <th key={`${e.key}-w`} rowSpan={2} style={headTop(1)} className={`${headCell} border-b border-r border-[var(--color-border)] px-2 py-1 align-bottom text-[11px] font-semibold text-[var(--color-text-muted)] min-w-[180px]`}>
+                          <th key={`${e.key}-w`} rowSpan={2} style={headTop(1)} className={`${headCell} ${OPAQUE} border-b border-r border-[var(--color-border)] px-2 py-1 align-bottom text-[11px] font-semibold text-[var(--color-text-muted)] min-w-[180px]`}>
                             {CITY_LABEL[e.city]}
                           </th>
                         )}
                         {ms.map((m, mi) => (
-                          <th key={`${e.key}-${m.key}`} colSpan={2} style={{ background: m.tint, ...headTop(1) }}
-                            className={`sticky z-20 border-b border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-2 py-1 text-center font-semibold text-[var(--color-text)] whitespace-nowrap`}>
+                          <th key={`${e.key}-${m.key}`} colSpan={2} style={{ background: tintHead(m), ...headTop(1) }}
+                            className={`sticky z-20 [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)] border-b border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-2 py-1 text-center font-semibold text-[var(--color-text)] whitespace-nowrap`}>
                             {m.label}
                           </th>
                         ))}
@@ -207,8 +337,8 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                   {entities.flatMap(e => {
                     const ms = e.total ? TOTAL_METRICS : METRICS;
                     return ms.flatMap((m, mi) => [
-                      <th key={`${e.key}-${m.key}-f`} style={{ background: m.tint, ...headTop(2) }} className="sticky z-20 border-b-2 border-[var(--color-border)] px-2 py-0.5 text-right text-[10px] font-medium text-[var(--color-text-muted)]">Факт</th>,
-                      <th key={`${e.key}-${m.key}-d`} style={{ background: m.tint, ...headTop(2) }} className={`sticky z-20 border-b-2 border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-1 py-0.5 text-center text-[10px] font-medium text-[var(--color-text-muted)]`}>Откл</th>,
+                      <th key={`${e.key}-${m.key}-f`} style={{ background: tintHead(m), ...headTop(2) }} className="sticky z-20 [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)] border-b-2 border-[var(--color-border)] px-2 py-0.5 text-right text-[10px] font-medium text-[var(--color-text-muted)]">Факт</th>,
+                      <th key={`${e.key}-${m.key}-d`} style={{ background: tintHead(m), ...headTop(2) }} className={`sticky z-20 [-webkit-backdrop-filter:var(--glass-blur)] [backdrop-filter:var(--glass-blur)] border-b-2 border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-1 py-0.5 text-center text-[10px] font-medium text-[var(--color-text-muted)]`}>Откл</th>,
                     ]);
                   })}
                 </tr>
@@ -227,14 +357,33 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                         const cells: React.ReactNode[] = [];
                         if (e.total || e.key === 'krd') {
                           if (r.kind === 'cur' && r.weekStart) {
-                            const w = weatherBy.get(`${e.city}:${r.weekStart}`);
+                            const wk = `${e.city}:${r.weekStart}`;
+                            const w = weatherBy.get(wk);
+                            const opened = openWeather.has(wk);
+                            const hasText = !!w?.manual;
                             cells.push(
-                              <td key={`${e.key}-w`} className={`${boundary} border-b border-r border-[var(--color-border)] px-2 py-1 align-top max-w-[240px]`}>
+                              <td key={`${e.key}-w`} className={`${boundary} border-b border-r border-[var(--color-border)] px-2 py-1 align-top w-[200px] max-w-[200px]`}>
                                 <div className="flex items-start gap-1">
-                                  <span className="whitespace-pre-wrap text-[11px] leading-snug text-[var(--color-text)]">
-                                    {w?.manual ?? <span className="text-[var(--color-text-muted)]">{w?.auto ?? ''}</span>}
-                                    {w?.manual && w.auto ? <span className="text-[var(--color-text-muted)]"> · {w.auto}</span> : null}
-                                  </span>
+                                  <button type="button"
+                                    onClick={() => hasText && toggleWeather(wk)}
+                                    title={hasText ? (opened ? 'Свернуть' : 'Развернуть комментарий') : 'Комментария за эту неделю нет'}
+                                    className={`min-w-0 flex-1 text-left ${hasText ? 'cursor-pointer' : 'cursor-default'}`}>
+                                    <span className="flex items-center gap-1">
+                                      {hasText && (opened
+                                        ? <ChevronDown size={11} className="shrink-0 text-[var(--color-accent)]" />
+                                        : <ChevronRight size={11} className="shrink-0 text-[var(--color-accent)]" />)}
+                                      {/* Свёрнуто — короткая метеосводка в ОДНУ строку. */}
+                                      <span className={`truncate text-[11px] ${hasText ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}>
+                                        {w?.short ?? w?.auto ?? '—'}
+                                      </span>
+                                    </span>
+                                    {opened && (
+                                      <span className="mt-1 block whitespace-pre-wrap text-[11px] leading-snug text-[var(--color-text)]">
+                                        {w?.manual}
+                                        {w?.auto && <span className="mt-0.5 block text-[var(--color-text-muted)]">{w.auto}</span>}
+                                      </span>
+                                    )}
+                                  </button>
                                   {isSuperadmin && (
                                     <button type="button" title="Поправить текст погоды"
                                       onClick={() => setEditWeather({ city: e.city, weekStart: r.weekStart!, text: w?.manual ?? '' })}
@@ -268,14 +417,14 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                             fact = fmt(v?.[m.key] ?? null, m.kind);
                           }
                           cells.push(
-                            <td key={`${e.key}-${m.key}-f`} style={{ background: r.isTotal ? undefined : m.tint }}
+                            <td key={`${e.key}-${m.key}-f`} style={{ background: r.isTotal ? undefined : tintBody(m) }}
                               className={`${boundary} whitespace-nowrap border-b border-[var(--color-border)] px-2 py-1 text-right`}>
                               {fact}
                             </td>,
                           );
                           const lastOfBlock = m.key === ms[ms.length - 1].key;
                           cells.push(
-                            <td key={`${e.key}-${m.key}-d`} style={{ background: r.isTotal ? undefined : m.tint }}
+                            <td key={`${e.key}-${m.key}-d`} style={{ background: r.isTotal ? undefined : tintBody(m) }}
                               className={`${boundary} whitespace-nowrap border-b border-r border-[var(--color-border)] ${lastOfBlock ? BLOCK_EDGE : ''} px-1 py-1 text-center text-[11px]`}>
                               {r.kind === 'cur' && prevRow
                                 ? <Dev cur={r.get(e.key)?.[m.key] ?? null} prev={prevRow.get(e.key)?.[m.key] ?? null} kind={m.kind} />

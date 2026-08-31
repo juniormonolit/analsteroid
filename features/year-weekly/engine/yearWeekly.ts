@@ -150,6 +150,11 @@ async function resolveEntityManagers(): Promise<Record<EntityKey, Set<string>>> 
 
 const MSK = 'Europe/Moscow';
 
+// Первая дата, с которой в sa.deals есть сделки (живая проверка 30.07.2026:
+// min(created_at) = 08.01.2025). Недели, чья прошлогодняя пара начинается
+// раньше, из отчёта исключаются — сравнивать их не с чем.
+const DATA_START = '2025-01-08';
+
 async function fetchWeeklyFacts(fromYmd: string, toExclYmd: string): Promise<Map<string, Map<string, Agg>>> {
   // Map<weekMonday, Map<managerId, Agg>>
   const db = analyticsDb();
@@ -271,12 +276,21 @@ const EMPTY_PLAN: NonMoneyPlan = { deals: null, crSale: null, crShip: null, avgC
 
 export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
   // Недели года: все ISO-недели с четвергом в этом году, не позже текущей.
+  //
+  // ПРОПУСКАЕМ недели, чья прошлогодняя пара начинается раньше DATA_START:
+  // сравнивать не с чем, и «год к году» показывал бы падение на пустое место
+  // (владелец 28.08 со скрина: «первые 6 строчек удали, там косячные данные
+  // подгрузились из-за технических особенностей» — это ровно W1 и W2 2026-го,
+  // их пары в 2025-м приходятся на 30.12.2024 и 06.01.2025, а сделки в sa.deals
+  // начинаются с 08.01.2025). Этим же правилом отчёт сам начинается с той
+  // недели, с которой начат ручной файл владельца («12-18 января» = W03).
   const todayMsk = new Date().toLocaleDateString('sv-SE', { timeZone: MSK });
   const mondays: string[] = [];
   for (let w = 1; w <= 53; w++) {
     const mon = isoWeekMonday(year, w);
     if (isoWeekOf(mon).year !== year) break; // W53 бывает не каждый год
     if (mon > todayMsk) break;
+    if (isoWeekMonday(year - 1, w) < DATA_START) continue;
     mondays.push(mon);
   }
 

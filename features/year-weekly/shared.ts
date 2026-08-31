@@ -67,7 +67,10 @@ export interface YearWeeklyWeatherRow {
   city: 'spb' | 'msk' | 'krd';
   weekStart: string;
   manualText: string | null;
+  /** Полная сводка — в развёрнутом виде. */
   autoSummary: string | null;
+  /** Короткая сводка в одну строчку: «+5, пасмурно, дожди». */
+  autoShort: string | null;
 }
 
 export interface YearWeeklyResult {
