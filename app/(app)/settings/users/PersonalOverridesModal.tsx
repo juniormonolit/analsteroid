@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
 import { Modal } from '@/components/ui/Modal';
-import { PERM_SECTIONS } from '@/lib/auth/perms';
+import { PERM_SECTIONS, hasAllSections } from '@/lib/auth/perms';
 
 // Права v2: персональные исключения видимости разделов — доп. галки лично
 // юзеру, союз с правами его роли (lib/auth/session.ts union'ит их в
@@ -25,6 +25,9 @@ export function PersonalOverridesModal({ userId, userName, rolePermissions, onCl
   const [error, setError] = useState<string | null>(null);
 
   const roleSet = useMemo(() => new Set(rolePermissions), [rolePermissions]);
+  // Роль с джокером «Все разделы» уже открывает всё — личные исключения ей ни к
+  // чему, показываем всё как «даёт роль» (см. ALL_SECTIONS_PERM в perms.ts).
+  const roleGivesAll = useMemo(() => hasAllSections(rolePermissions), [rolePermissions]);
 
   useEffect(() => {
     fetch(`/api/admin/users/${userId}/overrides`)
@@ -35,7 +38,7 @@ export function PersonalOverridesModal({ userId, userName, rolePermissions, onCl
   }, [userId]);
 
   function toggle(key: string) {
-    if (roleSet.has(key)) return; // уже даёт роль — переключать нечего
+    if (roleGivesAll || roleSet.has(key)) return; // уже даёт роль — переключать нечего
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -74,6 +77,7 @@ export function PersonalOverridesModal({ userId, userName, rolePermissions, onCl
         <p className="text-xs text-[var(--color-text-muted)]">
           Доп. разделы лично этому пользователю — в союзе с тем, что уже даёт его роль.
           Разделы, отмеченные серым, уже открыты ролью.
+          {roleGivesAll && ' Роль открывает все разделы — добавлять нечего.'}
         </p>
 
         <div className="border border-[var(--color-border)] rounded-lg py-1">
@@ -81,7 +85,7 @@ export function PersonalOverridesModal({ userId, userName, rolePermissions, onCl
             <div className="px-3 py-4 text-sm text-[var(--color-text-muted)]">Загрузка...</div>
           ) : (
             PERM_SECTIONS.map((p) => {
-              const fromRole = roleSet.has(p.key);
+              const fromRole = roleGivesAll || roleSet.has(p.key);
               const checked = fromRole || selected.has(p.key);
               return (
                 <label

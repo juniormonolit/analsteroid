@@ -43,11 +43,27 @@ export const PERM_ACTIONS = [
   { key: 'action.subscriptions.view_all', label: 'Просмотр подписок сотрудников на бота (только чтение)' },
 ] as const;
 
+// Особое право-джокер: «все разделы, включая будущие». Заведено 31.08 по жалобе
+// владельца («почему-то на роль администратор автоматически не добавляются в
+// видимость все разделы»): каталог PERM_SECTIONS растёт без миграций, а
+// roles.permissions хранит ПЕРЕЧИСЛЕНИЕ ключей — значит каждый новый раздел
+// (section.year_weekly, section.employees, section.presentation…) приходилось
+// доставлять галкой руками, иначе «Администратор» его не видел. Джокер решает
+// это раз и навсегда: hasPerm() пропускает по нему любой section.*.
+//
+// Только для разделов. На action.* джокер СОЗНАТЕЛЬНО не распространяется:
+// действия — это право что-то менять (планы, пользователей, общие отчёты, чаты
+// с менеджерами), их выдача должна оставаться пофамильной. Плюс пара мест в
+// UI читает session.permissions.includes('action.…') напрямую, минуя hasPerm.
+export const ALL_SECTIONS_PERM = 'section.*';
+
 export type PermKey =
   | (typeof PERM_SECTIONS)[number]['key']
-  | (typeof PERM_ACTIONS)[number]['key'];
+  | (typeof PERM_ACTIONS)[number]['key']
+  | typeof ALL_SECTIONS_PERM;
 
 export const ALL_PERM_KEYS: PermKey[] = [
+  ALL_SECTIONS_PERM,
   ...PERM_SECTIONS.map((p) => p.key),
   ...PERM_ACTIONS.map((p) => p.key),
 ];
@@ -73,7 +89,15 @@ export function sanitizeSectionOverrides(raw: unknown): SectionKey[] {
 export function hasPerm(session: SessionUser | null, key: PermKey): boolean {
   if (!session) return false;
   if (session.isSuperadmin) return true; // супер-админ не может залочить сам себя
-  return session.permissions.includes(key);
+  if (session.permissions.includes(key)) return true;
+  // Джокер «все разделы» — см. ALL_SECTIONS_PERM. Работает только для section.*.
+  return key.startsWith('section.') && session.permissions.includes(ALL_SECTIONS_PERM);
+}
+
+// Есть ли у набора прав (roles.permissions) джокер «все разделы» — для UI:
+// редактор ролей, матрица прав, личные исключения.
+export function hasAllSections(permissions: readonly string[]): boolean {
+  return permissions.includes(ALL_SECTIONS_PERM);
 }
 
 // Для API-роутов: Response с ошибкой либо null, если доступ есть.

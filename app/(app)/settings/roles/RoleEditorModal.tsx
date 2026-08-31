@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
-import { PERM_SECTIONS, PERM_ACTIONS } from '@/lib/auth/perms';
+import { PERM_SECTIONS, PERM_ACTIONS, ALL_SECTIONS_PERM } from '@/lib/auth/perms';
 import type { Role } from './page';
 
 interface Props {
@@ -15,25 +15,33 @@ function PermGroup({
   items,
   selected,
   onToggle,
+  forcedAll,
 }: {
   title: string;
   items: ReadonlyArray<{ readonly key: string; readonly label: string }>;
   selected: Set<string>;
   onToggle: (key: string) => void;
+  // true — галки в группе включены «джокером» (все разделы): показываем
+  // отмеченными и заблокированными, чтобы не создавать иллюзию выбора.
+  forcedAll?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">{title}</div>
+      {title && (
+        <div className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">{title}</div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
         {items.map((p) => (
-          <label key={p.key} className="flex items-center gap-2 cursor-pointer py-0.5">
+          <label key={p.key} className={`flex items-center gap-2 py-0.5 ${forcedAll ? '' : 'cursor-pointer'}`}
+            title={forcedAll ? 'Включено правом «Все разделы»' : undefined}>
             <input
               type="checkbox"
-              checked={selected.has(p.key)}
+              checked={forcedAll || selected.has(p.key)}
+              disabled={forcedAll}
               onChange={() => onToggle(p.key)}
               className="accent-[var(--color-accent)] w-4 h-4 shrink-0"
             />
-            <span className="text-sm text-[var(--color-text)]">{p.label}</span>
+            <span className={`text-sm text-[var(--color-text)] ${forcedAll ? 'opacity-60' : ''}`}>{p.label}</span>
           </label>
         ))}
       </div>
@@ -47,6 +55,7 @@ export function RoleEditorModal({ role, onClose, onSaved }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set(role?.permissions ?? []));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const allSections = selected.has(ALL_SECTIONS_PERM);
 
   function toggle(key: string) {
     setSelected((prev) => {
@@ -116,7 +125,29 @@ export function RoleEditorModal({ role, onClose, onSaved }: Props) {
           </div>
         </div>
 
-        <PermGroup title="Видимость разделов" items={PERM_SECTIONS} selected={selected} onToggle={toggle} />
+        {/* Джокер «Все разделы»: без него каждый новый раздел приходилось
+            доставлять руками каждой роли — жалоба владельца 31.08 про
+            «Администратора», который не видит только что заведённые разделы. */}
+        <div className="flex flex-col gap-1.5">
+          <div className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">
+            Видимость разделов
+          </div>
+          <label className="flex items-start gap-2 cursor-pointer rounded-lg border border-[var(--color-border)] px-3 py-2">
+            <input
+              type="checkbox"
+              checked={allSections}
+              onChange={() => toggle(ALL_SECTIONS_PERM)}
+              className="accent-[var(--color-accent)] w-4 h-4 shrink-0 mt-0.5"
+            />
+            <span className="text-sm text-[var(--color-text)]">
+              Все разделы — включая те, что появятся позже
+              <span className="block text-xs text-[var(--color-text-muted)]">
+                Роль автоматически видит каждый новый раздел; отдельные галки ниже можно не трогать.
+              </span>
+            </span>
+          </label>
+          <PermGroup title="" items={PERM_SECTIONS} selected={selected} onToggle={toggle} forcedAll={allSections} />
+        </div>
         <PermGroup title="Действия" items={PERM_ACTIONS} selected={selected} onToggle={toggle} />
 
         {error && <div className="text-sm text-red-500">{error}</div>}

@@ -12,7 +12,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const body = await req.json();
   const db = systemDb();
 
-  const existing = await db.query<{ is_system: boolean }>(`SELECT is_system FROM roles WHERE id = $1`, [id]);
+  const existing = await db.query<{ is_system: boolean; name: string }>(
+    `SELECT is_system, name FROM roles WHERE id = $1`, [id]
+  );
   if (!existing.rows.length) return NextResponse.json({ error: 'Роль не найдена' }, { status: 404 });
 
   const fields: string[] = [];
@@ -20,7 +22,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   let i = 1;
 
   // У сидовых ролей имя фиксировано (на него завязан backfill/дефолты), права менять можно.
-  if (typeof body.name === 'string' && body.name.trim()) {
+  //
+  // Сравниваем с ТЕКУЩИМ именем: редактор ролей всегда присылает name (поле в
+  // форме задисейблено, но значение уходит в payload), поэтому проверка «пришло
+  // имя → это переименование» ломала сохранение прав у ВСЕХ шести сидовых ролей
+  // — жалоба владельца 31.08: «редактирую „Доступ к разделам“, жму Сохранить,
+  // получаю „Роль не может быть переименована“, а я и не переименовывал».
+  const sameName = typeof body.name === 'string' && body.name.trim() === existing.rows[0].name;
+  if (typeof body.name === 'string' && body.name.trim() && !sameName) {
     if (existing.rows[0].is_system) {
       return NextResponse.json({ error: 'Системную роль нельзя переименовать' }, { status: 400 });
     }

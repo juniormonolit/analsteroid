@@ -1,3 +1,4 @@
 {
-  "components/layout/AppShell.tsx::manual-popover-positioning": 1
+  "components/layout/AppShell.tsx::manual-popover-positioning": 1,
+  "features/year-weekly/ui/YearWeeklyChart.tsx::manual-popover-positioning": 1
 }

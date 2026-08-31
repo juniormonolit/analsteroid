@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { PERM_SECTIONS, PERM_ACTIONS } from '@/lib/auth/perms';
+import { PERM_SECTIONS, PERM_ACTIONS, ALL_SECTIONS_PERM, hasAllSections } from '@/lib/auth/perms';
 
 // Права v2: матрица роль × раздел (+ отдельно роль × действие) с чекбоксами,
 // видна только супер-админу (гейт в layout.tsx). Каждый чекбокс сразу PATCH'ит
@@ -24,6 +24,7 @@ function MatrixTable({
   roles,
   busyCell,
   onToggle,
+  withAllSections,
 }: {
   title: string;
   hint?: string;
@@ -31,6 +32,10 @@ function MatrixTable({
   roles: Role[];
   busyCell: string | null; // `${roleId}:${key}`
   onToggle: (role: Role, key: string) => void;
+  // Для таблицы разделов: первый столбец — джокер «Все разделы» (ALL_SECTIONS_PERM).
+  // Роль с ним автоматически видит и будущие разделы, поэтому остальные ячейки
+  // строки показываем отмеченными и заблокированными.
+  withAllSections?: boolean;
 }) {
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden">
@@ -43,34 +48,55 @@ function MatrixTable({
           <thead>
             <tr className="border-b border-[var(--color-border)] text-left text-[var(--color-text-muted)]">
               <th className="px-4 py-2 font-medium sticky left-0 bg-[var(--color-bg-surface)]">Роль</th>
+              {withAllSections && (
+                <th className="px-3 py-2 font-medium text-center whitespace-nowrap text-[var(--color-text)]">
+                  Все разделы
+                </th>
+              )}
               {items.map((p) => (
                 <th key={p.key} className="px-3 py-2 font-medium text-center whitespace-nowrap">{p.label}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {roles.map((r) => (
-              <tr key={r.id} className="border-b border-[var(--color-border)] last:border-0">
-                <td className="px-4 py-2 text-[var(--color-text)] whitespace-nowrap sticky left-0 bg-[var(--color-bg-surface)]">
-                  {r.name}
-                </td>
-                {items.map((p) => {
-                  const cellKey = `${r.id}:${p.key}`;
-                  const checked = r.permissions.includes(p.key);
-                  return (
-                    <td key={p.key} className="px-3 py-2 text-center">
+            {roles.map((r) => {
+              const allSections = withAllSections && hasAllSections(r.permissions);
+              return (
+                <tr key={r.id} className="border-b border-[var(--color-border)] last:border-0">
+                  <td className="px-4 py-2 text-[var(--color-text)] whitespace-nowrap sticky left-0 bg-[var(--color-bg-surface)]">
+                    {r.name}
+                  </td>
+                  {withAllSections && (
+                    <td className="px-3 py-2 text-center">
                       <input
                         type="checkbox"
-                        checked={checked}
-                        disabled={busyCell === cellKey}
-                        onChange={() => onToggle(r, p.key)}
+                        checked={!!allSections}
+                        disabled={busyCell === `${r.id}:${ALL_SECTIONS_PERM}`}
+                        onChange={() => onToggle(r, ALL_SECTIONS_PERM)}
                         className="accent-[var(--color-accent)] w-4 h-4"
+                        title="Роль видит все разделы, включая будущие"
                       />
                     </td>
-                  );
-                })}
-              </tr>
-            ))}
+                  )}
+                  {items.map((p) => {
+                    const cellKey = `${r.id}:${p.key}`;
+                    const checked = allSections || r.permissions.includes(p.key);
+                    return (
+                      <td key={p.key} className="px-3 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={busyCell === cellKey || allSections}
+                          onChange={() => onToggle(r, p.key)}
+                          className="accent-[var(--color-accent)] w-4 h-4"
+                          title={allSections ? 'Включено правом «Все разделы»' : undefined}
+                        />
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -143,6 +169,8 @@ export default function RightsMatrixPage() {
         <>
           <MatrixTable
             title="Видимость разделов"
+            hint="«Все разделы» — джокер: роль автоматически видит и те разделы, которые появятся позже"
+            withAllSections
             items={PERM_SECTIONS}
             roles={roles}
             busyCell={busyCell}

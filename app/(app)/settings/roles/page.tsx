@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RoleEditorModal } from './RoleEditorModal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { hasAllSections } from '@/lib/auth/perms';
 
 export interface Role {
   id: string;
@@ -101,7 +102,13 @@ export default function RolesPage() {
                     )}
                   </td>
                   <td className="px-4 py-2 text-[var(--color-text-muted)]">{r.description ?? '—'}</td>
-                  <td className="px-4 py-2 text-[var(--color-text-muted)]">{r.permissions.length}</td>
+                  <td className="px-4 py-2 text-[var(--color-text-muted)]">
+                    {/* Джокер «Все разделы» (ALL_SECTIONS_PERM) в числе прав считать
+                        бессмысленно — он один заменяет весь список разделов. */}
+                    {hasAllSections(r.permissions)
+                      ? `все разделы + ${r.permissions.filter((p) => p.startsWith('action.')).length}`
+                      : r.permissions.length}
+                  </td>
                   <td className="px-4 py-2 text-[var(--color-text-muted)]">{r.userCount}</td>
                   <td className="px-4 py-2 text-right whitespace-nowrap">
                     <button
