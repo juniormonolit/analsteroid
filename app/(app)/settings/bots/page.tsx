@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Bot, PhoneMissed } from 'lucide-react';
+import { Bot, PhoneMissed, CloudSun } from 'lucide-react';
 import { BotChannelsBlock } from '@/features/badges/ui/BotChannelsBlock';
 
 // Список ботов Bitrix24, живущих в Монолитике. «Аналитик» пока без своей страницы
@@ -36,6 +36,20 @@ export default function BotsPage() {
           <p className="text-xs text-[var(--color-text-muted)]">
             Следит за пропущенными входящими и эскалирует по правилам: менеджер → РОП →
             директор → собственник. Правила и шаблоны настраиваются →
+          </p>
+        </Link>
+
+        <Link
+          href="/settings/bots/weather"
+          className="border border-[var(--color-border)] rounded-lg p-4 hover:bg-[var(--color-bg-hover)] transition-colors block"
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <CloudSun size={18} className="text-[var(--color-accent)]" />
+            <span className="text-sm font-semibold text-[var(--color-text)]">Погода для «Данных по годам»</span>
+          </div>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Каждый понедельник 09:00 МСК «Аналитик» спрашивает ответственных про
+            погоду прошлой недели. Кого спрашивать по городам →
           </p>
         </Link>
       </div>

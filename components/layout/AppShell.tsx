@@ -7,7 +7,7 @@ import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
-  MessageCircle, LineChart, Trophy, PackageOpen, Users, Presentation,
+  MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation,
   Lightbulb, Repeat2, Grid3x3,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
@@ -425,6 +425,9 @@ function SidebarBody({
     // право по паттерну section.settings: только супер-админ + роли, которым
     // ключ выдан явно в настройках.
     { href: '/offload', label: 'Разгрузка отделов', icon: <PackageOpen size={18} />, ok: hasPerm(user, 'section.offload') },
+    // Спец-отчёт «Данные по годам» (понедельный, год к году; решения владельца
+    // 28.08 в BACKLOG) — закрытый раздел по паттерну offload.
+    { href: '/year-weekly', label: 'Данные по годам', icon: <CalendarRange size={18} />, ok: hasPerm(user, 'section.year_weekly') },
     // «Сотрудники» (задача 2654) — реестр: стаж + история переименований логина;
     // закрытый раздел по паттерну section.offload (только супер-админ + роли).
     { href: '/employees', label: 'Сотрудники', icon: <Users size={18} />, ok: hasPerm(user, 'section.employees') },

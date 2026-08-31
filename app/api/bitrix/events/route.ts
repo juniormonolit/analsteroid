@@ -32,11 +32,18 @@ export async function POST(req: NextRequest) {
         && str('data[PARAMS][SYSTEM]') !== 'Y'
         && str('data[PARAMS][FROM_USER_ID]') !== botId) {
       const replyIdRaw = str('data[PARAMS][PARAMS][REPLY_ID]');
-      await handleIncomingBotMessage({
+      const handledByDealChats = await handleIncomingBotMessage({
         fromUserId: str('data[PARAMS][FROM_USER_ID]'),
         text: str('data[PARAMS][MESSAGE]'),
         replyToBitrixMessageId: replyIdRaw ? Number(replyIdRaw) : null,
       });
+      // Не чат по сделке → возможно, это ответ на понедельничный вопрос бота
+      // «Как погодка на той неделе была?» (спец-отчёт «Данные по годам», 28.08).
+      // recordWeatherAnswer сам возвращает null, если вопросов человеку не было.
+      if (!handledByDealChats) {
+        const { recordWeatherAnswer } = await import('@/lib/weather/weeklyWeather');
+        await recordWeatherAnswer(str('data[PARAMS][FROM_USER_ID]'), str('data[PARAMS][MESSAGE]'));
+      }
     }
 
     // Клик по кнопке «к какой сделке относится ответ?». Ключ содержит id команды:

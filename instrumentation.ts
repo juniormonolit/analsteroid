@@ -60,6 +60,7 @@ export async function register() {
   scheduleAdviceFeedback();
   scheduleRopDigest();
   scheduleRopAdviceFeedback();
+  scheduleWeeklyWeather();
 }
 
 // ── Дайджест «Аналитика» менеджерам + цикл обратной связи (задача 2765) ──────
@@ -96,6 +97,35 @@ async function runOnceADayMsk(lockKey: string, dateStr: string, job: () => Promi
   await job();
   if (redis) await redis.set(`${lockKey}:sent:${dateStr}`, '1', 'EX', 24 * 3600).catch(() => {});
   return 'ran';
+}
+
+// Погода для спец-отчёта «Данные по годам» (решение владельца 28.08): каждый
+// понедельник 09:00 МСК бот спрашивает ответственных «Как погодка на той неделе
+// была?» и подтягивает автосводку Open-Meteo. Окно 09:00–11:59 — ретраи, если
+// в 9 утра что-то лежало (тот же приём, что у отчёта «МОСКВА»).
+function scheduleWeeklyWeather() {
+  let lastDate = '';
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    const msk = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+    const [date, time] = msk.split(' ');
+    const hour = parseInt(time.slice(0, 2), 10);
+    const dow = new Date(`${date}T12:00:00Z`).getUTCDay(); // 1 = понедельник
+    if (dow !== 1 || hour < 9 || hour > 11 || lastDate === date) return;
+    running = true;
+    try {
+      const outcome = await runOnceADayMsk('weekly-weather', date, async () => {
+        const { askWeeklyWeatherAll } = await import('./lib/weather/weeklyWeather');
+        const res = await askWeeklyWeatherAll();
+        console.log(`[weekly-weather] спрошено ${res.asked}, автосводок ${res.autoFilled}`);
+      });
+      if (outcome !== 'busy' && outcome !== 'lock-error') lastDate = date;
+    } catch (err) {
+      console.error('[weekly-weather] тик не удался:', err);
+    } finally { running = false; }
+  };
+  setInterval(() => { void tick(); }, 60 * 1000);
 }
 
 function scheduleManagerDigest() {
