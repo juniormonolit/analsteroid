@@ -24,6 +24,12 @@ const METRICS: { key: MetricKey; label: string; kind: 'count' | 'money' | 'pct';
 // СПБ/МСК ИТОГО в файле — только продажи и отгрузки.
 const TOTAL_METRICS = METRICS.filter(m => m.key === 'salesSum' || m.key === 'shipSum');
 
+// Жирная вертикальная граница на стыке смысловых блоков — сущностей (правка
+// владельца 28.08). Ставится на ПОСЛЕДНЮЮ ячейку блока во ВСЕХ рядах шапки и
+// тела, иначе линия рвётся построчно. Цвет — border-strong: на широкой таблице
+// в 7800px обычный hairline между блоками не читался.
+const BLOCK_EDGE = 'border-r-[3px] border-r-[var(--color-border-strong,var(--color-text-muted))]';
+
 const CITY_LABEL: Record<string, string> = { spb: 'Погода СПБ', msk: 'Погода МСК', krd: 'Погода КРД' };
 
 function fmt(v: number | null | undefined, kind: 'count' | 'money' | 'pct'): string {
@@ -150,13 +156,13 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
               <thead>
                 {/* ряд 1: сущности */}
                 <tr>
-                  <th className={`sticky left-0 z-30 ${stickyBg} border-b border-r border-[var(--color-border)] px-2 py-1`} colSpan={2} />
+                  <th className={`sticky left-0 z-30 ${stickyBg} border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1`} colSpan={2} />
                   {entities.map(e => {
                     const ms = e.total ? TOTAL_METRICS : METRICS;
                     const weatherCol = e.total || e.key === 'krd' ? 1 : 0;
                     return (
                       <th key={e.key} colSpan={ms.length * 2 + weatherCol}
-                        className="border-b border-r-2 border-[var(--color-border)] bg-[var(--color-bg-hover)] px-2 py-1.5 text-center font-bold text-[var(--color-text)] whitespace-nowrap">
+                        className={`border-b border-[var(--color-border)] ${BLOCK_EDGE} bg-[var(--color-bg-hover)] px-2 py-1.5 text-center font-bold text-[var(--color-text)] whitespace-nowrap`}>
                         {e.label}
                       </th>
                     );
@@ -164,7 +170,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                 </tr>
                 {/* ряд 2: метрики */}
                 <tr>
-                  <th className={`sticky left-0 z-30 ${stickyBg} border-b border-r border-[var(--color-border)]`} colSpan={2} />
+                  <th className={`sticky left-0 z-30 ${stickyBg} border-b border-[var(--color-border)] ${BLOCK_EDGE}`} colSpan={2} />
                   {entities.map(e => {
                     const ms = e.total ? TOTAL_METRICS : METRICS;
                     return (
@@ -174,9 +180,9 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                             {CITY_LABEL[e.city]}
                           </th>
                         )}
-                        {ms.map(m => (
+                        {ms.map((m, mi) => (
                           <th key={`${e.key}-${m.key}`} colSpan={2} style={{ background: m.tint }}
-                            className="border-b border-r border-[var(--color-border)] px-2 py-1 text-center font-semibold text-[var(--color-text)] whitespace-nowrap">
+                            className={`border-b border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-2 py-1 text-center font-semibold text-[var(--color-text)] whitespace-nowrap`}>
                             {m.label}
                           </th>
                         ))}
@@ -186,11 +192,14 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                 </tr>
                 {/* ряд 3: Факт/Откл */}
                 <tr>
-                  <th className={`sticky left-0 z-30 ${stickyBg} border-b-2 border-r border-[var(--color-border)]`} colSpan={2} />
-                  {entities.flatMap(e => (e.total ? TOTAL_METRICS : METRICS).flatMap(m => [
-                    <th key={`${e.key}-${m.key}-f`} style={{ background: m.tint }} className="border-b-2 border-[var(--color-border)] px-2 py-0.5 text-right text-[10px] font-medium text-[var(--color-text-muted)]">Факт</th>,
-                    <th key={`${e.key}-${m.key}-d`} style={{ background: m.tint }} className="border-b-2 border-r border-[var(--color-border)] px-1 py-0.5 text-center text-[10px] font-medium text-[var(--color-text-muted)]">Откл</th>,
-                  ]))}
+                  <th className={`sticky left-0 z-30 ${stickyBg} border-b-2 border-[var(--color-border)] ${BLOCK_EDGE}`} colSpan={2} />
+                  {entities.flatMap(e => {
+                    const ms = e.total ? TOTAL_METRICS : METRICS;
+                    return ms.flatMap((m, mi) => [
+                      <th key={`${e.key}-${m.key}-f`} style={{ background: m.tint }} className="border-b-2 border-[var(--color-border)] px-2 py-0.5 text-right text-[10px] font-medium text-[var(--color-text-muted)]">Факт</th>,
+                      <th key={`${e.key}-${m.key}-d`} style={{ background: m.tint }} className={`border-b-2 border-r border-[var(--color-border)] ${mi === ms.length - 1 ? BLOCK_EDGE : ''} px-1 py-0.5 text-center text-[10px] font-medium text-[var(--color-text-muted)]`}>Откл</th>,
+                    ]);
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -201,7 +210,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                   return (
                     <tr key={idx} className={rowBg}>
                       <td className={`sticky left-0 z-20 w-[52px] min-w-[52px] ${stickyBg} ${boundary} whitespace-nowrap border-b border-r border-[var(--color-border)] px-2 py-1 text-[11px] text-[var(--color-text-muted)] ${r.isTotal ? 'font-semibold' : ''}`}>{r.yearLabel}</td>
-                      <td className={`sticky left-[52px] z-20 ${stickyBg} ${boundary} whitespace-nowrap border-b border-r-2 border-[var(--color-border)] px-2 py-1 ${r.kind === 'cur' ? 'font-semibold text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}>{r.weekLabel}</td>
+                      <td className={`sticky left-[52px] z-20 ${stickyBg} ${boundary} whitespace-nowrap border-b border-[var(--color-border)] ${BLOCK_EDGE} px-2 py-1 ${r.kind === 'cur' ? 'font-semibold text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}>{r.weekLabel}</td>
                       {entities.flatMap(e => {
                         const ms = e.total ? TOTAL_METRICS : METRICS;
                         const cells: React.ReactNode[] = [];
@@ -244,9 +253,10 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
                               {fact}
                             </td>,
                           );
+                          const lastOfBlock = m.key === ms[ms.length - 1].key;
                           cells.push(
                             <td key={`${e.key}-${m.key}-d`} style={{ background: r.isTotal ? undefined : m.tint }}
-                              className={`${boundary} whitespace-nowrap border-b border-r border-[var(--color-border)] px-1 py-1 text-center text-[11px]`}>
+                              className={`${boundary} whitespace-nowrap border-b border-r border-[var(--color-border)] ${lastOfBlock ? BLOCK_EDGE : ''} px-1 py-1 text-center text-[11px]`}>
                               {r.kind === 'cur' && prevRow
                                 ? <Dev cur={r.get(e.key)?.[m.key] ?? null} prev={prevRow.get(e.key)?.[m.key] ?? null} kind={m.kind} />
                                 : null}
