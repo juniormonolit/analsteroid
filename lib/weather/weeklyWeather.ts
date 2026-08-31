@@ -207,15 +207,21 @@ export async function recordWeatherAnswer(fromUserId: string, text: string): Pro
 export interface WeekWeatherRow {
   city: WeatherCity; weekStart: string;
   manualText: string | null;
-  /** Полная сводка: «t 12…22, осадки 71 мм» — видна в развёрнутом виде. */
+  /** Полная сводка: «t 12…22, осадки 71 мм». */
   autoSummary: string | null;
-  /** Короткая, в одну строчку ячейки: «+5, пасмурно, дожди». */
+  /** Короткая: «+5, пасмурно». */
   autoShort: string | null;
+  /** Средняя температура недели, °C — ЧИСЛОМ, для графика (задача 28.08). */
+  autoTemp: number | null;
+  /** Средняя облачность недели, % — для подсказок графика. */
+  autoCloud: number | null;
 }
 
 export async function listWeatherForYear(year: number): Promise<WeekWeatherRow[]> {
-  const res = await systemDb().query<{ city: WeatherCity; week_start: string; manual_text: string | null; auto_summary: string | null; auto_short: string | null }>(
-    `SELECT city, to_char(week_start, 'YYYY-MM-DD') AS week_start, manual_text, auto_summary, auto_short
+  const res = await systemDb().query<{ city: WeatherCity; week_start: string; manual_text: string | null; auto_summary: string | null; auto_short: string | null; auto_temp: string | null; auto_cloud: string | null }>(
+    `SELECT city, to_char(week_start, 'YYYY-MM-DD') AS week_start, manual_text, auto_summary, auto_short,
+            (auto_data->>'tMean')::numeric AS auto_temp,
+            (auto_data->>'cloudPct')::numeric AS auto_cloud
        FROM weekly_weather
       WHERE week_start >= make_date($1, 1, 1) - interval '7 days'
         AND week_start < make_date($1 + 1, 1, 1)`,
@@ -224,5 +230,7 @@ export async function listWeatherForYear(year: number): Promise<WeekWeatherRow[]
   return res.rows.map(r => ({
     city: r.city, weekStart: r.week_start, manualText: r.manual_text,
     autoSummary: r.auto_summary, autoShort: r.auto_short,
+    autoTemp: r.auto_temp !== null ? Number(r.auto_temp) : null,
+    autoCloud: r.auto_cloud !== null ? Number(r.auto_cloud) : null,
   }));
 }

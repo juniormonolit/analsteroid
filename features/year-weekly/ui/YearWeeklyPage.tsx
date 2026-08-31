@@ -1,8 +1,9 @@
 'use client';
 import { Fragment, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Pencil } from 'lucide-react';
+import { BarChart3, ChevronDown, ChevronRight, Pencil } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
+import { YearWeeklyChart } from './YearWeeklyChart';
 import type { EntityKey, EntityMetrics, NonMoneyPlan, YearWeeklyResult } from '@/features/year-weekly/shared';
 
 // Спец-отчёт «Данные по годам» — зеркало ручного файла владельца (скрин 28.08):
@@ -238,6 +239,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
   // строчку с возможностью развернуть и прочитать»). Свёрнутый вид — короткая
   // метеосводка «+5, пасмурно, дожди», она влезает в строку и одинаково узкая
   // у всех недель, поэтому строки таблицы не пляшут по высоте.
+  const [chartOpen, setChartOpen] = useState(false);
   const [openWeather, setOpenWeather] = useState<Set<string>>(new Set());
   const toggleWeather = (k: string) => setOpenWeather(prev => {
     const next = new Set(prev);
@@ -305,6 +307,13 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
               </button>
             ))}
           </div>
+          {/* График (задача владельца 28.08) — тот же payload, другой взгляд:
+              данные для него уже загружены таблицей, запрос не повторяется. */}
+          <button type="button" onClick={() => setChartOpen(true)} disabled={!data}
+            title="Интерактивный график: метрики по неделям, сравнение с прошлым годом, температура, комментарии"
+            className="tap-target min-h-8 flex items-center gap-1.5 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent)]/10 px-3 text-xs font-semibold text-[var(--color-accent)] disabled:opacity-40">
+            <BarChart3 size={13} /> График
+          </button>
           {/* Якорные ссылки по городам (правка владельца 28.08) — полотно
               шириной ~7800px, доскроллить до Краснодара мышью утомительно. */}
           <div className="flex items-center gap-1">
@@ -495,6 +504,8 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
           </div>
         )}
       </div>
+
+      {chartOpen && data && <YearWeeklyChart data={data} onClose={() => setChartOpen(false)} />}
 
       {editWeather && (
         <Modal open onOpenChange={o => { if (!o) setEditWeather(null); }} title="Погода за неделю" desktopWidth="sm:max-w-md">

@@ -69,8 +69,12 @@ export interface YearWeeklyWeatherRow {
   manualText: string | null;
   /** Полная сводка — в развёрнутом виде. */
   autoSummary: string | null;
-  /** Короткая сводка в одну строчку: «+5, пасмурно, дожди». */
+  /** Короткая сводка: «+5, пасмурно». */
   autoShort: string | null;
+  /** Средняя температура недели, °C — числом, для графика. */
+  autoTemp: number | null;
+  /** Средняя облачность недели, % — для подсказок графика. */
+  autoCloud: number | null;
 }
 
 export interface YearWeeklyResult {
