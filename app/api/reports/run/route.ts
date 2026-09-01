@@ -11,6 +11,7 @@ import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features
 import { fetchBookingCallRate } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/features/reports/engine/stageConversions';
 import { fetchPriceObjectionConversion } from '@/features/reports/engine/priceObjectionConversion';
+import { fetchPriceSpeed, type PriceSpeedRow } from '@/features/reports/engine/priceSpeed';
 import { buildCommonDealWhere, type CommonDealFilterOpts } from '@/features/reports/engine/commonDealWhere';
 import { fetchCalledConversion, CALLED_CONVERSION_HIDDEN_IDS } from '@/features/reports/engine/calledConversion';
 import { fetchStageEntered, STAGE_ENTERED_GROUP_KEYS, STAGE_ENTERED_METRIC_IDS, stageEnteredMetricIds } from '@/features/reports/engine/stageEntered';
@@ -813,6 +814,57 @@ export async function POST(req: NextRequest) {
     compRows = compRows.map(r => enrichPriceObjection(r, compPO));
   }
 
+  // «Скорость озвучивания цены» (задача владельца 01.09, миграции 196/197):
+  // CR Сделка → Цена озвучена (calculated поверх скрытых счётчиков) + медиана
+  // часов до цены (прямые external). Когорта — сделки, созданные в периоде;
+  // разметка стадий — stage_price_markup («Настройки → Цена: разметка стадий»);
+  // «Спорно» исключает сделку из расчёта целиком. Тот же гейт (by-managers,
+  // null только когда весь период раньше старта deal_events).
+  const priceSpeedIds = [
+    'price_reached_primary', 'price_reached_repeat',
+    'price_denom_primary', 'price_denom_repeat',
+    'price_speed_median_hours', 'price_speed_median_hours_repeat', 'price_speed_median_hours_all',
+  ];
+  const hasPriceSpeedMetric = withDeps.some(m => priceSpeedIds.includes(m.id));
+  let priceSpeedGrandTotals: { cur?: PriceSpeedRow; comp?: PriceSpeedRow } | null = null;
+
+  if (hasPriceSpeedMetric && reportSlug === 'by-managers') {
+    // Скоуп «Итого» — менеджеры, уже прошедшие фильтры отчёта (как у медиан звонков).
+    const curManagerIdsPS = currentRows.map(r => r.dimensionId);
+    const compManagerIdsPS = compRows.map(r => r.dimensionId);
+    const [curPS, compPS] = await Promise.all([
+      fetchPriceSpeed(opts.period, commonDealFilters, curManagerIdsPS),
+      fetchPriceSpeed(compOpts.period, commonDealFilters, compManagerIdsPS),
+    ]);
+    priceSpeedGrandTotals = {
+      cur: curPS?.get(GRAND_TOTAL_KEY),
+      comp: compPS?.get(GRAND_TOTAL_KEY),
+    };
+
+    const round1ps = (n: number) => Math.round(n * 10) / 10;
+    const enrichPriceSpeed = (
+      row: ReportRow,
+      ps: Awaited<ReturnType<typeof fetchPriceSpeed>>,
+    ): ReportRow => {
+      const p = ps?.get(row.dimensionId);
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          price_reached_primary: ps ? (p?.reachedPrimary ?? 0) : null,
+          price_reached_repeat: ps ? (p?.reachedRepeat ?? 0) : null,
+          price_denom_primary: ps ? (p?.denomPrimary ?? 0) : null,
+          price_denom_repeat: ps ? (p?.denomRepeat ?? 0) : null,
+          price_speed_median_hours: ps ? round1ps(p?.medianHours.primary ?? 0) : null,
+          price_speed_median_hours_repeat: ps ? round1ps(p?.medianHours.repeat ?? 0) : null,
+          price_speed_median_hours_all: ps ? round1ps(p?.medianHours.all ?? 0) : null,
+        },
+      };
+    };
+    currentRows = currentRows.map(r => enrichPriceSpeed(r, curPS));
+    compRows = compRows.map(r => enrichPriceSpeed(r, compPS));
+  }
+
   // «Кол-во сделок в стадии X» за период (задача 28.07, migrations/107) — потоковая
   // пара к снимкам «Стадии (сейчас)»: впервые вошедшие в стадию в периоде, тройки
   // перв./повт./все. Тот же гейт (только by-managers) и тот же приём «null только
@@ -1220,6 +1272,25 @@ export async function POST(req: NextRequest) {
       if (!withDeps.some(m => m.id === def.id)) continue; // метрика не запрошена в этом вызове
       const current = def.cur ? def.cur[def.bucket] : null;
       const comparison = def.comp ? def.comp[def.bucket] : null;
+      totals[def.id] = { current, comparison, ...computeDelta(current, comparison) };
+    }
+  }
+
+  // «Итого» медианы часов до цены (миграция 197) — тот же приём, что у медиан
+  // звонков выше: настоящая медиана по всей отфильтрованной совокупности из
+  // GRAND_TOTAL-ветки GROUPING SETS, а не сумма/среднее построчных медиан.
+  if (priceSpeedGrandTotals) {
+    const { cur, comp } = priceSpeedGrandTotals;
+    const round1ps = (n: number) => Math.round(n * 10) / 10;
+    const psTotalDefs: { id: string; bucket: keyof Bucket }[] = [
+      { id: 'price_speed_median_hours', bucket: 'primary' },
+      { id: 'price_speed_median_hours_repeat', bucket: 'repeat' },
+      { id: 'price_speed_median_hours_all', bucket: 'all' },
+    ];
+    for (const def of psTotalDefs) {
+      if (!withDeps.some(m => m.id === def.id)) continue;
+      const current = cur ? round1ps(cur.medianHours[def.bucket]) : null;
+      const comparison = comp ? round1ps(comp.medianHours[def.bucket]) : null;
       totals[def.id] = { current, comparison, ...computeDelta(current, comparison) };
     }
   }
