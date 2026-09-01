@@ -20,7 +20,7 @@ import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 
 type ChartMetric = 'deals' | 'salesSum' | 'shipSum' | 'crSale' | 'crShip' | 'avgCheck';
 const METRIC_DEFS: { key: ChartMetric; label: string; kind: 'count' | 'money' | 'pct' }[] = [
-  { key: 'deals', label: 'Кол-во сделок', kind: 'count' },
+  { key: 'deals', label: 'Кол-во сделок (перв.)', kind: 'count' },
   { key: 'salesSum', label: 'Сумма продаж', kind: 'money' },
   { key: 'shipSum', label: 'Сумма отгрузок', kind: 'money' },
   { key: 'crSale', label: 'Конв. продажа', kind: 'pct' },

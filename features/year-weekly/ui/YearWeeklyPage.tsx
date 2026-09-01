@@ -16,7 +16,7 @@ import type { EntityKey, EntityMetrics, NonMoneyPlan, YearWeeklyResult } from '@
 type MetricKey = 'deals' | 'salesSum' | 'shipSum' | 'crSale' | 'crShip' | 'avgCheck';
 interface MetricDef { key: MetricKey; label: string; kind: 'count' | 'money' | 'pct'; tintC?: string; tintP?: number }
 const METRICS: MetricDef[] = [
-  { key: 'deals', label: 'Кол-во сделок', kind: 'count' },
+  { key: 'deals', label: 'Кол-во сделок (перв.)', kind: 'count' },
   { key: 'salesSum', label: 'Сумма продаж', kind: 'money', tintC: '#4aa3e0', tintP: 12 },
   { key: 'shipSum', label: 'Сумма отгрузок', kind: 'money', tintC: '#2f9e44', tintP: 10 },
   { key: 'crSale', label: 'Конв. продажа', kind: 'pct', tintC: '#f5c518', tintP: 16 },
@@ -340,7 +340,7 @@ export function YearWeeklyPage({ isSuperadmin }: { isSuperadmin: boolean }) {
             {data?.comparable === false
               ? `${year}-й — первый год данных, сравнивать не с чем`
               : `неделя ${year}-го против той же ISO-недели ${year - 1}-го`}
-            {' · '}план = месяц / 4 · конверсии — первичные · ср. чек — по первичным отгрузкам
+            {' · '}план = месяц / 4 · сделки и конверсии — первичные · ср. чек — по первичным отгрузкам
             {' · '}погода: свёрнуто — метеоданные (Open-Meteo), развёрнуто — комментарий ответственного
           </span>
         </div>

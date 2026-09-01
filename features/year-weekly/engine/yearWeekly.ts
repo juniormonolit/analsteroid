@@ -232,7 +232,10 @@ function sumForEntity(week: Map<string, Agg> | undefined, managers: Set<string>)
 
 function toMetrics(a: Agg): EntityMetrics {
   return {
-    deals: a.deals,
+    // «Кол-во сделок» — ТОЛЬКО первичные (правка владельца 31.08: «сделки
+    // должны считаться только первичные»). До этого считались все созданные;
+    // конверсии и раньше были от первичных (dealsPrim) — они не изменились.
+    deals: a.dealsPrim,
     salesSum: Math.round(a.salesSum),
     shipSum: Math.round(a.shipSum),
     crSale: a.dealsPrim > 0 ? a.salesPrimCnt / a.dealsPrim : null,

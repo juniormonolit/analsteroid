@@ -21,6 +21,7 @@ export const ENTITY_DEFS: { key: EntityKey; label: string; city: 'spb' | 'msk' |
 ];
 
 export interface EntityMetrics {
+  /** Кол-во ПЕРВИЧНЫХ сделок, созданных за период (правка владельца 31.08). */
   deals: number;
   salesSum: number;
   shipSum: number;
