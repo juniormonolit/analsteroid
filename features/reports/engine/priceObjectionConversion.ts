@@ -2,7 +2,8 @@ import { analyticsDb } from '@/lib/db/clients';
 import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { DEAL_EVENTS_DATA_START } from './managerActivity';
 
-// CR «Есть цена дешевле» → Бронь/Продажа/Отказ (задача 1, owners-inbox, 10.07).
+// CR «Есть цена дешевле» → Бронь/Продажа/Отгрузка/Отказ (задача 1, owners-inbox,
+// 10.07; исход «Отгрузка» добавлен правкой владельца 31.08 — п.7, миграция 193).
 //
 // Стадия резолвится ДИНАМИЧЕСКИ по названию (ILIKE 'Есть цена дешевле%'), НЕ по
 // хардкоду stage_id — объединяет одноимённые стадии across воронок (живая проверка
@@ -28,6 +29,8 @@ export interface PriceObjectionRow {
   numSaleRepeat: number;
   numLostPrimary: number;
   numLostRepeat: number;
+  numShipmentPrimary: number;
+  numShipmentRepeat: number;
 }
 
 /**
@@ -64,7 +67,7 @@ cohort AS (
 )
 SELECT
   c.manager_id, c.first_at,
-  d.reserved_at, d.sold_at, d.lost_at,
+  d.reserved_at, d.sold_at, d.lost_at, d.delivered_at,
   f.is_repeat
 FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
@@ -74,6 +77,7 @@ JOIN funnels f ON f.id = d.funnel_id
   const res = await analyticsDb().query<{
     manager_id: number; first_at: string;
     reserved_at: string | null; sold_at: string | null; lost_at: string | null;
+    delivered_at: string | null;
     is_repeat: boolean;
   }>(sql, [from, toExcl]);
 
@@ -86,6 +90,7 @@ JOIN funnels f ON f.id = d.funnel_id
         numReservationPrimary: 0, numReservationRepeat: 0,
         numSalePrimary: 0, numSaleRepeat: 0,
         numLostPrimary: 0, numLostRepeat: 0,
+        numShipmentPrimary: 0, numShipmentRepeat: 0,
       };
       map.set(managerId, row);
     }
@@ -112,6 +117,10 @@ JOIN funnels f ON f.id = d.funnel_id
     }
     if (lostAt !== null && lostAt >= firstAt) {
       if (isRepeat) row.numLostRepeat += 1; else row.numLostPrimary += 1;
+    }
+    const deliveredAt = r.delivered_at ? new Date(r.delivered_at).getTime() : null;
+    if (deliveredAt !== null && deliveredAt >= firstAt) {
+      if (isRepeat) row.numShipmentRepeat += 1; else row.numShipmentPrimary += 1;
     }
   }
 

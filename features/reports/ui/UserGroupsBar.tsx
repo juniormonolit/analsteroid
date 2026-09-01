@@ -18,6 +18,9 @@ export interface UserReportGroup {
   id: string;
   name: string;
   member_ids: string[];
+  // Тумблер (правка владельца 31.08, миграция 190): false — группа хранится на
+  // аккаунте, но к отчёту не применяется (бейдж серый, строки не сворачиваются).
+  enabled: boolean;
 }
 
 // Кнопка «Создать группу» (правка Серёги 31.07): живёт в ряду тулбара
@@ -83,7 +86,7 @@ export function GroupSelectPanel({ dimensionKey, selectedIds, entityLabel, onCan
       <input
         value={name} onChange={e => setName(e.target.value)} placeholder="Название группы"
         maxLength={80} autoFocus
-        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') onCancel(); }}
+        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { e.preventDefault(); onCancel(); } }}
         className="px-3 py-1 text-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] w-[200px]"
       />
       <span className="text-xs text-[var(--color-text-muted)]">Отмечено: {selectedIds.length}</span>
@@ -121,17 +124,38 @@ export function UserGroupsBar({ dimensionKey, groups }: {
     onSuccess: invalidate,
   });
 
+  // Клик по бейджу — вкл/выкл группы (крестик по-прежнему расформировывает).
+  const toggle = useMutation({
+    mutationFn: async (g: UserReportGroup) => {
+      const res = await fetch('/api/report-groups', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: g.id, enabled: !g.enabled }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    },
+    onSuccess: invalidate,
+  });
+
   // Кнопка создания живёт в тулбаре (см. CreateGroupButton) — пустой бар не рисуем.
   if (groups.length === 0) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 px-3 sm:px-4 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
       {groups.map(g => (
-        <span key={g.id} className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border border-[var(--color-accent)]/50 bg-[var(--color-accent)]/10 text-[var(--color-text)]">
-          <Users size={11} className="text-[var(--color-accent)]" />
-          {g.name}
-          <span className="text-[var(--color-text-muted)]">{g.member_ids.length}</span>
+        <span key={g.id}
+          className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border transition-colors ${
+            g.enabled
+              ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/10 text-[var(--color-text)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-70'}`}>
+          <button onClick={() => toggle.mutate(g)} disabled={toggle.isPending}
+            title={g.enabled ? 'Выключить группу (останется на аккаунте)' : 'Включить группу'}
+            className="inline-flex items-center gap-1 hover:opacity-80">
+            <Users size={11} className={g.enabled ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'} />
+            <span className={g.enabled ? '' : 'line-through decoration-[1.5px]'}>{g.name}</span>
+            <span className="text-[var(--color-text-muted)]">{g.member_ids.length}</span>
+          </button>
           <button onClick={() => del.mutate({ id: g.id })} aria-label={`Расформировать группу ${g.name}`}
+            title="Расформировать (удалить навсегда)"
             className="text-[var(--color-text-muted)] hover:text-[var(--color-negative)]"><X size={11} /></button>
         </span>
       ))}

@@ -5,6 +5,7 @@ import type { ComparisonDisplay } from '@/lib/metrics/types';
 import { GsColorPickerButton } from '@/components/ui/GsColorPicker';
 import { GOOGLE_SHEETS_PALETTE_GRID, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { useUnsavedGuard } from '@/lib/hooks/useUnsavedGuard';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
@@ -68,6 +69,10 @@ interface Props {
   onDecimalPlacesChange?: (v: number) => void;
   comparisonThreshold?: number;
   onComparisonThresholdChange?: (v: number) => void;
+  // Вертикальные границы колонки (правка владельца 31.08): l/r — толщина px
+  // (1|2|3), undefined = не задана (общий borderMode). null в onBorderChange = снять.
+  borders?: { l?: number; r?: number };
+  onBorderChange?: (side: 'l' | 'r', px: number | null) => void;
   // Док-режим: редактор прижимается к left=anchorLeft (справа от панели метрик),
   // без бэкдропа — панель остаётся кликабельной (можно щёлкать шестерёнки подряд).
   anchorLeft?: number;
@@ -90,7 +95,7 @@ interface Props {
   onFilterReset?: () => void;
 }
 
-export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, onThresholdsClear, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft, isFirst, isLast, onMoveLeft, onMoveRight, onRemove, filterState, onColorZoneChange, onConditionChange, onSortByColorToggle, onFilterReset }: Props) {
+export function HighlightEditor({ metricName, dataType, initial, onSave, onClose, displayMode, onDisplayModeChange, isPinned, onPinToggle, isAccented, onAccentToggle, isBar, onBarToggle, isHeatmap, onHeatmapToggle, isHeatmapInverted, onHeatmapInvertToggle, onThresholdsClear, decimalPlaces, onDecimalPlacesChange, comparisonThreshold, onComparisonThresholdChange, anchorLeft, isFirst, isLast, onMoveLeft, onMoveRight, onRemove, filterState, onColorZoneChange, onConditionChange, onSortByColorToggle, onFilterReset, borders, onBorderChange }: Props) {
   const isPercent = dataType === 'percent';
   const thresholdLabel = isPercent ? 'До значения (%)' : 'До значения';
   const [enabled, setEnabled] = useState(initial?.enabled ?? false);
@@ -184,17 +189,9 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
   const { dialogOpen, requestGuardedClose, confirmDiscard, confirmSave, cancel: cancelGuard } = useUnsavedGuard();
   function guardedClose() { requestGuardedClose(isDirty, requestClose); }
 
-  // Esc закрывает панель (п.4 брифа: «мимо/крестик/Esc» — единый список триггеров
-  // закрытия, которые обязаны идти через guardedClose). Раньше Esc тут не был
-  // подключён вовсе (закрытие только по подложке/крестику) — добавлено этой правкой.
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') guardedClose();
-    }
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDirty]);
+  // Esc — через общий стек оверлеев (useEscapeClose), но с guard несохранённых
+  // правок: закрытие обязано идти через guardedClose, не напрямую.
+  useEscapeClose(guardedClose);
 
   // Обёртка секции: в доке — компактная (как раньше, узкая колонка рядом с панелью
   // метрик), в модалке — широкая карточка с разделителем снизу (макет
@@ -289,6 +286,40 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           >
             {n}
           </button>
+        ))}
+      </div>
+    </SectionBlock>
+  );
+
+  // «Границы» (правка владельца 31.08, скрин панели Google Sheets): только
+  // вертикальные — левая/правая грань колонки и толщина. Побеждает общий
+  // borderMode и рамку акцента (см. ReportTable.leftEdgeCls/rightEdgeCls).
+  const bordersSection = onBorderChange && (
+    <SectionBlock eyebrow="Вертикальные границы">
+      <div className="flex flex-col gap-3">
+        {([['l', 'Левая'], ['r', 'Правая']] as const).map(([side, label]) => (
+          <div key={side} className="flex items-center gap-2 flex-wrap">
+            <span className="w-14 text-sm font-medium text-[var(--color-text)]">{label}</span>
+            {[null, 1, 2, 3].map(px => {
+              const active = (borders?.[side] ?? null) === px;
+              return (
+                <button
+                  key={String(px)}
+                  onClick={() => onBorderChange(side, px)}
+                  title={px === null ? 'Как у всей таблицы' : `${px}px`}
+                  className={`h-9 min-w-9 px-2 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center ${
+                    active
+                      ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                      : 'bg-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+                  }`}
+                >
+                  {px === null ? 'нет' : (
+                    <span className="inline-block h-5 bg-current" style={{ width: px }} />
+                  )}
+                </button>
+              );
+            })}
+          </div>
         ))}
       </div>
     </SectionBlock>
@@ -639,6 +670,7 @@ export function HighlightEditor({ metricName, dataType, initial, onSave, onClose
           {displaySection}
           {optionsSection}
           {formatSection}
+          {bordersSection}
           {neutralitySection}
         </div>
       )}

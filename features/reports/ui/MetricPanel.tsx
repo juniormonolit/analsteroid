@@ -1,4 +1,5 @@
 'use client';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { useState, useRef } from 'react';
 import { X, Search, GripVertical, Settings2, HelpCircle } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
@@ -324,6 +325,7 @@ export function MetricPanel(props: Props) {
     drilldownMetricIds, onDrilldownMetricIdsChange,
     dealFields, onDealFieldsChange,
   } = props;
+  useEscapeClose(onClose);
   const [tab, setTab] = useState<Tab>('main');
   const [fDragIdx, setFDragIdx] = useState<number | null>(null);
   const [fOverIdx, setFOverIdx] = useState<number | null>(null);

@@ -6,6 +6,7 @@ import {
 import { X, Thermometer, MessageSquareText } from 'lucide-react';
 import { type EntityKey, type EntityMetrics, type YearWeeklyResult } from '@/features/year-weekly/shared';
 import { useIsMobile } from '@/lib/hooks/useMediaQuery';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 
 // Интерактивный график отчёта «Данные по годам» (задача владельца 28.08: «строй
 // охуенный интерактивный график на весь экран… все основные сущности (сделки,
@@ -102,6 +103,8 @@ export function YearWeeklyChart({ data, year, years, onYearChange, initialCity, 
   // отдельного года. Доступно только когда есть с чем усреднять.
   const [avgYears, setAvgYears] = useState(false);
   const [pinned, setPinned] = useState<number | null>(null);
+  // Esc: сначала снять закреплённую неделю, вторым нажатием — закрыть график.
+  useEscapeClose(() => { if (pinned !== null) setPinned(null); else onClose(); });
 
   const mDef = METRIC_DEFS.find(m => m.key === metric)!;
   const entityById = useMemo(() => new Map(data.entities.map(e => [e.key, e])), [data.entities]);

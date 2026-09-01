@@ -5,6 +5,7 @@ import { X, ExternalLink, ArrowDownLeft, ArrowUpRight, Mic } from 'lucide-react'
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { branchLabel } from '@/lib/org/branchLabel';
@@ -160,6 +161,7 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   // фолбэк на lost_at — иначе воспроизвели бы тот же баг «шрама».
   const isLostDeal = deal?.stage_event_type === 'lost';
   const { closing, requestClose } = useSlideClose(onClose);
+  useEscapeClose(requestClose);
   const [tab, setTab] = useState<DealCardTab>('main');
   // Карточка заказчика поверх карточки сделки (задача 17.08). Сырые id — правильный
   // ключ (c/k/x) и менеджера-владельца считает /api/customers/resolve: слать ключ и

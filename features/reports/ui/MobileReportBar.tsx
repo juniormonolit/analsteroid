@@ -4,6 +4,7 @@ import { SlidersHorizontal } from 'lucide-react';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import {
   MainPeriodControl, ComparisonPeriodControl, DepartmentPicker,
   MetricsButton, SearchField, GroupingSelector, SourceDimensionSelector,
@@ -67,6 +68,7 @@ export function MobileReportBar(props: Props) {
 
   const [open, setOpen] = useState(false);
   const { closing, requestClose } = useSlideClose(() => setOpen(false));
+  useEscapeClose(requestClose, open);
 
   // Бейдж «Фильтры · N» (п.1 задачи 1714): активные фильтры + поиск + сравнение вкл +
   // группировка не-дефолтная — та же countActiveFilters, что и у десктопной «Настройки

@@ -2,6 +2,7 @@
 import { useMemo, useState } from 'react';
 import { X, Plus, Search, Scale } from 'lucide-react';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
 import { formatValue } from '@/lib/format';
@@ -45,6 +46,7 @@ export function ComparisonPanel({
 }: Props) {
   const [query, setQuery] = useState('');
   const { closing, requestClose } = useSlideClose(onClose);
+  useEscapeClose(requestClose);
 
   const byId = useMemo(() => new Map(rows.map(r => [r.dimensionId, r])), [rows]);
   const selectedSet = new Set(selectedIds);

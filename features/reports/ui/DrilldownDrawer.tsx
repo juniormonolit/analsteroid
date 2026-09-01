@@ -28,6 +28,7 @@ import { ReportTable, type RowDeltas } from './ReportTable';
 import { DealCard } from './DealCard';
 import { DealChatPanel } from './DealChatPanel';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
 import { PeriodRangeControls, DepartmentPicker, GroupingSelector } from './FilterBar';
@@ -125,6 +126,7 @@ interface Props {
   comparisonThreshold?: number;
   highlights?: Record<string, MetricHighlightConfig>;
   metricDecimalOverrides?: Record<string, number>;
+  metricBorders?: Record<string, { l?: number; r?: number }>;
   metricThresholdOverrides?: Record<string, number>;
   accentedMetricIds?: string[];
   barMetricIds?: string[];
@@ -1082,6 +1084,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
           dimensionLabel={label}
           highlights={props.highlights}
           metricDecimalOverrides={props.metricDecimalOverrides}
+          metricBorders={props.metricBorders}
           metricThresholdOverrides={props.metricThresholdOverrides}
           accentedMetricIds={props.accentedMetricIds}
           barMetricIds={props.barMetricIds}
@@ -1182,6 +1185,7 @@ export function DrilldownDrawer(props: Props) {
     onGroupedChange?.(v);
   }
   const { closing, requestClose } = useSlideClose(onClose);
+  useEscapeClose(requestClose); // Esc закрывает верхнюю панель (стек в хуке)
   return (
     <div className="fixed inset-0 z-50 flex">
       {/* Полоска-подложка для закрытия — только там, где есть место (sm+). Цвет/прозрачность

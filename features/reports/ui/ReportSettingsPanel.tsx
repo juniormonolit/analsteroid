@@ -1,6 +1,7 @@
 'use client';
 import { useEffect } from 'react';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { FiltersFields, type FiltersFieldsProps } from './FiltersMenu';
@@ -36,16 +37,10 @@ interface Props extends FiltersFieldsProps, ViewSettingsFieldsProps {
 export function ReportSettingsPanel({ onClose, ...fields }: Props) {
   const { closing, requestClose } = useSlideClose(onClose);
 
-  // Esc закрывает панель, как и клик по подложке (SlideBackdrop.onClick) — п. брифа
-  // владельца 09.07. Локальный обработчик (не общий для всех слайд-панелей — остальные
-  // сейчас закрываются только по подложке/крестику, трогать их не входит в эту правку).
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') requestClose();
-    }
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [requestClose]);
+  // Esc закрывает панель, как и клик по подложке (SlideBackdrop.onClick).
+  // Общий стек (правка владельца 31.08): раньше здесь был свой window-обработчик,
+  // и при вложенных панелях Esc закрывал и эту, и верхнюю одновременно.
+  useEscapeClose(requestClose);
 
   return (
     <>

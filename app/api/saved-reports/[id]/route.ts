@@ -56,7 +56,8 @@ export async function PUT(
        drilldown_grouped = $33, source_dimension = $34, drilldown_dimension = $35,
        is_shared = $36, shared_section = $37, heatmap_inverted_ids = $38, colorize_metrics = $39,
        zebra = $40, border_mode = $41, deal_filters = $42,
-       period_unit = $43, period_dimension = $44, compare_mode = $45
+       period_unit = $43, period_dimension = $44, compare_mode = $45,
+       metric_borders = $46
      WHERE id = $1`,
     [
       id,
@@ -98,6 +99,7 @@ export async function PUT(
       body.periodUnit ?? null,
       body.periodDimension ?? null,
       body.compareMode ?? null,
+      JSON.stringify(body.metricBorders ?? {}),
     ]
   );
   return NextResponse.json({ ok: true });

@@ -199,16 +199,18 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
       : Promise.resolve(null),
     // Account-type filter is by the Bitrix login prefix (manager* / logist*), which lives in
     // employees.bitrix_login (NOT in org_resolved_hierarchy, where managers are short_login #NNNN).
-    accountType !== 'all'
-      ? sysDb.query<{ bitrix_user_id: string; bitrix_login: string | null }>(
-          `SELECT bitrix_user_id::text AS bitrix_user_id, bitrix_login FROM employees WHERE is_active = true`,
-        )
-      : Promise.resolve(null),
+    // Грузим ВСЕГДА (а не только при accountType!=='all'): полный логин теперь ещё и
+    // выводится колонкой «Логин» (метрика manager_login, правка владельца 31.08).
+    sysDb.query<{ bitrix_user_id: string; bitrix_login: string | null }>(
+      `SELECT bitrix_user_id::text AS bitrix_user_id, bitrix_login FROM employees WHERE is_active = true`,
+    ),
   ]);
 
   const orgMap         = new Map(orgRes.rows.map(r => [r.bitrix_user_id, r]));
   const allowedBitrix  = deptRes ? new Set(deptRes.rows.map(r => r.bitrix_user_id)) : null;
-  const loginByBitrix  = loginRes ? new Map(loginRes.rows.map(r => [r.bitrix_user_id, (r.bitrix_login ?? '').toLowerCase()])) : null;
+  // Оригинальный регистр (Manager2015) — для колонки «Логин»; префикс-фильтр
+  // аккаунтов сравнивает через toLowerCase() сам.
+  const loginByBitrix  = new Map(loginRes.rows.map(r => [r.bitrix_user_id, r.bitrix_login ?? '']));
   const accountPrefix  = accountType === 'managers' ? 'manager' : accountType === 'logists' ? 'logist' : null;
 
   // Metrics
@@ -293,8 +295,8 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   return [...agg.entries()]
     .filter(([id]) => !allowedBitrix || allowedBitrix.has(id))
     .filter(([id]) => {
-      if (!accountPrefix || !loginByBitrix) return true;
-      return (loginByBitrix.get(id) ?? '').startsWith(accountPrefix);
+      if (!accountPrefix) return true;
+      return (loginByBitrix.get(id) ?? '').toLowerCase().startsWith(accountPrefix);
     })
     .map(([id, metrics]) => {
       const org = orgMap.get(id);
@@ -305,6 +307,9 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
         dimensionId:       id,
         dimensionName:     org?.manager_name ?? `#${id}`,
         dimensionSubtitle: org?.short_login  ?? undefined,
+        // Полный битрикс-логин — для псевдо-метрики «Логин» (manager_login):
+        // рендерится текстом, в metrics её нет (там только числа).
+        managerLogin:      loginByBitrix.get(id) || undefined,
         teamId:            org?.department_id   ?? null,
         teamName:          org?.department_name ?? null,
         // Правило заказчика: всё, что не Москва и не Краснодар, — СПб. branch в

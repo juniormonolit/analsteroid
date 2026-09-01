@@ -36,6 +36,7 @@ interface Props {
   highlights: Record<string, import('@/lib/saved-reports/types').MetricHighlightConfig>;
   pinnedMetricIds: string[];
   metricDecimalOverrides: Record<string, number>;
+  metricBorders: Record<string, { l?: number; r?: number }>;
   metricThresholdOverrides: Record<string, number>;
   accentedMetricIds: string[];
   barMetricIds: string[];
@@ -86,7 +87,7 @@ export function SaveReportModal({
   reportSlug, metricIds, dealScope, clientType, grouping, comparisonDisplay,
   metricDisplayModes, comparisonThreshold,
   productGroupMode, departmentIds, highlights,
-  pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides,
+  pinnedMetricIds, metricDecimalOverrides, metricBorders, metricThresholdOverrides,
   accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, themeAccent, numberAlign, accountType,
   drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped,
   sourceDimension, drilldownDimension,
@@ -188,6 +189,7 @@ export function SaveReportModal({
       comparisonThreshold,
       pinnedMetricIds,
       metricDecimalOverrides,
+      metricBorders,
       metricThresholdOverrides,
       accentedMetricIds,
       barMetricIds,

@@ -1,4 +1,5 @@
 'use client';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { DealFilterButton } from './DealFilterButton';
@@ -486,6 +487,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const [configuringMetricId, setConfiguringMetricId] = useState<string | null>(null);
   const [pinnedMetricIds, setPinnedMetricIds] = useState<string[]>([]);
   const [metricDecimalOverrides, setMetricDecimalOverrides] = useState<Record<string, number>>({});
+  // Вертикальные границы колонок (правка владельца 31.08): metricId → {l, r} в px.
+  const [metricBorders, setMetricBorders] = useState<Record<string, { l?: number; r?: number }>>({});
   const [metricThresholdOverrides, setMetricThresholdOverrides] = useState<Record<string, number>>({});
   const [accentedMetricIds, setAccentedMetricIds] = useState<string[]>([]);
   const [barMetricIds, setBarMetricIds] = useState<string[]>([]);
@@ -598,6 +601,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     setHighlights(p.metricHighlights ?? {});
     setPinnedMetricIds(p.pinnedMetricIds ?? []);
     setMetricDecimalOverrides(p.metricDecimalOverrides ?? {});
+    setMetricBorders(p.metricBorders ?? {});
     setMetricThresholdOverrides(p.metricThresholdOverrides ?? {});
     setAccentedMetricIds(p.accentedMetricIds ?? []);
     setBarMetricIds(p.barMetricIds ?? []);
@@ -687,7 +691,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     metricDisplayModes: metricDisplayModes as Record<string, string>,
     comparisonThreshold, productGroupMode,
     highlights: highlights as Record<string, unknown>,
-    pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides,
+    pinnedMetricIds, metricDecimalOverrides, metricBorders, metricThresholdOverrides,
     accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds,
     colorizeMetrics, zebra, borderMode, numberAlign, accountType,
     drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped,
@@ -696,7 +700,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     dealFilters,
     createdTimeFilter, firstTouchFilter, search,
     periodUnit, periodDimension, compareMode,
-  }), [period, comparison, dealScope, clientType, grouping, metricIds, comparisonDisplay, metricDisplayModes, comparisonThreshold, productGroupMode, highlights, pinnedMetricIds, metricDecimalOverrides, metricThresholdOverrides, accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, numberAlign, accountType, drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped, sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups, metricFilters, createdTimeFilter, firstTouchFilter, search, periodUnit, periodDimension, compareMode]);
+  }), [period, comparison, dealScope, clientType, grouping, metricIds, comparisonDisplay, metricDisplayModes, comparisonThreshold, productGroupMode, highlights, pinnedMetricIds, metricDecimalOverrides, metricBorders, metricThresholdOverrides, accentedMetricIds, barMetricIds, heatmapMetricIds, heatmapInvertedIds, colorizeMetrics, zebra, borderMode, numberAlign, accountType, drilldownDuplicate, drilldownMetricIds, dealFields, drilldownGrouped, sourceDimension, drilldownDimension, sortBy, sortDir, columnGroups, metricFilters, createdTimeFilter, firstTouchFilter, search, periodUnit, periodDimension, compareMode]);
 
   // Задача 2824: respectUrl=true — только для ПЕРВОГО restore на монтировании
   // (см. вызов ниже) — там URL-параметр диплинка должен победить сохранённую
@@ -723,6 +727,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     setHighlights((s.highlights ?? {}) as Record<string, MetricHighlightConfig>);
     setPinnedMetricIds(s.pinnedMetricIds ?? []);
     setMetricDecimalOverrides(s.metricDecimalOverrides ?? {});
+    setMetricBorders(s.metricBorders ?? {});
     setMetricThresholdOverrides(s.metricThresholdOverrides ?? {});
     setAccentedMetricIds(s.accentedMetricIds ?? []);
     setBarMetricIds(s.barMetricIds ?? []);
@@ -1068,6 +1073,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     refetchOnWindowFocus: false,
   });
   const userGroups = useMemo(() => userGroupsData?.groups ?? [], [userGroupsData]);
+  // К отчёту применяются только ВКЛЮЧЁННЫЕ группы (тумблер-бейдж, миграция 190);
+  // выключенные остаются на аккаунте: видны серым в панели, держат «занятость»
+  // участников (один — в одной группе) и ждут повторного включения.
+  const activeUserGroups = useMemo(() => userGroups.filter(g => g.enabled !== false), [userGroups]);
   // id участника → имя его группы: дизейбл чекбоксов в режиме выбора (тултип
   // «Уже в группе …») — «один участник — одна группа» (плюс серверный 409).
   const userGroupBusy = useMemo(() => {
@@ -1075,14 +1084,18 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     for (const g of userGroups) for (const id of g.member_ids) m.set(id, g.name);
     return m;
   }, [userGroups]);
-  // Свободные (не в группах) сущности текущего среза — участники строки
-  // «Без группы»: её дрилл-даун идёт объединением по этим id (как у групп).
-  const userGroupFreeIds = useMemo(
-    () => (data?.rows ?? [])
+  // Свободные сущности текущего среза — участники строки «Без группы»: её
+  // дрилл-даун идёт объединением по этим id (как у групп). Считаем от ВКЛЮЧЁННЫХ
+  // групп (не от userGroupBusy): участник выключенной группы в таблице стоит
+  // обычной строкой в «Без группы», и дрилл обязан его видеть — иначе строка и
+  // её дрилл расходятся (userGroupBusy остаётся про «занятость» при создании).
+  const userGroupFreeIds = useMemo(() => {
+    const inActive = new Set<string>();
+    for (const g of activeUserGroups) for (const id of g.member_ids) inActive.add(id);
+    return (data?.rows ?? [])
       .map((r: MergedRow) => r.dimensionId)
-      .filter((id: string) => !userGroupBusy.has(id)),
-    [data?.rows, userGroupBusy]
-  );
+      .filter((id: string) => !inActive.has(id));
+  }, [data?.rows, activeUserGroups]);
 
   // Режим создания группы чекбоксами в строках (правка Серёги 31.07 №2):
   // состояние живёт здесь (таблица и инлайн-панель — разные ветки рендера).
@@ -1092,6 +1105,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     setGroupSelectMode(false);
     setGroupSelectIds(new Set());
   }, []);
+  // Esc выходит из режима выбора (общий стек оверлеев; инпут названия в
+  // GroupSelectPanel гасит Esc сам — preventDefault — и зовёт onCancel).
+  useEscapeClose(exitGroupSelect, groupSelectMode);
   // Смена измерения (менеджеры ↔ товарные группы kc/by_max) — выбор неактуален.
   useEffect(() => { exitGroupSelect(); }, [userGroupsKey, exitGroupSelect]);
 
@@ -1102,9 +1118,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     // строки группы). Строка группы с общим отделом/филиалом остаётся внутри
     // него; «сборная» из разных — поднимается на верхний уровень с пометкой.
     let grouped: GroupedMergedRow[];
-    if (!sourceMode && !periodMode && !clientMode && userGroups.length > 0) {
+    if (!sourceMode && !periodMode && !clientMode && activeUserGroups.length > 0) {
       // «Без группы» — только при grouping='none' (решение выше, у applyUserGroups).
-      const applied = applyUserGroups(data?.rows ?? [], userGroups, catalogMetrics, grouping === 'none');
+      const applied = applyUserGroups(data?.rows ?? [], activeUserGroups, catalogMetrics, grouping === 'none');
       if (grouping === 'none' || grouping === 'total') {
         grouped = grouping === 'none' ? applied : applyClientGrouping(applied, grouping, catalogMetrics);
       } else {
@@ -1138,7 +1154,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         return { ...r, children: filteredChildren };
       })
       .filter(Boolean) as typeof grouped;
-  }, [data?.rows, grouping, search, catalogMetrics, sourceMode, userGroups]);
+  }, [data?.rows, grouping, search, catalogMetrics, sourceMode, activeUserGroups]);
 
   // Общее число отделов — только для диагноз-пилюли составного empty state (задача
   // 1698, кейс 10Б). Тот же queryKey, что у DepartmentPicker внутри FilterBar — React
@@ -1531,7 +1547,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             onChange={e => setTitleValue(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') commitTitleRename();
-              if (e.key === 'Escape') { setRenamingTitle(false); setTitleValue(title); }
+              if (e.key === 'Escape') { e.preventDefault(); setRenamingTitle(false); setTitleValue(title); }
             }}
             onBlur={commitTitleRename}
             className="text-lg font-semibold text-[var(--color-text)] bg-[var(--color-bg)] border border-[var(--color-accent)] rounded-[7px] px-2 py-0.5 outline-none w-full max-w-md"
@@ -1818,6 +1834,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             onMetricReorder={isPro ? handleMetricReorder : undefined}
             onMetricConfigure={isPro ? (id) => setConfiguringMetricId(id) : undefined}
             metricDecimalOverrides={metricDecimalOverrides}
+            metricBorders={metricBorders}
             metricThresholdOverrides={metricThresholdOverrides}
             accentedMetricIds={accentedMetricIds}
             barMetricIds={barMetricIds}
@@ -1897,6 +1914,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           comparisonThreshold={comparisonThreshold}
           highlights={effectiveHighlights}
           metricDecimalOverrides={metricDecimalOverrides}
+          metricBorders={metricBorders}
           metricThresholdOverrides={metricThresholdOverrides}
           accentedMetricIds={accentedMetricIds}
           barMetricIds={barMetricIds}
@@ -2032,6 +2050,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             onMoveLeft={() => handleMetricMoveLeft(configuringMetricId!)}
             onMoveRight={() => handleMetricMoveRight(configuringMetricId!)}
             onRemove={() => { handleMetricRemove(configuringMetricId!); setConfiguringMetricId(null); }}
+            borders={metricBorders[configuringMetricId]}
+            onBorderChange={(side, px) => setMetricBorders(prev => {
+              const cur = { ...(prev[configuringMetricId!] ?? {}) };
+              if (px === null) delete cur[side]; else cur[side] = px;
+              const next = { ...prev };
+              if (cur.l === undefined && cur.r === undefined) delete next[configuringMetricId!];
+              else next[configuringMetricId!] = cur;
+              return next;
+            })}
             filterState={metricFilters[configuringMetricId]}
             onColorZoneChange={(zone) => handleColorZoneChange(configuringMetricId!, zone)}
             onConditionChange={(cond) => handleConditionChange(configuringMetricId!, cond)}
@@ -2058,6 +2085,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           highlights={highlights}
           pinnedMetricIds={pinnedMetricIds}
           metricDecimalOverrides={metricDecimalOverrides}
+          metricBorders={metricBorders}
           metricThresholdOverrides={metricThresholdOverrides}
           accentedMetricIds={accentedMetricIds}
           barMetricIds={barMetricIds}

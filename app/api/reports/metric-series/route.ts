@@ -64,13 +64,14 @@ export async function POST(req: NextRequest) {
   // сделочного SQL), но тенденцию по времени он строить умеет: перебирает сделки
   // поштучно, бакет = дата вехи (правка владельца 24.08 — «хочу смотреть
   // тенденцию в виде графика»). Замечание: фильтры отчёта, кроме списка
-  // менеджеров, на эту метрику не действуют и в ячейке — расхождения с ячейкой
-  // здесь нет.
+  // менеджеров и физиков/юриков, на эту метрику не действуют и в ячейке —
+  // расхождения с ячейкой здесь нет.
   // «CR стадий» (cr_stage_*) — свой движок по deal_events (правка владельца
   // 27.08: крупнейшее семейство «относительных» метрик без графика).
   const fetchSeries = BOOKING_SERIES_METRICS[common.metricId]
     ? (o: { period: { from: Date; to: Date } }) => fetchBookingCallRateSeries({
         metricId: common.metricId, granularity, managerIds, period: o.period,
+        clientType: common.clientType,
       })
     : stagePairForMetric(common.metricId)
       ? (o: { period: { from: Date; to: Date } }) => fetchStageConversionSeries({

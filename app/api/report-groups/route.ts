@@ -18,8 +18,12 @@ export async function GET(req: NextRequest) {
   if (!DIMENSION_KEYS.includes(dimensionKey)) {
     return NextResponse.json({ error: 'dimensionKey обязателен' }, { status: 400 });
   }
+  // COALESCE: до миграции 190 колонки enabled нет — группы считаются включёнными,
+  // роут не падает (тот же приём, что loadNonMoneyPlans в year-weekly).
   const res = await systemDb().query(
-    `SELECT id, name, member_ids, created_at FROM user_report_groups
+    `SELECT id, name, member_ids, created_at,
+            COALESCE((to_jsonb(user_report_groups)->>'enabled')::boolean, true) AS enabled
+       FROM user_report_groups
       WHERE user_login = $1 AND dimension_key = $2 ORDER BY created_at`,
     [session.login, dimensionKey],
   );
@@ -73,6 +77,28 @@ export async function POST(req: NextRequest) {
     [session.login, dimensionKey, name, memberIds],
   );
   return NextResponse.json({ group: ins.rows[0] });
+}
+
+// Тумблер вкл/выкл (правка владельца 31.08): выключенная группа остаётся на
+// аккаунте, но не применяется к отчёту. Только своя группа (WHERE user_login).
+export async function PATCH(req: NextRequest) {
+  const session = await getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+  if (typeof body.id !== 'string' || !body.id || typeof body.enabled !== 'boolean') {
+    return NextResponse.json({ error: 'Нужны id и enabled' }, { status: 400 });
+  }
+  const res = await systemDb().query(
+    `UPDATE user_report_groups SET enabled = $1 WHERE id = $2::uuid AND user_login = $3 RETURNING id`,
+    [body.enabled, body.id, session.login],
+  );
+  if (!res.rows.length) return NextResponse.json({ error: 'Группа не найдена' }, { status: 404 });
+  return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(req: NextRequest) {

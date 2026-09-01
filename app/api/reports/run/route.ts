@@ -382,27 +382,38 @@ export async function POST(req: NextRequest) {
     // константный дневной план, БЕЗ накопления по периоду (прежняя период-накопительная
     // семантика жила здесь с задачи 10.07; computePeriodPlanByLogin ниже сохраняется —
     // на нём по-прежнему считаются «Выполнение плана % (день)/(неделя)»).
-    // Новые «План (на тек. день)» = дневной × порядковый номер рабочего дня СЕГОДНЯ
-    // (МСК) в текущем месяце ПО ПРОИЗВОДСТВЕННОМУ КАЛЕНДАРЮ (working_calendar,
-    // getCalendarWorkingDaysInPeriod — не зависит от режима ÷20). В нерабочий день
-    // номер = числу прошедших рабочих дней месяца.
+    // «План (на тек. день)» = дневной × кол-во РАБОЧИХ ДНЕЙ ВЫБРАННОГО ПЕРИОДА
+    // (обрезанного сегодняшним днём) ПО ПРОИЗВОДСТВЕННОМУ КАЛЕНДАРЮ
+    // (working_calendar, getCalendarWorkingDaysInPeriod — не зависит от режима ÷20).
+    // Переопределение 31.08, см. workdaysOf ниже; прежнее окно [начало месяца,
+    // сегодня] игнорировало период отчёта.
     // DateRange для getCalendarWorkingDaysInPeriod: полночь/конец дня UTC — тогда
     // «полуденный» приём periodDateStrFromInstant внутри вернёт ровно эти даты.
     // null (календарь не заполнен на месяц) → «(на тек. день)» честно null.
-    const mskMonthStartStr = `${mskTodayStr.slice(0, 7)}-01`;
     // Понедельник текущей недели (МСК) — для «(на текущий день недели)», миграция 147.
     const mskWeekStartStr = (() => {
       const d = new Date(`${mskTodayStr}T00:00:00Z`);
       d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
       return d.toISOString().slice(0, 10);
     })();
-    const [planByLoginCurrent, planByLoginComp, workdayNum, weekWorkdayNum] = await Promise.all([
+    // «(на текущий день)» — ПЕРЕОПРЕДЕЛЕНИЕ 31.08 (жалоба владельца: «метрика
+    // игнорирует выбранный период; по задумке — план на день × кол-во рабочих
+    // дней в периоде»). Раньше окно было жёстко [начало ТЕКУЩЕГО месяца, сегодня]
+    // (семантика 14.07) — при любом выбранном периоде значение не менялось.
+    // Теперь: рабочие дни СВОЕГО периода у текущего и у периода сравнения,
+    // будущее не считаем — окно обрезается сегодняшним днём (как и раньше);
+    // период целиком в будущем → 0 рабочих дней → план 0.
+    const clampToToday = (fromStr: string, toStr: string) => ({
+      from: new Date(`${fromStr}T00:00:00.000Z`),
+      to: new Date(`${(toStr < mskTodayStr ? toStr : mskTodayStr)}T23:59:59.999Z`),
+    });
+    const workdaysOf = (fromStr: string, toStr: string): Promise<number | null> =>
+      fromStr > mskTodayStr ? Promise.resolve(0) : getCalendarWorkingDaysInPeriod(clampToToday(fromStr, toStr));
+    const [planByLoginCurrent, planByLoginComp, workdayNumCurrent, workdayNumComp, weekWorkdayNum] = await Promise.all([
       loadPlanByLogin(periodFromStr, periodToStr),
       loadPlanByLogin(compPeriodFromStr, compPeriodToStr),
-      getCalendarWorkingDaysInPeriod({
-        from: new Date(`${mskMonthStartStr}T00:00:00.000Z`),
-        to: new Date(`${mskTodayStr}T23:59:59.999Z`),
-      }),
+      workdaysOf(periodFromStr, periodToStr),
+      workdaysOf(compPeriodFromStr, compPeriodToStr),
       getCalendarWorkingDaysInPeriod({
         from: new Date(`${mskWeekStartStr}T00:00:00.000Z`),
         to: new Date(`${mskTodayStr}T23:59:59.999Z`),
@@ -412,6 +423,7 @@ export async function POST(req: NextRequest) {
     const enrichRow = (
       row: ReportRow,
       planByLogin: Map<string, { plan_shipments: number; plan_n: number }>,
+      workdayNum: number | null,
     ): ReportRow => {
       const login = row.dimensionSubtitle;
       const plan = login ? planByLogin.get(login) : undefined;
@@ -498,8 +510,8 @@ export async function POST(req: NextRequest) {
       ]);
     }
 
-    currentRows = currentRows.map(r => enrichRow(r, planByLoginCurrent));
-    compRows = compRows.map(r => enrichRow(r, planByLoginComp));
+    currentRows = currentRows.map(r => enrichRow(r, planByLoginCurrent, workdayNumCurrent));
+    compRows = compRows.map(r => enrichRow(r, planByLoginComp, workdayNumComp));
   }
 
   // Метрики «Выполнение плана продаж/отгрузок, % (день)/(неделя)» — задача 10.07 (фикс
@@ -682,8 +694,8 @@ export async function POST(req: NextRequest) {
 
   if (hasBookingCallMetric && reportSlug === 'by-managers') {
     const [curBooking, compBooking] = await Promise.all([
-      fetchBookingCallRate(opts.period),
-      fetchBookingCallRate(compOpts.period),
+      fetchBookingCallRate(opts.period, clientType),
+      fetchBookingCallRate(compOpts.period, clientType),
     ]);
 
     const enrichBooking = (row: ReportRow, booking: Awaited<ReturnType<typeof fetchBookingCallRate>>): ReportRow => {
@@ -749,6 +761,7 @@ export async function POST(req: NextRequest) {
     'stage_price_lower_to_reservation_num_primary', 'stage_price_lower_to_reservation_num_repeat',
     'stage_price_lower_to_sale_num_primary', 'stage_price_lower_to_sale_num_repeat',
     'stage_price_lower_to_lost_num_primary', 'stage_price_lower_to_lost_num_repeat',
+    'stage_price_lower_to_shipment_num_primary', 'stage_price_lower_to_shipment_num_repeat',
   ];
   const hasPriceObjectionMetric = withDeps.some(m => priceObjectionHiddenIds.includes(m.id));
 
@@ -773,6 +786,8 @@ export async function POST(req: NextRequest) {
           stage_price_lower_to_reservation_num_repeat: po ? (p?.numReservationRepeat ?? 0) : null,
           stage_price_lower_to_sale_num_primary: po ? (p?.numSalePrimary ?? 0) : null,
           stage_price_lower_to_sale_num_repeat: po ? (p?.numSaleRepeat ?? 0) : null,
+          stage_price_lower_to_shipment_num_primary: po ? (p?.numShipmentPrimary ?? 0) : null,
+          stage_price_lower_to_shipment_num_repeat: po ? (p?.numShipmentRepeat ?? 0) : null,
           stage_price_lower_to_lost_num_primary: po ? (p?.numLostPrimary ?? 0) : null,
           stage_price_lower_to_lost_num_repeat: po ? (p?.numLostRepeat ?? 0) : null,
         },

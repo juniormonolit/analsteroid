@@ -14,6 +14,7 @@ import {
   ReferenceArea, ReferenceLine,
 } from 'recharts';
 import { exportNodeToPng } from '@/features/reports/lib/exportImage';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import type { Metric, DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 import type { DealFilter } from '@/lib/metrics/dealFilters';
 import { previousPeriodSameLength, type DateRange } from '@/lib/period';
@@ -139,6 +140,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
   };
   onClose: () => void;
 }) {
+  useEscapeClose(onClose);
   const [gran, setGran] = useState<Gran>(() => autoGran(period));
   // «С накоплением» и «Линия тренда» (правка владельца 24.08). Накопление
   // приходит с сервера отдельной серией в том же ответе (cumulativeBuckets):

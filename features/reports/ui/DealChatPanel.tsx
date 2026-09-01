@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Send, ExternalLink, X } from 'lucide-react';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { useEscapeClose } from '@/lib/hooks/useEscapeClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 
@@ -35,6 +36,7 @@ export function DealChatPanel({ dealId, dealName, managerName, onClose }: {
   onClose: () => void;
 }) {
   const { closing, requestClose } = useSlideClose(onClose);
+  useEscapeClose(requestClose);
   const [text, setText] = useState('');
   const queryClient = useQueryClient();
 

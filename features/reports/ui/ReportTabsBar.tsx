@@ -99,7 +99,7 @@ export function ReportTabsBar({ tabs, activeId, onSelect, onClose, onAdd, onRena
                 onChange={e => setNameValue(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === 'Enter') commitRename(tab);
-                  if (e.key === 'Escape') setRenamingId(null);
+                  if (e.key === 'Escape') { e.preventDefault(); setRenamingId(null); }
                 }}
                 onBlur={() => commitRename(tab)}
                 onClick={e => e.stopPropagation()}

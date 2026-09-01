@@ -101,6 +101,10 @@ export interface SavedReport {
   // «Фильтр сделок» (задача 07.08, миграция 162): условия, режущие набор сделок
   // всего отчёта. Формат и разбор — lib/metrics/dealFilters.ts.
   dealFilters?: DealFilter[];
+  // Вертикальные границы колонки метрики (правка владельца 31.08, миграция 191):
+  // l/r — толщина левой/правой границы в px (1|2|3), нет ключа = не задана
+  // (действует общий borderMode). Побеждает и borderMode, и рамку акцента.
+  metricBorders?: Record<string, { l?: number; r?: number }>;
   periodMode: PeriodMode;
   relativePeriod: RelativePeriod | null;
   comparisonMode: ComparisonMode;

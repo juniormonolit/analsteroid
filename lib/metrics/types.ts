@@ -75,6 +75,9 @@ export interface ReportRow {
   dimensionId: string;
   dimensionName: string;
   dimensionSubtitle?: string;
+  /** Полный битрикс-логин (Manager2015) — значение текстовой псевдо-метрики
+   *  manager_login («Логин», правка владельца 31.08). Только by-managers. */
+  managerLogin?: string;
   teamId: string | null;
   teamName: string | null;
   branchName?: string | null;

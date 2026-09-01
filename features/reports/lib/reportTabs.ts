@@ -24,6 +24,7 @@ export interface ReportTabSnapshot {
   highlights: Record<string, unknown>;
   pinnedMetricIds: string[];
   metricDecimalOverrides: Record<string, number>;
+  metricBorders?: Record<string, { l?: number; r?: number }>;
   metricThresholdOverrides: Record<string, number>;
   accentedMetricIds: string[];
   barMetricIds: string[];

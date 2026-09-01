@@ -39,6 +39,7 @@ export default async function SavedReportPage({
             COALESCE(comparison_threshold, 5) AS "comparisonThreshold",
             COALESCE(pinned_metric_ids, '{}') AS "pinnedMetricIds",
             COALESCE(metric_decimal_overrides, '{}'::jsonb) AS "metricDecimalOverrides",
+            COALESCE(metric_borders, '{}'::jsonb) AS "metricBorders",
             COALESCE(metric_threshold_overrides, '{}'::jsonb) AS "metricThresholdOverrides",
             sort_by AS "sortBy",
             sort_dir AS "sortDir",

@@ -90,6 +90,8 @@ export interface RowDeltas {
   dimensionId: string;
   dimensionName: string;
   dimensionSubtitle?: string;
+  /** Полный битрикс-логин — текстовая псевдо-метрика manager_login («Логин»). */
+  managerLogin?: string;
   teamName: string | null;
   isGroup?: boolean;
   children?: RowDeltas[];
@@ -141,6 +143,9 @@ interface Props {
   pinnedMetricIds?: string[];
   onMetricPinToggle?: (metricId: string) => void;
   metricDecimalOverrides?: Record<string, number>;
+  // Вертикальные границы колонки метрики (правка владельца 31.08, миграция 191):
+  // l/r — толщина в px (1|2|3). Задано → побеждает borderMode и рамку акцента.
+  metricBorders?: Record<string, { l?: number; r?: number }>;
   metricThresholdOverrides?: Record<string, number>;
   accentedMetricIds?: string[];
   barMetricIds?: string[];
@@ -293,6 +298,7 @@ export function ReportTable({
   pinnedMetricIds = [],
   onMetricPinToggle,
   metricDecimalOverrides = {},
+  metricBorders = {},
   metricThresholdOverrides = {},
   accentedMetricIds = [],
   barMetricIds = [],
@@ -870,10 +876,33 @@ export function ReportTable({
 
   // rowBorderCls (задача 2056): нижняя граница строки на каждой ячейке — в
   // border-separate границы <tr> не рисуются, см. rowCls/rowBorderCls в renderRow.
+  // Текстовая псевдо-метрика «Логин» (manager_login): значение — строка из
+  // row.managerLogin, не число из deltas. Закрепление колонки поддерживаем тем же
+  // sticky-механизмом (одна под-колонка → subIdx 0).
+  const TEXT_LOGIN_METRIC_ID = 'manager_login';
+  const isPinnedText = (id: string) => pinnedMetricIds.includes(id) && isMeasured(id);
+  const textPinProps = (id: string, stickyBg: string): { className: string; style: React.CSSProperties } => ({
+    className: `sticky z-20 ${stickyBg} ${id === lastPinnedId ? 'border-r border-r-[var(--color-border)]' : ''}`,
+    style: { left: leafLeft(id, 0) },
+  });
+
   function renderMetricCells(row: RowDeltas, clickable: boolean, stickyBg: string, rowBorderCls = '') {
     const alignStyle: React.CSSProperties = { textAlign: numberAlign };
     return displayMetrics.map((m, metricIdx) => {
       const d = row.deltas?.[m.id];
+      // «Логин» (manager_login, правка владельца 31.08) — ТЕКСТ, а не число:
+      // значение живёт в row.managerLogin, сравнение/Δ/бары/подсветки для него
+      // не имеют смысла — одна ячейка на всю метрику в любом режиме.
+      if (m.id === TEXT_LOGIN_METRIC_ID) {
+        const p0 = isPinnedText(m.id) ? textPinProps(m.id, stickyBg) : { className: '', style: {} as React.CSSProperties };
+        return (
+          <td key={m.id}
+            className={`text-center px-[length:var(--report-cell-px)] py-[var(--row-py)] ${leftEdgeCls(metricIdx, m)} ${rightEdgeCls(m)} tabular-nums ${rowBorderCls} ${p0.className}`}
+            style={{ minWidth: METRIC_COL_WIDTH, textAlign: numberAlign, ...p0.style }}>
+            <span className="text-[13px] text-[var(--color-text)]">{row.managerLogin ?? '—'}</span>
+          </td>
+        );
+      }
       const mode = resolveMode(m.id);
       // Плавное сворачивание/разворачивание: vMode — структура, которую рисуем сейчас
       // (во время закрытия — прежняя, более широкая; см. visualMode/subColAnimCls выше).
@@ -1354,7 +1383,23 @@ export function ReportTable({
   // правок, «Акцент колонки» по-новому, не часть иерархии) > край пользовательской
   // группы колонок (strongLeft, 3px, уровень 3) > край развёрнутой метрики (2px,
   // уровень 2) > обычная тонкая граница между метриками (уровень 1).
+  // Ручная граница колонки (metricBorders) — статические классы фиксированного
+  // набора: Tailwind собирает по литералам, интерполяция px сломала бы сборку.
+  const MANUAL_EDGE: Record<'l' | 'r', Record<number, string>> = {
+    l: {
+      1: 'border-l border-l-[var(--color-border-strong)]',
+      2: 'border-l-2 border-l-[var(--color-border-strong)]',
+      3: 'border-l-[3px] border-l-[var(--color-border-strong)]',
+    },
+    r: {
+      1: 'border-r border-r-[var(--color-border-strong)]',
+      2: 'border-r-2 border-r-[var(--color-border-strong)]',
+      3: 'border-r-[3px] border-r-[var(--color-border-strong)]',
+    },
+  };
   function leftEdgeCls(metricIdx: number, m: Metric): string {
+    const manual = metricBorders[m.id]?.l;
+    if (manual && MANUAL_EDGE.l[manual]) return MANUAL_EDGE.l[manual];
     if (accentSet.has(m.id)) return 'border-l-2 border-l-[var(--color-border-strong)]';
     if (strongLeft.has(m.id)) return strongGroupCls;
     if (needsStrongGridDivider(metricIdx)) return 'border-l-2 border-l-[var(--color-border-strong)]';
@@ -1364,6 +1409,8 @@ export function ReportTable({
   // Правая граница метрики: только у акцентной — своя толстая граница колонки с ОБЕИХ
   // сторон, не зависящая от того, есть ли делитель у соседа справа (п.5).
   function rightEdgeCls(m: Metric): string {
+    const manual = metricBorders[m.id]?.r;
+    if (manual && MANUAL_EDGE.r[manual]) return MANUAL_EDGE.r[manual];
     return accentSet.has(m.id) ? 'border-r-2 border-r-[var(--color-border-strong)]' : '';
   }
 

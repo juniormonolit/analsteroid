@@ -18,6 +18,16 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { CALLS_DATA_START } from '@/features/reports/engine/callsMetrics';
 import { periodDateStrFromInstant, type DateRange } from '@/lib/period';
+import type { ClientType } from '@/lib/metrics/types';
+
+// Физики/юрики определяются воронкой — те же номера, что в lib/metrics/sqlGen.ts
+// (funnel_type) и dealFilters.ts. Жалоба владельца 31.08: «доля прозвона броней
+// не реагирует на переключение между физиками и юриками» — движок просто не
+// получал clientType и всегда считал по всем сделкам.
+const clientTypeSql = (ct: ClientType): string =>
+  ct === 'b2c' ? ' AND funnel_id IN (0, 2)'
+  : ct === 'b2b' ? ' AND funnel_id IN (1, 3)'
+  : '';
 
 export interface BookingCallRateRow {
   reservedDenom: number;
@@ -53,7 +63,7 @@ async function loadNextWorkingDayFn(): Promise<(dateStr: string) => string> {
   };
 }
 
-export async function fetchBookingCallRate(period: DateRange): Promise<Map<string, BookingCallRateRow> | null> {
+export async function fetchBookingCallRate(period: DateRange, clientType: ClientType = 'all'): Promise<Map<string, BookingCallRateRow> | null> {
   const fromStr = periodDateStrFromInstant(period.from, 'from');
   const toStr = periodDateStrFromInstant(period.to, 'to');
   // Весь период раньше старта сбора звонков — числитель был бы всегда 0, это ложь.
@@ -76,7 +86,7 @@ export async function fetchBookingCallRate(period: DateRange): Promise<Map<strin
        FROM sa.deals
        WHERE current_manager_id IS NOT NULL
          AND ${milestone} >= ($1 || 'T00:00:00+03:00')::timestamptz
-         AND ${milestone} <  (($2 || 'T00:00:00+03:00')::timestamptz + interval '1 day')`,
+         AND ${milestone} <  (($2 || 'T00:00:00+03:00')::timestamptz + interval '1 day')${clientTypeSql(clientType)}`,
       [fromStr, toStr],
     );
     if (deals.rows.length === 0) continue;
@@ -142,6 +152,7 @@ export async function fetchBookingCallRateSeries(opts: {
   /** Явное ограничение строк — как в fetchMetricSeries (для строки менеджера
    *  один id, для Итого/отдела — участники видимого отчёта). */
   managerIds?: string[];
+  clientType?: ClientType;
 }): Promise<MetricSeriesResult> {
   const milestone = BOOKING_SERIES_METRICS[opts.metricId];
   if (!milestone) return { supported: false, reason: 'Не метрика прозвона броней', buckets: [], cumulativeBuckets: [], total: null };
@@ -162,7 +173,7 @@ export async function fetchBookingCallRateSeries(opts: {
      FROM sa.deals
      WHERE current_manager_id IS NOT NULL
        AND ${milestone} >= ($1 || 'T00:00:00+03:00')::timestamptz
-       AND ${milestone} <  (($2 || 'T00:00:00+03:00')::timestamptz + interval '1 day')`,
+       AND ${milestone} <  (($2 || 'T00:00:00+03:00')::timestamptz + interval '1 day')${clientTypeSql(opts.clientType ?? 'all')}`,
     [fromStr, toStr],
   );
   const rows = mgrSet ? deals.rows.filter(d => mgrSet.has(String(d.mgr))) : deals.rows;
