@@ -1,6 +1,7 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { DEAL_EVENTS_DATA_START } from './managerActivity';
+import { buildCommonDealWhere, type CommonDealFilterOpts } from './commonDealWhere';
 
 // CR «Есть цена дешевле» → Бронь/Продажа/Отгрузка/Отказ (задача 1, owners-inbox,
 // 10.07; исход «Отгрузка» добавлен правкой владельца 31.08 — п.7, миграция 193).
@@ -42,13 +43,18 @@ export interface PriceObjectionRow {
  *
  * Возвращает null, если ВЕСЬ период раньше DEAL_EVENTS_DATA_START.
  */
-export async function fetchPriceObjectionConversion(period: DateRange): Promise<Map<string, PriceObjectionRow> | null> {
+// Сделочные фильтры отчёта (физики/юрики, товарные группы, время создания,
+// первое касание, «Фильтр сделок») применяются к КОГОРТЕ: сделка, не прошедшая
+// фильтр, не попадает ни в знаменатель, ни в числитель (аудит владельца 31.08:
+// «все метрики должны подчиняться фильтрации отчёта»).
+export async function fetchPriceObjectionConversion(period: DateRange, filters: CommonDealFilterOpts = {}): Promise<Map<string, PriceObjectionRow> | null> {
   // periodDateStrFromInstant — тот же UTC-сдвиг, что чинили в план-метриках (8a4ab37,
   // задача 1595) и managerActivity.ts (задача 1610).
   const periodToStr = periodDateStrFromInstant(period.to, 'to');
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
   const { from, toExcl } = toSqlInterval(period);
+  const cw = buildCommonDealWhere(filters, 2);
 
   const sql = `
 WITH price_lower_stages AS (
@@ -72,6 +78,7 @@ SELECT
 FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
+${cw.sql ? `WHERE ${cw.sql}` : ''}
   `.trim();
 
   const res = await analyticsDb().query<{
@@ -79,7 +86,7 @@ JOIN funnels f ON f.id = d.funnel_id
     reserved_at: string | null; sold_at: string | null; lost_at: string | null;
     delivered_at: string | null;
     is_repeat: boolean;
-  }>(sql, [from, toExcl]);
+  }>(sql, [from, toExcl, ...cw.params]);
 
   const map = new Map<string, PriceObjectionRow>();
   const ensure = (managerId: string): PriceObjectionRow => {

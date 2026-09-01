@@ -1,6 +1,7 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { DEAL_EVENTS_DATA_START } from './managerActivity';
+import { buildCommonDealWhere, type CommonDealFilterOpts } from './commonDealWhere';
 
 // Матрица CR по основному пути ЧЛ+ЮЛ (задача 2, owners-inbox, 10.07): «Новая →
 // Взял в работу → Связался со снабженцем → Озвучил цену/КП → Бронь → Подтв. бронь →
@@ -82,7 +83,11 @@ export interface StageConversionRow {
  * Возвращает null, если ВЕСЬ период раньше DEAL_EVENTS_DATA_START (честный null,
  * как и в managerActivity.ts).
  */
-export async function fetchStageConversions(period: DateRange): Promise<Map<string, StageConversionRow> | null> {
+// Сделочные фильтры отчёта (аудит владельца 31.08): применяются через ВТОРОЙ
+// запрос (deals) — он и так тянет затронутые deal_id; сделка, не прошедшая
+// фильтр, выпадает из allowed-набора и не попадает ни в знаменатель, ни в
+// числитель ни одной пары.
+export async function fetchStageConversions(period: DateRange, filters: CommonDealFilterOpts = {}): Promise<Map<string, StageConversionRow> | null> {
   // periodDateStrFromInstant — тот же UTC-сдвиг, что чинили в план-метриках (8a4ab37,
   // задача 1595) и managerActivity.ts (задача 1610).
   const periodToStr = periodDateStrFromInstant(period.to, 'to');
@@ -120,13 +125,17 @@ ORDER BY g.group_name, de.deal_id, de.event_at ASC
   }
 
   const dealIds = [...entriesByDeal.keys()];
+  const cw = buildCommonDealWhere(filters, 1);
   const lostRes = dealIds.length
     ? await analyticsDb().query<{ deal_id: number; lost_at: string | null }>(
-        'SELECT deal_id, lost_at FROM deals WHERE deal_id = ANY($1::int[])',
-        [dealIds],
+        `SELECT d.deal_id, d.lost_at FROM deals d WHERE d.deal_id = ANY($1::int[])${cw.sql ? ` AND ${cw.sql}` : ''}`,
+        [dealIds, ...cw.params],
       )
     : { rows: [] as Array<{ deal_id: number; lost_at: string | null }> };
+  // Map одновременно несёт lost_at И играет роль allowed-набора: при активных
+  // фильтрах в него попадают только прошедшие сделки (см. цикл ниже).
   const lostAtByDeal = new Map(lostRes.rows.map(r => [r.deal_id, r.lost_at ? new Date(r.lost_at).getTime() : null]));
+  const filtersActive = cw.sql !== '';
 
   const map = new Map<string, StageConversionRow>();
   const ensure = (managerId: string): StageConversionRow => {
@@ -139,6 +148,7 @@ ORDER BY g.group_name, de.deal_id, de.event_at ASC
   };
 
   for (const [dealId, groupsMap] of entriesByDeal) {
+    if (filtersActive && !lostAtByDeal.has(dealId)) continue; // сделка отфильтрована
     for (const fromGroup of FROM_GROUPS) {
       const entry = groupsMap.get(fromGroup);
       if (!entry) continue;
@@ -191,6 +201,7 @@ export async function fetchStageConversionSeries(opts: {
   granularity: SeriesGranularity;
   managerIds?: string[];
   departmentIds?: string[];
+  filters?: CommonDealFilterOpts;
 }): Promise<MetricSeriesResult> {
   const pair = stagePairForMetric(opts.metricId);
   if (!pair) return { supported: false, reason: 'Не метрика CR стадий', buckets: [], cumulativeBuckets: [], total: null };
@@ -245,8 +256,20 @@ ORDER BY g.group_name, de.deal_id, de.event_at ASC
   }
 
   // Когорта: первый вход в X внутри периода (+ фильтр по менеджерам).
-  const cohort = [...fromByDeal.entries()].filter(([, e]) =>
+  let cohort = [...fromByDeal.entries()].filter(([, e]) =>
     e.at >= fromMs && e.at < toMs && (!mgrSet || mgrSet.has(e.mgr)));
+
+  // Сделочные фильтры отчёта (аудит 31.08) — тот же контракт, что у ячейки
+  // (fetchStageConversions): непрошедшие сделки выпадают из когорты целиком.
+  const cw = buildCommonDealWhere(opts.filters ?? {}, 1);
+  if (cw.sql && cohort.length > 0) {
+    const res = await analyticsDb().query<{ deal_id: number }>(
+      `SELECT d.deal_id FROM deals d WHERE d.deal_id = ANY($1::int[]) AND ${cw.sql}`,
+      [cohort.map(([id]) => id), ...cw.params],
+    );
+    const allowed = new Set(res.rows.map(r => r.deal_id));
+    cohort = cohort.filter(([id]) => allowed.has(id));
+  }
 
   let lostAtByDeal = new Map<number, number | null>();
   if (pair.to === 'lost' && cohort.length > 0) {

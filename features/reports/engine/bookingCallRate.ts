@@ -18,16 +18,12 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { CALLS_DATA_START } from '@/features/reports/engine/callsMetrics';
 import { periodDateStrFromInstant, type DateRange } from '@/lib/period';
-import type { ClientType } from '@/lib/metrics/types';
+import { buildCommonDealWhere, type CommonDealFilterOpts } from './commonDealWhere';
 
-// Физики/юрики определяются воронкой — те же номера, что в lib/metrics/sqlGen.ts
-// (funnel_type) и dealFilters.ts. Жалоба владельца 31.08: «доля прозвона броней
-// не реагирует на переключение между физиками и юриками» — движок просто не
-// получал clientType и всегда считал по всем сделкам.
-const clientTypeSql = (ct: ClientType): string =>
-  ct === 'b2c' ? ' AND funnel_id IN (0, 2)'
-  : ct === 'b2b' ? ' AND funnel_id IN (1, 3)'
-  : '';
+// Сделочные фильтры отчёта (физики/юрики, товарные группы, время создания,
+// первое касание, «Фильтр сделок») — общий хвост WHERE (аудит владельца 31.08:
+// «все метрики должны подчиняться фильтрации отчёта»; жалоба-триггер была про
+// физиков/юриков именно у этой метрики).
 
 export interface BookingCallRateRow {
   reservedDenom: number;
@@ -63,7 +59,7 @@ async function loadNextWorkingDayFn(): Promise<(dateStr: string) => string> {
   };
 }
 
-export async function fetchBookingCallRate(period: DateRange, clientType: ClientType = 'all'): Promise<Map<string, BookingCallRateRow> | null> {
+export async function fetchBookingCallRate(period: DateRange, filters: CommonDealFilterOpts = {}): Promise<Map<string, BookingCallRateRow> | null> {
   const fromStr = periodDateStrFromInstant(period.from, 'from');
   const toStr = periodDateStrFromInstant(period.to, 'to');
   // Весь период раньше старта сбора звонков — числитель был бы всегда 0, это ложь.
@@ -81,13 +77,14 @@ export async function fetchBookingCallRate(period: DateRange, clientType: Client
 
   for (const milestone of ['reserved_at', 'confirmed_at'] as const) {
     // Брони периода. Полуинтервал [from, to+1day) МСК — как везде в отчётах.
+    const cw = buildCommonDealWhere(filters, 2);
     const deals = await sa.query<{ deal_id: string; mgr: number; at: Date }>(
-      `SELECT deal_id, current_manager_id AS mgr, ${milestone} AS at
-       FROM sa.deals
-       WHERE current_manager_id IS NOT NULL
-         AND ${milestone} >= ($1 || 'T00:00:00+03:00')::timestamptz
-         AND ${milestone} <  (($2 || 'T00:00:00+03:00')::timestamptz + interval '1 day')${clientTypeSql(clientType)}`,
-      [fromStr, toStr],
+      `SELECT d.deal_id, d.current_manager_id AS mgr, d.${milestone} AS at
+       FROM sa.deals d
+       WHERE d.current_manager_id IS NOT NULL
+         AND d.${milestone} >= ($1 || 'T00:00:00+03:00')::timestamptz
+         AND d.${milestone} <  (($2 || 'T00:00:00+03:00')::timestamptz + interval '1 day')${cw.sql ? ` AND ${cw.sql}` : ''}`,
+      [fromStr, toStr, ...cw.params],
     );
     if (deals.rows.length === 0) continue;
 
@@ -152,7 +149,7 @@ export async function fetchBookingCallRateSeries(opts: {
   /** Явное ограничение строк — как в fetchMetricSeries (для строки менеджера
    *  один id, для Итого/отдела — участники видимого отчёта). */
   managerIds?: string[];
-  clientType?: ClientType;
+  filters?: CommonDealFilterOpts;
 }): Promise<MetricSeriesResult> {
   const milestone = BOOKING_SERIES_METRICS[opts.metricId];
   if (!milestone) return { supported: false, reason: 'Не метрика прозвона броней', buckets: [], cumulativeBuckets: [], total: null };
@@ -168,13 +165,14 @@ export async function fetchBookingCallRateSeries(opts: {
   const now = new Date();
   const mgrSet = opts.managerIds?.length ? new Set(opts.managerIds) : null;
 
+  const cw = buildCommonDealWhere(opts.filters ?? {}, 2);
   const deals = await sa.query<{ deal_id: string; mgr: number; at: Date }>(
-    `SELECT deal_id, current_manager_id AS mgr, ${milestone} AS at
-     FROM sa.deals
-     WHERE current_manager_id IS NOT NULL
-       AND ${milestone} >= ($1 || 'T00:00:00+03:00')::timestamptz
-       AND ${milestone} <  (($2 || 'T00:00:00+03:00')::timestamptz + interval '1 day')${clientTypeSql(opts.clientType ?? 'all')}`,
-    [fromStr, toStr],
+    `SELECT d.deal_id, d.current_manager_id AS mgr, d.${milestone} AS at
+     FROM sa.deals d
+     WHERE d.current_manager_id IS NOT NULL
+       AND d.${milestone} >= ($1 || 'T00:00:00+03:00')::timestamptz
+       AND d.${milestone} <  (($2 || 'T00:00:00+03:00')::timestamptz + interval '1 day')${cw.sql ? ` AND ${cw.sql}` : ''}`,
+    [fromStr, toStr, ...cw.params],
   );
   const rows = mgrSet ? deals.rows.filter(d => mgrSet.has(String(d.mgr))) : deals.rows;
 

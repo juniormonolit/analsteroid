@@ -11,6 +11,7 @@ import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features
 import { fetchBookingCallRate } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/features/reports/engine/stageConversions';
 import { fetchPriceObjectionConversion } from '@/features/reports/engine/priceObjectionConversion';
+import { buildCommonDealWhere, type CommonDealFilterOpts } from '@/features/reports/engine/commonDealWhere';
 import { fetchCalledConversion, CALLED_CONVERSION_HIDDEN_IDS } from '@/features/reports/engine/calledConversion';
 import { fetchStageEntered, STAGE_ENTERED_GROUP_KEYS, STAGE_ENTERED_METRIC_IDS, stageEnteredMetricIds } from '@/features/reports/engine/stageEntered';
 import {
@@ -133,14 +134,20 @@ async function computePeriodPlanByLogin(
 async function fetchPlanFactWindow(
   fromDateStr: string,
   toDateStr: string,
+  // Сделочные фильтры отчёта (аудит 31.08): факты «% выполнения плана» фикс.
+  // окон режутся так же, как основной отчёт. ПЛАН при этом не режется (планов в
+  // разрезе групп/типов клиентов не существует) — процент честно показывает,
+  // какую долю ПОЛНОГО плана дал выбранный срез.
+  filters: CommonDealFilterOpts = {},
 ): Promise<Map<string, { sales: number; shipments: number }>> {
   const IDS = ['primary_sales_amount', 'repeat_sales_amount', 'primary_shipments_amount', 'repeat_shipments_amount'];
   const all = await loadMetrics();
   const metrics = all.filter(m => IDS.includes(m.id));
+  const cw = buildCommonDealWhere(filters, 2);
   const sql = buildCollectedSQL(metrics, {
     idExpr: 'd.current_manager_id::text',
     groupBy: 'GROUP BY d.current_manager_id',
-    notNullWhere: 'd.current_manager_id IS NOT NULL',
+    notNullWhere: `d.current_manager_id IS NOT NULL${cw.sql ? ` AND ${cw.sql}` : ''}`,
   });
   const out = new Map<string, { sales: number; shipments: number }>();
   if (!sql) return out;
@@ -150,7 +157,7 @@ async function fetchPlanFactWindow(
   toExclDate.setUTCDate(toExclDate.getUTCDate() + 1);
   const toExclIso = fromZonedTime(`${toExclDate.toISOString().slice(0, 10)} 00:00:00`, 'Europe/Moscow').toISOString();
 
-  const res = await analyticsDb().query<Record<string, unknown> & { dimension_id: string }>(sql, [fromIso, toExclIso]);
+  const res = await analyticsDb().query<Record<string, unknown> & { dimension_id: string }>(sql, [fromIso, toExclIso, ...cw.params]);
   const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
   for (const row of res.rows) {
     out.set(row.dimension_id, {
@@ -193,6 +200,15 @@ export async function POST(req: NextRequest) {
     // белого списка, значения экранируются, потому что приходят от человека.
     dealFilters,
   } = body;
+
+  // Сделочные фильтры отчёта для СПЕЦ-ДВИЖКОВ (аудит владельца 31.08: «все
+  // метрики должны подчиняться фильтрации отчёта») — единый объект, чтобы ни
+  // один инжектор не забыл кусок набора (ровно так прозвон броней потерял
+  // физиков/юриков, а остальные движки — вообще всё).
+  const commonDealFilters = {
+    clientType, productGroupMode, productGroupIds,
+    createdTimeFilter, firstTouchFilter, dealFilters,
+  };
 
   if (!isValidPeriodInput(period)) {
     return NextResponse.json({ error: 'period.from и period.to обязательны и должны быть валидными датами' }, { status: 400 });
@@ -595,9 +611,9 @@ export async function POST(req: NextRequest) {
       return d.toISOString().slice(0, 10);
     })();
     const [todayByMgr, monthByMgr, weekByMgr] = await Promise.all([
-      fetchPlanFactWindow(mskTodayStr, mskTodayStr),
-      fetchPlanFactWindow(monthStartStr, mskTodayStr),
-      fetchPlanFactWindow(weekStartStr, mskTodayStr),
+      fetchPlanFactWindow(mskTodayStr, mskTodayStr, commonDealFilters),
+      fetchPlanFactWindow(monthStartStr, mskTodayStr, commonDealFilters),
+      fetchPlanFactWindow(weekStartStr, mskTodayStr, commonDealFilters),
     ]);
     const enrichFixedWindows = (row: ReportRow): ReportRow => {
       const t = todayByMgr.get(row.dimensionId);
@@ -694,8 +710,8 @@ export async function POST(req: NextRequest) {
 
   if (hasBookingCallMetric && reportSlug === 'by-managers') {
     const [curBooking, compBooking] = await Promise.all([
-      fetchBookingCallRate(opts.period, clientType),
-      fetchBookingCallRate(compOpts.period, clientType),
+      fetchBookingCallRate(opts.period, commonDealFilters),
+      fetchBookingCallRate(compOpts.period, commonDealFilters),
     ]);
 
     const enrichBooking = (row: ReportRow, booking: Awaited<ReturnType<typeof fetchBookingCallRate>>): ReportRow => {
@@ -729,8 +745,8 @@ export async function POST(req: NextRequest) {
 
   if (hasStageConversionMetric && reportSlug === 'by-managers') {
     const [curConv, compConv] = await Promise.all([
-      fetchStageConversions(opts.period),
-      fetchStageConversions(compOpts.period),
+      fetchStageConversions(opts.period, commonDealFilters),
+      fetchStageConversions(compOpts.period, commonDealFilters),
     ]);
 
     const enrichStageConv = (
@@ -767,8 +783,8 @@ export async function POST(req: NextRequest) {
 
   if (hasPriceObjectionMetric && reportSlug === 'by-managers') {
     const [curPO, compPO] = await Promise.all([
-      fetchPriceObjectionConversion(opts.period),
-      fetchPriceObjectionConversion(compOpts.period),
+      fetchPriceObjectionConversion(opts.period, commonDealFilters),
+      fetchPriceObjectionConversion(compOpts.period, commonDealFilters),
     ]);
 
     const enrichPriceObjection = (
@@ -804,8 +820,8 @@ export async function POST(req: NextRequest) {
   const hasStageEnteredMetric = withDeps.some(m => STAGE_ENTERED_METRIC_IDS.includes(m.id));
   if (hasStageEnteredMetric && reportSlug === 'by-managers') {
     const [curSE, compSE] = await Promise.all([
-      fetchStageEntered(opts.period),
-      fetchStageEntered(compOpts.period),
+      fetchStageEntered(opts.period, commonDealFilters),
+      fetchStageEntered(compOpts.period, commonDealFilters),
     ]);
 
     const enrichStageEntered = (
@@ -833,8 +849,8 @@ export async function POST(req: NextRequest) {
   const hasCalledConversionMetric = withDeps.some(m => CALLED_CONVERSION_HIDDEN_IDS.includes(m.id));
   if (hasCalledConversionMetric && reportSlug === 'by-managers') {
     const [curCC, compCC] = await Promise.all([
-      fetchCalledConversion(opts.period),
-      fetchCalledConversion(compOpts.period),
+      fetchCalledConversion(opts.period, commonDealFilters),
+      fetchCalledConversion(compOpts.period, commonDealFilters),
     ]);
 
     const enrichCalledConversion = (

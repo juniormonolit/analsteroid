@@ -60,18 +60,21 @@ export function ReportSettingsPanel({ onClose, ...fields }: Props) {
           <button onClick={requestClose} className="sm:hidden text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors ml-2 mt-0.5">✕</button>
         </div>
 
-        {/* Body: 2 колонки (Фильтры / Вид), на мобиле — 1 колонка на всю ширину */}
+        {/* Body: 2 колонки (Фильтры / Вид), на мобиле — 1 колонка на всю ширину.
+            Редизайн 31.08 («каша»): поля собраны в смысловые карточки (FieldsGroup),
+            «Тип аккаунтов» больше НЕ дублируется в «Виде» — это фильтр, его место
+            слева (в самостоятельном попапе «Вид» дрилл-дауна его и не было). */}
         <div className="flex-1 overflow-y-auto flex flex-col sm:flex-row">
           <div className="flex flex-col sm:w-1/2 sm:border-r sm:border-[var(--color-border)]">
-            <div className="px-6 sm:px-7 py-5 sm:py-6">
-              <div className="text-[11px] font-bold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Фильтры</div>
-              <FiltersFields {...fields} />
+            <div className="px-5 sm:px-6 py-5 sm:py-6">
+              <div className="text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider mb-3.5">Фильтры</div>
+              <FiltersFields {...fields} grouped />
             </div>
           </div>
           <div className="flex flex-col sm:w-1/2">
-            <div className="px-6 sm:px-7 py-5 sm:py-6">
-              <div className="text-[11px] font-bold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Вид</div>
-              <ViewSettingsFields {...fields} />
+            <div className="px-5 sm:px-6 py-5 sm:py-6">
+              <div className="text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider mb-3.5">Вид</div>
+              <ViewSettingsFields {...fields} accountType={undefined} onAccountTypeChange={undefined} grouped />
             </div>
           </div>
         </div>

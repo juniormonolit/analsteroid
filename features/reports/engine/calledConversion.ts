@@ -1,6 +1,7 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { DEAL_EVENTS_DATA_START } from './managerActivity';
+import { buildCommonDealWhere, type CommonDealFilterOpts } from './commonDealWhere';
 
 // «CR Созвонился → Продажа» (задача владельца 28.07) — калька с
 // priceObjectionConversion.ts (единственное отличие — набор стадий и исход только
@@ -32,11 +33,16 @@ export const CALLED_CONVERSION_HIDDEN_IDS = [
 ];
 
 /** Возвращает null, если ВЕСЬ период раньше DEAL_EVENTS_DATA_START. */
-export async function fetchCalledConversion(period: DateRange): Promise<Map<string, CalledConversionRow> | null> {
+// Сделочные фильтры отчёта (физики/юрики, товарные группы, время создания,
+// первое касание, «Фильтр сделок») применяются к КОГОРТЕ: сделка, не прошедшая
+// фильтр, не попадает ни в знаменатель, ни в числитель (аудит владельца 31.08:
+// «все метрики должны подчиняться фильтрации отчёта»).
+export async function fetchCalledConversion(period: DateRange, filters: CommonDealFilterOpts = {}): Promise<Map<string, CalledConversionRow> | null> {
   const periodToStr = periodDateStrFromInstant(period.to, 'to');
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
   const { from, toExcl } = toSqlInterval(period);
+  const cw = buildCommonDealWhere(filters, 2);
 
   const sql = `
 WITH called_stages AS (
@@ -60,13 +66,14 @@ SELECT
 FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
+${cw.sql ? `WHERE ${cw.sql}` : ''}
   `.trim();
 
   const res = await analyticsDb().query<{
     manager_id: number; first_at: string;
     sold_at: string | null;
     is_repeat: boolean;
-  }>(sql, [from, toExcl]);
+  }>(sql, [from, toExcl, ...cw.params]);
 
   const map = new Map<string, CalledConversionRow>();
   for (const r of res.rows) {

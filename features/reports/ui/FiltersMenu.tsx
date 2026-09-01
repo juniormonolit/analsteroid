@@ -75,13 +75,33 @@ export function countActiveFilters({
 // использовать И в самостоятельном дропдауне (FiltersMenu ниже, свои независимые
 // фильтры дрилл-дауна), И в объединённой панели «Настройки отчёта»
 // (ReportSettingsPanel — левая колонка основного тулбара), без дублирования разметки.
+// Карточка смысловой группы настроек (редизайн «Настроек отчёта», правка
+// владельца 31.08: «сейчас это выглядит как злоебучая каша — сделай красиво и
+// аккуратно»). grouped=false (узкие попапы дрилл-дауна) рендерит детей плоско,
+// как раньше — там карточки съели бы ширину.
+export function FieldsGroup({ title, grouped, children }: {
+  title: string;
+  grouped: boolean;
+  children: React.ReactNode;
+}) {
+  if (!grouped) return <>{children}</>;
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] p-3.5">
+      <div className="mb-3 text-[11px] font-bold uppercase tracking-wide text-[var(--color-text)]">{title}</div>
+      <div className="flex flex-col gap-3">{children}</div>
+    </div>
+  );
+}
+
 export function FiltersFields({
   dealScope, onDealScopeChange, clientType, onClientTypeChange, productGroupMode, onProductGroupModeChange,
   showProductGroupPicker, accountType, onAccountTypeChange,
   createdTimeFilter, onCreatedTimeFilterChange, firstTouchFilter, onFirstTouchFilterChange,
-}: FiltersFieldsProps) {
+  grouped = false,
+}: FiltersFieldsProps & { grouped?: boolean }) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className={`flex flex-col ${grouped ? 'gap-3.5' : 'gap-3'}`}>
+      <FieldsGroup title="Сделки" grouped={grouped}>
       <div>
         <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип сделок</div>
         <Seg
@@ -111,7 +131,9 @@ export function FiltersFields({
           />
         </div>
       )}
+      </FieldsGroup>
       {onAccountTypeChange && accountType !== undefined && (
+      <FieldsGroup title="Аккаунты" grouped={grouped}>
         <div>
           <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип аккаунтов</div>
           <Seg
@@ -121,10 +143,13 @@ export function FiltersFields({
             labels={{ managers: 'Менеджеры', logists: 'Логисты', all: 'Все' }}
           />
         </div>
+      </FieldsGroup>
       )}
       {/* Задача 1569 (владелец, «побаловаться») — экспериментальная сегментация по
           нерабочему времени, МСК. НЕ персистится в SavedReport (см. комментарий у
           пропсов выше) — сбрасывается сменой отчёта, как metricFilters. */}
+      {(onCreatedTimeFilterChange || onFirstTouchFilterChange) && (
+      <FieldsGroup title="Время создания · эксперимент" grouped={grouped}>
       {onCreatedTimeFilterChange && createdTimeFilter !== undefined && (
         <div>
           <div
@@ -156,6 +181,8 @@ export function FiltersFields({
             labels={{ all: 'Любая', off_hours: 'Нерабочее', business_hours: 'Рабочее' }}
           />
         </div>
+      )}
+      </FieldsGroup>
       )}
     </div>
   );

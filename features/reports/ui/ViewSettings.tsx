@@ -1,6 +1,7 @@
 'use client';
 import { Type } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
+import { FieldsGroup } from './FiltersMenu';
 import type { ComparisonDisplay, AccountType, BorderMode } from '@/lib/metrics/types';
 
 export type Density = 'compact' | 'normal' | 'relaxed';
@@ -92,10 +93,12 @@ export function ViewSettingsFields({
   colorizeMetrics, onColorizeMetricsChange,
   zebra, onZebraChange,
   borderMode, onBorderModeChange,
-}: ViewSettingsFieldsProps) {
+  grouped = false,
+}: ViewSettingsFieldsProps & { grouped?: boolean }) {
   return (
-      <div className="flex flex-col gap-3">
+      <div className={`flex flex-col ${grouped ? 'gap-3.5' : 'gap-3'}`}>
           {onAccountTypeChange && (
+          <FieldsGroup title="Аккаунты" grouped={grouped}>
             <div>
               <SectionLabel>Тип аккаунтов</SectionLabel>
               <Seg
@@ -105,8 +108,10 @@ export function ViewSettingsFields({
                 labels={{ managers: 'Менеджеры', logists: 'Логисты', all: 'Все' }}
               />
             </div>
+          </FieldsGroup>
           )}
 
+          <FieldsGroup title="Колонки" grouped={grouped}>
           {onComparisonDisplayChange && (
             <div>
               <SectionLabel>
@@ -121,6 +126,10 @@ export function ViewSettingsFields({
             </div>
           )}
 
+          <ViewBordersSlot borderMode={borderMode} onBorderModeChange={onBorderModeChange} />
+          </FieldsGroup>
+
+          <FieldsGroup title="Строки" grouped={grouped}>
           <div>
             <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Плотность строк</div>
             <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
@@ -157,6 +166,25 @@ export function ViewSettingsFields({
             </div>
           )}
 
+          {onZebraChange && (
+            <div>
+              <SectionLabel>Зебра</SectionLabel>
+              <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
+                {([true, false] as const).map(v => (
+                  <button
+                    key={String(v)}
+                    onClick={() => onZebraChange(v)}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${(zebra ?? false) === v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                  >
+                    {v ? 'Да' : 'Нет'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          </FieldsGroup>
+
+          <FieldsGroup title="Дрилл-даун и цвет" grouped={grouped}>
           {onDrilldownGroupedChange && (
             <div>
               <SectionLabel>Группировка в drilldown</SectionLabel>
@@ -191,42 +219,34 @@ export function ViewSettingsFields({
             </div>
           )}
 
-          {onZebraChange && (
-            <div>
-              <SectionLabel>Зебра</SectionLabel>
-              <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
-                {([true, false] as const).map(v => (
-                  <button
-                    key={String(v)}
-                    onClick={() => onZebraChange(v)}
-                    className={`flex-1 px-2 py-1.5 transition-colors ${(zebra ?? false) === v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
-                  >
-                    {v ? 'Да' : 'Нет'}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {onBorderModeChange && (
-            <div>
-              <SectionLabel>Границы</SectionLabel>
-              <Seg
-                options={['grid', 'horizontal', 'none'] as BorderMode[]}
-                value={borderMode ?? 'grid'}
-                onChange={onBorderModeChange}
-                labels={{ grid: 'Сетка', horizontal: 'Гориз.', none: 'Без границ' }}
-              />
-            </div>
-          )}
-
           <button
             onClick={() => onChange(DEFAULT_VIEW_PREFS)}
             className="text-xs text-[var(--color-accent)] hover:underline self-start"
           >
             Сбросить
           </button>
+          </FieldsGroup>
       </div>
+  );
+}
+
+// «Границы» — вынесены отдельным слотом, чтобы жить внутри группы «Колонки»
+// (редизайн 31.08), не дублируя разметку в двух ветках grouped/плоско.
+function ViewBordersSlot({ borderMode, onBorderModeChange }: {
+  borderMode?: BorderMode;
+  onBorderModeChange?: (v: BorderMode) => void;
+}) {
+  if (!onBorderModeChange) return null;
+  return (
+    <div>
+      <SectionLabel>Границы</SectionLabel>
+      <Seg
+        options={['grid', 'horizontal', 'none'] as BorderMode[]}
+        value={borderMode ?? 'grid'}
+        onChange={onBorderModeChange}
+        labels={{ grid: 'Сетка', horizontal: 'Гориз.', none: 'Без границ' }}
+      />
+    </div>
   );
 }
 

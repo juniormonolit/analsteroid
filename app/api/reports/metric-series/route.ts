@@ -63,19 +63,20 @@ export async function POST(req: NextRequest) {
   // «Доля прозвона броней / подтв. броней» — свой движок (bookingCallRate, вне
   // сделочного SQL), но тенденцию по времени он строить умеет: перебирает сделки
   // поштучно, бакет = дата вехи (правка владельца 24.08 — «хочу смотреть
-  // тенденцию в виде графика»). Замечание: фильтры отчёта, кроме списка
-  // менеджеров и физиков/юриков, на эту метрику не действуют и в ячейке —
-  // расхождения с ячейкой здесь нет.
+  // тенденцию в виде графика»). С аудита 31.08 движок принимает ВСЕ сделочные
+  // фильтры отчёта (см. commonDealWhere) — передаём их и сюда, чтобы график
+  // сходился с ячейкой.
   // «CR стадий» (cr_stage_*) — свой движок по deal_events (правка владельца
   // 27.08: крупнейшее семейство «относительных» метрик без графика).
   const fetchSeries = BOOKING_SERIES_METRICS[common.metricId]
     ? (o: { period: { from: Date; to: Date } }) => fetchBookingCallRateSeries({
         metricId: common.metricId, granularity, managerIds, period: o.period,
-        clientType: common.clientType,
+        filters: common,
       })
     : stagePairForMetric(common.metricId)
       ? (o: { period: { from: Date; to: Date } }) => fetchStageConversionSeries({
           metricId: common.metricId, granularity, managerIds, departmentIds, period: o.period,
+          filters: common,
         })
       : (o: { period: { from: Date; to: Date } }) => fetchMetricSeries({ ...common, period: o.period });
 

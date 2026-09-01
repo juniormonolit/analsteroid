@@ -23,14 +23,16 @@ export interface ExportColumn {
 export interface ExportRow {
   label: string;
   isGroup: boolean;
-  values: (number | null)[];
+  // string — текстовая псевдо-метрика («Логин», manager_login): в Excel уходит
+  // текстом, в TSV — как есть.
+  values: (number | string | null)[];
 }
 
 export interface ExportTable {
   dimensionLabel: string;
   columns: ExportColumn[];
   rows: ExportRow[];
-  totalsRow: (number | null)[] | null;
+  totalsRow: (number | string | null)[] | null;
 }
 
 // Структурная форма источника — совместима и с MergedRow (SalesReportPage.tsx), и с
@@ -40,6 +42,8 @@ export interface ExportTable {
 export interface ExportSourceRow {
   dimensionName: string;
   isGroup?: boolean;
+  /** Полный битрикс-логин — значение текстовой метрики manager_login. */
+  managerLogin?: string;
   deltas: Record<string, { current: number | null } | undefined>;
   children?: ExportSourceRow[];
 }
@@ -68,7 +72,9 @@ export function buildExportTable(params: {
     rows.push({
       label: r.dimensionName,
       isGroup: !!r.isGroup,
-      values: columns.map(c => r.deltas[c.id]?.current ?? null),
+      // «Логин» — текст из отдельного поля строки, не из числовых deltas
+      // (правка владельца 31.08: «в Excel-экспорте колонка пустая — доделай»).
+      values: columns.map(c => c.id === 'manager_login' ? (r.managerLogin ?? null) : (r.deltas[c.id]?.current ?? null)),
     });
   };
   for (const r of params.rows) {
@@ -90,8 +96,9 @@ export function buildExportTable(params: {
 // разрядных пробелов. Проценты — ДОЛЯ (14.5 → «0,145»): делим на 100, точность
 // decimalPlaces+2 (сдвиг на 2 знака при делении на 100, иначе теряем точность исходного
 // значения — 14.5 при decimalPlaces=1 без сдвига дал бы «0,1»/«0,15» вместо «0,145»).
-export function formatCellForClipboard(value: number | null, col: ExportColumn): string {
+export function formatCellForClipboard(value: number | string | null, col: ExportColumn): string {
   if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value; // текстовая метрика («Логин»)
   if (col.dataType === 'percent') {
     return (value / 100).toFixed(col.decimalPlaces + 2).replace('.', ',');
   }

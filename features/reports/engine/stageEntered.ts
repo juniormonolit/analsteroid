@@ -1,6 +1,7 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { toSqlInterval, periodDateStrFromInstant, type DateRange } from '@/lib/period';
 import { DEAL_EVENTS_DATA_START } from './managerActivity';
+import { buildCommonDealWhere, type CommonDealFilterOpts } from './commonDealWhere';
 import { STAGE_SNAPSHOT_GROUPS } from './stageSnapshot';
 
 // «Кол-во сделок в стадии X» ЗА ПЕРИОД (задача владельца 28.07) — потоковая пара к
@@ -49,7 +50,11 @@ export const STAGE_ENTERED_METRIC_IDS: string[] = STAGE_ENTERED_GROUP_KEYS.flatM
  * «Забронировано»). Возвращает null, если весь период раньше старта сбора
  * deal_events (03.04.2026) — честное «нет данных», как у соседних движков.
  */
-export async function fetchStageEntered(period: DateRange): Promise<Map<string, StageEnteredRow> | null> {
+// Сделочные фильтры отчёта (физики/юрики, товарные группы, время создания,
+// первое касание, «Фильтр сделок») применяются к КОГОРТЕ: сделка, не прошедшая
+// фильтр, не попадает ни в знаменатель, ни в числитель (аудит владельца 31.08:
+// «все метрики должны подчиняться фильтрации отчёта»).
+export async function fetchStageEntered(period: DateRange, filters: CommonDealFilterOpts = {}): Promise<Map<string, StageEnteredRow> | null> {
   const periodToStr = periodDateStrFromInstant(period.to, 'to');
   if (periodToStr < DEAL_EVENTS_DATA_START) return null;
 
@@ -60,6 +65,7 @@ export async function fetchStageEntered(period: DateRange): Promise<Map<string, 
     STAGE_SNAPSHOT_GROUPS[grp].stageIds.map(sid => `('${sid}', '${grp}')`),
   ).join(',\n    ');
 
+  const cw = buildCommonDealWhere(filters, 2);
   const sql = `
 WITH stage_groups(stage_id, grp) AS (
   VALUES
@@ -80,12 +86,13 @@ SELECT c.manager_id, c.grp, f.is_repeat, COUNT(*)::int AS cnt
 FROM cohort c
 JOIN deals d ON d.deal_id = c.deal_id
 JOIN funnels f ON f.id = d.funnel_id
+${cw.sql ? `WHERE ${cw.sql}` : ''}
 GROUP BY c.manager_id, c.grp, f.is_repeat
   `.trim();
 
   const res = await analyticsDb().query<{
     manager_id: number; grp: string; is_repeat: boolean; cnt: number;
-  }>(sql, [from, toExcl]);
+  }>(sql, [from, toExcl, ...cw.params]);
 
   const map = new Map<string, StageEnteredRow>();
   for (const r of res.rows) {
