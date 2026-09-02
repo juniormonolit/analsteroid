@@ -284,8 +284,12 @@ function addAgg(dst: Agg, src: Agg): void {
  * deals делится на 4 (как деньги — решение владельца «план = месяц / 4»),
  * уровневые метрики берутся как есть.
  */
-async function loadNonMoneyPlans(year: number): Promise<Map<string, NonMoneyPlan>> {
+async function loadNonMoneyPlans(year: number): Promise<{ other: Map<string, NonMoneyPlan>; ship: Map<string, number> }> {
   const out = new Map<string, NonMoneyPlan>();
+  // metric='ship_sum' (миграция 196, лист «Общая» файла «2026 Декомпозиция
+  // (Основная)») — МЕСЯЧНЫЙ план отгрузок по сущности; при наличии побеждает
+  // Σ manager_plans (решение владельца 02.09: «берём с листа Основной»).
+  const ship = new Map<string, number>();
   try {
     const res = await systemDb().query<{ month: number; entity_key: string; metric: string; value: string }>(
       'SELECT month, entity_key, metric, value FROM year_weekly_plans WHERE year = $1',
@@ -293,9 +297,10 @@ async function loadNonMoneyPlans(year: number): Promise<Map<string, NonMoneyPlan
     );
     for (const r of res.rows) {
       const k = `${r.month}:${r.entity_key}`;
-      const cur = out.get(k) ?? { deals: null, crSale: null, crShip: null, avgCheck: null };
       const v = Number(r.value);
-      if (r.metric === 'deals') cur.deals = Math.round(v / 4);
+      if (r.metric === 'ship_sum') { ship.set(k, v); continue; }
+      const cur = out.get(k) ?? { deals: null, crSale: null, crShip: null, avgCheck: null };
+      if (r.metric === 'deals') cur.deals = v; // месячный; в неделю делится ниже
       if (r.metric === 'cr_sale') cur.crSale = v;
       if (r.metric === 'cr_ship') cur.crShip = v;
       if (r.metric === 'avg_check') cur.avgCheck = Math.round(v);
@@ -304,7 +309,7 @@ async function loadNonMoneyPlans(year: number): Promise<Map<string, NonMoneyPlan
   } catch {
     // Миграции 166 ещё нет — отчёт работает без этих планов (прочерки), а не падает.
   }
-  return out;
+  return { other: out, ship };
 }
 
 const EMPTY_PLAN: NonMoneyPlan = { deals: null, crSale: null, crShip: null, avgCheck: null };
@@ -348,15 +353,28 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
   // последней недели текущего года.
   const factsFrom = prevMondays[0] ?? `${year - 1}-01-01`;
   const factsToExcl = addDays(mondays[mondays.length - 1] ?? `${year}-01-01`, 7);
-  const [managers, facts, weather, nonMoneyPlans] = await Promise.all([
+  const [managers, facts, weather, plansLoaded] = await Promise.all([
     resolveEntityManagers(),
     fetchWeeklyFacts(factsFrom, factsToExcl),
     listWeatherForYear(year),
     loadNonMoneyPlans(year),
   ]);
+  const { other: nonMoneyPlans, ship: shipPlans } = plansLoaded;
 
   // Планы: месячные суммы по сущностям (по месяцам года). Кэш по месяцу.
   const months = [...new Set(mondays.map(m => Number(addDays(m, 3).slice(5, 7))))];
+  // Делитель недели: число ISO-недель месяца ПО ПОЛНОМУ календарю года (4 или 5),
+  // а не «÷ 4» и не «сколько недель уже показано». Иначе ИТОГО план 5-недельного
+  // месяца = 125 % месячного, а у текущего (неполного) месяца — зависел бы от
+  // сегодняшней даты (правка владельца 02.09: планы «сильно отличаются» от листа).
+  const weeksInMonth = new Map<number, number>();
+  for (let w = 1; w <= 53; w++) {
+    const mon = isoWeekMonday(year, w);
+    if (isoWeekOf(mon).year !== year) break;
+    const mo = Number(addDays(mon, 3).slice(5, 7));
+    weeksInMonth.set(mo, (weeksInMonth.get(mo) ?? 0) + 1);
+  }
+  const weekDiv = (mo: number) => weeksInMonth.get(mo) ?? 4;
   const planByMonth = new Map<number, { sales: Record<EntityKey, number | null>; ship: Record<EntityKey, number | null> }>();
   for (const mo of months) {
     const monthFirst = `${year}-${String(mo).padStart(2, '0')}-01`;
@@ -370,7 +388,10 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
         if (p) { s += p.sales; sh += p.shipments; found = true; }
       }
       sales[e.key] = found ? Math.round(s) : null;
-      ship[e.key] = found ? Math.round(sh) : null;
+      // План отгрузок: лист «Общая» (ship_sum, миграция 196) в приоритете,
+      // Σ manager_plans — только если для сущности/месяца строки в листе нет.
+      const sheet = shipPlans.get(`${mo}:${e.key}`);
+      ship[e.key] = sheet != null ? Math.round(sheet) : found ? Math.round(sh) : null;
     }
     planByMonth.set(mo, { sales, ship });
   }
@@ -385,12 +406,16 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
     const planShip = {} as Record<EntityKey, number | null>;
     const planOther = {} as Record<EntityKey, NonMoneyPlan>;
     for (const e of ENTITY_DEFS) {
-      planOther[e.key] = nonMoneyPlans.get(`${month}:${e.key}`) ?? EMPTY_PLAN;
+      {
+        // deals в таблице — МЕСЯЧНЫЙ план; в неделю — тем же делителем, что деньги.
+        const mp = nonMoneyPlans.get(`${month}:${e.key}`) ?? EMPTY_PLAN;
+        planOther[e.key] = { ...mp, deals: mp.deals != null ? Math.round(mp.deals / weekDiv(month)) : null };
+      }
       cur[e.key] = toMetrics(sumForEntity(facts.get(mon), managers[e.key]));
       prev[e.key] = toMetrics(sumForEntity(facts.get(prevMon), managers[e.key]));
-      // План недели = месяц / 4 (решение владельца 28.08).
-      planSales[e.key] = plan?.sales[e.key] != null ? Math.round(plan.sales[e.key]! / 4) : null;
-      planShip[e.key] = plan?.ship[e.key] != null ? Math.round(plan.ship[e.key]! / 4) : null;
+      // План недели = месяц ÷ число ISO-недель месяца (было «÷ 4», см. weekDiv).
+      planSales[e.key] = plan?.sales[e.key] != null ? Math.round(plan.sales[e.key]! / weekDiv(month)) : null;
+      planShip[e.key] = plan?.ship[e.key] != null ? Math.round(plan.ship[e.key]! / weekDiv(month)) : null;
     }
     return { weekStart: mon, label: weekLabel(mon), prevWeekStart: prevMon, prevLabel: weekLabel(prevMon), month, cur, prev, planSales, planShip, planOther };
   });
@@ -409,12 +434,14 @@ export async function buildYearWeekly(year: number): Promise<YearWeeklyResult> {
     const planShip = {} as Record<EntityKey, number | null>;
     const planOther = {} as Record<EntityKey, NonMoneyPlan>;
     for (const e of ENTITY_DEFS) {
-      const weekPlan = nonMoneyPlans.get(`${mo}:${e.key}`) ?? EMPTY_PLAN;
-      // deals — сумма недельных планов месяца (как деньги); конверсии и ср. чек
-      // уровневые: месячный план равен недельному, складывать нельзя.
+      const monthPlan = nonMoneyPlans.get(`${mo}:${e.key}`) ?? EMPTY_PLAN;
+      // deals — сумма недельных планов ПОКАЗАННЫХ недель (как деньги ниже): у
+      // полного месяца это ровно месячный план, у текущего неполного — доля.
+      // Конверсии и ср. чек уровневые: месячный равен недельному.
+      const dealsWeeks = weeksOfMonth.map(w => w.planOther[e.key]?.deals).filter((v): v is number => v != null);
       planOther[e.key] = {
-        deals: weekPlan.deals != null ? weekPlan.deals * weeksOfMonth.length : null,
-        crSale: weekPlan.crSale, crShip: weekPlan.crShip, avgCheck: weekPlan.avgCheck,
+        deals: dealsWeeks.length ? dealsWeeks.reduce((a, b) => a + b, 0) : null,
+        crSale: monthPlan.crSale, crShip: monthPlan.crShip, avgCheck: monthPlan.avgCheck,
       };
       const aggCur = zeroAgg(); const aggPrev = zeroAgg();
       for (const w of weeksOfMonth) {
