@@ -49,8 +49,9 @@ interface FieldDef {
   column: string;
   kind: FieldKind;
   label: string;
-  /** Справочник значений для пикера (см. dealFilterOptions ниже). */
-  options?: 'funnels' | 'stages' | 'head_groups' | 'sources';
+  /** Справочник значений для пикера (см. dealFilterOptions ниже; client_kind и
+   *  stage_entered_presets — статические, отдаются роутом без запроса в БД). */
+  options?: 'funnels' | 'stages' | 'head_groups' | 'sources' | 'client_kind' | 'stage_entered_presets';
   /** Псевдополе: своё SQL-выражение вместо d.<column> (тип клиента = воронка). */
   customSql?: (op: DealFilterOp, values: string[]) => string;
 }
@@ -71,8 +72,35 @@ export const DEAL_FILTER_FIELDS: Record<string, FieldDef> = {
   stage_id:        { column: 'stage_id',        kind: 'text',   label: 'Стадия',          options: 'stages' },
   source_id:       { column: 'source_id',       kind: 'text',   label: 'Источник',        options: 'sources' },
   created_at:      { column: 'created_at',      kind: 'date',   label: 'Дата создания сделки' },
+  // «В текущей стадии с …» (идея владельца 31.08, запрос ОП: «видеть сделки,
+  // которые попали в этот статус сегодня»). Дата входа в ТЕКУЩУЮ стадию сделки
+  // считается из истории событий (последнее событие сделки с её нынешней
+  // стадией) — отдельной колонки в sa.deals нет. Комбинируется с чем угодно:
+  // «Стадии (сейчас)» + «сегодня» = свежий остаток статуса; «дольше 7 дней» =
+  // зависшие. История deal_events ведётся с 03.04.2026: у сделки, не менявшей
+  // стадию с тех пор, даты нет (NULL) — такие считаются «давно в стадии» и
+  // попадают только под пресеты «дольше N дней».
+  stage_entered_at: {
+    column: 'stage_id', kind: 'text', label: 'В текущей стадии с', options: 'stage_entered_presets',
+    customSql: (_op, values) => {
+      const preset = values[0] ?? '';
+      // Последний вход сделки в её текущую стадию; полночь сегодня в МСК.
+      const entered = `(SELECT MAX(e.event_at) FROM deal_events e WHERE e.deal_id = d.deal_id AND e.stage_id = d.stage_id)`;
+      const msk0 = `(date_trunc('day', (now() AT TIME ZONE 'Europe/Moscow'))::timestamp AT TIME ZONE 'Europe/Moscow')`;
+      if (preset === 'today') return `${entered} >= ${msk0}`;
+      if (preset === 'yesterday') return `(${entered} >= ${msk0} - interval '1 day' AND ${entered} < ${msk0})`;
+      const last = /^last(\d{1,3})$/.exec(preset);
+      // «Последние N дней» — календарных, включая сегодня.
+      if (last) return `${entered} >= ${msk0} - interval '${Number(last[1]) - 1} days'`;
+      const over = /^over(\d{1,3})$/.exec(preset);
+      // «Дольше N дней» — дополнение к lastN; NULL (вход до старта истории
+      // 03.04.2026) — тоже «давно», включаем.
+      if (over) return `(${entered} < ${msk0} - interval '${Number(over[1]) - 1} days' OR ${entered} IS NULL)`;
+      return '';
+    },
+  },
   client_kind:     {
-    column: 'funnel_id', kind: 'text', label: 'Тип клиента (ЮЛ/ФЛ)',
+    column: 'funnel_id', kind: 'text', label: 'Тип клиента (ЮЛ/ФЛ)', options: 'client_kind',
     customSql: (op, values) => {
       const ids = values.flatMap(v => v === 'b2b' ? B2B_FUNNELS : v === 'b2c' ? B2C_FUNNELS : []);
       if (ids.length === 0) return '';
@@ -87,6 +115,7 @@ export const DEAL_FILTER_FIELDS: Record<string, FieldDef> = {
 export function opsForField(field: string): DealFilterOp[] {
   const def = DEAL_FILTER_FIELDS[field];
   if (!def) return [];
+  if (field === 'stage_entered_at') return ['eq']; // пресеты периодов, «не равно» не имеет смысла
   if (def.customSql) return ['eq', 'neq'];
   if (def.kind === 'number' || def.kind === 'int') return def.options ? SET_OPS : NUM_OPS;
   if (def.kind === 'date') return DATE_OPS;
@@ -204,6 +233,16 @@ export function validateDealFilters(input: unknown): string | null {
   return null;
 }
 
+/** Пресеты «В текущей стадии с» — для пикера и человеческих подписей. */
+export const STAGE_ENTERED_PRESETS: { value: string; label: string }[] = [
+  { value: 'today', label: 'Сегодня' },
+  { value: 'yesterday', label: 'Вчера' },
+  { value: 'last7', label: 'Последние 7 дней' },
+  { value: 'last30', label: 'Последние 30 дней' },
+  { value: 'over7', label: 'Дольше 7 дней' },
+  { value: 'over30', label: 'Дольше 30 дней' },
+];
+
 /** Человеческое описание фильтра — для плашки над таблицей и подписи в отчёте. */
 export function describeDealFilters(filters: DealFilter[] | undefined | null): string[] {
   if (!Array.isArray(filters)) return [];
@@ -214,6 +253,10 @@ export function describeDealFilters(filters: DealFilter[] | undefined | null): s
   return filters.flatMap(f => {
     const def = DEAL_FILTER_FIELDS[f.field];
     if (!def) return [];
+    if (f.field === 'stage_entered_at') {
+      const p = STAGE_ENTERED_PRESETS.find(x => x.value === String(f.value ?? ''));
+      return [`${def.label}: ${(p?.label ?? String(f.value ?? '')).toLowerCase()}`];
+    }
     if (f.op === 'is_null' || f.op === 'is_not_null') return [`${def.label}: ${OP_LABEL[f.op]}`];
     if (f.op === 'between' && Array.isArray(f.value)) return [`${def.label}: от ${f.value[0]} до ${f.value[1]}`];
     const v = Array.isArray(f.value) ? f.value.join(', ') : String(f.value ?? '');

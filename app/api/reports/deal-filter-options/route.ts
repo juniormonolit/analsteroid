@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb } from '@/lib/db/clients';
-import { dealFilterOptions, DEAL_FILTER_FIELDS, opsForField } from '@/lib/metrics/dealFilters';
+import { dealFilterOptions, DEAL_FILTER_FIELDS, opsForField, STAGE_ENTERED_PRESETS } from '@/lib/metrics/dealFilters';
 
 // Справочники значений для «Фильтра сделок» (задача владельца 07.08): воронки,
 // стадии, товарные группы, источники. Отдаём одним запросом — пикер открывается
@@ -23,12 +23,16 @@ export async function GET() {
       key,
       label: def.label,
       kind: def.customSql ? 'enum' : def.kind,
-      options: def.options ?? (def.customSql ? 'client_kind' : null),
+      options: def.options ?? null,
       ops: opsForField(key),
     }));
     return NextResponse.json({
       fields,
-      options: { ...options, client_kind: [{ value: 'b2b', label: 'ЮЛ (юрлица)' }, { value: 'b2c', label: 'ФЛ (частные лица)' }] },
+      options: {
+        ...options,
+        client_kind: [{ value: 'b2b', label: 'ЮЛ (юрлица)' }, { value: 'b2c', label: 'ФЛ (частные лица)' }],
+        stage_entered_presets: STAGE_ENTERED_PRESETS,
+      },
     });
   } finally {
     client.release();
