@@ -11,6 +11,13 @@
 // short_login=/^manager(\d+)$/i→'#'+d иначе LOGIN; department по UF_DEPARTMENT[0];
 // branch по дереву (москва/краснодар/екатеринбург иначе СПб); rop=ближайший
 // предок с UF_HEAD, кроме Дирекции(1) и владельца(6). Смена имени → history.
+//
+// ВНИМАНИЕ: этот standalone-скрипт держится как ручной/dev-запуск, боевой синк
+// работает через POST /api/admin/org-sync (lib/org/sync.ts) — тот файл сейчас
+// впереди этого (добор глав отделов и т.п. здесь не портированы). Задача 5174
+// (02.09) добавляет sa.employees.work_phone только сюда+в lib/org/sync.ts —
+// логика синка work_phone продублирована 1-в-1 (WORK_PHONE, фолбэк
+// PERSONAL_MOBILE, пустое не затирает), см. bxUserPhone() ниже.
 
 import pg from 'pg';
 import fs from 'fs';
@@ -58,6 +65,22 @@ const ropOf = (chain, self) => {
   return null;
 };
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const PHONE_RATE_MS = Number(process.env.ORG_SYNC_PHONE_RATE_MS || 600);
+
+// Задача 5174: рабочий телефон (sa.employees.work_phone), фолбэк на личный
+// мобильный, если рабочего нет. Возвращает null при отсутствии обоих —
+// вызывающий код тогда НЕ трогает уже сохранённое значение.
+async function bxUserPhone(id) {
+  const d = await get(`${BX}/user.get.json?ID=${id}`);
+  if (d.error) { console.warn(`[org-sync] телефон ${id}: ${d.error_description || d.error}`); return null; }
+  const u = (d.result || [])[0];
+  if (!u) return null;
+  const work = String(u.WORK_PHONE || '').trim();
+  const mobile = String(u.PERSONAL_MOBILE || '').trim();
+  return work || mobile || null;
+}
+
 async function main() {
   const client = new pg.Client({
     host: process.env.SA_PG_HOST, port: +process.env.SA_PG_PORT, user: process.env.SA_PG_USER,
@@ -77,6 +100,19 @@ async function main() {
   // ручные оверрайды филиала для менеджеров на удалённых/неоднозначных отделах
   const brOverride = new Map((await client.query('SELECT bitrix_user_id, branch FROM sa.manager_branch_override')).rows.map(r => [String(r.bitrix_user_id), r.branch]));
   const branchToCode = new Map((await client.query('SELECT raw_label, code FROM sa.branches')).rows.map(r => [r.raw_label, r.code]));
+
+  // Задача 5174: телефон добираем только для bitrix_id, уже заведённых в
+  // sa.employees, и ДО открытия транзакции (иначе ~2 мин последовательных
+  // user.get держали бы BEGIN открытым).
+  const trackedBitrixIds = new Set((await client.query('SELECT bitrix_id::text FROM sa.employees WHERE bitrix_id IS NOT NULL')).rows.map(r => r.bitrix_id));
+  const phoneByUid = new Map();
+  for (const m of mgr) {
+    const uid = String(m.ID);
+    if (!trackedBitrixIds.has(uid)) continue;
+    const phone = await bxUserPhone(uid);
+    await sleep(PHONE_RATE_MS);
+    if (phone) phoneByUid.set(uid, phone);
+  }
 
   await client.query('BEGIN');
 
@@ -98,6 +134,7 @@ async function main() {
   // 3. org_resolved_hierarchy + детект смены имени
   const now = new Date();
   let renamed = 0;
+  let phonesSynced = 0;
   const seen = [];
   for (const m of mgr) {
     const uid = String(m.ID);
@@ -141,13 +178,22 @@ async function main() {
          branch=EXCLUDED.branch, branch_code=EXCLUDED.branch_code`,
       [uid, orh.manager_name, orh.department_id, orh.department_name, orh.rop_bitrix_user_id, orh.rop_name,
        orh.resolved_path, orh.is_active, now, orh.short_login, orh.branch, orh.branch_code]);
+
+    // Задача 5174: work_phone из phoneByUid. Пустое (uid не в карте) — НЕ трогаем
+    // уже сохранённое значение.
+    const phone = phoneByUid.get(uid);
+    if (phone) {
+      const phoneUpd = await client.query('UPDATE sa.employees SET work_phone = $2 WHERE bitrix_id = $1::integer AND work_phone IS DISTINCT FROM $2', [uid, phone]);
+      if (phoneUpd.rowCount) phonesSynced += phoneUpd.rowCount;
+    }
+
     seen.push(uid);
   }
   // менеджеры, пропавшие из выгрузки → is_active=false
   await client.query(`UPDATE sa.org_resolved_hierarchy SET is_active=false WHERE NOT (manager_bitrix_user_id = ANY($1))`, [seen]);
 
   await client.query('COMMIT');
-  console.log(JSON.stringify({ ok: true, departments: bxdep.length, managers: mgr.length, renamed, ms: Date.now() - t0 }));
+  console.log(JSON.stringify({ ok: true, departments: bxdep.length, managers: mgr.length, renamed, phonesSynced, ms: Date.now() - t0 }));
   await client.end();
 }
 main().catch(e => { console.error('SYNC FAILED:', e.message); process.exit(1); });

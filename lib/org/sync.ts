@@ -12,6 +12,11 @@
 // иначе LOGIN; department по UF_DEPARTMENT[0]; branch по дереву (москва/краснодар/
 // екатеринбург иначе СПб); rop = ближайший предок с UF_HEAD, кроме Дирекции(1) и
 // владельца(6). Смена имени → sa.employee_name_history (SCD2).
+//
+// Задача 5174 (02.09, санкция владельца): sa.employees.work_phone тоже держим
+// синхронным — WORK_PHONE из user.get, при пустом фолбэк на PERSONAL_MOBILE.
+// Только для bitrix_id, уже существующих в sa.employees; пустой результат
+// Битрикса никогда не затирает уже сохранённый телефон.
 
 import type { PoolClient } from 'pg';
 import { analyticsDb } from '@/lib/db/clients';
@@ -25,7 +30,13 @@ interface BxManager {
   ACTIVE?: string | boolean; UF_DEPARTMENT?: (string | number)[]; WORK_POSITION?: string;
 }
 
-export interface OrgSyncResult { ok: true; departments: number; managers: number; backfilledHeads: number; renamed: number; ms: number }
+export interface OrgSyncResult { ok: true; departments: number; managers: number; backfilledHeads: number; renamed: number; phonesSynced: number; ms: number }
+
+const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
+// Пауза между user.get при добивке телефонов — щадящий режим, Bitrix-вебхук
+// держит ~2 запроса/сек (см. scripts/bitrix_backfill.mjs RATE_MS=1100 — тот же
+// принцип, здесь чуть быстрее т.к. это ЕДИНСТВЕННЫЙ вызываемый метод в цикле).
+const PHONE_RATE_MS = Number(process.env.ORG_SYNC_PHONE_RATE_MS || 600);
 
 function webhookBase(): string {
   const bx = process.env.BITRIX_ORG_WEBHOOK;
@@ -75,6 +86,26 @@ async function bxUser(id: string): Promise<BxManager | null> {
     UF_DEPARTMENT: Array.isArray(dept) ? (dept as (string | number)[]) : (dept != null ? [dept as string | number] : undefined),
     WORK_POSITION: u.WORK_POSITION as string | undefined,
   };
+}
+
+/**
+ * Задача 5174: рабочий телефон сотрудника (sa.employees.work_phone).
+ * user.get?ID= → WORK_PHONE, при пустом — фолбэк PERSONAL_MOBILE (санкция
+ * владельца 02.09, id 2161). Возвращает null, если оба поля пусты — тогда
+ * вызывающий код НЕ трогает уже сохранённое значение (пустое не затирает).
+ */
+async function bxUserPhone(id: string): Promise<string | null> {
+  const d = await bxCall('user.get', { ID: id });
+  if (d.error) {
+    console.warn(`[org-sync] телефон ${id}: user.get ошибка — пропуск:`, d.error_description ?? d.error);
+    return null;
+  }
+  const arr = (d.result as Record<string, unknown>[]) ?? [];
+  const u = arr[0];
+  if (!u) return null;
+  const work = String(u.WORK_PHONE ?? '').trim();
+  const mobile = String(u.PERSONAL_MOBILE ?? '').trim();
+  return work || mobile || null;
 }
 
 const shortLogin = (l?: string): string | null => {
@@ -162,6 +193,28 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
         .map(r => [r.raw_label, r.code]),
     );
 
+    // Задача 5174: bitrix_id, за которыми реально следит sa.employees — телефон
+    // добираем ТОЛЬКО для них (mlt.managers.list телефон не отдаёт вообще, а
+    // дёргать user.get по всем ~420 менеджерам ради 211 нужных — лишняя нагрузка
+    // на вебхук). Новых сотрудников в sa.employees этим синком не заводим,
+    // только обновляем работ.телефон у уже существующих строк.
+    const trackedBitrixIds = new Set(
+      (await client.query<{ bitrix_id: string }>('SELECT bitrix_id::text FROM sa.employees WHERE bitrix_id IS NOT NULL')).rows
+        .map(r => r.bitrix_id),
+    );
+
+    // Телефоны добираем ДО открытия транзакции — иначе соединение простаивало бы
+    // ~2 минуты (211 последовательных user.get с паузой PHONE_RATE_MS) с открытым
+    // BEGIN, держа лишний коннекшн из пула. phoneByUid — только непустые значения.
+    const phoneByUid = new Map<string, string>();
+    for (const m of mgr) {
+      const uid = String(m.ID);
+      if (!trackedBitrixIds.has(uid)) continue;
+      const phone = await bxUserPhone(uid);
+      await sleep(PHONE_RATE_MS);
+      if (phone) phoneByUid.set(uid, phone);
+    }
+
     await client.query('BEGIN');
 
     // 2. departments upsert (uuid стабилен по bitrix_department_id)
@@ -186,6 +239,7 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
     // 3. org_resolved_hierarchy + детект смены имени
     const now = new Date();
     let renamed = 0;
+    let phonesSynced = 0;
     const seen: string[] = [];
     for (const m of mgr) {
       const uid = String(m.ID);
@@ -228,13 +282,26 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
            branch=EXCLUDED.branch, branch_code=EXCLUDED.branch_code`,
         [uid, name, departmentId, departmentName, ropId, ropName, resolvedPath, isActive, now, login, branch, branchCode],
       );
+
+      // Задача 5174: work_phone (+фолбэк personal mobile, добраны в phoneByUid
+      // выше). Пустой результат от Битрикса НЕ затирает уже сохранённое значение
+      // — UPDATE выполняется, только если для uid нашёлся непустой телефон.
+      const phone = phoneByUid.get(uid);
+      if (phone) {
+        const phoneUpd = await client.query(
+          'UPDATE sa.employees SET work_phone = $2 WHERE bitrix_id = $1::integer AND work_phone IS DISTINCT FROM $2',
+          [uid, phone],
+        );
+        if (phoneUpd.rowCount) phonesSynced += phoneUpd.rowCount;
+      }
+
       seen.push(uid);
     }
     // менеджеры, пропавшие из выгрузки → is_active=false
     await client.query('UPDATE sa.org_resolved_hierarchy SET is_active=false WHERE NOT (manager_bitrix_user_id = ANY($1))', [seen]);
 
     await client.query('COMMIT');
-    return { ok: true, departments: bxdep.length, managers: mgr.length, backfilledHeads, renamed, ms: Date.now() - t0 };
+    return { ok: true, departments: bxdep.length, managers: mgr.length, backfilledHeads, renamed, phonesSynced, ms: Date.now() - t0 };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;
