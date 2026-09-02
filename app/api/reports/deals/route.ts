@@ -7,6 +7,7 @@ import { resolveFilterClause } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
 import { STAGE_SNAPSHOT_GROUPS, DEALS_IN_WORK_METRIC_IDS } from '@/features/reports/engine/stageSnapshot';
 import { STAGE_ENTERED_GROUP_KEYS, stageEnteredMetricIds } from '@/features/reports/engine/stageEntered';
+import { DRILL_RULES, NO_DEAL_LIST_METRIC_IDS } from '@/features/reports/engine/drillRules';
 import type { Metric } from '@/lib/metrics/types';
 import { buildDealFilterWhere, validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
@@ -174,6 +175,11 @@ export async function GET(req: NextRequest) {
     clientType === 'b2c' ? 'AND d.funnel_id IN (0, 2)' :
     clientType === 'b2b' ? 'AND d.funnel_id IN (1, 3)' : '';
 
+  // Атрибуция менеджера для списка (переопределяется ветками ниже): шаблоны
+  // условий с `%P%` под позиционный параметр. Дефолт — текущий владелец сделки.
+  let mgrOneTpl = 'd.current_manager_id = %P%';
+  let mgrManyTpl = 'd.current_manager_id = ANY(%P%::int[])';
+
   // ── Metric filter (generic, from the metrics catalog) ────────────────────
   // Default window: a deal is in scope if ANY of its stage dates falls in the period.
   let metricDateFilter = `(
@@ -203,12 +209,16 @@ export async function GET(req: NextRequest) {
     // отчёта — как и в ячейке (stageEntered.ts считает по funnels.is_repeat).
     const def = STAGE_ENTERED_DRILL.get(metricFilter)!;
     const ids = def.stageIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+    // DISTINCT ON — первый вход в стадию группы + МЕНЕДЖЕР ЭТОГО СОБЫТИЯ (ровно
+    // как в ячейке: stageEntered.ts атрибутирует по deal_events.manager_id).
     extraJoin = `JOIN (
-      SELECT de.deal_id, MIN(de.event_at) AS first_at
+      SELECT DISTINCT ON (de.deal_id) de.deal_id, de.event_at AS first_at, de.manager_id
       FROM deal_events de
       WHERE de.stage_id IN (${ids})
-      GROUP BY de.deal_id
+      ORDER BY de.deal_id, de.event_at ASC
     ) _se ON _se.deal_id = d.deal_id AND _se.first_at >= $1 AND _se.first_at < $2`;
+    mgrOneTpl = '_se.manager_id = %P%::bigint';
+    mgrManyTpl = '_se.manager_id = ANY(%P%::bigint[])';
     metricDateFilter = def.funnel === 'primary'
       ? `d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = false)`
       : def.funnel === 'repeat'
@@ -221,9 +231,28 @@ export async function GET(req: NextRequest) {
     // (см. комментарий в ветке STAGE_NOW_STAGE_IDS выше).
     extraJoin = `JOIN stages _s_work ON _s_work.id = d.stage_id`;
     metricDateFilter = `_s_work.stage_type = 'WORK' AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
+  } else if (metricFilter && NO_DEAL_LIST_METRIC_IDS.includes(metricFilter)) {
+    // Списка сделок у метрики не существует (план/календарь/рейтинг/снапшот) —
+    // честно отдаём пустоту с признаком noRule, а не «сделки с любой
+    // активностью» (аудит 02.09). UI показывает объяснение.
+    return NextResponse.json({ deals: [], total_count: 0, total_amount: 0, noRule: 'no_deal_list' });
+  } else if (metricFilter && DRILL_RULES[metricFilter]) {
+    // Метрика со своим движком: явное правило населения (features/reports/engine/
+    // drillRules.ts) — звонки, «тишина», «без звонка», скорость до цены.
+    const rule = DRILL_RULES[metricFilter];
+    if (rule.join) extraJoin = rule.join;
+    if (rule.mgrOne) mgrOneTpl = rule.mgrOne;
+    if (rule.mgrMany) mgrManyTpl = rule.mgrMany;
+    metricDateFilter = `(${rule.where})`;
   } else if (metricFilter) {
     const legs = resolveDrilldownLegs(metricFilter, await loadMetrics());
     const metric = legs[0] ?? null;
+    if (!metric?.dateField) {
+      // Правила нет — раньше здесь молча оставалось дефолтное окно «любая дата
+      // стадии в периоде», и человек получал ПРАВДОПОДОБНЫЙ, но не тот список
+      // (аудит 02.09: так вело себя 91 метрика). Теперь честный признак.
+      return NextResponse.json({ deals: [], total_count: 0, total_amount: 0, noRule: 'no_rule' });
+    }
     if (metric?.dateField) {
       if (metric.source === 'deal_events') {
         // Event-sourced metric (e.g. called_deals_count): deal has a matching event in period
@@ -262,6 +291,7 @@ export async function GET(req: NextRequest) {
   // из мини-отчёта шлёт оба).
   const params: unknown[] = [fromDate.toISOString(), toExcl.toISOString()];
   let dimensionFilter = '';
+
   if (companyId && /^\d+$/.test(companyId)) {
     params.push(Number(companyId));
     dimensionFilter += ` AND d.company_id = $${params.length}`;
@@ -273,11 +303,11 @@ export async function GET(req: NextRequest) {
 
   if (managerId) {
     params.push(managerId);
-    dimensionFilter = `AND d.current_manager_id = $${params.length}`;
+    dimensionFilter = `AND ${mgrOneTpl.replace('%P%', `$${params.length}`)}`;
   }
   if (managerIds.length) {
     params.push(managerIds);
-    dimensionFilter += ` AND d.current_manager_id = ANY($${params.length}::int[])`;
+    dimensionFilter += ` AND ${mgrManyTpl.replace('%P%', `$${params.length}`)}`;
   }
   if (productGroups.length) {
     // Группа товарных групп: та же семантика значений, что у одиночного

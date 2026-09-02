@@ -476,6 +476,20 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
     return <div className="p-6 space-y-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-8 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
   }
   if (deals.length === 0) {
+    // noRule (аудит 02.09) — у метрики нет правила населения списком сделок:
+    // либо объекта не существует (план/рейтинг/календарь), либо правило не
+    // написано. Раньше в этом месте показывался ПРАВДОПОДОБНЫЙ, но чужой список
+    // («сделки с любой активностью в периоде») — теперь честное объяснение.
+    const noRule = (data as { noRule?: string } | undefined)?.noRule;
+    if (noRule) {
+      return (
+        <div className="p-10 text-center text-sm text-[var(--color-text-muted)]">
+          {noRule === 'no_deal_list'
+            ? 'У этой метрики нет списка сделок: она считается не по сделкам (план, календарь, рейтинг или замороженный снапшот).'
+            : 'Для этой метрики список сделок пока не определён — цифра в ячейке верна, а какие именно сделки в неё вошли, показать не можем.'}
+        </div>
+      );
+    }
     return <div className="p-10 text-center text-[var(--color-text-muted)] text-sm">{emptyLabel ?? 'Нет сделок за выбранный период'}</div>;
   }
   return (

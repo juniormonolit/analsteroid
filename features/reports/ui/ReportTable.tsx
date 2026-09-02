@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { ArrowUp, ArrowDown, ChartLine, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Settings, GripVertical, Columns2, Filter, IdCard, Search, HelpCircle } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { MetricInfoBody } from './MetricInfoBody';
+import { NO_DEAL_LIST_METRIC_IDS } from '@/features/reports/engine/drillRules';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { formatValue, formatDelta, formatDeltaPct } from '@/lib/format';
@@ -847,7 +848,12 @@ export function ReportTable({
     return leafOffsets[`${metricId}:0`] !== undefined;
   }
 
-  const isClickableMetric = (m: Metric) => m.dataType !== 'percent';
+  // Кликабельны только метрики, у которых дрилл-даун что-то покажет: проценты
+  // (у них своя семантика) и метрики без списка сделок (план/рейтинг/календарь/
+  // логин/замороженные снапшоты — NO_DEAL_LIST_METRIC_IDS, аудит 02.09) не
+  // открывают панель вообще, вместо панели с объяснением.
+  const isClickableMetric = (m: Metric) =>
+    m.dataType !== 'percent' && !NO_DEAL_LIST_METRIC_IDS.includes(m.id);
   const hasAnyWideMode = displayMetrics.some(m => colSpanFor(m.id) > 1);
   const hasConfigureButton = !!onMetricConfigure;
 
