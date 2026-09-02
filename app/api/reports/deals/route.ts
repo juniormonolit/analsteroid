@@ -6,9 +6,28 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { resolveFilterClause } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
 import { STAGE_SNAPSHOT_GROUPS, DEALS_IN_WORK_METRIC_IDS } from '@/features/reports/engine/stageSnapshot';
+import { STAGE_ENTERED_GROUP_KEYS, stageEnteredMetricIds } from '@/features/reports/engine/stageEntered';
 import type { Metric } from '@/lib/metrics/types';
 import { buildDealFilterWhere, validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
+
+// «Вошло в стадию: …» (метрики 107) — metricId → {stage_id группы, воронка}.
+// Дрилл обязан повторять семантику ячейки (stageEntered.ts): сделки, ВПЕРВЫЕ
+// (MIN(event_at) по всей истории) вошедшие в стадию группы В ПЕРИОДЕ. До этой
+// ветки такие метрики падали в дефолтное окно «любая дата стадии в периоде» —
+// жалоба владельца 02.09 со сделкой #246216: вошла в «Созвонился и озвучил»
+// 24.08, а в дрилле периода 01.09 оказалась из-за sold_at 01.09.
+const STAGE_ENTERED_DRILL: Map<string, { stageIds: string[]; funnel: 'primary' | 'repeat' | 'all' }> = new Map(
+  STAGE_ENTERED_GROUP_KEYS.flatMap(grp => {
+    const ids = stageEnteredMetricIds(grp);
+    const stageIds = STAGE_SNAPSHOT_GROUPS[grp].stageIds;
+    return [
+      [ids.primary, { stageIds, funnel: 'primary' as const }],
+      [ids.repeat, { stageIds, funnel: 'repeat' as const }],
+      [ids.all, { stageIds, funnel: 'all' as const }],
+    ] as [string, { stageIds: string[]; funnel: 'primary' | 'repeat' | 'all' }][];
+  }),
+);
 
 // Снимок «Стадии (сейчас)» (задача 2059) — metricId → stage_id этой группы.
 // Драйв-даун этих метрик игнорирует период (см. stageSnapshot.ts: снимок текущего
@@ -178,6 +197,23 @@ export async function GET(req: NextRequest) {
     // строки), просто даёт параметру тип и не меняет результат.
     const ids = STAGE_NOW_STAGE_IDS.get(metricFilter)!;
     metricDateFilter = `d.stage_id IN (${ids.map(id => `'${id.replace(/'/g, "''")}'`).join(',')}) AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
+  } else if (metricFilter && STAGE_ENTERED_DRILL.has(metricFilter)) {
+    // «Вошло в стадию: …» — первый вход сделки в стадию группы внутри периода.
+    // Воронка метрики (перв./повт./все) зашита в её id и НЕ зависит от scope
+    // отчёта — как и в ячейке (stageEntered.ts считает по funnels.is_repeat).
+    const def = STAGE_ENTERED_DRILL.get(metricFilter)!;
+    const ids = def.stageIds.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+    extraJoin = `JOIN (
+      SELECT de.deal_id, MIN(de.event_at) AS first_at
+      FROM deal_events de
+      WHERE de.stage_id IN (${ids})
+      GROUP BY de.deal_id
+    ) _se ON _se.deal_id = d.deal_id AND _se.first_at >= $1 AND _se.first_at < $2`;
+    metricDateFilter = def.funnel === 'primary'
+      ? `d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = false)`
+      : def.funnel === 'repeat'
+        ? `d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)`
+        : '1=1';
   } else if (metricFilter && DEALS_IN_WORK_METRIC_IDS.includes(metricFilter)) {
     // «Сделок в работе» (перв./повт./все) — период игнорируется, фильтр — семантика
     // sa.stages.stage_type = 'WORK' (см. stageSnapshot.ts); перв./повт./все уже
