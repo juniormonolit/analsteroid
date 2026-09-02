@@ -17,7 +17,12 @@
 // впереди этого (добор глав отделов и т.п. здесь не портированы). Задача 5174
 // (02.09) добавляет sa.employees.work_phone только сюда+в lib/org/sync.ts —
 // логика синка work_phone продублирована 1-в-1 (WORK_PHONE, фолбэк
-// PERSONAL_MOBILE, пустое не затирает), см. bxUserPhone() ниже.
+// PERSONAL_MOBILE, пустое не затирает).
+//
+// Доработка Серёги (02.09, id 2163) — вежливый режим: батчи по 50 через
+// Bitrix `batch` вместо одиночных user.get, пауза между батчами, один ретрай
+// с задержкой, ошибка батча не валит весь синк (см. bxFetchPhones ниже —
+// логика 1-в-1 с lib/org/sync.ts).
 
 import pg from 'pg';
 import fs from 'fs';
@@ -66,19 +71,78 @@ const ropOf = (chain, self) => {
 };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const PHONE_RATE_MS = Number(process.env.ORG_SYNC_PHONE_RATE_MS || 600);
+// Вежливый режим (задача 5174, доработка Серёги 02.09): синк ночной, время
+// есть — батчи по 50 (лимит Bitrix batch, подтверждено живым вызовом), пауза
+// между батчами, один ретрай с задержкой при сбое.
+const PHONE_BATCH_SIZE = Number(process.env.ORG_SYNC_PHONE_BATCH_SIZE || 50);
+const PHONE_BATCH_RATE_MS = Number(process.env.ORG_SYNC_PHONE_RATE_MS || 1500);
+const PHONE_RETRY_MS = Number(process.env.ORG_SYNC_PHONE_RETRY_MS || 4000);
 
-// Задача 5174: рабочий телефон (sa.employees.work_phone), фолбэк на личный
-// мобильный, если рабочего нет. Возвращает null при отсутствии обоих —
-// вызывающий код тогда НЕ трогает уже сохранённое значение.
-async function bxUserPhone(id) {
-  const d = await get(`${BX}/user.get.json?ID=${id}`);
-  if (d.error) { console.warn(`[org-sync] телефон ${id}: ${d.error_description || d.error}`); return null; }
-  const u = (d.result || [])[0];
-  if (!u) return null;
-  const work = String(u.WORK_PHONE || '').trim();
-  const mobile = String(u.PERSONAL_MOBILE || '').trim();
-  return work || mobile || null;
+// Bitrix `batch` (halt=0, до 50 подкоманд) через POST — один HTTP-вызов вместо N.
+// Формат подтверждён живым вызовом rest/2248 (задача 5174): result.result[key] =
+// обычный result метода, result.result_error[key] = ошибка только этой подкоманды.
+async function bxBatch(cmds) {
+  const body = new URLSearchParams();
+  body.set('halt', '0');
+  for (const [key, cmd] of Object.entries(cmds)) body.append(`cmd[${key}]`, cmd);
+  const r = await fetch(`${BX}/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  if (!r.ok) throw new Error(`batch HTTP ${r.status}`);
+  const d = await r.json();
+  if (d.error) throw new Error(`batch: ${d.error_description || d.error}`);
+  return d.result;
+}
+
+// Один повтор с задержкой на сетевых ошибках/5xx/лимите запросов.
+async function bxBatchWithRetry(cmds) {
+  try {
+    return await bxBatch(cmds);
+  } catch (e) {
+    console.warn(`[org-sync] batch попытка 1 не удалась, повтор через ${PHONE_RETRY_MS}мс:`, e.message);
+    await sleep(PHONE_RETRY_MS);
+    return await bxBatch(cmds); // если снова упадёт — исключение уходит вызывающему (пропускает весь батч, не весь синк)
+  }
+}
+
+// Задача 5174: рабочие телефоны (sa.employees.work_phone) батчами. WORK_PHONE,
+// фолбэк PERSONAL_MOBILE. uid без телефона (оба поля пусты либо user.get
+// вернул пусто) в карту не попадает — вызывающий код тогда НЕ трогает уже
+// сохранённое значение. Ошибка батча (после ретрая) логируется и НЕ валит
+// синк — телефоны этого батча остаются как были.
+async function bxFetchPhones(uids) {
+  const phoneByUid = new Map();
+  let skipped = 0, errors = 0, batches = 0;
+  for (let i = 0; i < uids.length; i += PHONE_BATCH_SIZE) {
+    const chunk = uids.slice(i, i + PHONE_BATCH_SIZE);
+    batches++;
+    try {
+      const cmds = {};
+      chunk.forEach((uid, idx) => { cmds[`p${idx}`] = `user.get?ID=${uid}`; });
+      const { result, result_error } = await bxBatchWithRetry(cmds);
+      chunk.forEach((uid, idx) => {
+        const key = `p${idx}`;
+        if (result_error && result_error[key]) {
+          errors++;
+          console.warn(`[org-sync] телефон ${uid}: ${result_error[key].error_description || result_error[key].error} — пропуск`);
+          return;
+        }
+        const u = (result && result[key] || [])[0];
+        if (!u) { skipped++; return; }
+        const work = String(u.WORK_PHONE || '').trim();
+        const mobile = String(u.PERSONAL_MOBILE || '').trim();
+        const phone = work || mobile;
+        if (phone) phoneByUid.set(uid, phone); else skipped++;
+      });
+    } catch (e) {
+      errors += chunk.length;
+      console.warn(`[org-sync] батч телефонов [${i}..${i + chunk.length}) не удался после ретрая — пропуск (${chunk.length} сотрудников):`, e.message);
+    }
+    if (i + PHONE_BATCH_SIZE < uids.length) await sleep(PHONE_BATCH_RATE_MS);
+  }
+  return { phoneByUid, skipped, errors, batches };
 }
 
 async function main() {
@@ -102,16 +166,21 @@ async function main() {
   const branchToCode = new Map((await client.query('SELECT raw_label, code FROM sa.branches')).rows.map(r => [r.raw_label, r.code]));
 
   // Задача 5174: телефон добираем только для bitrix_id, уже заведённых в
-  // sa.employees, и ДО открытия транзакции (иначе ~2 мин последовательных
-  // user.get держали бы BEGIN открытым).
+  // sa.employees, и ДО открытия транзакции. Вся фаза в try/catch: полный отказ
+  // Битрикса здесь НЕ должен ронять departments/org_resolved_hierarchy —
+  // phoneByUid просто останется пустой.
   const trackedBitrixIds = new Set((await client.query('SELECT bitrix_id::text FROM sa.employees WHERE bitrix_id IS NOT NULL')).rows.map(r => r.bitrix_id));
-  const phoneByUid = new Map();
-  for (const m of mgr) {
-    const uid = String(m.ID);
-    if (!trackedBitrixIds.has(uid)) continue;
-    const phone = await bxUserPhone(uid);
-    await sleep(PHONE_RATE_MS);
-    if (phone) phoneByUid.set(uid, phone);
+  let phoneByUid = new Map();
+  let phonesSkipped = 0, phonesErrors = 0, phoneBatches = 0;
+  try {
+    const trackedIds = mgr.map(m => String(m.ID)).filter(uid => trackedBitrixIds.has(uid));
+    const phones = await bxFetchPhones(trackedIds);
+    phoneByUid = phones.phoneByUid;
+    phonesSkipped = phones.skipped;
+    phonesErrors = phones.errors;
+    phoneBatches = phones.batches;
+  } catch (e) {
+    console.error('[org-sync] фаза телефонов провалилась целиком — work_phone в этом прогоне не обновится:', e.message);
   }
 
   await client.query('BEGIN');
@@ -193,7 +262,10 @@ async function main() {
   await client.query(`UPDATE sa.org_resolved_hierarchy SET is_active=false WHERE NOT (manager_bitrix_user_id = ANY($1))`, [seen]);
 
   await client.query('COMMIT');
-  console.log(JSON.stringify({ ok: true, departments: bxdep.length, managers: mgr.length, renamed, phonesSynced, ms: Date.now() - t0 }));
+  console.log(JSON.stringify({
+    ok: true, departments: bxdep.length, managers: mgr.length, renamed,
+    phonesSynced, phonesSkipped, phonesErrors, phoneBatches, ms: Date.now() - t0,
+  }));
   await client.end();
 }
 main().catch(e => { console.error('SYNC FAILED:', e.message); process.exit(1); });
