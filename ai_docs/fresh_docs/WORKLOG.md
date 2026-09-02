@@ -6,6 +6,76 @@
 
 ---
 
+## 2026-09-02 — sa.employees.work_phone в ночной синк оргструктуры + вежливый режим к Битриксу
+
+Задача #5174 (владелец: «добавить рабочий номер в БД» → Серёга, хозяин прода,
+02.09: «синк у нас стоит на ночь, времени достаточно — сделай вежливо, без
+риска падения»). Санкция на деплой — от Серёги, задеплоено Маркусом
+(life-os) на прод.
+
+**Находка:** боевой ночной синк оргструктуры (`lib/org/sync.ts`, `runOrgSync`,
+кнопка `/settings/org-structure` + таймер 04:00 МСК) до этой правки НЕ трогал
+`sa.employees` вообще — писал только `sa.departments`/`sa.org_resolved_hierarchy`/
+`sa.employee_name_history`. Значит подключение `work_phone` к синку — не
+расширение существующей логики, а первое подключение таблицы.
+
+**Реализация** (`lib/org/sync.ts` + `scripts/org-sync.mjs`, идентично):
+`user.get` → `WORK_PHONE`, фолбэк `PERSONAL_MOBILE` при пустом. Только для
+`bitrix_id`, уже заведённых в `sa.employees` (211, не все ~430 менеджеров).
+Пустой результат Битрикса НЕ затирает уже сохранённый телефон (`UPDATE ...
+WHERE work_phone IS DISTINCT FROM $2`, вызывается только если найден непустой
+телефон).
+
+**Вежливый режим (доработка по прямому запросу Серёги):** ~211 одиночных
+`user.get` заменены на Bitrix `batch` (halt=0, до 50 подкоманд/вызов — формат
+ответа подтверждён живым вызовом rest/2248, не по документации) → **5 HTTP-
+вызовов** вместо 211. Пауза 1.5с между батчами (`ORG_SYNC_PHONE_RATE_MS`), один
+ретрай с задержкой 4с (`ORG_SYNC_PHONE_RETRY_MS`) на сетевых/5xx/лимитных
+ошибках. Устойчивость: ошибка батча после ретрая — лог + пропуск (телефоны
+этого батча остаются как были), синк продолжает; полный отказ Битрикса на фазе
+телефонов — try/catch, `departments`/`org_resolved_hierarchy` синкуются как
+обычно. Сводка в результате: `phonesSynced`/`phonesSkipped`/`phonesErrors`/
+`phoneBatches`.
+
+**Деплой:** ветка `fix/employees-work-phone-sync` (rebase на `origin/dev-asteroid`
+— **`main` для этого репо мёртв**, реальный прод едет с `dev-asteroid`, см. ниже)
+→ ff-мёрж в `origin/dev-asteroid` (`53179f8`) → `deploy.sh` из
+`/home/user/apps/analsteroid` (BUILD `ZVYM-04iYGkMbtNMoeuay`, было
+`jXCH9u01O90aoma3F91eT`). Бэкап до перезаписи:
+`/home/junior/prod-backups/analsteroid-pre-5174-20260902-151047.tar.gz` (standalone+static).
+
+**Грабли по пути (обе устранены):**
+1. Ворктри `/home/user/apps/analsteroid` не пересобирался месяц — `node_modules`
+   отстал от `package-lock.json` (recharts/jspdf/html-to-image/unicode-emoji-json
+   отсутствовали физически) → сборка падала module-not-found. Фикс: `npm ci`.
+2. `deploy.sh`'s гард `check_schema_drift.mjs` падал `ECONNREFUSED 127.0.0.1:6432`
+   — в этом ворктри не было `.env.local`/`certs/yandex-ca.pem` вовсе (никогда не
+   настраивался под живые прод-проверки). Скопированы из свежего рабочего
+   ворктри `analsteroid-wt-4994` (`.env*` в `.gitignore`, в git не попало).
+   После этого сверка прошла штатно (расхождений опасных — 0).
+
+**Приёмка на проде (ручной запуск `POST /api/admin/org-sync` служебным
+токеном):** первый вызов упал `permission denied for table employees` —
+`junior_user` (роль приложения на `sa`) имел только `SELECT` на `sa.employees`,
+`UPDATE` никогда не выдавался (таблицу раньше никто не писал). Выдан
+**колоночный** грант `GRANT UPDATE (work_phone) ON sa.employees TO junior_user`
+(минимально необходимый — не вся таблица). Повторный вызов: `{"ok":true,
+"departments":80,"managers":431,"backfilledHeads":1,"renamed":5,
+"phonesSynced":0,"phonesSkipped":35,"phonesErrors":0,"phoneBatches":5,
+"ms":10370}`. `phonesSynced:0` ожидаемо — телефоны уже были заполнены прямой
+SQL-правкой раньше в этой же задаче, значения совпали (идемпотентность
+подтверждена). Проверено после: `sa.employees` — 173/211 с `work_phone`,
+NULL не пострадали (первый упавший вызов откатился транзакцией целиком, без
+частичной записи); `sa.org_resolved_hierarchy` — 431 строка с сегодняшним
+`resolved_at`. Первая (упавшая) попытка — в `app.log`, чистый rollback, без
+падения процесса.
+
+Файлы: `owners-inbox/task-5174-sa-employees-work-phone.md` (life-os, полный
+отчёт по обеим частям задачи), диффы в
+`team-inbox/shared-memory/5174-org-sync-work-phone.diff`.
+
+---
+
 ## 2026-09-02 — Планы отгрузок сентября: полная замена из «Верные планы Сентябрь (1).xlsx»
 
 Владелец: «с планами получилась какая-то хуйня — потри все планы отгрузок
