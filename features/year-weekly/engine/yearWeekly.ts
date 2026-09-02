@@ -27,17 +27,34 @@ export type { EntityKey, EntityMetrics, WeekBlock, MonthBlock, NonMoneyPlan, Yea
 // есть в цепочке предков его отдела. Переименование отдела в Битриксе сломает
 // блок — это осознанно: явного словаря id владелец не давал, а имена стабильны.
 
-// Якорные ИМЕНА отделов дерева продаж (см. поддерево «Отдел продаж»).
-const ANCHORS = {
-  spb_os: 'Департамент ОС',
-  spb_nc: 'Департамент НЦ',
-  spb_zhbi: 'Отдел ЖБИ',
-  spb_metal: 'Отдел Металлопроката',
-  msk_os: 'МСК ОС',
-  msk_nc: 'МСК НЦ',
-  msk_zhbi: 'МСК ЖБИ',
-  krd: 'Филиал Краснодар',
-} as const;
+// Состав сущностей — якорные ИМЕНА отделов дерева продаж; менеджер попадает в
+// сущность, если ЛЮБОЙ из якорей встречается в цепочке его отдела до корня.
+// Определение владельца 02.09 (дословно, «предельно понятно»):
+//   СПБ ИТОГО   = Департамент ОС + Департамент НЦ + Департамент ЮЛ
+//   Общестрой   = Департамент ОС;  Нулевой = Департамент НЦ
+//   Нерудка СПБ = Команда Новикова + Команда Матвеевой
+//   ЖБИ СПБ = Отдел ЖБИ;  Металл СПБ = Отдел металлопроката
+//   МСК ИТОГО   = Московский филиал (целиком: ОС + НЦ + ЖБИ + Стажеры МСК + …)
+//   ОС/НЦ/ЖБИ МСК = одноимённые отделы;  Краснодар = Филиал Краснодар
+// До 02.09 состав зеркалил формулы xlsx владельца: МСК ИТОГО был ОС+НЦ (без
+// ЖБИ и стажёров), СПБ ИТОГО — без ЮЛ, Нерудка = НЦ − ЖБИ − Металл (и тянула
+// «Отдел перспективы НЦ»). Жалоба-триггер: отгрузки МСК за август 69,9 млн
+// против 96,9 млн в отчёте по менеджерам с «Московским филиалом» целиком.
+// Сравнение имён — без учёта регистра (в оргструктуре «Отдел Металлопроката»).
+const ANCHORS: Record<string, string[]> = {
+  spb_total:   ['Департамент ОС', 'Департамент НЦ', 'Департамент ЮЛ'],
+  spb_os:      ['Департамент ОС'],
+  spb_nc:      ['Департамент НЦ'],
+  spb_nerudka: ['Команда Новикова', 'Команда Матвеевой'],
+  spb_zhbi:    ['Отдел ЖБИ'],
+  spb_metal:   ['Отдел металлопроката'],
+  msk_total:   ['Московский филиал'],
+  msk_os:      ['МСК ОС'],
+  msk_nc:      ['МСК НЦ'],
+  msk_zhbi:    ['МСК ЖБИ'],
+  krd:         ['Филиал Краснодар'],
+};
+const norm = (s: string) => s.trim().toLowerCase();
 
 interface Agg {
   deals: number; dealsPrim: number;
@@ -108,7 +125,8 @@ async function resolveEntityManagers(): Promise<Record<EntityKey, Set<string>>> 
   const byBx = new Map(depts.rows.filter(d => d.bx).map(d => [d.bx!, d]));
   const byId = new Map(depts.rows.map(d => [d.id, d]));
 
-  // Имена всей цепочки предков отдела (включая сам отдел), с guard от циклов.
+  // Имена всей цепочки предков отдела (включая сам отдел), нормализованные,
+  // с guard от циклов.
   const chainCache = new Map<string, Set<string>>();
   const chainNames = (deptId: string | null): Set<string> => {
     if (!deptId) return new Set();
@@ -117,40 +135,44 @@ async function resolveEntityManagers(): Promise<Record<EntityKey, Set<string>>> 
     const names = new Set<string>();
     let cur = byId.get(deptId);
     for (let i = 0; cur && i < 15; i++) {
-      names.add(cur.name);
+      names.add(norm(cur.name));
       cur = cur.parent ? byBx.get(cur.parent) : undefined;
     }
     chainCache.set(deptId, names);
     return names;
   };
 
+  // Диагностика: якорь, которого нет в оргструктуре, даёт пустую сущность
+  // МОЛЧА (нули в колонке) — предупреждаем в логе, чтобы переименование отдела в
+  // Битриксе не осталось незамеченным.
+  const allDeptNames = new Set(depts.rows.map(d => norm(d.name)));
+  for (const [key, anchors] of Object.entries(ANCHORS)) {
+    for (const a of anchors) {
+      if (!allDeptNames.has(norm(a))) console.warn(`[year-weekly] якорь «${a}» (${key}) не найден среди активных отделов`);
+    }
+  }
+
   const sets: Record<string, Set<string>> = {};
   for (const k of Object.keys(ANCHORS)) sets[k] = new Set();
   for (const m of mgrs.rows) {
     const names = chainNames(m.dept);
-    for (const [key, anchor] of Object.entries(ANCHORS)) {
-      if (names.has(anchor)) sets[key].add(m.mgr);
+    for (const [key, anchors] of Object.entries(ANCHORS)) {
+      if (anchors.some(a => names.has(norm(a)))) sets[key].add(m.mgr);
     }
   }
-  const minus = (a: Set<string>, ...subs: Set<string>[]) =>
-    new Set([...a].filter(x => !subs.some(s => s.has(x))));
-  const union = (...xs: Set<string>[]) => new Set(xs.flatMap(s => [...s]));
 
   return {
-    spb_os: sets.spb_os,
-    spb_nc: sets.spb_nc,
-    // «Все прочее внутри НЦ = Нерудка» (владелец 28.08)
-    spb_nerudka: minus(sets.spb_nc, sets.spb_zhbi, sets.spb_metal),
-    spb_zhbi: sets.spb_zhbi,
-    spb_metal: sets.spb_metal,
-    // Итоги — как в файле: СПБ = Общестрой + Нулевой; МСК = ОС + НЦ (ЖБИ МСК
-    // в МСК ИТОГО файла НЕ входит — формула BQ=BW+CI, зеркалим).
-    spb_total: union(sets.spb_os, sets.spb_nc),
-    msk_total: union(sets.msk_os, sets.msk_nc),
-    msk_os: sets.msk_os,
-    msk_nc: sets.msk_nc,
-    msk_zhbi: sets.msk_zhbi,
-    krd: sets.krd,
+    spb_total:   sets.spb_total,
+    spb_os:      sets.spb_os,
+    spb_nc:      sets.spb_nc,
+    spb_nerudka: sets.spb_nerudka,
+    spb_zhbi:    sets.spb_zhbi,
+    spb_metal:   sets.spb_metal,
+    msk_total:   sets.msk_total,
+    msk_os:      sets.msk_os,
+    msk_nc:      sets.msk_nc,
+    msk_zhbi:    sets.msk_zhbi,
+    krd:         sets.krd,
   };
 }
 
