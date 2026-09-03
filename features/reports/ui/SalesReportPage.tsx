@@ -1548,6 +1548,19 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     walk(displayRows as GroupedMergedRow[]);
     return out;
   }, [displayRows]);
+  // Популяция «Итого» разбора — ВСЕ строки ответа (без поиска и без групп), см.
+  // BreakdownReportContext.totalRowIds.
+  const breakdownTotalRowIds = useMemo(() => {
+    const out: string[] = [];
+    const walk = (rs: GroupedMergedRow[]) => {
+      for (const r of rs) {
+        if (r.isGroup) { if (r.children) walk(r.children as GroupedMergedRow[]); }
+        else out.push(r.dimensionId);
+      }
+    };
+    walk(((data?.rows ?? []) as GroupedMergedRow[]));
+    return out;
+  }, [data?.rows]);
   const getBreakdownCellValue = useCallback((metricId: string, rowId: string | null): number | null => {
     if (rowId === null) return data?.totals?.[metricId]?.current ?? null;
     const find = (rs: GroupedMergedRow[]): MergedRow | undefined => {
@@ -1566,8 +1579,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     periodDimension: periodMode ? periodDimension : undefined,
     period, dealScope, clientType, productGroupMode, departmentIds, dealFilters, accountType, dealFields,
     rows: breakdownRows,
+    totalRowIds: breakdownTotalRowIds,
     getCellValue: getBreakdownCellValue,
-  }), [dimensionType, periodMode, periodDimension, period, dealScope, clientType, productGroupMode, departmentIds, dealFilters, accountType, dealFields, breakdownRows, getBreakdownCellValue]);
+  }), [dimensionType, periodMode, periodDimension, period, dealScope, clientType, productGroupMode, departmentIds, dealFilters, accountType, dealFields, breakdownRows, breakdownTotalRowIds, getBreakdownCellValue]);
 
   return (
     <MetricBreakdownProvider value={breakdownCtx}>

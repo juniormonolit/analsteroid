@@ -203,9 +203,17 @@ function buildDealsQuery(ctx: BreakdownReportContext, metricId: string, rowId: s
     || (ctx.dimensionType === 'period' && ctx.periodDimension !== 'product-groups');
   if (managerSlice && ctx.accountType && ctx.accountType !== 'all') p.accountType = ctx.accountType;
   if (ctx.dealFilters.length) p.dealFilters = JSON.stringify(ctx.dealFilters);
-  // Срез: «Итого» — весь срез (all=1); строка — менеджер или товарная группа.
-  // Период/источник/клиент по строке в v1 не режем (переключатель там выключен).
-  if (rowId === null) p.all = '1';
+  // Срез: «Итого» в отчёте по менеджерам — ТОЛЬКО менеджеры строк отчёта
+  // (ctx.totalRowIds): так считает ячейка «Итого» (фильтр «тип аккаунта» и
+  // оргструктура режут строки, движок и суммы идут по ним). Без этого разбор
+  // брал весь срез и расходился на сделки не-manager* аккаунтов (инцидент 03.09,
+  // +11,7 млн у «Сумма (Новые клиенты)»). Прочие разрезы — весь срез (all=1);
+  // строка — менеджер или товарная группа; период/источник/клиент по строке
+  // в v1 не режем (переключатель там выключен).
+  if (rowId === null) {
+    if (ctx.dimensionType === 'manager' && ctx.totalRowIds.length) p.managerIds = ctx.totalRowIds.join(',');
+    else p.all = '1';
+  }
   else if (ctx.dimensionType === 'manager') p.managerId = rowId;
   else if (ctx.dimensionType === 'product-group') p.productGroup = rowId;
   else p.all = '1';
@@ -269,7 +277,13 @@ function MetricLeafPanel({ metric, note }: { metric: Metric; note?: string }) {
           <div className="h-[min(440px,55dvh)] min-h-[200px] min-w-0">
             {isClient ? (
               <ClientDealsView
-                target={{ id: rowId ?? '__total__', name: rowName, metricId: metric.id, kind: rowId ? undefined : 'total' }}
+                // «Итого» по менеджерам — kind 'managers' со списком строк отчёта
+                // (та же популяция, что у ячейки, см. buildDealsQuery); иначе — весь срез.
+                target={rowId !== null
+                  ? { id: rowId, name: rowName, metricId: metric.id }
+                  : ctx.dimensionType === 'manager' && ctx.totalRowIds.length
+                    ? { id: ctx.totalRowIds.join(','), name: rowName, metricId: metric.id, kind: 'managers' }
+                    : { id: '__total__', name: rowName, metricId: metric.id, kind: 'total' }}
                 dimensionType={ctx.dimensionType === 'client' ? 'manager' : ctx.dimensionType}
                 period={ctx.period}
                 dealScope={ctx.dealScope}
@@ -579,7 +593,7 @@ export function MetricBreakdownModal({ metric, ctx, onClose }: {
                 title={sliceSupported ? undefined : SLICE_UNSUPPORTED_NOTE}
                 className="min-w-0 flex-1 sm:flex-none sm:max-w-[320px] text-base sm:text-sm min-h-11 sm:min-h-9 px-2 border border-[var(--color-border)] rounded-lg bg-[var(--color-bg-surface)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
               >
-                <option value="">Итого · весь отчёт</option>
+                <option value="">{ctx.dimensionType === 'manager' && ctx.totalRowIds.length ? `Итого · ${ctx.totalRowIds.length} строк отчёта` : 'Итого · весь отчёт'}</option>
                 {sliceSupported && ctx.rows.map(r => (
                   <option key={r.id} value={r.id}>{DIMENSION_LABEL[ctx.dimensionType]}: {r.name}</option>
                 ))}
