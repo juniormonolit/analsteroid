@@ -185,14 +185,25 @@ export async function cached<T>(key: string, ttlSec: number, producer: () => Pro
 
 const LIVE_TTL_SEC = 10 * 60;             // 10 min — matches the previous in-memory behaviour
 const HISTORICAL_TTL_SEC = 24 * 60 * 60;  // 24 h
+// «Свежезакончившийся» период ещё меняется задним числом: синк доносит вчерашние
+// продажи и правки сумм в течение следующего дня. Инцидент 03.09: отчёт за 02.09,
+// открытый в ~05:00, замёрз на 24 ч с 2 315 605 ₽; к 10:13 синк донёс продажу
+// #250078 и +101 650 к сумме #249736 — живой дрилл показывал 2 491 255 ₽, и
+// расхождение с кэшем не рассасывалось до вечера. 48 ч форы решают и «вчера», и
+// стык месяца/выходных.
+const RECENT_GRACE_MS = 48 * 60 * 60 * 1000;
 
 /**
  * TTL policy for report caches. A period whose exclusive upper bound is still in the future
- * (i.e. it includes today) keeps changing as deals sync in → short TTL. A fully-past period is
- * stable → long TTL. `toExclIso` is the exclusive end (start of the day after the range end).
+ * (i.e. it includes today) keeps changing as deals sync in → short TTL. A period that ended
+ * less than RECENT_GRACE_MS ago still receives backdated sync edits → short TTL too. Only a
+ * long-finished period is stable → long TTL. `toExclIso` is the exclusive end (start of the
+ * day after the range end).
  */
 export function reportTtl(toExclIso: string): number {
-  return new Date(toExclIso).getTime() >= Date.now() ? LIVE_TTL_SEC : HISTORICAL_TTL_SEC;
+  const toExclMs = new Date(toExclIso).getTime();
+  if (toExclMs >= Date.now()) return LIVE_TTL_SEC;
+  return Date.now() - toExclMs < RECENT_GRACE_MS ? LIVE_TTL_SEC : HISTORICAL_TTL_SEC;
 }
 
 /**
