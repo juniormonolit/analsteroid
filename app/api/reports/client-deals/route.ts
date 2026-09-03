@@ -49,7 +49,10 @@ export async function GET(req: NextRequest) {
     period: { from: new Date(from), to: new Date(to) },
     dimension,
     dimValue: sp.get('dimValue') ?? undefined,
-    dimValues: (sp.get('dimValues') ?? '').split(',').map(s => s.trim()).filter(Boolean) || undefined,
+    // НЕ '(…)?.split… || undefined': пустой массив truthy, uезжал в опции как
+    // dimValues=[] и глушил dimValue в движке ('??' видит не-null) — клиентский
+    // дрилл по строке МЕНЕДЖЕРА всегда отвечал «Нет заказчиков» (инцидент 03.09).
+    dimValues: sp.get('dimValues') ? sp.get('dimValues')!.split(',').map(s => s.trim()).filter(Boolean) : undefined,
     productGroupMode: (sp.get('productGroupMode') as 'kc' | 'by_max' | null) ?? undefined,
     dealScope: (sp.get('scope') as 'primary' | 'repeat' | 'all' | null) ?? undefined,
     clientType: (sp.get('clientType') as 'all' | 'b2c' | 'b2b' | null) ?? undefined,

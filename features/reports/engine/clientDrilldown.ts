@@ -98,7 +98,10 @@ function pillWhere(dealScope: DealScope, clientType: ClientType): string {
 /** Условие «сделка принадлежит строке отчёта» для алиаса d. */
 function dimWhere(opts: ClientDrillOptions): string {
   if (opts.dimension === 'manager') {
-    const ids = (opts.dimValues ?? (opts.dimValue ? [opts.dimValue] : [])).filter(v => /^\d+$/.test(v));
+    // ПУСТОЙ dimValues равносилен отсутствию: '??' его не ловит, а роут исторически
+    // слал [] вместо undefined — и dimValue глушился в '1=0' (инцидент 03.09).
+    const list = opts.dimValues?.length ? opts.dimValues : (opts.dimValue ? [opts.dimValue] : []);
+    const ids = list.filter(v => /^\d+$/.test(v));
     return ids.length ? `d.current_manager_id IN (${ids.join(',')})` : '1=0';
   }
   if (opts.dimension === 'product-group') {
