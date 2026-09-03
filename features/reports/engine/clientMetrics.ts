@@ -123,6 +123,9 @@ export const CLIENT_METRIC_IDS = [
   'cohort_repeat_clients', 'cohort_first_revenue',
   'cohort_repeat_revenue_30', 'cohort_repeat_revenue_60', 'cohort_repeat_revenue_90',
   'cohort_repeat_revenue_180', 'cohort_repeat_revenue_360', 'cohort_ltv_total_revenue',
+  // Прожившие окно повторные клиенты — честные знаменатели средних LTV (аудит 03.09).
+  'cohort_matured_30', 'cohort_matured_60', 'cohort_matured_90',
+  'cohort_matured_180', 'cohort_matured_360',
 ] as const;
 
 /** Метрики второй пачки считаются отдельным запросом (своя популяция — интервалы,
@@ -883,6 +886,9 @@ export const CLIENT_COHORT_METRIC_IDS = [
   'cohort_repeat_clients', 'cohort_first_revenue',
   'cohort_repeat_revenue_30', 'cohort_repeat_revenue_60', 'cohort_repeat_revenue_90',
   'cohort_repeat_revenue_180', 'cohort_repeat_revenue_360', 'cohort_ltv_total_revenue',
+  // Прожившие окно повторные клиенты — честные знаменатели средних LTV (аудит 03.09).
+  'cohort_matured_30', 'cohort_matured_60', 'cohort_matured_90',
+  'cohort_matured_180', 'cohort_matured_360',
   // Задача #4996 (заказчик Серёга): «% вернувшихся клиентов» — числители-счётчики
   // для calculated cohort_return_rate_* (миграция 182). Та же когорта, то же
   // определение окон 30/60/90/180/360 и та же зрелость, что у LTV-блока выше —
@@ -921,6 +927,10 @@ export interface ClientCohortRow {
   ltv: Record<(typeof LTV_WINDOWS_DAYS)[number], number | null>;
   /** Сумма всех отгрузок этих клиентов за всю историю. */
   ltvTotal: number;
+  /** Повторные клиенты, ПРОЖИВШИЕ окно (first_at + N дн ≤ сейчас) — честный
+   *  знаменатель среднего LTV окна: числитель суммирует только их (аудит 03.09:
+   *  среднее делилось на всех повторных и занижалось свежими клиентами). */
+  maturedRepeat: Record<(typeof LTV_WINDOWS_DAYS)[number], number | null>;
   /** Клиенты когорты (ВСЕ, не только повторные), у кого ППО (вторая отгрузка)
    *  случилась в пределах окна от первой; null = окно не прожито всей когортой
    *  (только для dimension='period', см. rowEndMs ниже). */
@@ -940,6 +950,11 @@ export function clientCohortToRecord(row: ClientCohortRow | undefined): Record<s
     cohort_repeat_revenue_180: row?.ltv[180] ?? null,
     cohort_repeat_revenue_360: row?.ltv[360] ?? null,
     cohort_ltv_total_revenue: row?.ltvTotal ?? 0,
+    cohort_matured_30: row?.maturedRepeat[30] ?? null,
+    cohort_matured_60: row?.maturedRepeat[60] ?? null,
+    cohort_matured_90: row?.maturedRepeat[90] ?? null,
+    cohort_matured_180: row?.maturedRepeat[180] ?? null,
+    cohort_matured_360: row?.maturedRepeat[360] ?? null,
     cohort_clients: row?.cohortClients ?? 0,
     // ?? null (не 0): различаем «окно не прожито» (immature, из rowEndMs) от
     // «прожито, вернувшихся 0» — оба в итоге дают formula null → «—» у доли,
@@ -1058,14 +1073,19 @@ returned_flags AS (
     FROM per_client
 ),
 rep AS (SELECT * FROM per_client WHERE n_ships >= 2),
+-- Суммы окон БЕЗ COALESCE: SUM по клиентам, не прожившим окно, даёт NULL —
+-- «ни один не прожил» показывается прочерком, а не ложным «0 ₽» (аудит 03.09).
+-- matured_N — знаменатель честного среднего LTV: только прожившие окно.
 rep_agg AS (
   SELECT dim_id, count(*) AS repeat_clients, COALESCE(SUM(first_rev), 0) AS first_revenue,
-         ${LTV_WINDOWS_DAYS.map(w => `COALESCE(SUM(ltv_${w}), 0) AS ltv_${w}`).join(', ')},
+         ${LTV_WINDOWS_DAYS.map(w => `SUM(ltv_${w}) AS ltv_${w}`).join(', ')},
+         ${LTV_WINDOWS_DAYS.map(w => `count(*) FILTER (WHERE first_at + interval '${w} days' <= now()) AS matured_${w}`).join(', ')},
          COALESCE(SUM(ltv_total), 0) AS ltv_total
     FROM rep GROUP BY 1
   UNION ALL
   SELECT '${CLIENTS_GRAND_TOTAL_KEY}', count(*), COALESCE(SUM(first_rev), 0),
-         ${LTV_WINDOWS_DAYS.map(w => `COALESCE(SUM(ltv_${w}), 0)`).join(', ')},
+         ${LTV_WINDOWS_DAYS.map(w => `SUM(ltv_${w})`).join(', ')},
+         ${LTV_WINDOWS_DAYS.map(w => `count(*) FILTER (WHERE first_at + interval '${w} days' <= now())`).join(', ')},
          COALESCE(SUM(ltv_total), 0)
     FROM rep
 ),
@@ -1088,13 +1108,14 @@ ret_agg AS (
 SELECT COALESCE(a.dim_id, b.dim_id) AS dim_id,
        a.repeat_clients, a.first_revenue,
        ${LTV_WINDOWS_DAYS.map(w => `a.ltv_${w}`).join(', ')}, a.ltv_total,
+       ${LTV_WINDOWS_DAYS.map(w => `a.matured_${w}`).join(', ')},
        b.cohort_clients,
        ${LTV_WINDOWS_DAYS.map(w => `b.returned_${w}`).join(', ')}
   FROM rep_agg a FULL JOIN ret_agg b ON b.dim_id = a.dim_id
 `;
 
   const key = [
-    'cohort3', fromIso, toExclIso, opts.dimension, opts.periodUnit ?? '-', opts.productGroupMode ?? '-',
+    'cohort4', fromIso, toExclIso, opts.dimension, opts.periodUnit ?? '-', opts.productGroupMode ?? '-',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
     deptEmpty ? 'none' : (managerIds.length ? managerIds.join(',') : 'all'),
     `${opts.createdTimeFilter ?? 'all'}:${opts.firstTouchFilter ?? 'all'}|df:${df.key}`,
@@ -1125,9 +1146,11 @@ SELECT COALESCE(a.dim_id, b.dim_id) AS dim_id,
     const end = rowEndMs(dimId);
     const ltv = {} as ClientCohortRow['ltv'];
     const returned = {} as ClientCohortRow['returned'];
+    const maturedRepeat = {} as ClientCohortRow['maturedRepeat'];
     for (const w of LTV_WINDOWS_DAYS) {
       const immature = opts.dimension === 'period' && end + w * 86_400_000 > now;
-      ltv[w] = immature ? null : num(r[`ltv_${w}`]);
+      ltv[w] = immature ? null : numOrNull(r[`ltv_${w}`]);
+      maturedRepeat[w] = immature ? null : num(r[`matured_${w}`]);
       // Та же зрелость, что у LTV: колонка «% вернувшихся через N дн.» в разрезе
       // по периодам гасится (null → «—»), пока окно не прожито всем бакетом.
       returned[w] = immature ? null : num(r[`returned_${w}`]);
@@ -1137,6 +1160,7 @@ SELECT COALESCE(a.dim_id, b.dim_id) AS dim_id,
       firstRevenue: num(r.first_revenue),
       ltv,
       ltvTotal: num(r.ltv_total),
+      maturedRepeat,
       returned,
       cohortClients: num(r.cohort_clients),
     });
