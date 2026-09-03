@@ -83,6 +83,12 @@ export interface ClientMetricsRow {
   groupsPerOrder: number | null;
   /** Среднее число товарных позиций в одном заказе периода. */
   productsPerOrder: number | null;
+  /** Аддитивные числители «средних» (задача 03.09: строки отдела/филиала суммировали
+   *  сами средние — СПб показывал 164,7 группы на клиента). Средние теперь
+   *  calculated-метрики из этих сумм, и группы пересчитываются честно, взвешенно. */
+  groupsSumClients: number;
+  groupsSumOrders: number;
+  productsSumOrders: number;
   /** Медиана дней от created_at до delivered_at по заказам периода. */
   medianCycleDays: number | null;
   /** Медиана месяцев жизни клиента (первая заявка → последняя отгрузка). */
@@ -101,8 +107,10 @@ export interface ClientMetricsRow {
 export const CLIENT_METRIC_IDS = [
   'new_clients_count', 'all_clients_delivered', 'repeat_clients_delivered',
   'delivered_deals_count', 'new_clients_amount', 'repeat_clients_amount',
-  'complex_clients', 'avg_groups_per_client', 'avg_groups_per_order',
-  'avg_products_per_order',
+  'complex_clients',
+  // Служебные аддитивные числители «средних» (03.09); сами avg_* теперь calculated
+  // и попадают в гейт роута через withDeps (зависимости раскрыты до этих id).
+  'client_groups_sum', 'order_groups_sum', 'order_products_sum',
   // Вторая пачка (миграция 172) — медианные времена между заказами.
   'median_time_to_2nd', 'median_time_between_orders',
   'median_time_to_2nd_diff_cat', 'median_time_between_orders_diff_cat',
@@ -134,8 +142,8 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
       new_clients_count: 0, all_clients_delivered: 0, repeat_clients_delivered: 0,
       first_repeat_clients: 0,
       delivered_deals_count: 0, new_clients_amount: 0, repeat_clients_amount: 0,
-      complex_clients: 0, avg_groups_per_client: null, avg_groups_per_order: null,
-      avg_products_per_order: null, median_cycle_time_days: null, median_client_lifetime_months: null,
+      complex_clients: 0, client_groups_sum: 0, order_groups_sum: 0, order_products_sum: 0,
+      median_cycle_time_days: null, median_client_lifetime_months: null,
       client_days_since_last: null, client_order_frequency_days: null, client_ltv: null,
       client_categories_count: null, client_churn_risk_pct: null,
     };
@@ -152,9 +160,11 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
     new_clients_amount: row.newAmount,
     repeat_clients_amount: row.repeatAmount,
     complex_clients: row.complexClients,
-    avg_groups_per_client: row.groupsPerClient,
-    avg_groups_per_order: row.groupsPerOrder,
-    avg_products_per_order: row.productsPerOrder,
+    // Средние (avg_groups_per_client и пр.) с 03.09 — calculated из этих сумм:
+    // строки-группы отчёта складывают числители и делят, а не суммируют средние.
+    client_groups_sum: row.groupsSumClients,
+    order_groups_sum: row.groupsSumOrders,
+    order_products_sum: row.productsSumOrders,
     median_cycle_time_days: row.medianCycleDays,
     median_client_lifetime_months: row.medianLifetimeMonths,
     client_days_since_last: row.daysSinceLast,
@@ -409,6 +419,7 @@ deal_dim AS (
          COALESCE(SUM(amount) FILTER (WHERE NOT is_repeat_deal), 0) AS new_amount,
          COALESCE(SUM(amount) FILTER (WHERE is_repeat_deal), 0)     AS repeat_amount,
          AVG(groups_cnt) AS groups_per_order, AVG(items_cnt) AS products_per_order,
+         COALESCE(SUM(groups_cnt), 0) AS groups_sum_orders, COALESCE(SUM(items_cnt), 0) AS products_sum_orders,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY cycle_days) AS median_cycle
     FROM src GROUP BY 1),
 deal_all AS (
@@ -416,6 +427,7 @@ deal_all AS (
          COALESCE(SUM(amount) FILTER (WHERE NOT is_repeat_deal), 0) AS new_amount,
          COALESCE(SUM(amount) FILTER (WHERE is_repeat_deal), 0)     AS repeat_amount,
          AVG(groups_cnt) AS groups_per_order, AVG(items_cnt) AS products_per_order,
+         COALESCE(SUM(groups_cnt), 0) AS groups_sum_orders, COALESCE(SUM(items_cnt), 0) AS products_sum_orders,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY cycle_days) AS median_cycle
     FROM src),
 client_dim AS (
@@ -425,6 +437,7 @@ client_dim AS (
          count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
          AVG(cg) AS groups_per_client,
+         COALESCE(SUM(cg), 0) AS groups_sum_clients,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY lifetime) AS median_lifetime,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY dsl)  AS med_dsl,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY freq) AS med_freq,
@@ -439,6 +452,7 @@ client_all AS (
          count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
          AVG(cg) AS groups_per_client,
+         COALESCE(SUM(cg), 0) AS groups_sum_clients,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY lifetime) AS median_lifetime,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY dsl)  AS med_dsl,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY freq) AS med_freq,
@@ -448,12 +462,14 @@ client_all AS (
     FROM pc_all)
 SELECT d.dim_id, c.clients_total, c.new_clients, c.repeat_clients, c.first_repeat_clients, d.orders, d.new_amount, d.repeat_amount,
        c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
+       c.groups_sum_clients, d.groups_sum_orders, d.products_sum_orders,
        d.median_cycle, c.median_lifetime,
        c.med_dsl, c.med_freq, c.med_ltv, c.med_cats, c.med_risk
   FROM deal_dim d JOIN client_dim c ON c.dim_id IS NOT DISTINCT FROM d.dim_id
 UNION ALL
 SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.repeat_clients, c.first_repeat_clients, d.orders, d.new_amount,
        d.repeat_amount, c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
+       c.groups_sum_clients, d.groups_sum_orders, d.products_sum_orders,
        d.median_cycle, c.median_lifetime,
        c.med_dsl, c.med_freq, c.med_ltv, c.med_cats, c.med_risk
   FROM deal_all d CROSS JOIN client_all c
@@ -485,6 +501,9 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.repeat_cl
       groupsPerClient: numOrNull(r.groups_per_client),
       groupsPerOrder: numOrNull(r.groups_per_order),
       productsPerOrder: numOrNull(r.products_per_order),
+      groupsSumClients: num(r.groups_sum_clients),
+      groupsSumOrders: num(r.groups_sum_orders),
+      productsSumOrders: num(r.products_sum_orders),
       medianCycleDays: numOrNull(r.median_cycle),
       medianLifetimeMonths: numOrNull(r.median_lifetime),
       daysSinceLast: numOrNull(r.med_dsl),

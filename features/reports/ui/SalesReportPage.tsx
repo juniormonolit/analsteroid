@@ -75,7 +75,12 @@ function aggregateGroupDeltas(members: MergedRow[], metrics: Metric[]): Deltas {
   const sumsCur: Record<string, number | null> = {};
   const sumsCmp: Record<string, number | null> = {};
   for (const id of ids) {
-    if (byId.get(id)?.metricType === 'calculated') continue;
+    const m = byId.get(id);
+    if (m?.metricType === 'calculated') continue;
+    // Несуммируемые external (медианы, клиентские значения, aggregation_fn='none')
+    // в строке группы честно пусты: сумма медиан 12 команд — не медиана филиала
+    // (инцидент 03.09: СПб показывал 164,7 «средних товарных групп на клиента»).
+    if (m?.metricType === 'external' && m.aggregationFn !== 'sum') continue;
     let cur: number | null = null, cmp: number | null = null;
     for (const r of members) {
       const d = r.deltas[id];
