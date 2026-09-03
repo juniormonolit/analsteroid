@@ -4,6 +4,32 @@ import { permError } from '@/lib/auth/perms';
 import { ycAnalyticsDb } from '@/lib/db/clients';
 import { invalidateMetricsCache } from '@/lib/metrics/catalog';
 
+// JSON с детерминированным порядком ключей — для сравнения filters «как есть в БД»
+// с тем, что пришло в body. jsonb хранит ключи в своём порядке (по длине, потом по
+// алфавиту), body — в порядке вставки формой, поэтому голый JSON.stringify обеих
+// сторон различался бы на одинаковых по смыслу фильтрах.
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`;
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map(k => `${JSON.stringify(k)}:${stableJson(o[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
+// null/undefined и пустая строка — одно и то же «не задано».
+const normStr = (v: unknown): string => (v == null ? '' : String(v));
+
+interface MetricDefinitionRow {
+  formula: string | null;
+  filters: unknown;
+  agg_fn: string | null;
+  agg_field: string | null;
+  date_field: string | null;
+  metric_type: string;
+  source: string;
+}
+
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   const denied = permError(session, 'section.metrics');
@@ -12,6 +38,29 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const body = await req.json();
   const db = ycAnalyticsDb();
+
+  // Отметка «Проверено» (миграция 192) не должна переживать правку ОПРЕДЕЛЕНИЯ
+  // метрики: владелец сверял с Битриксом конкретную формулу/фильтры, после их
+  // смены галочка врёт. Поэтому перед UPDATE читаем текущее определение и, если
+  // хоть одно из полей formula / filters / agg_fn / agg_field / date_field /
+  // metric_type / source реально меняется — в том же UPDATE обнуляем verified_*.
+  // Правка названий, описаний, категории, флагов видимости отметку не трогает.
+  // Сравниваем ровно те значения, которые уйдут в UPDATE (с теми же дефолтами).
+  const cur = await db.query<MetricDefinitionRow>(`
+    SELECT formula, filters, agg_fn, agg_field, date_field, metric_type,
+           COALESCE(source, 'deals') AS source
+    FROM metrics WHERE id = $1
+  `, [id]);
+  const prev = cur.rows[0];
+  const definitionChanged = !!prev && (
+    normStr(prev.formula) !== normStr(body.formula ?? null) ||
+    stableJson(prev.filters ?? []) !== stableJson(body.filters ?? []) ||
+    normStr(prev.agg_fn) !== normStr(body.agg_fn ?? null) ||
+    normStr(prev.agg_field) !== normStr(body.agg_field ?? null) ||
+    normStr(prev.date_field) !== normStr(body.date_field ?? null) ||
+    normStr(prev.metric_type) !== normStr(body.metric_type ?? 'collected') ||
+    normStr(prev.source) !== normStr(body.source ?? 'deals')
+  );
 
   await db.query(`
     UPDATE metrics SET
@@ -39,7 +88,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       is_collect_ok    = $22,
       is_calc_ok       = $23,
       calc_ok          = $23,
-      fill_ok          = $22
+      fill_ok          = $22,
+      verified_at      = CASE WHEN $25::boolean THEN NULL ELSE verified_at END,
+      verified_by      = CASE WHEN $25::boolean THEN NULL ELSE verified_by END
     WHERE id = $24
   `, [
     body.name_ru,
@@ -66,6 +117,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     body.is_collect_ok ?? false,
     body.is_calc_ok ?? false,
     id,
+    definitionChanged,
   ]);
 
   invalidateMetricsCache();

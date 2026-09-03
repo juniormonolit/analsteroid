@@ -60,17 +60,63 @@ function filterRu(field: string, op: string, value: unknown): string {
   return `${FIELD_RU[field] ?? DATE_RU[field] ?? field} ${op === 'neq' || op === 'not_in' ? '≠' : '='} ${v}`;
 }
 
+// Общие куски человеческой сборки collected-метрики — их делят строка «формула»
+// (metricFormulaLine) и чипы выборки «Разбора метрики» (collectedSelectionChips),
+// чтобы «?» и полноэкранный разбор не разошлись в словах.
+function aggRu(m: Metric): string {
+  return AGG_RU[`${m.aggFn ?? ''}:${m.aggField ?? ''}`]
+    ?? `${m.aggFn === 'sum' ? 'сумма' : m.aggFn === 'avg' ? 'среднее' : 'количество'} по полю ${m.aggField ?? 'deal_id'}`;
+}
+// «дата продажи попадает в период»; null — метрика без датового окна.
+function dateWindowRu(m: Metric): string | null {
+  return m.dateField ? `${DATE_RU[m.dateField] ?? m.dateField} попадает в период` : null;
+}
+
 export function metricFormulaLine(m: Metric): string | null {
   // Ручная формула каталога — для любого типа метрики (external в том числе);
   // для calculated без ручной каталог уже положил сюда автогенерацию из имён.
   if (m.formulaHuman) return m.formulaHuman;
   if (m.metricType === 'calculated') return m.formula ?? null;
   if (m.metricType === 'collected') {
-    const agg = AGG_RU[`${m.aggFn ?? ''}:${m.aggField ?? ''}`]
-      ?? `${m.aggFn === 'sum' ? 'сумма' : m.aggFn === 'avg' ? 'среднее' : 'количество'} по полю ${m.aggField ?? 'deal_id'}`;
-    const win = m.dateField ? `, у которых ${DATE_RU[m.dateField] ?? m.dateField} попадает в период` : '';
+    const agg = aggRu(m);
+    const dateWin = dateWindowRu(m);
+    const win = dateWin ? `, у которых ${dateWin}` : '';
     const filters = (m.filters ?? []).map(f => filterRu(f.field, f.op, f.value)).join('; ');
     return `= ${agg}${win}${filters ? `; условия: ${filters}` : ''}`;
   }
   return null;
+}
+
+/**
+ * Чипы параметров выборки collected-метрики для «Разбора метрики» (задача
+ * владельца 03.09): [агрегат, датовое окно (если есть), ...по одному на фильтр].
+ * Те же словари, что у metricFormulaLine, — только не одной строкой, а по частям,
+ * чтобы UI мог показать каждый параметр отдельной плашкой. Для calculated/external
+ * пустой массив: у них нет выборки сделок, они считаются из других метрик/движка.
+ */
+export function collectedSelectionChips(m: Metric): string[] {
+  if (m.metricType !== 'collected') return [];
+  const chips = [aggRu(m)];
+  const dateWin = dateWindowRu(m);
+  if (dateWin) chips.push(dateWin);
+  for (const f of m.filters ?? []) chips.push(filterRu(f.field, f.op, f.value));
+  return chips;
+}
+
+/**
+ * Что за число у метрики — счётчик сделок/заказчиков, сумма в рублях или иное
+ * (доля, среднее, месяцы). «Разбор» по этому выбирает, как показывать живую
+ * выборку: перечнем с количеством или с суммой. Для collected смотрим на сам
+ * агрегат (он первичен: dataType у collected — только формат вывода), для
+ * calculated/external — на dataType, другого источника нет.
+ */
+export function metricValueKind(m: Metric): 'count' | 'amount' | 'other' {
+  if (m.metricType === 'collected') {
+    if (m.aggFn === 'count_distinct' || m.aggFn === 'count_all') return 'count';
+    if ((m.aggFn === 'sum' || m.aggFn === 'avg') && m.aggField === 'amount') return 'amount';
+    return 'other';
+  }
+  if (m.dataType === 'money') return 'amount';
+  if (m.dataType === 'int') return 'count';
+  return 'other';
 }

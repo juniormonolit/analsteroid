@@ -44,6 +44,7 @@ import { exportNodeToPng } from '@/features/reports/lib/exportImage';
 import { exportNodeToPdf } from '@/features/reports/lib/exportPdf';
 import { UserGroupsBar, CreateGroupButton, GroupSelectPanel, type UserReportGroup } from './UserGroupsBar';
 import { ReportTabsBar } from './ReportTabsBar';
+import { MetricBreakdownProvider, MetricBreakdownContext, type BreakdownReportContext } from './MetricBreakdownContext';
 import { loadTabsStore, saveTabsStore, newTabId, type ReportTab, type ReportTabSnapshot, type ReportTabsStore } from '@/features/reports/lib/reportTabs';
 import { diffFromPreset } from '@/features/reports/lib/presetDiff';
 
@@ -1532,7 +1533,44 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     setMetricIds(ids); // always keep explicit order, never collapse to 'all_core'
   }
 
+  // Контекст полноэкранного «Разбора метрики» (задача владельца 03.09) — для
+  // кнопки «Подробнее» в «?» (MetricInfoBody через ReportTable/MetricPanel).
+  // rows — только реальные строки (без подытогов/групп), значения ячеек — из
+  // deltas текущего периода, «Итого» — из totals ответа.
+  const breakdownRows = useMemo(() => {
+    const out: { id: string; name: string }[] = [];
+    const walk = (rs: GroupedMergedRow[]) => {
+      for (const r of rs) {
+        if (r.isGroup) { if (r.children) walk(r.children as GroupedMergedRow[]); }
+        else out.push({ id: r.dimensionId, name: r.dimensionName });
+      }
+    };
+    walk(displayRows as GroupedMergedRow[]);
+    return out;
+  }, [displayRows]);
+  const getBreakdownCellValue = useCallback((metricId: string, rowId: string | null): number | null => {
+    if (rowId === null) return data?.totals?.[metricId]?.current ?? null;
+    const find = (rs: GroupedMergedRow[]): MergedRow | undefined => {
+      for (const r of rs) {
+        if (r.dimensionId === rowId) return r;
+        if (r.children) { const c = find(r.children as GroupedMergedRow[]); if (c) return c; }
+      }
+      return undefined;
+    };
+    // Сначала видимые строки, затем сырые (поиск по имени мог отфильтровать строку).
+    const row = find(displayRows as GroupedMergedRow[]) ?? (data?.rows as MergedRow[] | undefined)?.find(r => r.dimensionId === rowId);
+    return row?.deltas?.[metricId]?.current ?? null;
+  }, [data?.totals, data?.rows, displayRows]);
+  const breakdownCtx = useMemo<Omit<BreakdownReportContext, 'openBreakdown'>>(() => ({
+    dimensionType,
+    periodDimension: periodMode ? periodDimension : undefined,
+    period, dealScope, clientType, productGroupMode, departmentIds, dealFilters, accountType, dealFields,
+    rows: breakdownRows,
+    getCellValue: getBreakdownCellValue,
+  }), [dimensionType, periodMode, periodDimension, period, dealScope, clientType, productGroupMode, departmentIds, dealFilters, accountType, dealFields, breakdownRows, getBreakdownCellValue]);
+
   return (
+    <MetricBreakdownProvider value={breakdownCtx}>
     <div className="flex flex-col h-full overflow-hidden">
       {tabsStore && (
         <ReportTabsBar
@@ -1888,7 +1926,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           />
         );
       })()}
+      {/* Дровер — вне контекста «Разбора метрики» (value=null → «?» мини-отчёта
+          без кнопки «Подробнее»): breakdownCtx собран из среза ОСНОВНОГО отчёта,
+          а дровер живёт на своих local*-фильтрах/периоде — разбор сверял бы не
+          ту ячейку, рядом с которой стояла кнопка (ревью 03.09). */}
       {drilldown && (
+        <MetricBreakdownContext.Provider value={null}>
         <DrilldownDrawer
           key={`${drilldown.id}:${drilldown.metricId ?? ''}`}
           target={drilldown}
@@ -1958,6 +2001,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           }
           onClose={() => setDrilldown(null)}
         />
+        </MetricBreakdownContext.Provider>
       )}
 
       {showComparison && (
@@ -2121,5 +2165,6 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         />
       )}
     </div>
+    </MetricBreakdownProvider>
   );
 }

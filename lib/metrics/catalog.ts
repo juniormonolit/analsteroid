@@ -38,6 +38,7 @@ export async function loadMetrics(): Promise<Metric[]> {
     source: string; agg_fn: string | null; agg_field: string | null;
     date_field: string | null; filters: string | null; tags: string[] | null;
     is_collect_ok: boolean; is_calc_ok: boolean;
+    verified_at: Date | string | null; verified_by: string | null;
   }>(`
     SELECT id, name_ru, name_short_ru, description, human_description, formula_human, calc_ok, fill_ok,
            metric_type, data_type, formula,
@@ -49,7 +50,8 @@ export async function loadMetrics(): Promise<Metric[]> {
            filters::text AS filters,
            tags,
            COALESCE(is_collect_ok, false) AS is_collect_ok,
-           COALESCE(is_calc_ok, false) AS is_calc_ok
+           COALESCE(is_calc_ok, false) AS is_calc_ok,
+           verified_at, verified_by
     FROM metrics
     WHERE is_active = true OR is_hidden_in_ui = false
     ORDER BY sort_order, name_ru
@@ -85,6 +87,10 @@ export async function loadMetrics(): Promise<Metric[]> {
     tags: r.tags ?? [],
     isCollectOk: r.is_collect_ok,
     isCalcOk: r.is_calc_ok,
+    // Отметка «Проверено» (миграция 192). pg отдаёт timestamptz как Date — в кэш
+    // и JSON кладём ISO-строку, чтобы клиент не зависел от сериализации Date.
+    verifiedAt: r.verified_at ? new Date(r.verified_at).toISOString() : null,
+    verifiedBy: r.verified_by ?? null,
     // Приоритет: ручное переопределение по метрике > по категории > автоцвет по
     // сущности (lib/metrics/entity-colors.ts, задача 6а, п.10 спеки 2026-07-08).
     // Автоцвет — код, не БД: metric_colors хранит ТОЛЬКО ручные переопределения.

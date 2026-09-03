@@ -1,9 +1,12 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { format } from 'date-fns';
+import { ru } from 'date-fns/locale';
 import { metricFormulaLine } from '@/lib/metrics/formulaText';
 import type { Metric } from '@/lib/metrics/types';
+import { useMetricBreakdown } from './MetricBreakdownContext';
 
 // Тело поповера «?» у метрики — общее для панели метрик (MetricPanel) и шапки
 // колонки отчёта (ReportTable). Задача владельца 24.08: по «имени метрики» в
@@ -87,9 +90,19 @@ export function MetricInfoBody({ metric }: { metric: Metric }) {
     staleTime: 5 * 60 * 1000,
   });
   const all = data?.metrics ?? [];
+  // Каталог — источник свежести отметки «Проверено» (миграция 192): объект `metric`
+  // из пропсов мог быть загружен до тумблера в «Разборе», каталог инвалидируется им.
+  const live = all.find(m => m.id === current.id) ?? current;
+
+  // Полноэкранный «Разбор метрики» (задача владельца 03.09) — только внутри
+  // отчёта с провайдером контекста; на прочих страницах кнопки нет.
+  const breakdown = useMetricBreakdown();
 
   const text = current.humanDescription || current.description;
   const formula = metricFormulaLine(current);
+  const verifiedTitle = live.verifiedAt
+    ? `Проверено · ${live.verifiedBy ?? '—'} · ${format(new Date(live.verifiedAt), 'd MMM yyyy', { locale: ru })}`
+    : null;
 
   return (
     <>
@@ -102,7 +115,14 @@ export function MetricInfoBody({ metric }: { metric: Metric }) {
           Назад к «{(stack[stack.length - 2] ?? metric).nameRu}»
         </button>
       )}
-      <div className="text-sm font-semibold text-[var(--color-text)] mb-1.5">{current.nameRu}</div>
+      <div className="flex items-center gap-1.5 text-sm font-semibold text-[var(--color-text)] mb-1.5">
+        <span className="min-w-0">{current.nameRu}</span>
+        {verifiedTitle && (
+          <span title={verifiedTitle} aria-label={verifiedTitle} className="shrink-0 inline-flex">
+            <CheckCircle2 size={14} className="text-[var(--color-positive,#16a34a)]" />
+          </span>
+        )}
+      </div>
       {text && (
         <div className="text-xs leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">{text}</div>
       )}
@@ -111,6 +131,17 @@ export function MetricInfoBody({ metric }: { metric: Metric }) {
           <span className="font-semibold">Формула:</span>{' '}
           <FormulaLine line={formula} all={all} selfId={current.id} onOpen={m => setStack(s => [...s, m])} />
         </div>
+      )}
+      {breakdown && (
+        <button
+          // Модал рендерит провайдер (вне поповера): Radix размонтирует содержимое
+          // поповера при закрытии, а поповер закроется сам, когда фокус уйдёт в модал.
+          onClick={e => { e.stopPropagation(); breakdown.openBreakdown(live); }}
+          className="mt-2.5 w-full min-h-11 sm:min-h-0 sm:py-1.5 px-3 rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)] text-xs font-medium hover:opacity-90 transition-opacity"
+          title="Все сущности расчёта с параметрами выборки — на весь экран"
+        >
+          Подробнее
+        </button>
       )}
     </>
   );

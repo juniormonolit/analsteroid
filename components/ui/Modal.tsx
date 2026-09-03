@@ -17,6 +17,7 @@ export function Modal({
   /** Ширина на десктопе, например 'sm:max-w-md' | 'sm:max-w-[460px]' */
   desktopWidth = 'sm:max-w-md',
   contentClassName,
+  bodyClassName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -24,6 +25,14 @@ export function Modal({
   children: React.ReactNode;
   desktopWidth?: string;
   contentClassName?: string;
+  /**
+   * Классы тела модала (обёртка children, по умолчанию только p-4). Нужен, когда
+   * прокрутку надо перенести с Dialog.Content на тело: у Content стоят transform
+   * (десктоп) и backdrop-filter — оба делают его containing block для
+   * position:fixed потомков, и fixed-панель внутри скроллящегося Content уезжала
+   * вместе с содержимым (см. MetricBreakdownModal: карточка сделки в разборе).
+   */
+  bodyClassName?: string;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -57,13 +66,16 @@ export function Modal({
             // выше), а не поверх страницы — повторный blur тут ничего не даёт, только
             // расходует GPU и рискует артефактами вложенного backdrop-filter в Safari.
             <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-bg-overlay)] rounded-t-xl sm:rounded-t-lg">
-              <Dialog.Title className="text-sm font-semibold">{title}</Dialog.Title>
+              {/* min-w-0: без него h2 как flex-item держит min-content ширину всего
+                  nowrap-заголовка — truncate внутри не срабатывает, а крестик на 375px
+                  уезжает за край и тело модала скроллится вбок. */}
+              <Dialog.Title className="text-sm font-semibold min-w-0">{title}</Dialog.Title>
               <Dialog.Close className="tap-target p-1 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
                 <X size={16} />
               </Dialog.Close>
             </div>
           )}
-          <div className="p-4">{children}</div>
+          <div className={twMerge('p-4', bodyClassName)}>{children}</div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

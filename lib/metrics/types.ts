@@ -69,6 +69,12 @@ export interface Metric {
   isCalcOk: boolean;
   // Цвет показателя (бейдж заголовка колонки): override по метрике > правило категории
   color?: string | null;
+  /** Ручная отметка «Проверено» (миграция 192): когда (ISO) и кем (users.login).
+      Ставит/снимает только супер-админ — POST /api/catalog/metrics/[id]/verify.
+      Правка ОПРЕДЕЛЕНИЯ метрики (formula, filters, agg_fn, agg_field, date_field,
+      metric_type, source) через админский PUT сбрасывает обе в null. */
+  verifiedAt?: string | null;
+  verifiedBy?: string | null;
 }
 
 export interface ReportRow {

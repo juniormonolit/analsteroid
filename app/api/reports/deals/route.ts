@@ -191,6 +191,9 @@ export async function GET(req: NextRequest) {
     OR d.lost_at >= $1 AND d.lost_at < $2
   )`;
   let extraJoin = '';
+  // Объект ячейки метрики (см. DrillRule.object): 'calls' — список показывает
+  // сделки со звонком, а ячейка считает звонки; UI не сверяет такой итог.
+  let population: 'calls' | undefined;
 
   if (metricFilter && STAGE_NOW_STAGE_IDS.has(metricFilter)) {
     // Снимок «Стадии (сейчас)» — период игнорируется целиком, фильтр — ТЕКУЩИЙ
@@ -243,6 +246,7 @@ export async function GET(req: NextRequest) {
     if (rule.join) extraJoin = rule.join;
     if (rule.mgrOne) mgrOneTpl = rule.mgrOne;
     if (rule.mgrMany) mgrManyTpl = rule.mgrMany;
+    if (rule.object === 'call') population = 'calls';
     metricDateFilter = `(${rule.where})`;
   } else if (metricFilter) {
     const legs = resolveDrilldownLegs(metricFilter, await loadMetrics());
@@ -507,5 +511,5 @@ export async function GET(req: NextRequest) {
     branch_name: mgrInfo.get(r.manager_id)?.branch ?? 'СПб',
   }));
 
-  return NextResponse.json({ deals, total_count: totalCount, total_amount: totalAmount });
+  return NextResponse.json({ deals, total_count: totalCount, total_amount: totalAmount, ...(population ? { population } : {}) });
 }

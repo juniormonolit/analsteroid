@@ -60,5 +60,8 @@ export async function GET(req: NextRequest) {
     dealFilters,
   });
   if (!result) return NextResponse.json({ error: 'метрика не поддержана' }, { status: 400 });
-  return NextResponse.json(result);
+  // populationMetricId — по какому правилу реально построено население. Когда оно
+  // не совпадает с metricId, сработал фолбэк «все отгрузки периода»: «Разбор
+  // метрики» обязан это знать и не сверять такой итог с ячейкой (население иное).
+  return NextResponse.json({ ...result, populationMetricId: effectiveId });
 }

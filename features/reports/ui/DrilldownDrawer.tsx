@@ -437,6 +437,31 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
   );
 }
 
+// Итог живой выборки для полноэкранного «Разбора метрики» (MetricBreakdownModal,
+// задача владельца 03.09): панель операнда сверяет «Итого выборки» с ячейкой
+// отчёта, поэтому списки отдают агрегат наружу, а не только рисуют его в шапке.
+export interface DrillTotals {
+  /** Плоский список — сделки; клиентский дрилл — заказчики (сделки тогда в `deals`). */
+  count: number;
+  amount: number;
+  deals?: number;
+  /** Сколько строк реально пришло: сервер режет 1000 сделок / 500 заказчиков. */
+  shown?: number;
+  truncated?: boolean;
+  /** Плоский список: у метрики нет правила населения (см. drillRules.ts) — сверять нечего. */
+  noRule?: string;
+  /**
+   * Плоский список: что считает ЯЧЕЙКА. 'calls' — звонковые метрики: список —
+   * сделки со звонком, ячейка — звонки, счётчики несравнимы (см. DrillRule.object).
+   */
+  unit?: 'deals' | 'calls';
+  /**
+   * Клиентский дрилл: сервер подменил население фолбэком «все отгрузки клиентов
+   * периода» (у метрики нет точного правила) — итог с ячейкой не сверяется.
+   */
+  approxPopulation?: boolean;
+}
+
 // ── Плоский список сделок по готовому набору query-параметров ───────────────
 // `fetchOverride` (задача 2546, дрилл-даун из графиков — features/charts/ui/*):
 // когда список сделок выбирается не dimension-фильтром (`managerId`/
@@ -446,10 +471,16 @@ function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDea
 // используется переданный fetcher. `query` тогда не нужен; `fetchOverride.key`
 // обязан включать всё, от чего зависит результат (иначе react-query не
 // перезапросит список при смене корзины/фильтра).
-export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, tableScale, emptyLabel }: {
+export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, tableScale, emptyLabel, onTotals }: {
   query?: URLSearchParams;
   fetchOverride?: { key: unknown[]; fn: () => Promise<{ deals: Deal[]; total_count: number; total_amount: number }> };
   dealFields?: string[]; onDealOpen?: (id: number) => void; tableScale?: number; emptyLabel?: string;
+  /**
+   * Итог выборки наружу (см. DrillTotals) — при каждом приходе данных; null —
+   * данных сейчас нет (новый запрос грузится или упал). Без null получатель
+   * держал бы итог ПРЕДЫДУЩЕГО среза и сверял его с уже новой ячейкой.
+   */
+  onTotals?: (t: DrillTotals | null) => void;
 }) {
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const [dealSort, setDealSort] = useState<DealSort>(null);
@@ -457,9 +488,18 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
     setDealSort(p => (p && p.key === k ? { key: k, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { key: k, dir: 'asc' }));
   }
   const qs = query?.toString() ?? '';
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: fetchOverride ? ['drill-deals-override', ...fetchOverride.key] : ['drill-deals-flat', qs],
-    queryFn: fetchOverride ? fetchOverride.fn : () => fetch(`/api/reports/deals?${qs}`).then(r => r.json()),
+    // r.ok обязателен (как в ClientDealsView): 401/400/500 роута отдают {error},
+    // и без проверки это превращалось в deals=[] → «Итого: 0 сделок», а «Разбор
+    // метрики» рисовал по нему красное «расходится на −N» — сбой сессии/сервера
+    // предъявлялся как подтверждённое расхождение метрики (ревью 03.09).
+    queryFn: fetchOverride ? fetchOverride.fn : async () => {
+      const res = await fetch(`/api/reports/deals?${qs}`);
+      const body = await res.json().catch(() => null);
+      if (!res.ok || body?.error) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      return body;
+    },
   });
   const deals: Deal[] = data?.deals ?? [];
   // Задача #2369: «Итого» должно отражать ПОЛНУЮ выборку, а не только пришедший
@@ -471,16 +511,33 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
   const totalCount  = hasTotals ? Number(data.total_count)  : deals.length;
   const totalAmount = hasTotals ? Number(data.total_amount) : deals.reduce((s, d) => s + (Number(d.amount) || 0), 0);
   const isTruncated = totalCount > deals.length;
+  // noRule (аудит 02.09) — у метрики нет правила населения списком сделок:
+  // либо объекта не существует (план/рейтинг/календарь), либо правило не
+  // написано. Раньше в этом месте показывался ПРАВДОПОДОБНЫЙ, но чужой список
+  // («сделки с любой активностью в периоде») — теперь честное объяснение.
+  const noRule = (data as { noRule?: string } | undefined)?.noRule;
+  const population = (data as { population?: 'calls' } | undefined)?.population;
 
+  // До ранних return'ов — хук. Зависимость только от data: caller обязан
+  // передавать стабильный колбэк (setState), иначе эффект зациклится. Пока
+  // данных нет (смена ключа запроса, ошибка) — сообщаем null, а не молчим:
+  // сброс из родителя по qs не годится, его эффект выполнился бы ПОЗЖЕ нашего
+  // с новыми данными и затёр бы их.
+  useEffect(() => {
+    if (!onTotals) return;
+    onTotals(data
+      ? { count: totalCount, amount: totalAmount, shown: deals.length, truncated: isTruncated, noRule, unit: population === 'calls' ? 'calls' : 'deals' }
+      : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, onTotals]);
+
+  if (error) {
+    return <div className="p-10 text-center text-[var(--color-negative,#d33)] text-sm">Список сделок не загрузился: {error instanceof Error ? error.message : String(error)}</div>;
+  }
   if (isLoading) {
     return <div className="p-6 space-y-3">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-8 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
   }
   if (deals.length === 0) {
-    // noRule (аудит 02.09) — у метрики нет правила населения списком сделок:
-    // либо объекта не существует (план/рейтинг/календарь), либо правило не
-    // написано. Раньше в этом месте показывался ПРАВДОПОДОБНЫЙ, но чужой список
-    // («сделки с любой активностью в периоде») — теперь честное объяснение.
-    const noRule = (data as { noRule?: string } | undefined)?.noRule;
     if (noRule) {
       return (
         <div className="p-10 text-center text-sm text-[var(--color-text-muted)]">
@@ -551,7 +608,17 @@ interface ClientDrillDealRow {
 interface ClientDrillCustomerRow {
   contactId: string; name: string; dealsCount: number; amount: number; deals: ClientDrillDealRow[];
 }
-function ClientDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, departmentIds, onDealOpen, dealFilters, grouped = true }: Props & { grouped?: boolean }) {
+// Экспортированное подмножество Props: клиентский вид переиспользует «Разбор
+// метрики» (MetricBreakdownModal), которому весь контракт дровера (metricIds,
+// onClose, настройки мини-отчёта) не нужен.
+export type ClientDealsViewProps = Pick<Props,
+  'target' | 'dimensionType' | 'period' | 'dealScope' | 'clientType' | 'productGroupMode' | 'departmentIds' | 'dealFilters' | 'onDealOpen'
+> & {
+  grouped?: boolean;
+  /** Итог выборки наружу (см. DrillTotals): count — заказчики, deals — сделки; null — данных нет. */
+  onTotals?: (t: DrillTotals | null) => void;
+};
+export function ClientDealsView({ target, dimensionType, period, dealScope, clientType, productGroupMode, departmentIds, onDealOpen, dealFilters, grouped = true, onTotals }: ClientDealsViewProps) {
   const [openIds, setOpenIds] = useState<Set<string>>(new Set());
   // Карточка заказчика по клику на имя (задача 17.08). Отдаём сырой contact_id —
   // правильный ключ (юр-сделки: k/x, не c!) и менеджера-владельца (по последней
@@ -578,7 +645,7 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
     ...(dealFilters?.length ? { dealFilters: JSON.stringify(dealFilters) } : {}),
   });
   const qs = params.toString();
-  const { data, isLoading, error } = useQuery<{ customers: ClientDrillCustomerRow[]; totalCustomers: number; totalDeals: number; totalAmount: number; truncated: boolean }>({
+  const { data, isLoading, error } = useQuery<{ customers: ClientDrillCustomerRow[]; totalCustomers: number; totalDeals: number; totalAmount: number; truncated: boolean; populationMetricId?: string }>({
     queryKey: ['client-drill', qs],
     // r.ok обязателен: 400 роута («метрика не поддерживает клиентский дрилл»)
     // раньше молча превращался в {error} → customers=[] → «Нет заказчиков» —
@@ -592,6 +659,20 @@ function ClientDealsView({ target, dimensionType, period, dealScope, clientType,
       return res.json();
     },
   });
+
+  // Итог наружу для «Разбора метрики» — до ранних return'ов (правила хуков).
+  // null, пока данных нет (см. DealsListBody). approxPopulation — сервер построил
+  // население не по правилу метрики, а фолбэком (populationMetricId ≠ metricId).
+  useEffect(() => {
+    if (!onTotals) return;
+    onTotals(data
+      ? {
+        count: data.totalCustomers, deals: data.totalDeals, amount: data.totalAmount,
+        shown: data.customers.length, truncated: data.truncated,
+        approxPopulation: data.populationMetricId !== undefined && data.populationMetricId !== target.metricId,
+      }
+      : null);
+  }, [data, onTotals, target.metricId]);
 
   if (error) {
     return <div className="p-10 text-center text-[var(--color-negative,#d33)] text-sm">Дрилл-даун не открылся: {String(error instanceof Error ? error.message : error)}</div>;

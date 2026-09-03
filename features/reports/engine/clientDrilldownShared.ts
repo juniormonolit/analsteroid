@@ -9,30 +9,37 @@ const LTV_WINDOWS = [30, 60, 90, 180, 360] as const;
 
 // Правила населения дрилла по метрике. rnCond — какие отгрузки клиента берём
 // (порядковый номер в его истории), windowDays — окно когорты от первой отгрузки.
+// compare — с чем ячейку метрики сверяет «Разбор метрики» (MetricBreakdownModal):
+// число заказчиков населения, число их сделок или сумма. Задаётся ЯВНО и только
+// у сумм/счётчиков; у средних, медиан, долей и коэффициентов поля нет — их
+// ячейка с итогом населения несравнима, и разбор так и пишет (ревью 03.09:
+// угадывание единицы по id — regex /clients?/ — сверяло group_buyers_count,
+// счётчик ЗАКАЗЧИКОВ, с числом сделок; client_ltv (медиана) — с суммой).
+export type ClientDrillCompare = 'customers' | 'deals' | 'amount';
 export type ClientDrillRule =
-  | { kind: 'base'; rnCond?: string; complexOnly?: boolean }
+  | { kind: 'base'; rnCond?: string; complexOnly?: boolean; compare?: ClientDrillCompare }
   | { kind: 'cohort'; windowDays?: number; firstOnly?: boolean;
       // allClients — вся когорта, не только повторные (cohort_clients, #4996);
       // returnedOnly — повторные, у кого ВТОРАЯ отгрузка уложилась в окно
       // (население «% вернувшихся N дн»: 2+ отгрузки именно внутри окна).
-      allClients?: boolean; returnedOnly?: boolean };
+      allClients?: boolean; returnedOnly?: boolean; compare?: ClientDrillCompare };
 
 export const CLIENT_DRILL_RULES: Record<string, ClientDrillRule> = {
-  all_clients_delivered:    { kind: 'base' },
-  delivered_deals_count:    { kind: 'base' },
-  group_buyers_count:       { kind: 'base' },
-  new_clients_count:        { kind: 'base', rnCond: '= 1' },
-  new_clients_amount:       { kind: 'base', rnCond: '= 1' },
-  repeat_clients_delivered: { kind: 'base', rnCond: '>= 2' },
-  repeat_clients_amount:    { kind: 'base', rnCond: '>= 2' },
+  all_clients_delivered:    { kind: 'base', compare: 'customers' },
+  delivered_deals_count:    { kind: 'base', compare: 'deals' },
+  group_buyers_count:       { kind: 'base', compare: 'customers' },
+  new_clients_count:        { kind: 'base', rnCond: '= 1', compare: 'customers' },
+  new_clients_amount:       { kind: 'base', rnCond: '= 1', compare: 'amount' },
+  repeat_clients_delivered: { kind: 'base', rnCond: '>= 2', compare: 'customers' },
+  repeat_clients_amount:    { kind: 'base', rnCond: '>= 2', compare: 'amount' },
   repeat_rate_clients:      { kind: 'base', rnCond: '>= 2' },
-  first_repeat_clients:     { kind: 'base', rnCond: '= 2' },
-  complex_clients:          { kind: 'base', complexOnly: true },
-  cohort_repeat_clients:    { kind: 'cohort' },
-  cohort_first_revenue:     { kind: 'cohort', firstOnly: true },
-  cohort_ltv_total_revenue: { kind: 'cohort' },
+  first_repeat_clients:     { kind: 'base', rnCond: '= 2', compare: 'customers' },
+  complex_clients:          { kind: 'base', complexOnly: true, compare: 'customers' },
+  cohort_repeat_clients:    { kind: 'cohort', compare: 'customers' },
+  cohort_first_revenue:     { kind: 'cohort', firstOnly: true, compare: 'amount' },
+  cohort_ltv_total_revenue: { kind: 'cohort', compare: 'amount' },
   ...Object.fromEntries(LTV_WINDOWS.map(w => [
-    `cohort_repeat_revenue_${w}`, { kind: 'cohort', windowDays: w } as ClientDrillRule,
+    `cohort_repeat_revenue_${w}`, { kind: 'cohort', windowDays: w, compare: 'amount' } as ClientDrillRule,
   ])),
   // #4994: коэффициент = всё/первый заказ — население то же, что у LTV за всё время.
   cohort_repeat_ratio:      { kind: 'cohort' },
@@ -42,7 +49,7 @@ export const CLIENT_DRILL_RULES: Record<string, ClientDrillRule> = {
     `cohort_ltv_${w}`, { kind: 'cohort', windowDays: w } as ClientDrillRule,
   ])),
   // #4996: «Клиентов» — ВСЯ когорта; «% вернувшихся N дн» — вернувшиеся в окне.
-  cohort_clients:           { kind: 'cohort', allClients: true },
+  cohort_clients:           { kind: 'cohort', allClients: true, compare: 'customers' },
   cohort_return_rate_total: { kind: 'cohort' },
   ...Object.fromEntries(LTV_WINDOWS.map(w => [
     `cohort_return_rate_${w}`, { kind: 'cohort', windowDays: w, returnedOnly: true } as ClientDrillRule,
