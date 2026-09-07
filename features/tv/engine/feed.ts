@@ -18,7 +18,7 @@ import { resolveManagersForDepartments, type RosterManager } from '@/lib/org/tea
 import { getManagerAvatarUrl } from '@/lib/bitrix/managerAvatar';
 import { cached } from '@/lib/cache/redis';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
-import type { TvFeedManager, TvFeedOk, TvFeedSale, TvFeedSlide, TvScreen } from '../shared';
+import { isPlaceholderName, type TvFeedManager, type TvFeedOk, type TvFeedSale, type TvFeedSlide, type TvScreen } from '../shared';
 import { activeMessagesForScreen } from './store';
 
 const TZ = 'Europe/Moscow';
@@ -113,9 +113,27 @@ async function fetchAvatars(ids: string[]): Promise<Map<string, string | null>> 
   return out;
 }
 
+/**
+ * Кого показывать на плитках (замечание владельца 07.09 про manager2014):
+ *  • пустой слот Битрикса — имя-заглушка И нет плана на месяц И нет продаж/броней
+ *    за день — скрыт всегда (org_resolved_hierarchy держит его is_active=true,
+ *    других признаков «нет человека» у нас нет; у manager2204 план есть — значит
+ *    человек есть, показываем как есть, пока в Битриксе не заполнят ФИО);
+ *  • hideIdle (настройка экрана) — скрыть любого без плана и без движения за день.
+ * Итоги шапки считаются по ВИДИМЫМ плиткам — у скрытых они по построению нули.
+ */
+function visibleManager(m: RosterManager, hasPlan: boolean, f: Record<FactId, number> | undefined, hideIdle: boolean): boolean {
+  const moved = !!f && (f.primary_sales_count + f.repeat_sales_count + f.reservations_count > 0
+    || f.primary_sales_amount + f.repeat_sales_amount + f.reservations_amount > 0);
+  if (hasPlan || moved) return true;
+  if (isPlaceholderName(m.name)) return false;
+  return !hideIdle;
+}
+
 function slideFor(key: string, title: string, managers: RosterManager[], facts: Map<string, Record<FactId, number>>,
-  plans: Map<string, { planSales: number }>, avatars: Map<string, string | null>): TvFeedSlide {
-  const rows: TvFeedManager[] = managers.map(m => {
+  plans: Map<string, { planSales: number }>, avatars: Map<string, string | null>, hideIdle: boolean): TvFeedSlide {
+  const shown = managers.filter(m => visibleManager(m, !!(m.login && plans.has(m.login)), facts.get(m.managerId), hideIdle));
+  const rows: TvFeedManager[] = shown.map(m => {
     const f = facts.get(m.managerId);
     const plan = m.login ? plans.get(m.login)?.planSales ?? 0 : 0;
     return {
@@ -163,11 +181,11 @@ export async function buildScreenFeed(screen: TvScreen, deptNames: Map<string, s
     const slides: TvFeedSlide[] = [];
     if (screen.mode === 'merged') {
       const title = screen.departmentIds.map(id => deptNames.get(id) ?? 'Отдел').join(' + ');
-      slides.push(slideFor('merged', title || screen.name, managers, facts, plans, avatars));
+      slides.push(slideFor('merged', title || screen.name, managers, facts, plans, avatars, screen.settings.hideIdle));
     } else {
       for (const deptId of screen.departmentIds) {
         const own = managers.filter(m => m.deptUuid === deptId);
-        slides.push(slideFor(deptId, deptNames.get(deptId) ?? 'Отдел', own, facts, plans, avatars));
+        slides.push(slideFor(deptId, deptNames.get(deptId) ?? 'Отдел', own, facts, plans, avatars, screen.settings.hideIdle));
       }
     }
     return { slides, sales, day: today };
