@@ -28,7 +28,8 @@ export function parseMessageInput(body: unknown): (TvMessageInput & { endsAtDate
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   const kind: TvMessageKind = b.kind === 'banner' || b.kind === 'fullscreen' ? b.kind : 'ticker';
   const text = String(b.text ?? '').trim().slice(0, kind === 'ticker' ? 500 : 300);
-  if (!text) return 'Введите текст сообщения';
+  const imageId = kind === 'fullscreen' && typeof b.imageId === 'string' && UUID_RE.test(b.imageId) ? b.imageId : null;
+  if (!text && !imageId) return 'Введите текст сообщения' + (kind === 'fullscreen' ? ' или добавьте картинку' : '');
   let targetScreenIds: string[] | null = null;
   if (Array.isArray(b.targetScreenIds)) {
     targetScreenIds = [...new Set(b.targetScreenIds.map(String).filter(id => UUID_RE.test(id)))];
@@ -43,5 +44,5 @@ export function parseMessageInput(body: unknown): (TvMessageInput & { endsAtDate
     endsAtDate = new Date(Date.now() + minutes * 60_000);
   }
   if (endsAtDate.getTime() <= Date.now()) return 'Время окончания уже прошло';
-  return { kind, text, targetScreenIds, endsAtDate };
+  return { kind, text, targetScreenIds, endsAtDate, imageId };
 }

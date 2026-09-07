@@ -97,6 +97,8 @@ export interface TvMessage {
   createdByName: string | null;
   createdAt: string;
   active: boolean;
+  /** Фон полноэкранного сообщения — публичный URL /api/tv/media/<id>. */
+  imageUrl: string | null;
 }
 
 export interface TvMessageInput {
@@ -106,6 +108,8 @@ export interface TvMessageInput {
   /** Минут показа от «сейчас» (1..1440) — либо явное endsAt. */
   minutes?: number;
   endsAt?: string;
+  /** id картинки из tv_media (только для fullscreen). */
+  imageId?: string | null;
 }
 
 // ── Фид (то, что телевизор получает раз в N секунд) ─────────────────────────
@@ -147,6 +151,8 @@ export interface TvFeedMessage {
   kind: TvMessageKind;
   text: string;
   until: string;
+  /** Фон на весь экран (fullscreen), публичный URL. */
+  image?: string | null;
 }
 
 export interface TvFeedOk {

@@ -4,9 +4,9 @@
 // за сутки, «Снять» — закончить показ сейчас.
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Megaphone, Square } from 'lucide-react';
+import { ImagePlus, Megaphone, Square, X } from 'lucide-react';
 import type { TvMessage, TvMessageKind, TvScreen } from '../shared';
-import { BTN_PRIMARY, BTN_SECONDARY, INPUT_CLS, LABEL_CLS, tvApi } from './api';
+import { BTN_PRIMARY, BTN_SECONDARY, INPUT_CLS, LABEL_CLS, shrinkImage, tvApi } from './api';
 
 const KIND_LABEL: Record<TvMessageKind, string> = { ticker: 'Бегущая строка', banner: 'Баннер сверху', fullscreen: 'На весь экран' };
 const DURATIONS = [{ m: 5, l: '5 мин' }, { m: 15, l: '15 мин' }, { m: 60, l: '1 час' }, { m: 240, l: '4 часа' }, { m: 1440, l: 'сутки' }];
@@ -25,10 +25,25 @@ export function MessagesPanel({ screens, full }: { screens: TvScreen[]; full: bo
   const [targets, setTargets] = useState<Set<string>>(new Set());
   const [minutes, setMinutes] = useState(60);
   const [error, setError] = useState<string | null>(null);
+  // Фон полноэкранного сообщения (правка владельца 07.09): ужимаем на клиенте, грузим в tv_media.
+  const [image, setImage] = useState<{ id: string; preview: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  async function pickImage(file: File | undefined) {
+    if (!file) return;
+    setUploading(true); setError(null);
+    try {
+      const { mime, base64, preview } = await shrinkImage(file);
+      const r = await tvApi.uploadMedia(mime, base64);
+      setImage({ id: r.id, preview });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось загрузить картинку');
+    } finally { setUploading(false); }
+  }
 
   const create = useMutation({
-    mutationFn: () => tvApi.createMessage({ kind, text: text.trim(), targetScreenIds: all ? null : [...targets], minutes }),
-    onSuccess: () => { setText(''); setError(null); qc.invalidateQueries({ queryKey: ['tv-messages'] }); },
+    mutationFn: () => tvApi.createMessage({ kind, text: text.trim(), targetScreenIds: all ? null : [...targets], minutes, imageId: kind === 'fullscreen' ? image?.id ?? null : null }),
+    onSuccess: () => { setText(''); setImage(null); setError(null); qc.invalidateQueries({ queryKey: ['tv-messages'] }); },
     onError: (e: Error) => setError(e.message),
   });
   const stop = useMutation({
@@ -39,7 +54,7 @@ export function MessagesPanel({ screens, full }: { screens: TvScreen[]; full: bo
   const messages = data?.messages ?? [];
   const active = messages.filter(m => m.active);
   const past = messages.filter(m => !m.active);
-  const canSend = text.trim().length > 0 && (all || targets.size > 0);
+  const canSend = (text.trim().length > 0 || (kind === 'fullscreen' && !!image)) && (all || targets.size > 0) && !uploading;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)] gap-4">
@@ -58,8 +73,27 @@ export function MessagesPanel({ screens, full }: { screens: TvScreen[]; full: bo
         <div className="flex flex-col gap-1.5">
           <label className={LABEL_CLS}>Текст</label>
           <textarea className={`${INPUT_CLS} min-h-[80px]`} value={text} onChange={e => setText(e.target.value)} maxLength={kind === 'ticker' ? 500 : 300}
-            placeholder={kind === 'ticker' ? 'Коллеги, в 17:00 общее собрание в переговорной' : 'Собрание в 17:00'} />
+            placeholder={kind === 'ticker' ? 'Коллеги, в 17:00 общее собрание в переговорной' : kind === 'fullscreen' ? 'Текст поверх картинки (можно без текста)' : 'Собрание в 17:00'} />
+          {kind === 'ticker' && <div className="text-xs text-[var(--color-text-muted)]">Пока рассылка активна, она заменяет собственную строку экрана.</div>}
         </div>
+        {kind === 'fullscreen' && (
+          <div className="flex flex-col gap-1.5">
+            <label className={LABEL_CLS}>Картинка на фон</label>
+            {image ? (
+              <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-[var(--color-border)] bg-black">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image.preview} alt="" className="w-full h-full object-cover" />
+                <button type="button" onClick={() => setImage(null)} className="tap-target absolute top-1 right-1 p-1 rounded bg-black/60 text-white" aria-label="Убрать картинку"><X size={14} /></button>
+              </div>
+            ) : (
+              <label className={`${BTN_SECONDARY} cursor-pointer w-fit`}>
+                <ImagePlus size={14} /> {uploading ? 'Загружаем…' : 'Выбрать картинку'}
+                <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={e => { void pickImage(e.target.files?.[0]); e.target.value = ''; }} />
+              </label>
+            )}
+            <div className="text-xs text-[var(--color-text-muted)]">Ужмётся до 1920px. Текст выведется поверх, картинка растянется на весь экран.</div>
+          </div>
+        )}
         <div className="flex flex-col gap-1.5">
           <label className={LABEL_CLS}>Кому</label>
           {full && (
@@ -118,8 +152,12 @@ export function MessagesPanel({ screens, full }: { screens: TvScreen[]; full: bo
 function MessageRow({ m, onStop, stopping }: { m: TvMessage; onStop?: () => void; stopping?: boolean }) {
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 flex flex-col sm:flex-row sm:items-start gap-2">
+      {m.imageUrl && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={m.imageUrl} alt="" className="w-full sm:w-28 aspect-video object-cover rounded border border-[var(--color-border)] shrink-0" />
+      )}
       <div className="min-w-0 flex-1">
-        <div className="text-sm text-[var(--color-text)] break-words">{m.text}</div>
+        <div className="text-sm text-[var(--color-text)] break-words">{m.text || <span className="text-[var(--color-text-muted)]">только картинка</span>}</div>
         <div className="text-xs text-[var(--color-text-muted)] mt-1 flex flex-wrap gap-x-2">
           <span>{KIND_LABEL[m.kind]}</span>
           <span>· {m.targetScreenNames ? m.targetScreenNames.join(', ') : 'все экраны'}</span>

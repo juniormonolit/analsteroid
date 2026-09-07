@@ -108,10 +108,12 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .empty{position:absolute;left:0;right:0;top:40%;text-align:center;font-size:1.6vw;color:#8FA1BD}
 .off{position:absolute;left:1vw;bottom:.6vw;font-size:.85vw;color:#FBBC04;background:rgba(0,0,0,.35);padding:.2vw .6vw;border-radius:.4vw;display:none}
 .off.on{display:block}
-.banner{position:absolute;left:2.2vw;right:2.2vw;top:1.2vw;background:#1B7FD4;color:#fff;border-radius:.8vw;padding:1vw 1.6vw;font-size:1.7vw;font-weight:600;-webkit-box-shadow:0 1vw 3vw rgba(0,0,0,.4);box-shadow:0 1vw 3vw rgba(0,0,0,.4);z-index:20;white-space:normal;word-wrap:break-word}
-.full{position:absolute;left:0;top:0;right:0;bottom:0;background:#0B1220;z-index:30;text-align:center;padding:6vw}
+.banner{position:absolute;left:2.2vw;right:2.2vw;top:1.2vw;background:#1B7FD4;color:#fff;border-radius:.8vw;padding:1vw 1.6vw;font-size:1.7vw;font-weight:600;text-align:center;-webkit-box-shadow:0 1vw 3vw rgba(0,0,0,.4);box-shadow:0 1vw 3vw rgba(0,0,0,.4);z-index:20;white-space:normal;word-wrap:break-word}
+.full{position:absolute;left:0;top:0;right:0;bottom:0;background:#0B1220;z-index:30;text-align:center;padding:6vw;display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center}
 .th-light .full{background:#F6F8FA}
-.full .t{font-size:4vw;font-weight:700;line-height:1.2;white-space:normal;word-wrap:break-word}
+.full.img{background-position:center;background-size:cover;background-repeat:no-repeat;color:#fff}
+.full.img .t{text-shadow:0 .2vw 1.2vw rgba(0,0,0,.85),0 0 .3vw rgba(0,0,0,.9);background:rgba(0,0,0,.35);padding:1.5vw 3vw;border-radius:1vw;display:inline-block}
+.full .t{font-size:4vw;font-weight:700;line-height:1.2;white-space:normal;word-wrap:break-word;max-width:100%}
 .full .s{font-size:1.2vw;color:#8FA1BD;margin-top:2vw;text-transform:uppercase;letter-spacing:.1em}
 .pair{position:absolute;left:0;top:0;right:0;bottom:0;text-align:center;padding-top:14vh}
 .pair .logo{font-size:2vw;font-weight:700;letter-spacing:.02em;color:#4A9CDE}.th-light .pair .logo{color:#005CA9}
@@ -201,7 +203,7 @@ function renderPairing(code,expires){
     '<div class="url">'+esc(location.host+'/tv')+'</div></div>';
 }
 function renderMessage(t,s){
-  root.innerHTML='<div class="full"><div class="t">'+esc(t)+'</div>'+(s?'<div class="s">'+esc(s)+'</div>':'')+'</div>';
+  root.innerHTML='<div class="full"><div><div class="t">'+esc(t)+'</div>'+(s?'<div class="s">'+esc(s)+'</div>':'')+'</div></div>';
 }
 
 /* ---------- дашборд ---------- */
@@ -221,12 +223,14 @@ function tileHtml(m,i,showAva){
     '<div class="fxb pb tnum"><span class="l">ПРОДАЖЕБРОНЕЙ</span><span class="n'+(pb>=target?' ok':'')+'">'+pb+'<small>/ '+target+'</small></span></div>'+
     '</div></div>';
 }
+/* Правка владельца 07.09: бегущая строка из рассылки ПЕРЕКРЫВАЕТ строку экрана/отдела
+   («она важней»); строка экрана возвращается, когда рассылка закончилась. */
 function tickerText(slide){
   if(!data)return '';
   var parts=[];
-  if(slide&&slide.ticker)parts.push(slide.ticker);
   for(var i=0;i<data.messages.length;i++){var m=data.messages[i];if(m.kind==='ticker'&&new Date(m.until).getTime()>Date.now())parts.push(m.text);}
-  return parts.join('   \u2022   ');
+  if(parts.length)return parts.join('   \u2022   ');
+  return (slide&&slide.ticker)||'';
 }
 /* Большой отдел (60 менеджеров) на одном экране нечитаем — режем на страницы по
    PER_PAGE плиток; страницы крутятся как слайды, шапка — итоги всего отдела. */
@@ -318,7 +322,9 @@ function renderOverlays(){
   for(var j=0;j<data.messages.length;j++){var m=data.messages[j];if(new Date(m.until).getTime()<=now)continue;
     if(m.kind==='banner'&&!banner)banner=m;if(m.kind==='fullscreen'&&!full)full=m;}
   if(banner){var b=document.createElement('div');b.className='banner';b.innerHTML=esc(banner.text);stage.appendChild(b);}
-  if(full){var f=document.createElement('div');f.className='full';f.innerHTML='<div class="t">'+esc(full.text)+'</div><div class="s">Сообщение</div>';stage.appendChild(f);}
+  if(full){var f=document.createElement('div');f.className='full'+(full.image?' img':'');
+    if(full.image)f.style.backgroundImage='url("'+full.image.replace(/"/g,'')+'")';
+    f.innerHTML=full.text?'<div class="t">'+esc(full.text)+'</div>':'';stage.appendChild(f);}
 }
 function tick(){
   var c=$('#clock');if(c)c.innerHTML=timeStr();

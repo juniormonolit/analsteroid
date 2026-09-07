@@ -21,7 +21,30 @@ export const tvApi = {
   listMessages: () => fetch('/api/tv/messages').then(r => j<{ messages: TvMessage[] }>(r)),
   createMessage: (input: TvMessageInput) => fetch('/api/tv/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }).then(r => j<{ ok: true; id: string }>(r)),
   stopMessage: (id: string) => fetch(`/api/tv/messages/${id}`, { method: 'DELETE' }).then(r => j<{ ok: true }>(r)),
+  uploadMedia: (mime: string, base64: string) => fetch('/api/tv/media', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mime, data: base64 }) }).then(r => j<{ id: string; url: string }>(r)),
 };
+
+/** Ужать картинку до ≤1920px по большей стороне и отдать JPEG base64 (без префикса data:). */
+export function shrinkImage(file: File, maxSide = 1920, quality = 0.85): Promise<{ mime: string; base64: string; preview: string }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { URL.revokeObjectURL(url); reject(new Error('Canvas недоступен')); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      const dataUrl = canvas.toDataURL('image/jpeg', quality);
+      URL.revokeObjectURL(url);
+      resolve({ mime: 'image/jpeg', base64: dataUrl.slice(dataUrl.indexOf(',') + 1), preview: dataUrl });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Не удалось прочитать картинку')); };
+    img.src = url;
+  });
+}
 
 export function screenUrl(publicToken: string): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';

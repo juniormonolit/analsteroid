@@ -285,19 +285,23 @@ export async function purgeStaleDevices(): Promise<number> {
 interface MessageRow {
   id: string; kind: TvMessageKind; text: string; target_screen_ids: string[] | null;
   starts_at: string; ends_at: string; created_by_name: string | null; created_at: string; active: boolean;
+  image_id: string | null;
 }
+export function mediaUrl(id: string | null): string | null { return id ? `/api/tv/media/${id}` : null; }
 const MESSAGE_COLS = `id, kind, text, target_screen_ids::text[] AS target_screen_ids,
   to_char(starts_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS starts_at,
   to_char(ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS ends_at,
   created_by_name,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
-  (starts_at <= now() AND ends_at > now()) AS active`;
+  (starts_at <= now() AND ends_at > now()) AS active,
+  image_id::text AS image_id`;
 
 function toMessage(r: MessageRow, screenNames: Map<string, string>): TvMessage {
   return {
     id: r.id, kind: r.kind, text: r.text, targetScreenIds: r.target_screen_ids,
     targetScreenNames: r.target_screen_ids ? r.target_screen_ids.map(id => screenNames.get(id) ?? 'экран удалён') : null,
     startsAt: r.starts_at, endsAt: r.ends_at, createdByName: r.created_by_name, createdAt: r.created_at, active: r.active,
+    imageUrl: mediaUrl(r.image_id),
   };
 }
 
@@ -310,23 +314,23 @@ export async function listMessages(screenNames: Map<string, string>): Promise<Tv
 }
 
 /** Активные сообщения для экрана (фид). */
-export async function activeMessagesForScreen(screenId: string): Promise<{ id: string; kind: TvMessageKind; text: string; until: string }[]> {
-  const res = await systemDb().query<{ id: string; kind: TvMessageKind; text: string; until: string }>(
-    `SELECT id, kind, text, to_char(ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS until
+export async function activeMessagesForScreen(screenId: string): Promise<{ id: string; kind: TvMessageKind; text: string; until: string; image: string | null }[]> {
+  const res = await systemDb().query<{ id: string; kind: TvMessageKind; text: string; until: string; image_id: string | null }>(
+    `SELECT id, kind, text, to_char(ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS until, image_id::text AS image_id
        FROM tv_messages
       WHERE starts_at <= now() AND ends_at > now()
         AND (target_screen_ids IS NULL OR $1::uuid = ANY(target_screen_ids))
       ORDER BY starts_at`,
     [screenId],
   );
-  return res.rows;
+  return res.rows.map(r => ({ id: r.id, kind: r.kind, text: r.text, until: r.until, image: mediaUrl(r.image_id) }));
 }
 
 export async function createMessage(input: TvMessageInput, endsAt: Date, createdBy: string | null, createdByName: string | null): Promise<string> {
   const res = await systemDb().query<{ id: string }>(
-    `INSERT INTO tv_messages (kind, text, target_screen_ids, ends_at, created_by, created_by_name)
-     VALUES ($1, $2, $3::uuid[], $4, $5, $6) RETURNING id`,
-    [input.kind, input.text, input.targetScreenIds, endsAt.toISOString(), createdBy, createdByName],
+    `INSERT INTO tv_messages (kind, text, target_screen_ids, ends_at, created_by, created_by_name, image_id)
+     VALUES ($1, $2, $3::uuid[], $4, $5, $6, $7) RETURNING id`,
+    [input.kind, input.text, input.targetScreenIds, endsAt.toISOString(), createdBy, createdByName, input.kind === 'fullscreen' ? input.imageId ?? null : null],
   );
   return res.rows[0].id;
 }
@@ -346,3 +350,32 @@ export async function getMessageTargets(id: string): Promise<string[] | null | u
 }
 
 export type { TvScreenSettings };
+
+// ── Медиа (фон полноэкранных сообщений, миграция 202) ───────────────────────
+
+export const MEDIA_MAX_BYTES = 3 * 1024 * 1024;
+const MEDIA_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+
+export async function saveMedia(mime: string, data: Buffer, createdBy: string | null): Promise<string | null> {
+  if (!MEDIA_MIMES.has(mime) || data.length === 0 || data.length > MEDIA_MAX_BYTES) return null;
+  const res = await systemDb().query<{ id: string }>(
+    `INSERT INTO tv_media (mime, data, size, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [mime, data, data.length, createdBy],
+  );
+  return res.rows[0].id;
+}
+
+export async function getMedia(id: string): Promise<{ mime: string; data: Buffer } | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const res = await systemDb().query<{ mime: string; data: Buffer }>(`SELECT mime, data FROM tv_media WHERE id = $1`, [id]);
+  return res.rows[0] ?? null;
+}
+
+/** Картинки, на которые не ссылается ни одно сообщение, старше суток — удалить. */
+export async function purgeOrphanMedia(): Promise<number> {
+  const res = await systemDb().query(
+    `DELETE FROM tv_media m WHERE m.created_at < now() - interval '1 day'
+        AND NOT EXISTS (SELECT 1 FROM tv_messages t WHERE t.image_id = m.id)`,
+  );
+  return res.rowCount ?? 0;
+}
