@@ -1,15 +1,15 @@
 -- Задача #5555: сохранённый отчёт «Отчет по делам и задачам» из 7 новых метрик-заглушек
 -- (migrations/156_dela_zadachi_metrics.sql), в личном «Избранном» Серёги.
 --
--- user_login = 'devtest' — единственная явная зацепка: строка users с
--- display_name = 'Dev (Серёга)', is_admin=true, is_superadmin=true (проверено живым
--- SELECT на YC system, 2026-09-07). Кандидатов с именем «Сергей» в users несколько
--- (bx2069 «Сергей Степанов», bx2098 «Сергей Афанасьев», osipov «Сергей Осипов») —
--- это обычные сотрудники-тёзки, НЕ разработчик; ни один из них не подписан как
--- «Серёга»/dev. Если 'devtest' — не тот аккаунт, замените одной правкой: константу
--- v_user_login ниже на нужный users.login (избранное — per-user по user_login,
--- см. saved_reports.user_login + app/api/saved-reports/route.ts: GET фильтрует
--- WHERE user_login = session.login OR is_shared = true).
+-- user_login = 'admin' — уточнено Серёгой (владелец Монолитики) 2026-09-07: отчёт
+-- должен лежать в Избранном аккаунта admin (login=admin, display_name Admin,
+-- superadmin), не devtest. Исходно строка сеялась под devtest (display_name
+-- 'Dev (Серёга)', is_admin=true, is_superadmin=true) — перенос выполнен
+-- migrations/158_move_dela_zadachi_report_to_admin.sql, эта миграция сама
+-- перецелена на admin, чтобы на свежем dev-стенде отчёт сразу сеялся под нужным
+-- логином. Избранное — per-user по user_login, см. saved_reports.user_login +
+-- app/api/saved-reports/route.ts: GET фильтрует WHERE user_login = session.login
+-- OR is_shared = true.
 --
 -- Избранное = личный (НЕ is_shared) saved_reports с deleted_at IS NULL — раздел
 -- «Избранное» в сайдбаре (components/layout/AppShell.tsx: ownReports = !isShared &&
@@ -28,7 +28,7 @@ INSERT INTO saved_reports (
   department_ids, is_shared
 )
 VALUES (
-  'devtest', 'by-managers', 'Отчет по делам и задачам',
+  'admin', 'by-managers', 'Отчет по делам и задачам',
   ARRAY['dela_total', 'dela_overdue', 'dela_today', 'deals_without_dela',
         'zadachi_total', 'zadachi_overdue', 'zadachi_today'],
   'all', 'all', 'none', 'full', 'kc',
