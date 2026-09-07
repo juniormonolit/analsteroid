@@ -16,10 +16,68 @@ import type { EntityInput } from './entities';
 
 export type PeriodKey = 'day' | 'week' | 'month';
 
-export interface ReportTemplateState {
+/** Как сущность/метрика подписана В ОТЧЁТЕ (правка владельца 07.09: в чате отделы и
+ *  показатели зовутся не так, как в Монолитике — «Общестрой» вместо «МСК ОС»). */
+export interface EntityAlias { name?: string; short?: string }
+
+export interface ReportLabels {
+  /** «Отчет МОСКВА». Пусто — автозаголовок «Отчет: <сущности>». */
+  title?: string;
+  /** Ключ — templateEntityKey(): 'self' | 'department:<id>' | 'branch:<id>'. */
+  entityAliases?: Record<string, EntityAlias>;
+  /** metricId → подпись в отчёте. */
+  metricAliases?: Record<string, string>;
+}
+
+export interface ReportTemplateState extends ReportLabels {
   period: PeriodKey;
   entities: EntityInput[];
   metricIds: string[];
+}
+
+/** Стабильный ключ сущности для псевдонимов — общий с UI (MyReportPage.entityKey). */
+export function templateEntityKey(e: EntityInput): string {
+  return e.kind === 'self' ? 'self' : `${e.kind}:${e.id}`;
+}
+
+const MAX_TITLE = 80;
+const MAX_ALIAS = 60;
+const MAX_ALIASES = 80;
+
+function cleanLabel(v: unknown, max: number): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  return t && t.length <= max ? t : undefined;
+}
+
+/** Заголовок и псевдонимы из чужого JSON: обрезаем, лишнее отбрасываем молча. */
+export function parseReportLabels(raw: unknown): ReportLabels {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const out: ReportLabels = {};
+  const title = cleanLabel(o.title, MAX_TITLE);
+  if (title) out.title = title;
+  if (o.entityAliases && typeof o.entityAliases === 'object') {
+    const aliases: Record<string, EntityAlias> = {};
+    for (const [k, v] of Object.entries(o.entityAliases as Record<string, unknown>).slice(0, MAX_ALIASES)) {
+      if (!v || typeof v !== 'object' || k.length > 200) continue;
+      const a: EntityAlias = {};
+      const name = cleanLabel((v as Record<string, unknown>).name, MAX_ALIAS);
+      const short = cleanLabel((v as Record<string, unknown>).short, MAX_ALIAS);
+      if (name) a.name = name;
+      if (short) a.short = short;
+      if (a.name || a.short) aliases[k] = a;
+    }
+    if (Object.keys(aliases).length) out.entityAliases = aliases;
+  }
+  if (o.metricAliases && typeof o.metricAliases === 'object') {
+    const aliases: Record<string, string> = {};
+    for (const [k, v] of Object.entries(o.metricAliases as Record<string, unknown>).slice(0, MAX_ALIASES)) {
+      const label = cleanLabel(v, MAX_ALIAS);
+      if (label && k.length <= 200) aliases[k] = label;
+    }
+    if (Object.keys(aliases).length) out.metricAliases = aliases;
+  }
+  return out;
 }
 
 export interface ReportTemplate {
@@ -138,5 +196,5 @@ export function parseTemplateState(raw: unknown): ReportTemplateState | null {
     : [];
   if (metricIds.length === 0) return null;
 
-  return { period, entities, metricIds };
+  return { period, entities, metricIds, ...parseReportLabels(o) };
 }

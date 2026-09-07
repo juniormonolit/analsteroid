@@ -21,6 +21,7 @@ import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { computeTotals } from '@/features/reports/engine/calculated';
 import { enrichPlanMetrics } from '@/features/reports/engine/planMetrics';
 import { EntityAccessError, resolveEntities, type EntityInput, type ResolvedEntity } from '@/lib/reports-builder/entities';
+import { parseReportLabels, templateEntityKey } from '@/lib/reports-builder/presets';
 import { getMonthPlansByManager, getPlanWindows } from '@/lib/reports-builder/plans';
 import { TOTAL, type ReportMetric, type ReportSpec } from '@/features/reports-builder/engine/buildReportText';
 import type { MetricValue, ValueFormat } from '@/features/reports-builder/engine/format';
@@ -126,6 +127,8 @@ function planPercentMetric(
 }
 
 const SALES_AMOUNT_IDS = ['primary_sales_amount', 'repeat_sales_amount'];
+// Блоки 3–4 отчёта (план/факт «на текущий день»): считаются всегда, независимо от выбора.
+const FIXED_PLAN_METRIC_IDS = ['plan_sales_current_day', 'plan_shipments_current_day'];
 
 function sumSalesByEntity(rows: ReportRow[], entities: ResolvedEntity[]): Map<string, number> {
   const out = new Map<string, number>();
@@ -190,8 +193,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Ни одна из запрошенных метрик не найдена в каталоге' }, { status: 400 });
   }
   // Зависимости нужны, чтобы calculated-метрики (конверсии) было из чего считать,
-  // но в отчёт они не попадают — только выбранные человеком.
-  const withDeps = withDependencies(selected, allMetrics);
+  // но в отчёт они не попадают — только выбранные человеком. Плановые метрики
+  // фиксированных блоков (3 и 4, правка владельца 07.09) добавляются всегда.
+  const fixedPlanMetrics = resolveMetricIds(FIXED_PLAN_METRIC_IDS, allMetrics);
+  const withDeps = withDependencies([...selected, ...fixedPlanMetrics], allMetrics);
+  const labels = parseReportLabels(body);
 
   const monthFirstDay = `${dateStr.slice(0, 7)}-01`;
   const weekStart = mondayOf(dateStr);
@@ -206,7 +212,7 @@ export async function POST(req: NextRequest) {
     ...fetchOpts,
   });
 
-  const [rowsDay, rowsWeek, rowsMonth, plans, planWindows] = await Promise.all([
+  const [rowsDay, rowsWeek, rowsMonthRaw, plans, planWindows] = await Promise.all([
     windowRows(dateStr),
     windowRows(weekStart),
     windowRows(monthFirstDay),
@@ -214,9 +220,32 @@ export async function POST(req: NextRequest) {
     getPlanWindows(monthFirstDay, dateStr, weekStart),
   ]);
 
-  const rowsByPeriod: Record<PeriodKey, ReportRow[]> = { day: rowsDay, week: rowsWeek, month: rowsMonth };
+  // Плановые метрики каталога («План продаж (на текущий день)» и т.п.) строки
+  // fetchByManagers не содержат — их дорисовывает тот же движок, что и основной
+  // отчёт (инцидент 07.09: без него планы в конструкторе были «0,0 млн»).
+  // «Сегодня» для планов — дата отчёта: человек собирает «за 04.09» и ждёт план
+  // на 04.09, а не на реальное сегодня.
+  const enrich = async (rows: ReportRow[], fromStr: string): Promise<ReportRow[]> =>
+    (await enrichPlanMetrics({
+      withDeps,
+      isManagersReport: true,
+      mskTodayStr: dateStr,
+      current: { rows, fromStr, toStr: dateStr },
+      accountType: 'managers',
+    })).current;
+  const rowsMonth = await enrich(rowsMonthRaw, monthFirstDay);
+  const rowsByPeriod: Record<PeriodKey, ReportRow[]> = { day: rowsDay, week: rowsWeek, month: rowsMonthRaw };
+  const windowFromStr: Record<PeriodKey, string> = { day: dateStr, week: weekStart, month: monthFirstDay };
 
-  // «% ПЛАНА» — три окна всегда.
+  // Подписи в отчёте: псевдонимы владельца поверх названий Монолитики.
+  const inputKeys = entityInput.map(templateEntityKey);
+  const display = entities.map((e, i) => {
+    const a = labels.entityAliases?.[inputKeys[i] ?? ''];
+    return { key: e.key, title: a?.name ?? e.title, short: a?.short ?? a?.name ?? e.shortTitle };
+  });
+  const titleOf = new Map(display.map(d => [d.key, d]));
+
+  // Блок 1 — «% ПЛАНА»: три окна всегда.
   const planPct: ReportMetric[] = (['day', 'week', 'month'] as PeriodKey[]).map(p =>
     planPercentMetric(
       p,
@@ -225,47 +254,62 @@ export async function POST(req: NextRequest) {
     ),
   );
 
-  // Остальные метрики — за выбранный период. Плановые метрики каталога («План
-  // прод. (тек)», «План отгр. (мес)», «Выполнение плана %» и т.п.) строки
-  // fetchByManagers не содержат — их дорисовывает тот же движок, что и основной
-  // отчёт (инцидент 07.09: без него планы в конструкторе были «0,0 млн» при
-  // заданных планах). «Сегодня» для планов — дата отчёта, а не реальное сегодня:
-  // человек собирает отчёт «за 04.09» и ждёт план на 04.09.
-  const windowFromStr: Record<PeriodKey, string> = { day: dateStr, week: weekStart, month: monthFirstDay };
-  const blockRows = (await enrichPlanMetrics({
-    withDeps,
-    isManagersReport: true,
-    mskTodayStr: dateStr,
-    current: { rows: rowsByPeriod[period], fromStr: windowFromStr[period], toStr: dateStr },
-    accountType: 'managers',
-  })).current;
-  const totalsByEntity = new Map<string, Record<string, number | null>>();
-  for (const e of entities) {
-    totalsByEntity.set(e.key, computeTotals(blockRows.filter(r => e.managerIds.has(r.dimensionId)), withDeps));
-  }
-  const allSelectedManagers = new Set(entities.flatMap(e => [...e.managerIds]));
-  const grandTotal = computeTotals(blockRows.filter(r => allSelectedManagers.has(r.dimensionId)), withDeps);
-
   const onlySelf = entities.length === 1 && entities[0].key === 'self';
   const moneyFormat = onlySelf ? 'money' : 'mln';
-  const blockMetrics: ReportMetric[] = selected.map(m => ({
-    label: m.nameShortRu || m.nameRu,
+  const allSelectedManagers = new Set(entities.flatMap(e => [...e.managerIds]));
+  const totalsOf = (rows: ReportRow[]) => {
+    const byEntity = new Map<string, Record<string, number | null>>();
+    for (const e of entities) byEntity.set(e.key, computeTotals(rows.filter(r => e.managerIds.has(r.dimensionId)), withDeps));
+    const grand = computeTotals(rows.filter(r => allSelectedManagers.has(r.dimensionId)), withDeps);
+    return { byEntity, grand };
+  };
+
+  // Блок 2 — выбранные показатели за выбранный период, каждый сводкой:
+  // «[b]Метрика — итог[/b]» + строка на сущность (структура «МОСКВЫ»).
+  const blockRows = period === 'month' ? rowsMonth : await enrich(rowsByPeriod[period], windowFromStr[period]);
+  const periodTotals = totalsOf(blockRows);
+  const selectedOverview: ReportMetric[] = selected.map(m => ({
+    label: labels.metricAliases?.[m.id] ?? m.nameShortRu ?? m.nameRu,
     format: metricFormat(m, moneyFormat),
-    values: valuesFor(m.id, totalsByEntity, grandTotal),
+    values: valuesFor(m.id, periodTotals.byEntity, periodTotals.grand),
   }));
 
-  // Агрегат — везде, кроме личного отчёта из одной сущности (правило владельца).
-  const aggregate = onlySelf
-    ? undefined
-    : { title: `ИТОГО (${entities.map(e => e.shortTitle).join('+')})` };
+  // Блоки 3 и 4 — фиксированные план/факт по каждой сущности и ИТОГО, всегда с
+  // начала месяца по дату отчёта («на текущий день»): план = дневной × рабочие дни
+  // месяца до даты (plan_*_current_day), факт = все продажи/отгрузки (перв.+повт.).
+  const monthTotals = totalsOf(rowsMonth);
+  const planFactMetrics = ((): ReportMetric[] => {
+    const cols: [string, Record<string, number | null>][] = [
+      ...entities.map(e => [e.key, monthTotals.byEntity.get(e.key) ?? {}] as [string, Record<string, number | null>]),
+      [TOTAL, monthTotals.grand],
+    ];
+    const g = (t: Record<string, number | null>, id: string) => t[id] ?? 0;
+    const sales = (t: Record<string, number | null>) => g(t, 'primary_sales_amount') + g(t, 'repeat_sales_amount');
+    const ships = (t: Record<string, number | null>) => g(t, 'primary_shipments_amount') + g(t, 'repeat_shipments_amount');
+    const planS = (t: Record<string, number | null>) => t.plan_sales_current_day ?? null;
+    const planSh = (t: Record<string, number | null>) => t.plan_shipments_current_day ?? null;
+    const num = (f: (t: Record<string, number | null>) => number | null): Record<string, MetricValue> =>
+      Object.fromEntries(cols.map(([k, t]) => [k, f(t)]));
+    const ratio = (fact: (t: Record<string, number | null>) => number, plan: (t: Record<string, number | null>) => number | null): Record<string, MetricValue> =>
+      Object.fromEntries(cols.map(([k, t]) => [k, { num: fact(t), den: plan(t) ?? 0 }]));
+    return [
+      { label: 'План продаж', format: moneyFormat, values: num(planS) },
+      { label: 'Сумма продаж', format: moneyFormat, values: num(sales) },
+      { label: '% выполнения', format: 'pct0', values: ratio(sales, planS) },
+      { label: 'План отгрузок', format: moneyFormat, gapBefore: true, values: num(planSh) },
+      { label: 'Сумма отгрузок', format: moneyFormat, values: num(ships) },
+      { label: '% выполнения', format: 'pct0', values: ratio(ships, planSh) },
+    ];
+  })();
 
   const spec: ReportSpec = {
-    title: onlySelf ? `Отчет: ${entities[0].title}` : `Отчет: ${entities.map(e => e.title).join(', ')}`,
+    title: labels.title ?? (onlySelf ? `Отчет: ${display[0]?.title ?? ''}` : `Отчет: ${display.map(d => d.title).join(', ')}`),
     subtitle: { style: 'za', date: dateStr },
-    entities: entities.map(e => ({ key: e.key, title: e.title })),
-    overview: [planPct],
-    entityBlock: blockMetrics,
-    aggregate,
+    entities: display.map(d => ({ key: d.key, title: d.title, blockTitle: d.title.toUpperCase() })),
+    overview: selectedOverview.length ? [planPct, selectedOverview] : [planPct],
+    entityBlock: planFactMetrics,
+    // Агрегат — везде, кроме личного отчёта из одной сущности (правило владельца).
+    aggregate: onlySelf ? undefined : { title: `ИТОГО (${display.map(d => d.short).join('+')})`, metrics: planFactMetrics },
   };
 
   return NextResponse.json({ spec, meta: { date: dateStr, period } });

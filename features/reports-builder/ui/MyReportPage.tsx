@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ClipboardCheck, Copy, Play, Plus, Save, Star, Trash2, X } from 'lucide-react';
+import { Check, ClipboardCheck, Copy, Pencil, Play, Plus, Save, Star, Trash2, X } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import type { ReportSpec } from '@/features/reports-builder/engine/buildReportText';
 import { useReportAssembly } from './useReportAssembly';
@@ -43,10 +43,16 @@ interface CatalogMetric {
   isCore: boolean;
 }
 
+interface EntityAlias { name?: string; short?: string }
 interface TemplateState {
   period: PeriodKey;
   entities: EntityInput[];
   metricIds: string[];
+  /** Заголовок отчёта и подписи сущностей/метрик в чате (правка владельца 07.09):
+   *  в отчёте отделы и показатели зовутся не так, как в Монолитике. */
+  title?: string;
+  entityAliases?: Record<string, EntityAlias>;
+  metricAliases?: Record<string, string>;
 }
 interface Template {
   id: string;
@@ -74,6 +80,9 @@ export function MyReportPage() {
   const [period, setPeriod] = useState<PeriodKey>('month');
   const [entities, setEntities] = useState<ChosenEntity[]>([{ input: { kind: 'self' }, label: 'Я' }]);
   const [metricIds, setMetricIds] = useState<string[]>(DEFAULT_METRICS);
+  const [title, setTitle] = useState('');
+  const [entityAliases, setEntityAliases] = useState<Record<string, EntityAlias>>({});
+  const [metricAliases, setMetricAliases] = useState<Record<string, string>>({});
   // Поиск в пикере «Кто в отчёте» — список стал всей оргструктурой (80 отделов).
   const [entitySearch, setEntitySearch] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +156,9 @@ export function MyReportPage() {
     setPeriod(tpl.state.period);
     setEntities(resolved);
     setMetricIds(tpl.state.metricIds);
+    setTitle(tpl.state.title ?? '');
+    setEntityAliases(tpl.state.entityAliases ?? {});
+    setMetricAliases(tpl.state.metricAliases ?? {});
     setActiveTemplate(tpl.id);
     assembly.reset();
   }, [assembly, labelFor]);
@@ -180,6 +192,27 @@ export function MyReportPage() {
     touched();
   }, [touched]);
 
+  const setEntityAlias = useCallback((key: string, alias: EntityAlias) => {
+    setEntityAliases(prev => {
+      const next = { ...prev };
+      const clean: EntityAlias = {};
+      if (alias.name?.trim()) clean.name = alias.name.trim();
+      if (alias.short?.trim()) clean.short = alias.short.trim();
+      if (clean.name || clean.short) next[key] = clean; else delete next[key];
+      return next;
+    });
+    touched();
+  }, [touched]);
+
+  const setMetricAlias = useCallback((id: string, label: string) => {
+    setMetricAliases(prev => {
+      const next = { ...prev };
+      if (label.trim()) next[id] = label.trim(); else delete next[id];
+      return next;
+    });
+    touched();
+  }, [touched]);
+
   const toggleMetric = useCallback((id: string) => {
     setMetricIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
     touched();
@@ -189,13 +222,13 @@ export function MyReportPage() {
     const res = await fetch('/api/my-report/templates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, isDefault, state: { period, entities: entities.map(e => e.input), metricIds } }),
+      body: JSON.stringify({ name, isDefault, state: { period, entities: entities.map(e => e.input), metricIds, title, entityAliases, metricAliases } }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
     await queryClient.invalidateQueries({ queryKey: ['my-report-templates'] });
     setActiveTemplate(body.id as string);
-  }, [entities, metricIds, period, queryClient]);
+  }, [entities, metricIds, period, title, entityAliases, metricAliases, queryClient]);
 
   const deleteTemplate = useCallback(async (id: string) => {
     const res = await fetch(`/api/my-report/templates?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -213,7 +246,7 @@ export function MyReportPage() {
       const res = await fetch('/api/my-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date, period, entities: entities.map(e => e.input), metricIds }),
+        body: JSON.stringify({ date, period, entities: entities.map(e => e.input), metricIds, title, entityAliases, metricAliases }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
@@ -225,7 +258,7 @@ export function MyReportPage() {
     } finally {
       setLoading(false);
     }
-  }, [assembly, date, period, entities, metricIds]);
+  }, [assembly, date, period, entities, metricIds, title, entityAliases, metricAliases]);
 
   const copy = useCallback(async () => {
     if (!assembly.done) return;
@@ -259,6 +292,20 @@ export function MyReportPage() {
           />
 
           <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Заголовок отчёта</span>
+            <input
+              value={title}
+              onChange={e => { setTitle(e.target.value); touched(); }}
+              placeholder="Отчет МОСКВА"
+              maxLength={80}
+              className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-[16px] sm:text-sm"
+            />
+            <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">
+              Пусто — «Отчет: …» из названий участников. Заголовок хранится в шаблоне.
+            </span>
+          </label>
+
+          <label className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-[var(--color-text-muted)]">Дата</span>
             <input
               type="date"
@@ -290,7 +337,7 @@ export function MyReportPage() {
               ))}
             </div>
             <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">
-              «% ПЛАНА» всегда показывает день, неделю и месяц — период задаёт остальные метрики.
+              «% ПЛАНА» — всегда день, неделя и месяц; план/факт по участникам — всегда с начала месяца. Период задаёт выбранные показатели.
             </span>
           </div>
 
@@ -301,7 +348,17 @@ export function MyReportPage() {
                 const key = entityKey(e.input);
                 return (
                   <span key={key} className="inline-flex items-center gap-1 rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] pl-2.5 pr-1 py-1 text-sm">
-                    {e.label}
+                    <span title={entityAliases[key]?.name ? `В Монолитике: ${e.label}` : undefined}>
+                      {entityAliases[key]?.name ?? e.label}
+                    </span>
+                    <AliasEditor
+                      title={`Как подписать «${e.label}» в отчёте`}
+                      fields={[
+                        { key: 'name', label: 'Название в отчёте', placeholder: e.label, value: entityAliases[key]?.name ?? '' },
+                        { key: 'short', label: 'Кратко — для строки «ИТОГО (…)»', placeholder: entityAliases[key]?.name ?? e.label, value: entityAliases[key]?.short ?? '' },
+                      ]}
+                      onSave={v => setEntityAlias(key, { name: v.name, short: v.short })}
+                    />
                     {entities.length > 1 && (
                       <button
                         type="button"
@@ -366,7 +423,7 @@ export function MyReportPage() {
             </div>
             {entities.length > 1 && (
               <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">
-                Метрики общие для всех — в конце отчёта появится агрегат.
+                Каждый показатель — сводкой: итог и строка на участника. Ниже — план/факт по каждому и «ИТОГО».
               </span>
             )}
           </div>
@@ -378,7 +435,14 @@ export function MyReportPage() {
             <div className="flex flex-wrap gap-1.5">
               {selectedMetrics.map(m => (
                 <span key={m.id} className="inline-flex items-center gap-1 rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] pl-2.5 pr-1 py-1 text-sm">
-                  {m.nameShortRu || m.nameRu}
+                  <span title={metricAliases[m.id] ? `В каталоге: ${m.nameRu}` : m.nameRu}>
+                    {metricAliases[m.id] ?? m.nameShortRu ?? m.nameRu}
+                  </span>
+                  <AliasEditor
+                    title={`Как подписать «${m.nameRu}» в отчёте`}
+                    fields={[{ key: 'label', label: 'Название в отчёте', placeholder: m.nameShortRu || m.nameRu, value: metricAliases[m.id] ?? '' }]}
+                    onSave={v => setMetricAlias(m.id, v.label ?? '')}
+                  />
                   <button type="button" onClick={() => toggleMetric(m.id)} aria-label={`Убрать ${m.nameRu}`}
                     className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-negative)]">
                     <X size={13} />
@@ -439,6 +503,57 @@ export function MyReportPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Карандаш у чипа: поповер с полями «как подписать в отчёте». Пустое поле —
+ * вернуть название Монолитики. Сохранение по Enter/кнопке, не на каждый ввод:
+ * иначе каждая буква сбрасывала бы сборку и снимала отметку шаблона.
+ */
+function AliasEditor({ title, fields, onSave }: {
+  title: string;
+  fields: { key: string; label: string; placeholder: string; value: string }[];
+  onSave: (values: Record<string, string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const openWith = (o: boolean) => {
+    if (o) setDraft(Object.fromEntries(fields.map(f => [f.key, f.value])));
+    setOpen(o);
+  };
+  const submit = () => { onSave(draft); setOpen(false); };
+  return (
+    <Popover
+      open={open}
+      onOpenChange={openWith}
+      className="w-[280px] max-w-[calc(100vw-24px)]"
+      trigger={
+        <button type="button" aria-label={title} title={title} className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-accent)]">
+          <Pencil size={12} />
+        </button>
+      }
+    >
+      <div className="flex flex-col gap-2 p-3">
+        <span className="text-xs text-[var(--color-text-muted)]">{title}</span>
+        {fields.map(f => (
+          <label key={f.key} className="flex flex-col gap-1">
+            <span className="text-[11px] text-[var(--color-text-muted)]">{f.label}</span>
+            <input
+              value={draft[f.key] ?? ''}
+              onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+              placeholder={f.placeholder}
+              maxLength={60}
+              className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-[16px] sm:text-sm outline-none"
+            />
+          </label>
+        ))}
+        <button type="button" onClick={submit} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-3 text-sm font-medium text-white">
+          Готово
+        </button>
+      </div>
+    </Popover>
   );
 }
 
