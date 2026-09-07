@@ -12,17 +12,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ClipboardCheck, Copy, Pencil, Play, Plus, Save, Star, Trash2, X } from 'lucide-react';
+import { Check, ClipboardCheck, Copy, Play, Plus, Save, Star, Trash2, X } from 'lucide-react';
+import { metricMatchesQuery, searchTokens } from '@/lib/metrics/searchText';
 import { Popover } from '@/components/ui/Popover';
 import type { ReportSpec } from '@/features/reports-builder/engine/buildReportText';
 import { useReportAssembly } from './useReportAssembly';
 
 type PeriodKey = 'day' | 'week' | 'month';
-const PERIODS: { key: PeriodKey; label: string }[] = [
-  { key: 'day', label: 'День' },
-  { key: 'week', label: 'Неделя' },
-  { key: 'month', label: 'Месяц' },
-];
+// Период показателей всегда месяц (решение владельца 07.09: пикер убран — сценария
+// «неделя/день» у отчёта нет; «% ПЛАНА» и план/факт и так считаются своими окнами).
+const PERIOD: PeriodKey = 'month';
 
 type EntityInput = { kind: 'self' } | { kind: 'department'; id: string } | { kind: 'branch'; id: string };
 interface ChosenEntity { input: EntityInput; label: string }
@@ -53,6 +52,7 @@ interface TemplateState {
   title?: string;
   entityAliases?: Record<string, EntityAlias>;
   metricAliases?: Record<string, string>;
+  showTotal?: boolean;
 }
 interface Template {
   id: string;
@@ -77,12 +77,12 @@ function entityKey(e: EntityInput): string {
 
 export function MyReportPage() {
   const [date, setDate] = useState(todayStr);
-  const [period, setPeriod] = useState<PeriodKey>('month');
   const [entities, setEntities] = useState<ChosenEntity[]>([{ input: { kind: 'self' }, label: 'Я' }]);
   const [metricIds, setMetricIds] = useState<string[]>(DEFAULT_METRICS);
   const [title, setTitle] = useState('');
   const [entityAliases, setEntityAliases] = useState<Record<string, EntityAlias>>({});
   const [metricAliases, setMetricAliases] = useState<Record<string, string>>({});
+  const [showTotal, setShowTotal] = useState(true);
   // Поиск в пикере «Кто в отчёте» — список стал всей оргструктурой (80 отделов).
   const [entitySearch, setEntitySearch] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -153,12 +153,12 @@ export function MyReportPage() {
       .map(input => ({ input, label: labelFor(input) }))
       .filter((e): e is ChosenEntity => e.label !== null);
     if (resolved.length === 0) return;
-    setPeriod(tpl.state.period);
     setEntities(resolved);
     setMetricIds(tpl.state.metricIds);
     setTitle(tpl.state.title ?? '');
     setEntityAliases(tpl.state.entityAliases ?? {});
     setMetricAliases(tpl.state.metricAliases ?? {});
+    setShowTotal(tpl.state.showTotal !== false);
     setActiveTemplate(tpl.id);
     assembly.reset();
   }, [assembly, labelFor]);
@@ -195,9 +195,11 @@ export function MyReportPage() {
   const setEntityAlias = useCallback((key: string, alias: EntityAlias) => {
     setEntityAliases(prev => {
       const next = { ...prev };
+      // Не тримим на вводе — иначе нельзя набрать пробел между словами; сервер
+      // обрежет края сам (parseReportLabels).
       const clean: EntityAlias = {};
-      if (alias.name?.trim()) clean.name = alias.name.trim();
-      if (alias.short?.trim()) clean.short = alias.short.trim();
+      if (alias.name) clean.name = alias.name;
+      if (alias.short) clean.short = alias.short;
       if (clean.name || clean.short) next[key] = clean; else delete next[key];
       return next;
     });
@@ -207,7 +209,7 @@ export function MyReportPage() {
   const setMetricAlias = useCallback((id: string, label: string) => {
     setMetricAliases(prev => {
       const next = { ...prev };
-      if (label.trim()) next[id] = label.trim(); else delete next[id];
+      if (label) next[id] = label; else delete next[id];
       return next;
     });
     touched();
@@ -222,13 +224,13 @@ export function MyReportPage() {
     const res = await fetch('/api/my-report/templates', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, isDefault, state: { period, entities: entities.map(e => e.input), metricIds, title, entityAliases, metricAliases } }),
+      body: JSON.stringify({ name, isDefault, state: { period: PERIOD, entities: entities.map(e => e.input), metricIds, title, entityAliases, metricAliases, showTotal } }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
     await queryClient.invalidateQueries({ queryKey: ['my-report-templates'] });
     setActiveTemplate(body.id as string);
-  }, [entities, metricIds, period, title, entityAliases, metricAliases, queryClient]);
+  }, [entities, metricIds, title, entityAliases, metricAliases, showTotal, queryClient]);
 
   const deleteTemplate = useCallback(async (id: string) => {
     const res = await fetch(`/api/my-report/templates?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -246,7 +248,7 @@ export function MyReportPage() {
       const res = await fetch('/api/my-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date, period, entities: entities.map(e => e.input), metricIds, title, entityAliases, metricAliases }),
+        body: JSON.stringify({ date, period: PERIOD, entities: entities.map(e => e.input), metricIds, title, entityAliases, metricAliases, showTotal }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
@@ -258,7 +260,7 @@ export function MyReportPage() {
     } finally {
       setLoading(false);
     }
-  }, [assembly, date, period, entities, metricIds, title, entityAliases, metricAliases]);
+  }, [assembly, date, entities, metricIds, title, entityAliases, metricAliases, showTotal]);
 
   const copy = useCallback(async () => {
     if (!assembly.done) return;
@@ -279,7 +281,7 @@ export function MyReportPage() {
         Состояние на сегодня и как идём по плану. Собери отчёт и скопируй в чат.
       </p>
 
-      <div className="grid gap-4 lg:grid-cols-[340px_1fr] items-start">
+      <div className="grid gap-4 lg:grid-cols-[minmax(440px,520px)_1fr] items-start">
         {/* ── Шаблон ─────────────────────────────────────────────── */}
         <div className="flex flex-col gap-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 sm:p-4">
           <TemplateBar
@@ -319,46 +321,13 @@ export function MyReportPage() {
           </label>
 
           <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-[var(--color-text-muted)]">Период</span>
-            <div className="flex rounded-lg border border-[var(--color-border)] overflow-hidden">
-              {PERIODS.map(p => (
-                <button
-                  key={p.key}
-                  type="button"
-                  onClick={() => { setPeriod(p.key); touched(); }}
-                  className={`min-h-11 flex-1 text-sm transition-colors ${
-                    period === p.key
-                      ? 'bg-[var(--color-accent)] text-white font-medium'
-                      : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-            <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">
-              «% ПЛАНА» — всегда день, неделя и месяц; план/факт по участникам — всегда с начала месяца. Период задаёт выбранные показатели.
-            </span>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
             <span className="text-xs font-medium text-[var(--color-text-muted)]">Кто в отчёте</span>
             <div className="flex flex-wrap gap-1.5">
               {entities.map(e => {
                 const key = entityKey(e.input);
                 return (
                   <span key={key} className="inline-flex items-center gap-1 rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] pl-2.5 pr-1 py-1 text-sm">
-                    <span title={entityAliases[key]?.name ? `В Монолитике: ${e.label}` : undefined}>
-                      {entityAliases[key]?.name ?? e.label}
-                    </span>
-                    <AliasEditor
-                      title={`Как подписать «${e.label}» в отчёте`}
-                      fields={[
-                        { key: 'name', label: 'Название в отчёте', placeholder: e.label, value: entityAliases[key]?.name ?? '' },
-                        { key: 'short', label: 'Кратко — для строки «ИТОГО (…)»', placeholder: entityAliases[key]?.name ?? e.label, value: entityAliases[key]?.short ?? '' },
-                      ]}
-                      onSave={v => setEntityAlias(key, { name: v.name, short: v.short })}
-                    />
+                    {e.label}
                     {entities.length > 1 && (
                       <button
                         type="button"
@@ -423,7 +392,7 @@ export function MyReportPage() {
             </div>
             {entities.length > 1 && (
               <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">
-                Каждый показатель — сводкой: итог и строка на участника. Ниже — план/факт по каждому и «ИТОГО».
+                Показатели — сводкой (итог + строка на участника), затем план/факт по каждому за месяц.
               </span>
             )}
           </div>
@@ -435,14 +404,7 @@ export function MyReportPage() {
             <div className="flex flex-wrap gap-1.5">
               {selectedMetrics.map(m => (
                 <span key={m.id} className="inline-flex items-center gap-1 rounded-full bg-[var(--color-bg)] border border-[var(--color-border)] pl-2.5 pr-1 py-1 text-sm">
-                  <span title={metricAliases[m.id] ? `В каталоге: ${m.nameRu}` : m.nameRu}>
-                    {metricAliases[m.id] ?? m.nameShortRu ?? m.nameRu}
-                  </span>
-                  <AliasEditor
-                    title={`Как подписать «${m.nameRu}» в отчёте`}
-                    fields={[{ key: 'label', label: 'Название в отчёте', placeholder: m.nameShortRu || m.nameRu, value: metricAliases[m.id] ?? '' }]}
-                    onSave={v => setMetricAlias(m.id, v.label ?? '')}
-                  />
+                  {m.nameShortRu || m.nameRu}
                   <button type="button" onClick={() => toggleMetric(m.id)} aria-label={`Убрать ${m.nameRu}`}
                     className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-negative)]">
                     <X size={13} />
@@ -452,6 +414,69 @@ export function MyReportPage() {
               <MetricPicker metrics={metrics} selected={metricIds} onToggle={toggleMetric} />
             </div>
           </div>
+
+          {/* Названия в отчёте — таблицей в два столбца (правка владельца 07.09:
+              карандаши у чипов «не попадёшь»): слева как в Монолитике, справа как
+              печатать. Пустое поле — оставить название Монолитики. */}
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-[var(--color-text-muted)]">Названия в отчёте</span>
+            <div className="rounded-lg border border-[var(--color-border)] overflow-hidden">
+              <div className="hidden sm:grid grid-cols-2 gap-2 px-3 py-1.5 text-[11px] font-medium text-[var(--color-text-muted)] bg-[var(--color-bg)] border-b border-[var(--color-border)]">
+                <span>В Монолитике</span><span>В отчёте</span>
+              </div>
+              {entities.map(e => {
+                const key = entityKey(e.input);
+                const a = entityAliases[key] ?? {};
+                return (
+                  <div key={key} className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-2 items-center px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0">
+                    <span className="text-sm min-w-0 truncate" title={e.label}>{e.label}</span>
+                    <div className="flex gap-1.5 min-w-0">
+                      <input
+                        value={a.name ?? ''}
+                        onChange={ev => setEntityAlias(key, { ...a, name: ev.target.value })}
+                        placeholder={e.label}
+                        maxLength={60}
+                        aria-label={`Название «${e.label}» в отчёте`}
+                        className="min-h-11 sm:min-h-9 min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-sm outline-none"
+                      />
+                      <input
+                        value={a.short ?? ''}
+                        onChange={ev => setEntityAlias(key, { ...a, short: ev.target.value })}
+                        placeholder="кратко"
+                        maxLength={20}
+                        title="Кратко — для строки «ИТОГО (…)»"
+                        aria-label={`Кратко для ИТОГО: ${e.label}`}
+                        className="min-h-11 sm:min-h-9 w-20 sm:w-16 shrink-0 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-sm outline-none"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              {selectedMetrics.map(m => (
+                <div key={m.id} className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-2 items-center px-3 py-1.5 border-b border-[var(--color-border)] last:border-b-0">
+                  <span className="text-sm min-w-0 truncate" title={m.nameRu}>{m.nameShortRu || m.nameRu}</span>
+                  <input
+                    value={metricAliases[m.id] ?? ''}
+                    onChange={ev => setMetricAlias(m.id, ev.target.value)}
+                    placeholder={m.nameShortRu || m.nameRu}
+                    maxLength={60}
+                    aria-label={`Название «${m.nameRu}» в отчёте`}
+                    className="min-h-11 sm:min-h-9 min-w-0 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-sm outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+            <span className="text-[11px] leading-snug text-[var(--color-text-muted)]">
+              Пустое поле — как в Монолитике. Второе поле у участника — короткое имя для «ИТОГО (…)».
+            </span>
+          </div>
+
+          {entities.length > 1 && (
+            <label className="flex min-h-11 items-center gap-2 text-sm">
+              <input type="checkbox" checked={showTotal} onChange={e => { setShowTotal(e.target.checked); touched(); }} />
+              Блок «ИТОГО» в конце отчёта
+            </label>
+          )}
 
           <button
             type="button"
@@ -503,57 +528,6 @@ export function MyReportPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * Карандаш у чипа: поповер с полями «как подписать в отчёте». Пустое поле —
- * вернуть название Монолитики. Сохранение по Enter/кнопке, не на каждый ввод:
- * иначе каждая буква сбрасывала бы сборку и снимала отметку шаблона.
- */
-function AliasEditor({ title, fields, onSave }: {
-  title: string;
-  fields: { key: string; label: string; placeholder: string; value: string }[];
-  onSave: (values: Record<string, string>) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const openWith = (o: boolean) => {
-    if (o) setDraft(Object.fromEntries(fields.map(f => [f.key, f.value])));
-    setOpen(o);
-  };
-  const submit = () => { onSave(draft); setOpen(false); };
-  return (
-    <Popover
-      open={open}
-      onOpenChange={openWith}
-      className="w-[280px] max-w-[calc(100vw-24px)]"
-      trigger={
-        <button type="button" aria-label={title} title={title} className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-accent)]">
-          <Pencil size={12} />
-        </button>
-      }
-    >
-      <div className="flex flex-col gap-2 p-3">
-        <span className="text-xs text-[var(--color-text-muted)]">{title}</span>
-        {fields.map(f => (
-          <label key={f.key} className="flex flex-col gap-1">
-            <span className="text-[11px] text-[var(--color-text-muted)]">{f.label}</span>
-            <input
-              value={draft[f.key] ?? ''}
-              onChange={e => setDraft(d => ({ ...d, [f.key]: e.target.value }))}
-              onKeyDown={e => { if (e.key === 'Enter') submit(); }}
-              placeholder={f.placeholder}
-              maxLength={60}
-              className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 text-[16px] sm:text-sm outline-none"
-            />
-          </label>
-        ))}
-        <button type="button" onClick={submit} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-3 text-sm font-medium text-white">
-          Готово
-        </button>
-      </div>
-    </Popover>
   );
 }
 
@@ -677,15 +651,18 @@ function MetricPicker({ metrics, selected, onToggle }: {
   onToggle: (id: string) => void;
 }) {
   const [query, setQuery] = useState('');
+  // Тот же поиск, что в панели метрик отчёта (lib/metrics/searchText): токены в
+  // любом порядке, разделители не мешают — «доля повтор сумм» находит «Доля
+  // повторных продаж, % (сумма, по воронке)».
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const base = q ? metrics.filter(m => m.nameRu.toLowerCase().includes(q)) : metrics.filter(m => m.isCore);
+    const tokens = searchTokens(query);
+    const base = tokens.length ? metrics.filter(m => metricMatchesQuery(m, tokens)) : metrics.filter(m => m.isCore);
     return base.slice(0, 200);
   }, [metrics, query]);
 
   return (
     <Popover
-      className="w-[300px] max-w-[calc(100vw-24px)]"
+      className="w-[400px] max-w-[calc(100vw-24px)]"
       trigger={
         <button type="button" className="tap-target inline-flex items-center gap-1 rounded-full border border-dashed border-[var(--color-border)] px-2.5 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           <Plus size={13} /> Показатель
@@ -717,7 +694,7 @@ function MetricPicker({ metrics, selected, onToggle }: {
                 }`}>
                   {on && <Check size={11} />}
                 </span>
-                <span className="min-w-0 flex-1 truncate">{m.nameRu}</span>
+                <span className="min-w-0 flex-1 leading-snug">{m.nameRu}</span>
               </button>
             );
           })}

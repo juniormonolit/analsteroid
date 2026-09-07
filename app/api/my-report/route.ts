@@ -309,7 +309,9 @@ export async function POST(req: NextRequest) {
     overview: selectedOverview.length ? [planPct, selectedOverview] : [planPct],
     entityBlock: planFactMetrics,
     // Агрегат — везде, кроме личного отчёта из одной сущности (правило владельца).
-    aggregate: onlySelf ? undefined : { title: `ИТОГО (${display.map(d => d.short).join('+')})`, metrics: planFactMetrics },
+    aggregate: onlySelf || labels.showTotal === false
+      ? undefined
+      : { title: `ИТОГО (${display.map(d => d.short).join('+')})`, metrics: planFactMetrics },
   };
 
   return NextResponse.json({ spec, meta: { date: dateStr, period } });

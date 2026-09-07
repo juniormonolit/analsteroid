@@ -27,6 +27,8 @@ export interface ReportLabels {
   entityAliases?: Record<string, EntityAlias>;
   /** metricId → подпись в отчёте. */
   metricAliases?: Record<string, string>;
+  /** Блок «ИТОГО» в конце — по галочке (правка владельца 07.09); по умолчанию есть. */
+  showTotal?: boolean;
 }
 
 export interface ReportTemplateState extends ReportLabels {
@@ -56,6 +58,7 @@ export function parseReportLabels(raw: unknown): ReportLabels {
   const out: ReportLabels = {};
   const title = cleanLabel(o.title, MAX_TITLE);
   if (title) out.title = title;
+  if (typeof o.showTotal === 'boolean') out.showTotal = o.showTotal;
   if (o.entityAliases && typeof o.entityAliases === 'object') {
     const aliases: Record<string, EntityAlias> = {};
     for (const [k, v] of Object.entries(o.entityAliases as Record<string, unknown>).slice(0, MAX_ALIASES)) {

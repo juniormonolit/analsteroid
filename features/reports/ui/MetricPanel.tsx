@@ -4,6 +4,7 @@ import { useState, useRef } from 'react';
 import { X, Search, GripVertical, Settings2, HelpCircle } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { MetricInfoBody } from './MetricInfoBody';
+import { normalizeSearchText, matchesSearchTokens } from '@/lib/metrics/searchText';
 import type { Metric } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
@@ -18,22 +19,6 @@ const CATEGORY_ORDER = ['Сделки', 'Брони', 'Продажи', 'Отг�
 export function getMetricPanelWidth(): number {
   if (typeof window === 'undefined') return 960;
   return Math.max(720, Math.min(1040, window.innerWidth - 220 - 500));
-}
-
-// Нормализация текста для поиска метрик: нижний регистр + служебные разделители
-// (стрелки любых видов →←↔, тире/дефис, слэши, скобки, кавычки, знаки препинания)
-// заменяются на пробел, лишние пробелы схлопываются. Нужно, чтобы «CR Сделка → Бронь»
-// находилось по запросу «сделка бронь» — стрелка между словами не должна мешать поиску.
-const SEARCH_SEPARATOR_RE = /[←-⇿➔➠-➿‐-―_/,;:()«»"'.\-]+/g;
-function normalizeSearchText(s: string): string {
-  return s.toLowerCase().replace(SEARCH_SEPARATOR_RE, ' ').replace(/\s+/g, ' ').trim();
-}
-// Метрика подходит под запрос, если ВСЕ токены запроса встречаются в нормализованном
-// названии (в любом порядке) — так «сделка бронь» и «бронь сделка» оба находят метрику.
-function matchesSearchTokens(text: string, tokens: string[]): boolean {
-  if (tokens.length === 0) return true;
-  const normalized = normalizeSearchText(text);
-  return tokens.every(t => normalized.includes(t));
 }
 
 // Охват метрики по названию: (перв.) / (повт.) / без суффикса = все
