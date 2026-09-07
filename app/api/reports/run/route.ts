@@ -7,6 +7,7 @@ import { fetchBySources } from '@/features/reports/engine/bySources';
 import { fetchByDealBuckets } from '@/features/reports/engine/byDealBuckets';
 import { fetchByClients } from '@/features/reports/engine/byClients';
 import { fetchManagerActivity, getCalendarWorkingDaysInPeriod } from '@/features/reports/engine/managerActivity';
+import { fetchDealsActivitiesSnapshot, DELA_ZADACHI_METRIC_IDS } from '@/features/reports/engine/dealsActivities';
 import { fetchBookingCallRate } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversions, STAGE_PAIRS, type StageConversionRow } from '@/features/reports/engine/stageConversions';
 import { fetchPriceObjectionConversion } from '@/features/reports/engine/priceObjectionConversion';
@@ -273,6 +274,36 @@ export async function POST(req: NextRequest) {
     };
     currentRows = currentRows.map(r => enrichActivity(r, curActivity, curCalDays));
     compRows = compRows.map(r => enrichActivity(r, compActivity, compCalDays));
+  }
+
+  // «Дела и задачи» (задача #5589, Серёга) — снимок sa.deals.activities по
+  // менеджеру (features/reports/engine/dealsActivities.ts), НЕ период-зависим:
+  // один и тот же снимок в current и comparison (как managerActivity выше) —
+  // колонка сравнения естественно совпадает с текущей, без спец-обработки.
+  // Смысл только в разрезе менеджеров — инжектим ТОЛЬКО в by-managers.
+  const hasDelaZadachiMetric = withDeps.some(m => DELA_ZADACHI_METRIC_IDS.includes(m.id));
+
+  if (hasDelaZadachiMetric && reportSlug === 'by-managers') {
+    const snap = await fetchDealsActivitiesSnapshot();
+    const enrichDelaZadachi = (row: ReportRow): ReportRow => {
+      const a = snap.get(row.dimensionId);
+      return {
+        ...row,
+        metrics: {
+          ...row.metrics,
+          dela_total: a?.delaTotal ?? 0,
+          dela_overdue: a?.delaOverdue ?? 0,
+          dela_today: a?.delaToday ?? 0,
+          deals_without_dela: a?.dealsWithoutDela ?? 0,
+          zadachi_total: a?.zadachiTotal ?? 0,
+          zadachi_overdue: a?.zadachiOverdue ?? 0,
+          zadachi_today: a?.zadachiToday ?? 0,
+          deals_with_active_zapros: a?.dealsWithActiveZapros ?? 0,
+        },
+      };
+    };
+    currentRows = currentRows.map(enrichDelaZadachi);
+    compRows = compRows.map(enrichDelaZadachi);
   }
 
   // ── Метрика «Рейтинг» (manager_rating, миграция 108; задача владельца 30.07) ──

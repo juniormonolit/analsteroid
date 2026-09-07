@@ -21093,3 +21093,70 @@ localeCompare покрывает числовые и временные оси.
    эффект смотрел только верхний уровень по точному id.
 4. **Группировка «По филиалу»**: строки ручных групп среди отделов филиала
    отсортированы в конец (там «Без группы» не нужна — уровень отделов, не людей).
+
+## 2026-09-07 — Задача #5589: «Дела и задачи» — реальные данные + «Сделки с активным запросом»
+
+### Что было
+7 метрик-заглушек «Дела и задачи» (migrations/156, задача #5555, formula='0') уже применены
+Артёмом на прод-`analytics` и лежат в избранном отчёте admin «Отчет по делам и задачам»
+(migrations/157/158). Серёга (стоячая санкция) попросил наполнить их реальными данными из
+`sa.deals.activities` (jsonb-снимок открытых дел/задач сделки, справочник
+owners-inbox/sa-deals-activities-field-guide-20260907.html, статистика
+owners-inbox/sa-deals-activities-analysis-20260907.html) и добавить 8-ю метрику «Сделки с
+активным запросом». Дополнительно — Маркус проверил, что type='CRM_TASKS_TASK' смешанный:
+только 21,2% (216/1018) реально на логистах (Bitrix WORK_POSITION, отчёт
+owners-inbox/sa-deals-logist-tasks-check-20260907.html); Серёга попросил фильтр по
+ответственному-логисту как отключаемую по умолчанию настройку.
+
+### Что сделано
+- `features/reports/engine/dealsActivities.ts` (новый): `fetchDealsActivitiesSnapshot()` —
+  один агрегатный SQL по `sa.deals.activities` (jsonb_array_elements LATERAL + FILTER),
+  сгруппированный по `current_manager_id`, только активные сделки
+  (`stages.stage_type NOT IN ('WON','LOSS')`, тот же критерий, что stageSnapshot.ts). Снимок
+  «сейчас» — без параметра периода, кэш 2 мин (паттерн stageSnapshot.ts/managerActivity.ts).
+  Даёт 8 полей: dela_total/overdue/today, deals_without_dela, zadachi_total/overdue/today,
+  deals_with_active_zapros. «Просрочено» — `deadline < now()` и НЕ заглушка `9999-12-31%`
+  (текстовый LIKE, без риска cast-ошибки). «Сегодня» — `deadline AT TIME ZONE
+  'Europe/Moscow'` = сегодня по МСК. `deals_without_dela`/`deals_with_active_zapros` считаются
+  per-deal через `EXISTS`, не через агрегат элементов (иначе двойной счёт при нескольких
+  задачах на сделке).
+  Фильтр логиста: `DELA_ZADACHI_LOGIST_FILTER_ENABLED = false` (константа) +
+  `LOGIST_BITRIX_IDS` (19 ID из отчёта Маркуса, временная заглушка до справочной таблицы
+  `sa.logist_bitrix_ids`, которую рекомендует завести Маркус) — применяется ТОЛЬКО к
+  `deals_with_active_zapros` (не к zadachi_total/overdue/today — те, по исходному ТЗ, про ВСЕ
+  задачи). Включить — один флаг в файле.
+- `app/api/reports/run/route.ts`: импорт + инжекция `fetchDealsActivitiesSnapshot()` — ТОЛЬКО
+  для `reportSlug === 'by-managers'`, паттерн 1-в-1 с `hasActivityMetric`/`hasBookingCallMetric`
+  выше по файлу (один снимок на current и comparison → сравнение с прошлым периодом
+  естественно равно текущему значению, как и у `stage_now_*`, без спец-кода).
+- `migrations/198_dela_zadachi_real_data.sql` (БД **YC analytics**, `run_analytics.mjs`):
+  `UPDATE metrics` — 7 старых метрик `metric_type: 'calculated'/formula='0'` → `'external'`
+  (иначе `computeCalculated` перезаписал бы инжектированные значения формулой '0' — метрики
+  плана/рейтинга/активности идут тем же путём), обновлены `description` на реальные
+  определения; `INSERT ... ON CONFLICT` — новая метрика `deals_with_active_zapros`
+  (`sort_order=1707`, `external`, честно описана текущая трактовка фильтра логиста).
+- `migrations/199_dela_zadachi_report_add_metric.sql` (БД **YC system**, `run_system.mjs`):
+  добавляет `deals_with_active_zapros` в `metric_ids` отчёта admin «Отчет по делам и задачам»,
+  идемпотентно (`NOT ... = ANY(metric_ids)`).
+
+### Проверено
+- `npm run typecheck` — чисто.
+- `npm run build` — прошла, все маршруты собрались штатно.
+- Контрольный SQL (та же логика, что в `dealsActivities.ts`, прогнан READ-ONLY напрямую через
+  `junior_user` на живой sa) на момент проверки (07.09.2026, снимок): всего активных сделок
+  7437; dela_total=7145, dela_overdue=2104, dela_today=1284, deals_without_dela=1845;
+  zadachi_total=711, zadachi_overdue=377, zadachi_today=183, deals_with_active_zapros=670
+  (без фильтра логиста — дефолт). Порядок величин согласуется с проверкой Маркуса (711 из
+  зафиксированных им 1018 CRM_TASKS_TASK минус финальные стадии ≈ его 30,8% отсева).
+- Живой прод/дев не трогали: обе миграции лежат в репо непримененными, накатывает Артём (как
+  и 156/157/158 в задаче #5555). `analsteroid-dev.service` (100.106.63.60:8100) сейчас деплой
+  из `main` недельной давности с прежним каталогом metrics (без 198/199) — скриншот с реальными
+  числами снять нельзя ДО наката 198 на `analytics` (метрики останутся `calculated`/'0' и
+  каталог не увидит 8-ю метрику) и деплоя этого кода. Честно отмечено, не подделано.
+
+### Артём — что осталось
+1. `node migrations/run_analytics.mjs migrations/198_dela_zadachi_real_data.sql` (БД `analytics`).
+2. `node migrations/run_system.mjs migrations/199_dela_zadachi_report_add_metric.sql` (БД `system`).
+3. Деплой кода (`bash deploy.sh`) — `dealsActivities.ts` + `app/api/reports/run/route.ts`.
+4. Проверить у admin: «Избранное» → «Отчет по делам и задачам» — 8 колонок, ненулевые числа,
+   совпадают порядком величин с контрольными выше (сверить с Маркусом).
