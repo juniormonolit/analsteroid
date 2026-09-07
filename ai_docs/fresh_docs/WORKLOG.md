@@ -21160,3 +21160,16 @@ owners-inbox/sa-deals-logist-tasks-check-20260907.html); Серёга попро
 3. Деплой кода (`bash deploy.sh`) — `dealsActivities.ts` + `app/api/reports/run/route.ts`.
 4. Проверить у admin: «Избранное» → «Отчет по делам и задачам» — 8 колонок, ненулевые числа,
    совпадают порядком величин с контрольными выше (сверить с Маркусом).
+
+## 2026-09-07 — Задача #5589 (хотфикс): все 8 метрик показывали 0 на проде
+
+Артём выкатил `431802a` — все 8 метрик «Дела и задачи» вернули 0. Причина (нашёл Артём):
+финальный `SELECT` в `dealsActivities.ts` отдавал `manager_id` как `integer`
+(`COALESCE(i.manager_id, a.manager_id)`, обе колонки — исходный `d.current_manager_id`), а
+`route.ts` матчит по строковому `row.dimensionId` (`Map<string, ...>`) — `snap.get()` мимо,
+везде срабатывал `?? 0`. Соседний `managerActivity.ts` кастит `::text` в аналогичном месте —
+починил так же: `COALESCE(i.manager_id, a.manager_id)::text AS manager_id`.
+
+Проверено READ-ONLY напрямую (`junior_user`, та же логика, что в файле) — `manager_id` теперь
+`text`, значения по конкретным менеджерам ненулевые: 1936 → dela_total=198/zadachi_total=3,
+1899 → 188/17, 2072 → 158/24. `npm run typecheck` и `npm run build` — чисто.

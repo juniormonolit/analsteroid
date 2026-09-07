@@ -144,7 +144,7 @@ deal_agg AS (
   GROUP BY manager_id
 )
 SELECT
-  COALESCE(i.manager_id, a.manager_id) AS manager_id,
+  COALESCE(i.manager_id, a.manager_id)::text AS manager_id,
   COALESCE(i.dela_total, 0)::int AS dela_total,
   COALESCE(i.dela_overdue, 0)::int AS dela_overdue,
   COALESCE(i.dela_today, 0)::int AS dela_today,
