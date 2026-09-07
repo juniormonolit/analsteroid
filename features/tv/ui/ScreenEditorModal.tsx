@@ -87,9 +87,6 @@ export function ScreenEditorModal({ open, screen, onClose, onSave, saving, error
           <Field label="Аватары">
             <Check checked={form.settings.showAvatars} onChange={v => set('settings', { ...form.settings, showAvatars: v })} label="Показывать фото менеджеров" />
           </Field>
-          <Field label="Состав плиток" hint="Пустые слоты Битрикса (имя вида manager2014 без плана и движения) скрыты всегда.">
-            <Check checked={form.settings.hideIdle} onChange={v => set('settings', { ...form.settings, hideIdle: v })} label="Скрывать всех без плана на месяц и без продаж/броней за день" />
-          </Field>
         </div>
 
         <Field label="Бегущая строка экрана" hint="Постоянный текст этого телевизора. Разовые рассылки — на вкладке «Рассылки».">

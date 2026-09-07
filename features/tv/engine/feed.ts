@@ -113,26 +113,44 @@ async function fetchAvatars(ids: string[]): Promise<Map<string, string | null>> 
   return out;
 }
 
-/**
- * Кого показывать на плитках (замечание владельца 07.09 про manager2014):
- *  • пустой слот Битрикса — имя-заглушка И нет плана на месяц И нет продаж/броней
- *    за день — скрыт всегда (org_resolved_hierarchy держит его is_active=true,
- *    других признаков «нет человека» у нас нет; у manager2204 план есть — значит
- *    человек есть, показываем как есть, пока в Битриксе не заполнят ФИО);
- *  • hideIdle (настройка экрана) — скрыть любого без плана и без движения за день.
- * Итоги шапки считаются по ВИДИМЫМ плиткам — у скрытых они по построению нули.
- */
-function visibleManager(m: RosterManager, hasPlan: boolean, f: Record<FactId, number> | undefined, hideIdle: boolean): boolean {
-  const moved = !!f && (f.primary_sales_count + f.repeat_sales_count + f.reservations_count > 0
-    || f.primary_sales_amount + f.repeat_sales_amount + f.reservations_amount > 0);
-  if (hasPlan || moved) return true;
-  if (isPlaceholderName(m.name)) return false;
-  return !hideIdle;
+/** Начало окна «последние N рабочих дней» (Пн–Пт, без учёта праздников — для
+ *  вопроса «жив ли аккаунт» этого достаточно), МСК-полночь в ISO. */
+function workingDaysBackIso(todayStr: string, n: number): string {
+  let d = new Date(`${todayStr}T00:00:00Z`);
+  let left = n;
+  while (left > 0) {
+    d.setUTCDate(d.getUTCDate() - 1);
+    const wd = d.getUTCDay();
+    if (wd !== 0 && wd !== 6) left--;
+  }
+  return mskMidnightIso(d.toISOString().slice(0, 10));
 }
 
+/** Менеджеры с продажей или бронью в окне [fromIso, toExclIso). */
+async function recentlyActiveIds(idsNum: number[], fromIso: string, toExclIso: string): Promise<Set<string>> {
+  if (idsNum.length === 0) return new Set();
+  const res = await analyticsDb().query<{ manager_id: string }>(
+    `SELECT DISTINCT current_manager_id::text AS manager_id
+       FROM deals
+      WHERE current_manager_id IN (${idsNum.join(',')})
+        AND ((sold_at >= $1 AND sold_at < $2) OR (reserved_at >= $1 AND reserved_at < $2))`,
+    [fromIso, toExclIso],
+  );
+  return new Set(res.rows.map(r => r.manager_id));
+}
+
+/**
+ * Кого показывать на плитках (правило владельца 07.09, после замечания про
+ * manager2014): нормальное ФИО — показываем; имя-заглушка (свободный слот Битрикса,
+ * ~76 из 431 активных строк org_resolved_hierarchy) — только если были продажи или
+ * брони за последние 5 рабочих дней (manager2204: человек на слоте без ФИО, продаёт —
+ * остаётся, а ФИО чинится в Битриксе). Итоги шапки — по видимым плиткам.
+ */
+const RECENT_WORKING_DAYS = 5;
+
 function slideFor(key: string, title: string, managers: RosterManager[], facts: Map<string, Record<FactId, number>>,
-  plans: Map<string, { planSales: number }>, avatars: Map<string, string | null>, hideIdle: boolean): TvFeedSlide {
-  const shown = managers.filter(m => visibleManager(m, !!(m.login && plans.has(m.login)), facts.get(m.managerId), hideIdle));
+  plans: Map<string, { planSales: number }>, avatars: Map<string, string | null>, recentActive: Set<string>): TvFeedSlide {
+  const shown = managers.filter(m => !isPlaceholderName(m.name) || recentActive.has(m.managerId));
   const rows: TvFeedManager[] = shown.map(m => {
     const f = facts.get(m.managerId);
     const plan = m.login ? plans.get(m.login)?.planSales ?? 0 : 0;
@@ -170,22 +188,24 @@ export async function buildScreenFeed(screen: TvScreen, deptNames: Map<string, s
     const idsNum = [...new Set(managers.map(m => Number(m.managerId)).filter(n => Number.isInteger(n) && n > 0))];
     const names = new Map(managers.map(m => [m.managerId, m.name]));
 
-    const [facts, planRes, avatars, sales] = await Promise.all([
+    const placeholderIds = managers.filter(m => isPlaceholderName(m.name)).map(m => Number(m.managerId)).filter(n => Number.isInteger(n) && n > 0);
+    const [facts, planRes, avatars, sales, recentActive] = await Promise.all([
       fetchFactsByManager(idsNum, fromIso, toExclIso),
       computePeriodPlanByLogin(today, today, today),
       fetchAvatars(managers.map(m => m.managerId)),
       fetchTodaySales(idsNum, fromIso, toExclIso, names),
+      recentlyActiveIds(placeholderIds, workingDaysBackIso(today, RECENT_WORKING_DAYS), toExclIso),
     ]);
     const plans = planRes.byLogin;
 
     const slides: TvFeedSlide[] = [];
     if (screen.mode === 'merged') {
       const title = screen.departmentIds.map(id => deptNames.get(id) ?? 'Отдел').join(' + ');
-      slides.push(slideFor('merged', title || screen.name, managers, facts, plans, avatars, screen.settings.hideIdle));
+      slides.push(slideFor('merged', title || screen.name, managers, facts, plans, avatars, recentActive));
     } else {
       for (const deptId of screen.departmentIds) {
         const own = managers.filter(m => m.deptUuid === deptId);
-        slides.push(slideFor(deptId, deptNames.get(deptId) ?? 'Отдел', own, facts, plans, avatars, screen.settings.hideIdle));
+        slides.push(slideFor(deptId, deptNames.get(deptId) ?? 'Отдел', own, facts, plans, avatars, recentActive));
       }
     }
     return { slides, sales, day: today };

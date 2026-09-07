@@ -29,20 +29,13 @@ export interface TvScreenSettings {
   events: TvEventSettings;
   tickerSpeed: 'slow' | 'normal' | 'fast';
   showAvatars: boolean;
-  /**
-   * Скрывать ЛЮБОГО менеджера без плана на месяц и без продаж/броней за день.
-   * Независимо от флага всегда скрыты пустые слоты Битрикса: аккаунт с именем-логином
-   * («manager2014», «User 4398»), у которого нет ни плана, ни движения за день
-   * (замечание владельца 07.09: «на дашборд попадают неактивные аккаунты»).
-   */
-  hideIdle: boolean;
 }
 
 export const DEFAULT_EVENT_SETTINGS: TvEventSettings = {
   enabled: true, sale: true, planDone: true, minAmount: 0, sound: false, durationSec: 12, style: 'confetti',
 };
 export const DEFAULT_SCREEN_SETTINGS: TvScreenSettings = {
-  events: DEFAULT_EVENT_SETTINGS, tickerSpeed: 'normal', showAvatars: true, hideIdle: false,
+  events: DEFAULT_EVENT_SETTINGS, tickerSpeed: 'normal', showAvatars: true,
 };
 
 export interface TvDeviceInfo {
@@ -196,7 +189,9 @@ export const PAIR_CODE_LEN = 4;
 export const PAIR_CODE_TTL_MIN = 20;
 
 /** Имя-заглушка вместо ФИО: Bitrix-аккаунт назван логином («manager2014»,
- *  «Manager 307») или org-sync подставил «User <id>» — слот без человека. */
+ *  «Manager 307») или org-sync подставил «User <id>». Правило владельца 07.09:
+ *  такой аккаунт показываем на телевизоре, только если у него были продажи/брони
+ *  за последние 5 рабочих дней (см. feed.ts::recentlyActiveIds). */
 export function isPlaceholderName(name: string): boolean {
   const n = name.trim();
   return /^manager\s*\d+$/i.test(n) || /^user\s+\d+$/i.test(n);
@@ -224,6 +219,5 @@ export function normalizeSettings(raw: unknown): TvScreenSettings {
     },
     tickerSpeed: speed,
     showAvatars: bool(r.showAvatars, true),
-    hideIdle: bool(r.hideIdle, false),
   };
 }
