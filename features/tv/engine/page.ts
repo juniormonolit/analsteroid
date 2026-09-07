@@ -43,6 +43,7 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 @keyframes tvin{from{opacity:0;transform:translateX(2vw)}to{opacity:1;transform:none}}
 .hdr{height:4.2vw;margin-bottom:1.1vw;padding:0 .2vw}
 .dept{font-size:2.4vw;font-weight:600;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dept .muted{font-size:1.4vw;font-weight:500;margin-left:.6vw}
 .st{text-align:right;margin-left:2.4vw}
 .st .l,.blg .l{display:block;font-size:.8vw;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#8FA1BD}
 .th-light .st .l,.th-light .blg .l{color:#6B7280}
@@ -218,23 +219,32 @@ function tickerText(){
   for(var i=0;i<data.messages.length;i++){var m=data.messages[i];if(m.kind==='ticker'&&new Date(m.until).getTime()>Date.now())parts.push(m.text);}
   return parts.join('   \u2022   ');
 }
+/* Большой отдел (60 менеджеров) на одном экране нечитаем — режем на страницы по
+   PER_PAGE плиток; страницы крутятся как слайды, шапка — итоги всего отдела. */
+var PER_PAGE=20;
+function pages(){
+  var out=[];if(!data)return out;
+  for(var i=0;i<data.slides.length;i++){var s=data.slides[i],n=Math.max(1,Math.ceil(s.managers.length/PER_PAGE));
+    for(var p=0;p<n;p++)out.push({s:s,page:p,pages:n,managers:s.managers.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE});}
+  return out;
+}
 function render(animate){
   if(!data)return;
-  var n=data.slides.length;
+  var pg=pages(),n=pg.length;
   if(n===0){root.innerHTML='<div class="stage"><div class="empty">Для этого экрана не выбраны отделы</div></div>';return;}
   if(idx>=n)idx=0;
-  var s=data.slides[idx],plan=s.planDay||0,fact=s.factDay||0,pct=plan?Math.round(fact/plan*100):null;
+  var cur=pg[idx],s=cur.s,plan=s.planDay||0,fact=s.factDay||0,pct=plan?Math.round(fact/plan*100):null;
   var showAva=!(data.screen.settings&&data.screen.settings.showAvatars===false);
   var tk=tickerText();
   var h='<div class="stage"><div class="slide'+(animate?' in':'')+'">'+
-    '<div class="fxb hdr"><div class="dept grow">'+esc(s.dept)+'</div><div class="fx tnum">'+
+    '<div class="fxb hdr"><div class="dept grow">'+esc(s.dept)+(cur.pages>1?' <span class="muted">'+(cur.page+1)+'/'+cur.pages+'</span>':'')+'</div><div class="fx tnum">'+
     '<div class="st"><span class="l">План</span><span class="v">'+fmtMoney(plan)+'</span></div>'+
     '<div class="st"><span class="l">Факт</span><span class="v fact">'+fmtMoney(fact)+'</span></div>'+
     '<div class="blg"><div class="fxb"><span class="l">Выполнение</span><span class="p">'+(pct==null?'\u2014':pct+'%')+'</span></div>'+bar(pct,'trk')+'</div>'+
     '<div class="st"><span class="l">Брони</span><span class="v book">'+fmtMoney(s.bookSum)+'</span></div>'+
     '</div></div>'+
     '<div class="grid'+(tk?' tk':'')+'" id="grid">';
-  for(var i=0;i<s.managers.length;i++)h+=tileHtml(s.managers[i],i,showAva);
+  for(var i=0;i<cur.managers.length;i++)h+=tileHtml(cur.managers[i],cur.offset+i,showAva);
   if(s.managers.length===0)h+='<div class="empty">В отделе нет активных менеджеров</div>';
   h+='</div>';
   if(tk)h+='<div class="ticker" id="ticker"><span id="tks">'+esc(tk)+'</span></div>';
@@ -250,7 +260,8 @@ function render(animate){
 }
 /* Раскладка плиток: столбцы 1..6, размер шрифта плитки — максимум, при котором
    контент (~9.3em высоты, ~15em ширины) влезает. Всё внутри плитки — в em. */
-var CONTENT_H=9.6,CONTENT_W=15.5;
+/* Ширина по самой широкой строке — hero: «12,5 млн ₽» (1.9em) + «12 шт» + «451%» (1.25em) ≈ 19em. */
+var CONTENT_H=9.6,CONTENT_W=19;
 function fit(){
   var grid=$('#grid');if(!grid)return;
   var tiles=grid.getElementsByClassName('tile'),n=tiles.length;if(!n)return;
@@ -261,7 +272,7 @@ function fit(){
     var k=Math.min(th/CONTENT_H,tw/CONTENT_W);
     if(k>best.k)best={k:k,cols:cols,rows:rows};
   }
-  var fs=Math.max(9,Math.min(best.k,window.innerWidth*0.026));
+  var fs=Math.max(9,Math.min(best.k,window.innerWidth*0.022));
   var tw2=(gw-gap*(best.cols-1))/best.cols,th2=(gh-gap*(best.rows-1))/best.rows;
   for(var i=0;i<n;i++){
     var r=Math.floor(i/best.cols),c=i%best.cols,t=tiles[i];
@@ -301,10 +312,10 @@ function tick(){
   if(data){var ch=false;for(var i=0;i<data.messages.length;i++){if(new Date(data.messages[i].until).getTime()<=Date.now()){ch=true;}}
     if(ch){data.messages=data.messages.filter(function(m){return new Date(m.until).getTime()>Date.now();});render(false);}}
 }
-function next(d){if(!data||data.slides.length<2)return;idx=(idx+d+data.slides.length)%data.slides.length;render(true);restartRotate();}
+function next(d){var n=pages().length;if(n<2)return;idx=(idx+d+n)%n;render(true);restartRotate();}
 function restartRotate(){
   if(timerRot)clearInterval(timerRot);timerRot=null;
-  if(data&&data.slides.length>1)timerRot=setInterval(function(){next(1);},(data.screen.rotateSec||15)*1000);
+  if(pages().length>1)timerRot=setInterval(function(){next(1);},(data.screen.rotateSec||15)*1000);
 }
 
 /* ---------- события («мувики») ---------- */
