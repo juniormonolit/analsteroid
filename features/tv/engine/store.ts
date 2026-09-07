@@ -21,6 +21,10 @@ interface DeviceRow {
   created_at: string; last_seen_at: string | null; paired_at: string | null;
 }
 
+// Даты отдаём строкой ISO в UTC с «Z» (не OF): to_char(..., 'OF') даёт «+00», а
+// new Date('…+00') в V8 — Invalid Date, из-за чего первый вариант выдавал телевизору
+// новый код привязки на каждом опросе и терял онлайн-статус устройств.
+
 // Токены: публичный токен экрана — 16 символов base32-подобного алфавита (80 бит,
 // перебор невозможен даже без rate-limit); токен устройства — 32 hex (128 бит).
 const TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -57,14 +61,14 @@ function toScreen(r: ScreenRow, devices: TvDeviceInfo[], deptNames: Map<string, 
 
 const SCREEN_COLS = `id, name, comment, public_token, department_ids::text[] AS department_ids, mode, theme, rotate_sec,
   ticker_text, ticker_enabled, settings,
-  to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS created_at,
-  to_char(updated_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS updated_at`;
+  to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+  to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at`;
 const DEVICE_COLS = `id, device_token, screen_id::text AS screen_id, pair_code,
-  to_char(pair_code_expires_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS pair_code_expires_at,
+  to_char(pair_code_expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS pair_code_expires_at,
   label, user_agent,
-  to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS created_at,
-  to_char(last_seen_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS last_seen_at,
-  to_char(paired_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS paired_at`;
+  to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+  to_char(last_seen_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_seen_at,
+  to_char(paired_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS paired_at`;
 
 export async function listScreens(deptNames: Map<string, string>): Promise<TvScreen[]> {
   const db = systemDb();
@@ -173,7 +177,7 @@ export async function getDeviceByToken(token: string): Promise<DeviceState | nul
   if (!/^[a-f0-9]{32}$/.test(token)) return null;
   const res = await systemDb().query<{ id: string; screen_id: string | null; pair_code: string | null; pair_code_expires_at: string | null }>(
     `SELECT id, screen_id::text AS screen_id, pair_code,
-            to_char(pair_code_expires_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS pair_code_expires_at
+            to_char(pair_code_expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS pair_code_expires_at
        FROM tv_devices WHERE device_token = $1`,
     [token],
   );
@@ -262,10 +266,10 @@ interface MessageRow {
   starts_at: string; ends_at: string; created_by_name: string | null; created_at: string; active: boolean;
 }
 const MESSAGE_COLS = `id, kind, text, target_screen_ids::text[] AS target_screen_ids,
-  to_char(starts_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS starts_at,
-  to_char(ends_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS ends_at,
+  to_char(starts_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS starts_at,
+  to_char(ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS ends_at,
   created_by_name,
-  to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS created_at,
+  to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
   (starts_at <= now() AND ends_at > now()) AS active`;
 
 function toMessage(r: MessageRow, screenNames: Map<string, string>): TvMessage {
@@ -287,7 +291,7 @@ export async function listMessages(screenNames: Map<string, string>): Promise<Tv
 /** Активные сообщения для экрана (фид). */
 export async function activeMessagesForScreen(screenId: string): Promise<{ id: string; kind: TvMessageKind; text: string; until: string }[]> {
   const res = await systemDb().query<{ id: string; kind: TvMessageKind; text: string; until: string }>(
-    `SELECT id, kind, text, to_char(ends_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS until
+    `SELECT id, kind, text, to_char(ends_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS until
        FROM tv_messages
       WHERE starts_at <= now() AND ends_at > now()
         AND (target_screen_ids IS NULL OR $1::uuid = ANY(target_screen_ids))
