@@ -100,13 +100,18 @@ function ScreenCard({ screen: s, onEdit, onPair, onPreview, onDelete, onChanged 
   screen: TvScreen; onEdit: () => void; onPair: () => void; onPreview: () => void; onDelete: () => void; onChanged: () => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const [ticker, setTicker] = useState(s.tickerText ?? '');
+  // Быстрая строка: цель — общая строка экрана или конкретный отдел (правка 07.09:
+  // «бегущая строка должна быть разная в зависимости от отдела»).
+  const [tickerFor, setTickerFor] = useState<string>(s.departmentIds.length === 1 ? s.departmentIds[0] : '');
+  const currentTicker = (target: string) => (target ? s.settings.deptTickers[target] ?? '' : s.tickerText ?? '');
+  const [ticker, setTicker] = useState(currentTicker(s.departmentIds.length === 1 ? s.departmentIds[0] : ''));
   const [tickerDirty, setTickerDirty] = useState(false);
+  const tickerShown = s.tickerEnabled && !!currentTicker(tickerFor).trim();
   const [rotating, setRotating] = useState(false);
   const url = screenUrl(s.publicToken);
 
   const tickerMut = useMutation({
-    mutationFn: (enabled: boolean) => tvApi.setTicker(s.id, ticker.trim() || null, enabled),
+    mutationFn: (enabled: boolean) => tvApi.setTicker(s.id, enabled ? (ticker.trim() || null) : (tickerFor ? null : ticker.trim() || null), enabled, tickerFor || null),
     onSuccess: () => { setTickerDirty(false); onChanged(); },
   });
   const unpair = useMutation({ mutationFn: (id: string) => tvApi.unpair(id), onSuccess: onChanged });
@@ -158,12 +163,20 @@ function ScreenCard({ screen: s, onEdit, onPair, onPreview, onDelete, onChanged 
       <div className="flex flex-col gap-1">
         <div className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider">Бегущая строка</div>
         <div className="flex flex-col sm:flex-row gap-2">
-          <input className={INPUT_CLS} value={ticker} onChange={e => { setTicker(e.target.value); setTickerDirty(true); }} placeholder="Текст строки для этого телевизора" />
+          {s.departmentIds.length > 1 && (
+            <select className={`${INPUT_CLS} sm:w-44 shrink-0`} value={tickerFor}
+              onChange={e => { setTickerFor(e.target.value); setTicker(currentTicker(e.target.value)); setTickerDirty(false); }}>
+              <option value="">Общая строка</option>
+              {s.departmentIds.map((id, i) => <option key={id} value={id}>{s.departmentNames[i]}</option>)}
+            </select>
+          )}
+          <input className={INPUT_CLS} value={ticker} onChange={e => { setTicker(e.target.value); setTickerDirty(true); }}
+            placeholder={tickerFor ? 'Строка этого отдела' : 'Общая строка (когда у отдела нет своей)'} />
           <div className="flex gap-2 shrink-0">
-            <button className={BTN_PRIMARY} disabled={tickerMut.isPending || !ticker.trim() || (!tickerDirty && s.tickerEnabled)} onClick={() => tickerMut.mutate(true)}>
-              {s.tickerEnabled && !tickerDirty ? 'Показывается' : 'Показать'}
+            <button className={BTN_PRIMARY} disabled={tickerMut.isPending || !ticker.trim() || (!tickerDirty && tickerShown)} onClick={() => tickerMut.mutate(true)}>
+              {tickerShown && !tickerDirty ? 'Показывается' : 'Показать'}
             </button>
-            {s.tickerEnabled && <button className={BTN_SECONDARY} disabled={tickerMut.isPending} onClick={() => tickerMut.mutate(false)}>Скрыть</button>}
+            {tickerShown && <button className={BTN_SECONDARY} disabled={tickerMut.isPending} onClick={() => tickerMut.mutate(false)}>Скрыть</button>}
           </div>
         </div>
       </div>

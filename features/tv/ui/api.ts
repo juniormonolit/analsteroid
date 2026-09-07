@@ -15,7 +15,7 @@ export const tvApi = {
   deleteScreen: (id: string) => fetch(`/api/tv/screens/${id}`, { method: 'DELETE' }).then(r => j<{ ok: true }>(r)),
   pair: (id: string, code: string, label: string | null) => fetch(`/api/tv/screens/${id}/pair`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, label }) }).then(r => j<{ ok: true; screen: TvScreen }>(r)),
   rotateToken: (id: string) => fetch(`/api/tv/screens/${id}/token`, { method: 'POST' }).then(r => j<{ publicToken: string }>(r)),
-  setTicker: (id: string, text: string | null, enabled: boolean) => fetch(`/api/tv/screens/${id}/ticker`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, enabled }) }).then(r => j<{ screen: TvScreen }>(r)),
+  setTicker: (id: string, text: string | null, enabled: boolean, deptId: string | null) => fetch(`/api/tv/screens/${id}/ticker`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, enabled, deptId }) }).then(r => j<{ screen: TvScreen }>(r)),
   unpair: (deviceId: string) => fetch(`/api/tv/devices/${deviceId}`, { method: 'DELETE' }).then(r => j<{ screen: TvScreen }>(r)),
   labelDevice: (deviceId: string, label: string | null) => fetch(`/api/tv/devices/${deviceId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) }).then(r => j<{ screen: TvScreen }>(r)),
   listMessages: () => fetch('/api/tv/messages').then(r => j<{ messages: TvMessage[] }>(r)),

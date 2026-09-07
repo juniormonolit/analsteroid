@@ -19,8 +19,9 @@ export function parseScreenInput(body: unknown): TvScreenInput | string {
   const rotateNum = Number(b.rotateSec);
   const rotateSec = Number.isFinite(rotateNum) ? Math.min(300, Math.max(5, Math.round(rotateNum))) : 15;
   const tickerText = typeof b.tickerText === 'string' && b.tickerText.trim() ? b.tickerText.trim().slice(0, 500) : null;
-  const tickerEnabled = b.tickerEnabled === true && !!tickerText;
-  return { name, comment, departmentIds, mode, theme, rotateSec, tickerText, tickerEnabled, settings: normalizeSettings(b.settings) };
+  const settings = normalizeSettings(b.settings);
+  const tickerEnabled = b.tickerEnabled === true && (!!tickerText || Object.keys(settings.deptTickers).length > 0);
+  return { name, comment, departmentIds, mode, theme, rotateSec, tickerText, tickerEnabled, settings };
 }
 
 export function parseMessageInput(body: unknown): (TvMessageInput & { endsAtDate: Date }) | string {

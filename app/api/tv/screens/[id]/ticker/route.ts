@@ -18,7 +18,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!screenInScope(scope, screen.departmentIds)) return NextResponse.json({ error: 'Экран вне вашей зоны ответственности' }, { status: 403 });
   const body = await req.json().catch(() => ({}));
   const text = typeof body?.text === 'string' && body.text.trim() ? body.text.trim().slice(0, 500) : null;
-  const enabled = body?.enabled === true && !!text;
-  await updateScreenTicker(id, text, enabled);
+  const deptId = typeof body?.deptId === 'string' && screen.departmentIds.includes(body.deptId) ? body.deptId : null;
+  // «Показать» включает мастер-выключатель строк экрана; «Скрыть» с пустым текстом
+  // общей строки выключает всё, пустой текст отдела — просто убирает строку отдела.
+  const enabled = body?.enabled === true ? true : (deptId ? screen.tickerEnabled : false);
+  await updateScreenTicker(id, text, enabled, deptId);
   return NextResponse.json({ screen: await getScreen(id, names) });
 }

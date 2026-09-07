@@ -169,6 +169,7 @@ function slideFor(key: string, title: string, managers: RosterManager[], facts: 
     key, dept: title,
     planDay: sum(r => r.plan), factDay: sum(r => r.salesSum), salesCount: sum(r => r.salesCount),
     bookSum: sum(r => r.bookSum), bookCount: sum(r => r.bookCount),
+    ticker: null,
     managers: rows,
   };
 }
@@ -198,14 +199,26 @@ export async function buildScreenFeed(screen: TvScreen, deptNames: Map<string, s
     ]);
     const plans = planRes.byLogin;
 
+    // Бегущая строка — своя у отдела (правка владельца 07.09: ЖБИ читает остаток
+    // склада, ОС МСК — про скандик), иначе общая строка экрана. Мастер-выключатель —
+    // ticker_enabled. Рассылки (tv_messages) добавляет клиент поверх.
+    const general = screen.tickerEnabled && screen.tickerText?.trim() ? screen.tickerText.trim() : null;
+    const deptTicker = (deptId: string): string | null =>
+      screen.tickerEnabled ? (screen.settings.deptTickers[deptId]?.trim() || general) : null;
+
     const slides: TvFeedSlide[] = [];
     if (screen.mode === 'merged') {
       const title = screen.departmentIds.map(id => deptNames.get(id) ?? 'Отдел').join(' + ');
-      slides.push(slideFor('merged', title || screen.name, managers, facts, plans, avatars, recentActive));
+      const slide = slideFor('merged', title || screen.name, managers, facts, plans, avatars, recentActive);
+      const own = screen.departmentIds.map(id => screen.settings.deptTickers[id]?.trim()).filter((t): t is string => !!t);
+      slide.ticker = screen.tickerEnabled ? (own.length ? own.join('   \u2022   ') : general) : null;
+      slides.push(slide);
     } else {
       for (const deptId of screen.departmentIds) {
         const own = managers.filter(m => m.deptUuid === deptId);
-        slides.push(slideFor(deptId, deptNames.get(deptId) ?? 'Отдел', own, facts, plans, avatars, recentActive));
+        const slide = slideFor(deptId, deptNames.get(deptId) ?? 'Отдел', own, facts, plans, avatars, recentActive);
+        slide.ticker = deptTicker(deptId);
+        slides.push(slide);
       }
     }
     return { slides, sales, day: today };

@@ -124,12 +124,33 @@ export async function updateScreen(id: string, input: TvScreenInput): Promise<bo
   return (res.rowCount ?? 0) > 0;
 }
 
-/** Только бегущая строка — быстрый рычаг «въебать строку на телевизор». */
-export async function updateScreenTicker(id: string, text: string | null, enabled: boolean): Promise<boolean> {
-  const res = await systemDb().query(
-    `UPDATE tv_screens SET ticker_text = $2, ticker_enabled = $3, updated_at = now() WHERE id = $1`,
-    [id, text, enabled],
-  );
+/** Только бегущая строка — быстрый рычаг «въебать строку на телевизор».
+ *  deptId задан → строка конкретного отдела (settings.deptTickers), иначе общая. */
+export async function updateScreenTicker(id: string, text: string | null, enabled: boolean, deptId?: string | null): Promise<boolean> {
+  const db = systemDb();
+  let res;
+  if (deptId) {
+    res = text
+      ? await db.query(
+          `UPDATE tv_screens
+              SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{deptTickers}',
+                                       COALESCE(settings->'deptTickers', '{}'::jsonb) || jsonb_build_object($2::text, $3::text)),
+                  ticker_enabled = $4, updated_at = now()
+            WHERE id = $1`,
+          [id, deptId, text, enabled])
+      : await db.query(
+          `UPDATE tv_screens
+              SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb), '{deptTickers}',
+                                       COALESCE(settings->'deptTickers', '{}'::jsonb) - $2::text),
+                  ticker_enabled = $3, updated_at = now()
+            WHERE id = $1`,
+          [id, deptId, enabled]);
+  } else {
+    res = await db.query(
+      `UPDATE tv_screens SET ticker_text = $2, ticker_enabled = $3, updated_at = now() WHERE id = $1`,
+      [id, text, enabled],
+    );
+  }
   return (res.rowCount ?? 0) > 0;
 }
 

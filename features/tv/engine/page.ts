@@ -41,29 +41,30 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .slide.in{-webkit-animation:tvin .5s ease;animation:tvin .5s ease}
 @-webkit-keyframes tvin{from{opacity:0;-webkit-transform:translateX(2vw)}to{opacity:1;-webkit-transform:none}}
 @keyframes tvin{from{opacity:0;transform:translateX(2vw)}to{opacity:1;transform:none}}
-.hdr{height:4.2vw;margin-bottom:1.1vw;padding:0 .2vw}
+.hdr{height:5.6vw;margin-bottom:1vw;padding:0 .2vw}
 .dept{font-size:2.4vw;font-weight:600;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dept .muted{font-size:1.4vw;font-weight:500;margin-left:.6vw}
 .st{text-align:right;margin-left:2.4vw}
-.st .l,.blg .l{display:block;font-size:.8vw;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#8FA1BD}
+.st .l,.blg .l{display:block;font-size:.95vw;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#8FA1BD}
 .th-light .st .l,.th-light .blg .l{color:#6B7280}
-.st .v{display:block;font-size:1.7vw;font-weight:600;line-height:1.1;margin-top:.15vw}
+.st .v{display:block;font-size:2.5vw;font-weight:700;line-height:1.1;margin-top:.15vw;letter-spacing:-.01em}
 .st .v.fact{color:#5BC878}.th-light .st .v.fact{color:#1E8E3E}
 .st .v.book{color:#7FB9E8}.th-light .st .v.book{color:#0069BE}
-.blg{width:14vw;margin-left:2.4vw}
-.blg .p{font-size:1.7vw;font-weight:600;line-height:1.1}
-.trk{height:.45vw;border-radius:1vw;background:#243450;overflow:hidden;margin-top:.3vw}
+.blg{width:18vw;margin-left:2.4vw}
+.blg .p{font-size:3.1vw;font-weight:800;line-height:1;color:#FBBC04}
+.blg .p.ok{color:#5BC878}.th-light .blg .p.ok{color:#1E8E3E}.th-light .blg .p{color:#B26000}
+.trk{height:.7vw;border-radius:1vw;background:#243450;overflow:hidden;margin-top:.35vw}
 .th-light .trk{background:#E5E9EF}
 .trk i{display:block;height:100%;border-radius:1vw;background:rgba(91,200,120,.75)}
 .trk.warn i{background:rgba(251,188,4,.7)}
 .th-light .trk i{background:#34A853}.th-light .trk.warn i{background:#FBBC04}
-.grid{position:absolute;left:0;right:0;top:5.3vw;bottom:2.6vw}
+.grid{position:absolute;left:0;right:0;top:6.8vw;bottom:2.6vw}
 .grid.tk{bottom:5.4vw}
 .tile{position:absolute;background:#121C2E;border:1px solid #243450;border-radius:.9em;padding:.9em 1.1em;overflow:hidden}
 .th-light .tile{background:#fff;border-color:#E5E9EF}
 .tile.top{background:#1A2740;border-color:#33507E}
 .th-light .tile.top{background:#EDF5FC;border-color:#AFD3F1}
-.tile .inner{position:absolute;left:1.1em;right:1.1em;top:50%;margin-top:-4.15em}
+.tile .inner{position:absolute;left:1.1em;right:1.1em;top:50%;margin-top:-5.3em}
 .ava{width:2.3em;height:2.3em;border-radius:50%;margin-right:.7em;-webkit-flex:none;flex:none;text-align:center;line-height:2.3em;font-weight:700;color:#fff;overflow:hidden;background:#1B7FD4}
 .ava span{font-size:.85em}
 .ava img{width:100%;height:100%;display:block;-o-object-fit:cover;object-fit:cover}
@@ -88,6 +89,12 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .sub b{font-weight:600;color:#F2F6FC;margin-left:.3em}.th-light .sub b{color:#1A202C}
 .sub b.book{color:#7FB9E8}.th-light .sub b.book{color:#0069BE}
 .sub small{font-size:.75em;margin-left:.25em}
+.pb{margin-top:.6em;padding-top:.5em;border-top:1px solid #243450;-webkit-box-align:baseline;-webkit-align-items:baseline;align-items:baseline}
+.th-light .pb{border-top-color:#E5E9EF}
+.pb .l{font-size:.8em;font-weight:700;letter-spacing:.08em;color:#8FA1BD}.th-light .pb .l{color:#6B7280}
+.pb .n{font-size:1.6em;font-weight:800;line-height:1;color:#FBBC04}.th-light .pb .n{color:#B26000}
+.pb .n.ok{color:#5BC878}.th-light .pb .n.ok{color:#1E8E3E}
+.pb .n small{font-size:.55em;font-weight:600;color:#8FA1BD;margin-left:.15em}
 .ftr{position:absolute;left:0;right:0;bottom:0;height:1.8vw;font-size:1vw;color:#8FA1BD}
 .th-light .ftr{color:#6B7280}
 .ftr b{color:#F2F6FC;font-size:1.15vw;font-weight:700;margin-left:.45vw}.th-light .ftr b{color:#1A202C}
@@ -204,28 +211,35 @@ function bar(p,cls){
 }
 function tileHtml(m,i,showAva){
   var mp=m.plan||0,pct=mp?Math.round(m.salesSum/mp*100):null;
+  var target=(data&&data.screen.settings&&data.screen.settings.dailyTarget)||5,pb=(m.salesCount||0)+(m.bookCount||0);
   var ava=showAva?(m.avatar?'<div class="ava"><img src="'+esc(m.avatar)+'" alt=""></div>':'<div class="ava" style="background:'+hue(m.name)+'"><span>'+esc(initials(m.name))+'</span></div>'):'';
   return '<div class="tile'+(i===0&&m.salesSum>0?' top':'')+'" data-i="'+i+'"><div class="inner">'+
     '<div class="fx">'+ava+'<div class="name grow">'+esc(m.name)+'</div><div class="rank tnum">'+(i+1)+'</div></div>'+
     '<div class="fxb hero tnum"><div class="v">'+fmtMoney(m.salesSum)+'<small>'+m.salesCount+' шт</small></div><div class="p'+(pct!=null&&pct<100?' warn':'')+'">'+(pct==null?'\u2014':pct+'%')+'</div></div>'+
     bar(pct,'bar')+
     '<div class="fxb sub tnum"><span>План<b>'+fmtMoney(mp)+'</b></span><span>Брони<b class="book">'+fmtMoney(m.bookSum)+'</b><small>'+m.bookCount+' шт</small></span></div>'+
+    '<div class="fxb pb tnum"><span class="l">ПРОДАЖЕБРОНЕЙ</span><span class="n'+(pb>=target?' ok':'')+'">'+pb+'<small>/ '+target+'</small></span></div>'+
     '</div></div>';
 }
-function tickerText(){
+function tickerText(slide){
   if(!data)return '';
   var parts=[];
-  if(data.screen.ticker)parts.push(data.screen.ticker);
+  if(slide&&slide.ticker)parts.push(slide.ticker);
   for(var i=0;i<data.messages.length;i++){var m=data.messages[i];if(m.kind==='ticker'&&new Date(m.until).getTime()>Date.now())parts.push(m.text);}
   return parts.join('   \u2022   ');
 }
 /* Большой отдел (60 менеджеров) на одном экране нечитаем — режем на страницы по
    PER_PAGE плиток; страницы крутятся как слайды, шапка — итоги всего отдела. */
-var PER_PAGE=20;
+/* Правка владельца 07.09: первая страница отдела — топ-6 по продажам (висит rotateSec),
+   остальные — «хвост» страницами по PER_PAGE (висят rotateTailSec). */
+var TOP_N=6,PER_PAGE=20;
 function pages(){
   var out=[];if(!data)return out;
-  for(var i=0;i<data.slides.length;i++){var s=data.slides[i],n=Math.max(1,Math.ceil(s.managers.length/PER_PAGE));
-    for(var p=0;p<n;p++)out.push({s:s,page:p,pages:n,managers:s.managers.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE});}
+  for(var i=0;i<data.slides.length;i++){var s=data.slides[i],ms=s.managers;
+    if(ms.length<=TOP_N){out.push({s:s,page:0,pages:1,managers:ms,offset:0});continue;}
+    var rest=ms.length-TOP_N,tail=Math.ceil(rest/PER_PAGE),n=1+tail;
+    out.push({s:s,page:0,pages:n,managers:ms.slice(0,TOP_N),offset:0});
+    for(var p=0;p<tail;p++){var from=TOP_N+p*PER_PAGE;out.push({s:s,page:p+1,pages:n,managers:ms.slice(from,from+PER_PAGE),offset:from});}}
   return out;
 }
 function render(animate){
@@ -235,12 +249,12 @@ function render(animate){
   if(idx>=n)idx=0;
   var cur=pg[idx],s=cur.s,plan=s.planDay||0,fact=s.factDay||0,pct=plan?Math.round(fact/plan*100):null;
   var showAva=!(data.screen.settings&&data.screen.settings.showAvatars===false);
-  var tk=tickerText();
+  var tk=tickerText(s);
   var h='<div class="stage"><div class="slide'+(animate?' in':'')+'">'+
     '<div class="fxb hdr"><div class="dept grow">'+esc(s.dept)+(cur.pages>1?' <span class="muted">'+(cur.page+1)+'/'+cur.pages+'</span>':'')+'</div><div class="fx tnum">'+
     '<div class="st"><span class="l">План</span><span class="v">'+fmtMoney(plan)+'</span></div>'+
     '<div class="st"><span class="l">Факт</span><span class="v fact">'+fmtMoney(fact)+'</span></div>'+
-    '<div class="blg"><div class="fxb"><span class="l">Выполнение</span><span class="p">'+(pct==null?'\u2014':pct+'%')+'</span></div>'+bar(pct,'trk')+'</div>'+
+    '<div class="blg"><div class="fxb"><span class="l">Выполнение</span><span class="p'+(pct!=null&&pct>=100?' ok':'')+'">'+(pct==null?'\u2014':pct+'%')+'</span></div>'+bar(pct,'trk')+'</div>'+
     '<div class="st"><span class="l">Брони</span><span class="v book">'+fmtMoney(s.bookSum)+'</span></div>'+
     '</div></div>'+
     '<div class="grid'+(tk?' tk':'')+'" id="grid">';
@@ -261,7 +275,7 @@ function render(animate){
 /* Раскладка плиток: столбцы 1..6, размер шрифта плитки — максимум, при котором
    контент (~9.3em высоты, ~15em ширины) влезает. Всё внутри плитки — в em. */
 /* Ширина по самой широкой строке — hero: «12,5 млн ₽» (1.9em) + «12 шт» + «451%» (1.25em) ≈ 19em. */
-var CONTENT_H=9.6,CONTENT_W=19;
+var CONTENT_H=11.9,CONTENT_W=19;
 function fit(){
   var grid=$('#grid');if(!grid)return;
   var tiles=grid.getElementsByClassName('tile'),n=tiles.length;if(!n)return;
@@ -314,8 +328,11 @@ function tick(){
 }
 function next(d){var n=pages().length;if(n<2)return;idx=(idx+d+n)%n;render(true);restartRotate();}
 function restartRotate(){
-  if(timerRot)clearInterval(timerRot);timerRot=null;
-  if(pages().length>1)timerRot=setInterval(function(){next(1);},(data.screen.rotateSec||15)*1000);
+  if(timerRot)clearTimeout(timerRot);timerRot=null;
+  var pg=pages();if(pg.length<2)return;
+  var cur=pg[idx]||pg[0],st=data.screen.settings||{};
+  var sec=cur.page===0?(data.screen.rotateSec||15):(st.rotateTailSec||10);
+  timerRot=setTimeout(function(){next(1);},sec*1000);
 }
 
 /* ---------- события («мувики») ---------- */

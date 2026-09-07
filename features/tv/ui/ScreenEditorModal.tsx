@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { DEFAULT_SCREEN_SETTINGS, type TvEventStyle, type TvScreen, type TvScreenInput } from '../shared';
-import { DeptTreePicker } from './DeptTreePicker';
+import { DeptTreePicker, flattenNames, useOrgTree } from './DeptTreePicker';
 import { BTN_PRIMARY, BTN_SECONDARY, INPUT_CLS, LABEL_CLS } from './api';
 
 function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
@@ -57,6 +57,14 @@ export function ScreenEditorModal({ open, screen, onClose, onSave, saving, error
   const set = <K extends keyof TvScreenInput>(k: K, v: TvScreenInput[K]) => setForm(f => ({ ...f, [k]: v }));
   const ev = form.settings.events;
   const setEv = (patch: Partial<typeof ev>) => set('settings', { ...form.settings, events: { ...ev, ...patch } });
+  const setS = (patch: Partial<TvScreenInput['settings']>) => set('settings', { ...form.settings, ...patch });
+  const { data: orgData } = useOrgTree();
+  const deptNames = flattenNames(orgData?.tree ?? []);
+  const setDeptTicker = (id: string, text: string) => {
+    const next = { ...form.settings.deptTickers };
+    if (text.trim()) next[id] = text; else delete next[id];
+    setS({ deptTickers: next });
+  };
 
   return (
     <Modal open={open} onOpenChange={v => { if (!v) onClose(); }} title={screen ? `Экран «${screen.name}»` : 'Новый экран'} desktopWidth="sm:max-w-2xl">
@@ -81,20 +89,36 @@ export function ScreenEditorModal({ open, screen, onClose, onSave, saving, error
           <Field label="Тема">
             <Seg value={form.theme} onChange={v => set('theme', v)} options={[{ v: 'dark', label: 'Тёмная' }, { v: 'light', label: 'Светлая' }]} />
           </Field>
-          <Field label="Смена слайда, сек">
-            <input type="number" min={5} max={300} className={INPUT_CLS} value={form.rotateSec} onChange={e => set('rotateSec', Number(e.target.value) || 15)} disabled={form.mode === 'merged'} />
+          <Field label="Топ-6 висит, сек" hint="Первая страница отдела — топ-6 по продажам.">
+            <input type="number" min={5} max={300} className={INPUT_CLS} value={form.rotateSec} onChange={e => set('rotateSec', Number(e.target.value) || 15)} />
+          </Field>
+          <Field label="Остальные страницы, сек" hint="«Хвост» отдела — страницами по 20 человек.">
+            <input type="number" min={3} max={300} className={INPUT_CLS} value={form.settings.rotateTailSec} onChange={e => setS({ rotateTailSec: Math.min(300, Math.max(3, Number(e.target.value) || 10)) })} />
+          </Field>
+          <Field label="Цель «продажеброней» в день" hint="Продажи + брони по количеству; при достижении — зелёным.">
+            <input type="number" min={1} max={100} className={INPUT_CLS} value={form.settings.dailyTarget} onChange={e => setS({ dailyTarget: Math.min(100, Math.max(1, Number(e.target.value) || 5)) })} />
           </Field>
           <Field label="Аватары">
-            <Check checked={form.settings.showAvatars} onChange={v => set('settings', { ...form.settings, showAvatars: v })} label="Показывать фото менеджеров" />
+            <Check checked={form.settings.showAvatars} onChange={v => setS({ showAvatars: v })} label="Показывать фото менеджеров" />
           </Field>
         </div>
 
-        <Field label="Бегущая строка экрана" hint="Постоянный текст этого телевизора. Разовые рассылки — на вкладке «Рассылки».">
-          <textarea className={`${INPUT_CLS} min-h-[64px]`} value={form.tickerText ?? ''} onChange={e => set('tickerText', e.target.value || null)} placeholder="Например: До конца месяца 12 рабочих дней — жмём!" />
+        <Field label="Бегущая строка" hint="У каждого отдела своя строка; если для отдела не задана — общая. Разовые рассылки — на вкладке «Рассылки».">
+          {form.departmentIds.map(id => (
+            <div key={id} className="flex flex-col gap-1">
+              <div className="text-xs text-[var(--color-text)] font-medium">{deptNames.get(id) ?? 'Отдел'}</div>
+              <textarea className={`${INPUT_CLS} min-h-[48px]`} value={form.settings.deptTickers[id] ?? ''} onChange={e => setDeptTicker(id, e.target.value)}
+                placeholder={form.departmentIds.length > 1 ? 'Строка этого отдела (пусто — общая)' : 'Например: Скандик по 899 с Петровича!'} />
+            </div>
+          ))}
+          <div className="flex flex-col gap-1">
+            <div className="text-xs text-[var(--color-text-muted)] font-medium">Общая строка экрана</div>
+            <textarea className={`${INPUT_CLS} min-h-[48px]`} value={form.tickerText ?? ''} onChange={e => set('tickerText', e.target.value || null)} placeholder="Например: До конца месяца 12 рабочих дней — жмём!" />
+          </div>
           <div className="flex flex-wrap gap-4">
-            <Check checked={form.tickerEnabled} onChange={v => set('tickerEnabled', v)} label="Показывать строку" />
+            <Check checked={form.tickerEnabled} onChange={v => set('tickerEnabled', v)} label="Показывать строки" />
             <div className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">Скорость
-              <Seg value={form.settings.tickerSpeed} onChange={v => set('settings', { ...form.settings, tickerSpeed: v })}
+              <Seg value={form.settings.tickerSpeed} onChange={v => setS({ tickerSpeed: v })}
                 options={[{ v: 'slow', label: 'Медленно' }, { v: 'normal', label: 'Обычно' }, { v: 'fast', label: 'Быстро' }]} />
             </div>
           </div>

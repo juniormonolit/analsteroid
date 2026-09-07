@@ -29,13 +29,19 @@ export interface TvScreenSettings {
   events: TvEventSettings;
   tickerSpeed: 'slow' | 'normal' | 'fast';
   showAvatars: boolean;
+  /** Сколько секунд висит «хвост» (страницы после топ-6); первый экран — rotateSec. */
+  rotateTailSec: number;
+  /** Дневная цель «продажеброней» (продажи + брони по количеству), зелёным при достижении. */
+  dailyTarget: number;
+  /** Бегущая строка на отдел: uuid отдела → текст. Пусто → общая строка экрана. */
+  deptTickers: Record<string, string>;
 }
 
 export const DEFAULT_EVENT_SETTINGS: TvEventSettings = {
   enabled: true, sale: true, planDone: true, minAmount: 0, sound: false, durationSec: 12, style: 'confetti',
 };
 export const DEFAULT_SCREEN_SETTINGS: TvScreenSettings = {
-  events: DEFAULT_EVENT_SETTINGS, tickerSpeed: 'normal', showAvatars: true,
+  events: DEFAULT_EVENT_SETTINGS, tickerSpeed: 'normal', showAvatars: true, rotateTailSec: 10, dailyTarget: 5, deptTickers: {},
 };
 
 export interface TvDeviceInfo {
@@ -123,6 +129,8 @@ export interface TvFeedSlide {
   salesCount: number;
   bookSum: number;
   bookCount: number;
+  /** Бегущая строка этого слайда: строка отдела, иначе общая строка экрана; null — нет. */
+  ticker: string | null;
   managers: TvFeedManager[];
 }
 
@@ -197,6 +205,18 @@ export function isPlaceholderName(name: string): boolean {
   return /^manager\s*\d+$/i.test(n) || /^user\s+\d+$/i.test(n);
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function sanitizeDeptTickers(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!UUID_RE.test(k) || typeof v !== 'string') continue;
+    const t = v.trim().slice(0, 500);
+    if (t) out[k] = t;
+  }
+  return out;
+}
+
 export function normalizeSettings(raw: unknown): TvScreenSettings {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const ev = (r.events && typeof r.events === 'object' ? r.events : {}) as Record<string, unknown>;
@@ -219,5 +239,8 @@ export function normalizeSettings(raw: unknown): TvScreenSettings {
     },
     tickerSpeed: speed,
     showAvatars: bool(r.showAvatars, true),
+    rotateTailSec: Math.round(num(r.rotateTailSec, 10, 3, 300)),
+    dailyTarget: Math.round(num(r.dailyTarget, 5, 1, 100)),
+    deptTickers: sanitizeDeptTickers(r.deptTickers),
   };
 }
