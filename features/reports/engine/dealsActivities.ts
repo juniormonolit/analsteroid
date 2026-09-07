@@ -47,6 +47,18 @@ export const LOGIST_BITRIX_IDS: string[] = [
   '2000', '2007', '2131', '1996', '1998',
 ];
 
+// ВАЖНО для сверки с сырым SQL (задача #5589, диагноз 07.09): «Итого» в
+// сохранённом отчёте admin считается ТОЛЬКО по менеджерам с
+// account_type='managers' — тот же Bitrix-login-префикс-фильтр (employees.
+// bitrix_login ILIKE 'manager%'), что byManagers.ts применяет КО ВСЕМ
+// метрикам этого отчёта, не только к «Дела и задачи». Живая проверка
+// (07.09.2026): активных сделок у org_resolved_hierarchy-менеджеров БЕЗ этого
+// фильтра — ~1738-1919 (deals_without_dela), а у 225 employees с login
+// ILIKE 'manager%' — 1066-1067 (сходится с наблюдаемым в отчёте 1054-1066,
+// с учётом live-дрейфа данных между проверками). Расхождение с «сырым SQL по
+// оргструктуре» — это НЕ баг снимка, а разные срезы населения (org_resolved_
+// hierarchy vs account_type='managers'); сверяющий должен применять тот же
+// фильтр, иначе сравнение яблоки-с-апельсинами.
 export const DELA_ZADACHI_METRIC_IDS = [
   'dela_total', 'dela_overdue', 'dela_today', 'deals_without_dela',
   'zadachi_total', 'zadachi_overdue', 'zadachi_today', 'deals_with_active_zapros',
