@@ -5,7 +5,7 @@ import type { Metric } from '@/lib/metrics/types';
 import type { MetricHighlightConfig } from '@/lib/saved-reports/types';
 import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 
-const CATEGORY_ORDER = ['Сделки', 'Брони', 'Продажи', 'Отгрузки', 'Конверсии', 'Отказы', 'Планы', 'Прочее'];
+const CATEGORY_ORDER = ['Сделки', 'Брони', 'Продажи', 'Отгрузки', 'Конверсии', 'Отказы', 'Планы', 'Дела и задачи', 'Прочее'];
 
 // Ширина панели: максимум места, но так, чтобы справа влезла доке-панель настроек
 // метрики (до 480px) + запас на правое поле. Резерв 500px = ширина панели (480) + ~20px
