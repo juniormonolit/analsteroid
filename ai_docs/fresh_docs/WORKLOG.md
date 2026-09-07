@@ -21194,3 +21194,15 @@ stage-снимка; часть менеджеров выпадала целик�
 раньше «в сырых данных», проблема была только в потере строк по пути к отчёту); минус ~195
 сделок менеджеров вне `org_resolved_hierarchy` (ожидаемо, не трогали) ≈ 1742 — совпадает с
 ожиданием «≈1700+». `npm run typecheck`/`npm run build` — чисто.
+
+## 2026-09-07 — Задача #5594: activities — переход на схему date_end/activity_id
+
+Владелец меняет sa.deals.activities на 6 полей (activity_id/type/name/responsible_id/
+date_create/date_end), заглушка '9999-12-31' у date_end больше не будет (NULL = без срока).
+`dealsActivities.ts`: `e_type`/`e_deadline` через `COALESCE(type, provider_id)` /
+`COALESCE(date_end, deadline)` в CTE `items` и inline в `deal_flags` — толерантно к обеим
+схемам на переходный период, старый 9999-фильтр сохранён. `migrations/200_...sql` (БД
+**analytics**) поправляет упоминания deadline в description на date_end. Живой SQL (07.09,
+junior_user) подтвердил: сейчас ещё старая схема (`deadline` заполнен, `date_end` пуст,
+`type`==`provider_id`) — COALESCE безопасно бьёт в старую ветку, поведение не изменилось.
+`npm run typecheck`/`npm run build` — чисто.

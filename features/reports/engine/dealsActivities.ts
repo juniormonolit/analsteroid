@@ -12,9 +12,16 @@ import type { SnapshotFlatRow } from './stageSnapshot';
 //   Дела  = элементы activities с type <> 'CRM_TASKS_TASK'.
 //   Задачи = элементы activities с type = 'CRM_TASKS_TASK' (модуль «Задачи»,
 //            на этом портале в основном запросы логистам от БП).
-//   «Сегодня»   — deadline::date (MSK) = сегодня (MSK).
-//   «Просрочено» — deadline < now() И deadline не заглушка '9999-12-31…'
+//   «Сегодня»   — date_end::date (MSK) = сегодня (MSK).
+//   «Просрочено» — date_end < now() И date_end не заглушка '9999-12-31…'
 //            (у трети открытых дел заглушка = «без срока», не просрочка).
+//
+// Задача #5594 (владелец): schema activities переведена на 6 полей —
+// activity_id/type/name/responsible_id/date_create/date_end (id/deadline/
+// created/subject/completed/priority/… больше не будет; заглушка '9999-…'
+// у date_end больше не приходит — NULL = без срока). SQL толерантен к обеим
+// схемам на переходный период: COALESCE(type, provider_id),
+// COALESCE(date_end, deadline) — старая заглушка 9999 по-прежнему отсекается.
 //   Активная сделка = current stage НЕ в финальной стадии (sa.stages.stage_type
 //            NOT IN ('WON','LOSS')) — 27% открытых дел висят на закрытых
 //            сделках (см. анализ 20260907), это должно резаться, как и в
@@ -85,7 +92,19 @@ WITH active_deals AS (
     AND d.current_manager_id IS NOT NULL
 ),
 items AS (
-  SELECT ad.manager_id, ad.funnel_id, e
+  SELECT
+    ad.manager_id, ad.funnel_id,
+    e,
+    -- Переходная схема (задача #5594, владелец): новые поля activity_id/type/
+    -- name/responsible_id/date_create/date_end заменяют id/deadline/created/
+    -- subject/completed/priority/…; type остаётся тем же именем (= PROVIDER_ID,
+    -- как и раньше), но на переходный период COALESCE на provider_id — на
+    -- случай, если где-то в снимке ещё встретится старое имя. date_end —
+    -- замена deadline: заглушки '9999-12-31…' больше НЕ будет (NULL = без
+    -- срока), но старые элементы с deadline='9999-...' всё ещё могут висеть в
+    -- снимке до следующей сверки — фильтр по заглушке оставлен.
+    COALESCE(e->>'type', e->>'provider_id') AS e_type,
+    COALESCE(e->>'date_end', e->>'deadline') AS e_deadline
   FROM active_deals ad
   LEFT JOIN LATERAL jsonb_array_elements(ad.activities) e ON true
 ),
@@ -93,31 +112,31 @@ item_agg AS (
   SELECT
     manager_id, funnel_id,
     count(*) FILTER (
-      WHERE e IS NOT NULL AND e->>'type' <> 'CRM_TASKS_TASK'
+      WHERE e IS NOT NULL AND e_type <> 'CRM_TASKS_TASK'
     ) AS dela_total,
     count(*) FILTER (
-      WHERE e IS NOT NULL AND e->>'type' <> 'CRM_TASKS_TASK'
-        AND e->>'deadline' IS NOT NULL AND e->>'deadline' NOT LIKE '9999-12-31%'
-        AND (e->>'deadline')::timestamptz < now()
+      WHERE e IS NOT NULL AND e_type <> 'CRM_TASKS_TASK'
+        AND e_deadline IS NOT NULL AND e_deadline NOT LIKE '9999-12-31%'
+        AND e_deadline::timestamptz < now()
     ) AS dela_overdue,
     count(*) FILTER (
-      WHERE e IS NOT NULL AND e->>'type' <> 'CRM_TASKS_TASK'
-        AND e->>'deadline' IS NOT NULL AND e->>'deadline' NOT LIKE '9999-12-31%'
-        AND ((e->>'deadline')::timestamptz AT TIME ZONE 'Europe/Moscow')::date
+      WHERE e IS NOT NULL AND e_type <> 'CRM_TASKS_TASK'
+        AND e_deadline IS NOT NULL AND e_deadline NOT LIKE '9999-12-31%'
+        AND (e_deadline::timestamptz AT TIME ZONE 'Europe/Moscow')::date
           = (now() AT TIME ZONE 'Europe/Moscow')::date
     ) AS dela_today,
     count(*) FILTER (
-      WHERE e IS NOT NULL AND e->>'type' = 'CRM_TASKS_TASK'
+      WHERE e IS NOT NULL AND e_type = 'CRM_TASKS_TASK'
     ) AS zadachi_total,
     count(*) FILTER (
-      WHERE e IS NOT NULL AND e->>'type' = 'CRM_TASKS_TASK'
-        AND e->>'deadline' IS NOT NULL AND e->>'deadline' NOT LIKE '9999-12-31%'
-        AND (e->>'deadline')::timestamptz < now()
+      WHERE e IS NOT NULL AND e_type = 'CRM_TASKS_TASK'
+        AND e_deadline IS NOT NULL AND e_deadline NOT LIKE '9999-12-31%'
+        AND e_deadline::timestamptz < now()
     ) AS zadachi_overdue,
     count(*) FILTER (
-      WHERE e IS NOT NULL AND e->>'type' = 'CRM_TASKS_TASK'
-        AND e->>'deadline' IS NOT NULL AND e->>'deadline' NOT LIKE '9999-12-31%'
-        AND ((e->>'deadline')::timestamptz AT TIME ZONE 'Europe/Moscow')::date
+      WHERE e IS NOT NULL AND e_type = 'CRM_TASKS_TASK'
+        AND e_deadline IS NOT NULL AND e_deadline NOT LIKE '9999-12-31%'
+        AND (e_deadline::timestamptz AT TIME ZONE 'Europe/Moscow')::date
           = (now() AT TIME ZONE 'Europe/Moscow')::date
     ) AS zadachi_today
   FROM items
@@ -128,11 +147,11 @@ deal_flags AS (
     ad.manager_id, ad.funnel_id, ad.deal_id,
     EXISTS (
       SELECT 1 FROM jsonb_array_elements(ad.activities) x
-      WHERE x->>'type' <> 'CRM_TASKS_TASK'
+      WHERE COALESCE(x->>'type', x->>'provider_id') <> 'CRM_TASKS_TASK'
     ) AS has_dela,
     EXISTS (
       SELECT 1 FROM jsonb_array_elements(ad.activities) x
-      WHERE x->>'type' = 'CRM_TASKS_TASK' ${logistFilterSql}
+      WHERE COALESCE(x->>'type', x->>'provider_id') = 'CRM_TASKS_TASK' ${logistFilterSql}
     ) AS has_zapros
   FROM active_deals ad
 ),
