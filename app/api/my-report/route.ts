@@ -127,8 +127,16 @@ function planPercentMetric(
 }
 
 const SALES_AMOUNT_IDS = ['primary_sales_amount', 'repeat_sales_amount'];
-// Блоки 3–4 отчёта (план/факт «на текущий день»): считаются всегда, независимо от выбора.
-const FIXED_PLAN_METRIC_IDS = ['plan_sales_current_day', 'plan_shipments_current_day'];
+// Блоки 3–4 отчёта (план/факт «на текущий день»): считаются всегда, независимо от
+// выбора. ВАЖНО: сюда входят и факты — computeTotals складывает ТОЛЬКО метрики из
+// withDeps, и без них «Сумма отгрузок» была 0,0 млн, как только владелец убрал
+// «Сумму отгрузок (все)» из выбранных (инцидент 07.09; продажи выживали случайно —
+// их тянула зависимость «Доли повторных продаж»).
+const FIXED_PLAN_METRIC_IDS = [
+  'plan_sales_current_day', 'plan_shipments_current_day',
+  'primary_sales_amount', 'repeat_sales_amount',
+  'primary_shipments_amount', 'repeat_shipments_amount',
+];
 
 function sumSalesByEntity(rows: ReportRow[], entities: ResolvedEntity[]): Map<string, number> {
   const out = new Map<string, number>();
