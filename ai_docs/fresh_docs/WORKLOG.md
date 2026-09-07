@@ -21173,3 +21173,24 @@ owners-inbox/sa-deals-logist-tasks-check-20260907.html); Серёга попро
 Проверено READ-ONLY напрямую (`junior_user`, та же логика, что в файле) — `manager_id` теперь
 `text`, значения по конкретным менеджерам ненулевые: 1936 → dela_total=198/zadachi_total=3,
 1899 → 188/17, 2072 → 158/24. `npm run typecheck` и `npm run build` — чисто.
+
+## 2026-09-07 — Задача #5589 (хотфикс 2): «Сделки без дел» 977 вместо ~1738 — scope_independent
+
+Диагноз Маркуса (подтверждён SQL): снимок «Дела и задачи» шёл в обход `byManagers.ts::aggregate()`
+— отдельным `.map()`-обогащением по `dimensionId` в `route.ts`, поэтому строка менеджера
+существовала только если у него уже была строка от `collected`-метрик (период) или
+stage-снимка; часть менеджеров выпадала целиком вместе со снимком дел (тот же класс бага, что
+09.07 чинили для ППП/ППО через `scopeIndependentIds`, migrations/061).
+
+Фикс: `dealsActivities.ts` переписан на группировку `(manager_id, funnel_id)` — строки того же
+формата `SnapshotFlatRow`, что и `stageSnapshot.ts::pillRows`. `byManagers.ts` теперь тянет их
+в общий `aggregate()` наравне с collected/stage-snapshot (`allMetricIds` + слияние rows), а
+все 8 ID `DELA_ZADACHI_METRIC_IDS` добавлены в `scopeIndependentIds` вручную (эти метрики
+`metric_type='external'`, а не `'collected'` — тег `scope_independent` в `metrics.tags` туда не
+долетел бы, `scopeIndependentIds` строится только из `collected`-метрик). Отдельное
+обогащение в `route.ts` удалено — значения теперь приходят прямо из `fetchByManagers()`.
+
+Проверено: READ-ONLY (junior_user) — активных сделок без дел всего 1937 (было бы столько же и
+раньше «в сырых данных», проблема была только в потере строк по пути к отчёту); минус ~195
+сделок менеджеров вне `org_resolved_hierarchy` (ожидаемо, не трогали) ≈ 1742 — совпадает с
+ожиданием «≈1700+». `npm run typecheck`/`npm run build` — чисто.

@@ -4,6 +4,7 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
 import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
+import { fetchDealsActivitiesSnapshot, DELA_ZADACHI_METRIC_IDS } from './dealsActivities';
 import { buildProductGroupFilter, productGroupCacheKey } from './productGroupFilter';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ReportRow, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
@@ -220,6 +221,12 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   const scopeIndependentIds = new Set(
     collected.filter(m => m.tags.includes('scope_independent')).map(m => m.id),
   );
+  // Задача #5589 (диагноз Маркуса): «Дела и задачи» — снимок «сейчас»
+  // (dealsActivities.ts), metric_type='external' — НЕ входит в `collected`,
+  // поэтому тег scope_independent в metrics.tags сюда не долетел бы; те же 8
+  // ID добавлены в scopeIndependentIds вручную (тот же смысл, что у ППП/ППО:
+  // снимок не должен зависеть от пилюли Первичные/Повторные).
+  for (const id of DELA_ZADACHI_METRIC_IDS) scopeIndependentIds.add(id);
 
   // Задача 1569: фильтры по нерабочему времени НЕ funnel-based (в отличие от
   // dealScope/clientType ниже) — режут конкретные сделки, значит идут прямо в SQL
@@ -280,14 +287,20 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   }
   const { pillRows, workByDim } = snapEntry.snap;
 
+  // «Дела и задачи» (задача #5589) — свой снимок, тот же путь, что pillRows
+  // выше: (manager_id, funnel_id)-строки идут в общий aggregate() вместе с
+  // collected/stage-snapshot, scopeIndependentIds (см. выше) держит строку
+  // менеджера живой даже если ни одна его сделка не проходит пилюлю dealScope.
+  const delaZadachiRows = await fetchDealsActivitiesSnapshot();
+
   // Apply pills in memory — снимочные per-stage метрики идут ЧЕРЕЗ ТУ ЖЕ pill-
   // агрегацию, что и обычные collected (funnel_id — реальное измерение сделки,
   // funnel-пилюля Первичные/Повторные/Все режет их как обычно, БЕЗ scope_independent
   // обхода).
   const funnels     = await loadFunnels();
-  const allMetricIds = [...metricIds, ...STAGE_SNAPSHOT_METRIC_IDS];
+  const allMetricIds = [...metricIds, ...STAGE_SNAPSHOT_METRIC_IDS, ...DELA_ZADACHI_METRIC_IDS];
   const agg = aggregate(
-    [...entry.rows, ...pillRows] as FlatRow[],
+    [...entry.rows, ...pillRows, ...delaZadachiRows] as FlatRow[],
     funnels, allMetricIds, dealScope, clientType, scopeIndependentIds,
   );
 
