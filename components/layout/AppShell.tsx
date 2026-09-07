@@ -7,7 +7,7 @@ import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
-  MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation,
+  MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
   Lightbulb, Repeat2, Grid3x3,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
@@ -434,6 +434,9 @@ function SidebarBody({
     // «Презентация» (ТЗ владельца 11.08) — слайды еженедельного собрания;
     // закрытый раздел по паттерну section.offload (только супер-админ + роли).
     { href: '/presentation', label: 'Презентация', icon: <Presentation size={18} />, ok: hasPerm(user, 'section.presentation') },
+    // «Телевизоры» (ТЗ владельца 07.09) — ТВ-дашборды отделов; закрытый раздел
+    // по паттерну section.offload. Публичная страница телевизора — /tv (без сессии).
+    { href: '/screens', label: 'Телевизоры', icon: <Tv size={18} />, ok: hasPerm(user, 'section.tv') },
     { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: hasPerm(user, 'section.summary') },
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },

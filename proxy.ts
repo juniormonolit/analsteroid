@@ -19,11 +19,22 @@ const PUBLIC = [
   '/login', '/api/auth/login', '/invite', '/bot-avatar.png', '/bx',
   '/manifest.webmanifest', '/icon.svg', '/apple-icon.png', '/icons',
   '/sw.js', '/offline.html',
+  // ТВ-дашборды (задача 07.09): телевизор открывает /tv без всякой сессии —
+  // устройство идентифицируется своим токеном и кодом привязки (features/tv).
+  // Совпадение — по сегменту пути (см. isPublic), а не по голому префиксу: иначе
+  // '/tv' открыл бы наружу и любой будущий '/tv-…' маршрут.
+  '/tv',
+  // robots.txt обязан отдаваться без сессии (иначе 307 на /login и роботы его не видят).
+  '/robots.txt',
 ];
+
+function isPublic(pathname: string): boolean {
+  return PUBLIC.some(p => pathname === p || pathname.startsWith(p + '/') || pathname.startsWith(p + '.'));
+}
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  if (PUBLIC.some(p => pathname.startsWith(p))) return NextResponse.next();
+  if (isPublic(pathname)) return NextResponse.next();
   if (pathname.startsWith('/api/')) return NextResponse.next(); // API handles auth itself
 
   const session = req.cookies.get('as_session');

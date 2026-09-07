@@ -18,6 +18,19 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        // ТВ-дашборды (задача 07.09): страницы телевизоров и их API — без индексации.
+        source: '/tv/:path*',
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
+      },
+      {
+        source: '/tv',
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
+      },
+      {
+        source: '/api/tv/:path*',
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
+      },
+      {
         // Встроенные страницы: фреймить может только портал (и мы сами).
         source: '/bx/:path*',
         headers: [

@@ -56,6 +56,10 @@ function resolveBuildId(): string {
 const CACHE_VERSION = resolveBuildId();
 const NS = `as:${CACHE_VERSION}:`;
 
+/** Версия сборки (BUILD_ID | 'dev') — та же, что в namespace кэша. Нужна
+ *  публичной ТВ-странице: телевизор перезагружается, когда версия сменилась. */
+export function cacheVersion(): string { return CACHE_VERSION; }
+
 let _client: Redis | null = null;
 let _initTried = false;
 let _lastWarnAt = 0;
