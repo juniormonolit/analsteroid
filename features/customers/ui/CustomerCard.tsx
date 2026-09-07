@@ -6,6 +6,7 @@
 // ПДн: телефонов нет by construction — звонить менеджер идёт в Битрикс по ссылке.
 
 import { Fragment, useState } from 'react';
+import { DealsTable, type Deal } from '@/features/reports/ui/DrilldownDrawer';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -21,6 +22,12 @@ import {
   clientBitrixUrl, dealBitrixUrl, clientDisplayName,
   CATEGORY_LABELS, CATEGORY_STYLE, MODIFIER_LABELS,
 } from './shared';
+
+// Колонки блока «Сделки» карточки заказчика: путь сделки по воронке датами.
+const CUSTOMER_DEAL_FIELDS = [
+  'deal_name', 'head_group_name', 'stage_name', 'amount',
+  'created_at', 'reserved_at', 'confirmed_at', 'sold_at', 'delivered_at', 'lost_at',
+];
 
 const DAY_MS = 86_400_000;
 
@@ -228,7 +235,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
     scope: 'all',
     ...(row.clientKey.startsWith('k') ? { companyId: String(row.clientId) } : { contactId: String(row.clientId) }),
   }).toString();
-  const { data: dealsData } = useQuery<{ deals: { deal_id: number; deal_name: string | null; amount: number | string | null; created_at: string | null; stage_name: string | null; head_group_name: string | null }[]; total_count: number }>({
+  const { data: dealsData } = useQuery<{ deals: Deal[]; total_count: number }>({
     queryKey: ['customer-deals', row.clientKey],
     queryFn: () => fetch(`/api/reports/deals?${dealsQs}`).then(r => r.json()),
     staleTime: 5 * 60 * 1000,
@@ -285,7 +292,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
       <div className="hidden sm:block flex-1 min-w-[10%] bg-black/40 cursor-pointer" onClick={onClose} />
       {/* 920px вместо прежних 720 (правка владельца 17.08 «очень зажата по
           ширине»): в «Сделках» длинные названия + стадия + группа не умещались. */}
-      <div className="w-full sm:w-[920px] sm:max-w-[92vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
+      <div className="w-full sm:w-[1240px] sm:max-w-[96vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
         {/* Шапка — полиш 01.08 (правка владельца через Серёгу): имя+статусные чипы в
             ОДНУ строку в логичном порядке (тип → категория → модификаторы →
             статус → Битрикс), менеджер отдельной строкой, метрики покупок —
@@ -457,28 +464,11 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
             {clientDeals.length === 0 ? (
               <div className="text-[12px] text-[var(--color-text-muted)]">Сделок не найдено.</div>
             ) : (
-              <div className="flex flex-col">
-                {clientDeals.map(d => (
-                  <button
-                    key={d.deal_id}
-                    onClick={() => setOpenDealId(d.deal_id)}
-                    className="flex items-center gap-2 py-1 text-left rounded hover:bg-[var(--color-bg-hover)] transition-colors"
-                  >
-                    <span className="shrink-0 w-[72px] text-[11px] text-[var(--color-text-muted)] tabular-nums">
-                      {d.created_at ? format(new Date(d.created_at), 'd MMM yy', { locale: ru }) : '—'}
-                    </span>
-                    <span className="shrink-0 text-[11px] font-mono text-[var(--color-accent)]">#{d.deal_id}</span>
-                    <span className="flex-1 min-w-0 text-[12px] text-[var(--color-text)] truncate">{d.deal_name ?? '—'}</span>
-                    {/* Товарная группа по наибольшему (правка владельца 17.08). */}
-                    {d.head_group_name && (
-                      <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] truncate max-w-[160px]">
-                        {d.head_group_name}
-                      </span>
-                    )}
-                    {d.stage_name && <span className="shrink-0 text-[11px] text-[var(--color-text-muted)] truncate max-w-[140px]">{d.stage_name}</span>}
-                    <span className="shrink-0 text-[12px] text-[var(--color-text)] tabular-nums whitespace-nowrap">{fmtMoney(Number(d.amount ?? 0))}</span>
-                  </button>
-                ))}
+              // Та же таблица, что в дрилл-дауне отчёта (правка владельца 07.09: «даты
+              // движения по воронке как в обычном отчёте»): создана → бронь → подтв. →
+              // продажа → отгрузка → проиграна. Обёртка scroll-x — правило 2 CLAUDE.md.
+              <div className="scroll-x">
+                <DealsTable deals={clientDeals} fields={CUSTOMER_DEAL_FIELDS} onDealOpen={setOpenDealId} />
               </div>
             )}
           </Section>

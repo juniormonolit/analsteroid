@@ -335,7 +335,9 @@ function SortHead({ label, col, align, sortKey, sortDir, onSort }: {
   );
 }
 
-function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDealOpen, tableScale = 1 }: {
+// export — переиспользуется карточкой заказчика (CustomerCard, правка владельца 07.09):
+// блок «Сделки» там показывает те же даты стадий, что дрилл-даун отчёта.
+export function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDealOpen, tableScale = 1 }: {
   deals: Deal[]; fields: string[]; sortKey?: string; sortDir?: 'asc' | 'desc'; onSort?: (k: string) => void; stickyHead?: boolean;
   onDealOpen?: (id: number) => void; tableScale?: number;
 }) {
