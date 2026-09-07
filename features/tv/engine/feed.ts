@@ -177,10 +177,15 @@ function slideFor(key: string, title: string, managers: RosterManager[], facts: 
  * Собрать фид экрана. buildId — версия сервера для авто-перезагрузки телевизора.
  * deptNames — id→имя для заголовков слайдов.
  */
-export async function buildScreenFeed(screen: TvScreen, deptNames: Map<string, string>, buildId: string): Promise<TvFeedOk> {
+export async function buildScreenFeed(
+  screen: TvScreen,
+  deptNames: Map<string, string>,
+  buildId: string,
+  opts?: { bypassCache?: boolean },
+): Promise<TvFeedOk> {
   const today = mskTodayStr();
   const key = `tv:feed:${screen.id}:${today}:${screen.updatedAt}`;
-  const body = await cached(key, FEED_TTL_SEC, async () => {
+  const build = async () => {
     const fromIso = mskMidnightIso(today);
     const toExclIso = mskMidnightIso(addDaysStr(today, 1));
 
@@ -209,7 +214,13 @@ export async function buildScreenFeed(screen: TvScreen, deptNames: Map<string, s
       }
     }
     return { slides, sales, day: today };
-  });
+  };
+  // Событие sa_deals_changed (задача #5636, lib/tv/notifier.ts) означает «за 1-3 с
+  // в базе появилась свежая продажа/бронь/переброска сделки» — Redis TTL=20с в
+  // этот момент был бы гарантированной ложью, поэтому SSE-триггер идёт мимо кэша
+  // прямым SQL «сегодня». Периодический fallback-опрос продолжает бить в кэш
+  // (в этом и смысл: десять ТВ одного отдела = один запрос раз в 20 с).
+  const body = opts?.bypassCache ? await build() : await cached(key, FEED_TTL_SEC, build);
 
   const messages = await activeMessagesForScreen(screen.id).catch(() => []);
   return {

@@ -388,21 +388,36 @@ function fanfare(type){
 }
 
 /* ---------- опрос ---------- */
-function feedUrl(){
+function feedUrl(fresh){
   var u=CFG.api||'/api/tv/feed';
-  if(CFG.mode==='screen')return u+'?s='+encodeURIComponent(CFG.token||'');
-  return u+'?d='+encodeURIComponent(deviceToken||'');
+  if(CFG.mode==='screen')u=u+'?s='+encodeURIComponent(CFG.token||'');
+  else u=u+'?d='+encodeURIComponent(deviceToken||'');
+  if(fresh)u=u+'&fresh=1';
+  return u;
 }
-function schedule(ms){if(timerPoll)clearTimeout(timerPoll);timerPoll=setTimeout(poll,ms);}
+function schedule(ms){if(timerPoll)clearTimeout(timerPoll);timerPoll=setTimeout(function(){poll(false);},ms);}
 function registerDevice(){
   xhr('POST','/api/tv/device',{ua:navigator.userAgent},function(st,j){
     if(st===200&&j&&j.token){deviceToken=j.token;store('tv_device',j.token);renderPairing(j.code);schedule(5000);}
     else{renderMessage('Не удалось подключиться','Проверьте интернет на телевизоре — повторим через минуту');schedule(60000);}
   });
 }
-function poll(){
+/* Задача #5636: событие sa_deals_changed из /api/tv/stream — не ждём таймер,
+   опрашиваем фид сразу с fresh=1 (мимо Redis-кэша 20 с). Троттлинг 1.5 с —
+   несколько NOTIFY подряд (одна транзакция n8n меняет несколько полей) не
+   должны превращаться в дождь запросов; таймер обычного опроса перезаводится
+   этим же вызовом poll(), так что дублей не будет. */
+var lastPushPoll=0;
+function pollNow(){
+  var now=Date.now();
+  if(now-lastPushPoll<1500)return;
+  lastPushPoll=now;
+  if(timerPoll)clearTimeout(timerPoll);
+  poll(true);
+}
+function poll(fresh){
   if(CFG.mode==='device'&&!deviceToken){registerDevice();return;}
-  xhr('GET',feedUrl(),null,function(st,j){
+  xhr('GET',feedUrl(fresh),null,function(st,j){
     if(st===429){schedule(60000);return;}
     if(st===0||!j){offline=true;var o=$('#off');if(o){o.className='off on';o.innerHTML='нет связи'+(lastOk?' \u00b7 данные на '+lastOk:'');}
       if(!data&&!$('.pair'))renderMessage('Нет связи с Монолитикой','Повторим через 30 секунд'+(lastOk?'. Данные на '+lastOk:''));schedule(30000);return;}
@@ -425,12 +440,29 @@ function poll(){
   });
 }
 
+/* Задача #5636: SSE как быстрый путь поверх опроса (fallback-поллинг POLL/5000мс
+   остаётся штатным путём и единственным источником правды при недоступности
+   EventSource — Tizen 2016/webOS 3.x иногда его не имеют). Браузер сам
+   переподключается при обрыве (retry по умолчанию ~3 с), поэтому явного
+   реконнекта в клиенте не нужно — только троттлинг через pollNow(). */
+function startStream(){
+  if(!window.EventSource)return;
+  try{
+    var es=new EventSource('/api/tv/stream');
+    es.addEventListener('hello',function(){pollNow();});
+    es.addEventListener('deal',function(){pollNow();});
+    es.addEventListener('resync',function(){pollNow();});
+    es.onerror=function(){/* EventSource переподключится сам; фолбэк-опрос жив всегда */};
+  }catch(e){/* старый ТВ без EventSource — фолбэк-опрос справится один */}
+}
+
 window.addEventListener('resize',function(){fit();startTicker();});
 document.addEventListener('keydown',function(e){var k=e.keyCode||e.which;if(k===39)next(1);if(k===37)next(-1);});
 timerClock=setInterval(tick,1000);
 if(CFG.mode==='device'){deviceToken=load('tv_device');}
 renderMessage('Монолитика','Подключаемся…');
-poll();
+poll(false);
+startStream();
 })();
 `;
 
