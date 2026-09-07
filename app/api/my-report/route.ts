@@ -19,6 +19,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadMetrics, resolveMetricIds, withDependencies } from '@/lib/metrics/catalog';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
 import { computeTotals } from '@/features/reports/engine/calculated';
+import { enrichPlanMetrics } from '@/features/reports/engine/planMetrics';
 import { EntityAccessError, resolveEntities, type EntityInput, type ResolvedEntity } from '@/lib/reports-builder/entities';
 import { getMonthPlansByManager, getPlanWindows } from '@/lib/reports-builder/plans';
 import { TOTAL, type ReportMetric, type ReportSpec } from '@/features/reports-builder/engine/buildReportText';
@@ -224,8 +225,20 @@ export async function POST(req: NextRequest) {
     ),
   );
 
-  // Остальные метрики — за выбранный период.
-  const blockRows = rowsByPeriod[period];
+  // Остальные метрики — за выбранный период. Плановые метрики каталога («План
+  // прод. (тек)», «План отгр. (мес)», «Выполнение плана %» и т.п.) строки
+  // fetchByManagers не содержат — их дорисовывает тот же движок, что и основной
+  // отчёт (инцидент 07.09: без него планы в конструкторе были «0,0 млн» при
+  // заданных планах). «Сегодня» для планов — дата отчёта, а не реальное сегодня:
+  // человек собирает отчёт «за 04.09» и ждёт план на 04.09.
+  const windowFromStr: Record<PeriodKey, string> = { day: dateStr, week: weekStart, month: monthFirstDay };
+  const blockRows = (await enrichPlanMetrics({
+    withDeps,
+    isManagersReport: true,
+    mskTodayStr: dateStr,
+    current: { rows: rowsByPeriod[period], fromStr: windowFromStr[period], toStr: dateStr },
+    accountType: 'managers',
+  })).current;
   const totalsByEntity = new Map<string, Record<string, number | null>>();
   for (const e of entities) {
     totalsByEntity.set(e.key, computeTotals(blockRows.filter(r => e.managerIds.has(r.dimensionId)), withDeps));
