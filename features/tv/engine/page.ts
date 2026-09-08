@@ -319,7 +319,7 @@ function gridGeom(){
 function pageHtml(p,g){
   var showAva=!(data.screen.settings&&data.screen.settings.showAvatars===false),h='';
   for(var k=0;k<p.managers.length;k++){h+=tileHtml(p.managers[k],p.offset+k,showAva).replace('<div class="tile','<div style="'+tileStyle(k,g)+'" class="tile');}
-  if(p.managers.length===0)h+='<div class="empty">В отделе нет активных менеджеров</div>';
+  if(p.managers.length===0)h+='<div class="empty">Продаж и броней сегодня пока нет</div>';
   return h;
 }
 /* Показать страницу i. animate — кросфейд (смена страницы); без — обновление данных на месте. */

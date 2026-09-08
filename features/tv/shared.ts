@@ -128,6 +128,7 @@ export interface TvFeedManager {
 export interface TvFeedSlide {
   key: string;
   dept: string;        // заголовок слайда («Отдел металлопроката», «ОС МСК + ЖБИ МСК»)
+  // planDay/factDay/book* — по всему отделу; managers — только с продажей/бронью за день.
   planDay: number;
   factDay: number;
   salesCount: number;

@@ -164,13 +164,17 @@ function slideFor(key: string, title: string, managers: RosterManager[], facts: 
     };
   });
   rows.sort((a, b) => b.salesSum - a.salesSum || b.bookSum - a.bookSum || a.name.localeCompare(b.name, 'ru'));
+  // Итоги отдела (план дня в том числе) — по ВСЕМ менеджерам отдела; на плитках —
+  // только те, у кого сегодня есть продажа или бронь (правка владельца 08.09:
+  // «менеджеры без продаж или броней вообще не отображаются, заебывает на нули смотреть»).
   const sum = (fn: (r: TvFeedManager) => number) => rows.reduce((a, r) => a + fn(r), 0);
+  const active = rows.filter(r => r.salesCount > 0 || r.bookCount > 0 || r.salesSum > 0 || r.bookSum > 0);
   return {
     key, dept: title,
     planDay: sum(r => r.plan), factDay: sum(r => r.salesSum), salesCount: sum(r => r.salesCount),
     bookSum: sum(r => r.bookSum), bookCount: sum(r => r.bookCount),
     ticker: null,
-    managers: rows,
+    managers: active,
   };
 }
 
