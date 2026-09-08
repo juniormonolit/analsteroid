@@ -253,7 +253,10 @@ var COLS=2,ROWS=3,TOP_N=6;
 /* Ширина по самой широкой строке — hero: «12,5 млн ₽» (1.9em) + «12 шт» + «451%» (1.25em) ≈ 19em. */
 var CONTENT_H=11.9,CONTENT_W=19;
 var L=null; /* геометрия ленты */
-var scroll={y:0,phase:null,holdUntil:0,cur:0,raf:null,last:null,shownKey:null};
+/* Движение — по стенным часам (y = y0 − speed·Δt), а не по накоплению кадров: на
+   медленном телевизоре и в свёрнутой вкладке rAF редкий, но лента едет с той же скоростью. */
+var scroll={y:0,phase:null,holdUntil:0,cur:0,raf:null,shownKey:null,t0:0,y0:0};
+function startScroll(){scroll.phase='scroll';scroll.t0=Date.now();scroll.y0=scroll.y;}
 function holdMs(){return ((data&&data.screen.rotateSec)||15)*1000;}
 function anyTicker(){
   if(!data)return false;
@@ -294,8 +297,8 @@ function render(){
   layout(showAva);
   if(!L)return;
   /* восстановить позицию после обновления данных */
-  if(scroll.phase==null||!L.blocks[scroll.cur]){scroll.cur=0;var b0=L.blocks[0];scroll.y=b0.top+(b0.rows-ROWS)*L.row;scroll.phase=b0.rows>ROWS?'scroll':'hold';scroll.holdUntil=Date.now()+holdMs();}
-  else{var b=L.blocks[scroll.cur],lo=b.top,hi=b.top+(b.rows-ROWS)*L.row;if(scroll.y<lo)scroll.y=lo;if(scroll.y>hi)scroll.y=hi;}
+  if(scroll.phase==null||!L.blocks[scroll.cur]){scroll.cur=0;var b0=L.blocks[0];scroll.y=b0.top+(b0.rows-ROWS)*L.row;if(b0.rows>ROWS)startScroll();else{scroll.phase='hold';scroll.holdUntil=Date.now()+holdMs();}}
+  else{var b=L.blocks[scroll.cur],lo=b.top,hi=b.top+(b.rows-ROWS)*L.row;if(scroll.y<lo)scroll.y=lo;if(scroll.y>hi)scroll.y=hi;if(scroll.phase==='scroll'){scroll.t0=Date.now();scroll.y0=scroll.y;}}
   scroll.shownKey=null;
   apply();
   if(prevKey!=null&&scroll.shownKey===prevKey)startTicker();
@@ -340,14 +343,12 @@ function apply(){
   for(var d=0;d<L.dots.length;d++)L.dots[d].className=(d===curKey)?'on':'';
   if(curKey!==scroll.shownKey){scroll.shownKey=curKey;var tks=$('#tks');if(tks){tks.innerHTML=esc(tickerText(data.slides[curKey]));startTicker();}}
 }
-function step(ts){
+function step(){
   scroll.raf=null;
   if(!L||!data)return;
-  if(scroll.last==null)scroll.last=ts;
-  var dt=Math.min(0.1,Math.max(0,(ts-scroll.last)/1000));scroll.last=ts;
   var b=L.blocks[scroll.cur];
   if(scroll.phase==='scroll'){
-    scroll.y-=L.speed*dt;
+    scroll.y=scroll.y0-L.speed*(Date.now()-scroll.t0)/1000;
     if(scroll.y<=b.top){scroll.y=b.top;scroll.phase='hold';scroll.holdUntil=Date.now()+holdMs();}
     apply();
   }else if(scroll.phase==='hold'&&Date.now()>=scroll.holdUntil){
@@ -358,7 +359,7 @@ function step(ts){
 function advance(){
   var n=L.blocks.length;
   if(n===1&&L.blocks[0].rows<=ROWS){scroll.holdUntil=Date.now()+3600000;return;} /* один короткий отдел — статика */
-  if(scroll.cur+1<n){scroll.cur++;scroll.phase='scroll';return;}
+  if(scroll.cur+1<n){scroll.cur++;startScroll();return;}
   fadeRestart();
 }
 function fadeRestart(){
@@ -367,7 +368,7 @@ function fadeRestart(){
   setTimeout(function(){
     if(!L){scroll.phase=null;return;}
     scroll.cur=0;var b=L.blocks[0];
-    scroll.y=b.top+(b.rows-ROWS)*L.row;scroll.phase=b.rows>ROWS?'scroll':'hold';scroll.holdUntil=Date.now()+holdMs();
+    scroll.y=b.top+(b.rows-ROWS)*L.row;if(b.rows>ROWS)startScroll();else{scroll.phase='hold';scroll.holdUntil=Date.now()+holdMs();}
     apply();var s2=$('.slide');if(s2)s2.className='slide';
   },450);
 }
