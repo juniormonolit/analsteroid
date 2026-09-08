@@ -4,7 +4,7 @@
 // бегущая строка; вкладка «Рассылки» — сообщения на экраны.
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Cast, Check, Copy, Eye, Link2, Megaphone, MonitorPlay, Pencil, Plus, RefreshCw, Trash2, Unplug } from 'lucide-react';
+import { Cast, Check, Copy, Eye, LayoutDashboard, Link2, Megaphone, MonitorPlay, Pencil, Plus, RefreshCw, Trash2, Unplug } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { TvScreen, TvScreenInput } from '../shared';
 import { ScreenEditorModal } from './ScreenEditorModal';
@@ -46,9 +46,12 @@ export function TvAdminPage() {
             <h1 className="text-lg font-semibold text-[var(--color-text)] flex items-center gap-2"><MonitorPlay size={20} /> Телевизоры</h1>
             <p className="text-sm text-[var(--color-text-muted)]">ТВ-дашборды отделов продаж: телевизор открывает <b className="text-[var(--color-text)]">{typeof window !== 'undefined' ? window.location.host : ''}/tv</b>, показывает код — вы привязываете его к экрану здесь.</p>
           </div>
-          {tab === 'screens' && (
-            <button className={BTN_PRIMARY} onClick={() => { setSaveError(null); setEditor({ open: true, screen: null }); }}><Plus size={16} /> Создать экран</button>
-          )}
+          <div className="flex items-center gap-2">
+            <a href="/today" target="_blank" rel="noreferrer" className={BTN_SECONDARY}><LayoutDashboard size={16} /> Дашборд «Сегодня»</a>
+            {tab === 'screens' && (
+              <button className={BTN_PRIMARY} onClick={() => { setSaveError(null); setEditor({ open: true, screen: null }); }}><Plus size={16} /> Создать экран</button>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-1 border-b border-[var(--color-border)]">

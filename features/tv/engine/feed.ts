@@ -31,22 +31,22 @@ const FACT_IDS = [
   // заявки за день (created_at) — для «активного менеджера» (правка владельца 08.09)
   'primary_deals_count', 'repeat_deals_count',
 ] as const;
-type FactId = (typeof FACT_IDS)[number];
+export type FactId = (typeof FACT_IDS)[number];
 
 export function mskTodayStr(): string {
   const now = toZonedTime(new Date(), TZ);
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
-function mskMidnightIso(dateStr: string): string {
+export function mskMidnightIso(dateStr: string): string {
   return fromZonedTime(`${dateStr} 00:00:00`, TZ).toISOString();
 }
-function addDaysStr(dateStr: string, days: number): string {
+export function addDaysStr(dateStr: string, days: number): string {
   const d = new Date(`${dateStr}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
-async function fetchFactsByManager(idsNum: number[], fromIso: string, toExclIso: string): Promise<Map<string, Record<FactId, number>>> {
+export async function fetchFactsByManager(idsNum: number[], fromIso: string, toExclIso: string): Promise<Map<string, Record<FactId, number>>> {
   const out = new Map<string, Record<FactId, number>>();
   if (idsNum.length === 0) return out;
   const all = await loadMetrics();
@@ -90,7 +90,7 @@ async function fetchTodaySales(idsNum: number[], fromIso: string, toExclIso: str
 // Аватары: bulk из кэша; у кого нет/протух — догружаем в фоне по одному (Битрикс),
 // не задерживая ответ телевизору. Не чаще раза в 10 минут на менеджера.
 const _avatarKick = new Map<string, number>();
-async function fetchAvatars(ids: string[]): Promise<Map<string, string | null>> {
+export async function fetchAvatars(ids: string[]): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>();
   if (ids.length === 0) return out;
   try {
@@ -118,7 +118,7 @@ async function fetchAvatars(ids: string[]): Promise<Map<string, string | null>> 
 
 /** Начало окна «последние N рабочих дней» (Пн–Пт, без учёта праздников — для
  *  вопроса «жив ли аккаунт» этого достаточно), МСК-полночь в ISO. */
-function workingDaysBackIso(todayStr: string, n: number): string {
+export function workingDaysBackIso(todayStr: string, n: number): string {
   let d = new Date(`${todayStr}T00:00:00Z`);
   let left = n;
   while (left > 0) {
@@ -130,7 +130,7 @@ function workingDaysBackIso(todayStr: string, n: number): string {
 }
 
 /** Менеджеры с продажей или бронью в окне [fromIso, toExclIso). */
-async function recentlyActiveIds(idsNum: number[], fromIso: string, toExclIso: string): Promise<Set<string>> {
+export async function recentlyActiveIds(idsNum: number[], fromIso: string, toExclIso: string): Promise<Set<string>> {
   if (idsNum.length === 0) return new Set();
   const res = await analyticsDb().query<{ manager_id: string }>(
     `SELECT DISTINCT current_manager_id::text AS manager_id
@@ -149,16 +149,16 @@ async function recentlyActiveIds(idsNum: number[], fromIso: string, toExclIso: s
  * брони за последние 5 рабочих дней (manager2204: человек на слоте без ФИО, продаёт —
  * остаётся, а ФИО чинится в Битриксе). Итоги шапки — по видимым плиткам.
  */
-const RECENT_WORKING_DAYS = 5;
+export const RECENT_WORKING_DAYS = 5;
 
 /** Активный менеджер дня: была заявка, бронь или продажа. */
-function isActiveToday(f: Record<FactId, number> | undefined): boolean {
+export function isActiveToday(f: Record<FactId, number> | undefined): boolean {
   return !!f && (f.primary_deals_count + f.repeat_deals_count + f.primary_sales_count + f.repeat_sales_count + f.reservations_count > 0
     || f.primary_sales_amount + f.repeat_sales_amount + f.reservations_amount > 0);
 }
 
-interface Totals { planDay: number; factDay: number; salesCount: number; bookSum: number; bookCount: number; activeManagers: number; pb: number }
-function totalsOf(managers: RosterManager[], facts: Map<string, Record<FactId, number>>, plans: Map<string, { planSales: number }>): Totals {
+export interface Totals { planDay: number; factDay: number; salesCount: number; bookSum: number; bookCount: number; activeManagers: number; pb: number }
+export function totalsOf(managers: RosterManager[], facts: Map<string, Record<FactId, number>>, plans: Map<string, { planSales: number }>): Totals {
   const t: Totals = { planDay: 0, factDay: 0, salesCount: 0, bookSum: 0, bookCount: 0, activeManagers: 0, pb: 0 };
   for (const m of managers) {
     const f = facts.get(m.managerId);
