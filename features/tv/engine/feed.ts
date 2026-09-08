@@ -14,7 +14,8 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { computePeriodPlanByLogin } from '@/lib/plans/dailyPlan';
-import { resolveManagersForDepartments, type RosterManager } from '@/lib/org/teamRoster';
+import type { RosterManager } from '@/lib/org/teamRoster';
+import { loadDepartments } from '@/lib/org/deptCategories';
 import { getManagerAvatarUrl } from '@/lib/bitrix/managerAvatar';
 import { cached } from '@/lib/cache/redis';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
@@ -113,6 +114,50 @@ async function fetchAvatars(ids: string[]): Promise<Map<string, string | null>> 
   return out;
 }
 
+/**
+ * Менеджеры по выбранным узлам: узел = ВСЕ активные менеджеры его поддерева
+ * (правка владельца 08.09: «Московский филиал» вместе с «МСК ОС»/«МСК ЖБИ» показывал
+ * прочерки — resolveManagersForDepartments приписывает человека только к БЛИЖАЙШЕМУ
+ * выбранному узлу, родителю ничего не оставалось). Узлы могут пересекаться: филиал
+ * показывает всех, его отделы — своих. Один SQL + дерево отделов из кэша.
+ */
+async function managersByDept(deptIds: string[]): Promise<Map<string, RosterManager[]>> {
+  const out = new Map<string, RosterManager[]>(deptIds.map(id => [id, []]));
+  if (deptIds.length === 0) return out;
+  const [rows, { byId, byBitrixId }] = await Promise.all([
+    analyticsDb().query<{ manager_id: string; manager_name: string; department_id: string | null; short_login: string | null }>(
+      `SELECT manager_bitrix_user_id::text AS manager_id, manager_name, department_id::text AS department_id, short_login
+         FROM sa.org_resolved_hierarchy WHERE is_active = true AND manager_bitrix_user_id IS NOT NULL`,
+    ),
+    loadDepartments(),
+  ]);
+  // цепочка предков (uuid) для каждого отдела — кэш на вызов
+  const chainCache = new Map<string, Set<string>>();
+  const uuidByBitrix = new Map<string, string>();
+  for (const [uuid, row] of byId) uuidByBitrix.set(row.bitrixId, uuid);
+  const chainOf = (deptUuid: string): Set<string> => {
+    const hit = chainCache.get(deptUuid);
+    if (hit) return hit;
+    const set = new Set<string>();
+    let cur = byId.get(deptUuid);
+    for (let guard = 0; cur && guard < 15; guard++) {
+      const uuid = uuidByBitrix.get(cur.bitrixId);
+      if (uuid) set.add(uuid);
+      cur = cur.parentBitrixId ? byBitrixId.get(cur.parentBitrixId) : undefined;
+    }
+    chainCache.set(deptUuid, set);
+    return set;
+  };
+  for (const r of rows.rows) {
+    if (!r.department_id) continue;
+    const chain = chainOf(r.department_id);
+    for (const deptId of deptIds) {
+      if (chain.has(deptId)) out.get(deptId)!.push({ managerId: r.manager_id, name: r.manager_name, login: r.short_login, deptUuid: deptId });
+    }
+  }
+  return out;
+}
+
 /** Начало окна «последние N рабочих дней» (Пн–Пт, без учёта праздников — для
  *  вопроса «жив ли аккаунт» этого достаточно), МСК-полночь в ISO. */
 function workingDaysBackIso(todayStr: string, n: number): string {
@@ -194,7 +239,11 @@ export async function buildScreenFeed(
     const fromIso = mskMidnightIso(today);
     const toExclIso = mskMidnightIso(addDaysStr(today, 1));
 
-    const managers = await resolveManagersForDepartments(screen.departmentIds);
+    const byDept = await managersByDept(screen.departmentIds);
+    // объединение без дублей — для фактов/планов/аватаров/событий
+    const seen = new Set<string>();
+    const managers: RosterManager[] = [];
+    for (const list of byDept.values()) for (const m of list) { if (!seen.has(m.managerId)) { seen.add(m.managerId); managers.push(m); } }
     const idsNum = [...new Set(managers.map(m => Number(m.managerId)).filter(n => Number.isInteger(n) && n > 0))];
     const names = new Map(managers.map(m => [m.managerId, m.name]));
 
@@ -224,7 +273,7 @@ export async function buildScreenFeed(
       slides.push(slide);
     } else {
       for (const deptId of screen.departmentIds) {
-        const own = managers.filter(m => m.deptUuid === deptId);
+        const own = byDept.get(deptId) ?? [];
         const slide = slideFor(deptId, deptNames.get(deptId) ?? 'Отдел', own, facts, plans, avatars, recentActive);
         slide.ticker = deptTicker(deptId);
         slides.push(slide);
