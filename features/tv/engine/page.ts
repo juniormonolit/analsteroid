@@ -41,24 +41,34 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .slide.in{-webkit-animation:tvin .5s ease;animation:tvin .5s ease}
 @-webkit-keyframes tvin{from{opacity:0;-webkit-transform:translateX(2vw)}to{opacity:1;-webkit-transform:none}}
 @keyframes tvin{from{opacity:0;transform:translateX(2vw)}to{opacity:1;transform:none}}
-.hdr{height:5.6vw;margin-bottom:1vw;padding:0 .2vw}
-.dept{font-size:2.4vw;font-weight:600;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dept .muted{font-size:1.4vw;font-weight:500;margin-left:.6vw}
-.st{text-align:right;margin-left:2.4vw}
-.st .l,.blg .l{display:block;font-size:.95vw;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#8FA1BD}
-.th-light .st .l,.th-light .blg .l{color:#6B7280}
-.st .v{display:block;font-size:2.5vw;font-weight:700;line-height:1.1;margin-top:.15vw;letter-spacing:-.01em}
-.st .v.fact{color:#5BC878}.th-light .st .v.fact{color:#1E8E3E}
-.st .v.book{color:#7FB9E8}.th-light .st .v.book{color:#0069BE}
-.blg{width:18vw;margin-left:2.4vw}
-.blg .p{font-size:3.1vw;font-weight:800;line-height:1;color:#FBBC04}
-.blg .p.ok{color:#5BC878}.th-light .blg .p.ok{color:#1E8E3E}.th-light .blg .p{color:#B26000}
-.trk{height:.7vw;border-radius:1vw;background:#243450;overflow:hidden;margin-top:.35vw}
-.th-light .trk{background:#E5E9EF}
-.trk i{display:block;height:100%;border-radius:1vw;background:rgba(91,200,120,.75)}
-.trk.warn i{background:rgba(251,188,4,.7)}
-.th-light .trk i{background:#34A853}.th-light .trk.warn i{background:#FBBC04}
-.grid{position:absolute;left:0;right:0;top:6.8vw;bottom:2.6vw}
+/* Правка владельца 08.09: ~30% экрана — выполнение плана отделом, сайдбаром слева
+   со столбцом. Справа (.main) — плитки. */
+.side{position:absolute;left:0;top:0;bottom:0;width:26.5vw;background:#121C2E;border:1px solid #243450;border-radius:1vw;padding:1.6vw 1.6vw 1.2vw}
+.th-light .side{background:#fff;border-color:#E5E9EF}
+.main{position:absolute;left:28.3vw;right:0;top:0;bottom:0}
+.dept{font-size:2.3vw;font-weight:700;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.15}
+.dept .muted{font-size:1.3vw;font-weight:500;margin-left:.5vw}
+.col{position:absolute;left:1.6vw;right:1.6vw;top:5.2vw;bottom:15.6vw}
+.col .track{position:absolute;left:50%;margin-left:-4.5vw;width:9vw;top:0;bottom:0;border-radius:1.2vw;background:#0B1220;border:1px solid #243450;overflow:hidden}
+.th-light .col .track{background:#F6F8FA;border-color:#E5E9EF}
+.col .fill{position:absolute;left:0;right:0;bottom:0;background:#FBBC04;background:-webkit-linear-gradient(top,#FBBC04,#E0941C);background:linear-gradient(to bottom,#FBBC04,#E0941C);border-radius:0 0 1.1vw 1.1vw;-webkit-transition:height .8s ease;transition:height .8s ease}
+.col .fill.ok{background:#5BC878;background:-webkit-linear-gradient(top,#5BC878,#2E9E55);background:linear-gradient(to bottom,#5BC878,#2E9E55)}
+.col .fill.ok.over{border-radius:1.1vw}
+.col .pct{position:absolute;left:0;right:0;top:50%;margin-top:-2.8vw;text-align:center;font-size:5.2vw;font-weight:800;line-height:1;letter-spacing:-.03em;color:#F2F6FC;text-shadow:0 .15vw .8vw rgba(0,0,0,.55)}
+.th-light .col .pct{color:#1A202C;text-shadow:0 .1vw .6vw rgba(255,255,255,.9)}
+.col .cap{position:absolute;left:0;right:0;top:50%;margin-top:3vw;text-align:center;font-size:.95vw;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#F2F6FC;opacity:.85}
+.th-light .col .cap{color:#1A202C}
+.col .mark{position:absolute;left:50%;margin-left:-5.4vw;width:10.8vw;border-top:.15vw dashed #4A9CDE;opacity:.7}
+.col .mark span{position:absolute;right:0;top:-1.5vw;font-size:.9vw;color:#4A9CDE;font-weight:600}
+.sst{position:absolute;left:1.6vw;right:1.6vw}
+.sst .l{display:block;font-size:.9vw;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#8FA1BD}
+.th-light .sst .l{color:#6B7280}
+.sst .v{display:block;font-size:2.2vw;font-weight:700;line-height:1.05;margin-top:.15vw;letter-spacing:-.01em;white-space:nowrap}
+.sst .v.fact{color:#5BC878}.th-light .sst .v.fact{color:#1E8E3E}
+.sst .v.book{color:#7FB9E8}.th-light .sst .v.book{color:#0069BE}
+.sst.s1{bottom:10.6vw}.sst.s2{bottom:6.4vw}.sst.s3{bottom:2.2vw}
+.sst .r{position:absolute;right:0;top:0;text-align:right}
+.grid{position:absolute;left:0;right:0;top:0;bottom:2.6vw}
 .grid.tk{bottom:5.4vw}
 .tile{position:absolute;background:#121C2E;border:1px solid #243450;border-radius:.9em;padding:.9em 1.1em;overflow:hidden}
 .th-light .tile{background:#fff;border-color:#E5E9EF}
@@ -96,6 +106,7 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .pb .n.ok{color:#5BC878}.th-light .pb .n.ok{color:#1E8E3E}
 .pb .n small{font-size:.55em;font-weight:600;color:#8FA1BD;margin-left:.15em}
 .ftr{position:absolute;left:0;right:0;bottom:0;height:1.8vw;font-size:1vw;color:#8FA1BD}
+.ftr .tnum{white-space:nowrap}
 .th-light .ftr{color:#6B7280}
 .ftr b{color:#F2F6FC;font-size:1.15vw;font-weight:700;margin-left:.45vw}.th-light .ftr b{color:#1A202C}
 .dots span{display:inline-block;width:.6vw;height:.6vw;border-radius:1vw;background:#243450;margin-left:.6vw;vertical-align:middle;-webkit-transition:all .3s;transition:all .3s}
@@ -105,7 +116,7 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .th-light .ticker{background:#fff;border-color:#E5E9EF}
 .ticker span{position:absolute;left:100%;top:0;line-height:2.5vw;font-size:1.35vw;font-weight:600;padding:0 1vw;will-change:transform}
 .ticker span b{color:#4A9CDE;font-weight:700}.th-light .ticker span b{color:#1B7FD4}
-.empty{position:absolute;left:0;right:0;top:40%;text-align:center;font-size:1.6vw;color:#8FA1BD}
+.empty{position:absolute;left:0;right:0;top:40%;text-align:center;font-size:1.6vw;color:#8FA1BD;padding:0 2vw}
 .off{position:absolute;left:1vw;bottom:.6vw;font-size:.85vw;color:#FBBC04;background:rgba(0,0,0,.35);padding:.2vw .6vw;border-radius:.4vw;display:none}
 .off.on{display:block}
 .banner{position:absolute;left:2.2vw;right:2.2vw;top:1.2vw;background:#1B7FD4;color:#fff;border-radius:.8vw;padding:1vw 1.6vw;font-size:1.7vw;font-weight:600;text-align:center;-webkit-box-shadow:0 1vw 3vw rgba(0,0,0,.4);box-shadow:0 1vw 3vw rgba(0,0,0,.4);z-index:20;white-space:normal;word-wrap:break-word}
@@ -236,7 +247,8 @@ function tickerText(slide){
    PER_PAGE плиток; страницы крутятся как слайды, шапка — итоги всего отдела. */
 /* Правка владельца 07.09: первая страница отдела — топ-6 по продажам (висит rotateSec),
    остальные — «хвост» страницами по PER_PAGE (висят rotateTailSec). */
-var TOP_N=6,PER_PAGE=20;
+/* Правка владельца 08.09: максимум на экране — сетка 4×3, в 5×4 контент не влезает. */
+var TOP_N=6,PER_PAGE=12,MAX_COLS=4;
 function pages(){
   var out=[];if(!data)return out;
   for(var i=0;i<data.slides.length;i++){var s=data.slides[i],ms=s.managers;
@@ -254,13 +266,17 @@ function render(animate){
   var cur=pg[idx],s=cur.s,plan=s.planDay||0,fact=s.factDay||0,pct=plan?Math.round(fact/plan*100):null;
   var showAva=!(data.screen.settings&&data.screen.settings.showAvatars===false);
   var tk=tickerText(s);
+  var fillH=pct==null?0:Math.min(pct,100),ok=pct!=null&&pct>=100;
   var h='<div class="stage"><div class="slide'+(animate?' in':'')+'">'+
-    '<div class="fxb hdr"><div class="dept grow">'+esc(s.dept)+(cur.pages>1?' <span class="muted">'+(cur.page+1)+'/'+cur.pages+'</span>':'')+'</div><div class="fx tnum">'+
-    '<div class="st"><span class="l">План</span><span class="v">'+fmtMoney(plan)+'</span></div>'+
-    '<div class="st"><span class="l">Факт</span><span class="v fact">'+fmtMoney(fact)+'</span></div>'+
-    '<div class="blg"><div class="fxb"><span class="l">Выполнение</span><span class="p'+(pct!=null&&pct>=100?' ok':'')+'">'+(pct==null?'\u2014':pct+'%')+'</span></div>'+bar(pct,'trk')+'</div>'+
-    '<div class="st"><span class="l">Брони</span><span class="v book">'+fmtMoney(s.bookSum)+'</span></div>'+
-    '</div></div>'+
+    '<div class="side">'+
+      '<div class="dept">'+esc(s.dept)+(cur.pages>1?' <span class="muted">'+(cur.page+1)+'/'+cur.pages+'</span>':'')+'</div>'+
+      '<div class="col"><div class="track"><div class="fill'+(ok?' ok':'')+(pct!=null&&pct>100?' over':'')+'" style="height:'+fillH+'%"></div></div>'+
+        '<div class="pct tnum">'+(pct==null?'\u2014':pct+'%')+'</div><div class="cap">плана дня</div></div>'+
+      '<div class="sst s1 tnum"><span class="l">План</span><span class="v">'+fmtMoney(plan)+'</span></div>'+
+      '<div class="sst s2 tnum"><span class="l">Факт</span><span class="v fact">'+fmtMoney(fact)+'</span><span class="r"><span class="l">Продаж</span><span class="v">'+s.salesCount+'</span></span></div>'+
+      '<div class="sst s3 tnum"><span class="l">Брони</span><span class="v book">'+fmtMoney(s.bookSum)+'</span><span class="r"><span class="l">Шт</span><span class="v book">'+s.bookCount+'</span></span></div>'+
+    '</div>'+
+    '<div class="main">'+
     '<div class="grid'+(tk?' tk':'')+'" id="grid">';
   for(var i=0;i<cur.managers.length;i++)h+=tileHtml(cur.managers[i],cur.offset+i,showAva);
   if(s.managers.length===0)h+='<div class="empty">В отделе нет активных менеджеров</div>';
@@ -269,6 +285,7 @@ function render(animate){
   h+='<div class="fxb ftr"><div class="tnum">'+dateStr()+'<b id="clock">'+timeStr()+'</b></div><div class="dots">';
   for(var j=0;j<n;j++)h+='<span'+(j===idx?' class="on"':'')+'></span>';
   h+='</div></div>';
+  h+='</div>';
   h+='<div class="off'+(offline?' on':'')+'" id="off">нет связи'+(lastOk?' \u00b7 данные на '+lastOk:'')+'</div>';
   h+='</div></div>';
   root.innerHTML=h;
@@ -285,7 +302,7 @@ function fit(){
   var tiles=grid.getElementsByClassName('tile'),n=tiles.length;if(!n)return;
   var gw=grid.clientWidth,gh=grid.clientHeight,gap=Math.round(window.innerWidth*0.007);
   var best={k:0,cols:1,rows:n};
-  for(var cols=1;cols<=Math.min(n,6);cols++){
+  for(var cols=1;cols<=Math.min(n,MAX_COLS);cols++){
     var rows=Math.ceil(n/cols),tw=(gw-gap*(cols-1))/cols,th=(gh-gap*(rows-1))/rows;
     var k=Math.min(th/CONTENT_H,tw/CONTENT_W);
     if(k>best.k)best={k:k,cols:cols,rows:rows};
