@@ -7,10 +7,13 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Eye, EyeOff, RefreshCw, Users } from 'lucide-react';
 import type { TvDashManager, TvDashNode, TvDashboard as Dash } from '../engine/dashboard';
 
+// Неразрывные пробелы: «17,5 млн ₽» не должно переноситься по словам в узкой KPI-карточке
+// (правка владельца 08.09: «знак рубля вываливается»).
+const NB = '\u00a0';
 const fmtMoney = (v: number): string => {
-  if (v >= 1e6) return `${(v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} млн ₽`;
-  if (v >= 1e4) return `${Math.round(v / 1e3).toLocaleString('ru-RU')} тыс ₽`;
-  return `${Math.round(v).toLocaleString('ru-RU')} ₽`;
+  if (v >= 1e6) return `${(v / 1e6).toLocaleString('ru-RU', { maximumFractionDigits: 1 })}${NB}млн${NB}₽`;
+  if (v >= 1e4) return `${Math.round(v / 1e3).toLocaleString('ru-RU')}${NB}тыс${NB}₽`;
+  return `${Math.round(v).toLocaleString('ru-RU')}${NB}₽`;
 };
 const pctOf = (fact: number, plan: number): number | null => (plan > 0 ? Math.round((fact / plan) * 100) : null);
 
@@ -131,16 +134,16 @@ function Kpis({ node }: { node: TvDashNode }) {
     { l: 'Факт продаж', v: fmtMoney(node.factDay), cls: 'text-[var(--color-positive)]' },
     { l: 'Выполнение', v: p == null ? '—' : `${p}%`, cls: p != null && p >= 100 ? 'text-[var(--color-positive)]' : 'text-[var(--color-warning)]' },
     { l: 'Продаж, шт', v: node.salesCount },
-    { l: 'Брони', v: <>{fmtMoney(node.bookSum)} <span className="text-sm lg:text-[1vw] font-normal text-[var(--color-text-muted)]">{node.bookCount} шт</span></>, cls: 'text-[var(--color-accent)]' },
+    { l: 'Брони', v: <>{fmtMoney(node.bookSum)}<span className="block text-sm lg:text-[0.95vw] font-normal text-[var(--color-text-muted)]">{node.bookCount} шт</span></>, cls: 'text-[var(--color-accent)]' },
     { l: 'Продажеброней', v: <Pb pb={node.pb} target={node.target} /> },
     { l: 'Активных / всего', v: <>{node.activeManagers} <span className="text-sm lg:text-[1vw] font-normal text-[var(--color-text-muted)]">/ {node.managerCount}</span></> },
   ];
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 lg:gap-[0.8vw]">
+    <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-2 lg:gap-[0.9vw]">
       {items.map(it => (
-        <div key={it.l} className="rounded-lg lg:rounded-[0.8vw] border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 lg:px-[1.2vw] lg:py-[1vw] min-w-0">
-          <div className="text-[11px] lg:text-[0.85vw] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider truncate">{it.l}</div>
-          <div className={`text-lg lg:text-[2.1vw] font-bold tabular-nums leading-tight ${it.cls ?? ''}`}>{it.v}</div>
+        <div key={it.l} className="rounded-lg lg:rounded-[0.8vw] border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 lg:px-[1.3vw] lg:py-[1.1vw] min-w-0 flex flex-col gap-1 lg:gap-[0.5vw]">
+          <div className="text-[11px] lg:text-[0.8vw] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider truncate">{it.l}</div>
+          <div className={`text-lg lg:text-[1.7vw] font-bold tabular-nums leading-tight whitespace-nowrap ${it.cls ?? ''}`}>{it.v}</div>
         </div>
       ))}
     </div>
