@@ -24,8 +24,10 @@ function Pb({ pb, target }: { pb: number; target: number }) {
   return <span className={`font-semibold tabular-nums ${ok ? 'text-[var(--color-positive)]' : target > 0 ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-muted)]'}`}>{pb}<span className="text-[var(--color-text-muted)] font-normal"> / {target}</span></span>;
 }
 
-const TH = 'px-2 py-2 text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider whitespace-nowrap';
-const TD = 'px-2 py-1.5 text-sm whitespace-nowrap tabular-nums';
+// Крупная типографика под большой монитор: на десктопе размеры в vw (1.1vw ≈ 21px на 1920),
+// на телефоне — обычные rem (правка владельца 08.09: «пожирней, чтобы на весь экран»).
+const TH = 'px-3 py-3 text-xs lg:text-[0.85vw] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider whitespace-nowrap';
+const TD = 'px-3 py-2 lg:py-[0.7vw] text-sm lg:text-[1.15vw] whitespace-nowrap tabular-nums';
 
 export function TodayDashboard() {
   const { data, isLoading, error, refetch, isFetching } = useQuery<Dash>({
@@ -51,16 +53,16 @@ export function TodayDashboard() {
 
   return (
     <div className="h-dvh overflow-y-auto overflow-x-hidden">
-      <div className="p-3 sm:p-6 max-w-7xl mx-auto flex flex-col gap-4">
+      <div className="p-3 sm:p-6 lg:px-[2vw] lg:py-[1.5vw] flex flex-col gap-4 lg:gap-[1.2vw]">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h1 className="text-lg sm:text-xl font-semibold">Сегодня по компании</h1>
-            <div className="text-xs text-[var(--color-text-muted)]">
+            <h1 className="text-lg sm:text-xl lg:text-[2vw] font-semibold leading-tight">Сегодня по компании</h1>
+            <div className="text-xs lg:text-[0.9vw] text-[var(--color-text-muted)]">
               {data ? `${data.day} · обновлено ${new Date(data.generatedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : '…'} · продажи и брони за день, план дня по менеджерам
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowIdle(v => !v)} className="inline-flex items-center gap-1.5 min-h-9 px-3 rounded-lg border border-[var(--color-border)] text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
+            <button onClick={() => setShowIdle(v => !v)} className="inline-flex items-center gap-1.5 min-h-9 lg:min-h-[2.6vw] px-3 lg:px-[1vw] rounded-lg border border-[var(--color-border)] text-sm lg:text-[1vw] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
               {showIdle ? <EyeOff size={14} /> : <Eye size={14} />} {showIdle ? 'Скрыть без движения' : 'Показать всех'}
             </button>
             <button onClick={() => refetch()} className="tap-target p-2 rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title="Обновить">
@@ -73,7 +75,7 @@ export function TodayDashboard() {
           <div className="flex flex-wrap gap-1 p-1 rounded-lg bg-[var(--color-bg-hover)] w-fit max-w-full">
             {tabs.map(t => (
               <button key={t.id} onClick={() => setTab(t.id)}
-                className={`min-h-9 px-3 rounded-md text-sm whitespace-nowrap ${tab === t.id ? 'bg-[var(--color-bg-surface)] font-medium shadow-sm text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+                className={`min-h-9 lg:min-h-[2.8vw] px-3 lg:px-[1.4vw] rounded-md text-sm lg:text-[1.15vw] whitespace-nowrap ${tab === t.id ? 'bg-[var(--color-bg-surface)] font-semibold shadow-sm text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
                 {t.name}
               </button>
             ))}
@@ -112,7 +114,7 @@ export function TodayDashboard() {
                 </tbody>
               </table>
             </div>
-            <div className="text-xs text-[var(--color-text-muted)]">
+            <div className="text-xs lg:text-[0.9vw] text-[var(--color-text-muted)]">
               Активный менеджер — была заявка, бронь или продажа сегодня. Цель бронепродаж = активные × {data.dailyTarget}. Без переключателя «Показать всех» менеджеры без движения скрыты.
             </div>
           </>
@@ -129,16 +131,16 @@ function Kpis({ node }: { node: TvDashNode }) {
     { l: 'Факт продаж', v: fmtMoney(node.factDay), cls: 'text-[var(--color-positive)]' },
     { l: 'Выполнение', v: p == null ? '—' : `${p}%`, cls: p != null && p >= 100 ? 'text-[var(--color-positive)]' : 'text-[var(--color-warning)]' },
     { l: 'Продаж, шт', v: node.salesCount },
-    { l: 'Брони', v: <>{fmtMoney(node.bookSum)} <span className="text-sm font-normal text-[var(--color-text-muted)]">{node.bookCount} шт</span></>, cls: 'text-[var(--color-accent)]' },
+    { l: 'Брони', v: <>{fmtMoney(node.bookSum)} <span className="text-sm lg:text-[1vw] font-normal text-[var(--color-text-muted)]">{node.bookCount} шт</span></>, cls: 'text-[var(--color-accent)]' },
     { l: 'Продажеброней', v: <Pb pb={node.pb} target={node.target} /> },
-    { l: 'Активных / всего', v: <>{node.activeManagers} <span className="text-sm font-normal text-[var(--color-text-muted)]">/ {node.managerCount}</span></> },
+    { l: 'Активных / всего', v: <>{node.activeManagers} <span className="text-sm lg:text-[1vw] font-normal text-[var(--color-text-muted)]">/ {node.managerCount}</span></> },
   ];
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 lg:gap-[0.8vw]">
       {items.map(it => (
-        <div key={it.l} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 min-w-0">
-          <div className="text-[11px] font-medium text-[var(--color-text-muted)] uppercase tracking-wider truncate">{it.l}</div>
-          <div className={`text-lg font-semibold tabular-nums truncate ${it.cls ?? ''}`}>{it.v}</div>
+        <div key={it.l} className="rounded-lg lg:rounded-[0.8vw] border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 lg:px-[1.2vw] lg:py-[1vw] min-w-0">
+          <div className="text-[11px] lg:text-[0.85vw] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider truncate">{it.l}</div>
+          <div className={`text-lg lg:text-[2.1vw] font-bold tabular-nums leading-tight ${it.cls ?? ''}`}>{it.v}</div>
         </div>
       ))}
     </div>
@@ -206,10 +208,10 @@ function ManagerRows({ ids, depth, managers, target, showIdle }: {
             <div className="flex items-center gap-2 min-w-0">
               {m.avatar
                 // eslint-disable-next-line @next/next/no-img-element
-                ? <img src={m.avatar} alt="" className="w-6 h-6 rounded-full object-cover shrink-0" />
-                : <span className="w-6 h-6 rounded-full bg-[var(--color-accent-soft)] text-[10px] font-semibold flex items-center justify-center shrink-0">{m.name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase()).join('')}</span>}
+                ? <img src={m.avatar} alt="" className="w-6 h-6 lg:w-[1.8vw] lg:h-[1.8vw] rounded-full object-cover shrink-0" />
+                : <span className="w-6 h-6 lg:w-[1.8vw] lg:h-[1.8vw] rounded-full bg-[var(--color-accent-soft)] text-[10px] lg:text-[0.7vw] font-semibold flex items-center justify-center shrink-0">{m.name.split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase()).join('')}</span>}
               <span className={`truncate ${m.active ? '' : 'text-[var(--color-text-muted)]'}`}>{m.name}</span>
-              {m.dealsCount > 0 && <span className="text-[10px] text-[var(--color-text-muted)] shrink-0">заявок {m.dealsCount}</span>}
+              {m.dealsCount > 0 && <span className="text-[10px] lg:text-[0.8vw] text-[var(--color-text-muted)] shrink-0">заявок {m.dealsCount}</span>}
             </div>
           </td>
           <td className={`${TD} text-right`}>{fmtMoney(m.plan)}</td>
@@ -223,7 +225,7 @@ function ManagerRows({ ids, depth, managers, target, showIdle }: {
         </tr>
       ))}
       {hidden > 0 && (
-        <tr><td colSpan={9} className={`${TD} text-xs text-[var(--color-text-muted)]`} style={{ paddingLeft: 8 + depth * 18 + 19 }}>ещё {hidden} без движения скрыто</td></tr>
+        <tr><td colSpan={9} className={`${TD} !text-xs lg:!text-[0.85vw] text-[var(--color-text-muted)]`} style={{ paddingLeft: 8 + depth * 18 + 19 }}>ещё {hidden} без движения скрыто</td></tr>
       )}
     </>
   );

@@ -69,7 +69,13 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .sst .v.warn{color:#FBBC04}.th-light .sst .v.warn{color:#B26000}
 .sst .v small{font-size:.5em;font-weight:600;color:#8FA1BD;margin-left:.15em}
 .sst .l small.act,.pb .l small.act{text-transform:none;letter-spacing:0;font-weight:500;margin-left:.6em;opacity:.8}
-.tile.card{border-color:#33507E}.th-light .tile.card{border-color:#AFD3F1}
+.tile.card{border-color:#33507E;cursor:pointer}.th-light .tile.card{border-color:#AFD3F1}
+.tile.focus{-webkit-box-shadow:0 0 0 .3vw #4A9CDE;box-shadow:0 0 0 .3vw #4A9CDE}
+.pill{position:absolute;right:0;top:0;z-index:25;background:rgba(18,28,46,.94);border:1px solid #33507E;border-radius:.8vw;padding:.6vw 1vw;font-size:1.1vw;font-weight:600;color:#F2F6FC;white-space:nowrap}
+.th-light .pill{background:rgba(255,255,255,.96);border-color:#AFD3F1;color:#1A202C}
+.pill .ico{color:#FBBC04;margin-right:.5vw;font-size:.9vw}
+.pill .pbtn{margin-left:.8vw;font-family:inherit;font-size:1vw;font-weight:600;padding:.35vw .9vw;border-radius:.5vw;border:1px solid #4A9CDE;background:#1B7FD4;color:#fff;cursor:pointer}
+.pill .pbtn.go{background:transparent;color:#4A9CDE}.th-light .pill .pbtn.go{color:#005CA9}
 .ava.dep{background:#33507E;border-radius:.6em}.th-light .ava.dep{background:#7DA7D9}
 .sst .r{position:absolute;right:0;top:0;text-align:right}
 .grid{position:absolute;left:0;right:0;top:0;bottom:2.6vw}
@@ -244,7 +250,7 @@ function tileHtml(m,i,showAva){
    план/брони, внизу «ПРОДАЖЕБРОНЕЙ n / цель» (цель = активные менеджеры × dailyTarget). */
 function cardHtml(c,i){
   var mp=c.planDay||0,pct=mp?Math.round(c.factDay/mp*100):null;
-  return '<div class="tile card'+(i===0&&c.factDay>0?' top':'')+'" data-i="'+i+'"><div class="inner">'+
+  return '<div class="tile card'+(i===0&&c.factDay>0?' top':'')+'" data-i="'+i+'" data-node="'+esc(c.id)+'"><div class="inner">'+
     '<div class="fx"><div class="ava dep"><span>'+esc(initials(c.name))+'</span></div><div class="name grow">'+esc(c.name)+'</div><div class="rank tnum">'+(i+1)+'</div></div>'+
     '<div class="fxb hero tnum"><div class="v">'+fmtMoney(c.factDay)+'<small>'+c.salesCount+' шт</small></div><div class="p'+(pct!=null&&pct<100?' warn':'')+'">'+(pct==null?'\u2014':pct+'%')+'</div></div>'+
     bar(pct,'bar')+
@@ -318,6 +324,7 @@ function ensureShell(){
   root.innerHTML='<div class="stage"><div class="slide">'+
     '<div class="sides" id="sides"></div>'+
     '<div class="main"><div class="grid'+(tk?' tk':'')+'" id="grid"></div>'+
+    '<div class="pill" id="pill" style="display:none"><span class="ico">\u275A\u275A</span><span id="pillTxt"></span><button type="button" class="pbtn" id="pillBack">\u2039 Назад</button><button type="button" class="pbtn go" id="pillGo">\u25B6 Продолжить</button></div>'+
     (tk?'<div class="ticker" id="ticker"><span id="tks"></span></div>':'')+
     '<div class="fxb ftr"><div class="tnum">'+dateStr()+'<b id="clock">'+timeStr()+'</b></div><div class="dots" id="dots"></div></div>'+
     '</div>'+
@@ -363,6 +370,7 @@ function pageHtml(p,g){
 /* Показать страницу i. animate — кросфейд (смена страницы); без — обновление данных на месте. */
 function showPage(i,animate){
   if(!data)return;
+  if(animate)focusIdx=-1;
   var pg=pages(),n=pg.length;
   if(n===0){root.innerHTML='<div class="stage"><div class="empty">Для этого экрана не выбраны отделы</div></div>';shell=null;return;}
   var fresh=ensureShell();
@@ -389,8 +397,41 @@ function showPage(i,animate){
 }
 function refresh(){showPage(idx,false);}
 function next(d){showPage(idx+d,true);restartRotate();}
+/* ---------- интерактив (правка владельца 08.09): клик по карточке — проваливание в узел,
+   карусель на паузе, 20 с без нажатий — возврат на верх и продолжение; кнопка «Назад» и
+   клавиша «назад» пульта — на уровень вверх (на верхнем уровне не перехватываем — пусть
+   телевизор делает своё «назад»). ---------- */
+var IDLE_SEC=20,base=null,drill=[],paused=false,idleLeft=0,focusIdx=-1;
+function activity(){paused=true;idleLeft=IDLE_SEC;if(timerRot){clearTimeout(timerRot);timerRot=null;}updatePill();}
+function updatePill(){
+  var p=$('#pill');if(!p)return;var show=paused||drill.length>0;p.style.display=show?'block':'none';if(!show)return;
+  var t=$('#pillTxt'),b=$('#pillBack');
+  if(t)t.innerHTML=paused?'Пауза \u00b7 '+idleLeft+' с':'';
+  if(b)b.style.display=drill.length?'inline-block':'none';
+}
+function swapData(j){data=j;idx=0;focusIdx=-1;sideKey=null;showPage(0,true);updatePill();}
+function resumeAll(){paused=false;idleLeft=0;if(drill.length){drill=[];swapData(base);}else updatePill();restartRotate();}
+function drillInto(id){
+  activity();
+  xhr('GET',feedUrl(false)+'&node='+encodeURIComponent(id),null,function(st,j){
+    if(st!==200||!j||j.state!=='ok')return;
+    drill.push({id:id,data:j});swapData(j);
+  });
+}
+function goBack(){
+  if(!drill.length)return false;
+  activity();drill.pop();swapData(drill.length?drill[drill.length-1].data:base);return true;
+}
+function moveFocus(d){
+  var grid=$('#grid');if(!grid)return;var cards=grid.querySelectorAll('.tile.card');if(!cards.length)return;
+  focusIdx=((focusIdx+d)%cards.length+cards.length)%cards.length;
+  for(var i=0;i<cards.length;i++)cards[i].className=cards[i].className.replace(/\s*\bfocus\b/,'')+(i===focusIdx?' focus':'');
+}
+var BACK_KEYS={10009:1,461:1,8:1,27:1,166:1,4:1};
+function isBackKey(e){var k=e.keyCode||e.which;return !!BACK_KEYS[k]||e.key==='GoBack'||e.key==='BrowserBack'||e.key==='XF86Back';}
 function restartRotate(){
   if(timerRot)clearTimeout(timerRot);timerRot=null;
+  if(paused)return;
   var pg=pages();if(pg.length<2)return;
   var cur=pg[idx]||pg[0];
   timerRot=setTimeout(function(){next(1);},cur.holdSec?cur.holdSec*1000:(cur.kind==='cards'||cur.offset===0)?holdMs():tailMs());
@@ -434,6 +475,7 @@ function renderOverlays(){
 }
 function tick(){
   var c=$('#clock');if(c)c.innerHTML=timeStr();
+  if(paused){idleLeft--;if(idleLeft<=0){resumeAll();}else updatePill();}
   /* сообщения с истёкшим until снимаем сами, не дожидаясь фида */
   if(data){var ch=false;for(var i=0;i<data.messages.length;i++){if(new Date(data.messages[i].until).getTime()<=Date.now()){ch=true;}}
     if(ch){data.messages=data.messages.filter(function(m){return new Date(m.until).getTime()>Date.now();});renderOverlays();var pg=pages();if(pg[idx])tickerSet(tickerText(data.slides[pg[idx].slide]));}}
@@ -548,11 +590,15 @@ function poll(fresh){
     if(j.state==='unknown_screen'){data=null;renderMessage('Экран удалён','Привяжите телевизор заново в разделе «Телевизоры»');schedule(60000);return;}
     if(j.state!=='ok'){renderMessage('Ошибка',j.message||'Попробуем ещё раз');schedule(30000);return;}
     offline=false;lastOk=timeStr();
-    var prev=data,firstRender=!data;
-    data=j;
+    var prev=base,firstRender=!base;
+    base=j;
     body.className='th-'+(j.screen.theme||'dark');
     if(prev&&prev.day!==j.day){seeded=false;seenSales={};pctBySlide={};idx=0;}
-    refresh();
+    if(drill.length){
+      /* в проваливании: обновить текущий узел, верхний уровень — в base */
+      var top=drill[drill.length-1];
+      xhr('GET',feedUrl(false)+'&node='+encodeURIComponent(top.id),null,function(st2,j2){if(st2===200&&j2&&j2.state==='ok'&&drill.length&&drill[drill.length-1]===top){top.data=j2;data=j2;refresh();}});
+    }else{data=j;refresh();}
     if(firstRender)restartRotate();
     detectEvents(prev,j);
     /* ночная перезагрузка — раз в сутки в 03–05 МСК, если страница живёт дольше 20 ч */
@@ -578,7 +624,27 @@ function startStream(){
 }
 
 window.addEventListener('resize',function(){shell=null;refresh();});
-document.addEventListener('keydown',function(e){var k=e.keyCode||e.which;if(k===39)next(1);if(k===37)next(-1);});
+document.addEventListener('keydown',function(e){
+  var k=e.keyCode||e.which;
+  if(isBackKey(e)){if(drill.length){e.preventDefault();goBack();}return;}
+  if(!data)return;
+  if(k===39){activity();next(1);}
+  else if(k===37){activity();next(-1);}
+  else if(k===40||k===38){e.preventDefault();activity();moveFocus(k===40?1:-1);}
+  else if(k===13){var grid=$('#grid'),cards=grid?grid.querySelectorAll('.tile.card'):[];
+    if(focusIdx>=0&&cards[focusIdx]){var id=cards[focusIdx].getAttribute('data-node');if(id){drillInto(id);return;}}
+    activity();}
+});
+document.addEventListener('click',function(e){
+  var t=e.target;
+  while(t&&t!==document){
+    if(t.id==='pillBack'){goBack();return;}
+    if(t.id==='pillGo'){resumeAll();return;}
+    if(t.className&&typeof t.className==='string'&&/\bcard\b/.test(t.className)&&/\btile\b/.test(t.className)){var id=t.getAttribute('data-node');if(id){drillInto(id);return;}}
+    t=t.parentNode;
+  }
+  if(data)activity();
+});
 timerClock=setInterval(tick,1000);
 if(CFG.mode==='device'){deviceToken=load('tv_device');}
 renderMessage('Монолитика','Подключаемся…');

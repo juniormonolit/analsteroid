@@ -239,10 +239,14 @@ export async function buildScreenFeed(
   screen: TvScreen,
   deptNames: Map<string, string>,
   buildId: string,
-  opts?: { bypassCache?: boolean },
+  opts?: { bypassCache?: boolean; node?: string | null },
 ): Promise<TvFeedOk> {
   const today = mskTodayStr();
-  const key = `tv:feed:${screen.id}:${today}:${screen.updatedAt}`;
+  // Проваливание с телевизора (правка владельца 08.09): node — под-узел одного из узлов
+  // экрана; фид строится как для экрана из одного этого узла (проверка принадлежности —
+  // в роуте через nodeWithin).
+  if (opts?.node) screen = { ...screen, departmentIds: [opts.node], mode: 'carousel' };
+  const key = `tv:feed:${screen.id}:${today}:${screen.updatedAt}:${opts?.node ?? ''}`;
   const build = async () => {
     const fromIso = mskMidnightIso(today);
     const toExclIso = mskMidnightIso(addDaysStr(today, 1));

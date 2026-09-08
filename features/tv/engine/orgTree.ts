@@ -156,3 +156,19 @@ export function managersOfNode(node: TvNode, rows: OrgRow[], chains: Map<string,
   }
   return out;
 }
+
+/** Узел nodeId лежит в поддереве одного из узлов rootIds (или совпадает с ним). */
+export function nodeWithin(tree: TvTree, rootIds: string[], nodeId: string): boolean {
+  const target = tree.byId.get(nodeId);
+  if (!target) return false;
+  const stack: TvNode[] = rootIds.map(id => tree.byId.get(id)).filter((n): n is TvNode => !!n);
+  const seen = new Set<string>();
+  while (stack.length) {
+    const n = stack.pop()!;
+    if (n.id === nodeId) return true;
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    for (const c of n.children) stack.push(c);
+  }
+  return false;
+}

@@ -3,6 +3,7 @@ import { getClientIp } from '@/lib/auth/pin';
 import { cacheVersion } from '@/lib/cache/redis';
 import { departmentNameMap } from '@/features/tv/engine/access';
 import { buildScreenFeed } from '@/features/tv/engine/feed';
+import { buildTvTree, nodeWithin } from '@/features/tv/engine/orgTree';
 import { rateLimited, tooMany } from '@/features/tv/engine/rateLimit';
 import {
   ensurePairCode, getDeviceByToken, getScreen, getScreenByToken, touchDevice,
@@ -34,13 +35,25 @@ export async function GET(req: NextRequest) {
   // fresh=1 — сигнал от клиентского SSE-хука (задача #5636, sa_deals_changed):
   // «только что пришло событие, кэш 20 с сейчас точно устарел» — идём мимо него.
   const fresh = req.nextUrl.searchParams.get('fresh') === '1';
+  // node — проваливание с телевизора в под-узел (карточка кликнута); только внутри
+  // поддеревьев узлов экрана, иначе 403.
+  const nodeParam = req.nextUrl.searchParams.get('node');
+  const nodeFor = async (deptIds: string[]): Promise<string | null | Response> => {
+    if (!nodeParam) return null;
+    if (!/^[a-z0-9:-]{4,64}$/i.test(nodeParam)) return json({ state: 'error', v, now, message: 'Плохой узел' }, 400);
+    const tree = await buildTvTree();
+    if (!nodeWithin(tree, deptIds, nodeParam)) return json({ state: 'error', v, now, message: 'Узел вне экрана' }, 403);
+    return nodeParam;
+  };
 
   try {
     if (s) {
       const screen = await getScreenByToken(s);
       if (!screen) return json({ state: 'unknown_screen', v, now }, 404);
       const names = await departmentNameMap();
-      return json(await buildScreenFeed(screen, names, v, { bypassCache: fresh }));
+      const node = await nodeFor(screen.departmentIds);
+      if (node instanceof Response) return node;
+      return json(await buildScreenFeed(screen, names, v, { bypassCache: fresh, node }));
     }
     if (d) {
       const device = await getDeviceByToken(d);
@@ -53,7 +66,9 @@ export async function GET(req: NextRequest) {
       const names = await departmentNameMap();
       const screen = await getScreen(device.screenId, names);
       if (!screen) return json({ state: 'unknown_screen', v, now }, 404);
-      return json(await buildScreenFeed(screen, names, v, { bypassCache: fresh }));
+      const node = await nodeFor(screen.departmentIds);
+      if (node instanceof Response) return node;
+      return json(await buildScreenFeed(screen, names, v, { bypassCache: fresh, node }));
     }
     return json({ state: 'error', v, now, message: 'Нет токена' }, 400);
   } catch (e) {
