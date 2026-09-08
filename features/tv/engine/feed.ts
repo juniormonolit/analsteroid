@@ -207,6 +207,8 @@ function slideFor(node: TvNode, managers: RosterManager[], childManagers: Map<st
   if (kids.length >= 2) {
     for (const c of kids) {
       const ct = totalsOf(childManagers.get(c.id) ?? [], facts, plans);
+      // узлы без плана и без движения за день (ЮЛ, стажировка — одни заглушки) карточкой не показываем
+      if (ct.planDay <= 0 && ct.pb <= 0 && ct.factDay <= 0) continue;
       cards.push({ id: c.id, name: c.name, planDay: ct.planDay, factDay: ct.factDay, salesCount: ct.salesCount,
         bookSum: ct.bookSum, bookCount: ct.bookCount, activeManagers: ct.activeManagers, target: ct.activeManagers * dailyTarget, pb: ct.pb });
     }
