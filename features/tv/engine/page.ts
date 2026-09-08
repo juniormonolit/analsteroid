@@ -7,7 +7,7 @@
 // ES6-синтаксиса (стрелки/const/шаблонные строки — Chromium ~49+). Поэтому здесь:
 //   • строка HTML, отдаваемая route handler-ом (app/tv/route.ts, app/tv/s/[token]);
 //   • CSS без переменных: тема — классом на <body> (.th-dark / .th-light), размеры
-//     плиток — в em от font-size плитки, который выставляет JS (fit());
+//     плиток — в em от font-size плитки, который выставляет JS (layout());
 //   • flexbox с -webkit- префиксами, сетка плиток — position:absolute в px из JS;
 //   • JS строго ES5: var, function, XHR, без Promise/fetch/Intl (toLocaleString на
 //     старых ТВ даёт мусор — форматирование сумм своё).
@@ -38,11 +38,9 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .muted{color:#8FA1BD}.th-light .muted{color:#6B7280}
 .stage{position:absolute;left:0;top:0;right:0;bottom:0;padding:1.8vw 2.2vw 1.4vw}
 .slide{position:absolute;left:2.2vw;right:2.2vw;top:1.8vw;bottom:1.4vw}
-.slide.in{-webkit-animation:tvin .5s ease;animation:tvin .5s ease}
-@-webkit-keyframes tvin{from{opacity:0;-webkit-transform:translateX(2vw)}to{opacity:1;-webkit-transform:none}}
-@keyframes tvin{from{opacity:0;transform:translateX(2vw)}to{opacity:1;transform:none}}
 /* Правка владельца 08.09: ~30% экрана — выполнение плана отделом, сайдбаром слева
    со столбцом. Справа (.main) — плитки. */
+.sides{position:absolute;left:0;top:0;bottom:0;width:26.5vw;overflow:hidden;border-radius:1vw}
 .side{position:absolute;left:0;top:0;bottom:0;width:26.5vw;background:#121C2E;border:1px solid #243450;border-radius:1vw;padding:1.6vw 1.6vw 1.2vw}
 .th-light .side{background:#fff;border-color:#E5E9EF}
 .main{position:absolute;left:28.3vw;right:0;top:0;bottom:0}
@@ -68,8 +66,11 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .sst .v.book{color:#7FB9E8}.th-light .sst .v.book{color:#0069BE}
 .sst.s1{bottom:10.6vw}.sst.s2{bottom:6.4vw}.sst.s3{bottom:2.2vw}
 .sst .r{position:absolute;right:0;top:0;text-align:right}
-.grid{position:absolute;left:0;right:0;top:0;bottom:2.6vw}
+.grid{position:absolute;left:0;right:0;top:0;bottom:2.6vw;overflow:hidden}
 .grid.tk{bottom:5.4vw}
+.strip{position:absolute;left:0;top:0;right:0}
+.slide{-webkit-transition:opacity .4s ease;transition:opacity .4s ease}
+.slide.fade{opacity:0}
 .tile{position:absolute;background:#121C2E;border:1px solid #243450;border-radius:.9em;padding:.9em 1.1em;overflow:hidden}
 .th-light .tile{background:#fff;border-color:#E5E9EF}
 .tile.top{background:#1A2740;border-color:#33507E}
@@ -161,7 +162,7 @@ var root=document.getElementById('root');
 var body=document.body;
 var POLL=(CFG.poll||15)*1000;
 var startV=null,pageStart=Date.now();
-var data=null,idx=0,timerRot=null,timerPoll=null,timerClock=null;
+var data=null,timerPoll=null,timerClock=null;
 var seeded=false,seenSales={},pctBySlide={},evQueue=[],evBusy=false,offline=false,lastOk=null;
 var deviceToken=null;
 
@@ -243,78 +244,138 @@ function tickerText(slide){
   if(parts.length)return parts.join('   \u2022   ');
   return (slide&&slide.ticker)||'';
 }
-/* Большой отдел (60 менеджеров) на одном экране нечитаем — режем на страницы по
-   PER_PAGE плиток; страницы крутятся как слайды, шапка — итоги всего отдела. */
-/* Правка владельца 07.09: первая страница отдела — топ-6 по продажам (висит rotateSec),
-   остальные — «хвост» страницами по PER_PAGE (висят rotateTailSec). */
-/* Правка владельца 08.09: максимум на экране — сетка 4×3, в 5×4 контент не влезает. */
-var TOP_N=6,PER_PAGE=12,MAX_COLS=4;
-function pages(){
-  var out=[];if(!data)return out;
-  for(var i=0;i<data.slides.length;i++){var s=data.slides[i],ms=s.managers;
-    if(ms.length<=TOP_N){out.push({s:s,page:0,pages:1,managers:ms,offset:0});continue;}
-    var rest=ms.length-TOP_N,tail=Math.ceil(rest/PER_PAGE),n=1+tail;
-    out.push({s:s,page:0,pages:n,managers:ms.slice(0,TOP_N),offset:0});
-    for(var p=0;p<tail;p++){var from=TOP_N+p*PER_PAGE;out.push({s:s,page:p+1,pages:n,managers:ms.slice(from,from+PER_PAGE),offset:from});}}
-  return out;
+/* Правка владельца 08.09: ЛЕНТА. Одна сетка 2×3. Менеджеры отдела едут сверху вниз,
+   начиная с хвоста; топ-6 задерживается на экране на rotateSec. Следующий отдел
+   приезжает сверху вместе со своим сайдбаром; сайдбар «липнет» к экрану, пока его
+   блок виден, и уезжает вниз вместе с блоком. В конце ленты — плавный рестарт.
+   Скорость хвоста: экран из 6 плиток за rotateTailSec секунд. */
+var COLS=2,ROWS=3,TOP_N=6;
+/* Ширина по самой широкой строке — hero: «12,5 млн ₽» (1.9em) + «12 шт» + «451%» (1.25em) ≈ 19em. */
+var CONTENT_H=11.9,CONTENT_W=19;
+var L=null; /* геометрия ленты */
+var scroll={y:0,phase:null,holdUntil:0,cur:0,raf:null,last:null,shownKey:null};
+function holdMs(){return ((data&&data.screen.rotateSec)||15)*1000;}
+function anyTicker(){
+  if(!data)return false;
+  for(var i=0;i<data.messages.length;i++){if(data.messages[i].kind==='ticker'&&new Date(data.messages[i].until).getTime()>Date.now())return true;}
+  for(var j=0;j<data.slides.length;j++){if(data.slides[j].ticker)return true;}
+  return false;
 }
-function render(animate){
-  if(!data)return;
-  var pg=pages(),n=pg.length;
-  if(n===0){root.innerHTML='<div class="stage"><div class="empty">Для этого экрана не выбраны отделы</div></div>';return;}
-  if(idx>=n)idx=0;
-  var cur=pg[idx],s=cur.s,plan=s.planDay||0,fact=s.factDay||0,pct=plan?Math.round(fact/plan*100):null;
-  var showAva=!(data.screen.settings&&data.screen.settings.showAvatars===false);
-  var tk=tickerText(s);
+function sideHtml(s,k){
+  var plan=s.planDay||0,fact=s.factDay||0,pct=plan?Math.round(fact/plan*100):null;
   var fillH=pct==null?0:Math.min(pct,100),ok=pct!=null&&pct>=100;
-  var h='<div class="stage"><div class="slide'+(animate?' in':'')+'">'+
-    '<div class="side">'+
-      '<div class="dept">'+esc(s.dept)+(cur.pages>1?' <span class="muted">'+(cur.page+1)+'/'+cur.pages+'</span>':'')+'</div>'+
-      '<div class="col"><div class="track"><div class="fill'+(ok?' ok':'')+(pct!=null&&pct>100?' over':'')+'" style="height:'+fillH+'%"></div></div>'+
-        '<div class="pct tnum">'+(pct==null?'\u2014':pct+'%')+'</div><div class="cap">плана дня</div></div>'+
-      '<div class="sst s1 tnum"><span class="l">План</span><span class="v">'+fmtMoney(plan)+'</span></div>'+
-      '<div class="sst s2 tnum"><span class="l">Факт</span><span class="v fact">'+fmtMoney(fact)+'</span><span class="r"><span class="l">Продаж</span><span class="v">'+s.salesCount+'</span></span></div>'+
-      '<div class="sst s3 tnum"><span class="l">Брони</span><span class="v book">'+fmtMoney(s.bookSum)+'</span><span class="r"><span class="l">Шт</span><span class="v book">'+s.bookCount+'</span></span></div>'+
-    '</div>'+
-    '<div class="main">'+
-    '<div class="grid'+(tk?' tk':'')+'" id="grid">';
-  for(var i=0;i<cur.managers.length;i++)h+=tileHtml(cur.managers[i],cur.offset+i,showAva);
-  if(s.managers.length===0)h+='<div class="empty">В отделе нет активных менеджеров</div>';
-  h+='</div>';
-  if(tk)h+='<div class="ticker" id="ticker"><span id="tks">'+esc(tk)+'</span></div>';
-  h+='<div class="fxb ftr"><div class="tnum">'+dateStr()+'<b id="clock">'+timeStr()+'</b></div><div class="dots">';
-  for(var j=0;j<n;j++)h+='<span'+(j===idx?' class="on"':'')+'></span>';
-  h+='</div></div>';
-  h+='</div>';
-  h+='<div class="off'+(offline?' on':'')+'" id="off">нет связи'+(lastOk?' \u00b7 данные на '+lastOk:'')+'</div>';
+  return '<div class="side" data-k="'+k+'">'+
+    '<div class="dept">'+esc(s.dept)+'</div>'+
+    '<div class="col"><div class="track"><div class="fill'+(ok?' ok':'')+(pct!=null&&pct>100?' over':'')+'" style="height:'+fillH+'%"></div></div>'+
+      '<div class="pct tnum">'+(pct==null?'—':pct+'%')+'</div><div class="cap">плана дня</div></div>'+
+    '<div class="sst s1 tnum"><span class="l">План</span><span class="v">'+fmtMoney(plan)+'</span></div>'+
+    '<div class="sst s2 tnum"><span class="l">Факт</span><span class="v fact">'+fmtMoney(fact)+'</span><span class="r"><span class="l">Продаж</span><span class="v">'+s.salesCount+'</span></span></div>'+
+    '<div class="sst s3 tnum"><span class="l">Брони</span><span class="v book">'+fmtMoney(s.bookSum)+'</span><span class="r"><span class="l">Шт</span><span class="v book">'+s.bookCount+'</span></span></div>'+
+  '</div>';
+}
+function render(){
+  if(!data)return;
+  var n=data.slides.length;
+  if(n===0){root.innerHTML='<div class="stage"><div class="empty">Для этого экрана не выбраны отделы</div></div>';L=null;return;}
+  var tk=anyTicker(),showAva=!(data.screen.settings&&data.screen.settings.showAvatars===false);
+  var prevKey=scroll.shownKey;
+  var h='<div class="stage"><div class="slide">'+
+    '<div class="sides" id="sides">';
+  for(var i=0;i<n;i++)h+=sideHtml(data.slides[i],i);
+  h+='</div><div class="main"><div class="grid'+(tk?' tk':'')+'" id="grid"><div class="strip" id="strip"></div></div>';
+  if(tk)h+='<div class="ticker" id="ticker"><span id="tks"></span></div>';
+  h+='<div class="fxb ftr"><div class="tnum">'+dateStr()+'<b id="clock">'+timeStr()+'</b></div><div class="dots" id="dots">';
+  for(var j=0;j<n;j++)h+='<span></span>';
+  h+='</div></div></div>';
+  h+='<div class="off'+(offline?' on':'')+'" id="off">нет связи'+(lastOk?' · данные на '+lastOk:'')+'</div>';
   h+='</div></div>';
   root.innerHTML=h;
   renderOverlays();
-  fit();
-  startTicker();
+  layout(showAva);
+  if(!L)return;
+  /* восстановить позицию после обновления данных */
+  if(scroll.phase==null||!L.blocks[scroll.cur]){scroll.cur=0;var b0=L.blocks[0];scroll.y=b0.top+(b0.rows-ROWS)*L.row;scroll.phase=b0.rows>ROWS?'scroll':'hold';scroll.holdUntil=Date.now()+holdMs();}
+  else{var b=L.blocks[scroll.cur],lo=b.top,hi=b.top+(b.rows-ROWS)*L.row;if(scroll.y<lo)scroll.y=lo;if(scroll.y>hi)scroll.y=hi;}
+  scroll.shownKey=null;
+  apply();
+  if(prevKey!=null&&scroll.shownKey===prevKey)startTicker();
+  if(!scroll.raf)scroll.raf=requestAnimationFrame(step);
 }
-/* Раскладка плиток: столбцы 1..6, размер шрифта плитки — максимум, при котором
-   контент (~9.3em высоты, ~15em ширины) влезает. Всё внутри плитки — в em. */
-/* Ширина по самой широкой строке — hero: «12,5 млн ₽» (1.9em) + «12 шт» + «451%» (1.25em) ≈ 19em. */
-var CONTENT_H=11.9,CONTENT_W=19;
-function fit(){
-  var grid=$('#grid');if(!grid)return;
-  var tiles=grid.getElementsByClassName('tile'),n=tiles.length;if(!n)return;
+/* Геометрия: блоки отделов в ленте стоят СНИЗУ ВВЕРХ (первый отдел — внизу ленты,
+   лента едет вниз → зритель поднимается по ней от хвоста первого отдела к его топ-6,
+   потом к хвосту второго и т.д.). Высота блока — не меньше экрана (3 ряда). */
+function layout(showAva){
+  var grid=$('#grid'),strip=$('#strip');if(!grid||!strip){L=null;return;}
   var gw=grid.clientWidth,gh=grid.clientHeight,gap=Math.round(window.innerWidth*0.007);
-  var best={k:0,cols:1,rows:n};
-  for(var cols=1;cols<=Math.min(n,MAX_COLS);cols++){
-    var rows=Math.ceil(n/cols),tw=(gw-gap*(cols-1))/cols,th=(gh-gap*(rows-1))/rows;
-    var k=Math.min(th/CONTENT_H,tw/CONTENT_W);
-    if(k>best.k)best={k:k,cols:cols,rows:rows};
+  var tw=(gw-gap*(COLS-1))/COLS,th=(gh-gap*(ROWS-1))/ROWS,row=th+gap;
+  var fs=Math.max(9,Math.min(Math.min(th/CONTENT_H,tw/CONTENT_W),window.innerWidth*0.022));
+  var st=data.screen.settings||{},tail=st.rotateTailSec||10;
+  var blocks=[],total=0,i;
+  for(i=0;i<data.slides.length;i++){var s=data.slides[i],rows=Math.max(ROWS,Math.ceil(s.managers.length/COLS));blocks.push({key:i,s:s,rows:rows,h:rows*row});total+=rows*row;}
+  var acc=total;
+  for(i=0;i<blocks.length;i++){acc-=blocks[i].h;blocks[i].top=acc;blocks[i].edge=acc+blocks[i].h-gap;}
+  var html='';
+  for(i=0;i<blocks.length;i++){var b=blocks[i],ms=b.s.managers;
+    for(var k=0;k<ms.length;k++){var r=Math.floor(k/COLS),c=k%COLS;
+      html+=tileHtml(ms[k],k,showAva).replace('<div class="tile','<div style="left:'+Math.round(c*(tw+gap))+'px;top:'+Math.round(b.top+r*row)+'px;width:'+Math.floor(tw)+'px;height:'+Math.floor(th)+'px;font-size:'+fs.toFixed(2)+'px" class="tile');}
+    if(ms.length===0)html+='<div class="empty" style="top:'+Math.round(b.top+gh*0.4)+'px">В отделе нет активных менеджеров</div>';}
+  strip.style.height=total+'px';
+  strip.innerHTML=html;
+  L={H:gh,row:row,gap:gap,blocks:blocks,total:total,speed:(ROWS*row)/tail,sides:$('#sides').children,dots:$('#dots').children};
+}
+function apply(){
+  if(!L)return;
+  var strip=$('#strip');if(!strip)return;
+  var y=scroll.y,H=L.H,tr='translateY('+(-y).toFixed(1)+'px)';
+  strip.style.webkitTransform=tr;strip.style.transform=tr;
+  var mid=y+H/2,curKey=null;
+  for(var i=0;i<L.blocks.length;i++){var b=L.blocks[i],el=L.sides[i];if(!el)continue;
+    var pTop=(b.edge-y<H)?(b.edge-y-H):Math.max(0,b.top-y);
+    var vis=pTop>-H&&pTop<H;
+    el.style.display=vis?'block':'none';
+    if(vis){var t='translateY('+pTop.toFixed(1)+'px)';el.style.webkitTransform=t;el.style.transform=t;}
+    if(mid>=b.top&&mid<b.top+b.h)curKey=i;
   }
-  var fs=Math.max(9,Math.min(best.k,window.innerWidth*0.022));
-  var tw2=(gw-gap*(best.cols-1))/best.cols,th2=(gh-gap*(best.rows-1))/best.rows;
-  for(var i=0;i<n;i++){
-    var r=Math.floor(i/best.cols),c=i%best.cols,t=tiles[i];
-    t.style.fontSize=fs.toFixed(2)+'px';
-    t.style.left=Math.round(c*(tw2+gap))+'px';t.style.top=Math.round(r*(th2+gap))+'px';
-    t.style.width=Math.floor(tw2)+'px';t.style.height=Math.floor(th2)+'px';
+  if(curKey==null)curKey=scroll.cur;
+  for(var d=0;d<L.dots.length;d++)L.dots[d].className=(d===curKey)?'on':'';
+  if(curKey!==scroll.shownKey){scroll.shownKey=curKey;var tks=$('#tks');if(tks){tks.innerHTML=esc(tickerText(data.slides[curKey]));startTicker();}}
+}
+function step(ts){
+  scroll.raf=null;
+  if(!L||!data)return;
+  if(scroll.last==null)scroll.last=ts;
+  var dt=Math.min(0.1,Math.max(0,(ts-scroll.last)/1000));scroll.last=ts;
+  var b=L.blocks[scroll.cur];
+  if(scroll.phase==='scroll'){
+    scroll.y-=L.speed*dt;
+    if(scroll.y<=b.top){scroll.y=b.top;scroll.phase='hold';scroll.holdUntil=Date.now()+holdMs();}
+    apply();
+  }else if(scroll.phase==='hold'&&Date.now()>=scroll.holdUntil){
+    advance();
   }
+  scroll.raf=requestAnimationFrame(step);
+}
+function advance(){
+  var n=L.blocks.length;
+  if(n===1&&L.blocks[0].rows<=ROWS){scroll.holdUntil=Date.now()+3600000;return;} /* один короткий отдел — статика */
+  if(scroll.cur+1<n){scroll.cur++;scroll.phase='scroll';return;}
+  fadeRestart();
+}
+function fadeRestart(){
+  var sl=$('.slide');scroll.phase='fading';
+  if(sl)sl.className='slide fade';
+  setTimeout(function(){
+    if(!L){scroll.phase=null;return;}
+    scroll.cur=0;var b=L.blocks[0];
+    scroll.y=b.top+(b.rows-ROWS)*L.row;scroll.phase=b.rows>ROWS?'scroll':'hold';scroll.holdUntil=Date.now()+holdMs();
+    apply();var s2=$('.slide');if(s2)s2.className='slide';
+  },450);
+}
+/* Пульт: ←/→ — сразу к топ-6 предыдущего/следующего отдела. */
+function jump(d){
+  if(!L)return;var n=L.blocks.length;if(n<1)return;
+  scroll.cur=(scroll.cur+d+n)%n;var b=L.blocks[scroll.cur];
+  scroll.y=b.top;scroll.phase='hold';scroll.holdUntil=Date.now()+holdMs();apply();
 }
 /* Бегущая строка — rAF-анимация transform (CSS-переменных и динамических keyframes нет). */
 var tkRaf=null;
@@ -347,16 +408,10 @@ function tick(){
   var c=$('#clock');if(c)c.innerHTML=timeStr();
   /* сообщения с истёкшим until снимаем сами, не дожидаясь фида */
   if(data){var ch=false;for(var i=0;i<data.messages.length;i++){if(new Date(data.messages[i].until).getTime()<=Date.now()){ch=true;}}
-    if(ch){data.messages=data.messages.filter(function(m){return new Date(m.until).getTime()>Date.now();});render(false);}}
+    if(ch){data.messages=data.messages.filter(function(m){return new Date(m.until).getTime()>Date.now();});render();}}
 }
-function next(d){var n=pages().length;if(n<2)return;idx=(idx+d+n)%n;render(true);restartRotate();}
-function restartRotate(){
-  if(timerRot)clearTimeout(timerRot);timerRot=null;
-  var pg=pages();if(pg.length<2)return;
-  var cur=pg[idx]||pg[0],st=data.screen.settings||{};
-  var sec=cur.page===0?(data.screen.rotateSec||15):(st.rotateTailSec||10);
-  timerRot=setTimeout(function(){next(1);},sec*1000);
-}
+function next(d){jump(d);}
+function restartRotate(){if(!scroll.raf)scroll.raf=requestAnimationFrame(step);}
 
 /* ---------- события («мувики») ---------- */
 function evSettings(){var s=data&&data.screen.settings&&data.screen.settings.events;return s||{enabled:false};}
@@ -470,8 +525,8 @@ function poll(fresh){
     var prev=data,firstRender=!data;
     data=j;
     body.className='th-'+(j.screen.theme||'dark');
-    if(prev&&prev.day!==j.day){seeded=false;seenSales={};pctBySlide={};idx=0;}
-    render(firstRender);
+    if(prev&&prev.day!==j.day){seeded=false;seenSales={};pctBySlide={};scroll.phase=null;}
+    render();
     if(firstRender)restartRotate();
     detectEvents(prev,j);
     /* ночная перезагрузка — раз в сутки в 03–05 МСК, если страница живёт дольше 20 ч */
@@ -496,7 +551,7 @@ function startStream(){
   }catch(e){/* старый ТВ без EventSource — фолбэк-опрос справится один */}
 }
 
-window.addEventListener('resize',function(){fit();startTicker();});
+window.addEventListener('resize',function(){render();});
 document.addEventListener('keydown',function(e){var k=e.keyCode||e.which;if(k===39)next(1);if(k===37)next(-1);});
 timerClock=setInterval(tick,1000);
 if(CFG.mode==='device'){deviceToken=load('tv_device');}

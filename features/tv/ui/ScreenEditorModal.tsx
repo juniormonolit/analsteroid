@@ -89,10 +89,10 @@ export function ScreenEditorModal({ open, screen, onClose, onSave, saving, error
           <Field label="Тема">
             <Seg value={form.theme} onChange={v => set('theme', v)} options={[{ v: 'dark', label: 'Тёмная' }, { v: 'light', label: 'Светлая' }]} />
           </Field>
-          <Field label="Топ-6 висит, сек" hint="Первая страница отдела — топ-6 по продажам.">
+          <Field label="Топ-6 висит, сек" hint="Лента останавливается на топ-6 отдела по продажам.">
             <input type="number" min={5} max={300} className={INPUT_CLS} value={form.rotateSec} onChange={e => set('rotateSec', Number(e.target.value) || 15)} />
           </Field>
-          <Field label="Остальные страницы, сек" hint="«Хвост» отдела — страницами по 20 человек.">
+          <Field label="Скорость хвоста: экран за N сек" hint="Остальные менеджеры едут сверху вниз; 6 плиток проезжают за это время.">
             <input type="number" min={3} max={300} className={INPUT_CLS} value={form.settings.rotateTailSec} onChange={e => setS({ rotateTailSec: Math.min(300, Math.max(3, Number(e.target.value) || 10)) })} />
           </Field>
           <Field label="Цель «продажеброней» в день" hint="Продажи + брони по количеству; при достижении — зелёным.">
