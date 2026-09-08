@@ -17,7 +17,7 @@ export function parseScreenInput(body: unknown): TvScreenInput | string {
   const mode = b.mode === 'merged' ? 'merged' : 'carousel';
   const theme = b.theme === 'light' ? 'light' : 'dark';
   const rotateNum = Number(b.rotateSec);
-  const rotateSec = Number.isFinite(rotateNum) ? Math.min(300, Math.max(5, Math.round(rotateNum))) : 15;
+  const rotateSec = Number.isFinite(rotateNum) ? Math.min(300, Math.max(5, Math.round(rotateNum))) : 20;
   const tickerText = typeof b.tickerText === 'string' && b.tickerText.trim() ? b.tickerText.trim().slice(0, 500) : null;
   const settings = normalizeSettings(b.settings);
   const tickerEnabled = b.tickerEnabled === true && (!!tickerText || Object.keys(settings.deptTickers).length > 0);

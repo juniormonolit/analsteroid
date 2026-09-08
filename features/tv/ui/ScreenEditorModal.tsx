@@ -44,7 +44,7 @@ function toInput(s: TvScreen | null): TvScreenInput {
     name: s.name, comment: s.comment, departmentIds: s.departmentIds, mode: s.mode, theme: s.theme, rotateSec: s.rotateSec,
     tickerText: s.tickerText, tickerEnabled: s.tickerEnabled, settings: s.settings,
   } : {
-    name: '', comment: null, departmentIds: [], mode: 'carousel', theme: 'dark', rotateSec: 15,
+    name: '', comment: null, departmentIds: [], mode: 'carousel', theme: 'dark', rotateSec: 20,
     tickerText: null, tickerEnabled: false, settings: DEFAULT_SCREEN_SETTINGS,
   };
 }
@@ -89,10 +89,10 @@ export function ScreenEditorModal({ open, screen, onClose, onSave, saving, error
           <Field label="Тема">
             <Seg value={form.theme} onChange={v => set('theme', v)} options={[{ v: 'dark', label: 'Тёмная' }, { v: 'light', label: 'Светлая' }]} />
           </Field>
-          <Field label="Топ-6 висит, сек" hint="Лента останавливается на топ-6 отдела по продажам.">
-            <input type="number" min={5} max={300} className={INPUT_CLS} value={form.rotateSec} onChange={e => set('rotateSec', Number(e.target.value) || 15)} />
+          <Field label="Топ-6 висит, сек" hint="Первый экран отдела — шесть лучших по продажам.">
+            <input type="number" min={5} max={300} className={INPUT_CLS} value={form.rotateSec} onChange={e => set('rotateSec', Number(e.target.value) || 20)} />
           </Field>
-          <Field label="Скорость хвоста: экран за N сек" hint="Остальные менеджеры едут сверху вниз; 6 плиток проезжают за это время.">
+          <Field label="Остальные страницы, сек" hint="Хвост отдела — страницами по 6 человек, смена плавным затуханием.">
             <input type="number" min={3} max={300} className={INPUT_CLS} value={form.settings.rotateTailSec} onChange={e => setS({ rotateTailSec: Math.min(300, Math.max(3, Number(e.target.value) || 10)) })} />
           </Field>
           <Field label="Цель «продажеброней» в день" hint="Продажи + брони по количеству; при достижении — зелёным.">
