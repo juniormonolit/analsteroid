@@ -71,10 +71,11 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .sst .l small.act,.pb .l small.act{text-transform:none;letter-spacing:0;font-weight:500;margin-left:.6em;opacity:.8}
 .tile.card{border-color:#33507E;cursor:pointer}.th-light .tile.card{border-color:#AFD3F1}
 .tile.focus{-webkit-box-shadow:0 0 0 .3vw #4A9CDE;box-shadow:0 0 0 .3vw #4A9CDE}
-.pill{position:absolute;right:0;top:0;z-index:25;background:rgba(18,28,46,.94);border:1px solid #33507E;border-radius:.8vw;padding:.6vw 1vw;font-size:1.1vw;font-weight:600;color:#F2F6FC;white-space:nowrap}
-.th-light .pill{background:rgba(255,255,255,.96);border-color:#AFD3F1;color:#1A202C}
-.pill .ico{color:#FBBC04;margin-right:.5vw;font-size:.9vw}
-.pill .pbtn{margin-left:.8vw;font-family:inherit;font-size:1vw;font-weight:600;padding:.35vw .9vw;border-radius:.5vw;border:1px solid #4A9CDE;background:#1B7FD4;color:#fff;cursor:pointer}
+/* Плашка паузы — в строке футера между датой и точками (правка владельца: не перекрывать контент) */
+.pill{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;margin:0 1vw;font-size:1vw;font-weight:600;color:#F2F6FC;white-space:nowrap;-webkit-box-flex:1;-webkit-flex:1;flex:1;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center}
+.th-light .pill{color:#1A202C}
+.pill .ico{color:#FBBC04;margin-right:.5vw;font-size:.8vw}
+.pill .pbtn{margin-left:.8vw;font-family:inherit;font-size:.9vw;font-weight:600;line-height:1;padding:.3vw .8vw;border-radius:.4vw;border:1px solid #4A9CDE;background:#1B7FD4;color:#fff;cursor:pointer}
 .pill .pbtn.go{background:transparent;color:#4A9CDE}.th-light .pill .pbtn.go{color:#005CA9}
 .ava.dep{background:#33507E;border-radius:.6em}.th-light .ava.dep{background:#7DA7D9}
 .sst .r{position:absolute;right:0;top:0;text-align:right}
@@ -324,9 +325,10 @@ function ensureShell(){
   root.innerHTML='<div class="stage"><div class="slide">'+
     '<div class="sides" id="sides"></div>'+
     '<div class="main"><div class="grid'+(tk?' tk':'')+'" id="grid"></div>'+
-    '<div class="pill" id="pill" style="display:none"><span class="ico">\u275A\u275A</span><span id="pillTxt"></span><button type="button" class="pbtn" id="pillBack">\u2039 Назад</button><button type="button" class="pbtn go" id="pillGo">\u25B6 Продолжить</button></div>'+
     (tk?'<div class="ticker" id="ticker"><span id="tks"></span></div>':'')+
-    '<div class="fxb ftr"><div class="tnum">'+dateStr()+'<b id="clock">'+timeStr()+'</b></div><div class="dots" id="dots"></div></div>'+
+    '<div class="fxb ftr"><div class="tnum">'+dateStr()+'<b id="clock">'+timeStr()+'</b></div>'+
+    '<div class="pill" id="pill" style="display:none"><span class="ico">\u275A\u275A</span><span id="pillTxt"></span><button type="button" class="pbtn" id="pillBack">\u2039 Назад</button><button type="button" class="pbtn go" id="pillGo">\u25B6 Продолжить</button></div>'+
+    '<div class="dots" id="dots"></div></div>'+
     '</div>'+
     '<div class="off'+(offline?' on':'')+'" id="off">нет связи'+(lastOk?' · данные на '+lastOk:'')+'</div>'+
     '</div></div>';
@@ -404,7 +406,7 @@ function next(d){showPage(idx+d,true);restartRotate();}
 var IDLE_SEC=20,base=null,drill=[],paused=false,idleLeft=0,focusIdx=-1;
 function activity(){paused=true;idleLeft=IDLE_SEC;if(timerRot){clearTimeout(timerRot);timerRot=null;}updatePill();}
 function updatePill(){
-  var p=$('#pill');if(!p)return;var show=paused||drill.length>0;p.style.display=show?'block':'none';if(!show)return;
+  var p=$('#pill');if(!p)return;var show=paused||drill.length>0;p.style.display=show?'-webkit-flex':'none';if(show)p.style.display='flex';if(!show)return;
   var t=$('#pillTxt'),b=$('#pillBack');
   if(t)t.innerHTML=paused?'Пауза \u00b7 '+idleLeft+' с':'';
   if(b)b.style.display=drill.length?'inline-block':'none';
