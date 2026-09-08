@@ -282,10 +282,15 @@ function anyTicker(){
    правка владельца 08.09), затем топ-6 менеджеров, затем хвост по 6. */
 function pages(){
   var out=[];if(!data)return out;
-  for(var i=0;i<data.slides.length;i++){var sl=data.slides[i],ms=sl.managers,cs=sl.cards||[];
-    var nc=Math.ceil(cs.length/PER_PAGE),nm=Math.max(1,Math.ceil(ms.length/PER_PAGE)),n=nc+nm,p;
-    for(p=0;p<nc;p++)out.push({slide:i,page:p,pages:n,kind:'cards',cards:cs.slice(p*PER_PAGE,(p+1)*PER_PAGE),managers:[],offset:p*PER_PAGE});
-    for(p=0;p<nm;p++)out.push({slide:i,page:nc+p,pages:n,kind:'managers',cards:[],managers:ms.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE});}
+  for(var i=0;i<data.slides.length;i++){var sl=data.slides[i],ms=sl.managers,p,k;
+    /* страницы карточек: явная последовательность (Монолит) или одна — карточки узла */
+    var cps=sl.cardPages||((sl.cards&&sl.cards.length)?[{label:null,holdSec:null,cards:sl.cards}]:[]);
+    var items=[];
+    for(k=0;k<cps.length;k++){var cp=cps[k],nc=Math.ceil(cp.cards.length/PER_PAGE);
+      for(p=0;p<nc;p++)items.push({kind:'cards',cards:cp.cards.slice(p*PER_PAGE,(p+1)*PER_PAGE),managers:[],offset:p*PER_PAGE,label:cp.label,holdSec:cp.holdSec});}
+    if(!sl.noManagers){var nm=Math.max(1,Math.ceil(ms.length/PER_PAGE));
+      for(p=0;p<nm;p++)items.push({kind:'managers',cards:[],managers:ms.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE,label:null,holdSec:null});}
+    for(k=0;k<items.length;k++){items[k].slide=i;items[k].page=k;items[k].pages=items.length;out.push(items[k]);}}
   return out;
 }
 function sideInner(s){
@@ -371,7 +376,7 @@ function showPage(i,animate){
       cur._h=html;}}
   /* точки = страницы; текущая — «on» */
   var dots=$('#dots');if(dots){var dh='';for(var d=0;d<n;d++)dh+='<span'+(d===idx?' class="on"':'')+'></span>';if(dots._n!==n){dots.innerHTML=dh;dots._n=n;}else{for(var q=0;q<dots.children.length;q++)dots.children[q].className=q===idx?'on':'';}}
-  var dep=sides.lastChild&&sides.lastChild.querySelector('.dept');if(dep&&p.pages>1){var lab=dep.querySelector('.muted');if(!lab){lab=document.createElement('span');lab.className='muted';dep.appendChild(lab);}lab.innerHTML=(p.page+1)+'/'+p.pages;}
+  var dep=sides.lastChild&&sides.lastChild.querySelector('.dept');if(dep&&(p.pages>1||p.label)){var lab=dep.querySelector('.muted');if(!lab){lab=document.createElement('span');lab.className='muted';dep.appendChild(lab);}lab.innerHTML=p.label?'\u00b7 '+esc(p.label):(p.page+1)+'/'+p.pages;}
   tickerSet(tickerText(s));
   renderOverlays();
 }
@@ -381,7 +386,7 @@ function restartRotate(){
   if(timerRot)clearTimeout(timerRot);timerRot=null;
   var pg=pages();if(pg.length<2)return;
   var cur=pg[idx]||pg[0];
-  timerRot=setTimeout(function(){next(1);},(cur.kind==='cards'||cur.offset===0)?holdMs():tailMs());
+  timerRot=setTimeout(function(){next(1);},cur.holdSec?cur.holdSec*1000:(cur.kind==='cards'||cur.offset===0)?holdMs():tailMs());
 }
 /* Бегущая строка — непрерывная rAF-анимация; новый текст (смена отдела, рассылка)
    встаёт в очередь и подхватывается, когда текущий доехал до конца. */

@@ -156,6 +156,13 @@ export interface TvFeedSlide {
   pb: number;
   /** Узел объединяет другие узлы → первая страница слайда: карточки подчинённых. */
   cards: TvFeedCard[];
+  /**
+   * Явная последовательность страниц карточек (правка владельца 08.09 для «Монолита»:
+   * слева всегда Монолит, справа филиалы 30 с, затем отделы каждого филиала по 15 с).
+   * Если задана — клиент показывает её вместо `cards`; `noManagers` — без ротации людей.
+   */
+  cardPages?: { label: string | null; holdSec: number; cards: TvFeedCard[] }[];
+  noManagers?: boolean;
   /** Бегущая строка этого слайда: строка отдела, иначе общая строка экрана; null — нет. */
   ticker: string | null;
   managers: TvFeedManager[];

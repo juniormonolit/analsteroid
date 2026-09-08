@@ -176,6 +176,26 @@ function totalsOf(managers: RosterManager[], facts: Map<string, Record<FactId, n
   return t;
 }
 
+/** Карточки подчинённых узлов (≥2 с людьми); узлы без плана и без движения за день
+ *  (ЮЛ, стажировка — одни заглушки) карточкой не показываем. */
+function cardsFor(node: TvNode, childManagers: Map<string, RosterManager[]>, facts: Map<string, Record<FactId, number>>,
+  plans: Map<string, { planSales: number }>, dailyTarget: number): TvFeedCard[] {
+  const cards: TvFeedCard[] = [];
+  const kids = node.children.filter(c => (childManagers.get(c.id)?.length ?? 0) > 0);
+  if (kids.length < 2) return cards;
+  for (const c of kids) {
+    const ct = totalsOf(childManagers.get(c.id) ?? [], facts, plans);
+    if (ct.planDay <= 0 && ct.pb <= 0 && ct.factDay <= 0) continue;
+    cards.push({ id: c.id, name: c.name, planDay: ct.planDay, factDay: ct.factDay, salesCount: ct.salesCount,
+      bookSum: ct.bookSum, bookCount: ct.bookCount, activeManagers: ct.activeManagers, target: ct.activeManagers * dailyTarget, pb: ct.pb });
+  }
+  cards.sort((a, b) => b.factDay - a.factDay || b.bookSum - a.bookSum);
+  return cards;
+}
+
+const ROOT_HOLD_SEC = 30;   // «Монолит»: филиалы карточками
+const BRANCH_HOLD_SEC = 15; // затем отделы каждого филиала
+
 /**
  * Слайд узла: итоги по ВСЕМ менеджерам узла; плитки — только с продажей/бронью за день
  * (правка владельца 08.09: «нули не показывать»); карточки подчинённых узлов — если
@@ -202,18 +222,7 @@ function slideFor(node: TvNode, managers: RosterManager[], childManagers: Map<st
   const active = rows.filter(r => r.salesCount > 0 || r.bookCount > 0 || r.salesSum > 0 || r.bookSum > 0);
   const t = totalsOf(managers, facts, plans);
 
-  const cards: TvFeedCard[] = [];
-  const kids = node.children.filter(c => (childManagers.get(c.id)?.length ?? 0) > 0);
-  if (kids.length >= 2) {
-    for (const c of kids) {
-      const ct = totalsOf(childManagers.get(c.id) ?? [], facts, plans);
-      // узлы без плана и без движения за день (ЮЛ, стажировка — одни заглушки) карточкой не показываем
-      if (ct.planDay <= 0 && ct.pb <= 0 && ct.factDay <= 0) continue;
-      cards.push({ id: c.id, name: c.name, planDay: ct.planDay, factDay: ct.factDay, salesCount: ct.salesCount,
-        bookSum: ct.bookSum, bookCount: ct.bookCount, activeManagers: ct.activeManagers, target: ct.activeManagers * dailyTarget, pb: ct.pb });
-    }
-    cards.sort((a, b) => b.factDay - a.factDay || b.bookSum - a.bookSum);
-  }
+  const cards = cardsFor(node, childManagers, facts, plans, dailyTarget);
   return {
     key: node.id, dept: node.name,
     planDay: t.planDay, factDay: t.factDay, salesCount: t.salesCount, bookSum: t.bookSum, bookCount: t.bookCount,
@@ -240,13 +249,13 @@ export async function buildScreenFeed(
 
     const [tree, orgRows, chains] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains()]);
     const dailyTarget = screen.settings.dailyTarget || 5;
-    // Слайды: узел → слайд; «Монолит» (root) → по слайду на филиал (правка владельца:
-    // «выбираю Монолит — вижу карусель по филиалам с разбивкой на ОС и НЦ»).
+    // Слайды: узел → слайд. «Монолит» (root) — один слайд: слева всегда общая агрегация,
+    // справа филиалы карточками (30 с), затем отделы каждого филиала (по 15 с), без ротации
+    // менеджеров (правка владельца 08.09).
     const slideNodes: TvNode[] = [];
     for (const id of screen.departmentIds) {
       const n = tree.byId.get(id);
-      if (!n) continue;
-      if (n.kind === 'root') { for (const b of n.children) slideNodes.push(b); } else slideNodes.push(n);
+      if (n) slideNodes.push(n);
     }
     const mgrCache = new Map<string, RosterManager[]>();
     const mgrs = (n: TvNode): RosterManager[] => {
@@ -292,6 +301,15 @@ export async function buildScreenFeed(
     } else {
       for (const n of slideNodes) {
         const slide = slideFor(n, mgrs(n), childMap(n), facts, plans, avatars, recentActive, dailyTarget);
+        if (n.kind === 'root') {
+          slide.cardPages = [{ label: null, holdSec: ROOT_HOLD_SEC, cards: slide.cards }];
+          for (const b of n.children) {
+            const bc = cardsFor(b, childMap(b), facts, plans, dailyTarget);
+            if (bc.length > 0) slide.cardPages.push({ label: b.name, holdSec: BRANCH_HOLD_SEC, cards: bc });
+          }
+          slide.managers = [];
+          slide.noManagers = true;
+        }
         // строка: своя у узла; для филиала внутри «Монолита» — строка Монолита, потом общая
         const own = screen.settings.deptTickers[n.id]?.trim()
           || (screen.departmentIds.includes(tree.root.id) ? screen.settings.deptTickers[tree.root.id]?.trim() : undefined);
