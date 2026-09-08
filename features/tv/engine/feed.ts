@@ -302,10 +302,13 @@ export async function buildScreenFeed(
       for (const n of slideNodes) {
         const slide = slideFor(n, mgrs(n), childMap(n), facts, plans, avatars, recentActive, dailyTarget);
         if (n.kind === 'root') {
-          slide.cardPages = [{ label: null, holdSec: ROOT_HOLD_SEC, cards: slide.cards }];
+          // филиалы → топ-6 менеджеров компании (правка владельца: «наряду с филиалами топ-6
+          // менеджеров в принципе») → отделы каждого филиала
+          slide.pageSeq = [{ kind: 'cards', label: null, holdSec: ROOT_HOLD_SEC, cards: slide.cards }];
+          if (slide.managers.length > 0) slide.pageSeq.push({ kind: 'managers', label: 'топ-6', holdSec: BRANCH_HOLD_SEC, managers: slide.managers.slice(0, 6) });
           for (const b of n.children) {
             const bc = cardsFor(b, childMap(b), facts, plans, dailyTarget);
-            if (bc.length > 0) slide.cardPages.push({ label: b.name, holdSec: BRANCH_HOLD_SEC, cards: bc });
+            if (bc.length > 0) slide.pageSeq.push({ kind: 'cards', label: b.name, holdSec: BRANCH_HOLD_SEC, cards: bc });
           }
           slide.managers = [];
           slide.noManagers = true;

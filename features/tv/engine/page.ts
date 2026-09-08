@@ -283,13 +283,20 @@ function anyTicker(){
 function pages(){
   var out=[];if(!data)return out;
   for(var i=0;i<data.slides.length;i++){var sl=data.slides[i],ms=sl.managers,p,k;
-    /* страницы карточек: явная последовательность (Монолит) или одна — карточки узла */
-    var cps=sl.cardPages||((sl.cards&&sl.cards.length)?[{label:null,holdSec:null,cards:sl.cards}]:[]);
+    /* явная последовательность страниц (Монолит) — либо карточки узла + менеджеры */
     var items=[];
-    for(k=0;k<cps.length;k++){var cp=cps[k],nc=Math.ceil(cp.cards.length/PER_PAGE);
-      for(p=0;p<nc;p++)items.push({kind:'cards',cards:cp.cards.slice(p*PER_PAGE,(p+1)*PER_PAGE),managers:[],offset:p*PER_PAGE,label:cp.label,holdSec:cp.holdSec});}
-    if(!sl.noManagers){var nm=Math.max(1,Math.ceil(ms.length/PER_PAGE));
-      for(p=0;p<nm;p++)items.push({kind:'managers',cards:[],managers:ms.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE,label:null,holdSec:null});}
+    if(sl.pageSeq){
+      for(k=0;k<sl.pageSeq.length;k++){var pg=sl.pageSeq[k];
+        if(pg.kind==='cards'){var nc0=Math.ceil(pg.cards.length/PER_PAGE);
+          for(p=0;p<nc0;p++)items.push({kind:'cards',cards:pg.cards.slice(p*PER_PAGE,(p+1)*PER_PAGE),managers:[],offset:p*PER_PAGE,label:pg.label,holdSec:pg.holdSec});}
+        else{var nm0=Math.max(1,Math.ceil(pg.managers.length/PER_PAGE));
+          for(p=0;p<nm0;p++)items.push({kind:'managers',cards:[],managers:pg.managers.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE,label:pg.label,holdSec:pg.holdSec});}}
+    }else{
+      var cs=sl.cards||[],nc=Math.ceil(cs.length/PER_PAGE);
+      for(p=0;p<nc;p++)items.push({kind:'cards',cards:cs.slice(p*PER_PAGE,(p+1)*PER_PAGE),managers:[],offset:p*PER_PAGE,label:null,holdSec:null});
+      if(!sl.noManagers){var nm=Math.max(1,Math.ceil(ms.length/PER_PAGE));
+        for(p=0;p<nm;p++)items.push({kind:'managers',cards:[],managers:ms.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE,label:null,holdSec:null});}
+    }
     for(k=0;k<items.length;k++){items[k].slide=i;items[k].page=k;items[k].pages=items.length;out.push(items[k]);}}
   return out;
 }

@@ -142,6 +142,11 @@ export interface TvFeedCard {
   pb: number;
 }
 
+/** Страница явной последовательности слайда: карточки узлов или плитки менеджеров. */
+export type TvFeedPage =
+  | { kind: 'cards'; label: string | null; holdSec: number; cards: TvFeedCard[] }
+  | { kind: 'managers'; label: string | null; holdSec: number; managers: TvFeedManager[] };
+
 export interface TvFeedSlide {
   key: string;
   dept: string;        // заголовок слайда («Отдел металлопроката», «Москва»)
@@ -157,11 +162,11 @@ export interface TvFeedSlide {
   /** Узел объединяет другие узлы → первая страница слайда: карточки подчинённых. */
   cards: TvFeedCard[];
   /**
-   * Явная последовательность страниц карточек (правка владельца 08.09 для «Монолита»:
-   * слева всегда Монолит, справа филиалы 30 с, затем отделы каждого филиала по 15 с).
-   * Если задана — клиент показывает её вместо `cards`; `noManagers` — без ротации людей.
+   * Явная последовательность страниц (правка владельца 08.09 для «Монолита»: слева всегда
+   * Монолит, справа филиалы 30 с, топ-6 менеджеров компании 15 с, затем отделы каждого
+   * филиала по 15 с). Если задана — клиент показывает её вместо cards/managers.
    */
-  cardPages?: { label: string | null; holdSec: number; cards: TvFeedCard[] }[];
+  pageSeq?: TvFeedPage[];
   noManagers?: boolean;
   /** Бегущая строка этого слайда: строка отдела, иначе общая строка экрана; null — нет. */
   ticker: string | null;
