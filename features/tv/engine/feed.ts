@@ -233,7 +233,9 @@ export async function buildScreenFeed(
   // этот момент был бы гарантированной ложью, поэтому SSE-триггер идёт мимо кэша
   // прямым SQL «сегодня». Периодический fallback-опрос продолжает бить в кэш
   // (в этом и смысл: десять ТВ одного отдела = один запрос раз в 20 с).
-  const body = opts?.bypassCache ? await build() : await cached(key, FEED_TTL_SEC, build);
+  // fresh=1 — не полный обход кэша, а короткий кэш 3 с (правка 08.09): десять
+  // телевизоров одного отдела, разбуженные одним NOTIFY, всё равно делают один SQL.
+  const body = opts?.bypassCache ? await cached(`${key}:fresh`, 3, build) : await cached(key, FEED_TTL_SEC, build);
 
   const messages = await activeMessagesForScreen(screen.id).catch(() => []);
   return {

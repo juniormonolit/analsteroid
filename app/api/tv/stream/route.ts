@@ -38,7 +38,27 @@ export async function GET(req: NextRequest) {
         }
       };
       send('hello', { ts: Date.now() });
-      unsub = subscribe((ev) => send('deal', ev));
+      // Фильтр + склейка (правка 08.09 после замера на проде: триггер стреляет на
+      // КАЖДОЕ изменение stage/amount/manager любой сделки компании, и каждый
+      // телевизор шёл в базу мимо кэша ~40 раз/мин). Телевизору интересны только
+      // продажа/бронь СЕГОДНЯ (sold_at/reserved_at за текущие сутки МСК) — остальное
+      // отбрасываем; а частые события склеиваем в одно не чаще раза в 5 с на соединение.
+      let pending: ReturnType<typeof setTimeout> | undefined;
+      let lastSent = 0;
+      const relevant = (ev: unknown): boolean => {
+        if (!ev || typeof ev !== 'object') return true; // resync и прочие служебные
+        const e = ev as { type?: string; sold_at?: string | null; reserved_at?: string | null };
+        if (e.type === 'resync') return true;
+        const dayStart = Date.now() - 36 * 3600 * 1000; // «сегодня» с запасом на пояс/задним числом
+        const ts = (v?: string | null) => (v ? Date.parse(v) : NaN);
+        return ts(e.sold_at) >= dayStart || ts(e.reserved_at) >= dayStart;
+      };
+      unsub = subscribe((ev) => {
+        if (!relevant(ev)) return;
+        if (pending) return;
+        const wait = Math.max(0, 5000 - (Date.now() - lastSent));
+        pending = setTimeout(() => { pending = undefined; lastSent = Date.now(); send('deal', { ts: lastSent }); }, wait);
+      });
       // heartbeat держит коннект живым сквозь nginx/proxy_read_timeout
       beat = setInterval(() => {
         try {
@@ -49,6 +69,7 @@ export async function GET(req: NextRequest) {
       }, HEARTBEAT_MS);
       req.signal.addEventListener('abort', () => {
         clearInterval(beat);
+        if (pending) clearTimeout(pending);
         unsub();
         try {
           ctrl.close();
