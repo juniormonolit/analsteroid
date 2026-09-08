@@ -15,11 +15,11 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { computePeriodPlanByLogin } from '@/lib/plans/dailyPlan';
 import type { RosterManager } from '@/lib/org/teamRoster';
-import { loadDepartments } from '@/lib/org/deptCategories';
+import { buildTvTree, deptChains, loadActiveManagers, managersOfNode, type TvNode } from './orgTree';
 import { getManagerAvatarUrl } from '@/lib/bitrix/managerAvatar';
 import { cached } from '@/lib/cache/redis';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
-import { isPlaceholderName, type TvFeedManager, type TvFeedOk, type TvFeedSale, type TvFeedSlide, type TvScreen } from '../shared';
+import { isPlaceholderName, type TvFeedCard, type TvFeedManager, type TvFeedOk, type TvFeedSale, type TvFeedSlide, type TvScreen } from '../shared';
 import { activeMessagesForScreen } from './store';
 
 const TZ = 'Europe/Moscow';
@@ -28,6 +28,8 @@ const FEED_TTL_SEC = 20;
 const FACT_IDS = [
   'primary_sales_count', 'repeat_sales_count', 'primary_sales_amount', 'repeat_sales_amount',
   'reservations_count', 'reservations_amount',
+  // заявки за день (created_at) — для «активного менеджера» (правка владельца 08.09)
+  'primary_deals_count', 'repeat_deals_count',
 ] as const;
 type FactId = (typeof FACT_IDS)[number];
 
@@ -114,50 +116,6 @@ async function fetchAvatars(ids: string[]): Promise<Map<string, string | null>> 
   return out;
 }
 
-/**
- * Менеджеры по выбранным узлам: узел = ВСЕ активные менеджеры его поддерева
- * (правка владельца 08.09: «Московский филиал» вместе с «МСК ОС»/«МСК ЖБИ» показывал
- * прочерки — resolveManagersForDepartments приписывает человека только к БЛИЖАЙШЕМУ
- * выбранному узлу, родителю ничего не оставалось). Узлы могут пересекаться: филиал
- * показывает всех, его отделы — своих. Один SQL + дерево отделов из кэша.
- */
-async function managersByDept(deptIds: string[]): Promise<Map<string, RosterManager[]>> {
-  const out = new Map<string, RosterManager[]>(deptIds.map(id => [id, []]));
-  if (deptIds.length === 0) return out;
-  const [rows, { byId, byBitrixId }] = await Promise.all([
-    analyticsDb().query<{ manager_id: string; manager_name: string; department_id: string | null; short_login: string | null }>(
-      `SELECT manager_bitrix_user_id::text AS manager_id, manager_name, department_id::text AS department_id, short_login
-         FROM sa.org_resolved_hierarchy WHERE is_active = true AND manager_bitrix_user_id IS NOT NULL`,
-    ),
-    loadDepartments(),
-  ]);
-  // цепочка предков (uuid) для каждого отдела — кэш на вызов
-  const chainCache = new Map<string, Set<string>>();
-  const uuidByBitrix = new Map<string, string>();
-  for (const [uuid, row] of byId) uuidByBitrix.set(row.bitrixId, uuid);
-  const chainOf = (deptUuid: string): Set<string> => {
-    const hit = chainCache.get(deptUuid);
-    if (hit) return hit;
-    const set = new Set<string>();
-    let cur = byId.get(deptUuid);
-    for (let guard = 0; cur && guard < 15; guard++) {
-      const uuid = uuidByBitrix.get(cur.bitrixId);
-      if (uuid) set.add(uuid);
-      cur = cur.parentBitrixId ? byBitrixId.get(cur.parentBitrixId) : undefined;
-    }
-    chainCache.set(deptUuid, set);
-    return set;
-  };
-  for (const r of rows.rows) {
-    if (!r.department_id) continue;
-    const chain = chainOf(r.department_id);
-    for (const deptId of deptIds) {
-      if (chain.has(deptId)) out.get(deptId)!.push({ managerId: r.manager_id, name: r.manager_name, login: r.short_login, deptUuid: deptId });
-    }
-  }
-  return out;
-}
-
 /** Начало окна «последние N рабочих дней» (Пн–Пт, без учёта праздников — для
  *  вопроса «жив ли аккаунт» этого достаточно), МСК-полночь в ISO. */
 function workingDaysBackIso(todayStr: string, n: number): string {
@@ -193,8 +151,40 @@ async function recentlyActiveIds(idsNum: number[], fromIso: string, toExclIso: s
  */
 const RECENT_WORKING_DAYS = 5;
 
-function slideFor(key: string, title: string, managers: RosterManager[], facts: Map<string, Record<FactId, number>>,
-  plans: Map<string, { planSales: number }>, avatars: Map<string, string | null>, recentActive: Set<string>): TvFeedSlide {
+/** Активный менеджер дня: была заявка, бронь или продажа. */
+function isActiveToday(f: Record<FactId, number> | undefined): boolean {
+  return !!f && (f.primary_deals_count + f.repeat_deals_count + f.primary_sales_count + f.repeat_sales_count + f.reservations_count > 0
+    || f.primary_sales_amount + f.repeat_sales_amount + f.reservations_amount > 0);
+}
+
+interface Totals { planDay: number; factDay: number; salesCount: number; bookSum: number; bookCount: number; activeManagers: number; pb: number }
+function totalsOf(managers: RosterManager[], facts: Map<string, Record<FactId, number>>, plans: Map<string, { planSales: number }>): Totals {
+  const t: Totals = { planDay: 0, factDay: 0, salesCount: 0, bookSum: 0, bookCount: 0, activeManagers: 0, pb: 0 };
+  for (const m of managers) {
+    const f = facts.get(m.managerId);
+    t.planDay += m.login ? plans.get(m.login)?.planSales ?? 0 : 0;
+    if (!f) continue;
+    const sc = f.primary_sales_count + f.repeat_sales_count;
+    t.factDay += f.primary_sales_amount + f.repeat_sales_amount;
+    t.salesCount += sc;
+    t.bookSum += f.reservations_amount;
+    t.bookCount += f.reservations_count;
+    t.pb += sc + f.reservations_count;
+    if (isActiveToday(f)) t.activeManagers++;
+  }
+  t.planDay = Math.round(t.planDay);
+  return t;
+}
+
+/**
+ * Слайд узла: итоги по ВСЕМ менеджерам узла; плитки — только с продажей/бронью за день
+ * (правка владельца 08.09: «нули не показывать»); карточки подчинённых узлов — если
+ * узел объединяет ≥2 узла с людьми («экран отделов» по аналогии с плитками менеджеров).
+ * Цель бронепродаж = активные менеджеры × dailyTarget экрана («в отделе N / 95 при 19 активных»).
+ */
+function slideFor(node: TvNode, managers: RosterManager[], childManagers: Map<string, RosterManager[]>,
+  facts: Map<string, Record<FactId, number>>, plans: Map<string, { planSales: number }>,
+  avatars: Map<string, string | null>, recentActive: Set<string>, dailyTarget: number): TvFeedSlide {
   const shown = managers.filter(m => !isPlaceholderName(m.name) || recentActive.has(m.managerId));
   const rows: TvFeedManager[] = shown.map(m => {
     const f = facts.get(m.managerId);
@@ -209,17 +199,24 @@ function slideFor(key: string, title: string, managers: RosterManager[], facts: 
     };
   });
   rows.sort((a, b) => b.salesSum - a.salesSum || b.bookSum - a.bookSum || a.name.localeCompare(b.name, 'ru'));
-  // Итоги отдела (план дня в том числе) — по ВСЕМ менеджерам отдела; на плитках —
-  // только те, у кого сегодня есть продажа или бронь (правка владельца 08.09:
-  // «менеджеры без продаж или броней вообще не отображаются, заебывает на нули смотреть»).
-  const sum = (fn: (r: TvFeedManager) => number) => rows.reduce((a, r) => a + fn(r), 0);
   const active = rows.filter(r => r.salesCount > 0 || r.bookCount > 0 || r.salesSum > 0 || r.bookSum > 0);
+  const t = totalsOf(managers, facts, plans);
+
+  const cards: TvFeedCard[] = [];
+  const kids = node.children.filter(c => (childManagers.get(c.id)?.length ?? 0) > 0);
+  if (kids.length >= 2) {
+    for (const c of kids) {
+      const ct = totalsOf(childManagers.get(c.id) ?? [], facts, plans);
+      cards.push({ id: c.id, name: c.name, planDay: ct.planDay, factDay: ct.factDay, salesCount: ct.salesCount,
+        bookSum: ct.bookSum, bookCount: ct.bookCount, activeManagers: ct.activeManagers, target: ct.activeManagers * dailyTarget, pb: ct.pb });
+    }
+    cards.sort((a, b) => b.factDay - a.factDay || b.bookSum - a.bookSum);
+  }
   return {
-    key, dept: title,
-    planDay: sum(r => r.plan), factDay: sum(r => r.salesSum), salesCount: sum(r => r.salesCount),
-    bookSum: sum(r => r.bookSum), bookCount: sum(r => r.bookCount),
-    ticker: null,
-    managers: active,
+    key: node.id, dept: node.name,
+    planDay: t.planDay, factDay: t.factDay, salesCount: t.salesCount, bookSum: t.bookSum, bookCount: t.bookCount,
+    activeManagers: t.activeManagers, target: t.activeManagers * dailyTarget, pb: t.pb,
+    cards, ticker: null, managers: active,
   };
 }
 
@@ -239,11 +236,26 @@ export async function buildScreenFeed(
     const fromIso = mskMidnightIso(today);
     const toExclIso = mskMidnightIso(addDaysStr(today, 1));
 
-    const byDept = await managersByDept(screen.departmentIds);
+    const [tree, orgRows, chains] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains()]);
+    const dailyTarget = screen.settings.dailyTarget || 5;
+    // Слайды: узел → слайд; «Монолит» (root) → по слайду на филиал (правка владельца:
+    // «выбираю Монолит — вижу карусель по филиалам с разбивкой на ОС и НЦ»).
+    const slideNodes: TvNode[] = [];
+    for (const id of screen.departmentIds) {
+      const n = tree.byId.get(id);
+      if (!n) continue;
+      if (n.kind === 'root') { for (const b of n.children) slideNodes.push(b); } else slideNodes.push(n);
+    }
+    const mgrCache = new Map<string, RosterManager[]>();
+    const mgrs = (n: TvNode): RosterManager[] => {
+      let v = mgrCache.get(n.id);
+      if (!v) { v = managersOfNode(n, orgRows, chains); mgrCache.set(n.id, v); }
+      return v;
+    };
     // объединение без дублей — для фактов/планов/аватаров/событий
     const seen = new Set<string>();
     const managers: RosterManager[] = [];
-    for (const list of byDept.values()) for (const m of list) { if (!seen.has(m.managerId)) { seen.add(m.managerId); managers.push(m); } }
+    for (const n of slideNodes) for (const m of mgrs(n)) { if (!seen.has(m.managerId)) { seen.add(m.managerId); managers.push(m); } }
     const idsNum = [...new Set(managers.map(m => Number(m.managerId)).filter(n => Number.isInteger(n) && n > 0))];
     const names = new Map(managers.map(m => [m.managerId, m.name]));
 
@@ -261,21 +273,27 @@ export async function buildScreenFeed(
     // склада, ОС МСК — про скандик), иначе общая строка экрана. Мастер-выключатель —
     // ticker_enabled. Рассылки (tv_messages) добавляет клиент поверх.
     const general = screen.tickerEnabled && screen.tickerText?.trim() ? screen.tickerText.trim() : null;
-    const deptTicker = (deptId: string): string | null =>
-      screen.tickerEnabled ? (screen.settings.deptTickers[deptId]?.trim() || general) : null;
 
     const slides: TvFeedSlide[] = [];
+    const childMap = (n: TvNode) => new Map(n.children.map(c => [c.id, mgrs(c)] as const));
     if (screen.mode === 'merged') {
-      const title = screen.departmentIds.map(id => deptNames.get(id) ?? 'Отдел').join(' + ');
-      const slide = slideFor('merged', title || screen.name, managers, facts, plans, avatars, recentActive);
+      // одна сетка: все выбранные узлы вместе; карточки — сами выбранные узлы
+      const virtual: TvNode = {
+        id: 'merged', kind: 'branch', children: slideNodes,
+        name: slideNodes.map(n => n.name).join(' + ') || screen.name,
+        deptUuids: new Set(), exactUuids: new Set(),
+      };
+      const slide = slideFor(virtual, managers, childMap(virtual), facts, plans, avatars, recentActive, dailyTarget);
       const own = screen.departmentIds.map(id => screen.settings.deptTickers[id]?.trim()).filter((t): t is string => !!t);
       slide.ticker = screen.tickerEnabled ? (own.length ? own.join('   \u2022   ') : general) : null;
       slides.push(slide);
     } else {
-      for (const deptId of screen.departmentIds) {
-        const own = byDept.get(deptId) ?? [];
-        const slide = slideFor(deptId, deptNames.get(deptId) ?? 'Отдел', own, facts, plans, avatars, recentActive);
-        slide.ticker = deptTicker(deptId);
+      for (const n of slideNodes) {
+        const slide = slideFor(n, mgrs(n), childMap(n), facts, plans, avatars, recentActive, dailyTarget);
+        // строка: своя у узла; для филиала внутри «Монолита» — строка Монолита, потом общая
+        const own = screen.settings.deptTickers[n.id]?.trim()
+          || (screen.departmentIds.includes(tree.root.id) ? screen.settings.deptTickers[tree.root.id]?.trim() : undefined);
+        slide.ticker = screen.tickerEnabled ? (own || general) : null;
         slides.push(slide);
       }
     }

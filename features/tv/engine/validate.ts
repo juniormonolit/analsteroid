@@ -1,7 +1,7 @@
 // Валидация тела запросов админки телевизоров. Возвращает либо нормализованный
 // ввод, либо строку ошибки для 400.
 
-import { normalizeSettings, type TvMessageInput, type TvMessageKind, type TvScreenInput } from '../shared';
+import { isNodeId, normalizeSettings, type TvMessageInput, type TvMessageKind, type TvScreenInput } from '../shared';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -11,7 +11,7 @@ export function parseScreenInput(body: unknown): TvScreenInput | string {
   if (!name) return 'Укажите название экрана';
   const comment = typeof b.comment === 'string' && b.comment.trim() ? b.comment.trim().slice(0, 300) : null;
   const deptRaw = Array.isArray(b.departmentIds) ? b.departmentIds : [];
-  const departmentIds = [...new Set(deptRaw.map(String).filter(id => UUID_RE.test(id)))];
+  const departmentIds = [...new Set(deptRaw.map(String).filter(id => isNodeId(id)))];
   if (departmentIds.length === 0) return 'Выберите хотя бы один отдел';
   if (departmentIds.length > 12) return 'Не больше 12 отделов на экран';
   const mode = b.mode === 'merged' ? 'merged' : 'carousel';

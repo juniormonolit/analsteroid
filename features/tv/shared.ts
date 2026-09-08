@@ -125,15 +125,37 @@ export interface TvFeedManager {
   bookSum: number;
 }
 
-export interface TvFeedSlide {
-  key: string;
-  dept: string;        // заголовок слайда («Отдел металлопроката», «ОС МСК + ЖБИ МСК»)
-  // planDay/factDay/book* — по всему отделу; managers — только с продажей/бронью за день.
+/** Карточка подчинённого узла на «экране отделов» (аналог плитки менеджера). */
+export interface TvFeedCard {
+  id: string;
+  name: string;
   planDay: number;
   factDay: number;
   salesCount: number;
   bookSum: number;
   bookCount: number;
+  /** Менеджеры, у кого сегодня была заявка, бронь или продажа. */
+  activeManagers: number;
+  /** Цель бронепродаж = activeManagers × dailyTarget экрана. */
+  target: number;
+  /** Факт бронепродаж = продажи + брони по количеству. */
+  pb: number;
+}
+
+export interface TvFeedSlide {
+  key: string;
+  dept: string;        // заголовок слайда («Отдел металлопроката», «Москва»)
+  // planDay/factDay/book* — по всему узлу; managers — только с продажей/бронью за день.
+  planDay: number;
+  factDay: number;
+  salesCount: number;
+  bookSum: number;
+  bookCount: number;
+  activeManagers: number;
+  target: number;
+  pb: number;
+  /** Узел объединяет другие узлы → первая страница слайда: карточки подчинённых. */
+  cards: TvFeedCard[];
   /** Бегущая строка этого слайда: строка отдела, иначе общая строка экрана; null — нет. */
   ticker: string | null;
   managers: TvFeedManager[];
@@ -193,6 +215,17 @@ export interface TvFeedError {
 }
 
 export type TvFeed = TvFeedOk | TvFeedPairing | TvFeedError;
+
+/** Узел дерева экранов для пикера: Монолит → филиалы → отделы Битрикса (с командами). */
+export interface TvTreeNode {
+  id: string;            // uuid отдела Битрикса | 'branch:spb'
+  name: string;          // подпись («Монолит», «Москва», «МСК ОС», …)
+  kind: 'root' | 'branch' | 'dept';
+  children: TvTreeNode[];
+}
+export const VIRTUAL_NODE_RE = /^branch:[a-z]{2,10}$/;
+export const UUID_NODE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isNodeId(v: string): boolean { return UUID_NODE_RE.test(v) || VIRTUAL_NODE_RE.test(v); }
 
 /** Интервал опроса фида телевизором, сек. */
 export const TV_POLL_SEC = 15;

@@ -14,7 +14,8 @@ import type { SessionUser } from '@/lib/auth/session';
 import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
 import { loadDepartments } from '@/lib/org/deptCategories';
 import { getSalesDepartmentOptions } from '@/lib/org/teamRoster';
-import type { TvScreen } from '../shared';
+import { UUID_NODE_RE, type TvScreen } from '../shared';
+import { buildTvTree } from './orgTree';
 
 export interface TvScope {
   /** null = без ограничений. */
@@ -47,7 +48,8 @@ export async function tvScope(session: SessionUser): Promise<TvScope> {
 export function screenInScope(scope: TvScope, deptIds: string[]): boolean {
   if (!scope.allowedDeptIds) return true;
   if (deptIds.length === 0) return false;
-  return deptIds.every(id => scope.allowedDeptIds!.has(id));
+  // виртуальные узлы (branch:spb) — только у руководства с полным доступом
+  return deptIds.every(id => UUID_NODE_RE.test(id) && scope.allowedDeptIds!.has(id));
 }
 
 export function filterScreens(scope: TvScope, screens: TvScreen[]): TvScreen[] {
@@ -56,9 +58,11 @@ export function filterScreens(scope: TvScope, screens: TvScreen[]): TvScreen[] {
 
 /** id отдела → имя, для подписей экранов (поддерево «Отдел продаж» + фолбэк на всё дерево). */
 export async function departmentNameMap(): Promise<Map<string, string>> {
-  const [sales, all] = await Promise.all([getSalesDepartmentOptions(), loadDepartments()]);
+  const [sales, all, tree] = await Promise.all([getSalesDepartmentOptions(), loadDepartments(), buildTvTree()]);
   const map = new Map<string, string>();
   for (const [uuid, row] of all.byId) map.set(uuid, row.name);
   for (const d of sales) map.set(d.id, d.name);
+  // подписи дерева экранов поверх: «Отдел продаж» → «Монолит», «Московский филиал» → «Москва», branch:spb
+  for (const [id, name] of tree.names) map.set(id, name);
   return map;
 }

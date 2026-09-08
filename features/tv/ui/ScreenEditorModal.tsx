@@ -78,7 +78,7 @@ export function ScreenEditorModal({ open, screen, onClose, onSave, saving, error
           </Field>
         </div>
 
-        <Field label="Отделы на экране" hint="Отдел = узел структуры вместе с вложенными командами. Несколько отделов — карусель или общая сетка.">
+        <Field label="Отделы на экране" hint="Узел = все менеджеры его поддерева. Филиал или «Монолит» добавляют экран карточек подчинённых отделов; несколько узлов — карусель или общая сетка.">
           <DeptTreePicker value={form.departmentIds} onChange={ids => set('departmentIds', ids)} />
         </Field>
 

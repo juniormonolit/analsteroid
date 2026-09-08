@@ -51,7 +51,7 @@ function toScreen(r: ScreenRow, devices: TvDeviceInfo[], deptNames: Map<string, 
   return {
     id: r.id, name: r.name, comment: r.comment, publicToken: r.public_token,
     departmentIds: r.department_ids ?? [],
-    departmentNames: (r.department_ids ?? []).map(id => deptNames.get(id) ?? 'Отдел'),
+    departmentNames: (r.department_ids ?? []).map(id => deptNames.get(id) ?? 'Узел'),
     mode: r.mode, theme: r.theme, rotateSec: Number(r.rotate_sec),
     tickerText: r.ticker_text, tickerEnabled: r.ticker_enabled,
     settings: normalizeSettings(r.settings),
@@ -59,7 +59,7 @@ function toScreen(r: ScreenRow, devices: TvDeviceInfo[], deptNames: Map<string, 
   };
 }
 
-const SCREEN_COLS = `id, name, comment, public_token, department_ids::text[] AS department_ids, mode, theme, rotate_sec,
+const SCREEN_COLS = `id, name, comment, public_token, department_ids, mode, theme, rotate_sec,
   ticker_text, ticker_enabled, settings,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
   to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at`;
@@ -106,7 +106,7 @@ export async function createScreen(input: TvScreenInput, createdBy: string | nul
   const res = await systemDb().query<{ id: string }>(
     `INSERT INTO tv_screens (name, comment, public_token, department_ids, mode, theme, rotate_sec,
                              ticker_text, ticker_enabled, settings, created_by)
-     VALUES ($1, $2, $3, $4::uuid[], $5, $6, $7, $8, $9, $10::jsonb, $11) RETURNING id`,
+     VALUES ($1, $2, $3, $4::text[], $5, $6, $7, $8, $9, $10::jsonb, $11) RETURNING id`,
     [input.name, input.comment, randomToken(16), input.departmentIds, input.mode, input.theme, input.rotateSec,
      input.tickerText, input.tickerEnabled, JSON.stringify(input.settings), createdBy],
   );
@@ -115,7 +115,7 @@ export async function createScreen(input: TvScreenInput, createdBy: string | nul
 
 export async function updateScreen(id: string, input: TvScreenInput): Promise<boolean> {
   const res = await systemDb().query(
-    `UPDATE tv_screens SET name = $2, comment = $3, department_ids = $4::uuid[], mode = $5, theme = $6,
+    `UPDATE tv_screens SET name = $2, comment = $3, department_ids = $4::text[], mode = $5, theme = $6,
             rotate_sec = $7, ticker_text = $8, ticker_enabled = $9, settings = $10::jsonb, updated_at = now()
       WHERE id = $1`,
     [id, input.name, input.comment, input.departmentIds, input.mode, input.theme, input.rotateSec,

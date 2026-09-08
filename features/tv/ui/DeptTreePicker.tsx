@@ -1,19 +1,21 @@
 'use client';
-// Дерево отделов продаж с чекбоксами (uuid), для редактора экрана. Источник —
-// /api/catalog/org-structure (поддерево «Отдел продаж», узлы несут id=uuid и
-// bitrixId). Отличие от DepartmentPicker отчётов: там выбор по bitrixId и в
-// поповере; экрану нужны uuid (resolveManagersForDepartments) и встроенный в
-// форму список — поэтому свой компактный компонент, без второго источника данных.
+// Дерево узлов экрана с чекбоксами, для редактора экрана. Источник — /api/tv/tree
+// (Монолит → филиалы → отделы Битрикса → команды; СПб — виртуальный узел branch:spb).
+// Отличие от DepartmentPicker отчётов: там выбор по bitrixId и в поповере; здесь —
+// встроенный в форму список и свои id узлов.
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 
-export interface OrgNode { id: string; bitrixId: string; name: string; children?: OrgNode[] }
+export interface OrgNode { id: string; name: string; kind?: 'root' | 'branch' | 'dept'; children?: OrgNode[] }
 
+// Дерево экранов (features/tv/engine/orgTree.ts): Монолит → Москва / Санкт-Петербург /
+// Краснодар → отделы → команды. Выбор родителя = все менеджеры поддерева + экран
+// карточек подчинённых узлов.
 export function useOrgTree() {
   return useQuery({
-    queryKey: ['org-structure'],
-    queryFn: () => fetch('/api/catalog/org-structure').then(r => r.json()) as Promise<{ tree: OrgNode[] }>,
+    queryKey: ['tv-tree'],
+    queryFn: () => fetch('/api/tv/tree').then(r => r.json()) as Promise<{ tree: OrgNode[] }>,
     staleTime: 5 * 60 * 1000,
   });
 }
@@ -26,7 +28,7 @@ export function flattenNames(tree: OrgNode[]): Map<string, string> {
 }
 
 function Node({ node, depth, selected, onToggle }: { node: OrgNode; depth: number; selected: Set<string>; onToggle: (id: string) => void }) {
-  const [open, setOpen] = useState(depth < 1);
+  const [open, setOpen] = useState(depth < 2);
   const kids = node.children ?? [];
   const checked = selected.has(node.id);
   return (
@@ -39,7 +41,9 @@ function Node({ node, depth, selected, onToggle }: { node: OrgNode; depth: numbe
         ) : <span className="w-[19px]" />}
         <label className="flex items-center gap-2 cursor-pointer min-w-0 flex-1">
           <input type="checkbox" checked={checked} onChange={() => onToggle(node.id)} className="accent-[var(--color-accent)] w-4 h-4 shrink-0" />
-          <span className={`text-sm truncate ${checked ? 'font-medium text-[var(--color-text)]' : 'text-[var(--color-text)]'}`}>{node.name}</span>
+          <span className={`text-sm truncate ${checked ? 'font-medium' : ''} ${node.kind === 'root' || node.kind === 'branch' ? 'font-semibold' : ''} text-[var(--color-text)]`}>{node.name}</span>
+          {node.kind === 'root' && <span className="text-xs text-[var(--color-text-muted)] shrink-0">все филиалы каруселью</span>}
+          {node.kind === 'branch' && <span className="text-xs text-[var(--color-text-muted)] shrink-0">филиал</span>}
         </label>
       </div>
       {open && kids.map(k => <Node key={k.id} node={k} depth={depth + 1} selected={selected} onToggle={onToggle} />)}

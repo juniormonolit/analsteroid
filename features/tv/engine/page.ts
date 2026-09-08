@@ -47,7 +47,7 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .main{position:absolute;left:28.3vw;right:0;top:0;bottom:0}
 .dept{font-size:2.3vw;font-weight:700;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.15}
 .dept .muted{font-size:1.3vw;font-weight:500;margin-left:.5vw}
-.col{position:absolute;left:1.6vw;right:1.6vw;top:5.2vw;bottom:15.6vw}
+.col{position:absolute;left:1.6vw;right:1.6vw;top:5.2vw;bottom:19.8vw}
 .col .track{position:absolute;left:50%;margin-left:-8vw;width:16vw;top:0;bottom:0;border-radius:1.4vw;background:#0B1220;border:1px solid #243450;overflow:hidden}
 .th-light .col .track{background:#F6F8FA;border-color:#E5E9EF}
 .col .fill{position:absolute;left:0;right:0;bottom:0;background:#FBBC04;background:-webkit-linear-gradient(top,#FBBC04,#E0941C);background:linear-gradient(to bottom,#FBBC04,#E0941C);border-radius:0 0 1.3vw 1.3vw;-webkit-transition:height .8s ease;transition:height .8s ease}
@@ -65,7 +65,12 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .sst .v{display:block;font-size:2.2vw;font-weight:700;line-height:1.05;margin-top:.15vw;letter-spacing:-.01em;white-space:nowrap}
 .sst .v.fact{color:#5BC878}.th-light .sst .v.fact{color:#1E8E3E}
 .sst .v.book{color:#7FB9E8}.th-light .sst .v.book{color:#0069BE}
-.sst.s1{bottom:10.6vw}.sst.s2{bottom:6.4vw}.sst.s3{bottom:2.2vw}
+.sst.s0{bottom:14.8vw}.sst.s1{bottom:10.6vw}.sst.s2{bottom:6.4vw}.sst.s3{bottom:2.2vw}
+.sst .v.warn{color:#FBBC04}.th-light .sst .v.warn{color:#B26000}
+.sst .v small{font-size:.5em;font-weight:600;color:#8FA1BD;margin-left:.15em}
+.sst .l small.act,.pb .l small.act{text-transform:none;letter-spacing:0;font-weight:500;margin-left:.6em;opacity:.8}
+.tile.card{border-color:#33507E}.th-light .tile.card{border-color:#AFD3F1}
+.ava.dep{background:#33507E;border-radius:.6em}.th-light .ava.dep{background:#7DA7D9}
 .sst .r{position:absolute;right:0;top:0;text-align:right}
 .grid{position:absolute;left:0;right:0;top:0;bottom:2.6vw}
 .grid.tk{bottom:5.4vw}
@@ -235,6 +240,18 @@ function tileHtml(m,i,showAva){
 }
 /* Правка владельца 07.09: бегущая строка из рассылки ПЕРЕКРЫВАЕТ строку экрана/отдела
    («она важней»); строка экрана возвращается, когда рассылка закончилась. */
+/* Карточка подчинённого узла — по аналогии с плиткой менеджера: сумма продаж, % плана,
+   план/брони, внизу «ПРОДАЖЕБРОНЕЙ n / цель» (цель = активные менеджеры × dailyTarget). */
+function cardHtml(c,i){
+  var mp=c.planDay||0,pct=mp?Math.round(c.factDay/mp*100):null;
+  return '<div class="tile card'+(i===0&&c.factDay>0?' top':'')+'" data-i="'+i+'"><div class="inner">'+
+    '<div class="fx"><div class="ava dep"><span>'+esc(initials(c.name))+'</span></div><div class="name grow">'+esc(c.name)+'</div><div class="rank tnum">'+(i+1)+'</div></div>'+
+    '<div class="fxb hero tnum"><div class="v">'+fmtMoney(c.factDay)+'<small>'+c.salesCount+' шт</small></div><div class="p'+(pct!=null&&pct<100?' warn':'')+'">'+(pct==null?'\u2014':pct+'%')+'</div></div>'+
+    bar(pct,'bar')+
+    '<div class="fxb sub tnum"><span>План<b>'+fmtMoney(mp)+'</b></span><span>Брони<b class="book">'+fmtMoney(c.bookSum)+'</b><small>'+c.bookCount+' шт</small></span></div>'+
+    '<div class="fxb pb tnum"><span class="l">ПРОДАЖЕБРОНЕЙ<small class="act">'+c.activeManagers+' акт.</small></span><span class="n'+(c.target>0&&c.pb>=c.target?' ok':'')+'">'+c.pb+'<small>/ '+c.target+'</small></span></div>'+
+    '</div></div>';
+}
 function tickerText(slide){
   if(!data)return '';
   var parts=[];
@@ -261,10 +278,14 @@ function anyTicker(){
   for(var j=0;j<data.slides.length;j++){if(data.slides[j].ticker)return true;}
   return false;
 }
+/* Страницы слайда: сначала карточки подчинённых узлов (если узел объединяет отделы —
+   правка владельца 08.09), затем топ-6 менеджеров, затем хвост по 6. */
 function pages(){
   var out=[];if(!data)return out;
-  for(var i=0;i<data.slides.length;i++){var ms=data.slides[i].managers,n=Math.max(1,Math.ceil(ms.length/PER_PAGE));
-    for(var p=0;p<n;p++)out.push({slide:i,page:p,pages:n,managers:ms.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE});}
+  for(var i=0;i<data.slides.length;i++){var sl=data.slides[i],ms=sl.managers,cs=sl.cards||[];
+    var nc=Math.ceil(cs.length/PER_PAGE),nm=Math.max(1,Math.ceil(ms.length/PER_PAGE)),n=nc+nm,p;
+    for(p=0;p<nc;p++)out.push({slide:i,page:p,pages:n,kind:'cards',cards:cs.slice(p*PER_PAGE,(p+1)*PER_PAGE),managers:[],offset:p*PER_PAGE});
+    for(p=0;p<nm;p++)out.push({slide:i,page:nc+p,pages:n,kind:'managers',cards:[],managers:ms.slice(p*PER_PAGE,(p+1)*PER_PAGE),offset:p*PER_PAGE});}
   return out;
 }
 function sideInner(s){
@@ -273,6 +294,7 @@ function sideInner(s){
   return '<div class="dept">'+esc(s.dept)+'</div>'+
     '<div class="col"><div class="track"><div class="fill'+(ok?' ok':'')+(pct!=null&&pct>100?' over':'')+'" style="height:'+fillH+'%"></div></div>'+
       '<div class="pct tnum">'+(pct==null?'—':pct+'%')+'</div><div class="cap">плана дня</div></div>'+
+    '<div class="sst s0 tnum"><span class="l">Продажеброней<small class="act">'+(s.activeManagers||0)+' акт.</small></span><span class="v'+(s.target>0&&s.pb>=s.target?' fact':' warn')+'">'+(s.pb||0)+'<small>/ '+(s.target||0)+'</small></span></div>'+
     '<div class="sst s1 tnum"><span class="l">План</span><span class="v">'+fmtMoney(plan)+'</span></div>'+
     '<div class="sst s2 tnum"><span class="l">Факт</span><span class="v fact">'+fmtMoney(fact)+'</span><span class="r"><span class="l">Продаж</span><span class="v">'+s.salesCount+'</span></span></div>'+
     '<div class="sst s3 tnum"><span class="l">Брони</span><span class="v book">'+fmtMoney(s.bookSum)+'</span><span class="r"><span class="l">Шт</span><span class="v book">'+s.bookCount+'</span></span></div>';
@@ -317,8 +339,12 @@ function gridGeom(){
   return {tw:tw,th:th,gap:gap,row:th+gap,fs:fs};
 }
 function pageHtml(p,g){
-  var showAva=!(data.screen.settings&&data.screen.settings.showAvatars===false),h='';
-  for(var k=0;k<p.managers.length;k++){h+=tileHtml(p.managers[k],p.offset+k,showAva).replace('<div class="tile','<div style="'+tileStyle(k,g)+'" class="tile');}
+  var showAva=!(data.screen.settings&&data.screen.settings.showAvatars===false),h='',k;
+  if(p.kind==='cards'){
+    for(k=0;k<p.cards.length;k++){h+=cardHtml(p.cards[k],p.offset+k).replace('<div class="tile','<div style="'+tileStyle(k,g)+'" class="tile');}
+    return h;
+  }
+  for(k=0;k<p.managers.length;k++){h+=tileHtml(p.managers[k],p.offset+k,showAva).replace('<div class="tile','<div style="'+tileStyle(k,g)+'" class="tile');}
   if(p.managers.length===0)h+='<div class="empty">Продаж и броней сегодня пока нет</div>';
   return h;
 }
@@ -355,7 +381,7 @@ function restartRotate(){
   if(timerRot)clearTimeout(timerRot);timerRot=null;
   var pg=pages();if(pg.length<2)return;
   var cur=pg[idx]||pg[0];
-  timerRot=setTimeout(function(){next(1);},cur.page===0?holdMs():tailMs());
+  timerRot=setTimeout(function(){next(1);},(cur.kind==='cards'||cur.offset===0)?holdMs():tailMs());
 }
 /* Бегущая строка — непрерывная rAF-анимация; новый текст (смена отдела, рассылка)
    встаёт в очередь и подхватывается, когда текущий доехал до конца. */
