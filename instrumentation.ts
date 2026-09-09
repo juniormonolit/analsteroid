@@ -61,6 +61,26 @@ export async function register() {
   scheduleRopDigest();
   scheduleRopAdviceFeedback();
   scheduleWeeklyWeather();
+  scheduleReportSchedules();
+}
+
+// Авторассылка сохранённых отчётов «Мой отчёт» (задача владельца 09.09): раз в
+// минуту спрашиваем БД, чьё время пришло. Всё «когда/кому/что» — в
+// report_schedules, вся защита от дублей — внутри runDueReportSchedules
+// (атомарный claim по дате), поэтому здесь ни локов, ни состояния.
+function scheduleReportSchedules() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { runDueReportSchedules } = await import('./lib/jobs/reportSchedules');
+      await runDueReportSchedules();
+    } catch (err) {
+      console.error('[report-schedules] тик не удался:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setInterval(() => { void tick(); }, 60 * 1000);
 }
 
 // ── Дайджест «Аналитика» менеджерам + цикл обратной связи (задача 2765) ──────
@@ -523,8 +543,9 @@ interface DailyReportJob {
 // здесь выстрадана (см. историю правок 30.07 и задачи 2776) — дублировать её
 // вторым экземпляром нельзя, поэтому джоба параметризована.
 function scheduleDailyReport(job: DailyReportJob) {
-  const recipient = job.recipient;
-  if (!recipient) return;
+  // Получателей теперь резолвит сама send() (настройки функции → env), поэтому
+  // отсутствие env больше не повод не запускать джобу (реестр функций 09.09).
+  const recipient = job.recipient || '(из настроек функции)';
 
   // Окно отправки 18:00–19:59 МСК: тик раз в минуту, при неудаче — ПОВТОР на
   // следующем тике (правка 30.07 после реального пропуска: Битрикс оборвал

@@ -153,7 +153,7 @@ export async function askWeeklyWeatherAll(): Promise<{ asked: number; autoFilled
       `Как погодка на той неделе была? (${WEATHER_CITIES[city].label}, ${fmtRu(weekStart)}—${fmtRu(weekEnd)})\n`
       + `Ответь одним сообщением — я запишу его в отчёт «Данные по годам».`,
       undefined,
-      'report',
+      'weekly_weather',
     );
     // 0 = канал выключен, сообщение не ушло — asked_at НЕ ставим, следующий
     // тик/понедельник спросит снова.
@@ -197,7 +197,7 @@ export async function recordWeatherAnswer(fromUserId: string, text: string): Pro
     fromUserId,
     `Записал погоду (${WEATHER_CITIES[row.city].label}, неделя с ${fmtRu(row.week_start)}) в отчёт «Данные по годам». Спасибо!`,
     undefined,
-    'report',
+    'weekly_weather',
   );
   return { city: row.city, weekStart: row.week_start };
 }

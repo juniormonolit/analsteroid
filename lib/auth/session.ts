@@ -67,6 +67,30 @@ export const getSession = cache(async (): Promise<SessionUser | null> => {
   };
 });
 
+/** SessionUser по логину — БЕЗ cookie/сессии. Для фоновых джоб, которым нужно
+ *  действовать «глазами» конкретного человека: авторассылка сохранённых отчётов
+ *  собирает шаблон с доступом его ВЛАДЕЛЬЦА (задача 09.09). Тот же SELECT, что у
+ *  getSession, минус user_sessions. Неактивный или отсутствующий — null. */
+export async function loadSessionUserByLogin(login: string): Promise<SessionUser | null> {
+  const res = await systemDb().query<SessionUser>(
+    `SELECT u.id, u.login, u.display_name AS "displayName",
+            u.is_superadmin AS "isSuperadmin",
+            (SELECT COALESCE(array_agg(DISTINCT perm), '{}')
+               FROM unnest(COALESCE(r.permissions, '{}') || COALESCE(u.section_overrides, '{}')) AS perm
+            ) AS "permissions",
+            COALESCE(u.section_overrides, '{}') AS "sectionOverrides",
+            r.name AS "roleName",
+            u.avatar_url AS "avatarUrl",
+            u.bitrix_user_id AS "bitrixUserId",
+            u.ui_mode AS "uiMode"
+     FROM users u
+     LEFT JOIN roles r ON r.id = u.role_id
+     WHERE u.login = $1 AND u.is_active = true`,
+    [login],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function createSession(userId: string): Promise<string> {
   const token = crypto.randomUUID() + crypto.randomUUID();
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);

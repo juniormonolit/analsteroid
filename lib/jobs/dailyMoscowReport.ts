@@ -15,7 +15,7 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { getManagerOrgMap } from '@/lib/org/deptCategories';
-import { bx, sendBitrixBotMessage } from '@/lib/bitrix/notify';
+import { bx, sendBitrixBotMessage, getBotFunctionConfig } from '@/lib/bitrix/notify';
 import { getMonthWorkingDays, getWeekWorkingDays } from '@/lib/plans/dailyPlan';
 import { buildReportText, TOTAL } from '@/features/reports-builder/engine/buildReportText';
 import { buildDailyReportSpec, type Sums } from '@/lib/reports-builder/dailySpecs';
@@ -395,12 +395,16 @@ export async function buildDailyMoscowReport(reportDate?: string): Promise<Daily
 /** Отправляет отчёт получателю из DAILY_REPORT_BITRIX_USER_ID (или явно указанному).
  *  Два сообщения: сам отчёт и отдельно сверка расхождений (просьба владельца). */
 export async function sendDailyMoscowReport(dialogId?: string, reportDate?: string): Promise<DailyReportData> {
-  const recipient = dialogId || process.env.DAILY_REPORT_BITRIX_USER_ID || '';
-  if (!recipient) throw new Error('DAILY_REPORT_BITRIX_USER_ID не задан — некому отправлять ежедневный отчёт');
+  // Получатели — из настроек функции «Ежедневный отчёт МОСКВА» (реестр 09.09);
+  // пусто — прежний env. Явный dialogId (тест «отправить сейчас») — только ему.
+  const cfg = await getBotFunctionConfig('daily_moscow_report');
+  const recipients = dialogId ? [dialogId]
+    : (cfg.recipients?.length ? cfg.recipients : [process.env.DAILY_REPORT_BITRIX_USER_ID || '']).filter(Boolean);
+  if (!recipients.length) throw new Error('Получатели ежедневного отчёта не заданы — ни в настройках функции, ни в DAILY_REPORT_BITRIX_USER_ID');
   const report = await buildDailyMoscowReport(reportDate);
-  // channel:'report' — ежедневные отчёты продолжают ходить и в режиме тишины
-  // до релиза («отчёты пусть шлёт, но ничего больше», владелец 05.08).
-  await sendBitrixBotMessage(recipient, report.message, undefined, 'report');
-  await sendBitrixBotMessage(recipient, report.discrepancyMessage, undefined, 'report');
+  for (const recipient of recipients) {
+    await sendBitrixBotMessage(recipient, report.message, undefined, 'daily_moscow_report');
+    await sendBitrixBotMessage(recipient, report.discrepancyMessage, undefined, 'daily_moscow_report');
+  }
   return report;
 }

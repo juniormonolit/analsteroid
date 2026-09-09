@@ -18,7 +18,7 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
-import { bx, sendBitrixBotMessage } from '@/lib/bitrix/notify';
+import { bx, sendBitrixBotMessage, type BotChannel } from '@/lib/bitrix/notify';
 import { getMonthWorkingDays, getWeekWorkingDays } from '@/lib/plans/dailyPlan';
 import { buildReportText } from '@/features/reports-builder/engine/buildReportText';
 import { buildDailyReportSpec } from '@/lib/reports-builder/dailySpecs';
@@ -376,10 +376,12 @@ export async function buildGroupReport(config: GroupReportConfig, reportDate?: s
 /** Отправляет отчёт двумя сообщениями (отчёт + сверка), как отчёт «МОСКВА». */
 export async function sendGroupReport(
   dialogId: string, config: GroupReportConfig, reportDate?: string,
+  channel: BotChannel = 'daily_os_teams_report',
 ): Promise<GroupReportData> {
   const report = await buildGroupReport(config, reportDate);
-  // channel:'report' — см. комментарий в dailyMoscowReport.ts (режим тишины).
-  await sendBitrixBotMessage(dialogId, report.message, undefined, 'report');
-  await sendBitrixBotMessage(dialogId, report.discrepancyMessage, undefined, 'report');
+  // Функция бота указывает вызывающий (реестр 09.09) — у каждого группового
+  // отчёта свой рубильник в «Настройки → Боты → Аналитик».
+  await sendBitrixBotMessage(dialogId, report.message, undefined, channel);
+  await sendBitrixBotMessage(dialogId, report.discrepancyMessage, undefined, channel);
   return report;
 }

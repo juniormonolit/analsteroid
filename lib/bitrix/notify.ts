@@ -78,35 +78,66 @@ export interface BotKeyboardButton {
 // `BOT_SEND_ENABLED=1` остаётся аварийным «включить всё» поверх БД: если
 // админка недоступна, а разослать надо. Обратного (`=0`) намеренно нет —
 // выключить всё можно флажками, и одно место управления лучше двух.
-export type BotChannel = 'report' | 'call_control' | 'gamification' | 'manager_digest' | 'deal_chats' | 'service';
+// С 09.09.2026 (задача владельца «каждую функцию бота включать, настраивать и
+// выключать») строка bot_channels = ОДНА ФУНКЦИЯ, а не смысловая группа: ключ
+// передаёт вызывающий, и он же виден владельцу в «Настройки → Боты → Аналитик».
+// Все функции после миграции 181 выключены — включает владелец руками.
+export const BOT_FUNCTION_KEYS = [
+  'invite_link', 'direct_access_link', 'widget_script',
+  'daily_moscow_report', 'daily_os_teams_report', 'report_schedules', 'weekly_weather',
+  'manager_digest_daily', 'manager_digest_weekly', 'rop_digest', 'advice_feedback',
+  'gamification', 'deal_chats',
+  'call_control',
+] as const;
+export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 
-let _channelCache: { map: Map<string, boolean>; at: number } | null = null;
+/** Настройки функции: получатели (bitrix id) и час МСК — что именно значат поля,
+ *  решает функция-потребитель; пустые значения = прежнее поведение (env/константы). */
+export interface BotFunctionConfig {
+  recipients?: string[];
+  hour?: number;
+}
+interface BotFunctionRow { enabled: boolean; config: BotFunctionConfig }
+
+let _channelCache: { map: Map<string, BotFunctionRow>; at: number } | null = null;
 const CHANNEL_CACHE_TTL_MS = 30_000;
 
-/** Сбросить кэш каналов — зовётся из админки сразу после сохранения, чтобы
+/** Сбросить кэш функций — зовётся из админки сразу после сохранения, чтобы
  *  владелец увидел эффект переключателя, а не ждал 30 секунд. */
 export function invalidateBotChannelCache(): void { _channelCache = null; }
 
-async function channelEnabled(channel: BotChannel): Promise<boolean> {
-  if (process.env.BOT_SEND_ENABLED === '1') return true;   // аварийное «включить всё»
-  if (_channelCache && Date.now() - _channelCache.at < CHANNEL_CACHE_TTL_MS) {
-    return _channelCache.map.get(channel) ?? false;
-  }
-  const map = new Map<string, boolean>();
+async function loadFunctions(): Promise<Map<string, BotFunctionRow> | null> {
+  if (_channelCache && Date.now() - _channelCache.at < CHANNEL_CACHE_TTL_MS) return _channelCache.map;
+  const map = new Map<string, BotFunctionRow>();
   try {
     // Динамический импорт: notify.ts тянут и сборщики, которым пул БД не нужен.
     const { systemDb } = await import('@/lib/db/clients');
-    const r = await systemDb().query<{ key: string; enabled: boolean }>(
-      'SELECT key, enabled FROM bot_channels',
+    const r = await systemDb().query<{ key: string; enabled: boolean; config: BotFunctionConfig | null }>(
+      'SELECT key, enabled, config FROM bot_channels',
     );
-    for (const row of r.rows) map.set(row.key, row.enabled);
+    for (const row of r.rows) map.set(row.key, { enabled: row.enabled, config: row.config ?? {} });
     _channelCache = { map, at: Date.now() };
+    return map;
   } catch {
-    // Миграции 170 ещё нет или БД недоступна — молчим. Кэш НЕ ставим: иначе
-    // при разовом сбое связи бот замолчал бы на полминуты уже после починки.
-    return false;
+    // Миграции нет или БД недоступна — молчим. Кэш НЕ ставим: иначе при разовом
+    // сбое связи бот замолчал бы на полминуты уже после починки.
+    return null;
   }
-  return map.get(channel) ?? false;
+}
+
+/** Настройки функции для её потребителя (получатели ежедневных отчётов и т.п.).
+ *  Недоступная БД → {} — вызывающий падает на свой прежний дефолт. */
+export async function getBotFunctionConfig(channel: BotChannel): Promise<BotFunctionConfig> {
+  const map = await loadFunctions();
+  return map?.get(channel)?.config ?? {};
+}
+
+/** Включена ли функция. Экспорт — для джоб, которые дорого СЧИТАТЬ (дайджесты,
+ *  отчёты) и незачем считать, если отправка всё равно заглушена. */
+export async function channelEnabled(channel: BotChannel): Promise<boolean> {
+  if (process.env.BOT_SEND_ENABLED === '1') return true;   // аварийное «включить всё»
+  const map = await loadFunctions();
+  return map?.get(channel)?.enabled ?? false;
 }
 
 export async function sendBitrixBotMessage(

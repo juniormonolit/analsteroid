@@ -197,6 +197,18 @@ export interface SendManagerBotMessageOpts {
  *  «Ошибка»/«Полезно» + тихую метку ID + приписку про неточности. Реально
  *  шлёт в Bitrix только если dry-run выключен И suppressReason не задан.
  *  Не бросает — падение пуша не должно ронять вызывающий код. */
+// Тип сообщения → функция бота (реестр bot_channels, задача 09.09): владелец
+// включает «Ежедневный дайджест» отдельно от «Еженедельного» и от «Напоминаний по
+// советам». Неизвестный тип — в геймификацию (самая глухая функция): забытый тип в
+// новом коде должен молчать, а не прорываться под чужим рубильником.
+function functionKeyForMsgType(msgType: string): BotChannel {
+  if (msgType === 'digest_daily') return 'manager_digest_daily';
+  if (msgType === 'digest_weekly') return 'manager_digest_weekly';
+  if (msgType.startsWith('rop_digest')) return 'rop_digest';
+  if (msgType.includes('advice')) return 'advice_feedback';
+  return 'gamification';
+}
+
 export async function sendManagerBotMessage(
   bitrixId: number, text: string, msgType: string, triggerReason?: string | null,
   opts: SendManagerBotMessageOpts = {},
@@ -206,7 +218,7 @@ export async function sendManagerBotMessage(
   // разные разговоры с человеком, и владелец должен уметь включить одно без
   // другого. Тип сообщения у нас уже есть — по нему и разводим, второго
   // справочника заводить не надо.
-  const channel: BotChannel = msgType === 'gamification' ? 'gamification' : 'manager_digest';
+  const channel: BotChannel = functionKeyForMsgType(msgType);
   const dryRun = await isManagerDryRunEnabled();
   const willSend = !dryRun && !opts.suppressReason;
 

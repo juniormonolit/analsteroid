@@ -15,6 +15,7 @@
 
 import { analyticsDb } from '@/lib/db/clients';
 import { buildGroupReport, sendGroupReport, type GroupReportConfig, type GroupReportData } from './dailyGroupReport';
+import { getBotFunctionConfig } from '@/lib/bitrix/notify';
 
 /** Отделы sa.org_resolved_hierarchy.department_name → подпись в отчёте. */
 const TEAMS: { department: string; title: string }[] = [
@@ -59,6 +60,13 @@ export async function buildOsTeamsReport(reportDate?: string): Promise<GroupRepo
 }
 
 export async function sendOsTeamsReport(dialogId?: string, reportDate?: string): Promise<GroupReportData> {
-  const recipient = dialogId || process.env.OS_TEAMS_REPORT_BITRIX_USER_ID || RECIPIENT_BITRIX_ID;
-  return sendGroupReport(recipient, await buildOsTeamsConfig(), reportDate);
+  // Получатели — из настроек функции (Настройки → Боты → Аналитик); пусто —
+  // прежний env/константа. Явный dialogId (тест «отправить сейчас») — только ему.
+  const cfg = await getBotFunctionConfig('daily_os_teams_report');
+  const recipients = dialogId ? [dialogId]
+    : (cfg.recipients?.length ? cfg.recipients : [process.env.OS_TEAMS_REPORT_BITRIX_USER_ID || RECIPIENT_BITRIX_ID]);
+  const config = await buildOsTeamsConfig();
+  let last!: Awaited<ReturnType<typeof sendGroupReport>>;
+  for (const r of recipients) last = await sendGroupReport(r, config, reportDate, 'daily_os_teams_report');
+  return last;
 }
