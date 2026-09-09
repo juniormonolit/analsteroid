@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { upsertRegistry } from '@/features/employees/engine/registry';
 import { validateManualStartDate } from '@/features/employees/engine/tenure';
+import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Ручные поля реестра сотрудников: дата начала работы (стаж) + заметки.
 // Пишем ТОЛЬКО в sa.employee_registry. sa.employees (мёртвая заготовка,
@@ -22,6 +23,12 @@ export async function POST(req: Request) {
   const bitrixId = Number(body.bitrixId);
   if (!Number.isInteger(bitrixId) || bitrixId <= 0) {
     return NextResponse.json({ error: 'bitrixId обязателен' }, { status: 400 });
+  }
+
+  // Аудит 09.09 («Главные дыры» п.6): носитель section.employees правил стаж и
+  // заметки любого сотрудника компании. Цель обязана быть в срезе сессии.
+  if (!canSeeManager(await getSessionScope(session!), String(bitrixId))) {
+    return scopeForbidden('Этот сотрудник вне вашего среза');
   }
 
   const patch: { manualStartDate?: string | null; notes?: string } = {};

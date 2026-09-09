@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { getCachedWidgetMetrics } from '@/lib/jobs/widgetMetrics';
 import { sliceForConfig } from '@/lib/widget/resolve';
 import { validateWidgetConfig } from '@/lib/widget/config';
+import { widgetScopeError } from '@/lib/widget/scopeAccess';
 
 // Живое превью конструктора: тот же срез, что отдаст виджет, но по НЕсохранённому конфигу
 // из тела (сессионно, без токена). POST, т.к. конфиг сложный.
@@ -13,6 +14,11 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const result = validateWidgetConfig(body);
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+
+  // Аудит 09.09: превью отдавало метрики любого филиала/отдела из блоба — разрез
+  // конфига обязан входить в срез сессии (lib/widget/scopeAccess.ts), иначе 403.
+  const denied = await widgetScopeError(session, result.config);
+  if (denied) return denied;
 
   const blob = await getCachedWidgetMetrics();
   if (!blob) return NextResponse.json({ error: 'Данные ещё не рассчитаны' }, { status: 503 });

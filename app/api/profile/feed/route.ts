@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadXpSettings, levelFromXp, titleForLevel } from '@/features/xp/engine/xp';
+import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Лента событий профиля (задача владельца 05.08, этап 2 ЛК-соцсетки: «пусть в
 // профиле будет лента отдельными постами-событиями — получена награда, сделана
@@ -9,8 +10,10 @@ import { loadXpSettings, levelFromXp, titleForLevel } from '@/features/xp/engine
 //
 // Ленты как ХРАНИМОЙ сущности нет — события собираются на лету UNION'ом из трёх
 // живых источников (badge_awards / quests(done) / sa.deals), ничего не пишем и
-// не бэкфиллим. Доступ — любой залогиненный: лента часть публичного профиля
-// (то же решение владельца, что и для /api/badges/profile).
+// не бэкфиллим. Раньше доступ был любому залогиненному как «части публичного
+// профиля»; аудит 09.09 («Главные дыры» п.5): лента публикует имена и суммы
+// сделок — это денежные данные, тот же уровень, что и /api/manager-card. Цель
+// обязана быть в срезе сессии (canSeeManager), иначе 403.
 
 const LIMIT = 30;                    // событий в ответе
 const PER_SOURCE = 30;               // с каждого источника до слияния
@@ -87,6 +90,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'bitrixId (число) обязателен' }, { status: 400 });
   }
   const idNum = Number(bitrixId);
+
+  if (!canSeeManager(await getSessionScope(session), bitrixId)) {
+    return scopeForbidden('Лента этого сотрудника вам недоступна');
+  }
 
   // Источники независимы; недоступность одного (например, таблиц квестов до
   // миграции) не валит ленту целиком — each ловится отдельно.

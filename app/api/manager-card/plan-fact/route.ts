@@ -8,6 +8,7 @@ import { buildPlanFact } from '@/features/manager-card/engine/planFact';
 import { resolveManagersForDepartments, getUserDepartmentOptions } from '@/lib/org/teamRoster';
 import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
 import { hasFullManagerAccess, managedDepartmentIds } from '@/lib/org/managerAccess';
+import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
 
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -21,12 +22,13 @@ export async function POST(req: NextRequest) {
     if (mode === 'manager') {
       const managerId = String(body.managerId ?? '');
       if (!/^\d+$/.test(managerId)) return NextResponse.json({ error: 'managerId (число) обязателен' }, { status: 400 });
-      // Гейт managerAccessError снят СОЗНАТЕЛЬНО (решение владельца 05.08,
-      // ЛК-соцсетка): блок «месяц» (план/факт) — часть вкладки «Профиль», а
-      // «публичный профиль показывает всё, что и так у человека в профиле,
-      // всем». Личное — «Статистика» (полная аналитика, /api/manager-card) —
-      // остаётся за canViewManager. Ветка department ниже гейт сохраняет:
-      // агрегаты отделов к публичному профилю не относятся.
+      // Гейт возвращён (аудит 09.09, «Главные дыры» п.3): решение 05.08 снять
+      // проверку ради «публичного профиля» противоречит модели владельца —
+      // месячный план/факт (сумма) был доступен любому МОПу по любому менеджеру.
+      // Цель обязана быть в срезе сессии (свои, подконтрольные отделы, админ — все).
+      if (!canSeeManager(await getSessionScope(session), managerId)) {
+        return scopeForbidden('План/факт этого сотрудника вам недоступен');
+      }
       managerIds = [managerId];
     } else {
       const departmentId = String(body.departmentId ?? '');

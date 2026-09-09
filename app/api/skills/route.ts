@@ -3,10 +3,13 @@ import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import { fetchSkillTree, buySkillLevel } from '@/features/badges/engine/skills';
 import { actorFromSession } from '@/lib/auth/pin';
+import { getSessionScope, canSeeManager, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Дерево скиллов менеджера (задача 49): состояние веток + покупка уровня.
-// Смотреть можно чужое (профили в ЛК публичные), покупать — только своё:
-// уровень списывает MLT с кошелька, это денежная операция.
+// Смотреть чужое — только в пределах среза сессии (аудит 09.09,
+// ai_docs/fresh_docs/ACCESS_AUDIT_2026-09-09.md: раньше ?bitrixId= любой отдавал
+// дерево и balance коллеги), покупать — только своё: уровень списывает MLT с
+// кошелька, это денежная операция.
 
 function bitrixIdOf(session: { bitrixUserId: string | null } | null): number | null {
   const n = Number(session?.bitrixUserId ?? NaN);
@@ -20,6 +23,10 @@ export async function GET(req: Request) {
   const self = bitrixIdOf(session);
   const mgr = Number.isFinite(asked) && asked > 0 ? asked : self;
   if (!mgr) return NextResponse.json({ error: 'Не определён сотрудник' }, { status: 400 });
+  // Аудит 09.09: чужое дерево — только внутри среза сессии.
+  if (mgr !== self && !canSeeManager(await getSessionScope(session), String(mgr))) {
+    return scopeForbidden('Скиллы этого сотрудника вам недоступны');
+  }
   try {
     const tree = await fetchSkillTree(systemDb(), mgr);
     return NextResponse.json({ ...tree, bitrixId: mgr, isSelf: mgr === self });

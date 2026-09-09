@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { buildPresentation } from '@/features/presentation/engine/presentation';
+import { getSessionScope, scopeDeptIdsBitrix, scopeForbidden } from '@/lib/org/sessionScope';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -20,9 +21,16 @@ export async function POST(req: Request) {
     period?: { from?: unknown; to?: unknown };
     comparison?: { from?: unknown; to?: unknown };
   };
-  const departmentIds = Array.isArray(b.departmentIds)
+  const requestedDepartmentIds = Array.isArray(b.departmentIds)
     ? b.departmentIds.filter((x): x is string => typeof x === 'string').slice(0, 500)
     : [];
+  // Аудит 09.09: departmentIds шли в движок как есть, пусто = вся компания по филиалам.
+  // Теперь — срез сессии (lib/org/sessionScope.ts). Движок группирует по КОРНЯМ
+  // выбранных узлов и собирает менеджеров вверх по иерархии, поэтому корней среза
+  // (scopeDeptIdsBitrix) достаточно. Нечего показывать (без отделов / только чужие) → 403.
+  const scope = await getSessionScope(session);
+  const departmentIds = (await scopeDeptIdsBitrix(scope, requestedDepartmentIds)) ?? [];
+  if (scope.kind !== 'all' && departmentIds.length === 0) return scopeForbidden('Презентация доступна только по подконтрольным отделам');
   const dates = [b.period?.from, b.period?.to, b.comparison?.from, b.comparison?.to];
   if (!dates.every(d => typeof d === 'string' && DATE_RE.test(d))) {
     return NextResponse.json({ error: 'Ожидаются period/comparison с датами YYYY-MM-DD' }, { status: 400 });

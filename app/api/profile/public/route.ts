@@ -14,6 +14,12 @@ import { getManagerAvatarUrl } from '@/lib/bitrix/managerAvatar';
 // Аватар — через getManagerAvatarUrl (кэш manager_avatars с ленивым обновлением
 // из Битрикса): здесь один человек, не список — ленивый поход уместен, заодно
 // прогревает кэш для справочника «Люди».
+//
+// Аудит 09.09 — решение: роут НЕ режем срезом сессии. Имя/отдел/филиал/аватар —
+// не деньги и не аналитика (те закрыты canSeeManager в feed/plan-fact/manager-card),
+// а bitrixId здесь входной параметр, а не выдача — чужой id роут не раскрывает.
+// Справочник «Люди» (/api/profile/people) при этом режется срезом, так что ссылки
+// на чужие профили из UI не-админу не попадаются.
 
 export async function GET(req: NextRequest) {
   const session = await getSession();

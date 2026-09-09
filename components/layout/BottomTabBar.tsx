@@ -34,15 +34,21 @@ const TABS: { href: string; label: string; icon: React.ReactNode; match: (p: str
   { href: '/rating', label: 'Рейтинг', icon: <Trophy size={20} />, match: (p) => p.startsWith('/rating') },
 ];
 
-export function BottomTabBar({ onMore }: { onMore: () => void }) {
+export function BottomTabBar({ onMore, showRating = true }: {
+  onMore: () => void;
+  /** Аудит 09.09: «Рейтинг» — раздел «Ещё», только админам; AppShell передаёт
+      зеркало hasFullManagerAccess по полям сессии. Дефолт true — обратная совместимость. */
+  showRating?: boolean;
+}) {
   const pathname = usePathname();
+  const tabs = showRating ? TABS : TABS.filter(t => t.href !== '/rating');
 
   return (
     <nav
       className="md:hidden shrink-0 flex items-stretch border-t border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-bg)] pb-[env(safe-area-inset-bottom)] [backdrop-filter:var(--glass-blur)]"
       aria-label="Основная навигация"
     >
-      {TABS.map((tab) => {
+      {tabs.map((tab) => {
         const active = tab.match(pathname);
         return (
           <Link

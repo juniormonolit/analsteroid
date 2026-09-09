@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb } from '@/lib/db/clients';
+import { getSessionScope, type SessionScope } from '@/lib/org/sessionScope';
 
 interface DeptNode {
   id: string;
@@ -10,9 +11,28 @@ interface DeptNode {
   children: DeptNode[];
 }
 
+// Аудит 09.09 («Главные дыры» п.4): пикер отделов отдавал всё поддерево продаж
+// любой сессии. Требование владельца — неподконтрольных отделов в пикере быть не
+// должно вовсе. Узлы дерева несут uuid (id) — режем набором scope.deptIds (корни
+// среза + потомки); узел вне среза, у которого потомки в срезе (корень среза
+// глубже), заменяется своими допустимыми детьми, чтобы форма {tree} осталась.
+function pruneToScope(nodes: DeptNode[], scope: SessionScope): DeptNode[] {
+  if (scope.kind === 'all') return nodes;
+  if (scope.kind === 'self') return [];
+  const out: DeptNode[] = [];
+  for (const n of nodes) {
+    const kids = pruneToScope(n.children, scope);
+    if (scope.deptIds.has(n.id)) out.push({ ...n, children: kids });
+    else out.push(...kids);
+  }
+  return out;
+}
+
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const scope = await getSessionScope(session);
 
   // Оргструктура переехала в sa (задача Серёги 13.07): читаем из analyticsDb.
   const db = analyticsDb();
@@ -43,5 +63,5 @@ export async function GET() {
     ?? roots.find(n => n.name === 'Отдел продаж');
   const salesTree = salesRoot ? salesRoot.children : roots;
 
-  return NextResponse.json({ tree: salesTree });
+  return NextResponse.json({ tree: pruneToScope(salesTree, scope) });
 }

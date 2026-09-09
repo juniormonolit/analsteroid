@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
 import { loadMetrics, resolveMetricIds, withDependencies } from '@/lib/metrics/catalog';
 import {
   fetchByPeriods,
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
     metricIds = ['all_core'],
     dealScope = 'all' as DealScope,
     clientType = 'all' as ClientType,
-    departmentIds,
+    departmentIds: requestedDepartmentIds,
     accountType = 'all' as AccountType,
     productGroupMode = 'kc' as ProductGroupMode,
     productGroupIds,
@@ -103,6 +104,22 @@ export async function POST(req: NextRequest) {
   if (!UNITS.includes(unit)) {
     return NextResponse.json({ error: `unit должен быть одним из: ${UNITS.join(', ')}` }, { status: 400 });
   }
+  // ── Срез сессии (аудит доступа 09.09): отделы — пересечение со своими; без
+  // отделов у сессии (МОП/«Пользователь») разрез по периодам недоступен — движок
+  // бакетов не умеет резать одного менеджера, а показывать компанию нельзя.
+  const scope = await getSessionScope(session);
+  let departmentIds: string[] | undefined = Array.isArray(requestedDepartmentIds) ? requestedDepartmentIds : undefined;
+  if (scope.kind !== 'all') {
+    if (scope.kind === 'self') {
+      return NextResponse.json({ error: 'Отчёт по периодам доступен только руководителям и администраторам' }, { status: 403 });
+    }
+    const eff = await scopeDeptIdsBitrix(scope, departmentIds);
+    if (eff !== null && eff.length === 0) {
+      return NextResponse.json({ error: 'Запрошенные отделы вне вашего доступа' }, { status: 403 });
+    }
+    departmentIds = eff ?? undefined;
+  }
+
   if (!DIMENSIONS.includes(dimension)) {
     return NextResponse.json({ error: `dimension должен быть одним из: ${DIMENSIONS.join(', ')}` }, { status: 400 });
   }

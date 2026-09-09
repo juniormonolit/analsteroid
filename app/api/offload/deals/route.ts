@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
+import { getSessionScope, canSeeManager, scopeForbidden } from '@/lib/org/sessionScope';
+import { scopeDeptIdsBitrixExact } from '@/lib/org/scopeCoverage';
 import { parseAmountRange } from '@/features/charts/engine/amountParam';
 import { getManagerDeals, type StageMode } from '@/features/offload/engine/offload';
 import type { DealScope } from '@/lib/metrics/types';
@@ -27,9 +29,15 @@ export async function POST(req: NextRequest) {
   const stageMode: StageMode = body.stageMode === 'work' || body.stageMode === 'new' ? body.stageMode : 'both';
   const dealScope = (['primary', 'repeat', 'all'] as const).includes(body.dealScope as DealScope)
     ? body.dealScope as DealScope : 'all';
-  const departmentIds = Array.isArray(body.departmentIds)
+  const requestedDepartmentIds = Array.isArray(body.departmentIds)
     ? (body.departmentIds as unknown[]).filter((x): x is string => typeof x === 'string')
     : undefined;
+  // Аудит 09.09: managerId и departmentIds сверяются со срезом сессии
+  // (lib/org/sessionScope.ts) — чужой менеджер → 403, отделы — только свои.
+  const scope = await getSessionScope(session!);
+  if (!canSeeManager(scope, managerId)) return scopeForbidden('Сделки этого менеджера вам недоступны');
+  const departmentIds = (await scopeDeptIdsBitrixExact(scope, requestedDepartmentIds)) ?? undefined;
+  if (departmentIds && departmentIds.length === 0) return scopeForbidden('Разгрузка доступна только по подконтрольным отделам');
   const amt = parseAmountRange(body);
   if (!amt.ok) return NextResponse.json({ error: amt.error }, { status: 400 });
 

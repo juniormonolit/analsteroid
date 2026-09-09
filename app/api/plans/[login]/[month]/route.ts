@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
+import { getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
+import { canSeeShortLogin } from '@/lib/org/shortLoginScope';
 
 export async function PUT(
   request: Request,
@@ -12,6 +14,14 @@ export async function PUT(
   if (denied) return denied;
 
   const { login, month } = await params;
+
+  // Аудит 09.09 («Главные дыры» п.6): право action.plans.edit давало правку плана
+  // ЛЮБОГО сотрудника компании. Право остаётся, но логин цели обязан принадлежать
+  // срезу сессии (login → bitrix id через оргструктуру → canSeeManager).
+  if (!(await canSeeShortLogin(await getSessionScope(session!), login))) {
+    return scopeForbidden('План этого сотрудника вам недоступен');
+  }
+
   const body = await request.json() as { plan_shipments: number; plan_n: number };
 
   // month is YYYY-MM, store as YYYY-MM-01

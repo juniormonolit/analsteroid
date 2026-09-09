@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
+import { getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
+import { scopeDeptIdsBitrixExact } from '@/lib/org/scopeCoverage';
 import { fetchWorkDaysCohortDealIds } from '@/features/charts/engine/workDaysCohort';
 import { fetchDealsByIds } from '@/lib/reports/dealsByIds';
 import { parseAmountRange } from '@/features/charts/engine/amountParam';
@@ -50,9 +52,18 @@ export async function POST(req: NextRequest) {
     ? body.dealScope as DealScope : 'all';
   const clientType = (['all', 'b2c', 'b2b'] as const).includes(body.clientType as ClientType)
     ? body.clientType as ClientType : 'all';
-  const departmentIds = Array.isArray(body.departmentIds)
+  const requestedDepartmentIds = Array.isArray(body.departmentIds)
     ? (body.departmentIds as unknown[]).filter((x): x is string => typeof x === 'string')
     : undefined;
+  // Аудит 09.09: срез сессии (lib/org/sessionScope.ts). Раньше departmentIds из тела
+  // уходили в движок как есть, а пустой список означал всю компанию. Движок фильтрует
+  // отделы ТОЧНЫМ матчем (departmentsWhere), поэтому берём все отделы среза, не корни.
+  // Параметра managerIds у движка нет — МОП/«Пользователь» без отделов получает 403.
+  // Пусто после пересечения (запрошены только чужие отделы) — пустые данные, не компания.
+  const scope = await getSessionScope(session!);
+  if (scope.kind === 'self') return scopeForbidden('Графики доступны только по подконтрольным отделам');
+  const departmentIds = (await scopeDeptIdsBitrixExact(scope, requestedDepartmentIds)) ?? undefined;
+  if (departmentIds && departmentIds.length === 0) return NextResponse.json({ deals: [], total_count: 0, total_amount: 0 });
 
   const productGroupMode: ProductGroupMode = body.productGroupMode === 'by_max' ? 'by_max' : 'kc';
   let productGroupIds: string[] | undefined;

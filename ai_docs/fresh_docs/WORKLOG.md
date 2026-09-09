@@ -101,6 +101,58 @@ typecheck, lint:responsive (0 новых), полный build; SQL раннер�
 
 ---
 
+## 2026-09-09 — Срез данных по сессии: единый механизм на всех роутах данных и справочниках
+
+По аудиту (ACCESS_AUDIT_2026-09-09.md) и правилам владельца: всё — только
+Администратор/супер-админ; Директор — свой филиал и ниже; РОП — себя +
+подконтрольные отделы с поддеревом; МОП/«Пользователь»/логист без отделов —
+только себя; пикеры режутся тем же срезом; «Ещё» и «Настройки» — только админам.
+
+**Механизм** — lib/org/sessionScope.ts: getSessionScope(session) → all | depts
+(корни + все потомки по sa.departments, менеджеры через resolveManagersForDepartments)
+| self; scopeDeptIds / scopeDeptIdsBitrix (ВСЕ отделы среза в bitrix-формате —
+движки матчат orh.department_id точно, без спуска по дереву) / scopeManagerIds /
+canSeeManager / canSeeDept. lib/org/managerAccess.ts: Директор исключён из
+FULL_ACCESS_ROLES; managedDepartmentIds добавляет ему все активные отделы его
+филиала (по branch в orh) — все «отделочные» роуты (карточки, сводная, ТВ,
+рейтинг, геймификация) получили правило «филиал и ниже» автоматически.
+Вспомогательные: lib/org/shortLoginScope.ts (планы: short_login ↔ bitrixId),
+lib/org/scopeCoverage.ts (филиалы/категории, покрытые срезом целиком — для кэша
+план/факт и виджетов), lib/widget/scopeAccess.ts.
+
+**Ядро отчётов** (координатор): /api/reports/run — 403 для by-sources не-админу;
+managerId вне среза → 403; depts: departmentIds ∩ срез (пустой запрос = весь срез,
+только чужие → 403); self: by-managers → пост-фильтр строк по scope.managerIds
+(после fetch и после дорисовки план-строк), by-product-groups/бакеты → managerId=свой,
+остальное → 403. /api/reports/deals — ко всем спискам добавлен фильтр
+`current_manager_id IN (менеджеры среза)`, чужой managerId → 403; client-deals —
+«Итого»/период превращаются в список менеджеров среза, чужие dimValues отсекаются;
+by-periods — depts ∩ срез, self → 403; metric-series — managerIds ∩ срез, self →
+свой id; product-matrix — только админ.
+
+**Три параллельные линии** (агенты, файлы не пересекались): планы/ростер/выгрузка/
+импорт — по логинам среза; реестр сотрудников; catalog/org-structure — пикер
+обрезан до среза (чужие узлы выпадают, разрешённые потомки поднимаются);
+marketing-sources; profile/pulse|feed|people; manager-card/plan-fact|leader-skills;
+customers/journey|resolve — владелец клиента ∈ срез; deal-chats POST. Графики (8) и
+их дриллы, summary/plan (режется на выдаче, кэш общий), widget-constructor/*,
+widget-metrics/custom (срез владельца токена), reports/deal и deal/calls (IDOR
+закрыт), offload/*, presentation. Геймификация: badges/profile|collection|batch,
+skills — по срезу. «Ещё»: серверные layout-гейты hasFullManagerAccess на 13
+разделах (rating, product-matrix, widget-constructor, summary, plans,
+decomposition, metrics, offload, year-weekly, employees, presentation, screens,
+chats), пункт «Ещё» и таб «Рейтинг» скрыты не-админам (зеркало FULL_ACCESS_ROLES
+в клиенте — managerAccess тянет pg). Вебхук /api/bitrix/events: домен портала
+обязателен, BITRIX_EVENTS_APP_TOKEN — timingSafeEqual, пока не задан — warn с
+полученным токеном в лог.
+
+**Проверка среза на живых данных** (симуляция по orh/user_departments для всех
+20 аккаунтов РОП/Директор/Логист): Директора — СПб 44 отдела / Краснодар 5;
+РОПы — 3–60 менеджеров; без среза остаются ropmskos2 и логисты logist2207/2215
+(см. BACKLOG). Остаток: общий токен widget-metrics/plan, rate-limit логина — BACKLOG.
+
+---
+
 ## 2026-09-09 — Аудит доступа к данным по ролям (проверка, без правок)
 
 Владелец: «каждый аккаунт видит только своё и подчинённых по иерархии; Директор

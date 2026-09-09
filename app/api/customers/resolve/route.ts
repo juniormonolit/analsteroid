@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb } from '@/lib/db/clients';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Резолвер «сырой id из сделки → (clientKey, менеджер-владелец)» для сквозной
 // навигации в карточку заказчика (задача 17.08, фикс «Заказчик не найден в списке
@@ -55,5 +56,12 @@ export async function GET(req: NextRequest) {
       LIMIT 1`,
     [cardKey],
   );
-  return NextResponse.json({ clientKey: cardKey, managerId: owner.rows[0]?.mgr ?? null });
+  const managerId = owner.rows[0]?.mgr ?? null;
+  // Аудит 09.09 («Главные дыры» п.2): резолв раскрывал владельца и clientKey
+  // любого клиента по перебору id. Не-админу — только клиенты, чей владелец
+  // (менеджер последней сделки) в срезе сессии, иначе 403.
+  if (!canSeeManager(await getSessionScope(session), managerId)) {
+    return scopeForbidden('Этот заказчик вам недоступен');
+  }
+  return NextResponse.json({ clientKey: cardKey, managerId });
 }

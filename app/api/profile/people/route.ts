@@ -1,12 +1,17 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
+import { canSeeManager, getSessionScope } from '@/lib/org/sessionScope';
 
 // Справочник «Люди» (задача владельца 05.08, ЛК-соцсетка): все активные менеджеры
 // компании — имя, отдел, филиал, аватар. Доступен ЛЮБОМУ залогиненному — решение
 // владельца: «публичный профиль показывает всё, что и так у человека в профиле,
 // всем»; справочник — точка входа в такие профили. Ничего денежного/аналитического
 // здесь нет — цифры остаются за своими гейтами.
+//
+// Аудит 09.09 («Главные дыры» п.4, справочники): список людей — точка входа в
+// профили и пикер; по требованию владельца режется срезом сессии — не-админ
+// видит только менеджеров своих подконтрольных отделов (МОП — себя).
 //
 // Аватары — bulk-чтение кэша manager_avatars БЕЗ ленивого похода в Битрикс
 // (getManagerAvatarUrl ходит по одному и не для списка на ~200 человек): у кого
@@ -16,7 +21,8 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const org = await analyticsDb().query<{
+  const scope = await getSessionScope(session);
+  const orgAll = await analyticsDb().query<{
     id: string; name: string; department: string | null; branch: string | null;
   }>(
     `SELECT DISTINCT ON (h.manager_bitrix_user_id)
@@ -30,6 +36,7 @@ export async function GET() {
       ORDER BY h.manager_bitrix_user_id, h.manager_name`,
   );
 
+  const org = { rows: orgAll.rows.filter(r => canSeeManager(scope, r.id)) };
   const ids = org.rows.map(r => r.id);
   let avatarById = new Map<string, string>();
   if (ids.length > 0) {

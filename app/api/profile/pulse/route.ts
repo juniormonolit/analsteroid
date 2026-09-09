@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { fromZonedTime } from 'date-fns-tz';
+import { getSessionScope } from '@/lib/org/sessionScope';
 
 // «Движуха» (задача владельца 05.08): общая новостная лента компании — все
 // продажи «обычными комментариями», гип-посты по порогам сделки (3/5/10/20 млн),
@@ -9,6 +10,12 @@ import { fromZonedTime } from 'date-fns-tz';
 // (отсечка 18:00, награда в конце дня — существующие бейджи «Топ продаж»).
 // Хранимой ленты нет — собирается на лету, как персональная (/api/profile/feed).
 // Доступ — любой залогиненный. ?scope=dept — только отдел зрителя (по оргструктуре).
+//
+// Аудит 09.09 («Главные дыры» п.5): scope=company по умолчанию публиковал имена
+// сделок и суммы по всей компании любому аккаунту. Теперь «вся компания» — только
+// для админа; остальным «company» означает их собственный срез (менеджеры
+// подконтрольных отделов), а МОП/«Пользователь» видит только свои события.
+// scope=dept дополнительно сужает до отдела зрителя внутри среза.
 
 const LIMIT = 80;          // событий в ответе после слияния
 const SALES_SCAN = 120;    // свежих продаж со сдвига (все, вкл. «комментарии»)
@@ -42,6 +49,7 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const scope = req.nextUrl.searchParams.get('scope') === 'dept' ? 'dept' : 'company';
+  const access = await getSessionScope(session);
 
   // Справочник менеджеров: имя/отдел (+ отдел зрителя для scope=dept).
   const org = await analyticsDb().query<{ id: string; name: string; department: string | null; department_id: string | null }>(
@@ -57,9 +65,10 @@ export async function GET(req: NextRequest) {
   const viewerDeptId = session.bitrixUserId ? (byId.get(session.bitrixUserId)?.department_id ?? null) : null;
   const deptIds = scope === 'dept' && viewerDeptId
     ? new Set(org.rows.filter(r => r.department_id === viewerDeptId).map(r => r.id))
-    : null; // null = вся компания
+    : null; // null = вся компания (для админа) / весь срез сессии (для остальных)
 
-  const inScope = (managerId: string) => !deptIds || deptIds.has(managerId);
+  const inScope = (managerId: string) =>
+    (!deptIds || deptIds.has(managerId)) && (access.kind === 'all' || access.managerIds.has(managerId));
 
   // Начало текущего дня МСК — для закреплённого топ-3.
   const now = new Date();

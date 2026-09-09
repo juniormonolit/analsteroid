@@ -35,6 +35,7 @@ import { periodDateStr } from '@/lib/period';
 import { formatInTimeZone } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { validateDealFilters } from '@/lib/metrics/dealFilters';
+import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
 
 /**
  * Валидация period/comparisonPeriod (баг найден 10.07 при работе над задачей "план
@@ -64,10 +65,10 @@ export async function POST(req: NextRequest) {
     dealScope = 'primary' as DealScope,
     clientType = 'all' as ClientType,
     grouping = 'none' as Grouping,
-    departmentIds,
+    departmentIds: requestedDepartmentIds,
     productGroupMode = 'kc' as ProductGroupMode,
     accountType = 'managers' as AccountType,
-    managerId,       // drilldown: restrict by-product-groups to one manager
+    managerId: requestedManagerId, // drilldown: restrict by-product-groups to one manager
     productGroupId,  // drilldown: restrict by-managers to one product group
     productGroupIds, // раздел «Графики» (мультиселект, задача 29.07): пустой/undefined = все группы
     sourceDimension, // by-sources: main dimension (brand/platform/contact_type/ad_channel/branch/source)
@@ -115,6 +116,40 @@ export async function POST(req: NextRequest) {
   const requested = resolveMetricIds(metricIds, allMetrics);
   const withDeps = withDependencies(requested, allMetrics);
   const calculatedMetrics = withDeps.filter(m => m.metricType === 'calculated');
+
+  // ── Срез сессии (аудит доступа 09.09, требование владельца) ──────────────────
+  // До этого роут проверял только наличие сессии и верил departmentIds/managerId
+  // из тела: любой РОП/логист получал отчёт по всей компании. Теперь: админ — всё;
+  // РОП/Директор — пересечение запрошенных отделов со своими (пустой запрос =
+  // весь свой срез); МОП/«Пользователь» — только собственные строки/сделки.
+  const scope = await getSessionScope(session);
+  let departmentIds: string[] | undefined = Array.isArray(requestedDepartmentIds) ? requestedDepartmentIds : undefined;
+  let managerId: string | undefined = requestedManagerId;
+  if (scope.kind !== 'all') {
+    if (reportSlug === 'by-sources') {
+      return NextResponse.json({ error: 'Разрез по источникам доступен только администраторам' }, { status: 403 });
+    }
+    if (managerId && !canSeeManager(scope, String(managerId))) {
+      return NextResponse.json({ error: 'Этот менеджер вам недоступен' }, { status: 403 });
+    }
+    if (scope.kind === 'depts') {
+      const eff = await scopeDeptIdsBitrix(scope, departmentIds);
+      if (eff !== null && eff.length === 0) {
+        return NextResponse.json({ error: 'Запрошенные отделы вне вашего доступа' }, { status: 403 });
+      }
+      departmentIds = eff ?? undefined;
+    } else {
+      const self = session.bitrixUserId;
+      if (!self) return NextResponse.json({ error: 'Аккаунт не привязан к менеджеру Битрикса' }, { status: 403 });
+      if (reportSlug === 'by-managers') departmentIds = undefined;            // строки режем ниже по scope.managerIds
+      else if (reportSlug === 'by-product-groups' || reportSlug === 'by-deal-buckets' || reportSlug === 'by-amount-buckets') managerId = self;
+      else return NextResponse.json({ error: 'Этот разрез доступен только руководителям и администраторам' }, { status: 403 });
+    }
+  }
+  // Строки отчёта по менеджерам — только менеджеры среза (после fetch и после
+  // дорисовки план-строк, которая могла добавить чужих).
+  const filterScopedRows = (rows: ReportRow[]): ReportRow[] =>
+    scope.kind === 'all' || reportSlug !== 'by-managers' ? rows : rows.filter(r => canSeeManager(scope, r.dimensionId));
 
   const opts = {
     period: { from: new Date(period.from), to: new Date(period.to) },
@@ -219,6 +254,9 @@ export async function POST(req: NextRequest) {
   }
 
 
+  currentRows = filterScopedRows(currentRows);
+  compRows = filterScopedRows(compRows);
+
   // Плановые метрики (план месяца/дневной/на текущий день/неделю, план периода,
   // факты фиксированных окон) — общий движок features/reports/engine/planMetrics.ts:
   // тот же код зовёт конструктор «Мой отчёт» (/api/my-report), чтобы его блок
@@ -234,6 +272,8 @@ export async function POST(req: NextRequest) {
     accountType,
     commonDealFilters,
   }));
+  currentRows = filterScopedRows(currentRows);
+  compRows = filterScopedRows(compRows);
 
   // Метрики активности менеджеров «Дней в работе» / «% выхода» / «Сделок/день» —
   // спека 09.07+допы (задача 10.07, см. features/reports/engine/managerActivity.ts).

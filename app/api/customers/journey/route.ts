@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb } from '@/lib/db/clients';
+import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
 
 // «Путь клиента» — цепочка покупок заказчика по товарным группам (задача владельца
 // 17.08: «дерево развития»: первая сделка → интервал → следующая → …, у каждой —
@@ -24,6 +25,25 @@ export async function GET(req: NextRequest) {
   }
   const where = companyId ? 'd.company_id = $1' : 'd.contact_id = $1';
   const id = Number(companyId ?? contactId);
+
+  // Аудит 09.09 («Главные дыры» п.2): contactId/companyId принимались на веру —
+  // перебором id читалась история отгрузок любого клиента компании. Не-админу
+  // проверяем владельца клиента: менеджер ПОСЛЕДНЕЙ сделки по тому же ключу
+  // (правило атрибуции customers.ts / resolve) обязан быть в срезе сессии.
+  const scope = await getSessionScope(session);
+  if (scope.kind !== 'all') {
+    const owner = await analyticsDb().query<{ mgr: string | null }>(
+      `SELECT d.current_manager_id::text AS mgr
+         FROM sa.deals d
+        WHERE ${where} AND d.funnel_id IN (0,1,2,3)
+        ORDER BY d.created_at DESC, d.deal_id DESC
+        LIMIT 1`,
+      [id],
+    );
+    if (!canSeeManager(scope, owner.rows[0]?.mgr)) {
+      return scopeForbidden('Этот заказчик вам недоступен');
+    }
+  }
 
   const res = await analyticsDb().query<{
     deal_id: number; deal_name: string | null; amount: string | null;

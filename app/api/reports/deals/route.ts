@@ -11,6 +11,7 @@ import { DRILL_RULES, NO_DEAL_LIST_METRIC_IDS } from '@/features/reports/engine/
 import type { Metric } from '@/lib/metrics/types';
 import { buildDealFilterWhere, validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
+import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
 
 // «Вошло в стадию: …» (метрики 107) — metricId → {stage_id группы, воронка}.
 // Дрилл обязан повторять семантику ячейки (stageEntered.ts): сделки, ВПЕРВЫЕ
@@ -418,6 +419,19 @@ export async function GET(req: NextRequest) {
   }
 
   const db = analyticsDb();
+
+  // ── Срез сессии (аудит доступа 09.09): любой список сделок — только сделки
+  // менеджеров среза, какие бы managerId/managerIds/all=1/departmentIds/contactId/
+  // companyId ни пришли от клиента. Админ — без ограничения.
+  const access = await getSessionScope(session);
+  if (access.kind !== 'all') {
+    if (managerId && !canSeeManager(access, String(managerId))) {
+      return NextResponse.json({ error: 'Сделки этого менеджера вам недоступны' }, { status: 403 });
+    }
+    const allowed = [...access.managerIds].filter(id => /^\d+$/.test(id));
+    if (allowed.length === 0) return NextResponse.json({ deals: [], total_count: 0, total_amount: 0 });
+    dimensionFilter += ` AND ${managerIdsWhere(allowed)}`;
+  }
 
   const sql = `
     SELECT

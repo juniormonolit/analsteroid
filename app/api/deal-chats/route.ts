@@ -7,6 +7,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { getDealChatStatuses, listDealChats, sendDealChatMessage } from '@/lib/deal-chats/service';
+import { analyticsDb } from '@/lib/db/clients';
+import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
 
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -35,6 +37,18 @@ export async function POST(req: NextRequest) {
   if (!Number.isInteger(dealId) || dealId <= 0) return NextResponse.json({ error: 'dealId обязателен' }, { status: 400 });
   if (!text) return NextResponse.json({ error: 'Пустое сообщение' }, { status: 400 });
   if (text.length > 4000) return NextResponse.json({ error: 'Сообщение слишком длинное (макс. 4000)' }, { status: 400 });
+
+  // Аудит 09.09 («Главные дыры» п.6): носитель action.deal_chats мог написать
+  // менеджеру ЛЮБОЙ сделки компании. Менеджер сделки (sa.deals — истина, тот же
+  // источник, что в sendDealChatMessage) обязан быть в срезе сессии.
+  const deal = await analyticsDb().query<{ manager_id: string | null }>(
+    'SELECT current_manager_id::text AS manager_id FROM deals WHERE deal_id = $1',
+    [dealId],
+  );
+  if (!deal.rows.length) return NextResponse.json({ error: `Сделка #${dealId} не найдена` }, { status: 404 });
+  if (!canSeeManager(await getSessionScope(session!), deal.rows[0].manager_id)) {
+    return scopeForbidden('Сделка вне вашего среза — написать по ней нельзя');
+  }
 
   try {
     const { chatId } = await sendDealChatMessage({

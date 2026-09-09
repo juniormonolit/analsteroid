@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { timingSafeEqual } from 'crypto';
 import { handleIncomingBotMessage, handleBindDealCommand } from '@/lib/deal-chats/service';
 import { handleAdviceFeedback } from '@/lib/bot/feedback';
 import { systemDb } from '@/lib/db/clients';
@@ -23,6 +24,65 @@ async function logInbound(row: {
   }
 }
 
+// ── Аутентификация вебхука (аудит 09.09, ACCESS_AUDIT_2026-09-09.md, «главная
+// дыра» №1): роут был полностью открыт — любой из интернета мог подделать
+// «ответ менеджера», привязку сделки и клики по кнопкам. Битрикс с каждым
+// событием присылает auth[application_token] (секрет приложения, выдаётся при
+// установке обработчика) и auth[domain] (портал). Проверяем:
+//   * домен обязан совпасть с BITRIX_PORTAL_DOMAIN (дефолт — td.monolit-crm.ru,
+//     тот же захардкоженный портал, что в lib/bots/callControlAdmin.ts);
+//   * если задан BITRIX_EVENTS_APP_TOKEN — токен обязан совпасть (constant-time),
+//     иначе 403;
+//   * если env НЕ задан — событие принимаем (не ломать бота до настройки), но один
+//     раз за процесс пишем в лог полученный токен, чтобы админ перенёс его в
+//     start.sh (прод читает env только оттуда — см. память prod-env-not-from-envlocal).
+const DEFAULT_PORTAL_DOMAIN = 'td.monolit-crm.ru';
+let appTokenWarned = false;
+
+function pickAuth(data: Record<string, unknown>): { token: string; domain: string } {
+  // form-data: плоские ключи auth[application_token] / auth[domain];
+  // JSON: вложенный объект auth: { application_token, domain }.
+  const nested = (data.auth && typeof data.auth === 'object' ? data.auth : {}) as Record<string, unknown>;
+  const token = String(data['auth[application_token]'] ?? nested.application_token ?? '');
+  const domain = String(data['auth[domain]'] ?? nested.domain ?? '');
+  return { token, domain: domain.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '') };
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  // timingSafeEqual бросает при разной длине — сравниваем длину отдельно,
+  // а потом буферы одинаковой длины (тот же приём, что в admin/org-sync).
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+/** null — событие подлинное; иначе готовый ответ 403. */
+function authenticateEvent(data: Record<string, unknown>): NextResponse | null {
+  const { token, domain } = pickAuth(data);
+  const expectedDomain = (process.env.BITRIX_PORTAL_DOMAIN || DEFAULT_PORTAL_DOMAIN).toLowerCase();
+  if (domain !== expectedDomain) {
+    console.warn('[bitrix/events] отклонено: чужой домен', JSON.stringify(domain));
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  const expectedToken = process.env.BITRIX_EVENTS_APP_TOKEN || '';
+  if (!expectedToken) {
+    if (!appTokenWarned) {
+      appTokenWarned = true;
+      console.warn(
+        `[bitrix/events] BITRIX_EVENTS_APP_TOKEN не задан — события принимаются без проверки токена. `
+        + `Настройте BITRIX_EVENTS_APP_TOKEN=${token || '<пусто: Битрикс не прислал application_token>'} в start.sh и перезапустите.`,
+      );
+    }
+    return null;
+  }
+  if (!token || !safeEqual(token, expectedToken)) {
+    console.warn('[bitrix/events] отклонено: application_token не совпал');
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+  return null;
+}
+
 // Обработчик событий бота «Аналитик». Сейчас обслуживает чаты по сделкам
 // (ответы менеджеров и клики по кнопкам bind_deal); разбор вопросов на
 // естественном языке — по-прежнему Phase 2.
@@ -39,6 +99,10 @@ export async function POST(req: NextRequest) {
     const form = await req.formData().catch(() => null);
     if (form) for (const [key, value] of form.entries()) data[key] = String(value);
   }
+
+  // Аудит 09.09: сначала подлинность события, потом всё остальное (в т.ч. лог тела).
+  const denied = authenticateEvent(data);
+  if (denied) return denied;
 
   const event = String(data.event ?? '');
   console.log('[bitrix/events]', event || 'unknown event', JSON.stringify(data).slice(0, 500));

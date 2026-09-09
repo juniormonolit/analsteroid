@@ -1,6 +1,7 @@
 import type { SessionUser } from '@/lib/auth/session';
 import { getCallControlManagedDepts } from './callControlScope';
 import { getUserDepartmentOptions, resolveManagersForDepartments } from './teamRoster';
+import { analyticsDb } from '@/lib/db/clients';
 
 // Кто вправе смотреть карточку КОНКРЕТНОГО менеджера (задача владельца 30.07,
 // «Вариант Б»: ЛК открывается всем менеджерам из Битрикса, пользователи создаются
@@ -17,7 +18,9 @@ import { getUserDepartmentOptions, resolveManagersForDepartments } from './teamR
 //   * РОП и любой, у кого есть подконтрольные отделы — карточки менеджеров этих
 //     отделов (КЗ-структура + назначения админом в user_departments);
 //   * остальные («МОП», «Пользователь», автосозданные из Битрикса) — только себя.
-const FULL_ACCESS_ROLES = new Set(['Администратор', 'Директор']);
+// Директор ИСКЛЮЧЁН из полного доступа (аудит 09.09, требование владельца): он
+// видит свой филиал и ниже — филиал добавляется в managedDepartmentIds ниже.
+const FULL_ACCESS_ROLES = new Set(['Администратор']);
 
 export function hasFullManagerAccess(session: SessionUser): boolean {
   return session.isSuperadmin || (!!session.roleName && FULL_ACCESS_ROLES.has(session.roleName));
@@ -25,11 +28,33 @@ export function hasFullManagerAccess(session: SessionUser): boolean {
 
 /** Отделы, чьи данные пользователь вправе смотреть: КЗ-структура ∪ назначенные админом. */
 export async function managedDepartmentIds(session: SessionUser): Promise<string[]> {
-  const [cc, assigned] = await Promise.all([
+  const [cc, assigned, branch] = await Promise.all([
     session.bitrixUserId ? getCallControlManagedDepts(session.bitrixUserId) : Promise.resolve([]),
     getUserDepartmentOptions(session.id),
+    session.roleName === 'Директор' && session.bitrixUserId ? branchDepartmentIds(session.bitrixUserId) : Promise.resolve([]),
   ]);
-  return [...new Set([...cc.map(d => d.deptId), ...assigned.map(d => d.id)])];
+  return [...new Set([...cc.map(d => d.deptId), ...assigned.map(d => d.id), ...branch])];
+}
+
+/**
+ * Директор — «свой филиал и ниже» (правило владельца 09.09): все активные отделы
+ * филиала, в котором директор сам числится в оргструктуре. Если его нет в
+ * org_resolved_hierarchy (не менеджер) — филиал не определить, остаются КЗ-отделы
+ * и назначения админа.
+ */
+async function branchDepartmentIds(bitrixUserId: string): Promise<string[]> {
+  const res = await analyticsDb().query<{ department_id: string }>(
+    `SELECT DISTINCT department_id::text AS department_id
+       FROM sa.org_resolved_hierarchy
+      WHERE is_active AND department_id IS NOT NULL
+        AND branch IS NOT DISTINCT FROM (
+          SELECT branch FROM sa.org_resolved_hierarchy
+           WHERE manager_bitrix_user_id::text = $1 AND is_active LIMIT 1)
+        AND EXISTS (SELECT 1 FROM sa.org_resolved_hierarchy o2
+                     WHERE o2.manager_bitrix_user_id::text = $1 AND o2.is_active)`,
+    [bitrixUserId],
+  );
+  return res.rows.map(r => r.department_id);
 }
 
 export async function canViewManager(session: SessionUser, managerBitrixId: string): Promise<boolean> {

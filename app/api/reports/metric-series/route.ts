@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
 import { fetchMetricSeries, type SeriesGranularity } from '@/features/reports/engine/metricSeries';
 import { fetchBookingCallRateSeries, BOOKING_SERIES_METRICS } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversionSeries, stagePairForMetric } from '@/features/reports/engine/stageConversions';
@@ -28,17 +29,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'metricId и period обязательны' }, { status: 400 });
   }
   const granularity: SeriesGranularity = GRANS.includes(body.granularity) ? body.granularity : 'day';
-  const managerIds = Array.isArray(body.managerIds)
+  let managerIds = Array.isArray(body.managerIds)
     ? (body.managerIds as unknown[]).filter((v): v is string => typeof v === 'string' && /^\d+$/.test(v)).slice(0, 1000)
     : undefined;
   // Фильтр отчёта по отделам — без него график в разрезах без явного списка
   // менеджеров (товарные группы) игнорировал выбранные отделы (баг 27.08).
-  const departmentIds = Array.isArray(body.departmentIds)
+  let departmentIds = Array.isArray(body.departmentIds)
     ? (body.departmentIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.length <= 64).slice(0, 200)
     : undefined;
   if (body.productGroupIds !== undefined && (!Array.isArray(body.productGroupIds) || body.productGroupIds.length > 200
     || (body.productGroupIds as unknown[]).some(v => typeof v !== 'string' || (v as string).length > 200))) {
     return NextResponse.json({ error: 'productGroupIds: массив строк ≤200' }, { status: 400 });
+  }
+
+  // ── Срез сессии (аудит доступа 09.09): чужие менеджеры отсекаются, отделы
+  // пересекаются со своими; МОП без явных менеджеров — только он сам.
+  const scope = await getSessionScope(session);
+  if (scope.kind !== 'all') {
+    if (managerIds?.length) {
+      const eff = managerIds.filter(id => canSeeManager(scope, id));
+      if (eff.length === 0) return NextResponse.json({ error: 'Эти менеджеры вам недоступны' }, { status: 403 });
+      managerIds = eff;
+    } else if (scope.kind === 'self') {
+      managerIds = [...scope.managerIds];
+      if (managerIds.length === 0) return NextResponse.json({ error: 'Аккаунт не привязан к менеджеру Битрикса' }, { status: 403 });
+    }
+    if (scope.kind === 'depts') {
+      const effD = await scopeDeptIdsBitrix(scope, departmentIds?.length ? departmentIds : undefined);
+      if (effD !== null && effD.length === 0) return NextResponse.json({ error: 'Запрошенные отделы вне вашего доступа' }, { status: 403 });
+      departmentIds = effD ?? undefined;
+    }
   }
 
   const common = {

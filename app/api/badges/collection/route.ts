@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
+import { getSessionScope, canSeeManager, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Коллекция ачивок (задача владельца 05.08: «раздел „Награды“ должен быть только
 // про награды… у наград должна быть редкость (частота встречаемости у других)…
@@ -13,8 +14,10 @@ import { systemDb } from '@/lib/db/clients';
 //   ≤5% — легендарная, ≤15% — эпическая, ≤35% — редкая, ≤65% — необычная, иначе обычная.
 //
 // СЕКРЕТНЫЕ (is_secret, миграция 152) в список неполученных НЕ попадают — они
-// появляются только у того, кто их получил. Доступ — любой залогиненный (раздел
-// «Награды» публичен, как и профиль).
+// появляются только у того, кто их получил. Доступ (аудит 09.09,
+// ai_docs/fresh_docs/ACCESS_AUDIT_2026-09-09.md): чужой ?bitrixId — только в
+// пределах среза сессии (canSeeManager), иначе 403; раньше отдавалось любому
+// залогиненному как «публичный раздел» — отменено моделью владельца.
 
 export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 
@@ -54,6 +57,10 @@ export async function GET(req: NextRequest) {
   const requested = req.nextUrl.searchParams.get('bitrixId');
   const bitrixId = requested && /^\d+$/.test(requested) ? requested : session.bitrixUserId;
   if (!bitrixId) return NextResponse.json({ items: [], totals: null });
+  // Аудит 09.09: чужая коллекция — только внутри среза сессии.
+  if (bitrixId !== session.bitrixUserId && !canSeeManager(await getSessionScope(session), bitrixId)) {
+    return scopeForbidden('Награды этого сотрудника вам недоступны');
+  }
   const id = Number(bitrixId);
 
   const db = systemDb();

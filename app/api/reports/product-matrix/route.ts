@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 import { fetchProductMatrix } from '@/features/reports/engine/productMatrix';
 
 // «Товарная матрица» (задача владельца 10.08): вероятности перехода
@@ -18,6 +19,11 @@ function isValidPeriodInput(p: unknown): p is { from: string; to: string } {
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  // Аудит доступа 09.09: матрица — срез всей компании, движок не умеет резать по
+  // менеджерам; раздел «Ещё» — только админам, так что и API — только им.
+  if (!hasFullManagerAccess(session)) {
+    return NextResponse.json({ error: 'Товарная матрица доступна только администраторам' }, { status: 403 });
+  }
 
   const body = await req.json();
   if (!isValidPeriodInput(body.period)) {

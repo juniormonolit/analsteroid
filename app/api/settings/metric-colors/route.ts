@@ -9,6 +9,10 @@ import { categoryDefaultColor } from '@/lib/metrics/entity-colors';
 // Ручные правила (metric_colors) — приоритет; когда правила нет, действует
 // автоцвет по сущности (lib/metrics/entity-colors.ts, задача 6а, п.10 спеки
 // 2026-07-08) — autoCategoryColors ниже отдаёт превью этого автоцвета для UI.
+//
+// Аудит 09.09, решение: GET намеренно без права и без среза — это НЕ данные
+// (ни сумм, ни менеджеров), а палитра, нужная каждому отчёту для рендера у любой
+// сессии; запись (PUT) как и была — только section.settings. Код не менялся.
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
+import { getSessionScope } from '@/lib/org/sessionScope';
+import { scopeShortLogins } from '@/lib/org/shortLoginScope';
 import * as XLSX from 'xlsx';
 
 interface ConflictItem {
@@ -15,6 +17,13 @@ interface CleanItem {
   login: string;
   name: string;
   amount: number;
+}
+
+/** Строки файла, отброшенные из-за среза (аудит 09.09) — честно показываем в ответе. */
+interface SkippedItem {
+  login: string;
+  name: string;
+  reason: string;
 }
 
 export async function POST(request: Request) {
@@ -49,14 +58,26 @@ export async function POST(request: Request) {
     parsed.push({ login, name, amount });
   }
 
-  if (parsed.length === 0) {
-    return NextResponse.json({ conflicts: [], clean: [] });
+  // Аудит 09.09 («Главные дыры» п.6): носитель action.plans.edit мог импортом
+  // задать план любому сотруднику компании. Логины вне среза сессии не
+  // проверяем на конфликты и не отдаём на подтверждение — возвращаем отдельным
+  // списком skipped, чтобы человек видел, что именно не легло и почему.
+  const allowedLogins = await scopeShortLogins(await getSessionScope(session!));
+  const skipped: SkippedItem[] = [];
+  const inScope = parsed.filter(p => {
+    if (allowedLogins === null || allowedLogins.has(p.login)) return true;
+    skipped.push({ login: p.login, name: p.name, reason: 'Сотрудник вне вашего среза — план не импортирован' });
+    return false;
+  });
+
+  if (inScope.length === 0) {
+    return NextResponse.json({ conflicts: [], clean: [], skipped });
   }
 
   // Check existing records for this month
   const monthDate = `${month}-01`;
   const db = systemDb();
-  const logins = parsed.map(p => p.login);
+  const logins = inScope.map(p => p.login);
   const existing = await db.query<{ manager_login: string; plan_shipments: string }>(
     `SELECT manager_login, plan_shipments FROM manager_plans WHERE month = $1 AND manager_login = ANY($2)`,
     [monthDate, logins],
@@ -66,7 +87,7 @@ export async function POST(request: Request) {
   const conflicts: ConflictItem[] = [];
   const clean: CleanItem[] = [];
 
-  for (const p of parsed) {
+  for (const p of inScope) {
     if (existingMap.has(p.login)) {
       conflicts.push({ login: p.login, name: p.name, existing: existingMap.get(p.login)!, incoming: p.amount });
     } else {
@@ -74,5 +95,5 @@ export async function POST(request: Request) {
     }
   }
 
-  return NextResponse.json({ conflicts, clean });
+  return NextResponse.json({ conflicts, clean, skipped });
 }

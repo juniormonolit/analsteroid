@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb } from '@/lib/db/clients';
 import { loadManagerInfoMap, loadSourceMap } from '@/lib/marketing/sources';
+import { getSessionScope, canSeeManager, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Полная карточка сделки: все поля deals + товары (products jsonb) + справочные
 // обогащения (менеджер из org, источник из marketing_sources).
@@ -37,6 +38,13 @@ export async function GET(req: NextRequest) {
   );
   if (!res.rows.length) return NextResponse.json({ error: 'Сделка не найдена' }, { status: 404 });
   const deal = res.rows[0];
+
+  // Аудит 09.09 (IDOR): карточка отдавалась по любому числовому deal_id. Сделка
+  // видна, только если её текущий менеджер входит в срез сессии (lib/org/sessionScope.ts).
+  // Карточка открывается из отчётов/карточек, которые уже режутся тем же срезом,
+  // поэтому для UI ничего не меняется — закрывается только перебор id.
+  const scope = await getSessionScope(session);
+  if (!canSeeManager(scope, deal.manager_id)) return scopeForbidden('Эта сделка вам недоступна');
 
   // LTV-показатели карточки сделки (задача 1561, владелец приложения Серёга).
   // Клиент = contact_id сделки. «Продажа» — тот же предикат, что и в остальных

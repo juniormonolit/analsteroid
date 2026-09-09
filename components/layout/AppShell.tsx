@@ -405,8 +405,15 @@ function SidebarBody({
   onOpenIdeas: () => void;
 }) {
   const salesActive = pathname.startsWith('/sales');
-  const showSummaryBlock = hasPerm(user, 'section.summary') || hasPerm(user, 'section.plans') || hasPerm(user, 'section.decomposition');
-  const showMetricsBlock = hasPerm(user, 'section.metrics') || hasPerm(user, 'section.settings');
+
+  // Аудит 09.09 (ai_docs/fresh_docs/ACCESS_AUDIT_2026-09-09.md): весь пункт «Ещё»
+  // и его разделы — только Администратор/супер-админ (правило владельца «всё —
+  // только админ; остальные — свой срез»). Это ЗЕРКАЛО FULL_ACCESS_ROLES из
+  // lib/org/managerAccess.ts (hasFullManagerAccess): сам модуль тянет
+  // teamRoster → analyticsDb → pg и в клиентский бандл не годится, поэтому
+  // проверка повторена по полям сессии. Менять — синхронно с FULL_ACCESS_ROLES.
+  // Серверные гейты — в layout.tsx каждого раздела, здесь только скрытие пункта.
+  const moreVisible = user.isSuperadmin || user.roleName === 'Администратор';
 
   // «Ещё ▸» (оптимизация 16.07): второстепенные разделы одним свёрнутым пунктом.
   const moreItems = [
@@ -444,7 +451,7 @@ function SidebarBody({
     // Конструктор виджетов доступен любому залогиненному (данные — те же, что он и так
     // видит; жёсткой ограды по отделам в приложении нет). Не гейтим по section.*.
     { href: '/widget-constructor', label: 'Виджеты', icon: <Smartphone size={18} />, ok: true },
-  ].filter(i => i.ok);
+  ].filter(i => moreVisible && i.ok);
   const moreActive = moreItems.some(i => pathname.startsWith(i.href));
   // Авто-раскрытие, когда пользователь В одном из спрятанных разделов — активный
   // пункт не должен быть невидимым (и при навигации туда извне, поэтому effect,
@@ -611,9 +618,10 @@ function SidebarBody({
               (авто-раскрыт, когда открыт один из его разделов), видимыми остались
               только «Настройки» и «Что изменилось?». «Идеи и планы» переехали
               кнопкой в шапку панели ченджлога, «Корзина» — в ЛК. */}
-          {(showSummaryBlock || showMetricsBlock || hasPerm(user, 'section.presentation')) && (
+          {/* Аудит 09.09: блок показываем, если есть «Ещё» (только админам) или «Настройки». */}
+          {((moreVisible && moreItems.length > 0) || hasPerm(user, 'section.settings')) && (
             <div className="border-t border-[var(--color-sidebar-border)] pt-1 px-2">
-              {moreItems.length > 0 && (
+              {moreVisible && moreItems.length > 0 && (
                 <>
                   <RailTooltip collapsed={collapsed} label="Ещё">
                     <button
@@ -890,7 +898,12 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           {/* Нижняя навигация (задача 2764) — flex-сиблинг main, не fixed-оверлей:
               main отдаёт ей реальную высоту, поэтому ни одной из ~30 страниц с
               собственным h-full не нужно ничего менять под новый нижний бар. */}
-          <BottomTabBar onMore={() => setMobileOpen(true)} />
+          {/* Аудит 09.09: «Рейтинг» теперь раздел «Ещё» (только админам) — таб
+              скрываем тем же зеркалом FULL_ACCESS_ROLES, что и пункт в сайдбаре. */}
+          <BottomTabBar
+            onMore={() => setMobileOpen(true)}
+            showRating={user.isSuperadmin || user.roleName === 'Администратор'}
+          />
         </div>
       </div>
       {changelogOpen && (
