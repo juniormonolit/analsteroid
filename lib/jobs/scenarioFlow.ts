@@ -106,6 +106,17 @@ export function nextAfter(flow: ScenarioFlow, idx: Map<string, NodeRef>, nodeId:
   return null;
 }
 
+/** Ветка «завершена»: последний блок — «Завершить», либо «Проверка», обе ветки которой
+ *  завершены. После такой ветки блоков быть не может — они недостижимы, и сливать её с
+ *  соседней на схеме нельзя (владелец 09.09). */
+export function terminates(list: FlowNode[]): boolean {
+  const last = list[list.length - 1];
+  if (!last) return false;
+  if (last.type === 'end') return true;
+  if (last.type === 'check') return terminates(last.yes) && terminates(last.no);
+  return false;
+}
+
 export function countNodes(list: FlowNode[]): number {
   return list.reduce((n, x) => n + 1 + (x.type === 'check' ? countNodes(x.yes) + countNodes(x.no) : 0), 0);
 }
@@ -145,7 +156,7 @@ export function validateFlow(raw: unknown): { flow: ScenarioFlow; errors: string
   const ids = new Set<string>();
   const nodes = (list: unknown, path: string): FlowNode[] => {
     if (!Array.isArray(list)) return [];
-    return list.map((n, i): FlowNode | null => {
+    const out = list.map((n, i): FlowNode | null => {
       const o = (n ?? {}) as Record<string, unknown>;
       let id = String(o.id ?? '').trim() || newNodeId();
       while (ids.has(id)) id = newNodeId();
@@ -167,6 +178,10 @@ export function validateFlow(raw: unknown): { flow: ScenarioFlow; errors: string
         default: errors.push(`${where}: неизвестный тип блока`); return null;
       }
     }).filter((x): x is FlowNode => x !== null);
+    // Блоки после завершения недостижимы — это ошибка схемы, не «мы так задумали».
+    const cut = out.findIndex((n, i) => i < out.length - 1 && terminates([n]));
+    if (cut >= 0) errors.push(`${path}: после блока ${cut + 1} («${out[cut].type === 'end' ? 'Завершить' : 'Проверка», обе ветки которой завершены'}) стоят блоки — они никогда не выполнятся`);
+    return out;
   };
   const a = (f.audience ?? {}) as Partial<FlowAudience>;
   const managerIds = Array.isArray(a.managerIds) ? [...new Set(a.managerIds.map(Number).filter(n => Number.isInteger(n) && n > 0))] : [];

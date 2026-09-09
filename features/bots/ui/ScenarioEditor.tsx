@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import type { DataType } from '@/lib/metrics/types';
 import {
-  CONDITION_LABEL, defaultFlow, newNodeId, renderTemplate, validateFlow,
+  CONDITION_LABEL, defaultFlow, newNodeId, renderTemplate, terminates, validateFlow,
   type CheckCondition, type FlowBranch, type FlowNode, type ScenarioFlow,
 } from '@/lib/jobs/scenarioFlow';
 import { Chip, fmtV, jsonOrThrow, unitFor, type RunSummary } from './ScenariosTab';
@@ -213,10 +213,10 @@ export function ScenarioEditor({ id }: { id: string }) {
         {/* Развилка триггера: две колонки-ветки, каждая центрирует свои блоки */}
         <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
           <BranchCol side="left" label="Ниже порога — просадка" color="var(--color-negative)"
-            hint={`значение < ${metric ? fmtV(baseOf(flow), dt) : 'база'} − ${flow.trigger.dropThreshold.toLocaleString('ru-RU')} ${unitFor(dt)}`} root>
+            hint={`значение < ${metric ? fmtV(baseOf(flow), dt) : 'база'} − ${flow.trigger.dropThreshold.toLocaleString('ru-RU')} ${unitFor(dt)}`} root terminated>
             <NodeList nodes={flow.below} onChange={list => update(f => ({ ...f, below: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
           </BranchCol>
-          <BranchCol side="right" label="В норме — на уровне цели или выше" color="var(--color-positive)" hint="значение ≥ базы; между порогом и базой — тишина" root>
+          <BranchCol side="right" label="В норме — на уровне цели или выше" color="var(--color-positive)" hint="значение ≥ базы; между порогом и базой — тишина" root terminated>
             <NodeList nodes={flow.norm} onChange={list => update(f => ({ ...f, norm: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
           </BranchCol>
         </div>
@@ -506,24 +506,30 @@ function NodeList({ nodes, onChange, placeholders, sample, depth }: ListProps) {
       )}
       {nodes.map((n, i) => (
         <div key={n.id} className="flex flex-col items-center">
-          <AddBetween onAdd={node => insert(i, node)} />
+          {(i === 0 || !terminates([nodes[i - 1]])) && <AddBetween onAdd={node => insert(i, node)} />}
           <NodeCard node={n} onChange={node => replace(i, node)} onRemove={() => remove(i)}
             onUp={i > 0 ? () => move(i, -1) : undefined} onDown={i < nodes.length - 1 ? () => move(i, 1) : undefined}
             placeholders={placeholders} sample={sample} />
           {n.type === 'check' && <div className="h-4 w-px bg-[var(--color-border)]" />}
           {n.type === 'check' && (
             <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-              <BranchCol side="left" label="Да" color="var(--color-positive)">
+              <BranchCol side="left" label="Да" color="var(--color-positive)" terminated={terminates(n.yes)}>
                 <NodeList nodes={n.yes} onChange={list => replace(i, { ...n, yes: list })} placeholders={placeholders} sample={sample} depth={depth + 1} />
               </BranchCol>
-              <BranchCol side="right" label="Нет" color="var(--color-negative)">
+              <BranchCol side="right" label="Нет" color="var(--color-negative)" terminated={terminates(n.no)}>
                 <NodeList nodes={n.no} onChange={list => replace(i, { ...n, no: list })} placeholders={placeholders} sample={sample} depth={depth + 1} />
               </BranchCol>
             </div>
           )}
+          {terminates([n]) && (
+            <div className="flex flex-col items-center" title={n.type === 'end' ? 'Цепочка завершена' : 'Обе ветки завершены — продолжения нет'}>
+              <div className="h-3 w-px bg-[var(--color-negative)]" />
+              <div className="h-3 w-3 rounded-full bg-[var(--color-negative)]" />
+            </div>
+          )}
         </div>
       ))}
-      <AddBetween onAdd={node => insert(nodes.length, node)} last />
+      {!terminates(nodes) && <AddBetween onAdd={node => insert(nodes.length, node)} last />}
     </div>
   );
 }
@@ -531,8 +537,8 @@ function NodeList({ nodes, onChange, placeholders, sample, depth }: ListProps) {
 // Колонка ветки: сверху коннектор от родителя (горизонтальная линия от центра колонки к
 // внутреннему краю + вертикальный отвод), подпись ветки, содержимое, снизу — зеркальный
 // коннектор слияния. root — ветки триггера: подпись крупнее, с пояснением.
-function BranchCol({ side, label, color, hint, root, children }: {
-  side: 'left' | 'right'; label: string; color: string; hint?: string; root?: boolean; children: React.ReactNode;
+function BranchCol({ side, label, color, hint, root, terminated, children }: {
+  side: 'left' | 'right'; label: string; color: string; hint?: string; root?: boolean; terminated?: boolean; children: React.ReactNode;
 }) {
   const hline = side === 'left' ? { left: '50%', right: 0 } : { left: 0, right: '50%' };
   return (
@@ -546,12 +552,19 @@ function BranchCol({ side, label, color, hint, root, children }: {
       </div>
       {hint && <div className="mt-1 text-[11px] text-[var(--color-text-muted)] text-center max-w-[460px]">{hint}</div>}
       {children}
-      {/* колонка короче соседней — линия дотягивается до общего слияния */}
-      <div className="flex-1 w-px min-h-5 bg-[var(--color-border)]" />
-      <div className="relative h-5 w-full">
-        <div className="absolute left-1/2 top-0 h-5 w-px bg-[var(--color-border)]" />
-        <div className="absolute bottom-0 h-px bg-[var(--color-border)]" style={hline} />
-      </div>
+      {terminated ? (
+        // Ветка завершена «Завершить» — в слияние не идёт, просто заканчивается.
+        <div className="flex-1" />
+      ) : (
+        <>
+          {/* колонка короче соседней — линия дотягивается до общего слияния */}
+          <div className="flex-1 w-px min-h-5 bg-[var(--color-border)]" />
+          <div className="relative h-5 w-full">
+            <div className="absolute left-1/2 top-0 h-5 w-px bg-[var(--color-border)]" />
+            <div className="absolute bottom-0 h-px bg-[var(--color-border)]" style={hline} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
