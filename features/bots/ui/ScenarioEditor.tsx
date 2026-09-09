@@ -14,7 +14,7 @@ import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, Clock, FlaskConical, GitBranch, Hourglass,
-  MessageSquareText, Pencil, Play, Plus, Search, Sparkles, Square, Target, Trash2, TrendingDown, Users, X, AlertTriangle, BellOff,
+  MessageSquareText, Pencil, Play, Plus, RotateCcw, Search, Sparkles, Square, Target, Trash2, TrendingDown, Users, X, AlertTriangle, BellOff,
 } from 'lucide-react';
 import type { DataType } from '@/lib/metrics/types';
 import {
@@ -51,6 +51,7 @@ const NODE_META = {
   wait:    { label: 'Ждать',     Icon: Hourglass,         cls: 'border-[var(--color-warning)]' },
   check:   { label: 'Проверка',  Icon: GitBranch,         cls: 'border-[var(--color-text-muted)]' },
   end:     { label: 'Завершить', Icon: Square,            cls: 'border-[var(--color-negative)]' },
+  restart: { label: 'В начало',  Icon: RotateCcw,         cls: 'border-[var(--color-accent)]' },
 } as const;
 
 // ── Страница ─────────────────────────────────────────────────────────────────
@@ -507,6 +508,7 @@ function NodeList({ nodes, onChange, placeholders, sample, depth }: ListProps) {
       {nodes.map((n, i) => (
         <div key={n.id} className="flex flex-col items-center">
           {(i === 0 || !terminates([nodes[i - 1]])) && <AddBetween onAdd={node => insert(i, node)} />}
+          {i > 0 && nodes[i - 1].type === 'end' && n.type === 'restart' && <div className="h-4 w-px bg-[var(--color-border)]" />}
           <NodeCard node={n} onChange={node => replace(i, node)} onRemove={() => remove(i)}
             onUp={i > 0 ? () => move(i, -1) : undefined} onDown={i < nodes.length - 1 ? () => move(i, 1) : undefined}
             placeholders={placeholders} sample={sample} />
@@ -521,10 +523,27 @@ function NodeList({ nodes, onChange, placeholders, sample, depth }: ListProps) {
               </BranchCol>
             </div>
           )}
-          {terminates([n]) && (
-            <div className="flex flex-col items-center" title={n.type === 'end' ? 'Цепочка завершена' : 'Обе ветки завершены — продолжения нет'}>
+          {n.type === 'end' && nodes[i + 1]?.type !== 'restart' && (
+            // После «Завершить» единственное продолжение — «В начало». Без него — точка.
+            <div className="flex flex-col items-center">
               <div className="h-3 w-px bg-[var(--color-negative)]" />
-              <div className="h-3 w-3 rounded-full bg-[var(--color-negative)]" />
+              <button type="button" onClick={() => insert(i + 1, makeNode('restart'))} title="После паузы вернуть менеджера под триггер"
+                className="min-h-8 inline-flex items-center gap-1.5 rounded-full border border-dashed border-[var(--color-border)] px-3 text-[12px] text-[var(--color-text-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]">
+                <RotateCcw size={12} /> + В начало
+              </button>
+              <div className="mt-1 h-3 w-3 rounded-full bg-[var(--color-negative)]" title="Окончательно: сценарий для менеджера больше не запустится" />
+            </div>
+          )}
+          {n.type === 'restart' && (
+            <div className="flex flex-col items-center" title="После паузы — снова под триггер">
+              <div className="h-3 w-px bg-[var(--color-accent)]" />
+              <div className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-accent)] text-[var(--color-text-inverse)]"><RotateCcw size={12} /></div>
+            </div>
+          )}
+          {n.type === 'check' && terminates([n]) && (
+            <div className="flex flex-col items-center" title="Обе ветки завершены — продолжения нет">
+              <div className="h-3 w-px bg-[var(--color-border)]" />
+              <div className="h-3 w-3 rounded-full bg-[var(--color-text-muted)]" />
             </div>
           )}
         </div>
@@ -576,6 +595,7 @@ function makeNode(type: FlowNode['type']): FlowNode {
     case 'wait': return { id, type, days: 7 };
     case 'check': return { id, type, condition: 'recovered', yes: [], no: [] };
     case 'end': return { id, type, cooldownDays: null };
+    case 'restart': return { id, type };
   }
 }
 
@@ -586,7 +606,7 @@ function AddBetween({ onAdd, last }: { onAdd: (n: FlowNode) => void; last?: bool
       <div className="h-4 w-px bg-[var(--color-border)]" />
       {open ? (
         <div className="flex flex-wrap justify-center gap-1 rounded-xl border border-[var(--color-accent)] bg-[var(--color-bg)] p-1.5">
-          {(Object.keys(NODE_META) as FlowNode['type'][]).map(t => {
+          {(['message', 'wait', 'check', 'end'] as FlowNode['type'][]).map(t => {
             const { label, Icon } = NODE_META[t];
             return (
               <button key={t} type="button" onClick={() => { onAdd(makeNode(t)); setOpen(false); }}
@@ -639,11 +659,22 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
         </div>
       )}
       {node.type === 'end' && (
-        <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-text)]">
-          Цепочка закрыта; не трогать менеджера
-          <input type="number" inputMode="numeric" min={0} max={365} placeholder="из триггера" value={node.cooldownDays ?? ''}
-            onChange={e => onChange({ ...node, cooldownDays: e.target.value === '' ? null : Number(e.target.value) })} className={`${inputCls} w-28`} />
-          дней
+        <div>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-text)]">
+            Цепочка закрыта; пауза
+            <input type="number" inputMode="numeric" min={0} max={365} placeholder="из триггера" value={node.cooldownDays ?? ''}
+              onChange={e => onChange({ ...node, cooldownDays: e.target.value === '' ? null : Number(e.target.value) })} className={`${inputCls} w-28`} />
+            дней
+          </div>
+          <div className="mt-1.5 text-[12px] text-[var(--color-text-muted)]">
+            С блоком «В начало» ниже — после паузы менеджер снова под триггером, цикл повторится. Без него — окончательно,
+            сценарий для этого менеджера больше не запустится.
+          </div>
+        </div>
+      )}
+      {node.type === 'restart' && (
+        <div className="text-sm text-[var(--color-text)]">
+          После паузы менеджер возвращается под триггер: если показатель снова ниже порога (или снова в норме) — цикл коучинга запускается заново.
         </div>
       )}
     </div>

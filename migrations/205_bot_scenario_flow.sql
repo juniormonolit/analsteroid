@@ -62,3 +62,8 @@ CREATE TABLE IF NOT EXISTS bot_scenario_run_track (
   value   numeric,
   PRIMARY KEY (run_id, day)
 );
+
+-- Блок «В начало» (владелец 09.09): «Завершить» + пауза, затем «В начало» — цикл коучинга
+-- запустится по триггеру снова не раньше паузы. Без «В начало» цепочка закрыта окончательно:
+-- restartable=false → сценарий для этого менеджера больше не стартует.
+ALTER TABLE bot_scenario_runs ADD COLUMN IF NOT EXISTS restartable boolean NOT NULL DEFAULT true;

@@ -102,7 +102,7 @@ export interface ManagerEval {
   outcome: string;
   /** Новое состояние цепочки после сегодняшних шагов (null — без изменений). */
   next: { status: 'open'; branch: FlowBranch; nodeId: string; resumeAt: string; startValue: number | null }
-      | { status: 'closed'; reason: string }
+      | { status: 'closed'; reason: string; restartable: boolean; cooldownDays: number }
       | null;
   /** Итог цепочки при закрытии — для оценки эффективности. */
   result: RunResult | null;
@@ -196,9 +196,11 @@ async function loadState(scenarioId: string | null, todayStr: string) {
     scenarioId ? db.query<RunRow>(
       `SELECT id::text, manager_bitrix_id, branch, node_id, to_char(resume_at, 'YYYY-MM-DD') AS resume_at, start_value, vars
          FROM bot_scenario_runs WHERE scenario_id = $1 AND status = 'open'`, [scenarioId]) : Promise.resolve(empty),
-    scenarioId ? db.query<{ manager_bitrix_id: number; branch: FlowBranch; closed_at: string | Date }>(
-      `SELECT manager_bitrix_id, branch, max(closed_at) AS closed_at FROM bot_scenario_runs
-        WHERE scenario_id = $1 AND status = 'closed' GROUP BY 1, 2`, [scenarioId]) : Promise.resolve(empty),
+    scenarioId ? db.query<{ manager_bitrix_id: number; branch: FlowBranch; closed_at: string | Date; restartable: boolean; closed_reason: string | null }>(
+      `SELECT DISTINCT ON (manager_bitrix_id, branch) manager_bitrix_id, branch, closed_at, restartable, closed_reason,
+              (vars->>'cooldownDays')::int AS cooldown_days
+         FROM bot_scenario_runs WHERE scenario_id = $1 AND status = 'closed'
+        ORDER BY manager_bitrix_id, branch, closed_at DESC`, [scenarioId]) : Promise.resolve(empty),
     // Дневной лимит — по ВСЕМ сценариям.
     db.query<{ manager_bitrix_id: number }>(
       `SELECT DISTINCT manager_bitrix_id FROM bot_scenario_events
@@ -211,9 +213,15 @@ async function loadState(scenarioId: string | null, todayStr: string) {
       startValue: r.start_value === null ? null : Number(r.start_value), messagesSent: r.vars?.messagesSent ?? 0,
     });
   }
-  const closedBy = new Map<string, string>(); // `${mgr}:${branch}` → дата закрытия
-  for (const r of closed.rows as { manager_bitrix_id: number; branch: FlowBranch; closed_at: string | Date }[]) {
-    closedBy.set(`${r.manager_bitrix_id}:${r.branch}`, mskDateStr(new Date(r.closed_at)));
+  // `${mgr}:${branch}` → последняя закрытая цепочка: дата и можно ли стартовать снова.
+  // Выключение сценария (closed_reason='disabled') возвратом не считается — после
+  // включения менеджер снова под триггером.
+  const closedBy = new Map<string, { at: string; restartable: boolean; cooldownDays: number | null }>();
+  for (const r of closed.rows as { manager_bitrix_id: number; branch: FlowBranch; closed_at: string | Date; restartable: boolean; closed_reason: string | null; cooldown_days: number | null }[]) {
+    closedBy.set(`${r.manager_bitrix_id}:${r.branch}`, {
+      at: mskDateStr(new Date(r.closed_at)), restartable: r.restartable || r.closed_reason === 'disabled' || r.closed_reason === 'manual',
+      cooldownDays: r.cooldown_days,
+    });
   }
   return { openBy, closedBy, sentToday: new Set(sentToday.rows.map(r => Number(r.manager_bitrix_id))) };
 }
@@ -236,12 +244,18 @@ function checkCondition(cond: CheckCondition, ctx: ExecCtx): boolean {
   }
 }
 
+// Пауза прошлой цепочки: у «Завершить» может быть своя (vars.cooldownDays), иначе из триггера.
+function prevCooldown(prev: { cooldownDays?: number | null }, fromTrigger: number): number {
+  return typeof prev.cooldownDays === 'number' ? prev.cooldownDays : fromTrigger;
+}
+
 function nodeLabel(n: FlowNode): string {
   switch (n.type) {
     case 'message': return 'Сообщение';
     case 'wait': return `Ждать ${n.days} дн.`;
     case 'check': return 'Проверка';
     case 'end': return 'Завершить';
+    case 'restart': return 'В начало';
   }
 }
 
@@ -251,8 +265,10 @@ function execute(start: FlowNode | null, ctx: ExecCtx): Pick<ManagerEval, 'steps
   let cur: FlowNode | null = start;
   let capped = ctx.capped;
   const cooldown = (n: number | null) => n ?? (ctx.branch === 'norm' ? ctx.flow.trigger.praiseCooldownDays : ctx.flow.trigger.cooldownDays);
-  const close = (reason: string, why: string) => ({
-    steps, messages, next: { status: 'closed' as const, reason }, outcome: `${why}; пауза ${cooldown(null)} дн.`,
+  const close = (reason: string, why: string, cd: number = cooldown(null), restartable = true) => ({
+    steps, messages,
+    next: { status: 'closed' as const, reason, restartable, cooldownDays: cd },
+    outcome: restartable ? `${why}; пауза ${cd} дн., затем снова под триггером` : `${why}; окончательно — сценарий для менеджера больше не запустится`,
   });
   const tplCtx = buildCtx(ctx.flow, ctx.metric, ctx.e, ctx.startValue);
 
@@ -290,8 +306,14 @@ function execute(start: FlowNode | null, ctx: ExecCtx): Pick<ManagerEval, 'steps
         break;
       }
       case 'end': {
-        steps.push({ nodeId: cur.id, type: 'end', label: `Завершить (пауза ${cooldown(cur.cooldownDays)} дн.)` });
-        return { steps, messages, next: { status: 'closed', reason: 'end' }, outcome: `цепочка завершена; пауза ${cooldown(cur.cooldownDays)} дн.` };
+        const after = nextAfter(ctx.flow, ctx.idx, cur.id);
+        const restart = after?.type === 'restart';
+        steps.push({ nodeId: cur.id, type: 'end', label: restart ? `Завершить (пауза ${cooldown(cur.cooldownDays)} дн.) → В начало` : 'Завершить — окончательно' });
+        return close(restart ? 'restart' : 'end', 'цепочка завершена', cooldown(cur.cooldownDays), restart);
+      }
+      case 'restart': {
+        steps.push({ nodeId: cur.id, type: 'end', label: `В начало (пауза ${cooldown(null)} дн.)` });
+        return close('restart', 'цепочка завершена');
       }
     }
   }
@@ -365,7 +387,8 @@ export async function evaluateFlow(flow: ScenarioFlow, scenarioId: string | null
       if (!node) {
         // Блок удалили в редакторе — честно закрываем.
         e.steps.push({ nodeId: null, type: 'end', label: 'Блок цепочки удалён из сценария' });
-        e.next = { status: 'closed', reason: 'node_missing' }; e.outcome = 'цепочка закрыта: её блок удалён из сценария';
+        e.next = { status: 'closed', reason: 'node_missing', restartable: true, cooldownDays: run.branch === 'norm' ? t.praiseCooldownDays : t.cooldownDays };
+        e.outcome = 'цепочка закрыта: её блок удалён из сценария';
         summary.closed++; continue;
       }
       e.steps.push({ nodeId: null, type: 'start', label: `Продолжаем цепочку (${run.branch === 'below' ? 'просадка' : 'в норме'})` });
@@ -377,10 +400,14 @@ export async function evaluateFlow(flow: ScenarioFlow, scenarioId: string | null
       if (!branch) { e.outcome = `в коридоре: ниже цели, но не ниже порога ${fmt(e.threshold, metric)} — тишина`; continue; }
       const list = flow[branch];
       if (!list.length) { e.outcome = branch === 'below' ? 'ниже порога, но ветка «просадка» пустая' : 'в норме, ветка «в норме» пустая'; continue; }
-      const closedAt = state.closedBy.get(`${m.bitrixId}:${branch}`);
+      const prev = state.closedBy.get(`${m.bitrixId}:${branch}`);
+      if (prev && !prev.restartable) {
+        e.outcome = `${branch === 'below' ? 'ниже порога' : 'в норме'}, но прошлая цепочка завершена окончательно (без «В начало») — сценарий для менеджера больше не стартует`;
+        continue;
+      }
       const cd = branch === 'below' ? t.cooldownDays : t.praiseCooldownDays;
-      if (closedAt && addDaysStr(closedAt, cd) > todayStr) {
-        e.outcome = `${branch === 'below' ? 'ниже порога' : 'в норме'}, но пауза после прошлой цепочки до ${addDaysStr(closedAt, cd)}`;
+      if (prev && addDaysStr(prev.at, prevCooldown(prev, cd)) > todayStr) {
+        e.outcome = `${branch === 'below' ? 'ниже порога' : 'в норме'}, но пауза после прошлой цепочки до ${addDaysStr(prev.at, prevCooldown(prev, cd))}`;
         continue;
       }
       e.startBranch = branch;
@@ -464,10 +491,11 @@ export async function runScenario(s: Scenario, opts: { todayStr?: string; manage
       } else if (runId && e.next?.status === 'closed') {
         await db.query(
           `UPDATE bot_scenario_runs SET status = 'closed', closed_at = now(), closed_reason = $2, last_value = $3, step = step + $4,
-                  result = $5, track_until = $6::date, last_sent_at = CASE WHEN $4 > 0 THEN now() ELSE last_sent_at END,
-                  vars = vars || jsonb_build_object('messagesSent', COALESCE((vars->>'messagesSent')::int, 0) + $4)
+                  result = $5, track_until = $6::date, restartable = $7,
+                  vars = vars || jsonb_build_object('messagesSent', COALESCE((vars->>'messagesSent')::int, 0) + $4, 'cooldownDays', $8::int),
+                  last_sent_at = CASE WHEN $4 > 0 THEN now() ELSE last_sent_at END
             WHERE id = $1`,
-          [runId, e.next.reason, e.value, e.messages.length, e.result, addDaysStr(todayStr, s.flow.trigger.trackDays)],
+          [runId, e.next.reason, e.value, e.messages.length, e.result, addDaysStr(todayStr, s.flow.trigger.trackDays), e.next.restartable, e.next.cooldownDays],
         );
         await db.query(
           `INSERT INTO bot_scenario_events (scenario_id, run_id, manager_bitrix_id, kind, value, threshold, text, branch)

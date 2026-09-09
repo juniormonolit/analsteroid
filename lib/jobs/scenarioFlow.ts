@@ -7,9 +7,12 @@
 //             база − просадка; когда значение ниже порога → ветка below, когда ≥ базы →
 //             ветка norm, между — тишина;
 //   блоки  — message (сообщение), wait (пауза N дней), check (проверка показателя с
-//            ветвлением да/нет, вложенность любая), end (завершить цепочку с паузой).
+//            ветвлением да/нет, вложенность любая), end (завершить цепочку с паузой),
+//            restart («В начало»: после паузы снова под триггер).
 // Цепочка идёт по блокам сверху вниз; пустая ветка check — «идти дальше по основной».
-// Конец списка — цепочка завершена (пауза cooldown из триггера).
+// Конец списка без end/restart — цепочка завершена с паузой из триггера и возвратом под
+// триггер (как end + restart). end без restart — окончательно: сценарий для этого
+// менеджера больше не стартует.
 
 export type FlowBranch = 'below' | 'norm';
 
@@ -36,7 +39,10 @@ export type FlowNode =
   | { id: string; type: 'message'; text: string }
   | { id: string; type: 'wait'; days: number }
   | { id: string; type: 'check'; condition: CheckCondition; yes: FlowNode[]; no: FlowNode[] }
-  | { id: string; type: 'end'; cooldownDays: number | null };
+  | { id: string; type: 'end'; cooldownDays: number | null }
+  // «В начало»: после паузы менеджер снова под триггером — цикл повторяется. Ставится
+  // последним, обычно сразу после «Завершить». Без него «Завершить» — окончательно.
+  | { id: string; type: 'restart' };
 
 /** Кому: всем работающим менеджерам или выбранным (владелец 09.09). */
 export interface FlowAudience { mode: 'all' | 'selected'; managerIds: number[] }
@@ -112,7 +118,7 @@ export function nextAfter(flow: ScenarioFlow, idx: Map<string, NodeRef>, nodeId:
 export function terminates(list: FlowNode[]): boolean {
   const last = list[list.length - 1];
   if (!last) return false;
-  if (last.type === 'end') return true;
+  if (last.type === 'end' || last.type === 'restart') return true;
   if (last.type === 'check') return terminates(last.yes) && terminates(last.no);
   return false;
 }
@@ -175,12 +181,15 @@ export function validateFlow(raw: unknown): { flow: ScenarioFlow; errors: string
           return { id, type: 'check', condition: cond, yes: nodes(o.yes, `${where} → да`), no: nodes(o.no, `${where} → нет`) };
         }
         case 'end': return { id, type: 'end', cooldownDays: o.cooldownDays === null || o.cooldownDays === undefined || o.cooldownDays === '' ? null : int(o.cooldownDays, 14, 0, 365, `${where} (пауза)`) };
+        case 'restart': return { id, type: 'restart' };
         default: errors.push(`${where}: неизвестный тип блока`); return null;
       }
     }).filter((x): x is FlowNode => x !== null);
     // Блоки после завершения недостижимы — это ошибка схемы, не «мы так задумали».
-    const cut = out.findIndex((n, i) => i < out.length - 1 && terminates([n]));
-    if (cut >= 0) errors.push(`${path}: после блока ${cut + 1} («${out[cut].type === 'end' ? 'Завершить' : 'Проверка», обе ветки которой завершены'}) стоят блоки — они никогда не выполнятся`);
+    // Единственное допустимое продолжение после «Завершить» — «В начало» последним блоком.
+    const cut = out.findIndex((n, i) => i < out.length - 1 && terminates([n])
+      && !(n.type === 'end' && out[i + 1].type === 'restart' && i + 2 === out.length));
+    if (cut >= 0) errors.push(`${path}: после блока ${cut + 1} («${out[cut].type === 'end' ? 'Завершить' : out[cut].type === 'restart' ? 'В начало' : 'Проверка», обе ветки которой завершены'}) стоят блоки — они никогда не выполнятся`);
     return out;
   };
   const a = (f.audience ?? {}) as Partial<FlowAudience>;
@@ -207,6 +216,7 @@ export function defaultFlow(metricId: string): ScenarioFlow {
         yes: [
           { id: id(), type: 'message', text: '{имя}, молодец! «{показатель}» поднялся до {значение} (было {было}) — вышел на порог {порог}. Так держать! 💪' },
           { id: id(), type: 'end', cooldownDays: null },
+          { id: id(), type: 'restart' },
         ],
         no: [
           { id: id(), type: 'message', text: '{имя}, проверяю, как договаривались. «{показатель}» — {значение}, всё ещё ниже порога {порог} (в начале было {было}).\n\nПосмотри, все ли брони прозвонены и по каждой ли назначен следующий шаг. Если что-то мешает — напиши мне в ответ, разберём. Проверю ещё через неделю.' },
