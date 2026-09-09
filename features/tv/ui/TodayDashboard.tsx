@@ -2,9 +2,9 @@
 // Дашборд «Сегодня по компании» (правка владельца 08.09): отдельный URL /today без меню.
 // Вкладки — Итого и филиалы; KPI выбранного узла; дерево департаменты → отделы → менеджеры
 // с раскрытием. Данные — /api/tv/dashboard (тот же движок, что у телевизоров), 30 с.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Eye, EyeOff, RefreshCw, Users } from 'lucide-react';
+import { ChevronDown, ChevronRight, Eye, EyeOff, Moon, RefreshCw, Sun, Users } from 'lucide-react';
 import type { TvDashManager, TvDashNode, TvDashboard as Dash } from '../engine/dashboard';
 
 // Неразрывные пробелы: «17,5 млн ₽» не должно переноситься по словам в узкой KPI-карточке
@@ -29,6 +29,28 @@ function Pb({ pb, target }: { pb: number; target: number }) {
 
 // Крупная типографика под большой монитор: на десктопе размеры в vw (1.1vw ≈ 21px на 1920),
 // на телефоне — обычные rem (правка владельца 08.09: «пожирней, чтобы на весь экран»).
+// Палитра телевизора (features/tv/engine/page.ts) поверх токенов приложения — правка
+// владельца 09.09: «в той же стилистике, что и ТВ-дашборды, или переключатель темы».
+// Переменные переопределяются на обёртке страницы, компоненты ниже читают их как обычно.
+type Theme = 'dark' | 'light';
+const THEMES: Record<Theme, React.CSSProperties> = {
+  dark: {
+    '--color-bg': '#0B1220', '--color-bg-surface': '#121C2E', '--color-bg-hover': '#1A2740',
+    '--color-border': '#243450', '--color-border-strong': '#33507E', '--color-text': '#F2F6FC',
+    '--color-text-muted': '#8FA1BD', '--color-positive': '#5BC878', '--color-warning': '#FBBC04',
+    '--color-negative': '#EA4335', '--color-accent': '#7FB9E8', '--color-accent-soft': '#1A2740',
+    '--color-table-row-border': '#1C2A44', '--color-table-row-hover': '#1A2740', colorScheme: 'dark',
+  } as React.CSSProperties,
+  light: {
+    '--color-bg': '#F6F8FA', '--color-bg-surface': '#FFFFFF', '--color-bg-hover': '#EDF5FC',
+    '--color-border': '#E5E9EF', '--color-border-strong': '#AFD3F1', '--color-text': '#1A202C',
+    '--color-text-muted': '#6B7280', '--color-positive': '#1E8E3E', '--color-warning': '#B26000',
+    '--color-negative': '#D93025', '--color-accent': '#0069BE', '--color-accent-soft': '#EDF5FC',
+    '--color-table-row-border': '#EEF1F5', '--color-table-row-hover': '#EDF5FC', colorScheme: 'light',
+  } as React.CSSProperties,
+};
+const THEME_KEY = 'today-theme';
+
 const TH = 'px-3 py-3 text-xs lg:text-[0.85vw] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider whitespace-nowrap';
 const TD = 'px-3 py-2 lg:py-[0.7vw] text-sm lg:text-[1.15vw] whitespace-nowrap tabular-nums';
 
@@ -45,6 +67,11 @@ export function TodayDashboard() {
   });
   const [tab, setTab] = useState<string>('root');
   const [showIdle, setShowIdle] = useState(false);
+  const [theme, setTheme] = useState<Theme>('dark');
+  useEffect(() => {
+    try { const t = localStorage.getItem(THEME_KEY); if (t === 'light' || t === 'dark') setTheme(t); } catch { /* приватный режим */ }
+  }, []);
+  const toggleTheme = () => setTheme(t => { const n: Theme = t === 'dark' ? 'light' : 'dark'; try { localStorage.setItem(THEME_KEY, n); } catch { /* ignore */ } return n; });
 
   const tabs = useMemo(() => {
     if (!data) return [];
@@ -55,7 +82,7 @@ export function TodayDashboard() {
   const current = tabs.find(t => t.id === tab)?.node ?? data?.root;
 
   return (
-    <div className="h-dvh overflow-y-auto overflow-x-hidden">
+    <div className="h-dvh overflow-y-auto overflow-x-hidden bg-[var(--color-bg)] text-[var(--color-text)]" style={THEMES[theme]}>
       <div className="p-3 sm:p-6 lg:px-[2vw] lg:py-[1.5vw] flex flex-col gap-4 lg:gap-[1.2vw]">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -68,7 +95,10 @@ export function TodayDashboard() {
             <button onClick={() => setShowIdle(v => !v)} className="inline-flex items-center gap-1.5 min-h-9 lg:min-h-[2.6vw] px-3 lg:px-[1vw] rounded-lg border border-[var(--color-border)] text-sm lg:text-[1vw] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
               {showIdle ? <EyeOff size={14} /> : <Eye size={14} />} {showIdle ? 'Скрыть без движения' : 'Показать всех'}
             </button>
-            <button onClick={() => refetch()} className="tap-target p-2 rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title="Обновить">
+            <button onClick={toggleTheme} className="tap-target p-2 lg:p-[0.6vw] rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}>
+              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            <button onClick={() => refetch()} className="tap-target p-2 lg:p-[0.6vw] rounded-lg border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title="Обновить">
               <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
             </button>
           </div>
@@ -91,7 +121,7 @@ export function TodayDashboard() {
         {data && current && (
           <>
             <Kpis node={current} />
-            <div className="scroll-x rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+            <div className="scroll-x rounded-lg lg:rounded-[0.8vw] border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
               <table className="w-full min-w-[820px] border-collapse">
                 <thead>
                   <tr className="border-b border-[var(--color-border)] text-left">
