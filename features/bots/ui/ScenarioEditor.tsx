@@ -133,6 +133,21 @@ export function ScenarioEditor({ id }: { id: string }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
+  // При открытии — канва центрируется на «Триггере» (владелец 09.09: «центр, а не левый
+  // верхний угол»): канва шире экрана, стартовый scrollLeft=0 показывал бы левый край ветки.
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLDivElement | null>(null);
+  const centeredOnce = useRef(false);
+  useEffect(() => {
+    if (centeredOnce.current || !flow || !opts) return;
+    const el = canvasRef.current, tg = triggerRef.current;
+    if (!el || !tg) return;
+    centeredOnce.current = true;
+    requestAnimationFrame(() => {
+      el.scrollLeft = Math.max(0, tg.offsetLeft + tg.offsetWidth / 2 - el.clientWidth / 2);
+    });
+  }, [flow, opts]);
+
   if (loadError) return <div className="p-6 text-sm text-[var(--color-negative)]">{(loadError as Error).message}</div>;
   if (!flow || !opts) return <div className="p-6 text-sm text-[var(--color-text-muted)]">Загрузка конструктора…</div>;
 
@@ -177,8 +192,8 @@ export function ScenarioEditor({ id }: { id: string }) {
           своим поддеревом, «Проверка» — по центру над колонками Да/Нет. Вся область
           скроллится по обеим осям целиком (владелец 09.09: «хули он скроллится внутри
           области, а не всего экрана»), ширина канвы = самый широкий ряд веток. */}
-      <div className="flex-1 min-h-0 overflow-auto">
-      <div className="w-max min-w-full p-3 sm:p-6 flex flex-col items-center gap-4">
+      <div ref={canvasRef} className="flex-1 min-h-0 overflow-auto">
+      <div className="relative w-max min-w-full p-3 sm:p-6 flex flex-col items-center gap-4">
         {fnEnabled === false && (
           <div className="w-[1040px] max-w-full rounded-xl border border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-[12px] text-[var(--color-text)]">
             <BellOff size={12} className="inline mr-1 text-[var(--color-warning)]" /> Функция бота «Сценарии коучинга» выключена — сценарии можно строить и проверять, но в Битрикс ничего не уйдёт,
@@ -187,7 +202,7 @@ export function ScenarioEditor({ id }: { id: string }) {
         )}
 
         {/* Триггер */}
-        <div className="w-[1040px] max-w-full">
+        <div ref={triggerRef} className="w-[1040px] max-w-full">
         <TriggerCard flow={flow} metric={metric} opts={opts} update={update}
           checkHour={checkHour} setCheckHour={h => { setCheckHour(h); setDirty(true); }}
           weekdaysOnly={weekdaysOnly} setWeekdaysOnly={v => { setWeekdaysOnly(v); setDirty(true); }} />
