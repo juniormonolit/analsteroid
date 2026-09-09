@@ -1,4 +1,5 @@
 {
   "components/layout/AppShell.tsx::manual-popover-positioning": 1,
+  "features/bots/ui/ScenarioEditor.tsx::fixed-width-no-max": 1,
   "features/year-weekly/ui/YearWeeklyChart.tsx::manual-popover-positioning": 1
 }

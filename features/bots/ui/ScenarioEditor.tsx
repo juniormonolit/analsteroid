@@ -139,10 +139,10 @@ export function ScenarioEditor({ id }: { id: string }) {
   const dt: DataType = metric?.dataType ?? 'decimal';
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden">
-      {/* Шапка */}
-      <div className="sticky top-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]/95 backdrop-blur px-3 sm:px-6 py-2.5">
-        <div className="max-w-6xl flex flex-wrap items-center gap-2">
+    <div className="h-full flex flex-col min-h-0">
+      {/* Шапка — вне скролла, всегда на месте */}
+      <div className="shrink-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 sm:px-6 py-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <Link href="/settings/bots/analitik?tab=scenarios" onClick={e => { if (dirty && !confirm('Есть несохранённые изменения. Уйти без сохранения?')) e.preventDefault(); }}
             className="tap-target inline-flex items-center gap-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><ArrowLeft size={16} /> Сценарии</Link>
           <input value={name} onChange={e => { setName(e.target.value); setDirty(true); }} placeholder="Название сценария"
@@ -164,49 +164,53 @@ export function ScenarioEditor({ id }: { id: string }) {
           </div>
         </div>
         {(errors.length > 0 || save.isError || toggle.isError) && (
-          <div className="max-w-6xl mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-[var(--color-negative)]">
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-[var(--color-negative)]">
             {errors.map(e => <span key={e} className="inline-flex items-center gap-1"><AlertTriangle size={11} /> {e}</span>)}
             {save.isError && <span>{(save.error as Error).message}</span>}
             {toggle.isError && <span>{(toggle.error as Error).message}</span>}
           </div>
         )}
-        {dirty && errors.length === 0 && <div className="max-w-6xl mt-1 text-[11px] text-[var(--color-warning)]">Есть несохранённые изменения</div>}
+        {dirty && errors.length === 0 && <div className="mt-1 text-[11px] text-[var(--color-warning)]">Есть несохранённые изменения</div>}
       </div>
 
-      <div className="max-w-6xl p-3 sm:p-6 flex flex-col gap-4">
+      {/* Канва: блок-схема. Блоки фиксированной ширины (CARD_W), каждый центрирован над
+          своим поддеревом, «Проверка» — по центру над колонками Да/Нет. Вся область
+          скроллится по обеим осям целиком (владелец 09.09: «хули он скроллится внутри
+          области, а не всего экрана»), ширина канвы = самый широкий ряд веток. */}
+      <div className="flex-1 min-h-0 overflow-auto">
+      <div className="w-max min-w-full p-3 sm:p-6 flex flex-col items-center gap-4">
         {fnEnabled === false && (
-          <div className="rounded-xl border border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-[12px] text-[var(--color-text)]">
+          <div className="w-[1040px] max-w-full rounded-xl border border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-[12px] text-[var(--color-text)]">
             <BellOff size={12} className="inline mr-1 text-[var(--color-warning)]" /> Функция бота «Сценарии коучинга» выключена — сценарии можно строить и проверять, но в Битрикс ничего не уйдёт,
             пока не включишь её во вкладке <Link href="/settings/bots/analitik?tab=functions" className="text-[var(--color-accent)] hover:underline">«Функции»</Link>.
           </div>
         )}
 
         {/* Триггер */}
+        <div className="w-[1040px] max-w-full">
         <TriggerCard flow={flow} metric={metric} opts={opts} update={update}
           checkHour={checkHour} setCheckHour={h => { setCheckHour(h); setDirty(true); }}
           weekdaysOnly={weekdaysOnly} setWeekdaysOnly={v => { setWeekdaysOnly(v); setDirty(true); }} />
+        </div>
 
         {/* Развилка */}
         <div className="flex justify-center -my-1"><ArrowDown size={18} className="text-[var(--color-text-muted)]" /></div>
-        {/* Канва веток: блоки не ужимаются под ширину экрана — каждая ветка и каждая
-            под-ветка «Проверки» держит полную ширину карточки, целое скроллится
-            горизонтально (владелец 09.09: «место на экране не платное, горизонтальный
-            скролл не стесняться»). */}
-        <div className="scroll-x min-w-0 -mx-3 px-3 sm:-mx-6 sm:px-6 pb-2">
-          <div className="flex items-start gap-6 w-max min-w-full">
-            <Lane title="Ниже порога — просадка" tone="neg" hint={`значение < ${metric ? fmtV(baseOf(flow), dt) : 'база'} − ${flow.trigger.dropThreshold.toLocaleString('ru-RU')} ${unitFor(dt)}`}>
-              <NodeList nodes={flow.below} onChange={list => update(f => ({ ...f, below: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
-            </Lane>
-            <Lane title="В норме — на уровне цели или выше" tone="pos" hint="значение ≥ базы; между порогом и базой — тишина">
-              <NodeList nodes={flow.norm} onChange={list => update(f => ({ ...f, norm: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
-            </Lane>
-          </div>
+        {/* Развилка триггера: две колонки-ветки, каждая центрирует свои блоки */}
+        <div className="flex items-start">
+          <BranchCol side="left" label="Ниже порога — просадка" color="var(--color-negative)"
+            hint={`значение < ${metric ? fmtV(baseOf(flow), dt) : 'база'} − ${flow.trigger.dropThreshold.toLocaleString('ru-RU')} ${unitFor(dt)}`} root>
+            <NodeList nodes={flow.below} onChange={list => update(f => ({ ...f, below: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
+          </BranchCol>
+          <BranchCol side="right" label="В норме — на уровне цели или выше" color="var(--color-positive)" hint="значение ≥ базы; между порогом и базой — тишина" root>
+            <NodeList nodes={flow.norm} onChange={list => update(f => ({ ...f, norm: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
+          </BranchCol>
         </div>
 
         {/* Превью */}
-        <div ref={previewRef}>
+        <div ref={previewRef} className="w-[1200px] max-w-full">
           {previewOpen && <PreviewPanel flow={flow} scenarioId={savedId} dirty={dirty} enabledScenario={enabled} fnEnabled={fnEnabled} onClose={() => setPreviewOpen(false)} />}
         </div>
+      </div>
       </div>
     </div>
   );
@@ -460,22 +464,13 @@ function MetricPicker({ metrics, value, onChange }: { metrics: MetricOpt[]; valu
   );
 }
 
-// ── Ветки и блоки ────────────────────────────────────────────────────────────
-function Lane({ title, tone, hint, children }: { title: string; tone: 'neg' | 'pos'; hint: string; children: React.ReactNode }) {
-  const color = tone === 'neg' ? 'var(--color-negative)' : 'var(--color-positive)';
-  return (
-    <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4 w-max min-w-[560px] max-w-none">
-      <div className="mb-3 flex items-start gap-2">
-        <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white" style={{ background: color }}><ArrowDown size={13} /></span>
-        <div className="min-w-0">
-          <div className="text-sm font-bold" style={{ color }}>{title}</div>
-          <div className="text-[11px] text-[var(--color-text-muted)]">{hint}</div>
-        </div>
-      </div>
-      {children}
-    </div>
-  );
-}
+// ── Блок-схема: колонки веток, блоки, коннекторы ─────────────────────────────
+// Блок — карточка фиксированной ширины CARD_W. Список блоков — вертикальная колонка с
+// центрированием (flex-col items-center): ширина колонки = самый широкий элемент, а
+// самый широкий — ряд веток «Проверки» (две колонки Да/Нет рядом). Так «Проверка»
+// сама встаёт по центру над своими ветками, как на блок-схеме, и ничего не растягивается.
+const CARD_W = 'w-[500px]';
+const COL_MIN = 'min-w-[560px]'; // колонка ветки: карточка + воздух под коннекторы
 
 interface ListProps { nodes: FlowNode[]; onChange: (list: FlowNode[]) => void; placeholders: Options['placeholders']; sample: Record<string, string>; depth: number }
 
@@ -488,21 +483,57 @@ function NodeList({ nodes, onChange, placeholders, sample, depth }: ListProps) {
     const copy = [...nodes]; [copy[i], copy[j]] = [copy[j], copy[i]]; onChange(copy);
   };
   return (
-    <div className="flex flex-col items-stretch">
+    <div className="flex flex-col items-center">
       {nodes.length === 0 && (
-        <div className="rounded-xl border border-dashed border-[var(--color-border)] px-3 py-3 text-center text-[12px] text-[var(--color-text-muted)] min-w-[520px]">
-          {depth === 0 ? 'Ветка пустая — бот ничего не сделает. Добавь первый блок:' : 'Пусто — цепочка пойдёт дальше по основной ветке'}
+        <div className={`${CARD_W} rounded-xl border border-dashed border-[var(--color-border)] px-3 py-3 text-center text-[12px] text-[var(--color-text-muted)]`}>
+          {depth === 0 ? 'Ветка пустая — бот ничего не сделает. Добавь первый блок:' : 'Пусто — цепочка идёт дальше по основной ветке'}
         </div>
       )}
       {nodes.map((n, i) => (
-        <div key={n.id} className="flex flex-col">
+        <div key={n.id} className="flex flex-col items-center">
           <AddBetween onAdd={node => insert(i, node)} />
           <NodeCard node={n} onChange={node => replace(i, node)} onRemove={() => remove(i)}
             onUp={i > 0 ? () => move(i, -1) : undefined} onDown={i < nodes.length - 1 ? () => move(i, 1) : undefined}
-            placeholders={placeholders} sample={sample} depth={depth} />
+            placeholders={placeholders} sample={sample} />
+          {n.type === 'check' && (
+            <div className="flex items-start">
+              <BranchCol side="left" label="Да" color="var(--color-positive)">
+                <NodeList nodes={n.yes} onChange={list => replace(i, { ...n, yes: list })} placeholders={placeholders} sample={sample} depth={depth + 1} />
+              </BranchCol>
+              <BranchCol side="right" label="Нет" color="var(--color-negative)">
+                <NodeList nodes={n.no} onChange={list => replace(i, { ...n, no: list })} placeholders={placeholders} sample={sample} depth={depth + 1} />
+              </BranchCol>
+            </div>
+          )}
         </div>
       ))}
       <AddBetween onAdd={node => insert(nodes.length, node)} last />
+    </div>
+  );
+}
+
+// Колонка ветки: сверху коннектор от родителя (горизонтальная линия от центра колонки к
+// внутреннему краю + вертикальный отвод), подпись ветки, содержимое, снизу — зеркальный
+// коннектор слияния. root — ветки триггера: подпись крупнее, с пояснением.
+function BranchCol({ side, label, color, hint, root, children }: {
+  side: 'left' | 'right'; label: string; color: string; hint?: string; root?: boolean; children: React.ReactNode;
+}) {
+  const hline = side === 'left' ? { left: '50%', right: 0 } : { left: 0, right: '50%' };
+  return (
+    <div className={`flex flex-col items-center ${COL_MIN} px-4`}>
+      <div className="relative h-5 w-full">
+        <div className="absolute top-0 h-px" style={{ ...hline, background: color }} />
+        <div className="absolute left-1/2 top-0 h-5 w-px" style={{ background: color }} />
+      </div>
+      <div className={`inline-flex items-center gap-2 rounded-full border px-3 ${root ? 'py-1.5 text-sm' : 'py-0.5 text-[12px]'} font-bold`} style={{ color, borderColor: color }}>
+        <ArrowDown size={root ? 14 : 11} /> {label}
+      </div>
+      {hint && <div className="mt-1 text-[11px] text-[var(--color-text-muted)] text-center max-w-[460px]">{hint}</div>}
+      {children}
+      <div className="relative h-5 w-full">
+        <div className="absolute left-1/2 top-0 h-5 w-px bg-[var(--color-border)]" />
+        <div className="absolute bottom-0 h-px bg-[var(--color-border)]" style={hline} />
+      </div>
     </div>
   );
 }
@@ -520,45 +551,45 @@ function makeNode(type: FlowNode['type']): FlowNode {
 function AddBetween({ onAdd, last }: { onAdd: (n: FlowNode) => void; last?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="flex flex-col items-center py-1">
-      <div className="h-3 w-px bg-[var(--color-border)]" />
+    <div className="flex flex-col items-center">
+      <div className="h-4 w-px bg-[var(--color-border)]" />
       {open ? (
         <div className="flex flex-wrap justify-center gap-1 rounded-xl border border-[var(--color-accent)] bg-[var(--color-bg)] p-1.5">
           {(Object.keys(NODE_META) as FlowNode['type'][]).map(t => {
             const { label, Icon } = NODE_META[t];
             return (
               <button key={t} type="button" onClick={() => { onAdd(makeNode(t)); setOpen(false); }}
-                className="min-h-9 inline-flex items-center gap-1 rounded-lg px-2 text-[12px] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"><Icon size={13} /> {label}</button>
+                className="min-h-9 inline-flex items-center gap-1 rounded-lg px-2.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"><Icon size={14} /> {label}</button>
             );
           })}
           <button type="button" onClick={() => setOpen(false)} className="tap-target px-1 text-[var(--color-text-muted)]"><X size={13} /></button>
         </div>
       ) : (
         <button type="button" onClick={() => setOpen(true)} title="Добавить блок"
-          className={`tap-target inline-flex h-6 w-6 items-center justify-center rounded-full border text-[var(--color-text-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] ${last ? 'border-[var(--color-border)]' : 'border-transparent hover:border-[var(--color-accent)]'}`}>
-          <Plus size={13} />
+          className={`tap-target inline-flex h-7 w-7 items-center justify-center rounded-full border bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] ${last ? 'border-[var(--color-border)]' : 'border-[var(--color-border)]/60'}`}>
+          <Plus size={14} />
         </button>
       )}
-      {!last && <div className="h-3 w-px bg-[var(--color-border)]" />}
+      {!last && <div className="h-4 w-px bg-[var(--color-border)]" />}
     </div>
   );
 }
 
-function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample, depth }: {
+function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample }: {
   node: FlowNode; onChange: (n: FlowNode) => void; onRemove: () => void; onUp?: () => void; onDown?: () => void;
-  placeholders: Options['placeholders']; sample: Record<string, string>; depth: number;
+  placeholders: Options['placeholders']; sample: Record<string, string>;
 }) {
   const { label, Icon, cls } = NODE_META[node.type];
   return (
-    <div className={`rounded-xl border-l-4 border border-[var(--color-border)] bg-[var(--color-bg)] p-4 min-w-[520px] ${cls}`}>
+    <div className={`${CARD_W} rounded-xl border-l-4 border border-[var(--color-border)] bg-[var(--color-bg)] shadow-sm p-4 ${cls}`}>
       <div className="mb-2 flex items-center gap-2">
         <Icon size={16} className="text-[var(--color-text-muted)]" />
         <span className="text-sm font-semibold text-[var(--color-text)]">{label}</span>
         <div className="ml-auto flex items-center">
-          <button type="button" onClick={onUp} disabled={!onUp} className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-25" title="Выше"><ArrowUp size={13} /></button>
-          <button type="button" onClick={onDown} disabled={!onDown} className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-25" title="Ниже"><ArrowDown size={13} /></button>
+          <button type="button" onClick={onUp} disabled={!onUp} className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-25" title="Выше"><ArrowUp size={14} /></button>
+          <button type="button" onClick={onDown} disabled={!onDown} className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-25" title="Ниже"><ArrowDown size={14} /></button>
           <button type="button" onClick={() => { if (node.type !== 'check' || (node.yes.length + node.no.length === 0) || confirm('Удалить проверку вместе с вложенными блоками?')) onRemove(); }}
-            className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-negative)]" title="Удалить"><Trash2 size={13} /></button>
+            className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-negative)]" title="Удалить"><Trash2 size={14} /></button>
         </div>
       </div>
       {node.type === 'message' && <MessageBody node={node} onChange={onChange} placeholders={placeholders} sample={sample} />}
@@ -573,15 +604,7 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
           <select value={node.condition} onChange={e => onChange({ ...node, condition: e.target.value as CheckCondition })} className={inputCls}>
             {(Object.keys(CONDITION_LABEL) as CheckCondition[]).map(c => <option key={c} value={c}>{CONDITION_LABEL[c]}?</option>)}
           </select>
-          <div className="mt-1 text-[12px] text-[var(--color-text-muted)]">Показатель считается заново на день проверки. Пустая ветка — цепочка идёт дальше по основной.</div>
-          <div className="mt-3 flex items-start gap-4">
-            <SubLane title="Да" color="var(--color-positive)">
-              <NodeList nodes={node.yes} onChange={list => onChange({ ...node, yes: list })} placeholders={placeholders} sample={sample} depth={depth + 1} />
-            </SubLane>
-            <SubLane title="Нет" color="var(--color-negative)">
-              <NodeList nodes={node.no} onChange={list => onChange({ ...node, no: list })} placeholders={placeholders} sample={sample} depth={depth + 1} />
-            </SubLane>
-          </div>
+          <div className="mt-1 text-[12px] text-[var(--color-text-muted)]">Показатель считается заново на день проверки. Да — левая ветка, нет — правая; пустая ветка — дальше по основной.</div>
         </div>
       )}
       {node.type === 'end' && (
@@ -592,15 +615,6 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
           дней
         </div>
       )}
-    </div>
-  );
-}
-
-function SubLane({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border-l-2 pl-3 w-max min-w-[540px]" style={{ borderColor: color }}>
-      <div className="text-[12px] font-bold mb-1" style={{ color }}>{title} <ArrowDown size={11} className="inline" /></div>
-      {children}
     </div>
   );
 }
