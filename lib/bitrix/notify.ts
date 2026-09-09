@@ -87,7 +87,6 @@ export const BOT_FUNCTION_KEYS = [
   'daily_moscow_report', 'daily_os_teams_report', 'report_schedules', 'weekly_weather',
   'manager_digest_daily', 'manager_digest_weekly', 'rop_digest', 'advice_feedback',
   'gamification', 'deal_chats',
-  'call_control',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 
@@ -98,6 +97,11 @@ export interface BotFunctionConfig {
   hour?: number;
 }
 interface BotFunctionRow { enabled: boolean; config: BotFunctionConfig }
+
+// Общий рубильник «Аналитика» (bot_settings.killed, миграция 183; панель
+// /settings/bots/analitik, кнопка «Вырубить бота»): true — молчит ВСЁ, сколько бы
+// функций ни было включено. Живёт в том же кэше, что реестр функций.
+let _killed = false;
 
 let _channelCache: { map: Map<string, BotFunctionRow>; at: number } | null = null;
 const CHANNEL_CACHE_TTL_MS = 30_000;
@@ -116,6 +120,10 @@ async function loadFunctions(): Promise<Map<string, BotFunctionRow> | null> {
       'SELECT key, enabled, config FROM bot_channels',
     );
     for (const row of r.rows) map.set(row.key, { enabled: row.enabled, config: row.config ?? {} });
+    // Колонка появилась миграцией 183; до неё — считаем «не вырублен» (реестр
+    // функций и так всё режет), чтобы отсутствие колонки не глушило бота молча.
+    const k = await systemDb().query<{ killed: boolean }>('SELECT killed FROM bot_settings WHERE id = 1').catch(() => null);
+    _killed = k?.rows[0]?.killed ?? false;
     _channelCache = { map, at: Date.now() };
     return map;
   } catch {
@@ -135,9 +143,18 @@ export async function getBotFunctionConfig(channel: BotChannel): Promise<BotFunc
 /** Включена ли функция. Экспорт — для джоб, которые дорого СЧИТАТЬ (дайджесты,
  *  отчёты) и незачем считать, если отправка всё равно заглушена. */
 export async function channelEnabled(channel: BotChannel): Promise<boolean> {
-  if (process.env.BOT_SEND_ENABLED === '1') return true;   // аварийное «включить всё»
   const map = await loadFunctions();
+  // Общий рубильник сильнее аварийного env: «Вырубить бота» из панели обязано
+  // работать и когда на сервере поднят BOT_SEND_ENABLED=1.
+  if (map && _killed) return false;
+  if (process.env.BOT_SEND_ENABLED === '1') return true;   // аварийное «включить всё»
   return map?.get(channel)?.enabled ?? false;
+}
+
+/** Состояние общего рубильника — для панели (после loadFunctions актуально). */
+export async function isBotKilled(): Promise<boolean> {
+  await loadFunctions();
+  return _killed;
 }
 
 export async function sendBitrixBotMessage(
@@ -169,18 +186,14 @@ export async function sendBitrixBotMessage(
 // Бот «Контроль звонков» (BOT_ID 15010) — отдельный, давно зарегистрированный бот
 // missedcalls-робота. Свой вебхук/CLIENT_ID (env CALL_CONTROL_*), НЕ переиспользует
 // креды «Аналитика»: у ботов разные владельцы-вебхуки и разные аватары/имена в чате.
-/** Возвращает false, если канал выключен и сообщение НЕ ушло.
- *  Раньше метод молча возвращал управление, и вызывающий записывал доставку как
- *  успешную: 10.08 журнал показывал 75 «доставок» за день, ни одна из которых не
- *  ушла. Из-за этого нельзя было отличить «бот заглушен» от «бот сломался» —
- *  ровно тот вопрос, с которым владелец и пришёл. */
+/** Всегда true (сигнатура сохранена ради вызывающих). Рубильника у этого бота НЕТ
+ *  намеренно — правка владельца 09.09: «у Контроля звонков одна функция —
+ *  уведомления о пропущенных, он должен работать всегда; его настройки — только на
+ *  /settings/bots/call-control». Реестр функций (bot_channels) — про «Аналитика».
+ *  История: 09.08 канал call_control завели, чтобы он не глох вместе с
+ *  геймификацией; 09.09 реестр стал пофункциональным и рубильник для отдельного
+ *  бота с одной функцией потерял смысл (миграция 182 удалила строку). */
 export async function sendCallControlBotMessage(bitrixUserId: string, message: string): Promise<boolean> {
-  // Свой канал: «Контроль звонков» к геймификации отношения не имеет и глохнуть
-  // вместе с ней не должен — ровно это и просил владелец 09.08.
-  if (!(await channelEnabled('call_control'))) {
-    console.warn(`[bot:call-control] канал выключен: сообщение для ${bitrixUserId} не отправлено`);
-    return false;
-  }
   const webhook = process.env.CALL_CONTROL_WEBHOOK_URL || '';
   const botId = process.env.CALL_CONTROL_BOT_ID || '';
   const clientId = process.env.CALL_CONTROL_CLIENT_ID || '';

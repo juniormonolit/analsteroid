@@ -1,6 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { handleIncomingBotMessage, handleBindDealCommand } from '@/lib/deal-chats/service';
 import { handleAdviceFeedback } from '@/lib/bot/feedback';
+import { systemDb } from '@/lib/db/clients';
+
+// Журнал входящих (панель управления «Аналитиком», 09.09): каждое сообщение/клик
+// человека боту — строкой, с пометкой, какой обработчик его забрал. Не бросает:
+// журнал не должен ломать обработку.
+async function logInbound(row: {
+  bitrixId: string; event: string; text: string; dialogId: string; messageId: string; replyTo: string | null; handledBy: string;
+}): Promise<void> {
+  if (!/^\d+$/.test(row.bitrixId)) return;
+  try {
+    await systemDb().query(
+      `INSERT INTO bot_inbound_log (bitrix_id, event, text, dialog_id, message_id, reply_to, handled_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [Number(row.bitrixId), row.event, row.text.slice(0, 4000) || null, row.dialogId || null,
+       /^\d+$/.test(row.messageId) ? Number(row.messageId) : null,
+       row.replyTo && /^\d+$/.test(row.replyTo) ? Number(row.replyTo) : null, row.handledBy],
+    );
+  } catch (e) {
+    console.warn('[bitrix/events] журнал входящих не записан:', e instanceof Error ? e.message : e);
+  }
+}
 
 // Обработчик событий бота «Аналитик». Сейчас обслуживает чаты по сделкам
 // (ответы менеджеров и клики по кнопкам bind_deal); разбор вопросов на
@@ -40,10 +61,17 @@ export async function POST(req: NextRequest) {
       // Не чат по сделке → возможно, это ответ на понедельничный вопрос бота
       // «Как погодка на той неделе была?» (спец-отчёт «Данные по годам», 28.08).
       // recordWeatherAnswer сам возвращает null, если вопросов человеку не было.
+      let handledBy = handledByDealChats ? 'deal_chat' : 'unhandled';
       if (!handledByDealChats) {
         const { recordWeatherAnswer } = await import('@/lib/weather/weeklyWeather');
-        await recordWeatherAnswer(str('data[PARAMS][FROM_USER_ID]'), str('data[PARAMS][MESSAGE]'));
+        const w = await recordWeatherAnswer(str('data[PARAMS][FROM_USER_ID]'), str('data[PARAMS][MESSAGE]'));
+        if (w) handledBy = 'weather';
       }
+      await logInbound({
+        bitrixId: str('data[PARAMS][FROM_USER_ID]'), event, text: str('data[PARAMS][MESSAGE]'),
+        dialogId: str('data[PARAMS][DIALOG_ID]'), messageId: str('data[PARAMS][MESSAGE_ID]'),
+        replyTo: replyIdRaw || null, handledBy,
+      });
     }
 
     // Клик по кнопке «к какой сделке относится ответ?». Ключ содержит id команды:
@@ -57,6 +85,10 @@ export async function POST(req: NextRequest) {
         if (chatId) {
           await handleBindDealCommand({ fromUserId: str('data[PARAMS][FROM_USER_ID]'), chatId });
         }
+        await logInbound({
+          bitrixId: str('data[PARAMS][FROM_USER_ID]'), event, text: `кнопка: привязать к сделке (чат ${chatId})`,
+          dialogId: str('data[PARAMS][DIALOG_ID]'), messageId: str('data[PARAMS][MESSAGE_ID]'), replyTo: null, handledBy: 'bind_deal',
+        });
       }
 
       // Кнопки «⚠️ Ошибка» / «👍 Полезно» под сообщениями «Аналитика» (задача
@@ -72,6 +104,11 @@ export async function POST(req: NextRequest) {
             fromUserId: str('data[PARAMS][FROM_USER_ID]'),
             logIdRaw,
             signal: signal === 'advice_error' ? 'error' : 'useful',
+          });
+          await logInbound({
+            bitrixId: str('data[PARAMS][FROM_USER_ID]'), event,
+            text: signal === 'advice_error' ? `кнопка: ⚠️ Ошибка (сообщение #${logIdRaw})` : `кнопка: 👍 Полезно (сообщение #${logIdRaw})`,
+            dialogId: str('data[PARAMS][DIALOG_ID]'), messageId: str('data[PARAMS][MESSAGE_ID]'), replyTo: null, handledBy: 'feedback',
           });
         }
       }

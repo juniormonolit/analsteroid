@@ -1,7 +1,9 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BellOff, Bot, Plus, Send, Trash2, X } from 'lucide-react';
+import { BellOff, Bot, Plus, Send, Trash2, X, Power, ShieldAlert, MessageSquareText, Inbox, CalendarClock, ToggleLeft, CloudSun, FlaskConical } from 'lucide-react';
+import { useUrlState, enumParam } from '@/lib/hooks/useUrlState';
+import { OutboundLogBlock } from '@/features/badges/ui/OutboundLog';
 
 // Настройки бота «Аналитик» (задача владельца 09.09): каждая ФУНКЦИЯ бота —
 // отдельный рубильник + свои настройки (получатели/час), и блок расписаний
@@ -38,19 +40,169 @@ async function jsonOrThrow(res: Response) {
   return body;
 }
 
+// ── Панель ───────────────────────────────────────────────────────────────────
+// Вкладка — в адресе (правило адресуемости DESIGN_GUIDELINES): ссылку на «Журнал»
+// можно прислать, «назад» возвращает на предыдущую вкладку.
+const TABS = ['functions', 'schedules', 'journal', 'weather'] as const;
+type Tab = (typeof TABS)[number];
+const TAB_META: Record<Tab, { label: string; Icon: typeof Bot }> = {
+  functions: { label: 'Функции', Icon: ToggleLeft },
+  schedules: { label: 'Расписания', Icon: CalendarClock },
+  journal:   { label: 'Журнал', Icon: MessageSquareText },
+  weather:   { label: 'Погода', Icon: CloudSun },
+};
+
+interface MasterState { killed: boolean; killedAt: string | null; killedBy: string | null; dryRunManagers: boolean; envOverride: boolean }
+
 export function AnalitikSettingsPage() {
+  const [tab, setTab] = useUrlState<Tab>('tab', { ...enumParam(TABS, 'functions'), mode: 'push' });
   return (
-    <div className="p-3 sm:p-6 max-w-4xl flex flex-col gap-6">
-      <div>
-        <h1 className="text-lg font-semibold text-[var(--color-text)] mb-1">Бот «Аналитик»</h1>
-        <p className="text-sm text-[var(--color-text-muted)]">
-          Что бот отправляет и кому. Каждая функция включается отдельно; выключенная — считается,
-          пишется в журнал исходящих, но в Битрикс не уходит. Включение задним числом не рассылает
-          пропущенное — только то, что случится дальше.
-        </p>
+    <div className="p-3 sm:p-6 max-w-5xl flex flex-col gap-5">
+      <MasterPanel />
+      <nav className="flex gap-1 border-b border-[var(--color-border)] overflow-x-auto scrollbar-none">
+        {TABS.map(t => {
+          const { label, Icon } = TAB_META[t];
+          const active = tab === t;
+          return (
+            <button key={t} data-tab-key={t} onClick={() => setTab(t)}
+              className={`min-h-11 shrink-0 inline-flex items-center gap-1.5 px-3 text-sm border-b-2 -mb-px transition-colors whitespace-nowrap ${active
+                ? 'border-[var(--color-accent)] text-[var(--color-accent)] font-semibold'
+                : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+              <Icon size={15} /> {label}
+            </button>
+          );
+        })}
+      </nav>
+      {tab === 'functions' && <FunctionsBlock />}
+      {tab === 'schedules' && <SchedulesBlock />}
+      {tab === 'journal' && <JournalTab />}
+      {tab === 'weather' && <WeatherResponsiblesBlock />}
+    </div>
+  );
+}
+
+// Шапка панели: статус одним взглядом + общий рубильник + тест-режим.
+function MasterPanel() {
+  const qc = useQueryClient();
+  const { data: master } = useQuery<MasterState>({
+    queryKey: ['bot-master'],
+    queryFn: () => fetch('/api/settings/bots/master').then(jsonOrThrow),
+    refetchOnWindowFocus: false,
+  });
+  const { data: fns } = useQuery<{ functions: BotFunction[] }>({
+    queryKey: ['bot-functions'],
+    queryFn: () => fetch('/api/settings/bots/channels').then(jsonOrThrow),
+    refetchOnWindowFocus: false,
+  });
+  const patch = useMutation({
+    mutationFn: (body: Partial<Pick<MasterState, 'killed' | 'dryRunManagers'>>) =>
+      fetch('/api/settings/bots/master', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(jsonOrThrow),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['bot-master'] }); void qc.invalidateQueries({ queryKey: ['bot-functions'] }); },
+  });
+  const killed = master?.killed ?? false;
+  const on = fns?.functions.filter(f => f.enabled).length ?? 0;
+  const total = fns?.functions.length ?? 0;
+
+  return (
+    <section className={`rounded-2xl border p-4 sm:p-5 ${killed
+      ? 'border-[var(--color-negative)] bg-[color-mix(in_srgb,var(--color-negative)_8%,var(--color-bg-surface))]'
+      : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
+      <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <Bot size={20} className={killed ? 'text-[var(--color-negative)]' : 'text-[var(--color-accent)]'} />
+            <h1 className="text-lg font-semibold text-[var(--color-text)]">Бот «Аналитик»</h1>
+            <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${killed
+              ? 'bg-[var(--color-negative)] text-white'
+              : on > 0 ? 'bg-[var(--color-positive)] text-white' : 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]'}`}>
+              {killed ? 'ВЫРУБЛЕН' : on > 0 ? `работает · ${on} из ${total}` : `молчит · 0 из ${total}`}
+            </span>
+          </div>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            {killed
+              ? `Все отправки остановлены${master?.killedBy ? ` — ${master.killedBy}` : ''}${master?.killedAt ? `, ${new Date(master.killedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}` : ''}. Функции и расписания сохранены и заработают, когда бота включат обратно.`
+              : 'Что бот отправляет и кому — по функциям. Выключенная функция считается и пишется в журнал, но в Битрикс не уходит; включение задним числом ничего не досылает.'}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+            {master?.envOverride && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-[var(--color-negative)] px-2 py-0.5 text-[var(--color-negative)]">
+                <ShieldAlert size={12} /> на сервере BOT_SEND_ENABLED=1 — функции не решают, решает только «Вырубить»
+              </span>
+            )}
+            <label className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-muted)] cursor-pointer" title="Сообщения менеджерам (дайджесты, награды) считаются и пишутся в журнал исходящих, но не отправляются. Раньше этот флаг был скрыт и включён по умолчанию.">
+              <input type="checkbox" checked={master?.dryRunManagers ?? true} onChange={e => patch.mutate({ dryRunManagers: e.target.checked })} className="tap-target h-3.5 w-3.5 accent-[var(--color-accent)]" />
+              <FlaskConical size={12} /> тест-режим сообщений менеджерам {master?.dryRunManagers ? '— ВКЛЮЧЁН (в Битрикс не уходит)' : '— выключен'}
+            </label>
+          </div>
+        </div>
+        <div className="shrink-0">
+          {killed ? (
+            <button onClick={() => patch.mutate({ killed: false })} disabled={patch.isPending}
+              className="min-h-11 inline-flex items-center gap-2 rounded-xl bg-[var(--color-positive)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40">
+              <Power size={16} /> Включить бота
+            </button>
+          ) : (
+            <button onClick={() => { if (confirm('Вырубить бота? Остановятся ВСЕ отправки «Аналитика» — отчёты, дайджесты, приглашения, всё. Функции и расписания сохранятся.')) patch.mutate({ killed: true }); }}
+              disabled={patch.isPending}
+              className="min-h-11 inline-flex items-center gap-2 rounded-xl bg-[var(--color-negative)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40">
+              <Power size={16} /> Вырубить бота
+            </button>
+          )}
+        </div>
       </div>
-      <FunctionsBlock />
-      <SchedulesBlock />
+      {patch.isError && <div className="mt-2 text-xs text-[var(--color-negative)]">{(patch.error as Error).message}</div>}
+    </section>
+  );
+}
+
+// ── Журнал: входящие (что пишут люди) + исходящие ────────────────────────────
+interface InboundItem { id: string; bitrixId: number; name: string | null; event: string; text: string | null; handledBy: string; replyTo: string | null; createdAt: string }
+const HANDLED_LABEL: Record<string, string> = {
+  deal_chat: 'чат по сделке', weather: 'ответ про погоду', feedback: 'кнопка под сообщением',
+  bind_deal: 'кнопка «к сделке»', unhandled: 'без обработчика',
+};
+function JournalTab() {
+  const [q, setQ] = useState('');
+  const { data, isLoading } = useQuery<{ items: InboundItem[] }>({
+    queryKey: ['bot-inbound', q],
+    queryFn: () => fetch(`/api/settings/bots/inbound?q=${encodeURIComponent(q)}`).then(jsonOrThrow),
+    refetchOnWindowFocus: false,
+  });
+  return (
+    <div className="flex flex-col gap-5">
+      <section className={cardCls}>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-base font-bold text-[var(--color-text)] inline-flex items-center gap-2"><Inbox size={16} /> Входящие — что пишут боту</h2>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск по тексту или человеку…" className={`${inputCls} sm:w-72`} />
+        </div>
+        <p className="mb-3 text-[11px] leading-snug text-[var(--color-text-muted)]">
+          Каждое сообщение и клик по кнопке в личке бота — с пометкой, какой обработчик его забрал. «Без обработчика» —
+          человек написал боту, а бот не понял: это и есть то, что стоит читать глазами.
+        </p>
+        {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>
+          : !data || data.items.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">Пока пусто — журнал ведётся с момента выкатки панели.</div>
+          : (
+            <div className="flex flex-col divide-y divide-[var(--color-border)]">
+              {data.items.map(it => (
+                <div key={it.id} className="py-2 flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-3">
+                  <span className="shrink-0 text-[11px] text-[var(--color-text-muted)] tabular-nums sm:w-28">
+                    {new Date(it.createdAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })}
+                  </span>
+                  <span className="shrink-0 text-sm font-semibold text-[var(--color-text)] sm:w-44 truncate" title={`#${it.bitrixId}`}>{it.name ?? `#${it.bitrixId}`}</span>
+                  <span className="min-w-0 flex-1 text-sm text-[var(--color-text)] whitespace-pre-wrap break-words">{it.text ?? '—'}</span>
+                  <span className={`shrink-0 self-start rounded-md px-2 py-0.5 text-[11px] ${it.handledBy === 'unhandled'
+                    ? 'bg-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] text-[var(--color-warning)]'
+                    : 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]'}`}>
+                    {HANDLED_LABEL[it.handledBy] ?? it.handledBy}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+      </section>
+      {/* Исходящие — готовый журнал из раздела наград (bot_outbound_log): тот же
+          компонент, чтобы не было двух разных чтений одной таблицы. */}
+      <OutboundLogBlock />
     </div>
   );
 }
@@ -82,15 +234,10 @@ function FunctionsBlock() {
   return (
     <section className={cardCls}>
       <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <h2 className="text-base font-bold text-[var(--color-text)]">Функции</h2>
+        <h2 className="text-base font-bold text-[var(--color-text)] inline-flex items-center gap-2"><ToggleLeft size={16} /> Функции</h2>
         <span className="text-xs text-[var(--color-text-muted)]">включено {on} из {data.functions.length}</span>
       </div>
       {data.error && <div className="mb-3 text-xs text-[var(--color-text-muted)]">{data.error}</div>}
-      {data.envOverride && (
-        <div className="mb-3 rounded-lg border border-[var(--color-negative)] p-2 text-xs text-[var(--color-negative)]">
-          На сервере поднят аварийный тумблер <code>BOT_SEND_ENABLED=1</code> — шлётся ВСЁ, рубильники ниже сейчас ничего не решают.
-        </div>
-      )}
       <div className="flex flex-col gap-5">
         {groups.map(g => (
           <div key={g}>
@@ -210,6 +357,60 @@ function FunctionRow({ f, recipientsById, allRecipients, onToggle, onConfig, bus
   );
 }
 
+// ── Опрос по погоде: кого спрашивать по городам ──────────────────────────────
+// Раньше — отдельная страница /settings/bots/weather (правка владельца 09.09:
+// «раздел „Опрос по погоде" можно засунуть внутрь Аналитика» — это функция того же
+// бота, а не отдельный бот). Логика и API прежние (/api/settings/weather-responsibles).
+const CITY_LABELS: Record<string, string> = { spb: 'Санкт-Петербург', msk: 'Москва', krd: 'Краснодар' };
+interface WeatherResponsible { city: string; bitrixUserId: string; name: string | null }
+
+function WeatherResponsiblesBlock() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery<{ responsibles: WeatherResponsible[] }>({
+    queryKey: ['weather-responsibles'],
+    queryFn: () => fetch('/api/settings/weather-responsibles').then(jsonOrThrow),
+    refetchOnWindowFocus: false,
+  });
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const save = useMutation({
+    mutationFn: ({ city, id }: { city: string; id: string }) =>
+      fetch('/api/settings/weather-responsibles', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ city, bitrixUserId: id }) }).then(jsonOrThrow),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['weather-responsibles'] }),
+  });
+  const byCity = new Map((data?.responsibles ?? []).map(r => [r.city, r]));
+  return (
+    <section className={cardCls}>
+      <h2 className="text-base font-bold text-[var(--color-text)] mb-1 inline-flex items-center gap-2"><CloudSun size={16} /> Опрос по погоде — кого спрашивать</h2>
+      <p className="mb-3 text-[11px] leading-snug text-[var(--color-text-muted)]">
+        Каждый понедельник в 09:00 МСК «Аналитик» спрашивает этих людей «Как погодка на той неделе была?» —
+        ответ попадает в отчёт «Данные по годам». Сам опрос включается функцией «Опрос погоды по понедельникам»
+        выше. Указывается Bitrix ID; автосводка Open-Meteo добавляется независимо.
+      </p>
+      {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div> : (
+        <div className="flex flex-col gap-2">
+          {Object.keys(CITY_LABELS).map(city => {
+            const cur = byCity.get(city);
+            const val = draft[city] ?? cur?.bitrixUserId ?? '';
+            return (
+              <div key={city} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2">
+                <span className="w-40 text-sm font-semibold text-[var(--color-text)]">{CITY_LABELS[city]}</span>
+                <input value={val} onChange={e => setDraft(d => ({ ...d, [city]: e.target.value }))} inputMode="numeric" placeholder="Bitrix ID"
+                  className="w-28 min-h-11 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-base sm:text-sm text-right tabular-nums" />
+                <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-muted)]">
+                  {cur?.name ? `сейчас: ${cur.name} (#${cur.bitrixUserId})` : cur ? `сейчас: #${cur.bitrixUserId}` : 'не назначен — дефолт подберётся по имени при первом опросе'}
+                </span>
+                <button type="button" disabled={save.isPending || !/^\d{1,10}$/.test(val) || val === cur?.bitrixUserId} onClick={() => save.mutate({ city, id: val })}
+                  className={btnPrimaryCls}>Сохранить</button>
+              </div>
+            );
+          })}
+          {save.isError && <div className="text-xs text-[var(--color-negative)]">{(save.error as Error).message}</div>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // ── Расписания авторассылки отчётов ──────────────────────────────────────────
 function SchedulesBlock() {
   const qc = useQueryClient();
@@ -243,7 +444,7 @@ function SchedulesBlock() {
     <section className={cardCls}>
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-x-2">
-          <h2 className="text-base font-bold text-[var(--color-text)]">Расписания рассылки отчётов</h2>
+          <h2 className="text-base font-bold text-[var(--color-text)] inline-flex items-center gap-2"><CalendarClock size={16} /> Расписания рассылки отчётов</h2>
           <span className="text-xs text-[var(--color-text-muted)]">{data ? `${data.schedules.length} шт.` : ''}</span>
         </div>
         {!adding && <button className={btnPrimaryCls} onClick={() => setAdding(true)}><Plus size={14} /> Добавить</button>}

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Bot, PhoneMissed, CloudSun } from 'lucide-react';
+import { Bot, PhoneMissed } from 'lucide-react';
 
 // Список ботов Bitrix24, живущих в Монолитике. У «Аналитика» с 09.09 своя страница:
 // реестр функций (каждая — рубильник + получатели/час) и расписания авторассылки
@@ -23,9 +23,9 @@ export default function BotsPage() {
             <span className="text-sm font-semibold text-[var(--color-text)]">Аналитик</span>
           </div>
           <p className="text-xs text-[var(--color-text-muted)]">
-            Приглашения, ежедневные отчёты, дайджесты, геймификация, чаты по сделкам —
-            каждая функция включается отдельно; плюс расписания рассылки сохранённых
-            отчётов «Мой отчёт» в личку →
+            Всё, что пишет «Аналитик»: приглашения и служебные ссылки, ежедневные отчёты,
+            дайджесты, напоминания, геймификация, чаты по сделкам, опрос по погоде — каждая
+            функция включается отдельно; плюс расписания рассылки сохранённых отчётов →
           </p>
         </Link>
 
@@ -38,24 +38,12 @@ export default function BotsPage() {
             <span className="text-sm font-semibold text-[var(--color-text)]">Контроль звонков</span>
           </div>
           <p className="text-xs text-[var(--color-text-muted)]">
-            Следит за пропущенными входящими и эскалирует по правилам: менеджер → РОП →
-            директор → собственник. Правила и шаблоны настраиваются →
+            Отдельный бот с одной функцией: пропущенные входящие и эскалация по правилам
+            менеджер → РОП → директор → собственник. Работает всегда, рубильника нет;
+            правила и шаблоны →
           </p>
         </Link>
 
-        <Link
-          href="/settings/bots/weather"
-          className="border border-[var(--color-border)] rounded-lg p-4 hover:bg-[var(--color-bg-hover)] transition-colors block"
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <CloudSun size={18} className="text-[var(--color-accent)]" />
-            <span className="text-sm font-semibold text-[var(--color-text)]">Погода для «Данных по годам»</span>
-          </div>
-          <p className="text-xs text-[var(--color-text-muted)]">
-            Каждый понедельник 09:00 МСК «Аналитик» спрашивает ответственных про
-            погоду прошлой недели. Кого спрашивать по городам →
-          </p>
-        </Link>
       </div>
 
     </div>
