@@ -62,6 +62,7 @@ export async function register() {
   scheduleRopAdviceFeedback();
   scheduleWeeklyWeather();
   scheduleReportSchedules();
+  scheduleScenarios();
 }
 
 // Авторассылка сохранённых отчётов «Мой отчёт» (задача владельца 09.09): раз в
@@ -78,6 +79,25 @@ function scheduleReportSchedules() {
       await runDueReportSchedules();
     } catch (err) {
       console.error('[report-schedules] тик не удался:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setInterval(() => { void tick(); }, 60 * 1000);
+}
+
+// Сценарии авто-коучинга (lib/jobs/scenarios.ts, задача владельца 09.09): раз в
+// минуту спрашиваем БД, у каких включённых сценариев пришёл час проверки.
+// Защита от дублей — атомарный claim по МСК-дате внутри runDueScenarios; гейт
+// функции 'scenarios' — там же (выключено → даже не считаем).
+function scheduleScenarios() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { runDueScenarios } = await import('./lib/jobs/scenarios');
+      await runDueScenarios();
+    } catch (err) {
+      console.error('[scenarios] тик не удался:', err instanceof Error ? err.message : err);
     } finally { running = false; }
   };
   setInterval(() => { void tick(); }, 60 * 1000);

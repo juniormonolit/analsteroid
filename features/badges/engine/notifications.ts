@@ -205,6 +205,7 @@ function functionKeyForMsgType(msgType: string): BotChannel {
   if (msgType === 'digest_daily') return 'manager_digest_daily';
   if (msgType === 'digest_weekly') return 'manager_digest_weekly';
   if (msgType.startsWith('rop_digest')) return 'rop_digest';
+  if (msgType.startsWith('scenario')) return 'scenarios';
   if (msgType.includes('advice')) return 'advice_feedback';
   return 'gamification';
 }

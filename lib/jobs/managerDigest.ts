@@ -952,7 +952,7 @@ export async function fetchRecentlyActiveManagerIds(days: number): Promise<Set<n
   return new Set(res.rows.map(r => Number(r.id)).filter(n => Number.isFinite(n)));
 }
 
-async function fetchWorkingManagers(): Promise<{ managers: ManagerRef[]; skippedInactive: number }> {
+export async function fetchWorkingManagers(): Promise<{ managers: ManagerRef[]; skippedInactive: number }> {
   const [all, settings] = await Promise.all([fetchActiveManagers(), fetchDigestSettings()]);
   const active = await fetchRecentlyActiveManagerIds(settings.inactiveDays).catch(() => null);
   if (!active) return { managers: all, skippedInactive: 0 }; // БД аналитики недоступна — не режем молча всех

@@ -85,7 +85,7 @@ export interface BotKeyboardButton {
 export const BOT_FUNCTION_KEYS = [
   'invite_link', 'direct_access_link', 'widget_script',
   'daily_moscow_report', 'daily_os_teams_report', 'report_schedules', 'weekly_weather',
-  'manager_digest_daily', 'manager_digest_weekly', 'rop_digest', 'advice_feedback',
+  'manager_digest_daily', 'manager_digest_weekly', 'rop_digest', 'advice_feedback', 'scenarios',
   'gamification', 'deal_chats',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
