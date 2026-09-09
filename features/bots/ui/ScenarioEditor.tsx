@@ -393,7 +393,8 @@ function AudiencePicker({ flow, update }: { flow: ScenarioFlow; update: (p: (f: 
 function TriCheckbox({ state, onChange }: { state: 'none' | 'some' | 'all'; onChange: () => void }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { if (ref.current) ref.current.indeterminate = state === 'some'; }, [state]);
-  return <input ref={ref} type="checkbox" checked={state === 'all'} onChange={onChange} className="tap-target accent-[var(--color-accent)] w-3.5 h-3.5 shrink-0 cursor-pointer" />;
+  // Без tap-target: его 44px-зона накрывала бы соседнюю стрелку (клик по галке разворачивал ветку).
+  return <input ref={ref} type="checkbox" checked={state === 'all'} onChange={onChange} className="accent-[var(--color-accent)] w-4 h-4 shrink-0 cursor-pointer" />;
 }
 
 function OrgNodeRow({ node, depth, selected, onToggle, q }: { node: OrgTreeNode; depth: number; selected: Set<number>; onToggle: (ids: number[], on: boolean) => void; q: string }) {
@@ -406,9 +407,10 @@ function OrgNodeRow({ node, depth, selected, onToggle, q }: { node: OrgTreeNode;
   const people = node.managers.filter(m => !q || m.name.toLowerCase().includes(q) || node.name.toLowerCase().includes(q));
   return (
     <div>
-      <div className="flex items-center gap-1.5 min-h-9 hover:bg-[var(--color-bg-hover)] select-none" style={{ paddingLeft: 8 + depth * 14, paddingRight: 8 }}>
-        <button type="button" onClick={() => setExpanded(v => !v)} className="tap-target w-4 h-4 flex items-center justify-center text-[var(--color-text-muted)]">
-          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      <div className="flex items-center gap-2 min-h-10 hover:bg-[var(--color-bg-hover)] select-none" style={{ paddingLeft: 8 + depth * 14, paddingRight: 8 }}>
+        <button type="button" onClick={() => setExpanded(v => !v)} aria-label={open ? 'Свернуть' : 'Развернуть'}
+          className="h-8 w-8 shrink-0 flex items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-border)]">
+          {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </button>
         <TriCheckbox state={state} onChange={() => onToggle(ids, state !== 'all')} />
         <span onClick={() => onToggle(ids, state !== 'all')} className={`flex-1 truncate text-sm cursor-pointer ${depth === 0 ? 'font-medium text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>{node.name}</span>
@@ -420,8 +422,8 @@ function OrgNodeRow({ node, depth, selected, onToggle, q }: { node: OrgTreeNode;
           {people.map(m => {
             const on = selected.has(m.bitrixId);
             return (
-              <label key={m.bitrixId} className="flex items-center gap-1.5 min-h-9 hover:bg-[var(--color-bg-hover)] cursor-pointer" style={{ paddingLeft: 8 + (depth + 1) * 14 + 20, paddingRight: 8 }}>
-                <input type="checkbox" checked={on} onChange={() => onToggle([m.bitrixId], !on)} className="tap-target accent-[var(--color-accent)] w-3.5 h-3.5 shrink-0" />
+              <label key={m.bitrixId} className="flex items-center gap-2 min-h-10 hover:bg-[var(--color-bg-hover)] cursor-pointer" style={{ paddingLeft: 8 + (depth + 1) * 14 + 40, paddingRight: 8 }}>
+                <input type="checkbox" checked={on} onChange={() => onToggle([m.bitrixId], !on)} className="accent-[var(--color-accent)] w-4 h-4 shrink-0" />
                 <span className="truncate text-sm text-[var(--color-text)]">{m.name}</span>
               </label>
             );
@@ -613,12 +615,12 @@ function AddBetween({ onAdd, last }: { onAdd: (n: FlowNode) => void; last?: bool
                 className="min-h-9 inline-flex items-center gap-1 rounded-lg px-2.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]"><Icon size={14} /> {label}</button>
             );
           })}
-          <button type="button" onClick={() => setOpen(false)} className="tap-target px-1 text-[var(--color-text-muted)]"><X size={13} /></button>
+          <button type="button" onClick={() => setOpen(false)} className="h-9 w-9 inline-flex items-center justify-center rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]"><X size={14} /></button>
         </div>
       ) : (
         <button type="button" onClick={() => setOpen(true)} title="Добавить блок"
-          className={`tap-target inline-flex h-7 w-7 items-center justify-center rounded-full border bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] ${last ? 'border-[var(--color-border)]' : 'border-[var(--color-border)]/60'}`}>
-          <Plus size={14} />
+          className={`inline-flex h-8 w-8 items-center justify-center rounded-full border bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] ${last ? 'border-[var(--color-border)]' : 'border-[var(--color-border)]/60'}`}>
+          <Plus size={15} />
         </button>
       )}
       {!last && <div className="h-4 w-px bg-[var(--color-border)]" />}
@@ -637,10 +639,10 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
         <Icon size={16} className="text-[var(--color-text-muted)]" />
         <span className="text-sm font-semibold text-[var(--color-text)]">{label}</span>
         <div className="ml-auto flex items-center">
-          <button type="button" onClick={onUp} disabled={!onUp} className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-25" title="Выше"><ArrowUp size={14} /></button>
-          <button type="button" onClick={onDown} disabled={!onDown} className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-25" title="Ниже"><ArrowDown size={14} /></button>
+          <button type="button" onClick={onUp} disabled={!onUp} className="h-9 w-9 inline-flex items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-25" title="Выше"><ArrowUp size={16} /></button>
+          <button type="button" onClick={onDown} disabled={!onDown} className="h-9 w-9 inline-flex items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] disabled:opacity-25" title="Ниже"><ArrowDown size={16} /></button>
           <button type="button" onClick={() => { if (node.type !== 'check' || (node.yes.length + node.no.length === 0) || confirm('Удалить проверку вместе с вложенными блоками?')) onRemove(); }}
-            className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-negative)]" title="Удалить"><Trash2 size={14} /></button>
+            className="h-9 w-9 inline-flex items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-negative)]" title="Удалить"><Trash2 size={16} /></button>
         </div>
       </div>
       {node.type === 'message' && <MessageBody node={node} onChange={onChange} placeholders={placeholders} sample={sample} />}

@@ -111,7 +111,7 @@ function ScenarioCard({ s, onToggle, onJournal, onDelete }: { s: ScenarioListIte
     <div className={`rounded-xl border p-3 ${s.enabled ? 'border-[var(--color-border)]' : 'border-dashed border-[var(--color-border)] opacity-80'}`}>
       <div className="flex items-start gap-3">
         <input type="checkbox" checked={s.enabled} onChange={onToggle} title={s.enabled ? 'Выключить (открытые цепочки закроются)' : 'Включить'}
-          className="tap-target mt-1 h-4 w-4 shrink-0 cursor-pointer accent-[var(--color-accent)]" />
+          className="mt-1 h-5 w-5 shrink-0 cursor-pointer accent-[var(--color-accent)]" />
         <Link href={`/settings/bots/analitik/scenarios/${s.id}`} className="min-w-0 flex-1 group">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-sm font-bold text-[var(--color-text)] group-hover:text-[var(--color-accent)]">{s.name}</span>
@@ -133,9 +133,9 @@ function ScenarioCard({ s, onToggle, onJournal, onDelete }: { s: ScenarioListIte
           </div>
         </Link>
         <div className="flex items-center gap-0.5 shrink-0">
-          <button onClick={onJournal} title="Журнал цепочек и сообщений" className="tap-target p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"><History size={15} /></button>
-          <button onClick={onDelete} title="Удалить" className="tap-target p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-negative)]"><Trash2 size={15} /></button>
-          <Link href={`/settings/bots/analitik/scenarios/${s.id}`} title="Открыть конструктор" className="tap-target p-1.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"><ChevronRight size={16} /></Link>
+          <button onClick={onJournal} title="Журнал цепочек и сообщений" className="h-10 w-10 inline-flex items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent)]"><History size={16} /></button>
+          <button onClick={onDelete} title="Удалить" className="h-10 w-10 inline-flex items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-negative)]"><Trash2 size={16} /></button>
+          <Link href={`/settings/bots/analitik/scenarios/${s.id}`} title="Открыть конструктор" className="h-10 w-10 inline-flex items-center justify-center rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-accent)]"><ChevronRight size={18} /></Link>
         </div>
       </div>
     </div>
