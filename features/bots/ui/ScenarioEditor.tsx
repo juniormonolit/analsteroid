@@ -25,7 +25,7 @@ import { Chip, fmtV, jsonOrThrow, unitFor, type RunSummary } from './ScenariosTa
 
 // ── Типы API ─────────────────────────────────────────────────────────────────
 interface MetricOpt { id: string; name: string; short: string | null; category: string | null; dataType: DataType; decimalPlaces: number; description: string | null; formula: string | null }
-interface Options { metrics: MetricOpt[]; placeholders: { key: string; hint: string }[]; managers: { bitrixId: number; name: string }[] }
+interface Options { metrics: MetricOpt[]; placeholders: { key: string; hint: string }[] }
 interface ScenarioDto { id: string; name: string; enabled: boolean; flow: ScenarioFlow; checkHour: number; weekdaysOnly: boolean; metricName: string; metricDataType: DataType; stats: { open: number; sent30: number } }
 interface ExecStep { nodeId: string | null; type: 'start' | 'message' | 'wait' | 'check' | 'end' | 'deferred'; label: string; text?: string; result?: boolean }
 interface Eval {
@@ -294,23 +294,44 @@ function TriggerCard({ flow, metric, opts, update, checkHour, setCheckHour, week
             Ниже порога → левая ветка; на уровне {t.baseline === 'target' ? 'цели' : 'своего среднего'} или выше → правая; между — тишина.
           </div>
         </div>
-        <AudiencePicker flow={flow} managers={opts.managers} update={update} />
+        <AudiencePicker flow={flow} update={update} />
       </div>
     </section>
   );
 }
 
-function AudiencePicker({ flow, managers, update }: { flow: ScenarioFlow; managers: Options['managers']; update: (p: (f: ScenarioFlow) => ScenarioFlow) => void }) {
+interface OrgTreeNode { id: string; bitrixId: string; name: string; children: OrgTreeNode[]; managers: { bitrixId: number; name: string }[] }
+
+function subtreeManagerIds(n: OrgTreeNode): number[] {
+  return [...n.managers.map(m => m.bitrixId), ...n.children.flatMap(subtreeManagerIds)];
+}
+function nodeMatches(n: OrgTreeNode, q: string): boolean {
+  return !q || n.name.toLowerCase().includes(q) || n.managers.some(m => m.name.toLowerCase().includes(q)) || n.children.some(c => nodeMatches(c, q));
+}
+
+// Аудитория — дерево оргструктуры до менеджеров (владелец 09.09: «пикер как в отчётах,
+// но чтобы раскрывался вплоть до менеджеров»). Отдел = тристейт-чекбокс на всех
+// менеджеров поддерева; храним ВЫБРАННЫХ ЛЮДЕЙ (managerIds), не отделы — сценарий
+// адресный, новые сотрудники отдела в него не попадают сами.
+function AudiencePicker({ flow, update }: { flow: ScenarioFlow; update: (p: (f: ScenarioFlow) => ScenarioFlow) => void }) {
   const a = flow.audience;
   const [q, setQ] = useState('');
+  const { data, isLoading } = useQuery<{ tree: OrgTreeNode[] }>({
+    queryKey: ['bot-scenario-org-tree'],
+    queryFn: () => fetch('/api/settings/bots/scenarios/org-tree').then(jsonOrThrow),
+    staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false, enabled: a.mode === 'selected',
+  });
   const setA = (patch: Partial<ScenarioFlow['audience']>) => update(f => ({ ...f, audience: { ...f.audience, ...patch } }));
-  const list = useMemo(() => {
-    const n = q.trim().toLowerCase();
-    return managers.filter(m => !a.managerIds.includes(m.bitrixId) && (!n || m.name.toLowerCase().includes(n))).slice(0, 30);
-  }, [managers, q, a.managerIds]);
-  const chosen = a.managerIds.map(id => managers.find(m => m.bitrixId === id) ?? { bitrixId: id, name: `#${id}` });
+  const selected = useMemo(() => new Set(a.managerIds), [a.managerIds]);
+  const toggle = (ids: number[], on: boolean) => {
+    const next = new Set(selected);
+    ids.forEach(id => (on ? next.add(id) : next.delete(id)));
+    setA({ managerIds: [...next] });
+  };
+  const total = useMemo(() => (data?.tree ?? []).reduce((n, t) => n + subtreeManagerIds(t).length, 0), [data]);
+  const qq = q.trim().toLowerCase();
   return (
-    <div className="rounded-xl border border-[var(--color-border)] p-3">
+    <div className="rounded-xl border border-[var(--color-border)] p-3 flex flex-col min-h-0">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]"><Users size={14} /> Кому</div>
       <div className="flex gap-1.5 mb-2">
         <Seg on={a.mode === 'all'} onClick={() => setA({ mode: 'all' })}>Всем менеджерам</Seg>
@@ -322,29 +343,64 @@ function AudiencePicker({ flow, managers, update }: { flow: ScenarioFlow; manage
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap gap-1 mb-2 min-h-6">
-            {chosen.length === 0 && <span className="text-[11px] text-[var(--color-text-muted)]">Никого не выбрано</span>}
-            {chosen.map(m => (
-              <span key={m.bitrixId} className="inline-flex items-center gap-1 rounded-md bg-[var(--color-accent)]/10 px-2 py-0.5 text-[12px] text-[var(--color-accent)]">
-                {m.name}
-                <button type="button" onClick={() => setA({ managerIds: a.managerIds.filter(x => x !== m.bitrixId) })} className="tap-target"><X size={11} /></button>
-              </span>
-            ))}
+          <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px]">
+            <span className="text-[var(--color-text-muted)]">выбрано <b className="text-[var(--color-text)]">{a.managerIds.length}</b>{total ? ` из ${total}` : ''}</span>
+            {a.managerIds.length > 0 && <button type="button" onClick={() => setA({ managerIds: [] })} className="text-[var(--color-accent)] hover:underline">Очистить</button>}
           </div>
-          <div className="relative">
+          <div className="relative mb-1">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Найти менеджера…" className={`${inputCls} pl-7`} />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Отдел или менеджер…" className={`${inputCls} pl-7`} />
           </div>
-          {(q || chosen.length === 0) && (
-            <div className="mt-1 max-h-44 overflow-y-auto rounded-lg border border-[var(--color-border)]">
-              {list.length === 0 && <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">Ничего не найдено</div>}
-              {list.map(m => (
-                <button key={m.bitrixId} type="button" onClick={() => { setA({ managerIds: [...a.managerIds, m.bitrixId] }); setQ(''); }}
-                  className="w-full min-h-10 text-left px-3 py-1.5 text-sm text-[var(--color-text)] border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-bg-hover)]">{m.name}</button>
-              ))}
-            </div>
-          )}
+          <div className="max-h-72 overflow-y-auto rounded-lg border border-[var(--color-border)] py-1">
+            {isLoading && <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">Загрузка оргструктуры…</div>}
+            {data && data.tree.filter(n => nodeMatches(n, qq)).map(n => (
+              <OrgNodeRow key={n.id} node={n} depth={0} selected={selected} onToggle={toggle} q={qq} />
+            ))}
+            {data && data.tree.length === 0 && <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">Оргструктура пуста</div>}
+          </div>
         </>
+      )}
+    </div>
+  );
+}
+
+function TriCheckbox({ state, onChange }: { state: 'none' | 'some' | 'all'; onChange: () => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = state === 'some'; }, [state]);
+  return <input ref={ref} type="checkbox" checked={state === 'all'} onChange={onChange} className="tap-target accent-[var(--color-accent)] w-3.5 h-3.5 shrink-0 cursor-pointer" />;
+}
+
+function OrgNodeRow({ node, depth, selected, onToggle, q }: { node: OrgTreeNode; depth: number; selected: Set<number>; onToggle: (ids: number[], on: boolean) => void; q: string }) {
+  const ids = useMemo(() => subtreeManagerIds(node), [node]);
+  const count = ids.filter(id => selected.has(id)).length;
+  const state = count === 0 ? 'none' : count === ids.length ? 'all' : 'some';
+  const [expanded, setExpanded] = useState(depth === 0);
+  const open = expanded || !!q; // при поиске раскрываем всё совпавшее
+  const kids = node.children.filter(c => nodeMatches(c, q));
+  const people = node.managers.filter(m => !q || m.name.toLowerCase().includes(q) || node.name.toLowerCase().includes(q));
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 min-h-9 hover:bg-[var(--color-bg-hover)] select-none" style={{ paddingLeft: 8 + depth * 14, paddingRight: 8 }}>
+        <button type="button" onClick={() => setExpanded(v => !v)} className="tap-target w-4 h-4 flex items-center justify-center text-[var(--color-text-muted)]">
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </button>
+        <TriCheckbox state={state} onChange={() => onToggle(ids, state !== 'all')} />
+        <span onClick={() => onToggle(ids, state !== 'all')} className={`flex-1 truncate text-sm cursor-pointer ${depth === 0 ? 'font-medium text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>{node.name}</span>
+        <span className="text-[10.5px] tabular-nums text-[var(--color-text-muted)]">{count ? `${count}/` : ''}{ids.length}</span>
+      </div>
+      {open && (
+        <div>
+          {kids.map(c => <OrgNodeRow key={c.id} node={c} depth={depth + 1} selected={selected} onToggle={onToggle} q={q} />)}
+          {people.map(m => {
+            const on = selected.has(m.bitrixId);
+            return (
+              <label key={m.bitrixId} className="flex items-center gap-1.5 min-h-9 hover:bg-[var(--color-bg-hover)] cursor-pointer" style={{ paddingLeft: 8 + (depth + 1) * 14 + 20, paddingRight: 8 }}>
+                <input type="checkbox" checked={on} onChange={() => onToggle([m.bitrixId], !on)} className="tap-target accent-[var(--color-accent)] w-3.5 h-3.5 shrink-0" />
+                <span className="truncate text-sm text-[var(--color-text)]">{m.name}</span>
+              </label>
+            );
+          })}
+        </div>
       )}
     </div>
   );
