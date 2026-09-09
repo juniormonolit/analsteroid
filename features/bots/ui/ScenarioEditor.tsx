@@ -196,14 +196,14 @@ export function ScenarioEditor({ id }: { id: string }) {
       <div ref={canvasRef} className="flex-1 min-h-0 overflow-auto">
       <div className="relative w-max min-w-full p-3 sm:p-6 flex flex-col items-center gap-4">
         {fnEnabled === false && (
-          <div className="w-[1040px] max-w-full rounded-xl border border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-[12px] text-[var(--color-text)]">
+          <div className="w-[1200px] max-w-full rounded-xl border border-[var(--color-warning)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-[12px] text-[var(--color-text)]">
             <BellOff size={12} className="inline mr-1 text-[var(--color-warning)]" /> Функция бота «Сценарии коучинга» выключена — сценарии можно строить и проверять, но в Битрикс ничего не уйдёт,
             пока не включишь её во вкладке <Link href="/settings/bots/analitik?tab=functions" className="text-[var(--color-accent)] hover:underline">«Функции»</Link>.
           </div>
         )}
 
         {/* Триггер */}
-        <div ref={triggerRef} className="w-[1040px] max-w-full">
+        <div ref={triggerRef} className="w-[1200px] max-w-full">
         <TriggerCard flow={flow} metric={metric} opts={opts} update={update}
           checkHour={checkHour} setCheckHour={h => { setCheckHour(h); setDirty(true); }}
           weekdaysOnly={weekdaysOnly} setWeekdaysOnly={v => { setWeekdaysOnly(v); setDirty(true); }} />
@@ -250,6 +250,42 @@ function sampleCtx(flow: ScenarioFlow, metric: MetricOpt | null): Record<string,
 }
 
 // ── Триггер ──────────────────────────────────────────────────────────────────
+// Дизайн-проход 09.09 («всё мелко, криво, поля скачут»): секции с номерами, все подписи в
+// одну строку фиксированной высоты (поля в ряду всегда на одной линии), контролы 44px,
+// единицы измерения внутри поля, крупная строка «Порог = …», «Кому» — своя колонка.
+const fieldInput = 'h-11 w-full rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3.5 text-base text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] focus:ring-2 focus:ring-[var(--color-accent)]/20 transition-shadow';
+
+function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="h-5 mb-1.5 text-[12px] font-medium text-[var(--color-text-muted)] whitespace-nowrap truncate" title={label}>{label}</div>
+      {children}
+      {hint && <div className="mt-1 text-[11px] text-[var(--color-text-muted)] whitespace-nowrap truncate" title={hint}>{hint}</div>}
+    </div>
+  );
+}
+function UnitInput({ value, onChange, unit, placeholder, mode = 'int', min, max }: {
+  value: string | number; onChange: (raw: string) => void; unit?: string; placeholder?: string; mode?: 'int' | 'decimal'; min?: number; max?: number;
+}) {
+  return (
+    <div className="relative">
+      <input type={mode === 'int' ? 'number' : 'text'} inputMode={mode === 'int' ? 'numeric' : 'decimal'} min={min} max={max} value={value} placeholder={placeholder}
+        onChange={e => onChange(e.target.value)} className={`${fieldInput} ${unit ? 'pr-14' : ''} tabular-nums`} />
+      {unit && <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-sm text-[var(--color-text-muted)]">{unit}</span>}
+    </div>
+  );
+}
+function SectionTitle({ n, icon, title, sub }: { n: number; icon: React.ReactNode; title: string; sub?: string }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--color-accent)] text-[12px] font-bold text-[var(--color-text-inverse)]">{n}</span>
+      <span className="text-[var(--color-text-muted)]">{icon}</span>
+      <span className="text-[15px] font-bold text-[var(--color-text)]">{title}</span>
+      {sub && <span className="text-[12px] text-[var(--color-text-muted)]">{sub}</span>}
+    </div>
+  );
+}
+
 function TriggerCard({ flow, metric, opts, update, checkHour, setCheckHour, weekdaysOnly, setWeekdaysOnly }: {
   flow: ScenarioFlow; metric: MetricOpt | null; opts: Options; update: (p: (f: ScenarioFlow) => ScenarioFlow) => void;
   checkHour: number; setCheckHour: (h: number) => void; weekdaysOnly: boolean; setWeekdaysOnly: (v: boolean) => void;
@@ -257,7 +293,9 @@ function TriggerCard({ flow, metric, opts, update, checkHour, setCheckHour, week
   const t = flow.trigger;
   const setT = (patch: Partial<ScenarioFlow['trigger']>) => update(f => ({ ...f, trigger: { ...f.trigger, ...patch } }));
   const dt: DataType = metric?.dataType ?? 'decimal';
-  const unit = unitFor(dt);
+  const unit = dt === 'percent' ? '%' : unitFor(dt);
+  const dropUnit = unitFor(dt);
+  const dp = metric?.decimalPlaces ?? 1;
   const [num, setNum] = useState<{ target: string; drop: string }>({ target: t.targetValue === null ? '' : String(t.targetValue), drop: String(t.dropThreshold) });
   const onNum = (k: 'target' | 'drop', raw: string) => {
     setNum(n => ({ ...n, [k]: raw }));
@@ -265,62 +303,112 @@ function TriggerCard({ flow, metric, opts, update, checkHour, setCheckHour, week
     if (k === 'target') setT({ targetValue: raw.trim() === '' || !Number.isFinite(v) ? null : v });
     else if (Number.isFinite(v)) setT({ dropThreshold: Math.abs(v) });
   };
+  const onInt = (k: keyof ScenarioFlow['trigger']) => (raw: string) => { const v = Number(raw); if (Number.isInteger(v)) setT({ [k]: v } as Partial<ScenarioFlow['trigger']>); };
+  const baseLabel = t.baseline === 'target' ? fmtV(t.targetValue, dt, dp) : 'своё среднее';
+  const thr = t.baseline === 'target' && t.targetValue !== null ? fmtV(t.targetValue - t.dropThreshold, dt, dp) : null;
+
   return (
-    <section className="rounded-2xl border-2 border-[var(--color-accent)] bg-[var(--color-bg-surface)] p-4">
-      <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[var(--color-text)]">
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--color-accent)] text-[var(--color-text-inverse)]"><Target size={15} /></span>
-        Триггер: показатель на менеджера
+    <section className="rounded-3xl border-2 border-[var(--color-accent)] bg-[var(--color-bg-surface)] p-6 shadow-sm">
+      <div className="mb-5 flex items-center gap-3">
+        <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--color-accent)] text-[var(--color-text-inverse)]"><Target size={18} /></span>
+        <div>
+          <div className="text-lg font-bold text-[var(--color-text)]">Триггер</div>
+          <div className="text-[12px] text-[var(--color-text-muted)]">Что считаем, когда срабатываем и кому пишем</div>
+        </div>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] gap-4">
-        <div className="flex flex-col gap-3">
-          <MetricPicker metrics={opts.metrics} value={t.metricId} onChange={id => setT({ metricId: id })} />
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <Num label="Окно, дней (до вчера)" value={t.windowDays} min={1} max={365} onChange={v => setT({ windowDays: v })} />
-            <div className="col-span-2">
-              <div className={labelCls}>База сравнения</div>
-              <div className="flex gap-1.5">
-                <Seg on={t.baseline === 'target'} onClick={() => setT({ baseline: 'target' })}>Цель</Seg>
-                <Seg on={t.baseline === 'own_avg'} onClick={() => setT({ baseline: 'own_avg' })}>Своё среднее</Seg>
-              </div>
-            </div>
-            {t.baseline === 'target'
-              ? <div><div className={labelCls}>Цель{dt === 'percent' ? ', %' : unit ? `, ${unit}` : ''}</div><input inputMode="decimal" value={num.target} onChange={e => onNum('target', e.target.value)} className={inputCls} placeholder="15" /></div>
-              : <Num label="Среднее за, дней" value={t.baselineDays} min={7} max={730} onChange={v => setT({ baselineDays: v })} />}
+
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px] gap-6">
+        <div className="flex flex-col gap-6">
+          {/* 1. Показатель */}
+          <div className="flex flex-col gap-3">
+            <SectionTitle n={1} icon={<Target size={15} />} title="Показатель" sub="любая метрика каталога, считается на менеджера" />
+            <MetricPicker metrics={opts.metrics} value={t.metricId} onChange={id => setT({ metricId: id })} />
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div><div className={labelCls}>Просадка{unit ? `, ${unit}` : ''}</div><input inputMode="decimal" value={num.drop} onChange={e => onNum('drop', e.target.value)} className={inputCls} placeholder="2" /></div>
-            <Num label="Пауза после «просадки», дн." value={t.cooldownDays} min={0} max={365} onChange={v => setT({ cooldownDays: v })} />
-            <Num label="Пауза после «в норме», дн." value={t.praiseCooldownDays} min={0} max={365} onChange={v => setT({ praiseCooldownDays: v })} />
-            <div>
-              <div className={labelCls}>Час проверки (МСК)</div>
-              <div className="flex items-center gap-2">
-                <select value={checkHour} onChange={e => setCheckHour(Number(e.target.value))} className={inputCls}>
+
+          {/* 2. Условие */}
+          <div className="flex flex-col gap-3">
+            <SectionTitle n={2} icon={<TrendingDown size={15} />} title="Условие" sub="за какое окно, с чем сравниваем, где порог" />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Field label="Окно расчёта" hint="до вчера включительно">
+                <UnitInput value={t.windowDays} onChange={onInt('windowDays')} unit="дней" min={1} max={365} />
+              </Field>
+              <Field label="База сравнения">
+                <div className="grid grid-cols-2 gap-1 h-11 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] p-1">
+                  <Seg on={t.baseline === 'target'} onClick={() => setT({ baseline: 'target' })} compact>Цель</Seg>
+                  <Seg on={t.baseline === 'own_avg'} onClick={() => setT({ baseline: 'own_avg' })} compact>Своё среднее</Seg>
+                </div>
+              </Field>
+              {t.baseline === 'target' ? (
+                <Field label="Целевое значение">
+                  <UnitInput value={num.target} onChange={v => onNum('target', v)} unit={unit} mode="decimal" placeholder="15" />
+                </Field>
+              ) : (
+                <Field label="Своё среднее за" hint="дни до начала окна">
+                  <UnitInput value={t.baselineDays} onChange={onInt('baselineDays')} unit="дней" min={7} max={730} />
+                </Field>
+              )}
+              <Field label="Допустимая просадка" hint="ниже базы на столько — триггер">
+                <UnitInput value={num.drop} onChange={v => onNum('drop', v)} unit={dropUnit} mode="decimal" placeholder="2" />
+              </Field>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl bg-[var(--color-bg)] px-4 py-3">
+              <span className="text-base text-[var(--color-text)]">
+                Порог = <b>{baseLabel}</b> − <b>{t.dropThreshold.toLocaleString('ru-RU')} {dropUnit}</b>{thr && <> = <b className="text-lg">{thr}</b></>}
+              </span>
+              <span className="hidden sm:inline text-[var(--color-border)]">|</span>
+              <span className="inline-flex items-center gap-1.5 text-sm"><span className="h-2.5 w-2.5 rounded-full bg-[var(--color-negative)]" /> ниже порога → «Просадка»</span>
+              <span className="inline-flex items-center gap-1.5 text-sm"><span className="h-2.5 w-2.5 rounded-full bg-[var(--color-positive)]" /> ≥ {t.baseline === 'target' ? 'цели' : 'своего среднего'} → «В норме»</span>
+              <span className="inline-flex items-center gap-1.5 text-sm text-[var(--color-text-muted)]"><span className="h-2.5 w-2.5 rounded-full bg-[var(--color-border)]" /> между — тишина</span>
+            </div>
+          </div>
+
+          {/* 3. Ритм */}
+          <div className="flex flex-col gap-3">
+            <SectionTitle n={3} icon={<Clock size={15} />} title="Ритм" sub="когда проверяем и как долго молчим после цепочки" />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Field label="Час проверки" hint="по Москве">
+                <select value={checkHour} onChange={e => setCheckHour(Number(e.target.value))} className={fieldInput}>
                   {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
                 </select>
+              </Field>
+              <Field label="Дни">
+                <div className="grid grid-cols-2 gap-1 h-11 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] p-1">
+                  <Seg on={weekdaysOnly} onClick={() => setWeekdaysOnly(true)} compact>Будни</Seg>
+                  <Seg on={!weekdaysOnly} onClick={() => setWeekdaysOnly(false)} compact>Каждый день</Seg>
+                </div>
+              </Field>
+              <Field label="Пауза после «Просадки»" hint="если в «Завершить» пусто">
+                <UnitInput value={t.cooldownDays} onChange={onInt('cooldownDays')} unit="дней" min={0} max={365} />
+              </Field>
+              <Field label="Пауза после «В норме»" hint="не хвалить чаще">
+                <UnitInput value={t.praiseCooldownDays} onChange={onInt('praiseCooldownDays')} unit="дней" min={0} max={365} />
+              </Field>
+            </div>
+          </div>
+
+          {/* 4. Оценка */}
+          <div className="flex flex-col gap-3">
+            <SectionTitle n={4} icon={<Sparkles size={15} />} title="Оценка результата" sub="что считаем успехом" />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Field label="Цель удержана" hint="дней подряд ≥ порога">
+                <UnitInput value={t.holdDays} onChange={onInt('holdDays')} unit="дней" min={1} max={365} />
+              </Field>
+              <Field label="Наблюдать после закрытия" hint="снимаем показатель каждый день">
+                <UnitInput value={t.trackDays} onChange={onInt('trackDays')} unit="дней" min={0} max={365} />
+              </Field>
+              <div className="col-span-2 self-end text-[12px] leading-snug text-[var(--color-text-muted)]">
+                На старте цепочки фиксируются стартовое значение, база и порог. Полный успех — только «удержал цель»: держался ≥ порога
+                заданное число дней подряд. Итоги — во вкладке «Сценарии» → «Результаты».
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
-            <Num label="Цель удержана: ≥ порога дней подряд" value={t.holdDays} min={1} max={365} onChange={v => setT({ holdDays: v })} />
-            <Num label="Наблюдать после закрытия, дн." value={t.trackDays} min={0} max={365} onChange={v => setT({ trackDays: v })} />
-            <label className="col-span-2 inline-flex items-center gap-2 text-sm text-[var(--color-text)] min-h-11">
-              <input type="checkbox" checked={weekdaysOnly} onChange={e => setWeekdaysOnly(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" />
-              <Clock size={13} className="text-[var(--color-text-muted)]" /> Только по будням
-            </label>
-          </div>
-          <div className="text-[10.5px] leading-snug text-[var(--color-text-muted)]">
-            Оценка: на старте цепочки фиксируются стартовое значение, база и порог; дальше показатель снимается каждый день —
-            пока цепочка идёт и ещё «наблюдать» дней после. «Удержал цель» = держался ≥ порога заданное число дней подряд;
-            только это считается полным успехом (вкладка «Сценарии» → «Результаты»).
-          </div>
-          <div className="rounded-lg bg-[var(--color-bg)] px-3 py-2 text-[12px] text-[var(--color-text)]">
-            <TrendingDown size={12} className="inline mr-1 text-[var(--color-negative)]" />
-            Порог = {t.baseline === 'target' ? fmtV(t.targetValue, dt) : 'своё среднее'} − {t.dropThreshold.toLocaleString('ru-RU')} {unit}
-            {t.baseline === 'target' && t.targetValue !== null && <> = <b>{fmtV(t.targetValue - t.dropThreshold, dt)}</b></>}.
-            Ниже порога → левая ветка; на уровне {t.baseline === 'target' ? 'цели' : 'своего среднего'} или выше → правая; между — тишина.
-          </div>
         </div>
-        <AudiencePicker flow={flow} update={update} />
+
+        {/* 5. Кому */}
+        <div className="flex flex-col gap-3 min-h-0">
+          <SectionTitle n={5} icon={<Users size={15} />} title="Кому" />
+          <AudiencePicker flow={flow} update={update} />
+        </div>
       </div>
     </section>
   );
@@ -357,27 +445,27 @@ function AudiencePicker({ flow, update }: { flow: ScenarioFlow; update: (p: (f: 
   const total = useMemo(() => (data?.tree ?? []).reduce((n, t) => n + subtreeManagerIds(t).length, 0), [data]);
   const qq = q.trim().toLowerCase();
   return (
-    <div className="rounded-xl border border-[var(--color-border)] p-3 flex flex-col min-h-0">
-      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]"><Users size={14} /> Кому</div>
-      <div className="flex gap-1.5 mb-2">
-        <Seg on={a.mode === 'all'} onClick={() => setA({ mode: 'all' })}>Всем менеджерам</Seg>
-        <Seg on={a.mode === 'selected'} onClick={() => setA({ mode: 'selected' })}>Выбранным</Seg>
+    <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)] p-4 flex flex-col min-h-0 flex-1">
+      <div className="grid grid-cols-2 gap-1 h-11 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1 mb-3">
+        <Seg on={a.mode === 'all'} onClick={() => setA({ mode: 'all' })} compact>Всем менеджерам</Seg>
+        <Seg on={a.mode === 'selected'} onClick={() => setA({ mode: 'selected' })} compact>Выбранным</Seg>
       </div>
       {a.mode === 'all' ? (
-        <div className="text-[11px] leading-snug text-[var(--color-text-muted)]">
-          Все работающие менеджеры (аккаунты manager*, активные в CRM за последние N дней — настройка «неактивные» во вкладке «Дайджест»).
+        <div className="text-[13px] leading-relaxed text-[var(--color-text-muted)]">
+          Все работающие менеджеры отдела продаж: аккаунты <code>manager*</code>, активные в CRM за последние N дней
+          (порог «неактивные» — во вкладке «Дайджест»). Новые сотрудники подхватываются сами.
         </div>
       ) : (
         <>
-          <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px]">
+          <div className="mb-2 flex items-center justify-between gap-2 text-[13px]">
             <span className="text-[var(--color-text-muted)]">выбрано <b className="text-[var(--color-text)]">{a.managerIds.length}</b>{total ? ` из ${total}` : ''}</span>
-            {a.managerIds.length > 0 && <button type="button" onClick={() => setA({ managerIds: [] })} className="text-[var(--color-accent)] hover:underline">Очистить</button>}
+            {a.managerIds.length > 0 && <button type="button" onClick={() => setA({ managerIds: [] })} className="min-h-8 text-[var(--color-accent)] hover:underline">Очистить</button>}
           </div>
-          <div className="relative mb-1">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
-            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Отдел или менеджер…" className={`${inputCls} pl-7`} />
+          <div className="relative mb-2">
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Отдел или менеджер…" className={`${fieldInput} pl-10`} />
           </div>
-          <div className="max-h-72 overflow-y-auto rounded-lg border border-[var(--color-border)] py-1">
+          <div className="max-h-[420px] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] py-1">
             {isLoading && <div className="px-3 py-2 text-xs text-[var(--color-text-muted)]">Загрузка оргструктуры…</div>}
             {data && data.tree.filter(n => nodeMatches(n, qq)).map(n => (
               <OrgNodeRow key={n.id} node={n} depth={0} selected={selected} onToggle={toggle} q={qq} />
@@ -861,7 +949,15 @@ function PreviewPanel({ flow, scenarioId, dirty, enabledScenario, fnEnabled, onC
 function RowGroup({ children }: { children: React.ReactNode }) { return <>{children}</>; }
 
 // ── Мелочи ───────────────────────────────────────────────────────────────────
-function Seg({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+function Seg({ on, onClick, compact, children }: { on: boolean; onClick: () => void; compact?: boolean; children: React.ReactNode }) {
+  if (compact) {
+    return (
+      <button type="button" onClick={onClick}
+        className={`h-full min-w-0 rounded-lg px-2 text-sm whitespace-nowrap truncate transition-colors ${on
+          ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] font-semibold'
+          : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>{children}</button>
+    );
+  }
   return (
     <button type="button" onClick={onClick}
       className={`min-h-11 flex-1 rounded-lg border px-3 text-sm transition-colors ${on
