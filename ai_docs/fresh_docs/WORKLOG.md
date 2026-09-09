@@ -101,6 +101,29 @@ typecheck, lint:responsive (0 новых), полный build; SQL раннер�
 
 ---
 
+## 2026-09-09 — Аудит доступа к данным по ролям (проверка, без правок)
+
+Владелец: «каждый аккаунт видит только своё и подчинённых по иерархии; Директор
+— свой филиал и ниже; всё — только админ; пикеры тоже режутся; «Ещё» и
+«Настройки» — только админам». Полные таблицы (≈150 роутов, каждая строка с
+файл:строка) — ai_docs/fresh_docs/ACCESS_AUDIT_2026-09-09.md.
+
+Итог: модель доступа реализована только на «отделочных» роутах (manager-card/*,
+customers, customers/card, summary/*, tv/*, my-report/*, rating, badges/quests/
+shop team) через lib/org/managerAccess.ts. ЯДРО ОТЧЁТОВ её не знает: /api/reports/
+run, deals, client-deals, by-periods, metric-series, product-matrix, charts/* и
+plans/* проверяют только наличие сессии и доверяют departmentIds/managerId/all=1
+из запроса — любой РОП/Логист (и любой аккаунт для plans, product-matrix,
+customers/journey, profile/pulse) получает данные всей компании; /api/reports/deal
+и deal/calls — IDOR по номеру сделки. Пикер отделов отчётов (catalog/
+org-structure) отдаёт всё дерево. Директор через hasFullManagerAccess получает
+всё. Отдельно вне темы: POST /api/bitrix/events без аутентификации; badges/
+profile|batch|collection, skills, manager-card/plan-fact, profile/feed открыты
+сознательно (решение 05.08) — противоречат новой модели. Правки — после решения
+владельца по плану из чата.
+
+---
+
 ## 2026-09-07 — Задача #5636: реалтайм-канал для ТВ-дашборда (pg_notify → SSE) (Виктор)
 
 Серёга (стоячая санкция): ТВ-дашборд «Телевизоры» (готов, WORKLOG 07.09) читает
