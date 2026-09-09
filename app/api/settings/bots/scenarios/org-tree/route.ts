@@ -8,7 +8,10 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 // sa.departments (как /api/catalog/org-structure), менеджеры — sa.org_resolved_hierarchy
 // по department_id, только менеджерские аккаунты (bitrix_login manager*, то же правило,
 // что accountType='managers' в отчёте «По менеджерам» и в движке сценариев). Отделы без
-// менеджеров в поддереве вырезаются — здесь выбирают людей, а не структуру.
+// менеджеров в поддереве вырезаются — здесь выбирают людей, а не структуру. Показываем
+// ТОЛЬКО поддерево «Отдел продаж» (владелец 09.09: «мне нужен ТОЛЬКО отдел продаж») — то же
+// правило, что у пикера отделов в отчётах (/api/catalog/org-structure): дирекция,
+// квалификация, «без отдела» и прочее не показываются.
 export interface OrgTreeNode {
   id: string; bitrixId: string; name: string; children: OrgTreeNode[];
   managers: { bitrixId: number; name: string }[];
@@ -40,18 +43,24 @@ export async function GET() {
     const parent = d.parent_bitrix_department_id ? nodes.get(d.parent_bitrix_department_id) : undefined;
     (parent ? parent.children : roots).push(n);
   }
-  let unassigned: OrgTreeNode | null = null;
   for (const p of people.rows) {
     if (!isManager.get(p.manager_bitrix_user_id)) continue;
-    const m = { bitrixId: Number(p.manager_bitrix_user_id), name: p.manager_name };
     const dept = p.department_id ? byUuid.get(p.department_id) : undefined;
-    if (dept) dept.managers.push(m);
-    else (unassigned ??= { id: 'unassigned', bitrixId: 'unassigned', name: 'Без отдела', children: [], managers: [] }).managers.push(m);
+    if (dept) dept.managers.push({ bitrixId: Number(p.manager_bitrix_user_id), name: p.manager_name });
   }
   const prune = (list: OrgTreeNode[]): OrgTreeNode[] => list
     .map(n => ({ ...n, children: prune(n.children), managers: n.managers.sort((a, b) => a.name.localeCompare(b.name, 'ru')) }))
     .filter(n => n.children.length > 0 || n.managers.length > 0);
-  const tree = prune(roots);
-  if (unassigned) tree.push(unassigned);
-  return NextResponse.json({ tree });
+
+  const findSales = (list: OrgTreeNode[]): OrgTreeNode | undefined => {
+    for (const n of list) { if (n.name === 'Отдел продаж') return n; const hit = findSales(n.children); if (hit) return hit; }
+    return undefined;
+  };
+  const sales = findSales(roots);
+  // Корни пикера — подотделы «Отдела продаж»; менеджеры, висящие прямо на нём (СПб),
+  // — отдельным узлом, чтобы не потеряться.
+  const salesTree = sales
+    ? [...sales.children, ...(sales.managers.length ? [{ ...sales, children: [], name: 'Отдел продаж (напрямую)' }] : [])]
+    : roots;
+  return NextResponse.json({ tree: prune(salesTree) });
 }
