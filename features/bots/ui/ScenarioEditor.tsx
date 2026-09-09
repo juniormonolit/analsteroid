@@ -196,7 +196,7 @@ export function ScenarioEditor({ id }: { id: string }) {
         {/* Развилка */}
         <div className="flex justify-center -my-1"><ArrowDown size={18} className="text-[var(--color-text-muted)]" /></div>
         {/* Развилка триггера: две колонки-ветки, каждая центрирует свои блоки */}
-        <div className="flex items-start">
+        <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
           <BranchCol side="left" label="Ниже порога — просадка" color="var(--color-negative)"
             hint={`значение < ${metric ? fmtV(baseOf(flow), dt) : 'база'} − ${flow.trigger.dropThreshold.toLocaleString('ru-RU')} ${unitFor(dt)}`} root>
             <NodeList nodes={flow.below} onChange={list => update(f => ({ ...f, below: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
@@ -495,8 +495,9 @@ function NodeList({ nodes, onChange, placeholders, sample, depth }: ListProps) {
           <NodeCard node={n} onChange={node => replace(i, node)} onRemove={() => remove(i)}
             onUp={i > 0 ? () => move(i, -1) : undefined} onDown={i < nodes.length - 1 ? () => move(i, 1) : undefined}
             placeholders={placeholders} sample={sample} />
+          {n.type === 'check' && <div className="h-4 w-px bg-[var(--color-border)]" />}
           {n.type === 'check' && (
-            <div className="flex items-start">
+            <div className="grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
               <BranchCol side="left" label="Да" color="var(--color-positive)">
                 <NodeList nodes={n.yes} onChange={list => replace(i, { ...n, yes: list })} placeholders={placeholders} sample={sample} depth={depth + 1} />
               </BranchCol>
@@ -520,7 +521,7 @@ function BranchCol({ side, label, color, hint, root, children }: {
 }) {
   const hline = side === 'left' ? { left: '50%', right: 0 } : { left: 0, right: '50%' };
   return (
-    <div className={`flex flex-col items-center ${COL_MIN} px-4`}>
+    <div className={`flex flex-col items-center ${COL_MIN} px-4 h-full`}>
       <div className="relative h-5 w-full">
         <div className="absolute top-0 h-px" style={{ ...hline, background: color }} />
         <div className="absolute left-1/2 top-0 h-5 w-px" style={{ background: color }} />
@@ -530,6 +531,8 @@ function BranchCol({ side, label, color, hint, root, children }: {
       </div>
       {hint && <div className="mt-1 text-[11px] text-[var(--color-text-muted)] text-center max-w-[460px]">{hint}</div>}
       {children}
+      {/* колонка короче соседней — линия дотягивается до общего слияния */}
+      <div className="flex-1 w-px min-h-5 bg-[var(--color-border)]" />
       <div className="relative h-5 w-full">
         <div className="absolute left-1/2 top-0 h-5 w-px bg-[var(--color-border)]" />
         <div className="absolute bottom-0 h-px bg-[var(--color-border)]" style={hline} />
@@ -604,7 +607,7 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
           <select value={node.condition} onChange={e => onChange({ ...node, condition: e.target.value as CheckCondition })} className={inputCls}>
             {(Object.keys(CONDITION_LABEL) as CheckCondition[]).map(c => <option key={c} value={c}>{CONDITION_LABEL[c]}?</option>)}
           </select>
-          <div className="mt-1 text-[12px] text-[var(--color-text-muted)]">Показатель считается заново на день проверки. Да — левая ветка, нет — правая; пустая ветка — дальше по основной.</div>
+          <div className="mt-1 text-[12px] text-[var(--color-text-muted)]">Показатель считается заново на день проверки. Пустая ветка — цепочка идёт дальше по основной.</div>
         </div>
       )}
       {node.type === 'end' && (
