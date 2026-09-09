@@ -188,13 +188,19 @@ export function ScenarioEditor({ id }: { id: string }) {
 
         {/* Развилка */}
         <div className="flex justify-center -my-1"><ArrowDown size={18} className="text-[var(--color-text-muted)]" /></div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-          <Lane title="Ниже порога — просадка" tone="neg" hint={`значение < ${metric ? fmtV(baseOf(flow), dt) : 'база'} − ${flow.trigger.dropThreshold.toLocaleString('ru-RU')} ${unitFor(dt)}`}>
-            <NodeList nodes={flow.below} onChange={list => update(f => ({ ...f, below: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
-          </Lane>
-          <Lane title="В норме — на уровне цели или выше" tone="pos" hint="значение ≥ базы; между порогом и базой — тишина">
-            <NodeList nodes={flow.norm} onChange={list => update(f => ({ ...f, norm: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
-          </Lane>
+        {/* Канва веток: блоки не ужимаются под ширину экрана — каждая ветка и каждая
+            под-ветка «Проверки» держит полную ширину карточки, целое скроллится
+            горизонтально (владелец 09.09: «место на экране не платное, горизонтальный
+            скролл не стесняться»). */}
+        <div className="scroll-x min-w-0 -mx-3 px-3 sm:-mx-6 sm:px-6 pb-2">
+          <div className="flex items-start gap-6 w-max min-w-full">
+            <Lane title="Ниже порога — просадка" tone="neg" hint={`значение < ${metric ? fmtV(baseOf(flow), dt) : 'база'} − ${flow.trigger.dropThreshold.toLocaleString('ru-RU')} ${unitFor(dt)}`}>
+              <NodeList nodes={flow.below} onChange={list => update(f => ({ ...f, below: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
+            </Lane>
+            <Lane title="В норме — на уровне цели или выше" tone="pos" hint="значение ≥ базы; между порогом и базой — тишина">
+              <NodeList nodes={flow.norm} onChange={list => update(f => ({ ...f, norm: list }))} placeholders={opts.placeholders} sample={sampleCtx(flow, metric)} depth={0} />
+            </Lane>
+          </div>
         </div>
 
         {/* Превью */}
@@ -458,7 +464,7 @@ function MetricPicker({ metrics, value, onChange }: { metrics: MetricOpt[]; valu
 function Lane({ title, tone, hint, children }: { title: string; tone: 'neg' | 'pos'; hint: string; children: React.ReactNode }) {
   const color = tone === 'neg' ? 'var(--color-negative)' : 'var(--color-positive)';
   return (
-    <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 min-w-0">
+    <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4 w-max min-w-[560px] max-w-none">
       <div className="mb-3 flex items-start gap-2">
         <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white" style={{ background: color }}><ArrowDown size={13} /></span>
         <div className="min-w-0">
@@ -484,7 +490,7 @@ function NodeList({ nodes, onChange, placeholders, sample, depth }: ListProps) {
   return (
     <div className="flex flex-col items-stretch">
       {nodes.length === 0 && (
-        <div className="rounded-xl border border-dashed border-[var(--color-border)] px-3 py-3 text-center text-[12px] text-[var(--color-text-muted)]">
+        <div className="rounded-xl border border-dashed border-[var(--color-border)] px-3 py-3 text-center text-[12px] text-[var(--color-text-muted)] min-w-[520px]">
           {depth === 0 ? 'Ветка пустая — бот ничего не сделает. Добавь первый блок:' : 'Пусто — цепочка пойдёт дальше по основной ветке'}
         </div>
       )}
@@ -544,10 +550,10 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
 }) {
   const { label, Icon, cls } = NODE_META[node.type];
   return (
-    <div className={`rounded-xl border-l-4 border border-[var(--color-border)] bg-[var(--color-bg)] p-3 ${cls}`}>
+    <div className={`rounded-xl border-l-4 border border-[var(--color-border)] bg-[var(--color-bg)] p-4 min-w-[520px] ${cls}`}>
       <div className="mb-2 flex items-center gap-2">
-        <Icon size={14} className="text-[var(--color-text-muted)]" />
-        <span className="text-[12px] font-semibold text-[var(--color-text)]">{label}</span>
+        <Icon size={16} className="text-[var(--color-text-muted)]" />
+        <span className="text-sm font-semibold text-[var(--color-text)]">{label}</span>
         <div className="ml-auto flex items-center">
           <button type="button" onClick={onUp} disabled={!onUp} className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-25" title="Выше"><ArrowUp size={13} /></button>
           <button type="button" onClick={onDown} disabled={!onDown} className="tap-target p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-25" title="Ниже"><ArrowDown size={13} /></button>
@@ -557,7 +563,7 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
       </div>
       {node.type === 'message' && <MessageBody node={node} onChange={onChange} placeholders={placeholders} sample={sample} />}
       {node.type === 'wait' && (
-        <div className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+        <div className="flex items-center gap-3 text-base text-[var(--color-text)]">
           <input type="number" inputMode="numeric" min={1} max={180} value={node.days} onChange={e => { const v = Number(e.target.value); if (Number.isFinite(v)) onChange({ ...node, days: v }); }} className={`${inputCls} w-24`} />
           дней, потом — следующий блок
         </div>
@@ -567,8 +573,8 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
           <select value={node.condition} onChange={e => onChange({ ...node, condition: e.target.value as CheckCondition })} className={inputCls}>
             {(Object.keys(CONDITION_LABEL) as CheckCondition[]).map(c => <option key={c} value={c}>{CONDITION_LABEL[c]}?</option>)}
           </select>
-          <div className="mt-1 text-[10.5px] text-[var(--color-text-muted)]">Показатель считается заново на день проверки. Пустая ветка — цепочка идёт дальше по основной.</div>
-          <div className="mt-2 grid grid-cols-1 lg:grid-cols-2 gap-2">
+          <div className="mt-1 text-[12px] text-[var(--color-text-muted)]">Показатель считается заново на день проверки. Пустая ветка — цепочка идёт дальше по основной.</div>
+          <div className="mt-3 flex items-start gap-4">
             <SubLane title="Да" color="var(--color-positive)">
               <NodeList nodes={node.yes} onChange={list => onChange({ ...node, yes: list })} placeholders={placeholders} sample={sample} depth={depth + 1} />
             </SubLane>
@@ -592,8 +598,8 @@ function NodeCard({ node, onChange, onRemove, onUp, onDown, placeholders, sample
 
 function SubLane({ title, color, children }: { title: string; color: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border-l-2 pl-2 min-w-0" style={{ borderColor: color }}>
-      <div className="text-[11px] font-bold mb-1" style={{ color }}>{title} <ArrowDown size={10} className="inline" /></div>
+    <div className="rounded-lg border-l-2 pl-3 w-max min-w-[540px]" style={{ borderColor: color }}>
+      <div className="text-[12px] font-bold mb-1" style={{ color }}>{title} <ArrowDown size={11} className="inline" /></div>
       {children}
     </div>
   );
@@ -610,19 +616,19 @@ function MessageBody({ node, onChange, placeholders, sample }: { node: Extract<F
   };
   return (
     <div>
-      <textarea ref={ref} value={node.text} rows={4} onChange={e => onChange({ ...node, text: e.target.value })} placeholder="Текст сообщения менеджеру…"
-        className={`${inputCls} resize-y leading-snug`} />
-      <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10.5px]">
+      <textarea ref={ref} value={node.text} rows={7} onChange={e => onChange({ ...node, text: e.target.value })} placeholder="Текст сообщения менеджеру…"
+        className={`${inputCls} resize-y !text-base leading-relaxed`} />
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
         {placeholders.map(p => (
           <button key={p.key} type="button" title={p.hint} onMouseDown={e => e.preventDefault()} onClick={() => insert(p.key)}
-            className="min-h-6 rounded border border-[var(--color-border)] px-1 font-mono text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">{`{${p.key}}`}</button>
+            className="min-h-7 rounded-md border border-[var(--color-border)] px-1.5 font-mono text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">{`{${p.key}}`}</button>
         ))}
         <button type="button" onClick={() => setShowSample(s => !s)} className="ml-auto inline-flex items-center gap-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           {showSample ? <ChevronDown size={11} /> : <ChevronRight size={11} />} пример
         </button>
       </div>
       {showSample && node.text && (
-        <div className="mt-1.5 rounded-lg border border-dashed border-[var(--color-border)] p-2 text-[12px] whitespace-pre-wrap break-words text-[var(--color-text)]">{renderTemplate(node.text, sample)}</div>
+        <div className="mt-2 rounded-lg border border-dashed border-[var(--color-border)] p-3 text-sm leading-relaxed whitespace-pre-wrap break-words text-[var(--color-text)]">{renderTemplate(node.text, sample)}</div>
       )}
     </div>
   );
