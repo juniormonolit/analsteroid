@@ -16,7 +16,7 @@ interface ScoringSettings {
 }
 
 interface DigestPayload {
-  settings: { dailyEnabled: boolean; weeklyEnabled: boolean; dailyHour: number; weeklyHour: number; maxReminders: number };
+  settings: { dailyEnabled: boolean; weeklyEnabled: boolean; dailyHour: number; weeklyHour: number; maxReminders: number; inactiveDays: number };
   scoring: ScoringSettings;
   stats: { total: number; success: number; closedNoContact: number; closedNoDeal: number; open: number; successRatePct: number | null };
 }
