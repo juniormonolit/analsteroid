@@ -84,21 +84,23 @@ export interface DigestSettings {
   dailyHour: number;
   weeklyHour: number;
   maxReminders: number;
+  /** Дней без событий по сделкам и без новых сделок — менеджер считается неактивным, дайджест не шлём (миграция 184). */
+  inactiveDays: number;
 }
 export const DEFAULT_DIGEST_SETTINGS: DigestSettings = {
-  dailyEnabled: true, weeklyEnabled: true, dailyHour: 8, weeklyHour: 8, maxReminders: 2,
-};
+  dailyEnabled: true, weeklyEnabled: true, dailyHour: 8, weeklyHour: 8, maxReminders: 2, inactiveDays: 30 };
 
 export async function fetchDigestSettings(): Promise<DigestSettings> {
   try {
     const res = await systemDb().query<{
-      daily_enabled: boolean; weekly_enabled: boolean; daily_hour: number; weekly_hour: number; max_reminders: number;
-    }>('SELECT daily_enabled, weekly_enabled, daily_hour, weekly_hour, max_reminders FROM digest_settings WHERE id = 1');
+      daily_enabled: boolean; weekly_enabled: boolean; daily_hour: number; weekly_hour: number; max_reminders: number; inactive_days: number | null;
+    }>('SELECT daily_enabled, weekly_enabled, daily_hour, weekly_hour, max_reminders, inactive_days FROM digest_settings WHERE id = 1');
     const r = res.rows[0];
     if (!r) return DEFAULT_DIGEST_SETTINGS;
     return {
       dailyEnabled: r.daily_enabled, weeklyEnabled: r.weekly_enabled,
       dailyHour: r.daily_hour, weeklyHour: r.weekly_hour, maxReminders: r.max_reminders,
+      inactiveDays: r.inactive_days ?? DEFAULT_DIGEST_SETTINGS.inactiveDays,
     };
   } catch { return DEFAULT_DIGEST_SETTINGS; } // до наката миграции 134 — дефолты, тик просто не шлёт
 }
@@ -935,8 +937,32 @@ export async function sendWeeklyDigestForManager(m: ManagerRef, opts: { testRun?
 
 // ── Прогон по всем активным менеджерам (вызывается из instrumentation.ts) ───
 
+// ── Неактивные аккаунты (правка владельца 09.09) ─────────────────────────────
+// «Активен по оргструктуре» ≠ «работает»: intake-аккаунты, роботы, длинные отпуска
+// — в структуре есть, сделок нет, и им уходило «не за что ни похвалить, ни
+// поругать». Работающий = хоть одно событие по сделкам (deal_events) ИЛИ новая
+// сделка за последние N дней (digest_settings.inactive_days).
+export async function fetchRecentlyActiveManagerIds(days: number): Promise<Set<number>> {
+  const res = await analyticsDb().query<{ id: string }>(
+    `SELECT DISTINCT manager_id::text AS id FROM deal_events WHERE event_at >= now() - ($1 || ' days')::interval
+     UNION
+     SELECT DISTINCT current_manager_id::text FROM deals WHERE created_at >= now() - ($1 || ' days')::interval AND current_manager_id IS NOT NULL`,
+    [String(Math.max(1, Math.min(365, days)))],
+  );
+  return new Set(res.rows.map(r => Number(r.id)).filter(n => Number.isFinite(n)));
+}
+
+async function fetchWorkingManagers(): Promise<{ managers: ManagerRef[]; skippedInactive: number }> {
+  const [all, settings] = await Promise.all([fetchActiveManagers(), fetchDigestSettings()]);
+  const active = await fetchRecentlyActiveManagerIds(settings.inactiveDays).catch(() => null);
+  if (!active) return { managers: all, skippedInactive: 0 }; // БД аналитики недоступна — не режем молча всех
+  const managers = all.filter(m => active.has(m.bitrixId));
+  return { managers, skippedInactive: all.length - managers.length };
+}
+
 export async function runDailyDigestForAllManagers(): Promise<{ sent: number; failed: number }> {
-  const managers = await fetchActiveManagers();
+  const { managers, skippedInactive } = await fetchWorkingManagers();
+  if (skippedInactive) console.log(`[digest] дневной: пропущено неактивных аккаунтов — ${skippedInactive}`);
   let sent = 0, failed = 0;
   for (const m of managers) {
     try { await sendDailyDigestForManager(m); sent++; }
@@ -946,7 +972,8 @@ export async function runDailyDigestForAllManagers(): Promise<{ sent: number; fa
 }
 
 export async function runWeeklyDigestForAllManagers(): Promise<{ sent: number; failed: number }> {
-  const managers = await fetchActiveManagers();
+  const { managers, skippedInactive } = await fetchWorkingManagers();
+  if (skippedInactive) console.log(`[digest] недельный: пропущено неактивных аккаунтов — ${skippedInactive}`);
   let sent = 0, failed = 0;
   for (const m of managers) {
     try { await sendWeeklyDigestForManager(m); sent++; }

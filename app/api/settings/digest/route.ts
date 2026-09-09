@@ -36,6 +36,7 @@ const FIELDS: { key: keyof typeof DEFAULT_DIGEST_SETTINGS; col: string }[] = [
   { key: 'dailyHour', col: 'daily_hour' },
   { key: 'weeklyHour', col: 'weekly_hour' },
   { key: 'maxReminders', col: 'max_reminders' },
+  { key: 'inactiveDays', col: 'inactive_days' },
 ];
 
 // Веса — произвольные положительные числа (не обязаны суммироваться в 100,
@@ -68,8 +69,8 @@ export async function PATCH(req: NextRequest) {
       params.push(Boolean(v));
     } else {
       const num = Number(v);
-      const max = f.key === 'maxReminders' ? 5 : 23;
-      const min = f.key === 'maxReminders' ? 0 : 0;
+      const max = f.key === 'maxReminders' ? 5 : f.key === 'inactiveDays' ? 365 : 23;
+      const min = f.key === 'inactiveDays' ? 1 : 0;
       if (!Number.isInteger(num) || num < min || num > max) {
         return NextResponse.json({ error: `${f.key}: целое число от ${min} до ${max}` }, { status: 400 });
       }

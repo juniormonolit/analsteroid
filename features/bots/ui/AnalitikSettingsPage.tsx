@@ -4,6 +4,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BellOff, Bot, Plus, Send, Trash2, X, Power, ShieldAlert, MessageSquareText, Inbox, CalendarClock, ToggleLeft, CloudSun, FlaskConical } from 'lucide-react';
 import { useUrlState, enumParam } from '@/lib/hooks/useUrlState';
 import { OutboundLogBlock } from '@/features/badges/ui/OutboundLog';
+import { DigestSettingsBlock } from '@/features/badges/ui/DigestSettings';
+import { FeedbackQueueBlock } from '@/features/badges/ui/FeedbackQueue';
+import Link from 'next/link';
 
 // Настройки бота «Аналитик» (задача владельца 09.09): каждая ФУНКЦИЯ бота —
 // отдельный рубильник + свои настройки (получатели/час), и блок расписаний
@@ -43,10 +46,11 @@ async function jsonOrThrow(res: Response) {
 // ── Панель ───────────────────────────────────────────────────────────────────
 // Вкладка — в адресе (правило адресуемости DESIGN_GUIDELINES): ссылку на «Журнал»
 // можно прислать, «назад» возвращает на предыдущую вкладку.
-const TABS = ['functions', 'schedules', 'journal', 'weather'] as const;
+const TABS = ['functions', 'digest', 'schedules', 'journal', 'weather'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_META: Record<Tab, { label: string; Icon: typeof Bot }> = {
   functions: { label: 'Функции', Icon: ToggleLeft },
+  digest:    { label: 'Дайджест', Icon: MessageSquareText },
   schedules: { label: 'Расписания', Icon: CalendarClock },
   journal:   { label: 'Журнал', Icon: MessageSquareText },
   weather:   { label: 'Погода', Icon: CloudSun },
@@ -74,6 +78,16 @@ export function AnalitikSettingsPage() {
         })}
       </nav>
       {tab === 'functions' && <FunctionsBlock />}
+      {tab === 'digest' && (
+        <div className="flex flex-col gap-4">
+          <div className="text-[12px] text-[var(--color-text-muted)]">
+            Глобальные настройки дайджеста менеджерам и скоринг подсказок «кому звонить» (переехали из
+            «Геймификации»). Персональные подписки сотрудников — в{' '}
+            <Link href="/settings/subscriptions" className="text-[var(--color-accent)] hover:underline">Подписках сотрудников</Link>.
+          </div>
+          <DigestSettingsBlock />
+        </div>
+      )}
       {tab === 'schedules' && <SchedulesBlock />}
       {tab === 'journal' && <JournalTab />}
       {tab === 'weather' && <WeatherResponsiblesBlock />}
@@ -203,6 +217,8 @@ function JournalTab() {
       {/* Исходящие — готовый журнал из раздела наград (bot_outbound_log): тот же
           компонент, чтобы не было двух разных чтений одной таблицы. */}
       <OutboundLogBlock />
+      {/* Очередь «Ошибка»/«Полезно» по сообщениям бота — тоже ответы людей боту. */}
+      <FeedbackQueueBlock />
     </div>
   );
 }

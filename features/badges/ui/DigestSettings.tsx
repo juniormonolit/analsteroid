@@ -84,8 +84,8 @@ export function DigestSettingsBlock() {
         <h2 className="mb-1 text-sm font-semibold">Дайджест менеджерам</h2>
         <p className="mb-3 text-xs text-[var(--color-text-muted)]">
           Ежедневный (будни, короткий) и еженедельный (по понедельникам, итоги) пуш ботом «Аналитик» —
-          гамбургер похвала→укор→похвала + подсказка «кому позвонить». Пока действует общий рубильник
-          dry-run (см. вкладку «Исходящие»), реальной отправки нет — только формирование и лог.
+          гамбургер похвала→укор→похвала + подсказка «кому позвонить». Реальная отправка — если включены
+          функции «Дайджест» в разделе «Функции» и выключен тест-режим в шапке панели.
         </p>
         <div className="flex flex-col gap-3 max-w-md">
           <label className="flex items-center justify-between gap-3 text-sm">
@@ -115,6 +115,16 @@ export function DigestSettingsBlock() {
               onChange={e => setHourDraft(d => ({ ...d, weeklyHour: e.target.value }))}
               onBlur={() => saveHour('weeklyHour')}
               onKeyDown={e => { if (e.key === 'Enter') saveHour('weeklyHour'); }}
+              className="w-16 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-right text-sm"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-3 text-sm" title="Менеджер без событий по сделкам и без новых сделок столько дней — считается неактивным, дайджест ему не уходит (правка владельца 09.09: не спамить неиспользуемые аккаунты)">
+            <span>Не писать неактивным: дней без сделок</span>
+            <input
+              type="number" min={1} max={365}
+              value={hourDraft.inactiveDays ?? s.inactiveDays}
+              onChange={e => setHourDraft(d => ({ ...d, inactiveDays: e.target.value }))}
+              onBlur={() => { const v = Number(hourDraft.inactiveDays); if (Number.isInteger(v) && v >= 1 && v <= 365) { patch.mutate({ inactiveDays: v }); setHourDraft(d => { const n = { ...d }; delete n.inactiveDays; return n; }); } }}
               className="w-16 rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-right text-sm"
             />
           </label>
