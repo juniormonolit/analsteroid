@@ -13,6 +13,7 @@ import { loadDiagSettings, type DiagSettings } from './settings';
 import { loadLags } from './refs';
 import { loadManagerWindows, computeTickNodes, lastWindowTimings, type NodeValue, type ManagerWindow } from './windows';
 import { computeCrossSell, type CrossSellResult } from './crossSell';
+import { runDiagnose, type DiagnoseSummary } from './diagnose';
 import type { Progress } from './runs';
 
 export interface ActiveManager { bitrixId: number; name: string; shortLogin: string; branch: string; category: string; plan: number; firstDealAt: Date | null }
@@ -107,7 +108,7 @@ async function computeRoot(managers: ActiveManager[], s: DiagSettings, today: st
 }
 
 // ── Главный проход ───────────────────────────────────────────────────────────
-export interface DailyRunSummary { date: string; managers: number; series: number; insufficient: number; drifts: number; ms: number; timings: Record<string, number>; errors: string[] }
+export interface DailyRunSummary { date: string; managers: number; series: number; insufficient: number; drifts: number; diagnoses: DiagnoseSummary | null; ms: number; timings: Record<string, number>; errors: string[] }
 
 export async function runDaily(opts: { today?: string; progress?: Progress } = {}): Promise<DailyRunSummary> {
   const progress: Progress = opts.progress ?? (async () => {});
@@ -257,7 +258,11 @@ export async function runDaily(opts: { today?: string; progress?: Progress } = {
     }
     try { await flush(m.bitrixId); } catch (e) { buf = []; errors.push(`${m.name}/запись: ${e instanceof Error ? e.message : e}`); }
   }
-  timings.series = Date.now() - t;
+  timings.series = Date.now() - t; t = Date.now();
+  let diagnoses: DiagnoseSummary | null = null;
+  try { diagnoses = await runDiagnose(managers, today, async (stage) => progress(stage, managers.length * 2, managers.length * 2)); }
+  catch (e) { errors.push(`диагнозы: ${e instanceof Error ? e.message : e}`); }
+  timings.diagnose = Date.now() - t;
   await progress('готово', managers.length * 2, managers.length * 2);
-  return { date: today, managers: managers.length, series, insufficient, drifts, ms: Date.now() - t0, timings, errors: errors.slice(0, 30) };
+  return { date: today, managers: managers.length, series, insufficient, drifts, diagnoses, ms: Date.now() - t0, timings, errors: errors.slice(0, 30) };
 }

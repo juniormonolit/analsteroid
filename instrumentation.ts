@@ -63,6 +63,7 @@ export async function register() {
   scheduleWeeklyWeather();
   scheduleReportSchedules();
   scheduleScenarios();
+  scheduleDiagnostics();
 }
 
 // Авторассылка сохранённых отчётов «Мой отчёт» (задача владельца 09.09): раз в
@@ -79,6 +80,48 @@ function scheduleReportSchedules() {
       await runDueReportSchedules();
     } catch (err) {
       console.error('[report-schedules] тик не удался:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setInterval(() => { void tick(); }, 60 * 1000);
+}
+
+// Движок диагностики (features/diag/engine, ТЗ №1): ежедневно в 06:00 МСК — ряды и диагнозы
+// (runDaily); 1-го числа в 05:30 — справочники (лаги, зомби-пороги, сезонность). Защита от
+// дублей и нескольких инстансов — startRun (один прогон вида; повтор в тот же день не
+// стартует, если сегодня уже был done). Отправок нет.
+function scheduleDiagnostics() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const now = new Date();
+      const msk = now.toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+      const [date, time] = msk.split(' ');
+      const hour = Number(time.slice(0, 2)), minute = Number(time.slice(3, 5)), day = Number(date.slice(8, 10));
+      const { systemDb } = await import('./lib/db/clients');
+      const ranToday = async (kind: string) => (await systemDb().query(`SELECT 1 FROM diag_runs WHERE kind = $1 AND status = 'done' AND (started_at AT TIME ZONE 'Europe/Moscow')::date = $2::date LIMIT 1`, [kind, date])).rowCount;
+      const { startRun } = await import('./features/diag/engine/runs');
+      if (day === 1 && hour === 5 && minute >= 30 && !(await ranToday('refs'))) {
+        await startRun('refs', 'scheduler', async (progress) => {
+          const { computeLags, computeZombieThresholds, computeSeason } = await import('./features/diag/engine/refs');
+          await progress('лаги', 0, 3); const lags = await computeLags();
+          await progress('зомби-пороги', 1, 3); const z = await computeZombieThresholds();
+          await progress('сезонность', 2, 3); const season = await computeSeason();
+          return { lags: lags.rows, zombieGroups: z.groups, zombieFallback: z.fallback, season: season.rows };
+        });
+      }
+      if (hour === 6 && !(await ranToday('daily'))) {
+        const r = await startRun('daily', 'scheduler', async (progress) => {
+          const { runDaily } = await import('./features/diag/engine/daily');
+          const res = await runDaily({ progress });
+          console.log(`[diag] ежедневный расчёт: менеджеров ${res.managers}, рядов ${res.series}, просадок ${res.drifts}, диагнозов открыто ${res.diagnoses?.opened ?? '—'}, ${res.ms}ms`);
+          return res;
+        });
+        if ('busy' in r) console.log('[diag] ежедневный расчёт уже идёт');
+      }
+    } catch (err) {
+      console.error('[diag] тик не удался:', err instanceof Error ? err.message : err);
     } finally { running = false; }
   };
   setInterval(() => { void tick(); }, 60 * 1000);

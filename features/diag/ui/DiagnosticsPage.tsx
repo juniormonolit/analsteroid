@@ -10,6 +10,11 @@ interface NodeRow { nodeId: string; asOf: string; tickNo: number | null; value: 
 interface Mgr { bitrixId: number; name: string; branch: string; category: string; plan: number | null; nodes: NodeRow[] }
 interface NodeMeta { id: string; name: string; node_kind: string; window_kind: string; controllable: string; higher_is_better: boolean; sort_order: number; description: string | null }
 interface RunProgress { id: number; kind: string; status: 'running' | 'done' | 'error'; stage: string | null; total: number; done: number; summary: Record<string, unknown> | null; error: string | null; startedAt: string; finishedAt: string | null }
+interface Diagnosis {
+  id: number; bitrixId: number; managerName: string; nodeId: string; nodeName: string; leverId: string | null; leverName: string | null;
+  gapValue: number | null; gapShare: number | null; score: number | null; mode: string; arm: string; tooLate: boolean; recipientRole: string | null;
+  status: string; outcome: string | null; trace: Record<string, unknown> | null; openedAt: string; closedAt: string | null; feedbackN: number;
+}
 interface Overview { today: string; nodes: NodeMeta[]; managers: Mgr[]; refs: { what: string; n: number; at: string | null }[]; activeManagers: number }
 
 const btnCls = 'min-h-11 inline-flex items-center justify-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40 transition-colors';
@@ -158,6 +163,7 @@ export function DiagnosticsPage() {
       </div>
       {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>}
       {data && rows.length === 0 && <div className={`${cardCls} text-sm text-[var(--color-text-muted)]`}>Рядов пока нет — нажми «Справочники», затем «Пересчитать сегодня».</div>}
+      <DiagnosesBlock onPick={id => { setQ(''); setOpen(id); }} />
       {rows.length > 0 && (
         <div className="scroll-x rounded-2xl border border-[var(--color-border)]">
           <table className="w-full text-[12px]">
@@ -269,5 +275,100 @@ function NodeDetails({ m, nodeMeta }: { m: Mgr; nodeMeta: Map<string, NodeMeta> 
         </table>
       </div>
     </div>
+  );
+}
+
+// ── Диагнозы (ТЗ §11 п.1): что система считает проблемой и какой рычаг предлагает ──
+const DIAG_STATUS: Record<string, { label: string; tone: string }> = {
+  open: { label: 'открыт', tone: 'bg-[color-mix(in_srgb,var(--color-negative)_14%,transparent)] text-[var(--color-negative)]' },
+  queued: { label: 'в очереди', tone: 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]' },
+  in_scenario: { label: 'в сценарии', tone: 'bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]' },
+  disputed: { label: 'оспорен', tone: 'bg-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] text-[var(--color-warning)]' },
+  closed: { label: 'закрыт', tone: 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]' },
+};
+const REASONS: { key: string; label: string }[] = [
+  { key: 'wrong_lever', label: 'Не тот рычаг' }, { key: 'not_managers_fault', label: 'Не вина менеджера' },
+  { key: 'data_error', label: 'Ошибка в данных' }, { key: 'already_handled', label: 'Уже решается' }, { key: 'other', label: 'Другое' },
+];
+
+function DiagnosesBlock({ onPick }: { onPick: (bitrixId: number) => void }) {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery<{ diagnoses: Diagnosis[] }>({ queryKey: ['diag-diagnoses'], queryFn: () => fetch('/api/diag/diagnoses').then(r => r.json()), refetchOnWindowFocus: false });
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [showClosed, setShowClosed] = useState(false);
+  const dispute = useMutation({
+    mutationFn: (v: { id: number; reason: string; comment: string }) => fetch('/api/diag/diagnoses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }).then(r => r.json()),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['diag-diagnoses'] }),
+  });
+  const list = (data?.diagnoses ?? []).filter(d => showClosed || d.status !== 'closed');
+  const active = (data?.diagnoses ?? []).filter(d => d.status === 'open' || d.status === 'in_scenario').length;
+  const control = (data?.diagnoses ?? []).filter(d => d.status !== 'closed' && d.arm === 'control').length;
+  return (
+    <section className={cardCls}>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-base font-bold text-[var(--color-text)]">Диагнозы</h2>
+        <div className="flex items-center gap-3 text-[12px] text-[var(--color-text-muted)]">
+          <span>открытых {active} · в контроле {control}</span>
+          <label className="inline-flex items-center gap-1.5 min-h-8"><input type="checkbox" checked={showClosed} onChange={e => setShowClosed(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" /> закрытые за 14 дн</label>
+        </div>
+      </div>
+      <p className="mb-3 text-[11px] leading-snug text-[var(--color-text-muted)]">
+        Диагноз = проблемный узел дерева у менеджера + рычаг (лист под ним), который отклонился сильнее всего с учётом веса и уверенности ребра. Один открытый
+        фокус на менеджера, остальное — в очереди. Рука «контроль» — диагноз ведётся, но сообщение (когда появятся сценарии) не уйдёт: так измеряем эффект.
+        Не согласен — жми и укажи причину: это учится в весах рёбер.
+      </p>
+      {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>}
+      {data && list.length === 0 && <div className="text-sm text-[var(--color-text-muted)]">Диагнозов нет — либо ещё не считали, либо все узлы в норме.</div>}
+      {list.length > 0 && (
+        <div className="scroll-x rounded-xl border border-[var(--color-border)]">
+          <table className="w-full text-[12px]">
+            <thead className="bg-[var(--color-bg-hover)] text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)]">
+              <tr><th className="px-2 py-2 text-left">Менеджер</th><th className="px-2 py-2 text-left">Узел (что просело)</th><th className="px-2 py-2 text-left">Рычаг (что делать)</th><th className="px-2 py-2 text-right">Разрыв к плану</th><th className="px-2 py-2 text-right">Score</th><th className="px-2 py-2 text-left">Рука</th><th className="px-2 py-2 text-left">Статус</th><th className="px-2 py-2 text-right">Дней</th><th className="px-2 py-2"></th></tr>
+            </thead>
+            <tbody>
+              {list.map(d => {
+                const tr = (d.trace ?? {}) as { root?: { gapRub?: number; tooLate?: boolean }; node?: { value?: number; base?: number; devSigma?: number }; lever?: { value?: number; base?: number; devSigma?: number; edgeWeight?: number; edgeStatus?: string }; candidates?: { node: string; lever: string | null; score: number }[]; arm?: { reason?: string }; mode?: string };
+                const isOpen = openId === d.id;
+                const st = DIAG_STATUS[d.status] ?? { label: d.status, tone: '' };
+                const days = Math.floor((Date.now() - new Date(d.openedAt).getTime()) / 86400000);
+                return (
+                  <Frag key={d.id}>
+                    <tr className="border-t border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] cursor-pointer" onClick={() => setOpenId(isOpen ? null : d.id)}>
+                      <td className="px-2 py-1.5 font-semibold text-[var(--color-text)] whitespace-nowrap"><button className="hover:text-[var(--color-accent)]" onClick={e => { e.stopPropagation(); onPick(d.bitrixId); }}>{d.managerName}</button>{d.mode === 'onboarding' && <span className="ml-1 text-[10px] font-normal text-[var(--color-text-muted)]">новичок</span>}</td>
+                      <td className="px-2 py-1.5 text-[var(--color-text)]">{d.nodeName}{tr.node && <span className="text-[var(--color-text-muted)]"> · {fmtV(tr.node.value ?? null, d.nodeId)} при базе {fmtV(tr.node.base ?? null, d.nodeId)} ({(tr.node.devSigma ?? 0).toFixed(1)}σ)</span>}</td>
+                      <td className="px-2 py-1.5 text-[var(--color-text)]">{d.leverName ?? <span className="text-[var(--color-text-muted)]">рычаг не найден → РОПу</span>}{tr.lever && d.leverId && <span className="text-[var(--color-text-muted)]"> · {fmtV(tr.lever.value ?? null, d.leverId)} при базе {fmtV(tr.lever.base ?? null, d.leverId)} ({(tr.lever.devSigma ?? 0).toFixed(1)}σ)</span>}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{tr.root?.gapRub ? fmtRub(tr.root.gapRub) : '—'}{tr.root?.tooLate && <span className="ml-1 text-[10px] text-[var(--color-warning)]">поздно</span>}</td>
+                      <td className="px-2 py-1.5 text-right tabular-nums">{d.score?.toFixed(2) ?? '—'}</td>
+                      <td className="px-2 py-1.5">{d.arm === 'control' ? <span className="rounded px-1.5 py-0.5 bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">контроль</span> : <span className="rounded px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]">воздействие</span>}</td>
+                      <td className="px-2 py-1.5"><span className={`rounded px-1.5 py-0.5 ${st.tone}`}>{st.label}{d.outcome ? ` · ${d.outcome}` : ''}</span></td>
+                      <td className="px-2 py-1.5 text-right tabular-nums text-[var(--color-text-muted)]">{days}</td>
+                      <td className="px-2 py-1.5 text-right">
+                        {(d.status === 'open' || d.status === 'queued') && (
+                          <select className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-1 text-[11px] text-[var(--color-text)]" defaultValue="" onClick={e => e.stopPropagation()}
+                            onChange={e => { const reason = e.target.value; if (!reason) return; const comment = prompt('Комментарий (не обязательно):') ?? ''; dispute.mutate({ id: d.id, reason, comment }); e.target.value = ''; }}>
+                            <option value="">Не согласен…</option>{REASONS.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+                          </select>
+                        )}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="bg-[var(--color-bg)] border-t border-dashed border-[var(--color-border)]">
+                        <td colSpan={9} className="px-3 py-2 text-[12px] text-[var(--color-text)]">
+                          <div className="flex flex-col gap-1">
+                            <div><b>Рука:</b> {d.arm} — {tr.arm?.reason ?? '—'}{tr.lever?.edgeStatus && <> · ребро {tr.lever.edgeStatus}, вес {tr.lever.edgeWeight}</>}</div>
+                            {tr.candidates && tr.candidates.length > 0 && <div><b>Кандидаты:</b> {tr.candidates.map(c => `${c.node} → ${c.lever ?? '∅'} (${c.score})`).join(' · ')}</div>}
+                            <details><summary className="cursor-pointer text-[var(--color-text-muted)]">Трасса JSON</summary><pre className="mt-1 max-h-72 overflow-auto rounded-lg bg-[var(--color-bg-surface)] p-2 text-[11px]">{JSON.stringify(d.trace, null, 1)}</pre></details>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Frag>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
