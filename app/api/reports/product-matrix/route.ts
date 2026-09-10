@@ -48,13 +48,16 @@ export async function POST(req: NextRequest) {
       departmentIds = effD ?? [];
     }
   }
+  // mode: 'positions' — категории по ВСЕМ позициям заказа (правка владельца 10.09),
+  // 'by_max' (умолчание) — по главной группе, как считала «Товарная матрица».
+  const mode = body.mode === 'positions' ? 'positions' as const : 'by_max' as const;
   const dealScope = ['primary', 'repeat', 'all'].includes(body.dealScope) ? body.dealScope : 'all';
   const clientType = ['b2c', 'b2b', 'all'].includes(body.clientType) ? body.clientType : 'all';
 
   const start = Date.now();
   const result = await fetchProductMatrix({
     period: { from: new Date(body.period.from), to: new Date(body.period.to) },
-    managerIds, departmentIds, dealScope, clientType,
+    managerIds, departmentIds, dealScope, clientType, mode,
   });
   return NextResponse.json({ ...result, meta: { durationMs: Date.now() - start } });
 }

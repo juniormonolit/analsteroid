@@ -135,6 +135,9 @@ export function TransitionMatrixPage() {
     managerIds: manager ? [manager.id] : [],
     dealScope,
     clientType,
+    // Категории — по ВСЕМ позициям заказа (правка владельца 10.09): заказ
+    // «утеплитель + ОСБ» после газобетона — это два перехода, а не один.
+    mode: 'positions' as const,
   }), [period, departmentIds, manager, dealScope, clientType]);
 
   const { data, isLoading, error } = useQuery<MatrixResponse>({
@@ -171,8 +174,10 @@ export function TransitionMatrixPage() {
       <div className="px-3 sm:px-6 py-3 border-b border-[var(--color-border)]">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Матрица переходов</h1>
         <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-          Факт: строка — что отгрузили, колонка — что отгрузили следующим. Ячейка — доля и число таких переходов.
-          Фильтры режут закрывающую отгрузку пары (кто продал «следующее»); предыдущая — из всей истории заказчика.
+          Факт: строка — что отгрузили, колонка — что отгрузили следующим. В ячейке — в скольких процентах
+          повторных покупок после строки брали колонку (и число таких случаев). Категории — по всем товарным
+          позициям заказа, поэтому один заказ из двух категорий попадает в обе колонки, и строка может дать
+          больше 100 %. Фильтры режут закрывающую отгрузку пары; предыдущая — из всей истории заказчика.
         </p>
       </div>
 
@@ -210,8 +215,8 @@ export function TransitionMatrixPage() {
         </Popover>
         {data && (
           <span className="text-xs text-[var(--color-text-muted)]">
-            переходов в срезе: <b className="text-[var(--color-text)] tabular-nums">{data.total.toLocaleString('ru-RU')}</b>
-            {selected.size > 0 && ' · строки могут не суммироваться в 100 % — остальное ушло в скрытые категории'}
+            повторных покупок в срезе: <b className="text-[var(--color-text)] tabular-nums">{data.total.toLocaleString('ru-RU')}</b>
+            {selected.size > 0 && ' · часть переходов ушла в скрытые категории'}
           </span>
         )}
       </div>
@@ -221,7 +226,7 @@ export function TransitionMatrixPage() {
       ) : isLoading ? (
         <div className="p-6 space-y-3">{Array.from({ length: 10 }).map((_, i) => <div key={i} className="h-8 bg-[var(--color-border)] rounded animate-pulse" />)}</div>
       ) : shown.length === 0 ? (
-        <div className="p-10 text-center text-sm text-[var(--color-text-muted)]">Нет переходов за выбранный период в этом срезе</div>
+        <div className="p-10 text-center text-sm text-[var(--color-text-muted)]">Нет повторных покупок за выбранный период в этом срезе</div>
       ) : (
         <div className="scroll-x flex-1 px-3 sm:px-6 py-3">
           <table className="border-collapse text-xs">
@@ -244,13 +249,13 @@ export function TransitionMatrixPage() {
                   <tr key={from}>
                     <th className="sticky left-0 z-10 bg-[var(--color-bg)] text-left p-2 font-normal text-[var(--color-text)] border-b border-[var(--color-border)] min-w-[160px] max-w-[220px]">
                       <span className="break-words">{from}</span>
-                      <span className="block text-[10px] text-[var(--color-text-muted)]">{total} перех.</span>
+                      <span className="block text-[10px] text-[var(--color-text-muted)]">{total} повт. покупок</span>
                     </th>
                     {shown.map(to => {
                       const n = cellMap.get(`${from}→${to}`) ?? 0;
                       const pct = total > 0 ? (n / total) * 100 : 0;
                       return (
-                        <td key={to} title={`${from} → ${to}: ${n} из ${total}`}
+                        <td key={to} title={`После «${from}» брали «${to}»: ${n} из ${total} повторных покупок`}
                           className={`p-1 text-center border-b border-[var(--color-border)] tabular-nums ${from === to ? 'font-medium' : ''}`}
                           style={{ background: n > 0 ? heatBg(pct) : undefined }}>
                           {n > 0 ? (
