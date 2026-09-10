@@ -4,7 +4,9 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, Users } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Modal } from '@/components/ui/Modal';
+import { useSlideClose } from '@/lib/hooks/useSlideClose';
+import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
+import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
 import { DealCard } from './DealCard';
 import type { MatrixTransitionsResult, TransitionChain, TransitionDealBrief } from '@/features/reports/engine/productMatrix';
 
@@ -17,6 +19,11 @@ import type { MatrixTransitionsResult, TransitionChain, TransitionDealBrief } fr
 // повторял бы размер клиентской базы). Справа — цепочки в две колонки:
 // предыдущая покупка → следующая, между ними разрыв в днях. Клик по сделке
 // открывает карточку поверх (как в дрилл-дауне отчёта).
+//
+// Формат — выезжающая справа панель на ~80 % ширины (правка владельца 10.09:
+// «вместо попапа слайдер дрилл-дауна как в обычном отчёте, поверх него уже
+// сделка»), а не модал: карточка сделки (z-[70]) ложится поверх панели (z-[61]),
+// и обе живут во весь экран, без вложенных окон.
 
 const fmtMoney = (v: number) => `${Math.round(v).toLocaleString('ru-RU')} ₽`;
 const fmtDate = (iso: string) => (iso ? format(new Date(iso), 'd MMM yy', { locale: ru }) : '—');
@@ -103,29 +110,32 @@ export function TransitionDrillModal({ from, to, filters, onClose }: {
   const maxN = Math.max(1, ...(data?.managers ?? []).map(m => m.n));
   const selected = data?.managers.find(m => m.managerId === drillManagerId) ?? null;
 
+  const { closing, requestClose } = useSlideClose(onClose);
+
   return (
-    <Modal
-      open
-      onOpenChange={o => { if (!o) { if (openDealId !== null) setOpenDealId(null); else onClose(); } }}
-      desktopWidth="sm:max-w-[1200px]"
-      contentClassName="h-[100dvh] max-h-[100dvh] rounded-none sm:rounded-lg sm:h-[88vh] sm:max-h-[88vh]"
-      title={
-        <span className="flex flex-wrap items-baseline gap-x-2 min-w-0">
-          <span className="truncate">{from}</span>
-          <ArrowRight size={13} className="shrink-0 text-[var(--color-accent)]" />
-          <span className="truncate">{to}</span>
-        </span>
-      }
-    >
-      <div className="mb-3 text-sm text-[var(--color-text-muted)]">
-        {isLoading ? 'Считаем…' : error ? '' : (
-          <>
-            <b className="text-[var(--color-text)] tabular-nums">{data?.total ?? 0}</b> связок из{' '}
-            <b className="text-[var(--color-text)] tabular-nums">{data?.afterFrom ?? 0}</b> повторных покупок после «{from}»
-            {' '}(<b className="text-[var(--color-text)]">{pct.toFixed(pct >= 10 ? 0 : 1)} %</b>)
-          </>
-        )}
-      </div>
+    <div className="fixed inset-0 z-[60]">
+      <SlideBackdrop closing={closing} onClick={requestClose} className="z-[60]" />
+      <div className={`fixed inset-y-0 right-0 z-[61] w-full sm:w-[80vw] sm:min-w-[720px] sm:max-w-[1600px] bg-[var(--color-bg)] shadow-2xl border-l border-[var(--color-border)] flex flex-col ${closing ? 'slide-panel-out-right' : 'slide-panel-in-right'}`}>
+        <PanelCloseTab onClick={requestClose} />
+        <div className="shrink-0 px-3 sm:px-6 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+          <h2 className="flex flex-wrap items-baseline gap-x-2 min-w-0 text-base font-semibold text-[var(--color-text)]">
+            <span className="truncate">{from}</span>
+            <ArrowRight size={14} className="shrink-0 text-[var(--color-accent)]" />
+            <span className="truncate">{to}</span>
+          </h2>
+          <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">
+            {isLoading ? 'Считаем…' : error ? '' : (
+              <>
+                <b className="text-[var(--color-text)] tabular-nums">{data?.total ?? 0}</b> связок из{' '}
+                <b className="text-[var(--color-text)] tabular-nums">{data?.afterFrom ?? 0}</b> повторных покупок после «{from}»
+                {' '}(<b className="text-[var(--color-text)]">{pct.toFixed(pct >= 10 ? 0 : 1)} %</b>)
+              </>
+            )}
+          </p>
+        </div>
+
+        {/* Тело панели скроллится целиком; списки внутри — своими областями. */}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4">
 
       {error ? (
         <div className="p-10 text-center text-sm text-[var(--color-negative,#d33)]">{error instanceof Error ? error.message : String(error)}</div>
@@ -198,7 +208,11 @@ export function TransitionDrillModal({ from, to, filters, onClose }: {
         </div>
       )}
 
+        </div>
+      </div>
+      {/* Карточка сделки рендерится порталом в body (см. DealCard) и ложится
+          поверх панели: z-[70] против z-[61]. */}
       {openDealId !== null && <DealCard dealId={openDealId} onClose={() => setOpenDealId(null)} />}
-    </Modal>
+    </div>
   );
 }
