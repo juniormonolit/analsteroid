@@ -33,6 +33,16 @@ export const PERM_SECTIONS = [
   // section.offload; внутри раздела РОП видит только экраны своих отделов
   // (features/tv/engine/access.ts), руководство — все.
   { key: 'section.tv', label: 'Телевизоры' },
+  // Пункты меню «Ещё», не имевшие собственного ключа (задача Иосифа 10.09:
+  // «в матрице прав отдельно разрешать доступ роли к пунктам из „Ещё“»).
+  // До этого их закрывал только жёсткий гейт аудита 09.09 «только админ»;
+  // теперь гейт всех пунктов «Ещё» — «админ ИЛИ явное право роли» (см.
+  // MORE_MENU_PERMS ниже и layouts разделов). Дефолт по-прежнему закрыт.
+  { key: 'section.repeat', label: 'Повторные' },
+  { key: 'section.product_matrix', label: 'Товарная матрица' },
+  { key: 'section.transition_matrix', label: 'Матрица переходов' },
+  { key: 'section.rating', label: 'Рейтинг' },
+  { key: 'section.widget_constructor', label: 'Виджеты' },
 ] as const;
 
 export const PERM_ACTIONS = [
@@ -81,6 +91,31 @@ export function sanitizePermissions(raw: unknown): PermKey[] {
 }
 
 export type SectionKey = (typeof PERM_SECTIONS)[number]['key'];
+
+// Пункты меню «Ещё» в порядке самого меню (AppShell.moreItems) — отдельная
+// таблица в «Настройки → Матрица прав» (задача Иосифа 10.09). Это UI-группировка
+// поверх единого каталога: section.*-ключи отсюда НЕ показываются в таблице
+// «Видимость разделов», а «Чаты» (action.deal_chats) — в «Действиях», чтобы один
+// ключ не рисовался двумя чекбоксами. Гейт каждого пункта: админ (аудит 09.09)
+// ИЛИ явное право роли; джокер «Все разделы» покрывает section.*-пункты, но не
+// «Чаты» (action.*). Данные внутри разделов всё равно режутся срезом сессии.
+export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
+  { key: 'section.repeat', label: 'Повторные' },
+  { key: 'section.product_matrix', label: 'Товарная матрица' },
+  { key: 'section.transition_matrix', label: 'Матрица переходов' },
+  { key: 'action.deal_chats', label: 'Чаты' },
+  { key: 'section.rating', label: 'Рейтинг' },
+  { key: 'section.offload', label: 'Разгрузка отделов' },
+  { key: 'section.year_weekly', label: 'Данные по годам' },
+  { key: 'section.employees', label: 'Сотрудники' },
+  { key: 'section.presentation', label: 'Презентация' },
+  { key: 'section.tv', label: 'Телевизоры' },
+  { key: 'section.summary', label: 'Сводная' },
+  { key: 'section.plans', label: 'Планы' },
+  { key: 'section.decomposition', label: 'Декомпозиция' },
+  { key: 'section.metrics', label: 'Метрики' },
+  { key: 'section.widget_constructor', label: 'Виджеты' },
+];
 
 // Права v2: персональные исключения (users.section_overrides, миграция 067) —
 // только section.* ключи, action.* сюда не допускаются (действия остаются

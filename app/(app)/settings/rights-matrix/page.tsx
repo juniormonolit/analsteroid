@@ -1,6 +1,12 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { PERM_SECTIONS, PERM_ACTIONS, ALL_SECTIONS_PERM, hasAllSections } from '@/lib/auth/perms';
+import { PERM_SECTIONS, PERM_ACTIONS, ALL_SECTIONS_PERM, MORE_MENU_PERMS, hasAllSections } from '@/lib/auth/perms';
+
+// Пункты меню «Ещё» — отдельная таблица (задача Иосифа 10.09). Их ключи не
+// дублируем в «Видимости разделов»/«Действиях»: один ключ — один чекбокс.
+const MORE_KEYS = new Set<string>(MORE_MENU_PERMS.map((p) => p.key));
+const SECTION_ITEMS = PERM_SECTIONS.filter((p) => !MORE_KEYS.has(p.key));
+const ACTION_ITEMS = PERM_ACTIONS.filter((p) => !MORE_KEYS.has(p.key));
 
 // Права v2: матрица роль × раздел (+ отдельно роль × действие) с чекбоксами,
 // видна только супер-админу (гейт в layout.tsx). Каждый чекбокс сразу PATCH'ит
@@ -25,6 +31,7 @@ function MatrixTable({
   busyCell,
   onToggle,
   withAllSections,
+  jokerCoversSections,
 }: {
   title: string;
   hint?: string;
@@ -36,6 +43,11 @@ function MatrixTable({
   // Роль с ним автоматически видит и будущие разделы, поэтому остальные ячейки
   // строки показываем отмеченными и заблокированными.
   withAllSections?: boolean;
+  // Таблица «Пункты меню „Ещё“»: своей колонки джокера нет, но джокер роли
+  // покрывает её section.*-ключи (hasPerm пропускает любой section.*) — такие
+  // ячейки показываем отмеченными и заблокированными. action.*-ключи («Чаты»)
+  // джокер не покрывает — их чекбокс остаётся живым.
+  jokerCoversSections?: boolean;
 }) {
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] overflow-hidden">
@@ -60,7 +72,7 @@ function MatrixTable({
           </thead>
           <tbody>
             {roles.map((r) => {
-              const allSections = withAllSections && hasAllSections(r.permissions);
+              const allSections = (withAllSections || jokerCoversSections) && hasAllSections(r.permissions);
               return (
                 <tr key={r.id} className="border-b border-[var(--color-border)] last:border-0">
                   <td className="px-4 py-2 text-[var(--color-text)] whitespace-nowrap sticky left-0 bg-[var(--color-bg-surface)]">
@@ -80,16 +92,19 @@ function MatrixTable({
                   )}
                   {items.map((p) => {
                     const cellKey = `${r.id}:${p.key}`;
-                    const checked = allSections || r.permissions.includes(p.key);
+                    // Джокер покрывает только section.* — «Чаты» (action.deal_chats)
+                    // в таблице «Ещё» остаются самостоятельным чекбоксом.
+                    const jokered = allSections && p.key.startsWith('section.');
+                    const checked = jokered || r.permissions.includes(p.key);
                     return (
                       <td key={p.key} className="px-3 py-2 text-center">
                         <input
                           type="checkbox"
                           checked={checked}
-                          disabled={busyCell === cellKey || allSections}
+                          disabled={busyCell === cellKey || jokered}
                           onChange={() => onToggle(r, p.key)}
                           className="accent-[var(--color-accent)] w-4 h-4"
-                          title={allSections ? 'Включено правом «Все разделы»' : undefined}
+                          title={jokered ? 'Включено правом «Все разделы»' : undefined}
                         />
                       </td>
                     );
@@ -171,7 +186,16 @@ export default function RightsMatrixPage() {
             title="Видимость разделов"
             hint="«Все разделы» — джокер: роль автоматически видит и те разделы, которые появятся позже"
             withAllSections
-            items={PERM_SECTIONS}
+            items={SECTION_ITEMS}
+            roles={roles}
+            busyCell={busyCell}
+            onToggle={toggle}
+          />
+          <MatrixTable
+            title="Пункты меню «Ещё»"
+            hint="Каждый пункт доступен администраторам всегда; галка открывает его роли. Джокер «Все разделы» покрывает всё, кроме «Чатов» (это действие). Данные внутри разделов режутся зоной ответственности пользователя."
+            jokerCoversSections
+            items={MORE_MENU_PERMS}
             roles={roles}
             busyCell={busyCell}
             onToggle={toggle}
@@ -179,7 +203,7 @@ export default function RightsMatrixPage() {
           <MatrixTable
             title="Действия"
             hint="Право на конкретное действие, не на просмотр раздела"
-            items={PERM_ACTIONS}
+            items={ACTION_ITEMS}
             roles={roles}
             busyCell={busyCell}
             onToggle={toggle}

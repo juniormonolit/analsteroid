@@ -413,49 +413,54 @@ function SidebarBody({
   // teamRoster → analyticsDb → pg и в клиентский бандл не годится, поэтому
   // проверка повторена по полям сессии. Менять — синхронно с FULL_ACCESS_ROLES.
   // Серверные гейты — в layout.tsx каждого раздела, здесь только скрытие пункта.
-  const moreVisible = user.isSuperadmin || user.roleName === 'Администратор';
+  // Зеркало серверного hasFullManagerAccess (lib/org/managerAccess.ts) по полям
+  // сессии — модуль серверный (тянет БД), в клиент не импортируется.
+  const adminLike = user.isSuperadmin || user.roleName === 'Администратор';
 
   // «Ещё ▸» (оптимизация 16.07): второстепенные разделы одним свёрнутым пунктом.
+  // Пункты «Ещё» (задача Иосифа 10.09): каждый пункт — администратор (зеркало
+  // hasFullManagerAccess, серверные гейты в layout'ах разделов) ИЛИ явное право
+  // роли из «Настройки → Матрица прав» (таблица «Пункты меню „Ещё“»). Прежний
+  // общий рубильник moreVisible «только админ» (аудит 09.09) снят — дефолт у
+  // ролей по-прежнему закрыт, право выдаётся точечно.
+  const canMore = (key: PermKey) => adminLike || hasPerm(user, key);
   const moreItems = [
     // «Повторные» и «Товарная матрица» — из блока «Продажи» (правка владельца 17.08:
-    // «убери эти пункты в Ещё»). Гейты прежние: «Повторные» — только супер-админ
-    // (сервер проверяет isSuperadmin сам, тут лишь скрытие пункта), матрица — всем.
-    { href: '/sales/repeat', label: 'Повторные', icon: <Repeat2 size={18} />, ok: user.isSuperadmin },
-    { href: '/sales/product-matrix', label: 'Товарная матрица', icon: <Grid3x3 size={18} />, ok: true },
+    // «убери эти пункты в Ещё»). «Повторные» строже остальных: супер-админ или
+    // явное право (роль «Администратор» без джокера пункт не видит — как до 10.09).
+    { href: '/sales/repeat', label: 'Повторные', icon: <Repeat2 size={18} />, ok: hasPerm(user, 'section.repeat') },
+    { href: '/sales/product-matrix', label: 'Товарная матрица', icon: <Grid3x3 size={18} />, ok: canMore('section.product_matrix') },
     // «Матрица переходов» (задача владельца 10.09) — факт «отгружено X → следующим
     // Y» в срезе фильтров отчёта и по менеджеру; переехала сюда из блока «Продажи»
     // по правке владельца, рядом с вероятностной «Товарной матрицей».
-    { href: '/sales/transition-matrix', label: 'Матрица переходов', icon: <Grid3x3 size={18} />, ok: true },
+    { href: '/sales/transition-matrix', label: 'Матрица переходов', icon: <Grid3x3 size={18} />, ok: canMore('section.transition_matrix') },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
-    { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: hasPerm(user, 'action.deal_chats') },
-    // «Рейтинг» (задача владельца 30.07) — виден всем: состав строк режется по зоне
-    // ответственности на сервере (/api/rating), отдельного права не заводим.
-    { href: '/rating', label: 'Рейтинг', icon: <Trophy size={18} />, ok: true },
+    { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: canMore('action.deal_chats') },
+    // «Рейтинг»: состав строк режется по зоне ответственности на сервере (/api/rating).
+    { href: '/rating', label: 'Рейтинг', icon: <Trophy size={18} />, ok: canMore('section.rating') },
     // «Разгрузка отделов» (задача 2635) — инструмент директора по продажам;
     // право по паттерну section.settings: только супер-админ + роли, которым
     // ключ выдан явно в настройках.
-    { href: '/offload', label: 'Разгрузка отделов', icon: <PackageOpen size={18} />, ok: hasPerm(user, 'section.offload') },
+    { href: '/offload', label: 'Разгрузка отделов', icon: <PackageOpen size={18} />, ok: canMore('section.offload') },
     // Спец-отчёт «Данные по годам» (понедельный, год к году; решения владельца
     // 28.08 в BACKLOG) — закрытый раздел по паттерну offload.
-    { href: '/year-weekly', label: 'Данные по годам', icon: <CalendarRange size={18} />, ok: hasPerm(user, 'section.year_weekly') },
+    { href: '/year-weekly', label: 'Данные по годам', icon: <CalendarRange size={18} />, ok: canMore('section.year_weekly') },
     // «Сотрудники» (задача 2654) — реестр: стаж + история переименований логина;
     // закрытый раздел по паттерну section.offload (только супер-админ + роли).
-    { href: '/employees', label: 'Сотрудники', icon: <Users size={18} />, ok: hasPerm(user, 'section.employees') },
+    { href: '/employees', label: 'Сотрудники', icon: <Users size={18} />, ok: canMore('section.employees') },
     // «Презентация» (ТЗ владельца 11.08) — слайды еженедельного собрания;
     // закрытый раздел по паттерну section.offload (только супер-админ + роли).
-    { href: '/presentation', label: 'Презентация', icon: <Presentation size={18} />, ok: hasPerm(user, 'section.presentation') },
+    { href: '/presentation', label: 'Презентация', icon: <Presentation size={18} />, ok: canMore('section.presentation') },
     // «Телевизоры» (ТЗ владельца 07.09) — ТВ-дашборды отделов; закрытый раздел
     // по паттерну section.offload. Публичная страница телевизора — /tv (без сессии).
-    { href: '/screens', label: 'Телевизоры', icon: <Tv size={18} />, ok: hasPerm(user, 'section.tv') },
-    { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: hasPerm(user, 'section.summary') },
-    { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: hasPerm(user, 'section.plans') },
-    { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: hasPerm(user, 'section.decomposition') },
-    { href: '/metrics', label: 'Метрики', icon: <BarChart2 size={18} />, ok: hasPerm(user, 'section.metrics') },
-    // Конструктор виджетов доступен любому залогиненному (данные — те же, что он и так
-    // видит; жёсткой ограды по отделам в приложении нет). Не гейтим по section.*.
-    { href: '/widget-constructor', label: 'Виджеты', icon: <Smartphone size={18} />, ok: true },
-  ].filter(i => moreVisible && i.ok);
+    { href: '/screens', label: 'Телевизоры', icon: <Tv size={18} />, ok: canMore('section.tv') },
+    { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: canMore('section.summary') },
+    { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: canMore('section.plans') },
+    { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: canMore('section.decomposition') },
+    { href: '/metrics', label: 'Метрики', icon: <BarChart2 size={18} />, ok: canMore('section.metrics') },
+    { href: '/widget-constructor', label: 'Виджеты', icon: <Smartphone size={18} />, ok: canMore('section.widget_constructor') },
+  ].filter(i => i.ok);
   const moreActive = moreItems.some(i => pathname.startsWith(i.href));
   // Авто-раскрытие, когда пользователь В одном из спрятанных разделов — активный
   // пункт не должен быть невидимым (и при навигации туда извне, поэтому effect,
@@ -623,9 +628,9 @@ function SidebarBody({
               только «Настройки» и «Что изменилось?». «Идеи и планы» переехали
               кнопкой в шапку панели ченджлога, «Корзина» — в ЛК. */}
           {/* Аудит 09.09: блок показываем, если есть «Ещё» (только админам) или «Настройки». */}
-          {((moreVisible && moreItems.length > 0) || hasPerm(user, 'section.settings')) && (
+          {(moreItems.length > 0 || hasPerm(user, 'section.settings')) && (
             <div className="border-t border-[var(--color-sidebar-border)] pt-1 px-2">
-              {moreVisible && moreItems.length > 0 && (
+              {moreItems.length > 0 && (
                 <>
                   <RailTooltip collapsed={collapsed} label="Ещё">
                     <button
@@ -902,11 +907,12 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           {/* Нижняя навигация (задача 2764) — flex-сиблинг main, не fixed-оверлей:
               main отдаёт ей реальную высоту, поэтому ни одной из ~30 страниц с
               собственным h-full не нужно ничего менять под новый нижний бар. */}
-          {/* Аудит 09.09: «Рейтинг» теперь раздел «Ещё» (только админам) — таб
-              скрываем тем же зеркалом FULL_ACCESS_ROLES, что и пункт в сайдбаре. */}
+          {/* «Рейтинг» в нижнем таб-баре — тот же гейт, что у пункта «Ещё»
+              (задача Иосифа 10.09): админ (зеркало FULL_ACCESS_ROLES) ИЛИ право
+              section.rating из матрицы прав. */}
           <BottomTabBar
             onMore={() => setMobileOpen(true)}
-            showRating={user.isSuperadmin || user.roleName === 'Администратор'}
+            showRating={user.isSuperadmin || user.roleName === 'Администратор' || hasPerm(user, 'section.rating')}
           />
         </div>
       </div>

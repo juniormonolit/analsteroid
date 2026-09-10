@@ -7,11 +7,11 @@ import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 // Гейт пункта меню «Ещё» (задача Иосифа 10.09): администратор (аудит 09.09)
 // ИЛИ явное право роли из «Настройки → Матрица прав» (таблица «Пункты меню
 // „Ещё“»). Данные внутри раздела всё равно режутся срезом сессии там, где он есть.
-export default async function WidgetConstructorLayout({ children }: { children: React.ReactNode }) {
+export default async function TransitionMatrixLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/login');
-  if (!hasFullManagerAccess(session) && !hasPerm(session, 'section.widget_constructor')) {
-    return <AccessDenied reason="Раздел «Виджеты» — конструктор виджетов для телефона. Доступ выдаёт администратор в «Настройки → Матрица прав»." />;
+  if (!hasFullManagerAccess(session) && !hasPerm(session, 'section.transition_matrix')) {
+    return <AccessDenied reason="Раздел «Матрица переходов» — факт следующих покупок после отгрузки. Доступ выдаёт администратор в «Настройки → Матрица прав»." />;
   }
   return <>{children}</>;
 }

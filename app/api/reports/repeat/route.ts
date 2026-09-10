@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { superadminError } from '@/lib/auth/perms';
+import { permError } from '@/lib/auth/perms';
 import { fetchRepeatReport } from '@/features/reports/engine/repeat';
 
 // Раздел «Повторные» (#1725, возвращён задачей владельца 27.07). Доступ — ТОЛЬКО
@@ -12,7 +12,11 @@ import { fetchRepeatReport } from '@/features/reports/engine/repeat';
 // Данные — по всей истории клиентов (без периода), см. features/reports/engine/repeat.ts.
 export async function GET() {
   const session = await getSession();
-  const err = superadminError(session);
+  // Задача Иосифа 10.09 (пункты «Ещё» — через матрицу прав): было ТОЛЬКО
+  // супер-админ (#1725); теперь супер-админ (байпас внутри hasPerm) ИЛИ право
+  // section.repeat, выданное роли в «Настройки → Матрица прав». Зеркально
+  // гейту app/(app)/sales/repeat/layout.tsx.
+  const err = permError(session, 'section.repeat');
   if (err) return err;
 
   try {

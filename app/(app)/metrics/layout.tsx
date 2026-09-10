@@ -13,13 +13,9 @@ import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 export default async function MetricsLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/login');
-  // Аудит 09.09 (ACCESS_AUDIT_2026-09-09.md): раздел «Ещё» целиком — только
-  // Администратор/супер-админ (правило владельца «всё — только админ; остальные —
-  // свой срез»). Право section.metrics ниже остаётся вторым, более тонким рычагом.
-  if (!hasFullManagerAccess(session)) {
-    return <AccessDenied reason="Раздел доступен только администраторам" />;
-  }
-  if (!hasPerm(session, 'section.metrics')) {
+  // Гейт пункта меню «Ещё» (задача Иосифа 10.09): администратор (аудит 09.09)
+  // ИЛИ явное право роли из «Настройки → Матрица прав».
+  if (!hasFullManagerAccess(session) && !hasPerm(session, 'section.metrics')) {
     return <AccessDenied reason="Раздел «Метрики» — конструктор показателей, на которых считаются все отчёты. Доступ выдаёт администратор в «Настройки → Роли»." />;
   }
   return <>{children}</>;

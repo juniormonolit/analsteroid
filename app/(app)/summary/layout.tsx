@@ -12,13 +12,9 @@ import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 export default async function SummaryLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect('/login');
-  // Аудит 09.09 (ACCESS_AUDIT_2026-09-09.md): раздел «Ещё» целиком — только
-  // Администратор/супер-админ (правило владельца «всё — только админ; остальные —
-  // свой срез»). Право section.summary ниже остаётся вторым, более тонким рычагом.
-  if (!hasFullManagerAccess(session)) {
-    return <AccessDenied reason="Раздел доступен только администраторам" />;
-  }
-  if (!hasPerm(session, 'section.summary')) {
+  // Гейт пункта меню «Ещё» (задача Иосифа 10.09): администратор (аудит 09.09)
+  // ИЛИ явное право роли из «Настройки → Матрица прав».
+  if (!hasFullManagerAccess(session) && !hasPerm(session, 'section.summary')) {
     return <AccessDenied reason="Раздел «Сводная» — выполнение планов по филиалам и динамика продаж. Доступ выдаёт администратор в «Настройки → Роли»." />;
   }
   return <>{children}</>;
