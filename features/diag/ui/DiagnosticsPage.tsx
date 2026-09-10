@@ -4,7 +4,7 @@
 // Кнопки ручного пересчёта — пока движок не на планировщике.
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, Play, ChevronDown, ChevronRight, AlertTriangle, TrendingDown, TrendingUp, Minus, HelpCircle } from 'lucide-react';
+import { RefreshCw, Play, ChevronDown, ChevronRight, AlertTriangle, TrendingDown, TrendingUp, Minus, HelpCircle, ArrowUp, ArrowDown } from 'lucide-react';
 
 interface NodeRow { nodeId: string; asOf: string; tickNo: number | null; value: number | null; n: number | null; ciLow: number | null; ciHigh: number | null; ewma: number | null; cusumNeg: number | null; baseOwn: number | null; basePeers: number | null; baseTarget: number | null; sigma: number | null; status: string; trace: Record<string, unknown> | null }
 interface Mgr { bitrixId: number; name: string; branch: string; category: string; plan: number | null; nodes: NodeRow[] }
@@ -25,7 +25,13 @@ const SHORT: Record<string, string> = {
   booking_call_rate_reserved: 'прозвон броней', calls_touch_speed_median: '1-е касание, мин', price_speed_median_hours: 'до цены, ч',
   calls_deals_no_call: 'без звонка', zombie_share: 'зомби, %', calls_silence_deals: 'тишина, шт', cross_sell_expected_share: 'кросс-продажа',
 };
-const fmtRub = (v: number | null) => (v === null ? '—' : `${Math.round(v / 1000).toLocaleString('ru-RU')} т.₽`);
+// Деньги — в миллионах с одним знаком (владелец: «сокращай до миллионов»); меньше 100 тыс — в тысячах.
+const fmtRub = (v: number | null) => {
+  if (v === null || !Number.isFinite(v)) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 100_000) return `${(v / 1_000_000).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} млн ₽`;
+  return `${Math.round(v / 1000).toLocaleString('ru-RU')} тыс ₽`;
+};
 const fmtV = (v: number | null, nodeId: string) => {
   if (v === null) return '—';
   if (nodeId.startsWith('cr_') || nodeId.includes('rate') || nodeId.includes('share') || nodeId.includes('no_call') || nodeId.includes('pct')) return `${v.toFixed(1)}%`;
@@ -72,12 +78,33 @@ export function DiagnosticsPage() {
   const [open, setOpen] = useState<number | null>(null);
   const nodeMeta = useMemo(() => new Map((data?.nodes ?? []).map(n => [n.id, n])), [data]);
   const branches = useMemo(() => [...new Set((data?.managers ?? []).map(m => m.branch))].sort(), [data]);
+  // Сортировка по клику на заголовок (владелец 10.09); по умолчанию — разрыв к плану по убыванию.
+  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' }>({ key: 'gap', dir: 'desc' });
+  const toggleSort = (key: string) => setSort(s => (s.key === key ? { key, dir: s.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: key === 'name' ? 'asc' : 'desc' }));
+  const sortValue = (m: Mgr, key: string): number | string | null => {
+    const root = m.nodes.find(n => n.nodeId === 'plan_forecast_pct_month');
+    if (key === 'name') return m.name;
+    if (key === 'plan') return m.plan;
+    if (key === 'pct') return root?.value ?? null;
+    if (key === 'gap') return (root?.trace as { gapRub?: number } | null)?.gapRub ?? null;
+    return m.nodes.find(n => n.nodeId === key)?.value ?? null;
+  };
   const rows = useMemo(() => {
     const qq = q.trim().toLowerCase();
     const list = (data?.managers ?? []).filter(m => (!branch || m.branch === branch) && (!qq || m.name.toLowerCase().includes(qq)));
-    const gap = (m: Mgr) => (m.nodes.find(n => n.nodeId === 'plan_forecast_pct_month')?.trace as { gapRub?: number } | null)?.gapRub ?? -Infinity;
-    return list.sort((a, b) => gap(b) - gap(a));
-  }, [data, branch]);
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    return list.sort((a, b) => {
+      const va = sortValue(a, sort.key), vb = sortValue(b, sort.key);
+      if (va === null && vb === null) return 0; if (va === null) return 1; if (vb === null) return -1; // пустые — всегда внизу
+      if (typeof va === 'string' || typeof vb === 'string') return String(va).localeCompare(String(vb), 'ru') * dir;
+      return (va - vb) * dir;
+    });
+  }, [data, branch, q, sort]);
+  const Th = ({ k, children, align = 'right', title }: { k: string; children: React.ReactNode; align?: 'left' | 'right'; title?: string }) => (
+    <th className={`px-2 py-2 text-${align} whitespace-nowrap cursor-pointer select-none hover:text-[var(--color-text)] ${sort.key === k ? 'text-[var(--color-accent)]' : ''}`} title={title} onClick={() => toggleSort(k)}>
+      {children}{sort.key === k && (sort.dir === 'asc' ? <ArrowUp size={10} className="inline ml-0.5" /> : <ArrowDown size={10} className="inline ml-0.5" />)}
+    </th>
+  );
   const refAt = (what: string) => { const r = data?.refs.find(x => x.what === what); return r ? `${r.n} · ${r.at ? new Date(r.at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—'}` : '—'; };
 
   return (
@@ -123,7 +150,7 @@ export function DiagnosticsPage() {
           <option value="">Все филиалы</option>{branches.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск менеджера…" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base sm:text-sm text-[var(--color-text)] w-full sm:w-64" />
-        <span className="text-[12px] text-[var(--color-text-muted)]">{rows.length} менеджеров · сортировка по разрыву к плану</span>
+        <span className="text-[12px] text-[var(--color-text-muted)]">{rows.length} менеджеров · сортировка — клик по заголовку</span>
         <span className="text-[11px] text-[var(--color-text-muted)] ml-auto">
           <span className={`inline-block rounded px-1.5 py-0.5 ${STATUS_CLS.drift_down}`}>просадка</span> — CUSUM пробил 4σ и база вне интервала ·{' '}
           <span className={`inline-block rounded px-1.5 py-0.5 ${STATUS_CLS.drift_up}`}>рост</span> · <span className="opacity-60">серым — мало данных</span>
@@ -136,11 +163,11 @@ export function DiagnosticsPage() {
           <table className="w-full text-[12px]">
             <thead className="bg-[var(--color-bg-hover)] text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)]">
               <tr>
-                <th className="px-2 py-2 text-left">Менеджер</th>
-                <th className="px-2 py-2 text-right">План</th>
-                <th className="px-2 py-2 text-right">Прогноз %</th>
-                <th className="px-2 py-2 text-right">Разрыв</th>
-                {COMPACT_NODES.map(id => <th key={id} className="px-2 py-2 text-right whitespace-nowrap" title={nodeMeta.get(id)?.name}>{SHORT[id] ?? id}</th>)}
+                <Th k="name" align="left">Менеджер</Th>
+                <Th k="plan">План</Th>
+                <Th k="pct">Прогноз %</Th>
+                <Th k="gap">Разрыв</Th>
+                {COMPACT_NODES.map(id => <Th key={id} k={id} title={nodeMeta.get(id)?.name}>{SHORT[id] ?? id}</Th>)}
               </tr>
             </thead>
             <tbody>
