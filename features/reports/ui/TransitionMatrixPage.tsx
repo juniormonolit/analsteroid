@@ -23,7 +23,9 @@ interface MatrixResponse {
   categories: string[];
   cells: MatrixCell[];
   rowTotals: Record<string, number>;
+  shipments: Record<string, number>;
   total: number;
+  shipmentsTotal: number;
 }
 interface Person { id: string; name: string; department: string | null; branch: string | null }
 
@@ -141,6 +143,10 @@ export function TransitionMatrixPage() {
     // Категории — по ВСЕМ позициям заказа (правка владельца 10.09): заказ
     // «утеплитель + ОСБ» после газобетона — это два перехода, а не один.
     mode: 'positions' as const,
+    // Период и фильтры режут ИСХОДНУЮ отгрузку (правка владельца 10.09): «было
+    // 120 отгрузок газобетона → 28 повторов → 23 %» — одна популяция, конверсию
+    // можно писать в шапке строки.
+    periodAnchor: 'first' as const,
   }), [period, departmentIds, manager, dealScope, clientType]);
 
   const { data, isLoading, error } = useQuery<MatrixResponse>({
@@ -218,7 +224,9 @@ export function TransitionMatrixPage() {
         </Popover>
         {data && (
           <span className="text-xs text-[var(--color-text-muted)]">
-            повторных покупок в срезе: <b className="text-[var(--color-text)] tabular-nums">{data.total.toLocaleString('ru-RU')}</b>
+            отгрузок в срезе: <b className="text-[var(--color-text)] tabular-nums">{data.shipmentsTotal.toLocaleString('ru-RU')}</b>
+            {' · '}с повтором: <b className="text-[var(--color-text)] tabular-nums">{data.total.toLocaleString('ru-RU')}</b>
+            {data.shipmentsTotal > 0 && ` (${((data.total / data.shipmentsTotal) * 100).toFixed(0)} %)`}
             {selected.size > 0 && ' · часть переходов ушла в скрытые категории'}
           </span>
         )}
@@ -231,16 +239,19 @@ export function TransitionMatrixPage() {
       ) : shown.length === 0 ? (
         <div className="p-10 text-center text-sm text-[var(--color-text-muted)]">Нет повторных покупок за выбранный период в этом срезе</div>
       ) : (
+        // Крупнее в ~2 раза (правка владельца 10.09: «пусть лучше скроллить, чем
+        // глаза ломать»): базовый шрифт таблицы text-base, ячейки с внутренними
+        // отступами и минимальной шириной, шапки читаемые.
         <div className="scroll-x flex-1 px-3 sm:px-6 py-3">
-          <table className="border-collapse text-xs">
+          <table className="border-collapse text-base">
             <thead>
               <tr>
-                <th className="sticky left-0 z-10 bg-[var(--color-bg)] text-left p-2 font-medium text-[var(--color-text-muted)] border-b border-[var(--color-border)] min-w-[160px] max-w-[220px]">
+                <th className="sticky left-0 z-10 bg-[var(--color-bg)] text-left p-3 text-sm font-medium text-[var(--color-text-muted)] border-b border-[var(--color-border)] min-w-[260px] max-w-[320px]">
                   Отгрузили ↓ / следующим →
                 </th>
                 {shown.map(to => (
-                  <th key={to} className="p-1 font-medium text-[var(--color-text-muted)] border-b border-[var(--color-border)] align-bottom">
-                    <div className="[writing-mode:vertical-rl] rotate-180 max-h-40 overflow-hidden text-ellipsis whitespace-nowrap mx-auto" title={to}>{to}</div>
+                  <th key={to} className="p-2 text-sm font-medium text-[var(--color-text)] border-b border-[var(--color-border)] align-bottom min-w-[72px]">
+                    <div className="[writing-mode:vertical-rl] rotate-180 max-h-56 overflow-hidden text-ellipsis whitespace-nowrap mx-auto" title={to}>{to}</div>
                   </th>
                 ))}
               </tr>
@@ -248,11 +259,19 @@ export function TransitionMatrixPage() {
             <tbody>
               {shown.map(from => {
                 const total = data?.rowTotals[from] ?? 0;
+                const ship = data?.shipments[from] ?? 0;
                 return (
                   <tr key={from}>
-                    <th className="sticky left-0 z-10 bg-[var(--color-bg)] text-left p-2 font-normal text-[var(--color-text)] border-b border-[var(--color-border)] min-w-[160px] max-w-[220px]">
-                      <span className="break-words">{from}</span>
-                      <span className="block text-[10px] text-[var(--color-text-muted)]">{total} повт. покупок</span>
+                    <th className="sticky left-0 z-10 bg-[var(--color-bg)] text-left p-3 font-normal text-[var(--color-text)] border-b border-[var(--color-border)] min-w-[260px] max-w-[320px]">
+                      <span className="block break-words leading-tight">{from}</span>
+                      {/* Конверсия категории в повторную покупку: сколько отгрузок было
+                          в срезе и у скольких из них случилось продолжение. */}
+                      <span className="block mt-0.5 text-xs text-[var(--color-text-muted)]">
+                        {ship.toLocaleString('ru-RU')} отгр. · {total} повт.
+                        {ship > 0 && (
+                          <b className="ml-1 text-[var(--color-text)]">{((total / ship) * 100).toFixed(0)} %</b>
+                        )}
+                      </span>
                     </th>
                     {shown.map(to => {
                       const n = cellMap.get(`${from}→${to}`) ?? 0;
@@ -265,13 +284,13 @@ export function TransitionMatrixPage() {
                             <button
                               type="button"
                               onClick={() => setDrill({ from, to })}
-                              title={`После «${from}» брали «${to}»: ${n} из ${total} повторных покупок. Клик — кто продаёт и цепочки сделок`}
-                              className="w-full min-h-11 sm:min-h-0 px-1 py-1 inline-flex flex-col leading-tight items-center justify-center hover:outline hover:outline-1 hover:outline-[var(--color-accent)] rounded"
+                              title={`После «${from}» брали «${to}»: ${n} из ${total} повторных покупок (${ship} отгрузок категории). Клик — кто продаёт и цепочки сделок`}
+                              className="w-full min-h-11 px-2 py-2 inline-flex flex-col leading-tight items-center justify-center hover:outline hover:outline-2 hover:outline-[var(--color-accent)] rounded"
                             >
-                              <span>{pct.toFixed(pct >= 10 ? 0 : 1)}%</span>
-                              <span className="text-[10px] text-[var(--color-text-muted)]">{n}</span>
+                              <span className="font-medium">{pct.toFixed(pct >= 10 ? 0 : 1)}%</span>
+                              <span className="text-xs text-[var(--color-text-muted)]">{n}</span>
                             </button>
-                          ) : <span className="block p-1 text-center text-[var(--color-text-muted)]">·</span>}
+                          ) : <span className="block p-2 text-center text-[var(--color-text-muted)]">·</span>}
                         </td>
                       );
                     })}

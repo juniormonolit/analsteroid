@@ -52,8 +52,12 @@ export interface ProductMatrixResult {
   cells: MatrixCell[];
   /** Знаменатель строки: сколько повторных покупок было после этой категории. */
   rowTotals: Record<string, number>;
+  /** Отгрузок категории в срезе — база конверсии в повтор (только anchor='first'). */
+  shipments: Record<string, number>;
   /** Всего пар «покупка → следующая покупка» в срезе. */
   total: number;
+  /** Всего отгрузок в срезе (только anchor='first'). */
+  shipmentsTotal: number;
 }
 
 /** Чем считать категорию заказа — главной группой или всеми позициями (см. шапку). */
@@ -75,6 +79,16 @@ export interface ProductMatrixOptions {
   clientType?: ClientType;
   /** По умолчанию 'by_max' — прежнее поведение «Товарной матрицы». */
   mode?: MatrixCategoryMode;
+  /**
+   * Что режет период и фильтры (правка владельца 10.09):
+   *   'next'  — ЗАКРЫВАЮЩАЯ покупка пары (умолчание, прежняя «Товарная матрица»:
+   *             «куда вернулись те, кто вернулся в периоде»);
+   *   'first' — ИСХОДНАЯ отгрузка («Матрица переходов»): берём отгрузки категории
+   *             за период и смотрим, чем клиент продолжил — тогда «120 отгрузок
+   *             газобетона → 28 повторов → 23 %» это одна популяция, и конверсию
+   *             можно писать в шапке строки.
+   */
+  periodAnchor?: 'next' | 'first';
 }
 
 const EXCLUDED_FUNNELS = '(4, 7)';
@@ -82,27 +96,32 @@ const EXCLUDED_FUNNELS = '(4, 7)';
 /** Общая часть SQL для матрицы и её дрилла: фильтры закрывающей сделки + CTE заказов. */
 function buildMatrixScope(
   opts: ProductMatrixOptions, mode: MatrixCategoryMode, fromIso: string, toExclIso: string,
-): { params: unknown[]; nextWhere: string; dealCats: string } {
+): { params: unknown[]; nextWhere: string; dealCats: string; anchorAt: string } {
   const params: unknown[] = [fromIso, toExclIso];
   const next: string[] = [];
+  // Сторона пары, по которой режут период и фильтры (см. periodAnchor).
+  const first = (opts.periodAnchor ?? 'next') === 'first';
+  const mgrCol = first ? 'mgr' : 'next_mgr';
+  const funnelCol = first ? 'funnel_id' : 'next_funnel';
+  const anchorAt = first ? 'delivered_at' : 'next_at';
   const managerIds = (opts.managerIds ?? []).filter(id => /^\d+$/.test(id));
   if (managerIds.length) {
     params.push(managerIds);
-    next.push(`next_mgr = ANY($${params.length}::text[])`);
+    next.push(`${mgrCol} = ANY($${params.length}::text[])`);
   }
   const deptIds = (opts.departmentIds ?? []).filter(Boolean);
   if (deptIds.length) {
     params.push(deptIds);
-    next.push(`next_mgr IN (
+    next.push(`${mgrCol} IN (
       SELECT manager_bitrix_user_id::text FROM sa.org_resolved_hierarchy orh
        WHERE orh.is_active AND orh.department_id IN (
          SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($${params.length}::text[])))`);
   }
   // Пилюли — по воронке закрывающей сделки (те же правила, что у отчётов).
-  if (opts.dealScope === 'primary') next.push(`next_funnel IN (SELECT id FROM funnels WHERE is_repeat = false)`);
-  else if (opts.dealScope === 'repeat') next.push(`next_funnel IN (SELECT id FROM funnels WHERE is_repeat = true)`);
-  if (opts.clientType === 'b2c') next.push(`next_funnel IN (0, 2)`);
-  else if (opts.clientType === 'b2b') next.push(`next_funnel IN (1, 3)`);
+  if (opts.dealScope === 'primary') next.push(`${funnelCol} IN (SELECT id FROM funnels WHERE is_repeat = false)`);
+  else if (opts.dealScope === 'repeat') next.push(`${funnelCol} IN (SELECT id FROM funnels WHERE is_repeat = true)`);
+  if (opts.clientType === 'b2c') next.push(`${funnelCol} IN (0, 2)`);
+  else if (opts.clientType === 'b2b') next.push(`${funnelCol} IN (1, 3)`);
 
   // Заказ → массив его категорий. В 'by_max' массив из одного элемента, поэтому
   // дальше SQL общий для обоих режимов: пары строятся по ЗАКАЗАМ, а разворот в
@@ -130,7 +149,7 @@ function buildMatrixScope(
      AND d.head_group_name IS NOT NULL
      AND d.head_group_id NOT IN (${SERVICE_HEAD_GROUP_IDS.join(', ')})`;
 
-  return { params, nextWhere: next.length ? `AND ${next.join(' AND ')}` : '', dealCats };
+  return { params, nextWhere: next.length ? `AND ${next.join(' AND ')}` : '', dealCats, anchorAt };
 }
 
 export async function fetchProductMatrix(input: DateRange | ProductMatrixOptions): Promise<ProductMatrixResult> {
@@ -139,13 +158,13 @@ export async function fetchProductMatrix(input: DateRange | ProductMatrixOptions
   const fromIso = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
 
-  const { params, nextWhere, dealCats } = buildMatrixScope(opts, mode, fromIso, toExclIso);
+  const { params, nextWhere, dealCats, anchorAt } = buildMatrixScope(opts, mode, fromIso, toExclIso);
 
   const sql = `
 WITH deal_cats AS (${dealCats}
 ),
 seq AS (
-  SELECT contact_id, cats,
+  SELECT contact_id, cats, delivered_at, mgr, funnel_id,
          lead(cats)         OVER w AS next_cats,
          lead(delivered_at) OVER w AS next_at,
          lead(mgr)          OVER w AS next_mgr,
@@ -153,27 +172,38 @@ seq AS (
     FROM deal_cats
   WINDOW w AS (PARTITION BY contact_id ORDER BY delivered_at, deal_id)
 ),
-pairs AS (
-  SELECT cats, next_cats FROM seq
-   WHERE next_cats IS NOT NULL
-     AND next_at >= $1 AND next_at < $2
+-- База среза: отгрузки (anchor='first') либо закрывающие покупки (anchor='next').
+-- Для 'next' у строки всегда есть next_cats, поэтому base = pairs и «отгрузок»
+-- в шапке строки нет — конверсия там неприменима.
+base AS (
+  SELECT * FROM seq
+   WHERE ${anchorAt} >= $1 AND ${anchorAt} < $2
      ${nextWhere}
-)
-SELECT f.cat AS from_grp, t.cat AS to_grp, count(*)::int AS n
+),
+pairs AS (SELECT * FROM base WHERE next_cats IS NOT NULL)
+SELECT 'cell' AS kind, f.cat AS from_grp, t.cat AS to_grp, count(*)::int AS n
   FROM pairs, unnest(cats) f(cat), unnest(next_cats) t(cat)
- GROUP BY 1, 2
+ GROUP BY 1, 2, 3
 UNION ALL
 -- Знаменатели строк: сколько ПАР было после каждой категории (одна пара — один
 -- раз, даже если в следующем заказе несколько категорий).
-SELECT f.cat, NULL, count(*)::int
+SELECT 'row', f.cat, NULL, count(*)::int
   FROM pairs, unnest(cats) f(cat)
- GROUP BY 1
+ GROUP BY 2
 UNION ALL
-SELECT NULL, NULL, count(*)::int FROM pairs
+-- База конверсии: все отгрузки категории в срезе, включая те, за которыми
+-- продолжения не было.
+SELECT 'ship', f.cat, NULL, count(*)::int
+  FROM base, unnest(cats) f(cat)
+ GROUP BY 2
+UNION ALL
+SELECT 'total', NULL, NULL, count(*)::int FROM pairs
+UNION ALL
+SELECT 'shipTotal', NULL, NULL, count(*)::int FROM base
 `;
 
   const key = [
-    mode, fromIso, toExclIso,
+    mode, opts.periodAnchor ?? 'next', fromIso, toExclIso,
     (opts.managerIds ?? []).slice().sort().join(',') || 'm:all',
     (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
@@ -182,26 +212,33 @@ SELECT NULL, NULL, count(*)::int FROM pairs
     `rpt:matrix3:${key}`,
     reportTtl(toExclIso),
     async () => {
-      const res = await analyticsDb().query<{ from_grp: string | null; to_grp: string | null; n: number }>(sql, params);
+      const res = await analyticsDb().query<{ kind: string; from_grp: string | null; to_grp: string | null; n: number }>(sql, params);
       return res.rows;
     },
   );
 
   const cells: MatrixCell[] = [];
   const rowTotals: Record<string, number> = {};
+  const shipments: Record<string, number> = {};
   const cats = new Set<string>();
   let total = 0;
+  let shipmentsTotal = 0;
   for (const r of rows) {
     const n = Number(r.n);
-    if (r.from_grp === null) { total = n; continue; }
-    if (r.to_grp === null) { rowTotals[r.from_grp] = n; cats.add(r.from_grp); continue; }
-    cells.push({ from: r.from_grp, to: r.to_grp, n });
+    if (r.kind === 'total') { total = n; continue; }
+    if (r.kind === 'shipTotal') { shipmentsTotal = n; continue; }
+    if (!r.from_grp) continue;
     cats.add(r.from_grp);
-    cats.add(r.to_grp);
+    if (r.kind === 'row') { rowTotals[r.from_grp] = n; continue; }
+    if (r.kind === 'ship') { shipments[r.from_grp] = n; continue; }
+    if (r.to_grp) { cells.push({ from: r.from_grp, to: r.to_grp, n }); cats.add(r.to_grp); }
   }
-  // Порядок — по убыванию повторных покупок после категории: самые живые сверху/слева.
-  const categories = [...cats].sort((a, b) => (rowTotals[b] ?? 0) - (rowTotals[a] ?? 0));
-  return { categories, cells, rowTotals, total };
+  // Порядок — по убыванию отгрузок категории (при равенстве — по повторам): сверху
+  // и слева самые массовые категории, а не самые «конверсионные» из редких.
+  const categories = [...cats].sort((a, b) =>
+    (shipments[b] ?? rowTotals[b] ?? 0) - (shipments[a] ?? rowTotals[a] ?? 0)
+    || (rowTotals[b] ?? 0) - (rowTotals[a] ?? 0));
+  return { categories, cells, rowTotals, shipments, total, shipmentsTotal };
 }
 
 
@@ -265,7 +302,7 @@ export async function fetchMatrixTransitions(opts: MatrixTransitionsOptions): Pr
   const mode: MatrixCategoryMode = opts.mode ?? 'by_max';
   const fromIso = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
-  const { params, nextWhere, dealCats } = buildMatrixScope(opts, mode, fromIso, toExclIso);
+  const { params, nextWhere, dealCats, anchorAt } = buildMatrixScope(opts, mode, fromIso, toExclIso);
 
   params.push(opts.from); const pFrom = `$${params.length}`;
   params.push(opts.to);   const pTo = `$${params.length}`;
@@ -295,7 +332,7 @@ seq AS (
 pairs AS (
   SELECT * FROM seq
    WHERE next_cats IS NOT NULL
-     AND next_at >= $1 AND next_at < $2
+     AND ${anchorAt} >= $1 AND ${anchorAt} < $2
      ${nextWhere}
 ),
 after_from AS (SELECT * FROM pairs WHERE ${pFrom} = ANY(cats)),
@@ -319,7 +356,7 @@ SELECT 'chain', next_mgr, NULL, NULL,
     next_deal_id: string | null; next_deal_name: string | null; next_at: Date | null; next_amount: string | null; next_cats: string[] | null;
   };
   const key = [
-    'drill', mode, fromIso, toExclIso, opts.from, opts.to, opts.drillManagerId ?? '-',
+    'drill', mode, opts.periodAnchor ?? 'next', fromIso, toExclIso, opts.from, opts.to, opts.drillManagerId ?? '-',
     (opts.managerIds ?? []).slice().sort().join(',') || 'm:all',
     (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
