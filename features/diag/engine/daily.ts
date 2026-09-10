@@ -11,7 +11,7 @@ import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
 import { getManagerOrgMap } from '@/lib/org/deptCategories';
 import { loadDiagSettings, type DiagSettings } from './settings';
 import { loadLags } from './refs';
-import { loadManagerWindows, computeTickNodes, type NodeValue } from './windows';
+import { loadManagerWindows, computeTickNodes, lastWindowTimings, type NodeValue } from './windows';
 
 export interface ActiveManager { bitrixId: number; name: string; shortLogin: string; branch: string; category: string; plan: number; firstDealAt: Date | null }
 
@@ -105,7 +105,7 @@ async function computeRoot(managers: ActiveManager[], s: DiagSettings, today: st
 }
 
 // ── Главный проход ───────────────────────────────────────────────────────────
-export interface DailyRunSummary { date: string; managers: number; series: number; insufficient: number; drifts: number; ms: number; errors: string[] }
+export interface DailyRunSummary { date: string; managers: number; series: number; insufficient: number; drifts: number; ms: number; timings: Record<string, number>; errors: string[] }
 
 export async function runDaily(opts: { today?: string } = {}): Promise<DailyRunSummary> {
   const t0 = Date.now();
@@ -117,8 +117,13 @@ export async function runDaily(opts: { today?: string } = {}): Promise<DailyRunS
   const nodesRes = await sys.query<{ id: string; higher_is_better: boolean; window_kind: string }>(`SELECT id, higher_is_better, window_kind FROM diag_nodes WHERE enabled`);
   const nodeMeta = new Map<string, NodeMeta>(nodesRes.rows.map(n => [n.id, { id: n.id, higherIsBetter: n.higher_is_better, windowKind: n.window_kind }]));
 
+  const timings: Record<string, number> = {};
+  let t = Date.now();
   const windows = await loadManagerWindows(managers.map(m => m.bitrixId));
+  timings.windows = Date.now() - t; Object.assign(timings, Object.fromEntries(Object.entries(lastWindowTimings).map(([k, v]) => [`sql_${k}`, v])));
+  t = Date.now();
   const roots = await computeRoot(managers, s, today).catch(e => { errors.push(`корень: ${e instanceof Error ? e.message : e}`); return new Map<number, RootForecast>(); });
+  timings.root = Date.now() - t; t = Date.now();
 
   // Значения по менеджерам
   const cur = new Map<number, Record<string, NodeValue>>(), prev = new Map<number, Record<string, NodeValue>>();
@@ -211,5 +216,6 @@ export async function runDaily(opts: { today?: string } = {}): Promise<DailyRunS
       } catch (e) { errors.push(`${m.name}/root: ${e instanceof Error ? e.message : e}`); }
     }
   }
-  return { date: today, managers: managers.length, series, insufficient, drifts, ms: Date.now() - t0, errors: errors.slice(0, 30) };
+  timings.series = Date.now() - t;
+  return { date: today, managers: managers.length, series, insufficient, drifts, ms: Date.now() - t0, timings, errors: errors.slice(0, 30) };
 }
