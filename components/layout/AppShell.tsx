@@ -304,6 +304,19 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
       {/* «Повторные» и «Товарная матрица» переехали в «Ещё» (правка владельца
           17.08) — блок «Продажи» остаётся витринам отчётов. */}
 
+      {/* «Матрица переходов» (задача владельца 10.09) — факт «отгружено X → следующим Y»
+          в срезе фильтров отчёта и по менеджеру; доступна всем с разделом «Продажи»
+          (срез сессии режет сервер), поэтому живёт здесь, а не в админском «Ещё». */}
+      <Link
+        href="/sales/transition-matrix"
+        className={`flex items-center gap-2 min-h-11 sm:min-h-0 sm:py-1.5 px-2 rounded-md text-sm transition-colors ${
+          pathname === '/sales/transition-matrix' ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE
+        }`}
+      >
+        <Grid3x3 size={14} className="shrink-0" />
+        <span className="flex-1 min-w-0 truncate">Матрица переходов</span>
+      </Link>
+
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
