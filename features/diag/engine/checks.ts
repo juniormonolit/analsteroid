@@ -165,6 +165,52 @@ const CHECKS: Check[] = [
     },
   },
   {
+    key: 'zombie_early', title: '12.7б Зомби ДО брони: P(дойдёт до брони/продажи | ещё без брони в возрасте t) по топ-12 групп',
+    async run() {
+      // Кривая от брони (12.7) показала: забронированная сделка живёт долго и часто продаётся
+      // поздно — там зомби почти нет. «Висяк» владельца — это сделки, застрявшие ДО брони:
+      // созданы, но ни брони, ни продажи, ни отказа. Возраст — от created_at до первого из
+      // reserved/sold/lost; ещё открытые старше 60 дней — цензурируем как «не продвинулись».
+      const rows = await sa<Record<string, string>>(`
+        WITH d AS (
+          SELECT head_group_name,
+                 (reserved_at IS NOT NULL OR sold_at IS NOT NULL) AS advanced,
+                 LEAST(60, GREATEST(0, EXTRACT(epoch FROM (LEAST(coalesce(reserved_at, 'infinity'::timestamptz), coalesce(sold_at, 'infinity'::timestamptz), coalesce(lost_at, 'infinity'::timestamptz), now()) - created_at)) / 86400))::int AS age
+            FROM sa.deals
+           WHERE created_at >= now() - interval '6 months' AND created_at < now() - interval '60 days' AND funnel_id IN (0, 1, 2, 3)
+        ),
+        top AS (SELECT head_group_name FROM d GROUP BY 1 ORDER BY count(*) DESC LIMIT 12),
+        grid AS (SELECT t FROM generate_series(0, 30) t)
+        SELECT d.head_group_name, g.t, count(*)::text AS n_open_at_t, count(*) FILTER (WHERE d.advanced)::text AS n_advanced,
+               round(100.0 * count(*) FILTER (WHERE d.advanced) / count(*), 1)::text AS p_advance_pct
+          FROM d JOIN top USING (head_group_name) CROSS JOIN grid g
+         WHERE d.age >= g.t
+         GROUP BY 1, 2 HAVING count(*) >= 30 ORDER BY 1, 2`);
+      const thr: Record<string, { p0: number | null; p15: number | null; p10: number | null; p5: number | null }> = {};
+      for (const r of rows) {
+        const g = String(r.head_group_name); const t = thr[g] ??= { p0: null, p15: null, p10: null, p5: null };
+        const p = Number(r.p_advance_pct), day = Number(r.t);
+        if (day === 0) t.p0 = p;
+        if (t.p15 === null && p <= 15) t.p15 = day;
+        if (t.p10 === null && p <= 10) t.p10 = day;
+        if (t.p5 === null && p <= 5) t.p5 = day;
+      }
+      const summary = Object.entries(thr).map(([g, t]) => ({ head_group_name: g, p_advance_day0_pct: t.p0, zombie_at_15pct: t.p15 ?? '>30', zombie_at_10pct: t.p10 ?? '>30', zombie_at_5pct: t.p5 ?? '>30' }));
+      return { status: 'ok', note: `День, когда P(сделка без брони ещё продвинется) падает до 15% / 10% / 5%: ${summary.map(x => `${x.head_group_name}: ${x.zombie_at_15pct} / ${x.zombie_at_10pct} / ${x.zombie_at_5pct}`).join('; ')}.`, rows: [...summary, ...rows] };
+    },
+  },
+  {
+    key: 'calls_linked', title: '12.2б Звонки: доля звонков, чей deal_id реально есть в sa.deals (по месяцам)',
+    async run() {
+      const rows = await sa<Record<string, string>>(`
+        SELECT to_char(date_trunc('month', c.called_at), 'YYYY-MM') AS m, count(*)::text AS calls,
+               count(d.deal_id)::text AS linked_to_existing_deal, round(100.0 * count(d.deal_id) / count(*), 1)::text AS linked_pct
+          FROM va.calls c LEFT JOIN sa.deals d ON d.deal_id = c.deal_id
+         GROUP BY 1 ORDER BY 1`);
+      return { status: 'ok', note: 'Если доля привязанных к реальным сделкам до 03.2026 не хуже поздней — CALLS_DATA_START можно сдвинуть на 01.2025.', rows };
+    },
+  },
+  {
     key: 'diag_tables', title: '12.8 Существующие таблицы diag_* / bot_scenario_* в system',
     async run() {
       const rows = (await systemDb().query<Record<string, string>>(`
