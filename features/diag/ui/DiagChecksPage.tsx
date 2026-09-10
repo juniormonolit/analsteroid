@@ -20,6 +20,15 @@ export function DiagChecksPage() {
     queryKey: ['diag-checks-list'], queryFn: () => fetch('/api/diag/checks?list=1').then(r => r.json()), staleTime: Infinity,
   });
   const [results, setResults] = useState<Record<string, CheckResult>>({});
+  // Последние сохранённые результаты — чтобы экран не был пустым при повторном открытии.
+  useQuery<{ results: CheckResult[] }>({
+    queryKey: ['diag-checks-last'], staleTime: Infinity, refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const body = await fetch('/api/diag/checks?last=1').then(r => r.json()) as { results: CheckResult[] };
+      setResults(prev => { const next = { ...prev }; for (const r of body.results ?? []) if (!next[r.key]) next[r.key] = r; return next; });
+      return body;
+    },
+  });
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState(false);
 

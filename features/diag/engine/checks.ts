@@ -118,7 +118,7 @@ const CHECKS: Check[] = [
     key: 'handover', title: '12.6 Передачи сделок: доля сделок со сменой менеджера в deal_events (3 мес)',
     async run() {
       const rows = await sa<Record<string, string>>(`
-        WITH recent AS (SELECT id, current_manager_id FROM sa.deals WHERE created_at >= now() - interval '3 months'),
+        WITH recent AS (SELECT deal_id AS id, current_manager_id FROM sa.deals WHERE created_at >= now() - interval '3 months'),
         mgrs AS (SELECT e.deal_id, count(DISTINCT e.manager_id) AS n_mgr FROM sa.deal_events e JOIN recent r ON r.id = e.deal_id WHERE e.manager_id IS NOT NULL GROUP BY 1)
         SELECT coalesce(h.branch, '∅') AS branch, count(*)::text AS deals, count(*) FILTER (WHERE m.n_mgr > 1)::text AS handed_over
           FROM recent r LEFT JOIN mgrs m ON m.deal_id = r.id
@@ -142,21 +142,26 @@ const CHECKS: Check[] = [
            WHERE reserved_at IS NOT NULL AND coalesce(sold_at, lost_at) >= now() - interval '6 months' AND coalesce(sold_at, lost_at) IS NOT NULL
         ),
         top AS (SELECT head_group_name FROM closed GROUP BY 1 ORDER BY count(*) DESC LIMIT 12),
-        grid AS (SELECT t FROM generate_series(0, 30) t)
+        grid AS (SELECT t FROM generate_series(0, 60) t)
         SELECT c.head_group_name, g.t, count(*)::text AS n_open_at_t, count(*) FILTER (WHERE c.sold)::text AS n_sold,
                round(100.0 * count(*) FILTER (WHERE c.sold) / count(*), 1)::text AS p_sold_pct
           FROM closed c JOIN top USING (head_group_name) CROSS JOIN grid g
          WHERE c.age >= g.t
          GROUP BY 1, 2 HAVING count(*) >= 30 ORDER BY 1, 2`);
       // порог = первое t, где P ≤ 5%
-      const thr: Record<string, number | null> = {};
+      // Пороги для трёх отсечек — владелец 10.09: «может 10% или 15%? посчитай».
+      const thr: Record<string, { p5: number | null; p10: number | null; p15: number | null; p0: number | null }> = {};
       for (const r of rows) {
         const g = String(r.head_group_name);
-        if (!(g in thr)) thr[g] = null;
-        if (thr[g] === null && Number(r.p_sold_pct) <= 5) thr[g] = Number(r.t);
+        const t = thr[g] ??= { p5: null, p10: null, p15: null, p0: null };
+        const p = Number(r.p_sold_pct), day = Number(r.t);
+        if (day === 0) t.p0 = p;
+        if (t.p15 === null && p <= 15) t.p15 = day;
+        if (t.p10 === null && p <= 10) t.p10 = day;
+        if (t.p5 === null && p <= 5) t.p5 = day;
       }
-      const summary = Object.entries(thr).map(([g, t]) => ({ head_group_name: g, zombie_after_days: t ?? '>30 или мало данных' }));
-      return { status: 'ok', note: `Порог зомби (P ≤ 5%) по группам: ${summary.map(s => `${s.head_group_name}: ${s.zombie_after_days}`).join('; ')}. Первые строки — сводка, дальше кривые (возраст от брони, дни).`, rows: [...summary, ...rows] };
+      const summary = Object.entries(thr).map(([g, t]) => ({ head_group_name: g, p_sold_day0_pct: t.p0, zombie_at_15pct: t.p15 ?? '>60', zombie_at_10pct: t.p10 ?? '>60', zombie_at_5pct: t.p5 ?? '>60' }));
+      return { status: 'ok', note: `Порог зомби по группам (день, когда P(продажа) падает до 15% / 10% / 5%): ${summary.map(s => `${s.head_group_name}: ${s.zombie_at_15pct} / ${s.zombie_at_10pct} / ${s.zombie_at_5pct}`).join('; ')}. Первые строки — сводка, дальше кривые (возраст от брони, дни, до 60).`, rows: [...summary, ...rows] };
     },
   },
   {
@@ -190,7 +195,7 @@ const CHECKS: Check[] = [
     async run() {
       const rows = await sa<Record<string, string>>(`
         WITH recent AS (
-          SELECT d.id, d.current_manager_id::text AS cur_mgr, (d.reserved_at IS NOT NULL) AS reserved FROM sa.deals d WHERE d.created_at >= now() - interval '3 months' AND d.created_at < now() - interval '14 days'
+          SELECT d.deal_id AS id, d.current_manager_id::text AS cur_mgr, (d.reserved_at IS NOT NULL) AS reserved FROM sa.deals d WHERE d.created_at >= now() - interval '3 months' AND d.created_at < now() - interval '14 days'
         ),
         first_ev AS (SELECT DISTINCT ON (e.deal_id) e.deal_id, e.manager_id::text AS first_mgr FROM sa.deal_events e JOIN recent r ON r.id = e.deal_id ORDER BY e.deal_id, e.event_at),
         j AS (SELECT r.*, f.first_mgr FROM recent r LEFT JOIN first_ev f ON f.deal_id = r.id),
@@ -234,7 +239,7 @@ const CHECKS: Check[] = [
   },
 ];
 
-export async function runChecks(only?: string[]): Promise<CheckResult[]> {
+export async function runChecks(only?: string[], ranBy?: string): Promise<CheckResult[]> {
   const out: CheckResult[] = [];
   for (const c of CHECKS) {
     if (only && !only.includes(c.key)) continue;
@@ -245,8 +250,21 @@ export async function runChecks(only?: string[]): Promise<CheckResult[]> {
     } catch (e) {
       out.push({ key: c.key, title: c.title, status: 'error', note: e instanceof Error ? e.message : String(e), rows: [], ms: Date.now() - t0 });
     }
+    const r = out[out.length - 1];
+    await systemDb().query(
+      `INSERT INTO diag_check_runs (key, status, note, rows, ms, ran_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [r.key, r.status, r.note, JSON.stringify(r.rows.slice(0, 2000)), r.ms, ranBy ?? null],
+    ).catch(err => console.warn('[diag-checks] не записан в diag_check_runs:', err instanceof Error ? err.message : err));
   }
   return out;
+}
+
+/** Последний результат каждой проверки — для экрана при повторном открытии. */
+export async function lastCheckResults(): Promise<CheckResult[]> {
+  const r = await systemDb().query<{ key: string; status: CheckResult['status']; note: string; rows: Record<string, unknown>[]; ms: number; ran_at: string | Date }>(
+    `SELECT DISTINCT ON (key) key, status, note, rows, ms, ran_at FROM diag_check_runs ORDER BY key, ran_at DESC`);
+  const titles = new Map(CHECKS.map(c => [c.key, c.title]));
+  return r.rows.map(x => ({ key: x.key, title: titles.get(x.key) ?? x.key, status: x.status, note: `${x.note} (прогон ${new Date(x.ran_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })})`, rows: x.rows, ms: x.ms }));
 }
 
 export const CHECK_KEYS = CHECKS.map(c => ({ key: c.key, title: c.title }));
