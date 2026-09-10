@@ -8,6 +8,7 @@
 // выбор рычага) — следующий модуль, читает эти ряды.
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
+import { getManagerOrgMap } from '@/lib/org/deptCategories';
 import { loadDiagSettings, type DiagSettings } from './settings';
 import { loadLags } from './refs';
 import { loadManagerWindows, computeTickNodes, type NodeValue } from './windows';
@@ -22,14 +23,22 @@ export async function loadActiveManagers(monthFirst: string): Promise<ActiveMana
     `SELECT manager_login, plan_shipments FROM manager_plans WHERE month = $1::date AND plan_shipments > 0`, [monthFirst]);
   if (!plans.rows.length) return [];
   const planBy = new Map(plans.rows.map(p => [p.manager_login, Number(p.plan_shipments)]));
-  const h = await analyticsDb().query<{ manager_bitrix_user_id: string; manager_name: string; short_login: string | null; branch: string | null; category: string | null; first_deal_at: Date | null }>(
-    `SELECT h.manager_bitrix_user_id, h.manager_name, h.short_login, h.branch, h.category,
-            (SELECT min(created_at) FROM sa.deals d WHERE d.current_manager_id = h.manager_bitrix_user_id::bigint) AS first_deal_at
-       FROM sa.org_resolved_hierarchy h WHERE h.is_active = true AND h.short_login = ANY($1::text[])`, [[...planBy.keys()]]);
-  return h.rows.map(r => ({
-    bitrixId: Number(r.manager_bitrix_user_id), name: r.manager_name, shortLogin: r.short_login ?? '', branch: r.branch ?? '∅', category: r.category ?? '∅',
-    plan: planBy.get(r.short_login ?? '') ?? 0, firstDealAt: r.first_deal_at ? new Date(r.first_deal_at) : null,
-  }));
+  // category в org_resolved_hierarchy нет — направление резолвится по предкам отдела
+  // (lib/org/deptCategories.getManagerOrgMap), там же нормализованная метка филиала.
+  const [h, org] = await Promise.all([
+    analyticsDb().query<{ manager_bitrix_user_id: string; manager_name: string; short_login: string | null; branch: string | null; first_deal_at: Date | null }>(
+      `SELECT h.manager_bitrix_user_id, h.manager_name, h.short_login, h.branch,
+              (SELECT min(created_at) FROM sa.deals d WHERE d.current_manager_id = h.manager_bitrix_user_id::bigint) AS first_deal_at
+         FROM sa.org_resolved_hierarchy h WHERE h.is_active = true AND h.short_login = ANY($1::text[])`, [[...planBy.keys()]]),
+    getManagerOrgMap(),
+  ]);
+  return h.rows.map(r => {
+    const o = org.get(r.manager_bitrix_user_id);
+    return {
+      bitrixId: Number(r.manager_bitrix_user_id), name: r.manager_name, shortLogin: r.short_login ?? '', branch: o?.branch ?? r.branch ?? '∅', category: o?.category ?? '∅',
+      plan: planBy.get(r.short_login ?? '') ?? 0, firstDealAt: r.first_deal_at ? new Date(r.first_deal_at) : null,
+    };
+  });
 }
 
 // ── Статистика ───────────────────────────────────────────────────────────────

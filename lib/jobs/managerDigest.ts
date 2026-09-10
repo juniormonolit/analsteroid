@@ -283,11 +283,11 @@ export async function fetchActiveManagers(): Promise<ManagerRef[]> {
 
 interface ManagerOrg { branch: string; category: string | null }
 async function fetchManagerOrg(bitrixId: number): Promise<ManagerOrg | null> {
-  const res = await analyticsDb().query<{ branch: string; category: string | null }>(
-    `SELECT branch, category FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = $1 AND is_active = true LIMIT 1`,
-    [String(bitrixId)],
-  );
-  return res.rows[0] ?? null;
+  // Колонки category в org_resolved_hierarchy НЕТ (всплыло 10.09 в диагностике) —
+  // направление резолвится по предкам отдела в lib/org/deptCategories.
+  const { getManagerOrgMap } = await import('@/lib/org/deptCategories');
+  const o = (await getManagerOrgMap()).get(String(bitrixId));
+  return o ? { branch: o.branch, category: o.category } : null;
 }
 
 // ── Цифры менеджера за период vs предыдущий такой же период ─────────────────

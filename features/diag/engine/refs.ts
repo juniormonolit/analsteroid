@@ -8,6 +8,7 @@
 // Живые данные — только sa через analyticsDb(); результат — в system.
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadDiagSettings } from './settings';
+import { getManagerOrgMap } from '@/lib/org/deptCategories';
 
 const TRANSITIONS: { key: string; from: string; to: string }[] = [
   { key: 'created_to_reserved', from: 'created_at', to: 'reserved_at' },
@@ -79,35 +80,41 @@ export async function computeZombieThresholds(): Promise<{ groups: number; fallb
 export async function computeSeason(): Promise<{ rows: number }> {
   const s = await loadDiagSettings();
   const sa = analyticsDb(), sys = systemDb();
-  // Отгрузки по месяцам эталонного периода на филиал×направление менеджера (org_resolved_hierarchy).
-  const r = await sa.query<{ entity_key: string | null; m: number; amount: string; n_months: string }>(
-    `WITH x AS (
-       SELECT coalesce(h.branch, '∅') || '|' || coalesce(h.category, '∅') AS entity_key,
-              EXTRACT(month FROM d.delivered_at)::int AS m, to_char(d.delivered_at, 'YYYY-MM') AS ym, d.amount
-         FROM sa.deals d LEFT JOIN sa.org_resolved_hierarchy h ON h.manager_bitrix_user_id = d.current_manager_id::text
-        WHERE d.delivered_at >= $1::date AND d.delivered_at < ($2::date + interval '1 day') AND d.funnel_id IN (0, 1, 2, 3)
-     )
-     SELECT entity_key, m, sum(amount)::text AS amount, count(DISTINCT ym)::text AS n_months FROM x GROUP BY ROLLUP (entity_key), m`,
-    [s.seasonRefFrom, s.seasonRefTo]);
-  // coef(month) = среднемесячная выручка этого месяца / среднемесячная за все месяцы эталона (по сущности).
-  const byEntity = new Map<string, Map<number, { amount: number; months: number }>>();
+  // Отгрузки по менеджер×месяц эталонного периода; филиал×направление — из карты
+  // оргструктуры (lib/org/deptCategories: category в org_resolved_hierarchy НЕТ, она
+  // резолвится по предкам отдела).
+  const [r, org] = await Promise.all([
+    sa.query<{ m: string; month: number; ym: string; amount: string }>(
+      `SELECT d.current_manager_id::text AS m, EXTRACT(month FROM d.delivered_at)::int AS month, to_char(d.delivered_at, 'YYYY-MM') AS ym, sum(d.amount)::text AS amount
+         FROM sa.deals d
+        WHERE d.delivered_at >= $1::date AND d.delivered_at < ($2::date + interval '1 day') AND d.funnel_id IN (0, 1, 2, 3) AND d.current_manager_id IS NOT NULL
+        GROUP BY 1, 2, 3`, [s.seasonRefFrom, s.seasonRefTo]),
+    getManagerOrgMap(),
+  ]);
+  // entity → month → {amount, months(set)}; '*' — компания целиком.
+  const acc = new Map<string, Map<number, { amount: number; yms: Set<string> }>>();
+  const add = (key: string, month: number, ym: string, amount: number) => {
+    const e = acc.get(key) ?? acc.set(key, new Map()).get(key)!;
+    const v = e.get(month) ?? e.set(month, { amount: 0, yms: new Set() }).get(month)!;
+    v.amount += amount; v.yms.add(ym);
+  };
   for (const row of r.rows) {
-    if (row.m === null) continue;
-    const k = row.entity_key ?? '*';
-    const e = byEntity.get(k) ?? byEntity.set(k, new Map()).get(k)!;
-    e.set(row.m, { amount: Number(row.amount), months: Number(row.n_months) });
+    const o = org.get(row.m);
+    const key = `${o?.branch ?? '∅'}|${o?.category ?? '∅'}`;
+    add(key, row.month, row.ym, Number(row.amount));
+    add('*', row.month, row.ym, Number(row.amount));
   }
   let rows = 0;
-  for (const [key, months] of byEntity) {
+  for (const [key, months] of acc) {
     const perMonthAvg = new Map<number, number>();
-    for (const [m, v] of months) perMonthAvg.set(m, v.amount / Math.max(1, v.months));
+    for (const [m, v] of months) perMonthAvg.set(m, v.amount / Math.max(1, v.yms.size));
     const overall = [...perMonthAvg.values()].reduce((a, b) => a + b, 0) / Math.max(1, perMonthAvg.size);
     if (!overall) continue;
     for (const [m, avg] of perMonthAvg) {
       await sys.query(
         `INSERT INTO diag_season (entity_key, month, coef, n_years, computed_at) VALUES ($1, $2, $3, $4, now())
          ON CONFLICT (entity_key, month) DO UPDATE SET coef = EXCLUDED.coef, n_years = EXCLUDED.n_years, computed_at = now()`,
-        [key, m, Math.round((avg / overall) * 1000) / 1000, months.get(m)!.months]);
+        [key, m, Math.round((avg / overall) * 1000) / 1000, months.get(m)!.yms.size]);
       rows++;
     }
   }
