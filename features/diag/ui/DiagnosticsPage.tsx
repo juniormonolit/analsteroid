@@ -4,7 +4,12 @@
 // Кнопки ручного пересчёта — пока движок не на планировщике.
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, Play, ChevronDown, ChevronRight, AlertTriangle, TrendingDown, TrendingUp, Minus, HelpCircle, ArrowUp, ArrowDown } from 'lucide-react';
+import { RefreshCw, Play, ChevronDown, ChevronRight, AlertTriangle, TrendingDown, TrendingUp, Minus, HelpCircle, ArrowUp, ArrowDown, ExternalLink, Loader2 } from 'lucide-react';
+import dynamic from 'next/dynamic';
+
+// Карточки — динамически (тяжёлые, ссылаются друг на друга).
+const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
+const CustomerCardLoader = dynamic(() => import('@/features/customers/ui/CustomerCardLoader').then(m => m.CustomerCardLoader), { ssr: false });
 
 interface NodeRow { nodeId: string; asOf: string; tickNo: number | null; value: number | null; n: number | null; ciLow: number | null; ciHigh: number | null; ewma: number | null; cusumNeg: number | null; baseOwn: number | null; basePeers: number | null; baseTarget: number | null; sigma: number | null; status: string; trace: Record<string, unknown> | null }
 interface Mgr { bitrixId: number; name: string; branch: string; category: string; plan: number | null; nodes: NodeRow[] }
@@ -54,6 +59,18 @@ const fmtUnit = (v: number | null | undefined, unit: string | null | undefined):
     case 'rub': return fmtRub(v);
     default: return v.toFixed(1);
   }
+};
+// «60,6% против 24,6% · n=66» → «40 из 66 сделок против 24,6% у коллег» (владелец 10.09:
+// «вот это что за цифры?»). Для долей считаем числитель, для скоростей/счётчиков — как есть.
+const describeValue = (v: { value?: number; base?: number; n?: number; unit?: string | null; normGood?: number | null } | undefined): string => {
+  if (!v || v.value === undefined) return '—';
+  const parts: string[] = [];
+  if (v.unit === 'pct' && v.n) parts.push(`${fmtUnit(v.value, 'pct')} — это ${Math.round((v.value / 100) * v.n)} из ${v.n}`);
+  else if (v.unit === 'count') parts.push(`${fmtUnit(v.value, 'count')}${v.n ? ` из ${v.n} открытых` : ''}`);
+  else parts.push(fmtUnit(v.value, v.unit));
+  if (v.base !== undefined) parts.push(`было/у коллег ${fmtUnit(v.base, v.unit)}`);
+  if (v.normGood !== null && v.normGood !== undefined) parts.push(`норма ${fmtUnit(v.normGood, v.unit)}`);
+  return parts.join(' · ');
 };
 const STATUS_CLS: Record<string, string> = {
   drift_down: 'bg-[color-mix(in_srgb,var(--color-negative)_16%,transparent)] text-[var(--color-negative)]',
@@ -374,18 +391,12 @@ function DiagnosesBlock({ onPick }: { onPick: (bitrixId: number) => void }) {
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="text-[var(--color-text)]">{d.nodeName}</div>
-                        <div className="text-[11px] text-[var(--color-text-muted)]">
-                          <b className="text-[var(--color-negative)]">{fmtUnit(n?.value, n?.unit)}</b> против {fmtUnit(n?.base, n?.unit)}
-                          {n?.normGood !== null && n?.normGood !== undefined && <> · норма {fmtUnit(n.normGood, n.unit)}</>}
-                          {n?.n ? ` · n=${n.n}` : ''} · {(n?.devSigma ?? 0).toFixed(1)}σ
-                        </div>
+                        <div className="text-[11px] text-[var(--color-text-muted)]">{describeValue(n)}</div>
                       </td>
                       {tab === 'levers' && (
                         <td className="px-2 py-1.5">
                           <div className="text-[var(--color-text)]">{l?.selfLever ? <span title="Просел сам лист поведения — действие в нём же">{d.leverName}</span> : d.leverName}</div>
-                          {l && !l.selfLever && (
-                            <div className="text-[11px] text-[var(--color-text-muted)]">{fmtUnit(l.value, l.unit)} против {fmtUnit(l.base, l.unit)}{l.n ? ` · n=${l.n}` : ''} · {(l.devSigma ?? 0).toFixed(1)}σ</div>
-                          )}
+                          {l && !l.selfLever && <div className="text-[11px] text-[var(--color-text-muted)]">{describeValue(l)}</div>}
                         </td>
                       )}
                       <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{tr.root?.gapRub ? fmtRub(tr.root.gapRub) : '—'}{tr.root?.tooLate && <span className="ml-1 text-[10px] text-[var(--color-warning)]">поздно</span>}</td>
@@ -405,13 +416,17 @@ function DiagnosesBlock({ onPick }: { onPick: (bitrixId: number) => void }) {
                     </tr>
                     {isOpen && (
                       <tr className="bg-[var(--color-bg)] border-t border-dashed border-[var(--color-border)]">
-                        <td colSpan={tab === 'levers' ? 8 : 6} className="px-3 py-2 text-[12px] text-[var(--color-text)]">
-                          <div className="flex flex-col gap-1">
-                            <div><b>Рука:</b> {d.arm === 'control' ? 'контроль' : 'воздействие'} — {tr.arm?.reason ?? '—'}{l?.edgeStatus && <> · ребро {l.edgeStatus}, вес {l.edgeWeight}</>}</div>
-                            {tr.descendPath && tr.descendPath.length > 0 && <div><b>Спуск по дереву:</b> {[d.nodeId, ...tr.descendPath].join(' → ')}</div>}
-                            {tr.candidates && tr.candidates.length > 0 && <div><b>Кандидаты:</b> {tr.candidates.map(c => `${c.node} → ${c.lever ?? '∅'} (${c.score})`).join(' · ')}</div>}
-                            <details><summary className="cursor-pointer text-[var(--color-text-muted)]">Трасса JSON</summary><pre className="mt-1 max-h-72 overflow-auto rounded-lg bg-[var(--color-bg-surface)] p-2 text-[11px]">{JSON.stringify(d.trace, null, 1)}</pre></details>
-                          </div>
+                        <td colSpan={tab === 'levers' ? 8 : 6} className="px-3 py-3 text-[12px] text-[var(--color-text)]">
+                          <EvidenceBlock diagnosisId={d.id} managerName={d.managerName} />
+                          <details className="mt-3">
+                            <summary className="cursor-pointer text-[var(--color-text-muted)]">Как система это решила</summary>
+                            <div className="mt-1 flex flex-col gap-1">
+                              <div><b>Рука:</b> {d.arm === 'control' ? 'контроль' : 'воздействие'} — {tr.arm?.reason ?? '—'}{l?.edgeStatus && <> · ребро {l.edgeStatus}, вес {l.edgeWeight}</>}</div>
+                              {tr.descendPath && tr.descendPath.length > 0 && <div><b>Спуск по дереву:</b> {[d.nodeId, ...tr.descendPath].join(' → ')}</div>}
+                              {tr.candidates && tr.candidates.length > 0 && <div><b>Кандидаты:</b> {tr.candidates.map(c => `${c.node} → ${c.lever ?? '∅'} (${c.score})`).join(' · ')}</div>}
+                              <pre className="mt-1 max-h-72 overflow-auto rounded-lg bg-[var(--color-bg-surface)] p-2 text-[11px]">{JSON.stringify(d.trace, null, 1)}</pre>
+                            </div>
+                          </details>
                         </td>
                       </tr>
                     )}
@@ -423,5 +438,71 @@ function DiagnosesBlock({ onPick }: { onPick: (bitrixId: number) => void }) {
         </div>
       )}
     </section>
+  );
+}
+
+// ── Доказательства: конкретные сделки и клиенты за цифрой ────────────────────
+interface EvidenceCol { key: string; label: string; align?: 'left' | 'right' }
+interface EvidenceRow { dealId?: number; clientKey?: string; cells: Record<string, string | number | null> }
+interface Evidence { title: string; hint: string; columns: EvidenceCol[]; rows: EvidenceRow[]; total: number; kind: 'deals' | 'clients' | 'none' }
+
+function EvidenceBlock({ diagnosisId, managerName }: { diagnosisId: number; managerName: string }) {
+  const { data, isLoading, error } = useQuery<{ evidence?: Evidence; error?: string }>({
+    queryKey: ['diag-evidence', diagnosisId],
+    queryFn: () => fetch(`/api/diag/evidence?diagnosisId=${diagnosisId}`).then(r => r.json()),
+    staleTime: 60_000, refetchOnWindowFocus: false,
+  });
+  const [dealId, setDealId] = useState<number | null>(null);
+  const [clientKey, setClientKey] = useState<string | null>(null);
+  const ev = data?.evidence;
+  if (isLoading) return <div className="text-[var(--color-text-muted)] inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Собираю сделки…</div>;
+  if (error || data?.error) return <div className="text-[var(--color-negative)]">Не удалось собрать сделки: {data?.error ?? (error as Error)?.message}</div>;
+  if (!ev || ev.kind === 'none' || ev.rows.length === 0) return <div className="text-[var(--color-text-muted)]">Для этого показателя список сделок пока не собирается.</div>;
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <div className="font-semibold text-[var(--color-text)]">{ev.title} — {managerName}</div>
+        <div className="text-[11px] text-[var(--color-text-muted)]">{ev.hint}</div>
+      </div>
+      <div className="scroll-x max-h-[420px] overflow-y-auto rounded-xl border border-[var(--color-border)]">
+        <table className="w-full text-[12px]">
+          <thead className="sticky top-0 bg-[var(--color-bg-hover)] text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)]">
+            <tr>
+              {ev.columns.map(c => <th key={c.key} className={`px-2 py-1.5 text-${c.align ?? 'left'} whitespace-nowrap`}>{c.label}</th>)}
+              <th className="px-2 py-1.5"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {ev.rows.map((r, i) => (
+              <tr key={i} className="border-t border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]">
+                {ev.columns.map(c => {
+                  const v = r.cells[c.key];
+                  const isFirst = c.key === ev.columns[0].key;
+                  return (
+                    <td key={c.key} className={`px-2 py-1 text-${c.align ?? 'left'} ${c.align === 'right' ? 'tabular-nums' : ''} whitespace-nowrap ${String(v) === 'ОТКАЗ' ? 'text-[var(--color-negative)] font-semibold' : ''}`}>
+                      {isFirst ? (
+                        <button className="text-left text-[var(--color-accent)] hover:underline max-w-[280px] truncate"
+                          onClick={() => (ev.kind === 'clients' && r.clientKey ? setClientKey(r.clientKey) : r.dealId ? setDealId(r.dealId) : undefined)}>
+                          {v === null ? '—' : typeof v === 'number' ? v.toLocaleString('ru-RU') : v}
+                        </button>
+                      ) : v === null ? '—' : typeof v === 'number' ? v.toLocaleString('ru-RU') : v}
+                    </td>
+                  );
+                })}
+                <td className="px-2 py-1 text-right">
+                  {r.dealId && (
+                    <a href={`https://td.monolit-crm.ru/crm/deal/details/${r.dealId}/`} target="_blank" rel="noreferrer" title="Открыть в Битриксе"
+                      className="tap-target inline-flex text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"><ExternalLink size={13} /></a>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="text-[11px] text-[var(--color-text-muted)]">Показано {ev.rows.length}{ev.rows.length >= 60 ? ' (первые 60 по важности)' : ''} · клик по первой колонке — карточка, иконка — Битрикс</div>
+      {dealId !== null && <DealCard dealId={dealId} onClose={() => setDealId(null)} />}
+      {clientKey !== null && <CustomerCardLoader contactId={clientKey.startsWith('c') ? clientKey.slice(1) : undefined} companyId={clientKey.startsWith('k') ? clientKey.slice(1) : undefined} onClose={() => setClientKey(null)} zIndex={80} />}
+    </div>
   );
 }
