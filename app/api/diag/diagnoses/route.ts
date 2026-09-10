@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { superadminError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
+import { getEmployeeDirectory } from '@/lib/org/employeeDirectory';
 
 // Диагнозы (ТЗ №1 §11): GET — открытые/в очереди/спорные + закрытые за 14 дней с именами
 // узлов и менеджеров; POST — «Не согласен» (diag_feedback) → статус disputed.
@@ -10,7 +11,8 @@ export async function GET(req: NextRequest) {
   const err = superadminError(session);
   if (err) return err;
   const all = req.nextUrl.searchParams.get('all') === '1';
-  const r = await systemDb().query<{
+  // Имена — из sa.org_resolved_hierarchy (users.bitrix_user_id заполнен лишь у части).
+  const [dir, r] = await Promise.all([getEmployeeDirectory().catch(() => new Map()), systemDb().query<{
     id: string; subject_key: string; manager_name: string | null; node_id: string; node_name: string; lever_id: string | null; lever_name: string | null;
     gap_value: string | null; gap_share: string | null; score: string | null; mode: string; arm: string; too_late_for_month: boolean; recipient_role: string | null;
     status: string; outcome: string | null; trace: unknown; opened_at: Date; closed_at: Date | null; feedback_n: string;
@@ -23,11 +25,11 @@ export async function GET(req: NextRequest) {
        LEFT JOIN diag_nodes l ON l.id = d.lever_id
        LEFT JOIN users u ON u.bitrix_user_id = d.subject_key
       WHERE d.subject_type = 'manager' AND (${all ? 'true' : "d.status IN ('open','queued','in_scenario','disputed') OR d.closed_at > now() - interval '14 days'"})
-      ORDER BY (d.status IN ('open','disputed','in_scenario')) DESC, d.score DESC NULLS LAST, d.opened_at DESC LIMIT 500`);
+      ORDER BY (d.status IN ('open','disputed','in_scenario')) DESC, d.score DESC NULLS LAST, d.opened_at DESC LIMIT 500`)]);
   const n = (v: string | null) => (v === null ? null : Number(v));
   return NextResponse.json({
     diagnoses: r.rows.map(x => ({
-      id: Number(x.id), bitrixId: Number(x.subject_key), managerName: x.manager_name ?? `#${x.subject_key}`, nodeId: x.node_id, nodeName: x.node_name,
+      id: Number(x.id), bitrixId: Number(x.subject_key), managerName: dir.get(Number(x.subject_key))?.name ?? x.manager_name ?? `#${x.subject_key}`, nodeId: x.node_id, nodeName: x.node_name,
       leverId: x.lever_id, leverName: x.lever_name, gapValue: n(x.gap_value), gapShare: n(x.gap_share), score: n(x.score), mode: x.mode, arm: x.arm,
       tooLate: x.too_late_for_month, recipientRole: x.recipient_role, status: x.status, outcome: x.outcome, trace: x.trace,
       openedAt: new Date(x.opened_at).toISOString(), closedAt: x.closed_at ? new Date(x.closed_at).toISOString() : null, feedbackN: Number(x.feedback_n),

@@ -43,6 +43,18 @@ const fmtV = (v: number | null, nodeId: string) => {
   if (nodeId.includes('median') || nodeId.includes('avg')) return v.toFixed(1);
   return Math.round(v).toLocaleString('ru-RU');
 };
+// Значение узла в его единицах (единицы приходят в трассе диагноза).
+const fmtUnit = (v: number | null | undefined, unit: string | null | undefined): string => {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  switch (unit) {
+    case 'pct': return `${v.toFixed(1)}%`;
+    case 'min': return v >= 120 ? `${(v / 60).toFixed(1)} ч` : `${Math.round(v)} мин`;
+    case 'hours': return `${v.toFixed(1)} ч`;
+    case 'count': return `${Math.round(v)} шт`;
+    case 'rub': return fmtRub(v);
+    default: return v.toFixed(1);
+  }
+};
 const STATUS_CLS: Record<string, string> = {
   drift_down: 'bg-[color-mix(in_srgb,var(--color-negative)_16%,transparent)] text-[var(--color-negative)]',
   drift_up: 'bg-[color-mix(in_srgb,var(--color-positive)_16%,transparent)] text-[var(--color-positive)]',
@@ -296,52 +308,92 @@ function DiagnosesBlock({ onPick }: { onPick: (bitrixId: number) => void }) {
   const { data, isLoading } = useQuery<{ diagnoses: Diagnosis[] }>({ queryKey: ['diag-diagnoses'], queryFn: () => fetch('/api/diag/diagnoses').then(r => r.json()), refetchOnWindowFocus: false });
   const [openId, setOpenId] = useState<number | null>(null);
   const [showClosed, setShowClosed] = useState(false);
+  const [tab, setTab] = useState<'levers' | 'observations'>('levers');
   const dispute = useMutation({
     mutationFn: (v: { id: number; reason: string; comment: string }) => fetch('/api/diag/diagnoses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }).then(r => r.json()),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['diag-diagnoses'] }),
   });
-  const list = (data?.diagnoses ?? []).filter(d => showClosed || d.status !== 'closed');
-  const active = (data?.diagnoses ?? []).filter(d => d.status === 'open' || d.status === 'in_scenario').length;
-  const control = (data?.diagnoses ?? []).filter(d => d.status !== 'closed' && d.arm === 'control').length;
+  const all = (data?.diagnoses ?? []).filter(d => showClosed || d.status !== 'closed');
+  const levers = all.filter(d => d.leverId);
+  const obs = all.filter(d => !d.leverId);
+  const list = tab === 'levers' ? levers : obs;
+  const control = levers.filter(d => d.status !== 'closed' && d.arm === 'control').length;
   return (
     <section className={cardCls}>
-      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-base font-bold text-[var(--color-text)]">Диагнозы</h2>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1">
+          {([['levers', `Есть что сказать (${levers.length})`], ['observations', `Наблюдения РОПу (${obs.length})`]] as const).map(([k, label]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`min-h-9 rounded-lg px-3 text-sm transition-colors ${tab === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] font-semibold' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>{label}</button>
+          ))}
+        </div>
         <div className="flex items-center gap-3 text-[12px] text-[var(--color-text-muted)]">
-          <span>открытых {active} · в контроле {control}</span>
+          <span>в контроле {control}</span>
           <label className="inline-flex items-center gap-1.5 min-h-8"><input type="checkbox" checked={showClosed} onChange={e => setShowClosed(e.target.checked)} className="h-4 w-4 accent-[var(--color-accent)]" /> закрытые за 14 дн</label>
         </div>
       </div>
       <p className="mb-3 text-[11px] leading-snug text-[var(--color-text-muted)]">
-        Диагноз = проблемный узел дерева у менеджера + рычаг (лист под ним), который отклонился сильнее всего с учётом веса и уверенности ребра. Один открытый
-        фокус на менеджера, остальное — в очереди. Рука «контроль» — диагноз ведётся, но сообщение (когда появятся сценарии) не уйдёт: так измеряем эффект.
-        Не согласен — жми и укажи причину: это учится в весах рёбер.
+        {tab === 'levers'
+          ? 'Просадка подтверждена и статистически (σ), и практически: отклонение от базы больше минимально значимого И значение хуже нормы узла. Внутри нормы диагноза нет, даже если формально «стало хуже». Рычаг — что конкретно делать; один открытый фокус на менеджера, остальное в очереди.'
+          : 'Узел просел, но ни один рычаг под ним не отклонился значимо — автоматике сказать нечего, нужен человек. Фокус менеджера такие наблюдения не занимают.'}
       </p>
       {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>}
-      {data && list.length === 0 && <div className="text-sm text-[var(--color-text-muted)]">Диагнозов нет — либо ещё не считали, либо все узлы в норме.</div>}
+      {data && list.length === 0 && <div className="text-sm text-[var(--color-text-muted)]">{tab === 'levers' ? 'Диагнозов с рычагом нет.' : 'Наблюдений нет.'}</div>}
       {list.length > 0 && (
         <div className="scroll-x rounded-xl border border-[var(--color-border)]">
           <table className="w-full text-[12px]">
             <thead className="bg-[var(--color-bg-hover)] text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)]">
-              <tr><th className="px-2 py-2 text-left">Менеджер</th><th className="px-2 py-2 text-left">Узел (что просело)</th><th className="px-2 py-2 text-left">Рычаг (что делать)</th><th className="px-2 py-2 text-right">Разрыв к плану</th><th className="px-2 py-2 text-right">Score</th><th className="px-2 py-2 text-left">Рука</th><th className="px-2 py-2 text-left">Статус</th><th className="px-2 py-2 text-right">Дней</th><th className="px-2 py-2"></th></tr>
+              <tr>
+                <th className="px-2 py-2 text-left">Менеджер</th>
+                <th className="px-2 py-2 text-left">Что просело</th>
+                {tab === 'levers' && <th className="px-2 py-2 text-left">Что делать</th>}
+                <th className="px-2 py-2 text-right">Разрыв к плану</th>
+                <th className="px-2 py-2 text-right">Score</th>
+                {tab === 'levers' && <th className="px-2 py-2 text-left">Рука</th>}
+                <th className="px-2 py-2 text-left">Статус</th>
+                <th className="px-2 py-2"></th>
+              </tr>
             </thead>
             <tbody>
               {list.map(d => {
-                const tr = (d.trace ?? {}) as { root?: { gapRub?: number; tooLate?: boolean }; node?: { value?: number; base?: number; devSigma?: number }; lever?: { value?: number; base?: number; devSigma?: number; edgeWeight?: number; edgeStatus?: string }; candidates?: { node: string; lever: string | null; score: number }[]; arm?: { reason?: string }; mode?: string };
+                const tr = (d.trace ?? {}) as {
+                  root?: { gapRub?: number; tooLate?: boolean };
+                  node?: { value?: number; base?: number; worse?: number; devSigma?: number; n?: number; normGood?: number | null; unit?: string | null };
+                  lever?: { value?: number; base?: number; devSigma?: number; n?: number; normGood?: number | null; unit?: string | null; selfLever?: boolean; edgeStatus?: string; edgeWeight?: number };
+                  descendPath?: string[]; candidates?: { node: string; lever: string | null; score: number }[]; arm?: { reason?: string }; mode?: string;
+                };
                 const isOpen = openId === d.id;
                 const st = DIAG_STATUS[d.status] ?? { label: d.status, tone: '' };
-                const days = Math.floor((Date.now() - new Date(d.openedAt).getTime()) / 86400000);
+                const n = tr.node, l = tr.lever;
                 return (
                   <Frag key={d.id}>
-                    <tr className="border-t border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] cursor-pointer" onClick={() => setOpenId(isOpen ? null : d.id)}>
-                      <td className="px-2 py-1.5 font-semibold text-[var(--color-text)] whitespace-nowrap"><button className="hover:text-[var(--color-accent)]" onClick={e => { e.stopPropagation(); onPick(d.bitrixId); }}>{d.managerName}</button>{d.mode === 'onboarding' && <span className="ml-1 text-[10px] font-normal text-[var(--color-text-muted)]">новичок</span>}</td>
-                      <td className="px-2 py-1.5 text-[var(--color-text)]">{d.nodeName}{tr.node && <span className="text-[var(--color-text-muted)]"> · {fmtV(tr.node.value ?? null, d.nodeId)} при базе {fmtV(tr.node.base ?? null, d.nodeId)} ({(tr.node.devSigma ?? 0).toFixed(1)}σ)</span>}</td>
-                      <td className="px-2 py-1.5 text-[var(--color-text)]">{d.leverName ?? <span className="text-[var(--color-text-muted)]">рычаг не найден → РОПу</span>}{tr.lever && d.leverId && <span className="text-[var(--color-text-muted)]"> · {fmtV(tr.lever.value ?? null, d.leverId)} при базе {fmtV(tr.lever.base ?? null, d.leverId)} ({(tr.lever.devSigma ?? 0).toFixed(1)}σ)</span>}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{tr.root?.gapRub ? fmtRub(tr.root.gapRub) : '—'}{tr.root?.tooLate && <span className="ml-1 text-[10px] text-[var(--color-warning)]">поздно</span>}</td>
+                    <tr className="border-t border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] cursor-pointer align-top" onClick={() => setOpenId(isOpen ? null : d.id)}>
+                      <td className="px-2 py-1.5 whitespace-nowrap">
+                        <button className="font-semibold text-[var(--color-text)] hover:text-[var(--color-accent)]" onClick={e => { e.stopPropagation(); onPick(d.bitrixId); }}>{d.managerName}</button>
+                        {d.mode === 'onboarding' && <span className="ml-1 text-[10px] font-normal text-[var(--color-text-muted)]">новичок</span>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <div className="text-[var(--color-text)]">{d.nodeName}</div>
+                        <div className="text-[11px] text-[var(--color-text-muted)]">
+                          <b className="text-[var(--color-negative)]">{fmtUnit(n?.value, n?.unit)}</b> против {fmtUnit(n?.base, n?.unit)}
+                          {n?.normGood !== null && n?.normGood !== undefined && <> · норма {fmtUnit(n.normGood, n.unit)}</>}
+                          {n?.n ? ` · n=${n.n}` : ''} · {(n?.devSigma ?? 0).toFixed(1)}σ
+                        </div>
+                      </td>
+                      {tab === 'levers' && (
+                        <td className="px-2 py-1.5">
+                          <div className="text-[var(--color-text)]">{l?.selfLever ? <span title="Просел сам лист поведения — действие в нём же">{d.leverName}</span> : d.leverName}</div>
+                          {l && !l.selfLever && (
+                            <div className="text-[11px] text-[var(--color-text-muted)]">{fmtUnit(l.value, l.unit)} против {fmtUnit(l.base, l.unit)}{l.n ? ` · n=${l.n}` : ''} · {(l.devSigma ?? 0).toFixed(1)}σ</div>
+                          )}
+                        </td>
+                      )}
+                      <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{tr.root?.gapRub ? fmtRub(tr.root.gapRub) : '—'}{tr.root?.tooLate && <span className="ml-1 text-[10px] text-[var(--color-warning)]">поздно</span>}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums">{d.score?.toFixed(2) ?? '—'}</td>
-                      <td className="px-2 py-1.5">{d.arm === 'control' ? <span className="rounded px-1.5 py-0.5 bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">контроль</span> : <span className="rounded px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]">воздействие</span>}</td>
-                      <td className="px-2 py-1.5"><span className={`rounded px-1.5 py-0.5 ${st.tone}`}>{st.label}{d.outcome ? ` · ${d.outcome}` : ''}</span></td>
-                      <td className="px-2 py-1.5 text-right tabular-nums text-[var(--color-text-muted)]">{days}</td>
+                      {tab === 'levers' && (
+                        <td className="px-2 py-1.5 whitespace-nowrap">{d.arm === 'control' ? <span className="rounded px-1.5 py-0.5 bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">контроль</span> : <span className="rounded px-1.5 py-0.5 bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]">воздействие</span>}</td>
+                      )}
+                      <td className="px-2 py-1.5 whitespace-nowrap"><span className={`rounded px-1.5 py-0.5 ${st.tone}`}>{st.label}{d.outcome ? ` · ${d.outcome}` : ''}</span></td>
                       <td className="px-2 py-1.5 text-right">
                         {(d.status === 'open' || d.status === 'queued') && (
                           <select className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-1 text-[11px] text-[var(--color-text)]" defaultValue="" onClick={e => e.stopPropagation()}
@@ -353,9 +405,10 @@ function DiagnosesBlock({ onPick }: { onPick: (bitrixId: number) => void }) {
                     </tr>
                     {isOpen && (
                       <tr className="bg-[var(--color-bg)] border-t border-dashed border-[var(--color-border)]">
-                        <td colSpan={9} className="px-3 py-2 text-[12px] text-[var(--color-text)]">
+                        <td colSpan={tab === 'levers' ? 8 : 6} className="px-3 py-2 text-[12px] text-[var(--color-text)]">
                           <div className="flex flex-col gap-1">
-                            <div><b>Рука:</b> {d.arm} — {tr.arm?.reason ?? '—'}{tr.lever?.edgeStatus && <> · ребро {tr.lever.edgeStatus}, вес {tr.lever.edgeWeight}</>}</div>
+                            <div><b>Рука:</b> {d.arm === 'control' ? 'контроль' : 'воздействие'} — {tr.arm?.reason ?? '—'}{l?.edgeStatus && <> · ребро {l.edgeStatus}, вес {l.edgeWeight}</>}</div>
+                            {tr.descendPath && tr.descendPath.length > 0 && <div><b>Спуск по дереву:</b> {[d.nodeId, ...tr.descendPath].join(' → ')}</div>}
                             {tr.candidates && tr.candidates.length > 0 && <div><b>Кандидаты:</b> {tr.candidates.map(c => `${c.node} → ${c.lever ?? '∅'} (${c.score})`).join(' · ')}</div>}
                             <details><summary className="cursor-pointer text-[var(--color-text-muted)]">Трасса JSON</summary><pre className="mt-1 max-h-72 overflow-auto rounded-lg bg-[var(--color-bg-surface)] p-2 text-[11px]">{JSON.stringify(d.trace, null, 1)}</pre></details>
                           </div>

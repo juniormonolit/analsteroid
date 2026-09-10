@@ -90,7 +90,7 @@ export async function loadManagerWindows(managerIds: number[]): Promise<Map<numb
      win AS (SELECT * FROM ranked WHERE rn <= $6),
      pe AS (SELECT e.deal_id, min(e.event_at) AS priced_at FROM sa.deal_events e JOIN win ON win.deal_id = e.deal_id WHERE e.stage_id = ANY($5::text[]) GROUP BY e.deal_id),
      fc AS (SELECT p.contact_id, min(p.delivered_at) AS first_deliv FROM sa.deals p WHERE p.delivered_at IS NOT NULL AND p.contact_id IN (SELECT DISTINCT contact_id FROM win WHERE contact_id IS NOT NULL) GROUP BY p.contact_id),
-     fk AS (SELECT p.company_id, min(p.delivered_at) AS first_deliv FROM sa.deals p WHERE p.delivered_at IS NOT NULL AND p.company_id IN (SELECT DISTINCT company_id FROM win WHERE company_id IS NOT NULL AND company_id <> 0) GROUP BY p.company_id)
+     fk AS (SELECT p.company_id, min(p.delivered_at) AS first_deliv FROM sa.deals p WHERE p.delivered_at IS NOT NULL AND p.company_id IN (SELECT DISTINCT company_id FROM win WHERE company_id IS NOT NULL AND company_id <> 0) GROUP BY p.company_id),
      ng AS (SELECT w.deal_id, count(DISTINCT p->>'head_group_name') AS n_groups FROM win w JOIN sa.deals d ON d.deal_id = w.deal_id, jsonb_array_elements(d.products) p WHERE ${goodsPositionWhere('p')} GROUP BY w.deal_id)
      SELECT win.manager_id::text AS manager_id, win.deal_id::text AS deal_id, win.head_group_name, win.funnel_id, win.amount::text AS amount, win.contact_id::text AS contact_id, win.company_id::text AS company_id,
             win.created_at, pe.priced_at, win.reserved_at, win.sold_at, win.lost_at, win.delivered_at, win.outcome, win.closed_at, win.rn::text AS rn, win.total_closed::text AS total_closed, ng.n_groups::text AS n_groups,
