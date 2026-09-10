@@ -304,19 +304,6 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
       {/* «Повторные» и «Товарная матрица» переехали в «Ещё» (правка владельца
           17.08) — блок «Продажи» остаётся витринам отчётов. */}
 
-      {/* «Матрица переходов» (задача владельца 10.09) — факт «отгружено X → следующим Y»
-          в срезе фильтров отчёта и по менеджеру; доступна всем с разделом «Продажи»
-          (срез сессии режет сервер), поэтому живёт здесь, а не в админском «Ещё». */}
-      <Link
-        href="/sales/transition-matrix"
-        className={`flex items-center gap-2 min-h-11 sm:min-h-0 sm:py-1.5 px-2 rounded-md text-sm transition-colors ${
-          pathname === '/sales/transition-matrix' ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE
-        }`}
-      >
-        <Grid3x3 size={14} className="shrink-0" />
-        <span className="flex-1 min-w-0 truncate">Матрица переходов</span>
-      </Link>
-
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
@@ -435,6 +422,10 @@ function SidebarBody({
     // (сервер проверяет isSuperadmin сам, тут лишь скрытие пункта), матрица — всем.
     { href: '/sales/repeat', label: 'Повторные', icon: <Repeat2 size={18} />, ok: user.isSuperadmin },
     { href: '/sales/product-matrix', label: 'Товарная матрица', icon: <Grid3x3 size={18} />, ok: true },
+    // «Матрица переходов» (задача владельца 10.09) — факт «отгружено X → следующим
+    // Y» в срезе фильтров отчёта и по менеджеру; переехала сюда из блока «Продажи»
+    // по правке владельца, рядом с вероятностной «Товарной матрицей».
+    { href: '/sales/transition-matrix', label: 'Матрица переходов', icon: <Grid3x3 size={18} />, ok: true },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: hasPerm(user, 'action.deal_chats') },
