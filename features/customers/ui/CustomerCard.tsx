@@ -5,7 +5,8 @@
 // (таймлайн покупок, звонки, отказы, история отметок) — /api/customers/card.
 // ПДн: телефонов нет by construction — звонить менеджер идёт в Битрикс по ссылке.
 
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { DealsTable, type Deal } from '@/features/reports/ui/DrilldownDrawer';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
@@ -207,6 +208,13 @@ function JourneyTab({ purchases, loading, recommend, onDealOpen }: {
   );
 }
 
+/** Рендер в <body> — панель не должна зависеть от transform предка (см. DealCard). */
+function usePortalToBody(): (node: React.ReactNode) => React.ReactNode {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  return node => (mounted && typeof document !== 'undefined' ? createPortal(node, document.body) : null);
+}
+
 export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zIndex }: {
   row: ApiRow;
   managerId: string;
@@ -217,6 +225,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
   /** Поверх чего открылись: из карточки сделки (z-70) нужен z выше её дефолтных 50. */
   zIndex?: number;
 }) {
+  const portal = usePortalToBody();
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   // Вкладки карточки (задача владельца 17.08): «Обзор» — всё, что было; «Путь
   // клиента» — цепочка покупок по товарным группам («дерево развития»): вход по КЦ
@@ -287,7 +296,11 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
   const gaps: (number | null)[] = timeline.map((d, i) =>
     i === 0 ? null : Math.round((new Date(d.soldAt).getTime() - new Date(timeline[i - 1].soldAt).getTime()) / DAY_MS));
 
-  return (
+  // Портал в <body> (правка владельца 10.09, та же причина, что у DealCard):
+  // карточка открывается и из модалов (разбор метрики, матрица переходов), а у
+  // Radix Dialog.Content есть transform/backdrop-filter — fixed-потомок считался
+  // бы от окна модала и сжимался в него вместо полного экрана.
+  return portal(
     <div className="fixed inset-0 z-50 flex" style={zIndex ? { zIndex } : undefined}>
       <div className="hidden sm:block flex-1 min-w-[10%] bg-black/40 cursor-pointer" onClick={onClose} />
       {/* 920px вместо прежних 720 (правка владельца 17.08 «очень зажата по
@@ -580,6 +593,6 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
         )}
       </div>
       {openDealId !== null && <DealCard dealId={openDealId} onClose={() => setOpenDealId(null)} />}
-    </div>
+    </div>,
   );
 }

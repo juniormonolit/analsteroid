@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
 import { X, ExternalLink, ArrowDownLeft, ArrowUpRight, Mic } from 'lucide-react';
 import { format } from 'date-fns';
@@ -145,7 +146,16 @@ const STAGES: { key: keyof DealFull; label: string }[] = [
 // история звонков сделки, va.calls, грузится лениво только при открытии таба).
 type DealCardTab = 'main' | 'products' | 'calls';
 
+/** Рендер в <body>: панель не должна зависеть от transform/backdrop-filter предка
+ *  (Radix Dialog.Content), иначе fixed-позиционирование считается от окна модала. */
+function usePortalToBody(): (node: React.ReactNode) => React.ReactNode {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  return node => (mounted && typeof document !== 'undefined' ? createPortal(node, document.body) : null);
+}
+
 export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => void }) {
+  const portal = usePortalToBody();
   const { data, isLoading } = useQuery({
     queryKey: ['deal-card', dealId],
     queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null; callsCount: number; ltv: LtvInfo | null; stageHistory: StageHistoryItem[] }>,
@@ -197,7 +207,14 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
     }
   }
 
-  return (
+  // ПОРТАЛ В <body> (правка владельца 10.09: карточка сделки, открытая из модала
+  // «Матрицы переходов», сжималась в его коробку). Панель позиционируется fixed, но
+  // у Radix Dialog.Content стоят transform (центрирование на десктопе) и
+  // backdrop-filter — оба делают его containing block для position:fixed потомков,
+  // и «на весь экран» превращалось в «внутри окна». Портал уносит панель из-под
+  // трансформированного предка — во всех местах (дрилл отчёта, разбор метрики,
+  // карточка заказчика) она снова во весь экран.
+  return portal(
     <>
       {/* Затемнение: клик мимо карточки закрывает её. z-[65] — выше z-50 дрилл-дауна
           (карточка может открываться поверх него), ниже z-[70] самой карточки. */}
@@ -515,6 +532,6 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
           zIndex={80}
         />
       )}
-    </>
+    </>,
   );
 }
