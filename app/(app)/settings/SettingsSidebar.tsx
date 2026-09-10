@@ -54,6 +54,8 @@ export function SettingsSidebar({
         // superadmin-only: явное решение владельца «админ должен видеть и менять»
         // (в отличие от весов/режима плана рядом — те остаются супер-админ-only).
         { href: '/settings/card-templates', label: 'Шаблоны карточек', visible: canViewSettings },
+        // Движок диагностики (ТЗ №1, 10.09): фаза 0 — проверки данных.
+        { href: '/settings/diagnostics', label: 'Диагностика', visible: isSuperadmin },
       ],
     },
     {
