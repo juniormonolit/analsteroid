@@ -1,63 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
 import { fetchProductMatrix } from '@/features/reports/engine/productMatrix';
+import { resolveMatrixRequest } from '@/features/reports/engine/productMatrixRequest';
 
-// «Товарная матрица» (задача владельца 10.08): вероятности перехода
-// категория → категория. Вся математика — в движке; фильтр категорий — на
-// клиенте (см. шапку productMatrix.ts: вероятности от всех переходов, чтобы
-// скрытие колонок не меняло числа в оставшихся).
-
-function isValidPeriodInput(p: unknown): p is { from: string; to: string } {
-  if (!p || typeof p !== 'object') return false;
-  const from = (p as Record<string, unknown>).from;
-  const to = (p as Record<string, unknown>).to;
-  if (typeof from !== 'string' || typeof to !== 'string') return false;
-  return !Number.isNaN(new Date(from).getTime()) && !Number.isNaN(new Date(to).getTime());
-}
-
+// «Товарная матрица» (10.08) и «Матрица переходов» (10.09) — один роут: разбор
+// тела и срез сессии в resolveMatrixRequest, вся математика — в движке.
+// Фильтр категорий остаётся на клиенте (см. шапку productMatrix.ts).
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const body = await req.json();
-  if (!isValidPeriodInput(body.period)) {
-    return NextResponse.json({ error: 'period.from и period.to обязательны и должны быть валидными датами' }, { status: 400 });
-  }
-  // Фильтры среза (задача 10.09, «Матрица переходов»): менеджеры/отделы/пилюли —
-  // по закрывающей сделке. Срез сессии (аудит 09.09): админ — всё; РОП/Директор —
-  // пересечение со своими отделами (пустой запрос = весь свой срез); МОП — только он.
-  const scope = await getSessionScope(session);
-  let managerIds = Array.isArray(body.managerIds)
-    ? (body.managerIds as unknown[]).filter((v): v is string => typeof v === 'string' && /^\d+$/.test(v)).slice(0, 500)
-    : [];
-  let departmentIds = Array.isArray(body.departmentIds)
-    ? (body.departmentIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.length <= 64).slice(0, 200)
-    : [];
-  if (scope.kind !== 'all') {
-    if (managerIds.length) {
-      const eff = managerIds.filter(id => canSeeManager(scope, id));
-      if (eff.length === 0) return NextResponse.json({ error: 'Эти менеджеры вам недоступны' }, { status: 403 });
-      managerIds = eff;
-    } else if (scope.kind === 'self') {
-      managerIds = [...scope.managerIds];
-      if (managerIds.length === 0) return NextResponse.json({ error: 'Аккаунт не привязан к менеджеру Битрикса' }, { status: 403 });
-    }
-    if (scope.kind === 'depts') {
-      const effD = await scopeDeptIdsBitrix(scope, departmentIds.length ? departmentIds : undefined);
-      if (effD !== null && effD.length === 0) return NextResponse.json({ error: 'Запрошенные отделы вне вашего доступа' }, { status: 403 });
-      departmentIds = effD ?? [];
-    }
-  }
-  // mode: 'positions' — категории по ВСЕМ позициям заказа (правка владельца 10.09),
-  // 'by_max' (умолчание) — по главной группе, как считала «Товарная матрица».
-  const mode = body.mode === 'positions' ? 'positions' as const : 'by_max' as const;
-  const dealScope = ['primary', 'repeat', 'all'].includes(body.dealScope) ? body.dealScope : 'all';
-  const clientType = ['b2c', 'b2b', 'all'].includes(body.clientType) ? body.clientType : 'all';
+  const parsed = await resolveMatrixRequest(session, body);
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: parsed.status });
 
   const start = Date.now();
-  const result = await fetchProductMatrix({
-    period: { from: new Date(body.period.from), to: new Date(body.period.to) },
-    managerIds, departmentIds, dealScope, clientType, mode,
-  });
-  return NextResponse.json({ ...result, meta: { durationMs: Date.now() - start } });
+  const result = await fetchProductMatrix(parsed.opts);
+  console.log(`[product-matrix] ${result.cells.length} ячеек за ${Date.now() - start} мс`);
+  return NextResponse.json(result);
 }

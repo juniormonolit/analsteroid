@@ -7,6 +7,7 @@ import { DepartmentPicker, PeriodRangeControls } from './FilterBar';
 import { defaultPeriod, type DateRange } from '@/lib/period';
 import type { DealScope, ClientType } from '@/lib/metrics/types';
 import type { MatrixCell } from '@/features/reports/engine/productMatrix';
+import { TransitionDrillModal } from './TransitionDrillModal';
 
 // «Матрица переходов» (задача владельца 10.09): та же квадратная матрица
 // «отгружено X → следующим отгружено Y», что «Товарная матрица», но ФАКТ в срезе
@@ -128,6 +129,8 @@ export function TransitionMatrixPage() {
   const [clientType, setClientType] = useState<ClientType>('all');
   const [manager, setManager] = useState<Person | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set()); // категории; пусто = все
+  // Открытая ячейка → дрилл «кто продаёт связку + цепочки сделок» (правка 10.09).
+  const [drill, setDrill] = useState<{ from: string; to: string } | null>(null);
 
   const body = useMemo(() => ({
     period: { from: period.from.toISOString(), to: period.to.toISOString() },
@@ -255,15 +258,20 @@ export function TransitionMatrixPage() {
                       const n = cellMap.get(`${from}→${to}`) ?? 0;
                       const pct = total > 0 ? (n / total) * 100 : 0;
                       return (
-                        <td key={to} title={`После «${from}» брали «${to}»: ${n} из ${total} повторных покупок`}
-                          className={`p-1 text-center border-b border-[var(--color-border)] tabular-nums ${from === to ? 'font-medium' : ''}`}
+                        <td key={to}
+                          className={`border-b border-[var(--color-border)] tabular-nums ${from === to ? 'font-medium' : ''}`}
                           style={{ background: n > 0 ? heatBg(pct) : undefined }}>
                           {n > 0 ? (
-                            <span className="inline-flex flex-col leading-tight">
+                            <button
+                              type="button"
+                              onClick={() => setDrill({ from, to })}
+                              title={`После «${from}» брали «${to}»: ${n} из ${total} повторных покупок. Клик — кто продаёт и цепочки сделок`}
+                              className="w-full min-h-11 sm:min-h-0 px-1 py-1 inline-flex flex-col leading-tight items-center justify-center hover:outline hover:outline-1 hover:outline-[var(--color-accent)] rounded"
+                            >
                               <span>{pct.toFixed(pct >= 10 ? 0 : 1)}%</span>
                               <span className="text-[10px] text-[var(--color-text-muted)]">{n}</span>
-                            </span>
-                          ) : <span className="text-[var(--color-text-muted)]">·</span>}
+                            </button>
+                          ) : <span className="block p-1 text-center text-[var(--color-text-muted)]">·</span>}
                         </td>
                       );
                     })}
@@ -273,6 +281,9 @@ export function TransitionMatrixPage() {
             </tbody>
           </table>
         </div>
+      )}
+    {drill && (
+        <TransitionDrillModal from={drill.from} to={drill.to} filters={body} onClose={() => setDrill(null)} />
       )}
     </div>
   );
