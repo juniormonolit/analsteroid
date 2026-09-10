@@ -9,18 +9,22 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadPriceStageSets } from '@/lib/settings/priceStageMarkup';
 import { loadDiagSettings } from './settings';
 import { loadZombieThresholds } from './refs';
+import { goodsPositionWhere } from '@/lib/metrics/serviceGroups';
 
 export interface WindowDeal {
   dealId: string; headGroup: string; funnelId: number; isRepeatHist: boolean; amount: number;
   createdAt: Date; pricedAt: Date | null; reservedAt: Date | null; soldAt: Date | null; lostAt: Date | null; deliveredAt: Date | null;
   outcome: 'won' | 'lost' | 'zombie'; closedAt: Date;
+  nGroups: number; // товарных категорий в чеке (по позициям products, без сервисных)
   calls: number; firstCompletedCallAt: Date | null; bookingCalledNextDay: boolean | null; // null — брони не было или срок не наступил
 }
 
 export interface ManagerWindow {
   managerId: number;
-  current: WindowDeal[];   // последние N закрытых
-  previous: WindowDeal[];  // предыдущие N (own-база)
+  /** Последние 4N закрытых по убыванию closed_at — окно каждого узла режется из них по
+   *  ЕГО популяции (последние N броней, последние N повторных …). */
+  deals: WindowDeal[];
+  windowN: number;
   openDeals: { total: number; zombie: number; silence7: number };
   tickNo: number;          // floor(всего закрытых / tick)
 }
@@ -63,7 +67,7 @@ export async function loadManagerWindows(managerIds: number[]): Promise<Map<numb
   const deals = await saQuery<{
     manager_id: string; deal_id: string; head_group_name: string | null; funnel_id: number; amount: string | null; contact_id: string | null; company_id: string | null;
     created_at: Date; priced_at: Date | null; reserved_at: Date | null; sold_at: Date | null; lost_at: Date | null; delivered_at: Date | null;
-    outcome: 'won' | 'lost' | 'zombie'; closed_at: Date; is_repeat_hist: boolean; rn: string; total_closed: string;
+    outcome: 'won' | 'lost' | 'zombie'; closed_at: Date; is_repeat_hist: boolean; rn: string; total_closed: string; n_groups: string | null;
   }>(
     `WITH z AS (SELECT * FROM unnest($2::text[], $3::int[]) AS t(head_group_name, days)),
      d AS (
@@ -87,14 +91,15 @@ export async function loadManagerWindows(managerIds: number[]): Promise<Map<numb
      pe AS (SELECT e.deal_id, min(e.event_at) AS priced_at FROM sa.deal_events e JOIN win ON win.deal_id = e.deal_id WHERE e.stage_id = ANY($5::text[]) GROUP BY e.deal_id),
      fc AS (SELECT p.contact_id, min(p.delivered_at) AS first_deliv FROM sa.deals p WHERE p.delivered_at IS NOT NULL AND p.contact_id IN (SELECT DISTINCT contact_id FROM win WHERE contact_id IS NOT NULL) GROUP BY p.contact_id),
      fk AS (SELECT p.company_id, min(p.delivered_at) AS first_deliv FROM sa.deals p WHERE p.delivered_at IS NOT NULL AND p.company_id IN (SELECT DISTINCT company_id FROM win WHERE company_id IS NOT NULL AND company_id <> 0) GROUP BY p.company_id)
+     ng AS (SELECT w.deal_id, count(DISTINCT p->>'head_group_name') AS n_groups FROM win w JOIN sa.deals d ON d.deal_id = w.deal_id, jsonb_array_elements(d.products) p WHERE ${goodsPositionWhere('p')} GROUP BY w.deal_id)
      SELECT win.manager_id::text AS manager_id, win.deal_id::text AS deal_id, win.head_group_name, win.funnel_id, win.amount::text AS amount, win.contact_id::text AS contact_id, win.company_id::text AS company_id,
-            win.created_at, pe.priced_at, win.reserved_at, win.sold_at, win.lost_at, win.delivered_at, win.outcome, win.closed_at, win.rn::text AS rn, win.total_closed::text AS total_closed,
+            win.created_at, pe.priced_at, win.reserved_at, win.sold_at, win.lost_at, win.delivered_at, win.outcome, win.closed_at, win.rn::text AS rn, win.total_closed::text AS total_closed, ng.n_groups::text AS n_groups,
             CASE WHEN win.funnel_id IN (0, 2) THEN coalesce(fc.first_deliv < win.created_at, false)
                  ELSE coalesce(fk.first_deliv < win.created_at, fc.first_deliv < win.created_at, false) END AS is_repeat_hist
-       FROM win LEFT JOIN pe ON pe.deal_id = win.deal_id
+       FROM win LEFT JOIN pe ON pe.deal_id = win.deal_id LEFT JOIN ng ON ng.deal_id = win.deal_id
        LEFT JOIN fc ON fc.contact_id = win.contact_id
        LEFT JOIN fk ON fk.company_id = win.company_id AND win.company_id <> 0`,
-    [managerIds, z.groups, z.days, z.fallback, hasPrice, N * 2],
+    [managerIds, z.groups, z.days, z.fallback, hasPrice, N * 4],
   );
   timings.deals = deals.ms;
 
@@ -122,7 +127,7 @@ export async function loadManagerWindows(managerIds: number[]): Promise<Map<numb
   const openBy = new Map(open.rows.map(r => [Number(r.manager_id), { total: Number(r.total), zombie: Number(r.zombie), silence7: Number(r.silence7) }]));
 
   const now = new Date();
-  for (const id of managerIds) out.set(id, { managerId: id, current: [], previous: [], openDeals: openBy.get(id) ?? { total: 0, zombie: 0, silence7: 0 }, tickNo: 0 });
+  for (const id of managerIds) out.set(id, { managerId: id, deals: [], windowN: N, openDeals: openBy.get(id) ?? { total: 0, zombie: 0, silence7: 0 }, tickNo: 0 });
   for (const r of deals.rows) {
     const w = out.get(Number(r.manager_id))!;
     w.tickNo = Math.floor(Number(r.total_closed) / s.tickSize);
@@ -138,41 +143,63 @@ export async function loadManagerWindows(managerIds: number[]): Promise<Map<numb
       dealId: r.deal_id, headGroup: r.head_group_name ?? '∅', funnelId: r.funnel_id, isRepeatHist: r.is_repeat_hist, amount: Number(r.amount ?? 0),
       createdAt: new Date(r.created_at), pricedAt: r.priced_at ? new Date(r.priced_at) : null, reservedAt: r.reserved_at ? new Date(r.reserved_at) : null,
       soldAt: r.sold_at ? new Date(r.sold_at) : null, lostAt: r.lost_at ? new Date(r.lost_at) : null, deliveredAt: r.delivered_at ? new Date(r.delivered_at) : null,
-      outcome: r.outcome, closedAt: new Date(r.closed_at), calls: dc.length, firstCompletedCallAt: firstCompleted, bookingCalledNextDay: booking,
+      outcome: r.outcome, closedAt: new Date(r.closed_at), nGroups: Number(r.n_groups ?? 0), calls: dc.length, firstCompletedCallAt: firstCompleted, bookingCalledNextDay: booking,
     };
-    (Number(r.rn) <= N ? w.current : w.previous).push(deal);
+    w.deals.push(deal);
   }
+  for (const w of out.values()) w.deals.sort((a, b) => b.closedAt.getTime() - a.closedAt.getTime());
   console.log(`[diag] окна: менеджеров ${managerIds.length}, сделок ${deals.rows.length}, звонков ${calls.rows.length}; мс: ${JSON.stringify(timings)}`);
   lastWindowTimings = timings;
   return out;
 }
 export let lastWindowTimings: Record<string, number> = {};
 
-// ── Значения тиковых узлов из набора сделок ──────────────────────────────────
-const share = (num: number, den: number): NodeValue => ({ value: den ? (num / den) * 100 : null, n: den, kind: 'share' });
-const median = (xs: number[]): NodeValue => { if (!xs.length) return { value: null, n: 0, kind: 'mean' }; const s = [...xs].sort((a, b) => a - b); const m = Math.floor(s.length / 2); return { value: s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2, n: s.length, kind: 'mean' }; };
+// ── Значения тиковых узлов: окно каждого узла — последние N сделок ЕГО популяции ──
+// Иначе у «бронь → продажа» в окне из 60 закрытых всего ~12 броней и узел вечно
+// insufficient_data (первый прогон 10.09: 101 из 104 менеджеров). current — последние N
+// подходящих сделок, previous — следующие N (own-база, не пересекается).
+export interface NodeSpec {
+  population: (d: WindowDeal) => boolean;
+  kind: 'share' | 'mean';
+  /** share: числитель; mean: значение сделки (null — не учитывать). */
+  value: (d: WindowDeal) => boolean | number | null;
+}
 const hours = (a: Date, b: Date) => (b.getTime() - a.getTime()) / 3600000;
+const isPrimary = (d: WindowDeal) => !d.isRepeatHist;
+export const TICK_NODES: Record<string, NodeSpec> = {
+  cr_deal_to_sale:            { population: isPrimary, kind: 'share', value: d => d.outcome === 'won' },
+  cr_deal_to_sale_repeat:     { population: d => d.isRepeatHist, kind: 'share', value: d => d.outcome === 'won' },
+  cr_deal_to_priced:          { population: isPrimary, kind: 'share', value: d => !!d.pricedAt },
+  cr_priced_to_reservation:   { population: d => isPrimary(d) && !!d.pricedAt, kind: 'share', value: d => !!d.reservedAt },
+  cr_reservation_to_sale:     { population: d => isPrimary(d) && !!d.reservedAt, kind: 'share', value: d => d.outcome === 'won' },
+  booking_call_rate_reserved: { population: d => d.bookingCalledNextDay !== null, kind: 'share', value: d => d.bookingCalledNextDay === true },
+  calls_deals_no_call:        { population: isPrimary, kind: 'share', value: d => d.calls === 0 },
+  calls_to_reservation_avg:   { population: d => isPrimary(d) && !!d.reservedAt, kind: 'mean', value: d => d.calls },
+  calls_touch_speed_median:   { population: d => isPrimary(d) && !!d.firstCompletedCallAt, kind: 'mean', value: d => hours(d.createdAt, d.firstCompletedCallAt!) * 60 },
+  price_speed_median_hours:   { population: d => isPrimary(d) && !!d.pricedAt, kind: 'mean', value: d => hours(d.createdAt, d.pricedAt!) },
+  multi_group_order_share:    { population: d => d.outcome === 'won' && d.deliveredAt !== null, kind: 'share', value: d => d.nGroups >= 2 },
+};
 
-/** Узлы дерева, вычислимые из окна закрытых сделок (deals — текущее или предыдущее окно). */
-export function computeTickNodes(deals: WindowDeal[], open: ManagerWindow['openDeals']): Record<string, NodeValue> {
-  const primary = deals.filter(d => !d.isRepeatHist), repeat = deals.filter(d => d.isRepeatHist);
-  const won = (xs: WindowDeal[]) => xs.filter(d => d.outcome === 'won').length;
-  const priced = primary.filter(d => d.pricedAt), reserved = primary.filter(d => d.reservedAt);
-  const bookingKnown = deals.filter(d => d.bookingCalledNextDay !== null);
-  return {
-    cr_deal_to_sale:            share(won(primary), primary.length),
-    cr_deal_to_sale_repeat:     share(won(repeat), repeat.length),
-    cr_deal_to_priced:          share(priced.length, primary.length),
-    cr_priced_to_reservation:   share(reserved.filter(d => d.pricedAt).length, priced.length),
-    cr_reservation_to_sale:     share(won(reserved), reserved.length),
-    booking_call_rate_reserved: share(bookingKnown.filter(d => d.bookingCalledNextDay).length, bookingKnown.length),
-    calls_deals_no_call:        share(primary.filter(d => d.calls === 0).length, primary.length),
-    calls_to_reservation_avg:   { value: reserved.length ? reserved.reduce((s, d) => s + d.calls, 0) / reserved.length : null, n: reserved.length, kind: 'mean' },
-    calls_touch_speed_median:   median(primary.filter(d => d.firstCompletedCallAt).map(d => hours(d.createdAt, d.firstCompletedCallAt!) * 60)),
-    price_speed_median_hours:   median(priced.map(d => hours(d.createdAt, d.pricedAt!))),
-    multi_group_order_share:    { value: null, n: 0, kind: 'share' }, // нужны позиции заказа — следующий шаг
-    zombie_share:               share(open.zombie, open.total),
-    zombie_count:               { value: open.zombie, n: open.total, kind: 'count' },
-    calls_silence_deals:        { value: open.silence7, n: open.total, kind: 'count' },
-  };
+const median = (xs: number[]): number | null => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+function evalSpec(spec: NodeSpec, deals: WindowDeal[]): NodeValue {
+  if (spec.kind === 'share') { const num = deals.filter(d => spec.value(d) === true).length; return { value: deals.length ? (num / deals.length) * 100 : null, n: deals.length, kind: 'share' }; }
+  const xs = deals.map(d => spec.value(d)).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  return { value: median(xs), n: xs.length, kind: 'mean' };
+}
+
+/** Текущее и предыдущее окно каждого тикового узла + снимки (зомби, тишина). */
+export function computeTickNodes(w: ManagerWindow): { current: Record<string, NodeValue>; previous: Record<string, NodeValue> } {
+  const current: Record<string, NodeValue> = {}, previous: Record<string, NodeValue> = {};
+  for (const [id, spec] of Object.entries(TICK_NODES)) {
+    const pop = w.deals.filter(spec.population); // deals уже по убыванию closed_at
+    current[id] = evalSpec(spec, pop.slice(0, w.windowN));
+    previous[id] = evalSpec(spec, pop.slice(w.windowN, w.windowN * 2));
+  }
+  const o = w.openDeals;
+  current.zombie_share = { value: o.total ? (o.zombie / o.total) * 100 : null, n: o.total, kind: 'share' };
+  current.zombie_count = { value: o.zombie, n: o.total, kind: 'count' };
+  current.calls_silence_deals = { value: o.silence7, n: o.total, kind: 'count' };
+  for (const k of ['zombie_share', 'zombie_count', 'calls_silence_deals']) previous[k] = { value: null, n: 0, kind: current[k].kind };
+  return { current, previous };
 }

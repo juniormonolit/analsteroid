@@ -16,11 +16,14 @@ const btnCls = 'min-h-11 inline-flex items-center justify-center gap-1.5 rounded
 const btnPrimaryCls = 'min-h-11 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-sm text-[var(--color-text-inverse)] hover:bg-[var(--color-accent-hover)] disabled:opacity-40 transition-colors';
 const cardCls = 'rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-4';
 
-const COMPACT_NODES = ['cr_deal_to_sale', 'cr_deal_to_priced', 'cr_priced_to_reservation', 'cr_reservation_to_sale', 'booking_call_rate_reserved', 'calls_touch_speed_median', 'price_speed_median_hours', 'calls_deals_no_call', 'zombie_share', 'calls_silence_deals'];
+const COMPACT_NODES = ['cr_deal_to_sale', 'cr_deal_to_priced', 'cr_priced_to_reservation', 'cr_reservation_to_sale', 'booking_call_rate_reserved', 'calls_touch_speed_median', 'price_speed_median_hours', 'calls_deals_no_call', 'zombie_share', 'calls_silence_deals', 'cross_sell_expected_share'];
+// Статусы детектора человеческим языком (владелец: «что значит drift_down?»).
+const STATUS_LABEL: Record<string, string> = { ok: 'норма', drift_down: 'просадка', drift_up: 'рост', insufficient_data: 'мало данных', no_plan: 'нет плана' };
+const statusLabel = (st: string) => STATUS_LABEL[st] ?? st;
 const SHORT: Record<string, string> = {
   cr_deal_to_sale: 'CR→продажа', cr_deal_to_priced: 'CR→цена', cr_priced_to_reservation: 'цена→бронь', cr_reservation_to_sale: 'бронь→продажа',
   booking_call_rate_reserved: 'прозвон броней', calls_touch_speed_median: '1-е касание, мин', price_speed_median_hours: 'до цены, ч',
-  calls_deals_no_call: 'без звонка', zombie_share: 'зомби, %', calls_silence_deals: 'тишина, шт',
+  calls_deals_no_call: 'без звонка', zombie_share: 'зомби, %', calls_silence_deals: 'тишина, шт', cross_sell_expected_share: 'кросс-продажа',
 };
 const fmtRub = (v: number | null) => (v === null ? '—' : `${Math.round(v / 1000).toLocaleString('ru-RU')} т.₽`);
 const fmtV = (v: number | null, nodeId: string) => {
@@ -65,11 +68,13 @@ export function DiagnosticsPage() {
   });
   const running = !!runP && runP.status === 'running';
   const [branch, setBranch] = useState('');
+  const [q, setQ] = useState('');
   const [open, setOpen] = useState<number | null>(null);
   const nodeMeta = useMemo(() => new Map((data?.nodes ?? []).map(n => [n.id, n])), [data]);
   const branches = useMemo(() => [...new Set((data?.managers ?? []).map(m => m.branch))].sort(), [data]);
   const rows = useMemo(() => {
-    const list = (data?.managers ?? []).filter(m => !branch || m.branch === branch);
+    const qq = q.trim().toLowerCase();
+    const list = (data?.managers ?? []).filter(m => (!branch || m.branch === branch) && (!qq || m.name.toLowerCase().includes(qq)));
     const gap = (m: Mgr) => (m.nodes.find(n => n.nodeId === 'plan_forecast_pct_month')?.trace as { gapRub?: number } | null)?.gapRub ?? -Infinity;
     return list.sort((a, b) => gap(b) - gap(a));
   }, [data, branch]);
@@ -117,7 +122,12 @@ export function DiagnosticsPage() {
         <select value={branch} onChange={e => setBranch(e.target.value)} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base sm:text-sm text-[var(--color-text)]">
           <option value="">Все филиалы</option>{branches.map(b => <option key={b} value={b}>{b}</option>)}
         </select>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск менеджера…" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base sm:text-sm text-[var(--color-text)] w-full sm:w-64" />
         <span className="text-[12px] text-[var(--color-text-muted)]">{rows.length} менеджеров · сортировка по разрыву к плану</span>
+        <span className="text-[11px] text-[var(--color-text-muted)] ml-auto">
+          <span className={`inline-block rounded px-1.5 py-0.5 ${STATUS_CLS.drift_down}`}>просадка</span> — CUSUM пробил 4σ и база вне интервала ·{' '}
+          <span className={`inline-block rounded px-1.5 py-0.5 ${STATUS_CLS.drift_up}`}>рост</span> · <span className="opacity-60">серым — мало данных</span>
+        </span>
       </div>
       {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Загрузка…</div>}
       {data && rows.length === 0 && <div className={`${cardCls} text-sm text-[var(--color-text-muted)]`}>Рядов пока нет — нажми «Справочники», затем «Пересчитать сегодня».</div>}
@@ -153,7 +163,7 @@ export function DiagnosticsPage() {
                       {COMPACT_NODES.map(id => {
                         const nr = m.nodes.find(n => n.nodeId === id);
                         return (
-                          <td key={id} className="px-1.5 py-1.5 text-right tabular-nums" title={nr ? `n=${nr.n ?? '—'} · своё ${fmtV(nr.baseOwn, id)} · пиры ${fmtV(nr.basePeers, id)} · ${nr.status}` : ''}>
+                          <td key={id} className="px-1.5 py-1.5 text-right tabular-nums" title={nr ? `n=${nr.n ?? '—'} · своё ${fmtV(nr.baseOwn, id)} · пиры ${fmtV(nr.basePeers, id)} · ${statusLabel(nr.status)}` : ''}>
                             <span className={`inline-block rounded px-1.5 py-0.5 ${STATUS_CLS[nr?.status ?? 'ok'] ?? ''}`}>
                               {nr?.status === 'drift_down' && <TrendingDown size={11} className="inline mr-0.5" />}{nr?.status === 'drift_up' && <TrendingUp size={11} className="inline mr-0.5" />}
                               {nr ? fmtV(nr.value, id) : '—'}
@@ -196,6 +206,16 @@ function NodeDetails({ m, nodeMeta }: { m: Mgr; nodeMeta: Map<string, NodeMeta> 
           <span>= прогноз <b>{fmtRub(Number(tr.forecast))}</b> ({Number(tr.pct).toFixed(0)}%)</span>
         </div>
       )}
+      {(() => {
+        const cs = m.nodes.find(n => n.nodeId === 'cross_sell_expected_share');
+        const top = (cs?.trace as { crossSell?: { from: string; expected: string; companyPct: number; ownPct: number | null; n: number }[] } | null)?.crossSell ?? [];
+        return top.length ? (
+          <div className="text-[12px] text-[var(--color-text)]">
+            <span className="font-semibold">Кросс-продажа, где отстаёт от компании:</span>{' '}
+            {top.map(t => <span key={t.from} className="mr-3">после «{t.from}» → «{t.expected}»: у него {t.ownPct}% против {t.companyPct}% по компании (n={t.n})</span>)}
+          </div>
+        ) : null;
+      })()}
       <div className="scroll-x rounded-xl border border-[var(--color-border)]">
         <table className="w-full text-[12px]">
           <thead className="bg-[var(--color-bg-hover)] text-[10.5px] uppercase tracking-wide text-[var(--color-text-muted)]">
@@ -214,7 +234,7 @@ function NodeDetails({ m, nodeMeta }: { m: Mgr; nodeMeta: Map<string, NodeMeta> 
                   <td className="px-2 py-1.5 text-right tabular-nums">{fmtV(n.basePeers, n.nodeId)}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-[var(--color-text-muted)]">{n.ewma !== null ? fmtV(n.ewma, n.nodeId) : '—'}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums text-[var(--color-text-muted)]">{n.sigma && n.cusumNeg !== null ? (n.cusumNeg / n.sigma).toFixed(1) : '—'}</td>
-                  <td className={`px-2 py-1.5 whitespace-nowrap ${STATUS_CLS[n.status] ?? ''}`}>{n.status === 'ok' ? <Minus size={12} className="inline" /> : n.status === 'insufficient_data' ? <HelpCircle size={12} className="inline" /> : null} {n.status}</td>
+                  <td className={`px-2 py-1.5 whitespace-nowrap ${STATUS_CLS[n.status] ?? ''}`}>{n.status === 'ok' ? <Minus size={12} className="inline" /> : n.status === 'insufficient_data' ? <HelpCircle size={12} className="inline" /> : null} {statusLabel(n.status)}</td>
                 </tr>
               );
             })}

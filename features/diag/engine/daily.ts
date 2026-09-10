@@ -12,6 +12,7 @@ import { getManagerOrgMap } from '@/lib/org/deptCategories';
 import { loadDiagSettings, type DiagSettings } from './settings';
 import { loadLags } from './refs';
 import { loadManagerWindows, computeTickNodes, lastWindowTimings, type NodeValue, type ManagerWindow } from './windows';
+import { computeCrossSell, type CrossSellResult } from './crossSell';
 import type { Progress } from './runs';
 
 export interface ActiveManager { bitrixId: number; name: string; shortLogin: string; branch: string; category: string; plan: number; firstDealAt: Date | null }
@@ -142,9 +143,20 @@ export async function runDaily(opts: { today?: string; progress?: Progress } = {
   for (const m of managers) {
     const w = windows.get(m.bitrixId);
     if (!w) continue;
-    cur.set(m.bitrixId, computeTickNodes(w.current, w.openDeals));
-    prev.set(m.bitrixId, computeTickNodes(w.previous, w.openDeals));
+    const nv = computeTickNodes(w);
+    cur.set(m.bitrixId, nv.current);
+    prev.set(m.bitrixId, nv.previous);
   }
+  // Кросс-продажа по матрице переходов — календарный узел (12 мес), пачками.
+  const cross = new Map<number, CrossSellResult>();
+  await progress('кросс-продажа по матрице переходов', managers.length, managers.length * 2);
+  t = Date.now();
+  for (let i = 0; i < managers.length; i += 20) {
+    try { for (const [k, v] of await computeCrossSell(managers.slice(i, i + 20).map(m => m.bitrixId))) cross.set(k, v); }
+    catch (e) { errors.push(`кросс-продажа пачки ${i / 20 + 1}: ${e instanceof Error ? e.message : e}`); }
+  }
+  for (const [id, v] of cross) { const c = cur.get(id); if (c) c.cross_sell_expected_share = { value: v.value, n: v.n, kind: 'share' }; const p = prev.get(id); if (p) p.cross_sell_expected_share = { value: null, n: 0, kind: 'share' }; }
+  timings.crossSell = Date.now() - t;
   // Пиры: медиана по филиал×направление среди менеджеров с достаточным n
   const peerGroups = new Map<string, number[]>();
   for (const m of managers) (peerGroups.get(`${m.branch}|${m.category}`) ?? peerGroups.set(`${m.branch}|${m.category}`, []).get(`${m.branch}|${m.category}`)!).push(m.bitrixId);
@@ -195,7 +207,9 @@ export async function runDaily(opts: { today?: string; progress?: Progress } = {
       try {
         const own = p[nodeId]?.value ?? null;
         const peers = peerStat(group, nodeId, m.bitrixId);
-        const enough = v.kind === 'count' ? w.openDeals.total > 0 : v.n >= s.minClosed;
+        const SNAPSHOT_MIN_N = 5;
+        const isSnapshot = meta.windowKind === 'snapshot' || nodeId === 'cross_sell_expected_share';
+        const enough = v.kind === 'count' ? w.openDeals.total > 0 : isSnapshot ? v.n >= SNAPSHOT_MIN_N : v.n >= s.minClosed;
         if (v.value === null || !enough) {
           insufficient++;
           await upsert(m.bitrixId, nodeId, { tick_no: w.tickNo, value: v.value, n: v.n, base_own: own, base_peers: peers.median, status: 'insufficient_data', trace: { reason: v.value === null ? 'нет значения' : `n=${v.n} < ${s.minClosed}` } });
@@ -224,7 +238,8 @@ export async function runDaily(opts: { today?: string; progress?: Progress } = {
         await upsert(m.bitrixId, nodeId, {
           tick_no: w.tickNo, value: v.value, n: v.n, ci_low: ci?.low ?? null, ci_high: ci?.high ?? null, ewma, cusum_pos: cusumPos, cusum_neg: cusumNeg,
           base_own: own, base_peers: peers.median, sigma, status,
-          trace: { kind: v.kind, baseUsed: own !== null ? 'own' : peers.median !== null ? 'peers' : null, peersN: peers.n, window: w.current.length, prevWindow: w.previous.length },
+          trace: { kind: v.kind, baseUsed: own !== null ? 'own' : peers.median !== null ? 'peers' : null, peersN: peers.n, windowN: w.windowN, dealsLoaded: w.deals.length,
+                   ...(nodeId === 'cross_sell_expected_share' ? { crossSell: cross.get(m.bitrixId)?.top ?? [] } : {}) },
         });
       } catch (e) { errors.push(`${m.name}/${nodeId}: ${e instanceof Error ? e.message : e}`); }
     }
