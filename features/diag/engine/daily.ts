@@ -11,7 +11,8 @@ import { getMonthWorkingDays } from '@/lib/plans/dailyPlan';
 import { getManagerOrgMap } from '@/lib/org/deptCategories';
 import { loadDiagSettings, type DiagSettings } from './settings';
 import { loadLags } from './refs';
-import { loadManagerWindows, computeTickNodes, lastWindowTimings, type NodeValue } from './windows';
+import { loadManagerWindows, computeTickNodes, lastWindowTimings, type NodeValue, type ManagerWindow } from './windows';
+import type { Progress } from './runs';
 
 export interface ActiveManager { bitrixId: number; name: string; shortLogin: string; branch: string; category: string; plan: number; firstDealAt: Date | null }
 
@@ -107,7 +108,8 @@ async function computeRoot(managers: ActiveManager[], s: DiagSettings, today: st
 // ── Главный проход ───────────────────────────────────────────────────────────
 export interface DailyRunSummary { date: string; managers: number; series: number; insufficient: number; drifts: number; ms: number; timings: Record<string, number>; errors: string[] }
 
-export async function runDaily(opts: { today?: string } = {}): Promise<DailyRunSummary> {
+export async function runDaily(opts: { today?: string; progress?: Progress } = {}): Promise<DailyRunSummary> {
+  const progress: Progress = opts.progress ?? (async () => {});
   const t0 = Date.now();
   const today = opts.today ?? mskToday();
   const s = await loadDiagSettings();
@@ -119,9 +121,19 @@ export async function runDaily(opts: { today?: string } = {}): Promise<DailyRunS
 
   const timings: Record<string, number> = {};
   let t = Date.now();
-  const windows = await loadManagerWindows(managers.map(m => m.bitrixId));
-  timings.windows = Date.now() - t; Object.assign(timings, Object.fromEntries(Object.entries(lastWindowTimings).map(([k, v]) => [`sql_${k}`, v])));
-  t = Date.now();
+  // Окна — пачками по 10 менеджеров: прогресс виден, один тяжёлый запрос не держит всё.
+  const windows = new Map<number, ManagerWindow>();
+  const BATCH = 10;
+  for (let i = 0; i < managers.length; i += BATCH) {
+    const batch = managers.slice(i, i + BATCH);
+    await progress(`окна закрытых сделок: ${Math.min(i + BATCH, managers.length)} из ${managers.length} менеджеров`, i, managers.length * 2);
+    try {
+      for (const [k, v] of await loadManagerWindows(batch.map(m => m.bitrixId))) windows.set(k, v);
+      for (const [k, v] of Object.entries(lastWindowTimings)) timings[`sql_${k}`] = (timings[`sql_${k}`] ?? 0) + v;
+    } catch (e) { errors.push(`окна пачки ${i / BATCH + 1}: ${e instanceof Error ? e.message : e}`); }
+  }
+  timings.windows = Date.now() - t; t = Date.now();
+  await progress('прогноз плана (корень дерева)', managers.length, managers.length * 2);
   const roots = await computeRoot(managers, s, today).catch(e => { errors.push(`корень: ${e instanceof Error ? e.message : e}`); return new Map<number, RootForecast>(); });
   timings.root = Date.now() - t; t = Date.now();
 
@@ -147,22 +159,35 @@ export async function runDaily(opts: { today?: string } = {}): Promise<DailyRunS
   const prevBy = new Map<string, PrevState>(prevState.rows.map(r => [`${r.subject_key}|${r.node_id}`, { ewma: r.ewma === null ? null : Number(r.ewma), cusumPos: r.cusum_pos === null ? null : Number(r.cusum_pos), cusumNeg: r.cusum_neg === null ? null : Number(r.cusum_neg) }]));
 
   let series = 0, insufficient = 0, drifts = 0;
-  const upsert = async (mgr: number, nodeId: string, row: Record<string, unknown>) => {
+  // Буфер строк менеджера → один INSERT ... SELECT FROM unnest(...) вместо 17 запросов.
+  type SeriesRow = { nodeId: string; row: Record<string, unknown> };
+  let buf: SeriesRow[] = [];
+  const upsert = async (_mgr: number, nodeId: string, row: Record<string, unknown>) => { buf.push({ nodeId, row }); };
+  const flush = async (mgr: number) => {
+    if (!buf.length) return;
+    const col = <T,>(f: (r: Record<string, unknown>) => T) => buf.map(b => f(b.row));
+    const num = (k: string) => col(r => (r[k] === null || r[k] === undefined ? null : Number(r[k])));
     await sys.query(
       `INSERT INTO diag_series (subject_type, subject_key, node_id, head_group_name, as_of, tick_no, value, n, ci_low, ci_high, ewma, cusum_pos, cusum_neg, base_own, base_peers, base_target, sigma, status, trace)
-       VALUES ('manager', $1, $2, NULL, $3::date, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+       SELECT 'manager', $1, u.node_id, NULL, $2::date, u.tick_no, u.value, u.n, u.ci_low, u.ci_high, u.ewma, u.cusum_pos, u.cusum_neg, u.base_own, u.base_peers, u.base_target, u.sigma, u.status, u.trace
+         FROM unnest($3::text[], $4::int[], $5::numeric[], $6::int[], $7::numeric[], $8::numeric[], $9::numeric[], $10::numeric[], $11::numeric[], $12::numeric[], $13::numeric[], $14::numeric[], $15::numeric[], $16::text[], $17::jsonb[])
+              AS u(node_id, tick_no, value, n, ci_low, ci_high, ewma, cusum_pos, cusum_neg, base_own, base_peers, base_target, sigma, status, trace)
        ON CONFLICT (subject_type, subject_key, node_id, coalesce(head_group_name, ''), as_of) DO UPDATE SET
          tick_no = EXCLUDED.tick_no, value = EXCLUDED.value, n = EXCLUDED.n, ci_low = EXCLUDED.ci_low, ci_high = EXCLUDED.ci_high, ewma = EXCLUDED.ewma,
          cusum_pos = EXCLUDED.cusum_pos, cusum_neg = EXCLUDED.cusum_neg, base_own = EXCLUDED.base_own, base_peers = EXCLUDED.base_peers, base_target = EXCLUDED.base_target,
          sigma = EXCLUDED.sigma, status = EXCLUDED.status, trace = EXCLUDED.trace`,
-      [String(mgr), nodeId, today, row.tick_no ?? null, row.value ?? null, row.n ?? null, row.ci_low ?? null, row.ci_high ?? null, row.ewma ?? null, row.cusum_pos ?? null, row.cusum_neg ?? null,
-       row.base_own ?? null, row.base_peers ?? null, row.base_target ?? null, row.sigma ?? null, row.status, JSON.stringify(row.trace ?? {})]);
-    series++;
+      [String(mgr), today, buf.map(b => b.nodeId), num('tick_no'), num('value'), num('n'), num('ci_low'), num('ci_high'), num('ewma'), num('cusum_pos'), num('cusum_neg'),
+       num('base_own'), num('base_peers'), num('base_target'), num('sigma'), col(r => String(r.status)), col(r => JSON.stringify(r.trace ?? {}))]);
+    series += buf.length;
+    buf = [];
   };
 
+  let idx = 0;
   for (const m of managers) {
+    idx++;
     const w = windows.get(m.bitrixId), c = cur.get(m.bitrixId), p = prev.get(m.bitrixId);
     if (!w || !c || !p) continue;
+    await progress(`расчёт и запись рядов: ${idx} из ${managers.length} — ${m.name}`, managers.length + idx, managers.length * 2);
     const group = `${m.branch}|${m.category}`;
     for (const [nodeId, v] of Object.entries(c)) {
       const meta = nodeMeta.get(nodeId);
@@ -215,7 +240,9 @@ export async function runDaily(opts: { today?: string } = {}): Promise<DailyRunS
         await upsert(m.bitrixId, 'plan_shipments_month', { value: r.plan, n: 1, status: 'ok', trace: {} });
       } catch (e) { errors.push(`${m.name}/root: ${e instanceof Error ? e.message : e}`); }
     }
+    try { await flush(m.bitrixId); } catch (e) { buf = []; errors.push(`${m.name}/запись: ${e instanceof Error ? e.message : e}`); }
   }
   timings.series = Date.now() - t;
+  await progress('готово', managers.length * 2, managers.length * 2);
   return { date: today, managers: managers.length, series, insufficient, drifts, ms: Date.now() - t0, timings, errors: errors.slice(0, 30) };
 }

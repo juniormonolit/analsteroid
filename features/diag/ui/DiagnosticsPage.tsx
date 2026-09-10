@@ -2,13 +2,14 @@
 // Экран диагностики, фаза 1 (ТЗ №1 §11): таблица менеджеров × узлы дерева с состояниями,
 // прогноз плана и разрыв, раскрытие менеджера — все узлы с базами, интервалом, n, следом.
 // Кнопки ручного пересчёта — пока движок не на планировщике.
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RefreshCw, Play, ChevronDown, ChevronRight, AlertTriangle, TrendingDown, TrendingUp, Minus, HelpCircle } from 'lucide-react';
 
 interface NodeRow { nodeId: string; asOf: string; tickNo: number | null; value: number | null; n: number | null; ciLow: number | null; ciHigh: number | null; ewma: number | null; cusumNeg: number | null; baseOwn: number | null; basePeers: number | null; baseTarget: number | null; sigma: number | null; status: string; trace: Record<string, unknown> | null }
 interface Mgr { bitrixId: number; name: string; branch: string; category: string; plan: number | null; nodes: NodeRow[] }
 interface NodeMeta { id: string; name: string; node_kind: string; window_kind: string; controllable: string; higher_is_better: boolean; sort_order: number; description: string | null }
+interface RunProgress { id: number; kind: string; status: 'running' | 'done' | 'error'; stage: string | null; total: number; done: number; summary: Record<string, unknown> | null; error: string | null; startedAt: string; finishedAt: string | null }
 interface Overview { today: string; nodes: NodeMeta[]; managers: Mgr[]; refs: { what: string; n: number; at: string | null }[]; activeManagers: number }
 
 const btnCls = 'min-h-11 inline-flex items-center justify-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40 transition-colors';
@@ -38,15 +39,31 @@ const STATUS_CLS: Record<string, string> = {
 export function DiagnosticsPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery<Overview>({ queryKey: ['diag-overview'], queryFn: () => fetch('/api/diag/overview').then(r => r.json()), refetchOnWindowFocus: false });
-  const run = useMutation({
+  // Прогоны — фоновые (diag_runs): POST стартует и отдаёт id, дальше опрашиваем прогресс.
+  const [runId, setRunId] = useState<number | null>(null);
+  const [runKind, setRunKind] = useState<'refs' | 'daily' | null>(null);
+  const start = useMutation({
     mutationFn: async (step: 'refs' | 'daily') => {
       const res = await fetch(`/api/diag/run?step=${step}`, { method: 'POST' });
-      const body = await res.json();
+      const body = await res.json() as { id?: number; busy?: RunProgress; error?: string };
       if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
-      return body as { step: string; result: Record<string, unknown> };
+      return { step, id: body.id ?? body.busy?.id ?? null };
     },
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['diag-overview'] }),
+    onSuccess: r => { setRunKind(r.step); setRunId(r.id); },
   });
+  const { data: runData } = useQuery<{ run: RunProgress | null }>({
+    queryKey: ['diag-run', runId], enabled: runId !== null,
+    queryFn: () => fetch(`/api/diag/run?id=${runId}`).then(r => r.json()),
+    refetchInterval: q => (q.state.data?.run && q.state.data.run.status === 'running' ? 1500 : false),
+  });
+  const runP = runData?.run ?? null;
+  useEffect(() => { if (runP && runP.status !== 'running') void qc.invalidateQueries({ queryKey: ['diag-overview'] }); }, [runP?.status, qc]); // eslint-disable-line react-hooks/exhaustive-deps
+  // При открытии — подхватить уже идущий прогон.
+  useQuery<{ runs: RunProgress[] }>({
+    queryKey: ['diag-runs-last'], refetchOnWindowFocus: false, staleTime: Infinity,
+    queryFn: async () => { const b = await fetch('/api/diag/run').then(r => r.json()) as { runs: RunProgress[] }; const active = b.runs.find(r => r.status === 'running'); if (active && runId === null) { setRunId(active.id); setRunKind(active.kind as 'refs' | 'daily'); } return b; },
+  });
+  const running = !!runP && runP.status === 'running';
   const [branch, setBranch] = useState('');
   const [open, setOpen] = useState<number | null>(null);
   const nodeMeta = useMemo(() => new Map((data?.nodes ?? []).map(n => [n.id, n])), [data]);
@@ -70,17 +87,30 @@ export function DiagnosticsPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <a href="/settings/diagnostics/checks" className={btnCls}>Проверки данных</a>
-          <button className={btnCls} disabled={run.isPending} onClick={() => run.mutate('refs')}><RefreshCw size={14} className={run.isPending && run.variables === 'refs' ? 'animate-spin' : ''} /> Справочники (лаги, зомби, сезон)</button>
-          <button className={btnPrimaryCls} disabled={run.isPending} onClick={() => run.mutate('daily')}><Play size={14} /> Пересчитать сегодня</button>
+          <button className={btnCls} disabled={running || start.isPending} onClick={() => start.mutate('refs')}><RefreshCw size={14} className={running && runKind === 'refs' ? 'animate-spin' : ''} /> Справочники (лаги, зомби, сезон)</button>
+          <button className={btnPrimaryCls} disabled={running || start.isPending} onClick={() => start.mutate('daily')}><Play size={14} /> Пересчитать сегодня</button>
         </div>
       </div>
       <div className="flex flex-wrap gap-1.5 text-[11px]">
         <Chip>лаги: {refAt('lags')}</Chip><Chip>зомби-пороги: {refAt('zombie')}</Chip><Chip>сезонность: {refAt('season')}</Chip><Chip>рядов сегодня: {refAt('series_today')}</Chip>
       </div>
-      {run.isError && <div className={`${cardCls} text-sm text-[var(--color-negative)]`}><AlertTriangle size={14} className="inline mr-1" /> {(run.error as Error).message}</div>}
-      {run.isSuccess && (
-        <div className={`${cardCls} text-[12px] text-[var(--color-text)]`}>
-          <b>{run.data.step === 'refs' ? 'Справочники пересчитаны' : 'Ежедневный расчёт выполнен'}:</b> <code className="break-all">{JSON.stringify(run.data.result)}</code>
+      {start.isError && <div className={`${cardCls} text-sm text-[var(--color-negative)]`}><AlertTriangle size={14} className="inline mr-1" /> {(start.error as Error).message}</div>}
+      {runP && (
+        <div className={cardCls}>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-[var(--color-text)]">
+            <span className="font-semibold">{runP.kind === 'refs' ? 'Справочники' : 'Ежедневный расчёт'} · {runP.status === 'running' ? 'идёт' : runP.status === 'done' ? 'готово' : 'ошибка'}</span>
+            <span className="text-[12px] text-[var(--color-text-muted)]">{runP.stage ?? ''}{runP.total ? ` · ${runP.done}/${runP.total}` : ''} · старт {new Date(runP.startedAt).toLocaleTimeString('ru-RU')}{runP.finishedAt ? `, финиш ${new Date(runP.finishedAt).toLocaleTimeString('ru-RU')}` : ''}</span>
+          </div>
+          <div className="mt-2 h-3 w-full overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
+            <div className={`h-full rounded-full transition-all ${runP.status === 'error' ? 'bg-[var(--color-negative)]' : runP.status === 'done' ? 'bg-[var(--color-positive)]' : 'bg-[var(--color-accent)]'}`}
+              style={{ width: `${runP.total ? Math.round((runP.done / runP.total) * 100) : (runP.status === 'running' ? 5 : 100)}%` }} />
+          </div>
+          {runP.error && <div className="mt-2 text-sm text-[var(--color-negative)]"><AlertTriangle size={14} className="inline mr-1" /> {runP.error}</div>}
+          {runP.status === 'done' && runP.summary && (
+            <div className="mt-2 text-[12px] text-[var(--color-text)]">
+              <code className="break-all whitespace-pre-wrap">{JSON.stringify(runP.summary, null, 1)}</code>
+            </div>
+          )}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
