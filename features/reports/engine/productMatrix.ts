@@ -272,7 +272,9 @@ export async function fetchMatrixTransitions(opts: MatrixTransitionsOptions): Pr
   let drillWhere = '';
   if (opts.drillManagerId && /^\d+$/.test(opts.drillManagerId)) {
     params.push(opts.drillManagerId);
-    drillWhere = `AND next_mgr = $${params.length}`;
+    // WHERE, а не AND: подзапрос цепочек ниже своего WHERE не имеет — с «AND»
+    // получался синтаксически битый SQL и 500 при клике по менеджеру (10.09).
+    drillWhere = `WHERE next_mgr = $${params.length}`;
   }
 
   const sql = `
