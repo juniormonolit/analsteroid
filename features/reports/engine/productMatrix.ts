@@ -358,8 +358,14 @@ export async function fetchMatrixTransitions(opts: MatrixTransitionsOptions): Pr
   // Колонки объединения (19): служебные агрегаты и цепочки в одном ответе —
   // deal_cats тяжёлый (jsonb_array_elements по всем отгрузкам), второй такой же
   // проход ради агрегатов удвоил бы время открытия дрилла.
-  const NULLS_DEAL = `NULL::bigint, NULL::text, NULL::timestamptz, NULL::numeric, NULL::text[],
-       NULL::bigint, NULL::text, NULL::timestamptz, NULL::numeric, NULL::text[]`;
+  // АЛИАСЫ ОБЯЗАТЕЛЬНЫ: имена колонок ответа Postgres берёт из ПЕРВОЙ ветви
+  // union, а первая здесь — 'mgr' с этими NULL-заглушками. Без AS колонки
+  // приезжают безымянными (и с дублями вида «bigint»), node-pg кладёт их не под
+  // теми ключами — цепочки приходили пустыми: «# —», 0 ₽, через 0 дн. (баг 11.09).
+  const NULLS_DEAL = `NULL::bigint AS deal_id, NULL::text AS deal_name, NULL::timestamptz AS at,
+       NULL::numeric AS amount, NULL::text[] AS cats,
+       NULL::bigint AS next_deal_id, NULL::text AS next_deal_name, NULL::timestamptz AS next_at,
+       NULL::numeric AS next_amount, NULL::text[] AS next_cats`;
   const DAYS = `EXTRACT(EPOCH FROM (next_at - delivered_at)) / 86400`;
 
   const sql = `
@@ -415,19 +421,24 @@ SELECT 'grpBase', NULL, NULL,
        ${NULLS_DEAL}
   FROM af_drill
 UNION ALL
+-- Агрегаты шапки — по СРЕЗУ ДРИЛЛА (правка владельца 11.09: «цифры пусть
+-- пересчитываются исходя из выбранного слева менеджера»). Без выбора
+-- hits_drill = hits, af_drill = after_from, то есть вся ячейка — как было.
+-- Список менеджеров слева при этом остаётся глобальным (ветка 'mgr' выше):
+-- иначе, выбрав одного, нельзя было бы вернуться к остальным.
 SELECT 'hitsAgg', NULL, NULL,
        count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
        sum(amount), sum(next_amount),
        percentile_cont(0.5) WITHIN GROUP (ORDER BY ${DAYS}),
        ${NULLS_DEAL}
-  FROM hits
+  FROM hits_drill
 UNION ALL
 SELECT 'afterFromAgg', NULL, NULL,
        count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
        sum(amount), sum(next_amount),
        percentile_cont(0.5) WITHIN GROUP (ORDER BY ${DAYS}),
        ${NULLS_DEAL}
-  FROM after_from
+  FROM af_drill
 UNION ALL
 SELECT 'chain', next_mgr, NULL,
        NULL::int, NULL::int, NULL::int, NULL::numeric, NULL::numeric, NULL::numeric,
@@ -444,10 +455,11 @@ SELECT 'chain', next_mgr, NULL,
     deal_id: string | null; deal_name: string | null; at: Date | null; amount: string | null; cats: string[] | null;
     next_deal_id: string | null; next_deal_name: string | null; next_at: Date | null; next_amount: string | null; next_cats: string[] | null;
   };
-  // 'drill2' — форма ответа изменилась 11.09 (агрегаты + разбивка): старые
-  // записи Redis с прежней формой не должны прилететь в новый парсер.
+  // 'drill3' — версия формы ответа. Бампается при КАЖДОЙ смене набора колонок:
+  // 'drill2' успел закэшировать битые строки (union без алиасов, см. NULLS_DEAL),
+  // и без бампа они жили бы в Redis до истечения TTL уже после фикса.
   const key = [
-    'drill2', mode, opts.periodAnchor ?? 'next', fromIso, toExclIso, opts.from, opts.to, opts.drillManagerId ?? '-',
+    'drill3', mode, opts.periodAnchor ?? 'next', fromIso, toExclIso, opts.from, opts.to, opts.drillManagerId ?? '-',
     (opts.managerIds ?? []).slice().sort().join(',') || 'm:all',
     (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',

@@ -1,7 +1,7 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Users } from 'lucide-react';
+import { ArrowRight, ChevronRight, Users } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
@@ -100,17 +100,70 @@ function ChainRow({ chain, from, to, onOpenDeal }: {
   );
 }
 
-/** Таб «A → остальное»: агрегаты по товарной группе следующей покупки. */
-function NextGroupsTable({ groups, base, to, from }: {
-  groups: TransitionNextGroup[]; base: number; to: string; from: string;
+/** Цепочки одной группы внутри таба «→ остальное» (правка владельца 11.09:
+ *  «сгруппированные связки не раскрываются, а хотелось бы их видеть»).
+ *  Тот же эндпоинт, что и у ячейки, только `to` = раскрытая группа — поэтому
+ *  выбор менеджера слева и фильтры отчёта работают здесь автоматически. */
+function GroupChains({ from, cat, filters, drillManagerId, onOpenDeal }: {
+  from: string; cat: string; filters: Record<string, unknown>;
+  drillManagerId: string | null; onOpenDeal: (id: number) => void;
 }) {
+  const body = useMemo(() => ({ ...filters, from, to: cat, drillManagerId }), [filters, from, cat, drillManagerId]);
+  const { data, isLoading, error } = useQuery<MatrixTransitionsResult>({
+    queryKey: ['matrix-transitions', body],
+    queryFn: async () => {
+      const res = await fetch('/api/reports/product-matrix/transitions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (isLoading) {
+    return <div className="space-y-1.5 py-2">{Array.from({ length: 3 }).map((_, i) => <div key={i} className="h-14 bg-[var(--color-border)] rounded animate-pulse" />)}</div>;
+  }
+  if (error) {
+    return <div className="py-3 text-sm text-[var(--color-negative,#d33)]">{error instanceof Error ? error.message : String(error)}</div>;
+  }
+  return (
+    <div className="flex flex-col gap-2 py-2">
+      {(data?.chains ?? []).map(c => (
+        <ChainRow key={`${c.prev.dealId}-${c.next.dealId}`} chain={c} from={from} to={cat} onOpenDeal={onOpenDeal} />
+      ))}
+      {(data?.chains ?? []).length === 0 && (
+        <div className="py-3 text-center text-sm text-[var(--color-text-muted)]">Цепочек нет</div>
+      )}
+      {data?.truncated && (
+        <div className="text-[11px] text-[var(--color-text-muted)]">показаны последние 300 из {data.total}</div>
+      )}
+    </div>
+  );
+}
+
+/** Таб «A → остальное»: агрегаты по товарной группе следующей покупки; строка
+ *  раскрывается в цепочки этой группы. */
+function NextGroupsTable({ groups, base, to, from, filters, drillManagerId, onOpenDeal }: {
+  groups: TransitionNextGroup[]; base: number; to: string; from: string;
+  filters: Record<string, unknown>; drillManagerId: string | null; onOpenDeal: (id: number) => void;
+}) {
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
   const maxN = Math.max(1, ...groups.map(g => g.n));
   if (groups.length === 0) {
     return <div className="p-6 text-center text-sm text-[var(--color-text-muted)]">Повторных покупок после «{from}» в этом срезе нет</div>;
   }
+  const toggle = (cat: string) => setOpen(prev => {
+    const next = new Set(prev);
+    if (next.has(cat)) next.delete(cat); else next.add(cat);
+    return next;
+  });
   return (
     <div className="scroll-x">
-      <table className="w-full text-sm min-w-[520px]">
+      <table className="w-full text-sm min-w-[560px]">
         <thead>
           <tr className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
             <th className="text-left font-medium py-1.5 pr-2">Группа следующей покупки</th>
@@ -125,32 +178,48 @@ function NextGroupsTable({ groups, base, to, from }: {
           {groups.map(g => {
             const share = base > 0 ? (g.n / base) * 100 : 0;
             const current = g.cat === to;
+            const expanded = open.has(g.cat);
             return (
-              <tr
-                key={g.cat}
-                className={`border-b border-[var(--color-border)] last:border-b-0 ${
-                  current ? 'bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]' : ''
-                }`}
-              >
-                <td className="py-1.5 pr-2 min-w-0">
-                  <div className={`truncate ${current ? 'font-semibold text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>
-                    {g.cat}
-                    {current && <span className="ml-1.5 text-[10px] font-normal uppercase tracking-wide">ячейка</span>}
-                  </div>
-                  {/* Полоска — вклад группы относительно самой массовой: видно, чем
-                      продолжают чаще всего, без чтения цифр. */}
-                  <div className="mt-1 h-1 rounded bg-[var(--color-bg-hover)] overflow-hidden">
-                    <div className="h-full bg-[var(--color-accent)]" style={{ width: `${(g.n / maxN) * 100}%` }} />
-                  </div>
-                </td>
-                <td className="py-1.5 px-2 text-right tabular-nums font-semibold text-[var(--color-text)]">{g.n}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-[var(--color-text-muted)]">{pctStr(share)}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-[var(--color-text-muted)]">{g.clients}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-[var(--color-text)]">{fmtMln(g.sumNext)}</td>
-                <td className="py-1.5 pl-2 text-right tabular-nums text-[var(--color-text-muted)]">
-                  {g.medianDays === null ? '—' : `${g.medianDays} дн.`}
-                </td>
-              </tr>
+              <Fragment key={g.cat}>
+                <tr
+                  onClick={() => toggle(g.cat)}
+                  className={`border-b border-[var(--color-border)] cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors ${
+                    current ? 'bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]' : ''
+                  }`}
+                >
+                  <td className="py-1.5 pr-2 min-w-0">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <ChevronRight size={13} className={`shrink-0 text-[var(--color-text-muted)] transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                      <span className={`truncate ${current ? 'font-semibold text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>
+                        {g.cat}
+                      </span>
+                      {current && <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--color-accent)]">ячейка</span>}
+                    </div>
+                    {/* Полоска — вклад группы относительно самой массовой: видно, чем
+                        продолжают чаще всего, без чтения цифр. */}
+                    <div className="mt-1 h-1 rounded bg-[var(--color-bg-hover)] overflow-hidden">
+                      <div className="h-full bg-[var(--color-accent)]" style={{ width: `${(g.n / maxN) * 100}%` }} />
+                    </div>
+                  </td>
+                  <td className="py-1.5 px-2 text-right tabular-nums font-semibold text-[var(--color-text)]">{g.n}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-[var(--color-text-muted)]">{pctStr(share)}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-[var(--color-text-muted)]">{g.clients}</td>
+                  <td className="py-1.5 px-2 text-right tabular-nums text-[var(--color-text)]">{fmtMln(g.sumNext)}</td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums text-[var(--color-text-muted)]">
+                    {g.medianDays === null ? '—' : `${g.medianDays} дн.`}
+                  </td>
+                </tr>
+                {expanded && (
+                  <tr className="border-b border-[var(--color-border)]">
+                    <td colSpan={6} className="pl-5 pr-2">
+                      <GroupChains
+                        from={from} cat={g.cat} filters={filters}
+                        drillManagerId={drillManagerId} onOpenDeal={onOpenDeal}
+                      />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             );
           })}
         </tbody>
@@ -214,6 +283,10 @@ export function TransitionDrillModal({ from, to, filters, onClose }: {
                 <b className="text-[var(--color-text)] tabular-nums">{data?.total ?? 0}</b> связок из{' '}
                 <b className="text-[var(--color-text)] tabular-nums">{data?.afterFrom ?? 0}</b> повторных покупок после «{from}»
                 {' '}(<b className="text-[var(--color-text)]">{pctStr(pct)}</b>)
+                {/* Все цифры шапки считаются по срезу выбранного менеджера (правка
+                    владельца 11.09) — подписываем, чей это срез, чтобы «112 → 25»
+                    не читалось как расхождение данных. */}
+                {selected && <> · только <b className="text-[var(--color-text)]">{selected.name ?? selected.managerId}</b></>}
               </>
             )}
           </p>
@@ -304,31 +377,32 @@ export function TransitionDrillModal({ from, to, filters, onClose }: {
 
           {/* Правая колонка: два таба (цепочки ячейки / вся строка «A → остальное») */}
           <section className="min-w-0 flex flex-col lg:min-h-0">
-            {/* Две кнопки — flex-wrap, а не горизонтальный скролл: перенос на новую
-                строку снимает класс баг-ов правила 12 CLAUDE.md (уезжающая страница). */}
-            <div className="shrink-0 flex flex-wrap items-center gap-2 mb-1.5">
-              <div role="group" aria-label="Что показывать" className="flex flex-wrap rounded-lg border border-[var(--color-border)] overflow-hidden">
-                {([
-                  { key: 'chains' as const, label: `${from} → ${to}`, count: data?.chains.length ?? 0 },
-                  { key: 'groups' as const, label: `${from} → остальное`, count: data?.nextGroups.length ?? 0 },
-                ]).map(o => (
-                  <button
-                    key={o.key}
-                    type="button"
-                    onClick={() => setTab(o.key)}
-                    aria-pressed={tab === o.key}
-                    className={`min-h-11 sm:min-h-0 sm:py-1.5 px-3 text-sm transition-colors max-w-[46vw] sm:max-w-none truncate ${
-                      tab === o.key
-                        ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] font-medium'
-                        : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                    }`}
-                    title={o.key === 'chains' ? 'Цепочки сделок этой ячейки' : `Все товарные группы, которыми продолжали после «${from}»`}
-                  >
-                    {o.label} · {o.count}
-                  </button>
-                ))}
-              </div>
-              <span className="text-[11px] text-[var(--color-text-muted)] min-w-0 truncate">
+            {/* Настоящие табы с подчёркиванием (правка владельца 11.09: «получились
+                не табы, а пилюльковый переключатель») — тот же паттерн, что TabBar
+                в RewardsSettingsPage. flex-wrap вместо горизонтального скролла
+                снимает класс баг-ов правила 12 CLAUDE.md (уезжающая страница). */}
+            <div className="shrink-0 mb-2 flex flex-wrap items-end gap-x-1 gap-y-0 border-b border-[var(--color-border)]">
+              {([
+                { key: 'chains' as const, label: `${from} → ${to}`, count: data?.total ?? 0, hint: 'Цепочки сделок этой ячейки' },
+                { key: 'groups' as const, label: `${from} → остальное`, count: data?.nextGroups.length ?? 0, hint: `Все товарные группы, которыми продолжали после «${from}»` },
+              ]).map(o => (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => setTab(o.key)}
+                  aria-selected={tab === o.key}
+                  role="tab"
+                  title={o.hint}
+                  className={`min-h-11 sm:min-h-0 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors max-w-[70vw] sm:max-w-none truncate ${
+                    tab === o.key
+                      ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+                      : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                  }`}
+                >
+                  {o.label} · {o.count}
+                </button>
+              ))}
+              <span className="ml-auto pb-2 pl-2 text-[11px] text-[var(--color-text-muted)] min-w-0 truncate">
                 {selected ? `только ${selected.name ?? selected.managerId}` : 'все менеджеры'}
                 {tab === 'chains' && data?.truncated ? ' · показаны последние 300' : ''}
                 {tab === 'groups' ? ` · база ${data?.nextGroupsBase ?? 0} повт. покупок` : ''}
@@ -346,7 +420,11 @@ export function TransitionDrillModal({ from, to, filters, onClose }: {
                   )}
                 </div>
               ) : (
-                <NextGroupsTable groups={data?.nextGroups ?? []} base={data?.nextGroupsBase ?? 0} to={to} from={from} />
+                <NextGroupsTable
+                  groups={data?.nextGroups ?? []} base={data?.nextGroupsBase ?? 0}
+                  to={to} from={from} filters={filters}
+                  drillManagerId={drillManagerId} onOpenDeal={setOpenDealId}
+                />
               )}
             </div>
           </section>
