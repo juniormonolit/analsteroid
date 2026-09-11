@@ -366,7 +366,7 @@ export function TransitionMatrixPage() {
         {withComparison && (
           <span className="text-xs text-[var(--color-text-muted)]">
             {compLoading ? 'считаем сравнение…' : (
-              <>в ячейке: <b className="text-[var(--color-text)]">↖ период</b> · <b>↘ сравнение</b>;
+              <>в ячейке: <b className="text-[var(--color-text)]">↗ период</b> · <b>↙ сравнение</b>;
               {' '}цвет — <b className="text-[var(--color-positive)]">рост</b>,
               {' '}<b className="text-[var(--color-negative)]">просадка</b>,
               {' '}серый — стагнация (±1 п.п.)</>
@@ -500,10 +500,13 @@ export function TransitionMatrixPage() {
                                 className="block h-full w-full hover:outline hover:outline-2 hover:outline-[var(--color-accent)] rounded"
                               >
                                 {withComparison ? (
-                                  /* Квадрат делится диагональю: слева-сверху выбранный
-                                     период (крупно, цветом дельты), справа-снизу — период
-                                     сравнения одной строкой «доля · случаев». Так обе пары
-                                     цифр стоят компактными блоками у соседних углов. */
+                                  /* Квадрат делится диагональю ИЗ ЛЕВОГО ВЕРХА В ПРАВЫЙ НИЗ
+                                     (правка владельца 11.09): выбранный период — правый
+                                     верхний угол, сравнение — левый нижний. Диагональ
+                                     развёрнута вместе с цифрами: при прежнем направлении
+                                     (из левого низа в правый верх) ровно эти два угла лежали
+                                     НА линии, и цифры её задевали. Теперь каждый блок стоит в
+                                     середине своего треугольника. */
                                   <span className="relative block h-full w-full">
                                     <span
                                       aria-hidden
@@ -511,16 +514,16 @@ export function TransitionMatrixPage() {
                                       /* Линия делителя — от приглушённого текста, а не
                                          --color-border: на плотной heat-заливке бордюрный
                                          цвет сливается с фоном (проверено на стенде). */
-                                      style={{ background: 'linear-gradient(to top right, transparent calc(50% - 0.5px), color-mix(in srgb, var(--color-text-muted) 45%, transparent) calc(50% - 0.5px), color-mix(in srgb, var(--color-text-muted) 45%, transparent) calc(50% + 0.5px), transparent calc(50% + 0.5px))' }}
+                                      style={{ background: 'linear-gradient(to bottom right, transparent calc(50% - 0.5px), color-mix(in srgb, var(--color-text-muted) 45%, transparent) calc(50% - 0.5px), color-mix(in srgb, var(--color-text-muted) 45%, transparent) calc(50% + 0.5px), transparent calc(50% + 0.5px))' }}
                                     />
-                                    <span className="absolute top-1.5 left-2 leading-none text-left">
+                                    <span className="absolute top-1.5 right-2 leading-none text-right">
                                       {/* Цветом — только доля (она и говорит о направлении);
                                           число переходов нейтральное, иначе «569» под красным
                                           процентом читается как отрицательная величина. */}
                                       <span className={`block text-[15px] font-semibold ${DELTA_CLS[d]}`}>{n > 0 ? pctStr(pct) : '—'}</span>
                                       <span className="block mt-0.5 text-[10.5px] text-[var(--color-text-muted)]">{n > 0 ? n : ''}</span>
                                     </span>
-                                    <span className="absolute bottom-1.5 right-2 text-[10.5px] leading-none text-[var(--color-text-muted)] whitespace-nowrap">
+                                    <span className="absolute bottom-1.5 left-2 text-[10.5px] leading-none text-[var(--color-text-muted)] whitespace-nowrap">
                                       {cTotal > 0 && cn > 0 ? `${pctStr(cPct)} · ${cn}` : '—'}
                                     </span>
                                   </span>
