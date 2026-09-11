@@ -6,6 +6,66 @@
 
 ---
 
+## 2026-09-11 — Деплой «Снять с продажи» на прод (задача #6271, Артём)
+
+Санкция Серёги («деплой фичу на прод») на выкат `feature/unsell-deal` (a763f84,
+задача #6260 выше) — до этого фича лежала в ветке, не смёржена и не задеплоена.
+
+**Дельта перед мержем:** прод (`/home/junior/analsteroid`, порт 8100) на момент
+проверки уже стоял на `origin/dev-asteroid` HEAD `2ce53c6` — свой деплой (не
+наш конвейер) прогнали в 11:32 того же дня (BUILD_ID `pCWols3YNgIeiFLAS0eq7`,
+mtime standalone совпадает с секунды до минуты с коммитом). Делта прод↔ветка —
+пустая, чужих незадеплоенных коммитов нет; мержить и катить безопасно.
+
+**Мерж:** `dev-asteroid-local` дотянута fast-forward до `origin/dev-asteroid`,
+`feature/unsell-deal` смёржена merge-commit'ом `90b449d`, запушена в
+`origin/dev-asteroid`.
+
+**Миграция:** `migrations/sa_org/004_manual_fixes.sql` изначально шла БЕЗ
+`GRANT` приложению (в отличие от `002_employee_registry.sql`, где грант есть) —
+`performUnsell()` упал бы на `INSERT` (default privileges на новые таблицы
+схемы `sa` отозваны). Добавлен `GRANT USAGE ON SCHEMA sa` + `GRANT SELECT,
+INSERT ON sa.manual_fixes TO junior_user` (`REVOKE UPDATE, DELETE` — журнал не
+редактируется), коммит `2bf3182`, запушено. Накатано вручную
+`docker exec supabase-db psql -U supabase_admin`, таблица создана, права
+проверены `information_schema.role_table_grants`.
+
+**Выкат:** пересборка в `/home/user/apps/analsteroid`, тарбол по составу
+прод-`deploy.sh` (`server/`, `*.json`, `BUILD_ID`, `server.js`, `static/`,
+`public/`), новый BUILD_ID `AELP3fhICpHi0b5Q8NvVs`. При остановке старого
+процесса (`kill <pid>` перед extract) процесс НЕ погиб — уже освободил порт
+8100 (новый успел его занять), но продолжал висеть отдельным PID до ручного
+`kill -9` постфактум (та же грабля зомби-деплоев, что 06.09 — `kill` без
+проверки, что процесс реально завершился, недостаточен). После проверки
+`for p in /proc/[0-9]*` — процессов с `cwd=.../analsteroid/.next/standalone`
+остался ровно один.
+
+**BITRIX_BOT_\* — расхождение со старой памятью:** ожидалось, что креды бота
+«Аналитик» в `start.sh` обнулены (мьют 06.09). На деле они восстановлены
+Серёгой 09.09 (`start.sh.bak-unmute-20260909-1330`) вместе с общим рубильником
+`bot_settings.killed` (миграция 183) — это НЕ регресс этого деплоя, `start.sh`
+не трогался. Проверено `killed=false` в `system.bot_settings` — бот сейчас
+технически МОЖЕТ слать сообщения (рубильник не включён); этот деплой его
+состояние не менял. Отмечено владельцу отдельно — старая заметка о мьюте
+устарела.
+
+**Смок на живом проде:** временные строки `user_sessions` для `test_alfred_user`
+(роль «Пользователь», без `action.deals.unsell`) и `test_alfred_admin` (роль
+«Администратор»), удалены сразу после проверки. Пользователь — 403 на
+`POST /api/sales/unsell-deal/:id`, пункта «Снять с продажи» в меню нет
+(экран `AccessDenied`, скрин `unsell-deal-prod-denied-20260911.png`). Админ —
+200, страница работает, скрин `unsell-deal-prod-20260911.png`. `sa.manual_fixes`
+после проверки — 0 строк (ничего не снято с продажи по-настоящему). Отчёт:
+`owners-inbox/monolitika-unsell-deal-deploy-20260911.html`.
+
+**Откат:** снапшот `prod-backups/rollback-pre-6260-20260911-183919.tar.gz`
+(старый `standalone/` + `static/` + `public/`, `BUILD_ID`
+`pCWols3YNgIeiFLAS0eq7`) — восстановить: остановить процесс на 8100,
+`tar -xzf` снапшот с `--overwrite` в `/home/junior/analsteroid`, скопировать
+`static/public` в `standalone`, `nohup bash start.sh`. Миграция обратной
+совместимости не требует (новая таблица, DOWN — `DROP TABLE sa.manual_fixes`,
+не выполнялся).
+
 ## 2026-09-11 — «Снять с продажи» в «Ещё»: директор и выше, ручная очистка sold_at (задача #6260)
 
 Заказчик Серёга: «добавь ручную правку в раздел „Ещё" и сделай доступной только
