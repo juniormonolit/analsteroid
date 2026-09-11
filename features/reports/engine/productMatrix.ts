@@ -93,6 +93,20 @@ export interface ProductMatrixOptions {
 
 const EXCLUDED_FUNNELS = '(4, 7)';
 
+// Категории-шум, исключённые ИЗ МАТРИЦ (правка владельца 11.09 по итогам разбора
+// «Разного», артефакт «Что лежит в „Разном“»): группа 102 — не спрос, а ящик
+// сопутствующей мелочи (упаковка 1 559 позиций, крепёж, ленты, услуги), который
+// прицеплен к каждому пятому заказу. Она участвовала в 32 % всех пар переходов и
+// забивала верх матрицы, а настоящие связки вроде «газобетон → кровля» тонули ниже.
+//
+// Исключаем ТОЛЬКО здесь, а НЕ в общем SERVICE_HEAD_GROUP_IDS: тот список читают
+// метрики раздела «Клиенты», разгрузка отделов и прочее — там «Разное» остаётся
+// обычным товаром, и менять им цифры этой правкой нельзя.
+//
+// По ID, а не по имени — по той же причине, что и в serviceGroups.ts: имя группы
+// редактируется в Битриксе, id — нет.
+const NOISE_HEAD_GROUP_IDS = [102] as const; // 102 — «Разное»
+
 /** Общая часть SQL для матрицы и её дрилла: фильтры закрывающей сделки + CTE заказов. */
 function buildMatrixScope(
   opts: ProductMatrixOptions, mode: MatrixCategoryMode, fromIso: string, toExclIso: string,
@@ -136,6 +150,7 @@ function buildMatrixScope(
      AND d.contact_id IS NOT NULL
      AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
      AND ${goodsPositionWhere('p')}
+     AND (p->>'head_group_id')::bigint NOT IN (${NOISE_HEAD_GROUP_IDS.join(', ')})
      AND (p->>'head_group_name') IS NOT NULL
    GROUP BY d.contact_id, d.delivered_at, d.deal_id, d.deal_name, d.amount, d.current_manager_id, d.funnel_id`
     : `
@@ -147,7 +162,7 @@ function buildMatrixScope(
      AND d.contact_id IS NOT NULL
      AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
      AND d.head_group_name IS NOT NULL
-     AND d.head_group_id NOT IN (${SERVICE_HEAD_GROUP_IDS.join(', ')})`;
+     AND d.head_group_id NOT IN (${[...SERVICE_HEAD_GROUP_IDS, ...NOISE_HEAD_GROUP_IDS].join(', ')})`;
 
   return { params, nextWhere: next.length ? `AND ${next.join(' AND ')}` : '', dealCats, anchorAt };
 }
@@ -209,7 +224,7 @@ SELECT 'shipTotal', NULL, NULL, count(*)::int FROM base
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
   ].join('|');
   const rows = await cached(
-    `rpt:matrix3:${key}`,
+    `rpt:matrix4:${key}`,
     reportTtl(toExclIso),
     async () => {
       const res = await analyticsDb().query<{ kind: string; from_grp: string | null; to_grp: string | null; n: number }>(sql, params);
@@ -464,7 +479,7 @@ SELECT 'chain', next_mgr, NULL,
     (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
   ].join('|');
-  const rows = await cached(`rpt:matrix3:${key}`, reportTtl(toExclIso), async () => {
+  const rows = await cached(`rpt:matrix4:${key}`, reportTtl(toExclIso), async () => {
     const res = await analyticsDb().query<Row>(sql, params);
     return res.rows;
   });
