@@ -29,6 +29,14 @@ CREATE TABLE IF NOT EXISTS sa.manual_fixes (
 CREATE INDEX IF NOT EXISTS idx_manual_fixes_deal_id    ON sa.manual_fixes (deal_id);
 CREATE INDEX IF NOT EXISTS idx_manual_fixes_created_at ON sa.manual_fixes (created_at DESC);
 
+-- Права приложению (junior_user), по образцу sa_org/002_employee_registry.sql —
+-- без этого performUnsell() упадёт на INSERT (default privileges на новые
+-- таблицы в sa отозваны, см. reference_supabase_revoke_default_privileges).
+-- Найдено Артёмом при деплое #6271: миграция изначально шла без GRANT.
+GRANT USAGE ON SCHEMA sa TO junior_user;
+GRANT SELECT, INSERT ON sa.manual_fixes TO junior_user;
+REVOKE UPDATE, DELETE ON sa.manual_fixes FROM junior_user;
+
 -- Проверка после накатки:
 --   \d sa.manual_fixes
 --   SELECT count(*) FROM sa.manual_fixes; -- 0
