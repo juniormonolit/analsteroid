@@ -489,7 +489,11 @@ export function TransitionMatrixPage() {
                           : `После «${from}» брали «${to}»: ${n} из ${total} повторных покупок (${ship} отгрузок категории). Клик — кто продаёт и цепочки сделок`;
                         return (
                           <td key={to}
-                            className={`group/cell relative border-b border-[var(--color-border)] p-0 tabular-nums ${from === to ? 'font-medium' : ''}`}
+                            /* Именно `group`, а не `group/cell`: правило .hover-reveal в
+                               globals.css завязано на ЛИТЕРАЛЬНЫЙ класс `.group`, и с
+                               именованной группой Tailwind кнопка графика оставалась
+                               прозрачной навсегда (баг 11.09 — «кнопки не появилось»). */
+                            className={`group relative border-b border-[var(--color-border)] p-0 tabular-nums ${from === to ? 'font-medium' : ''}`}
                             style={{
                               background: n > 0 ? heatBg(pct) : undefined,
                               width: size, minWidth: size, height: size,
@@ -502,7 +506,11 @@ export function TransitionMatrixPage() {
                                 type="button"
                                 onClick={e => { e.stopPropagation(); setChart({ from, to, pct: n > 0 ? pct : null }); }}
                                 title={`График динамики: «${from}» → «${to}»`}
-                                className="hover-reveal tap-target absolute top-0.5 left-0.5 z-10 flex h-4 w-4 items-center justify-center rounded bg-[var(--color-bg-surface)]/85 text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+                                /* Без .tap-target: его псевдоэлемент 44×44 внутри ячейки
+                                   в 76–100 px накрывает пол-ячейки и, будучи невидимым,
+                                   ворует клики у дрилла. Вместо этого сама кнопка крупнее
+                                   (24 px) — попасть легко, чужие клики не перехватывает. */
+                                className="hover-reveal absolute top-0.5 left-0.5 z-10 flex h-6 w-6 items-center justify-center rounded bg-[var(--color-bg-surface)] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] shadow-sm"
                               >
                                 <ChartLine size={11} />
                               </button>
