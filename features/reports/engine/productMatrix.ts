@@ -258,6 +258,35 @@ export interface TransitionManagerRow {
   afterFrom: number;
   /** Из них с категорией B. */
   n: number;
+  /** Сумма закрывающих сделок связок A→B этого менеджера. */
+  sumNext: number;
+  /** Медиана дней между покупками в его связках. */
+  medianDays: number | null;
+}
+
+/** Строка таба «материал → остальное»: чем продолжили после A (все категории). */
+export interface TransitionNextGroup {
+  cat: string;
+  /** Повторных покупок после A, в которых была эта категория. */
+  n: number;
+  /** Заказчиков за этими покупками. */
+  clients: number;
+  /** Сумма закрывающих сделок (заказ из двух категорий попадает в обе строки). */
+  sumNext: number;
+  medianDays: number | null;
+}
+
+/** Агрегаты набора пар — для шапки дрилла. */
+export interface TransitionAgg {
+  /** Пар в наборе. */
+  n: number;
+  /** Уникальных заказчиков. */
+  clients: number;
+  /** Сумма исходных отгрузок пар. */
+  sumPrev: number;
+  /** Сумма закрывающих сделок пар. */
+  sumNext: number;
+  medianDays: number | null;
 }
 
 export interface TransitionDealBrief {
@@ -286,6 +315,18 @@ export interface MatrixTransitionsResult {
   afterFrom: number;
   /** Показаны не все цепочки (потолок CHAINS_LIMIT). */
   truncated: boolean;
+  /** Агрегаты связок A→B по всей ячейке (без фильтра менеджера). */
+  hitsAgg: TransitionAgg;
+  /** Агрегаты ВСЕХ повторных покупок после A — знаменатель ячейки. */
+  afterFromAgg: TransitionAgg;
+  /**
+   * Таб «материал отгрузки → остальное» (правка владельца 11.09): чем вообще
+   * продолжали после A, в разрезе товарной группы следующей покупки. Уважает
+   * выбор менеджера в левой колонке — как и цепочки.
+   */
+  nextGroups: TransitionNextGroup[];
+  /** Знаменатель разбивки: повторных покупок после A в текущем срезе дрилла. */
+  nextGroupsBase: number;
 }
 
 export interface MatrixTransitionsOptions extends ProductMatrixOptions {
@@ -314,11 +355,18 @@ export async function fetchMatrixTransitions(opts: MatrixTransitionsOptions): Pr
     drillWhere = `WHERE next_mgr = $${params.length}`;
   }
 
+  // Колонки объединения (19): служебные агрегаты и цепочки в одном ответе —
+  // deal_cats тяжёлый (jsonb_array_elements по всем отгрузкам), второй такой же
+  // проход ради агрегатов удвоил бы время открытия дрилла.
+  const NULLS_DEAL = `NULL::bigint, NULL::text, NULL::timestamptz, NULL::numeric, NULL::text[],
+       NULL::bigint, NULL::text, NULL::timestamptz, NULL::numeric, NULL::text[]`;
+  const DAYS = `EXTRACT(EPOCH FROM (next_at - delivered_at)) / 86400`;
+
   const sql = `
 WITH deal_cats AS (${dealCats}
 ),
 seq AS (
-  SELECT contact_id, cats, deal_id, deal_name, amount, delivered_at,
+  SELECT contact_id, cats, deal_id, deal_name, amount, delivered_at, mgr, funnel_id,
          lead(cats)         OVER w AS next_cats,
          lead(delivered_at) OVER w AS next_at,
          lead(deal_id)      OVER w AS next_deal_id,
@@ -336,27 +384,70 @@ pairs AS (
      ${nextWhere}
 ),
 after_from AS (SELECT * FROM pairs WHERE ${pFrom} = ANY(cats)),
-hits AS (SELECT * FROM after_from WHERE ${pTo} = ANY(next_cats))
-SELECT 'mgr' AS kind, next_mgr AS manager_id,
-       count(*)::int AS after_from,
+hits AS (SELECT * FROM after_from WHERE ${pTo} = ANY(next_cats)),
+-- Срез дрилла (выбранный менеджер) — для цепочек и разбивки «→ остальное».
+af_drill AS (SELECT * FROM after_from ${drillWhere}),
+hits_drill AS (SELECT * FROM hits ${drillWhere})
+SELECT 'mgr' AS kind, next_mgr AS manager_id, NULL::text AS cat,
        count(*) FILTER (WHERE ${pTo} = ANY(next_cats))::int AS n,
-       NULL::bigint AS deal_id, NULL::text AS deal_name, NULL::timestamptz AS at, NULL::numeric AS amount, NULL::text[] AS cats,
-       NULL::bigint AS next_deal_id, NULL::text AS next_deal_name, NULL::timestamptz AS next_at, NULL::numeric AS next_amount, NULL::text[] AS next_cats
+       count(*)::int AS after_from,
+       count(DISTINCT contact_id) FILTER (WHERE ${pTo} = ANY(next_cats))::int AS clients,
+       NULL::numeric AS sum_prev,
+       sum(next_amount) FILTER (WHERE ${pTo} = ANY(next_cats)) AS sum_next,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY ${DAYS}) FILTER (WHERE ${pTo} = ANY(next_cats)) AS median_days,
+       ${NULLS_DEAL}
   FROM after_from GROUP BY next_mgr
 UNION ALL
-SELECT 'chain', next_mgr, NULL, NULL,
+-- Таб «материал → остальное»: чем продолжили после A, по группе следующей покупки.
+-- Пара с двумя категориями в закрывающем заказе попадает в обе строки (как в ячейках матрицы).
+SELECT 'grp', NULL, t.cat,
+       count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
+       NULL::numeric, sum(next_amount),
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY ${DAYS}),
+       ${NULLS_DEAL}
+  FROM af_drill, unnest(next_cats) t(cat) GROUP BY t.cat
+UNION ALL
+-- Знаменатель разбивки и её агрегаты (пары, а не категории — без двойного счёта).
+SELECT 'grpBase', NULL, NULL,
+       count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
+       sum(amount), sum(next_amount),
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY ${DAYS}),
+       ${NULLS_DEAL}
+  FROM af_drill
+UNION ALL
+SELECT 'hitsAgg', NULL, NULL,
+       count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
+       sum(amount), sum(next_amount),
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY ${DAYS}),
+       ${NULLS_DEAL}
+  FROM hits
+UNION ALL
+SELECT 'afterFromAgg', NULL, NULL,
+       count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
+       sum(amount), sum(next_amount),
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY ${DAYS}),
+       ${NULLS_DEAL}
+  FROM after_from
+UNION ALL
+SELECT 'chain', next_mgr, NULL,
+       NULL::int, NULL::int, NULL::int, NULL::numeric, NULL::numeric, NULL::numeric,
        deal_id, deal_name, delivered_at, amount, cats,
        next_deal_id, next_deal_name, next_at, next_amount, next_cats
-  FROM (SELECT * FROM hits ${drillWhere} ORDER BY next_at DESC LIMIT ${CHAINS_LIMIT + 1}) c
+  FROM (SELECT * FROM hits_drill ORDER BY next_at DESC LIMIT ${CHAINS_LIMIT + 1}) c
 `;
 
   type Row = {
-    kind: 'mgr' | 'chain'; manager_id: string | null; after_from: number | null; n: number | null;
+    kind: 'mgr' | 'grp' | 'grpBase' | 'hitsAgg' | 'afterFromAgg' | 'chain';
+    manager_id: string | null; cat: string | null;
+    n: number | null; after_from: number | null; clients: number | null;
+    sum_prev: string | null; sum_next: string | null; median_days: string | null;
     deal_id: string | null; deal_name: string | null; at: Date | null; amount: string | null; cats: string[] | null;
     next_deal_id: string | null; next_deal_name: string | null; next_at: Date | null; next_amount: string | null; next_cats: string[] | null;
   };
+  // 'drill2' — форма ответа изменилась 11.09 (агрегаты + разбивка): старые
+  // записи Redis с прежней формой не должны прилететь в новый парсер.
   const key = [
-    'drill', mode, opts.periodAnchor ?? 'next', fromIso, toExclIso, opts.from, opts.to, opts.drillManagerId ?? '-',
+    'drill2', mode, opts.periodAnchor ?? 'next', fromIso, toExclIso, opts.from, opts.to, opts.drillManagerId ?? '-',
     (opts.managerIds ?? []).slice().sort().join(',') || 'm:all',
     (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
@@ -368,17 +459,37 @@ SELECT 'chain', next_mgr, NULL, NULL,
 
   const managers: TransitionManagerRow[] = [];
   const chains: TransitionChain[] = [];
-  let total = 0;
-  let afterFrom = 0;
+  const nextGroups: TransitionNextGroup[] = [];
+  const emptyAgg = (): TransitionAgg => ({ n: 0, clients: 0, sumPrev: 0, sumNext: 0, medianDays: null });
+  let hitsAgg = emptyAgg();
+  let afterFromAgg = emptyAgg();
+  let nextGroupsBase = 0;
+  const num = (v: string | null) => (v === null ? 0 : Number(v));
+  const med = (v: string | null) => (v === null ? null : Math.round(Number(v)));
+  const aggOf = (r: Row): TransitionAgg => ({
+    n: Number(r.n ?? 0), clients: Number(r.clients ?? 0),
+    sumPrev: num(r.sum_prev), sumNext: num(r.sum_next), medianDays: med(r.median_days),
+  });
+
   for (const r of rows) {
     if (r.kind === 'mgr') {
-      const n = Number(r.n ?? 0);
-      const af = Number(r.after_from ?? 0);
-      total += n;
-      afterFrom += af;
-      managers.push({ managerId: r.manager_id, name: null, afterFrom: af, n });
+      managers.push({
+        managerId: r.manager_id, name: null,
+        afterFrom: Number(r.after_from ?? 0), n: Number(r.n ?? 0),
+        sumNext: num(r.sum_next), medianDays: med(r.median_days),
+      });
       continue;
     }
+    if (r.kind === 'grp') {
+      if (r.cat) nextGroups.push({
+        cat: r.cat, n: Number(r.n ?? 0), clients: Number(r.clients ?? 0),
+        sumNext: num(r.sum_next), medianDays: med(r.median_days),
+      });
+      continue;
+    }
+    if (r.kind === 'grpBase') { nextGroupsBase = Number(r.n ?? 0); continue; }
+    if (r.kind === 'hitsAgg') { hitsAgg = aggOf(r); continue; }
+    if (r.kind === 'afterFromAgg') { afterFromAgg = aggOf(r); continue; }
     const at = r.at ? new Date(r.at).toISOString() : '';
     const nextAt = r.next_at ? new Date(r.next_at).toISOString() : '';
     chains.push({
@@ -389,6 +500,7 @@ SELECT 'chain', next_mgr, NULL, NULL,
       days: at && nextAt ? Math.round((new Date(nextAt).getTime() - new Date(at).getTime()) / 86_400_000) : 0,
     });
   }
+  nextGroups.sort((a, b) => b.n - a.n || b.sumNext - a.sumNext);
 
   // Имена менеджеров — одним запросом по встретившимся id (в SQL выше JOIN дал бы
   // дубли строк оргструктуры).
@@ -407,5 +519,9 @@ SELECT 'chain', next_mgr, NULL, NULL,
   // Лучшие — по числу связок; при равенстве выше тот, у кого выше доля.
   managers.sort((a, b) => b.n - a.n || (b.afterFrom ? b.n / b.afterFrom : 0) - (a.afterFrom ? a.n / a.afterFrom : 0));
   const truncated = chains.length > CHAINS_LIMIT;
-  return { managers, chains: chains.slice(0, CHAINS_LIMIT), total, afterFrom, truncated };
+  return {
+    managers, chains: chains.slice(0, CHAINS_LIMIT),
+    total: hitsAgg.n, afterFrom: afterFromAgg.n, truncated,
+    hitsAgg, afterFromAgg, nextGroups, nextGroupsBase,
+  };
 }
