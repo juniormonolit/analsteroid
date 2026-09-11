@@ -78,6 +78,14 @@ const DELTA_CLS: Record<Delta, string> = {
 };
 const pctStr = (v: number) => `${v.toFixed(v >= 10 ? 0 : 1)}%`;
 
+// Ячейки КВАДРАТНЫЕ (правка владельца 11.09: «сделай ячейки квадратными,
+// скомпануй цифры нормально»). Прямоугольник 150×79 растаскивал две пары цифр
+// по далёким углам, и глаз прыгал через всю ячейку. В квадрате углы рядом:
+// текущее значение плотным блоком слева-сверху, сравнение одной строкой
+// справа-снизу — читается как «сейчас / было».
+const CELL_PLAIN = 76;
+const CELL_CMP = 100;
+
 function Segmented<T extends string>({ value, options, onChange, ariaLabel }: {
   value: T; options: { key: T; label: string }[]; onChange: (v: T) => void; ariaLabel: string;
 }) {
@@ -402,7 +410,7 @@ export function TransitionMatrixPage() {
                     <th
                       key={to}
                       className="sticky top-0 z-20 bg-[var(--color-bg)] p-0 text-sm font-medium text-[var(--color-text)] border-b border-[var(--color-border)] align-bottom"
-                      style={{ minWidth: withComparison ? 150 : 72 }}
+                      style={{ width: withComparison ? CELL_CMP : CELL_PLAIN, minWidth: withComparison ? CELL_CMP : CELL_PLAIN }}
                     >
                       {/* Клик по колонке → строки от большего к меньшему по ней. */}
                       <button
@@ -423,6 +431,7 @@ export function TransitionMatrixPage() {
               </thead>
               <tbody>
                 {rows.map(from => {
+                  const size = withComparison ? CELL_CMP : CELL_PLAIN;
                   const total = data?.rowTotals[from] ?? 0;
                   const ship = data?.shipments[from] ?? 0;
                   const cTotal = compData?.rowTotals[from] ?? 0;
@@ -432,17 +441,24 @@ export function TransitionMatrixPage() {
                   const convDelta = deltaOf(conv, cConv, cShip > 0);
                   return (
                     <tr key={from}>
-                      <th className="sticky left-0 z-10 bg-[var(--color-bg)] text-left p-0 font-normal text-[var(--color-text)] border-b border-r border-[var(--color-border)] min-w-[260px] max-w-[320px]">
+                      {/* Высота строки жёстко равна стороне ячейки — иначе длинное
+                          название («Кровельные материалы, водосточные системы») растянуло
+                          бы строку и ячейки перестали быть квадратными. Название — до двух
+                          строк, полное видно в подсказке. */}
+                      <th
+                        className="sticky left-0 z-10 bg-[var(--color-bg)] text-left p-0 font-normal text-[var(--color-text)] border-b border-r border-[var(--color-border)] min-w-[260px] max-w-[320px]"
+                        style={{ height: size }}
+                      >
                         {/* Клик по строке → колонки от большего к меньшему по ней. */}
                         <button
                           type="button"
                           onClick={() => setSort(s => nextSort(s, 'cols', from))}
                           title={`Сортировать колонки по строке «${from}» (слева направо от большего)`}
-                          className={`w-full text-left p-3 hover:bg-[var(--color-bg-hover)] transition-colors ${
+                          className={`w-full h-full text-left px-3 py-2 hover:bg-[var(--color-bg-hover)] transition-colors ${
                             sort?.kind === 'cols' && sort.key === from ? 'text-[var(--color-accent)]' : ''
                           }`}
                         >
-                          <span className="block break-words leading-tight">{from}{sortMark('cols', from)}</span>
+                          <span className="block break-words leading-tight line-clamp-2" title={from}>{from}{sortMark('cols', from)}</span>
                           {/* Конверсия категории в повторную покупку: сколько отгрузок было
                               в срезе и у скольких из них случилось продолжение. */}
                           <span className="block mt-0.5 text-xs text-[var(--color-text-muted)]">
@@ -469,44 +485,49 @@ export function TransitionMatrixPage() {
                           : `После «${from}» брали «${to}»: ${n} из ${total} повторных покупок (${ship} отгрузок категории). Клик — кто продаёт и цепочки сделок`;
                         return (
                           <td key={to}
-                            className={`border-b border-[var(--color-border)] tabular-nums ${from === to ? 'font-medium' : ''}`}
-                            style={{ background: n > 0 ? heatBg(pct) : undefined }}>
+                            className={`border-b border-[var(--color-border)] p-0 tabular-nums ${from === to ? 'font-medium' : ''}`}
+                            style={{
+                              background: n > 0 ? heatBg(pct) : undefined,
+                              width: size, minWidth: size, height: size,
+                            }}>
                             {empty ? (
-                              <span className="block p-2 text-center text-[var(--color-text-muted)]">·</span>
+                              <span className="flex h-full w-full items-center justify-center text-[var(--color-text-muted)]">·</span>
                             ) : (
                               <button
                                 type="button"
                                 onClick={() => setDrill({ from, to })}
                                 title={title}
-                                className="w-full min-h-11 hover:outline hover:outline-2 hover:outline-[var(--color-accent)] rounded"
+                                className="block h-full w-full hover:outline hover:outline-2 hover:outline-[var(--color-accent)] rounded"
                               >
                                 {withComparison ? (
-                                  /* Ячейка поделена по диагонали (правка владельца 11.09):
-                                     сверху-слева — выбранный период, снизу-справа — период
-                                     сравнения. Цвет верхнего значения = рост / просадка /
-                                     стагнация. Сетка вчетверо крупнее, чтобы всё влезло. */
-                                  <span className="relative block h-[68px] w-full">
+                                  /* Квадрат делится диагональю: слева-сверху выбранный
+                                     период (крупно, цветом дельты), справа-снизу — период
+                                     сравнения одной строкой «доля · случаев». Так обе пары
+                                     цифр стоят компактными блоками у соседних углов. */
+                                  <span className="relative block h-full w-full">
                                     <span
                                       aria-hidden
                                       className="absolute inset-0"
                                       /* Линия делителя — от приглушённого текста, а не
                                          --color-border: на плотной heat-заливке бордюрный
                                          цвет сливается с фоном (проверено на стенде). */
-                                      style={{ background: 'linear-gradient(to top right, transparent calc(50% - 0.5px), color-mix(in srgb, var(--color-text-muted) 60%, transparent) calc(50% - 0.5px), color-mix(in srgb, var(--color-text-muted) 60%, transparent) calc(50% + 0.5px), transparent calc(50% + 0.5px))' }}
+                                      style={{ background: 'linear-gradient(to top right, transparent calc(50% - 0.5px), color-mix(in srgb, var(--color-text-muted) 45%, transparent) calc(50% - 0.5px), color-mix(in srgb, var(--color-text-muted) 45%, transparent) calc(50% + 0.5px), transparent calc(50% + 0.5px))' }}
                                     />
-                                    <span className={`absolute top-1 left-2 leading-tight text-left ${DELTA_CLS[d]}`}>
-                                      <span className="block font-semibold">{n > 0 ? pctStr(pct) : '—'}</span>
-                                      <span className="block text-[11px] opacity-80">{n > 0 ? n : ''}</span>
+                                    <span className="absolute top-1.5 left-2 leading-none text-left">
+                                      {/* Цветом — только доля (она и говорит о направлении);
+                                          число переходов нейтральное, иначе «569» под красным
+                                          процентом читается как отрицательная величина. */}
+                                      <span className={`block text-[15px] font-semibold ${DELTA_CLS[d]}`}>{n > 0 ? pctStr(pct) : '—'}</span>
+                                      <span className="block mt-0.5 text-[10.5px] text-[var(--color-text-muted)]">{n > 0 ? n : ''}</span>
                                     </span>
-                                    <span className="absolute bottom-1 right-2 leading-tight text-right text-[var(--color-text-muted)]">
-                                      <span className="block text-sm">{cTotal > 0 && cn > 0 ? pctStr(cPct) : '—'}</span>
-                                      <span className="block text-[11px]">{cn > 0 ? cn : ''}</span>
+                                    <span className="absolute bottom-1.5 right-2 text-[10.5px] leading-none text-[var(--color-text-muted)] whitespace-nowrap">
+                                      {cTotal > 0 && cn > 0 ? `${pctStr(cPct)} · ${cn}` : '—'}
                                     </span>
                                   </span>
                                 ) : (
-                                  <span className="px-2 py-2 flex flex-col leading-tight items-center justify-center">
-                                    <span className="font-medium">{pctStr(pct)}</span>
-                                    <span className="text-xs text-[var(--color-text-muted)]">{n}</span>
+                                  <span className="flex h-full w-full flex-col items-center justify-center leading-none">
+                                    <span className="text-[15px] font-medium">{pctStr(pct)}</span>
+                                    <span className="mt-1 text-[11px] text-[var(--color-text-muted)]">{n}</span>
                                   </span>
                                 )}
                               </button>
