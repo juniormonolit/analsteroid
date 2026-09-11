@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -460,6 +460,10 @@ function SidebarBody({
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: canMore('section.decomposition') },
     { href: '/metrics', label: 'Метрики', icon: <BarChart2 size={18} />, ok: canMore('section.metrics') },
     { href: '/widget-constructor', label: 'Виджеты', icon: <Smartphone size={18} />, ok: canMore('section.widget_constructor') },
+    // «Снять с продажи» (задача #6260, санкция Серёги 11.09) — ручная очистка
+    // sold_at ошибочно проданной сделки. Гейт по действию (как «Чаты»), не по
+    // section.*: директор и выше, РОПу право не выдаётся по умолчанию.
+    { href: '/sales/unsell-deal', label: 'Снять с продажи', icon: <RotateCcw size={18} />, ok: canMore('action.deals.unsell') },
   ].filter(i => i.ok);
   const moreActive = moreItems.some(i => pathname.startsWith(i.href));
   // Авто-раскрытие, когда пользователь В одном из спрятанных разделов — активный
