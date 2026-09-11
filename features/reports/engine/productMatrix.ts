@@ -257,6 +257,85 @@ SELECT 'shipTotal', NULL, NULL, count(*)::int FROM base
 }
 
 
+// ── Динамика ячейки во времени (правка владельца 11.09: «кнопка графика на
+// каждом квадратике, как в основных отчётах; шаг по умолчанию — неделя») ───────
+//
+// Бакеты режутся по той же стороне пары, что и весь отчёт (periodAnchor), поэтому
+// точка графика читается так же, как ячейка: «из отгрузок категории A в эту
+// неделю столько-то получили продолжение, и в n из них была категория B».
+// Три числа на бакет: отгрузок A (ship), из них с любым продолжением (denom) и с
+// категорией B (n) — на графике это доля n/denom, а ship даёт вторую линию
+// «конверсия в повтор» без второго запроса.
+
+export type TransitionSeriesStep = 'day' | 'week' | 'month';
+
+export interface TransitionSeriesPoint {
+  /** Начало бакета, YYYY-MM-DD (МСК). */
+  bucket: string;
+  ship: number;
+  denom: number;
+  n: number;
+}
+
+export interface TransitionSeriesResult {
+  step: TransitionSeriesStep;
+  points: TransitionSeriesPoint[];
+}
+
+export async function fetchTransitionSeries(
+  opts: MatrixTransitionsOptions & { step?: TransitionSeriesStep },
+): Promise<TransitionSeriesResult> {
+  const mode: MatrixCategoryMode = opts.mode ?? 'by_max';
+  const step: TransitionSeriesStep = opts.step ?? 'week';
+  const fromIso = opts.period.from.toISOString();
+  const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
+  const { params, nextWhere, dealCats, anchorAt } = buildMatrixScope(opts, mode, fromIso, toExclIso);
+
+  params.push(opts.from); const pFrom = `$${params.length}`;
+  params.push(opts.to);   const pTo = `$${params.length}`;
+
+  const sql = `
+WITH deal_cats AS (${dealCats}
+),
+seq AS (
+  SELECT contact_id, cats, deal_id, delivered_at, mgr, funnel_id,
+         lead(cats)         OVER w AS next_cats,
+         lead(delivered_at) OVER w AS next_at,
+         lead(mgr)          OVER w AS next_mgr,
+         lead(funnel_id)    OVER w AS next_funnel
+    FROM deal_cats
+  WINDOW w AS (PARTITION BY contact_id ORDER BY delivered_at, deal_id)
+),
+base AS (
+  SELECT * FROM seq
+   WHERE ${anchorAt} >= $1 AND ${anchorAt} < $2
+     ${nextWhere}
+     AND ${pFrom} = ANY(cats)
+)
+SELECT date_trunc('${step}', ${anchorAt} AT TIME ZONE 'Europe/Moscow')::date::text AS bucket,
+       count(*)::int AS ship,
+       count(*) FILTER (WHERE next_cats IS NOT NULL)::int AS denom,
+       count(*) FILTER (WHERE next_cats IS NOT NULL AND ${pTo} = ANY(next_cats))::int AS n
+  FROM base
+ GROUP BY 1 ORDER BY 1
+`;
+
+  const key = [
+    'series1', mode, opts.periodAnchor ?? 'next', step, fromIso, toExclIso, opts.from, opts.to,
+    (opts.managerIds ?? []).slice().sort().join(',') || 'm:all',
+    (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
+    opts.dealScope ?? 'all', opts.clientType ?? 'all',
+  ].join('|');
+  const points = await cached(`rpt:matrix4:${key}`, reportTtl(toExclIso), async () => {
+    const res = await analyticsDb().query<TransitionSeriesPoint>(sql, params);
+    return res.rows.map(r => ({
+      bucket: r.bucket, ship: Number(r.ship), denom: Number(r.denom), n: Number(r.n),
+    }));
+  });
+  return { step, points };
+}
+
+
 // ── Дрилл ячейки: кто продаёт связку и цепочки сделок (задача владельца 10.09) ──
 //
 // Клик по ячейке (A → B) отвечает на два вопроса владельца: «кто лучше продаёт

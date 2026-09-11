@@ -1,13 +1,14 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeftRight, Filter, Search, UserRound, X } from 'lucide-react';
+import { ArrowLeftRight, ChartLine, Filter, Search, UserRound, X } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { DepartmentPicker, PeriodRangeControls } from './FilterBar';
 import { applyPreset, calendarComparisonForPreset, type DateRange } from '@/lib/period';
 import type { DealScope, ClientType } from '@/lib/metrics/types';
 import type { MatrixCell } from '@/features/reports/engine/productMatrix';
 import { TransitionDrillModal } from './TransitionDrillModal';
+import { TransitionSeriesModal } from './TransitionSeriesModal';
 
 // «Матрица переходов» (задача владельца 10.09): та же квадратная матрица
 // «отгружено X → следующим отгружено Y», что «Товарная матрица», но ФАКТ в срезе
@@ -193,6 +194,9 @@ export function TransitionMatrixPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set()); // категории; пусто = все
   // Открытая ячейка → дрилл «кто продаёт связку + цепочки сделок» (правка 10.09).
   const [drill, setDrill] = useState<{ from: string; to: string } | null>(null);
+  // График динамики ячейки (правка владельца 11.09) — как «график метрики» в
+  // основных отчётах, только ряд считает движок матрицы.
+  const [chart, setChart] = useState<{ from: string; to: string; pct: number | null } | null>(null);
   // Режим сравнения периодов (правка владельца 11.09) — по умолчанию выключен;
   // включённый добавляет второй запрос за период сравнения и делит ячейку по
   // диагонали. Пикер периода сравнения — тот же, что в основных отчётах.
@@ -485,11 +489,24 @@ export function TransitionMatrixPage() {
                           : `После «${from}» брали «${to}»: ${n} из ${total} повторных покупок (${ship} отгрузок категории). Клик — кто продаёт и цепочки сделок`;
                         return (
                           <td key={to}
-                            className={`border-b border-[var(--color-border)] p-0 tabular-nums ${from === to ? 'font-medium' : ''}`}
+                            className={`group/cell relative border-b border-[var(--color-border)] p-0 tabular-nums ${from === to ? 'font-medium' : ''}`}
                             style={{
                               background: n > 0 ? heatBg(pct) : undefined,
                               width: size, minWidth: size, height: size,
                             }}>
+                            {/* Иконка «график» — как в ячейке основного отчёта, но через
+                                hover-reveal (правило 5 CLAUDE.md): на тач-устройствах
+                                group-hover недоступен, и кнопка была бы мёртвой. */}
+                            {!empty && (
+                              <button
+                                type="button"
+                                onClick={e => { e.stopPropagation(); setChart({ from, to, pct: n > 0 ? pct : null }); }}
+                                title={`График динамики: «${from}» → «${to}»`}
+                                className="hover-reveal tap-target absolute top-0.5 left-0.5 z-10 flex h-4 w-4 items-center justify-center rounded bg-[var(--color-bg-surface)]/85 text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+                              >
+                                <ChartLine size={11} />
+                              </button>
+                            )}
                             {empty ? (
                               <span className="flex h-full w-full items-center justify-center text-[var(--color-text-muted)]">·</span>
                             ) : (
@@ -558,6 +575,13 @@ export function TransitionMatrixPage() {
              появляется переключатель «Период / Сравнение» (правка владельца 11.09). */
           comparisonFilters={withComparison ? compBody : undefined}
           onClose={() => setDrill(null)}
+        />
+      )}
+      {chart && (
+        <TransitionSeriesModal
+          from={chart.from} to={chart.to} cellPct={chart.pct}
+          filters={body}
+          onClose={() => setChart(null)}
         />
       )}
     </div>
