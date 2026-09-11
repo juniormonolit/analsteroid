@@ -228,18 +228,32 @@ function NextGroupsTable({ groups, base, to, from, filters, drillManagerId, onOp
   );
 }
 
-export function TransitionDrillModal({ from, to, filters, onClose }: {
+/** Подпись диапазона из тела запроса матрицы (там period.from/to — ISO-строки). */
+function rangeLabel(f: Record<string, unknown>): string {
+  const p = f.period as { from?: string; to?: string } | undefined;
+  if (!p?.from || !p?.to) return '';
+  return `${format(new Date(p.from), 'd MMM yy', { locale: ru })} — ${format(new Date(p.to), 'd MMM yy', { locale: ru })}`;
+}
+
+export function TransitionDrillModal({ from, to, filters, comparisonFilters, onClose }: {
   from: string;
   to: string;
   /** Тело запроса матрицы: период, отделы, менеджеры, пилюли, mode. */
   filters: Record<string, unknown>;
+  /** Тело того же запроса за ПЕРИОД СРАВНЕНИЯ. Передаётся только когда в отчёте
+   *  включено «Со сравнением» — тогда в панели появляется переключатель периода
+   *  (правка владельца 11.09: «а если я хочу открыть прошлый период?»). */
+  comparisonFilters?: Record<string, unknown>;
   onClose: () => void;
 }) {
   const [drillManagerId, setDrillManagerId] = useState<string | null>(null);
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   const [tab, setTab] = useState<'chains' | 'groups'>('chains');
+  // По умолчанию открывается ВЫБРАННЫЙ период — как было до правки.
+  const [periodMode, setPeriodMode] = useState<'current' | 'comparison'>('current');
 
-  const body = useMemo(() => ({ ...filters, from, to, drillManagerId }), [filters, from, to, drillManagerId]);
+  const activeFilters = periodMode === 'comparison' && comparisonFilters ? comparisonFilters : filters;
+  const body = useMemo(() => ({ ...activeFilters, from, to, drillManagerId }), [activeFilters, from, to, drillManagerId]);
   const { data, isLoading, error } = useQuery<MatrixTransitionsResult>({
     queryKey: ['matrix-transitions', body],
     queryFn: async () => {
@@ -277,6 +291,32 @@ export function TransitionDrillModal({ from, to, filters, onClose }: {
             <ArrowRight size={14} className="shrink-0 text-[var(--color-accent)]" />
             <span className="truncate">{to}</span>
           </h2>
+          {/* Переключатель периода — только в режиме сравнения. Смена периода
+              сбрасывает выбранного менеджера: в другом периоде у него может не
+              быть ни одной связки, и панель показала бы пустоту без объяснения. */}
+          {comparisonFilters && (
+            <div role="group" aria-label="Период дрилла" className="mt-1.5 inline-flex flex-wrap rounded-lg border border-[var(--color-border)] overflow-hidden">
+              {([
+                { key: 'current' as const, label: 'Период', f: filters },
+                { key: 'comparison' as const, label: 'Сравнение', f: comparisonFilters },
+              ]).map(o => (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => { setPeriodMode(o.key); setDrillManagerId(null); }}
+                  aria-pressed={periodMode === o.key}
+                  className={`min-h-11 sm:min-h-0 sm:py-1.5 px-3 text-sm transition-colors ${
+                    periodMode === o.key
+                      ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] font-medium'
+                      : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                  }`}
+                >
+                  {o.label}
+                  <span className="ml-1.5 text-[11px] opacity-80 tabular-nums">{rangeLabel(o.f)}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">
             {isLoading ? 'Считаем…' : error ? '' : (
               <>
@@ -422,7 +462,7 @@ export function TransitionDrillModal({ from, to, filters, onClose }: {
               ) : (
                 <NextGroupsTable
                   groups={data?.nextGroups ?? []} base={data?.nextGroupsBase ?? 0}
-                  to={to} from={from} filters={filters}
+                  to={to} from={from} filters={activeFilters}
                   drillManagerId={drillManagerId} onOpenDeal={setOpenDealId}
                 />
               )}

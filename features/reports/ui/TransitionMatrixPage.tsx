@@ -551,7 +551,14 @@ export function TransitionMatrixPage() {
         </div>
       )}
     {drill && (
-        <TransitionDrillModal from={drill.from} to={drill.to} filters={body} onClose={() => setDrill(null)} />
+        <TransitionDrillModal
+          from={drill.from} to={drill.to}
+          filters={body}
+          /* Тело за период сравнения — только когда режим включён: тогда в панели
+             появляется переключатель «Период / Сравнение» (правка владельца 11.09). */
+          comparisonFilters={withComparison ? compBody : undefined}
+          onClose={() => setDrill(null)}
+        />
       )}
     </div>
   );
