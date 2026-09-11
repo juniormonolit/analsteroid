@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Filter, Search, UserRound, X } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { DepartmentPicker, PeriodRangeControls } from './FilterBar';
-import { defaultPeriod, type DateRange } from '@/lib/period';
+import { applyPreset, calendarComparisonForPreset, type DateRange } from '@/lib/period';
 import type { DealScope, ClientType } from '@/lib/metrics/types';
 import type { MatrixCell } from '@/features/reports/engine/productMatrix';
 import { TransitionDrillModal } from './TransitionDrillModal';
@@ -124,8 +124,16 @@ function ManagerPicker({ value, onChange }: { value: Person | null; onChange: (p
 }
 
 export function TransitionMatrixPage() {
-  const [period, setPeriod] = useState<DateRange>(defaultPeriod);
-  const [comparison, setComparison] = useState<DateRange>(defaultPeriod);
+  // Дефолт периода — «Этот год» (правка владельца 11.09), а не общий по
+  // приложению defaultPeriod() «с 1-го числа по вчера»: матрица переходов живёт
+  // на длинном горизонте — в первые дни месяца пар «отгрузка → следующая» почти
+  // нет и матрица открывалась пустой. Тот же диапазон, что кнопка пресета «Этот
+  // год», — формула не дублируется (applyPreset). Замер 11.09 на боевых данных:
+  // матрица 0,7 с, дрилл 0,6 с на годовом окне — держит дефолт без кэша.
+  const [period, setPeriod] = useState<DateRange>(() => applyPreset('this_year'));
+  // Сравнение в этом отчёте не показывается (showComparison={false}) и в расчёте
+  // не участвует, но держим его осмысленным — прошлый год целиком.
+  const [comparison, setComparison] = useState<DateRange>(() => calendarComparisonForPreset('this_year'));
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [dealScope, setDealScope] = useState<DealScope>('all');
   const [clientType, setClientType] = useState<ClientType>('all');
