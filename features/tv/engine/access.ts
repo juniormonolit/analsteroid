@@ -56,6 +56,47 @@ export function filterScreens(scope: TvScope, screens: TvScreen[]): TvScreen[] {
   return scope.allowedDeptIds ? screens.filter(s => screenInScope(scope, s.departmentIds)) : screens;
 }
 
+/**
+ * Скоуп персональной страницы /rop (задача #6446, авторизованная копия /today —
+ * решение владельца 14.09: «сделай так, чтобы /today открывался без пароля» плюс
+ * «копию как today, но /rop которая с авторизацией и показывает только данные
+ * согласно правам»). Переиспользует tvScope() — тот же источник «кто чем
+ * управляет», что у раздела «Телевизоры» и карточек менеджеров: РОП/Директор —
+ * подконтрольные отделы (КЗ-структура + назначения + «свой филиал» у директора).
+ * Рядовой менеджер (МОП) без управляемых отделов — только он сам, по bitrixUserId
+ * сессии (в tvScope такого понятия нет — там пусто = «нет доступных экранов»,
+ * здесь пусто = «свои данные»).
+ */
+export interface RopScope {
+  /** true = без ограничений (руководство компании). */
+  full: boolean;
+  /** null при full; иначе — отделы (и их потомки) в зоне ответственности. */
+  allowedDeptIds: Set<string> | null;
+  /** bitrix id менеджера, если скоуп сузился до «только я» (нет управляемых отделов). */
+  selfOnly: string | null;
+}
+
+/**
+ * Чистая часть решения — без обращения к БД (принимает уже посчитанный
+ * tvScope). Вынесена отдельно, чтобы юнит-тест на «3 роли» (scripts/
+ * assert-rop-scope.ts) не тянул за собой Postgres — тот же приём, что у
+ * canUnsellDeal/checkUnsellable в lib/sales/unsellDeal.ts.
+ */
+export function deriveRopScope(base: TvScope, bitrixUserId: string | null): RopScope {
+  if (base.full) return { full: true, allowedDeptIds: null, selfOnly: null };
+  if (base.allowedDeptIds && base.allowedDeptIds.size > 0) {
+    return { full: false, allowedDeptIds: base.allowedDeptIds, selfOnly: null };
+  }
+  // Нет подконтрольных отделов — не «нет доступа», а «доступ только к себе»:
+  // без bitrixUserId (аккаунт не привязан к Битриксу) скоуп остаётся пустым —
+  // buildDashboard() отдаст пустое дерево, а не чужие данные.
+  return { full: false, allowedDeptIds: new Set(), selfOnly: bitrixUserId };
+}
+
+export async function ropScope(session: SessionUser): Promise<RopScope> {
+  return deriveRopScope(await tvScope(session), session.bitrixUserId);
+}
+
 /** id отдела → имя, для подписей экранов (поддерево «Отдел продаж» + фолбэк на всё дерево). */
 export async function departmentNameMap(): Promise<Map<string, string>> {
   const [sales, all, tree] = await Promise.all([getSalesDepartmentOptions(), loadDepartments(), buildTvTree()]);
