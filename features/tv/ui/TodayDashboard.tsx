@@ -2,6 +2,12 @@
 // Дашборд «Сегодня по компании» (правка владельца 08.09): отдельный URL /today без меню.
 // Вкладки — Итого и филиалы; KPI выбранного узла; дерево департаменты → отделы → менеджеры
 // с раскрытием. Данные — /api/tv/dashboard (тот же движок, что у телевизоров), 30 с.
+//
+// Задача #6446 (14.09): «РОП — сегодня» (/rop) — авторизованная копия с теми же вёрсткой
+// и логикой, но данные из /api/rop/dashboard уже урезаны бэкендом по зоне ответственности
+// (ropScope). Чтобы не копипастить разметку, вынесена общая `DashboardView` с параметрами
+// (эндпоинт, ключ запроса, заголовок, подпись) — `TodayDashboard`/`RopDashboard` ниже её
+// просто настраивают под свой URL и текст.
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Eye, EyeOff, Moon, RefreshCw, Sun, Users } from 'lucide-react';
@@ -54,11 +60,45 @@ const THEME_KEY = 'today-theme';
 const TH = 'px-3 py-3 text-xs lg:text-[0.85vw] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider whitespace-nowrap';
 const TD = 'px-3 py-2 lg:py-[0.7vw] text-sm lg:text-[1.15vw] whitespace-nowrap tabular-nums';
 
+interface DashboardViewProps {
+  /** GET-эндпоинт, отдающий TvDashboard. */
+  apiUrl: string;
+  /** Ключ react-query — разный у /today и /rop, чтобы не делить кэш между разными скоупами. */
+  queryKey: string;
+  /** Заголовок h1. */
+  title: string;
+  /** Хвост подписи под датой/временем обновления (после « · »). */
+  subtitleSuffix: string;
+}
+
 export function TodayDashboard() {
+  return (
+    <DashboardView
+      apiUrl="/api/tv/dashboard"
+      queryKey="tv-dashboard"
+      title="Сегодня по компании"
+      subtitleSuffix="продажи и брони за день, план дня по менеджерам"
+    />
+  );
+}
+
+/** /rop (задача #6446) — та же вёрстка, что у TodayDashboard, эндпоинт уже режет данные по правам. */
+export function RopDashboard() {
+  return (
+    <DashboardView
+      apiUrl="/api/rop/dashboard"
+      queryKey="rop-dashboard"
+      title="Сегодня — моя зона"
+      subtitleSuffix="продажи и брони за день по вашей зоне ответственности"
+    />
+  );
+}
+
+function DashboardView({ apiUrl, queryKey, title, subtitleSuffix }: DashboardViewProps) {
   const { data, isLoading, error, refetch, isFetching } = useQuery<Dash>({
-    queryKey: ['tv-dashboard'],
+    queryKey: [queryKey],
     queryFn: async () => {
-      const r = await fetch('/api/tv/dashboard');
+      const r = await fetch(apiUrl);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? `Ошибка ${r.status}`);
       return j as Dash;
@@ -86,9 +126,9 @@ export function TodayDashboard() {
       <div className="p-3 sm:p-6 lg:px-[2vw] lg:py-[1.5vw] flex flex-col gap-4 lg:gap-[1.2vw]">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h1 className="text-lg sm:text-xl lg:text-[2vw] font-semibold leading-tight">Сегодня по компании</h1>
+            <h1 className="text-lg sm:text-xl lg:text-[2vw] font-semibold leading-tight">{title}</h1>
             <div className="text-xs lg:text-[0.9vw] text-[var(--color-text-muted)]">
-              {data ? `${data.day} · обновлено ${new Date(data.generatedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : '…'} · продажи и брони за день, план дня по менеджерам
+              {data ? `${data.day} · обновлено ${new Date(data.generatedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : '…'} · {subtitleSuffix}
             </div>
           </div>
           <div className="flex items-center gap-2">

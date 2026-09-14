@@ -36,6 +36,15 @@ const nextConfig: NextConfig = {
         headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
       },
       {
+        // Авторизованная копия «РОП — сегодня» (задача #6446) — та же непубличность, что у /today.
+        source: '/rop',
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
+      },
+      {
+        source: '/api/rop/:path*',
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
+      },
+      {
         // Встроенные страницы: фреймить может только портал (и мы сами).
         source: '/bx/:path*',
         headers: [

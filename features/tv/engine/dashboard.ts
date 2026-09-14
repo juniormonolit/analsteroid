@@ -14,6 +14,7 @@ import {
   recentlyActiveIds, RECENT_WORKING_DAYS, totalsOf, workingDaysBackIso, type FactId, type Totals,
 } from './feed';
 import { buildTvTree, deptChains, loadActiveManagers, managersOfNode, type OrgRow, type TvNode } from './orgTree';
+import type { RopScope } from './access';
 
 export interface TvDashManager extends TvFeedManager {
   dealsCount: number;   // заявки за день (created_at)
@@ -43,12 +44,31 @@ export interface TvDashboard {
 const DASH_TTL_SEC = 20;
 const DEFAULT_TARGET = 5;
 
-export async function buildDashboard(dailyTarget = DEFAULT_TARGET): Promise<TvDashboard> {
+// Срезает состав по зоне ответственности (/rop, задача #6446). Без scope (или
+// scope.full) — полный состав, как у публичного /today. Дальше по коду везде
+// подставляются УЖЕ обрезанные orgRows — дерево и КПИ каждого узла строятся
+// рекурсией managersOfNode() из dashboard-движка без изменений: пустые ветки
+// сами отваливаются в build() (children.filter(c => c.managerCount > 0)).
+export function scopeRows(rows: OrgRow[], scope?: RopScope): OrgRow[] {
+  if (!scope || scope.full) return rows;
+  if (scope.selfOnly) return rows.filter(r => r.manager_id === scope.selfOnly);
+  const allowed = scope.allowedDeptIds;
+  if (!allowed || allowed.size === 0) return []; // нет ни отделов, ни себя — пустой дашборд, не чужие данные
+  return rows.filter(r => r.department_id != null && allowed.has(r.department_id));
+}
+
+export async function buildDashboard(dailyTarget = DEFAULT_TARGET, scope?: RopScope): Promise<TvDashboard> {
   const today = mskTodayStr();
-  return cached(`tv:dash:${today}:${dailyTarget}`, DASH_TTL_SEC, async () => {
+  // Кэш-ключ обязан учитывать скоуп: иначе полный /today-расчёт и урезанный
+  // /rop-расчёт за тот же день перезаписывали бы друг друга в Redis.
+  const scopeKey = !scope || scope.full ? 'full'
+    : scope.selfOnly ? `self:${scope.selfOnly}`
+    : `depts:${[...(scope.allowedDeptIds ?? [])].sort().join(',') || 'none'}`;
+  return cached(`tv:dash:${today}:${dailyTarget}:${scopeKey}`, DASH_TTL_SEC, async () => {
     const fromIso = mskMidnightIso(today);
     const toExclIso = mskMidnightIso(addDaysStr(today, 1));
-    const [tree, orgRows, chains] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains()]);
+    const [tree, orgRowsAll, chains] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains()]);
+    const orgRows = scopeRows(orgRowsAll, scope);
 
     const all = managersOfNode(tree.root, orgRows, chains);
     const idsNum = [...new Set(all.map(m => Number(m.managerId)).filter(n => Number.isInteger(n) && n > 0))];
