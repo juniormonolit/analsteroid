@@ -1,16 +1,15 @@
-import { redirect } from 'next/navigation';
-import { getSession } from '@/lib/auth/session';
-import { hasPerm } from '@/lib/auth/perms';
-import { AccessDenied } from '@/components/ui/AccessDenied';
 import { TodayDashboard } from '@/features/tv/ui/TodayDashboard';
 
-export const metadata = { title: 'Сегодня по компании — Монолитика' };
+// Дашборд «Сегодня по компании» — ПУБЛИЧНЫЙ (решение владельца 14.09: «сделай так,
+// чтобы /today открывался без пароля»). Та же модель, что у ТВ-экранов: страница и её
+// API отдаются без сессии, снаружи закрыты только от роботов (noindex + robots.txt) и
+// лимитом запросов на IP. Адрес простой и угадываемый — в отличие от ссылок экранов с
+// 16-символьным токеном; если понадобится спрятать, заводить /today/<токен>.
+export const metadata = {
+  title: 'Сегодня по компании — Монолитика',
+  robots: { index: false, follow: false, nocache: true },
+};
 
-export default async function Page() {
-  const session = await getSession();
-  if (!session) redirect('/login');
-  if (!hasPerm(session, 'section.tv')) {
-    return <AccessDenied reason="Дашборд «Сегодня по компании» открыт тем, у кого есть раздел «Телевизоры». Доступ выдаёт администратор в «Настройки → Роли»." />;
-  }
+export default function Page() {
   return <TodayDashboard />;
 }
