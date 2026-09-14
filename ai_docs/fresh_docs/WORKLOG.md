@@ -23141,3 +23141,98 @@ Playwright, сессии отозваны сразу после (`DELETE FROM us
 это `section.*`-ключ, так что джокер «Все разделы» у «Администратора» его уже
 покрывает, довыдавать нужно только прицельным ролям), должен ли `/today` остаться
 публичным теперь, когда есть авторизованный `/rop`.
+
+## 2026-09-14 — /today и /rop: раскрытие продаж/броней в список сделок (задача #6465)
+
+Запрос Серёги: «сделай ещё так, чтобы брони и продажи можно было в сделки раскрывать.
+Интересно же, кто что продал или забронил. И в today и в rop». Продолжение задачи
+#6446 — тот же общий компонент `DashboardView`, тот же принцип «эндпоинт уже режет
+по scope».
+
+**Список сделок не изобретён с нуля — переиспользован эталон drill-down отчётов.**
+Новая панель `features/tv/ui/DashboardDrilldownPanel.tsx` — тот же слайд-ин, что у
+дрилл-дауна графиков (`features/charts/ui/ChartDrilldownPanel.tsx`): `SlideBackdrop`+
+`PanelCloseTab`+`useSlideClose`, а список сделок — существующие `DealsListBody`/
+`DealsTable` (`features/reports/ui/DrilldownDrawer.tsx`) с `fetchOverride`, те же
+колонки, ссылка на сделку в Битрикс, копирование ссылки, сортировка по клику на
+заголовок. `onDealOpen` (карточка сделки) сознательно НЕ передан — `/api/reports/deal`
+требует сессию, а `/today` публичная страница, открытие карточки там дало бы 401.
+
+**Резолвинг узла/менеджера — на уже посчитанном `TvDashboard`, не заново.**
+`features/tv/engine/dashboardDrilldown.ts:resolveDrilldownSelection(dash, nodeId,
+managerId)` рекурсией ищет узел в `dash.root` (или берёт менеджера из `dash.managers`)
+— то есть ровно то множество `managerIds`/имя, что уже дало `node.salesCount`/
+`bookCount` в карточке (`allManagerIds` считает `buildDashboard()` тем же `mgrs()`/
+`totalsOf()`, что и итоги узла). Отсюда — ДВА свойства бесплатно, без отдельной
+реализации: (1) сумма списка сделок физически не может разойтись с числом в карточке;
+(2) scope /rop не переизобретён — `buildDashboard(undefined, scope)` уже режет дерево
+и `managers{}` по `ropScope()`, узел/менеджер вне зоны ответственности просто
+ОТСУТСТВУЕТ (пустые узлы отваливаются в `build()`, менеджеры вне `scopeRows()` не
+попадают в `managers{}`) → `resolveDrilldownSelection` возвращает `null`, роут отдаёт
+пустой список, а не чужие сделки.
+
+**Список сделок — тот же SQL-смысл, что у счётчиков c2552ea.** `fetchDrilldownDeals`
+фильтрует `deals` по `sold_at`/`reserved_at` в окне дня + `current_manager_id`; для
+`kind='sales'` добавлено явное условие `funnel_id IN (…is_repeat=false) OR funnel_id
+IN (…is_repeat=true)` — тот же способ, что `resolveFilterClause('funnel_type', …)` в
+`lib/metrics/sqlGen.ts`, специально НЕ «без фильтра» (проверено запросом в `metrics`:
+`primary_sales_count`/`repeat_sales_count` — `date_field=sold_at`, `filters=funnel_type
+primary|repeat`; `reservations_count` — `date_field=reserved_at`, `filters=[]`). Живая
+проверка на реальных данных (analytics, read-only): список «Итого» сходится с карточкой
+до рубля для root (130 сделок · 19 013 655 ₽), для менеджера (2 · 602 500 ₽; 1 ·
+39 913 000 ₽ брони) и для ROP-скоупа (25 · 2 965 305 ₽).
+
+**Два новых эндпоинта, тот же гейт, что у страницы.** `GET /api/tv/dashboard/deals`
+(публичный, IP rate-limit, как `/api/tv/dashboard`) и `GET /api/rop/dashboard/deals`
+(сессия + `section.rop_today`, как `/api/rop/dashboard`). Параметры: `type=sales|book`
++ (`node=<id узла>` ИЛИ `manager=<id>`). Проверено прямыми вызовами: ROP-сессия
+запросом чужого узла (Москва) или чужого менеджера напрямую — `0` сделок, не утечка;
+без сессии на `/api/rop/dashboard/deals` — 401.
+
+**Состояние — в URL** (`?dd=sales|book&node=<id>` или `&manager=<id>`), как у
+`ManagerCardPage.tsx` (`useRouter`/`usePathname`/`useSearchParams`, `router.push`,
+без `Suspense` — тот же паттерн уже живёт в проде у `/manager/[id]`). Клик — в трёх
+местах: KPI-плитка узла, `Pb`-ячейка строки узла таблицы, `Pb`-ячейка строки
+менеджера (везде теперь опциональный `onClick`, рендерится `<button>` вместо `<span>`).
+`/today` не имел ни одного query-параметра — пришлось форсировать `export const
+dynamic = 'force-dynamic'` на `app/(bare)/today/page.tsx`: без session-вызова (как у
+`/rop`, там `getSession()` сам форсит динамику) страница пыталась статически
+предрендериться и валила билд («useSearchParams() should be wrapped in a suspense
+boundary»).
+
+**Побочная находка и фикс: DealsTable не переживала «инородную» тёмную/светлую
+палитру.** Живой скриншот вскрыл нечитаемые строки через одну — `DealsTable`
+рассчитан на глобальные токены приложения (`app/globals.css :root`), а локальная
+палитра ТВ (`THEMES` в `TodayDashboard.tsx`) их не переопределяла: `--color-table-
+header`/`--color-table-stripe`/`--color-num`/`--color-mix-base`/`--color-highlight-
+pct` наследовались со светлого `:root`, конфликтуя с тёмным `--color-text` — зебра
+рисовалась почти белой под почти белым текстом. Добавлены явно в обе темы (dark/
+light) `THEMES`-объекта — до и после фикса сравнено скриншотом. Вторая находка —
+`/api/deal-chats` (статус чата по сделке) безусловно дёргался `DealsTable` независимо
+от контекста и сыпал 401 в консоль на анонимном `/today`; добавлен опциональный проп
+`showChat` (по умолчанию `true` — оба существующих вызывающих не меняются) в
+`DealsTable`/`DealsListBody`, наша панель передаёт `showChat={false}`.
+
+**Тесты** (`scripts/assert-dashboard-drilldown.ts`, `npm run test:dashboard-drilldown`,
+БЕЗ БД — тот же приём, что `assert-rop-scope.ts`): резолвинг узла (в т.ч. вложенного),
+резолвинг менеджера, узел вне дерева/менеджер вне `managers{}` → `null` (не пустой
+список наугад, не подстановка чужих данных), `dateColumnFor`/`funnelConditionFor` —
+текст SQL-условия совпадает с определением метрик каталога. 10/10 зелёных.
+`typecheck`/`npm run build`/`lint:responsive` — чисто (0 новых нарушений), три
+существующих DB-less теста (`test:rop-scope`, `test:reports`, `test:unsell-deal`) —
+без регрессий. Node 22.15 требует `--experimental-strip-types` — без флага
+`test:*`-скрипты падают `ERR_UNKNOWN_FILE_EXTENSION`.
+
+**Живая проверка** — тот же рецепт, что #6446: отдельный локальный `next start`,
+`YC_SYSTEM_DB=junibaseone` (НЕ прод `system`), `sa`/`analytics` реальные read-only.
+Фикстуры `zzz_test3018_rop/_mop` — временные сессии по токену в `user_sessions`,
+скриншоты Playwright, сессии отозваны сразу после. 6 скриншотов в
+`owners-inbox/screenshots/today-drilldown/` (life-os): `/today` продажи раскрыты
+(десктоп), брони раскрыты (URL несёт состояние), клик по строке узла таблицы (второй
+вход в тот же дрилл-даун), `/rop` под ролью РОП (скоуп — один филиал, сумма сходится),
+мобильный 375px, пустой менеджер (граница). `.env.local`/`certs/` скопированы
+временно, удалены из ворктри по завершении — не коммитились.
+
+Ветка `feature/today-drilldown` (от `origin/dev-asteroid`, worktree
+`analsteroid-wt-6465`), в `dev-asteroid` НЕ вливалась — по заданию задачи. Открытые
+вопросы — в отчёте `owners-inbox/monolitika-today-drilldown-20260914.html` (life-os).

@@ -337,9 +337,15 @@ function SortHead({ label, col, align, sortKey, sortDir, onSort }: {
 
 // export — переиспользуется карточкой заказчика (CustomerCard, правка владельца 07.09):
 // блок «Сделки» там показывает те же даты стадий, что дрилл-даун отчёта.
-export function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDealOpen, tableScale = 1 }: {
+export function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead, onDealOpen, tableScale = 1, showChat = true }: {
   deals: Deal[]; fields: string[]; sortKey?: string; sortDir?: 'asc' | 'desc'; onSort?: (k: string) => void; stickyHead?: boolean;
   onDealOpen?: (id: number) => void; tableScale?: number;
+  /** false — не запрашивать статусы чатов по сделкам (задача #6465, drill-down /today:
+   *  страница анонимная, /api/deal-chats требует сессию — без этого флага список
+   *  сделок безусловно бил по нему и сыпал 401 в консоль публичной страницы; кнопка
+   *  «Сообщение менеджеру» там и не нужна). По умолчанию true — поведение остальных
+   *  вызывающих (авторизованные экраны отчётов) не меняется. */
+  showChat?: boolean;
 }) {
   // Column order follows the configured `fields` order.
   const cols = fields.map(k => DEAL_FIELDS.find(f => f.key === k)).filter(Boolean) as typeof DEAL_FIELDS;
@@ -355,7 +361,7 @@ export function DealsTable({ deals, fields, sortKey, sortDir, onSort, stickyHead
       if (!res.ok) return { statuses: null };
       return res.json() as Promise<{ statuses: ChatStatusMap }>;
     },
-    enabled: deals.length > 0,
+    enabled: deals.length > 0 && showChat,
     refetchInterval: 30_000,
     staleTime: 15_000,
   });
@@ -473,7 +479,7 @@ export interface DrillTotals {
 // используется переданный fetcher. `query` тогда не нужен; `fetchOverride.key`
 // обязан включать всё, от чего зависит результат (иначе react-query не
 // перезапросит список при смене корзины/фильтра).
-export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, tableScale, emptyLabel, onTotals }: {
+export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, tableScale, emptyLabel, onTotals, showChat = true }: {
   query?: URLSearchParams;
   fetchOverride?: { key: unknown[]; fn: () => Promise<{ deals: Deal[]; total_count: number; total_amount: number }> };
   dealFields?: string[]; onDealOpen?: (id: number) => void; tableScale?: number; emptyLabel?: string;
@@ -483,6 +489,8 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
    * держал бы итог ПРЕДЫДУЩЕГО среза и сверял его с уже новой ячейкой.
    */
   onTotals?: (t: DrillTotals | null) => void;
+  /** см. DealsTable — false на анонимных страницах (задача #6465). */
+  showChat?: boolean;
 }) {
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const [dealSort, setDealSort] = useState<DealSort>(null);
@@ -565,7 +573,7 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
         )}
       </div>
       <div className="flex-1 overflow-hidden">
-        <DealsTable deals={sortDealsBy(deals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} tableScale={tableScale} />
+        <DealsTable deals={sortDealsBy(deals, dealSort)} fields={dealCols} sortKey={dealSort?.key} sortDir={dealSort?.dir} onSort={onDealSort} stickyHead onDealOpen={onDealOpen} tableScale={tableScale} showChat={showChat} />
       </div>
     </div>
   );
