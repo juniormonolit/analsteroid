@@ -129,16 +129,15 @@ export function TodayDashboard() {
                     <th className={`${TH} text-right`}>План</th>
                     <th className={`${TH} text-right`}>Факт</th>
                     <th className={`${TH} text-right`}>%</th>
-                    <th className={`${TH} text-right`}>Продаж</th>
-                    <th className={`${TH} text-right`}>Брони</th>
-                    <th className={`${TH} text-right`}>Шт</th>
-                    <th className={`${TH} text-right`}>Продажеброней</th>
+                    <th className={`${TH} text-right`}>Продажи / цель</th>
+                    <th className={`${TH} text-right`}>Брони, ₽</th>
+                    <th className={`${TH} text-right`}>Брони / цель</th>
                     <th className={`${TH} text-right`}>Активных</th>
                   </tr>
                 </thead>
                 <tbody>
                   {current.children.length === 0 && current.directManagerIds.length === 0 && (
-                    <tr><td colSpan={9} className={`${TD} text-[var(--color-text-muted)]`}>Нет данных</td></tr>
+                    <tr><td colSpan={8} className={`${TD} text-[var(--color-text-muted)]`}>Нет данных</td></tr>
                   )}
                   {current.children.map(c => <NodeRows key={c.id} node={c} depth={0} managers={data.managers} target={data.dailyTarget} showIdle={showIdle} defaultOpen={false} />)}
                   {current.directManagerIds.length > 0 && (
@@ -148,7 +147,7 @@ export function TodayDashboard() {
               </table>
             </div>
             <div className="text-xs lg:text-[0.9vw] text-[var(--color-text-muted)]">
-              Активный менеджер — была заявка, бронь или продажа сегодня. Цель бронепродаж = активные × {data.dailyTarget}. Без переключателя «Показать всех» менеджеры без движения скрыты.
+              Активный менеджер — была заявка, бронь или продажа сегодня. Цель продаж и цель броней считаются отдельно: {data.dailyTarget} в день на менеджера, для узла — активные × {data.dailyTarget}. Без переключателя «Показать всех» менеджеры без движения скрыты.
             </div>
           </>
         )}
@@ -163,9 +162,9 @@ function Kpis({ node }: { node: TvDashNode }) {
     { l: 'План дня', v: fmtMoney(node.planDay) },
     { l: 'Факт продаж', v: fmtMoney(node.factDay), cls: 'text-[var(--color-positive)]' },
     { l: 'Выполнение', v: p == null ? '—' : `${p}%`, cls: p != null && p >= 100 ? 'text-[var(--color-positive)]' : 'text-[var(--color-warning)]' },
-    { l: 'Продаж, шт', v: node.salesCount },
-    { l: 'Брони', v: <>{fmtMoney(node.bookSum)}<span className="block text-sm lg:text-[0.95vw] font-normal text-[var(--color-text-muted)]">{node.bookCount} шт</span></>, cls: 'text-[var(--color-accent)]' },
-    { l: 'Продажеброней', v: <Pb pb={node.pb} target={node.target} /> },
+    { l: 'Продажи, шт / цель', v: <Pb pb={node.salesCount} target={node.target} /> },
+    { l: 'Брони', v: fmtMoney(node.bookSum), cls: 'text-[var(--color-accent)]' },
+    { l: 'Брони, шт / цель', v: <Pb pb={node.bookCount} target={node.target} /> },
     { l: 'Активных / всего', v: <>{node.activeManagers} <span className="text-sm lg:text-[1vw] font-normal text-[var(--color-text-muted)]">/ {node.managerCount}</span></> },
   ];
   return (
@@ -209,10 +208,9 @@ function NodeRows({ node, depth, managers, target, showIdle, defaultOpen }: {
         <td className={`${TD} text-right`}>{fmtMoney(node.planDay)}</td>
         <td className={`${TD} text-right font-semibold text-[var(--color-positive)]`}>{fmtMoney(node.factDay)}</td>
         <td className={`${TD} text-right`}><Pct fact={node.factDay} plan={node.planDay} /></td>
-        <td className={`${TD} text-right`}>{node.salesCount}</td>
+        <td className={`${TD} text-right`}><Pb pb={node.salesCount} target={node.target} /></td>
         <td className={`${TD} text-right text-[var(--color-accent)]`}>{fmtMoney(node.bookSum)}</td>
-        <td className={`${TD} text-right`}>{node.bookCount}</td>
-        <td className={`${TD} text-right`}><Pb pb={node.pb} target={node.target} /></td>
+        <td className={`${TD} text-right`}><Pb pb={node.bookCount} target={node.target} /></td>
         <td className={`${TD} text-right`}>{node.activeManagers}<span className="text-[var(--color-text-muted)]"> / {node.managerCount}</span></td>
       </tr>
       {open && (people || !hasKids
@@ -250,15 +248,14 @@ function ManagerRows({ ids, depth, managers, target, showIdle }: {
           <td className={`${TD} text-right`}>{fmtMoney(m.plan)}</td>
           <td className={`${TD} text-right font-semibold ${m.salesSum > 0 ? 'text-[var(--color-positive)]' : 'text-[var(--color-text-muted)]'}`}>{fmtMoney(m.salesSum)}</td>
           <td className={`${TD} text-right`}><Pct fact={m.salesSum} plan={m.plan} /></td>
-          <td className={`${TD} text-right`}>{m.salesCount}</td>
+          <td className={`${TD} text-right`}><Pb pb={m.salesCount} target={target} /></td>
           <td className={`${TD} text-right text-[var(--color-accent)]`}>{fmtMoney(m.bookSum)}</td>
-          <td className={`${TD} text-right`}>{m.bookCount}</td>
-          <td className={`${TD} text-right`}><Pb pb={m.pb} target={target} /></td>
+          <td className={`${TD} text-right`}><Pb pb={m.bookCount} target={target} /></td>
           <td className={`${TD} text-right text-[var(--color-text-muted)]`}>{m.active ? 'активен' : '—'}</td>
         </tr>
       ))}
       {hidden > 0 && (
-        <tr><td colSpan={9} className={`${TD} !text-xs lg:!text-[0.85vw] text-[var(--color-text-muted)]`} style={{ paddingLeft: 8 + depth * 18 + 19 }}>ещё {hidden} без движения скрыто</td></tr>
+        <tr><td colSpan={8} className={`${TD} !text-xs lg:!text-[0.85vw] text-[var(--color-text-muted)]`} style={{ paddingLeft: 8 + depth * 18 + 19 }}>ещё {hidden} без движения скрыто</td></tr>
       )}
     </>
   );

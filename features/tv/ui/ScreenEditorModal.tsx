@@ -95,7 +95,7 @@ export function ScreenEditorModal({ open, screen, onClose, onSave, saving, error
           <Field label="Остальные страницы, сек" hint="Хвост отдела — страницами по 6 человек, смена плавным затуханием.">
             <input type="number" min={3} max={300} className={INPUT_CLS} value={form.settings.rotateTailSec} onChange={e => setS({ rotateTailSec: Math.min(300, Math.max(3, Number(e.target.value) || 10)) })} />
           </Field>
-          <Field label="Цель «продажеброней» в день" hint="Продажи + брони по количеству; при достижении — зелёным.">
+          <Field label="Цель в день на менеджера" hint="Отдельно продаж и отдельно броней по количеству (5 и 5); при достижении — зелёным. Цель отдела = активные × это число.">
             <input type="number" min={1} max={100} className={INPUT_CLS} value={form.settings.dailyTarget} onChange={e => setS({ dailyTarget: Math.min(100, Math.max(1, Number(e.target.value) || 5)) })} />
           </Field>
           <Field label="Аватары">

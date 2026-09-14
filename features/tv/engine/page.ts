@@ -116,6 +116,10 @@ body.th-light{background:#F6F8FA;color:#1A202C}
 .pb .n{font-size:1.6em;font-weight:800;line-height:1;color:#FBBC04}.th-light .pb .n{color:#B26000}
 .pb .n.ok{color:#5BC878}.th-light .pb .n.ok{color:#1E8E3E}
 .pb .n small{font-size:.55em;font-weight:600;color:#8FA1BD;margin-left:.15em}
+.pb .half{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:baseline;-webkit-align-items:baseline;align-items:baseline}
+.pb .half .l{margin-right:.5em}
+.pb .n.book{color:#7FB9E8}.th-light .pb .n.book{color:#0069BE}
+.pb .n.book.ok{color:#5BC878}.th-light .pb .n.book.ok{color:#1E8E3E}
 .ftr{position:absolute;left:0;right:0;bottom:0;height:1.8vw;font-size:1vw;color:#8FA1BD}
 .ftr .tnum{white-space:nowrap}
 .th-light .ftr{color:#6B7280}
@@ -235,14 +239,15 @@ function bar(p,cls){
 }
 function tileHtml(m,i,showAva){
   var mp=m.plan||0,pct=mp?Math.round(m.salesSum/mp*100):null;
-  var target=(data&&data.screen.settings&&data.screen.settings.dailyTarget)||5,pb=(m.salesCount||0)+(m.bookCount||0);
+  var target=(data&&data.screen.settings&&data.screen.settings.dailyTarget)||5;
   var ava=showAva?(m.avatar?'<div class="ava"><img src="'+esc(m.avatar)+'" alt=""></div>':'<div class="ava" style="background:'+hue(m.name)+'"><span>'+esc(initials(m.name))+'</span></div>'):'';
   return '<div class="tile'+(i===0&&m.salesSum>0?' top':'')+'" data-i="'+i+'"><div class="inner">'+
     '<div class="fx">'+ava+'<div class="name grow">'+esc(m.name)+'</div><div class="rank tnum">'+(i+1)+'</div></div>'+
     '<div class="fxb hero tnum"><div class="v">'+fmtMoney(m.salesSum)+'<small>'+m.salesCount+' шт</small></div><div class="p'+(pct!=null&&pct<100?' warn':'')+'">'+(pct==null?'\u2014':pct+'%')+'</div></div>'+
     bar(pct,'bar')+
     '<div class="fxb sub tnum"><span>План<b>'+fmtMoney(mp)+'</b></span><span>Брони<b class="book">'+fmtMoney(m.bookSum)+'</b><small>'+m.bookCount+' шт</small></span></div>'+
-    '<div class="fxb pb tnum"><span class="l">ПРОДАЖЕБРОНЕЙ</span><span class="n'+(pb>=target?' ok':'')+'">'+pb+'<small>/ '+target+'</small></span></div>'+
+    '<div class="fxb pb tnum"><span class="half"><span class="l">ПРОДАЖИ</span><span class="n'+(m.salesCount>=target?' ok':'')+'">'+m.salesCount+'<small>/ '+target+'</small></span></span>'+
+      '<span class="half"><span class="l">БРОНИ</span><span class="n book'+(m.bookCount>=target?' ok':'')+'">'+m.bookCount+'<small>/ '+target+'</small></span></span></div>'+
     '</div></div>';
 }
 /* Правка владельца 07.09: бегущая строка из рассылки ПЕРЕКРЫВАЕТ строку экрана/отдела
@@ -256,7 +261,8 @@ function cardHtml(c,i){
     '<div class="fxb hero tnum"><div class="v">'+fmtMoney(c.factDay)+'<small>'+c.salesCount+' шт</small></div><div class="p'+(pct!=null&&pct<100?' warn':'')+'">'+(pct==null?'\u2014':pct+'%')+'</div></div>'+
     bar(pct,'bar')+
     '<div class="fxb sub tnum"><span>План<b>'+fmtMoney(mp)+'</b></span><span>Брони<b class="book">'+fmtMoney(c.bookSum)+'</b><small>'+c.bookCount+' шт</small></span></div>'+
-    '<div class="fxb pb tnum"><span class="l">ПРОДАЖЕБРОНЕЙ<small class="act">'+c.activeManagers+' акт.</small></span><span class="n'+(c.target>0&&c.pb>=c.target?' ok':'')+'">'+c.pb+'<small>/ '+c.target+'</small></span></div>'+
+    '<div class="fxb pb tnum"><span class="half"><span class="l">ПРОДАЖИ<small class="act">'+c.activeManagers+' акт.</small></span><span class="n'+(c.target>0&&c.salesCount>=c.target?' ok':'')+'">'+c.salesCount+'<small>/ '+c.target+'</small></span></span>'+
+      '<span class="half"><span class="l">БРОНИ</span><span class="n book'+(c.target>0&&c.bookCount>=c.target?' ok':'')+'">'+c.bookCount+'<small>/ '+c.target+'</small></span></span></div>'+
     '</div></div>';
 }
 function tickerText(slide){
@@ -313,7 +319,8 @@ function sideInner(s){
   return '<div class="dept">'+esc(s.dept)+'</div>'+
     '<div class="col"><div class="track"><div class="fill'+(ok?' ok':'')+(pct!=null&&pct>100?' over':'')+'" style="height:'+fillH+'%"></div></div>'+
       '<div class="pct tnum">'+(pct==null?'—':pct+'%')+'</div><div class="cap">плана дня</div></div>'+
-    '<div class="sst s0 tnum"><span class="l">Продажеброней<small class="act">'+(s.activeManagers||0)+' акт.</small></span><span class="v'+(s.target>0&&s.pb>=s.target?' fact':' warn')+'">'+(s.pb||0)+'<small>/ '+(s.target||0)+'</small></span></div>'+
+    '<div class="sst s0 tnum"><span class="l">Продажи<small class="act">'+(s.activeManagers||0)+' акт.</small></span><span class="v'+(s.target>0&&s.salesCount>=s.target?' fact':' warn')+'">'+(s.salesCount||0)+'<small>/ '+(s.target||0)+'</small></span>'+
+      '<span class="r"><span class="l">Брони</span><span class="v'+(s.target>0&&s.bookCount>=s.target?' fact':' book')+'">'+(s.bookCount||0)+'<small>/ '+(s.target||0)+'</small></span></span></div>'+
     '<div class="sst s1 tnum"><span class="l">План</span><span class="v">'+fmtMoney(plan)+'</span></div>'+
     '<div class="sst s2 tnum"><span class="l">Факт</span><span class="v fact">'+fmtMoney(fact)+'</span><span class="r"><span class="l">Продаж</span><span class="v">'+s.salesCount+'</span></span></div>'+
     '<div class="sst s3 tnum"><span class="l">Брони</span><span class="v book">'+fmtMoney(s.bookSum)+'</span><span class="r"><span class="l">Шт</span><span class="v book">'+s.bookCount+'</span></span></div>';
