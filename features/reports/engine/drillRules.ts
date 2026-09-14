@@ -20,7 +20,7 @@
 // делать кликабельными ячейки, у которых списка не будет.
 
 import { workingDaysAgoSql } from '@/lib/metrics/productionCalendar';
-import { DELA_OVERDUE_WD_STEPS, delaOverdueWdMetricId } from './dealsActivities';
+import { DELA_OVERDUE_WD_STEPS, delaOverdueWdMetricId } from './delaZadachiIds';
 
 /** Правило: SQL-условие на сделку `d` + опциональный JOIN. $1/$2 — период. */
 export interface DrillRule {

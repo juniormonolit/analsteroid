@@ -1,5 +1,8 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { workingDaysAgoSql } from '@/lib/metrics/productionCalendar';
+import { DELA_OVERDUE_WD_STEPS, delaOverdueWdMetricId } from './delaZadachiIds';
+
+export { DELA_OVERDUE_WD_STEPS, delaOverdueWdMetricId, DELA_ZADACHI_METRIC_IDS } from './delaZadachiIds';
 import type { SnapshotFlatRow } from './stageSnapshot';
 
 // «Дела и задачи» (задача #5589, Серёга) — снимок sa.deals.activities (jsonb),
@@ -60,28 +63,7 @@ export const LOGIST_BITRIX_IDS: string[] = [
 // оргструктуре» — это НЕ баг снимка, а разные срезы населения (org_resolved_
 // hierarchy vs account_type='managers'); сверяющий должен применять тот же
 // фильтр, иначе сравнение яблоки-с-апельсинами.
-/**
- * Глубина просрочки в РАБОЧИХ днях (правка владельца 14.09). Мотив: «просрочено»
- * без глубины сваливает в одну кучу дело, забытое вчера вечером, и дело, которое
- * никто не трогал с мая — а это разные разговоры с менеджером. Дни именно
- * рабочие: дело со сроком в пятницу в понедельник просрочено на 1 рабочий день,
- * а не на 3, иначе каждые выходные метрика скакала бы сама по себе.
- *
- * Пороги вложенные, НЕ взаимоисключающие: дело, просроченное на 40 рабочих дней,
- * попадает и в «>5», и в «>10», и в «>30». Так столбцы читаются как воронка
- * запущенности слева направо, и каждый сам по себе отвечает на вопрос «сколько
- * висит дольше N» без сложения соседних.
- */
-export const DELA_OVERDUE_WD_STEPS = [5, 10, 30, 60, 90] as const;
 
-/** id метрики глубины просрочки по числу рабочих дней. */
-export const delaOverdueWdMetricId = (n: number) => `dela_overdue_${n}wd`;
-
-export const DELA_ZADACHI_METRIC_IDS = [
-  'dela_total', 'dela_overdue', 'dela_today', 'deals_without_dela',
-  'zadachi_total', 'zadachi_overdue', 'zadachi_today', 'deals_with_active_zapros',
-  ...DELA_OVERDUE_WD_STEPS.map(delaOverdueWdMetricId),
-];
 
 let _cache: { rows: SnapshotFlatRow[]; at: number } | null = null;
 const CACHE_TTL = 2 * 60 * 1000; // 2 мин — тот же порядок, что SNAPSHOT_TTL в stageSnapshot.ts
