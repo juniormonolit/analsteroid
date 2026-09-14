@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "next lint",
     "lint:responsive": "node scripts/check-responsive.mjs",
-    "test:reports": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-report-engine.ts"
+    "test:reports": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-report-engine.ts",
+    "test:unsell-deal": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-unsell-deal.ts"
   },
   "dependencies": {
     "@radix-ui/react-checkbox": "^1.3.2",
