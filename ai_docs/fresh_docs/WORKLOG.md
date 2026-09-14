@@ -6,6 +6,53 @@
 
 ---
 
+## 2026-09-14 — /rop: заголовок «Сегодня», подтверждён сплит продаж/броней (#6457)
+
+Просьба Серёги: убрать «Моя зона» из заголовка `/rop`. `RopDashboard` и
+`TodayDashboard` делят один `DashboardView` (`features/tv/ui/TodayDashboard.tsx`) —
+поменял только `title`/`subtitleSuffix` у `RopDashboard`: `«Сегодня — моя зона»` →
+`«Сегодня»`, подпись `«…по вашей зоне ответственности»` → в стиле `/today`
+(`«продажи и брони за день, план дня по менеджерам»`). Данные по-прежнему режутся
+`ropScope()` на бэкенде — правка только текстовая.
+
+Заодно проверил дополнение к задаче: свежий коммит `c2552ea` (сегодня, уже был в
+`origin/dev-asteroid` на момент форка ветки) — «продажи и брони отдельными
+счётчиками к цели 5» — оказался уже смёржен и уже покрывает `/rop`, т.к. тот же
+`DashboardView`/`Kpis`/`NodeRows`/`ManagerRows`. Отдельных правок под сплит
+продаж/броней не потребовалось, только подтвердил скриншотами.
+
+Ветка `feature/rop-title-today` (свежий форк от `origin/dev-asteroid`, т.к. старый
+ворктрайл `analsteroid-wt-6446` отстал — dev-asteroid успел уйти на два коммита
+вперёд за день, включая `c2552ea`), запушена напрямую в `origin/dev-asteroid`
+(`4c0303b`, после ребейза на догнавший `406aeec`).
+
+Прогон: `npm run typecheck` — чисто, `npm run build` — ок (`/rop`/`/today` в
+списке роутов), `node --import ./scripts/ts-resolve-register.mjs
+--experimental-strip-types scripts/assert-rop-scope.ts` — 10/10.
+
+QA-проверка на dev-БД `junibaseone`: отдельный `next start` (не деплой),
+`.env.local`/`certs/` скопированы временно и удалены по завершении (как в 2824/
+3018, не коммитились — заметил, что `certs/yandex-ca.pem` в основном чекауте
+`analsteroid/` протух/подменён — CN=localhost вместо цепочки YandexInternalRootCA;
+рабочая копия взята из `analsteroid-prod/certs/`, стоит поправить основной
+чекаут отдельно). Использована готовая фикстура `zzz_test3018_rop` (право
+`section.rop_today` уже выдано с 3018) — временная сессия по токену в
+`user_sessions`, скриншот `/rop` («Сегодня», СПб-скоуп, раздельные «Продажи /
+цель» и «Брони / цель»), сессия отозвана сразу после. Скриншоты:
+`owners-inbox/screenshots/rop-page-prod/rop-title-today.png`,
+`.../today-sales-bookings-split.png` (life-os).
+
+Деплой на прод (62.113.100.67:8100) штатным `deploy.sh`. Бэкап ДО выкатки:
+`prod-backups/rollback-pre-6457-20260914-173431.tar.gz`. Новый BUILD_ID —
+`iwWa7Fe9yNISOtSVSB5E2`. После выкатки найден и убит `kill -9` зомби-процесс
+(pid 1036576, держал cwd `.next/standalone`, не слушал порт — тот же паттерн,
+что 11.09/06.09/#6453). Проверки: `/today` → 200, `/rop` → 307 на `/login` —
+и на localhost:8100, и через публичный домен `monolitika.mlt-it.com`; ровно
+один процесс на 8100; `start.sh` (BITRIX_BOT_*) не тронут; `app.log` чист (один
+несвязанный `tv/feed` connection timeout — фоновая джоба, не из этого деплоя).
+
+---
+
 ## 2026-09-14 — Деплой страницы /rop на прод (#6446/#6453)
 
 Смёржена `feature/rop-page` (90061d8) в `dev-asteroid` merge-commit'ом `05c9ff1`,
