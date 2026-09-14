@@ -19,6 +19,9 @@
 // Файл ЧИСТЫЙ (без импортов БД) — его читает и клиентский ReportTable, чтобы не
 // делать кликабельными ячейки, у которых списка не будет.
 
+import { workingDaysAgoSql } from '@/lib/metrics/productionCalendar';
+import { DELA_OVERDUE_WD_STEPS, delaOverdueWdMetricId } from './dealsActivities';
+
 /** Правило: SQL-условие на сделку `d` + опциональный JOIN. $1/$2 — период. */
 export interface DrillRule {
   /** JOIN-хвост (может использовать $1/$2 и алиас d). */
@@ -40,7 +43,10 @@ export interface DrillRule {
   // список показывает СДЕЛКИ со звонком: его счётчик с ячейкой несравним (одна
   // сделка — несколько звонков), и «Разбор метрики» не должен рисовать ни
   // ложное «расходится», ни ложное «совпало». Роут отдаёт это как population.
-  object?: 'deal' | 'call';
+  // 'activity' — объект метрики ДЕЛО/ЗАДАЧА внутри сделки («Дела и задачи»):
+  // у одной сделки их несколько, поэтому счётчик списка (сделки) с ячейкой
+  // (дела) несравним — ровно та же история, что со звонками.
+  object?: 'deal' | 'call' | 'activity';
 }
 
 /** Воронка по суффиксу id метрики: …_all → все, …_repeat → повторные, иначе первичные. */
@@ -140,6 +146,59 @@ function priceSpeedRule(id: string): DrillRule {
   };
 }
 
+// ── «Дела и задачи» (13 метрик, задачи #5589 и правка владельца 14.09) ──────
+// Объект счётчиков — ДЕЛО/ЗАДАЧА внутри sa.deals.activities, а показать в панели
+// можно только сделки, в которых такие дела есть (object:'activity' — «Разбор
+// метрики» не станет сверять число сделок с числом дел). Исключение —
+// «Сделки без дел» и «Сделки с активным запросом»: там объект действительно
+// сделка, они сравнимы и помечены object по умолчанию.
+//
+// Период игнорируется целиком: это снимок «сейчас», как и «Стадии (сейчас)».
+// $1/$2 обязаны встретиться в тексте, иначе Postgres не типизирует параметры
+// (42P18) — тот же приём `$1::timestamptz IS NOT NULL`, что в роуте выше.
+const ACT_TYPE = `COALESCE(e->>'type', e->>'provider_id')`;
+const ACT_END = `COALESCE(e->>'date_end', e->>'deadline')`;
+/** Срок проставлен и это не заглушка «без срока» переходного периода. */
+const ACT_HAS_END = `${ACT_END} IS NOT NULL AND ${ACT_END} NOT LIKE '9999-12-31%'`;
+/** Та же отсечка активных сделок, что в dealsActivities.ts и stageSnapshot.ts. */
+const ACT_ACTIVE_DEAL = `EXISTS (SELECT 1 FROM stages _s_act WHERE _s_act.id = d.stage_id AND _s_act.stage_type NOT IN ('WON','LOSS'))`;
+const ACT_PERIOD_UNUSED = `$1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
+const hasActivity = (cond: string) => `EXISTS (SELECT 1 FROM jsonb_array_elements(d.activities) e WHERE ${cond})`;
+const ACT_TODAY_MSK = `(${ACT_END}::timestamptz AT TIME ZONE 'Europe/Moscow')::date = (now() AT TIME ZONE 'Europe/Moscow')::date`;
+
+function activityRule(inner: string, label: string, object: 'deal' | 'activity' = 'activity'): DrillRule {
+  return { where: `${inner} AND ${ACT_ACTIVE_DEAL} AND ${ACT_PERIOD_UNUSED}`, label, object };
+}
+
+const DELA = `${ACT_TYPE} <> 'CRM_TASKS_TASK'`;
+const ZADACHA = `${ACT_TYPE} = 'CRM_TASKS_TASK'`;
+
+const DELA_ZADACHI_RULES: Record<string, DrillRule> = {
+  dela_total: activityRule(hasActivity(DELA), 'активные сделки, где есть дела'),
+  dela_overdue: activityRule(
+    hasActivity(`${DELA} AND ${ACT_HAS_END} AND ${ACT_END}::timestamptz < now()`),
+    'активные сделки с просроченными делами'),
+  dela_today: activityRule(
+    hasActivity(`${DELA} AND ${ACT_HAS_END} AND ${ACT_TODAY_MSK}`),
+    'активные сделки с делами на сегодня'),
+  deals_without_dela: activityRule(
+    `NOT ${hasActivity(DELA)}`, 'активные сделки без единого дела', 'deal'),
+  zadachi_total: activityRule(hasActivity(ZADACHA), 'активные сделки, где есть задачи'),
+  zadachi_overdue: activityRule(
+    hasActivity(`${ZADACHA} AND ${ACT_HAS_END} AND ${ACT_END}::timestamptz < now()`),
+    'активные сделки с просроченными задачами'),
+  zadachi_today: activityRule(
+    hasActivity(`${ZADACHA} AND ${ACT_HAS_END} AND ${ACT_TODAY_MSK}`),
+    'активные сделки с задачами на сегодня'),
+  deals_with_active_zapros: activityRule(
+    hasActivity(ZADACHA), 'активные сделки с запросом', 'deal'),
+  ...Object.fromEntries(DELA_OVERDUE_WD_STEPS.map(n => [
+    delaOverdueWdMetricId(n),
+    activityRule(
+      hasActivity(`${DELA} AND ${ACT_HAS_END} AND ${ACT_END}::timestamptz < ${workingDaysAgoSql(n)}`),
+      `активные сделки с делами, просроченными больше чем на ${n} раб. дней`),
+  ])),
+};
 export const DRILL_RULES: Record<string, DrillRule> = (() => {
   const out: Record<string, DrillRule> = {};
   const triple = (base: string) => [base, `${base}_repeat`, `${base}_all`];
@@ -150,6 +209,7 @@ export const DRILL_RULES: Record<string, DrillRule> = (() => {
   for (const id of triple('calls_silence_deals'))   out[id] = silenceRule(id);
   for (const id of triple('calls_to_reservation_avg')) out[id] = toReservationRule(id);
   for (const id of triple('price_speed_median_hours')) out[id] = priceSpeedRule(id);
+  Object.assign(out, DELA_ZADACHI_RULES);
   return out;
 })();
 

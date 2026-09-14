@@ -1,8 +1,8 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
-import { X, ExternalLink, ArrowDownLeft, ArrowUpRight, Mic } from 'lucide-react';
+import { X, ExternalLink, ArrowDownLeft, ArrowUpRight, Mic, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
@@ -144,7 +144,21 @@ const STAGES: { key: keyof DealFull; label: string }[] = [
 // группы + менеджер + источник + служебное, 2 колонки без вертикального скролла
 // панели), «Товары» (список позиций + итого) и «Звонки» (задача КОЛСТАТ, 10.07 —
 // история звонков сделки, va.calls, грузится лениво только при открытии таба).
-type DealCardTab = 'main' | 'products' | 'calls';
+interface DealActivity {
+  activityId: string;
+  type: string;
+  typeLabel: string;
+  isTask: boolean;
+  name: string | null;
+  dateCreate: string | null;
+  dateEnd: string | null;
+  responsibleId: string | null;
+  responsibleName: string | null;
+  overdue: boolean;
+  taskUrl: string | null;
+}
+
+type DealCardTab = 'main' | 'products' | 'calls' | 'activities';
 
 /** Рендер в <body>: панель не должна зависеть от transform/backdrop-filter предка
  *  (Radix Dialog.Content), иначе fixed-позиционирование считается от окна модала. */
@@ -158,7 +172,7 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const portal = usePortalToBody();
   const { data, isLoading } = useQuery({
     queryKey: ['deal-card', dealId],
-    queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null; callsCount: number; ltv: LtvInfo | null; stageHistory: StageHistoryItem[] }>,
+    queryFn: () => fetch(`/api/reports/deal?id=${dealId}`).then(r => r.json()) as Promise<{ deal: DealFull; manager: ManagerInfo | null; source: SourceInfo | null; callsCount: number; activitiesCount: number; ltv: LtvInfo | null; stageHistory: StageHistoryItem[] }>,
     staleTime: 60_000,
   });
   const deal = data?.deal;
@@ -190,6 +204,34 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   });
   const calls = callsData?.calls ?? [];
   const callsCount = data?.callsCount ?? 0;
+
+  // Дела и задачи — так же лениво, как звонки: список ходит в Битрикс за id
+  // задач (см. /api/reports/deal/activities), на каждое открытие карточки это
+  // ни к чему. Цифра на табе приходит с основным запросом.
+  const { data: actData, isLoading: actLoading } = useQuery({
+    queryKey: ['deal-card-activities', dealId],
+    queryFn: () => fetch(`/api/reports/deal/activities?id=${dealId}`).then(r => r.json()) as Promise<{ activities: DealActivity[] }>,
+    enabled: tab === 'activities',
+    staleTime: 60_000,
+  });
+  const activities = useMemo(() => actData?.activities ?? [], [actData]);
+  const activitiesCount = data?.activitiesCount ?? 0;
+  // Фильтр по типу: владелец просил «сортировать по типу», а типов в снимке
+  // всего 6–8 и у одной сделки обычно 1–3 — выбор типа полезнее сортировки,
+  // которая на трёх строках ничего не даёт и ломает хронологию.
+  const [actType, setActType] = useState<string>('');
+  const actTypes = useMemo(() => {
+    const m = new Map<string, { label: string; n: number }>();
+    for (const a of activities) {
+      const cur = m.get(a.type);
+      m.set(a.type, { label: a.typeLabel, n: (cur?.n ?? 0) + 1 });
+    }
+    return [...m.entries()].sort((x, y) => y[1].n - x[1].n);
+  }, [activities]);
+  const shownActivities = useMemo(
+    () => (actType ? activities.filter(a => a.type === actType) : activities),
+    [activities, actType],
+  );
 
   // Хронология — только заполненные этапы (+ ожидаемое закрытие, если сделка ещё
   // открыта), в порядке жизненного цикла. Собираем один раз здесь, чтобы вертикальная
@@ -276,17 +318,18 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                 (единый визуальный язык табов приложения). max-w-md (было max-w-xs) —
                 третья пилюля «Звонки N» иначе не помещалась на 375px без переноса. */}
             <div className="shrink-0 px-6 sm:px-9 pt-4 pb-1 border-b border-[var(--color-border)]">
-              <div className="flex bg-[var(--color-bg)] rounded-xl p-1 gap-1 max-w-md">
+              <div className="flex flex-wrap bg-[var(--color-bg)] rounded-xl p-1 gap-1 max-w-lg">
                 {([
                   { v: 'main', label: 'Основное' },
                   { v: 'products', label: `Товары${products.length ? ` · ${products.length}` : ''}` },
                   { v: 'calls', label: `Звонки${callsCount ? ` · ${callsCount}` : ''}` },
+                  { v: 'activities', label: `Дела${activitiesCount ? ` · ${activitiesCount}` : ''}` },
                 ] as { v: DealCardTab; label: string }[]).map(o => (
                   <button
                     key={o.v}
                     type="button"
                     onClick={() => setTab(o.v)}
-                    className={`flex-1 text-center px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                    className={`flex-1 min-w-[84px] min-h-11 text-center px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${
                       tab === o.v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)] shadow-sm' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
                     }`}
                   >
@@ -472,6 +515,102 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                         <span className="text-sm font-bold tabular-nums text-[var(--color-accent)]">{fmtMoney(productsTotal)}</span>
                       </div>
                     </div>
+                  )}
+                </Section>
+              </div>
+            )}
+
+            {tab === 'activities' && (
+              // «Дела» (правка владельца 14.09): хронология дел и задач сделки из
+              // снимка sa.deals.activities — того же, по которому считаются метрики
+              // раздела «Дела и задачи». Свежие сверху (по сроку, а без срока — по
+              // дате создания): это независимые события, «последнее сверху»
+              // читается лучше, чем «с начала», как и в табе «Звонки».
+              //
+              // Ссылка ведёт в Битрикс ТОЛЬКО у задач и только если бэкенд смог
+              // достать настоящий id задачи (ASSOCIATED_ENTITY_ID): в снимке лежит
+              // id ДЕЛА CRM, сквозной для всех типов, — ссылка по нему открыла бы
+              // чужую задачу. Нет id — нет ссылки, это осознанно.
+              <div className="flex-1 overflow-y-auto px-6 sm:px-9 py-5 sm:py-7">
+                <Section title={`Дела и задачи · ${activities.length}`}>
+                  {actLoading ? (
+                    <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-16 bg-[var(--color-border)] rounded-xl animate-pulse" />)}</div>
+                  ) : activities.length === 0 ? (
+                    <div className="text-sm text-[var(--color-text-muted)]">Дел и задач по сделке нет</div>
+                  ) : (
+                    <>
+                      {actTypes.length > 1 && (
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          <button
+                            type="button"
+                            onClick={() => setActType('')}
+                            className={`min-h-11 sm:min-h-0 sm:py-1.5 px-3 rounded-full text-xs font-medium border transition-colors ${
+                              actType === ''
+                                ? 'bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                            }`}
+                          >
+                            Все · {activities.length}
+                          </button>
+                          {actTypes.map(([type, info]) => (
+                            <button
+                              key={type}
+                              type="button"
+                              onClick={() => setActType(type)}
+                              className={`min-h-11 sm:min-h-0 sm:py-1.5 px-3 rounded-full text-xs font-medium border transition-colors ${
+                                actType === type
+                                  ? 'bg-[var(--color-accent)] border-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                                  : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                              }`}
+                            >
+                              {info.label} · {info.n}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="border border-[var(--color-border)] rounded-xl overflow-hidden">
+                        {shownActivities.map((a, i) => (
+                          <div key={a.activityId} className={`px-4 py-3 ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`}>
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="text-xs font-medium text-[var(--color-text-muted)] shrink-0">{a.typeLabel}</span>
+                              <span className="flex items-center gap-1.5 shrink-0">
+                                {a.overdue && (
+                                  <span className="flex items-center gap-1 text-[11px] font-medium text-[var(--color-negative,#d33)]">
+                                    <AlertTriangle size={11} aria-hidden />просрочено
+                                  </span>
+                                )}
+                                <span className="text-sm tabular-nums text-[var(--color-text)]">
+                                  {a.dateEnd ? fmtDateTimeMsk(a.dateEnd) : <span className="text-[var(--color-text-muted)]">без срока</span>}
+                                </span>
+                              </span>
+                            </div>
+                            <div className="mt-1 text-sm text-[var(--color-text)] break-words">
+                              {a.taskUrl ? (
+                                <a
+                                  href={a.taskUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-start gap-1 hover:text-[var(--color-accent)] hover:underline"
+                                >
+                                  <span>{a.name || 'Без названия'}</span>
+                                  <ExternalLink size={12} className="shrink-0 mt-1" aria-label="Открыть задачу в Битриксе" />
+                                </a>
+                              ) : (
+                                a.name || <span className="text-[var(--color-text-muted)]">Без названия</span>
+                              )}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-[var(--color-text-muted)]">
+                              <span>{a.responsibleName ?? (a.responsibleId ? `id ${a.responsibleId}` : 'ответственный не указан')}</span>
+                              {a.dateCreate && <span className="tabular-nums">создано {fmtDateTimeMsk(a.dateCreate)}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-3 text-xs text-[var(--color-text-muted)]">
+                        Снимок из Битрикса, обновляется сверкой 4 раза в сутки; история дел не хранится —
+                        видно то, что открыто сейчас. Ссылка есть только у задач.
+                      </p>
+                    </>
                   )}
                 </Section>
               </div>

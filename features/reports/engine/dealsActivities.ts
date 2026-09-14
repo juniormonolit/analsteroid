@@ -1,4 +1,5 @@
 import { analyticsDb } from '@/lib/db/clients';
+import { workingDaysAgoSql } from '@/lib/metrics/productionCalendar';
 import type { SnapshotFlatRow } from './stageSnapshot';
 
 // «Дела и задачи» (задача #5589, Серёга) — снимок sa.deals.activities (jsonb),
@@ -59,9 +60,27 @@ export const LOGIST_BITRIX_IDS: string[] = [
 // оргструктуре» — это НЕ баг снимка, а разные срезы населения (org_resolved_
 // hierarchy vs account_type='managers'); сверяющий должен применять тот же
 // фильтр, иначе сравнение яблоки-с-апельсинами.
+/**
+ * Глубина просрочки в РАБОЧИХ днях (правка владельца 14.09). Мотив: «просрочено»
+ * без глубины сваливает в одну кучу дело, забытое вчера вечером, и дело, которое
+ * никто не трогал с мая — а это разные разговоры с менеджером. Дни именно
+ * рабочие: дело со сроком в пятницу в понедельник просрочено на 1 рабочий день,
+ * а не на 3, иначе каждые выходные метрика скакала бы сама по себе.
+ *
+ * Пороги вложенные, НЕ взаимоисключающие: дело, просроченное на 40 рабочих дней,
+ * попадает и в «>5», и в «>10», и в «>30». Так столбцы читаются как воронка
+ * запущенности слева направо, и каждый сам по себе отвечает на вопрос «сколько
+ * висит дольше N» без сложения соседних.
+ */
+export const DELA_OVERDUE_WD_STEPS = [5, 10, 30, 60, 90] as const;
+
+/** id метрики глубины просрочки по числу рабочих дней. */
+export const delaOverdueWdMetricId = (n: number) => `dela_overdue_${n}wd`;
+
 export const DELA_ZADACHI_METRIC_IDS = [
   'dela_total', 'dela_overdue', 'dela_today', 'deals_without_dela',
   'zadachi_total', 'zadachi_overdue', 'zadachi_today', 'deals_with_active_zapros',
+  ...DELA_OVERDUE_WD_STEPS.map(delaOverdueWdMetricId),
 ];
 
 let _cache: { rows: SnapshotFlatRow[]; at: number } | null = null;
@@ -93,7 +112,21 @@ export async function fetchDealsActivitiesSnapshot(): Promise<SnapshotFlatRow[]>
   const logistFilterSql = DELA_ZADACHI_LOGIST_FILTER_ENABLED
     ? `AND e->>'responsible_id' = ANY($1::text[])`
     : '';
-  const params = DELA_ZADACHI_LOGIST_FILTER_ENABLED ? [LOGIST_BITRIX_IDS] : [];
+  const params: unknown[] = DELA_ZADACHI_LOGIST_FILTER_ENABLED ? [LOGIST_BITRIX_IDS] : [];
+
+  // Общая часть предиката «это просроченное ДЕЛО» — чтобы пять порогов и базовая
+  // «Просроченные дела» не разъезжались по условиям при будущих правках.
+  const overdueDelaBase = `e IS NOT NULL AND e_type <> 'CRM_TASKS_TASK'
+        AND e_deadline IS NOT NULL AND e_deadline NOT LIKE '9999-12-31%'`;
+  // Отсечка «N рабочих дней назад» — выражением прямо в SQL (один календарь на
+  // ячейку и на дриллдаун, см. workingDaysAgoSql).
+  const overdueWdAgg = DELA_OVERDUE_WD_STEPS.map(n => `count(*) FILTER (
+      WHERE ${overdueDelaBase}
+        AND e_deadline::timestamptz < ${workingDaysAgoSql(n)}
+    ) AS ${delaOverdueWdMetricId(n)}`).join(',\n    ');
+  const overdueWdSelect = DELA_OVERDUE_WD_STEPS
+    .map(n => `  COALESCE(i.${delaOverdueWdMetricId(n)}, 0)::int AS ${delaOverdueWdMetricId(n)}`)
+    .join(',\n');
 
   const sql = `
 WITH active_deals AS (
@@ -150,7 +183,8 @@ item_agg AS (
         AND e_deadline IS NOT NULL AND e_deadline NOT LIKE '9999-12-31%'
         AND (e_deadline::timestamptz AT TIME ZONE 'Europe/Moscow')::date
           = (now() AT TIME ZONE 'Europe/Moscow')::date
-    ) AS zadachi_today
+    ) AS zadachi_today,
+    ${overdueWdAgg}
   FROM items
   GROUP BY manager_id, funnel_id
 ),
@@ -185,7 +219,8 @@ SELECT
   COALESCE(i.zadachi_total, 0)::int AS zadachi_total,
   COALESCE(i.zadachi_overdue, 0)::int AS zadachi_overdue,
   COALESCE(i.zadachi_today, 0)::int AS zadachi_today,
-  COALESCE(a.deals_with_active_zapros, 0)::int AS deals_with_active_zapros
+  COALESCE(a.deals_with_active_zapros, 0)::int AS deals_with_active_zapros,
+${overdueWdSelect}
 FROM item_agg i
 FULL JOIN deal_agg a ON a.manager_id = i.manager_id AND a.funnel_id = i.funnel_id
   `.trim();
@@ -194,7 +229,7 @@ FULL JOIN deal_agg a ON a.manager_id = i.manager_id AND a.funnel_id = i.funnel_i
     manager_id: string; funnel_id: number;
     dela_total: number; dela_overdue: number; dela_today: number; deals_without_dela: number;
     zadachi_total: number; zadachi_overdue: number; zadachi_today: number; deals_with_active_zapros: number;
-  }>(sql, params);
+  } & Record<string, number | string>>(sql, params);
 
   const rows: SnapshotFlatRow[] = res.rows.map(r => ({
     dimension_id: r.manager_id,
@@ -207,6 +242,8 @@ FULL JOIN deal_agg a ON a.manager_id = i.manager_id AND a.funnel_id = i.funnel_i
     zadachi_overdue: r.zadachi_overdue,
     zadachi_today: r.zadachi_today,
     deals_with_active_zapros: r.deals_with_active_zapros,
+    ...Object.fromEntries(DELA_OVERDUE_WD_STEPS.map(n =>
+      [delaOverdueWdMetricId(n), r[delaOverdueWdMetricId(n)] as number])),
   }));
   _cache = { rows, at: Date.now() };
   return rows;

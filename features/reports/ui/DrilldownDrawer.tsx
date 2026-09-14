@@ -456,7 +456,7 @@ export interface DrillTotals {
    * Плоский список: что считает ЯЧЕЙКА. 'calls' — звонковые метрики: список —
    * сделки со звонком, ячейка — звонки, счётчики несравнимы (см. DrillRule.object).
    */
-  unit?: 'deals' | 'calls';
+  unit?: 'deals' | 'calls' | 'activities';
   /**
    * Клиентский дрилл: сервер подменил население фолбэком «все отгрузки клиентов
    * периода» (у метрики нет точного правила) — итог с ячейкой не сверяется.
@@ -518,7 +518,7 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
   // написано. Раньше в этом месте показывался ПРАВДОПОДОБНЫЙ, но чужой список
   // («сделки с любой активностью в периоде») — теперь честное объяснение.
   const noRule = (data as { noRule?: string } | undefined)?.noRule;
-  const population = (data as { population?: 'calls' } | undefined)?.population;
+  const population = (data as { population?: 'calls' | 'activities' } | undefined)?.population;
 
   // До ранних return'ов — хук. Зависимость только от data: caller обязан
   // передавать стабильный колбэк (setState), иначе эффект зациклится. Пока
@@ -528,7 +528,7 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
   useEffect(() => {
     if (!onTotals) return;
     onTotals(data
-      ? { count: totalCount, amount: totalAmount, shown: deals.length, truncated: isTruncated, noRule, unit: population === 'calls' ? 'calls' : 'deals' }
+      ? { count: totalCount, amount: totalAmount, shown: deals.length, truncated: isTruncated, noRule, unit: population === 'calls' ? 'calls' : population === 'activities' ? 'activities' : 'deals' }
       : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, onTotals]);

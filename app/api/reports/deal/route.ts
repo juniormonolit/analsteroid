@@ -24,6 +24,9 @@ export async function GET(req: NextRequest) {
        d.current_manager_id::text AS manager_id,
        d.lead_id, d.contact_id, d.company_id,
        d.source_id, d.products,
+       -- только ДЛИНА снимка дел (для цифры на табе «Дела»); сам jsonb на клиент
+       -- не отдаём — список грузит /api/reports/deal/activities лениво.
+       jsonb_array_length(coalesce(d.activities, '[]'::jsonb)) AS activities_count,
        d.product_group_id, pg.name AS product_group_name,
        d.head_group_id, d.head_group_name,
        s.name AS stage_name,
@@ -91,6 +94,9 @@ export async function GET(req: NextRequest) {
     callsCountPromise, ltvPromise, historyPromise, loadManagerInfoMap(), loadSourceMap(),
   ]);
   const callsCount = Number(callsCountRes.rows[0]?.count ?? 0);
+  // Счётчик для лейбла таба «Дела» — дёшево, прямо из уже прочитанного jsonb
+  // (сам список таб грузит лениво, см. /api/reports/deal/activities).
+  const activitiesCount = Number(deal.activities_count ?? 0);
   const manager = deal.manager_id ? mgrInfo.get(deal.manager_id) ?? null : null;
   const source  = deal.source_id ? srcMap.get(deal.source_id) ?? null : null;
   const ltv = ltvRes && ltvRes.rows.length
@@ -105,5 +111,5 @@ export async function GET(req: NextRequest) {
     managerName: r.manager_id ? (mgrInfo.get(r.manager_id)?.name ?? `#${r.manager_id}`) : null,
   }));
 
-  return NextResponse.json({ deal, manager, source, callsCount, ltv, stageHistory });
+  return NextResponse.json({ deal, manager, source, callsCount, activitiesCount, ltv, stageHistory });
 }

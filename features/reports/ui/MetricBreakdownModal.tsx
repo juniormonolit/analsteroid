@@ -253,6 +253,8 @@ function MetricLeafPanel({ metric, note }: { metric: Metric; note?: string }) {
       else compared = clientCompare === 'deals' ? (totals.deals ?? totals.count) : clientCompare === 'amount' ? totals.amount : totals.count;
     } else if (totals.unit === 'calls') {
       noCompare = 'объект метрики — звонок, а в списке сделки со звонком';
+    } else if (totals.unit === 'activities') {
+      noCompare = 'объект метрики — дело, а в списке сделки с такими делами';
     } else if (kind === 'count') {
       if (metric.metricType === 'collected' && metric.aggField && metric.aggField !== 'deal_id') noCompare = 'счётчик не по сделкам';
       else compared = totals.count;

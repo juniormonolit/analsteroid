@@ -194,7 +194,7 @@ export async function GET(req: NextRequest) {
   let extraJoin = '';
   // Объект ячейки метрики (см. DrillRule.object): 'calls' — список показывает
   // сделки со звонком, а ячейка считает звонки; UI не сверяет такой итог.
-  let population: 'calls' | undefined;
+  let population: 'calls' | 'activities' | undefined;
 
   if (metricFilter && STAGE_NOW_STAGE_IDS.has(metricFilter)) {
     // Снимок «Стадии (сейчас)» — период игнорируется целиком, фильтр — ТЕКУЩИЙ
@@ -248,6 +248,7 @@ export async function GET(req: NextRequest) {
     if (rule.mgrOne) mgrOneTpl = rule.mgrOne;
     if (rule.mgrMany) mgrManyTpl = rule.mgrMany;
     if (rule.object === 'call') population = 'calls';
+    if (rule.object === 'activity') population = 'activities';
     metricDateFilter = `(${rule.where})`;
   } else if (metricFilter) {
     const legs = resolveDrilldownLegs(metricFilter, await loadMetrics());
