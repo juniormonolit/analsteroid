@@ -88,8 +88,8 @@ export function RopDashboard() {
     <DashboardView
       apiUrl="/api/rop/dashboard"
       queryKey="rop-dashboard"
-      title="Сегодня — моя зона"
-      subtitleSuffix="продажи и брони за день по вашей зоне ответственности"
+      title="Сегодня"
+      subtitleSuffix="продажи и брони за день, план дня по менеджерам"
     />
   );
 }
