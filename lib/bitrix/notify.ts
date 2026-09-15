@@ -87,6 +87,7 @@ export const BOT_FUNCTION_KEYS = [
   'daily_moscow_report', 'daily_os_teams_report', 'report_schedules', 'weekly_weather',
   'manager_digest_daily', 'manager_digest_weekly', 'rop_digest', 'advice_feedback', 'scenarios',
   'gamification', 'deal_chats',
+  'how_are_we',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 
@@ -179,6 +180,36 @@ export async function sendBitrixBotMessage(
     DIALOG_ID: bitrixUserId,
     MESSAGE: message,
     ...(keyboard?.length ? { KEYBOARD: { BUTTONS: keyboard } } : {}),
+  });
+  return Number(body?.result) || 0;
+}
+
+/** Сообщение с картинкой-вложением (дайджест «Как дела?», 15.09): Битрикс сам
+ *  скачивает картинку по публичному URL и показывает превью под текстом. Блок
+ *  ATTACH — штатный формат imbot.message.add; текст остаётся обычным MESSAGE с
+ *  bbcode. Картинка ОБЯЗАНА быть доступна без сессии — см. /api/how-are-we/chart. */
+export async function sendBitrixBotMessageWithImage(
+  bitrixUserId: string,
+  message: string,
+  imageUrl: string,
+  channel: BotChannel,
+): Promise<number> {
+  if (!(await channelEnabled(channel))) {
+    console.warn(`[bot] канал «${channel}» выключен: сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
+    return 0;
+  }
+  const webhook = process.env.BITRIX_BOT_WEBHOOK_URL || '';
+  const botId = process.env.BITRIX_BOT_ID || '';
+  const clientId = process.env.BITRIX_BOT_CLIENT_ID || '';
+  if (!webhook || !botId || !clientId) {
+    throw new Error('BITRIX_BOT_WEBHOOK_URL/BITRIX_BOT_ID/BITRIX_BOT_CLIENT_ID не заданы — бот "Аналитик" ещё не зарегистрирован');
+  }
+  const body = await bx(webhook, 'imbot.message.add', {
+    CLIENT_ID: clientId,
+    BOT_ID: botId,
+    DIALOG_ID: bitrixUserId,
+    MESSAGE: message,
+    ATTACH: [{ IMAGE: { LINK: imageUrl } }],
   });
   return Number(body?.result) || 0;
 }

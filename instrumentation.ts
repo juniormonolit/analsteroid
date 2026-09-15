@@ -64,6 +64,36 @@ export async function register() {
   scheduleReportSchedules();
   scheduleScenarios();
   scheduleDiagnostics();
+  scheduleHowAreWe();
+}
+
+// Дайджест «Как дела?» (задача владельца 15.09): несколько выпусков в день по
+// часам из настроек (12/15/18 МСК), будни. Тик раз в минуту; замок на пару
+// «дата:час», поэтому неудачная отправка повторится на следующем тике в тот же
+// час (как у отчёта «МОСКВА»), а соседние инстансы не задублируют.
+function scheduleHowAreWe() {
+  let running = false;
+  let lastKey = '';
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { howAreWeDue, sendHowAreWe } = await import('./lib/jobs/howAreWe');
+      const due = await howAreWeDue();
+      if (!due) return;
+      const key = `${due.date}:${due.hour}`;
+      if (lastKey === key) return;
+      const outcome = await runOnceADayMsk(`how-are-we:${due.hour}`, due.date, async () => {
+        const res = await sendHowAreWe({ cutHour: due.hour, dateStr: due.date });
+        console.log(`[howAreWe] ${due.hour}:00 — отправлено ${res.recipients.length} получателям${res.imageUrl ? ' с картинкой' : ''}`);
+      });
+      if (outcome !== 'busy' && outcome !== 'lock-error') lastKey = key;
+    } catch (err) {
+      console.error('[howAreWe] тик упал:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setTimeout(tick, 20_000);
+  setInterval(tick, 60 * 1000);
 }
 
 // Авторассылка сохранённых отчётов «Мой отчёт» (задача владельца 09.09): раз в
