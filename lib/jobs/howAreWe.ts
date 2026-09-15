@@ -74,9 +74,10 @@ export async function sendHowAreWe(opts: SendOptions): Promise<{ recipients: str
   for (const to of recipients) {
     // Пробная отправка явному адресату (кнопка «отправить мне» / тест-роут) идёт и
     // при выключенной функции: иначе владелец не увидит выпуск до включения на всех.
-    if (built.imageUrl) await sendBitrixBotMessageWithImage(to, built.message, built.imageUrl, 'how_are_we', { test: !!opts.deliverTo });
-    else if (opts.deliverTo) await sendBitrixBotMessageWithImage(to, built.message, '', 'how_are_we', { test: true });
-    else await sendBitrixBotMessage(to, built.message, undefined, 'how_are_we');
+    const sentId = built.imageUrl || opts.deliverTo
+      ? await sendBitrixBotMessageWithImage(to, built.message, built.imageUrl ?? '', 'how_are_we', { test: !!opts.deliverTo })
+      : await sendBitrixBotMessage(to, built.message, undefined, 'how_are_we');
+    if (!sentId) continue; // функция выключена — сообщение не ушло, в журнал не пишем
     await systemDb().query(
       'INSERT INTO how_are_we_log (date_str, cut_hour, recipient, message, image_url, test) VALUES ($1, $2, $3, $4, $5, $6)',
       [dateStr, opts.cutHour, to, built.message, built.imageUrl, opts.test ?? false],
