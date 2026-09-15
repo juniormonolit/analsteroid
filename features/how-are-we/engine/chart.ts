@@ -18,7 +18,9 @@ const C = {
   plan: '#e5e7eb', usual: '#374151', ahead: '#2e7d32', behind: '#c62828', normal: '#2563eb',
   typical: '#9ca3af', factLine: '#2563eb', planLine: '#111827',
 };
-const W = 1200;
+// Ширина с запасом: DejaVu Sans на проде заметно шире Helvetica, подписи не должны
+// упираться в край (первый прогон 15.09 обрезал «43 %»).
+const W = 1440;
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const pctS = (v: number) => `${Math.round(v)} %`;
@@ -30,7 +32,7 @@ function text(x: number, y: number, s: string, opts: { size?: number; weight?: n
 /** Панель 1: горизонтальные полосы — факт к часу на фоне дневного плана, засечка «обычно». */
 function barsPanel(f: HowAreWeFacts, y0: number): { svg: string; height: number } {
   const rows = [f.company, ...f.branches.filter(b => b.plan || b.sales.n || b.usual.n)];
-  const rowH = 74; const labelW = 230; const barX = labelW + 20; const barW = W - barX - 330;
+  const rowH = 74; const labelW = 330; const barX = labelW + 20; const barW = W - barX - 470;
   const max = Math.max(...rows.map(r => Math.max(r.plan ?? 0, r.sales.amt, r.usual.amt)), 1);
   const sx = (v: number) => barX + (v / max) * barW;
   const parts: string[] = [];
@@ -48,14 +50,15 @@ function barsPanel(f: HowAreWeFacts, y0: number): { svg: string; height: number 
       parts.push(`<line x1="${ux}" y1="${y + 4}" x2="${ux}" y2="${y + 54}" stroke="${C.usual}" stroke-width="3" stroke-dasharray="5 4"/>`);
     }
     const p = plan > 0 ? pctS(r.sales.amt / plan * 100) : '—';
-    parts.push(text(barX + barW + 20, y + 30, `${fmtMoney(r.sales.amt)} из ${plan ? fmtMoney(plan) : '—'} · ${p}`, { size: 22, weight: 600 }));
-    parts.push(text(barX + barW + 20, y + 54, `обычно ${fmtMoney(r.usual.amt)}`, { size: 18, fill: C.muted }));
+    parts.push(text(barX + barW + 24, y + 30, `${fmtMoney(r.sales.amt)} из ${plan ? fmtMoney(plan) : '—'} · ${p}`, { size: 21, weight: 600 }));
+    parts.push(text(barX + barW + 24, y + 54, `обычно ${fmtMoney(r.usual.amt)}`, { size: 18, fill: C.muted }));
     y += rowH;
   }
-  // Легенда.
+  // Легенда — в две строки, чтобы длинные подписи не наезжали друг на друга.
   parts.push(`<rect x="${barX}" y="${y + 10}" width="26" height="14" rx="3" fill="${C.plan}"/>` + text(barX + 34, y + 22, 'план дня', { size: 17, fill: C.muted }));
-  parts.push(`<rect x="${barX + 150}" y="${y + 10}" width="26" height="14" rx="3" fill="${C.normal}"/>` + text(barX + 184, y + 22, 'факт (зелёный — выше обычного, красный — ниже)', { size: 17, fill: C.muted }));
-  parts.push(`<line x1="${barX + 640}" y1="${y + 8}" x2="${barX + 640}" y2="${y + 28}" stroke="${C.usual}" stroke-width="3" stroke-dasharray="5 4"/>` + text(barX + 652, y + 22, 'обычно к этому часу', { size: 17, fill: C.muted }));
+  parts.push(`<line x1="${barX + 172}" y1="${y + 8}" x2="${barX + 172}" y2="${y + 28}" stroke="${C.usual}" stroke-width="3" stroke-dasharray="5 4"/>` + text(barX + 184, y + 22, 'обычно к этому часу', { size: 17, fill: C.muted }));
+  parts.push(`<rect x="${barX}" y="${y + 40}" width="26" height="14" rx="3" fill="${C.normal}"/>` + text(barX + 34, y + 52, 'факт: зелёный — выше обычного, красный — ниже, синий — как обычно', { size: 17, fill: C.muted }));
+  y += 30;
   return { svg: parts.join(''), height: y + 40 - y0 };
 }
 
