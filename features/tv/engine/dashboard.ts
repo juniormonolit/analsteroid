@@ -39,7 +39,21 @@ export interface TvDashboard {
   dailyTarget: number;
   root: TvDashNode;
   managers: Record<string, TvDashManager>;
+  /**
+   * Задача #6479: /rop не должен молча показывать пустое дерево, когда причина
+   * пустоты — «не удалось определить зону ответственности» (нет ни полного
+   * доступа, ни подконтрольных отделов, ни привязки к Битриксу), а не «правда
+   * нуль активности за день». Заполняется только в этом случае — не для
+   * self-only/depts-скоупов (там пусто ожидаемо и понятно само по себе: «моя
+   * зона» видна как есть) и не для /today (без scope).
+   */
+  scopeNotice?: string;
 }
+
+const NO_ORG_BINDING_NOTICE =
+  'Нет привязки к оргструктуре — доступ к «РОП — сегодня» есть, но система не знает, '
+  + 'какие отделы или менеджера вам показывать. Обратитесь к администратору: нужна '
+  + 'привязка к Битриксу/подконтрольным отделам или право «видеть всю компанию».';
 
 const DASH_TTL_SEC = 20;
 const DEFAULT_TARGET = 5;
@@ -121,6 +135,11 @@ export async function buildDashboard(dailyTarget = DEFAULT_TARGET, scope?: RopSc
         allManagerIds: allIds,
       };
     };
-    return { day: today, generatedAt: new Date().toISOString(), dailyTarget, root: build(tree.root), managers };
+    const noOrgBinding = !!scope && !scope.full && !scope.selfOnly
+      && (!scope.allowedDeptIds || scope.allowedDeptIds.size === 0);
+    return {
+      day: today, generatedAt: new Date().toISOString(), dailyTarget, root: build(tree.root), managers,
+      ...(noOrgBinding ? { scopeNotice: NO_ORG_BINDING_NOTICE } : {}),
+    };
   });
 }
