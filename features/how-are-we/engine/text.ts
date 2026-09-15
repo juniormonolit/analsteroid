@@ -74,7 +74,6 @@ export interface BuildOptions {
   baseUrl?: string;
 }
 
-const DOT = { ahead: '🟢', behind: '🔴', normal: '⚪' } as const;
 
 export function buildHowAreWeMessage(f: HowAreWeFacts, opts: BuildOptions = {}): string {
   const overrides = opts.overrides ?? {};
@@ -121,7 +120,7 @@ export function buildHowAreWeMessage(f: HowAreWeFacts, opts: BuildOptions = {}):
   for (const { b, p } of withPct) {
     if (!b.plan && b.sales.n === 0 && b.usual.n === 0) continue;
     const trend = trendOf(b);
-    out.push(`${DOT[trend]} [B]${b.name}[/B] — ${fmtPair(b.sales.amt, b.plan)} · [B]${b.plan ? pct(p * 100) : '—'} %[/B]`);
+    out.push(`[B]${b.name}[/B] — ${fmtPair(b.sales.amt, b.plan)} · [B]${coloredPct(b.plan ? p : null, companyPct, b.sales.n)}[/B]`);
     const intro = pick(`branch_${trend}`, { name: b.name, fact: fmtMoney(b.sales.amt), usual: fmtMoney(b.usual.amt), pct: b.plan ? pct(p * 100) : '—', gap: fmtMoney(Math.max(0, b.usual.amt - b.sales.amt)) });
     if (intro) out.push(color(GREY, intro));
     for (const line of departmentLines(f, b.key, companyPct)) out.push(line);
@@ -183,33 +182,64 @@ export function fmtPair(fact: number, plan: number | null): string {
   return `${fmtMoney(fact)} из ${fmtMoney(plan)}`;
 }
 
-/** Метка команды относительно темпа компании по дневному плану. */
-function deptDot(p: number | null, companyPct: number | null, sales: number): string {
-  if (sales === 0) return '⚫';
-  if (p == null) return '⚪';
+/** Процент плана, окрашенный относительно темпа компании: зелёный — заметно выше,
+ *  красный — заметно ниже или ноль, обычный — без цвета. */
+function coloredPct(p: number | null, companyPct: number | null, sales: number): string {
+  if (p == null) return '—';
+  const txt = `${pct(p * 100)} %`;
+  if (sales === 0) return color(RED, txt);
   const ref = companyPct && companyPct > 0.05 ? companyPct : 0.4;
-  return p >= ref * 1.25 ? '🟢' : p <= ref * 0.6 ? '🔴' : '⚪';
+  return p >= ref * 1.25 ? color(GREEN, txt) : p <= ref * 0.6 ? color(RED, txt) : txt;
+}
+
+const INDENT = '\u00A0\u00A0\u00A0\u00A0';
+
+function sumUnits(name: string, list: DeptFact[]): UnitFact {
+  const z = { n: 0, amt: 0 };
+  const acc: UnitFact = { key: name, name, sales: { ...z }, usual: { ...z }, plan: null, books: { ...z }, usualBooks: { ...z }, created: { ...z }, usualCreated: { ...z } };
+  for (const d of list) {
+    acc.sales.n += d.sales.n; acc.sales.amt += d.sales.amt; acc.usual.n += d.usual.n; acc.usual.amt += d.usual.amt;
+    if (d.plan != null) acc.plan = (acc.plan ?? 0) + d.plan;
+  }
+  return acc;
+}
+
+function teamLine(f: HowAreWeFacts, d: DeptFact, companyPct: number | null, indent: string): string {
+  const p = d.plan ? d.sales.amt / d.plan : null;
+  // Хвост строки — одно уточнение: у лидеров кто тащит, у провалов — что обычно.
+  let tail = '';
+  if (p != null && p >= 0.5) {
+    const top = f.managers.filter(m => m.branch === d.branch && m.dept === d.name && m.sales.amt >= 3e5)
+      .sort((a, b) => b.sales.amt - a.sales.amt)[0];
+    if (top) tail = ` · ${surname(top.name)} ${fmtMoney(top.sales.amt)}`;
+  } else if (d.usual.amt >= 5e5 && d.sales.amt / d.usual.amt < 0.4) {
+    tail = color(GREY, ` · обычно ${fmtMoney(d.usual.amt)}`);
+  }
+  return `${indent}${d.name} — ${fmtPair(d.sales.amt, d.plan)}${p != null ? ` · ${coloredPct(p, companyPct, d.sales.n)}` : ''}${tail}`;
 }
 
 function departmentLines(f: HowAreWeFacts, branch: string, companyPct: number | null): string[] {
   // Существенные команды: план дня или обычный уровень от 300 тыс.
   const depts = f.departments.filter(d => d.branch === branch && ((d.plan ?? 0) >= 3e5 || d.usual.amt >= 3e5));
   if (!depts.length) return [];
-  const rows = depts
-    .map(d => ({ d, p: d.plan ? d.sales.amt / d.plan : null }))
-    .sort((a, b) => (b.p ?? -1) - (a.p ?? -1) || b.d.sales.amt - a.d.sales.amt);
-  return rows.map(({ d, p }) => {
-    // Хвост строки — одно уточнение: у лидеров кто тащит, у провалов — что обычно.
-    let tail = '';
-    if (p != null && p >= 0.5) {
-      const top = f.managers.filter(m => m.branch === branch && m.dept === d.name && m.sales.amt >= 3e5)
-        .sort((a, b) => b.sales.amt - a.sales.amt)[0];
-      if (top) tail = ` · ${surname(top.name)} ${fmtMoney(top.sales.amt)}`;
-    } else if (d.usual.amt >= 5e5 && d.sales.amt / d.usual.amt < 0.4) {
-      tail = ` · обычно ${fmtMoney(d.usual.amt)}`;
-    }
-    return `${deptDot(p, companyPct, d.sales.n)} ${shortDept(d.name)} — ${fmtPair(d.sales.amt, d.plan)}${p != null && d.sales.n > 0 ? ` · ${pct(p * 100)} %` : ''}${tail}`;
-  });
+  const byPct = (a: DeptFact, b: DeptFact) => ((b.plan ? b.sales.amt / b.plan : -1) - (a.plan ? a.sales.amt / a.plan : -1)) || b.sales.amt - a.sales.amt;
+
+  // Группировка по департаментам — только когда их в филиале больше одного
+  // (Питер: Департамент ОС / НЦ); иначе команды сразу под филиалом.
+  const parents = [...new Set(depts.map(d => d.parent).filter((x): x is string => !!x))];
+  if (parents.length < 2) return depts.sort(byPct).map(d => teamLine(f, d, companyPct, ''));
+
+  const groups = parents.map(name => ({ unit: sumUnits(name, depts.filter(d => d.parent === name)), teams: depts.filter(d => d.parent === name).sort(byPct) }));
+  const rest = depts.filter(d => !d.parent).sort(byPct);
+  groups.sort((a, b) => ((b.unit.plan ? b.unit.sales.amt / b.unit.plan : -1) - (a.unit.plan ? a.unit.sales.amt / a.unit.plan : -1)));
+  const lines: string[] = [];
+  for (const g of groups) {
+    const gp = g.unit.plan ? g.unit.sales.amt / g.unit.plan : null;
+    lines.push(`[B]${g.unit.name}[/B] — ${fmtPair(g.unit.sales.amt, g.unit.plan)} · ${coloredPct(gp, companyPct, g.unit.sales.n)}`);
+    for (const d of g.teams) lines.push(teamLine(f, d, companyPct, INDENT));
+  }
+  for (const d of rest) lines.push(teamLine(f, d, companyPct, ''));
+  return lines;
 }
 
 function paceLine(kind: string, p: PaceLine, day: number, days: number, pick: Pick): string {

@@ -38,7 +38,11 @@ export interface UnitFact {
   created: Amt;
   usualCreated: Amt;
 }
-export interface DeptFact extends UnitFact { branch: string }
+export interface DeptFact extends UnitFact {
+  branch: string;
+  /** Промежуточный уровень между командой и «Отделом продаж» («Департамент ОС»); null — команда сразу под филиалом. */
+  parent: string | null;
+}
 export interface ManagerFact {
   id: string; name: string; branch: string; dept: string;
   sales: Amt; usual: Amt; plan: number | null; active: boolean;
@@ -88,7 +92,7 @@ export interface HowAreWeFacts {
   month: MonthPace | null;
 }
 
-interface OrgRow { short_login: string | null; mid: string; manager_name: string; department_name: string | null; branch: string | null; is_active: boolean }
+interface OrgRow { short_login: string | null; mid: string; manager_name: string; department_name: string | null; branch: string | null; is_active: boolean; parent: string | null }
 interface DayRow { day: string; mid: string; grp: string | null; n: number; amt: string | null }
 
 function ymd(d: Date): string { return d.toISOString().slice(0, 10); }
@@ -141,11 +145,18 @@ async function fetchDayRows(col: 'sold_at' | 'reserved_at' | 'created_at', days:
 }
 
 async function fetchOrg(): Promise<OrgRow[]> {
-  const r = await analyticsDb().query<OrgRow>(
-    `SELECT short_login, manager_bitrix_user_id::text AS mid, manager_name, department_name, branch, is_active
+  const r = await analyticsDb().query<Omit<OrgRow, 'parent'> & { path: { name: string }[] | null }>(
+    `SELECT short_login, manager_bitrix_user_id::text AS mid, manager_name, department_name, branch, is_active, resolved_path AS path
        FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id IS NOT NULL`,
   );
-  return r.rows;
+  // Родитель команды — звено пути между ней и «Отделом продаж» (в Питере это
+  // «Департамент ОС/НЦ»); в Москве и Краснодаре команды стоят сразу под филиалом.
+  return r.rows.map(({ path, ...o }) => {
+    const names = (path ?? []).map(x => x.name);
+    const sales = names.indexOf('Отдел продаж');
+    const parent = sales >= 2 && names[sales - 1] !== o.department_name ? names[sales - 1] : null;
+    return { ...o, parent };
+  });
 }
 
 /** Планы месяца по логину: продажи = отгрузки / коэффициент plan_n (как planMetrics). */
@@ -207,10 +218,10 @@ export async function computeHowAreWeFacts(dateStr: string, cutHour: number): Pr
   const company = mkUnit('company', 'Компания', () => true);
   const branches = BRANCH_ORDER.map(b => mkUnit(b, BRANCH_LABEL[b] ?? b, o => o.branch === b));
 
-  const deptKeys = new Map<string, { branch: string; name: string }>();
-  for (const o of org) if (o.branch && o.department_name) deptKeys.set(`${o.branch}|${o.department_name}`, { branch: o.branch, name: o.department_name });
+  const deptKeys = new Map<string, { branch: string; name: string; parent: string | null }>();
+  for (const o of org) if (o.branch && o.department_name) deptKeys.set(`${o.branch}|${o.department_name}`, { branch: o.branch, name: o.department_name, parent: o.parent });
   const departments: DeptFact[] = [...deptKeys.entries()]
-    .map(([k, v]) => ({ ...mkUnit(k, v.name, o => o.branch === v.branch && o.department_name === v.name), branch: v.branch }))
+    .map(([k, v]) => ({ ...mkUnit(k, v.name, o => o.branch === v.branch && o.department_name === v.name), branch: v.branch, parent: v.parent }))
     .filter(d => d.plan != null || d.sales.n > 0 || d.usual.n > 0);
 
   // Менеджеры.
