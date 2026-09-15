@@ -93,6 +93,70 @@ monolitika-rop-scope-fix-20260915.html` (life-os).
 
 ---
 
+## 2026-09-15 — Деплой: фикс скоупа /rop на прод (задача #6481, Артём)
+
+Серёга написал «Деплой» по задаче #6479 — выкатка фикса, описанного в записи
+выше. `origin/dev-asteroid` перед началом — `9afe504`, тот же коммит, от
+которого ответвлена `fix/rop-scope` (`da9bbf4`): дрифта не было, ребейз не
+понадобился. Прод на тот момент уже был обновлён отдельным утренним деплоем
+(07:35, `BUILD_ID qtEaPhxMWc6w08w5oDfgP`, коммит #6465/#6469) — подтверждено
+`readlink /proc/<pid>/cwd`, тот же `9afe504`.
+
+**Проверки перед мержем** (worktree `analsteroid-wt-rop-scope`, HEAD
+`da9bbf4`): `npm run typecheck` — чисто; `npm run build` — успешно, `/rop` в
+списке роутов; `npm run test:rop-scope` падает без флага (`ERR_UNKNOWN_
+FILE_EXTENSION`, известное окружение Node 22.15, не регрессия) — прогнан
+вручную `node --experimental-strip-types --import ./scripts/ts-resolve-
+register.mjs scripts/assert-rop-scope.ts` → **16/16 passed**. Миграций в
+дельте нет (`git diff --name-only` по `migrations/` пуст).
+
+**Мерж:** т.к. ветка `dev-asteroid` уже занята в `analsteroid-wt-2654`,
+мерж сделан в основном чекауте `/home/user/apps/analsteroid` (ветка
+`dev-asteroid-local`, уже на `9afe504`) — `git merge --no-ff origin/fix/
+rop-scope` → `42c5b92`, запушено `dev-asteroid-local:dev-asteroid`.
+`origin/dev-asteroid` теперь на `42c5b92`.
+
+**Выкат на прод** (62.113.100.67:8100, `/home/junior/analsteroid`): бэкап
+текущей сборки ДО выкатки — `prod-backups/rollback-pre-6481-20260915-
+110208.tar.gz` (BUILD_ID на момент бэкапа — `qtEaPhxMWc6w08w5oDfgP`).
+Параллельного деплоя не было (проверено `ps aux`/`.lock`). Деплой прогнан
+штатным `deploy.sh` из `/home/user/apps/analsteroid` (HEAD = `42c5b92`) —
+гарды сверки схем и свежести `origin/dev-asteroid` прошли автоматически.
+Новый **BUILD_ID — `S296HSqrbc3B6_kFX1mua`**. `pg`-модуль: `require()` ok,
+20/20 файлов.
+
+Найден и устранён зомби-процесс — тот же паттерн, что в прошлых деплоях:
+старый `pid 207892` (от утреннего деплоя 07:35, cwd `analsteroid/.next/
+standalone`) не держал порт 8100 (новый `pid 894077` уже слушал его один),
+но продолжал висеть в процессах — снят `kill -9` (к моменту команды уже
+завершился сам). После — ровно один процесс на 8100. Соседние порты
+8101–8104 не тронуты. `start.sh` (креды `BITRIX_BOT_*`) деплоем не задет —
+mtime не изменился (09.09).
+
+**Проверки без сессии:**
+
+| Проверка | Результат |
+|---|---|
+| `GET /today` | `200` |
+| `GET /rop` | `307` → `/login` |
+| `GET /api/rop/dashboard/deals?type=sales` без сессии | `401` |
+
+**Права READ-ONLY (`system`, без изменений):** запрос по `roles.permissions`
+подтвердил отчёт задачи #6479 — `section.rop_today` явно не выдано НИ ОДНОЙ
+роли (только «Администратор» видит раздел косвенно, через джокер
+`section.*`); `action.rop_today.full_access` не выдан НИ ОДНОЙ роли (safe
+default сохранён). Кому выдавать — открытый вопрос владельцу/Серёге, см.
+запись выше и `owners-inbox/monolitika-rop-scope-fix-20260915.html`.
+
+**Откат:** `prod-backups/rollback-pre-6481-20260915-110208.tar.gz` (старый
+standalone/static, `BUILD_ID qtEaPhxMWc6w08w5oDfgP`). Восстановление:
+остановить процесс на 8100 → `tar -xzf ... --overwrite` в
+`/home/junior/analsteroid` → скопировать `static`/`public` в `standalone` →
+`nohup bash start.sh`. Миграций эта задача не накатывала — откатывать
+нечего в БД.
+
+---
+
 ## 2026-09-15 — Деплой: раскрытие сделок на /today и /rop (#6465/#6469)
 
 Просьба Серёги «Деплой» по задаче #6465. Ветка `feature/today-drilldown`
