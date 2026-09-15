@@ -165,10 +165,9 @@ export function buildHowAreWeMessage(f: HowAreWeFacts, opts: BuildOptions = {}):
   return out.join('\n').replace(/\.\./g, '.').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** «Команда Осипов» → «Осипов», «Отдел ЖБИ» → «ЖБИ»: в строке про человека отдел — вторым планом. */
-function shortDept(dept: string): string {
-  return dept.replace(/^(Команда|Отдел|Департамент)\s+/i, '');
-}
+/** Названия команд — как в оргструктуре: «Команда Ухановой» без первого слова
+ *  остаётся в родительном падеже, сокращать нельзя. */
+function shortDept(dept: string): string { return dept; }
 
 function shortBranch(branch: string): string {
   return branch === 'СПб' ? 'СПб' : branch === 'Москва/МО' ? 'Москва' : BRANCH_LABEL[branch] ?? branch;
