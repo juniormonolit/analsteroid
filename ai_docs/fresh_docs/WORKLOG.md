@@ -6,6 +6,52 @@
 
 ---
 
+## 2026-09-15 — Деплой: раскрытие сделок на /today и /rop (#6465/#6469)
+
+Просьба Серёги «Деплой» по задаче #6465. Ветка `feature/today-drilldown`
+(`a695d1c`, worktree `analsteroid-wt-6465`) форкнута ровно от `origin/dev-asteroid`
+(`94fe461`) — дельты не было, `dev-asteroid-local` (была на устаревшем `8fbd8b8`)
+подтянута fast-forward до `94fe461` перед мержем. Миграций в фиче нет
+(`git diff --name-only` по `migrations/` пуст).
+
+Прогон в ворктрайле на `a695d1c`: `tsc --noEmit` — чисто, `npm run build` — ок
+(`/today`/`/rop` в списке роутов, `✓ Compiled successfully`; восемь строк
+«Ecmascript file had an error» в выводе Turbopack — известные некритичные
+предупреждения по `pg`/`redis`-SSL модулям (`fs.readFileSync` в серверном коде),
+файлы фичи их не трогают), `node --experimental-strip-types --import
+./scripts/ts-resolve-register.mjs scripts/assert-dashboard-drilldown.ts` — 10/10
+(Node 22.15 без флага падает `ERR_UNKNOWN_FILE_EXTENSION`, как и остальные `test:*`).
+
+Мерж-коммит `436b186` (`feature/today-drilldown` → `dev-asteroid-local`, без
+конфликтов, хотя `TodoDashboard.tsx`/`WORKLOG.md` менялись обеими сторонами),
+запушен в `origin/dev-asteroid`. Прогон повторён на смёрженном дереве — типы/
+билд/тест чисто, `.next/BUILD_ID` локальной сборки `oorL-TeDp8VMqjJ_mDLyh`
+(до реального деплоя, локальный).
+
+Бэкап ДО выкатки: `prod-backups/rollback-pre-6469-20260915-073449.tar.gz`
+(BUILD_ID на тот момент — `iwWa7Fe9yNISOtSVSB5E2`, снят вручную с прода, т.к.
+отдельного backup-скрипта нет — тот же приём, что #6453/#6457). Параллельного
+деплоя на проде не было (`ps aux`/`ss -ltnp` чисты до старта).
+
+Деплой штатным `deploy.sh` (гарды сверки схем dev/prod и свежести
+`origin/dev-asteroid` прошли автоматически; патчи `node_modules` для `ioredis`-
+стека и `pg` под Turbopack NFT — как обычно). Новый BUILD_ID —
+`qtEaPhxMWc6w08w5oDfgP`. После деплоя на 8100 ровно один процесс (без зомби —
+скрипт сам убил старый перед стартом), `start.sh`/`BITRIX_BOT_*` не тронуты.
+
+Проверки без логина под admin (`monolitika.mlt-it.com`): `/today` → 200, `/rop`
+→ 307 на `/login`, `GET /api/tv/dashboard/deals?type=sales` (без `node` — бэкенд
+трактует отсутствие как корень целиком) → 200, `{"total_count":0,"total_amount":0}`
+— сошлось с `root.salesCount=0`/`factDay=0` в `/api/tv/dashboard` на тот же момент
+(07:36 МСК, продаж в этот час действительно ещё не было), `GET
+/api/rop/dashboard/deals?type=sales` без сессии → 401. Headless-скриншот
+`/today?dd=sales&node=<root>` (панель открыта прямой ссылкой через URL-состояние
+дрилл-дауна — так и задумано фичей) — `owners-inbox/screenshots/today-drilldown/
+prod-today-sales.png` (life-os): панель «Продажи — Монолит», «Нет продаж за
+сегодня», согласуется с нулевым фактом дня.
+
+---
+
 ## 2026-09-14 — /rop: заголовок «Сегодня», подтверждён сплит продаж/броней (#6457)
 
 Просьба Серёги: убрать «Моя зона» из заголовка `/rop`. `RopDashboard` и
