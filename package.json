@@ -13,7 +13,8 @@
     "lint:responsive": "node scripts/check-responsive.mjs",
     "test:reports": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-report-engine.ts",
     "test:unsell-deal": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-unsell-deal.ts",
-    "test:rop-scope": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-rop-scope.ts"
+    "test:rop-scope": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-rop-scope.ts",
+    "test:dashboard-drilldown": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-dashboard-drilldown.ts"
   },
   "dependencies": {
     "@radix-ui/react-checkbox": "^1.3.2",

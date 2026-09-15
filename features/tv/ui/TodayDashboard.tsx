@@ -8,10 +8,18 @@
 // (ropScope). Чтобы не копипастить разметку, вынесена общая `DashboardView` с параметрами
 // (эндпоинт, ключ запроса, заголовок, подпись) — `TodayDashboard`/`RopDashboard` ниже её
 // просто настраивают под свой URL и текст.
+//
+// Задача #6465 (14.09, Серёга: «сделай так, чтобы брони и продажи можно было в сделки
+// раскрывать»): клик по числу продаж/броней (KPI-плитка, строка узла, строка менеджера)
+// открывает список сделок — DashboardDrilldownPanel. Состояние панели живёт в URL
+// (?dd=sales|book&node=<id>|&manager=<id>), а не в useState — так ссылку на конкретный
+// открытый список можно переслать (правило репозитория «каждое состояние — свой URL»).
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Eye, EyeOff, Moon, RefreshCw, Sun, Users } from 'lucide-react';
 import type { TvDashManager, TvDashNode, TvDashboard as Dash } from '../engine/dashboard';
+import { DashboardDrilldownPanel, type DashboardDrilldownTarget, type DrilldownKind } from './DashboardDrilldownPanel';
 
 // Неразрывные пробелы: «17,5 млн ₽» не должно переноситься по словам в узкой KPI-карточке
 // (правка владельца 08.09: «знак рубля вываливается»).
@@ -28,9 +36,19 @@ function Pct({ fact, plan }: { fact: number; plan: number }) {
   if (p == null) return <span className="text-[var(--color-text-muted)]">—</span>;
   return <span className={`font-semibold ${p >= 100 ? 'text-[var(--color-positive)]' : 'text-[var(--color-warning)]'}`}>{p}%</span>;
 }
-function Pb({ pb, target }: { pb: number; target: number }) {
+// onClick (задача #6465) — раскрыть число в список сделок за сегодня: KPI-плитка,
+// строка узла и строка менеджера передают его одинаково, рендер меняется только
+// span→button (тот же текст/цвет, плюс подчёркивание по hover — видно, что кликабельно).
+function Pb({ pb, target, onClick }: { pb: number; target: number; onClick?: () => void }) {
   const ok = target > 0 && pb >= target;
-  return <span className={`font-semibold tabular-nums ${ok ? 'text-[var(--color-positive)]' : target > 0 ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-muted)]'}`}>{pb}<span className="text-[var(--color-text-muted)] font-normal"> / {target}</span></span>;
+  const cls = `font-semibold tabular-nums ${ok ? 'text-[var(--color-positive)]' : target > 0 ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-muted)]'}`;
+  const content = <>{pb}<span className="text-[var(--color-text-muted)] font-normal"> / {target}</span></>;
+  if (!onClick) return <span className={cls}>{content}</span>;
+  return (
+    <button onClick={onClick} className={`${cls} hover:underline underline-offset-2 cursor-pointer`} title="Показать сделки за сегодня">
+      {content}
+    </button>
+  );
 }
 
 // Крупная типографика под большой монитор: на десктопе размеры в vw (1.1vw ≈ 21px на 1920),
@@ -38,6 +56,14 @@ function Pb({ pb, target }: { pb: number; target: number }) {
 // Палитра телевизора (features/tv/engine/page.ts) поверх токенов приложения — правка
 // владельца 09.09: «в той же стилистике, что и ТВ-дашборды, или переключатель темы».
 // Переменные переопределяются на обёртке страницы, компоненты ниже читают их как обычно.
+// Задача #6465: drill-down переиспользует DealsTable/DealsListBody (features/reports/
+// ui/DrilldownDrawer.tsx) — компонент рассчитан на глобальные токены приложения
+// (app/globals.css :root), которых наша ЛОКАЛЬНАЯ палитра телевизора не переопределяла:
+// --color-table-header/--color-table-stripe/--color-num/--color-mix-base. Без них
+// строки таблицы наследовали СВЕТЛЫЕ значения этих токенов с :root (globals.css не
+// знает про наш вложенный тёмный style) — зебра рисовалась почти белой, а текст поверх
+// нёс уже наш тёмный --color-text (почти белый) → нечитаемые «пустые» строки через одну
+// (баг найден живым скриншотом при самопроверке). Добавлены явно в обеих темах.
 type Theme = 'dark' | 'light';
 const THEMES: Record<Theme, React.CSSProperties> = {
   dark: {
@@ -46,6 +72,8 @@ const THEMES: Record<Theme, React.CSSProperties> = {
     '--color-text-muted': '#8FA1BD', '--color-positive': '#5BC878', '--color-warning': '#FBBC04',
     '--color-negative': '#EA4335', '--color-accent': '#7FB9E8', '--color-accent-soft': '#1A2740',
     '--color-table-row-border': '#1C2A44', '--color-table-row-hover': '#1A2740', colorScheme: 'dark',
+    '--color-table-header': '#16213A', '--color-table-stripe': '#141F35', '--color-num': '#F2F6FC',
+    '--color-mix-base': '#121C2E', '--color-highlight-pct': '32%',
   } as React.CSSProperties,
   light: {
     '--color-bg': '#F6F8FA', '--color-bg-surface': '#FFFFFF', '--color-bg-hover': '#EDF5FC',
@@ -53,6 +81,8 @@ const THEMES: Record<Theme, React.CSSProperties> = {
     '--color-text-muted': '#6B7280', '--color-positive': '#1E8E3E', '--color-warning': '#B26000',
     '--color-negative': '#D93025', '--color-accent': '#0069BE', '--color-accent-soft': '#EDF5FC',
     '--color-table-row-border': '#EEF1F5', '--color-table-row-hover': '#EDF5FC', colorScheme: 'light',
+    '--color-table-header': '#EDF1F5', '--color-table-stripe': '#F3F6F9', '--color-num': '#1A202C',
+    '--color-mix-base': '#FFFFFF', '--color-highlight-pct': '68%',
   } as React.CSSProperties,
 };
 const THEME_KEY = 'today-theme';
@@ -63,6 +93,8 @@ const TD = 'px-3 py-2 lg:py-[0.7vw] text-sm lg:text-[1.15vw] whitespace-nowrap t
 interface DashboardViewProps {
   /** GET-эндпоинт, отдающий TvDashboard. */
   apiUrl: string;
+  /** GET-эндпоинт списка сделок drill-down (задача #6465) — те же права/scope, что у apiUrl. */
+  dealsApiUrl: string;
   /** Ключ react-query — разный у /today и /rop, чтобы не делить кэш между разными скоупами. */
   queryKey: string;
   /** Заголовок h1. */
@@ -75,6 +107,7 @@ export function TodayDashboard() {
   return (
     <DashboardView
       apiUrl="/api/tv/dashboard"
+      dealsApiUrl="/api/tv/dashboard/deals"
       queryKey="tv-dashboard"
       title="Сегодня по компании"
       subtitleSuffix="продажи и брони за день, план дня по менеджерам"
@@ -87,6 +120,7 @@ export function RopDashboard() {
   return (
     <DashboardView
       apiUrl="/api/rop/dashboard"
+      dealsApiUrl="/api/rop/dashboard/deals"
       queryKey="rop-dashboard"
       title="Сегодня"
       subtitleSuffix="продажи и брони за день, план дня по менеджерам"
@@ -94,7 +128,18 @@ export function RopDashboard() {
   );
 }
 
-function DashboardView({ apiUrl, queryKey, title, subtitleSuffix }: DashboardViewProps) {
+/** Имя узла дерева дашборда по id (для заголовка drill-down панели) — поиск в уже
+ *  загруженных данных, БЕЗ похода на сервер: то же дерево, что рисует таблица. */
+function findDashNodeName(node: TvDashNode, id: string): string | null {
+  if (node.id === id) return node.name;
+  for (const c of node.children) {
+    const found = findDashNodeName(c, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function DashboardView({ apiUrl, dealsApiUrl, queryKey, title, subtitleSuffix }: DashboardViewProps) {
   const { data, isLoading, error, refetch, isFetching } = useQuery<Dash>({
     queryKey: [queryKey],
     queryFn: async () => {
@@ -112,6 +157,45 @@ function DashboardView({ apiUrl, queryKey, title, subtitleSuffix }: DashboardVie
     try { const t = localStorage.getItem(THEME_KEY); if (t === 'light' || t === 'dark') setTheme(t); } catch { /* приватный режим */ }
   }, []);
   const toggleTheme = () => setTheme(t => { const n: Theme = t === 'dark' ? 'light' : 'dark'; try { localStorage.setItem(THEME_KEY, n); } catch { /* ignore */ } return n; });
+
+  // Drill-down «Продажи»/«Брони» → список сделок (задача #6465). Состояние — в URL
+  // (?dd=sales|book&node=<id> ИЛИ &manager=<id>), не в useState: открытую панель
+  // можно переслать ссылкой, «назад» браузера закрывает её как обычную навигацию.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const ddKind = searchParams.get('dd');
+  const ddNode = searchParams.get('node');
+  const ddManager = searchParams.get('manager');
+  const openDrill = (kind: DrilldownKind, sel: { node?: string; manager?: string }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('dd', kind);
+    if (sel.manager) { params.set('manager', sel.manager); params.delete('node'); }
+    else {
+      // sel.node — реальный id узла дерева (TvDashNode.id, uuid/'branch:spb' — НЕ
+      // синтетический id вкладки 'root' из tabs выше). Все вызовы ниже (Kpis/
+      // NodeRows) передают node.id явно; без него backend САМ трактует отсутствие
+      // node как «корень целиком» (resolveDrilldownSelection(dash, null, null)) —
+      // подставлять сюда строку-заглушку не нужно и опасно (не совпадёт ни с одним
+      // настоящим id дерева, drill вернётся пустым).
+      if (sel.node) params.set('node', sel.node); else params.delete('node');
+      params.delete('manager');
+    }
+    router.push(`${pathname}?${params.toString()}`, { scroll: false });
+  };
+  const closeDrill = () => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('dd'); params.delete('node'); params.delete('manager');
+    const qs = params.toString();
+    router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
+  const drillTarget: DashboardDrilldownTarget | null = useMemo(() => {
+    if (ddKind !== 'sales' && ddKind !== 'book') return null;
+    if (!ddNode && !ddManager) return null;
+    if (ddManager) return { kind: ddKind, managerId: ddManager, label: data?.managers[ddManager]?.name ?? '…' };
+    const id = ddNode ?? 'root';
+    return { kind: ddKind, nodeId: id, label: (data && findDashNodeName(data.root, id)) ?? '…' };
+  }, [ddKind, ddNode, ddManager, data]);
 
   const tabs = useMemo(() => {
     if (!data) return [];
@@ -160,7 +244,7 @@ function DashboardView({ apiUrl, queryKey, title, subtitleSuffix }: DashboardVie
 
         {data && current && (
           <>
-            <Kpis node={current} />
+            <Kpis node={current} onDrill={openDrill} />
             <div className="scroll-x rounded-lg lg:rounded-[0.8vw] border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
               <table className="w-full min-w-[820px] border-collapse">
                 <thead>
@@ -179,32 +263,35 @@ function DashboardView({ apiUrl, queryKey, title, subtitleSuffix }: DashboardVie
                   {current.children.length === 0 && current.directManagerIds.length === 0 && (
                     <tr><td colSpan={8} className={`${TD} text-[var(--color-text-muted)]`}>Нет данных</td></tr>
                   )}
-                  {current.children.map(c => <NodeRows key={c.id} node={c} depth={0} managers={data.managers} target={data.dailyTarget} showIdle={showIdle} defaultOpen={false} />)}
+                  {current.children.map(c => <NodeRows key={c.id} node={c} depth={0} managers={data.managers} target={data.dailyTarget} showIdle={showIdle} defaultOpen={false} onDrill={openDrill} />)}
                   {current.directManagerIds.length > 0 && (
-                    <ManagerRows ids={current.directManagerIds} depth={0} managers={data.managers} target={data.dailyTarget} showIdle={showIdle} />
+                    <ManagerRows ids={current.directManagerIds} depth={0} managers={data.managers} target={data.dailyTarget} showIdle={showIdle} onDrill={openDrill} />
                   )}
                 </tbody>
               </table>
             </div>
             <div className="text-xs lg:text-[0.9vw] text-[var(--color-text-muted)]">
-              Активный менеджер — была заявка, бронь или продажа сегодня. Цель продаж и цель броней считаются отдельно: {data.dailyTarget} в день на менеджера, для узла — активные × {data.dailyTarget}. Без переключателя «Показать всех» менеджеры без движения скрыты.
+              Активный менеджер — была заявка, бронь или продажа сегодня. Цель продаж и цель броней считаются отдельно: {data.dailyTarget} в день на менеджера, для узла — активные × {data.dailyTarget}. Без переключателя «Показать всех» менеджеры без движения скрыты. Клик по числу продаж/броней раскрывает список сделок.
             </div>
           </>
         )}
       </div>
+      {drillTarget && <DashboardDrilldownPanel apiUrl={dealsApiUrl} target={drillTarget} onClose={closeDrill} />}
     </div>
   );
 }
 
-function Kpis({ node }: { node: TvDashNode }) {
+type DrillOpener = (kind: DrilldownKind, sel: { node?: string; manager?: string }) => void;
+
+function Kpis({ node, onDrill }: { node: TvDashNode; onDrill: DrillOpener }) {
   const p = pctOf(node.factDay, node.planDay);
   const items: { l: string; v: React.ReactNode; cls?: string }[] = [
     { l: 'План дня', v: fmtMoney(node.planDay) },
     { l: 'Факт продаж', v: fmtMoney(node.factDay), cls: 'text-[var(--color-positive)]' },
     { l: 'Выполнение', v: p == null ? '—' : `${p}%`, cls: p != null && p >= 100 ? 'text-[var(--color-positive)]' : 'text-[var(--color-warning)]' },
-    { l: 'Продажи, шт / цель', v: <Pb pb={node.salesCount} target={node.target} /> },
+    { l: 'Продажи, шт / цель', v: <Pb pb={node.salesCount} target={node.target} onClick={() => onDrill('sales', { node: node.id })} /> },
     { l: 'Брони', v: fmtMoney(node.bookSum), cls: 'text-[var(--color-accent)]' },
-    { l: 'Брони, шт / цель', v: <Pb pb={node.bookCount} target={node.target} /> },
+    { l: 'Брони, шт / цель', v: <Pb pb={node.bookCount} target={node.target} onClick={() => onDrill('book', { node: node.id })} /> },
     { l: 'Активных / всего', v: <>{node.activeManagers} <span className="text-sm lg:text-[1vw] font-normal text-[var(--color-text-muted)]">/ {node.managerCount}</span></> },
   ];
   return (
@@ -219,8 +306,8 @@ function Kpis({ node }: { node: TvDashNode }) {
   );
 }
 
-function NodeRows({ node, depth, managers, target, showIdle, defaultOpen }: {
-  node: TvDashNode; depth: number; managers: Record<string, TvDashManager>; target: number; showIdle: boolean; defaultOpen: boolean;
+function NodeRows({ node, depth, managers, target, showIdle, defaultOpen, onDrill }: {
+  node: TvDashNode; depth: number; managers: Record<string, TvDashManager>; target: number; showIdle: boolean; defaultOpen: boolean; onDrill: DrillOpener;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [people, setPeople] = useState(false); // «люди узла» на любом уровне
@@ -248,24 +335,24 @@ function NodeRows({ node, depth, managers, target, showIdle, defaultOpen }: {
         <td className={`${TD} text-right`}>{fmtMoney(node.planDay)}</td>
         <td className={`${TD} text-right font-semibold text-[var(--color-positive)]`}>{fmtMoney(node.factDay)}</td>
         <td className={`${TD} text-right`}><Pct fact={node.factDay} plan={node.planDay} /></td>
-        <td className={`${TD} text-right`}><Pb pb={node.salesCount} target={node.target} /></td>
+        <td className={`${TD} text-right`}><Pb pb={node.salesCount} target={node.target} onClick={() => onDrill('sales', { node: node.id })} /></td>
         <td className={`${TD} text-right text-[var(--color-accent)]`}>{fmtMoney(node.bookSum)}</td>
-        <td className={`${TD} text-right`}><Pb pb={node.bookCount} target={node.target} /></td>
+        <td className={`${TD} text-right`}><Pb pb={node.bookCount} target={node.target} onClick={() => onDrill('book', { node: node.id })} /></td>
         <td className={`${TD} text-right`}>{node.activeManagers}<span className="text-[var(--color-text-muted)]"> / {node.managerCount}</span></td>
       </tr>
       {open && (people || !hasKids
-        ? <ManagerRows ids={people ? node.allManagerIds : node.directManagerIds} depth={depth + 1} managers={managers} target={target} showIdle={showIdle} />
+        ? <ManagerRows ids={people ? node.allManagerIds : node.directManagerIds} depth={depth + 1} managers={managers} target={target} showIdle={showIdle} onDrill={onDrill} />
         : <>
-            {node.children.map(c => <NodeRows key={c.id} node={c} depth={depth + 1} managers={managers} target={target} showIdle={showIdle} defaultOpen={false} />)}
-            {node.directManagerIds.length > 0 && <ManagerRows ids={node.directManagerIds} depth={depth + 1} managers={managers} target={target} showIdle={showIdle} />}
+            {node.children.map(c => <NodeRows key={c.id} node={c} depth={depth + 1} managers={managers} target={target} showIdle={showIdle} defaultOpen={false} onDrill={onDrill} />)}
+            {node.directManagerIds.length > 0 && <ManagerRows ids={node.directManagerIds} depth={depth + 1} managers={managers} target={target} showIdle={showIdle} onDrill={onDrill} />}
           </>
       )}
     </>
   );
 }
 
-function ManagerRows({ ids, depth, managers, target, showIdle }: {
-  ids: string[]; depth: number; managers: Record<string, TvDashManager>; target: number; showIdle: boolean;
+function ManagerRows({ ids, depth, managers, target, showIdle, onDrill }: {
+  ids: string[]; depth: number; managers: Record<string, TvDashManager>; target: number; showIdle: boolean; onDrill: DrillOpener;
 }) {
   const rows = ids.map(id => managers[id]).filter((m): m is TvDashManager => !!m)
     .filter(m => showIdle || m.active)
@@ -288,9 +375,9 @@ function ManagerRows({ ids, depth, managers, target, showIdle }: {
           <td className={`${TD} text-right`}>{fmtMoney(m.plan)}</td>
           <td className={`${TD} text-right font-semibold ${m.salesSum > 0 ? 'text-[var(--color-positive)]' : 'text-[var(--color-text-muted)]'}`}>{fmtMoney(m.salesSum)}</td>
           <td className={`${TD} text-right`}><Pct fact={m.salesSum} plan={m.plan} /></td>
-          <td className={`${TD} text-right`}><Pb pb={m.salesCount} target={target} /></td>
+          <td className={`${TD} text-right`}><Pb pb={m.salesCount} target={target} onClick={() => onDrill('sales', { manager: m.id })} /></td>
           <td className={`${TD} text-right text-[var(--color-accent)]`}>{fmtMoney(m.bookSum)}</td>
-          <td className={`${TD} text-right`}><Pb pb={m.bookCount} target={target} /></td>
+          <td className={`${TD} text-right`}><Pb pb={m.bookCount} target={target} onClick={() => onDrill('book', { manager: m.id })} /></td>
           <td className={`${TD} text-right text-[var(--color-text-muted)]`}>{m.active ? 'активен' : '—'}</td>
         </tr>
       ))}
