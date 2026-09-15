@@ -1,12 +1,13 @@
 'use client';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BellOff, Bot, Plus, Send, Trash2, X, Power, ShieldAlert, MessageSquareText, Inbox, CalendarClock, ToggleLeft, CloudSun, FlaskConical, Sparkles } from 'lucide-react';
+import { BellOff, Bot, Plus, Send, Trash2, X, Power, ShieldAlert, MessageSquareText, Inbox, CalendarClock, ToggleLeft, CloudSun, FlaskConical, Sparkles, Activity } from 'lucide-react';
 import { useUrlState, enumParam } from '@/lib/hooks/useUrlState';
 import { OutboundLogBlock } from '@/features/badges/ui/OutboundLog';
 import { DigestSettingsBlock } from '@/features/badges/ui/DigestSettings';
 import { FeedbackQueueBlock } from '@/features/badges/ui/FeedbackQueue';
 import { ScenariosTab } from './ScenariosTab';
+import { HowAreWeTab } from '@/features/how-are-we/ui/HowAreWeTab';
 import Link from 'next/link';
 
 // Настройки бота «Аналитик» (задача владельца 09.09): каждая ФУНКЦИЯ бота —
@@ -47,10 +48,11 @@ async function jsonOrThrow(res: Response) {
 // ── Панель ───────────────────────────────────────────────────────────────────
 // Вкладка — в адресе (правило адресуемости DESIGN_GUIDELINES): ссылку на «Журнал»
 // можно прислать, «назад» возвращает на предыдущую вкладку.
-const TABS = ['functions', 'digest', 'scenarios', 'schedules', 'journal', 'weather'] as const;
+const TABS = ['functions', 'howarewe', 'digest', 'scenarios', 'schedules', 'journal', 'weather'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_META: Record<Tab, { label: string; Icon: typeof Bot }> = {
   functions: { label: 'Функции', Icon: ToggleLeft },
+  howarewe:  { label: 'Как дела?', Icon: Activity },
   digest:    { label: 'Дайджест', Icon: MessageSquareText },
   scenarios: { label: 'Сценарии', Icon: Sparkles },
   schedules: { label: 'Расписания', Icon: CalendarClock },
@@ -90,6 +92,7 @@ export function AnalitikSettingsPage() {
           <DigestSettingsBlock />
         </div>
       )}
+      {tab === 'howarewe' && <HowAreWeTab />}
       {tab === 'scenarios' && <ScenariosTab />}
       {tab === 'schedules' && <SchedulesBlock />}
       {tab === 'journal' && <JournalTab />}
