@@ -4,6 +4,7 @@ import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/se
 import { fetchMetricSeries, type SeriesGranularity } from '@/features/reports/engine/metricSeries';
 import { fetchBookingCallRateSeries, BOOKING_SERIES_METRICS } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversionSeries, stagePairForMetric } from '@/features/reports/engine/stageConversions';
+import { fetchMetricSeriesViaReport } from '@/features/reports/engine/metricSeriesViaReport';
 import { validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import type { DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 
@@ -61,6 +62,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const reportSlug = typeof body.reportSlug === 'string' ? body.reportSlug : 'by-managers';
   const common = {
     metricId: body.metricId as string,
     granularity,
@@ -98,7 +100,15 @@ export async function POST(req: NextRequest) {
           metricId: common.metricId, granularity, managerIds, departmentIds, period: o.period,
           filters: common,
         })
-      : (o: { period: { from: Date; to: Date } }) => fetchMetricSeries({ ...common, period: o.period });
+      // Всё остальное — универсальным путём (metricSeriesViaReport): если метрика
+      // не собирается сделочным SQL (звонки, стадии, клиенты, планы, дела,
+      // активность, рейтинг), точка считается прогоном отчёта за бакет. Правка
+      // владельца 15.09: «надо чтоб все строились».
+      : async (o: { period: { from: Date; to: Date } }) => {
+          const native = await fetchMetricSeries({ ...common, period: o.period });
+          if (native.supported) return native;
+          return fetchMetricSeriesViaReport({ ...common, period: o.period, reportSlug });
+        };
 
   const current = await fetchSeries({
     period: { from: new Date(body.period.from), to: new Date(body.period.to) },

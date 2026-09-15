@@ -194,6 +194,9 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           metricId: target.metricId,
+          // Разрез отчёта — универсальному пути нужен тот же движок строк,
+          // что у самого отчёта (правка 15.09).
+          reportSlug,
           period: { from: period.from.toISOString(), to: period.to.toISOString() },
           comparisonPeriod: showCmpOverlay ? { from: comparison.from.toISOString(), to: comparison.to.toISOString() } : undefined,
           // Последовательно: «previous» = серия ПОЛОТНА целиком (пред.from…тек.to),
