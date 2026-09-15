@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import type Sharp from 'sharp';
 import { randomBytes } from 'crypto';
 import { redisReady } from '@/lib/cache/redis';
 import { fmtMoney } from './text';
@@ -119,7 +119,16 @@ export function buildHowAreWeSvg(f: HowAreWeFacts): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><rect width="${W}" height="${H}" fill="${C.bg}"/>${body.join('')}</svg>`;
 }
 
+// sharp — нативный модуль; статический импорт ломает сборку Edge-варианта
+// instrumentation (цепочка instrumentation → jobs/howAreWe → chart). Поэтому
+// грузим его только в рантайме Node, мимо бандлера.
+async function loadSharp(): Promise<typeof Sharp> {
+  const mod = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ 'sharp');
+  return (mod.default ?? mod) as typeof Sharp;
+}
+
 export async function renderHowAreWePng(f: HowAreWeFacts): Promise<Buffer> {
+  const sharp = await loadSharp();
   return sharp(Buffer.from(buildHowAreWeSvg(f)), { density: 96 }).png({ compressionLevel: 9 }).toBuffer();
 }
 
