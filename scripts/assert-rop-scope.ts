@@ -19,10 +19,11 @@
  *
  * Запуск: node --import ./scripts/ts-resolve-register.mjs scripts/assert-rop-scope.ts
  */
-import { deriveRopScope, type RopScope } from '../features/tv/engine/access.ts';
+import { deriveRopScope, ropFullAccess, type RopScope } from '../features/tv/engine/access.ts';
 import type { TvScope } from '../features/tv/engine/access.ts';
 import { scopeRows } from '../features/tv/engine/dashboard.ts';
 import type { OrgRow } from '../features/tv/engine/orgTree.ts';
+import type { SessionUser } from '../lib/auth/session.ts';
 
 let failures = 0;
 let passed = 0;
@@ -98,6 +99,58 @@ const directorScope = deriveRopScope(directorBase, null);
 const directorView = scopeRows(rows, directorScope);
 check(directorView.length === 3 && directorView.every(r => r.department_id === DEPT_SPB || r.department_id === DEPT_KRD),
   'Директор филиала (СПб + Краснодар) → видит оба отдела разом (3 менеджера), не Москву');
+
+// ── ropFullAccess(): регрессия задачи #6479 (баг «все аккаунты видят все») ──
+// На проде роль «Администратор» (джокер section.* в roles.permissions) носят
+// не только дирекция, но и маркетолог, разработчик («Отдел развития») и
+// тестовый аккаунт в «Отделе продаж» — реальная конфигурация, снятая
+// READ-ONLY с прода (system) при разборе задачи. hasFullManagerAccess() (старая
+// проверка) давала им ВСЮ компанию на /rop только по имени роли; ropFullAccess()
+// обязана требовать ОТДЕЛЬНОЕ, явное право.
+function fakeSession(overrides: Partial<SessionUser>): SessionUser {
+  return {
+    id: 'u1', login: 'u1', displayName: 'Тест', isSuperadmin: false,
+    permissions: [], sectionOverrides: [], roleName: null, avatarUrl: null,
+    bitrixUserId: null, uiMode: null, ...overrides,
+  };
+}
+
+// Реальная прод-конфигурация: роль «Администратор» → permissions включают
+// джокер «Все разделы» (section.*), но НЕ явное action.rop_today.full_access —
+// именно так сегодня выглядят на проде marketolog1/sdd6/verifier и другие
+// не-руководство аккаунты с ролью «Администратор».
+const adminRoleNoExplicitGrant = fakeSession({ roleName: 'Администратор', permissions: ['section.*'] });
+check(ropFullAccess(adminRoleNoExplicitGrant) === false,
+  '#6479: роль «Администратор» (джокер section.*) БЕЗ явного action.rop_today.full_access → ropFullAccess=false (регрессия бага)');
+
+// Тот же аккаунт без организационной привязки (bitrixUserId=null, как у
+// реальных junior/devtest/test_alfred_admin на проде) — по новой логике должен
+// получить ПУСТОЙ дашборд, не «всё».
+const adminEffectiveScope = ropFullAccess(adminRoleNoExplicitGrant)
+  ? { full: true, allowedDeptIds: null, selfOnly: null }
+  : deriveRopScope({ allowedDeptIds: new Set(), full: false }, adminRoleNoExplicitGrant.bitrixUserId);
+check(adminEffectiveScope.full === false && adminEffectiveScope.selfOnly === null
+  && adminEffectiveScope.allowedDeptIds?.size === 0,
+  '#6479: тот же аккаунт без bitrixUserId/подконтрольных отделов → пустой дашборд («нет привязки к оргструктуре»), не вся компания');
+check(scopeRows(rows, adminEffectiveScope).length === 0,
+  '#6479: scopeRows для этого скоупа → 0 строк, не все 6');
+
+// Явный грант права — единственный способ получить full теперь.
+const adminWithExplicitGrant = fakeSession({
+  roleName: 'Администратор', permissions: ['section.*', 'action.rop_today.full_access'],
+});
+check(ropFullAccess(adminWithExplicitGrant) === true,
+  '#6479: то же плюс явный action.rop_today.full_access → ropFullAccess=true');
+
+// Супер-админ по-прежнему проходит без явного гранта — «не может залочить сам себя».
+const superadmin = fakeSession({ isSuperadmin: true, roleName: 'Администратор', permissions: ['section.*'] });
+check(ropFullAccess(superadmin) === true,
+  '#6479: isSuperadmin=true → ropFullAccess=true и без явного action-права (супер-админ не блокируется)');
+
+// РОП/Директор без нового права — как и раньше, ropFullAccess=false (не менялось,
+// но фиксируем явно — раньше это тоже гарантировала hasFullManagerAccess).
+const ropRole = fakeSession({ roleName: 'РОП', permissions: ['section.sales', 'section.plans'] });
+check(ropFullAccess(ropRole) === false, '#6479: роль «РОП» без явного права → ropFullAccess=false');
 
 console.log(`\n${passed} passed, ${failures} failed`);
 if (failures > 0) process.exit(1);

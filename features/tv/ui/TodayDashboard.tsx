@@ -239,6 +239,17 @@ function DashboardView({ apiUrl, dealsApiUrl, queryKey, title, subtitleSuffix }:
           </div>
         )}
 
+        {/* Задача #6479: скоуп не определился (нет ни полного доступа, ни отделов,
+            ни привязки к Битриксу) — пустое дерево ниже само по себе не объясняет,
+            почему «0 везде», выглядит как «в компании сегодня ноль продаж». Явная
+            подпись вместо тихого пустого экрана — safe-default вместо «показываем
+            всё». */}
+        {data?.scopeNotice && (
+          <div className="rounded-lg lg:rounded-[0.8vw] border border-[var(--color-warning)] bg-[var(--color-accent-soft)] px-4 py-3 lg:px-[1.2vw] lg:py-[0.9vw] text-sm lg:text-[1vw] text-[var(--color-text)]">
+            {data.scopeNotice}
+          </div>
+        )}
+
         {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Считаем…</div>}
         {error && <div className="text-sm text-[var(--color-negative)]">{(error as Error).message}</div>}
 
