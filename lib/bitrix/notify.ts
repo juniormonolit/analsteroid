@@ -193,7 +193,11 @@ export async function sendBitrixBotMessageWithImage(
   message: string,
   imageUrl: string,
   channel: BotChannel,
-  opts: { /** Пробная отправка явному адресату — идёт и при выключенной функции (общий рубильник всё равно сильнее). */ test?: boolean } = {},
+  opts: {
+    /** Пробная отправка явному адресату или ответ на его же клик — идёт и при выключенной функции (общий рубильник всё равно сильнее). */
+    test?: boolean;
+    keyboard?: BotKeyboardButton[];
+  } = {},
 ): Promise<number> {
   if (!(opts.test ? !(await isBotKilled()) : await channelEnabled(channel))) {
     console.warn(`[bot] канал «${channel}» выключен: сообщение для ${bitrixUserId} не отправлено, ${message.length} симв.`);
@@ -211,6 +215,7 @@ export async function sendBitrixBotMessageWithImage(
     DIALOG_ID: bitrixUserId,
     MESSAGE: message,
     ...(imageUrl ? { ATTACH: [{ IMAGE: { LINK: imageUrl } }] } : {}),
+    ...(opts.keyboard?.length ? { KEYBOARD: { BUTTONS: opts.keyboard } } : {}),
   });
   return Number(body?.result) || 0;
 }

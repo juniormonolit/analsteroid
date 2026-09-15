@@ -1,7 +1,7 @@
 import { systemDb } from '@/lib/db/clients';
-import { channelEnabled, getBotFunctionConfig, sendBitrixBotMessage, sendBitrixBotMessageWithImage } from '@/lib/bitrix/notify';
+import { channelEnabled, getBotFunctionConfig, sendBitrixBotMessageWithImage } from '@/lib/bitrix/notify';
 import { computeHowAreWeFacts, isWeekday, type HowAreWeFacts } from '@/features/how-are-we/engine/facts';
-import { buildHowAreWeMessage } from '@/features/how-are-we/engine/text';
+import { buildHowAreWeMessage, buildHowAreWeDetails } from '@/features/how-are-we/engine/text';
 import { renderHowAreWePng, storeChart } from '@/features/how-are-we/engine/chart';
 import type { PhraseOverrides } from '@/features/how-are-we/engine/phrases';
 
@@ -49,10 +49,31 @@ export interface BuiltDigest { facts: HowAreWeFacts; message: string; png: Buffe
 export async function buildHowAreWeDigest(dateStr: string, cutHour: number, settings?: HowAreWeSettings, phrasesOverride?: PhraseOverrides): Promise<BuiltDigest> {
   const s = settings ?? await fetchHowAreWeSettings();
   const facts = await computeHowAreWeFacts(dateStr, cutHour);
-  const message = buildHowAreWeMessage(facts, { overrides: phrasesOverride ?? s.phrases, hours: s.hours, baseUrl: baseUrl() });
   const png = await renderHowAreWePng(facts);
   const token = await storeChart(png);
-  return { facts, message, png, imageUrl: token ? `${baseUrl()}/api/how-are-we/chart/${token}` : null };
+  const imageUrl = token ? `${baseUrl()}/api/how-are-we/chart/${token}` : null;
+  const message = buildHowAreWeMessage(facts, { overrides: phrasesOverride ?? s.phrases, hours: s.hours, baseUrl: baseUrl(), imageUrl });
+  return { facts, message, png, imageUrl };
+}
+
+/** Кнопка под выпуском: клик приходит ONIMCOMMANDADD с COMMAND_PARAMS «дата:час»
+ *  (imbot-команда how_details зарегистрирована в Битриксе 15.09, id 17). */
+export const HOW_DETAILS_COMMAND = 'how_details';
+function detailsKeyboard(dateStr: string, cutHour: number) {
+  return [{ TEXT: '📋 Детально', COMMAND: HOW_DETAILS_COMMAND, COMMAND_PARAMS: `${dateStr}:${cutHour}`, DISPLAY: 'LINE' as const, BG_COLOR: '#f5f5f5', TEXT_COLOR: '#1f2937' }];
+}
+
+/** Ответ на клик «Детально»: раскладка по департаментам и командам за тот же срез. */
+export async function sendHowAreWeDetails(toBitrixId: string, params: string): Promise<boolean> {
+  const m = /^(\d{4}-\d{2}-\d{2}):(\d{1,2})$/.exec(params.trim());
+  if (!m) return false;
+  const s = await fetchHowAreWeSettings();
+  const facts = await computeHowAreWeFacts(m[1], Number(m[2]));
+  const text = buildHowAreWeDetails(facts, { overrides: s.phrases, hours: s.hours, baseUrl: baseUrl() });
+  // Человек сам нажал кнопку под уже полученным выпуском — отвечаем и при
+  // выключенной функции (иначе пробный выпуск владельцу был бы без деталей).
+  const id = await sendBitrixBotMessageWithImage(toBitrixId, text, '', 'how_are_we', { test: true });
+  return id > 0;
 }
 
 export interface SendOptions {
@@ -74,9 +95,9 @@ export async function sendHowAreWe(opts: SendOptions): Promise<{ recipients: str
   for (const to of recipients) {
     // Пробная отправка явному адресату (кнопка «отправить мне» / тест-роут) идёт и
     // при выключенной функции: иначе владелец не увидит выпуск до включения на всех.
-    const sentId = built.imageUrl || opts.deliverTo
-      ? await sendBitrixBotMessageWithImage(to, built.message, built.imageUrl ?? '', 'how_are_we', { test: !!opts.deliverTo })
-      : await sendBitrixBotMessage(to, built.message, undefined, 'how_are_we');
+    const sentId = await sendBitrixBotMessageWithImage(to, built.message, built.imageUrl ?? '', 'how_are_we', {
+      test: !!opts.deliverTo, keyboard: detailsKeyboard(dateStr, opts.cutHour),
+    });
     if (!sentId) continue; // функция выключена — сообщение не ушло, в журнал не пишем
     await systemDb().query(
       'INSERT INTO how_are_we_log (date_str, cut_hour, recipient, message, image_url, test) VALUES ($1, $2, $3, $4, $5, $6)',

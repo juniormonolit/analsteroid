@@ -155,6 +155,21 @@ export async function POST(req: NextRequest) {
         });
       }
 
+      // Кнопка «📋 Детально» под выпуском дайджеста «Как дела?» (15.09):
+      // COMMAND_PARAMS = «дата:час» выпуска, ответ — раскладка по командам.
+      const howKey = Object.keys(data).find(
+        k => /^data\[COMMAND\]\[\d+\]\[COMMAND\]$/.test(k) && data[k] === 'how_details',
+      );
+      if (howKey) {
+        const params = str(howKey.replace(/\[COMMAND\]$/, '[COMMAND_PARAMS]'));
+        const { sendHowAreWeDetails } = await import('@/lib/jobs/howAreWe');
+        const ok = await sendHowAreWeDetails(str('data[PARAMS][FROM_USER_ID]'), params);
+        await logInbound({
+          bitrixId: str('data[PARAMS][FROM_USER_ID]'), event, text: `кнопка: детали «Как дела?» (${params})${ok ? '' : ' — не отправлено'}`,
+          dialogId: str('data[PARAMS][DIALOG_ID]'), messageId: str('data[PARAMS][MESSAGE_ID]'), replyTo: null, handledBy: 'how_are_we',
+        });
+      }
+
       // Кнопки «⚠️ Ошибка» / «👍 Полезно» под сообщениями «Аналитика» (задача
       // 2765): те же imbot-команды, тот же паттерн разбора ключей, что и у
       // bind_deal выше — COMMAND_PARAMS = id строки bot_outbound_log.

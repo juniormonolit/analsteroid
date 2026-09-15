@@ -118,6 +118,31 @@ export const PHRASE_BLOCKS: PhraseBlock[] = [
     ],
   },
   {
+    key: 'branch_leader', title: 'Филиал — кто тащит', hint: 'Кусок строки филиала про лучшую команду; {team} — «МСК ОС», {pct} — её процент.',
+    placeholders: ['team', 'pct', 'top'],
+    defaults: ['тащит {team} ({pct} %){top}', 'вытягивает {team} — {pct} %{top}', 'в графике {team}, {pct} %{top}'],
+  },
+  {
+    key: 'branch_laggards', title: 'Филиал — кто филонит', hint: 'Кусок строки филиала про отстающих; {list} — «Руденко, Новикова», {n} — сколько их.',
+    placeholders: ['list', 'n'],
+    defaults: ['ниже 25 % плана — {list}', 'филонят {list}', 'проседают {list}'],
+  },
+  {
+    key: 'branch_zero', title: 'Филиал — кто без продаж', hint: 'Кусок строки филиала про команды без единой продажи.',
+    placeholders: ['list'],
+    defaults: ['без продаж {list}', 'по нулям {list}'],
+  },
+  {
+    key: 'branch_stagnant', title: 'Филиал — все стагнируют', hint: 'Когда ни одна команда не выделяется ни вверх, ни вниз.',
+    placeholders: ['pct'],
+    defaults: ['все команды идут ровно', 'без лидеров и провалов', 'ровный день у всех'],
+  },
+  {
+    key: 'details_hint', title: 'Подпись к кнопке «Детально»', hint: 'Строка перед кнопкой с раскладкой по командам.',
+    placeholders: [],
+    defaults: ['Раскладка по департаментам и командам — по кнопке.', 'Кто как идёт по командам — жми «Детально».'],
+  },
+  {
     key: 'heroes', title: 'Молодцы', hint: 'Заголовок блока героев; сами люди — строками ниже.',
     placeholders: ['list'],
     defaults: [
