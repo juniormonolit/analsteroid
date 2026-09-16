@@ -46,13 +46,15 @@ export async function resolveMatrixRequest(session: SessionUser, body: Record<st
   }
   const mode: MatrixCategoryMode = body.mode === 'positions' ? 'positions' : 'by_max';
   const periodAnchor = body.periodAnchor === 'first' ? 'first' as const : 'next' as const;
+  // «Когда-либо потом» имеет смысл только от точки входа (anchor='first').
+  const horizon = body.horizon === 'any' && periodAnchor === 'first' ? 'any' as const : 'next' as const;
   const dealScope = ['primary', 'repeat', 'all'].includes(body.dealScope as string) ? body.dealScope as ProductMatrixOptions['dealScope'] : 'all';
   const clientType = ['b2c', 'b2b', 'all'].includes(body.clientType as string) ? body.clientType as ProductMatrixOptions['clientType'] : 'all';
   return {
     ok: true,
     opts: {
       period: { from: new Date((body.period as { from: string }).from), to: new Date((body.period as { to: string }).to) },
-      managerIds, departmentIds, dealScope, clientType, mode, periodAnchor,
+      managerIds, departmentIds, dealScope, clientType, mode, periodAnchor, horizon,
     },
   };
 }

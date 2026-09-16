@@ -81,20 +81,46 @@ function DealSide({ deal, highlight, onOpen }: { deal: TransitionDealBrief; high
 function ChainRow({ chain, from, to, onOpenDeal }: {
   chain: TransitionChain; from: string; to: string; onOpenDeal: (id: number) => void;
 }) {
+  // Цепочка целиком (правка владельца 16.09): все отгрузки клиента от точки входа
+  // и дальше. Точка входа подсвечена строкой, закрывающая — колонкой; промежуточные
+  // и те, что после B, — приглушены. Для «следующей отгрузки» шагов ровно два.
+  const steps = chain.steps.length >= 2 ? chain.steps : [
+    { ...chain.prev, managerId: chain.managerId, managerName: chain.managerName },
+    { ...chain.next, managerId: chain.managerId, managerName: chain.managerName },
+  ];
+  const between = Math.max(0, steps.findIndex(st => st.dealId === chain.next.dealId) - 1);
   return (
     <div className="rounded-xl border border-[var(--color-border)] p-2">
       <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-[var(--color-text-muted)]">
         <Users size={11} className="shrink-0" />
         <span className="truncate">{chain.managerName ?? `Менеджер ${chain.managerId ?? '—'}`}</span>
-        <span className="ml-auto shrink-0 tabular-nums">через {chain.days} дн.</span>
+        <span className="ml-auto shrink-0 tabular-nums">
+          через {chain.days} дн.{between > 0 ? ` · ${between} ${between === 1 ? 'покупка' : between < 5 ? 'покупки' : 'покупок'} между` : ''}
+          {steps.length > 2 ? ` · ${steps.length} отгрузок${chain.stepsTruncated ? '+' : ''}` : ''}
+        </span>
       </div>
-      {/* Две колонки: было → стало. На телефоне — стопкой, стрелка поворачивается. */}
-      <div className="flex flex-col sm:flex-row items-stretch gap-2">
-        <DealSide deal={chain.prev} highlight={from} onOpen={() => onOpenDeal(chain.prev.dealId)} />
-        <div className="flex items-center justify-center shrink-0 text-[var(--color-accent)]">
-          <ArrowRight size={16} className="rotate-90 sm:rotate-0" />
-        </div>
-        <DealSide deal={chain.next} highlight={to} onOpen={() => onOpenDeal(chain.next.dealId)} />
+      {/* Лента шагов: на десктопе — в ряд с горизонтальным скроллом, на телефоне — стопкой. */}
+      <div className="flex flex-col sm:flex-row sm:items-stretch gap-2 sm:overflow-x-auto scrollbar-none min-w-0">
+        {steps.map((st, i) => {
+          const isFrom = i === 0;
+          const isTo = st.dealId === chain.next.dealId;
+          const dim = !isFrom && !isTo;
+          return (
+            <Fragment key={`${st.dealId}-${i}`}>
+              {i > 0 && (
+                <div className="flex items-center justify-center shrink-0 text-[var(--color-accent)]">
+                  <ArrowRight size={16} className="rotate-90 sm:rotate-0" />
+                </div>
+              )}
+              <div className={`sm:min-w-[220px] sm:max-w-[280px] flex ${dim ? 'opacity-60' : ''}`}>
+                <DealSide deal={st} highlight={isFrom ? from : isTo ? to : ''} onOpen={() => onOpenDeal(st.dealId)} />
+              </div>
+            </Fragment>
+          );
+        })}
+        {chain.stepsTruncated && (
+          <div className="flex items-center text-[11px] text-[var(--color-text-muted)] shrink-0">…ещё</div>
+        )}
       </div>
     </div>
   );
@@ -400,7 +426,7 @@ export function TransitionDrillModal({ from, to, filters, comparisonFilters, onC
                         <div className="h-full bg-[var(--color-accent)]" style={{ width: `${(m.n / maxN) * 100}%` }} />
                       </div>
                       <div className="mt-0.5 flex items-baseline gap-2 text-[10px] text-[var(--color-text-muted)]">
-                        <span className="truncate">из {m.afterFrom} повт. покупок после «{from}»</span>
+                        <span className="truncate">из {m.afterFrom} повт. покупок после «{from}»{m.afterFrom < 3 ? ' · мало данных' : ''}</span>
                         <span className="ml-auto shrink-0 tabular-nums">
                           {fmtMln(m.sumNext)}{m.medianDays !== null ? ` · ${m.medianDays} дн.` : ''}
                         </span>

@@ -191,6 +191,10 @@ export function TransitionMatrixPage() {
   const [dealScope, setDealScope] = useState<DealScope>('all');
   const [clientType, setClientType] = useState<ClientType>('all');
   const [manager, setManager] = useState<Person | null>(null);
+  // Горизонт перехода (правка владельца 16.09): «когда-либо потом» — переход
+  // засчитан, если после точки входа клиент вообще потом брал колонку; «следующая» —
+  // только соседняя отгрузка. Без ограничения по времени (решение владельца).
+  const [horizon, setHorizon] = useState<'any' | 'next'>('any');
   const [selected, setSelected] = useState<Set<string>>(new Set()); // категории; пусто = все
   // Открытая ячейка → дрилл «кто продаёт связку + цепочки сделок» (правка 10.09).
   const [drill, setDrill] = useState<{ from: string; to: string } | null>(null);
@@ -216,7 +220,8 @@ export function TransitionMatrixPage() {
     // 120 отгрузок газобетона → 28 повторов → 23 %» — одна популяция, конверсию
     // можно писать в шапке строки.
     periodAnchor: 'first' as const,
-  }), [period, departmentIds, manager, dealScope, clientType]);
+    horizon,
+  }), [period, departmentIds, manager, dealScope, clientType, horizon]);
 
   const { data, isLoading, error } = useQuery<MatrixResponse>({
     queryKey: ['transition-matrix', body],
@@ -299,10 +304,12 @@ export function TransitionMatrixPage() {
       <div className="shrink-0 px-3 sm:px-6 py-3 border-b border-[var(--color-border)]">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Матрица переходов</h1>
         <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
-          Факт: строка — что отгрузили, колонка — что отгрузили следующим. В ячейке — в скольких процентах
-          повторных покупок после строки брали колонку (и число таких случаев). Категории — по всем товарным
-          позициям заказа, поэтому один заказ из двух категорий попадает в обе колонки, и строка может дать
-          больше 100 %. Фильтры режут закрывающую отгрузку пары; предыдущая — из всей истории заказчика.
+          Факт: строка — точка входа (что отгрузили), колонка — что заказчик брал потом. В ячейке — в скольких
+          процентах отгрузок строки, за которыми вообще была повторная покупка, {horizon === 'any'
+            ? 'заказчик когда-либо потом брал колонку (через сколько бы покупок ни было, без ограничения по времени)'
+            : 'следующей отгрузкой была колонка'} — и число таких случаев. Категории — по всем товарным
+          позициям заказа, поэтому одна отгрузка может попасть в несколько колонок, и строка может дать
+          больше 100 %. Период и фильтры режут точку входа; продолжение — из всей истории заказчика.
           Сервисные группы (перевозка, аренда техники) и группа «Разное» в матрице не участвуют: «Разное» —
           не спрос, а сопутствующая мелочь (упаковка, крепёж, ленты), прицепленная к каждому пятому заказу.
         </p>
@@ -322,6 +329,8 @@ export function TransitionMatrixPage() {
           options={[{ key: 'all', label: 'Все' }, { key: 'primary', label: 'Перв.' }, { key: 'repeat', label: 'Повт.' }]} />
         <Segmented ariaLabel="Тип клиента" value={clientType} onChange={setClientType}
           options={[{ key: 'all', label: 'ЧЛ+ЮЛ' }, { key: 'b2c', label: 'ЧЛ' }, { key: 'b2b', label: 'ЮЛ' }]} />
+        <Segmented ariaLabel="Горизонт перехода" value={horizon} onChange={setHorizon}
+          options={[{ key: 'any', label: 'Когда-либо потом' }, { key: 'next', label: 'Следующая отгрузка' }]} />
         <button
           type="button"
           onClick={() => setWithComparison(v => !v)}
@@ -399,7 +408,7 @@ export function TransitionMatrixPage() {
                 <tr>
                   {/* Угол: прилипает и по вертикали, и по горизонтали — поверх обеих шапок. */}
                   <th className="sticky left-0 top-0 z-30 bg-[var(--color-bg)] text-left p-3 text-sm font-medium text-[var(--color-text-muted)] border-b border-r border-[var(--color-border)] min-w-[260px] max-w-[320px]">
-                    Отгрузили ↓ / следующим →
+                    {horizon === 'any' ? 'Отгрузили ↓ / потом брали →' : 'Отгрузили ↓ / следующим →'}
                     {sort && (
                       <button
                         type="button"

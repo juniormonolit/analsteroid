@@ -89,6 +89,16 @@ export interface ProductMatrixOptions {
    *             можно писать в шапке строки.
    */
   periodAnchor?: 'next' | 'first';
+  /**
+   * Горизонт перехода (правка владельца 16.09):
+   *   'next' — пара со СЛЕДУЮЩЕЙ отгрузкой клиента (умолчание, прежнее поведение);
+   *   'any'  — переход A → B засчитывается, если после отгрузки A клиент КОГДА-ЛИБО
+   *            потом брал B, через сколько бы покупок ни было. Одна отгрузка A даёт
+   *            в ячейку B не больше единицы; без ограничения по времени (решение
+   *            владельца: «без ограничений»). Только с periodAnchor='first' —
+   *            период режет точку входа.
+   */
+  horizon?: 'next' | 'any';
 }
 
 const EXCLUDED_FUNNELS = '(4, 7)';
@@ -175,11 +185,33 @@ export async function fetchProductMatrix(input: DateRange | ProductMatrixOptions
 
   const { params, nextWhere, dealCats, anchorAt } = buildMatrixScope(opts, mode, fromIso, toExclIso);
 
+  const any = (opts.horizon ?? 'next') === 'any';
+  // «Когда-либо потом»: к каждой отгрузке базы подтягиваем МНОЖЕСТВО категорий
+  // всех более поздних отгрузок клиента (DISTINCT — одна отгрузка A даёт в ячейку
+  // B одну единицу). Знаменатели те же, что в 'next': «отгрузок» и «повторов».
+  const laterCte = any ? `,
+later AS (
+  SELECT b.deal_id AS base_deal, t.cat
+    FROM base b
+    JOIN deal_cats l ON l.contact_id = b.contact_id
+                    AND (l.delivered_at, l.deal_id) > (b.delivered_at, b.deal_id),
+         unnest(l.cats) t(cat)
+   GROUP BY b.deal_id, t.cat
+)` : '';
+  const cellSql = any
+    ? `SELECT 'cell' AS kind, f.cat AS from_grp, l.cat AS to_grp, count(*)::int AS n
+  FROM base b
+  JOIN later l ON l.base_deal = b.deal_id, unnest(b.cats) f(cat)
+ GROUP BY 1, 2, 3`
+    : `SELECT 'cell' AS kind, f.cat AS from_grp, t.cat AS to_grp, count(*)::int AS n
+  FROM pairs, unnest(cats) f(cat), unnest(next_cats) t(cat)
+ GROUP BY 1, 2, 3`;
+
   const sql = `
 WITH deal_cats AS (${dealCats}
 ),
 seq AS (
-  SELECT contact_id, cats, delivered_at, mgr, funnel_id,
+  SELECT contact_id, cats, deal_id, delivered_at, mgr, funnel_id,
          lead(cats)         OVER w AS next_cats,
          lead(delivered_at) OVER w AS next_at,
          lead(mgr)          OVER w AS next_mgr,
@@ -195,10 +227,8 @@ base AS (
    WHERE ${anchorAt} >= $1 AND ${anchorAt} < $2
      ${nextWhere}
 ),
-pairs AS (SELECT * FROM base WHERE next_cats IS NOT NULL)
-SELECT 'cell' AS kind, f.cat AS from_grp, t.cat AS to_grp, count(*)::int AS n
-  FROM pairs, unnest(cats) f(cat), unnest(next_cats) t(cat)
- GROUP BY 1, 2, 3
+pairs AS (SELECT * FROM base WHERE next_cats IS NOT NULL)${laterCte}
+${cellSql}
 UNION ALL
 -- Знаменатели строк: сколько ПАР было после каждой категории (одна пара — один
 -- раз, даже если в следующем заказе несколько категорий).
@@ -218,7 +248,7 @@ SELECT 'shipTotal', NULL, NULL, count(*)::int FROM base
 `;
 
   const key = [
-    mode, opts.periodAnchor ?? 'next', fromIso, toExclIso,
+    'm5', mode, opts.periodAnchor ?? 'next', opts.horizon ?? 'next', fromIso, toExclIso,
     (opts.managerIds ?? []).slice().sort().join(',') || 'm:all',
     (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
@@ -282,6 +312,18 @@ export interface TransitionSeriesResult {
   points: TransitionSeriesPoint[];
 }
 
+/** Условие «после этой отгрузки была категория B»: для 'next' — в следующей
+ *  покупке, для 'any' — в любой более поздней отгрузке того же клиента. Ссылается
+ *  на колонки текущей строки base/seq и CTE deal_cats. */
+function hitCond(opts: ProductMatrixOptions, pTo: string): string {
+  return (opts.horizon ?? 'next') === 'any'
+    ? `EXISTS (SELECT 1 FROM deal_cats l
+                WHERE l.contact_id = base.contact_id
+                  AND (l.delivered_at, l.deal_id) > (base.delivered_at, base.deal_id)
+                  AND ${pTo} = ANY(l.cats))`
+    : `${pTo} = ANY(next_cats)`;
+}
+
 export async function fetchTransitionSeries(
   opts: MatrixTransitionsOptions & { step?: TransitionSeriesStep },
 ): Promise<TransitionSeriesResult> {
@@ -315,13 +357,13 @@ base AS (
 SELECT date_trunc('${step}', ${anchorAt} AT TIME ZONE 'Europe/Moscow')::date::text AS bucket,
        count(*)::int AS ship,
        count(*) FILTER (WHERE next_cats IS NOT NULL)::int AS denom,
-       count(*) FILTER (WHERE next_cats IS NOT NULL AND ${pTo} = ANY(next_cats))::int AS n
+       count(*) FILTER (WHERE next_cats IS NOT NULL AND ${hitCond(opts, pTo)})::int AS n
   FROM base
  GROUP BY 1 ORDER BY 1
 `;
 
   const key = [
-    'series1', mode, opts.periodAnchor ?? 'next', step, fromIso, toExclIso, opts.from, opts.to,
+    'series2', mode, opts.periodAnchor ?? 'next', opts.horizon ?? 'next', step, fromIso, toExclIso, opts.from, opts.to,
     (opts.managerIds ?? []).slice().sort().join(',') || 'm:all',
     (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
@@ -391,13 +433,28 @@ export interface TransitionDealBrief {
   cats: string[];
 }
 
-export interface TransitionChain {
-  prev: TransitionDealBrief;
-  next: TransitionDealBrief;
+export interface TransitionChainStep extends TransitionDealBrief {
   managerId: string | null;
   managerName: string | null;
-  /** Дней между отгрузками пары. */
+}
+
+export interface TransitionChain {
+  /** Точка входа (отгрузка A). */
+  prev: TransitionDealBrief;
+  /** Закрывающая отгрузка: следующая (horizon 'next') либо ПЕРВАЯ с B (horizon 'any'). */
+  next: TransitionDealBrief;
+  /** Менеджер закрывающей отгрузки. */
+  managerId: string | null;
+  managerName: string | null;
+  /** Дней от A до закрывающей. */
   days: number;
+  /**
+   * Цепочка целиком (правка владельца 16.09): все отгрузки клиента от A и дальше,
+   * по порядку, включая промежуточные и те, что после B. Для 'next' — две.
+   * Обрезана потолком CHAIN_STEPS_LIMIT; `stepsTruncated` — были ещё.
+   */
+  steps: TransitionChainStep[];
+  stepsTruncated: boolean;
 }
 
 export interface MatrixTransitionsResult {
@@ -432,6 +489,7 @@ export interface MatrixTransitionsOptions extends ProductMatrixOptions {
 }
 
 const CHAINS_LIMIT = 300;
+const CHAIN_STEPS_LIMIT = 15;
 
 export async function fetchMatrixTransitions(opts: MatrixTransitionsOptions): Promise<MatrixTransitionsResult> {
   const mode: MatrixCategoryMode = opts.mode ?? 'by_max';
@@ -449,7 +507,9 @@ export async function fetchMatrixTransitions(opts: MatrixTransitionsOptions): Pr
     drillWhere = `WHERE next_mgr = $${params.length}`;
   }
 
-  // Колонки объединения (19): служебные агрегаты и цепочки в одном ответе —
+  const any = (opts.horizon ?? 'next') === 'any';
+
+  // Колонки объединения (20): служебные агрегаты и цепочки в одном ответе —
   // deal_cats тяжёлый (jsonb_array_elements по всем отгрузкам), второй такой же
   // проход ради агрегатов удвоил бы время открытия дрилла.
   // АЛИАСЫ ОБЯЗАТЕЛЬНЫ: имена колонок ответа Postgres берёт из ПЕРВОЙ ветви
@@ -459,10 +519,19 @@ export async function fetchMatrixTransitions(opts: MatrixTransitionsOptions): Pr
   const NULLS_DEAL = `NULL::bigint AS deal_id, NULL::text AS deal_name, NULL::timestamptz AS at,
        NULL::numeric AS amount, NULL::text[] AS cats,
        NULL::bigint AS next_deal_id, NULL::text AS next_deal_name, NULL::timestamptz AS next_at,
-       NULL::numeric AS next_amount, NULL::text[] AS next_cats`;
+       NULL::numeric AS next_amount, NULL::text[] AS next_cats, NULL::jsonb AS steps`;
   const DAYS = `EXTRACT(EPOCH FROM (next_at - delivered_at)) / 86400`;
 
-  const sql = `
+  // Цепочка целиком: все отгрузки клиента от A и дальше (включая A), по порядку.
+  const STEPS = (baseAlias: string) => `(
+    SELECT jsonb_agg(jsonb_build_object('deal_id', l.deal_id, 'name', l.deal_name, 'at', l.delivered_at,
+                                        'amount', l.amount, 'cats', l.cats, 'mgr', l.mgr) ORDER BY l.delivered_at, l.deal_id)
+      FROM (SELECT * FROM deal_cats x
+             WHERE x.contact_id = ${baseAlias}.contact_id
+               AND (x.delivered_at, x.deal_id) >= (${baseAlias}.delivered_at, ${baseAlias}.deal_id)
+             ORDER BY x.delivered_at, x.deal_id LIMIT ${CHAIN_STEPS_LIMIT + 1}) l)`;
+
+  const sqlNext = `
 WITH deal_cats AS (${dealCats}
 ),
 seq AS (
@@ -537,9 +606,125 @@ UNION ALL
 SELECT 'chain', next_mgr, NULL,
        NULL::int, NULL::int, NULL::int, NULL::numeric, NULL::numeric, NULL::numeric,
        deal_id, deal_name, delivered_at, amount, cats,
-       next_deal_id, next_deal_name, next_at, next_amount, next_cats
+       next_deal_id, next_deal_name, next_at, next_amount, next_cats,
+       ${STEPS('c')}
   FROM (SELECT * FROM hits_drill ORDER BY next_at DESC LIMIT ${CHAINS_LIMIT + 1}) c
 `;
+
+  // Горизонт «когда-либо потом» (правка владельца 16.09). Определения:
+  //   after_from — отгрузки A из среза, за которыми у клиента вообще была покупка;
+  //   later      — все более поздние отгрузки клиента после каждой такой A;
+  //   hit        — среди них есть B; закрывающая = ПЕРВАЯ отгрузка с B;
+  //   менеджер   — тот, кто закрыл ХОТЬ ОДНУ из более поздних покупок клиента:
+  //                его база — отгрузки A, чьих клиентов он потом вёл, его связки —
+  //                те из них, где B продал именно он (первая его отгрузка с B).
+  //                Так процент менеджера не превышает 100 и отвечает на вопрос
+  //                «кто из тех, кто дальше работал с клиентом, довёл его до B».
+  const drillMgr = opts.drillManagerId && /^\d+$/.test(opts.drillManagerId) ? `$${params.length}` : null;
+  const sqlAny = `
+WITH deal_cats AS (${dealCats}
+),
+seq AS (
+  SELECT contact_id, cats, deal_id, deal_name, amount, delivered_at, mgr, funnel_id,
+         lead(cats) OVER w AS next_cats
+    FROM deal_cats
+  WINDOW w AS (PARTITION BY contact_id ORDER BY delivered_at, deal_id)
+),
+after_from AS (
+  SELECT contact_id, cats, deal_id, deal_name, amount, delivered_at, mgr, funnel_id FROM seq
+   WHERE next_cats IS NOT NULL
+     AND ${anchorAt} >= $1 AND ${anchorAt} < $2
+     ${nextWhere}
+     AND ${pFrom} = ANY(cats)
+),
+later AS (
+  SELECT b.deal_id AS base_deal, b.contact_id, b.delivered_at AS base_at, b.amount AS base_amount,
+         l.deal_id, l.deal_name, l.delivered_at, l.amount, l.cats, l.mgr,
+         (${pTo} = ANY(l.cats)) AS is_b
+    FROM after_from b
+    JOIN deal_cats l ON l.contact_id = b.contact_id
+                    AND (l.delivered_at, l.deal_id) > (b.delivered_at, b.deal_id)
+),
+-- Первая отгрузка с B после A (кем угодно) — закрывающая для ячейки.
+first_b AS (
+  SELECT DISTINCT ON (base_deal) * FROM later WHERE is_b ORDER BY base_deal, delivered_at, deal_id
+),
+-- Первая отгрузка с B после A КАЖДЫМ менеджером — для его строки и его цепочек.
+first_b_mgr AS (
+  SELECT DISTINCT ON (base_deal, mgr) * FROM later WHERE is_b ORDER BY base_deal, mgr, delivered_at, deal_id
+),
+-- Возможности менеджера: отгрузки A, чьих клиентов он потом вёл.
+mgr_opp AS (
+  SELECT base_deal, contact_id, mgr, bool_or(is_b) AS hit FROM later GROUP BY 1, 2, 3
+),
+hits AS (
+  SELECT b.*, f.deal_id AS next_deal_id, f.deal_name AS next_deal_name, f.delivered_at AS next_at,
+         f.amount AS next_amount, f.cats AS next_cats, f.mgr AS next_mgr
+    FROM after_from b JOIN first_b f ON f.base_deal = b.deal_id
+),
+af_drill AS (
+  SELECT b.* FROM after_from b
+   ${drillMgr ? `WHERE EXISTS (SELECT 1 FROM mgr_opp o WHERE o.base_deal = b.deal_id AND o.mgr = ${drillMgr})` : ''}
+),
+hits_drill AS (
+  ${drillMgr
+    ? `SELECT b.*, f.deal_id AS next_deal_id, f.deal_name AS next_deal_name, f.delivered_at AS next_at,
+              f.amount AS next_amount, f.cats AS next_cats, f.mgr AS next_mgr
+         FROM after_from b JOIN first_b_mgr f ON f.base_deal = b.deal_id AND f.mgr = ${drillMgr}`
+    : `SELECT * FROM hits`}
+),
+-- Категории, купленные КОГДА-ЛИБО после A (одна отгрузка A — одна единица на категорию),
+-- с первой такой покупкой — для таба «→ остальное».
+later_cats AS (
+  SELECT DISTINCT ON (l.base_deal, t.cat) l.base_deal, l.contact_id, t.cat, l.delivered_at, l.amount, l.base_at
+    FROM later l JOIN af_drill b ON b.deal_id = l.base_deal, unnest(l.cats) t(cat)
+   ORDER BY l.base_deal, t.cat, l.delivered_at, l.deal_id
+)
+SELECT 'mgr' AS kind, o.mgr AS manager_id, NULL::text AS cat,
+       count(*) FILTER (WHERE o.hit)::int AS n,
+       count(*)::int AS after_from,
+       count(DISTINCT o.contact_id) FILTER (WHERE o.hit)::int AS clients,
+       NULL::numeric AS sum_prev,
+       sum(f.amount) AS sum_next,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (f.delivered_at - f.base_at)) / 86400) AS median_days,
+       ${NULLS_DEAL}
+  FROM mgr_opp o LEFT JOIN first_b_mgr f ON f.base_deal = o.base_deal AND f.mgr = o.mgr
+ GROUP BY o.mgr
+UNION ALL
+SELECT 'grp', NULL, cat,
+       count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
+       NULL::numeric, sum(amount),
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (delivered_at - base_at)) / 86400),
+       ${NULLS_DEAL}
+  FROM later_cats GROUP BY cat
+UNION ALL
+SELECT 'grpBase', NULL, NULL,
+       count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
+       sum(amount), NULL::numeric, NULL::numeric,
+       ${NULLS_DEAL}
+  FROM af_drill
+UNION ALL
+SELECT 'hitsAgg', NULL, NULL,
+       count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
+       sum(amount), sum(next_amount),
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY ${DAYS}),
+       ${NULLS_DEAL}
+  FROM hits_drill
+UNION ALL
+SELECT 'afterFromAgg', NULL, NULL,
+       count(*)::int, NULL::int, count(DISTINCT contact_id)::int,
+       sum(amount), NULL::numeric, NULL::numeric,
+       ${NULLS_DEAL}
+  FROM af_drill
+UNION ALL
+SELECT 'chain', next_mgr, NULL,
+       NULL::int, NULL::int, NULL::int, NULL::numeric, NULL::numeric, NULL::numeric,
+       deal_id, deal_name, delivered_at, amount, cats,
+       next_deal_id, next_deal_name, next_at, next_amount, next_cats,
+       ${STEPS('c')}
+  FROM (SELECT * FROM hits_drill ORDER BY next_at DESC LIMIT ${CHAINS_LIMIT + 1}) c
+`;
+  const sql = any ? sqlAny : sqlNext;
 
   type Row = {
     kind: 'mgr' | 'grp' | 'grpBase' | 'hitsAgg' | 'afterFromAgg' | 'chain';
@@ -548,12 +733,13 @@ SELECT 'chain', next_mgr, NULL,
     sum_prev: string | null; sum_next: string | null; median_days: string | null;
     deal_id: string | null; deal_name: string | null; at: Date | null; amount: string | null; cats: string[] | null;
     next_deal_id: string | null; next_deal_name: string | null; next_at: Date | null; next_amount: string | null; next_cats: string[] | null;
+    steps: { deal_id: number; name: string | null; at: string; amount: string | number | null; cats: string[] | null; mgr: string | null }[] | null;
   };
-  // 'drill3' — версия формы ответа. Бампается при КАЖДОЙ смене набора колонок:
+  // 'drill4' — версия формы ответа (drill3 → добавлены steps и горизонт). Бампается при КАЖДОЙ смене набора колонок:
   // 'drill2' успел закэшировать битые строки (union без алиасов, см. NULLS_DEAL),
   // и без бампа они жили бы в Redis до истечения TTL уже после фикса.
   const key = [
-    'drill3', mode, opts.periodAnchor ?? 'next', fromIso, toExclIso, opts.from, opts.to, opts.drillManagerId ?? '-',
+    'drill4', mode, opts.periodAnchor ?? 'next', opts.horizon ?? 'next', fromIso, toExclIso, opts.from, opts.to, opts.drillManagerId ?? '-',
     (opts.managerIds ?? []).slice().sort().join(',') || 'm:all',
     (opts.departmentIds ?? []).slice().sort().join(',') || 'd:all',
     opts.dealScope ?? 'all', opts.clientType ?? 'all',
@@ -598,19 +784,25 @@ SELECT 'chain', next_mgr, NULL,
     if (r.kind === 'afterFromAgg') { afterFromAgg = aggOf(r); continue; }
     const at = r.at ? new Date(r.at).toISOString() : '';
     const nextAt = r.next_at ? new Date(r.next_at).toISOString() : '';
+    const rawSteps = r.steps ?? [];
     chains.push({
       prev: { dealId: Number(r.deal_id), name: r.deal_name, at, amount: Number(r.amount ?? 0), cats: r.cats ?? [] },
       next: { dealId: Number(r.next_deal_id), name: r.next_deal_name, at: nextAt, amount: Number(r.next_amount ?? 0), cats: r.next_cats ?? [] },
       managerId: r.manager_id,
       managerName: null,
       days: at && nextAt ? Math.round((new Date(nextAt).getTime() - new Date(at).getTime()) / 86_400_000) : 0,
+      steps: rawSteps.slice(0, CHAIN_STEPS_LIMIT).map(st => ({
+        dealId: Number(st.deal_id), name: st.name, at: st.at ? new Date(st.at).toISOString() : '',
+        amount: Number(st.amount ?? 0), cats: st.cats ?? [], managerId: st.mgr, managerName: null,
+      })),
+      stepsTruncated: rawSteps.length > CHAIN_STEPS_LIMIT,
     });
   }
   nextGroups.sort((a, b) => b.n - a.n || b.sumNext - a.sumNext);
 
   // Имена менеджеров — одним запросом по встретившимся id (в SQL выше JOIN дал бы
   // дубли строк оргструктуры).
-  const ids = [...new Set([...managers, ...chains].map(x => x.managerId).filter((v): v is string => !!v))];
+  const ids = [...new Set([...managers, ...chains, ...chains.flatMap(c => c.steps)].map(x => x.managerId).filter((v): v is string => !!v))];
   if (ids.length) {
     const res = await analyticsDb().query<{ id: string; name: string }>(
       `SELECT DISTINCT ON (manager_bitrix_user_id) manager_bitrix_user_id::text AS id, manager_name AS name
@@ -619,11 +811,19 @@ SELECT 'chain', next_mgr, NULL,
     );
     const byId = new Map(res.rows.map(r => [r.id, r.name]));
     for (const m of managers) m.name = m.managerId ? byId.get(m.managerId) ?? null : null;
-    for (const c of chains) c.managerName = c.managerId ? byId.get(c.managerId) ?? null : null;
+    for (const c of chains) {
+      c.managerName = c.managerId ? byId.get(c.managerId) ?? null : null;
+      for (const st of c.steps) st.managerName = st.managerId ? byId.get(st.managerId) ?? null : null;
+    }
   }
 
-  // Лучшие — по числу связок; при равенстве выше тот, у кого выше доля.
-  managers.sort((a, b) => b.n - a.n || (b.afterFrom ? b.n / b.afterFrom : 0) - (a.afterFrom ? a.n / a.afterFrom : 0));
+  // Рейтинг — по ДОЛЕ связок, не по их числу (правка владельца 16.09). Совсем
+  // маленькая база (< 3 повторов) уходит в конец: 1 из 1 — не рекорд, а случайность.
+  const pctOf = (m: TransitionManagerRow) => (m.afterFrom ? m.n / m.afterFrom : 0);
+  managers.sort((a, b) => {
+    const tinyA = a.afterFrom < 3 ? 1 : 0; const tinyB = b.afterFrom < 3 ? 1 : 0;
+    return tinyA - tinyB || pctOf(b) - pctOf(a) || b.n - a.n;
+  });
   const truncated = chains.length > CHAINS_LIMIT;
   return {
     managers, chains: chains.slice(0, CHAINS_LIMIT),
