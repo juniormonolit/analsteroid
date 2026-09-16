@@ -87,7 +87,7 @@ export const BOT_FUNCTION_KEYS = [
   'daily_moscow_report', 'daily_os_teams_report', 'report_schedules', 'weekly_weather',
   'manager_digest_daily', 'manager_digest_weekly', 'rop_digest', 'advice_feedback', 'scenarios',
   'gamification', 'deal_chats',
-  'how_are_we',
+  'how_are_we', 'b24_diag_alerts',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 

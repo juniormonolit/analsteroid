@@ -66,6 +66,13 @@ export function SettingsSidebar({
       ],
     },
     {
+      label: 'Мониторинг',
+      items: [
+        // Логи сервера Битрикса по SFTP (16.09): нагрузка, долгие SQL, наша доля запросов, оповещения.
+        { href: '/settings/bitrix-diag', label: 'Логи Битрикса', visible: isSuperadmin },
+      ],
+    },
+    {
       label: 'Справочники',
       items: [
         // Корзина отчётов (задача 3045, §4): у общей корзины наконец есть адрес.

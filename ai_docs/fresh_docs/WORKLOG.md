@@ -23525,3 +23525,29 @@ light) `THEMES`-объекта — до и после фикса сравнен�
 Ветка `feature/today-drilldown` (от `origin/dev-asteroid`, worktree
 `analsteroid-wt-6465`), в `dev-asteroid` НЕ вливалась — по заданию задачи. Открытые
 вопросы — в отчёте `owners-inbox/monolitika-today-drilldown-20260914.html` (life-os).
+
+## 2026-09-16 — Мониторинг сервера Битрикса по диагностическим логам (SFTP)
+
+Админы td.monolit-crm.ru дали SFTP-доступ (порт 2222, `diagreader`, ключ ed25519, только
+чтение `/logs`). Файл `diag_YYYY-MM-DD_HH-MM-SS.txt` = снимок: DATE, LOADAVG, TOP, Apache
+server-status (auto+full), ACTIVE HTTP REQUESTS, MySQL PROCESSLIST, InnoDB STATUS. Снимки идут
+сериями по 3 мин (скрипт админов снимает при нагрузке) — 197 файлов с 17.08.
+- `lib/b24diag/parser.ts` — чистый парсер: load, mysqld CPU/RSS, Apache busy/idle/slots/rps/
+  длительность, запросы в работе (M=W) с секундами и клиентом, активные HTTP по категориям
+  (rest / rest_mlt / crm_mlt / ajax / im …) и признак «наш» (IP 62.113.100.67 или `mlt.*`),
+  processlist → активные/долгие (≥5 с)/макс/состояния/отпечатки SQL (числа и строки → ?),
+  InnoDB history list / LOCK WAIT / deadlock. `severityOf()` — уровень 0/1/2 по порогам.
+- `lib/b24diag/sftp.ts` — системный `sftp -b -` (без npm-зависимости: Turbopack плохо трассирует
+  нативные пакеты), ключ `.secrets/b24_diag_reader` (gitignore) или env `B24_DIAG_SFTP_KEY`,
+  свой known_hosts. `lib/b24diag/sync.ts` — новые файлы → парсер → `b24_diag_snapshots`
+  (миграция 211, detail jsonb), оценка свежего снимка → оповещение через бота «Аналитик»
+  (функция `b24_diag_alerts` «Мониторинг Битрикса», ВЫКЛЮЧЕНА; пауза между оповещениями,
+  свежесть снимка, сообщение о снятии тревоги). Тик 5 мин в `instrumentation.ts`.
+- Настройки `b24_diag_settings` с описаниями (пороги load/воркеры/долгие SQL/макс SQL/
+  блокировки/CPU MySQL, уровень и пауза оповещений). API `/api/settings/bitrix-diag` (+`/sync`,
+  `/snapshot`). Экран `/settings/bitrix-diag` (сайдбар → «Мониторинг → Логи Битрикса»): статус
+  синка и ключа, график load1 по снимкам, сводка по дням, таблица снимков, раскрытие — HTTP в
+  работе с секундами, активные по типам, долгие SQL по отпечаткам, InnoDB, top CPU, deadlock.
+- Бэкфил с рабочей машины: 197 снимков (110 критичных, ср. load 58; 87 высоких). Доля запросов
+  Монолитики среди активных — 6,7 %. Ключ на прод положить должен владелец (копирование
+  секрета на сервер заблокировано классификатором) — команда в ответе владельцу.

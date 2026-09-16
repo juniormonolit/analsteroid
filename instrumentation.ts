@@ -65,6 +65,7 @@ export async function register() {
   scheduleScenarios();
   scheduleDiagnostics();
   scheduleHowAreWe();
+  scheduleB24Diag();
 }
 
 // Дайджест «Как дела?» (задача владельца 15.09): несколько выпусков в день по
@@ -113,6 +114,27 @@ function scheduleReportSchedules() {
     } finally { running = false; }
   };
   setInterval(() => { void tick(); }, 60 * 1000);
+}
+
+// Логи сервера Битрикса (lib/b24diag): раз в 5 минут забираем новые файлы из /logs по SFTP,
+// разбираем, при высокой нагрузке — оповещение через «Аналитика» (функция b24_diag_alerts,
+// выключена по умолчанию). Без ключа .secrets/b24_diag_reader тихо пропускает тик.
+function scheduleB24Diag() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { syncB24Diag } = await import('./lib/b24diag/sync');
+      const r = await syncB24Diag({ limit: 40 });
+      if (r.inserted || r.alert) console.log(`[b24diag] новых снимков ${r.inserted} из ${r.listed}${r.alert ? `, ${r.alert}` : ''}, ${r.ms}ms`);
+      if (r.errors.length && !r.errors[0].startsWith('синхронизация выключена') && !r.errors[0].startsWith('нет SSH-ключа')) console.warn('[b24diag]', r.errors.slice(0, 3).join(' | '));
+    } catch (err) {
+      console.error('[b24diag] тик не удался:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setTimeout(() => { void tick(); }, 90 * 1000);
+  setInterval(() => { void tick(); }, 5 * 60 * 1000);
 }
 
 // Движок диагностики (features/diag/engine, ТЗ №1): ежедневно в 06:00 МСК — ряды и диагнозы
