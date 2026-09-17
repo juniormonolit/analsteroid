@@ -7,7 +7,7 @@
 
 import { Fragment, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { DealsTable, type Deal } from '@/features/reports/ui/DrilldownDrawer';
+import type { Deal } from '@/features/reports/ui/DrilldownDrawer';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -26,12 +26,6 @@ import {
   clientBitrixUrl, dealBitrixUrl, clientDisplayName,
   CATEGORY_LABELS, CATEGORY_STYLE, MODIFIER_LABELS,
 } from './shared';
-
-// Колонки блока «Сделки» карточки заказчика: путь сделки по воронке датами.
-const CUSTOMER_DEAL_FIELDS = [
-  'deal_name', 'head_group_name', 'stage_name', 'amount',
-  'created_at', 'reserved_at', 'confirmed_at', 'sold_at', 'delivered_at', 'lost_at',
-];
 
 const DAY_MS = 86_400_000;
 
@@ -465,28 +459,54 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
           )}
 
           {cardTab === 'deals' && (
+            // Правка владельца 17.09: никаких «окошек» — список сделок на всю ширину
+            // вкладки, каждая сделка строкой-карточкой с путём по воронке датами. Без
+            // таблицы и без горизонтального скролла: читается при любой ширине панели.
             <>
-              <Section title={`Все сделки · ${dealsData?.total_count ?? '…'}`} hint="Вся история сделок заказчика с датами движения по воронке; клик по строке открывает карточку сделки">
-                {clientDeals.length === 0 ? <div className="text-[12px] text-[var(--color-text-muted)]">Сделок не найдено.</div> : (
-                  <div className="scroll-x -mx-2">
-                    <DealsTable deals={clientDeals} fields={CUSTOMER_DEAL_FIELDS} onDealOpen={setOpenDealId} />
-                  </div>
-                )}
-              </Section>
-              {!isLoading && (data?.refused.length ?? 0) > 0 && (
-                <Section title={`Отказы · ${data!.refused.length}`} hint="Сделки, закрытые в отказ; отмечено, были ли по ним звонки">
-                  <div className="flex flex-col divide-y divide-[var(--color-border)] text-[12.5px]">
-                    {data!.refused.map(d => (
-                      <div key={d.dealId} className="flex items-center gap-3 py-1.5 flex-wrap">
-                        <span className="w-[76px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtDate(d.lostAt)}</span>
-                        <button onClick={() => setOpenDealId(d.dealId)} className="font-mono text-[var(--color-accent)] hover:underline shrink-0">#{d.dealId}</button>
-                        <span className="min-w-0 flex-1 truncate text-[var(--color-text-muted)]" title={d.name ?? undefined}>{d.name ?? '—'}</span>
-                        <span className="tabular-nums whitespace-nowrap">{d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
-                        {d.hasCall ? <Chip>звонки были</Chip> : <Chip tone="neg" title="По сделке нет ни одного звонка">без звонка</Chip>}
+              <div className="flex items-baseline gap-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                Все сделки <span className="tabular-nums">{dealsData?.total_count ?? '…'}</span>
+                <span className="normal-case tracking-normal font-normal">· клик по номеру открывает карточку сделки</span>
+              </div>
+              {clientDeals.length === 0 ? <div className="text-[12px] text-[var(--color-text-muted)]">Сделок не найдено.</div> : (
+                <div className="flex flex-col gap-1.5">
+                  {[...clientDeals].sort((a, b) => b.created_at.localeCompare(a.created_at)).map(d => {
+                    const amount = Number(d.amount);
+                    const lost = !!d.lost_at; const shipped = !!d.delivered_at; const sold = !!d.sold_at;
+                    const tone = lost ? 'neg' as const : shipped || sold ? 'ok' as const : 'muted' as const;
+                    const steps: { label: string; at: string | null }[] = [
+                      { label: 'создана', at: d.created_at }, { label: 'бронь', at: d.reserved_at }, { label: 'подтв.', at: d.confirmed_at },
+                      { label: 'продана', at: d.sold_at }, { label: 'отгружена', at: d.delivered_at }, { label: 'отказ', at: d.lost_at },
+                    ];
+                    return (
+                      <div key={d.deal_id} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button onClick={() => setOpenDealId(d.deal_id)} className="font-mono text-[13px] font-semibold text-[var(--color-accent)] hover:underline">#{d.deal_id}</button>
+                          <Chip tone={tone}>{d.stage_name ?? '?'}</Chip>
+                          {d.funnel_name && <Chip>{d.funnel_name}</Chip>}
+                          {d.product_group_display && <span className="text-[12px] text-[var(--color-text-muted)] truncate max-w-[260px]" title={d.product_group_display}>{d.product_group_display}</span>}
+                          <span className="ml-auto text-[13.5px] font-bold tabular-nums whitespace-nowrap">{amount > 0 ? fmtMoney(amount) : '—'}</span>
+                        </div>
+                        <div className="mt-0.5 text-[12.5px] text-[var(--color-text)] break-words">{d.deal_name}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-[var(--color-text-muted)]">
+                          {steps.filter(st => st.at).map((st, i, arr) => (
+                            <Fragment key={st.label}>
+                              <span className={st.label === 'отказ' ? 'font-semibold' : ''} style={st.label === 'отказ' ? { color: 'var(--color-negative, #e03131)' } : undefined}>
+                                {st.label} <b className="font-semibold text-[var(--color-text)] tabular-nums">{fmtDate(st.at)}</b>
+                              </span>
+                              {i < arr.length - 1 && <span aria-hidden>→</span>}
+                            </Fragment>
+                          ))}
+                          {d.manager_name && <span className="ml-auto">· {d.manager_name}</span>}
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                </Section>
+                    );
+                  })}
+                </div>
+              )}
+              {!isLoading && (data?.refused.length ?? 0) > 0 && (
+                <div className="mt-2 text-[11px] text-[var(--color-text-muted)]">
+                  Отказов без единого звонка: <b className="text-[var(--color-negative, #e03131)]">{data!.refused.filter(r => !r.hasCall).length}</b> из {data!.refused.length}
+                </div>
               )}
             </>
           )}
