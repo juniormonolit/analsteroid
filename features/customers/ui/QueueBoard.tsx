@@ -136,7 +136,7 @@ function useQueuePages(managerId: string, isSelf: boolean, filter: string, searc
   });
 }
 
-function QueueColumn({ queue, managerId, isSelf, search, category, sort, onOpen, renderActions, single, team, mgr }: {
+function QueueColumn({ queue, managerId, isSelf, search, category, sort, onOpen, renderActions, single, team, mgr, dept }: {
   queue: CustomerQueue | 'archive'; managerId: string; isSelf: boolean; search: string; category: string; sort: string;
   onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; single: boolean; filterKey?: string; team?: boolean; mgr?: string; dept?: string;
 }) {
