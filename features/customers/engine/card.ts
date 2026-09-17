@@ -32,11 +32,26 @@ export interface MarkHistoryItem {
   createdBy: string;
   createdAt: string;         // ISO
 }
+export interface CallItem {
+  calledAt: string;          // ISO
+  direction: string | null;  // inbound / outbound
+  durationSec: number;
+  dealId: number | null;
+  managerId: number | null;
+  result: string | null;
+}
+export interface ExclusionHistoryItem {
+  requestedBy: string; reason: string; status: string; decidedBy: string | null; decisionComment: string | null;
+  createdAt: string; decidedAt: string | null;
+}
 export interface CustomerCardData {
   timeline: TimelineDeal[];          // хронологически, старые сверху
   calls: { total: number; lastAt: string | null; byYear: { year: number; count: number }[] };
+  /** Последние звонки по сделкам клиента (лента «Контакты», 17.09). */
+  callsList: CallItem[];
   refused: RefusedDeal[];
   markHistory: MarkHistoryItem[];
+  exclusions: ExclusionHistoryItem[];
 }
 
 function toIso(v: string | Date | null): string | null {
@@ -58,7 +73,7 @@ WITH cdeals AS (
 export async function fetchCustomerCard(clientKey: string): Promise<CustomerCardData> {
   const db = analyticsDb();
 
-  const [timelineRes, callsRes, byYearRes, refusedRes] = await Promise.all([
+  const [timelineRes, callsRes, byYearRes, refusedRes, callsListRes] = await Promise.all([
     db.query<{ deal_id: number; deal_name: string | null; amount: string | null; sold_at: string | Date; current_manager_id: number | null; grps: string[] | null }>(
       `${CLIENT_DEALS_CTE}
        SELECT d2.deal_id, d2.deal_name, d2.amount::text, d2.sold_at, d2.current_manager_id,
@@ -90,7 +105,22 @@ export async function fetchCustomerCard(clientKey: string): Promise<CustomerCard
        ORDER BY d2.lost_at DESC LIMIT 50`,
       [clientKey],
     ),
+    db.query<{ called_at: string | Date; direction: string | null; duration_seconds: number | null; deal_id: number | null; manager_id: number | null; result: string | null }>(
+      `${CLIENT_DEALS_CTE}
+       SELECT c.called_at, c.direction::text AS direction, c.duration_seconds, c.deal_id, c.manager_id, c.result::text AS result
+       FROM va.calls c WHERE c.deal_id IN (SELECT deal_id FROM cdeals)
+       ORDER BY c.called_at DESC LIMIT 60`,
+      [clientKey],
+    ),
   ]);
+  let exclusions: ExclusionHistoryItem[] = [];
+  try {
+    const ex = await systemDb().query<{ requested_by: string; reason: string; status: string; decided_by: string | null; decision_comment: string | null; created_at: string | Date; decided_at: string | Date | null }>(
+      `SELECT requested_by, reason, status, decided_by, decision_comment, created_at, decided_at
+         FROM customer_exclusion_requests WHERE client_key = $1 ORDER BY created_at DESC LIMIT 20`, [clientKey],
+    );
+    exclusions = ex.rows.map(r => ({ requestedBy: r.requested_by, reason: r.reason, status: r.status, decidedBy: r.decided_by, decisionComment: r.decision_comment, createdAt: toIso(r.created_at)!, decidedAt: toIso(r.decided_at) }));
+  } catch { /* до миграции 213 */ }
 
   // История отметок — системная БД (миграция 128); таблицы может не быть до
   // выкатки миграции — тогда честный пустой список, а не 500 всей карточки.
@@ -137,5 +167,10 @@ export async function fetchCustomerCard(clientKey: string): Promise<CustomerCard
       hasCall: r.has_call,
     })),
     markHistory,
+    callsList: callsListRes.rows.map(r => ({
+      calledAt: toIso(r.called_at)!, direction: r.direction, durationSec: Number(r.duration_seconds ?? 0),
+      dealId: r.deal_id !== null ? Number(r.deal_id) : null, managerId: r.manager_id !== null ? Number(r.manager_id) : null, result: r.result,
+    })),
+    exclusions,
   };
 }

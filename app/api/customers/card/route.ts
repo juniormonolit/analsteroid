@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const sp = req.nextUrl.searchParams;
-  const clientKey = /^[ck]\d+$/.test(sp.get('clientKey') ?? '') ? sp.get('clientKey')! : null;
+  const clientKey = /^[ckx]\d+$/.test(sp.get('clientKey') ?? '') ? sp.get('clientKey')! : null;
   const requested = sp.get('bitrixId');
   const bitrixId = requested && /^\d+$/.test(requested) ? requested : session.bitrixUserId;
   if (!clientKey || !bitrixId) return NextResponse.json({ error: 'Некорректный запрос' }, { status: 400 });

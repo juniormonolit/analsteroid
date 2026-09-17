@@ -28,7 +28,8 @@ import {
   CATEGORY_LABELS, CATEGORY_STYLE, MODIFIER_LABELS,
 } from './shared';
 import type { CustomerCategory, CustomerQueue } from '@/features/customers/engine/customers';
-import { QUEUE_META, WindowCell, ContactModal, ExclusionRequestModal, ExclusionRequestsPanel, RepeatHeaderBlock, queueRowStyle } from './QueueParts';
+import { ExclusionRequestsPanel, RepeatHeaderBlock, ContactModal, ExclusionRequestModal } from './QueueParts';
+import { QueueBoard } from './QueueBoard';
 
 interface ApiResponse {
   total: number;
@@ -46,12 +47,13 @@ interface ApiResponse {
   };
 }
 
-export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'never' | 'sleeping' | 'refused';
+export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
   { key: 'window', label: '🔥 Окно открыто' },
   { key: 'missed', label: 'Окно упущено' },
   { key: 'faded', label: 'Затихли' },
+  { key: 'rest', label: 'Остальные' },
   { key: 'active', label: 'С активными' },
   { key: 'inactive', label: 'Без активных' },
   { key: 'never', label: 'Ещё не купили' },
@@ -460,6 +462,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
       await qc.invalidateQueries({ queryKey: ['customers'] });
       void qc.invalidateQueries({ queryKey: ['customers-team'] });
       void qc.invalidateQueries({ queryKey: ['customer-card'] });
+      void qc.invalidateQueries({ queryKey: ['customer-by-key'] });
     } finally { setMarkBusy(false); }
   };
   const cycleSort = (key: string) => {
@@ -472,12 +475,14 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const { data, isLoading, isError } = useCustomers(managerId, isSelf, filter, search, page, sort, category);
+  // Счётчики пилюль и категорий — лёгкий запрос первой страницы (данные доски — в QueueBoard).
+  const { data } = useCustomers(managerId, isSelf, filter, search, 1, null, category);
   const rows = data?.rows ?? [];
-  const totalPages = useMemo(() => Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE)), [data?.total]);
 
-  // Карточка открыта — держим строку свежей после мутаций (список перезапросился).
-  const cardRowLive = cardRow ? (rows.find(r => r.clientKey === cardRow.clientKey) ?? cardRow) : null;
+  // Карточка открыта — держим строку свежей после мутаций: доска грузит очереди
+  // независимо, поэтому строку перечитываем по ключу (тот же деп-линк роут).
+  const liveQuery = useCustomerByKey(managerId, isSelf, cardRow?.clientKey ?? null);
+  const cardRowLive = cardRow ? (liveQuery.data?.row ?? cardRow) : null;
 
   const Th = ({ k, label, right = false }: { k?: string; label: string; right?: boolean }) => (
     <th className={`px-2.5 py-1.5 font-bold whitespace-nowrap ${right ? 'text-right' : 'text-left'}`}>
@@ -515,7 +520,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
                 <span className="ml-1 opacity-70 tabular-nums">
                   {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue
                     : f.key === 'window' ? (data.counts.queues?.window ?? 0) : f.key === 'missed' ? (data.counts.queues?.missed ?? 0)
-                    : f.key === 'faded' ? (data.counts.queues?.faded ?? 0)
+                    : f.key === 'faded' ? (data.counts.queues?.faded ?? 0) : f.key === 'rest' ? (data.counts.queues?.rest ?? 0)
                     : f.key === 'active' ? data.counts.active : f.key === 'inactive' ? data.counts.inactive
                     : f.key === 'never' ? data.counts.sections.never
                     : f.key === 'sleeping' ? data.counts.sleeping : data.counts.refused}
@@ -536,6 +541,17 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
           <option value="regular">Постоянные{data?.counts.byCategory ? ` (${data.counts.byCategory.regular})` : ''}</option>
           <option value="once">Разовые{data?.counts.byCategory ? ` (${data.counts.byCategory.once})` : ''}</option>
           <option value="potential">Потенциальные{data?.counts.byCategory ? ` (${data.counts.byCategory.potential})` : ''}</option>
+        </select>
+        <select value={sort ? `${sort.key}:${sort.dir}` : ''} onChange={e => { const v = e.target.value; setSort(v ? { key: v.split(':')[0], dir: v.split(':')[1] as 'asc' | 'desc' } : null); }}
+          title="Порядок карточек внутри очереди"
+          className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
+          <option value="">По срочности</option>
+          <option value="sumSold:desc">Куплено на ↓</option>
+          <option value="lastSoldAt:desc">Последняя покупка ↓</option>
+          <option value="lastSoldAt:asc">Последняя покупка ↑</option>
+          <option value="dealsSold:desc">Покупок ↓</option>
+          <option value="lastCallAt:asc">Давно не звонили</option>
+          <option value="activeCount:desc">Активных сделок ↓</option>
         </select>
         <LegendPopover />
       </div>
@@ -561,135 +577,11 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
         </div>
       )}
 
-      {isError ? (
-        <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить список заказчиков.</div>
-      ) : isLoading && rows.length === 0 ? (
-        <div className="text-sm text-[var(--color-text-muted)]">Считаем заказчиков… (первое открытие может занять до минуты)</div>
-      ) : rows.length === 0 ? (
-        <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-          <NoData what="заказчиков" hint="Либо фильтры слишком узкие, либо у этой роли нет своих клиентов — например, у маркетинга или логистики." />
-        </div>
-      ) : (
-        <div className="overflow-x-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-          <table className="w-full text-[12.5px]">
-            <thead>
-              <tr className="text-left text-[10.5px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-                <Th label="Клиент" />
-                <Th k="category" label="Категория" />
-                <Th label="Окно" />
-                <Th label="Сигнал" />
-                <Th k="dealsSold" label="Сд/прод" right />
-                <Th k="sumSold" label="Куплено на" right />
-                <Th k="lastSoldAt" label="Последняя покупка" />
-                <Th k="activeCount" label="Активные" />
-                <Th label="Предложить" />
-                <Th k="lastCallAt" label="Звонок" />
-                <Th k="lastActivityAt" label="Актив-ть" />
-                <Th label="" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, idx) => {
-                const showHeader = queueView
-                  ? (idx === 0 || rows[idx - 1].queue.queue !== r.queue.queue)
-                  : (idx === 0 || rows[idx - 1].section !== r.section);
-                const qmeta = QUEUE_META[r.queue.queue as CustomerQueue];
-                const qCount = data?.counts.queues?.[r.queue.queue as CustomerQueue] ?? null;
-                const secCounts = MAIN_FILTERS.includes(filter) ? data?.counts.sections : undefined;
-                const secCount = secCounts
-                  ? (r.section === 'regular' ? secCounts.regular : r.section === 'once' ? secCounts.once : secCounts.never)
-                  : null;
-                return (
-                  <Fragment key={r.clientKey}>
-                    {showHeader && queueView && (
-                      // Очередь по окну повторной продажи (17.09) — строка-разделитель с подсказкой.
-                      <tr className="border-t border-[var(--color-border)]">
-                        <td colSpan={12} className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-bold uppercase tracking-wider"
-                          style={{ color: r.queue.queue === 'window' ? 'var(--color-negative, #e03131)' : r.queue.queue === 'missed' ? 'var(--color-warning, #d9840c)' : r.queue.queue === 'faded' ? 'var(--color-accent)' : 'var(--color-text-muted)' }}
-                          title={qmeta.hint}>
-                          {qmeta.label}
-                          {qCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{qCount}</span>}
-                          {r.queue.queue === 'window' && (data?.counts.queues?.autoLostNoCall ?? 0) > 0 && (
-                            <span className="ml-2 normal-case font-semibold" title="Заказчики в очередях, у которых авто-сделку повторки закрыли в отказ без звонка">
-                              · сделку закрыли без звонка: {data!.counts.queues!.autoLostNoCall}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                    {showHeader && !queueView && (
-                      // Секция — тонкая строка-разделитель (редизайн 01.08), не серый блок.
-                      <tr className="border-t border-[var(--color-border)]">
-                        <td colSpan={12} className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]"
-                          title={SECTION_HINTS[r.section]}>
-                          {SECTION_LABELS[r.section]}
-                          {secCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{secCount}</span>}
-                          {r.section === 'regular' && secCounts !== undefined && (secCounts?.regularAtRisk ?? 0) > 0 && (
-                            <span className="ml-2 normal-case font-semibold" style={{ color: 'var(--color-negative, #e03131)' }}
-                              title="Постоянники без активных сделок, молчащие дольше двух своих циклов повторки">
-                              ⚠ {secCounts!.regularAtRisk}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    )}
-                    <tr className="border-t border-[var(--color-border)] align-middle hover:bg-[var(--color-bg-hover)]/50"
-                      style={queueView ? queueRowStyle(r.queue.queue as CustomerQueue) : (r.atRisk ? { backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 4%, transparent)' } : undefined)}>
-                      <td className="px-2.5 py-1">
-                        <div className="flex items-center gap-1.5 min-w-0 max-w-[300px]">
-                          <button type="button" onClick={() => setCardRow(r)}
-                            title={`${clientDisplayName(r)} — открыть карточку клиента`}
-                            className="min-w-0 truncate text-left font-semibold text-[var(--color-text)] hover:text-[var(--color-accent)] hover:underline">
-                            {clientDisplayName(r)}
-                          </button>
-                          <StatusChips r={r} />
-                        </div>
-                      </td>
-                      <td className="px-2.5 py-1"><CategoryCell r={r} /></td>
-                      <td className="px-2.5 py-1"><WindowCell r={r} windowDays={data?.thresholds.windowDays ?? 22} /></td>
-                      <td className="px-2.5 py-1"><SignalCell r={r} noCallDays={data?.thresholds.activeNoCallDays ?? 7} /></td>
-                      <td className="px-2.5 py-1 text-right tabular-nums whitespace-nowrap">{r.dealsTotal}/<b>{r.dealsSold}</b></td>
-                      <td className="px-2.5 py-1 text-right font-semibold tabular-nums whitespace-nowrap">{r.sumSold > 0 ? fmtMoney(r.sumSold) : '—'}</td>
-                      <td className="px-2.5 py-1">
-                        {/* Одной строкой: дата · группа · сумма (редизайн 01.08) */}
-                        {r.lastSoldAt ? (
-                          <div className="flex items-center gap-1 whitespace-nowrap max-w-[240px]"
-                            title={`${daysAgo(r.lastSoldAt)}${r.lastSoldGroups.length ? ` · ${r.lastSoldGroups.join(', ')}` : ''}`}>
-                            <span className="tabular-nums">{fmtDate(r.lastSoldAt)}</span>
-                            {r.lastSoldGroups.length > 0 && (
-                              <span className="min-w-0 truncate text-[11px] text-[var(--color-text-muted)]">· {r.lastSoldGroups.join(', ')}</span>
-                            )}
-                            {r.lastSoldAmount !== null && r.lastSoldAmount > 0 && (
-                              <span className="shrink-0 text-[11px] font-semibold">· {fmtMoney(r.lastSoldAmount)}</span>
-                            )}
-                          </div>
-                        ) : <span className="text-xs text-[var(--color-text-muted)]">—</span>}
-                      </td>
-                      <td className="px-2.5 py-1"><ActiveDealsCell deals={r.activeDeals} /></td>
-                      <td className="px-2.5 py-1"><RecommendCell rec={r.recommend} /></td>
-                      <td className="px-2.5 py-1 whitespace-nowrap text-xs" title={fmtDate(r.lastCallAt)}>{daysAgo(r.lastCallAt)}</td>
-                      <td className="px-2.5 py-1 whitespace-nowrap text-xs text-[var(--color-text-muted)]" title={fmtDate(r.lastActivityAt)}>{daysAgo(r.lastActivityAt)}</td>
-                      <td className="px-1.5 py-1 text-right">
-                        <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} managerId={managerId} isSelf={isSelf} />
-                      </td>
-                    </tr>
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {totalPages > 1 && (
-        <div className="flex items-center gap-2 text-xs">
-          <button type="button" disabled={page <= 1} onClick={() => setPage(p => p - 1)}
-            className="rounded-lg border border-[var(--color-border)] px-3 py-1 font-semibold disabled:opacity-40 hover:bg-[var(--color-bg-hover)]">←</button>
-          <span className="tabular-nums text-[var(--color-text-muted)]">стр. {page} из {totalPages} · {data?.total ?? 0} клиентов</span>
-          <button type="button" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}
-            className="rounded-lg border border-[var(--color-border)] px-3 py-1 font-semibold disabled:opacity-40 hover:bg-[var(--color-bg-hover)]">→</button>
-        </div>
-      )}
+      {/* Доска карточек по очередям (правка владельца 17.09) вместо таблицы. */}
+      <QueueBoard managerId={managerId} isSelf={isSelf} filter={filter} search={search} category={category}
+        sort={sort ? `${sort.key}:${sort.dir}` : ''}
+        onOpen={r => setCardRow(r)}
+        renderActions={r => <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} managerId={managerId} isSelf={isSelf} />} />
 
       {cardRowLive && (
         <CustomerCard

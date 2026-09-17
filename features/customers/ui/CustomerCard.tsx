@@ -12,12 +12,15 @@ import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import dynamic from 'next/dynamic';
-import { X, ExternalLink } from 'lucide-react';
+import { X, ExternalLink, Phone, MessageCircle, Ban, Pause, RotateCcw, ShieldAlert } from 'lucide-react';
 
 // DealCard — динамически: карточки ссылаются друг на друга (сделка → заказчик →
 // сделка, задача 17.08), статический импорт в обе стороны дал бы цикл модулей.
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 import type { CustomerCardData } from '@/features/customers/engine/card';
+import type { CustomerContact } from '@/features/customers/engine/contactTypes';
+import { CONTACT_CHANNEL_LABELS } from '@/features/customers/engine/contactTypes';
+import { windowLine } from './QueueBoard';
 import {
   type ApiRow, REASON_LABELS, fmtMoney, fmtDate, daysAgo,
   clientBitrixUrl, dealBitrixUrl, clientDisplayName,
@@ -101,10 +104,10 @@ function JourneyTab({ purchases, loading, recommend, onDealOpen }: {
   onDealOpen: (id: number) => void;
 }) {
   if (loading) {
-    return <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 text-sm text-[var(--color-text-muted)]">Собираем путь клиента…</div>;
+    return <div className="text-sm text-[var(--color-text-muted)]">Собираем путь клиента…</div>;
   }
   if (purchases.length === 0) {
-    return <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 text-sm text-[var(--color-text-muted)]">Отгрузок ещё не было — путь начнётся с первой покупки.</div>;
+    return <div className="text-sm text-[var(--color-text-muted)]">Отгрузок ещё не было — путь начнётся с первой покупки.</div>;
   }
 
   const first = purchases[0];
@@ -119,7 +122,7 @@ function JourneyTab({ purchases, loading, recommend, onDealOpen }: {
   const churnPct = freqDays && freqDays > 0 ? Math.round((daysSince / freqDays) * 100) : null;
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       {/* Вход: с чего зашёл (КЦ первой сделки) против фактически проданного. */}
       <Section title="Как зашёл" hint="Категория КЦ первой сделки — то, по чему клиент пришёл; группы по позициям — что реально продали">
         <div className="text-[12.5px] flex flex-col gap-0.5">
@@ -220,24 +223,20 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
   managerId: string;
   isSelf: boolean;
   onClose: () => void;
-  /** Кнопки «Отложить»/«Не звонить»/«Вернуть» — те же контролы, что в списке. */
+  /** Кнопки «Связался»/«Отложить»/«Исключить»/«Вернуть» — те же контролы, что в списке. */
   markControls: React.ReactNode;
   /** Поверх чего открылись: из карточки сделки (z-70) нужен z выше её дефолтных 50. */
   zIndex?: number;
 }) {
   const portal = usePortalToBody();
   const [openDealId, setOpenDealId] = useState<number | null>(null);
-  // Вкладки карточки (задача владельца 17.08): «Обзор» — всё, что было; «Путь
-  // клиента» — цепочка покупок по товарным группам («дерево развития»): вход по КЦ
-  // против фактически проданного, каждая покупка со ВСЕМИ группами и суммами по
-  // ним, интервалы между покупками, в конце — вилка вероятностей следующей покупки
-  // (та же матрица переходов, что «Что предложить») и клиентские показатели.
-  const [cardTab, setCardTab] = useState<'overview' | 'journey'>('overview');
+  // Вкладки по смыслу (правка владельца 17.09: «раздели всю инфу по смыслу на табы,
+  // чтобы сделки не скроллились в щёлке»): Обзор — что делать сейчас; Сделки —
+  // вся история сделок целиком; Покупки — путь клиента по товарным группам;
+  // Контакты — звонки, ручные отметки «Связался», отметки и запросы РОПу одной лентой.
+  type CardTab = 'overview' | 'deals' | 'journey' | 'contacts';
+  const [cardTab, setCardTab] = useState<CardTab>('overview');
 
-  // «Сделки» клиента (задача 17.08: из карточки заказчика — в карточку сделки).
-  // Окно широкое (вся история): раздел про навигацию, не про период отчёта.
-  // Юрлицо (clientKey k<id>) фильтруется по company_id, остальное — по contact_id
-  // (ключ x<id> — юр.сделка без карточки компании, клиент определён по контакту).
   const dealsQs = new URLSearchParams({
     from: '2015-01-01T00:00:00.000Z',
     to: new Date().toISOString(),
@@ -247,26 +246,21 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
   const { data: dealsData } = useQuery<{ deals: Deal[]; total_count: number }>({
     queryKey: ['customer-deals', row.clientKey],
     queryFn: () => fetch(`/api/reports/deals?${dealsQs}`).then(r => r.json()),
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
+    staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
   });
   const clientDeals = dealsData?.deals ?? [];
 
-  // «Путь клиента» — лениво, только при открытии вкладки (разбор jsonb-позиций
-  // всех отгрузок клиента; в «Обзоре» он не нужен).
   interface JourneyPurchase {
     dealId: number; dealName: string | null; amount: number; deliveredAt: string;
     headGroup: string | null; kcCategory: string | null;
     groups: { name: string | null; sum: number }[];
   }
-  const journeyQs = row.clientKey.startsWith('k')
-    ? `companyId=${row.clientId}` : `contactId=${row.clientId}`;
+  const journeyQs = row.clientKey.startsWith('k') ? `companyId=${row.clientId}` : `contactId=${row.clientId}`;
   const { data: journey, isLoading: journeyLoading } = useQuery<{ purchases: JourneyPurchase[] }>({
     queryKey: ['customer-journey', row.clientKey],
     enabled: cardTab === 'journey',
     queryFn: () => fetch(`/api/customers/journey?${journeyQs}`).then(r => r.json()),
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
+    staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
   });
   const { data, isLoading, isError } = useQuery<CustomerCardData>({
     queryKey: ['customer-card', row.clientKey, isSelf ? 'me' : managerId],
@@ -277,320 +271,268 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
-    staleTime: 5 * 60 * 1000,
-    refetchOnWindowFocus: false,
+    staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
+  });
+  const { data: contactsData } = useQuery<{ items: CustomerContact[] }>({
+    queryKey: ['customer-contacts', row.clientKey],
+    queryFn: () => fetch(`/api/customers/contact?clientKey=${row.clientKey}`).then(r => r.json()),
+    staleTime: 60_000, refetchOnWindowFocus: false,
   });
 
-  const status = row.mark?.kind === 'no_call' ? { label: '🚫 отказался', tone: 'neg' as const }
+  const status = row.mark?.kind === 'no_call' ? { label: '🚫 исключён', tone: 'neg' as const }
     : row.bucket === 'sleeping' ? { label: '💤 спящий', tone: 'muted' as const }
     : row.section === 'regular' ? { label: row.atRisk ? '⚠ постоянник под угрозой' : '★ постоянник', tone: row.atRisk ? 'neg' as const : 'ok' as const }
     : row.section === 'once' ? { label: 'купил один раз', tone: 'muted' as const }
     : { label: 'ещё не купил', tone: 'muted' as const };
 
   const avgCheck = row.dealsSold > 0 ? Math.round(row.sumSold / row.dealsSold) : null;
-  const currentManager = row.managerHistory.find(m => String(m.managerId) === managerId)
-    ?? row.managerHistory[0] ?? null;
-
-  // Интервалы между покупками — по таймлайну (видно ритм клиента).
+  const currentManager = row.managerHistory.find(m => String(m.managerId) === managerId) ?? row.managerHistory[0] ?? null;
+  const w = windowLine(row);
   const timeline = data?.timeline ?? [];
-  const gaps: (number | null)[] = timeline.map((d, i) =>
-    i === 0 ? null : Math.round((new Date(d.soldAt).getTime() - new Date(timeline[i - 1].soldAt).getTime()) / DAY_MS));
 
-  // Портал в <body> (правка владельца 10.09, та же причина, что у DealCard):
-  // карточка открывается и из модалов (разбор метрики, матрица переходов), а у
-  // Radix Dialog.Content есть transform/backdrop-filter — fixed-потомок считался
-  // бы от окна модала и сжимался в него вместо полного экрана.
+  // «Следующий шаг» — одна человеческая фраза из очереди и рекомендации.
+  const rec = row.recommend?.items?.[0] ?? null;
+  const nextStep = (() => {
+    const offer = rec ? ` Предложить: ${rec.group} (${rec.pct} % берут после такого заказа).` : '';
+    switch (row.queue.queue) {
+      case 'window': return `Позвонить ${row.queue.daysLeft !== null && row.queue.daysLeft < 1 ? 'сегодня' : `в ближайшие ${Math.ceil(row.queue.daysLeft ?? 0)} дн.`} — окно повторной продажи ещё открыто, звонка после отгрузки не было.${offer}`;
+      case 'missed': return `Окно упущено, но заказчик не потерян: позвонить, узнать, как зашёл материал, и что дальше по объекту.${offer}`;
+      case 'faded': return `Постоянник перестал покупать: связь была, покупок нет. Выяснить, что изменилось — ушёл к конкуренту, объект закончился, недовольство.${offer}`;
+      default: return row.activeCount > 0 ? 'Есть активные сделки — двигать их; новых звонков по повторке не требуется.' : `Контакт после отгрузки был.${offer}`;
+    }
+  })();
+
+  // Лента контактов: звонки + ручные отметки + отметки списка + запросы РОПу.
+  type FeedItem = { at: string; icon: React.ReactNode; text: React.ReactNode; by?: string | null; tone?: 'neg' | 'ok' | 'muted' };
+  const feed: FeedItem[] = [];
+  for (const c of data?.callsList ?? []) {
+    const good = c.durationSec > 20;
+    feed.push({
+      at: c.calledAt, icon: <Phone size={12} />, tone: good ? 'ok' : 'muted',
+      text: <>{c.direction === 'inbound' ? 'Входящий' : 'Исходящий'} звонок · {c.durationSec > 0 ? `${Math.floor(c.durationSec / 60)}:${String(c.durationSec % 60).padStart(2, '0')}` : 'без ответа'}{c.dealId ? <> · <button onClick={() => setOpenDealId(c.dealId!)} className="text-[var(--color-accent)] hover:underline">#{c.dealId}</button></> : null}{good ? '' : ' · не засчитан как успешный (< 20 с)'}</>,
+    });
+  }
+  for (const c of contactsData?.items ?? []) {
+    feed.push({ at: c.contactedAt, icon: <MessageCircle size={12} />, tone: 'ok', by: c.createdBy, text: <>Связался · {CONTACT_CHANNEL_LABELS[c.channel]} — «{c.note}»</> });
+  }
+  for (const h of data?.markHistory ?? []) {
+    feed.push({
+      at: h.createdAt, by: h.createdBy, tone: h.action === 'no_call' ? 'neg' : 'muted',
+      icon: h.action === 'snooze' ? <Pause size={12} /> : h.action === 'no_call' ? <Ban size={12} /> : <RotateCcw size={12} />,
+      text: <>{ACTION_LABELS[h.action] ?? h.action}{h.action === 'snooze' && h.snoozeUntil ? ` до ${fmtDate(h.snoozeUntil)}` : ''}{h.reason ? ` · ${REASON_LABELS[h.reason]}` : ''}{h.comment ? ` · «${h.comment}»` : ''}</>,
+    });
+  }
+  for (const e of data?.exclusions ?? []) {
+    feed.push({
+      at: e.createdAt, by: e.requestedBy, tone: e.status === 'approved' ? 'neg' : 'muted', icon: <ShieldAlert size={12} />,
+      text: <>Запрос на исключение — «{e.reason}» · {e.status === 'pending' ? 'ждёт РОПа' : e.status === 'approved' ? `исключён (${e.decidedBy})` : `оставлен в работе (${e.decidedBy})`}{e.decisionComment ? ` · «${e.decisionComment}»` : ''}</>,
+    });
+  }
+  feed.sort((a, b) => b.at.localeCompare(a.at));
+
+  const TABS: { key: CardTab; label: string }[] = [
+    { key: 'overview', label: 'Обзор' },
+    { key: 'deals', label: `Сделки${dealsData ? ` · ${dealsData.total_count}` : ''}` },
+    { key: 'journey', label: `Покупки${row.dealsDelivered ? ` · ${row.dealsDelivered}` : ''}` },
+    { key: 'contacts', label: `Контакты${data ? ` · ${feed.length}` : ''}` },
+  ];
+
   return portal(
     <div className="fixed inset-0 z-50 flex" style={zIndex ? { zIndex } : undefined}>
       <div className="hidden sm:block flex-1 min-w-[10%] bg-black/40 cursor-pointer" onClick={onClose} />
-      {/* 920px вместо прежних 720 (правка владельца 17.08 «очень зажата по
-          ширине»): в «Сделках» длинные названия + стадия + группа не умещались. */}
       <div className="w-full sm:w-[1240px] sm:max-w-[96vw] shrink-0 bg-[var(--color-bg)] flex flex-col shadow-2xl overflow-hidden">
-        {/* Шапка — полиш 01.08 (правка владельца через Серёгу): имя+статусные чипы в
-            ОДНУ строку в логичном порядке (тип → категория → модификаторы →
-            статус → Битрикс), менеджер отдельной строкой, метрики покупок —
-            сеткой плашек вместо строки-простыни. */}
-        <div className="px-4 sm:px-6 py-3 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
+        {/* Шапка: имя и статусы, менеджер, действия. */}
+        <div className="px-4 sm:px-6 pt-3 pb-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] shrink-0">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <h2 className="text-base font-bold text-[var(--color-text)] truncate max-w-[320px]" title={clientDisplayName(row)}>
-                  {clientDisplayName(row)}
-                </h2>
-                <Chip title={row.clientKey.startsWith('x')
-                  ? 'Юр.сделка без карточки компании в CRM — клиент определён по контакту-представителю (задача 2776, фикс «k0»)'
-                  : undefined}>{row.clientType === 'contact' ? 'физ' : 'юр'}</Chip>
+                <h2 className="text-lg font-bold text-[var(--color-text)] truncate max-w-[420px]" title={clientDisplayName(row)}>{clientDisplayName(row)}</h2>
+                <Chip title={row.clientKey.startsWith('x') ? 'Юр.сделка без карточки компании в CRM — клиент определён по контакту-представителю' : undefined}>{row.clientType === 'contact' ? 'физ' : 'юр'}</Chip>
                 {row.category && row.category !== 'none' && (
                   <span className="inline-flex items-center rounded px-2 py-0.5 text-[12px] font-bold"
                     style={{ color: CATEGORY_STYLE[row.category].color, backgroundColor: CATEGORY_STYLE[row.category].bg }}
-                    title={`Отгрузок ${row.dealsDelivered} на ${fmtMoney(row.sumDelivered)}, разных групп: ${row.distinctGroups}. Пороги — Настройки → Категории клиентов`}>
+                    title={`Отгрузок ${row.dealsDelivered} на ${fmtMoney(row.sumDelivered)}, разных групп: ${row.distinctGroups}`}>
                     {row.category === 'key' && '🔑 '}{CATEGORY_LABELS[row.category]}
                   </span>
                 )}
-                {(row.modifiers ?? []).map(mod => (
-                  <Chip key={mod} title={MODIFIER_LABELS[mod].hint}>{MODIFIER_LABELS[mod].icon} {MODIFIER_LABELS[mod].label}</Chip>
-                ))}
+                {(row.modifiers ?? []).map(mod => <Chip key={mod} title={MODIFIER_LABELS[mod].hint}>{MODIFIER_LABELS[mod].icon} {MODIFIER_LABELS[mod].label}</Chip>)}
                 <Chip tone={status.tone}>{status.label}</Chip>
-                {row.snoozedActive && row.mark && (
-                  <Chip title={`Отметил(а): ${row.mark.createdBy}, ${fmtDate(row.mark.createdAt)}`}>⏸ до {fmtDate(row.mark.snoozeUntil)}</Chip>
-                )}
-                {row.refusedNoCall && <Chip tone="neg" title="У клиента есть сделка, закрытая в отказ без единого звонка">🚫 отказ без звонка</Chip>}
-                <a href={clientBitrixUrl(row)} target="_blank" rel="noreferrer"
-                  className="ml-auto inline-flex items-center gap-1 text-[12px] font-semibold text-[var(--color-accent)] hover:underline whitespace-nowrap">
+                {row.pendingExclusion && <Chip title={`«${row.pendingExclusion.reason}» — ${row.pendingExclusion.requestedBy}`}>⏳ ждёт РОПа</Chip>}
+                {row.snoozedActive && row.mark && <Chip title={`Отметил(а): ${row.mark.createdBy}, ${fmtDate(row.mark.createdAt)}`}>⏸ до {fmtDate(row.mark.snoozeUntil)}</Chip>}
+                <a href={clientBitrixUrl(row)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[12px] font-semibold text-[var(--color-accent)] hover:underline whitespace-nowrap">
                   <ExternalLink size={12} /> Битрикс
                 </a>
               </div>
-              <div className="mt-1 text-[12px] text-[var(--color-text-muted)] truncate">
+              <div className="mt-0.5 text-[12px] text-[var(--color-text-muted)] truncate">
                 Менеджер: <b className="text-[var(--color-text)]">{currentManager?.name ?? `#${managerId}`}</b>
-                {row.prevManagerNames.length > 0 && (
-                  <span title={`Ранее вёл(а): ${row.prevManagerNames.join(', ')}`}> · ранее: {row.prevManagerNames.join(', ')}</span>
-                )}
-              </div>
-              <div className="mt-2 grid grid-cols-2 sm:grid-cols-5 gap-1.5">
-                <StatTile label="Покупок" value={`${row.dealsSold} из ${row.dealsTotal}`} />
-                <StatTile label="Сумма покупок" value={row.sumSold > 0 ? fmtMoney(row.sumSold) : '—'} />
-                <StatTile label="Средний чек" value={avgCheck !== null && avgCheck > 0 ? fmtMoney(avgCheck) : '—'} />
-                <StatTile label="Цикл повторки" value={`${row.cycleDays} дн.`}
-                  hint={row.cycleSource === 'own' ? 'Медиана интервалов между его покупками' : 'По базе — своих покупок у клиента мало, взята медиана по всей базе (16 дн.)'} />
-                <StatTile label="Отгружено" value={row.dealsDelivered > 0 ? `${row.dealsDelivered} / ${fmtMoney(row.sumDelivered)}` : '—'}
-                  hint="Отгрузки (delivered) — база категорий «Ключевой»/«Крупный»" />
+                {row.prevManagerNames.length > 0 && <span title={`Ранее вёл(а): ${row.prevManagerNames.join(', ')}`}> · ранее: {row.prevManagerNames.join(', ')}</span>}
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {markControls}
-              <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]" title="Закрыть">
-                <X size={16} />
-              </button>
+              <button onClick={onClose} className="tap-target w-7 h-7 flex items-center justify-center rounded-lg hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]" title="Закрыть"><X size={16} /></button>
             </div>
+          </div>
+          {/* Вкладки */}
+          <div className="mt-2 flex gap-1 -mb-2 overflow-x-auto scrollbar-none">
+            {TABS.map(t => (
+              <button key={t.key} onClick={() => setCardTab(t.key)}
+                className={`min-h-11 sm:min-h-0 px-3 py-1.5 text-[13px] border-b-2 whitespace-nowrap transition-colors ${cardTab === t.key ? 'border-[var(--color-accent)] text-[var(--color-accent)] font-semibold' : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+                {t.label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Вкладки: Обзор / Путь клиента (задача 17.08) */}
-        <div className="shrink-0 flex gap-1 px-4 sm:px-6 pt-2 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-          {([['overview', 'Обзор'], ['journey', 'Путь клиента']] as const).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setCardTab(key)}
-              className={`px-3 py-1.5 text-[13px] border-b-2 -mb-px transition-colors ${
-                cardTab === key
-                  ? 'border-[var(--color-accent)] text-[var(--color-accent)] font-semibold'
-                  : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {cardTab === 'journey' && (
-          <JourneyTab
-            purchases={journey?.purchases ?? []}
-            loading={journeyLoading}
-            recommend={row.recommend}
-            onDealOpen={setOpenDealId}
-          />
-        )}
-
-        {/* Тело */}
-        {cardTab === 'overview' && (
-        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 flex flex-col gap-5">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 sm:px-6 py-4 flex flex-col gap-4">
           {isError && <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить карточку клиента.</div>}
 
-          {/* Активные сделки — из строки списка. Пустая секция целиком не рендерим
-              (правка владельца 01.08) — сводится в одну строку ниже вместе с
-              «Отказов не было», если и то, и другое пусто. */}
-          {row.activeDeals.length > 0 && (
-            <Section title={`Активные сделки · ${row.activeDeals.length}`}>
-              <div className="scroll-x">
-              <table className="w-full text-[12.5px]">
-                <tbody>
-                  {row.activeDeals.map(d => {
-                    const daysInWork = Math.floor((Date.now() - new Date(d.createdAt).getTime()) / DAY_MS);
-                    return (
-                      <tr key={d.dealId} className="border-t border-[var(--color-border)] first:border-t-0">
-                        <td className="py-1 pr-3 whitespace-nowrap">
-                          <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline font-semibold">#{d.dealId}</a>
-                        </td>
-                        <td className="py-1 pr-3 max-w-[200px] truncate text-[var(--color-text-muted)]" title={d.name ?? undefined}>{d.name ?? '—'}</td>
-                        <td className="py-1 pr-3 whitespace-nowrap">{d.stage ?? '?'}</td>
-                        <td className="py-1 pr-3 text-right tabular-nums whitespace-nowrap">{d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}</td>
-                        <td className="py-1 pr-3 text-right tabular-nums whitespace-nowrap text-[var(--color-text-muted)]">{daysInWork} дн. в работе</td>
-                        <td className="py-1 text-right tabular-nums whitespace-nowrap font-semibold"
-                          style={d.daysSilent > 7 ? { color: 'var(--color-negative, #e03131)' } : { color: 'var(--color-text-muted)' }}>
-                          🔇 {Math.floor(d.daysSilent)} дн. без звонка
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          {cardTab === 'overview' && (
+            <>
+              {/* Окно повторной продажи — главный сигнал, крупно. */}
+              <div className="rounded-xl border px-4 py-3" style={{ borderColor: w.color, backgroundColor: `color-mix(in srgb, ${w.color} 6%, transparent)` }}>
+                <div className="text-[15px] font-bold" style={{ color: w.color }}>{w.text}</div>
+                {w.sub && <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">{w.sub}</div>}
+                {row.autoRepeatLostNoCall && row.queue.queue !== 'rest' && (
+                  <div className="text-[12px] font-semibold mt-0.5" style={{ color: 'var(--color-negative, #e03131)' }}>⚠ Авто-сделка повторки после этой отгрузки закрыта в отказ без успешного звонка</div>
+                )}
+                <div className="mt-2 text-[13px] text-[var(--color-text)]"><b>Следующий шаг:</b> {nextStep}</div>
               </div>
-            </Section>
-          )}
 
-          {/* Таймлайн покупок — сведён в строку-таблицу (дата · #сделка · группа ·
-              сумма), интервал между покупками — компактная серая метка МЕЖДУ
-              строками таблицы (не отдельная болтающаяся строка-текст). */}
-          <Section title={`Покупки · ${timeline.length}`} hint="Все проданные сделки клиента хронологически; между покупками — интервал в днях">
-            {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div>
-              : timeline.length === 0 ? <div className="text-[12px] text-[var(--color-text-muted)]">Покупок ещё не было.</div> : (
-              <div className="scroll-x">
-              <table className="w-full text-[12.5px]">
-                <tbody>
-                  {timeline.map((d, i) => (
-                    <Fragment key={d.dealId}>
-                      {gaps[i] !== null && (
-                        <tr>
-                          <td colSpan={4} className="pt-0.5 pb-1">
-                            <span className="inline-flex items-center rounded bg-[var(--color-bg-hover)] px-1.5 py-px text-[10px] font-semibold text-[var(--color-text-muted)]">
-                              ↓ {gaps[i]} дн.
-                            </span>
-                          </td>
-                        </tr>
-                      )}
-                      <tr className={i > 0 && gaps[i] === null ? 'border-t border-[var(--color-border)]' : ''}>
-                        <td className="py-1 pr-3 w-[76px] whitespace-nowrap tabular-nums text-[var(--color-text-muted)]">{fmtDate(d.soldAt)}</td>
-                        <td className="py-1 pr-3 whitespace-nowrap">
-                          <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline">#{d.dealId}</a>
-                        </td>
-                        <td className="py-1 pr-3 truncate" title={[...d.groups, d.name ?? ''].filter(Boolean).join(' · ')}>
-                          {d.groups.length > 0 ? d.groups.join(', ') : (d.name ?? 'без товарных групп')}
-                        </td>
-                        <td className="py-1 text-right font-semibold tabular-nums whitespace-nowrap">
-                          {d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}
-                        </td>
-                      </tr>
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
+                <StatTile label="Покупок" value={`${row.dealsSold} из ${row.dealsTotal}`} sub="проданных / всех сделок" />
+                <StatTile label="LTV (отгружено)" value={row.sumDelivered > 0 ? fmtMoney(row.sumDelivered) : '—'} sub={`${row.dealsDelivered} отгрузок`} hint="Сумма всех отгрузок заказчика" />
+                <StatTile label="Средний чек" value={avgCheck !== null && avgCheck > 0 ? fmtMoney(avgCheck) : '—'} />
+                <StatTile label="Цикл повторки" value={`${row.cycleDays} дн.`} hint={row.cycleSource === 'own' ? 'Медиана интервалов между его покупками' : 'По базе — своих покупок мало, взята медиана по всей базе (16 дн.)'} />
+                <StatTile label="Последняя отгрузка" value={row.lastDeliveredAt ? fmtDate(row.lastDeliveredAt) : '—'} sub={row.lastDeliveredAt ? daysAgo(row.lastDeliveredAt) : undefined} />
+                <StatTile label="Товарных групп" value={String(row.distinctGroups)} sub="разных, по отгрузкам" />
               </div>
-            )}
-          </Section>
 
-          {/* Звонки */}
-          {/* «Сделки» — ВСЕ сделки клиента за историю, включая непроданные (задача
-              17.08: сквозная навигация заказчик → сделка). Не путать с «Покупками»
-              выше (там только проданные, из движка карточки) и «Активными» (текущие
-              открытые). Клик — карточка сделки прямо поверх этой. */}
-          <Section title={`Сделки · ${dealsData?.total_count ?? '…'}`} hint="Все сделки клиента за всю историю; клик открывает карточку сделки">
-            {clientDeals.length === 0 ? (
-              <div className="text-[12px] text-[var(--color-text-muted)]">Сделок не найдено.</div>
-            ) : (
-              // Та же таблица, что в дрилл-дауне отчёта (правка владельца 07.09: «даты
-              // движения по воронке как в обычном отчёте»): создана → бронь → подтв. →
-              // продажа → отгрузка → проиграна. Обёртка scroll-x — правило 2 CLAUDE.md.
-              <div className="scroll-x">
-                <DealsTable deals={clientDeals} fields={CUSTOMER_DEAL_FIELDS} onDealOpen={setOpenDealId} />
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <Section title="Что предложить" hint="По истории всей базы: что покупают после такого же материала. Проценты — доля повторных покупок, в которых была эта группа">
+                  {!row.recommend || row.recommend.items.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">Статистики переходов пока нет.</div> : (
+                    <div className="flex flex-col gap-1.5">
+                      {row.recommend.fallback && <div className="text-[11px] text-[var(--color-text-muted)]">по группе клиента мало статистики — общий топ по базе</div>}
+                      <div className="text-[11px] text-[var(--color-text-muted)]">после: {row.recommend.basedOn.join(', ')}</div>
+                      {row.recommend.items.slice(0, 5).map(it => (
+                        <div key={it.group} className="flex items-center gap-2 text-[13px]">
+                          <span className="font-bold tabular-nums text-[var(--color-accent)] w-11 shrink-0">{it.pct}%</span>
+                          <div className="w-24 h-1.5 rounded bg-[var(--color-bg-hover)] overflow-hidden shrink-0"><div className="h-full bg-[var(--color-accent)]" style={{ width: `${Math.min(100, it.pct)}%` }} /></div>
+                          <span className="truncate">{it.group}</span>
+                          {it.badge && <span className="ml-auto text-[11px] text-[var(--color-text-muted)] whitespace-nowrap" title={`Награда «${it.badge.name}»`}>{it.badge.icon}{it.badge.price > 0 && <b className="ml-1 text-[var(--color-positive,#2f9e44)]">+{it.badge.price}</b>}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Section>
+                <Section title={`Активные сделки · ${row.activeDeals.length}`}>
+                  {row.activeDeals.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">Активных сделок нет.</div> : (
+                    <div className="flex flex-col gap-1.5">
+                      {row.activeDeals.map(d => {
+                        const daysInWork = Math.floor((Date.now() - new Date(d.createdAt).getTime()) / DAY_MS);
+                        return (
+                          <div key={d.dealId} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-[12.5px]">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button onClick={() => setOpenDealId(d.dealId)} className="font-mono text-[var(--color-accent)] hover:underline">#{d.dealId}</button>
+                              <Chip>{d.stage ?? '?'}</Chip>
+                              <span className="ml-auto font-semibold tabular-nums">{d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
+                            </div>
+                            <div className="mt-0.5 text-[var(--color-text-muted)] truncate" title={d.name ?? undefined}>{d.name ?? '—'}</div>
+                            <div className="mt-0.5 flex gap-3 text-[11.5px] text-[var(--color-text-muted)]">
+                              <span>{daysInWork} дн. в работе</span>
+                              <span className="font-semibold" style={d.daysSilent > 7 ? { color: 'var(--color-negative, #e03131)' } : undefined}>🔇 {Math.floor(d.daysSilent)} дн. без звонка</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Section>
               </div>
-            )}
-          </Section>
 
-          <Section title="Звонки">
-            {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div> : (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] tabular-nums">
-                <span>всего <b>{data?.calls.total ?? 0}</b></span>
-                <span>последний: <b>{data?.calls.lastAt ? `${fmtDate(data.calls.lastAt)} (${daysAgo(data.calls.lastAt)})` : '—'}</b></span>
-                {(data?.calls.byYear ?? []).map(y => <Chip key={y.year}>{y.year}: {y.count}</Chip>)}
-              </div>
-            )}
-          </Section>
-
-          {/* Что предложить */}
-          <Section title="Что предложить" hint="Матрица переходов «купил X → следом покупают Y» по истории продаж">
-            {!row.recommend || row.recommend.items.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">—</div> : (
-              <div className="flex flex-col gap-1">
-                {row.recommend.fallback && <div className="text-[11px] text-[var(--color-text-muted)]">по группе клиента мало статистики — общий топ по базе</div>}
-                {row.recommend.items.slice(0, 3).map(it => (
-                  <div key={it.group} className="flex items-center gap-2 text-[12.5px]">
-                    <span className="font-semibold tabular-nums text-[var(--color-accent)] w-10 shrink-0">{it.pct}%</span>
-                    <span className="truncate">{it.group}</span>
-                    {it.badge && (
-                      <span className="text-[11px] text-[var(--color-text-muted)] truncate" title="Бейдж и MLT за такую допродажу">
-                        → {it.badge.icon} «{it.badge.name}»{it.badge.price > 0 && <b className="ml-1 text-[var(--color-positive,#2f9e44)]">+{it.badge.price}</b>}
+              {row.managerHistory.length > 1 && (
+                <Section title="Кто вёл заказчика" hint="Имена — на момент работы с клиентом">
+                  <div className="flex flex-wrap gap-2 text-[12.5px]">
+                    {row.managerHistory.map(m => (
+                      <span key={m.managerId} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1">
+                        <b>{m.name ?? `Менеджер #${m.managerId}`}</b> <span className="text-[var(--color-text-muted)]">· сделок {m.deals}, продано {m.sold} · {fmtDate(m.firstAt)}{m.firstAt.slice(0, 10) !== m.lastAt.slice(0, 10) ? ` — ${fmtDate(m.lastAt)}` : ''}</span>
                       </span>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
-          </Section>
+                </Section>
+              )}
+            </>
+          )}
 
-          {/* Отказы — как активные сделки, пустая секция целиком не рендерим. */}
-          {!isLoading && (data?.refused.length ?? 0) > 0 && (
-            <Section title={`Отказы · ${data!.refused.length}`} hint="Сделки клиента, закрытые в отказ; отмечено, были ли по ним звонки">
-              <div className="scroll-x">
-              <table className="w-full text-[12.5px]">
-                <tbody>
-                  {data!.refused.map(d => (
-                    <tr key={d.dealId} className="border-t border-[var(--color-border)] first:border-t-0">
-                      <td className="py-1 pr-3 whitespace-nowrap tabular-nums text-[var(--color-text-muted)]">{fmtDate(d.lostAt)}</td>
-                      <td className="py-1 pr-3 whitespace-nowrap">
-                        <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline">#{d.dealId}</a>
-                      </td>
-                      <td className="py-1 pr-3 max-w-[220px] truncate text-[var(--color-text-muted)]" title={d.name ?? undefined}>{d.name ?? '—'}</td>
-                      <td className="py-1 pr-3 text-right tabular-nums whitespace-nowrap">{d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}</td>
-                      <td className="py-1 text-right whitespace-nowrap">
-                        {d.hasCall ? <span className="text-[11px] text-[var(--color-text-muted)]">звонки были</span>
-                          : <Chip tone="neg" title="По сделке нет ни одного звонка в va.calls">без звонка</Chip>}
-                      </td>
-                    </tr>
+          {cardTab === 'deals' && (
+            <>
+              <Section title={`Все сделки · ${dealsData?.total_count ?? '…'}`} hint="Вся история сделок заказчика с датами движения по воронке; клик по строке открывает карточку сделки">
+                {clientDeals.length === 0 ? <div className="text-[12px] text-[var(--color-text-muted)]">Сделок не найдено.</div> : (
+                  <div className="scroll-x -mx-2">
+                    <DealsTable deals={clientDeals} fields={CUSTOMER_DEAL_FIELDS} onDealOpen={setOpenDealId} />
+                  </div>
+                )}
+              </Section>
+              {!isLoading && (data?.refused.length ?? 0) > 0 && (
+                <Section title={`Отказы · ${data!.refused.length}`} hint="Сделки, закрытые в отказ; отмечено, были ли по ним звонки">
+                  <div className="flex flex-col divide-y divide-[var(--color-border)] text-[12.5px]">
+                    {data!.refused.map(d => (
+                      <div key={d.dealId} className="flex items-center gap-3 py-1.5 flex-wrap">
+                        <span className="w-[76px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtDate(d.lostAt)}</span>
+                        <button onClick={() => setOpenDealId(d.dealId)} className="font-mono text-[var(--color-accent)] hover:underline shrink-0">#{d.dealId}</button>
+                        <span className="min-w-0 flex-1 truncate text-[var(--color-text-muted)]" title={d.name ?? undefined}>{d.name ?? '—'}</span>
+                        <span className="tabular-nums whitespace-nowrap">{d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
+                        {d.hasCall ? <Chip>звонки были</Chip> : <Chip tone="neg" title="По сделке нет ни одного звонка">без звонка</Chip>}
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              )}
+            </>
+          )}
+
+          {cardTab === 'journey' && (
+            <>
+              {timeline.length > 0 && (
+                <Section title={`Покупки · ${timeline.length}`} hint="Проданные сделки хронологически; между ними — интервал в днях">
+                  <div className="flex flex-col divide-y divide-[var(--color-border)] text-[12.5px]">
+                    {timeline.map((d, i) => {
+                      const gap = i === 0 ? null : Math.round((new Date(d.soldAt).getTime() - new Date(timeline[i - 1].soldAt).getTime()) / DAY_MS);
+                      return (
+                        <div key={d.dealId} className="flex items-center gap-3 py-1.5 flex-wrap">
+                          <span className="w-[76px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtDate(d.soldAt)}</span>
+                          <button onClick={() => setOpenDealId(d.dealId)} className="font-mono text-[var(--color-accent)] hover:underline shrink-0">#{d.dealId}</button>
+                          <span className="min-w-0 flex-1 truncate" title={[...d.groups, d.name ?? ''].filter(Boolean).join(' · ')}>{d.groups.length > 0 ? d.groups.join(', ') : (d.name ?? 'без товарных групп')}</span>
+                          {gap !== null && <Chip>↓ {gap} дн.</Chip>}
+                          <span className="font-semibold tabular-nums whitespace-nowrap">{d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Section>
+              )}
+              <JourneyTab purchases={journey?.purchases ?? []} loading={journeyLoading} recommend={row.recommend} onDealOpen={setOpenDealId} />
+            </>
+          )}
+
+          {cardTab === 'contacts' && (
+            <Section title={`Контакты · ${feed.length}`} hint="Звонки по сделкам заказчика, ручные отметки «Связался», отложить/исключить и запросы РОПу — одной лентой, свежие сверху">
+              {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div>
+                : feed.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">Контактов ещё не было — ни звонков, ни отметок.</div> : (
+                <div className="flex flex-col divide-y divide-[var(--color-border)]">
+                  {feed.map((f, i) => (
+                    <div key={i} className="flex items-start gap-3 py-1.5 text-[12.5px]">
+                      <span className="w-[112px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{format(new Date(f.at), 'dd.MM.yyyy HH:mm', { locale: ru })}</span>
+                      <span className="shrink-0 mt-0.5" style={{ color: f.tone === 'neg' ? 'var(--color-negative, #e03131)' : f.tone === 'ok' ? 'var(--color-positive, #2f9e44)' : 'var(--color-text-muted)' }}>{f.icon}</span>
+                      <span className="min-w-0 flex-1 break-words">{f.text}</span>
+                      {f.by && <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{f.by}</span>}
+                    </div>
                   ))}
-                </tbody>
-              </table>
-              </div>
+                </div>
+              )}
             </Section>
           )}
-
-          {/* Сводка «пусто» (правка владельца 01.08): вместо двух раздутых секций
-              «АКТИВНЫЕ СДЕЛКИ · 0 —» и «ОТКАЗЫ · 0 —» — одна тихая строка, и то
-              только когда ОБЕ секции пусты (если хоть одна не пуста — молча
-              опускаем вторую, above). */}
-          {!isLoading && row.activeDeals.length === 0 && (data?.refused.length ?? 0) === 0 && (
-            <div className="-mt-2 text-[12px] text-[var(--color-text-muted)]">Активных сделок нет · Отказов не было</div>
-          )}
-
-          {/* История менеджеров */}
-          {row.managerHistory.length > 0 && (
-            <Section title="История менеджеров" hint="Имена — на момент работы с клиентом (на логине люди меняются)">
-              <div className="scroll-x">
-              <table className="text-[12.5px]">
-                <tbody>
-                  {row.managerHistory.map(m => (
-                    <tr key={m.managerId}>
-                      <td className="py-0.5 pr-4 font-semibold">{m.name ?? `Менеджер #${m.managerId}`}</td>
-                      <td className="py-0.5 pr-4 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap">сделок {m.deals} / продано <b className="text-[var(--color-text)]">{m.sold}</b></td>
-                      <td className="py-0.5 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap">
-                        {fmtDate(m.firstAt)}{m.firstAt.slice(0, 10) !== m.lastAt.slice(0, 10) ? ` — ${fmtDate(m.lastAt)}` : ''}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              </div>
-            </Section>
-          )}
-
-          {/* История отметок */}
-          <Section title="История отметок" hint="Снузы / «не звонить» / возвраты: кто и когда">
-            {isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Загружаем…</div>
-              : (data?.markHistory.length ?? 0) === 0 ? <div className="text-[11px] text-[var(--color-text-muted)]">Отметок не было.</div> : (
-              <div className="flex flex-col gap-0.5 text-[12.5px]">
-                {data!.markHistory.map((h, i) => (
-                  <div key={i} className="flex items-baseline gap-2">
-                    <span className="w-[76px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtDate(h.createdAt)}</span>
-                    <span className="font-semibold whitespace-nowrap">{ACTION_LABELS[h.action] ?? h.action}</span>
-                    {h.action === 'snooze' && h.snoozeUntil && <span className="text-[var(--color-text-muted)]">до {fmtDate(h.snoozeUntil)}</span>}
-                    {h.reason && <span className="text-[var(--color-text-muted)]">{REASON_LABELS[h.reason]}</span>}
-                    {h.comment && <span className="text-[var(--color-text-muted)] truncate" title={h.comment}>«{h.comment}»</span>}
-                    <span className="ml-auto shrink-0 text-[11px] text-[var(--color-text-muted)]">{h.createdBy}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Section>
         </div>
-        )}
       </div>
       {openDealId !== null && <DealCard dealId={openDealId} onClose={() => setOpenDealId(null)} />}
     </div>,

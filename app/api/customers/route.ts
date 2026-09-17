@@ -40,8 +40,8 @@ import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair 
 // Очереди по окну повторной продажи (задача владельца 17.09): window — окно
 // открыто (≤ 22 дн. после отгрузки, контакта нет), missed — окно упущено,
 // faded — постоянник затих. 'overdue' оставлен для старых деп-линков = все три.
-export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'never' | 'sleeping' | 'refused';
-const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'window', 'missed', 'faded', 'never', 'sleeping', 'refused'] as const;
+export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused';
+const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'window', 'missed', 'faded', 'rest', 'never', 'sleeping', 'refused'] as const;
 const PAGE_SIZE_MAX = 100;
 
 /** Строка после применения отметок: сигналы снузнутых погашены, bucket/mark в ответе. */
@@ -125,6 +125,7 @@ function applyFilter(rows: XRow[], filter: CustomerFilter): XRow[] {
     case 'window': return bought.filter(r => r.queue.queue === 'window');
     case 'missed': return bought.filter(r => r.queue.queue === 'missed');
     case 'faded': return bought.filter(r => r.queue.queue === 'faded');
+    case 'rest': return bought.filter(r => r.queue.queue === 'rest');
     case 'overdue': return bought.filter(r => r.queue.queue !== 'rest');
     default: return bought;
   }
