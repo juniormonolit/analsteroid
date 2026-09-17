@@ -5,20 +5,9 @@ import type { SessionUser } from '@/lib/auth/session';
 // Хранение — системная БД (миграция 213). Отметки применяются ПОВЕРХ кэша движка
 // списка, свежим запросом: «Связался» должно снимать заказчика из очереди сразу.
 
-export type ContactChannel = 'messenger' | 'email' | 'meeting' | 'phone_other';
-export const CONTACT_CHANNEL_LABELS: Record<ContactChannel, string> = {
-  messenger: 'Мессенджер',
-  email: 'Почта',
-  meeting: 'Лично / на объекте',
-  phone_other: 'Звонок с другого номера',
-};
-
-export interface CustomerContact {
-  contactedAt: string;   // ISO
-  channel: ContactChannel;
-  note: string;
-  createdBy: string;
-}
+export type { ContactChannel, CustomerContact, ExclusionStatus, ExclusionRequest } from './contactTypes';
+export { CONTACT_CHANNEL_LABELS } from './contactTypes';
+import type { ContactChannel, CustomerContact, ExclusionStatus, ExclusionRequest } from './contactTypes';
 
 function toIso(v: string | Date): string { return (v instanceof Date ? v : new Date(v)).toISOString(); }
 
@@ -54,20 +43,6 @@ export async function addContact(input: { clientKey: string; managerBitrixId: st
 }
 
 // ── Исключение из канбана через РОПа ────────────────────────────────────────
-
-export type ExclusionStatus = 'pending' | 'approved' | 'rejected';
-export interface ExclusionRequest {
-  id: number;
-  clientKey: string;
-  managerBitrixId: string;
-  requestedBy: string;
-  reason: string;
-  status: ExclusionStatus;
-  decidedBy: string | null;
-  decidedAt: string | null;
-  decisionComment: string | null;
-  createdAt: string;
-}
 
 function toReq(x: Record<string, unknown>): ExclusionRequest {
   return {

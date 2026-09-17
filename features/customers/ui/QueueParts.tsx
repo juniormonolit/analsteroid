@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal } from '@/components/ui/Modal';
 import type { CustomerQueue } from '@/features/customers/engine/customers';
-import { CONTACT_CHANNEL_LABELS, type ContactChannel, type ExclusionRequest } from '@/features/customers/engine/contacts';
+import { CONTACT_CHANNEL_LABELS, type ContactChannel, type ExclusionRequest } from '@/features/customers/engine/contactTypes';
 import type { RepeatHeader, RepeatMonth } from '@/features/customers/engine/repeatHeader';
 import { type ApiRow, fmtMoney, fmtDate, daysAgo, clientDisplayName } from './shared';
 

@@ -1,7 +1,7 @@
 // Общие утилиты «Моих заказчиков» (вынесены при редизайне 01.08, чтобы карточка
 // клиента (CustomerCard.tsx) и список (CustomersTab.tsx) не плодили копий и не
 // образовывали циклический импорт).
-import type { CustomerContact } from '@/features/customers/engine/contacts';
+import type { CustomerContact } from '@/features/customers/engine/contactTypes';
 import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem, CustomerMark, CustomerBucket, NoCallReason, CustomerCategory, CustomerModifier, QueueInfo } from '@/features/customers/engine/customers';
 import type { Recommendation } from '@/features/customers/engine/crossSell';
 
