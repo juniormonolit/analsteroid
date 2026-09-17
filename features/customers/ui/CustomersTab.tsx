@@ -27,7 +27,8 @@ import {
   clientBitrixUrl, dealBitrixUrl, clientDisplayName,
   CATEGORY_LABELS, CATEGORY_STYLE, MODIFIER_LABELS,
 } from './shared';
-import type { CustomerCategory } from '@/features/customers/engine/customers';
+import type { CustomerCategory, CustomerQueue } from '@/features/customers/engine/customers';
+import { QUEUE_META, WindowCell, ContactModal, ExclusionRequestModal, ExclusionRequestsPanel, RepeatHeaderBlock, queueRowStyle } from './QueueParts';
 
 interface ApiResponse {
   total: number;
@@ -36,18 +37,21 @@ interface ApiResponse {
     sections: { regular: number; regularAtRisk: number; once: number; never: number };
     sleeping: number; refused: number; refusedByReason: Partial<Record<NoCallReason, number>>;
     byCategory?: { key: number; large: number; regular: number; once: number; potential: number; keyAtRisk: number };
+    queues?: { window: number; missed: number; faded: number; rest: number; autoLostNoCall: number };
   };
   page: number; pageSize: number; rows: ApiRow[];
   thresholds: {
     globalCycleDays: number; activeNoCallDays: number; atRiskCycleMultiplier: number;
-    sleepCycleMultiplier: number; sleepMinDays: number;
+    sleepCycleMultiplier: number; sleepMinDays: number; windowDays?: number;
   };
 }
 
-export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'never' | 'sleeping' | 'refused';
+export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'never' | 'sleeping' | 'refused';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
-  { key: 'overdue', label: 'Пора позвонить' },
+  { key: 'window', label: '🔥 Окно открыто' },
+  { key: 'missed', label: 'Окно упущено' },
+  { key: 'faded', label: 'Затихли' },
   { key: 'active', label: 'С активными' },
   { key: 'inactive', label: 'Без активных' },
   { key: 'never', label: 'Ещё не купили' },
@@ -133,7 +137,11 @@ function LegendPopover() {
       </button>
       {open && (
         <div className="absolute right-0 top-full z-30 mt-1 w-[380px] max-w-[85vw] rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-overlay)] [backdrop-filter:var(--glass-blur)] p-3 text-xs leading-relaxed text-[var(--color-text-muted)] shadow-xl">
-          Клиенты, где вы вели последнюю сделку. <b>Постоянники</b> (2+ покупок за всю историю клиента) — сверху,
+          Список разбит на очереди по <b>окну повторной продажи</b> — 22 дня после отгрузки, когда заказчику проще всего продать снова:
+          <b> 🔥 окно открыто</b> — успешного звонка (дольше 20 с) или отметки «Связался» после отгрузки нет, сгорающие первыми — сверху;
+          <b> окно упущено</b> — так и не позвонили, порядок по деньгам; <b>затихли</b> — постоянники без активных сделок дольше своего цикла;
+          <b> остальные</b>. Кнопка «Связался» — честная: нужна причина; «Исключить через РОПа» убирает заказчика навсегда после решения РОПа.
+          Ниже — прежние понятия. Клиенты, где вы вели последнюю сделку. <b>Постоянники</b> (2+ покупок за всю историю клиента) — сверху,
           <b> ⚠ под угрозой</b> — постоянник молчит дольше двух своих циклов повторки и активных сделок нет; ниже —
           купившие один раз; не купившие — во вкладке «Ещё не купили». Сигналы: <b>📞 сделка молчит</b> — по активной
           сделке нет звонков больше недели; <b>⏰ пора позвонить</b> — активных сделок нет, а с последней покупки прошло
@@ -157,8 +165,13 @@ function addMonthsYmd(months: number): string {
 
 type MarkSender = (payload: Record<string, unknown>) => Promise<void>;
 
-export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkSender; busy: boolean; onDone?: () => void }) {
-  const [open, setOpen] = useState<'snooze' | 'nocall' | null>(null);
+export function MarkControls({ r, send, busy, onDone, managerId, isSelf }: {
+  r: ApiRow; send: MarkSender; busy: boolean; onDone?: () => void;
+  /** Кому принадлежит список и смотрит ли его сам менеджер (17.09): менеджер
+   *  исключает заказчика ЧЕРЕЗ РОПа, руководитель — сразу. */
+  managerId?: string; isSelf?: boolean;
+}) {
+  const [open, setOpen] = useState<'snooze' | 'nocall' | 'contact' | 'exclude' | null>(null);
   const [customDate, setCustomDate] = useState('');
   const [reason, setReason] = useState<NoCallReason | null>(null);
   const [comment, setComment] = useState('');
@@ -187,12 +200,30 @@ export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkS
   // столбиком, раздувало карточку/меню строки): иконка + короткая подпись,
   // расшифровка — в title; попап дат — абсолютным поповером, не сдвигает layout.
   const iconBtn = 'inline-flex items-center gap-1 rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] disabled:opacity-40 whitespace-nowrap';
+  const selfMode = isSelf === true && managerId !== undefined;
   return (
     <div className="relative flex flex-row flex-wrap items-center gap-1">
+      {managerId !== undefined && (
+        <button type="button" disabled={busy} className={iconBtn} onClick={() => setOpen('contact')}
+          title="Общались не по телефону (мессенджер, почта, лично) — честная отметка снимает заказчика из очереди как успешный звонок">✅ Связался</button>
+      )}
       <button type="button" disabled={busy} className={iconBtn} onClick={() => setOpen(o => o === 'snooze' ? null : 'snooze')}
         title="Отложить клиента: до даты он исчезает из горящих сигналов, потом возвращается сам">⏸ Отложить</button>
-      <button type="button" disabled={busy} className={iconBtn} onClick={() => { setReason(null); setComment(''); setOpen('nocall'); }}
-        title="Больше не звонить этому клиенту — уйдёт во вкладку «Отказались» (причина обязательна)">🚫 Не звонить</button>
+      {selfMode ? (
+        r.pendingExclusion
+          ? <span className={`${iconBtn} opacity-70 cursor-default`} title={`Запрос на исключение ждёт РОПа: «${r.pendingExclusion.reason}» (${fmtDate(r.pendingExclusion.createdAt)})`}>⏳ ждёт РОПа</span>
+          : <button type="button" disabled={busy} className={iconBtn} onClick={() => setOpen('exclude')}
+              title="Исключить заказчика из канбана навсегда — решение принимает РОП">🚫 Исключить через РОПа</button>
+      ) : (
+        <button type="button" disabled={busy} className={iconBtn} onClick={() => { setReason(null); setComment(''); setOpen('nocall'); }}
+          title="Больше не звонить этому клиенту — уйдёт во вкладку «Отказались» (причина обязательна)">🚫 Не звонить</button>
+      )}
+      {open === 'contact' && managerId !== undefined && (
+        <ContactModal r={r} managerId={managerId} isSelf={isSelf === true} onClose={() => { setOpen(null); onDone?.(); }} />
+      )}
+      {open === 'exclude' && managerId !== undefined && (
+        <ExclusionRequestModal r={r} managerId={managerId} isSelf={isSelf === true} onClose={() => { setOpen(null); onDone?.(); }} />
+      )}
       {open === 'snooze' && (
         <div className="absolute right-0 top-full z-10 mt-1 flex flex-col gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-overlay)] [backdrop-filter:var(--glass-blur)] p-1.5 shadow-lg min-w-[140px]">
           <button type="button" className={btn} onClick={() => snoozeTo(addMonthsYmd(1))}>На месяц</button>
@@ -235,7 +266,7 @@ export function MarkControls({ r, send, busy, onDone }: { r: ApiRow; send: MarkS
 }
 
 // Меню «⋯» строки: действия + ссылка в Битрикс (редизайн 01.08).
-function RowMenu({ r, send, busy, onOpenCard }: { r: ApiRow; send: MarkSender; busy: boolean; onOpenCard: () => void }) {
+function RowMenu({ r, send, busy, onOpenCard, managerId, isSelf }: { r: ApiRow; send: MarkSender; busy: boolean; onOpenCard: () => void; managerId: string; isSelf: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -260,7 +291,7 @@ function RowMenu({ r, send, busy, onOpenCard }: { r: ApiRow; send: MarkSender; b
             className="rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] inline-flex items-center gap-1">
             <ExternalLink size={11} /> Открыть в Битриксе
           </a>
-          <MarkControls r={r} send={send} busy={busy} onDone={() => setOpen(false)} />
+          <MarkControls r={r} send={send} busy={busy} onDone={() => setOpen(false)} managerId={managerId} isSelf={isSelf} />
         </div>
       )}
     </div>
@@ -284,6 +315,7 @@ function StatusChips({ r }: { r: ApiRow }) {
   if (r.atRisk) chips.push({ label: '⚠', title: `Постоянник под угрозой: активных сделок нет, с последней покупки прошло больше 2× его цикла повторки (${r.cycleDays} дн.)`, neg: true });
   if (r.refusedNoCall) chips.push({ label: '🚫', title: 'Есть сделка, закрытая в отказ без единого звонка', neg: true });
   if (r.snoozedActive && r.mark) chips.push({ label: `⏸ ${fmtDate(r.mark.snoozeUntil)}`, title: `Отложен до ${fmtDate(r.mark.snoozeUntil)} · ${r.mark.createdBy}` });
+  if (r.pendingExclusion) chips.push({ label: '⏳ ждёт РОПа', title: `Запрос на исключение из канбана: «${r.pendingExclusion.reason}» — ${r.pendingExclusion.requestedBy}, ${fmtDate(r.pendingExclusion.createdAt)}` });
   if (r.mark?.kind === 'no_call') chips.push({ label: `🚫 ${r.mark.reason ? REASON_LABELS[r.mark.reason] : 'не звонить'}`, title: `${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}${r.mark.comment ? ` — «${r.mark.comment}»` : ''}`, neg: true });
   return (
     <>
@@ -458,8 +490,13 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
     </th>
   );
 
+  const namesByKey = useMemo(() => new Map(rows.map(r => [r.clientKey, clientDisplayName(r)])), [rows]);
+  const queueView = !['never', 'sleeping', 'refused'].includes(filter);
   return (
     <div className="flex flex-col gap-2.5">
+      {/* Метрики менеджера по повторным продажам за месяц, тренд к прошлому (17.09). */}
+      <RepeatHeaderBlock managerId={managerId} isSelf={isSelf} />
+      <ExclusionRequestsPanel managerId={managerId} isSelf={isSelf} names={namesByKey} />
       {deepLinkMissing && (
         <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
           <span>Заказчик по ссылке не найден в вашем списке — возможно, сменил менеджера или ссылка устарела.</span>
@@ -477,6 +514,8 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
               {data && (
                 <span className="ml-1 opacity-70 tabular-nums">
                   {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue
+                    : f.key === 'window' ? (data.counts.queues?.window ?? 0) : f.key === 'missed' ? (data.counts.queues?.missed ?? 0)
+                    : f.key === 'faded' ? (data.counts.queues?.faded ?? 0)
                     : f.key === 'active' ? data.counts.active : f.key === 'inactive' ? data.counts.inactive
                     : f.key === 'never' ? data.counts.sections.never
                     : f.key === 'sleeping' ? data.counts.sleeping : data.counts.refused}
@@ -537,6 +576,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
               <tr className="text-left text-[10.5px] uppercase tracking-wider text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
                 <Th label="Клиент" />
                 <Th k="category" label="Категория" />
+                <Th label="Окно" />
                 <Th label="Сигнал" />
                 <Th k="dealsSold" label="Сд/прод" right />
                 <Th k="sumSold" label="Куплено на" right />
@@ -550,17 +590,37 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
             </thead>
             <tbody>
               {rows.map((r, idx) => {
-                const showHeader = idx === 0 || rows[idx - 1].section !== r.section;
+                const showHeader = queueView
+                  ? (idx === 0 || rows[idx - 1].queue.queue !== r.queue.queue)
+                  : (idx === 0 || rows[idx - 1].section !== r.section);
+                const qmeta = QUEUE_META[r.queue.queue as CustomerQueue];
+                const qCount = data?.counts.queues?.[r.queue.queue as CustomerQueue] ?? null;
                 const secCounts = MAIN_FILTERS.includes(filter) ? data?.counts.sections : undefined;
                 const secCount = secCounts
                   ? (r.section === 'regular' ? secCounts.regular : r.section === 'once' ? secCounts.once : secCounts.never)
                   : null;
                 return (
                   <Fragment key={r.clientKey}>
-                    {showHeader && (
+                    {showHeader && queueView && (
+                      // Очередь по окну повторной продажи (17.09) — строка-разделитель с подсказкой.
+                      <tr className="border-t border-[var(--color-border)]">
+                        <td colSpan={12} className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-bold uppercase tracking-wider"
+                          style={{ color: r.queue.queue === 'window' ? 'var(--color-negative, #e03131)' : r.queue.queue === 'missed' ? 'var(--color-warning, #d9840c)' : r.queue.queue === 'faded' ? 'var(--color-accent)' : 'var(--color-text-muted)' }}
+                          title={qmeta.hint}>
+                          {qmeta.label}
+                          {qCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{qCount}</span>}
+                          {r.queue.queue === 'window' && (data?.counts.queues?.autoLostNoCall ?? 0) > 0 && (
+                            <span className="ml-2 normal-case font-semibold" title="Заказчики в очередях, у которых авто-сделку повторки закрыли в отказ без звонка">
+                              · сделку закрыли без звонка: {data!.counts.queues!.autoLostNoCall}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    {showHeader && !queueView && (
                       // Секция — тонкая строка-разделитель (редизайн 01.08), не серый блок.
                       <tr className="border-t border-[var(--color-border)]">
-                        <td colSpan={11} className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]"
+                        <td colSpan={12} className="px-2.5 pt-2 pb-0.5 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]"
                           title={SECTION_HINTS[r.section]}>
                           {SECTION_LABELS[r.section]}
                           {secCount !== null && <span className="ml-1.5 tabular-nums normal-case font-semibold">{secCount}</span>}
@@ -574,7 +634,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
                       </tr>
                     )}
                     <tr className="border-t border-[var(--color-border)] align-middle hover:bg-[var(--color-bg-hover)]/50"
-                      style={r.atRisk ? { backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 4%, transparent)' } : undefined}>
+                      style={queueView ? queueRowStyle(r.queue.queue as CustomerQueue) : (r.atRisk ? { backgroundColor: 'color-mix(in srgb, var(--color-negative, #e03131) 4%, transparent)' } : undefined)}>
                       <td className="px-2.5 py-1">
                         <div className="flex items-center gap-1.5 min-w-0 max-w-[300px]">
                           <button type="button" onClick={() => setCardRow(r)}
@@ -586,6 +646,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
                         </div>
                       </td>
                       <td className="px-2.5 py-1"><CategoryCell r={r} /></td>
+                      <td className="px-2.5 py-1"><WindowCell r={r} windowDays={data?.thresholds.windowDays ?? 22} /></td>
                       <td className="px-2.5 py-1"><SignalCell r={r} noCallDays={data?.thresholds.activeNoCallDays ?? 7} /></td>
                       <td className="px-2.5 py-1 text-right tabular-nums whitespace-nowrap">{r.dealsTotal}/<b>{r.dealsSold}</b></td>
                       <td className="px-2.5 py-1 text-right font-semibold tabular-nums whitespace-nowrap">{r.sumSold > 0 ? fmtMoney(r.sumSold) : '—'}</td>
@@ -609,7 +670,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
                       <td className="px-2.5 py-1 whitespace-nowrap text-xs" title={fmtDate(r.lastCallAt)}>{daysAgo(r.lastCallAt)}</td>
                       <td className="px-2.5 py-1 whitespace-nowrap text-xs text-[var(--color-text-muted)]" title={fmtDate(r.lastActivityAt)}>{daysAgo(r.lastActivityAt)}</td>
                       <td className="px-1.5 py-1 text-right">
-                        <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} />
+                        <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} managerId={managerId} isSelf={isSelf} />
                       </td>
                     </tr>
                   </Fragment>
@@ -636,7 +697,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
           managerId={managerId}
           isSelf={isSelf}
           onClose={() => setCardRow(null)}
-          markControls={<MarkControls r={cardRowLive} send={sendMark} busy={markBusy} />}
+          markControls={<MarkControls r={cardRowLive} send={sendMark} busy={markBusy} managerId={managerId} isSelf={isSelf} />}
         />
       )}
     </div>

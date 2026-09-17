@@ -8,7 +8,9 @@ import {
   SLEEP_CYCLE_MULTIPLIER, SLEEP_MIN_DAYS,
   type CustomerRow, type CustomerMark, type CustomerBucket, type NoCallReason,
   type CustomerCategory, type CustomerModifier,
+  assignQueue, QUEUE_ORDER, REPEAT_WINDOW_DAYS, type QueueInfo,
 } from '@/features/customers/engine/customers';
+import { fetchLastContacts, fetchPendingExclusions, type CustomerContact, type ExclusionRequest } from '@/features/customers/engine/contacts';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair } from '@/features/customers/engine/crossSell';
 
@@ -35,8 +37,11 @@ import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair 
 //     из сигналов исключён насовсем, mini-аналитика причин в counts;
 //   * авто-архив «Спящие» (молчание > max(3×цикла, 120 дн) без активных) —
 //     вкладка filter='sleeping'; отметка wake возвращает в основной вид.
-export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'never' | 'sleeping' | 'refused';
-const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'never', 'sleeping', 'refused'] as const;
+// Очереди по окну повторной продажи (задача владельца 17.09): window — окно
+// открыто (≤ 22 дн. после отгрузки, контакта нет), missed — окно упущено,
+// faded — постоянник затих. 'overdue' оставлен для старых деп-линков = все три.
+export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'never' | 'sleeping' | 'refused';
+const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'window', 'missed', 'faded', 'never', 'sleeping', 'refused'] as const;
 const PAGE_SIZE_MAX = 100;
 
 /** Строка после применения отметок: сигналы снузнутых погашены, bucket/mark в ответе. */
@@ -46,6 +51,9 @@ type XRow = CustomerRow & {
   mark: CustomerMark | null;
   category: CustomerCategory;
   modifiers: CustomerModifier[];
+  queue: QueueInfo;
+  lastContact: CustomerContact | null;
+  pendingExclusion: Pick<ExclusionRequest, 'id' | 'reason' | 'requestedBy' | 'createdAt'> | null;
 };
 
 // Сортировка по заголовкам (правило владельца 01.08 «Заголовки = сортировка», по
@@ -71,8 +79,10 @@ const SORTS: Record<string, (r: CustomerRow & { category?: CustomerCategory }) =
 // виде отфильтрован). Внутри секции постоянников «под угрозой» — выше всех
 // (доработка 01.08), дальше — дефолтный порядок движка (сигнал/urgency) либо
 // выбранная заголовком сортировка.
-function sectionRank(r: CustomerRow): number {
-  return r.section === 'regular' ? 0 : r.section === 'once' ? 1 : 2;
+function sectionRank(r: XRow): number {
+  // Первичный порядок — очередь по окну повторной продажи (17.09); внутри
+  // очереди — её собственный порядок (сгорает первым / деньги), не секции.
+  return QUEUE_ORDER.indexOf(r.queue.queue);
 }
 
 function applySort(rows: XRow[], key: string | null, dir: SortDir): XRow[] {
@@ -84,10 +94,10 @@ function applySort(rows: XRow[], key: string | null, dir: SortDir): XRow[] {
       const sr = sectionRank(a.r) - sectionRank(b.r);
       if (sr !== 0) return sr;                       // секции не перемешиваются
       if (!get) {
-        // Дефолт: «под угрозой» выше всех в секции, отложенные — вниз секции
-        // (их сигналы погашены), дальше порядок движка.
+        // Дефолт: порядок очереди (окно — кто сгорает первым, дальше — деньги),
+        // отложенные — вниз, тай-брейк — порядок движка.
         if (a.r.snoozedActive !== b.r.snoozedActive) return a.r.snoozedActive ? 1 : -1;
-        if (a.r.atRisk !== b.r.atRisk) return a.r.atRisk ? -1 : 1;
+        if (a.r.queue.rank !== b.r.queue.rank) return a.r.queue.rank - b.r.queue.rank;
         return a.i - b.i;
       }
       const va = get(a.r); const vb = get(b.r);
@@ -112,7 +122,10 @@ function applyFilter(rows: XRow[], filter: CustomerFilter): XRow[] {
   switch (filter) {
     case 'active': return bought.filter(r => r.activeCount > 0);
     case 'inactive': return bought.filter(r => r.activeCount === 0);
-    case 'overdue': return bought.filter(r => r.signals.length > 0);
+    case 'window': return bought.filter(r => r.queue.queue === 'window');
+    case 'missed': return bought.filter(r => r.queue.queue === 'missed');
+    case 'faded': return bought.filter(r => r.queue.queue === 'faded');
+    case 'overdue': return bought.filter(r => r.queue.queue !== 'rest');
     default: return bought;
   }
 }
@@ -131,12 +144,14 @@ export async function GET(req: NextRequest) {
         all: 0, active: 0, inactive: 0, overdue: 0, refusedNoCall: 0,
         sections: { regular: 0, regularAtRisk: 0, once: 0, never: 0 },
         sleeping: 0, refused: 0, refusedByReason: {},
+        queues: { window: 0, missed: 0, faded: 0, rest: 0, autoLostNoCall: 0 },
       },
       page: 1, pageSize: 50, rows: [],
       thresholds: {
         globalCycleDays: GLOBAL_REPEAT_CYCLE_DAYS, activeNoCallDays: ACTIVE_NO_CALL_DAYS,
         atRiskCycleMultiplier: AT_RISK_CYCLE_MULTIPLIER,
         sleepCycleMultiplier: SLEEP_CYCLE_MULTIPLIER, sleepMinDays: SLEEP_MIN_DAYS,
+        windowDays: REPEAT_WINDOW_DAYS,
       },
     });
   }
@@ -159,11 +174,15 @@ export async function GET(req: NextRequest) {
 
   // Отметки — свежим запросом поверх кэша движка (снуз/«не звонить» действуют
   // сразу). У снузнутых сигналы/«под угрозой» гасятся здесь же.
-  const [marks, catSettings] = await Promise.all([
-    fetchCustomerMarks(engineRows.map(r => r.clientKey)),
+  const keys = engineRows.map(r => r.clientKey);
+  const [marks, catSettings, contacts, pending] = await Promise.all([
+    fetchCustomerMarks(keys),
     fetchCategorySettings(),
+    fetchLastContacts(keys),
+    fetchPendingExclusions(keys),
   ]);
   const today = todayYmdMsk();
+  const now = Date.now();
   const all: XRow[] = engineRows.map(r => {
     const mark = marks.get(r.clientKey) ?? null;
     const { bucket, snoozedActive } = classifyWithMark(r, mark ?? undefined, today);
@@ -171,7 +190,16 @@ export async function GET(req: NextRequest) {
     // Категория — на лету поверх кэша (дополнение 01.08): правка порогов в
     // настройках действует сразу, без инвалидации 10-минутного кэша движка.
     const { category, modifiers } = classifyCategory(r, catSettings);
-    return { ...base, bucket, snoozedActive, mark, category, modifiers };
+    const lastContact = contacts.get(r.clientKey) ?? null;
+    // Очередь (17.09) — поверх кэша: ручная отметка «Связался» действует сразу;
+    // отложенные — в «остальное».
+    const q = assignQueue(r, lastContact?.contactedAt ?? null, now);
+    const queue: QueueInfo = snoozedActive ? { ...q, queue: 'rest' } : q;
+    const pe = pending.get(r.clientKey);
+    return {
+      ...base, bucket, snoozedActive, mark, category, modifiers, queue, lastContact,
+      pendingExclusion: pe ? { id: pe.id, reason: pe.reason, requestedBy: pe.requestedBy, createdAt: pe.createdAt } : null,
+    };
   });
 
   // Деп-линк по ключу (задача 2822) — короткий путь, отдельный от обычной
@@ -245,8 +273,15 @@ export async function GET(req: NextRequest) {
       all: bought.length,
       active: bought.filter(r => r.activeCount > 0).length,
       inactive: bought.filter(r => r.activeCount === 0).length,
-      overdue: bought.filter(r => r.signals.length > 0).length,
+      overdue: bought.filter(r => r.queue.queue !== 'rest').length,
       refusedNoCall: searched.filter(r => r.refusedNoCall).length,
+      queues: {
+        window: bought.filter(r => r.queue.queue === 'window').length,
+        missed: bought.filter(r => r.queue.queue === 'missed').length,
+        faded: bought.filter(r => r.queue.queue === 'faded').length,
+        rest: bought.filter(r => r.queue.queue === 'rest').length,
+        autoLostNoCall: bought.filter(r => r.autoRepeatLostNoCall && r.queue.queue !== 'rest').length,
+      },
       sections: {
         regular: bought.filter(r => r.section === 'regular').length,
         regularAtRisk: bought.filter(r => r.atRisk).length,
@@ -271,6 +306,7 @@ export async function GET(req: NextRequest) {
       globalCycleDays: GLOBAL_REPEAT_CYCLE_DAYS, activeNoCallDays: ACTIVE_NO_CALL_DAYS,
       atRiskCycleMultiplier: AT_RISK_CYCLE_MULTIPLIER,
       sleepCycleMultiplier: SLEEP_CYCLE_MULTIPLIER, sleepMinDays: SLEEP_MIN_DAYS,
+      windowDays: REPEAT_WINDOW_DAYS,
     },
   });
 }

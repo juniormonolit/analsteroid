@@ -63,6 +63,69 @@ export const AT_RISK_CYCLE_MULTIPLIER = 2;
 export const SLEEP_CYCLE_MULTIPLIER = 3;
 export const SLEEP_MIN_DAYS = 120;
 
+// ── Очереди по окну повторной продажи (задача владельца 17.09) ────────────────
+// Главная цель раздела — не упустить окно, когда заказчику проще всего продать
+// повторно. По данным отчёта о повторных продажах медиана интервала «1-я → 2-я
+// покупка» — 22 дня, а качественный звонок в окне почти удваивает повтор (62 %
+// против 34 %). Окно — ЕДИНОЕ для всех групп (решение владельца: «позвонив по
+// ЖБИ на третий день, продажа тоже возможна»). Отсчёт — от ОТГРУЗКИ
+// (delivered_at), не от продажи: заказчику звонят, когда материал уже у него.
+export const REPEAT_WINDOW_DAYS = 22;
+/** «Успешный звонок» — дольше 20 секунд (порог отчёта о звонках после отгрузки). */
+export const GOOD_CALL_MIN_SEC = 20;
+/** Авто-сделка повторки: создана бизнес-процессом в первые минуты после отгрузки. */
+export const AUTO_REPEAT_DEAL_WINDOW_MIN = 15;
+
+/**
+ *   window — окно открыто: последняя отгрузка ≤ 22 дней назад, успешного звонка
+ *            (или ручной отметки «Связался») после неё нет;
+ *   missed — окно упущено: отгрузка > 22 дней, контакта после неё так и не было;
+ *   faded  — постоянник затих: 2+ покупок, активных сделок нет, с последней
+ *            отгрузки прошло больше его цикла повторки (контакт после отгрузки был);
+ *   rest   — всё остальное.
+ */
+export type CustomerQueue = 'window' | 'missed' | 'faded' | 'rest';
+export const QUEUE_ORDER: CustomerQueue[] = ['window', 'missed', 'faded', 'rest'];
+
+export interface QueueInfo {
+  queue: CustomerQueue;
+  /** Дней с последней отгрузки (null — отгрузок не было). */
+  daysSinceDelivery: number | null;
+  /** Дней до закрытия окна (только для 'window'). */
+  daysLeft: number | null;
+  /** Был ли контакт после последней отгрузки и какой. */
+  contactedAfter: 'call' | 'manual' | null;
+  /** Порядок внутри очереди: меньше — выше. */
+  rank: number;
+}
+
+/** Очередь заказчика. lastContactAt — последняя РУЧНАЯ отметка «Связался»
+ *  (customer_contacts, системная БД) — применяется поверх кэша движка в роуте. */
+export function assignQueue(r: CustomerRow, lastContactAt: string | null, now = Date.now()): QueueInfo {
+  const del = r.lastDeliveredAt;
+  if (!del) return { queue: 'rest', daysSinceDelivery: null, daysLeft: null, contactedAfter: null, rank: 0 };
+  const since = daysSince(del, now);
+  const delMs = new Date(del).getTime();
+  const callAfter = r.lastGoodCallAt !== null && new Date(r.lastGoodCallAt).getTime() > delMs;
+  const manualAfter = lastContactAt !== null && new Date(lastContactAt).getTime() > delMs;
+  const contactedAfter: QueueInfo['contactedAfter'] = callAfter ? 'call' : manualAfter ? 'manual' : null;
+
+  if (!contactedAfter && since <= REPEAT_WINDOW_DAYS) {
+    // Сгорает первым — выше; при равном остатке — крупнее отгрузка.
+    const daysLeft = Math.max(0, REPEAT_WINDOW_DAYS - since);
+    return { queue: 'window', daysSinceDelivery: since, daysLeft, contactedAfter, rank: daysLeft * 1e9 - (r.lastDeliveredAmount ?? 0) };
+  }
+  if (!contactedAfter) {
+    // Упущенные — по деньгам заказчика, не по давности: 60 и 90 дней без звонка
+    // одинаково плохо, а 2 млн против 80 тыс. — разница.
+    return { queue: 'missed', daysSinceDelivery: since, daysLeft: null, contactedAfter, rank: -r.sumDelivered };
+  }
+  if (r.section === 'regular' && r.activeCount === 0 && since > r.cycleDays) {
+    return { queue: 'faded', daysSinceDelivery: since, daysLeft: null, contactedAfter, rank: -r.sumDelivered };
+  }
+  return { queue: 'rest', daysSinceDelivery: since, daysLeft: null, contactedAfter, rank: -r.urgency };
+}
+
 export interface ActiveDealInfo {
   dealId: number;
   name: string | null;
@@ -139,6 +202,14 @@ export interface CustomerRow {
   /** Имена ПРЕДЫДУЩИХ менеджеров (все из истории, кроме текущего) — для пометки
    *  «ранее работал с: …» в строке. */
   prevManagerNames: string[];
+  /** Последняя ОТГРУЗКА (delivered_at) — точка отсчёта окна повторной продажи (17.09). */
+  lastDeliveredAt: string | null;
+  lastDeliveredAmount: number | null;
+  lastDeliveredGroup: string | null;
+  /** Последний успешный звонок (> GOOD_CALL_MIN_SEC) по любой сделке клиента. */
+  lastGoodCallAt: string | null;
+  /** Авто-сделка повторки после последней отгрузки закрыта в отказ без успешного звонка. */
+  autoRepeatLostNoCall: boolean;
 }
 
 interface RawRow {
@@ -167,6 +238,11 @@ interface RawRow {
     managerId: number; name: string | null; deals: number; sold: number;
     firstAt: string; lastAt: string;
   }[] | null;
+  last_delivered_at: string | Date | null;
+  last_delivered_amount: string | null;
+  last_delivered_group: string | null;
+  last_good_call_at: string | Date | null;
+  auto_repeat_lost_no_call: boolean | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -209,6 +285,32 @@ deal_calls AS (
 ev AS (
   SELECT m.client_key, max(de.event_at) AS last_event_at
   FROM sa.deal_events de JOIN mcd m ON m.deal_id = de.deal_id
+  GROUP BY 1
+),
+-- Окно повторной продажи (17.09): последняя отгрузка клиента и последний
+-- УСПЕШНЫЙ звонок (дольше 20 с) по любой его сделке.
+good_calls AS (
+  SELECT m.client_key, max(c.called_at) AS last_good_call_at
+  FROM va.calls c JOIN mcd m ON m.deal_id = c.deal_id
+  WHERE c.duration_seconds > 20
+  GROUP BY 1
+),
+lastdel AS (
+  SELECT DISTINCT ON (client_key) client_key, deal_id AS last_delivered_deal, delivered_at AS last_delivered_at,
+         amount AS last_delivered_amount, head_group_name AS last_delivered_group
+  FROM mcd WHERE delivered_at IS NOT NULL
+  ORDER BY client_key, delivered_at DESC, deal_id DESC
+),
+-- Боль владельца: авто-сделка повторки (создаётся процессом в первые минуты
+-- после отгрузки) закрыта в отказ, а успешного звонка по ней не было.
+auto_lost AS (
+  SELECT ld.client_key, bool_or(true) AS auto_repeat_lost_no_call
+  FROM lastdel ld
+  JOIN mcd r ON r.client_key = ld.client_key AND r.deal_id <> ld.last_delivered_deal
+   AND r.created_at BETWEEN ld.last_delivered_at - interval '1 minute' AND ld.last_delivered_at + interval '15 minutes'
+   AND r.lost_at IS NOT NULL
+  LEFT JOIN LATERAL (SELECT 1 FROM va.calls c WHERE c.deal_id = r.deal_id AND c.duration_seconds > 20 LIMIT 1) gc ON true
+  WHERE gc IS NULL
   GROUP BY 1
 ),
 opens AS (
@@ -301,7 +403,9 @@ SELECT a.client_key,
        a.deals_delivered::text, a.sum_delivered::text, a.distinct_groups::text,
        o.active_deals, lg.last_groups,
        ls.last_sold_amount::text, ls.last_sold_groups,
-       mh.manager_history
+       mh.manager_history,
+       ld.last_delivered_at, ld.last_delivered_amount::text, ld.last_delivered_group,
+       gc.last_good_call_at, al.auto_repeat_lost_no_call
 FROM (
   SELECT m.client_key,
          count(*) AS deals_total,
@@ -325,6 +429,9 @@ LEFT JOIN lastg lg USING (client_key)
 LEFT JOIN lasts ls USING (client_key)
 LEFT JOIN mgr_hist mh USING (client_key)
 LEFT JOIN ev USING (client_key)
+LEFT JOIN lastdel ld USING (client_key)
+LEFT JOIN good_calls gc USING (client_key)
+LEFT JOIN auto_lost al USING (client_key)
 `;
 
 function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
@@ -413,6 +520,11 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     sleeping,
     managerHistory,
     prevManagerNames,
+    lastDeliveredAt: toIso(r.last_delivered_at),
+    lastDeliveredAmount: r.last_delivered_amount !== null ? Math.round(Number(r.last_delivered_amount)) : null,
+    lastDeliveredGroup: r.last_delivered_group,
+    lastGoodCallAt: toIso(r.last_good_call_at),
+    autoRepeatLostNoCall: r.auto_repeat_lost_no_call === true,
   };
 }
 
@@ -427,10 +539,12 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   // v3 в ключе: форма строки расширена (v2 — секции/atRisk/история менеджеров,
   // v3 — sleeping) — старые кэши без этих полей ломали бы новый код 10 минут.
   // v4 — поля категорий клиентов (отгрузки/комплексность/интервалы, 01.08).
+  // v6 (17.09) — поля окна повторной продажи (последняя отгрузка, успешный звонок,
+  // авто-сделка без звонка).
   // v5 (задача 2776) — формула client_key поменялась (фикс «k0»): без бампа
   // версии до 10 минут после деплоя отдавался бы старый кэш со «схлопнутым»
   // client_key='k0' под старым TTL — версия форсирует немедленный промах.
-  return cached(`customers:mgr:v5:${managerBitrixId}`, 10 * 60, async () => {
+  return cached(`customers:mgr:v6:${managerBitrixId}`, 10 * 60, async () => {
     const res = await analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]);
     const now = Date.now();
     const rows = res.rows.map(r => toRow(r, now, managerBitrixId));

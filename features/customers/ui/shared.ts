@@ -1,7 +1,8 @@
 // Общие утилиты «Моих заказчиков» (вынесены при редизайне 01.08, чтобы карточка
 // клиента (CustomerCard.tsx) и список (CustomersTab.tsx) не плодили копий и не
 // образовывали циклический импорт).
-import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem, CustomerMark, CustomerBucket, NoCallReason, CustomerCategory, CustomerModifier } from '@/features/customers/engine/customers';
+import type { CustomerContact } from '@/features/customers/engine/contacts';
+import type { ActiveDealInfo, CallSignal, CustomerSection, ManagerHistoryItem, CustomerMark, CustomerBucket, NoCallReason, CustomerCategory, CustomerModifier, QueueInfo } from '@/features/customers/engine/customers';
 import type { Recommendation } from '@/features/customers/engine/crossSell';
 
 export const REASON_LABELS: Record<NoCallReason, string> = {
@@ -26,6 +27,12 @@ export interface ApiRow {
   // Категории клиентов (дополнение Серёги 01.08)
   category: CustomerCategory; modifiers: CustomerModifier[];
   dealsDelivered: number; sumDelivered: number; distinctGroups: number;
+  // Очереди по окну повторной продажи (17.09)
+  queue: QueueInfo;
+  lastDeliveredAt: string | null; lastDeliveredAmount: number | null; lastDeliveredGroup: string | null;
+  lastGoodCallAt: string | null; autoRepeatLostNoCall: boolean;
+  lastContact: CustomerContact | null;
+  pendingExclusion: { id: number; reason: string; requestedBy: string; createdAt: string } | null;
 }
 
 export const CATEGORY_LABELS: Record<CustomerCategory, string> = {
