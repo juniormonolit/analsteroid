@@ -496,11 +496,68 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   );
 
   const namesByKey = useMemo(() => new Map(rows.map(r => [r.clientKey, clientDisplayName(r)])), [rows]);
+  // Ряд фильтров — вынесен, чтобы жить внутри липкой шапки (замыкание на состояние списка).
+  const FiltersRow = () => (
+      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5 overflow-x-auto">
+        {FILTERS.map(f => (
+          <button key={f.key} type="button" onClick={() => { setFilter(f.key); setPage(1); }}
+            className={`rounded-lg px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors ${
+              filter === f.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
+            }`}>
+            {f.label}
+            {data && (
+              <span className="ml-1 opacity-70 tabular-nums">
+                {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue
+                  : f.key === 'window' ? (data.counts.queues?.window ?? 0) : f.key === 'missed' ? (data.counts.queues?.missed ?? 0)
+                  : f.key === 'faded' ? (data.counts.queues?.faded ?? 0) : f.key === 'rest' ? (data.counts.queues?.rest ?? 0)
+                  : f.key === 'active' ? data.counts.active : f.key === 'inactive' ? data.counts.inactive
+                  : f.key === 'never' ? data.counts.sections.never
+                  : f.key === 'sleeping' ? data.counts.sleeping : data.counts.refused}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+      <input value={searchInput} onChange={e => setSearchInput(e.target.value)} placeholder="Поиск по имени или id"
+        className="min-w-[160px] flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-[16px] sm:text-sm sm:max-w-xs" />
+      {/* Фильтр по категории клиента (дополнение Серёги 01.08) */}
+      <select value={category} onChange={e => { setCategory(e.target.value); setPage(1); }}
+        title="Фильтр по категории клиента (правила — в Настройки → Категории клиентов)"
+        className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
+        <option value="all">Все категории{data?.counts.byCategory ? ` · 🔑 ${data.counts.byCategory.key}` : ''}</option>
+        <option value="key">Ключевые{data?.counts.byCategory ? ` (${data.counts.byCategory.key})` : ''}</option>
+        <option value="large">Крупные{data?.counts.byCategory ? ` (${data.counts.byCategory.large})` : ''}</option>
+        <option value="regular">Постоянные{data?.counts.byCategory ? ` (${data.counts.byCategory.regular})` : ''}</option>
+        <option value="once">Разовые{data?.counts.byCategory ? ` (${data.counts.byCategory.once})` : ''}</option>
+        <option value="potential">Потенциальные{data?.counts.byCategory ? ` (${data.counts.byCategory.potential})` : ''}</option>
+      </select>
+      <select value={sort ? `${sort.key}:${sort.dir}` : ''} onChange={e => { const v = e.target.value; setSort(v ? { key: v.split(':')[0], dir: v.split(':')[1] as 'asc' | 'desc' } : null); }}
+        title="Порядок карточек внутри очереди"
+        className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
+        <option value="">По срочности</option>
+        <option value="sumSold:desc">Куплено на ↓</option>
+        <option value="lastSoldAt:desc">Последняя покупка ↓</option>
+        <option value="lastSoldAt:asc">Последняя покупка ↑</option>
+        <option value="dealsSold:desc">Покупок ↓</option>
+        <option value="lastCallAt:asc">Давно не звонили</option>
+        <option value="activeCount:desc">Активных сделок ↓</option>
+      </select>
+      <LegendPopover />
+    </div>
+  );
   const queueView = !['never', 'sleeping', 'refused'].includes(filter);
   return (
     <div className="flex flex-col gap-2.5">
-      {/* Метрики менеджера по повторным продажам за месяц, тренд к прошлому (17.09). */}
-      <RepeatHeaderBlock managerId={managerId} isSelf={isSelf} />
+      {/* На телефоне метрики не липнут (съели бы пол-экрана) — обычный блок сверху. */}
+      <div className="sm:hidden"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} /></div>
+      {/* Липкая шапка (правка владельца 17.09 «шапку зафиксируй»): метрики месяца
+          и пилюли очередей остаются на виду, пока листаешь доску. Родитель со
+          скроллом — обёртка PullToRefresh страницы ЛК, top-0 отсчитывается от неё. */}
+      <div className="sticky top-0 z-20 -mx-1 px-1 pt-1 pb-2 bg-[var(--color-bg)] flex flex-col gap-2.5 border-b border-[var(--color-border)]">
+        <div className="hidden sm:block"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} /></div>
+        <FiltersRow />
+      </div>
       <ExclusionRequestsPanel managerId={managerId} isSelf={isSelf} names={namesByKey} />
       {deepLinkMissing && (
         <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
@@ -508,53 +565,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
           <button type="button" onClick={() => setDeepLinkMissing(false)} className="shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">✕</button>
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5 overflow-x-auto">
-          {FILTERS.map(f => (
-            <button key={f.key} type="button" onClick={() => { setFilter(f.key); setPage(1); }}
-              className={`rounded-lg px-2.5 py-1 text-xs font-semibold whitespace-nowrap transition-colors ${
-                filter === f.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'
-              }`}>
-              {f.label}
-              {data && (
-                <span className="ml-1 opacity-70 tabular-nums">
-                  {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue
-                    : f.key === 'window' ? (data.counts.queues?.window ?? 0) : f.key === 'missed' ? (data.counts.queues?.missed ?? 0)
-                    : f.key === 'faded' ? (data.counts.queues?.faded ?? 0) : f.key === 'rest' ? (data.counts.queues?.rest ?? 0)
-                    : f.key === 'active' ? data.counts.active : f.key === 'inactive' ? data.counts.inactive
-                    : f.key === 'never' ? data.counts.sections.never
-                    : f.key === 'sleeping' ? data.counts.sleeping : data.counts.refused}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-        <input value={searchInput} onChange={e => setSearchInput(e.target.value)} placeholder="Поиск по имени или id"
-          className="min-w-[160px] flex-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-1.5 text-[16px] sm:text-sm sm:max-w-xs" />
-        {/* Фильтр по категории клиента (дополнение Серёги 01.08) */}
-        <select value={category} onChange={e => { setCategory(e.target.value); setPage(1); }}
-          title="Фильтр по категории клиента (правила — в Настройки → Категории клиентов)"
-          className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
-          <option value="all">Все категории{data?.counts.byCategory ? ` · 🔑 ${data.counts.byCategory.key}` : ''}</option>
-          <option value="key">Ключевые{data?.counts.byCategory ? ` (${data.counts.byCategory.key})` : ''}</option>
-          <option value="large">Крупные{data?.counts.byCategory ? ` (${data.counts.byCategory.large})` : ''}</option>
-          <option value="regular">Постоянные{data?.counts.byCategory ? ` (${data.counts.byCategory.regular})` : ''}</option>
-          <option value="once">Разовые{data?.counts.byCategory ? ` (${data.counts.byCategory.once})` : ''}</option>
-          <option value="potential">Потенциальные{data?.counts.byCategory ? ` (${data.counts.byCategory.potential})` : ''}</option>
-        </select>
-        <select value={sort ? `${sort.key}:${sort.dir}` : ''} onChange={e => { const v = e.target.value; setSort(v ? { key: v.split(':')[0], dir: v.split(':')[1] as 'asc' | 'desc' } : null); }}
-          title="Порядок карточек внутри очереди"
-          className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
-          <option value="">По срочности</option>
-          <option value="sumSold:desc">Куплено на ↓</option>
-          <option value="lastSoldAt:desc">Последняя покупка ↓</option>
-          <option value="lastSoldAt:asc">Последняя покупка ↑</option>
-          <option value="dealsSold:desc">Покупок ↓</option>
-          <option value="lastCallAt:asc">Давно не звонили</option>
-          <option value="activeCount:desc">Активных сделок ↓</option>
-        </select>
-        <LegendPopover />
-      </div>
+
 
       {filter === 'refused' && data && data.counts.refused > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-[11px]">
