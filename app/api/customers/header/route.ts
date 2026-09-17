@@ -14,7 +14,9 @@ export async function GET(req: Request) {
     // Командный вид (17.09): сумма по менеджерам подконтрольных отделов, проценты — от сумм.
     const roster = await fetchTeamRoster(session);
     const mgr = url.searchParams.get('mgr');
-    const subset = mgr && /^\d+$/.test(mgr) ? roster.filter(m => m.id === mgr) : roster;
+    const dept = (url.searchParams.get('dept') ?? '').trim();
+    let subset = dept ? roster.filter(m => (m.departmentName ?? '') === dept) : roster;
+    if (mgr && /^\d+$/.test(mgr)) subset = subset.filter(m => m.id === mgr);
     const parts: RepeatHeader[] = [];
     for (let i = 0; i < subset.length; i += 4) {
       parts.push(...await Promise.all(subset.slice(i, i + 4).map(m => fetchRepeatHeader(Number(m.id)))));

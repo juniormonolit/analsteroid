@@ -117,13 +117,13 @@ export function CustomerTile({ r, onOpen, actions }: { r: ApiRow; onOpen: () => 
 interface PageResponse { total: number; rows: ApiRow[]; page: number; pageSize: number; counts: { queues?: Record<string, number> } }
 const PAGE = 24;
 
-function useQueuePages(managerId: string, isSelf: boolean, filter: string, search: string, category: string, sort: string, team?: boolean, mgr?: string) {
+function useQueuePages(managerId: string, isSelf: boolean, filter: string, search: string, category: string, sort: string, team?: boolean, mgr?: string, dept?: string) {
   return useInfiniteQuery<PageResponse>({
-    queryKey: ['customers', team ? `team:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, 'board', filter, search, category, sort],
+    queryKey: ['customers', team ? `team:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, 'board', filter, search, category, sort],
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
       const qs = new URLSearchParams({ filter, page: String(pageParam), pageSize: String(PAGE) });
-      if (team) { qs.set('team', '1'); if (mgr) qs.set('mgr', mgr); } else if (!isSelf) qs.set('bitrixId', managerId);
+      if (team) { qs.set('team', '1'); if (mgr) qs.set('mgr', mgr); if (dept) qs.set('dept', dept); } else if (!isSelf) qs.set('bitrixId', managerId);
       if (search) qs.set('search', search);
       if (category && category !== 'all') qs.set('category', category);
       if (sort) { const [k, d] = sort.split(':'); qs.set('sort', k); qs.set('dir', d); }
@@ -138,9 +138,9 @@ function useQueuePages(managerId: string, isSelf: boolean, filter: string, searc
 
 function QueueColumn({ queue, managerId, isSelf, search, category, sort, onOpen, renderActions, single, team, mgr }: {
   queue: CustomerQueue | 'archive'; managerId: string; isSelf: boolean; search: string; category: string; sort: string;
-  onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; single: boolean; filterKey?: string; team?: boolean; mgr?: string;
+  onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; single: boolean; filterKey?: string; team?: boolean; mgr?: string; dept?: string;
 }) {
-  const q = useQueuePages(managerId, isSelf, queue, search, category, sort, team, mgr);
+  const q = useQueuePages(managerId, isSelf, queue, search, category, sort, team, mgr, dept);
   const rows = useMemo(() => (q.data?.pages ?? []).flatMap(p => p.rows), [q.data]);
   const total = q.data?.pages[0]?.total ?? null;
   const meta = queue === 'archive' ? null : QUEUE_META[queue];
@@ -176,27 +176,27 @@ function QueueColumn({ queue, managerId, isSelf, search, category, sort, onOpen,
 }
 
 /** Доска: filter='all' — четыре очереди колонками; иначе одна очередь/вкладка сеткой карточек. */
-export function QueueBoard({ managerId, isSelf, filter, search, category, sort, onOpen, renderActions, team, mgr }: {
+export function QueueBoard({ managerId, isSelf, filter, search, category, sort, onOpen, renderActions, team, mgr, dept }: {
   managerId: string; isSelf: boolean; filter: string; search: string; category: string; sort: string;
-  onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; team?: boolean; mgr?: string;
+  onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; team?: boolean; mgr?: string; dept?: string;
 }) {
   if (filter === 'all') {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 items-start">
         {(['window', 'missed', 'faded', 'rest'] as CustomerQueue[]).map(qk => (
           <Fragment key={qk}>
-            <QueueColumn queue={qk} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} single={false} team={team} mgr={mgr} />
+            <QueueColumn queue={qk} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} single={false} team={team} mgr={mgr} dept={dept} />
           </Fragment>
         ))}
       </div>
     );
   }
   const asQueue = (['window', 'missed', 'faded', 'rest'] as string[]).includes(filter) ? (filter as CustomerQueue) : 'archive';
-  return <QueueColumnByFilter filter={filter} queue={asQueue} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} team={team} mgr={mgr} />;
+  return <QueueColumnByFilter filter={filter} queue={asQueue} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} team={team} mgr={mgr} dept={dept} />;
 }
 
-function QueueColumnByFilter(p: { filter: string; queue: CustomerQueue | 'archive'; managerId: string; isSelf: boolean; search: string; category: string; sort: string; onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; team?: boolean; mgr?: string }) {
-  const q = useQueuePages(p.managerId, p.isSelf, p.filter, p.search, p.category, p.sort, p.team, p.mgr);
+function QueueColumnByFilter(p: { filter: string; queue: CustomerQueue | 'archive'; managerId: string; isSelf: boolean; search: string; category: string; sort: string; onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; team?: boolean; mgr?: string; dept?: string }) {
+  const q = useQueuePages(p.managerId, p.isSelf, p.filter, p.search, p.category, p.sort, p.team, p.mgr, p.dept);
   const rows = useMemo(() => (q.data?.pages ?? []).flatMap(x => x.rows), [q.data]);
   const total = q.data?.pages[0]?.total ?? null;
   return (

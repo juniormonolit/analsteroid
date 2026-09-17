@@ -100,12 +100,12 @@ function useCustomerByKey(managerId: string, isSelf: boolean, key: string | null
   });
 }
 
-function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort, category: string, team?: boolean, mgr?: string) {
+function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort, category: string, team?: boolean, mgr?: string, dept?: string) {
   return useQuery<ApiResponse>({
-    queryKey: ['customers', team ? `team:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? '', category],
+    queryKey: ['customers', team ? `team:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? '', category],
     queryFn: async () => {
       const qs = new URLSearchParams();
-      if (team) { qs.set('team', '1'); if (mgr) qs.set('mgr', mgr); } else if (!isSelf) qs.set('bitrixId', managerId);
+      if (team) { qs.set('team', '1'); if (mgr) qs.set('mgr', mgr); if (dept) qs.set('dept', dept); } else if (!isSelf) qs.set('bitrixId', managerId);
       qs.set('filter', filter);
       if (search) qs.set('search', search);
       qs.set('page', String(page));
@@ -434,6 +434,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   const [cardRow, setCardRow] = useState<ApiRow | null>(null);
   const [category, setCategory] = useState<string>(initialCategory ?? 'all'); // фильтр по категории (01.08)
   const [mgr, setMgr] = useState<string>(''); // командный вид: один менеджер или все
+  const [dept, setDept] = useState<string>(''); // командный вид: отдел
 
   // Деп-линк по заказчику (задача 2822): одноразовый запрос при заходе — после
   // первого ответа (найден/не найден) ключ сбрасывается, повторные ререндеры
@@ -481,7 +482,12 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   }, [searchInput]);
 
   // Счётчики пилюль и категорий — лёгкий запрос первой страницы (данные доски — в QueueBoard).
-  const { data } = useCustomers(managerId, isSelf, filter, search, 1, null, category, team, mgr || undefined);
+  const { data } = useCustomers(managerId, isSelf, filter, search, 1, null, category, team, mgr || undefined, dept || undefined);
+  // Ростер команды — без фильтров, чтобы селекты не сужались сами собой.
+  const { data: rosterData } = useCustomers(managerId, isSelf, 'all', '', 1, null, 'all', team);
+  const rosterAll = rosterData?.counts.managers ?? [];
+  const depts = useMemo(() => [...new Set(rosterAll.map(m => m.departmentName ?? ''))].filter(Boolean).sort((a, b) => a.localeCompare(b, 'ru')), [rosterAll]);
+  const mgrOptions = useMemo(() => rosterAll.filter(m => !dept || (m.departmentName ?? '') === dept), [rosterAll, dept]);
   const rows = data?.rows ?? [];
 
   // Карточка открыта — держим строку свежей после мутаций: доска грузит очереди
@@ -555,12 +561,12 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   return (
     <div className="flex flex-col gap-2.5">
       {/* На телефоне метрики не липнут (съели бы пол-экрана) — обычный блок сверху. */}
-      <div className="sm:hidden"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} team={team} mgr={mgr || undefined} /></div>
+      <div className="sm:hidden"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} team={team} mgr={mgr || undefined} dept={dept || undefined} /></div>
       {/* Липкая шапка (правка владельца 17.09 «шапку зафиксируй»): метрики месяца
           и пилюли очередей остаются на виду, пока листаешь доску. Родитель со
           скроллом — обёртка PullToRefresh страницы ЛК, top-0 отсчитывается от неё. */}
       <div className="sticky top-0 z-20 -mx-1 px-1 pt-1 pb-2 bg-[var(--color-bg)] flex flex-col gap-2.5 border-b border-[var(--color-border)]">
-        <div className="hidden sm:block"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} team={team} mgr={mgr || undefined} /></div>
+        <div className="hidden sm:block"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} team={team} mgr={mgr || undefined} dept={dept || undefined} /></div>
         <FiltersRow />
       </div>
       <ExclusionRequestsPanel managerId={managerId} isSelf={team ? false : isSelf} names={namesByKey} team={team} />
@@ -597,7 +603,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
       <QueueBoard managerId={managerId} isSelf={isSelf} filter={filter} search={search} category={category}
         sort={sort ? `${sort.key}:${sort.dir}` : ''}
         onOpen={r => setCardRow(r)}
-        team={team} mgr={mgr || undefined}
+        team={team} mgr={mgr || undefined} dept={dept || undefined}
         renderActions={r => <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} managerId={r.managerId ?? managerId} isSelf={team ? false : isSelf} />} />
 
       {cardRowLive && (

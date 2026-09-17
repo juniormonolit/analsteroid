@@ -214,10 +214,10 @@ function Tile({ label, value, sub, delta, betterUp, hint }: { label: string; val
 const pctS = (v: number | null) => v === null ? '—' : `${Math.round(v)} %`;
 const d = (a: number | null, b: number | null) => (a === null || b === null ? null : a - b);
 
-export function RepeatHeaderBlock({ managerId, isSelf, team, mgr }: { managerId: string; isSelf: boolean; team?: boolean; mgr?: string }) {
+export function RepeatHeaderBlock({ managerId, isSelf, team, mgr, dept }: { managerId: string; isSelf: boolean; team?: boolean; mgr?: string; dept?: string }) {
   const { data, isError } = useQuery<RepeatHeader>({
-    queryKey: ['customers-header', team ? `team:${mgr ?? 'all'}` : isSelf ? 'me' : managerId],
-    queryFn: () => fetch(team ? `/api/customers/header?team=1${mgr ? `&mgr=${mgr}` : ''}` : `/api/customers/header${isSelf ? '' : `?bitrixId=${managerId}`}`).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }),
+    queryKey: ['customers-header', team ? `team:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId],
+    queryFn: () => fetch(team ? `/api/customers/header?team=1${mgr ? `&mgr=${mgr}` : ''}${dept ? `&dept=${encodeURIComponent(dept)}` : ''}` : `/api/customers/header${isSelf ? '' : `?bitrixId=${managerId}`}`).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }),
     staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
   });
   if (isError) return null;

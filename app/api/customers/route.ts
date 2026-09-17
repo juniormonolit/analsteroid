@@ -185,7 +185,9 @@ export async function GET(req: NextRequest) {
     roster = await fetchTeamRoster(session);
     if (!roster.length) return empty();
     const mgr = sp.get('mgr');
-    const subset = mgr && /^\d+$/.test(mgr) ? roster.filter(m => m.id === mgr) : roster;
+    const dept = (sp.get('dept') ?? '').trim();
+    let subset = dept ? roster.filter(m => (m.departmentName ?? '') === dept) : roster;
+    if (mgr && /^\d+$/.test(mgr)) subset = subset.filter(m => m.id === mgr);
     engineRows = await fetchTeamCustomers(subset);
   } else {
     engineRows = await fetchManagerCustomers(Number(bitrixId));
