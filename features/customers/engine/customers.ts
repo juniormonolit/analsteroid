@@ -105,6 +105,8 @@ export function assignQueue(r: CustomerRow, lastContactAt: string | null, now = 
   const del = r.lastDeliveredAt;
   if (!del) return { queue: 'rest', daysSinceDelivery: null, daysLeft: null, contactedAfter: null, rank: 0 };
   const since = daysSince(del, now);
+  // Заказ в работе (продано, не отгружено): всё нормально, допродавать рано.
+  if (r.hasOpenOrder) return { queue: 'rest', daysSinceDelivery: since, daysLeft: null, contactedAfter: null, rank: -1e12 };
   const delMs = new Date(del).getTime();
   const callAfter = r.lastGoodCallAt !== null && new Date(r.lastGoodCallAt).getTime() > delMs;
   const manualAfter = lastContactAt !== null && new Date(lastContactAt).getTime() > delMs;
@@ -210,6 +212,8 @@ export interface CustomerRow {
   lastGoodCallAt: string | null;
   /** Авто-сделка повторки после последней отгрузки закрыта в отказ без успешного звонка. */
   autoRepeatLostNoCall: boolean;
+  /** Есть проданная, но ещё не отгруженная сделка — «заказ в работе» (17.09: в очереди не ставим). */
+  hasOpenOrder: boolean;
 }
 
 interface RawRow {
@@ -243,6 +247,7 @@ interface RawRow {
   last_delivered_group: string | null;
   last_good_call_at: string | Date | null;
   auto_repeat_lost_no_call: boolean | null;
+  has_open_order: boolean | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -399,7 +404,7 @@ gaps AS (
 SELECT a.client_key,
        a.deals_total::text, a.deals_sold::text, a.sum_sold::text,
        a.last_sold_at, a.last_call_at, ev.last_event_at,
-       g.median_gap_days::text, g.avg_gap_days::text, g.last_gap_days::text, a.refused_no_call,
+       g.median_gap_days::text, g.avg_gap_days::text, g.last_gap_days::text, a.refused_no_call, a.has_open_order,
        a.deals_delivered::text, a.sum_delivered::text, a.distinct_groups::text,
        o.active_deals, lg.last_groups,
        ls.last_sold_amount::text, ls.last_sold_groups,
@@ -414,6 +419,9 @@ FROM (
          max(m.sold_at) AS last_sold_at,
          max(dc.last_call_at) AS last_call_at,
          bool_or(m.lost_at IS NOT NULL AND dc.deal_id IS NULL) AS refused_no_call,
+         -- «Заказ в работе»: продана, но не отгружена и не отказ (правка владельца 17.09 —
+         -- пока текущая сделка не закрыта, допродавать рано, в очереди не ставим).
+         bool_or(m.sold_at IS NOT NULL AND m.delivered_at IS NULL AND m.lost_at IS NULL) AS has_open_order,
          -- Категории клиентов (дополнение Серёги 01.08): «отгрузка» = delivered_at
          -- (как «покупка» в отчёте «Повторные»), комплексность = разные deal-level
          -- head-группы отгруженных сделок (шкала by_max — как complex_clients там же).
@@ -525,6 +533,7 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     lastDeliveredGroup: r.last_delivered_group,
     lastGoodCallAt: toIso(r.last_good_call_at),
     autoRepeatLostNoCall: r.auto_repeat_lost_no_call === true,
+    hasOpenOrder: r.has_open_order === true,
   };
 }
 
@@ -539,12 +548,13 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   // v3 в ключе: форма строки расширена (v2 — секции/atRisk/история менеджеров,
   // v3 — sleeping) — старые кэши без этих полей ломали бы новый код 10 минут.
   // v4 — поля категорий клиентов (отгрузки/комплексность/интервалы, 01.08).
+  // v7 (17.09) — has_open_order («заказ в работе» не ставим в очередь).
   // v6 (17.09) — поля окна повторной продажи (последняя отгрузка, успешный звонок,
   // авто-сделка без звонка).
   // v5 (задача 2776) — формула client_key поменялась (фикс «k0»): без бампа
   // версии до 10 минут после деплоя отдавался бы старый кэш со «схлопнутым»
   // client_key='k0' под старым TTL — версия форсирует немедленный промах.
-  return cached(`customers:mgr:v6:${managerBitrixId}`, 10 * 60, async () => {
+  return cached(`customers:mgr:v7:${managerBitrixId}`, 10 * 60, async () => {
     const res = await analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]);
     const now = Date.now();
     const rows = res.rows.map(r => toRow(r, now, managerBitrixId));

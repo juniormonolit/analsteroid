@@ -25,6 +25,7 @@ export function windowLine(r: ApiRow): { text: string; sub: string | null; color
   const q = r.queue;
   const color = TONE_COLOR[q.queue];
   if (!r.lastDeliveredAt) return { text: 'Отгрузок ещё не было', sub: null, color: TONE_COLOR.rest };
+  if (r.hasOpenOrder) return { text: '📦 Заказ в работе — продано, ждёт отгрузки', sub: `предыдущая отгрузка ${fmtDate(r.lastDeliveredAt)}`, color: 'var(--color-positive, #2f9e44)' };
   const since = Math.floor(q.daysSinceDelivery ?? 0);
   const delivery = `${fmtDate(r.lastDeliveredAt)}${r.lastDeliveredGroup ? ` · ${r.lastDeliveredGroup}` : ''}${r.lastDeliveredAmount ? ` · ${fmtMoney(r.lastDeliveredAmount)}` : ''}`;
   if (q.queue === 'window') {

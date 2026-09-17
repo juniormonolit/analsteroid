@@ -30,7 +30,7 @@ export interface ApiRow {
   // Очереди по окну повторной продажи (17.09)
   queue: QueueInfo;
   lastDeliveredAt: string | null; lastDeliveredAmount: number | null; lastDeliveredGroup: string | null;
-  lastGoodCallAt: string | null; autoRepeatLostNoCall: boolean;
+  lastGoodCallAt: string | null; autoRepeatLostNoCall: boolean; hasOpenOrder: boolean;
   lastContact: CustomerContact | null;
   pendingExclusion: { id: number; reason: string; requestedBy: string; createdAt: string } | null;
 }
