@@ -8,5 +8,7 @@ import { PeoplePage } from '@/features/profile/ui/PeoplePage';
 export default async function Page() {
   const session = await getSession();
   if (!session) redirect('/login');
+  // Раздел скрыт для всех, кроме супер-админов (решение владельца 17.09).
+  if (!session.isSuperadmin) redirect('/profile?tab=customers');
   return <PeoplePage />;
 }

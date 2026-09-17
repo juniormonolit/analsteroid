@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createSession, SESSION_COOKIE, SESSION_TTL_DAYS } from '@/lib/auth/session';
 import { identifyByAuthId, resolveOrCreateAppUser, bitrixPortalOrigin } from '@/lib/bitrix/appAuth';
+import { rememberAppToken } from '@/lib/bitrix/appToken';
 
 // Точка входа встроенного в Битрикс приложения (задача владельца 30.07).
 // Битрикс открывает этот URL в iframe POST-запросом (form-encoded) и передаёт
@@ -73,6 +74,10 @@ export async function POST(req: NextRequest) {
   }
 
   const token = await createSession(resolved.userId);
+  // Токен приложения (17.09): методы placement.* работают только в контексте
+  // приложения, вебхуку они недоступны. Запоминаем AUTH_ID на его срок жизни —
+  // супер-админ из «Настроек» сможет привязать «Монолитику» в левое меню портала.
+  await rememberAppToken(resolved.userId, authId);
 
   const res = html(
     `<p>Загружаем ваш кабинет…</p>`

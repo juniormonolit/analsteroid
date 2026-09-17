@@ -12,11 +12,25 @@ import { ManagerCardPage } from '@/features/manager-card/ui/ManagerCardPage';
 //
 // Решение «чью карточку показать» вынесено в `lib/org/selfCard.ts` и общее с
 // `/bx/manager` (п.10 спеки).
-export default async function Page() {
+export default async function Page({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await getSession();
   if (!session) redirect('/login');
 
   const self = await resolveSelfCard(session);
+  // Не супер-админ (17.09): из вкладок карточки доступны только «Мои заказчики» и
+  // «Статистика»; вход без вкладки или на скрытую — на заказчиков. Деп-линк
+  // ?customer= без ?tab= и так открывает заказчиков — его не трогаем.
+  const restricted = !session.isSuperadmin;
+  if (restricted && self.kind === 'card') {
+    const sp = await searchParams;
+    const tab = typeof sp.tab === 'string' ? sp.tab : null;
+    if (!(tab === 'customers' || tab === 'stats') && !(typeof sp.customer === 'string' && !tab)) {
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && k !== 'tab') qs.set(k, v);
+      qs.set('tab', 'customers');
+      redirect(`/profile?${qs.toString()}`);
+    }
+  }
 
   if (self.kind === 'no-bitrix') {
     // Ссылку на настройки показываем только тем, кто реально может дойти (тот же
@@ -44,6 +58,7 @@ export default async function Page() {
       managerName={self.managerName}
       showBadges
       externalNav
+      restrictedTabs={restricted}
     />
   );
 }

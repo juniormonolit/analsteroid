@@ -75,9 +75,14 @@ const DEFAULT_GROUP = 2;
  * @param canManageRequests — «Заявки» только руководителям (решает сервер в
  *   layout, чтобы не гонять лишний запрос с клиента).
  */
-export function useProfileNav({ mode, canManageRequests = false }: {
+/** Разделы ЛК, доступные не супер-админам (решение владельца 17.09). «Мой отдел» —
+ *  только руководителям (canManageRequests — тот же признак «РОП и старше»). */
+const RESTRICTED_KEYS = new Set(['tab:customers', 'tab:stats', 'report', 'team', 'settings']);
+
+export function useProfileNav({ mode, canManageRequests = false, restricted = false }: {
   mode: 'manager' | 'department' | 'none';
   canManageRequests?: boolean;
+  restricted?: boolean;
 }): ProfileNavItem[] {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -154,7 +159,10 @@ export function useProfileNav({ mode, canManageRequests = false }: {
     },
   );
 
-  return items
+  const visible = restricted
+    ? items.filter(it => RESTRICTED_KEYS.has(it.key) && (it.key !== 'team' || canManageRequests))
+    : items;
+  return visible
     .map((it, idx) => ({ ...it, group: GROUP[it.key] ?? DEFAULT_GROUP, idx }))
     .sort((a, b) => (a.group - b.group) || (a.idx - b.idx))
     .map(({ idx: _idx, ...it }) => it);

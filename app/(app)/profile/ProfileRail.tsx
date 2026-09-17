@@ -12,13 +12,15 @@ import { useProfileNav } from './useProfileNav';
 // в ОДНОМ списке: для человека это один уровень навигации, как в соцсети. Сборка
 // списка, порядок и группировка — в useProfileNav.ts, здесь только отрисовка.
 
-export function ProfileRail({ mode, canManageRequests = false }: {
+export function ProfileRail({ mode, canManageRequests = false, restricted = false }: {
   mode: 'manager' | 'department' | 'none';
   /** «Заявки» — только руководителям (решает сервер в layout, чтобы не гонять
    *  лишний запрос с клиента): активации покупок и выводы MLT подчинённых. */
   canManageRequests?: boolean;
+  /** Не супер-админ: только рабочие разделы (17.09). */
+  restricted?: boolean;
 }) {
-  const items = useProfileNav({ mode, canManageRequests });
+  const items = useProfileNav({ mode, canManageRequests, restricted });
 
   return (
     <nav className="w-56 shrink-0 flex flex-col gap-0.5 border-r border-[var(--color-sidebar-border)] bg-[var(--color-sidebar-bg)] px-2 py-3 overflow-y-auto">

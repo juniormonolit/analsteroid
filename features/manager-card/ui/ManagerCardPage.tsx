@@ -222,9 +222,13 @@ export interface ManagerCardPageProps {
    *  (на телефоне рельсы нет — лента остаётся). Прочие входы (/manager/[id],
    *  /bx/manager) прокидывают ничего — там лента как была. */
   externalNav?: boolean;
+  /** Не супер-админ (17.09): из вкладок остаются только «Мои заказчики» и «Статистика». */
+  restrictedTabs?: boolean;
 }
 
-export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo, showBadges = false, forceReadOnly = false, externalNav = false }: ManagerCardPageProps) {
+const RESTRICTED_TAB_KEYS: ManagerTabKey[] = ['customers', 'stats'];
+
+export function ManagerCardPage({ managerId, mode, managerName, initialFrom, initialTo, showBadges = false, forceReadOnly = false, externalNav = false, restrictedTabs = false }: ManagerCardPageProps) {
   const qc = useQueryClient();
   // Pull-to-refresh (задача 2947): «потянуть вниз» обновляет всё, что
   // сейчас смонтировано на экране (карточка + активная вкладка) — проще и
@@ -267,10 +271,10 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
   // «Мои заказчики» — ссылку из бота удобнее делать одним параметром, а не
   // двумя обязательными.
   const customerParam = searchParams.get('customer');
-  const validTabKeys = MANAGER_TABS.map(t => t.key) as string[];
+  const validTabKeys = (restrictedTabs ? RESTRICTED_TAB_KEYS : MANAGER_TABS.map(t => t.key)) as string[];
   const tab: ManagerTabKey = tabParam && validTabKeys.includes(tabParam)
     ? (tabParam as ManagerTabKey)
-    : customerParam ? 'customers' : 'profile';
+    : (customerParam || restrictedTabs) ? 'customers' : 'profile';
   // Позиция скролла по вкладкам (задача 2947, П2.12 плана мобильной
   // готовности) — все вкладки ЛК рендерятся в ОДНОМ общем скролл-контейнере
   // (managerScrollRef, см. `<PullToRefresh>` ниже), поэтому переключение
@@ -494,7 +498,7 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
         // а не оставался внутри scroll-контейнера самой полосы (тот scroll-x
         // формально был, но родитель не давал ему стать реальной границей).
         <div className="flex min-w-0 items-stretch gap-2">
-          <div className="min-w-0 flex-1"><ManagerTabBar active={tab} onChange={goToTab} hidden={planyorkaEnabled ? [] : ['planyorka']} /></div>
+          <div className="min-w-0 flex-1"><ManagerTabBar active={tab} onChange={goToTab} hidden={restrictedTabs ? MANAGER_TABS.map(t => t.key).filter(k => !RESTRICTED_TAB_KEYS.includes(k)) : (planyorkaEnabled ? [] : ['planyorka'])} /></div>
           {/* Колокольчик убран (правка владельца 05.08): уведомления живут
               отдельным разделом /profile/notifications со счётчиком в рельсе. */}
         </div>

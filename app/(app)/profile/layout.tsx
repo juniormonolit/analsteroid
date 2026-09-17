@@ -26,14 +26,19 @@ export default async function ProfileLayout({ children }: { children: React.Reac
   const railMode = self.kind === 'no-bitrix' ? 'none' : self.mode;
   // «Заявки» в рельсе — только тем, кому есть что решать (руководство/РОП).
   const canManageRequests = hasFullManagerAccess(session) || (await managedDepartmentIds(session)).length > 0;
+  // Решение владельца 17.09: всем, кроме супер-админов, в ЛК видны только «Мой отчёт»,
+  // «Статистика», «Мой отдел» (РОП и старше), «Мои заказчики», «Настройки». Остальное
+  // (профиль, награды, кошелёк, магазин, квесты, движуха, коллеги…) — скрыто; страницы
+  // этих разделов редиректят сами (см. page.tsx каждого).
+  const restricted = !session.isSuperadmin;
 
   return (
     // overflow-x-hidden рядом с overflow-y-auto — правило 13 CLAUDE.md (иначе любая
     // забытая ширина внутри вкладки утаскивает вбок всю страницу, а не себя).
     <div className="h-full flex overflow-hidden">
-      <div className="hidden lg:flex shrink-0"><ProfileRail mode={railMode} canManageRequests={canManageRequests} /></div>
+      <div className="hidden lg:flex shrink-0"><ProfileRail mode={railMode} canManageRequests={canManageRequests} restricted={restricted} /></div>
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <div className="lg:hidden"><ProfileMobileNav mode={railMode} canManageRequests={canManageRequests} /></div>
+        <div className="lg:hidden"><ProfileMobileNav mode={railMode} canManageRequests={canManageRequests} restricted={restricted} /></div>
         <div className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">{children}</div>
       </div>
     </div>

@@ -7,5 +7,7 @@ import { PulsePage } from '@/features/profile/ui/PulsePage';
 export default async function Page() {
   const session = await getSession();
   if (!session) redirect('/login');
+  // Раздел скрыт для всех, кроме супер-админов (решение владельца 17.09).
+  if (!session.isSuperadmin) redirect('/profile?tab=customers');
   return <PulsePage />;
 }
