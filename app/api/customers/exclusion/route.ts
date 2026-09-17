@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { canViewManager } from '@/lib/org/managerAccess';
 import { fetchManagerCustomers } from '@/features/customers/engine/customers';
 import { createExclusionRequest, decideExclusion, listPendingExclusions } from '@/features/customers/engine/contacts';
+import { fetchTeamRoster } from '@/features/customers/engine/team';
 
 // Исключение заказчика из канбана навсегда — через РОПа (решение владельца 17.09:
 // «может, на негативе всё прошло, мы не знаем»). Менеджер — POST с причиной
@@ -12,7 +13,14 @@ import { createExclusionRequest, decideExclusion, listPendingExclusions } from '
 export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const managerId = new URL(req.url).searchParams.get('managerId') ?? session.bitrixUserId ?? '';
+  const url = new URL(req.url);
+  if (url.searchParams.get('team') === '1') {
+    // Командный вид: запросы всех менеджеров подконтрольных отделов, решать можно.
+    const roster = await fetchTeamRoster(session);
+    const lists = await Promise.all(roster.map(m => listPendingExclusions(m.id)));
+    return NextResponse.json({ items: lists.flat(), canDecide: true });
+  }
+  const managerId = url.searchParams.get('managerId') ?? session.bitrixUserId ?? '';
   if (!/^\d+$/.test(managerId)) return NextResponse.json({ items: [], canDecide: false });
   if (managerId !== session.bitrixUserId && !(await canViewManager(session, managerId))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   return NextResponse.json({ items: await listPendingExclusions(managerId), canDecide: managerId !== session.bitrixUserId });

@@ -552,7 +552,12 @@ export function ManagerCardPage({ managerId, mode, managerName, initialFrom, ini
           initialCustomerKey={customerParam ?? undefined} />
       )}
       {tabbed && tab === 'customers' && mode === 'department' && (
-        <div className="mx-auto w-full max-w-[1360px]"><TeamCustomersBlock /></div>
+        // РОП и выше (решение владельца 17.09): та же доска очередей, но по всем
+        // менеджерам подконтрольных отделов; сводка «у кого сколько» — ниже.
+        <div className="flex flex-col gap-4">
+          <CustomersTab managerId={managerId} isSelf={false} team initialCustomerKey={customerParam ?? undefined} />
+          <TeamCustomersBlock />
+        </div>
       )}
       {/* Квесты: у менеджера свои, у руководителя — сводка по команде. */}
       {tabbed && tab === 'quests' && mode === 'manager' && <QuestsTab managerId={managerId} isSelf={showBadges} />}

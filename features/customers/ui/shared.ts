@@ -33,6 +33,8 @@ export interface ApiRow {
   lastGoodCallAt: string | null; autoRepeatLostNoCall: boolean; hasOpenOrder: boolean;
   lastContact: CustomerContact | null;
   pendingExclusion: { id: number; reason: string; requestedBy: string; createdAt: string } | null;
+  /** Командный вид: чей заказчик. */
+  managerId?: string; managerName?: string;
 }
 
 export const CATEGORY_LABELS: Record<CustomerCategory, string> = {

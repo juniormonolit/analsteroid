@@ -109,9 +109,14 @@ export function useProfileNav({ mode, canManageRequests = false, restricted = fa
 
   const items: Omit<ProfileNavItem, 'group'>[] = [];
 
-  if (mode === 'manager') {
+  // У карточки отдела (РОП и выше) тоже есть вкладки — те, что ManagerCardPage
+  // умеет в mode='department' (профиль, заказчики командой, квесты, статистика,
+  // награды); раньше рельса рисовала для них один «Профиль» (17.09).
+  const DEPT_TABS = new Set<ManagerTabKey>(['profile', 'customers', 'quests', 'stats', 'rewards']);
+  if (mode === 'manager' || mode === 'department') {
     for (const t of MANAGER_TABS) {
       if (t.key === 'planyorka' && !planyorkaEnabled) continue;
+      if (mode === 'department' && !DEPT_TABS.has(t.key)) continue;
       items.push({
         key: `tab:${t.key}`,
         href: t.key === 'profile' ? '/profile' : `/profile?tab=${t.key}`,

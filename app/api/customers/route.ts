@@ -11,6 +11,7 @@ import {
   assignQueue, QUEUE_ORDER, REPEAT_WINDOW_DAYS, type QueueInfo,
 } from '@/features/customers/engine/customers';
 import { fetchLastContacts, fetchPendingExclusions, type CustomerContact, type ExclusionRequest } from '@/features/customers/engine/contacts';
+import { fetchTeamRoster, fetchTeamCustomers } from '@/features/customers/engine/team';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair } from '@/features/customers/engine/crossSell';
 
@@ -54,6 +55,9 @@ type XRow = CustomerRow & {
   queue: QueueInfo;
   lastContact: CustomerContact | null;
   pendingExclusion: Pick<ExclusionRequest, 'id' | 'reason' | 'requestedBy' | 'createdAt'> | null;
+  /** Командный вид (team=1): чей это заказчик. */
+  managerId?: string;
+  managerName?: string;
 };
 
 // Сортировка по заголовкам (правило владельца 01.08 «Заголовки = сортировка», по
@@ -136,27 +140,31 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const sp = req.nextUrl.searchParams;
+  // Командный вид (17.09, РОП и выше): team=1 — заказчики всех менеджеров
+  // подконтрольных отделов, mgr=<id> — сузить до одного. Ростер — managed-depts
+  // сессии, поэтому чужие менеджеры недостижимы; bitrixId в этом режиме не нужен.
+  const teamMode = sp.get('team') === '1';
   const requested = sp.get('bitrixId');
   const bitrixId = requested && /^\d+$/.test(requested) ? requested : session.bitrixUserId;
-  if (!bitrixId) {
-    return NextResponse.json({
-      total: 0,
-      counts: {
-        all: 0, active: 0, inactive: 0, overdue: 0, refusedNoCall: 0,
-        sections: { regular: 0, regularAtRisk: 0, once: 0, never: 0 },
-        sleeping: 0, refused: 0, refusedByReason: {},
-        queues: { window: 0, missed: 0, faded: 0, rest: 0, autoLostNoCall: 0 },
-      },
-      page: 1, pageSize: 50, rows: [],
-      thresholds: {
-        globalCycleDays: GLOBAL_REPEAT_CYCLE_DAYS, activeNoCallDays: ACTIVE_NO_CALL_DAYS,
-        atRiskCycleMultiplier: AT_RISK_CYCLE_MULTIPLIER,
-        sleepCycleMultiplier: SLEEP_CYCLE_MULTIPLIER, sleepMinDays: SLEEP_MIN_DAYS,
-        windowDays: REPEAT_WINDOW_DAYS,
-      },
-    });
-  }
-  if (bitrixId !== session.bitrixUserId && !(await canViewManager(session, bitrixId))) {
+  const empty = () => NextResponse.json({
+    total: 0,
+    counts: {
+      all: 0, active: 0, inactive: 0, overdue: 0, refusedNoCall: 0,
+      sections: { regular: 0, regularAtRisk: 0, once: 0, never: 0 },
+      sleeping: 0, refused: 0, refusedByReason: {},
+      queues: { window: 0, missed: 0, faded: 0, rest: 0, autoLostNoCall: 0 },
+      managers: [],
+    },
+    page: 1, pageSize: 50, rows: [],
+    thresholds: {
+      globalCycleDays: GLOBAL_REPEAT_CYCLE_DAYS, activeNoCallDays: ACTIVE_NO_CALL_DAYS,
+      atRiskCycleMultiplier: AT_RISK_CYCLE_MULTIPLIER,
+      sleepCycleMultiplier: SLEEP_CYCLE_MULTIPLIER, sleepMinDays: SLEEP_MIN_DAYS,
+      windowDays: REPEAT_WINDOW_DAYS,
+    },
+  });
+  if (!teamMode && !bitrixId) return empty();
+  if (!teamMode && bitrixId !== session.bitrixUserId && !(await canViewManager(session, bitrixId!))) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -171,7 +179,17 @@ export async function GET(req: NextRequest) {
   // ветка ответа — без счётчиков вкладок, они тут не нужны.
   const keyParam = sp.get('key');
 
-  const engineRows = await fetchManagerCustomers(Number(bitrixId));
+  let roster: { id: string; name: string; departmentName: string | null }[] = [];
+  let engineRows: (CustomerRow & { managerId?: string; managerName?: string })[];
+  if (teamMode) {
+    roster = await fetchTeamRoster(session);
+    if (!roster.length) return empty();
+    const mgr = sp.get('mgr');
+    const subset = mgr && /^\d+$/.test(mgr) ? roster.filter(m => m.id === mgr) : roster;
+    engineRows = await fetchTeamCustomers(subset);
+  } else {
+    engineRows = await fetchManagerCustomers(Number(bitrixId));
+  }
 
   // Отметки — свежим запросом поверх кэша движка (снуз/«не звонить» действуют
   // сразу). У снузнутых сигналы/«под угрозой» гасятся здесь же.
@@ -283,6 +301,12 @@ export async function GET(req: NextRequest) {
         rest: bought.filter(r => r.queue.queue === 'rest').length,
         autoLostNoCall: bought.filter(r => r.autoRepeatLostNoCall && r.queue.queue !== 'rest').length,
       },
+      // Командный вид: ростер для селекта менеджера + сколько у кого в очередях.
+      managers: roster.map(m => ({
+        ...m,
+        window: bought.filter(r => r.managerId === m.id && r.queue.queue === 'window').length,
+        missed: bought.filter(r => r.managerId === m.id && r.queue.queue === 'missed').length,
+      })),
       sections: {
         regular: bought.filter(r => r.section === 'regular').length,
         regularAtRisk: bought.filter(r => r.atRisk).length,

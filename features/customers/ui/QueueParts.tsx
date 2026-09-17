@@ -148,17 +148,17 @@ export function ExclusionRequestModal({ r, managerId, isSelf, onClose }: { r: Ap
 }
 
 // ── Панель решений РОПа ───────────────────────────────────────────────────────
-export function ExclusionRequestsPanel({ managerId, isSelf, names }: { managerId: string; isSelf: boolean; names: Map<string, string> }) {
+export function ExclusionRequestsPanel({ managerId, isSelf, names, team }: { managerId: string; isSelf: boolean; names: Map<string, string>; team?: boolean }) {
   const qc = useQueryClient();
   const { data } = useQuery<{ items: ExclusionRequest[]; canDecide: boolean }>({
-    queryKey: ['customers-exclusions', managerId],
-    queryFn: () => fetch(`/api/customers/exclusion?managerId=${managerId}`).then(r => r.json()),
+    queryKey: ['customers-exclusions', team ? 'team' : managerId],
+    queryFn: () => fetch(team ? '/api/customers/exclusion?team=1' : `/api/customers/exclusion?managerId=${managerId}`).then(r => r.json()),
     refetchOnWindowFocus: false,
   });
   const decide = useMutation({
-    mutationFn: async (v: { id: number; approve: boolean }) => {
+    mutationFn: async (v: { id: number; approve: boolean; managerId: string }) => {
       const res = await fetch('/api/customers/exclusion', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...v, managerId }),
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
@@ -179,9 +179,9 @@ export function ExclusionRequestsPanel({ managerId, isSelf, names }: { managerId
             <span className="min-w-0 flex-1 text-xs text-[var(--color-text)]">«{it.reason}» <span className="text-[var(--color-text-muted)]">— {it.requestedBy}, {fmtDate(it.createdAt)}</span></span>
             {data?.canDecide && (
               <span className="flex gap-1.5 shrink-0">
-                <button type="button" disabled={decide.isPending} onClick={() => decide.mutate({ id: it.id, approve: true })}
+                <button type="button" disabled={decide.isPending} onClick={() => decide.mutate({ id: it.id, approve: true, managerId: it.managerBitrixId })}
                   className={`${btn} !border-transparent`} style={{ color: 'var(--color-text-inverse)', backgroundColor: 'var(--color-negative, #e03131)' }}>Исключить</button>
-                <button type="button" disabled={decide.isPending} onClick={() => decide.mutate({ id: it.id, approve: false })} className={btn}>Оставить в работе</button>
+                <button type="button" disabled={decide.isPending} onClick={() => decide.mutate({ id: it.id, approve: false, managerId: it.managerBitrixId })} className={btn}>Оставить в работе</button>
               </span>
             )}
           </div>
@@ -214,10 +214,10 @@ function Tile({ label, value, sub, delta, betterUp, hint }: { label: string; val
 const pctS = (v: number | null) => v === null ? '—' : `${Math.round(v)} %`;
 const d = (a: number | null, b: number | null) => (a === null || b === null ? null : a - b);
 
-export function RepeatHeaderBlock({ managerId, isSelf }: { managerId: string; isSelf: boolean }) {
+export function RepeatHeaderBlock({ managerId, isSelf, team, mgr }: { managerId: string; isSelf: boolean; team?: boolean; mgr?: string }) {
   const { data, isError } = useQuery<RepeatHeader>({
-    queryKey: ['customers-header', isSelf ? 'me' : managerId],
-    queryFn: () => fetch(`/api/customers/header${isSelf ? '' : `?bitrixId=${managerId}`}`).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }),
+    queryKey: ['customers-header', team ? `team:${mgr ?? 'all'}` : isSelf ? 'me' : managerId],
+    queryFn: () => fetch(team ? `/api/customers/header?team=1${mgr ? `&mgr=${mgr}` : ''}` : `/api/customers/header${isSelf ? '' : `?bitrixId=${managerId}`}`).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }),
     staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
   });
   if (isError) return null;

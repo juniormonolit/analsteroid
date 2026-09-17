@@ -39,6 +39,7 @@ interface ApiResponse {
     sleeping: number; refused: number; refusedByReason: Partial<Record<NoCallReason, number>>;
     byCategory?: { key: number; large: number; regular: number; once: number; potential: number; keyAtRisk: number };
     queues?: { window: number; missed: number; faded: number; rest: number; autoLostNoCall: number };
+    managers?: { id: string; name: string; departmentName: string | null; window: number; missed: number }[];
   };
   page: number; pageSize: number; rows: ApiRow[];
   thresholds: {
@@ -99,12 +100,12 @@ function useCustomerByKey(managerId: string, isSelf: boolean, key: string | null
   });
 }
 
-function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort, category: string) {
+function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort, category: string, team?: boolean, mgr?: string) {
   return useQuery<ApiResponse>({
-    queryKey: ['customers', isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? '', category],
+    queryKey: ['customers', team ? `team:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? '', category],
     queryFn: async () => {
       const qs = new URLSearchParams();
-      if (!isSelf) qs.set('bitrixId', managerId);
+      if (team) { qs.set('team', '1'); if (mgr) qs.set('mgr', mgr); } else if (!isSelf) qs.set('bitrixId', managerId);
       qs.set('filter', filter);
       if (search) qs.set('search', search);
       qs.set('page', String(page));
@@ -179,7 +180,7 @@ export function MarkControls({ r, send, busy, onDone, managerId, isSelf }: {
   const [comment, setComment] = useState('');
 
   const btn = 'rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-semibold hover:bg-[var(--color-bg-hover)] disabled:opacity-40 text-left';
-  const fire = (payload: Record<string, unknown>) => { setOpen(null); onDone?.(); void send(payload); };
+  const fire = (payload: Record<string, unknown>) => { setOpen(null); onDone?.(); void send(r.managerId ? { ...payload, managerId: r.managerId } : payload); };
 
   if (r.mark?.kind === 'no_call') {
     return <button type="button" disabled={busy} className={btn}
@@ -414,8 +415,10 @@ function RecommendCell({ rec }: { rec: Recommendation | null }) {
 
 /** Список заказчиков одного менеджера: фильтры + поиск + пагинация.
  *  Используется и в табе ЛК, и в провале из блока РОПа. */
-export function CustomersList({ managerId, isSelf, initialFilter, initialCategory, initialCustomerKey }: {
+export function CustomersList({ managerId, isSelf, initialFilter, initialCategory, initialCustomerKey, team = false }: {
   managerId: string; isSelf: boolean;
+  /** Командный вид (РОП и выше, 17.09): заказчики всех менеджеров подконтрольных отделов. */
+  team?: boolean;
   // Деп-линк из «Планёрки» (01.08): открыть список сразу в нужном срезе
   // (например filter='overdue' — «пора позвонить», category='key' — ключевые).
   initialFilter?: Filter; initialCategory?: string;
@@ -430,6 +433,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   const [sort, setSort] = useState<Sort>(null);
   const [cardRow, setCardRow] = useState<ApiRow | null>(null);
   const [category, setCategory] = useState<string>(initialCategory ?? 'all'); // фильтр по категории (01.08)
+  const [mgr, setMgr] = useState<string>(''); // командный вид: один менеджер или все
 
   // Деп-линк по заказчику (задача 2822): одноразовый запрос при заходе — после
   // первого ответа (найден/не найден) ключ сбрасывается, повторные ререндеры
@@ -451,9 +455,10 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   const sendMark: MarkSender = async (payload) => {
     setMarkBusy(true);
     try {
+      const rowMgr = typeof payload.managerId === 'string' ? payload.managerId : undefined;
       const res = await fetch('/api/customers/mark', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, ...(isSelf ? {} : { managerId }) }),
+        body: JSON.stringify({ ...payload, ...(rowMgr ? { managerId: rowMgr } : isSelf && !team ? {} : { managerId }) }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => null);
@@ -476,12 +481,12 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   }, [searchInput]);
 
   // Счётчики пилюль и категорий — лёгкий запрос первой страницы (данные доски — в QueueBoard).
-  const { data } = useCustomers(managerId, isSelf, filter, search, 1, null, category);
+  const { data } = useCustomers(managerId, isSelf, filter, search, 1, null, category, team, mgr || undefined);
   const rows = data?.rows ?? [];
 
   // Карточка открыта — держим строку свежей после мутаций: доска грузит очереди
   // независимо, поэтому строку перечитываем по ключу (тот же деп-линк роут).
-  const liveQuery = useCustomerByKey(managerId, isSelf, cardRow?.clientKey ?? null);
+  const liveQuery = useCustomerByKey(cardRow?.managerId ?? managerId, team ? false : isSelf, cardRow?.clientKey ?? null);
   const cardRowLive = cardRow ? (liveQuery.data?.row ?? cardRow) : null;
 
   const Th = ({ k, label, right = false }: { k?: string; label: string; right?: boolean }) => (
@@ -550,15 +555,15 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   return (
     <div className="flex flex-col gap-2.5">
       {/* На телефоне метрики не липнут (съели бы пол-экрана) — обычный блок сверху. */}
-      <div className="sm:hidden"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} /></div>
+      <div className="sm:hidden"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} team={team} mgr={mgr || undefined} /></div>
       {/* Липкая шапка (правка владельца 17.09 «шапку зафиксируй»): метрики месяца
           и пилюли очередей остаются на виду, пока листаешь доску. Родитель со
           скроллом — обёртка PullToRefresh страницы ЛК, top-0 отсчитывается от неё. */}
       <div className="sticky top-0 z-20 -mx-1 px-1 pt-1 pb-2 bg-[var(--color-bg)] flex flex-col gap-2.5 border-b border-[var(--color-border)]">
-        <div className="hidden sm:block"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} /></div>
+        <div className="hidden sm:block"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} team={team} mgr={mgr || undefined} /></div>
         <FiltersRow />
       </div>
-      <ExclusionRequestsPanel managerId={managerId} isSelf={isSelf} names={namesByKey} />
+      <ExclusionRequestsPanel managerId={managerId} isSelf={team ? false : isSelf} names={namesByKey} team={team} />
       {deepLinkMissing && (
         <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-xs text-[var(--color-text-muted)]">
           <span>Заказчик по ссылке не найден в вашем списке — возможно, сменил менеджера или ссылка устарела.</span>
@@ -592,25 +597,26 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
       <QueueBoard managerId={managerId} isSelf={isSelf} filter={filter} search={search} category={category}
         sort={sort ? `${sort.key}:${sort.dir}` : ''}
         onOpen={r => setCardRow(r)}
-        renderActions={r => <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} managerId={managerId} isSelf={isSelf} />} />
+        team={team} mgr={mgr || undefined}
+        renderActions={r => <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} managerId={r.managerId ?? managerId} isSelf={team ? false : isSelf} />} />
 
       {cardRowLive && (
         <CustomerCard
           row={cardRowLive}
-          managerId={managerId}
-          isSelf={isSelf}
+          managerId={cardRowLive.managerId ?? managerId}
+          isSelf={team ? false : isSelf}
           onClose={() => setCardRow(null)}
-          markControls={<MarkControls r={cardRowLive} send={sendMark} busy={markBusy} managerId={managerId} isSelf={isSelf} />}
+          markControls={<MarkControls r={cardRowLive} send={sendMark} busy={markBusy} managerId={cardRowLive.managerId ?? managerId} isSelf={team ? false : isSelf} />}
         />
       )}
     </div>
   );
 }
 
-export function CustomersTab({ managerId, isSelf, initialFilter, initialCategory, initialCustomerKey }: {
-  managerId: string; isSelf: boolean; initialFilter?: Filter; initialCategory?: string; initialCustomerKey?: string;
+export function CustomersTab({ managerId, isSelf, initialFilter, initialCategory, initialCustomerKey, team }: {
+  managerId: string; isSelf: boolean; initialFilter?: Filter; initialCategory?: string; initialCustomerKey?: string; team?: boolean;
 }) {
-  return <CustomersList managerId={managerId} isSelf={isSelf} initialFilter={initialFilter} initialCategory={initialCategory} initialCustomerKey={initialCustomerKey} />;
+  return <CustomersList managerId={managerId} isSelf={isSelf} initialFilter={initialFilter} initialCategory={initialCategory} initialCustomerKey={initialCustomerKey} team={team} />;
 }
 
 // ── Блок РОПа: заказчики команды (managed-depts, как «Моя команда») ──────────
