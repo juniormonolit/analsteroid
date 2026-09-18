@@ -182,7 +182,12 @@ export async function GET(req: NextRequest) {
   let roster: { id: string; name: string; departmentName: string | null }[] = [];
   let engineRows: (CustomerRow & { managerId?: string; managerName?: string })[];
   if (teamMode) {
-    roster = await fetchTeamRoster(session);
+    // Чей отдел: for=<bitrixId> (кабинет РОПа, открытый руководителем) либо свой.
+    const anchor = sp.get('for') && /^\d+$/.test(sp.get('for')!) ? sp.get('for')! : session.bitrixUserId;
+    if (anchor && anchor !== session.bitrixUserId && !(await canViewManager(session, anchor))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    roster = await fetchTeamRoster(session, anchor);
     if (!roster.length) return empty();
     const mgr = sp.get('mgr');
     const dept = (sp.get('dept') ?? '').trim();

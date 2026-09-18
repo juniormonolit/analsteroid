@@ -102,10 +102,10 @@ function useCustomerByKey(managerId: string, isSelf: boolean, key: string | null
 
 function useCustomers(managerId: string, isSelf: boolean, filter: Filter, search: string, page: number, sort: Sort, category: string, team?: boolean, mgr?: string, dept?: string) {
   return useQuery<ApiResponse>({
-    queryKey: ['customers', team ? `team:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? '', category],
+    queryKey: ['customers', team ? `team:${managerId}:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, filter, search, page, sort?.key ?? '', sort?.dir ?? '', category],
     queryFn: async () => {
       const qs = new URLSearchParams();
-      if (team) { qs.set('team', '1'); if (mgr) qs.set('mgr', mgr); if (dept) qs.set('dept', dept); } else if (!isSelf) qs.set('bitrixId', managerId);
+      if (team) { qs.set('team', '1'); qs.set('for', managerId); if (mgr) qs.set('mgr', mgr); if (dept) qs.set('dept', dept); } else if (!isSelf) qs.set('bitrixId', managerId);
       qs.set('filter', filter);
       if (search) qs.set('search', search);
       qs.set('page', String(page));
@@ -415,7 +415,7 @@ function RecommendCell({ rec }: { rec: Recommendation | null }) {
 
 /** Список заказчиков одного менеджера: фильтры + поиск + пагинация.
  *  Используется и в табе ЛК, и в провале из блока РОПа. */
-export function CustomersList({ managerId, isSelf, initialFilter, initialCategory, initialCustomerKey, team = false }: {
+export function CustomersList({ managerId, isSelf, initialFilter, initialCategory, initialCustomerKey, team: teamProp = false }: {
   managerId: string; isSelf: boolean;
   /** Командный вид (РОП и выше, 17.09): заказчики всех менеджеров подконтрольных отделов. */
   team?: boolean;
@@ -433,6 +433,16 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   const [sort, setSort] = useState<Sort>(null);
   const [cardRow, setCardRow] = useState<ApiRow | null>(null);
   const [category, setCategory] = useState<string>(initialCategory ?? 'all'); // фильтр по категории (01.08)
+  // Переключатель «Мои / Отдел» (правка владельца 18.09: РОП видел только своих):
+  // показывается, если у менеджера кабинета есть подконтрольные отделы.
+  const { data: rosterProbe } = useQuery<{ managers: { id: string; name: string }[] }>({
+    queryKey: ['customers-roster', managerId],
+    queryFn: () => fetch(`/api/customers/roster?bitrixId=${managerId}`).then(r => (r.ok ? r.json() : { managers: [] })),
+    staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
+  });
+  const canTeam = teamProp || (rosterProbe?.managers?.length ?? 0) > 0;
+  const [scope, setScope] = useState<'own' | 'team'>(teamProp ? 'team' : 'own');
+  const team = canTeam && scope === 'team';
   const [mgr, setMgr] = useState<string>(''); // командный вид: один менеджер или все
   const [dept, setDept] = useState<string>(''); // командный вид: отдел
 
@@ -510,6 +520,16 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   // Ряд фильтров — вынесен, чтобы жить внутри липкой шапки (замыкание на состояние списка).
   const FiltersRow = () => (
       <div className="flex flex-wrap items-center gap-2">
+      {canTeam && (
+        <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5" title="Свои заказчики или весь отдел (все менеджеры подконтрольных отделов)">
+          {([['own', isSelf ? 'Мои' : 'Свои'], ['team', 'Отдел']] as const).map(([k, label]) => (
+            <button key={k} type="button" onClick={() => { setScope(k); setMgr(''); setDept(''); }}
+              className={`min-h-11 sm:min-h-0 rounded-lg px-3 py-1 text-xs font-bold whitespace-nowrap transition-colors ${scope === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5 overflow-x-auto">
         {FILTERS.map(f => (
           <button key={f.key} type="button" onClick={() => { setFilter(f.key); setPage(1); }}

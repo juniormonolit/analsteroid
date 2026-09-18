@@ -16,7 +16,10 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   if (url.searchParams.get('team') === '1') {
     // Командный вид: запросы всех менеджеров подконтрольных отделов, решать можно.
-    const roster = await fetchTeamRoster(session);
+    const anchor = url.searchParams.get('for') && /^\d+$/.test(url.searchParams.get('for')!) ? url.searchParams.get('for')! : session.bitrixUserId;
+    if (anchor && anchor !== session.bitrixUserId && !(await canViewManager(session, anchor))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const roster = await fetchTeamRoster(session, anchor);
+    // Свои собственные запросы решать нельзя — PATCH это проверит; здесь список.
     const lists = await Promise.all(roster.map(m => listPendingExclusions(m.id)));
     return NextResponse.json({ items: lists.flat(), canDecide: true });
   }

@@ -151,8 +151,8 @@ export function ExclusionRequestModal({ r, managerId, isSelf, onClose }: { r: Ap
 export function ExclusionRequestsPanel({ managerId, isSelf, names, team }: { managerId: string; isSelf: boolean; names: Map<string, string>; team?: boolean }) {
   const qc = useQueryClient();
   const { data } = useQuery<{ items: ExclusionRequest[]; canDecide: boolean }>({
-    queryKey: ['customers-exclusions', team ? 'team' : managerId],
-    queryFn: () => fetch(team ? '/api/customers/exclusion?team=1' : `/api/customers/exclusion?managerId=${managerId}`).then(r => r.json()),
+    queryKey: ['customers-exclusions', team ? `team:${managerId}` : managerId],
+    queryFn: () => fetch(team ? `/api/customers/exclusion?team=1&for=${managerId}` : `/api/customers/exclusion?managerId=${managerId}`).then(r => r.json()),
     refetchOnWindowFocus: false,
   });
   const decide = useMutation({
@@ -216,8 +216,8 @@ const d = (a: number | null, b: number | null) => (a === null || b === null ? nu
 
 export function RepeatHeaderBlock({ managerId, isSelf, team, mgr, dept }: { managerId: string; isSelf: boolean; team?: boolean; mgr?: string; dept?: string }) {
   const { data, isError } = useQuery<RepeatHeader>({
-    queryKey: ['customers-header', team ? `team:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId],
-    queryFn: () => fetch(team ? `/api/customers/header?team=1${mgr ? `&mgr=${mgr}` : ''}${dept ? `&dept=${encodeURIComponent(dept)}` : ''}` : `/api/customers/header${isSelf ? '' : `?bitrixId=${managerId}`}`).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }),
+    queryKey: ['customers-header', team ? `team:${managerId}:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId],
+    queryFn: () => fetch(team ? `/api/customers/header?team=1&for=${managerId}${mgr ? `&mgr=${mgr}` : ''}${dept ? `&dept=${encodeURIComponent(dept)}` : ''}` : `/api/customers/header${isSelf ? '' : `?bitrixId=${managerId}`}`).then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); }),
     staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
   });
   if (isError) return null;

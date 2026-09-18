@@ -119,11 +119,11 @@ const PAGE = 24;
 
 function useQueuePages(managerId: string, isSelf: boolean, filter: string, search: string, category: string, sort: string, team?: boolean, mgr?: string, dept?: string) {
   return useInfiniteQuery<PageResponse>({
-    queryKey: ['customers', team ? `team:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, 'board', filter, search, category, sort],
+    queryKey: ['customers', team ? `team:${managerId}:${dept ?? ''}:${mgr ?? 'all'}` : isSelf ? 'me' : managerId, 'board', filter, search, category, sort],
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
       const qs = new URLSearchParams({ filter, page: String(pageParam), pageSize: String(PAGE) });
-      if (team) { qs.set('team', '1'); if (mgr) qs.set('mgr', mgr); if (dept) qs.set('dept', dept); } else if (!isSelf) qs.set('bitrixId', managerId);
+      if (team) { qs.set('team', '1'); qs.set('for', managerId); if (mgr) qs.set('mgr', mgr); if (dept) qs.set('dept', dept); } else if (!isSelf) qs.set('bitrixId', managerId);
       if (search) qs.set('search', search);
       if (category && category !== 'all') qs.set('category', category);
       if (sort) { const [k, d] = sort.split(':'); qs.set('sort', k); qs.set('dir', d); }

@@ -12,7 +12,9 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   if (url.searchParams.get('team') === '1') {
     // Командный вид (17.09): сумма по менеджерам подконтрольных отделов, проценты — от сумм.
-    const roster = await fetchTeamRoster(session);
+    const anchor = url.searchParams.get('for') && /^\d+$/.test(url.searchParams.get('for')!) ? url.searchParams.get('for')! : session.bitrixUserId;
+    if (anchor && anchor !== session.bitrixUserId && !(await canViewManager(session, anchor))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const roster = await fetchTeamRoster(session, anchor);
     const mgr = url.searchParams.get('mgr');
     const dept = (url.searchParams.get('dept') ?? '').trim();
     let subset = dept ? roster.filter(m => (m.departmentName ?? '') === dept) : roster;

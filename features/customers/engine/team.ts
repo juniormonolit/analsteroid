@@ -12,9 +12,16 @@ import { fetchManagerCustomers, type CustomerRow } from './customers';
 
 export interface TeamManager { id: string; name: string; departmentName: string | null }
 
-export async function fetchTeamRoster(session: SessionUser): Promise<TeamManager[]> {
-  if (!session.bitrixUserId) return [];
-  const managed = await getCallControlManagedDepts(session.bitrixUserId);
+/**
+ * Ростер команды. anchorBitrixId — чей отдел (по умолчанию — сам смотрящий):
+ * руководитель, открывший кабинет РОПа, видит команду ЭТОГО РОПа (правка владельца
+ * 18.09: «Алёна Андреева — РОП, видит только своих»). Сам РОП в ростер входит —
+ * его заказчики тоже часть отдела.
+ */
+export async function fetchTeamRoster(session: SessionUser, anchorBitrixId?: string | null): Promise<TeamManager[]> {
+  const anchor = anchorBitrixId ?? session.bitrixUserId;
+  if (!anchor) return [];
+  const managed = await getCallControlManagedDepts(anchor);
   if (!managed.length) return [];
   const managers = await resolveManagersForDepartments(managed.map(d => d.deptId));
   const deptNames = new Map(managed.map(d => [d.deptId, d.deptName ?? null]));
@@ -22,7 +29,7 @@ export async function fetchTeamRoster(session: SessionUser): Promise<TeamManager
   const out: TeamManager[] = [];
   for (const m of managers) {
     const id = String(m.managerId);
-    if (!/^\d+$/.test(id) || id === session.bitrixUserId || seen.has(id)) continue;
+    if (!/^\d+$/.test(id) || seen.has(id)) continue;
     seen.add(id);
     out.push({ id, name: m.name || m.login || id, departmentName: deptNames.get(m.deptUuid) ?? null });
   }
