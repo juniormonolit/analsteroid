@@ -130,6 +130,26 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$REMOTE" "
   set -e
   cd $REMOTE_DIR
 
+  # Бэкап текущего билда перед перезаписью + ротация (keep 3) — задача #6751
+  TS=\$(date +%Y%m%d-%H%M%S)
+  mkdir -p prod-backups
+  if [ -f .next/standalone/.next/BUILD_ID ]; then
+    OLD_BUILD_ID=\$(cat .next/standalone/.next/BUILD_ID)
+    tar -czf \"prod-backups/analsteroid-prod-backup-\${TS}.tar.gz\" \
+      .next/standalone/.next/server/ \
+      .next/standalone/.next/*.json \
+      .next/standalone/.next/BUILD_ID \
+      .next/standalone/server.js \
+      .next/static/ \
+      public/ 2>/dev/null || true
+    echo \"\$OLD_BUILD_ID\" > \"prod-backups/BUILD_ID.rollback-\${TS}\"
+  fi
+  # ротация: оставить 3 последних *.tar.gz/*.tgz/BUILD_ID.* в prod-backups
+  cd prod-backups
+  ls -1t *.tar.gz *.tgz 2>/dev/null | tail -n +4 | xargs -r rm -f --
+  ls -1t BUILD_ID.* 2>/dev/null | tail -n +4 | xargs -r rm -f --
+  cd ..
+
   # Stop server
   kill \$(ss -tlnp | grep 8100 | grep -oP 'pid=\K[0-9]+') 2>/dev/null || true
   sleep 1
