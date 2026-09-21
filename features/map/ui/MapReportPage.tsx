@@ -12,7 +12,7 @@
 //   • точки с кластеризацией; клик по КЛАСТЕРУ — список всех его объектов и
 //     сделок (кластер не улетает в зум сам: zoomToBoundsOnClick=false, зум —
 //     отдельной кнопкой в панели);
-//   • тепловая карта (leaflet.heat) — включается поверх или вместо точек;
+//   • тепловая карта (штатный слой heatmap) — включается поверх или вместо точек;
 //   • круги радиусов вокруг филиалов (25/50/100 км) — «домашняя зона»;
 //   • «соседи» выбранного объекта по ВСЕЙ истории (/api/map/neighbors) —
 //     749 кустов с 3+ заказчиками дают больше половины выручки, это рабочий
@@ -20,8 +20,10 @@
 //   • раскладка по высоте экрана (h-dvh, карта тянется) + режим «на весь
 //     экран»; на телефоне панель уезжает под карту.
 //
-// Карта — Leaflet + OSM-тайлы. Библиотеки грузятся динамически в эффекте: они
-// лезут к window и на сервере не живут.
+// Карта — MapLibre GL + OSM-тайлы (Leaflet убран по указанию владельца 21.09,
+// подробности и причины переезда — в features/map/ui/mapEngine.ts). Библиотека
+// грузится динамически в эффекте: она лезет к window и на сервере не живёт.
+// Координаты в MapLibre — [lng, lat]; конвертация собрана в mapEngine.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -29,9 +31,8 @@ import dynamic from 'next/dynamic';
 import { MapPin, Loader2, X, Maximize2, Minimize2, SlidersHorizontal, ZoomIn, ChevronDown, Check } from 'lucide-react';
 import { Popover } from '@/components/ui/Popover';
 import { GS_BASE_ROW, mixHex } from '@/lib/colors/google-sheets-palette';
-import 'leaflet/dist/leaflet.css';
-import 'leaflet.markercluster/dist/MarkerCluster.css';
-import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import { osmStyle, boundsOf, circlePolygon, rectPolygon, setGeoJson, dropLayers, EMPTY_FC } from './mapEngine';
 
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 
@@ -204,107 +205,179 @@ export function MapReportPage() {
 
   // ── Карта ────────────────────────────────────────────────────────────────
   const mapEl = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<import('leaflet').Map | null>(null);
-  const pointsRef = useRef<import('leaflet').LayerGroup | null>(null);
-  const heatRef = useRef<import('leaflet').Layer | null>(null);
-  const circlesRef = useRef<import('leaflet').LayerGroup | null>(null);
-  const cellsRef = useRef<import('leaflet').LayerGroup | null>(null);
-  const [leaflet, setLeaflet] = useState<typeof import('leaflet') | null>(null);
+  const mapRef = useRef<import('maplibre-gl').Map | null>(null);
+  /** DOM-маркеры кластеров: их единицы, счётчик нужен текстом (см. mapEngine). */
+  const clusterMarkers = useRef<import('maplibre-gl').Marker[]>([]);
+  const popupRef = useRef<import('maplibre-gl').Popup | null>(null);
+  const [ml, setMl] = useState<typeof import('maplibre-gl') | null>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const L = (await import('leaflet')).default ?? (await import('leaflet'));
-      await import('leaflet.markercluster');
-      await import('leaflet.heat');
+      const mod = await import('maplibre-gl');
+      const M = (mod as unknown as { default?: typeof mod }).default ?? mod;
       if (cancelled || !mapEl.current || mapRef.current) return;
-      const map = L.map(mapEl.current, { center: [59.94, 30.31], zoom: 6, preferCanvas: true });
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+      const map = new M.Map({
+        container: mapEl.current,
+        style: osmStyle() as never,
+        center: [30.31, 59.94],   // [lng, lat]
+        zoom: 5,
+        attributionControl: { compact: true },
+      });
+      map.addControl(new M.NavigationControl({ showCompass: false }), 'top-right');
       mapRef.current = map;
-      setLeaflet(L);
+      popupRef.current = new M.Popup({ closeButton: false, closeOnClick: false, offset: 12 });
+      map.on('load', () => { if (!cancelled) setReady(true); });
+      setMl(M);
     })();
-    return () => { cancelled = true; mapRef.current?.remove(); mapRef.current = null; };
+    return () => {
+      cancelled = true;
+      clusterMarkers.current.forEach(m => m.remove());
+      clusterMarkers.current = [];
+      mapRef.current?.remove();
+      mapRef.current = null;
+    };
   }, []);
 
   // Масштабирование под размер экрана (правка владельца): при любом изменении
   // размеров контейнера — полноэкранный режим, поворот телефона, свёрнутые
-  // фильтры — Leaflet обязан пересчитать вьюпорт, иначе половина карты серая.
+  // фильтры — карта обязана пересчитать вьюпорт, иначе половина остаётся серой.
   useEffect(() => {
     const el = mapEl.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => { mapRef.current?.invalidateSize(); });
+    const ro = new ResizeObserver(() => { mapRef.current?.resize(); });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
   useEffect(() => {
-    const t = setTimeout(() => mapRef.current?.invalidateSize(), 60);
+    const t = setTimeout(() => mapRef.current?.resize(), 60);
     return () => clearTimeout(t);
   }, [fullscreen, filtersOpen, selected]);
 
-  // Точки + кластеры
-  useEffect(() => {
-    const L = leaflet;
-    const map = mapRef.current;
-    if (!L || !map || !data) return;
-    if (pointsRef.current) { map.removeLayer(pointsRef.current); pointsRef.current = null; }
-    if (layer === 'heat' || isConv) return;
+  // ── Точки + кластеры ──────────────────────────────────────────────────────
+  // Один GeoJSON-источник с cluster:true. Одиночные точки — слой circle (WebGL,
+  // тысячи штук без просадки), кластеры — DOM-маркеры: счётчик нужен текстом, а
+  // текстовому слою MapLibre требуются глифы с внешнего хоста (см. mapEngine).
+  const objByKey = useMemo(() => new Map((data?.objects ?? []).map(o => [o.key, o] as const)), [data]);
+  // Обработчики слоёв навешиваются ОДИН раз при создании слоя и замыкают первое
+  // значение данных. Поэтому читаем актуальные данные через ref, иначе клик по
+  // точке после смены фильтров открывал бы карточку из прошлой выборки.
+  const objByKeyRef = useRef(objByKey);
+  useEffect(() => { objByKeyRef.current = objByKey; }, [objByKey]);
+  const convRef = useRef<ConvData | null>(null);
+  useEffect(() => { convRef.current = conv ?? null; }, [conv]);
 
-    const cluster = (L as unknown as { markerClusterGroup: (o: object) => import('leaflet').LayerGroup & { on: (e: string, cb: (x: { layer: { getAllChildMarkers: () => unknown[] } }) => void) => void } })
-      .markerClusterGroup({
-        chunkedLoading: true,
-        maxClusterRadius: 50,
-        // Клик по кластеру не улетает в зум (правка владельца: «кликать на
-        // кластер и видеть все сделки там списком») — зум отдельной кнопкой.
-        zoomToBoundsOnClick: false,
-        spiderfyOnMaxZoom: false,
-        iconCreateFunction: (c: { getChildCount: () => number }) => {
-          const n = c.getChildCount();
-          const size = n < 10 ? 34 : n < 100 ? 42 : 52;
-          return L.divIcon({
-            html: `<div style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:999px;background:rgba(37,99,235,.85);color:#fff;font-weight:700;font-size:${n < 100 ? 13 : 12}px;border:2px solid rgba(255,255,255,.9)">${n}</div>`,
-            className: '', iconSize: [size, size],
-          });
+  const syncClusterMarkers = useCallback(() => {
+    const map = mapRef.current, M = ml;
+    if (!map || !M || !map.getSource('objects')) return;
+    clusterMarkers.current.forEach(mk => mk.remove());
+    clusterMarkers.current = [];
+    if (layer === 'heat' || isConv) return;
+    const feats = map.querySourceFeatures('objects', { filter: ['==', ['get', 'cluster'], true] });
+    const seen = new Set<string>();
+    for (const f of feats) {
+      const id = String(f.properties?.cluster_id ?? '');
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const n = Number(f.properties?.point_count ?? 0);
+      const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+      const size = n < 10 ? 34 : n < 100 ? 42 : 52;
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.title = `${n} объектов — открыть списком`;
+      el.style.cssText = `display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:999px;background:rgba(37,99,235,.85);color:#fff;font-weight:700;font-size:${n < 100 ? 13 : 12}px;border:2px solid rgba(255,255,255,.9);cursor:pointer`;
+      el.textContent = String(n);
+      // Клик по кластеру не улетает в зум (правка владельца: «кликать на кластер
+      // и видеть все сделки там списком») — зум отдельной кнопкой в панели.
+      el.onclick = async () => {
+        const src = map.getSource('objects') as import('maplibre-gl').GeoJSONSource;
+        const leaves = await src.getClusterLeaves(Number(id), 10_000, 0);
+        const objs = leaves
+          .map(l => objByKey.get(String((l.properties as { key?: string } | null)?.key ?? '')))
+          .filter((o): o is MapObject => !!o)
+          .sort((x, y) => y.sum - x.sum);
+        setSelected({ kind: 'cluster', objects: objs });
+      };
+      clusterMarkers.current.push(new M.Marker({ element: el }).setLngLat([lng, lat]).addTo(map));
+    }
+  }, [ml, layer, isConv, objByKey]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const hide = layer === 'heat' || isConv || !data;
+    const maxSum = Math.max(1, ...(data?.objects ?? []).map(o => o.sum));
+    const fc: GeoJSON.FeatureCollection = hide ? EMPTY_FC : {
+      type: 'FeatureCollection',
+      features: data!.objects.map(o => ({
+        type: 'Feature' as const,
+        properties: { key: o.key, sum: o.sum, r: 5 + Math.round(9 * Math.sqrt(o.sum / maxSum)), color: colorOf(o) },
+        geometry: { type: 'Point' as const, coordinates: [o.lon, o.lat] },
+      })),
+    };
+    setGeoJson(map, 'objects', fc, { cluster: true, clusterRadius: 50, clusterMaxZoom: 14 });
+    if (!map.getLayer('obj-points')) {
+      map.addLayer({
+        id: 'obj-points', type: 'circle', source: 'objects', filter: ['!', ['has', 'point_count']],
+        paint: {
+          'circle-radius': ['get', 'r'],
+          'circle-color': ['get', 'color'],
+          'circle-opacity': 0.8,
+          'circle-stroke-width': 1,
+          'circle-stroke-color': 'rgba(0,0,0,.35)',
         },
       });
-
-    const maxSum = Math.max(1, ...data.objects.map(o => o.sum));
-    for (const o of data.objects) {
-      const r = 5 + Math.round(9 * Math.sqrt(o.sum / maxSum));
-      const color = colorOf(o);
-      const m = L.circleMarker([o.lat, o.lon], { radius: r, weight: 1, color: mixHex(color, '#000000', 0.25), fillColor: color, fillOpacity: 0.8 });
-      (m as unknown as { __obj: MapObject }).__obj = o;
-      m.bindTooltip(
-        `${o.address}<br><b>${fmtMoney(o.sum)}</b> · сделок ${o.deals}${o.topGroup ? `<br>${o.topGroup}` : ''}${o.hot ? '<br><i>служебная точка: дефолтный адрес, не объект</i>' : ''}`,
-        { direction: 'top' },
-      );
-      m.on('click', () => setSelected({ kind: 'object', object: o }));
-      cluster.addLayer(m);
+      map.on('click', 'obj-points', e => {
+        const k = String(e.features?.[0]?.properties?.key ?? '');
+        const o = objByKeyRef.current.get(k);
+        if (o) setSelected({ kind: 'object', object: o });
+      });
+      map.on('mouseenter', 'obj-points', e => {
+        map.getCanvas().style.cursor = 'pointer';
+        const k = String(e.features?.[0]?.properties?.key ?? '');
+        const o = objByKeyRef.current.get(k);
+        if (!o || !popupRef.current) return;
+        popupRef.current
+          .setLngLat([o.lon, o.lat])
+          .setHTML(`${o.address}<br><b>${fmtMoney(o.sum)}</b> · сделок ${o.deals}${o.topGroup ? `<br>${o.topGroup}` : ''}${o.hot ? '<br><i>служебная точка: дефолтный адрес, не объект</i>' : ''}`)
+          .addTo(map);
+      });
+      map.on('mouseleave', 'obj-points', () => { map.getCanvas().style.cursor = ''; popupRef.current?.remove(); });
     }
-    cluster.on('clusterclick', (e: { layer: { getAllChildMarkers: () => unknown[] } }) => {
-      const objs = e.layer.getAllChildMarkers()
-        .map(m => (m as { __obj?: MapObject }).__obj)
-        .filter((o): o is MapObject => !!o)
-        .sort((a, b) => b.sum - a.sum);
-      setSelected({ kind: 'cluster', objects: objs });
-    });
-    map.addLayer(cluster);
-    pointsRef.current = cluster;
-  }, [leaflet, data, layer, colorOf, isConv]);
+    syncClusterMarkers();
+    map.on('move', syncClusterMarkers);
+    map.on('sourcedata', syncClusterMarkers);
+    return () => { map.off('move', syncClusterMarkers); map.off('sourcedata', syncClusterMarkers); };
+  }, [ready, data, layer, colorOf, isConv, syncClusterMarkers]);
 
   // Тепловая карта: вес точки — деньги, поэтому «горячо» там, где выручка, а
-  // не там, где просто много мелких отгрузок.
+  // не там, где просто много мелких отгрузок. Штатный слой heatmap.
   useEffect(() => {
-    const L = leaflet as unknown as { heatLayer?: (pts: [number, number, number][], o: object) => import('leaflet').Layer };
     const map = mapRef.current;
-    if (!leaflet || !map || !data) return;
-    if (heatRef.current) { map.removeLayer(heatRef.current); heatRef.current = null; }
-    if (layer === 'points' || isConv || !L.heatLayer) return;
-    const maxSum = Math.max(1, ...data.objects.map(o => o.sum));
-    const pts = data.objects.map(o => [o.lat, o.lon, Math.max(0.15, o.sum / maxSum)] as [number, number, number]);
-    const heat = L.heatLayer(pts, { radius: 26, blur: 20, maxZoom: 12, minOpacity: 0.25 });
-    heat.addTo(map);
-    heatRef.current = heat;
-  }, [leaflet, data, layer, isConv]);
+    if (!map || !ready) return;
+    const show = layer !== 'points' && !isConv && !!data;
+    const maxSum = Math.max(1, ...(data?.objects ?? []).map(o => o.sum));
+    const fc: GeoJSON.FeatureCollection = !show ? EMPTY_FC : {
+      type: 'FeatureCollection',
+      features: data!.objects.map(o => ({
+        type: 'Feature' as const,
+        properties: { w: Math.max(0.15, o.sum / maxSum) },
+        geometry: { type: 'Point' as const, coordinates: [o.lon, o.lat] },
+      })),
+    };
+    setGeoJson(map, 'heat', fc);
+    if (!map.getLayer('heat-layer')) {
+      map.addLayer({
+        id: 'heat-layer', type: 'heatmap', source: 'heat',
+        paint: {
+          'heatmap-weight': ['get', 'w'],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 4, 18, 12, 34],
+          'heatmap-opacity': 0.75,
+        },
+      }, map.getLayer('obj-points') ? 'obj-points' : undefined);
+    }
+  }, [ready, data, layer, isConv]);
 
   // Квадраты конверсии (правка владельца 21.09: «где территориально у меня
   // самая низкая конверсия?»). Считаем не по объекту — по одному адресу с
@@ -313,72 +386,96 @@ export function MapReportPage() {
   // текущей выборки: «хуже, чем обычно у этого товара», а не по абсолютной
   // шкале, где утеплитель и щебень несравнимы.
   useEffect(() => {
-    const L = leaflet;
     const map = mapRef.current;
-    if (!L || !map) return;
-    if (cellsRef.current) { map.removeLayer(cellsRef.current); cellsRef.current = null; }
-    if (!isConv || !conv) return;
-
-    const avg = mode === 'conv_sale' ? conv.summary.convSale : conv.summary.convShip;
-    const maxDeals = Math.max(1, ...conv.cells.map(c => c.deals));
-    const g = L.layerGroup();
-    for (const c of conv.cells) {
-      const value = mode === 'conv_sale' ? c.convSale : c.convShip;
-      const color = convColor(value, avg);
-      // Прозрачность по объёму: квадрат на 5 сделках не должен кричать так же,
-      // как квадрат на 200 — иначе «проблема» найдётся там, где просто мало данных.
-      const opacity = 0.25 + 0.45 * Math.sqrt(c.deals / maxDeals);
-      const rect = L.rectangle(c.bounds, { color, weight: 1, fillColor: color, fillOpacity: opacity });
-      rect.bindTooltip(
-        `${mode === 'conv_sale' ? 'CR в продажу' : 'CR в отгрузку'}: <b>${value}%</b>` +
-        `<br>${mode === 'conv_sale' ? c.sold : c.delivered} из ${c.deals} сделок` +
-        `<br>средняя по выборке ${avg}%`,
-        { direction: 'top' },
-      );
-      rect.on('click', () => setSelected({ kind: 'cell', cell: c }));
-      g.addLayer(rect);
+    if (!map || !ready) return;
+    const show = isConv && !!conv;
+    const avg = !conv ? 0 : mode === 'conv_sale' ? conv.summary.convSale : conv.summary.convShip;
+    const maxDeals = Math.max(1, ...(conv?.cells ?? []).map(c => c.deals));
+    const fc: GeoJSON.FeatureCollection = !show ? EMPTY_FC : {
+      type: 'FeatureCollection',
+      features: conv!.cells.map(c => {
+        const value = mode === 'conv_sale' ? c.convSale : c.convShip;
+        return rectPolygon(c.bounds, {
+          key: c.key, color: convColor(value, avg),
+          // Прозрачность по объёму: квадрат на 5 сделках не должен кричать так
+          // же, как квадрат на 200 — иначе «проблема» найдётся там, где просто
+          // мало данных.
+          opacity: 0.25 + 0.45 * Math.sqrt(c.deals / maxDeals),
+          tip: `${mode === 'conv_sale' ? 'CR в продажу' : 'CR в отгрузку'}: <b>${value}%</b>`
+             + `<br>${mode === 'conv_sale' ? c.sold : c.delivered} из ${c.deals} сделок`
+             + `<br>средняя по выборке ${avg}%`,
+        });
+      }),
+    };
+    setGeoJson(map, 'cells', fc);
+    if (!map.getLayer('cells-fill')) {
+      map.addLayer({ id: 'cells-fill', type: 'fill', source: 'cells',
+        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'opacity'] } });
+      map.addLayer({ id: 'cells-line', type: 'line', source: 'cells',
+        paint: { 'line-color': ['get', 'color'], 'line-width': 1 } });
+      map.on('click', 'cells-fill', e => {
+        const k = String(e.features?.[0]?.properties?.key ?? '');
+        const cell = convRef.current?.cells.find(c => c.key === k);
+        if (cell) setSelected({ kind: 'cell', cell });
+      });
+      map.on('mouseenter', 'cells-fill', e => {
+        map.getCanvas().style.cursor = 'pointer';
+        const tip = String(e.features?.[0]?.properties?.tip ?? '');
+        if (tip && popupRef.current) popupRef.current.setLngLat(e.lngLat).setHTML(tip).addTo(map);
+      });
+      map.on('mouseleave', 'cells-fill', () => { map.getCanvas().style.cursor = ''; popupRef.current?.remove(); });
     }
-    g.addTo(map);
-    cellsRef.current = g;
-    if (conv.cells.length > 0) {
-      const b = L.latLngBounds(conv.cells.flatMap(c => [c.bounds[0], c.bounds[1]] as [number, number][]));
-      map.fitBounds(b.pad(0.1), { maxZoom: 11 });
+    if (show && conv!.cells.length > 0) {
+      const b = boundsOf(conv!.cells.flatMap(c => [{ lat: c.bounds[0][0], lon: c.bounds[0][1] }, { lat: c.bounds[1][0], lon: c.bounds[1][1] }]));
+      if (b) map.fitBounds(b, { padding: 40, maxZoom: 11 });
     }
-  }, [leaflet, conv, isConv, mode]);
+  }, [ready, conv, isConv, mode]);
 
-  // Круги «домашней зоны» вокруг филиалов.
+  // Круги «домашней зоны» вокруг филиалов. У MapLibre нет круга в метрах —
+  // считаем полигон (mapEngine.circlePolygon), иначе радиус «плыл» бы с широтой.
   useEffect(() => {
-    const L = leaflet;
     const map = mapRef.current;
-    if (!L || !map) return;
-    if (circlesRef.current) { map.removeLayer(circlesRef.current); circlesRef.current = null; }
-    if (!branchRadius) return;
-    const g = L.layerGroup();
-    for (const b of BRANCHES) {
-      L.circle([b.lat, b.lon], {
-        radius: branchRadius * 1000, color: '#1d4ed8', weight: 1, dashArray: '4 4', fill: false, interactive: false,
-      }).addTo(g);
-      L.circleMarker([b.lat, b.lon], { radius: 4, color: '#1d4ed8', fillColor: '#1d4ed8', fillOpacity: 1 })
-        .bindTooltip(`${b.name} · радиус ${branchRadius} км`, { direction: 'top' }).addTo(g);
+    if (!map || !ready) return;
+    const fc: GeoJSON.FeatureCollection = !branchRadius ? EMPTY_FC : {
+      type: 'FeatureCollection',
+      features: BRANCHES.map(b => circlePolygon(b.lat, b.lon, branchRadius)),
+    };
+    setGeoJson(map, 'zones', fc);
+    if (!map.getLayer('zones-line')) {
+      map.addLayer({ id: 'zones-line', type: 'line', source: 'zones',
+        paint: { 'line-color': '#1d4ed8', 'line-width': 1, 'line-dasharray': [4, 4] } });
     }
-    g.addTo(map);
-    circlesRef.current = g;
-  }, [leaflet, branchRadius]);
+    const centers: GeoJSON.FeatureCollection = !branchRadius ? EMPTY_FC : {
+      type: 'FeatureCollection',
+      features: BRANCHES.map(b => ({ type: 'Feature' as const, properties: { name: `${b.name} · радиус ${branchRadius} км` },
+        geometry: { type: 'Point' as const, coordinates: [b.lon, b.lat] } })),
+    };
+    setGeoJson(map, 'branches', centers);
+    if (!map.getLayer('branches-dot')) {
+      map.addLayer({ id: 'branches-dot', type: 'circle', source: 'branches',
+        paint: { 'circle-radius': 4, 'circle-color': '#1d4ed8' } });
+      map.on('mouseenter', 'branches-dot', e => {
+        const name = String(e.features?.[0]?.properties?.name ?? '');
+        if (name && popupRef.current) popupRef.current.setLngLat(e.lngLat).setHTML(name).addTo(map);
+      });
+      map.on('mouseleave', 'branches-dot', () => popupRef.current?.remove());
+    }
+  }, [ready, branchRadius]);
 
   // Первая подгонка под данные (и при смене выборки).
   useEffect(() => {
-    const L = leaflet;
     const map = mapRef.current;
-    if (!L || !map || isConv || !data || data.objects.length === 0) return;
-    const b = L.latLngBounds(data.objects.map(o => [o.lat, o.lon] as [number, number]));
-    map.fitBounds(b.pad(0.1), { maxZoom: 12 });
-  }, [leaflet, data, isConv]);
+    if (!map || !ready || isConv || !data || data.objects.length === 0) return;
+    const b = boundsOf(data.objects);
+    if (b) map.fitBounds(b, { padding: 40, maxZoom: 12 });
+  }, [ready, data, isConv]);
 
   const zoomTo = (objs: MapObject[]) => {
-    const L = leaflet, map = mapRef.current;
-    if (!L || !map || objs.length === 0) return;
-    if (objs.length === 1) map.setView([objs[0]!.lat, objs[0]!.lon], 15);
-    else map.fitBounds(L.latLngBounds(objs.map(o => [o.lat, o.lon] as [number, number])).pad(0.15));
+    const map = mapRef.current;
+    if (!map || objs.length === 0) return;
+    if (objs.length === 1) { map.easeTo({ center: [objs[0]!.lon, objs[0]!.lat], zoom: 15 }); return; }
+    const b = boundsOf(objs);
+    if (b) map.fitBounds(b, { padding: 60 });
   };
 
   const toggle = (list: string[], v: string, set: (x: string[]) => void) =>
@@ -610,7 +707,11 @@ export function MapReportPage() {
           {selected?.kind === 'cell' && (
             <CellPanel cell={selected.cell} mode={mode} avg={mode === 'conv_sale' ? (cs?.convSale ?? 0) : (cs?.convShip ?? 0)}
               onClose={() => setSelected(null)} onDeal={setOpenDealId}
-              onZoom={() => { const map = mapRef.current; if (map) map.fitBounds(selected.cell.bounds as unknown as [[number, number], [number, number]]); }} />
+              onZoom={() => {
+                const map = mapRef.current, b = selected.cell.bounds;
+                // bounds приходят как [[lat,lon],[lat,lon]], MapLibre ждёт [[lng,lat],[lng,lat]].
+                if (map) map.fitBounds([[b[0][1], b[0][0]], [b[1][1], b[1][0]]], { padding: 40 });
+              }} />
           )}
           {!selected && (
             <div className="rounded-xl border border-dashed border-[var(--color-border)] px-3 py-3 text-[12px] text-[var(--color-text-muted)]">
