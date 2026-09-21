@@ -49,7 +49,7 @@ interface Facets {
 }
 interface MapData {
   objects: MapObject[];
-  summary: { deals: number; sum: number; objects: number; clients: number; withoutCoords: number; hiddenServiceDeals: number; shown: number; truncated: boolean };
+  summary: { deals: number; sum: number; objects: number; clients: number; withoutCoords: number; hiddenServiceDeals: number; pickupDeals: number; shown: number; truncated: boolean };
   facets: Facets;
 }
 interface ConvCell {
@@ -61,7 +61,7 @@ interface ConvCell {
 }
 interface ConvData {
   cells: ConvCell[]; cellKm: number; minDeals: number;
-  summary: { deals: number; sold: number; delivered: number; withoutCoords: number; convSale: number; convShip: number; cells: number; hiddenCells: number; truncated: boolean };
+  summary: { deals: number; sold: number; delivered: number; withoutCoords: number; pickupDeals: number; convSale: number; convShip: number; cells: number; hiddenCells: number; truncated: boolean };
   facets: Facets;
 }
 interface Neighbours {
@@ -408,6 +408,7 @@ export function MapReportPage() {
             <span>объектов <b className="text-[var(--color-text)] tabular-nums">{s ? s.objects.toLocaleString('ru-RU') : '…'}</b></span>
             <span>заказчиков <b className="text-[var(--color-text)] tabular-nums">{s ? s.clients.toLocaleString('ru-RU') : '…'}</b></span>
             <span title="Сделки выборки без адреса или без координат — на карту не попали">без координат <b className="text-[var(--color-text)] tabular-nums">{s ? s.withoutCoords.toLocaleString('ru-RU') : '…'}</b></span>
+            {!!s?.pickupDeals && <span title="«Париж» в адресе — самовывоз: точки доставки нет, на карту такие сделки не ставятся">самовывоз <b className="text-[var(--color-text)] tabular-nums">{s.pickupDeals.toLocaleString('ru-RU')}</b></span>}
           </div>
         )}
         {isConv && (
@@ -417,6 +418,7 @@ export function MapReportPage() {
             <span>CR в отгрузку <b className="text-[var(--color-text)] tabular-nums">{cs ? `${cs.convShip}%` : '…'}</b></span>
             <span>квадратов <b className="text-[var(--color-text)] tabular-nums">{cs ? cs.cells.toLocaleString('ru-RU') : '…'}</b></span>
             <span title="Квадраты, где сделок меньше порога — спрятаны, чтобы 0% на двух сделках не выглядел проблемой">скрыто мелких <b className="text-[var(--color-text)] tabular-nums">{cs ? cs.hiddenCells.toLocaleString('ru-RU') : '…'}</b></span>
+            {!!cs?.pickupDeals && <span title="«Париж» в адресе — самовывоз: к территории не привязан, в конверсии по районам не участвует">самовывоз <b className="text-[var(--color-text)] tabular-nums">{cs.pickupDeals.toLocaleString('ru-RU')}</b></span>}
           </div>
         )}
         {(isFetching || convFetching) && <Loader2 size={14} className="animate-spin text-[var(--color-text-muted)]" />}

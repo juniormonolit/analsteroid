@@ -126,15 +126,18 @@ export async function GET(req: NextRequest) {
 
   // Адреса — из системной БД пачками (кросс-базного джойна нет).
   const ids = deals.map(d => Number(d.deal_id));
-  const addr = new Map<number, { address: string | null; lat: number | null; lon: number | null; objKey: string | null; clientKey: string | null }>();
+  const addr = new Map<number, { address: string | null; lat: number | null; lon: number | null; objKey: string | null; clientKey: string | null; isPickup: boolean }>();
   for (let i = 0; i < ids.length; i += ADDR_CHUNK) {
     const chunk = ids.slice(i, i + ADDR_CHUNK);
-    const r = await systemDb().query<{ deal_id: string; address: string | null; lat: number | null; lon: number | null; obj_key: string | null; client_key: string | null }>(
-      `SELECT deal_id, address, lat, lon, obj_key, client_key FROM deal_addresses
+    const r = await systemDb().query<{ deal_id: string; address: string | null; lat: number | null; lon: number | null; obj_key: string | null; client_key: string | null; is_pickup: boolean }>(
+      `SELECT deal_id, address, lat, lon, obj_key, client_key, is_pickup FROM deal_addresses
         WHERE found AND lat IS NOT NULL AND deal_id = ANY($1::bigint[])`, [chunk],
     );
     for (const row of r.rows) {
-      addr.set(Number(row.deal_id), { address: row.address, lat: row.lat, lon: row.lon, objKey: row.obj_key, clientKey: row.client_key });
+      addr.set(Number(row.deal_id), {
+        address: row.address, lat: row.lat, lon: row.lon, objKey: row.obj_key,
+        clientKey: row.client_key, isPickup: row.is_pickup,
+      });
     }
   }
 
@@ -169,7 +172,7 @@ export async function GET(req: NextRequest) {
     items: { dealId: number; amount: number; at: string | null; manager: string | null; group: string | null; name: string | null }[];
   }
   const byObj = new Map<string, ObjAgg>();
-  const summary = { deals: 0, sum: 0, objects: 0, withoutCoords: 0, hidden: 0, clients: new Set<string>(), truncated: deals.length >= MAX_DEALS };
+  const summary = { deals: 0, sum: 0, objects: 0, withoutCoords: 0, hidden: 0, pickup: 0, clients: new Set<string>(), truncated: deals.length >= MAX_DEALS };
   const facetManagers = new Map<string, { id: string; name: string; department: string | null; deals: number; sum: number }>();
   const facetGroups = new Map<string, { group: string; deals: number; sum: number }>();
   const facetDepts = new Map<string, { department: string; deals: number; sum: number }>();
@@ -178,6 +181,9 @@ export async function GET(req: NextRequest) {
     const a = addr.get(Number(d.deal_id));
     const amount = Number(d.amount ?? 0) || 0;
     if (!a || a.lat === null || a.lon === null || !a.objKey) { summary.withoutCoords++; continue; }
+    // Самовывоз («Париж», правило владельца 21.09): точки доставки нет вовсе —
+    // на карту не ставим, но и в «без координат» не пишем, считаем отдельно.
+    if (a.isPickup) { summary.pickup++; continue; }
     const isHot = hot.has(a.objKey);
     if (isHot && !withHot) { summary.hidden++; continue; }
     if (builderKeys && (!a.clientKey || !builderKeys.has(a.clientKey))) continue;
@@ -243,7 +249,7 @@ export async function GET(req: NextRequest) {
     summary: {
       deals: summary.deals, sum: Math.round(summary.sum), objects: byObj.size,
       clients: summary.clients.size, withoutCoords: summary.withoutCoords,
-      hiddenServiceDeals: summary.hidden,
+      hiddenServiceDeals: summary.hidden, pickupDeals: summary.pickup,
       shown: objects.length, truncated: summary.truncated,
     },
     facets: {
@@ -255,7 +261,7 @@ export async function GET(req: NextRequest) {
 }
 
 function emptySummary() {
-  return { deals: 0, sum: 0, objects: 0, clients: 0, withoutCoords: 0, hiddenServiceDeals: 0, shown: 0, truncated: false };
+  return { deals: 0, sum: 0, objects: 0, clients: 0, withoutCoords: 0, hiddenServiceDeals: 0, pickupDeals: 0, shown: 0, truncated: false };
 }
 function emptyFacets() {
   return { managers: [], groups: [], departments: [] };

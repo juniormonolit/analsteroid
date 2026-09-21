@@ -1,6 +1,7 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
 import { CLIENT_KEY_CASE_SQL } from './clientKey';
+import { isNewPurchaseSql } from '@/lib/metrics/repeatRule';
 
 // ── «Шанс на повтор»: эмпирическая вероятность следующей отгрузки ────────────
 // Аудит раздела «Мои заказчики» (правка владельца 21.09: «слева направо и сверху
@@ -29,7 +30,9 @@ import { CLIENT_KEY_CASE_SQL } from './clientKey';
 // тот же паттерн, что у crossSell.ts.
 
 /** Горизонт, на котором считаем «купит ещё раз». 180 дней — как в исследовании
- *  ППО: к этому сроку кривая возвратов выходит на плато. */
+ *  ППО: к этому сроку кривая возвратов выходит на плато.
+ *  ВАЖНО: считается по ПОКУПКАМ (дробные отгрузки склеены, см.
+ *  lib/metrics/repeatRule.ts), иначе вероятность завышена на 0,7–2,3 п.п. */
 export const REPEAT_HORIZON_DAYS = 180;
 /** Меньше стольких отгрузок в группе — статистики мало, множитель не применяем. */
 const MIN_ROWS_FOR_GROUP = 200;
@@ -65,25 +68,44 @@ export function deliveriesBucket(n: number): string {
 const oddsOf = (p: number) => (p <= 0 ? 0 : p >= 1 ? Infinity : p / (1 - p));
 
 export async function fetchRepeatScoreTable(): Promise<RepeatScoreTable> {
-  return cached('customers:repeatScore:v2', 24 * 3600, async () => {
+  // v3 — дробные отгрузки склеиваются по правилу lib/metrics/repeatRule.ts.
+  return cached('customers:repeatScore:v3', 24 * 3600, async () => {
     const db = analyticsDb();
     // Нумеруем отгрузки заказчика, смотрим следующую (была ли, на какую сумму)
     // и его средний чек НА ЭТОТ МОМЕНТ (бегущее среднее — заглядывать в будущее
     // нельзя, иначе оценка сама себя подтвердит).
+    // Сначала СКЛЕИВАЕМ дробные отгрузки в покупки (правило владельца 21.09,
+    // lib/metrics/repeatRule.ts): без этого тысяча кубов песка десятью машинами
+    // считалась десятью повторами и завышала вероятность. Замер: доля дошедших
+    // до второй покупки падает с 21,1 % до 18,8 %.
     const seq = `
-      WITH d AS (
-        SELECT (${CLIENT_KEY_CASE_SQL}) AS ck, d.delivered_at, d.amount, d.head_group_name AS grp, d.funnel_id,
-               ROW_NUMBER() OVER (PARTITION BY (${CLIENT_KEY_CASE_SQL}) ORDER BY d.delivered_at, d.deal_id) AS rn,
-               LEAD(d.delivered_at) OVER (PARTITION BY (${CLIENT_KEY_CASE_SQL}) ORDER BY d.delivered_at, d.deal_id) AS nxt,
-               LEAD(d.amount) OVER (PARTITION BY (${CLIENT_KEY_CASE_SQL}) ORDER BY d.delivered_at, d.deal_id) AS nxt_amt,
-               avg(d.amount) OVER (PARTITION BY (${CLIENT_KEY_CASE_SQL}) ORDER BY d.delivered_at, d.deal_id
-                                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS avg_so_far
+      WITH raw AS (
+        SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, d.deal_id, d.delivered_at AS at,
+               d.amount, d.head_group_name AS grp, d.funnel_id
           FROM sa.deals d
          WHERE d.delivered_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)
       ),
+      flagged AS (
+        SELECT r.*, ${isNewPurchaseSql('r.at', 'r.grp', 'lag(r.at) OVER w', 'lag(r.grp) OVER w')} AS is_new
+          FROM raw r WHERE r.client_key IS NOT NULL
+        WINDOW w AS (PARTITION BY r.client_key ORDER BY r.at, r.deal_id)
+      ),
+      pur AS (
+        SELECT client_key, pno, min(at) AS at, sum(amount) AS amount, min(grp) AS grp, min(funnel_id) AS funnel_id
+          FROM (SELECT *, sum(is_new) OVER (PARTITION BY client_key ORDER BY at, deal_id ROWS UNBOUNDED PRECEDING) AS pno FROM flagged) z
+         GROUP BY client_key, pno
+      ),
+      d AS (
+        SELECT client_key AS ck, at AS delivered_at, amount, grp, funnel_id,
+               ROW_NUMBER() OVER (PARTITION BY client_key ORDER BY at, pno) AS rn,
+               LEAD(at)     OVER (PARTITION BY client_key ORDER BY at, pno) AS nxt,
+               LEAD(amount) OVER (PARTITION BY client_key ORDER BY at, pno) AS nxt_amt,
+               avg(amount)  OVER (PARTITION BY client_key ORDER BY at, pno
+                                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS avg_so_far
+          FROM pur
+      ),
       m AS (
-        SELECT * FROM d
-         WHERE ck IS NOT NULL AND delivered_at < now() - interval '${REPEAT_HORIZON_DAYS} days'
+        SELECT * FROM d WHERE delivered_at < now() - interval '${REPEAT_HORIZON_DAYS} days'
       )`;
     const repeated = `(nxt IS NOT NULL AND nxt <= delivered_at + interval '${REPEAT_HORIZON_DAYS} days')`;
 

@@ -17,11 +17,11 @@
 import { systemDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
 import { bx } from '@/lib/bitrix/notify';
-import { parseAddressCoords, objectKey } from './addressUtils';
+import { parseAddressCoords, objectKey, isPickupAddress } from './addressUtils';
 
 // Разбор формата и ключ «объекта» — в отдельном модуле без импорта БД:
 // их дёргает и клиентский код (карточка заказчика считает объекты).
-export { parseAddressCoords, objectKey } from './addressUtils';
+export { parseAddressCoords, objectKey, isPickupAddress } from './addressUtils';
 
 export interface DealAddress {
   dealId: number;
@@ -29,6 +29,9 @@ export interface DealAddress {
   lat: number | null;
   lon: number | null;
   regionId: string | null;
+  /** «Париж» в адресе = самовывоз: адреса доставки у сделки физически нет
+   *  (правило владельца 21.09, миграция 219). */
+  isPickup?: boolean;
   /** Привязка сделки к заказчику — кладём рядом, чтобы «объекты клиента» и
    *  карта считались без кросс-базного джойна с sa.deals (миграция 217). */
   companyId?: number | null;
@@ -50,8 +53,11 @@ interface BxDeal {
   COMPANY_ID?: string | null; CONTACT_ID?: string | null; CATEGORY_ID?: string | null;
 }
 
-function rowToAddress(r: { deal_id: string | number; address: string | null; lat: number | null; lon: number | null; region_id: string | null }): DealAddress {
-  return { dealId: Number(r.deal_id), address: r.address, lat: r.lat, lon: r.lon, regionId: r.region_id };
+function rowToAddress(r: { deal_id: string | number; address: string | null; lat: number | null; lon: number | null; region_id: string | null; is_pickup?: boolean }): DealAddress {
+  return {
+    dealId: Number(r.deal_id), address: r.address, lat: r.lat, lon: r.lon, regionId: r.region_id,
+    isPickup: r.is_pickup ?? isPickupAddress(r.address),
+  };
 }
 
 async function readCache(dealIds: number[]): Promise<{ fresh: Map<number, DealAddress>; staleOrMissing: number[] }> {
@@ -59,8 +65,8 @@ async function readCache(dealIds: number[]): Promise<{ fresh: Map<number, DealAd
   const known = new Set<number>();
   const res = await systemDb().query<{
     deal_id: string; address: string | null; lat: number | null; lon: number | null; region_id: string | null;
-    fetched_at: Date; found: boolean;
-  }>(`SELECT deal_id, address, lat, lon, region_id, fetched_at, found FROM deal_addresses WHERE deal_id = ANY($1::bigint[])`, [dealIds]);
+    fetched_at: Date; found: boolean; is_pickup: boolean;
+  }>(`SELECT deal_id, address, lat, lon, region_id, is_pickup, fetched_at, found FROM deal_addresses WHERE deal_id = ANY($1::bigint[])`, [dealIds]);
   const now = Date.now();
   for (const r of res.rows) {
     const id = Number(r.deal_id);
@@ -68,7 +74,7 @@ async function readCache(dealIds: number[]): Promise<{ fresh: Map<number, DealAd
     if (age < (r.found ? TTL_MS : MISS_TTL_MS)) {
       known.add(id);
       if (r.found) fresh.set(id, rowToAddress(r));
-      else fresh.set(id, { dealId: id, address: null, lat: null, lon: null, regionId: r.region_id });
+      else fresh.set(id, { dealId: id, address: null, lat: null, lon: null, regionId: r.region_id, isPickup: false });
     }
   }
   return { fresh, staleOrMissing: dealIds.filter(id => !known.has(id)) };
@@ -111,7 +117,7 @@ function toAddress(d: BxDeal): { row: DealAddress; found: boolean } {
   return {
     row: {
       dealId: Number(d.ID), address: parsed.address, lat: parsed.lat, lon: parsed.lon,
-      regionId: d.UF_REGION ?? null,
+      regionId: d.UF_REGION ?? null, isPickup: isPickupAddress(parsed.address),
       companyId: num(d.COMPANY_ID), contactId: num(d.CONTACT_ID), categoryId: num(d.CATEGORY_ID),
     },
     found: parsed.address !== null,
@@ -173,8 +179,8 @@ export async function getCachedDealAddresses(dealIds: number[]): Promise<Map<num
   if (ids.length === 0) return new Map();
   const out = new Map<number, DealAddress>();
   try {
-    const res = await systemDb().query<{ deal_id: string; address: string | null; lat: number | null; lon: number | null; region_id: string | null }>(
-      `SELECT deal_id, address, lat, lon, region_id FROM deal_addresses WHERE deal_id = ANY($1::bigint[]) AND found`, [ids],
+    const res = await systemDb().query<{ deal_id: string; address: string | null; lat: number | null; lon: number | null; region_id: string | null; is_pickup: boolean }>(
+      `SELECT deal_id, address, lat, lon, region_id, is_pickup FROM deal_addresses WHERE deal_id = ANY($1::bigint[]) AND found`, [ids],
     );
     for (const r of res.rows) out.set(Number(r.deal_id), rowToAddress(r));
   } catch { /* таблицы нет — пустая карта, вызывающий это переживает */ }
@@ -301,6 +307,7 @@ export async function fetchClientObjectCounts(clientKeys: string[]): Promise<Map
        SELECT client_key, count(DISTINCT obj_key)::text AS objs
          FROM deal_addresses d
         WHERE found AND obj_key IS NOT NULL AND client_key = ANY($1::text[])
+          AND NOT is_pickup                                   -- самовывоз не объект (правило владельца 21.09)
           AND NOT EXISTS (SELECT 1 FROM hot WHERE hot.obj_key = d.obj_key)
         GROUP BY 1`,
       [keys, HOT_OBJECT_MIN_DEALS],

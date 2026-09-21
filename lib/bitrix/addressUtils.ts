@@ -32,3 +32,10 @@ export function objectKey(a: ParsedAddress): string | null {
   return s || null;
 }
 
+
+/** Тот же критерий, что у STORED-колонки is_pickup (миграция 219): слово
+ *  «Париж» целиком, без учёта регистра. «1-й Парижский проезд» и «улица
+ *  Парижской Коммуны» — настоящие адреса доставки, их не трогаем. */
+export function isPickupAddress(address: string | null | undefined): boolean {
+  return !!address && /(^|[^\p{L}])\u043f\u0430\u0440\u0438\u0436([^\p{L}]|$)/iu.test(address);
+}

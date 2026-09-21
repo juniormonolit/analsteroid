@@ -48,8 +48,10 @@ export interface ObjectAgg {
   addressedDeals: number;
   /** Сумма этих отгрузок. */
   addressedSum: number;
-  /** ВСЕ отгрузки строки, включая безадресные — знаменатель дисциплины. */
+  /** Отгрузки строки без самовывоза — знаменатель дисциплины адреса. */
   allDeals: number;
+  /** Самовывоз («Париж»): адреса доставки физически нет, считаем отдельно. */
+  pickupDeals: number;
 }
 
 export type ObjectDim =
@@ -74,7 +76,7 @@ function keyExpr(dim: ObjectDim): string {
   }
 }
 
-const empty = (): ObjectAgg => ({ objects: 0, newObjects: 0, returned: 0, addressedDeals: 0, addressedSum: 0, allDeals: 0 });
+const empty = (): ObjectAgg => ({ objects: 0, newObjects: 0, returned: 0, addressedDeals: 0, addressedSum: 0, allDeals: 0, pickupDeals: 0 });
 
 /**
  * Агрегаты объектов по измерению отчёта. Возвращает Map: ключ строки →
@@ -120,19 +122,25 @@ export async function fetchObjectMetrics(opts: {
   // Адреса этих сделок (без служебных точек).
   const ids = dealsRes.rows.map(r => Number(r.deal_id));
   const objOf = new Map<number, string>();
+  const pickup = new Set<number>();
   const CHUNK = 5000;
   for (let i = 0; i < ids.length; i += CHUNK) {
-    const res = await systemDb().query<{ deal_id: string; obj_key: string }>(
+    const res = await systemDb().query<{ deal_id: string; obj_key: string | null; is_pickup: boolean }>(
       `WITH hot AS (
          SELECT obj_key FROM deal_addresses
           WHERE found AND obj_key IS NOT NULL GROUP BY 1 HAVING count(*) >= $2
        )
-       SELECT deal_id, obj_key FROM deal_addresses x
-        WHERE found AND obj_key IS NOT NULL AND deal_id = ANY($1::bigint[])
-          AND NOT EXISTS (SELECT 1 FROM hot WHERE hot.obj_key = x.obj_key)`,
+       SELECT deal_id, is_pickup,
+              CASE WHEN is_pickup OR EXISTS (SELECT 1 FROM hot WHERE hot.obj_key = x.obj_key)
+                   THEN NULL ELSE obj_key END AS obj_key
+         FROM deal_addresses x
+        WHERE found AND obj_key IS NOT NULL AND deal_id = ANY($1::bigint[])`,
       [ids.slice(i, i + CHUNK), HOT_OBJECT_MIN_DEALS],
     );
-    for (const r of res.rows) objOf.set(Number(r.deal_id), r.obj_key);
+    for (const r of res.rows) {
+      if (r.is_pickup) pickup.add(Number(r.deal_id));
+      else if (r.obj_key) objOf.set(Number(r.deal_id), r.obj_key);
+    }
   }
 
   // «Новый или вернулись»: по всем сделкам ЭТИХ объектов спрашиваем SA, была ли
@@ -166,8 +174,11 @@ export async function fetchObjectMetrics(opts: {
   // Агрегация по ключу строки + отдельный «настоящий» итог.
   const objsByKey = new Map<string, Set<string>>();
   const totalObjs = new Set<string>();
-  const bump = (key: string, objKey: string | undefined, amount: number) => {
+  const bump = (key: string, objKey: string | undefined, amount: number, isPickup: boolean) => {
     const a = out.get(key) ?? empty();
+    // Самовывоз не идёт ни в объекты, ни в знаменатель дисциплины: адреса
+    // доставки у такой сделки физически нет, упрекать менеджера не за что.
+    if (isPickup) { a.pickupDeals++; out.set(key, a); return; }
     a.allDeals++;
     if (objKey) {
       a.addressedDeals++;
@@ -181,9 +192,11 @@ export async function fetchObjectMetrics(opts: {
 
   for (const r of dealsRes.rows) {
     const amount = Number(r.amount ?? 0) || 0;
-    const objKey = objOf.get(Number(r.deal_id));
-    bump(r.k, objKey, amount);
-    bump(OBJECTS_GRAND_TOTAL_KEY, objKey, amount);
+    const id = Number(r.deal_id);
+    const objKey = objOf.get(id);
+    const isPickup = pickup.has(id);
+    bump(r.k, objKey, amount, isPickup);
+    bump(OBJECTS_GRAND_TOTAL_KEY, objKey, amount, isPickup);
     if (objKey) totalObjs.add(objKey);
   }
 

@@ -92,14 +92,14 @@ export async function GET(req: NextRequest) {
   if (deals.length === 0) return NextResponse.json(emptyBody(cellKm, minDeals));
 
   const ids = deals.map(d => Number(d.deal_id));
-  const addr = new Map<number, { address: string | null; lat: number; lon: number; objKey: string }>();
+  const addr = new Map<number, { address: string | null; lat: number; lon: number; objKey: string; isPickup: boolean }>();
   for (let i = 0; i < ids.length; i += ADDR_CHUNK) {
-    const r = await systemDb().query<{ deal_id: string; address: string | null; lat: number; lon: number; obj_key: string }>(
-      `SELECT deal_id, address, lat, lon, obj_key FROM deal_addresses
+    const r = await systemDb().query<{ deal_id: string; address: string | null; lat: number; lon: number; obj_key: string; is_pickup: boolean }>(
+      `SELECT deal_id, address, lat, lon, obj_key, is_pickup FROM deal_addresses
         WHERE found AND lat IS NOT NULL AND obj_key IS NOT NULL AND deal_id = ANY($1::bigint[])`,
       [ids.slice(i, i + ADDR_CHUNK)],
     );
-    for (const row of r.rows) addr.set(Number(row.deal_id), { address: row.address, lat: row.lat, lon: row.lon, objKey: row.obj_key });
+    for (const row of r.rows) addr.set(Number(row.deal_id), { address: row.address, lat: row.lat, lon: row.lon, objKey: row.obj_key, isPickup: row.is_pickup });
   }
   const hot = await hotObjectKeys();
 
@@ -119,7 +119,7 @@ export async function GET(req: NextRequest) {
   const facetManagers = new Map<string, { id: string; name: string; department: string | null; deals: number; sum: number }>();
   const facetDepts = new Map<string, { department: string; deals: number; sum: number }>();
   const latStep = cellKm / KM_PER_DEG_LAT;
-  let total = 0, sold = 0, delivered = 0, withoutCoords = 0;
+  let total = 0, sold = 0, delivered = 0, withoutCoords = 0, pickupDeals = 0;
 
   for (const d of deals) {
     const a = addr.get(Number(d.deal_id));
@@ -142,6 +142,9 @@ export async function GET(req: NextRequest) {
       fd.deals++; fd.sum += amount; facetDepts.set(dep, fd);
     }
     if (!okGroup || !okManager || !okDept) continue;
+    // Самовывоз к территории не привязан — в районы не попадает, считается
+    // отдельной строкой (правило владельца 21.09: «если Париж — это самовывоз»).
+    if (a?.isPickup) { pickupDeals++; continue; }
     if (!a || hot.has(a.objKey)) { withoutCoords++; continue; }
 
     total++;
@@ -196,7 +199,7 @@ export async function GET(req: NextRequest) {
     cells: out,
     cellKm, minDeals,
     summary: {
-      deals: total, sold, delivered, withoutCoords,
+      deals: total, sold, delivered, withoutCoords, pickupDeals,
       convSale: total > 0 ? Math.round((sold / total) * 1000) / 10 : 0,
       convShip: total > 0 ? Math.round((delivered / total) * 1000) / 10 : 0,
       cells: out.length, hiddenCells: cells.size - out.length,
@@ -213,7 +216,7 @@ export async function GET(req: NextRequest) {
 function emptyBody(cellKm: number, minDeals: number) {
   return {
     cells: [], cellKm, minDeals,
-    summary: { deals: 0, sold: 0, delivered: 0, withoutCoords: 0, convSale: 0, convShip: 0, cells: 0, hiddenCells: 0, truncated: false },
+    summary: { deals: 0, sold: 0, delivered: 0, withoutCoords: 0, pickupDeals: 0, convSale: 0, convShip: 0, cells: 0, hiddenCells: 0, truncated: false },
     facets: { managers: [], groups: [], departments: [] },
   };
 }

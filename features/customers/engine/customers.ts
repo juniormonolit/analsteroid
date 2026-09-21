@@ -245,6 +245,10 @@ export interface CustomerRow {
   sleeping: boolean;
   /** Категории клиентов (дополнение Серёги 01.08): сырьё для classifyCategory. */
   dealsDelivered: number;
+  /** ПОКУПКИ: отгрузки, склеенные по правилу повторной продажи (21.09,
+   *  lib/metrics/repeatRule.ts). Именно они, а не dealsDelivered, сопоставимы
+   *  с таблицей частот repeatScore — та тоже построена на склеенных. */
+  purchasesDelivered: number;
   sumDelivered: number;
   distinctGroups: number;
   avgGapDays: number | null;
@@ -310,6 +314,7 @@ interface RawRow {
   auto_repeat_lost_no_call: boolean | null;
   has_open_order: boolean | null;
   good_calls_after: (string | Date)[] | null;
+  purchases_delivered: string;
 }
 
 const DAY_MS = 86_400_000;
@@ -380,6 +385,27 @@ lastdel AS (
 ),
 -- Боль владельца: авто-сделка повторки (создаётся процессом в первые минуты
 -- после отгрузки) закрыта в отказ, а успешного звонка по ней не было.
+-- ПОКУПКИ, а не отгрузки (правило владельца 21.09, lib/metrics/repeatRule.ts):
+-- дробные отгрузки одной продажи склеиваются, иначе тысяча кубов песка десятью
+-- машинами выглядит как десять повторов и завышает и счётчик, и шанс на повтор.
+purchases AS (
+  SELECT client_key, count(*)::int AS purchases_delivered
+  FROM (
+    SELECT client_key, pno FROM (
+      SELECT f.client_key, f.deal_id,
+             sum(f.is_new) OVER (PARTITION BY f.client_key ORDER BY f.at, f.deal_id ROWS UNBOUNDED PRECEDING) AS pno
+      FROM (
+        SELECT m.client_key, m.deal_id, m.delivered_at AS at,
+               CASE WHEN lag(m.delivered_at) OVER w IS NULL THEN 1
+                    WHEN m.head_group_name IS DISTINCT FROM lag(m.head_group_name) OVER w THEN 1
+                    WHEN m.delivered_at >= lag(m.delivered_at) OVER w + interval '7 days' THEN 1
+                    ELSE 0 END AS is_new
+        FROM mcd m WHERE m.delivered_at IS NOT NULL
+        WINDOW w AS (PARTITION BY m.client_key ORDER BY m.delivered_at, m.deal_id)
+      ) f
+    ) x GROUP BY client_key, pno
+  ) y GROUP BY client_key
+),
 -- Касания в окне (правка владельца 21.09): не «был ли звонок», а КОГДА были —
 -- по правилу «три касания, по одному на каждой неделе» одного звонка мало.
 touches AS (
@@ -492,7 +518,8 @@ SELECT a.client_key,
        ls.last_sold_amount::text, ls.last_sold_groups,
        mh.manager_history,
        ld.last_delivered_at, ld.last_delivered_amount::text, ld.last_delivered_group,
-       gc.last_good_call_at, al.auto_repeat_lost_no_call, tch.good_calls_after
+       gc.last_good_call_at, al.auto_repeat_lost_no_call, tch.good_calls_after,
+       COALESCE(pu.purchases_delivered, 0)::text AS purchases_delivered
 FROM (
   SELECT m.client_key,
          count(*) AS deals_total,
@@ -523,6 +550,7 @@ LEFT JOIN lastdel ld USING (client_key)
 LEFT JOIN good_calls gc USING (client_key)
 LEFT JOIN auto_lost al USING (client_key)
 LEFT JOIN touches tch USING (client_key)
+LEFT JOIN purchases pu USING (client_key)
 `;
 
 function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
@@ -597,6 +625,7 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     activeDeals: active,
     refusedNoCall: r.refused_no_call,
     dealsDelivered: Number(r.deals_delivered),
+    purchasesDelivered: Number(r.purchases_delivered ?? 0),
     sumDelivered: Math.round(Number(r.sum_delivered)),
     distinctGroups: Number(r.distinct_groups),
     avgGapDays: r.avg_gap_days !== null ? Number(r.avg_gap_days) : null,
@@ -644,7 +673,8 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   // v8 (21.09) — касания по неделям и шанс на повтор в строке.
   // v9 (21.09) — из выборки убраны клиенты без отгрузок (раздел только про повторные).
   // v10 (21.09) — ожидаемые деньги в строке и в ранге очередей.
-  return cached(`customers:mgr:v10:${managerBitrixId}`, 10 * 60, async () => {
+  // v11 (21.09) — дробные отгрузки склеены в покупки (repeatRule.ts).
+  return cached(`customers:mgr:v11:${managerBitrixId}`, 10 * 60, async () => {
     const [res, scoreTable] = await Promise.all([
       analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]),
       fetchRepeatScoreTable(),
@@ -652,8 +682,11 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
     const now = Date.now();
     const rows = res.rows.map(r => toRow(r, now, managerBitrixId));
     for (const row of rows) {
-      row.repeatChance = repeatChance(scoreTable, row.dealsDelivered, row.lastDeliveredGroup, row.clientType === 'company');
-      const avgCheck = row.dealsDelivered > 0 ? row.sumDelivered / row.dealsDelivered : null;
+      // Шанс считаем по ПОКУПКАМ (склеенным), а не по сырым отгрузкам: таблица
+      // частот построена на них же, иначе заказчик с 10 дробными отгрузками
+      // попадал бы в бакет «6+» (86 %) вместо своего «3» (55 %).
+      row.repeatChance = repeatChance(scoreTable, row.purchasesDelivered, row.lastDeliveredGroup, row.clientType === 'company');
+      const avgCheck = row.purchasesDelivered > 0 ? row.sumDelivered / row.purchasesDelivered : null;
       row.expectedNextAmount = expectedNextAmount(scoreTable, avgCheck);
       row.expectedValue = expectedRepeatValue(row.repeatChance, row.expectedNextAmount);
     }
