@@ -156,6 +156,8 @@ export async function GET(req: NextRequest) {
   interface ObjAgg {
     key: string; lat: number; lon: number; address: string; hot: boolean;
     deals: number; sum: number; clients: Set<string>;
+    /** Состав по товарным группам — раскраска точек и разбивка в дрилле (правка 21.09). */
+    groups: Map<string, { deals: number; sum: number }>;
     items: { dealId: number; amount: number; at: string | null; manager: string | null; group: string | null; name: string | null }[];
   }
   const byObj = new Map<string, ObjAgg>();
@@ -189,12 +191,14 @@ export async function GET(req: NextRequest) {
       fd.deals++; fd.sum += amount; facetDepts.set(dep, fd);
     }
 
-    const o = byObj.get(a.objKey) ?? {
+    const o: ObjAgg = byObj.get(a.objKey) ?? {
       key: a.objKey, lat: a.lat, lon: a.lon, address: a.address ?? 'без адреса',
-      deals: 0, sum: 0, clients: new Set<string>(), items: [], hot: isHot,
+      deals: 0, sum: 0, clients: new Set<string>(), groups: new Map(), items: [], hot: isHot,
     };
     o.deals++; o.sum += amount;
     if (a.clientKey) o.clients.add(a.clientKey);
+    const og = o.groups.get(g) ?? { deals: 0, sum: 0 };
+    og.deals++; og.sum += amount; o.groups.set(g, og);
     // Список сделок объекта — для дрилл-дауна; больше 50 на одну точку не нужно.
     if (o.items.length < 50) {
       o.items.push({ dealId: Number(d.deal_id), amount, at: d.at, manager: mi?.name ?? null, group: d.head_group_name, name: d.deal_name });
@@ -205,10 +209,19 @@ export async function GET(req: NextRequest) {
   const objects = [...byObj.values()]
     .sort((a, b) => b.sum - a.sum)
     .slice(0, MAX_OBJECTS)
-    .map(o => ({
-      key: o.key, lat: o.lat, lon: o.lon, address: o.address, hot: o.hot,
-      deals: o.deals, sum: Math.round(o.sum), clients: o.clients.size, items: o.items,
-    }));
+    .map(o => {
+      const groups = [...o.groups.entries()]
+        .map(([group, v]) => ({ group, deals: v.deals, sum: Math.round(v.sum) }))
+        .sort((x, y) => y.sum - x.sum);
+      return {
+        key: o.key, lat: o.lat, lon: o.lon, address: o.address, hot: o.hot,
+        deals: o.deals, sum: Math.round(o.sum), clients: o.clients.size,
+        // Ведущая группа объекта — по деньгам: ею красится точка на карте.
+        topGroup: groups[0]?.group ?? null,
+        groups: groups.slice(0, 5),
+        items: o.items,
+      };
+    });
 
   return NextResponse.json({
     objects,

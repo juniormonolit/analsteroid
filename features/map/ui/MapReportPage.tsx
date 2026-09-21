@@ -1,21 +1,33 @@
 'use client';
-// Спец-отчёт «Карта объектов» (задача владельца 21.09: «хочу спецотчет в „Ещё“,
-// чтобы там можно было на карте смотреть все. Крутецкий отчет со всеми
-// стандартными фильтрами логикой дриллдауна и так далее»).
+// Спец-отчёт «Карта объектов» (задача владельца 21.09; вторая итерация — по
+// правке «Все что напрашивается — делаем. Еще масштабирование под размер
+// экрана. И разбивку на товарные категории. И чтобы можно было кликать на
+// кластер в большом размере и видеть все сделки там списком»).
 //
 // Точка на карте = ОБЪЕКТ (адрес доставки), а не сделка: на один адрес часто
 // возят несколько раз, и «3 сделки на 1,2 млн» читается лучше трёх меток друг
-// на друге. Клик по объекту → список его сделок → карточка сделки (тот же
-// DealCard, что в отчётах). Фильтры серверные, срезы-факты (менеджеры, группы,
-// отделы) считаются по текущей выборке и работают как фильтры в один клик.
+// на друге. Цвет точки — ведущая товарная группа объекта (по деньгам).
 //
-// Карта — Leaflet + OSM-тайлы, кластеризация leaflet.markercluster. Библиотека
-// грузится динамически в эффекте: она лезет к window и на сервере не живёт.
+// Что умеет:
+//   • точки с кластеризацией; клик по КЛАСТЕРУ — список всех его объектов и
+//     сделок (кластер не улетает в зум сам: zoomToBoundsOnClick=false, зум —
+//     отдельной кнопкой в панели);
+//   • тепловая карта (leaflet.heat) — включается поверх или вместо точек;
+//   • круги радиусов вокруг филиалов (25/50/100 км) — «домашняя зона»;
+//   • «соседи» выбранного объекта по ВСЕЙ истории (/api/map/neighbors) —
+//     749 кустов с 3+ заказчиками дают больше половины выручки, это рабочий
+//     инструмент, а не украшение;
+//   • раскладка по высоте экрана (h-dvh, карта тянется) + режим «на весь
+//     экран»; на телефоне панель уезжает под карту.
+//
+// Карта — Leaflet + OSM-тайлы. Библиотеки грузятся динамически в эффекте: они
+// лезут к window и на сервере не живут.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
-import { MapPin, Loader2, X } from 'lucide-react';
+import { MapPin, Loader2, X, Maximize2, Minimize2, SlidersHorizontal, ZoomIn } from 'lucide-react';
+import { GS_BASE_ROW, mixHex } from '@/lib/colors/google-sheets-palette';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
@@ -23,10 +35,15 @@ import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 
 interface ObjItem { dealId: number; amount: number; at: string | null; manager: string | null; group: string | null; name: string | null }
-interface MapObject { key: string; lat: number; lon: number; address: string; hot: boolean; deals: number; sum: number; clients: number; items: ObjItem[] }
+interface GroupSlice { group: string; deals: number; sum: number }
+interface MapObject {
+  key: string; lat: number; lon: number; address: string; hot: boolean;
+  deals: number; sum: number; clients: number;
+  topGroup: string | null; groups: GroupSlice[]; items: ObjItem[];
+}
 interface Facets {
   managers: { id: string; name: string; department: string | null; deals: number; sum: number }[];
-  groups: { group: string; deals: number; sum: number }[];
+  groups: GroupSlice[];
   departments: { department: string; deals: number; sum: number }[];
 }
 interface MapData {
@@ -34,8 +51,12 @@ interface MapData {
   summary: { deals: number; sum: number; objects: number; clients: number; withoutCoords: number; hiddenServiceDeals: number; shown: number; truncated: boolean };
   facets: Facets;
 }
+interface Neighbours {
+  radiusKm: number; objects: number; deals: number; sum: number; clients: number; lastAt: string | null;
+  items: { key: string; address: string; lat: number; lon: number; distanceKm: number; deals: number; sum: number; clients: number; lastAt: string | null }[];
+}
 
-const STATES: { key: string; label: string; hint: string }[] = [
+const STATES = [
   { key: 'delivered', label: 'Отгрузки', hint: 'Сделки, отгруженные в периоде (дата отгрузки)' },
   { key: 'sold', label: 'Продажи', hint: 'Сделки, проданные в периоде (дата продажи)' },
   { key: 'active', label: 'В работе', hint: 'Не проданы, не отгружены, не отказ — созданные в периоде' },
@@ -43,15 +64,23 @@ const STATES: { key: string; label: string; hint: string }[] = [
   { key: 'all', label: 'Все', hint: 'Любые сделки по выбранной базе даты' },
 ];
 const FUNNELS = [
-  { key: 'all', label: 'Все воронки' },
-  { key: 'primary', label: 'Первичные' },
-  { key: 'repeat', label: 'Повторные' },
+  { key: 'all', label: 'Все воронки' }, { key: 'primary', label: 'Первичные' }, { key: 'repeat', label: 'Повторные' },
 ];
 const CLIENTS = [
-  { key: 'all', label: 'ЮЛ и ФЛ' },
-  { key: 'company', label: 'Юрлица' },
-  { key: 'contact', label: 'Физлица' },
+  { key: 'all', label: 'ЮЛ и ФЛ' }, { key: 'company', label: 'Юрлица' }, { key: 'contact', label: 'Физлица' },
 ];
+/** Филиалы для кругов «домашней зоны» — те же города, что в UF_REGION Битрикса. */
+const BRANCHES: { name: string; lat: number; lon: number }[] = [
+  { name: 'Санкт-Петербург', lat: 59.9386, lon: 30.3141 },
+  { name: 'Москва', lat: 55.7558, lon: 37.6173 },
+  { name: 'Краснодар', lat: 45.0355, lon: 38.9753 },
+  { name: 'Воронеж', lat: 51.6606, lon: 39.2006 },
+  { name: 'Нижний Новгород', lat: 56.3269, lon: 44.0059 },
+  { name: 'Ростов-на-Дону', lat: 47.2225, lon: 39.7187 },
+  { name: 'Волгоград', lat: 48.7071, lon: 44.5170 },
+];
+const RADII_KM = [25, 50, 100];
+const OTHER_COLOR = '#9e9e9e';
 
 function ymd(d: Date): string { return d.toISOString().slice(0, 10); }
 function monthAgo(n: number): string { const d = new Date(); d.setMonth(d.getMonth() - n); return ymd(d); }
@@ -62,9 +91,13 @@ function fmtMoney(v: number): string {
 }
 function fmtDate(iso: string | null): string {
   if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  return new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
+
+type Selection =
+  | { kind: 'object'; object: MapObject }
+  | { kind: 'cluster'; objects: MapObject[] }
+  | null;
 
 export function MapReportPage() {
   const [from, setFrom] = useState(monthAgo(1));
@@ -78,10 +111,12 @@ export function MapReportPage() {
   const [min, setMin] = useState('');
   const [max, setMax] = useState('');
   const [buildersOnly, setBuildersOnly] = useState(false);
-  // Служебные точки (дефолт формы Битрикса, «просто город») — по умолчанию
-  // скрыты: 32 таких адреса собрали треть сделок базы и делают из карты кляксу.
   const [withHot, setWithHot] = useState(false);
-  const [selected, setSelected] = useState<MapObject | null>(null);
+  const [layer, setLayer] = useState<'points' | 'heat' | 'both'>('points');
+  const [branchRadius, setBranchRadius] = useState(0);   // 0 = круги выключены
+  const [fullscreen, setFullscreen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);  // на телефоне фильтры свёрнуты
+  const [selected, setSelected] = useState<Selection>(null);
   const [openDealId, setOpenDealId] = useState<number | null>(null);
 
   const qs = useMemo(() => {
@@ -102,10 +137,24 @@ export function MapReportPage() {
     staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
   });
 
+  // Палитра товарных групп: восемь ведущих по деньгам получают свой цвет,
+  // остальное — серое «прочее». Легенда снизу карты кликается как фильтр.
+  const groupColor = useMemo(() => {
+    const top = (data?.facets.groups ?? []).slice(0, 8).map(g => g.group);
+    const colors = [GS_BASE_ROW[6], GS_BASE_ROW[4], GS_BASE_ROW[2], GS_BASE_ROW[8], GS_BASE_ROW[1], GS_BASE_ROW[5], GS_BASE_ROW[9], GS_BASE_ROW[3]]
+      .map(c => mixHex(c, '#000000', 0.12));
+    const m = new Map<string, string>();
+    top.forEach((g, i) => m.set(g, colors[i % colors.length]!));
+    return m;
+  }, [data?.facets.groups]);
+  const colorOf = useCallback((o: MapObject) => (o.hot ? '#f59e0b' : groupColor.get(o.topGroup ?? '') ?? OTHER_COLOR), [groupColor]);
+
   // ── Карта ────────────────────────────────────────────────────────────────
   const mapEl = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<import('leaflet').Map | null>(null);
-  const layerRef = useRef<import('leaflet').LayerGroup | null>(null);
+  const pointsRef = useRef<import('leaflet').LayerGroup | null>(null);
+  const heatRef = useRef<import('leaflet').Layer | null>(null);
+  const circlesRef = useRef<import('leaflet').LayerGroup | null>(null);
   const [leaflet, setLeaflet] = useState<typeof import('leaflet') | null>(null);
 
   useEffect(() => {
@@ -113,233 +162,289 @@ export function MapReportPage() {
     (async () => {
       const L = (await import('leaflet')).default ?? (await import('leaflet'));
       await import('leaflet.markercluster');
+      await import('leaflet.heat');
       if (cancelled || !mapEl.current || mapRef.current) return;
       const map = L.map(mapEl.current, { center: [59.94, 30.31], zoom: 6, preferCanvas: true });
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19, attribution: '© OpenStreetMap',
-      }).addTo(map);
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
       mapRef.current = map;
       setLeaflet(L);
     })();
-    return () => {
-      cancelled = true;
-      mapRef.current?.remove();
-      mapRef.current = null;
-    };
+    return () => { cancelled = true; mapRef.current?.remove(); mapRef.current = null; };
   }, []);
 
-  // Перерисовка точек при смене выборки. Кластеры взвешены по СУММЕ: крупный
-  // объект должен быть заметен, а не растворяться среди мелких.
+  // Масштабирование под размер экрана (правка владельца): при любом изменении
+  // размеров контейнера — полноэкранный режим, поворот телефона, свёрнутые
+  // фильтры — Leaflet обязан пересчитать вьюпорт, иначе половина карты серая.
+  useEffect(() => {
+    const el = mapEl.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => { mapRef.current?.invalidateSize(); });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    const t = setTimeout(() => mapRef.current?.invalidateSize(), 60);
+    return () => clearTimeout(t);
+  }, [fullscreen, filtersOpen, selected]);
+
+  // Точки + кластеры
   useEffect(() => {
     const L = leaflet;
     const map = mapRef.current;
     if (!L || !map || !data) return;
-    if (layerRef.current) { map.removeLayer(layerRef.current); layerRef.current = null; }
+    if (pointsRef.current) { map.removeLayer(pointsRef.current); pointsRef.current = null; }
+    if (layer === 'heat') return;
 
-    const cluster = (L as unknown as { markerClusterGroup: (o: object) => import('leaflet').LayerGroup }).markerClusterGroup({
-      chunkedLoading: true,
-      maxClusterRadius: 50,
-      iconCreateFunction: (c: { getAllChildMarkers: () => { options: { title?: string } }[]; getChildCount: () => number }) => {
-        const n = c.getChildCount();
-        const size = n < 10 ? 34 : n < 100 ? 42 : 52;
-        return L.divIcon({
-          html: `<div style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:999px;background:rgba(37,99,235,.85);color:#fff;font-weight:700;font-size:${n < 100 ? 13 : 12}px;border:2px solid rgba(255,255,255,.9)">${n}</div>`,
-          className: '', iconSize: [size, size],
-        });
-      },
-    });
+    const cluster = (L as unknown as { markerClusterGroup: (o: object) => import('leaflet').LayerGroup & { on: (e: string, cb: (x: { layer: { getAllChildMarkers: () => unknown[] } }) => void) => void } })
+      .markerClusterGroup({
+        chunkedLoading: true,
+        maxClusterRadius: 50,
+        // Клик по кластеру не улетает в зум (правка владельца: «кликать на
+        // кластер и видеть все сделки там списком») — зум отдельной кнопкой.
+        zoomToBoundsOnClick: false,
+        spiderfyOnMaxZoom: false,
+        iconCreateFunction: (c: { getChildCount: () => number }) => {
+          const n = c.getChildCount();
+          const size = n < 10 ? 34 : n < 100 ? 42 : 52;
+          return L.divIcon({
+            html: `<div style="display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:999px;background:rgba(37,99,235,.85);color:#fff;font-weight:700;font-size:${n < 100 ? 13 : 12}px;border:2px solid rgba(255,255,255,.9)">${n}</div>`,
+            className: '', iconSize: [size, size],
+          });
+        },
+      });
 
     const maxSum = Math.max(1, ...data.objects.map(o => o.sum));
     for (const o of data.objects) {
       const r = 5 + Math.round(9 * Math.sqrt(o.sum / maxSum));
-      const m = L.circleMarker([o.lat, o.lon], {
-        radius: r, weight: 1,
-        color: o.hot ? '#92400e' : '#1d4ed8',
-        fillColor: o.hot ? '#f59e0b' : '#3b82f6',
-        fillOpacity: 0.75,
-      });
-      m.bindTooltip(`${o.address}<br><b>${fmtMoney(o.sum)}</b> · сделок ${o.deals}${o.hot ? '<br><i>служебная точка: дефолтный адрес, не объект</i>' : ''}`, { direction: 'top' });
-      m.on('click', () => setSelected(o));
+      const color = colorOf(o);
+      const m = L.circleMarker([o.lat, o.lon], { radius: r, weight: 1, color: mixHex(color, '#000000', 0.25), fillColor: color, fillOpacity: 0.8 });
+      (m as unknown as { __obj: MapObject }).__obj = o;
+      m.bindTooltip(
+        `${o.address}<br><b>${fmtMoney(o.sum)}</b> · сделок ${o.deals}${o.topGroup ? `<br>${o.topGroup}` : ''}${o.hot ? '<br><i>служебная точка: дефолтный адрес, не объект</i>' : ''}`,
+        { direction: 'top' },
+      );
+      m.on('click', () => setSelected({ kind: 'object', object: o }));
       cluster.addLayer(m);
     }
+    cluster.on('clusterclick', (e: { layer: { getAllChildMarkers: () => unknown[] } }) => {
+      const objs = e.layer.getAllChildMarkers()
+        .map(m => (m as { __obj?: MapObject }).__obj)
+        .filter((o): o is MapObject => !!o)
+        .sort((a, b) => b.sum - a.sum);
+      setSelected({ kind: 'cluster', objects: objs });
+    });
     map.addLayer(cluster);
-    layerRef.current = cluster;
+    pointsRef.current = cluster;
+  }, [leaflet, data, layer, colorOf]);
 
-    if (data.objects.length > 0) {
-      const b = L.latLngBounds(data.objects.map(o => [o.lat, o.lon] as [number, number]));
-      map.fitBounds(b.pad(0.1), { maxZoom: 12 });
+  // Тепловая карта: вес точки — деньги, поэтому «горячо» там, где выручка, а
+  // не там, где просто много мелких отгрузок.
+  useEffect(() => {
+    const L = leaflet as unknown as { heatLayer?: (pts: [number, number, number][], o: object) => import('leaflet').Layer };
+    const map = mapRef.current;
+    if (!leaflet || !map || !data) return;
+    if (heatRef.current) { map.removeLayer(heatRef.current); heatRef.current = null; }
+    if (layer === 'points' || !L.heatLayer) return;
+    const maxSum = Math.max(1, ...data.objects.map(o => o.sum));
+    const pts = data.objects.map(o => [o.lat, o.lon, Math.max(0.15, o.sum / maxSum)] as [number, number, number]);
+    const heat = L.heatLayer(pts, { radius: 26, blur: 20, maxZoom: 12, minOpacity: 0.25 });
+    heat.addTo(map);
+    heatRef.current = heat;
+  }, [leaflet, data, layer]);
+
+  // Круги «домашней зоны» вокруг филиалов.
+  useEffect(() => {
+    const L = leaflet;
+    const map = mapRef.current;
+    if (!L || !map) return;
+    if (circlesRef.current) { map.removeLayer(circlesRef.current); circlesRef.current = null; }
+    if (!branchRadius) return;
+    const g = L.layerGroup();
+    for (const b of BRANCHES) {
+      L.circle([b.lat, b.lon], {
+        radius: branchRadius * 1000, color: '#1d4ed8', weight: 1, dashArray: '4 4', fill: false, interactive: false,
+      }).addTo(g);
+      L.circleMarker([b.lat, b.lon], { radius: 4, color: '#1d4ed8', fillColor: '#1d4ed8', fillOpacity: 1 })
+        .bindTooltip(`${b.name} · радиус ${branchRadius} км`, { direction: 'top' }).addTo(g);
     }
+    g.addTo(map);
+    circlesRef.current = g;
+  }, [leaflet, branchRadius]);
+
+  // Первая подгонка под данные (и при смене выборки).
+  useEffect(() => {
+    const L = leaflet;
+    const map = mapRef.current;
+    if (!L || !map || !data || data.objects.length === 0) return;
+    const b = L.latLngBounds(data.objects.map(o => [o.lat, o.lon] as [number, number]));
+    map.fitBounds(b.pad(0.1), { maxZoom: 12 });
   }, [leaflet, data]);
+
+  const zoomTo = (objs: MapObject[]) => {
+    const L = leaflet, map = mapRef.current;
+    if (!L || !map || objs.length === 0) return;
+    if (objs.length === 1) map.setView([objs[0]!.lat, objs[0]!.lon], 15);
+    else map.fitBounds(L.latLngBounds(objs.map(o => [o.lat, o.lon] as [number, number])).pad(0.15));
+  };
 
   const toggle = (list: string[], v: string, set: (x: string[]) => void) =>
     set(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
 
   const s = data?.summary;
+  const activeFilters = groups.length + managers.length + depts.length + (buildersOnly ? 1 : 0) + (min ? 1 : 0) + (max ? 1 : 0);
 
   return (
-    <div className="h-full overflow-y-auto overflow-x-hidden">
-      <div className="mx-auto w-full max-w-[1600px] p-3 sm:p-5 flex flex-col gap-3">
-        <div className="flex flex-wrap items-baseline gap-2">
-          <h1 className="text-lg font-bold text-[var(--color-text)]">Карта объектов</h1>
-          <span className="text-xs text-[var(--color-text-muted)]">
-            адрес доставки из Битрикса · точка = объект, размер и число — деньги и сделки
-          </span>
+    <div className={`${fullscreen ? 'fixed inset-0 z-50 bg-[var(--color-bg)]' : 'h-full'} flex flex-col overflow-x-hidden`}>
+      {/* ── Шапка ── */}
+      <div className="shrink-0 border-b border-[var(--color-border)] px-3 sm:px-4 py-2 flex flex-wrap items-center gap-2">
+        <h1 className="text-[15px] font-bold text-[var(--color-text)]">Карта объектов</h1>
+        <div className="hidden sm:flex items-center gap-3 text-[11.5px] text-[var(--color-text-muted)]">
+          <span>сделок <b className="text-[var(--color-text)] tabular-nums">{s ? s.deals.toLocaleString('ru-RU') : '…'}</b></span>
+          <span>на <b className="text-[var(--color-text)] tabular-nums">{s ? fmtMoney(s.sum) : '…'}</b></span>
+          <span>объектов <b className="text-[var(--color-text)] tabular-nums">{s ? s.objects.toLocaleString('ru-RU') : '…'}</b></span>
+          <span>заказчиков <b className="text-[var(--color-text)] tabular-nums">{s ? s.clients.toLocaleString('ru-RU') : '…'}</b></span>
+          <span title="Сделки выборки без адреса или без координат — на карту не попали">без координат <b className="text-[var(--color-text)] tabular-nums">{s ? s.withoutCoords.toLocaleString('ru-RU') : '…'}</b></span>
         </div>
-
-        {/* ── Фильтры ── */}
-        <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <input type="date" value={from} onChange={e => setFrom(e.target.value)}
-              className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-xs" />
-            <span className="text-xs text-[var(--color-text-muted)]">—</span>
-            <input type="date" value={to} onChange={e => setTo(e.target.value)}
-              className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-xs" />
-            <div className="flex gap-1">
-              {([['Месяц', 1], ['3 месяца', 3], ['Год', 12]] as const).map(([label, n]) => (
-                <button key={label} type="button" onClick={() => { setFrom(monthAgo(n)); setTo(ymd(new Date())); }}
-                  className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] px-2 py-1 text-xs font-semibold hover:bg-[var(--color-bg-hover)]">
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="flex gap-1 rounded-xl border border-[var(--color-border)] p-0.5">
-              {STATES.map(st => (
-                <button key={st.key} type="button" title={st.hint} onClick={() => setState(st.key)}
-                  className={`min-h-11 sm:min-h-0 rounded-lg px-2.5 py-1 text-xs font-semibold whitespace-nowrap ${state === st.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
-                  {st.label}
-                </button>
-              ))}
-            </div>
-            <select value={funnel} onChange={e => setFunnel(e.target.value)}
-              className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-xs font-semibold">
-              {FUNNELS.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
-            </select>
-            <select value={client} onChange={e => setClient(e.target.value)}
-              className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-xs font-semibold">
-              {CLIENTS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-            </select>
-            <input value={min} onChange={e => setMin(e.target.value.replace(/\D/g, ''))} placeholder="сумма от"
-              inputMode="numeric"
-              className="w-[110px] min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-xs" />
-            <input value={max} onChange={e => setMax(e.target.value.replace(/\D/g, ''))} placeholder="до"
-              inputMode="numeric"
-              className="w-[90px] min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-xs" />
-            <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text)]"
-              title="Только заказчики, которые возят на 2+ разных объекта">
-              <input type="checkbox" checked={buildersOnly} onChange={e => setBuildersOnly(e.target.checked)} />
-              🏗 только строители
-            </label>
-            <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text)]"
-              title="Адреса, на которые по всей базе приходятся сотни сделок, — это не объекты, а дефолт формы Битрикса и «просто город». По умолчанию скрыты.">
-              <input type="checkbox" checked={withHot} onChange={e => setWithHot(e.target.checked)} />
-              служебные точки
-            </label>
-            {isFetching && <Loader2 size={14} className="animate-spin text-[var(--color-text-muted)]" />}
+        {isFetching && <Loader2 size={14} className="animate-spin text-[var(--color-text-muted)]" />}
+        <div className="ml-auto flex items-center gap-1">
+          <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] p-0.5">
+            {([['points', 'Точки'], ['heat', 'Тепло'], ['both', 'Оба']] as const).map(([k, label]) => (
+              <button key={k} type="button" onClick={() => setLayer(k)}
+                className={`min-h-11 sm:min-h-0 rounded px-2 py-1 text-[11px] font-semibold ${layer === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+                {label}
+              </button>
+            ))}
           </div>
+          <select value={branchRadius} onChange={e => setBranchRadius(Number(e.target.value))}
+            title="Круги вокруг филиалов — «домашняя зона» доставки"
+            className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[11px] font-semibold">
+            <option value={0}>без радиусов</option>
+            {RADII_KM.map(r => <option key={r} value={r}>радиус {r} км</option>)}
+          </select>
+          <button type="button" onClick={() => setFiltersOpen(v => !v)}
+            className="tap-target sm:hidden rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-semibold">
+            <SlidersHorizontal size={13} className="inline" />{activeFilters > 0 ? ` ${activeFilters}` : ''}
+          </button>
+          <button type="button" onClick={() => setFullscreen(v => !v)} title={fullscreen ? 'Свернуть' : 'На весь экран'}
+            className="tap-target rounded-lg border border-[var(--color-border)] px-2 py-1">
+            {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+        </div>
+      </div>
 
-          {/* Выбранные срезы — чипами, снимаются кликом */}
-          {(groups.length > 0 || managers.length > 0 || depts.length > 0) && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {depts.map(d => (
-                <button key={d} onClick={() => toggle(depts, d, setDepts)} className="rounded-lg bg-[var(--color-accent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-text-inverse)]">
-                  {d} ✕
+      {/* ── Фильтры (на телефоне сворачиваются) ── */}
+      <div className={`${filtersOpen ? 'flex' : 'hidden'} sm:flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-3 sm:px-4 py-2`}>
+        <input type="date" value={from} onChange={e => setFrom(e.target.value)}
+          className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs" />
+        <span className="text-xs text-[var(--color-text-muted)]">—</span>
+        <input type="date" value={to} onChange={e => setTo(e.target.value)}
+          className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs" />
+        {([['Месяц', 1], ['3 мес', 3], ['Год', 12]] as const).map(([label, n]) => (
+          <button key={label} type="button" onClick={() => { setFrom(monthAgo(n)); setTo(ymd(new Date())); }}
+            className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] px-2 py-1 text-xs font-semibold hover:bg-[var(--color-bg-hover)]">
+            {label}
+          </button>
+        ))}
+        <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] p-0.5">
+          {STATES.map(st => (
+            <button key={st.key} type="button" title={st.hint} onClick={() => setState(st.key)}
+              className={`min-h-11 sm:min-h-0 rounded px-2 py-1 text-[11px] font-semibold whitespace-nowrap ${state === st.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+              {st.label}
+            </button>
+          ))}
+        </div>
+        <select value={funnel} onChange={e => setFunnel(e.target.value)}
+          className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs font-semibold">
+          {FUNNELS.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+        </select>
+        <select value={client} onChange={e => setClient(e.target.value)}
+          className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs font-semibold">
+          {CLIENTS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+        </select>
+        <input value={min} onChange={e => setMin(e.target.value.replace(/\D/g, ''))} placeholder="сумма от" inputMode="numeric"
+          className="w-[104px] min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs" />
+        <input value={max} onChange={e => setMax(e.target.value.replace(/\D/g, ''))} placeholder="до" inputMode="numeric"
+          className="w-[84px] min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs" />
+        <label className="flex items-center gap-1.5 text-xs font-semibold" title="Только заказчики, которые возят на 2+ разных объекта">
+          <input type="checkbox" checked={buildersOnly} onChange={e => setBuildersOnly(e.target.checked)} /> 🏗 строители
+        </label>
+        <label className="flex items-center gap-1.5 text-xs font-semibold"
+          title="Адреса, на которые по всей базе приходятся сотни сделок, — дефолт формы Битрикса и «просто город». По умолчанию скрыты.">
+          <input type="checkbox" checked={withHot} onChange={e => setWithHot(e.target.checked)} /> служебные точки
+        </label>
+        {activeFilters > 0 && (
+          <button type="button" onClick={() => { setGroups([]); setManagers([]); setDepts([]); setMin(''); setMax(''); setBuildersOnly(false); }}
+            className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] px-2 py-1 text-[11px] font-semibold text-[var(--color-text-muted)]">
+            сбросить фильтры
+          </button>
+        )}
+      </div>
+
+      {/* Чипы выбранных срезов */}
+      {(groups.length > 0 || managers.length > 0 || depts.length > 0) && (
+        <div className="shrink-0 flex flex-wrap items-center gap-1.5 px-3 sm:px-4 py-1.5">
+          {depts.map(d => <Chip key={d} onClick={() => toggle(depts, d, setDepts)}>{d}</Chip>)}
+          {managers.map(m => <Chip key={m} onClick={() => toggle(managers, m, setManagers)}>{data?.facets.managers.find(x => x.id === m)?.name ?? m}</Chip>)}
+          {groups.map(g => <Chip key={g} onClick={() => toggle(groups, g, setGroups)}>{g}</Chip>)}
+        </div>
+      )}
+
+      {!!s?.hiddenServiceDeals && !withHot && (
+        <div className="shrink-0 px-3 sm:px-4 pb-1 text-[11px] text-[var(--color-text-muted)]">
+          Скрыто <b>{s.hiddenServiceDeals.toLocaleString('ru-RU')}</b> сделок на служебных точках (дефолт формы, «просто город») — включается галкой.
+        </div>
+      )}
+      {s?.truncated && (
+        <div className="shrink-0 px-3 sm:px-4 pb-1 text-[11px] text-[var(--color-negative,#e03131)]">
+          Выборка упёрлась в потолок 60 000 сделок — сузьте период или фильтры.
+        </div>
+      )}
+      {isError && <div className="shrink-0 px-4 pb-1 text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить данные карты.</div>}
+
+      {/* ── Карта + панель: тянутся по высоте экрана ── */}
+      <div className="min-h-0 flex-1 flex flex-col lg:flex-row gap-2 p-2 sm:p-3">
+        <div className="min-h-[320px] flex-1 flex flex-col gap-1.5">
+          <div ref={mapEl} className="min-h-0 flex-1 w-full rounded-xl border border-[var(--color-border)] overflow-hidden z-0" />
+          {/* Легенда товарных групп — она же фильтр в один клик */}
+          {(data?.facets.groups.length ?? 0) > 0 && (
+            <div className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px]">
+              {data!.facets.groups.slice(0, 8).map(g => (
+                <button key={g.group} type="button" onClick={() => toggle(groups, g.group, setGroups)}
+                  title={`${g.group}: сделок ${g.deals}, ${fmtMoney(g.sum)} — клик фильтрует карту`}
+                  className={`flex items-center gap-1 ${groups.includes(g.group) ? 'font-bold' : 'text-[var(--color-text-muted)]'}`}>
+                  <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: groupColor.get(g.group) }} />
+                  <span className="max-w-[160px] truncate">{g.group}</span>
                 </button>
               ))}
-              {managers.map(m => (
-                <button key={m} onClick={() => toggle(managers, m, setManagers)} className="rounded-lg bg-[var(--color-accent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-text-inverse)]">
-                  {data?.facets.managers.find(x => x.id === m)?.name ?? m} ✕
-                </button>
-              ))}
-              {groups.map(g => (
-                <button key={g} onClick={() => toggle(groups, g, setGroups)} className="rounded-lg bg-[var(--color-accent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-text-inverse)]">
-                  {g} ✕
-                </button>
-              ))}
+              <span className="flex items-center gap-1 text-[var(--color-text-muted)]">
+                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: OTHER_COLOR }} /> прочее
+              </span>
             </div>
           )}
         </div>
 
-        {/* ── Итоги ── */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-          {[
-            { label: 'Сделок', value: s ? s.deals.toLocaleString('ru-RU') : '…', hint: 'Сделок в выборке, у которых есть координаты объекта' },
-            { label: 'Сумма', value: s ? fmtMoney(s.sum) : '…', hint: 'Сумма сделок на карте' },
-            { label: 'Объектов', value: s ? s.objects.toLocaleString('ru-RU') : '…', hint: 'Разных адресов доставки' },
-            { label: 'Заказчиков', value: s ? s.clients.toLocaleString('ru-RU') : '…', hint: 'Разных заказчиков на этих объектах' },
-            { label: 'Без координат', value: s ? s.withoutCoords.toLocaleString('ru-RU') : '…', hint: 'Сделки выборки, у которых адрес не заполнен или без координат — на карту не попали' },
-          ].map(t => (
-            <div key={t.label} title={t.hint} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2">
-              <div className="text-[10.5px] uppercase tracking-wider text-[var(--color-text-muted)]">{t.label}</div>
-              <div className="text-[17px] font-bold tabular-nums text-[var(--color-text)]">{t.value}</div>
+        {/* Панель: справа на десктопе, под картой на телефоне */}
+        <div className="lg:w-[380px] shrink-0 min-h-0 flex flex-col gap-2 overflow-y-auto">
+          {selected?.kind === 'object' && (
+            <ObjectPanel o={selected.object} onClose={() => setSelected(null)} onDeal={setOpenDealId}
+              onZoom={() => zoomTo([selected.object])} color={colorOf(selected.object)} />
+          )}
+          {selected?.kind === 'cluster' && (
+            <ClusterPanel objects={selected.objects} onClose={() => setSelected(null)} onDeal={setOpenDealId}
+              onZoom={() => zoomTo(selected.objects)} onObject={o => setSelected({ kind: 'object', object: o })} />
+          )}
+          {!selected && (
+            <div className="rounded-xl border border-dashed border-[var(--color-border)] px-3 py-3 text-[12px] text-[var(--color-text-muted)]">
+              Клик по точке — объект и его сделки. Клик по кластеру — все сделки внутри него списком.
+              Цвет точки — ведущая товарная группа объекта.
             </div>
-          ))}
-        </div>
-        {!!s?.hiddenServiceDeals && !withHot && (
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-[11.5px] text-[var(--color-text-muted)]">
-            Скрыто <b>{s.hiddenServiceDeals.toLocaleString('ru-RU')}</b> сделок на служебных точках (дефолтный адрес формы, «просто город»).
-            Это не объекты — включить можно галкой «служебные точки».
-          </div>
-        )}
-        {s?.truncated && (
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-[11.5px] text-[var(--color-text-muted)]">
-            Выборка упёрлась в потолок (60 000 сделок) — сузьте период или фильтры, иначе часть объектов не показана.
-          </div>
-        )}
-        {isError && <div className="text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить данные карты.</div>}
-
-        {/* ── Карта + дрилл ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-3">
-          <div ref={mapEl} className="h-[52vh] lg:h-[70vh] w-full rounded-xl border border-[var(--color-border)] overflow-hidden z-0" />
-          <div className="flex flex-col gap-3 min-w-0">
-            {selected ? (
-              <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 flex flex-col gap-2">
-                <div className="flex items-start gap-2">
-                  <MapPin size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
-                  <div className="min-w-0 flex-1 text-[12.5px] font-semibold break-words">{selected.address}</div>
-                  <button onClick={() => setSelected(null)} className="tap-target shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><X size={14} /></button>
-                </div>
-                {selected.hot && (
-                  <div className="rounded-lg bg-[color-mix(in_srgb,var(--color-warning,#d9840c)_12%,transparent)] px-2 py-1 text-[11px] text-[var(--color-text-muted)]">
-                    Служебная точка: по всей базе сюда попали сотни сделок — это дефолтный адрес формы, а не реальный объект.
-                  </div>
-                )}
-                <div className="flex flex-wrap gap-3 text-[11.5px] text-[var(--color-text-muted)]">
-                  <span>сделок <b className="text-[var(--color-text)]">{selected.deals}</b></span>
-                  <span>на <b className="text-[var(--color-text)]">{fmtMoney(selected.sum)}</b></span>
-                  <span>заказчиков <b className="text-[var(--color-text)]">{selected.clients}</b></span>
-                  <a href={`https://yandex.ru/maps/?pt=${selected.lon},${selected.lat}&z=17&l=map`} target="_blank" rel="noopener noreferrer"
-                    className="text-[var(--color-accent)] hover:underline">на Яндекс-карте</a>
-                </div>
-                <div className="flex flex-col gap-1 max-h-[46vh] overflow-y-auto">
-                  {selected.items.map(it => (
-                    <button key={it.dealId} onClick={() => setOpenDealId(it.dealId)}
-                      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-left hover:border-[var(--color-accent)]">
-                      <div className="flex items-center gap-2 text-[12px]">
-                        <span className="font-mono font-semibold text-[var(--color-accent)]">#{it.dealId}</span>
-                        <span className="text-[var(--color-text-muted)]">{fmtDate(it.at)}</span>
-                        <span className="ml-auto font-semibold tabular-nums">{fmtMoney(it.amount)}</span>
-                      </div>
-                      <div className="text-[11px] text-[var(--color-text-muted)] truncate">
-                        {[it.group, it.manager].filter(Boolean).join(' · ') || it.name || '—'}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-dashed border-[var(--color-border)] px-3 py-4 text-[12px] text-[var(--color-text-muted)]">
-                Клик по точке — сделки этого объекта. Клик по сделке — карточка.
-              </div>
-            )}
-
-            {/* Срезы по текущей выборке — они же фильтры в один клик */}
-            <FacetList title="Отделы" rows={(data?.facets.departments ?? []).slice(0, 10).map(d => ({ key: d.department, label: d.department, deals: d.deals, sum: d.sum }))}
-              active={depts} onToggle={k => toggle(depts, k, setDepts)} />
-            <FacetList title="Менеджеры" rows={(data?.facets.managers ?? []).slice(0, 12).map(m => ({ key: m.id, label: m.name, deals: m.deals, sum: m.sum }))}
-              active={managers} onToggle={k => toggle(managers, k, setManagers)} />
-            <FacetList title="Товарные группы" rows={(data?.facets.groups ?? []).slice(0, 12).map(g => ({ key: g.group, label: g.group, deals: g.deals, sum: g.sum }))}
-              active={groups} onToggle={k => toggle(groups, k, setGroups)} />
-          </div>
+          )}
+          <FacetList title="Отделы" rows={(data?.facets.departments ?? []).slice(0, 10).map(d => ({ key: d.department, label: d.department, deals: d.deals, sum: d.sum }))}
+            active={depts} onToggle={k => toggle(depts, k, setDepts)} />
+          <FacetList title="Менеджеры" rows={(data?.facets.managers ?? []).slice(0, 12).map(m => ({ key: m.id, label: m.name, deals: m.deals, sum: m.sum }))}
+            active={managers} onToggle={k => toggle(managers, k, setManagers)} />
+          <FacetList title="Товарные группы" rows={(data?.facets.groups ?? []).slice(0, 14).map(g => ({ key: g.group, label: g.group, deals: g.deals, sum: g.sum }))}
+            active={groups} onToggle={k => toggle(groups, k, setGroups)} color={g => groupColor.get(g)} />
         </div>
       </div>
       {openDealId !== null && <DealCard dealId={openDealId} onClose={() => setOpenDealId(null)} />}
@@ -347,11 +452,225 @@ export function MapReportPage() {
   );
 }
 
-function FacetList({ title, rows, active, onToggle }: {
+function Chip({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="rounded-lg bg-[var(--color-accent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-text-inverse)]">
+      {children} ✕
+    </button>
+  );
+}
+
+function PanelHead({ title, onClose, onZoom }: { title: React.ReactNode; onClose: () => void; onZoom: () => void }) {
+  return (
+    <div className="flex items-start gap-2">
+      <MapPin size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
+      <div className="min-w-0 flex-1 text-[12.5px] font-semibold break-words">{title}</div>
+      <button onClick={onZoom} title="Приблизить на карте" className="tap-target shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><ZoomIn size={14} /></button>
+      <button onClick={onClose} className="tap-target shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><X size={14} /></button>
+    </div>
+  );
+}
+
+function GroupBars({ groups, total }: { groups: GroupSlice[]; total: number }) {
+  if (groups.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-0.5">
+      {groups.map(g => (
+        <div key={g.group} className="flex items-center gap-2 text-[11.5px]">
+          <span className="min-w-0 flex-1 truncate" title={g.group}>{g.group}</span>
+          <div className="w-16 h-1.5 shrink-0 rounded bg-[var(--color-bg-hover)] overflow-hidden">
+            <div className="h-full bg-[var(--color-accent)]" style={{ width: `${total > 0 ? Math.round((g.sum / total) * 100) : 0}%` }} />
+          </div>
+          <span className="shrink-0 w-[70px] text-right tabular-nums text-[var(--color-text-muted)]">{fmtMoney(g.sum)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DealRow({ it, onDeal }: { it: ObjItem; onDeal: (id: number) => void }) {
+  return (
+    <button onClick={() => onDeal(it.dealId)}
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-left hover:border-[var(--color-accent)]">
+      <div className="flex items-center gap-2 text-[12px]">
+        <span className="font-mono font-semibold text-[var(--color-accent)]">#{it.dealId}</span>
+        <span className="text-[var(--color-text-muted)]">{fmtDate(it.at)}</span>
+        <span className="ml-auto font-semibold tabular-nums">{fmtMoney(it.amount)}</span>
+      </div>
+      <div className="text-[11px] text-[var(--color-text-muted)] truncate">
+        {[it.group, it.manager].filter(Boolean).join(' · ') || it.name || '—'}
+      </div>
+    </button>
+  );
+}
+
+/** Панель объекта: состав по группам, сделки и соседи по всей истории. */
+function ObjectPanel({ o, onClose, onDeal, onZoom, color }: {
+  o: MapObject; onClose: () => void; onDeal: (id: number) => void; onZoom: () => void; color: string;
+}) {
+  const [radius, setRadius] = useState(1);
+  const { data: nb, isFetching } = useQuery<Neighbours>({
+    queryKey: ['map-neighbours', o.key, radius],
+    queryFn: () => fetch(`/api/map/neighbors?lat=${o.lat}&lon=${o.lon}&r=${radius}&key=${encodeURIComponent(o.key)}`).then(r => r.json()),
+    staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
+  });
+
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 flex flex-col gap-2">
+      <PanelHead title={<span className="flex items-start gap-1.5">
+        <span className="mt-1 inline-block w-2.5 h-2.5 shrink-0 rounded-full" style={{ background: color }} />
+        {o.address}
+      </span>} onClose={onClose} onZoom={onZoom} />
+      {o.hot && (
+        <div className="rounded-lg bg-[color-mix(in_srgb,var(--color-warning,#d9840c)_12%,transparent)] px-2 py-1 text-[11px] text-[var(--color-text-muted)]">
+          Служебная точка: сюда по всей базе попали сотни сделок — это дефолтный адрес формы, а не объект.
+        </div>
+      )}
+      <div className="flex flex-wrap gap-3 text-[11.5px] text-[var(--color-text-muted)]">
+        <span>сделок <b className="text-[var(--color-text)]">{o.deals}</b></span>
+        <span>на <b className="text-[var(--color-text)]">{fmtMoney(o.sum)}</b></span>
+        <span>заказчиков <b className="text-[var(--color-text)]">{o.clients}</b></span>
+        <a href={`https://yandex.ru/maps/?pt=${o.lon},${o.lat}&z=17&l=map`} target="_blank" rel="noopener noreferrer"
+          className="text-[var(--color-accent)] hover:underline">Яндекс-карта</a>
+      </div>
+
+      <Section title="Товарные группы объекта">
+        <GroupBars groups={o.groups} total={o.sum} />
+      </Section>
+
+      <Section title={`Сделки · ${o.items.length}`}>
+        <div className="flex flex-col gap-1 max-h-[34vh] overflow-y-auto">
+          {o.items.map(it => <DealRow key={it.dealId} it={it} onDeal={onDeal} />)}
+        </div>
+      </Section>
+
+      {/* Соседи — по ВСЕЙ истории, а не по фильтру отчёта: вопрос «есть ли тут
+          наша поляна», а не «что было в периоде». */}
+      <Section title="Соседи по объекту" hint="Что мы возили рядом за всю историю — независимо от фильтров отчёта">
+        <div className="flex items-center gap-1 mb-1">
+          {[0.5, 1, 3, 10].map(r => (
+            <button key={r} type="button" onClick={() => setRadius(r)}
+              className={`min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] px-2 py-0.5 text-[11px] font-semibold ${radius === r ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : ''}`}>
+              {r} км
+            </button>
+          ))}
+          {isFetching && <Loader2 size={12} className="animate-spin text-[var(--color-text-muted)]" />}
+        </div>
+        {nb && (
+          <>
+            <div className="mb-1 text-[11.5px] text-[var(--color-text-muted)]">
+              в радиусе {nb.radiusKm} км: объектов <b className="text-[var(--color-text)]">{nb.objects}</b>,
+              отгрузок <b className="text-[var(--color-text)]">{nb.deals}</b> на <b className="text-[var(--color-text)]">{fmtMoney(nb.sum)}</b>,
+              заказчиков <b className="text-[var(--color-text)]">{nb.clients}</b>
+              {nb.lastAt && <> · последняя {fmtDate(nb.lastAt)}</>}
+            </div>
+            <div className="flex flex-col gap-0.5 max-h-[26vh] overflow-y-auto">
+              {nb.items.map(n => (
+                <div key={n.key} className="flex items-center gap-2 text-[11.5px]">
+                  <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">{n.distanceKm} км</span>
+                  <span className="min-w-0 flex-1 truncate" title={n.address}>{n.address}</span>
+                  <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">{n.deals}</span>
+                  <span className="shrink-0 w-[70px] text-right tabular-nums">{fmtMoney(n.sum)}</span>
+                </div>
+              ))}
+              {nb.items.length === 0 && <span className="text-[11.5px] text-[var(--color-text-muted)]">Рядом ничего не возили.</span>}
+            </div>
+          </>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+/** Панель кластера: все объекты и ВСЕ сделки внутри него списком. */
+function ClusterPanel({ objects, onClose, onDeal, onZoom, onObject }: {
+  objects: MapObject[]; onClose: () => void; onDeal: (id: number) => void; onZoom: () => void; onObject: (o: MapObject) => void;
+}) {
+  const [tab, setTab] = useState<'objects' | 'deals'>('deals');
+  const deals = useMemo(
+    () => objects.flatMap(o => o.items.map(it => ({ ...it, address: o.address })))
+      .sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))
+      .slice(0, 300),
+    [objects],
+  );
+  const sum = objects.reduce((s, o) => s + o.sum, 0);
+  const dealsCount = objects.reduce((s, o) => s + o.deals, 0);
+  const groups = useMemo(() => {
+    const m = new Map<string, { group: string; deals: number; sum: number }>();
+    for (const o of objects) {
+      for (const g of o.groups) {
+        const cur = m.get(g.group) ?? { group: g.group, deals: 0, sum: 0 };
+        cur.deals += g.deals; cur.sum += g.sum; m.set(g.group, cur);
+      }
+    }
+    return [...m.values()].sort((a, b) => b.sum - a.sum).slice(0, 6);
+  }, [objects]);
+
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 flex flex-col gap-2">
+      <PanelHead title={`Кластер · объектов ${objects.length}`} onClose={onClose} onZoom={onZoom} />
+      <div className="flex flex-wrap gap-3 text-[11.5px] text-[var(--color-text-muted)]">
+        <span>сделок <b className="text-[var(--color-text)]">{dealsCount}</b></span>
+        <span>на <b className="text-[var(--color-text)]">{fmtMoney(sum)}</b></span>
+      </div>
+      <GroupBars groups={groups} total={sum} />
+      <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] p-0.5">
+        {([['deals', `Все сделки · ${Math.min(dealsCount, deals.length)}`], ['objects', `Объекты · ${objects.length}`]] as const).map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setTab(k)}
+            className={`min-h-11 sm:min-h-0 flex-1 rounded px-2 py-1 text-[11.5px] font-semibold ${tab === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-col gap-1 max-h-[52vh] overflow-y-auto">
+        {tab === 'deals' && deals.map(it => (
+          <button key={it.dealId} onClick={() => onDeal(it.dealId)}
+            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-left hover:border-[var(--color-accent)]">
+            <div className="flex items-center gap-2 text-[12px]">
+              <span className="font-mono font-semibold text-[var(--color-accent)]">#{it.dealId}</span>
+              <span className="text-[var(--color-text-muted)]">{fmtDate(it.at)}</span>
+              <span className="ml-auto font-semibold tabular-nums">{fmtMoney(it.amount)}</span>
+            </div>
+            <div className="text-[11px] text-[var(--color-text-muted)] truncate" title={it.address}>{it.address}</div>
+            <div className="text-[11px] text-[var(--color-text-muted)] truncate">{[it.group, it.manager].filter(Boolean).join(' · ')}</div>
+          </button>
+        ))}
+        {tab === 'objects' && objects.map(o => (
+          <button key={o.key} onClick={() => onObject(o)}
+            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-left hover:border-[var(--color-accent)]">
+            <div className="flex items-center gap-2 text-[12px]">
+              <span className="min-w-0 flex-1 truncate" title={o.address}>{o.address}</span>
+              <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">{o.deals}</span>
+              <span className="shrink-0 font-semibold tabular-nums">{fmtMoney(o.sum)}</span>
+            </div>
+            {o.topGroup && <div className="text-[11px] text-[var(--color-text-muted)] truncate">{o.topGroup}</div>}
+          </button>
+        ))}
+        {dealsCount > deals.length && tab === 'deals' && (
+          <div className="px-1 py-1 text-[11px] text-[var(--color-text-muted)]">
+            Показаны первые {deals.length} сделок кластера — приблизьте карту, чтобы разбить его на части.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]" title={hint}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function FacetList({ title, rows, active, onToggle, color }: {
   title: string;
   rows: { key: string; label: string; deals: number; sum: number }[];
   active: string[];
   onToggle: (key: string) => void;
+  color?: (key: string) => string | undefined;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -361,6 +680,7 @@ function FacetList({ title, rows, active, onToggle }: {
         {rows.map(r => (
           <button key={r.key} onClick={() => onToggle(r.key)}
             className={`flex items-center gap-2 rounded-lg px-1.5 py-1 text-left text-[12px] hover:bg-[var(--color-bg-hover)] ${active.includes(r.key) ? 'bg-[var(--color-bg-hover)] font-semibold' : ''}`}>
+            {color && <span className="inline-block w-2 h-2 shrink-0 rounded-full" style={{ background: color(r.key) ?? OTHER_COLOR }} />}
             <span className="min-w-0 flex-1 truncate" title={r.label}>{r.label}</span>
             <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">{r.deals}</span>
             <span className="shrink-0 w-[74px] text-right tabular-nums">{fmtMoney(r.sum)}</span>
