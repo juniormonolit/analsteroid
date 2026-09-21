@@ -94,14 +94,16 @@ export async function GET(req: NextRequest) {
     where.push(`${dateCol} IS NOT NULL`);
     where.push(`${dateCol} >= $1::timestamptz AND ${dateCol} < $2::timestamptz`);
   }
-  if (groups.length > 0) { params.push(groups); where.push(`d.head_group_name = ANY($${params.length}::text[])`); }
-  const managerFilter = managers.length > 0
-    ? managers.filter(m => !allowedManagers || allowedManagers.has(m))
-    : (depts.length > 0
-      ? [...info].filter(([id, i]) => depts.includes(i.department ?? '') && (!allowedManagers || allowedManagers.has(id))).map(([id]) => id)
-      : (allowedManagers ? [...allowedManagers] : []));
-  if (managerFilter.length > 0) { params.push(managerFilter); where.push(`d.current_manager_id::text = ANY($${params.length}::text[])`); }
-  else if (allowedManagers && allowedManagers.size === 0) return NextResponse.json({ objects: [], summary: emptySummary(), facets: emptyFacets() });
+  // ВАЖНО (правка владельца 21.09 «а фильтровать-то по товарным группам как?»):
+  // фильтры ПО ФАСЕТАМ — группы, менеджеры, отделы — в SQL НЕ уходят. Иначе
+  // после выбора одной группы список групп схлопывался до неё же, и добавить
+  // вторую было неоткуда. Они применяются в Node, а каждый фасет считается по
+  // выборке, отфильтрованной ОСТАЛЬНЫМИ фасетами (обычное faceted search):
+  // список групп — с учётом менеджера и отдела, но без фильтра групп, и т.д.
+  if (allowedManagers && allowedManagers.size === 0) {
+    return NextResponse.json({ objects: [], summary: emptySummary(), facets: emptyFacets() });
+  }
+  if (allowedManagers) { params.push([...allowedManagers]); where.push(`d.current_manager_id::text = ANY($${params.length}::text[])`); }
   if (minAmount > 0) { params.push(minAmount); where.push(`d.amount >= $${params.length}`); }
   if (maxAmount > 0) { params.push(maxAmount); where.push(`d.amount <= $${params.length}`); }
   if (clientType === 'company') where.push(`d.funnel_id IN (1,3)`);
@@ -152,6 +154,12 @@ export async function GET(req: NextRequest) {
   }
 
   const hot = await hotObjectKeys();
+  const groupSet = new Set(groups);
+  const managerSet = new Set(managers);
+  const deptSet = new Set(depts);
+  const passGroup = (g: string) => groupSet.size === 0 || groupSet.has(g);
+  const passManager = (id: string | null) => managerSet.size === 0 || (!!id && managerSet.has(id));
+  const passDept = (dep: string | null) => deptSet.size === 0 || (!!dep && deptSet.has(dep));
 
   interface ObjAgg {
     key: string; lat: number; lon: number; address: string; hot: boolean;
@@ -175,21 +183,28 @@ export async function GET(req: NextRequest) {
     if (builderKeys && (!a.clientKey || !builderKeys.has(a.clientKey))) continue;
 
     const mi = d.manager_id ? info.get(d.manager_id) : undefined;
-    summary.deals++; summary.sum += amount;
-    if (a.clientKey) summary.clients.add(a.clientKey);
+    const g = d.head_group_name ?? 'Без группы';
+    const dep = mi?.department ?? null;
+    const okGroup = passGroup(g), okManager = passManager(d.manager_id), okDept = passDept(dep);
 
-    if (d.manager_id) {
-      const f = facetManagers.get(d.manager_id) ?? { id: d.manager_id, name: mi?.name ?? `#${d.manager_id}`, department: mi?.department ?? null, deals: 0, sum: 0 };
+    // Фасеты: каждый считается «без своего фильтра», чтобы список не схлопывался.
+    if (okGroup && okDept && d.manager_id) {
+      const f = facetManagers.get(d.manager_id) ?? { id: d.manager_id, name: mi?.name ?? `#${d.manager_id}`, department: dep, deals: 0, sum: 0 };
       f.deals++; f.sum += amount; facetManagers.set(d.manager_id, f);
     }
-    const g = d.head_group_name ?? 'Без группы';
-    const fg = facetGroups.get(g) ?? { group: g, deals: 0, sum: 0 };
-    fg.deals++; fg.sum += amount; facetGroups.set(g, fg);
-    const dep = mi?.department ?? null;
-    if (dep) {
+    if (okManager && okDept) {
+      const fg = facetGroups.get(g) ?? { group: g, deals: 0, sum: 0 };
+      fg.deals++; fg.sum += amount; facetGroups.set(g, fg);
+    }
+    if (okGroup && okManager && dep) {
       const fd = facetDepts.get(dep) ?? { department: dep, deals: 0, sum: 0 };
       fd.deals++; fd.sum += amount; facetDepts.set(dep, fd);
     }
+
+    // На карту и в итоги — только то, что прошло ВСЕ фильтры.
+    if (!okGroup || !okManager || !okDept) continue;
+    summary.deals++; summary.sum += amount;
+    if (a.clientKey) summary.clients.add(a.clientKey);
 
     const o: ObjAgg = byObj.get(a.objKey) ?? {
       key: a.objKey, lat: a.lat, lon: a.lon, address: a.address ?? 'без адреса',

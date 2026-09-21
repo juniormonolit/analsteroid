@@ -26,7 +26,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
-import { MapPin, Loader2, X, Maximize2, Minimize2, SlidersHorizontal, ZoomIn } from 'lucide-react';
+import { MapPin, Loader2, X, Maximize2, Minimize2, SlidersHorizontal, ZoomIn, ChevronDown, Check } from 'lucide-react';
+import { Popover } from '@/components/ui/Popover';
 import { GS_BASE_ROW, mixHex } from '@/lib/colors/google-sheets-palette';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
@@ -361,6 +362,18 @@ export function MapReportPage() {
           className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs font-semibold">
           {CLIENTS.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
         </select>
+        {/* Явные мультиселекты (правка владельца 21.09: «а фильтровать-то по
+            товарным группам как? Точки раскрасил — а толку-то?»). Легенда и
+            списки справа остались как быстрые переключатели, но основной,
+            заметный способ — вот эти три кнопки в ряду фильтров. Списки
+            приходят с сервера по ТЕКУЩЕЙ выборке (с суммами) и не схлопываются
+            при выборе: каждый фасет считается без своего же фильтра. */}
+        <MultiSelect label="Группы" items={(data?.facets.groups ?? []).map(g => ({ key: g.group, label: g.group, deals: g.deals, sum: g.sum, color: groupColor.get(g.group) }))}
+          selected={groups} onChange={setGroups} searchPlaceholder="Поиск группы" />
+        <MultiSelect label="Менеджеры" items={(data?.facets.managers ?? []).map(m => ({ key: m.id, label: m.name, deals: m.deals, sum: m.sum }))}
+          selected={managers} onChange={setManagers} searchPlaceholder="Поиск менеджера" />
+        <MultiSelect label="Отделы" items={(data?.facets.departments ?? []).map(d => ({ key: d.department, label: d.department, deals: d.deals, sum: d.sum }))}
+          selected={depts} onChange={setDepts} searchPlaceholder="Поиск отдела" />
         <input value={min} onChange={e => setMin(e.target.value.replace(/\D/g, ''))} placeholder="сумма от" inputMode="numeric"
           className="w-[104px] min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs" />
         <input value={max} onChange={e => setMax(e.target.value.replace(/\D/g, ''))} placeholder="до" inputMode="numeric"
@@ -407,18 +420,28 @@ export function MapReportPage() {
           <div ref={mapEl} className="min-h-0 flex-1 w-full rounded-xl border border-[var(--color-border)] overflow-hidden z-0" />
           {/* Легенда товарных групп — она же фильтр в один клик */}
           {(data?.facets.groups.length ?? 0) > 0 && (
-            <div className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px]">
-              {data!.facets.groups.slice(0, 8).map(g => (
-                <button key={g.group} type="button" onClick={() => toggle(groups, g.group, setGroups)}
-                  title={`${g.group}: сделок ${g.deals}, ${fmtMoney(g.sum)} — клик фильтрует карту`}
-                  className={`flex items-center gap-1 ${groups.includes(g.group) ? 'font-bold' : 'text-[var(--color-text-muted)]'}`}>
-                  <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: groupColor.get(g.group) }} />
-                  <span className="max-w-[160px] truncate">{g.group}</span>
-                </button>
-              ))}
+            <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px]">
+              <span className="text-[var(--color-text-muted)]">Цвет — товарная группа, клик по ней фильтрует:</span>
+              {data!.facets.groups.slice(0, 8).map(g => {
+                const on = groups.includes(g.group);
+                return (
+                  <button key={g.group} type="button" onClick={() => toggle(groups, g.group, setGroups)}
+                    title={`${g.group}: сделок ${g.deals}, ${fmtMoney(g.sum)} — клик фильтрует карту`}
+                    className={`flex items-center gap-1 rounded-full border px-1.5 py-0.5 ${on
+                      ? 'border-[var(--color-accent)] bg-[var(--color-bg-hover)] font-bold text-[var(--color-text)]'
+                      : 'border-transparent text-[var(--color-text-muted)] hover:border-[var(--color-border)]'}`}>
+                    <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: groupColor.get(g.group) }} />
+                    <span className="max-w-[150px] truncate">{g.group}</span>
+                    {on && <Check size={10} />}
+                  </button>
+                );
+              })}
               <span className="flex items-center gap-1 text-[var(--color-text-muted)]">
                 <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: OTHER_COLOR }} /> прочее
               </span>
+              {groups.length > 0 && (
+                <button type="button" onClick={() => setGroups([])} className="text-[var(--color-accent)] hover:underline">сбросить группы</button>
+              )}
             </div>
           )}
         </div>
@@ -688,5 +711,70 @@ function FacetList({ title, rows, active, onToggle, color }: {
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * Мультиселект-фильтр на Radix Popover (правило проекта: никаких самописных
+ * дропдаунов — на узких экранах они уезжают за край). Список приходит из
+ * фасетов текущей выборки: у каждого пункта видно, сколько сделок и денег он
+ * даёт, поэтому выбирать можно осмысленно, а не наугад.
+ */
+function MultiSelect({ label, items, selected, onChange, searchPlaceholder }: {
+  label: string;
+  items: { key: string; label: string; deals: number; sum: number; color?: string }[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  searchPlaceholder: string;
+}) {
+  const [q, setQ] = useState('');
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const list = needle ? items.filter(i => i.label.toLowerCase().includes(needle)) : items;
+    // Выбранные держим наверху — иначе при длинном списке не видно, что включено.
+    return [...list].sort((a, b) => Number(selected.includes(b.key)) - Number(selected.includes(a.key)));
+  }, [items, q, selected]);
+  const toggleKey = (k: string) => onChange(selected.includes(k) ? selected.filter(x => x !== k) : [...selected, k]);
+
+  return (
+    <Popover
+      className="w-[320px] max-w-[calc(100vw-16px)] p-2"
+      trigger={
+        <button type="button"
+          className={`min-h-11 sm:min-h-0 flex items-center gap-1 rounded-lg border px-2 py-1 text-xs font-semibold ${
+            selected.length > 0
+              ? 'border-[var(--color-accent)] bg-[var(--color-bg-hover)] text-[var(--color-text)]'
+              : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+          {label}
+          {selected.length > 0 && <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-[10px] text-[var(--color-text-inverse)]">{selected.length}</span>}
+          <ChevronDown size={12} className="opacity-60" />
+        </button>
+      }
+    >
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder={searchPlaceholder}
+        className="mb-1.5 w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-[16px] sm:text-xs" />
+      <div className="max-h-[46vh] overflow-y-auto flex flex-col">
+        {shown.map(i => {
+          const on = selected.includes(i.key);
+          return (
+            <button key={i.key} type="button" onClick={() => toggleKey(i.key)}
+              className={`flex items-center gap-2 rounded-lg px-1.5 py-1 text-left text-[12px] hover:bg-[var(--color-bg-hover)] ${on ? 'font-semibold' : ''}`}>
+              <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${on ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'border-[var(--color-border)]'}`}>
+                {on && <Check size={10} />}
+              </span>
+              {i.color && <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: i.color }} />}
+              <span className="min-w-0 flex-1 truncate" title={i.label}>{i.label}</span>
+              <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">{i.deals}</span>
+              <span className="shrink-0 w-[70px] text-right tabular-nums">{fmtMoney(i.sum)}</span>
+            </button>
+          );
+        })}
+        {shown.length === 0 && <span className="px-1.5 py-2 text-[12px] text-[var(--color-text-muted)]">Ничего не найдено.</span>}
+      </div>
+      <div className="mt-1.5 flex items-center justify-between border-t border-[var(--color-border)] pt-1.5 text-[11px]">
+        <button type="button" onClick={() => onChange(shown.map(i => i.key))} className="text-[var(--color-accent)] hover:underline">выбрать всё{q ? ' найденное' : ''}</button>
+        <button type="button" onClick={() => onChange([])} className="text-[var(--color-text-muted)] hover:underline">сбросить</button>
+      </div>
+    </Popover>
   );
 }
