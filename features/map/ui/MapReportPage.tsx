@@ -268,40 +268,32 @@ export function MapReportPage() {
   const convRef = useRef<ConvData | null>(null);
   useEffect(() => { convRef.current = conv ?? null; }, [conv]);
 
-  const syncClusterMarkers = useCallback(() => {
+  // Кластеры рисует НАСТОЯЩИЙ слой circle, а не только DOM-маркеры. Это не
+  // косметика: на стартовом зуме кластеризуется ВСЁ, слой одиночных точек
+  // (filter: нет point_count) честно рисует ноль, и если кружки держатся лишь
+  // на querySourceFeatures + DOM-маркерах, то любая осечка этой связки =
+  // пустая карта. Ровно это и случилось после переезда с Leaflet (21.09):
+  // тайлы грузились, а данных не было видно вообще. Теперь кружки — WebGL, а
+  // DOM-маркеры остались только подписями поверх и ни на что не влияют.
+  const syncClusterLabels = useCallback(() => {
     const map = mapRef.current, M = ml;
-    if (!map || !M || !map.getSource('objects')) return;
+    if (!map || !M) return;
     clusterMarkers.current.forEach(mk => mk.remove());
     clusterMarkers.current = [];
-    if (layer === 'heat' || isConv) return;
-    const feats = map.querySourceFeatures('objects', { filter: ['==', ['get', 'cluster'], true] });
-    const seen = new Set<string>();
-    for (const f of feats) {
-      const id = String(f.properties?.cluster_id ?? '');
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
+    if (!map.getLayer('clusters')) return;
+    for (const f of map.queryRenderedFeatures({ layers: ['clusters'] })) {
       const n = Number(f.properties?.point_count ?? 0);
+      if (!n) continue;
       const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
-      const size = n < 10 ? 34 : n < 100 ? 42 : 52;
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.title = `${n} объектов — открыть списком`;
-      el.style.cssText = `display:flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;border-radius:999px;background:rgba(37,99,235,.85);color:#fff;font-weight:700;font-size:${n < 100 ? 13 : 12}px;border:2px solid rgba(255,255,255,.9);cursor:pointer`;
+      const el = document.createElement('div');
+      // Подпись не ловит клики — кликается сам слой кластеров под ней.
+      el.style.cssText = `pointer-events:none;color:#fff;font-weight:700;font-size:${n < 100 ? 13 : 11}px;text-shadow:0 1px 2px rgba(0,0,0,.35)`;
       el.textContent = String(n);
-      // Клик по кластеру не улетает в зум (правка владельца: «кликать на кластер
-      // и видеть все сделки там списком») — зум отдельной кнопкой в панели.
-      el.onclick = async () => {
-        const src = map.getSource('objects') as import('maplibre-gl').GeoJSONSource;
-        const leaves = await src.getClusterLeaves(Number(id), 10_000, 0);
-        const objs = leaves
-          .map(l => objByKey.get(String((l.properties as { key?: string } | null)?.key ?? '')))
-          .filter((o): o is MapObject => !!o)
-          .sort((x, y) => y.sum - x.sum);
-        setSelected({ kind: 'cluster', objects: objs });
-      };
       clusterMarkers.current.push(new M.Marker({ element: el }).setLngLat([lng, lat]).addTo(map));
     }
-  }, [ml, layer, isConv, objByKey]);
+  }, [ml]);
+  const syncRef = useRef(syncClusterLabels);
+  useEffect(() => { syncRef.current = syncClusterLabels; }, [syncClusterLabels]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -317,6 +309,33 @@ export function MapReportPage() {
       })),
     };
     setGeoJson(map, 'objects', fc, { cluster: true, clusterRadius: 50, clusterMaxZoom: 14 });
+
+    if (!map.getLayer('clusters')) {
+      map.addLayer({
+        id: 'clusters', type: 'circle', source: 'objects', filter: ['has', 'point_count'],
+        paint: {
+          'circle-radius': ['step', ['get', 'point_count'], 17, 10, 21, 100, 26],
+          'circle-color': 'rgba(37,99,235,.85)',
+          'circle-stroke-width': 2,
+          'circle-stroke-color': 'rgba(255,255,255,.9)',
+        },
+      });
+      // Клик по кластеру не улетает в зум (правка владельца: «кликать на кластер
+      // и видеть все сделки там списком») — зум отдельной кнопкой в панели.
+      map.on('click', 'clusters', async e => {
+        const id = e.features?.[0]?.properties?.cluster_id;
+        if (id === undefined) return;
+        const src = map.getSource('objects') as import('maplibre-gl').GeoJSONSource;
+        const leaves = await src.getClusterLeaves(Number(id), 10_000, 0);
+        const objs = leaves
+          .map(l => objByKeyRef.current.get(String((l.properties as { key?: string } | null)?.key ?? '')))
+          .filter((o): o is MapObject => !!o)
+          .sort((x, y) => y.sum - x.sum);
+        setSelected({ kind: 'cluster', objects: objs });
+      });
+      map.on('mouseenter', 'clusters', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'clusters', () => { map.getCanvas().style.cursor = ''; });
+    }
     if (!map.getLayer('obj-points')) {
       map.addLayer({
         id: 'obj-points', type: 'circle', source: 'objects', filter: ['!', ['has', 'point_count']],
@@ -345,11 +364,27 @@ export function MapReportPage() {
       });
       map.on('mouseleave', 'obj-points', () => { map.getCanvas().style.cursor = ''; popupRef.current?.remove(); });
     }
-    syncClusterMarkers();
-    map.on('move', syncClusterMarkers);
-    map.on('sourcedata', syncClusterMarkers);
-    return () => { map.off('move', syncClusterMarkers); map.off('sourcedata', syncClusterMarkers); };
-  }, [ready, data, layer, colorOf, isConv, syncClusterMarkers]);
+    // В режимах без точек слои прячем, а источник оставляем — чтобы не
+    // пересобирать тайлы кластеров на каждом переключении.
+    const vis = hide ? 'none' : 'visible';
+    map.setLayoutProperty('clusters', 'visibility', vis);
+    map.setLayoutProperty('obj-points', 'visibility', vis);
+    if (hide) { clusterMarkers.current.forEach(mk => mk.remove()); clusterMarkers.current = []; }
+    else syncRef.current();
+  }, [ready, data, layer, colorOf, isConv]);
+
+  // Подписи кластеров пересчитываем ПОСЛЕ отрисовки: queryRenderedFeatures
+  // читает то, что реально нарисовано, и до 'idle' отдаёт неполный набор.
+  // Слушатели вешаются ОДИН раз и зовут актуальную функцию через ref — иначе
+  // каждый ререндер снимал бы и ставил их заново.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const run = () => syncRef.current();
+    map.on('idle', run);
+    map.on('move', run);
+    return () => { map.off('idle', run); map.off('move', run); };
+  }, [ready]);
 
   // Тепловая карта: вес точки — деньги, поэтому «горячо» там, где выручка, а
   // не там, где просто много мелких отгрузок. Штатный слой heatmap.
