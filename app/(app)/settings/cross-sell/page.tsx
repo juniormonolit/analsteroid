@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 interface StatItem { group: string; pct: number }
-interface Row { name: string; transitions: number; stat: StatItem[]; priorities: string[] }
+interface Row { name: string; transitions: number; stat: StatItem[]; priorities: (string | null)[] }
 
 export default function CrossSellPrioritiesPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
@@ -38,12 +38,12 @@ export default function CrossSellPrioritiesPage() {
     const needle = q.trim().toLowerCase();
     if (!needle) return rows;
     return rows.filter(r => r.name.toLowerCase().includes(needle)
-      || r.priorities.some(p => p.toLowerCase().includes(needle)));
+      || r.priorities.some(p => p?.toLowerCase().includes(needle)));
   }, [rows, q]);
 
-  const configured = rows?.filter(r => r.priorities.length > 0).length ?? 0;
+  const configured = rows?.filter(r => r.priorities.some(Boolean)).length ?? 0;
 
-  async function save(name: string, groups: string[]) {
+  async function save(name: string, groups: (string | null)[]) {
     setSavingGroup(name); setMsg(null);
     // Оптимистично: селект должен реагировать мгновенно, откатываем при ошибке.
     const before = rows;
@@ -65,10 +65,12 @@ export default function CrossSellPrioritiesPage() {
   }
 
   function setSlot(row: Row, slot: number, value: string) {
-    const next = [...row.priorities];
-    if (value) next[slot] = value; else next.splice(slot, 1);
-    // Дырки не храним: выбранный третий при пустом втором становится вторым.
-    save(row.name, next.filter(Boolean).slice(0, max));
+    // Слот — это МЕСТО В СПИСКЕ: выбранный третьим остаётся третьим, первые две
+    // позиции займёт статистика (правка владельца 21.09: «выбрал ее в третьем
+    // приоритете. В итоге она воткнулась в первый»). Дырки не схлопываем.
+    const next: (string | null)[] = Array.from({ length: max }, (_, i) => row.priorities[i] ?? null);
+    next[slot] = value || null;
+    save(row.name, next);
   }
 
   if (!rows) return <div className="p-6 text-sm text-[var(--color-text-muted)]">{msg ?? 'Загрузка…'}</div>;
@@ -81,7 +83,8 @@ export default function CrossSellPrioritiesPage() {
           Блок «Предложить» в «Моих заказчиках» считается по статистике переходов — что клиенты покупали
           СЛЕДУЮЩЕЙ покупкой. Статистика честная, но шумит на сопутствующих товарах: после «Газобетон» она
           выводит «Сухие смеси», хотя клей берут той же покупкой. Здесь для каждой группы можно задать
-          до {max} групп, которые встанут <b>перед</b> статистикой. Статистика не удаляется — уезжает ниже.
+          до {max} групп. <b>Приоритет — это место в списке:</b> выбранный третьим и останется третьим,
+          а первые две позиции займёт статистика. Статистика не удаляется — расходится по свободным местам.
           Изменения применяются в течение минуты, пересчёт не нужен.
         </p>
       </div>
@@ -113,7 +116,7 @@ export default function CrossSellPrioritiesPage() {
                 </div>
                 {busy && <span className="text-[11px] text-[var(--color-text-muted)]">сохраняю…</span>}
                 {!busy && savedGroup === row.name && <span className="text-[11px] font-semibold text-[var(--color-positive,#2f9e44)]">сохранено</span>}
-                {row.priorities.length > 0 && (
+                {row.priorities.some(Boolean) && (
                   <button onClick={() => save(row.name, [])}
                     className="min-h-11 sm:min-h-0 sm:py-1 px-2 rounded-lg border border-[var(--color-border)] text-[11px] font-semibold text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
                     сбросить

@@ -53,49 +53,57 @@ export interface Recommendation {
 // Статистика шумит на сопутствующих товарах: после «Газобетон» она честно
 // выводит «Сухие смеси» — клей к блокам берут той же покупкой, и как совет
 // «кому позвонить и что предложить» это пустая строка. Настройка (таблица
-// cross_sell_priorities, «Настройки → Что предложить») позволяет задать до
-// трёх групп, которые идут ПЕРЕД статистикой для конкретной группы последней
-// покупки. Статистика не удаляется — уезжает ниже.
+// cross_sell_priorities, «Настройки → Что предложить») задаёт до трёх групп
+// для конкретной группы последней покупки.
+//
+// Слот = МЕСТО В ИТОГОВОМ СПИСКЕ, а не «ещё одна строка сверху» (правка
+// владельца 21.09, вторая итерация: «Я захотел поставить арматуру вместо
+// грунта и навоза и выбрал ее в третьем приоритете. В итоге она воткнулась в
+// первый»). Заполнен только третий слот — первые две позиции остаются за
+// статистикой, ручная встаёт третьей. Пустые слоты дырок в выдаче не делают:
+// их занимает статистика по порядку вероятности.
 
-/** from-группа → до 3 групп в порядке приоритета. */
-export type CrossSellPriorities = Record<string, string[]>;
+/** from-группа → слоты 1..3; null = слот свободен, его займёт статистика. */
+export type CrossSellPriorities = Record<string, (string | null)[]>;
 
 export const MANUAL_MAX = 3;
 
 /** Кэш короткий (минута): правка в настройках должна быть видна сразу, а не
  *  через сутки, как матрица. Таблица крошечная (≤ числа head-групп). */
 export async function fetchCrossSellPriorities(): Promise<CrossSellPriorities> {
-  return cached('customers:crosssell-priorities:v1', 60, async () => {
-    const res = await systemDb().query<{ from_group: string; groups: string[] }>(
+  return cached('customers:crosssell-priorities:v2', 60, async () => {
+    const res = await systemDb().query<{ from_group: string; groups: (string | null)[] }>(
       `SELECT from_group, groups FROM cross_sell_priorities`,
     );
     const out: CrossSellPriorities = {};
     for (const r of res.rows) {
-      const list = (r.groups ?? []).filter(Boolean).slice(0, MANUAL_MAX);
-      if (list.length > 0) out[r.from_group] = list;
+      const list = (r.groups ?? []).slice(0, MANUAL_MAX).map(g => (g && g.trim() ? g : null));
+      if (list.some(Boolean)) out[r.from_group] = list;
     }
     return out;
   }).catch(() => ({}));   // таблицы ещё нет на этом инстансе — работаем как раньше, на статистике
 }
 
 /**
- * Ручные приоритеты для клиента: слот за слотом по всем группам его последней
- * покупки (купил газобетон + щебень — берём сначала первые приоритеты обеих
- * групп, потом вторые), без дублей и без того, что клиент и так только что
- * купил (то же правило самоповтора, что у статистики). Не больше MANUAL_MAX.
+ * Ручные приоритеты для клиента: слот → группа. Если групп последней покупки
+ * несколько (купил газобетон + щебень), слот занимает первая непустая настройка
+ * по алфавиту групп. Не берём то, что клиент и так только что купил (то же
+ * правило самоповтора, что у статистики), и не дублируем группы между слотами.
  */
-function manualFor(priorities: CrossSellPriorities | undefined, lastGroups: string[]): string[] {
-  if (!priorities) return [];
-  const lists = [...lastGroups].sort().map(g => priorities[g]).filter((l): l is string[] => !!l && l.length > 0);
-  if (lists.length === 0) return [];
+function manualFor(priorities: CrossSellPriorities | undefined, lastGroups: string[]): Map<number, string> {
+  const out = new Map<number, string>();
+  if (!priorities) return out;
+  const lists = [...lastGroups].sort().map(g => priorities[g]).filter((l): l is (string | null)[] => !!l);
+  if (lists.length === 0) return out;
   const exclude = new Set(lastGroups);
-  const out: string[] = [];
+  const used = new Set<string>();
   for (let slot = 0; slot < MANUAL_MAX; slot++) {
     for (const list of lists) {
       const g = list[slot];
-      if (!g || exclude.has(g) || out.includes(g)) continue;
-      out.push(g);
-      if (out.length >= MANUAL_MAX) return out;
+      if (!g || exclude.has(g) || used.has(g)) continue;
+      out.set(slot, g);
+      used.add(g);
+      break;
     }
   }
   return out;
@@ -142,10 +150,10 @@ export async function fetchCrossSellMatrix(): Promise<CrossSellMatrix> {
   });
 }
 
-function topN(counts: Record<string, number>, total: number): { group: string; pct: number }[] {
+function topN(counts: Record<string, number>, total: number, limit = TOP_N): { group: string; pct: number }[] {
   return Object.entries(counts)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, TOP_N)
+    .slice(0, limit)
     .map(([group, cnt]) => ({ group, pct: Math.round((cnt / total) * 100) }));
 }
 
@@ -164,10 +172,17 @@ function pctMap(counts: Record<string, number>, total: number): Record<string, n
  * суммарных переходов) или покупок с товарами нет — общий топ по базе с пометкой.
  *
  * `priorities` (настройка владельца 21.09) — ручные приоритеты по группе последней
- * покупки: они встают ПЕРЕД статистикой, статистика остаётся следом без дублей.
+ * покупки: каждый занимает СВОЁ место в списке (слот 3 = третья строка), пустые
+ * места достаются статистике по порядку вероятности.
+ *
+ * `limit` — сколько статистических групп брать. По умолчанию TOP_N=3, как везде
+ * в разделе; «Настройки → Что предложить» просит 6 («пусть статистические данные
+ * отображаются не 3, а 6 самых вероятных») — там выбирают, что перебивать.
+ * ВАЖНО: менять значение по умолчанию нельзя — на составе топ-3 завязаны XP за
+ * допродажу (features/xp) и кросс-селл квесты, у них ретро-пересчёт.
  */
 export function recommendFor(
-  matrix: CrossSellMatrix, lastGroups: string[], priorities?: CrossSellPriorities,
+  matrix: CrossSellMatrix, lastGroups: string[], priorities?: CrossSellPriorities, limit: number = TOP_N,
 ): Recommendation | null {
   const known = lastGroups.filter(g => matrix.from[g]);
   const knownSet = new Set(known);
@@ -203,7 +218,7 @@ export function recommendFor(
         crossTotal += cnt;
       }
       if (crossTotal > 0) {
-        statItems = topN(crossOnly, crossTotal);
+        statItems = topN(crossOnly, crossTotal, limit);
         pctOf = pctMap(crossOnly, crossTotal);
       }
       // У группы клиента вообще нет статистики переходов НА ДРУГУЮ группу (в
@@ -222,7 +237,7 @@ export function recommendFor(
     }
     if (globalCrossTotal > 0) {
       fallback = true;
-      statItems = topN(globalCross, globalCrossTotal);
+      statItems = topN(globalCross, globalCrossTotal, limit);
       pctOf = pctMap(globalCross, globalCrossTotal);
     }
   }
@@ -230,17 +245,27 @@ export function recommendFor(
   // Ручные приоритеты применяются и там, где статистики нет вовсе: настройка —
   // это знание владельца о товаре, а не производная от матрицы.
   const manual = manualFor(priorities, lastGroups);
-  if (!statItems && manual.length === 0) return null;
+  if (!statItems && manual.size === 0) return null;
 
-  const manualSet = new Set(manual);
-  const items = [
-    ...manual.map(group => ({ group, pct: pctOf[group] ?? 0, manual: true })),
-    ...(statItems ?? []).filter(i => !manualSet.has(i.group)),
-  ];
+  // Раскладка по местам: ручной слот занимает своё место в списке, остальные
+  // места по порядку достаются статистике (без групп, уже занятых вручную).
+  const manualSet = new Set(manual.values());
+  const queue = (statItems ?? []).filter(i => !manualSet.has(i.group));
+  const lastSlot = manual.size > 0 ? Math.max(...manual.keys()) : -1;
+  const length = Math.max(lastSlot + 1, manual.size + queue.length);
+  const items: Recommendation['items'] = [];
+  let next = 0;
+  for (let pos = 0; pos < length; pos++) {
+    const m = manual.get(pos);
+    if (m !== undefined) { items.push({ group: m, pct: pctOf[m] ?? 0, manual: true }); continue; }
+    if (next < queue.length) items.push(queue[next++]!);
+  }
   // basedOn — от чего считали; при фолбэке статистики групп может не быть в
   // матрице вовсе, но ручной приоритет-то задан именно от них — показываем их,
   // иначе в карточке «после: » окажется пусто при заданной вручную подсказке.
-  const basedOn = known.length > 0 ? known : (manual.length > 0 ? lastGroups.filter(g => priorities?.[g]?.length) : known);
+  const basedOn = known.length > 0
+    ? known
+    : (manual.size > 0 ? lastGroups.filter(g => priorities?.[g]?.some(Boolean)) : known);
   return { basedOn, fallback, items };
 }
 

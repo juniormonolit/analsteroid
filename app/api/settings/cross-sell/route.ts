@@ -16,6 +16,9 @@ import {
 // разошёлся бы с ней (услуги/доставка/«Разное» из матрицы исключены).
 // Правит только супер-админ, как и остальные настройки расчёта.
 
+/** Сколько статистических групп показывать в подсказке строки (владелец 21.09). */
+const STAT_SHOWN = 6;
+
 export async function GET() {
   const session = await getSession();
   const denied = superadminError(session);
@@ -28,8 +31,10 @@ export async function GET() {
     name,
     /** Сколько раз из этой группы вообще был переход дальше — вес группы. */
     transitions: matrix.from[name]?.total ?? 0,
-    /** Что рекомендация показывает СЕЙЧАС по статистике (без ручных приоритетов). */
-    stat: (recommendFor(matrix, [name])?.items ?? []).map(i => ({ group: i.group, pct: i.pct })),
+    /** Что рекомендация показывает СЕЙЧАС по статистике (без ручных приоритетов).
+     *  Шесть, а не три (правка владельца 21.09: «пусть статистические данные
+     *  отображаются не 3, а 6 самых вероятных») — здесь выбирают, что перебивать. */
+    stat: (recommendFor(matrix, [name], undefined, STAT_SHOWN)?.items ?? []).map(i => ({ group: i.group, pct: i.pct })),
     priorities: priorities[name] ?? [],
   }));
   rows.sort((a, b) => b.transitions - a.transitions || a.name.localeCompare(b.name, 'ru'));
@@ -50,23 +55,27 @@ export async function PUT(req: NextRequest) {
   const fromGroup = typeof body?.fromGroup === 'string' ? body.fromGroup.trim() : '';
   if (!fromGroup) return NextResponse.json({ error: 'Не указана товарная группа' }, { status: 400 });
 
+  // Слот = место в итоговом списке, поэтому пустые слоты СОХРАНЯЮТСЯ как null:
+  // «заполнен только третий» значит «первые две позиции — статистика» (правка
+  // владельца 21.09). Схлопывать дырки нельзя — именно на это он и жаловался.
   const raw = Array.isArray(body?.groups) ? body!.groups : [];
-  const groups: string[] = [];
+  if (raw.length > MANUAL_MAX) {
+    return NextResponse.json({ error: `Не больше ${MANUAL_MAX} приоритетов` }, { status: 400 });
+  }
+  const groups: (string | null)[] = [];
   for (const g of raw) {
-    if (typeof g !== 'string') continue;
-    const v = g.trim();
-    if (!v || groups.includes(v)) continue;
+    const v = typeof g === 'string' ? g.trim() : '';
+    if (!v) { groups.push(null); continue; }
     // Предлагать ту же группу бессмысленно: движок самоповторы и так вырезает
     // («предложить то же самое» — правило 01.08), приоритет просто не сработал бы.
     if (v === fromGroup) return NextResponse.json({ error: 'Нельзя предлагать ту же самую группу' }, { status: 400 });
+    if (groups.includes(v)) return NextResponse.json({ error: 'Одна и та же группа в двух приоритетах' }, { status: 400 });
     groups.push(v);
   }
-  if (groups.length > MANUAL_MAX) {
-    return NextResponse.json({ error: `Не больше ${MANUAL_MAX} приоритетов` }, { status: 400 });
-  }
+  while (groups.length > 0 && groups[groups.length - 1] === null) groups.pop();  // хвостовые пустые не храним
 
   const db = systemDb();
-  if (groups.length === 0) {
+  if (groups.every(g => g === null)) {
     await db.query(`DELETE FROM cross_sell_priorities WHERE from_group = $1`, [fromGroup]);
   } else {
     await db.query(
