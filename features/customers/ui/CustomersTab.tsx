@@ -54,9 +54,9 @@ interface ApiResponse {
 export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused' | 'builders';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
-  { key: 'window', label: '🔥 Окно открыто' },
-  { key: 'missed', label: 'Окно упущено' },
+  { key: 'window', label: '🔥 Звонить сейчас' },
   { key: 'faded', label: 'Затихли' },
+  { key: 'missed', label: 'Окно упущено' },
   { key: 'rest', label: 'Остальные' },
   // Строители (21.09): заказчики, чьи сделки едут на разные адреса.
   { key: 'builders', label: '🏗 Строители' },
@@ -581,6 +581,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
         title="Порядок карточек внутри очереди"
         className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
         <option value="">По срочности</option>
+        <option value="repeatChance:desc">Шанс на повтор ↓</option>
         <option value="sumSold:desc">Куплено на ↓</option>
         <option value="lastSoldAt:desc">Последняя покупка ↓</option>
         <option value="lastSoldAt:asc">Последняя покупка ↑</option>

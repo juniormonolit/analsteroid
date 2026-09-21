@@ -1,5 +1,10 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
+import { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER, type CustomerQueue } from './queueRules';
+
+export { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER };
+export type { CustomerQueue };
+import { fetchRepeatScoreTable, repeatChance } from './repeatScore';
 import { CLIENT_KEY_CASE_SQL, deriveClientType } from './clientKey';
 
 // ── «Мои заказчики» (фича Серёги 01.08) ──────────────────────────────────────
@@ -70,7 +75,7 @@ export const SLEEP_MIN_DAYS = 120;
 // против 34 %). Окно — ЕДИНОЕ для всех групп (решение владельца: «позвонив по
 // ЖБИ на третий день, продажа тоже возможна»). Отсчёт — от ОТГРУЗКИ
 // (delivered_at), не от продажи: заказчику звонят, когда материал уже у него.
-export const REPEAT_WINDOW_DAYS = 22;
+
 /** «Успешный звонок» — дольше 20 секунд (порог отчёта о звонках после отгрузки). */
 export const GOOD_CALL_MIN_SEC = 20;
 /** Авто-сделка повторки: создана бизнес-процессом в первые минуты после отгрузки. */
@@ -84,8 +89,6 @@ export const AUTO_REPEAT_DEAL_WINDOW_MIN = 15;
  *            отгрузки прошло больше его цикла повторки (контакт после отгрузки был);
  *   rest   — всё остальное.
  */
-export type CustomerQueue = 'window' | 'missed' | 'faded' | 'rest';
-export const QUEUE_ORDER: CustomerQueue[] = ['window', 'missed', 'faded', 'rest'];
 
 export interface QueueInfo {
   queue: CustomerQueue;
@@ -97,35 +100,81 @@ export interface QueueInfo {
   contactedAfter: 'call' | 'manual' | null;
   /** Порядок внутри очереди: меньше — выше. */
   rank: number;
+  /** Правило трёх касаний (21.09): по одному контакту на каждой неделе окна.
+   *  touchedWeeks[i] — было ли касание на неделе i+1 (недели 1..3). */
+  touchedWeeks: boolean[];
+  /** Сколько недель окна уже закрыто касанием (0..3). */
+  touchesDone: number;
+  /** Идёт неделя окна (1..3), null — окно уже закрыто или отгрузок не было. */
+  weekNo: number | null;
+  /** Дней до конца ТЕКУЩЕЙ недели окна — когда сгорит это касание. */
+  daysLeftInWeek: number | null;
 }
 
 /** Очередь заказчика. lastContactAt — последняя РУЧНАЯ отметка «Связался»
  *  (customer_contacts, системная БД) — применяется поверх кэша движка в роуте. */
 export function assignQueue(r: CustomerRow, lastContactAt: string | null, now = Date.now()): QueueInfo {
+  const empty = { touchedWeeks: [false, false, false], touchesDone: 0, weekNo: null, daysLeftInWeek: null };
   const del = r.lastDeliveredAt;
-  if (!del) return { queue: 'rest', daysSinceDelivery: null, daysLeft: null, contactedAfter: null, rank: 0 };
+  if (!del) return { queue: 'rest', daysSinceDelivery: null, daysLeft: null, contactedAfter: null, rank: 0, ...empty };
   const since = daysSince(del, now);
   // Заказ в работе (продано, не отгружено): всё нормально, допродавать рано.
-  if (r.hasOpenOrder) return { queue: 'rest', daysSinceDelivery: since, daysLeft: null, contactedAfter: null, rank: -1e12 };
+  if (r.hasOpenOrder) return { queue: 'rest', daysSinceDelivery: since, daysLeft: null, contactedAfter: null, rank: -1e12, ...empty };
   const delMs = new Date(del).getTime();
+
+  // Неделя окна для момента t: 1 (дни 0–7), 2 (7–14), 3 (14–22).
+  const weekOf = (ms: number): number | null => {
+    const d = (ms - delMs) / DAY_MS;
+    if (d <= 0 || d > REPEAT_WINDOW_DAYS) return null;
+    return Math.min(TOUCH_TARGET, Math.floor(d / TOUCH_WEEK_DAYS) + 1);
+  };
+  const touchedWeeks = [false, false, false];
+  for (const iso of r.goodCallsAfter) {
+    const w = weekOf(new Date(iso).getTime());
+    if (w) touchedWeeks[w - 1] = true;
+  }
+  // Ручная отметка «Связался» — такое же касание, как звонок (знаем только последнюю).
+  const manualMs = lastContactAt !== null ? new Date(lastContactAt).getTime() : null;
+  if (manualMs !== null && manualMs > delMs) {
+    const w = weekOf(manualMs);
+    if (w) touchedWeeks[w - 1] = true;
+  }
+  const touchesDone = touchedWeeks.filter(Boolean).length;
+
   const callAfter = r.lastGoodCallAt !== null && new Date(r.lastGoodCallAt).getTime() > delMs;
-  const manualAfter = lastContactAt !== null && new Date(lastContactAt).getTime() > delMs;
+  const manualAfter = manualMs !== null && manualMs > delMs;
   const contactedAfter: QueueInfo['contactedAfter'] = callAfter ? 'call' : manualAfter ? 'manual' : null;
 
-  if (!contactedAfter && since <= REPEAT_WINDOW_DAYS) {
-    // Сгорает первым — выше; при равном остатке — крупнее отгрузка.
+  if (since <= REPEAT_WINDOW_DAYS) {
+    const weekNo = Math.min(TOUCH_TARGET, Math.floor(since / TOUCH_WEEK_DAYS) + 1);
     const daysLeft = Math.max(0, REPEAT_WINDOW_DAYS - since);
-    return { queue: 'window', daysSinceDelivery: since, daysLeft, contactedAfter, rank: daysLeft * 1e9 - (r.lastDeliveredAmount ?? 0) };
+    const daysLeftInWeek = Math.max(0, Math.min(REPEAT_WINDOW_DAYS, weekNo * TOUCH_WEEK_DAYS) - since);
+    const meta = { touchedWeeks, touchesDone, weekNo, daysLeftInWeek };
+    // Касание этой недели ещё не сделано — заказчик в горячей очереди, даже если
+    // на прошлой неделе с ним уже говорили (в этом и суть правила трёх касаний).
+    if (!touchedWeeks[weekNo - 1]) {
+      // Порядок: сначала то, что сгорает раньше (целыми днями — дробные часы не
+      // должны решать), потом ШАНС НА ПОВТОР, и только потом деньги отгрузки.
+      const burn = Math.ceil(daysLeftInWeek) * 1e12;
+      const chance = Math.round((r.repeatChance ?? 0) * 100) * 1e9;
+      return { queue: 'window', daysSinceDelivery: since, daysLeft, contactedAfter, rank: burn - chance - Math.min(r.lastDeliveredAmount ?? 0, 1e8), ...meta };
+    }
+    // Касание недели сделано — до следующей недели человек не нужен.
+    return { queue: 'rest', daysSinceDelivery: since, daysLeft, contactedAfter, rank: -r.urgency, ...meta };
   }
+
+  const meta = { touchedWeeks, touchesDone, weekNo: null, daysLeftInWeek: null };
   if (!contactedAfter) {
-    // Упущенные — по деньгам заказчика, не по давности: 60 и 90 дней без звонка
-    // одинаково плохо, а 2 млн против 80 тыс. — разница.
-    return { queue: 'missed', daysSinceDelivery: since, daysLeft: null, contactedAfter, rank: -r.sumDelivered };
+    // Упущенные — по ШАНСУ и деньгам, не по давности: 60 и 90 дней без звонка
+    // одинаково плохо, а вероятность повтора и сумма — разница.
+    return { queue: 'missed', daysSinceDelivery: since, daysLeft: null, contactedAfter,
+             rank: -Math.round((r.repeatChance ?? 0) * 100) * 1e9 - Math.min(r.sumDelivered, 1e8), ...meta };
   }
   if (r.section === 'regular' && r.activeCount === 0 && since > r.cycleDays) {
-    return { queue: 'faded', daysSinceDelivery: since, daysLeft: null, contactedAfter, rank: -r.sumDelivered };
+    return { queue: 'faded', daysSinceDelivery: since, daysLeft: null, contactedAfter,
+             rank: -Math.round((r.repeatChance ?? 0) * 100) * 1e9 - Math.min(r.sumDelivered, 1e8), ...meta };
   }
-  return { queue: 'rest', daysSinceDelivery: since, daysLeft: null, contactedAfter, rank: -r.urgency };
+  return { queue: 'rest', daysSinceDelivery: since, daysLeft: null, contactedAfter, rank: -r.urgency, ...meta };
 }
 
 export interface ActiveDealInfo {
@@ -214,6 +263,12 @@ export interface CustomerRow {
   autoRepeatLostNoCall: boolean;
   /** Есть проданная, но ещё не отгруженная сделка — «заказ в работе» (17.09: в очереди не ставим). */
   hasOpenOrder: boolean;
+  /** Успешные звонки ПОСЛЕ последней отгрузки (ISO, по возрастанию) — сырьё для
+   *  правила трёх касаний (21.09). */
+  goodCallsAfter: string[];
+  /** Шанс на следующую отгрузку в 180 дней, 0..1 (engine/repeatScore.ts).
+   *  null — отгрузок ещё не было, судить не о чем. */
+  repeatChance: number | null;
 }
 
 interface RawRow {
@@ -248,6 +303,7 @@ interface RawRow {
   last_good_call_at: string | Date | null;
   auto_repeat_lost_no_call: boolean | null;
   has_open_order: boolean | null;
+  good_calls_after: (string | Date)[] | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -308,6 +364,16 @@ lastdel AS (
 ),
 -- Боль владельца: авто-сделка повторки (создаётся процессом в первые минуты
 -- после отгрузки) закрыта в отказ, а успешного звонка по ней не было.
+-- Касания в окне (правка владельца 21.09): не «был ли звонок», а КОГДА были —
+-- по правилу «три касания, по одному на каждой неделе» одного звонка мало.
+touches AS (
+  SELECT ld.client_key, array_agg(c.called_at ORDER BY c.called_at) AS good_calls_after
+  FROM lastdel ld
+  JOIN mcd m ON m.client_key = ld.client_key
+  JOIN va.calls c ON c.deal_id = m.deal_id
+  WHERE c.duration_seconds > 20 AND c.called_at > ld.last_delivered_at
+  GROUP BY 1
+),
 auto_lost AS (
   SELECT ld.client_key, bool_or(true) AS auto_repeat_lost_no_call
   FROM lastdel ld
@@ -410,7 +476,7 @@ SELECT a.client_key,
        ls.last_sold_amount::text, ls.last_sold_groups,
        mh.manager_history,
        ld.last_delivered_at, ld.last_delivered_amount::text, ld.last_delivered_group,
-       gc.last_good_call_at, al.auto_repeat_lost_no_call
+       gc.last_good_call_at, al.auto_repeat_lost_no_call, tch.good_calls_after
 FROM (
   SELECT m.client_key,
          count(*) AS deals_total,
@@ -440,6 +506,7 @@ LEFT JOIN ev USING (client_key)
 LEFT JOIN lastdel ld USING (client_key)
 LEFT JOIN good_calls gc USING (client_key)
 LEFT JOIN auto_lost al USING (client_key)
+LEFT JOIN touches tch USING (client_key)
 `;
 
 function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
@@ -534,6 +601,8 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     lastGoodCallAt: toIso(r.last_good_call_at),
     autoRepeatLostNoCall: r.auto_repeat_lost_no_call === true,
     hasOpenOrder: r.has_open_order === true,
+    goodCallsAfter: (r.good_calls_after ?? []).map(v => toIso(v)).filter((v): v is string => v !== null),
+    repeatChance: null,   // проставляется в fetchManagerCustomers из таблицы частот
   };
 }
 
@@ -554,10 +623,17 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   // v5 (задача 2776) — формула client_key поменялась (фикс «k0»): без бампа
   // версии до 10 минут после деплоя отдавался бы старый кэш со «схлопнутым»
   // client_key='k0' под старым TTL — версия форсирует немедленный промах.
-  return cached(`customers:mgr:v7:${managerBitrixId}`, 10 * 60, async () => {
-    const res = await analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]);
+  // v8 (21.09) — касания по неделям и шанс на повтор в строке.
+  return cached(`customers:mgr:v8:${managerBitrixId}`, 10 * 60, async () => {
+    const [res, scoreTable] = await Promise.all([
+      analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]),
+      fetchRepeatScoreTable(),
+    ]);
     const now = Date.now();
     const rows = res.rows.map(r => toRow(r, now, managerBitrixId));
+    for (const row of rows) {
+      row.repeatChance = repeatChance(scoreTable, row.dealsDelivered, row.lastDeliveredGroup, row.clientType === 'company');
+    }
     rows.sort((a, b) => {
       if ((a.signals.length > 0) !== (b.signals.length > 0)) return a.signals.length > 0 ? -1 : 1;
       if (a.urgency !== b.urgency) return b.urgency - a.urgency;

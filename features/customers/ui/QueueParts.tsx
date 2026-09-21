@@ -12,10 +12,10 @@ import type { RepeatHeader, RepeatMonth } from '@/features/customers/engine/repe
 import { type ApiRow, fmtMoney, fmtDate, daysAgo, clientDisplayName } from './shared';
 
 export const QUEUE_META: Record<CustomerQueue, { label: string; hint: string; tone: 'hot' | 'warn' | 'cold' | 'none' }> = {
-  window: { label: 'Окно открыто — звонка нет', hint: 'Отгрузка была не больше 22 дней назад, а успешного звонка (дольше 20 с) или отметки «Связался» после неё нет. Сгорающие первыми — сверху.', tone: 'hot' },
-  missed: { label: 'Окно упущено — так и не позвонили', hint: 'С отгрузки прошло больше 22 дней, контакта после неё не было. Порядок — по деньгам заказчика: 2 млн без звонка важнее 80 тыс.', tone: 'warn' },
-  faded: { label: 'Постоянники затихли', hint: 'Покупали 2+ раз, активных сделок нет, с последней отгрузки прошло больше их цикла повторки — связь была, а покупок нет. Почему?', tone: 'cold' },
-  rest: { label: 'Остальные', hint: 'Под звонком, с заказом в работе (продано, ждёт отгрузки), в работе по активным сделкам или разовые без сигнала.', tone: 'none' },
+  window: { label: 'Звонить сейчас', hint: 'Отгрузка была не больше 22 дней назад, и касание ТЕКУЩЕЙ недели ещё не сделано. Правило трёх касаний: по одному контакту на каждой из трёх недель окна — при равном числе звонков разнесение по неделям даёт +5,3 п.п. ППО. Сверху — то, что сгорает раньше, при равном сроке выше шанс на повтор.', tone: 'hot' },
+  missed: { label: 'Окно упущено — так и не позвонили', hint: 'С отгрузки прошло больше 22 дней, контакта после неё не было. Порядок — по шансу на повтор, при равном шансе по деньгам.', tone: 'warn' },
+  faded: { label: 'Постоянники затихли', hint: 'Покупали 2+ раз, активных сделок нет, с последней отгрузки прошло больше их цикла повторки — связь была, а покупок нет. Шанс на следующую покупку у них 39–88 %, поэтому колонка стоит выше упущенных. Почему затихли?', tone: 'cold' },
+  rest: { label: 'Остальные', hint: 'Касание этой недели уже сделано (вернутся на следующей), заказ в работе (продано, ждёт отгрузки), в работе по активным сделкам или разовые без сигнала.', tone: 'none' },
 };
 const TONE: Record<string, { color: string; bg: string }> = {
   hot: { color: 'var(--color-negative, #e03131)', bg: 'color-mix(in srgb, var(--color-negative, #e03131) 6%, transparent)' },
@@ -193,15 +193,24 @@ export function ExclusionRequestsPanel({ managerId, isSelf, names, team }: { man
 }
 
 // ── Шапка: метрики менеджера по повторным продажам ───────────────────────────
-function Tile({ label, value, sub, delta, betterUp, hint }: { label: string; value: string; sub?: string; delta: number | null; betterUp: boolean; hint: string }) {
+/** Меньше стольких наблюдений в знаменателе — процент показываем серым и без
+ *  тренда (аудит 21.09): «охват окна 100 %» на ОДНОЙ отгрузке выглядел как
+ *  достижение, а «конверсия ППО 0 %» на десяти — как провал; и то и другое
+ *  в пределах случайности. Цифра остаётся видна, но не притворяется фактом. */
+const MIN_DENOM_FOR_PCT = 8;
+
+function Tile({ label, value, sub, delta, betterUp, hint, denom }: { label: string; value: string; sub?: string; delta: number | null; betterUp: boolean; hint: string; denom?: number | null }) {
+  const thin = denom !== undefined && denom !== null && denom < MIN_DENOM_FOR_PCT;
   const good = delta === null ? null : betterUp ? delta > 0 : delta < 0;
   const color = delta === null || Math.abs(delta) < 0.05 ? 'var(--color-text-muted)' : good ? 'var(--color-positive, #16a34a)' : 'var(--color-negative, #e03131)';
   return (
-    <div className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2" title={hint}>
+    <div className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2"
+      title={thin ? `${hint}\n\nДанных мало (${denom} в знаменателе) — процент показан серым и без тренда: на такой базе он скачет случайно.` : hint}>
       <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] truncate">{label}</div>
       <div className="flex items-baseline gap-2">
-        <span className="text-xl font-bold tabular-nums text-[var(--color-text)]">{value}</span>
-        {delta !== null && (
+        <span className="text-xl font-bold tabular-nums" style={{ color: thin ? 'var(--color-text-muted)' : 'var(--color-text)' }}>{value}</span>
+        {thin && <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]" title="Слишком мало наблюдений, чтобы считать это показателем">мало данных</span>}
+        {!thin && delta !== null && (
           <span className="text-[11px] font-semibold tabular-nums" style={{ color }}>
             {delta > 0 ? '▲' : delta < 0 ? '▼' : '•'} {Math.abs(delta).toFixed(Math.abs(delta) < 10 ? 1 : 0).replace('.', ',')}
           </span>
@@ -226,16 +235,16 @@ export function RepeatHeaderBlock({ managerId, isSelf, team, mgr, dept }: { mana
   const pv = (f: (m: RepeatMonth) => number | null) => (p ? f(p) : null);
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2">
-      <Tile label="Охват окна" value={pctS(v(m => m.coveragePct))} delta={d(v(m => m.coveragePct), pv(m => m.coveragePct))} betterUp
+      <Tile label="Охват окна" value={pctS(v(m => m.coveragePct))} delta={d(v(m => m.coveragePct), pv(m => m.coveragePct))} betterUp denom={c?.windowsClosed ?? null}
         sub={c ? `${c.covered} из ${c.windowsClosed} отгрузок` : 'считаем…'}
         hint="Доля отгрузок месяца, по которым был успешный звонок (> 20 с) или отметка «Связался» в первые 22 дня. Отгрузки с ещё открытым окном и без контакта в знаменатель не входят. Тренд — к прошлому месяцу, п.п." />
-      <Tile label="Конверсия ППО" value={pctS(v(m => m.ppoCrPct))} delta={d(v(m => m.ppoCrPct), pv(m => m.ppoCrPct))} betterUp
+      <Tile label="Конверсия ППО" value={pctS(v(m => m.ppoCrPct))} delta={d(v(m => m.ppoCrPct), pv(m => m.ppoCrPct))} betterUp denom={c?.autoDeals ?? null}
         sub={c ? `${c.autoSold} продано из ${c.autoDeals} авто-сделок` : undefined}
         hint="Авто-сделки повторки (создаются процессом в первые минуты после отгрузки), созданные в этом месяце: доля дошедших до продажи." />
       <Tile label="Доля повторных" value={pctS(v(m => m.repeatSharePct))} delta={d(v(m => m.repeatSharePct), pv(m => m.repeatSharePct))} betterUp
         sub={c ? `${fmtMoney(c.repeatSoldSum)} из ${fmtMoney(c.soldSum)}` : undefined}
         hint="Сумма продаж в повторных воронках ÷ все продажи менеджера за месяц." />
-      <Tile label="Слито без звонка" value={pctS(v(m => m.dumpedPct))} delta={d(v(m => m.dumpedPct), pv(m => m.dumpedPct))} betterUp={false}
+      <Tile label="Слито без звонка" value={pctS(v(m => m.dumpedPct))} delta={d(v(m => m.dumpedPct), pv(m => m.dumpedPct))} betterUp={false} denom={c?.autoDeals ?? null}
         sub={c ? `${c.autoLostNoCall} сделок · за 5 мин: ${c.autoLost5min}` : undefined}
         hint="Доля авто-сделок повторки месяца, закрытых в отказ без единого успешного звонка. Ниже — лучше. В подсказке — сколько закрыли в первые 5 минут после создания." />
       <Tile label="Звонок после отгрузки" value={c?.callDayMedian !== null && c?.callDayMedian !== undefined ? `${c.callDayMedian.toFixed(1).replace('.', ',')} дн.` : '—'}

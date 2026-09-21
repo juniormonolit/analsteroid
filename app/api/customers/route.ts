@@ -80,6 +80,9 @@ const SORTS: Record<string, (r: CustomerRow & { category?: CustomerCategory }) =
   lastCallAt: r => r.lastCallAt,
   lastActivityAt: r => r.lastActivityAt,
   activeCount: r => r.activeCount,
+  // Шанс на повтор (21.09): прямой ответ на «кто купит ещё раз с наибольшей
+  // вероятностью» — раньше сортировать по нему было нечем.
+  repeatChance: r => r.repeatChance,
 };
 
 // Первичный порядок секций: постоянники → купили один раз (never в основном

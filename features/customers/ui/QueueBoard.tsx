@@ -8,7 +8,8 @@
 import { Fragment, useMemo } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { ExternalLink, PhoneOff, AlarmClock } from 'lucide-react';
-import type { CustomerQueue, CustomerCategory } from '@/features/customers/engine/customers';
+import type { CustomerCategory } from '@/features/customers/engine/customers';
+import { QUEUE_ORDER, TOUCH_TARGET, type CustomerQueue } from '@/features/customers/engine/queueRules';
 import { CONTACT_CHANNEL_LABELS } from '@/features/customers/engine/contactTypes';
 import { QUEUE_META } from './QueueParts';
 import {
@@ -29,14 +30,50 @@ export function windowLine(r: ApiRow): { text: string; sub: string | null; color
   const since = Math.floor(q.daysSinceDelivery ?? 0);
   const delivery = `${fmtDate(r.lastDeliveredAt)}${r.lastDeliveredGroup ? ` · ${r.lastDeliveredGroup}` : ''}${r.lastDeliveredAmount ? ` · ${fmtMoney(r.lastDeliveredAmount)}` : ''}`;
   if (q.queue === 'window') {
-    const left = q.daysLeft ?? 0;
-    return { text: left < 1 ? '🔥 Окно закрывается сегодня' : `🔥 ${Math.ceil(left)} дн. до закрытия окна`, sub: `отгрузка ${delivery}`, color };
+    // Правило трёх касаний (21.09): горит не окно целиком, а касание ТЕКУЩЕЙ недели.
+    const inWeek = Math.ceil(q.daysLeftInWeek ?? 0);
+    const wk = q.weekNo ?? 1;
+    const head = inWeek < 1 ? `🔥 Касание ${wk}-й недели сгорает сегодня` : `🔥 ${inWeek} дн. на касание ${wk}-й недели`;
+    return { text: head, sub: `отгрузка ${delivery}`, color };
+  }
+  // Касание этой недели сделано — человек ждёт следующей недели, а не «закрыт».
+  // Без этой строки экран говорил «звонок был» и выглядел как «тут всё», хотя по
+  // правилу трёх касаний работа с заказчиком не закончена (правка 21.09).
+  if (q.weekNo !== null && q.touchedWeeks[q.weekNo - 1]) {
+    const nextIn = Math.ceil(q.daysLeftInWeek ?? 0);
+    return {
+      text: `✓ Касание ${q.weekNo}-й недели сделано · ${q.touchesDone} из 3`,
+      sub: q.weekNo < 3 ? `следующее касание через ${nextIn} дн. · отгрузка ${delivery}` : `окно закроется через ${Math.ceil(q.daysLeft ?? 0)} дн. · отгрузка ${delivery}`,
+      color: 'var(--color-positive, #2f9e44)',
+    };
   }
   if (q.queue === 'missed') return { text: `Окно упущено · ${since} дн. без звонка`, sub: `отгрузка ${delivery}`, color };
   if (q.queue === 'faded') return { text: `Тихо ${since} дн. · его цикл ${Math.round(r.cycleDays)} дн.`, sub: `последняя отгрузка ${delivery}`, color };
   if (q.contactedAfter === 'call') return { text: `Звонок ${daysAgo(r.lastGoodCallAt)} после отгрузки`, sub: `отгрузка ${delivery}`, color };
   if (q.contactedAfter === 'manual' && r.lastContact) return { text: `Связался ${daysAgo(r.lastContact.contactedAt)} · ${CONTACT_CHANNEL_LABELS[r.lastContact.channel]}`, sub: `отгрузка ${delivery}`, color };
   return { text: `Отгрузка ${since} дн. назад`, sub: delivery, color };
+}
+
+/** Цвет шанса: чем выше, тем «теплее» — но без светофора, чтобы не спорить с тоном очереди. */
+function chanceColor(p: number): string {
+  if (p >= 0.6) return 'var(--color-positive, #2f9e44)';
+  if (p >= 0.35) return 'var(--color-text)';
+  return 'var(--color-text-muted)';
+}
+
+/** Три точки — три недели окна: закрытая касанием, текущая и будущие. */
+function TouchDots({ q }: { q: ApiRow['queue'] }) {
+  const cur = q.weekNo ?? 0;
+  return (
+    <span className="inline-flex items-center gap-1" title={`Правило «три касания»: по одному контакту на каждой неделе 22-дневного окна. Сделано ${q.touchesDone} из ${TOUCH_TARGET}; идёт ${cur}-я неделя.`}>
+      <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">касания</span>
+      {q.touchedWeeks.map((done, i) => (
+        <span key={i} aria-hidden className="inline-block h-2 w-2 rounded-full"
+          style={{ backgroundColor: done ? 'var(--color-positive, #2f9e44)' : i + 1 === cur ? 'var(--color-negative, #e03131)' : 'var(--color-border)' }} />
+      ))}
+      <span className="text-[10.5px] font-semibold tabular-nums text-[var(--color-text-muted)]">{q.touchesDone}/{TOUCH_TARGET}</span>
+    </span>
+  );
 }
 
 function Chip({ children, title, color, bg }: { children: React.ReactNode; title?: string; color?: string; bg?: string }) {
@@ -86,6 +123,16 @@ export function CustomerTile({ r, onOpen, actions }: { r: ApiRow; onOpen: () => 
         {r.autoRepeatLostNoCall && r.queue.queue !== 'rest' && (
           <div className="text-[11px] font-semibold" style={{ color: neg }} title="Авто-сделка повторки после этой отгрузки закрыта в отказ без успешного звонка">⚠ сделку закрыли без звонка</div>
         )}
+      </div>
+      {/* Шанс на повтор + касания недели (правка владельца 21.09) */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        {r.repeatChance !== null && (
+          <span className="inline-flex items-baseline gap-1" title={`Оценка вероятности, что заказчик отгрузится ещё раз в ближайшие 180 дней. Считается по истории базы: число прошлых отгрузок, физ/юр и группа последней покупки (см. engine/repeatScore.ts). Это не прогноз по конкретному человеку, а частота по похожим.`}>
+            <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">шанс на повтор</span>
+            <span className="text-[13px] font-bold tabular-nums" style={{ color: chanceColor(r.repeatChance) }}>{Math.round(r.repeatChance * 100)} %</span>
+          </span>
+        )}
+        {r.queue.weekNo !== null && <TouchDots q={r.queue} />}
       </div>
       {/* Цифры */}
       <div className="grid grid-cols-3 gap-1.5 text-[11.5px]">
@@ -196,7 +243,7 @@ export function QueueBoard({ managerId, isSelf, filter, search, category, sort, 
   if (filter === 'all') {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 items-start">
-        {(['window', 'missed', 'faded', 'rest'] as CustomerQueue[]).map(qk => (
+        {QUEUE_ORDER.map(qk => (
           <Fragment key={qk}>
             <QueueColumn queue={qk} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} single={false} team={team} mgr={mgr} dept={dept} />
           </Fragment>
