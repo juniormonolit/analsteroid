@@ -19,6 +19,10 @@ import {
   clientShareOf, CLIENT_SHARE_METRIC_IDS, CLIENT_BUYERS_METRIC_IDS,
 } from '@/features/reports/engine/clientMetrics';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
+import {
+  OBJECT_METRIC_IDS, OBJECTS_GRAND_TOTAL_KEY, fetchObjectMetrics, objectMetricValues,
+  resolveObjectScopeManagers, type ObjectAgg, type ObjectMetricId,
+} from '@/features/reports/engine/objectMetrics';
 import { periodDateStrFromInstant, type CalendarUnit } from '@/lib/period';
 import { validateDealFilters } from '@/lib/metrics/dealFilters';
 import type { DealScope, ClientType, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
@@ -168,6 +172,10 @@ export async function POST(req: NextRequest) {
   // являются: правило владельца «метрика работает во всех трёх стартовых
   // сущностях» (10.08) — здесь это третья.
   const clientIds = new Set<string>([...CLIENT_METRIC_IDS, ...CLIENT_COHORT_METRIC_IDS, ...CLIENT_SHARE_METRIC_IDS, ...CLIENT_BUYERS_METRIC_IDS]);
+  // Метрики объектов (21.09) — ровно тот же случай: external, свой движок
+  // (objectMetrics.ts), в разрезе по времени считаются честно, поэтому в
+  // «не поддерживается» им не место.
+  const objectIds = new Set<string>(OBJECT_METRIC_IDS);
   // calculated-метрики, построенные ЦЕЛИКОМ поверх клиентских зависимостей (например
   // cohort_repeat_ratio = LTV за всё время / выручка первого заказа, задача #4994) —
   // тоже посчитаны движком «Клиентов» per-bucket через computeCalculated, значит
@@ -179,7 +187,7 @@ export async function POST(req: NextRequest) {
     m.metricType === 'calculated' && m.dependencies.length > 0 && m.dependencies.every(dep => clientIds.has(dep));
   const unsupported = explicitMetrics
     ? requested
-        .filter(m => seriesDeps(m, allMetrics) === null && !clientIds.has(m.id) && !isCalculatedOverClientDeps(m))
+        .filter(m => seriesDeps(m, allMetrics) === null && !clientIds.has(m.id) && !objectIds.has(m.id) && !isCalculatedOverClientDeps(m))
         .map(m => m.id)
     : [];
   const unsupportedSet = new Set(unsupported);
@@ -271,6 +279,33 @@ export async function POST(req: NextRequest) {
   let currentRows = currentRaw.map(r => enrich(r, curClients, curTime, curFollow, curCohort, curActive));
   let compRows = compRaw.map(r => enrich(r, compClients, compTime, compFollow, compCohort, compActive));
 
+  // Метрики объектов (21.09) — тот же инжектор, что в run/route.ts, но с
+  // измерением «бакет периода»: адреса живут в системной БД, джойнить их в SQL
+  // отчёта нечем. Строка — период, поэтому срез по отделу обязан попасть в
+  // выборку заранее (resolveObjectScopeManagers), фильтровать постфактум нечего.
+  const objectMetricIds = new Set<string>(OBJECT_METRIC_IDS);
+  let objectTotals: { cur?: ObjectAgg; comp?: ObjectAgg } | null = null;
+  if (withDeps.some(m => objectMetricIds.has(m.id))) {
+    // Как и в run/route.ts: падение вспомогательного движка не должно ронять отчёт.
+    try {
+      const scope = await resolveObjectScopeManagers(departmentIds, null);
+      const objCommon = { clientType, productGroupMode, productGroupIds, createdTimeFilter, firstTouchFilter, dealFilters };
+      const [curObj, compObj] = await Promise.all([
+        fetchObjectMetrics({ dim: { kind: 'periods', unit }, period: periodRange, managerIds: scope, common: objCommon }),
+        compWindow
+          ? fetchObjectMetrics({ dim: { kind: 'periods', unit }, period: compRange, managerIds: scope, common: objCommon })
+          : Promise.resolve(new Map<string, ObjectAgg>()),
+      ]);
+      objectTotals = { cur: curObj.get(OBJECTS_GRAND_TOTAL_KEY), comp: compObj.get(OBJECTS_GRAND_TOTAL_KEY) };
+      const applyObjects = (rows: PeriodBucketRow[], agg: Map<string, ObjectAgg>): PeriodBucketRow[] =>
+        rows.map(r => ({ ...r, metrics: { ...r.metrics, ...objectMetricValues(agg.get(r.bucket)) } }));
+      currentRows = applyObjects(currentRows, curObj);
+      compRows = applyObjects(compRows, compObj);
+    } catch (err) {
+      console.error('[objectMetrics] по периодам не посчитались:', err instanceof Error ? err.message : err);
+    }
+  }
+
   // «Клиенты» в «Итого» — из общего итога движка, не суммой бакетов (клиент,
   // купивший в мае и в июле, за полугодие один). Считается ДО сборки строк:
   // долям каждой строки нужен итог (та же логика, что в run/route.ts).
@@ -332,6 +367,19 @@ export async function POST(req: NextRequest) {
     const current = totalsCurrent[id] ?? null;
     const comparison = compareMode === 'none' ? null : (totalsComparison[id] ?? null);
     totals[id] = { current, comparison, ...computeDelta(current, comparison) };
+  }
+
+  // «Итого» по объектам — отдельным честным агрегатом (сумма по бакетам
+  // завысила бы: объект, куда возили в мае и в июле, за полугодие один).
+  if (objectTotals) {
+    const curObjTotals = objectMetricValues(objectTotals.cur);
+    const compObjTotals = objectMetricValues(objectTotals.comp);
+    for (const id of OBJECT_METRIC_IDS) {
+      if (!withDeps.some(m => m.id === id)) continue;
+      const current = curObjTotals[id as ObjectMetricId];
+      const comparison = compareMode === 'none' ? null : compObjTotals[id as ObjectMetricId];
+      totals[id] = { current, comparison, ...computeDelta(current, comparison) };
+    }
   }
 
   return NextResponse.json({

@@ -31,6 +31,10 @@ import { computeRatingValues } from '@/features/manager-card/engine/ratings';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { enrichPlanMetrics } from '@/features/reports/engine/planMetrics';
+import {
+  OBJECT_METRIC_IDS, OBJECTS_GRAND_TOTAL_KEY, fetchObjectMetrics, objectMetricValues,
+  resolveObjectScopeManagers, type ObjectAgg, type ObjectDim, type ObjectMetricId,
+} from '@/features/reports/engine/objectMetrics';
 import { periodDateStr } from '@/lib/period';
 import { formatInTimeZone } from 'date-fns-tz';
 import type { DealScope, ClientType, Grouping, ReportRow, ProductGroupMode, AccountType, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
@@ -274,6 +278,51 @@ export async function POST(req: NextRequest) {
   }));
   currentRows = filterScopedRows(currentRows);
   compRows = filterScopedRows(compRows);
+
+  // Метрики объектов (задача владельца 21.09): «Объектов», «Новых объектов»,
+  // «Вернулись на объект», «% возвратов», «Средний чек на объект», «Отгрузок на
+  // объект», «Дисциплина адреса». Адреса живут в СИСТЕМНОЙ базе (кэш Битрикса),
+  // сделки — в SA; кросс-базного джойна быть не может, поэтому значения
+  // дорисовываются инжектором — тот же приём, что у планов и «Дел и задач».
+  // Разрезы: менеджеры и товарные группы (в остальных ключи просто не появятся,
+  // и ячейка честно пустая). «По периодам» — свой роут, там инжектор свой.
+  const objectMetricIds = new Set<string>(OBJECT_METRIC_IDS);
+  const hasObjectMetric = withDeps.some(m => objectMetricIds.has(m.id));
+  let objectGrandTotals: { cur?: ObjectAgg; comp?: ObjectAgg } | null = null;
+
+  if (hasObjectMetric && (reportSlug === 'by-managers' || reportSlug === 'by-product-groups')) {
+    const dim: ObjectDim = reportSlug === 'by-managers'
+      ? { kind: 'managers' }
+      : { kind: 'product_groups', mode: productGroupMode };
+    // По менеджерам срез уже «зашит» в состав строк — берём их id. По товарным
+    // группам строка от менеджера не зависит, поэтому отдел/менеджер отчёта
+    // резолвим в список id (иначе метрика игнорировала бы фильтр отдела).
+    const scopeCur = reportSlug === 'by-managers'
+      ? currentRows.map(r => r.dimensionId)
+      : await resolveObjectScopeManagers(departmentIds, managerId);
+    const scopeComp = reportSlug === 'by-managers'
+      ? compRows.map(r => r.dimensionId)
+      : scopeCur;
+
+    // Инжектор не имеет права уронить отчёт: адреса — вспомогательные данные
+    // из другой базы, их недоступность = пустые ячейки, а не 500 на весь отчёт.
+    try {
+      const [curObj, compObj] = await Promise.all([
+        fetchObjectMetrics({ dim, period: opts.period, managerIds: scopeCur, common: commonDealFilters }),
+        compRows.length > 0
+          ? fetchObjectMetrics({ dim, period: compOpts.period, managerIds: scopeComp, common: commonDealFilters })
+          : Promise.resolve(new Map<string, ObjectAgg>()),
+      ]);
+      objectGrandTotals = { cur: curObj.get(OBJECTS_GRAND_TOTAL_KEY), comp: compObj.get(OBJECTS_GRAND_TOTAL_KEY) };
+
+      const applyObjects = (rows: ReportRow[], agg: Map<string, ObjectAgg>): ReportRow[] =>
+        rows.map(row => ({ ...row, metrics: { ...row.metrics, ...objectMetricValues(agg.get(row.dimensionId)) } }));
+      currentRows = applyObjects(currentRows, curObj);
+      compRows = applyObjects(compRows, compObj);
+    } catch (err) {
+      console.error('[objectMetrics] не посчитались:', err instanceof Error ? err.message : err);
+    }
+  }
 
   // Метрики активности менеджеров «Дней в работе» / «% выхода» / «Сделок/день» —
   // спека 09.07+допы (задача 10.07, см. features/reports/engine/managerActivity.ts).
@@ -915,6 +964,20 @@ export async function POST(req: NextRequest) {
       const current = def.cur ? def.cur[def.bucket] : null;
       const comparison = def.comp ? def.comp[def.bucket] : null;
       totals[def.id] = { current, comparison, ...computeDelta(current, comparison) };
+    }
+  }
+
+  // «Итого» по объектам (21.09): складывать по строкам нельзя — один адрес
+  // бывает и у двух менеджеров, и в двух товарных группах. Настоящее «Итого»
+  // движок посчитал отдельной веткой той же выборки (OBJECTS_GRAND_TOTAL_KEY).
+  if (objectGrandTotals) {
+    const cur = objectMetricValues(objectGrandTotals.cur);
+    const comp = objectMetricValues(objectGrandTotals.comp);
+    for (const id of OBJECT_METRIC_IDS) {
+      if (!withDeps.some(m => m.id === id)) continue;
+      const current = cur[id as ObjectMetricId];
+      const comparison = comp[id as ObjectMetricId];
+      totals[id] = { current, comparison, ...computeDelta(current, comparison) };
     }
   }
 
