@@ -415,7 +415,8 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
                           <span className="font-bold tabular-nums text-[var(--color-accent)] w-11 shrink-0">{it.pct}%</span>
                           <div className="w-24 h-1.5 rounded bg-[var(--color-bg-hover)] overflow-hidden shrink-0"><div className="h-full bg-[var(--color-accent)]" style={{ width: `${Math.min(100, it.pct)}%` }} /></div>
                           <span className="truncate">{it.group}</span>
-                          {it.badge && <span className="ml-auto text-[11px] text-[var(--color-text-muted)] whitespace-nowrap" title={`Награда «${it.badge.name}»`}>{it.badge.icon}{it.badge.price > 0 && <b className="ml-1 text-[var(--color-positive,#2f9e44)]">+{it.badge.price}</b>}</span>}
+                          {/* Иконка бейджа и ебаллы за допродажу скрыты 21.09
+                              (геймификация убрана с глаз владельцем). */}
                         </div>
                       ))}
                     </div>

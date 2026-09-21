@@ -98,7 +98,9 @@ export function CustomerTile({ r, onOpen, actions }: { r: ApiRow; onOpen: () => 
           <span className="text-[var(--color-text-muted)]">Предложить: </span>
           <span className="font-semibold text-[var(--color-accent)]">{rec.pct}%</span> {rec.group}
           {r.recommend!.items.length > 1 && <span className="text-[var(--color-text-muted)]"> +{r.recommend!.items.length - 1}</span>}
-          {rec.badge && rec.badge.price > 0 && <span className="ml-1 text-[var(--color-positive,#2f9e44)] font-semibold" title={`Награда «${rec.badge.name}»`}>+{rec.badge.price}</span>}
+          {/* Награда за допродажу (кросс-селл бейдж + ебаллы) скрыта 21.09 по
+              правке владельца: геймификация временно убрана с глаз. Данные
+              приходят (rec.badge) — вернуть можно одной строкой. */}
         </div>
       )}
       {r.signals.includes('overdue_repeat') && r.queue.queue === 'rest' && (

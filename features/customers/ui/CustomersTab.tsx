@@ -6,7 +6,8 @@
 //   * строки в одну линию (~34px, 10-12 клиентов на экране): имя с эллипсисом,
 //     статусные чипы инлайн, «нет» → «—», последняя покупка одной строкой;
 //   * кнопки «Отложить»/«Не звонить» → меню «⋯» в конце строки;
-//   * «Предложить» — топ-1 чипом, топ-3 и награда в тултипе;
+//   * «Предложить» — топ-1 чипом, топ-3 в тултипе (награда за допродажу
+//     скрыта 21.09: геймификация временно убрана с глаз владельцем);
 //   * секции — тонкая строка-разделитель, не серый блок;
 //   * имя открывает КАРТОЧКУ КЛИЕНТА (CustomerCard.tsx) — ссылка на Битрикс,
 //     история менеджеров, таймлайн, отметки и пр. переехали туда.
@@ -149,7 +150,7 @@ function LegendPopover() {
           купившие один раз; не купившие — во вкладке «Ещё не купили». Сигналы: <b>📞 сделка молчит</b> — по активной
           сделке нет звонков больше недели; <b>⏰ пора позвонить</b> — активных сделок нет, а с последней покупки прошло
           больше типичного цикла повторки клиента. «Предложить» — что клиенты чаще всего покупают следом (наведите —
-          топ-3 и награда за допродажу). Имя открывает карточку клиента; действия — в меню «⋯».
+          топ-3). Имя открывает карточку клиента; действия — в меню «⋯».
         </div>
       )}
     </div>
@@ -393,21 +394,19 @@ function ActiveDealsCell({ deals }: { deals: ActiveDealInfo[] }) {
   );
 }
 
-// «Предложить» — топ-1 чипом, полный топ-3 и награды в тултипе (редизайн 01.08).
+// «Предложить» — топ-1 чипом, полный топ-3 в тултипе (редизайн 01.08).
+// Награды (кросс-селл бейджи и ебаллы) скрыты 21.09 — см. шапку файла.
 function RecommendCell({ rec }: { rec: Recommendation | null }) {
   if (!rec || rec.items.length === 0) return <span className="text-xs text-[var(--color-text-muted)]">—</span>;
   const top = rec.items[0];
   const title = [
     rec.fallback ? 'Мало статистики по группе клиента — общий топ по базе:' : `После: ${rec.basedOn.join(', ')} чаще всего покупают:`,
-    ...rec.items.map(it => `${it.group} — ${it.pct}%${it.badge ? ` (бейдж «${it.badge.name}»${it.badge.price > 0 ? `, +${it.badge.price}` : ''})` : ''}`),
+    ...rec.items.map(it => `${it.group} — ${it.pct}%`),
   ].join('\n');
   return (
     <div className="flex items-center gap-1 whitespace-nowrap text-xs" title={title}>
       <span className="max-w-[150px] truncate">{top.group}</span>
       <span className="font-semibold tabular-nums text-[var(--color-accent)]">{top.pct}%</span>
-      {top.badge && top.badge.price > 0 && (
-        <span className="font-bold text-[var(--color-positive,#2f9e44)]">+{top.badge.price}</span>
-      )}
       {rec.items.length > 1 && <span className="text-[var(--color-text-muted)]">+{rec.items.length - 1}</span>}
     </div>
   );
