@@ -211,6 +211,10 @@ export function MapReportPage() {
   const popupRef = useRef<import('maplibre-gl').Popup | null>(null);
   const [ml, setMl] = useState<typeof import('maplibre-gl') | null>(null);
   const [ready, setReady] = useState(false);
+  const [mapErr, setMapErr] = useState<string | null>(null);
+  // Диагностика по ?mapdebug=1 — чтобы не гадать вслепую, когда карта пустая.
+  const [dbg, setDbg] = useState<string>('—');
+  const debugOn = typeof window !== 'undefined' && window.location.search.includes('mapdebug=1');
 
   useEffect(() => {
     let cancelled = false;
@@ -228,7 +232,17 @@ export function MapReportPage() {
       map.addControl(new M.NavigationControl({ showCompass: false }), 'top-right');
       mapRef.current = map;
       popupRef.current = new M.Popup({ closeButton: false, closeOnClick: false, offset: 12 });
-      map.on('load', () => { if (!cancelled) setReady(true); });
+      // Готовность: 'load' мог уже произойти к моменту подписки (стиль тут
+      // инлайновый, без сети), поэтому проверяем и текущее состояние, и
+      // дублируем на 'idle'. Без этого все слои молча не создавались бы —
+      // ровно этот класс отказа искали 21.09.
+      const markReady = () => { if (!cancelled) setReady(true); };
+      if (map.loaded()) markReady(); else { map.once('load', markReady); map.once('idle', markReady); }
+      map.on('error', e => {
+        const msg = (e as unknown as { error?: { message?: string } }).error?.message ?? 'unknown';
+        setMapErr(prev => (prev ? prev : msg));
+        console.warn('[map] error:', msg);
+      });
       setMl(M);
     })();
     return () => {
@@ -372,6 +386,28 @@ export function MapReportPage() {
     if (hide) { clusterMarkers.current.forEach(mk => mk.remove()); clusterMarkers.current = []; }
     else syncRef.current();
   }, [ready, data, layer, colorOf, isConv]);
+
+  // Сбор диагностики (только при ?mapdebug=1).
+  useEffect(() => {
+    if (!debugOn) return;
+    const t = setInterval(() => {
+      const map = mapRef.current;
+      if (!map) { setDbg('карта не создана'); return; }
+      const src = map.getSource('objects') as { serialize?: () => { data?: { features?: unknown[] } } } | undefined;
+      const inSrc = (() => { try { return src?.serialize?.().data?.features?.length ?? '—'; } catch { return '?'; } })();
+      const q = (id: string) => { try { return map.getLayer(id) ? map.queryRenderedFeatures({ layers: [id] }).length : 'нет слоя'; } catch { return 'ошибка'; } };
+      setDbg([
+        `ready=${ready}`, `styleLoaded=${map.isStyleLoaded()}`, `loaded=${map.loaded()}`,
+        `zoom=${map.getZoom().toFixed(1)}`,
+        `objects.features=${inSrc}`,
+        `data.objects=${data?.objects.length ?? '—'}`,
+        `layers=[${map.getStyle().layers.map(l => l.id).join(',')}]`,
+        `rendered: clusters=${q('clusters')} points=${q('obj-points')}`,
+        `err=${mapErr ?? 'нет'}`,
+      ].join(' · '));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [debugOn, ready, data, mapErr]);
 
   // Подписи кластеров пересчитываем ПОСЛЕ отрисовки: queryRenderedFeatures
   // читает то, что реально нарисовано, и до 'idle' отдаёт неполный набор.
@@ -690,6 +726,11 @@ export function MapReportPage() {
       <div className="min-h-0 flex-1 flex flex-col lg:flex-row gap-2 p-2 sm:p-3">
         <div className="min-h-[320px] flex-1 flex flex-col gap-1.5">
           <div ref={mapEl} className="min-h-0 flex-1 w-full rounded-xl border border-[var(--color-border)] overflow-hidden z-0" />
+          {debugOn && (
+            <div className="shrink-0 rounded-lg border border-[var(--color-negative,#e03131)] bg-[var(--color-bg-surface)] px-2 py-1 font-mono text-[10.5px] leading-snug text-[var(--color-text)] break-all">
+              {dbg}
+            </div>
+          )}
           {/* Легенда товарных групп — она же фильтр в один клик */}
           {isConv && cs && (
             <div className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-[var(--color-text-muted)]">
