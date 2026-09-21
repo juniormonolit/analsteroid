@@ -4,7 +4,7 @@ import { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER, type Cu
 
 export { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER };
 export type { CustomerQueue };
-import { fetchRepeatScoreTable, repeatChance } from './repeatScore';
+import { fetchRepeatScoreTable, repeatChance, expectedNextAmount, expectedRepeatValue } from './repeatScore';
 import { CLIENT_KEY_CASE_SQL, deriveClientType } from './clientKey';
 
 // ── «Мои заказчики» (фича Серёги 01.08) ──────────────────────────────────────
@@ -155,9 +155,10 @@ export function assignQueue(r: CustomerRow, lastContactAt: string | null, now = 
     if (!touchedWeeks[weekNo - 1]) {
       // Порядок: сначала то, что сгорает раньше (целыми днями — дробные часы не
       // должны решать), потом ШАНС НА ПОВТОР, и только потом деньги отгрузки.
+      // Сгорающее раньше — выше; при равном сроке выше тот, с кого ждём больше
+      // денег (ожидаемые деньги = шанс × сумма, шанс в них уже учтён).
       const burn = Math.ceil(daysLeftInWeek) * 1e12;
-      const chance = Math.round((r.repeatChance ?? 0) * 100) * 1e9;
-      return { queue: 'window', daysSinceDelivery: since, daysLeft, contactedAfter, rank: burn - chance - Math.min(r.lastDeliveredAmount ?? 0, 1e8), ...meta };
+      return { queue: 'window', daysSinceDelivery: since, daysLeft, contactedAfter, rank: burn - Math.min(r.expectedValue ?? 0, 1e11), ...meta };
     }
     // Касание недели сделано — до следующей недели человек не нужен.
     return { queue: 'rest', daysSinceDelivery: since, daysLeft, contactedAfter, rank: -r.urgency, ...meta };
@@ -168,11 +169,11 @@ export function assignQueue(r: CustomerRow, lastContactAt: string | null, now = 
     // Упущенные — по ШАНСУ и деньгам, не по давности: 60 и 90 дней без звонка
     // одинаково плохо, а вероятность повтора и сумма — разница.
     return { queue: 'missed', daysSinceDelivery: since, daysLeft: null, contactedAfter,
-             rank: -Math.round((r.repeatChance ?? 0) * 100) * 1e9 - Math.min(r.sumDelivered, 1e8), ...meta };
+             rank: -Math.min(r.expectedValue ?? 0, 1e11), ...meta };
   }
   if (r.section === 'regular' && r.activeCount === 0 && since > r.cycleDays) {
     return { queue: 'faded', daysSinceDelivery: since, daysLeft: null, contactedAfter,
-             rank: -Math.round((r.repeatChance ?? 0) * 100) * 1e9 - Math.min(r.sumDelivered, 1e8), ...meta };
+             rank: -Math.min(r.expectedValue ?? 0, 1e11), ...meta };
   }
   return { queue: 'rest', daysSinceDelivery: since, daysLeft: null, contactedAfter, rank: -r.urgency, ...meta };
 }
@@ -269,6 +270,11 @@ export interface CustomerRow {
   /** Шанс на следующую отгрузку в 180 дней, 0..1 (engine/repeatScore.ts).
    *  null — отгрузок ещё не было, судить не о чем. */
   repeatChance: number | null;
+  /** Ожидаемая сумма следующей отгрузки, ₽ (по среднему чеку заказчика). */
+  expectedNextAmount: number | null;
+  /** Ожидаемые деньги от следующего звонка, ₽ = шанс × ожидаемая сумма.
+   *  Главный ответ на «кому выгоднее звонить» (правка владельца 21.09). */
+  expectedValue: number | null;
 }
 
 interface RawRow {
@@ -337,7 +343,17 @@ attr AS (
   SELECT DISTINCT ON (client_key) client_key, current_manager_id AS mgr
   FROM cd ORDER BY client_key, created_at DESC, deal_id DESC
 ),
-mcd AS (SELECT cd.* FROM cd JOIN attr USING (client_key) WHERE attr.mgr = $1),
+-- Раздел — про ПОВТОРНЫЕ продажи, поэтому клиенты без единой отгрузки в нём не
+-- нужны вовсе (правка владельца 21.09: «только создают визуальный шум и
+-- нагрузку»). Отсекаем на входе, до всех тяжёлых CTE: у менеджера со скриншота
+-- это 2 827 клиентов из 3 286 — семь восьмых работы запроса впустую.
+delivered_clients AS (SELECT DISTINCT client_key FROM cd WHERE delivered_at IS NOT NULL),
+mcd AS (
+  SELECT cd.* FROM cd
+  JOIN attr USING (client_key)
+  JOIN delivered_clients USING (client_key)
+  WHERE attr.mgr = $1
+),
 deal_calls AS (
   SELECT c.deal_id, max(c.called_at) AS last_call_at
   FROM va.calls c WHERE c.deal_id IN (SELECT deal_id FROM mcd)
@@ -602,7 +618,9 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     autoRepeatLostNoCall: r.auto_repeat_lost_no_call === true,
     hasOpenOrder: r.has_open_order === true,
     goodCallsAfter: (r.good_calls_after ?? []).map(v => toIso(v)).filter((v): v is string => v !== null),
-    repeatChance: null,   // проставляется в fetchManagerCustomers из таблицы частот
+    repeatChance: null,      // проставляются в fetchManagerCustomers из таблицы частот
+    expectedNextAmount: null,
+    expectedValue: null,
   };
 }
 
@@ -624,7 +642,9 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   // версии до 10 минут после деплоя отдавался бы старый кэш со «схлопнутым»
   // client_key='k0' под старым TTL — версия форсирует немедленный промах.
   // v8 (21.09) — касания по неделям и шанс на повтор в строке.
-  return cached(`customers:mgr:v8:${managerBitrixId}`, 10 * 60, async () => {
+  // v9 (21.09) — из выборки убраны клиенты без отгрузок (раздел только про повторные).
+  // v10 (21.09) — ожидаемые деньги в строке и в ранге очередей.
+  return cached(`customers:mgr:v10:${managerBitrixId}`, 10 * 60, async () => {
     const [res, scoreTable] = await Promise.all([
       analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]),
       fetchRepeatScoreTable(),
@@ -633,6 +653,9 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
     const rows = res.rows.map(r => toRow(r, now, managerBitrixId));
     for (const row of rows) {
       row.repeatChance = repeatChance(scoreTable, row.dealsDelivered, row.lastDeliveredGroup, row.clientType === 'company');
+      const avgCheck = row.dealsDelivered > 0 ? row.sumDelivered / row.dealsDelivered : null;
+      row.expectedNextAmount = expectedNextAmount(scoreTable, avgCheck);
+      row.expectedValue = expectedRepeatValue(row.repeatChance, row.expectedNextAmount);
     }
     rows.sort((a, b) => {
       if ((a.signals.length > 0) !== (b.signals.length > 0)) return a.signals.length > 0 ? -1 : 1;

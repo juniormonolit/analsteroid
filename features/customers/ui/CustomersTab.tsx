@@ -51,7 +51,7 @@ interface ApiResponse {
   };
 }
 
-export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused' | 'builders';
+export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'sleeping' | 'refused' | 'builders';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
   { key: 'window', label: '🔥 Звонить сейчас' },
@@ -62,7 +62,6 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'builders', label: '🏗 Строители' },
   { key: 'active', label: 'С активными' },
   { key: 'inactive', label: 'Без активных' },
-  { key: 'never', label: 'Ещё не купили' },
   { key: 'sleeping', label: 'Спящие' },
   { key: 'refused', label: 'Отказались' },
 ];
@@ -557,7 +556,6 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
                   : f.key === 'window' ? (data.counts.queues?.window ?? 0) : f.key === 'missed' ? (data.counts.queues?.missed ?? 0)
                   : f.key === 'faded' ? (data.counts.queues?.faded ?? 0) : f.key === 'rest' ? (data.counts.queues?.rest ?? 0)
                   : f.key === 'active' ? data.counts.active : f.key === 'inactive' ? data.counts.inactive
-                  : f.key === 'never' ? data.counts.sections.never
                   : f.key === 'sleeping' ? data.counts.sleeping : data.counts.refused}
               </span>
             )}
@@ -581,6 +579,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
         title="Порядок карточек внутри очереди"
         className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
         <option value="">По срочности</option>
+        <option value="expectedValue:desc">Ожидаемые деньги ↓</option>
         <option value="repeatChance:desc">Шанс на повтор ↓</option>
         <option value="sumSold:desc">Куплено на ↓</option>
         <option value="lastSoldAt:desc">Последняя покупка ↓</option>
@@ -592,7 +591,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
       <LegendPopover />
     </div>
   );
-  const queueView = !['never', 'sleeping', 'refused'].includes(filter);
+  const queueView = !['sleeping', 'refused'].includes(filter);
   return (
     <div className="flex flex-col gap-2.5">
       {/* На телефоне метрики не липнут (съели бы пол-экрана) — обычный блок сверху. */}

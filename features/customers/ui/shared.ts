@@ -35,6 +35,10 @@ export interface ApiRow {
   lastGoodCallAt: string | null; autoRepeatLostNoCall: boolean; hasOpenOrder: boolean;
   /** Шанс на следующую отгрузку в 180 дней, 0..1 (engine/repeatScore.ts). */
   repeatChance: number | null;
+  /** Ожидаемая сумма следующей отгрузки, ₽. */
+  expectedNextAmount: number | null;
+  /** Ожидаемые деньги от следующего звонка, ₽ = шанс × сумма. */
+  expectedValue: number | null;
   lastContact: CustomerContact | null;
   pendingExclusion: { id: number; reason: string; requestedBy: string; createdAt: string } | null;
   /** Командный вид: чей заказчик. */

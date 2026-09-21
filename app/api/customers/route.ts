@@ -28,9 +28,9 @@ import { fetchClientObjectCounts, BUILDER_MIN_OBJECTS } from '@/lib/bitrix/dealA
 
 // Секции (доработка Серёги 01.08): основной вид — «Постоянники» (2+ успешных
 // сделок) сверху, затем «Купили один раз»; клиенты БЕЗ покупок из основного
-// вида убраны в отдельную вкладку filter='never' (не удалены — там живут
-// сигналы по активным сделкам). Сортировка по заголовкам работает ВНУТРИ
-// секций (группировка по секции — всегда первичный ключ порядка).
+// вида исключены СОВСЕМ — с 21.09 движок не выбирает их из БД вообще (раздел
+// только про повторные продажи, см. delivered_clients в customers.ts).
+// Сортировка по заголовкам работает ВНУТРИ секций.
 //
 // Продолжение 01.08: отметки клиентов (customer_marks, миграция 123) + авто-архив:
 //   * снуз («Отложить») — клиент остаётся в основном виде, но сигналы и «под
@@ -42,8 +42,8 @@ import { fetchClientObjectCounts, BUILDER_MIN_OBJECTS } from '@/lib/bitrix/dealA
 // Очереди по окну повторной продажи (задача владельца 17.09): window — окно
 // открыто (≤ 22 дн. после отгрузки, контакта нет), missed — окно упущено,
 // faded — постоянник затих. 'overdue' оставлен для старых деп-линков = все три.
-export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused' | 'builders';
-const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'window', 'missed', 'faded', 'rest', 'never', 'sleeping', 'refused', 'builders'] as const;
+export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'sleeping' | 'refused' | 'builders';
+const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'window', 'missed', 'faded', 'rest', 'sleeping', 'refused', 'builders'] as const;
 const PAGE_SIZE_MAX = 100;
 
 /** Строка после применения отметок: сигналы снузнутых погашены, bucket/mark в ответе. */
@@ -83,10 +83,11 @@ const SORTS: Record<string, (r: CustomerRow & { category?: CustomerCategory }) =
   // Шанс на повтор (21.09): прямой ответ на «кто купит ещё раз с наибольшей
   // вероятностью» — раньше сортировать по нему было нечем.
   repeatChance: r => r.repeatChance,
+  // «Кому выгоднее звонить» (21.09): шанс × ожидаемая сумма следующей отгрузки.
+  expectedValue: r => r.expectedValue,
 };
 
-// Первичный порядок секций: постоянники → купили один раз (never в основном
-// виде отфильтрован). Внутри секции постоянников «под угрозой» — выше всех
+// Первичный порядок секций: постоянники → купили один раз. Внутри секции постоянников «под угрозой» — выше всех
 // (доработка 01.08), дальше — дефолтный порядок движка (сигнал/urgency) либо
 // выбранная заголовком сортировка.
 function sectionRank(r: XRow): number {
@@ -127,8 +128,10 @@ function applyFilter(rows: XRow[], filter: CustomerFilter): XRow[] {
   if (filter === 'refused') return rows.filter(r => r.bucket === 'refused');
   if (filter === 'sleeping') return rows.filter(r => r.bucket === 'sleeping');
   const main = rows.filter(r => r.bucket === 'main');
-  if (filter === 'never') return main.filter(r => r.section === 'never');
-  const bought = main.filter(r => r.section !== 'never');
+  // Клиентов без отгрузок в выборке больше нет (отсечены в SQL движка, 21.09),
+  // поэтому отдельного гейта по секции здесь не требуется: 'never' встречался бы
+  // только у отгруженных без sold_at — их прятать не за что.
+  const bought = main;
   switch (filter) {
     case 'active': return bought.filter(r => r.activeCount > 0);
     case 'inactive': return bought.filter(r => r.activeCount === 0);
@@ -158,7 +161,7 @@ export async function GET(req: NextRequest) {
     total: 0,
     counts: {
       all: 0, active: 0, inactive: 0, overdue: 0, builders: 0, refusedNoCall: 0,
-      sections: { regular: 0, regularAtRisk: 0, once: 0, never: 0 },
+      sections: { regular: 0, regularAtRisk: 0, once: 0 },
       sleeping: 0, refused: 0, refusedByReason: {},
       queues: { window: 0, missed: 0, faded: 0, rest: 0, autoLostNoCall: 0 },
       managers: [],
@@ -305,7 +308,7 @@ export async function GET(req: NextRequest) {
   // отдельные счётчики вкладок «Спящие»/«Отказались»/«Ещё не купили» + разбивка
   // причин отказа (mini-аналитика вкладки «Отказались»).
   const main = searched.filter(r => r.bucket === 'main');
-  const bought = main.filter(r => r.section !== 'never');
+  const bought = main;
   const refused = searched.filter(r => r.bucket === 'refused');
   const refusedByReason: Record<string, number> = {};
   for (const r of refused) {
@@ -338,7 +341,6 @@ export async function GET(req: NextRequest) {
         regular: bought.filter(r => r.section === 'regular').length,
         regularAtRisk: bought.filter(r => r.atRisk).length,
         once: bought.filter(r => r.section === 'once').length,
-        never: main.filter(r => r.section === 'never').length,
       },
       sleeping: searched.filter(r => r.bucket === 'sleeping').length,
       refused: refused.length,

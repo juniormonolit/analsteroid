@@ -126,10 +126,14 @@ export function CustomerTile({ r, onOpen, actions }: { r: ApiRow; onOpen: () => 
       </div>
       {/* Шанс на повтор + касания недели (правка владельца 21.09) */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        {r.repeatChance !== null && (
-          <span className="inline-flex items-baseline gap-1" title={`Оценка вероятности, что заказчик отгрузится ещё раз в ближайшие 180 дней. Считается по истории базы: число прошлых отгрузок, физ/юр и группа последней покупки (см. engine/repeatScore.ts). Это не прогноз по конкретному человеку, а частота по похожим.`}>
-            <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">шанс на повтор</span>
-            <span className="text-[13px] font-bold tabular-nums" style={{ color: chanceColor(r.repeatChance) }}>{Math.round(r.repeatChance * 100)} %</span>
+        {r.expectedValue !== null && (
+          <span className="inline-flex items-baseline gap-1"
+            title={`Сколько денег в среднем приносит звонок такому заказчику: шанс на повтор × ожидаемая сумма следующей отгрузки.\n\nШанс ${Math.round((r.repeatChance ?? 0) * 100)} % — частота по похожим заказчикам (число прошлых отгрузок, физ/юр, группа последней покупки).\nОжидаемая сумма ${fmtMoney(r.expectedNextAmount ?? 0)} — по среднему чеку этого заказчика.\n\nЭто не прогноз по конкретному человеку, а частота по похожим: заказчик с десятью мелкими покупками купит почти наверняка, но принесёт меньше трёхразового с крупным чеком.`}>
+            <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">ждём</span>
+            <span className="text-[13px] font-bold tabular-nums" style={{ color: chanceColor(r.repeatChance ?? 0) }}>{fmtMoney(r.expectedValue)}</span>
+            {r.repeatChance !== null && (
+              <span className="text-[10.5px] tabular-nums text-[var(--color-text-muted)]">{Math.round(r.repeatChance * 100)} % × {fmtMoney(r.expectedNextAmount ?? 0)}</span>
+            )}
           </span>
         )}
         {r.queue.weekNo !== null && <TouchDots q={r.queue} />}
