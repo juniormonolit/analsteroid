@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -446,6 +446,9 @@ function SidebarBody({
     // Спец-отчёт «Данные по годам» (понедельный, год к году; решения владельца
     // 28.08 в BACKLOG) — закрытый раздел по паттерну offload.
     { href: '/year-weekly', label: 'Данные по годам', icon: <CalendarRange size={18} />, ok: canMore('section.year_weekly') },
+    // «Карта объектов» (задача владельца 21.09) — куда возили: адреса доставки
+    // сделок точками на карте, стандартные фильтры и дрилл в карточку сделки.
+    { href: '/map', label: 'Карта объектов', icon: <Map size={18} />, ok: canMore('section.map') },
     // «Сотрудники» (задача 2654) — реестр: стаж + история переименований логина;
     // закрытый раздел по паттерну section.offload (только супер-админ + роли).
     { href: '/employees', label: 'Сотрудники', icon: <Users size={18} />, ok: canMore('section.employees') },
