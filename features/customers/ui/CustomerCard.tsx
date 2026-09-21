@@ -18,7 +18,7 @@ import { X, ExternalLink, Phone, MessageCircle, Ban, Pause, RotateCcw, ShieldAle
 // сделка, задача 17.08), статический импорт в обе стороны дал бы цикл модулей.
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 import type { CustomerCardData } from '@/features/customers/engine/card';
-import { objectKey, type ParsedAddress } from '@/lib/bitrix/addressUtils';
+import { objectKey, isPickupAddress, type ParsedAddress } from '@/lib/bitrix/addressUtils';
 import type { CustomerContact } from '@/features/customers/engine/contactTypes';
 import { CONTACT_CHANNEL_LABELS } from '@/features/customers/engine/contactTypes';
 import { windowLine } from './QueueBoard';
@@ -95,11 +95,14 @@ function fmtGap(days: number): string {
 // тогда просто текст без ссылки на карту.
 function AddressLine({ a, compact }: { a: ParsedAddress | null; compact?: boolean }) {
   if (!a?.address) return null;
+  // «Париж» = точка самовывоза (правило владельца 21.09): адреса доставки у
+  // сделки нет, геокодер выдаёт случайную улицу — показываем честно.
+  const pickup = isPickupAddress(a.address);
   return (
     <div className={`mt-0.5 flex items-start gap-1 ${compact ? 'text-[11px]' : 'text-[11.5px]'} text-[var(--color-text-muted)]`}>
       <MapPin size={11} className="mt-[2px] shrink-0" />
-      <span className="min-w-0 flex-1 break-words" title={a.address}>{a.address}</span>
-      {a.lat !== null && a.lon !== null && (
+      <span className="min-w-0 flex-1 break-words" title={a.address}>{pickup ? 'Самовывоз' : a.address}</span>
+      {!pickup && a.lat !== null && a.lon !== null && (
         <a href={`https://yandex.ru/maps/?pt=${a.lon},${a.lat}&z=16&l=map`} target="_blank" rel="noopener noreferrer"
           title="Открыть на карте" className="tap-target shrink-0 text-[var(--color-accent)] hover:underline">
           <ExternalLink size={11} className="inline" />
@@ -315,6 +318,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
     if (row.objects && row.objects > 0) return row.objects;
     const keys = new Set<string>();
     for (const a of Object.values(addrData?.addresses ?? {})) {
+      if (isPickupAddress(a.address)) continue;   // самовывоз — не объект
       const k = objectKey(a);
       if (k) keys.add(k);
     }

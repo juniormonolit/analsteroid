@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   if (ids.length === 0) return NextResponse.json({ addresses: {} });
 
   const map = await fetchDealAddresses(ids);
-  const addresses: Record<string, { address: string | null; lat: number | null; lon: number | null }> = {};
-  for (const [id, a] of map) addresses[String(id)] = { address: a.address, lat: a.lat, lon: a.lon };
+  const addresses: Record<string, { address: string | null; lat: number | null; lon: number | null; pickup: boolean }> = {};
+  for (const [id, a] of map) addresses[String(id)] = { address: a.address, lat: a.lat, lon: a.lon, pickup: !!a.isPickup };
   return NextResponse.json({ addresses });
 }

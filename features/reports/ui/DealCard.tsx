@@ -222,7 +222,7 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   const { data: addrData } = useQuery({
     queryKey: ['deal-address', dealId],
     queryFn: () => fetch(`/api/deals/addresses?ids=${dealId}`).then(r => r.json()) as Promise<{
-      addresses: Record<string, { address: string | null; lat: number | null; lon: number | null }>
+      addresses: Record<string, { address: string | null; lat: number | null; lon: number | null; pickup?: boolean }>
     }>,
     staleTime: 5 * 60_000,
   });
@@ -394,8 +394,14 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                       <Section title="Объект">
                         <div className="flex items-start gap-2 text-sm text-[var(--color-text)]">
                           <MapPin size={14} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
-                          <span className="min-w-0 flex-1 break-words">{addr.address}</span>
-                          {addr.lat !== null && addr.lon !== null && (
+                          {/* «Париж» в адресном поле — это НАЗВАНИЕ ТОЧКИ САМОВЫВОЗА
+                              (правило владельца 21.09), а геокодер разносит его по
+                              случайным улицам Североморска и даже по Франции.
+                              Показывать это как адрес доставки — враньё. */}
+                          {addr.pickup
+                            ? <span className="min-w-0 flex-1" title={addr.address}>Самовывоз</span>
+                            : <span className="min-w-0 flex-1 break-words">{addr.address}</span>}
+                          {!addr.pickup && addr.lat !== null && addr.lon !== null && (
                             <a href={`https://yandex.ru/maps/?pt=${addr.lon},${addr.lat}&z=16&l=map`}
                               target="_blank" rel="noopener noreferrer" title="Открыть на карте"
                               className="tap-target shrink-0 text-[var(--color-accent)] hover:underline">
