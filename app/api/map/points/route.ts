@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadManagerInfoMap } from '@/lib/marketing/sources';
 import { getSessionScope, scopeDeptIdsBitrix } from '@/lib/org/sessionScope';
+import { hotObjectKeys } from '@/lib/bitrix/dealAddress';
 
 // Спец-отчёт «Карта объектов» (задача владельца 21.09: «хочу спецотчет в „Ещё“,
 // чтобы там можно было на карте смотреть все. Крутецкий отчет со всеми
@@ -55,6 +56,10 @@ export async function GET(req: NextRequest) {
   const maxAmount = Number(sp.get('max') ?? '') || 0;
   const clientType = sp.get('client') === 'company' ? 'company' : sp.get('client') === 'contact' ? 'contact' : 'all';
   const buildersOnly = sp.get('builders') === '1';
+  // Служебные точки (дефолты Битрикса, «просто город») по умолчанию скрыты:
+  // 32 таких адреса собрали треть всех сделок базы и превращают карту в кляксу
+  // над центром Петербурга. Показать можно галкой.
+  const withHot = sp.get('hot') === '1';
 
   if (!from || !to) return NextResponse.json({ error: 'Не задан период' }, { status: 400 });
 
@@ -146,13 +151,15 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const hot = await hotObjectKeys();
+
   interface ObjAgg {
-    key: string; lat: number; lon: number; address: string;
+    key: string; lat: number; lon: number; address: string; hot: boolean;
     deals: number; sum: number; clients: Set<string>;
     items: { dealId: number; amount: number; at: string | null; manager: string | null; group: string | null; name: string | null }[];
   }
   const byObj = new Map<string, ObjAgg>();
-  const summary = { deals: 0, sum: 0, objects: 0, withoutCoords: 0, clients: new Set<string>(), truncated: deals.length >= MAX_DEALS };
+  const summary = { deals: 0, sum: 0, objects: 0, withoutCoords: 0, hidden: 0, clients: new Set<string>(), truncated: deals.length >= MAX_DEALS };
   const facetManagers = new Map<string, { id: string; name: string; department: string | null; deals: number; sum: number }>();
   const facetGroups = new Map<string, { group: string; deals: number; sum: number }>();
   const facetDepts = new Map<string, { department: string; deals: number; sum: number }>();
@@ -161,6 +168,8 @@ export async function GET(req: NextRequest) {
     const a = addr.get(Number(d.deal_id));
     const amount = Number(d.amount ?? 0) || 0;
     if (!a || a.lat === null || a.lon === null || !a.objKey) { summary.withoutCoords++; continue; }
+    const isHot = hot.has(a.objKey);
+    if (isHot && !withHot) { summary.hidden++; continue; }
     if (builderKeys && (!a.clientKey || !builderKeys.has(a.clientKey))) continue;
 
     const mi = d.manager_id ? info.get(d.manager_id) : undefined;
@@ -182,7 +191,7 @@ export async function GET(req: NextRequest) {
 
     const o = byObj.get(a.objKey) ?? {
       key: a.objKey, lat: a.lat, lon: a.lon, address: a.address ?? 'без адреса',
-      deals: 0, sum: 0, clients: new Set<string>(), items: [],
+      deals: 0, sum: 0, clients: new Set<string>(), items: [], hot: isHot,
     };
     o.deals++; o.sum += amount;
     if (a.clientKey) o.clients.add(a.clientKey);
@@ -197,7 +206,7 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => b.sum - a.sum)
     .slice(0, MAX_OBJECTS)
     .map(o => ({
-      key: o.key, lat: o.lat, lon: o.lon, address: o.address,
+      key: o.key, lat: o.lat, lon: o.lon, address: o.address, hot: o.hot,
       deals: o.deals, sum: Math.round(o.sum), clients: o.clients.size, items: o.items,
     }));
 
@@ -206,6 +215,7 @@ export async function GET(req: NextRequest) {
     summary: {
       deals: summary.deals, sum: Math.round(summary.sum), objects: byObj.size,
       clients: summary.clients.size, withoutCoords: summary.withoutCoords,
+      hiddenServiceDeals: summary.hidden,
       shown: objects.length, truncated: summary.truncated,
     },
     facets: {
@@ -217,7 +227,7 @@ export async function GET(req: NextRequest) {
 }
 
 function emptySummary() {
-  return { deals: 0, sum: 0, objects: 0, clients: 0, withoutCoords: 0, shown: 0, truncated: false };
+  return { deals: 0, sum: 0, objects: 0, clients: 0, withoutCoords: 0, hiddenServiceDeals: 0, shown: 0, truncated: false };
 }
 function emptyFacets() {
   return { managers: [], groups: [], departments: [] };

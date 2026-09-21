@@ -15,6 +15,7 @@
 // адреса дёргала бы Битрикс на каждый показ.
 
 import { systemDb } from '@/lib/db/clients';
+import { cached } from '@/lib/cache/redis';
 import { bx } from '@/lib/bitrix/notify';
 import { parseAddressCoords, objectKey } from './addressUtils';
 
@@ -292,15 +293,49 @@ export async function fetchClientObjectCounts(clientKeys: string[]): Promise<Map
   if (keys.length === 0) return out;
   try {
     const res = await systemDb().query<{ client_key: string; objs: string }>(
-      `SELECT client_key, count(DISTINCT obj_key)::text AS objs
-         FROM deal_addresses
+      `WITH hot AS (
+         SELECT obj_key FROM deal_addresses
+          WHERE found AND obj_key IS NOT NULL
+          GROUP BY 1 HAVING count(*) >= $2
+       )
+       SELECT client_key, count(DISTINCT obj_key)::text AS objs
+         FROM deal_addresses d
         WHERE found AND obj_key IS NOT NULL AND client_key = ANY($1::text[])
+          AND NOT EXISTS (SELECT 1 FROM hot WHERE hot.obj_key = d.obj_key)
         GROUP BY 1`,
-      [keys],
+      [keys, HOT_OBJECT_MIN_DEALS],
     );
     for (const r of res.rows) out.set(r.client_key, Number(r.objs));
   } catch { /* таблицы нет — признак просто не показывается */ }
   return out;
+}
+
+/**
+ * «Служебные» точки: адреса, на которые по всей базе приходятся сотни сделок —
+ * это не объекты, а дефолты Битрикса и «просто город». Замер 21.09: 32 таких
+ * obj_key собрали 75 265 сделок из 236 809 (32%!) — крупнейшая тянет 23 593
+ * («ул Вице-адмирала Падорина, д 31» в Североморске — явный дефолт формы),
+ * дальше центр Петербурга (8 350), Красная площадь (4 251), «г Москва» (3 704).
+ * Их нельзя считать ни объектами клиента (иначе «строителей» 1 777 вместо
+ * честных 1 358), ни точками карты — на карте они по умолчанию скрыты.
+ */
+export const HOT_OBJECT_MIN_DEALS = 300;
+
+/** Набор служебных obj_key (кэш на час — состав меняется медленно). */
+export async function hotObjectKeys(): Promise<Set<string>> {
+  try {
+    const rows = await cached('deal-addresses:hot-objects:v1', 60 * 60, async () => {
+      const res = await systemDb().query<{ obj_key: string }>(
+        `SELECT obj_key FROM deal_addresses
+          WHERE found AND obj_key IS NOT NULL
+          GROUP BY 1 HAVING count(*) >= $1`, [HOT_OBJECT_MIN_DEALS],
+      );
+      return res.rows.map(r => r.obj_key);
+    });
+    return new Set(rows);
+  } catch {
+    return new Set();
+  }
 }
 
 /** Порог «возит на разные объекты» — потенциальный строитель. */

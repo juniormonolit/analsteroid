@@ -23,7 +23,7 @@ import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 
 interface ObjItem { dealId: number; amount: number; at: string | null; manager: string | null; group: string | null; name: string | null }
-interface MapObject { key: string; lat: number; lon: number; address: string; deals: number; sum: number; clients: number; items: ObjItem[] }
+interface MapObject { key: string; lat: number; lon: number; address: string; hot: boolean; deals: number; sum: number; clients: number; items: ObjItem[] }
 interface Facets {
   managers: { id: string; name: string; department: string | null; deals: number; sum: number }[];
   groups: { group: string; deals: number; sum: number }[];
@@ -31,7 +31,7 @@ interface Facets {
 }
 interface MapData {
   objects: MapObject[];
-  summary: { deals: number; sum: number; objects: number; clients: number; withoutCoords: number; shown: number; truncated: boolean };
+  summary: { deals: number; sum: number; objects: number; clients: number; withoutCoords: number; hiddenServiceDeals: number; shown: number; truncated: boolean };
   facets: Facets;
 }
 
@@ -78,6 +78,9 @@ export function MapReportPage() {
   const [min, setMin] = useState('');
   const [max, setMax] = useState('');
   const [buildersOnly, setBuildersOnly] = useState(false);
+  // Служебные точки (дефолт формы Битрикса, «просто город») — по умолчанию
+  // скрыты: 32 таких адреса собрали треть сделок базы и делают из карты кляксу.
+  const [withHot, setWithHot] = useState(false);
   const [selected, setSelected] = useState<MapObject | null>(null);
   const [openDealId, setOpenDealId] = useState<number | null>(null);
 
@@ -89,8 +92,9 @@ export function MapReportPage() {
     if (min) p.set('min', min);
     if (max) p.set('max', max);
     if (buildersOnly) p.set('builders', '1');
+    if (withHot) p.set('hot', '1');
     return p.toString();
-  }, [from, to, state, funnel, client, groups, managers, depts, min, max, buildersOnly]);
+  }, [from, to, state, funnel, client, groups, managers, depts, min, max, buildersOnly, withHot]);
 
   const { data, isFetching, isError } = useQuery<MapData>({
     queryKey: ['map-points', qs],
@@ -149,9 +153,12 @@ export function MapReportPage() {
     for (const o of data.objects) {
       const r = 5 + Math.round(9 * Math.sqrt(o.sum / maxSum));
       const m = L.circleMarker([o.lat, o.lon], {
-        radius: r, weight: 1, color: '#1d4ed8', fillColor: '#3b82f6', fillOpacity: 0.75,
+        radius: r, weight: 1,
+        color: o.hot ? '#92400e' : '#1d4ed8',
+        fillColor: o.hot ? '#f59e0b' : '#3b82f6',
+        fillOpacity: 0.75,
       });
-      m.bindTooltip(`${o.address}<br><b>${fmtMoney(o.sum)}</b> · сделок ${o.deals}`, { direction: 'top' });
+      m.bindTooltip(`${o.address}<br><b>${fmtMoney(o.sum)}</b> · сделок ${o.deals}${o.hot ? '<br><i>служебная точка: дефолтный адрес, не объект</i>' : ''}`, { direction: 'top' });
       m.on('click', () => setSelected(o));
       cluster.addLayer(m);
     }
@@ -222,6 +229,11 @@ export function MapReportPage() {
               <input type="checkbox" checked={buildersOnly} onChange={e => setBuildersOnly(e.target.checked)} />
               🏗 только строители
             </label>
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text)]"
+              title="Адреса, на которые по всей базе приходятся сотни сделок, — это не объекты, а дефолт формы Битрикса и «просто город». По умолчанию скрыты.">
+              <input type="checkbox" checked={withHot} onChange={e => setWithHot(e.target.checked)} />
+              служебные точки
+            </label>
             {isFetching && <Loader2 size={14} className="animate-spin text-[var(--color-text-muted)]" />}
           </div>
 
@@ -262,6 +274,12 @@ export function MapReportPage() {
             </div>
           ))}
         </div>
+        {!!s?.hiddenServiceDeals && !withHot && (
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-[11.5px] text-[var(--color-text-muted)]">
+            Скрыто <b>{s.hiddenServiceDeals.toLocaleString('ru-RU')}</b> сделок на служебных точках (дефолтный адрес формы, «просто город»).
+            Это не объекты — включить можно галкой «служебные точки».
+          </div>
+        )}
         {s?.truncated && (
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-[11.5px] text-[var(--color-text-muted)]">
             Выборка упёрлась в потолок (60 000 сделок) — сузьте период или фильтры, иначе часть объектов не показана.
@@ -280,6 +298,11 @@ export function MapReportPage() {
                   <div className="min-w-0 flex-1 text-[12.5px] font-semibold break-words">{selected.address}</div>
                   <button onClick={() => setSelected(null)} className="tap-target shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><X size={14} /></button>
                 </div>
+                {selected.hot && (
+                  <div className="rounded-lg bg-[color-mix(in_srgb,var(--color-warning,#d9840c)_12%,transparent)] px-2 py-1 text-[11px] text-[var(--color-text-muted)]">
+                    Служебная точка: по всей базе сюда попали сотни сделок — это дефолтный адрес формы, а не реальный объект.
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-3 text-[11.5px] text-[var(--color-text-muted)]">
                   <span>сделок <b className="text-[var(--color-text)]">{selected.deals}</b></span>
                   <span>на <b className="text-[var(--color-text)]">{fmtMoney(selected.sum)}</b></span>
