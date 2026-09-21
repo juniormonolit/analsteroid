@@ -518,8 +518,16 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   );
 
   const namesByKey = useMemo(() => new Map(rows.map(r => [r.clientKey, clientDisplayName(r)])), [rows]);
-  // Ряд фильтров — вынесен, чтобы жить внутри липкой шапки (замыкание на состояние списка).
-  const FiltersRow = () => (
+  // Ряд фильтров — отдельной переменной, чтобы жить внутри липкой шапки
+  // (замыкание на состояние списка).
+  //
+  // ВАЖНО: это ГОТОВЫЙ ЭЛЕМЕНТ, а не компонент `const FiltersRow = () => …`.
+  // Компонент, объявленный внутри другого компонента, на каждый рендер родителя
+  // получает новый тип — React размонтирует поддерево и монтирует заново, а
+  // вместе с ним и <input>. Живой баг (владелец 21.09, скрин поиска «алексей»):
+  // «тут посимвольно сбрасывается ввод» — каждая буква меняла состояние
+  // родителя, поиск терял фокус, и следующая буква уходила в никуда.
+  const filtersRow = (
       <div className="flex flex-wrap items-center gap-2">
       {canTeam && (
         <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5" title="Свои заказчики или весь отдел (все менеджеры подконтрольных отделов)">
@@ -588,7 +596,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
           скроллом — обёртка PullToRefresh страницы ЛК, top-0 отсчитывается от неё. */}
       <div className="sticky top-0 z-20 -mx-1 px-1 pt-1 pb-2 bg-[var(--color-bg)] flex flex-col gap-2.5 border-b border-[var(--color-border)]">
         <div className="hidden sm:block"><RepeatHeaderBlock managerId={managerId} isSelf={isSelf} team={team} mgr={mgr || undefined} dept={dept || undefined} /></div>
-        <FiltersRow />
+        {filtersRow}
       </div>
       <ExclusionRequestsPanel managerId={managerId} isSelf={team ? false : isSelf} names={namesByKey} team={team} />
       {deepLinkMissing && (
