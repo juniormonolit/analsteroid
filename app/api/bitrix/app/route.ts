@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createSession, SESSION_COOKIE, SESSION_TTL_DAYS } from '@/lib/auth/session';
 import { identifyByAuthId, resolveOrCreateAppUser, bitrixPortalOrigin } from '@/lib/bitrix/appAuth';
 import { rememberAppToken } from '@/lib/bitrix/appToken';
+import { mintHandoff } from '@/lib/bitrix/handoff';
 
 // Точка входа встроенного в Битрикс приложения (задача владельца 30.07).
 // Битрикс открывает этот URL в iframe POST-запросом (form-encoded) и передаёт
@@ -79,10 +80,17 @@ export async function POST(req: NextRequest) {
   // супер-админ из «Настроек» сможет привязать «Монолитику» в левое меню портала.
   await rememberAppToken(resolved.userId, authId);
 
+  // Одноразовый ключ на случай, когда браузер зарежет cookie внутри iframe
+  // (инцидент 21.09: Яндекс.Браузер/Safari/встроенный webview). Страница
+  // /bx/manager по нему предложит открыть кабинет в обычной вкладке, где
+  // cookie первосторонняя и работает везде.
+  const handoff = await mintHandoff(resolved.userId);
+  const target = handoff ? `${PAGE}?t=${encodeURIComponent(handoff)}` : PAGE;
+
   const res = html(
     `<p>Загружаем ваш кабинет…</p>`
-    + `<script>location.replace(${JSON.stringify(PAGE)});</script>`
-    + `<noscript><p><a href="${PAGE}">Открыть кабинет</a></p></noscript>`,
+    + `<script>location.replace(${JSON.stringify(target)});</script>`
+    + `<noscript><p><a href="${target}">Открыть кабинет</a></p></noscript>`,
   );
   // Cookie для iframe: без SameSite=None браузер её в кросс-сайтовом фрейме не пошлёт,
   // а Partitioned (CHIPS) нужен, чтобы Chrome/Safari не зарезали её как третьесторонюю.
