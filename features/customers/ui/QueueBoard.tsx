@@ -67,7 +67,13 @@ export function CustomerTile({ r, onOpen, actions }: { r: ApiRow; onOpen: () => 
       <div className="flex flex-wrap items-center gap-1">
         <Chip>{r.clientType === 'contact' ? 'физ' : 'юр'}</Chip>
         {cat !== 'none' && <Chip color={st.color} bg={st.bg} title="Категория заказчика">{cat === 'key' && '🔑 '}{CATEGORY_LABELS[cat]}</Chip>}
-        {(r.modifiers ?? []).map(m => <span key={m} className="text-[12px]" title={`${MODIFIER_LABELS[m].label} — ${MODIFIER_LABELS[m].hint}`}>{MODIFIER_LABELS[m].icon}</span>)}
+        {(r.modifiers ?? []).map(m => (
+          <span key={m} className="text-[12px]" title={`${MODIFIER_LABELS[m].label} — ${MODIFIER_LABELS[m].hint}`}>
+            {MODIFIER_LABELS[m].icon}
+            {/* «Строитель» — с числом объектов: одна цифра говорит больше иконки. */}
+            {m === 'builder' && r.objects ? <span className="ml-0.5 text-[10.5px] font-semibold tabular-nums">{r.objects}</span> : null}
+          </span>
+        ))}
         {r.pendingExclusion && <Chip title={`Запрос на исключение: «${r.pendingExclusion.reason}»`}>⏳ ждёт РОПа</Chip>}
         {r.snoozedActive && r.mark && <Chip title={`Отложен до ${fmtDate(r.mark.snoozeUntil)}`}>⏸ до {fmtDate(r.mark.snoozeUntil)}</Chip>}
         {r.managerName && <Chip title="Менеджер заказчика" color="var(--color-accent)" bg="var(--color-accent-soft, #e7f1fb)">{r.managerName}</Chip>}

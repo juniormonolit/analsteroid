@@ -66,6 +66,24 @@ export async function register() {
   scheduleDiagnostics();
   scheduleHowAreWe();
   scheduleB24Diag();
+  scheduleDealAddresses();
+}
+
+// Адреса объектов сделок (задача владельца 21.09). Днём — только новые сделки
+// мелкими порциями с паузами («супервежливый режим до 20:00»), ночью — полный
+// проход за правками адресов. Вся политика внутри dealAddressTick, здесь —
+// только частота опроса.
+function scheduleDealAddresses() {
+  const tick = async () => {
+    try {
+      const { dealAddressTick } = await import('./lib/jobs/dealAddresses');
+      await dealAddressTick();
+    } catch (err) {
+      console.error('[dealAddresses] импорт тика упал:', err instanceof Error ? err.message : err);
+    }
+  };
+  setTimeout(() => { void tick(); }, 3 * 60 * 1000);      // не на старте — дать приложению подняться
+  setInterval(() => { void tick(); }, 30 * 60 * 1000);
 }
 
 // Дайджест «Как дела?» (задача владельца 15.09): несколько выпусков в день по

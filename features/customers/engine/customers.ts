@@ -575,7 +575,10 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
 // sold_at (шкала этого списка) — сознательно две шкалы, как в самих отчётах.
 
 export type CustomerCategory = 'key' | 'large' | 'regular' | 'once' | 'potential' | 'none';
-export type CustomerModifier = 'complex' | 'frequent' | 'fading';
+// 'builder' (задача владельца 21.09) ставится НЕ здесь, а в /api/customers:
+// он считается по адресам сделок из Битрикса (таблица deal_addresses), а не по
+// данным SA, на которых работает classifyCategory.
+export type CustomerModifier = 'complex' | 'frequent' | 'fading' | 'builder';
 
 export interface CustomerCategorySettings {
   keyMinShipments: number;

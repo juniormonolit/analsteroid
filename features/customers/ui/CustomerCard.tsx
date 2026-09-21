@@ -5,19 +5,20 @@
 // (таймлайн покупок, звонки, отказы, история отметок) — /api/customers/card.
 // ПДн: телефонов нет by construction — звонить менеджер идёт в Битрикс по ссылке.
 
-import { Fragment, useState, useEffect } from 'react';
+import { Fragment, useMemo, useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { Deal } from '@/features/reports/ui/DrilldownDrawer';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import dynamic from 'next/dynamic';
-import { X, ExternalLink, Phone, MessageCircle, Ban, Pause, RotateCcw, ShieldAlert } from 'lucide-react';
+import { X, ExternalLink, Phone, MessageCircle, Ban, Pause, RotateCcw, ShieldAlert, MapPin } from 'lucide-react';
 
 // DealCard — динамически: карточки ссылаются друг на друга (сделка → заказчик →
 // сделка, задача 17.08), статический импорт в обе стороны дал бы цикл модулей.
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 import type { CustomerCardData } from '@/features/customers/engine/card';
+import { objectKey, type ParsedAddress } from '@/lib/bitrix/addressUtils';
 import type { CustomerContact } from '@/features/customers/engine/contactTypes';
 import { CONTACT_CHANNEL_LABELS } from '@/features/customers/engine/contactTypes';
 import { windowLine } from './QueueBoard';
@@ -88,6 +89,24 @@ function fmtGap(days: number): string {
   if (days < 1) return 'в тот же день';
   if (days < 60) return `через ${Math.round(days)} дн.`;
   return `через ${(days / 30.44).toFixed(1).replace('.0', '')} мес.`;
+}
+
+// Адрес объекта строкой (задача владельца 21.09). Координат может не быть —
+// тогда просто текст без ссылки на карту.
+function AddressLine({ a, compact }: { a: ParsedAddress | null; compact?: boolean }) {
+  if (!a?.address) return null;
+  return (
+    <div className={`mt-0.5 flex items-start gap-1 ${compact ? 'text-[11px]' : 'text-[11.5px]'} text-[var(--color-text-muted)]`}>
+      <MapPin size={11} className="mt-[2px] shrink-0" />
+      <span className="min-w-0 flex-1 break-words" title={a.address}>{a.address}</span>
+      {a.lat !== null && a.lon !== null && (
+        <a href={`https://yandex.ru/maps/?pt=${a.lon},${a.lat}&z=16&l=map`} target="_blank" rel="noopener noreferrer"
+          title="Открыть на карте" className="tap-target shrink-0 text-[var(--color-accent)] hover:underline">
+          <ExternalLink size={11} className="inline" />
+        </a>
+      )}
+    </div>
+  );
 }
 
 function JourneyTab({ purchases, loading, recommend, onDealOpen }: {
@@ -271,6 +290,37 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
     },
     staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
   });
+  // Адреса объектов (задача владельца 21.09: «чтобы было видно по его
+  // объектам»). Один запрос на все сделки, которые карточка показывает:
+  // активные, вся история и покупки. Адрес живёт в Битриксе
+  // (UF_ADDRESS_COORDS) и кэшируется в deal_addresses — показ прогревает кэш.
+  const addrIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const d of row.activeDeals) ids.add(d.dealId);
+    for (const d of clientDeals) ids.add(d.deal_id);
+    for (const d of (data?.timeline ?? [])) ids.add(d.dealId);
+    return [...ids].slice(0, 200);
+  }, [row.activeDeals, clientDeals, data?.timeline]);
+  const { data: addrData } = useQuery<{ addresses: Record<string, ParsedAddress> }>({
+    queryKey: ['customer-deal-addresses', row.clientKey, addrIds.length],
+    enabled: addrIds.length > 0,
+    queryFn: () => fetch(`/api/deals/addresses?ids=${addrIds.join(',')}`).then(r => r.json()),
+    staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
+  });
+  const addrOf = (dealId: number): ParsedAddress | null => addrData?.addresses?.[String(dealId)] ?? null;
+  // Сколько разных объектов: считаем по тем же адресам, что показываем. Сервер
+  // присылает objects по всей истории заказчика (deal_addresses) — берём его,
+  // а локальный расчёт нужен, пока список ещё грузится или на чужих ключах.
+  const objectsCount = useMemo(() => {
+    if (row.objects && row.objects > 0) return row.objects;
+    const keys = new Set<string>();
+    for (const a of Object.values(addrData?.addresses ?? {})) {
+      const k = objectKey(a);
+      if (k) keys.add(k);
+    }
+    return keys.size;
+  }, [row.objects, addrData]);
+
   const { data: contactsData } = useQuery<{ items: CustomerContact[] }>({
     queryKey: ['customer-contacts', row.clientKey],
     queryFn: () => fetch(`/api/customers/contact?clientKey=${row.clientKey}`).then(r => r.json()),
@@ -292,6 +342,11 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
   const rec = row.recommend?.items?.[0] ?? null;
   const nextStep = (() => {
     const offer = rec ? ` Предложить: ${rec.group} (${rec.pct} % берут после такого заказа).` : '';
+    // Строитель (21.09): у него следующая покупка привязана не к «окну» после
+    // отгрузки, а к следующему объекту — и разговор правильнее начинать с него.
+    if (objectsCount >= 2 && row.queue.queue !== 'rest') {
+      return `Возит на ${objectsCount} разных объекта — похоже на строителя. Спросить про СЛЕДУЮЩИЙ объект: что за материал и когда закупка.${offer}`;
+    }
     switch (row.queue.queue) {
       case 'window': return `Позвонить ${row.queue.daysLeft !== null && row.queue.daysLeft < 1 ? 'сегодня' : `в ближайшие ${Math.ceil(row.queue.daysLeft ?? 0)} дн.`} — окно повторной продажи ещё открыто, звонка после отгрузки не было.${offer}`;
       case 'missed': return `Окно упущено, но заказчик не потерян: позвонить, узнать, как зашёл материал, и что дальше по объекту.${offer}`;
@@ -355,7 +410,11 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
                     {row.category === 'key' && '🔑 '}{CATEGORY_LABELS[row.category]}
                   </span>
                 )}
-                {(row.modifiers ?? []).map(mod => <Chip key={mod} title={MODIFIER_LABELS[mod].hint}>{MODIFIER_LABELS[mod].icon} {MODIFIER_LABELS[mod].label}</Chip>)}
+                {(row.modifiers ?? []).map(mod => (
+                  <Chip key={mod} title={MODIFIER_LABELS[mod].hint}>
+                    {MODIFIER_LABELS[mod].icon} {mod === 'builder' && row.objects ? `${row.objects} объекта(ов)` : MODIFIER_LABELS[mod].label}
+                  </Chip>
+                ))}
                 <Chip tone={status.tone}>{status.label}</Chip>
                 {row.pendingExclusion && <Chip title={`«${row.pendingExclusion.reason}» — ${row.pendingExclusion.requestedBy}`}>⏳ ждёт РОПа</Chip>}
                 {row.snoozedActive && row.mark && <Chip title={`Отметил(а): ${row.mark.createdBy}, ${fmtDate(row.mark.createdAt)}`}>⏸ до {fmtDate(row.mark.snoozeUntil)}</Chip>}
@@ -406,6 +465,14 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
                 <StatTile label="Цикл повторки" value={`${row.cycleDays} дн.`} hint={row.cycleSource === 'own' ? 'Медиана интервалов между его покупками' : 'По базе — своих покупок мало, взята медиана по всей базе (16 дн.)'} />
                 <StatTile label="Последняя отгрузка" value={row.lastDeliveredAt ? fmtDate(row.lastDeliveredAt) : '—'} sub={row.lastDeliveredAt ? daysAgo(row.lastDeliveredAt) : undefined} />
                 <StatTile label="Товарных групп" value={String(row.distinctGroups)} sub="разных, по отгрузкам" />
+                {/* Объекты (21.09): разные адреса доставки. 2+ — заказчик возит
+                    на стройки, а не домой: следующая покупка привязана к
+                    следующему объекту, а не к «окну» после отгрузки. */}
+                {objectsCount > 0 && (
+                  <StatTile label="Объектов" value={String(objectsCount)}
+                    sub={objectsCount >= 2 ? 'разных адреса — похоже на строителя' : 'один адрес'}
+                    hint="Сколько разных адресов доставки встречается в сделках заказчика (поле «Адрес и координаты» в Битриксе)" />
+                )}
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -443,6 +510,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
                               <span className="ml-auto font-semibold tabular-nums">{d.amount !== null && d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
                             </div>
                             <div className="mt-0.5 text-[var(--color-text-muted)] truncate" title={d.name ?? undefined}>{d.name ?? '—'}</div>
+                            <AddressLine a={addrOf(d.dealId)} compact />
                             <div className="mt-0.5 flex gap-3 text-[11.5px] text-[var(--color-text-muted)]">
                               <span>{daysInWork} дн. в работе</span>
                               <span className="font-semibold" style={d.daysSilent > 7 ? { color: 'var(--color-negative, #e03131)' } : undefined}>🔇 {Math.floor(d.daysSilent)} дн. без звонка</span>
@@ -498,6 +566,7 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
                           <span className="ml-auto text-[13.5px] font-bold tabular-nums whitespace-nowrap">{amount > 0 ? fmtMoney(amount) : '—'}</span>
                         </div>
                         <div className="mt-0.5 text-[12.5px] text-[var(--color-text)] break-words">{d.deal_name}</div>
+                        <AddressLine a={addrOf(d.deal_id)} />
                         <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-[var(--color-text-muted)]">
                           {steps.filter(st => st.at).map((st, i, arr) => (
                             <Fragment key={st.label}>

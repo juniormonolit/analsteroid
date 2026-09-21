@@ -26,6 +26,8 @@ export interface ApiRow {
   recommend: Recommendation | null;
   // Категории клиентов (дополнение Серёги 01.08)
   category: CustomerCategory; modifiers: CustomerModifier[];
+  /** Сколько РАЗНЫХ объектов (адресов) у заказчика — задача владельца 21.09. */
+  objects?: number;
   dealsDelivered: number; sumDelivered: number; distinctGroups: number;
   // Очереди по окну повторной продажи (17.09)
   queue: QueueInfo;
@@ -54,6 +56,7 @@ export const MODIFIER_LABELS: Record<CustomerModifier, { icon: string; label: st
   complex:  { icon: '🧩', label: 'комплексный', hint: 'Покупал 3+ разных товарных групп (по отгрузкам, шкала by_max — как «комплексные» в «Повторных»)' },
   frequent: { icon: '⚡', label: 'частый', hint: 'Собственный цикл повторки заметно чаще медианы базы (16 дн.)' },
   fading:   { icon: '📉', label: 'затухающий', hint: 'Частота падает: последний интервал (или текущая тишина) больше 2× его среднего интервала покупок' },
+  builder:  { icon: '🏗', label: 'разные объекты', hint: 'Возит на 2+ разных адреса — похоже на строителя/подрядчика: следующая покупка привязана не к «окну», а к следующему объекту' },
 };
 
 export function fmtMoney(v: number): string {

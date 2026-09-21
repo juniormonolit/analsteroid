@@ -36,6 +36,8 @@ interface ApiResponse {
   total: number;
   counts: {
     all: number; active: number; inactive: number; overdue: number; refusedNoCall: number;
+    /** Строители — возят на 2+ разных объекта (21.09). */
+    builders?: number;
     sections: { regular: number; regularAtRisk: number; once: number; never: number };
     sleeping: number; refused: number; refusedByReason: Partial<Record<NoCallReason, number>>;
     byCategory?: { key: number; large: number; regular: number; once: number; potential: number; keyAtRisk: number };
@@ -49,13 +51,15 @@ interface ApiResponse {
   };
 }
 
-export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused';
+export type Filter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused' | 'builders';
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'Все' },
   { key: 'window', label: '🔥 Окно открыто' },
   { key: 'missed', label: 'Окно упущено' },
   { key: 'faded', label: 'Затихли' },
   { key: 'rest', label: 'Остальные' },
+  // Строители (21.09): заказчики, чьи сделки едут на разные адреса.
+  { key: 'builders', label: '🏗 Строители' },
   { key: 'active', label: 'С активными' },
   { key: 'inactive', label: 'Без активных' },
   { key: 'never', label: 'Ещё не купили' },
@@ -350,7 +354,7 @@ function CategoryCell({ r }: { r: ApiRow }) {
       )}
       {(r.modifiers ?? []).map(mod => (
         <span key={mod} className="text-[12px] cursor-default" title={`${MODIFIER_LABELS[mod].label} — ${MODIFIER_LABELS[mod].hint}`}>
-          {MODIFIER_LABELS[mod].icon}
+          {MODIFIER_LABELS[mod].icon}{mod === 'builder' && r.objects ? <span className="ml-0.5 text-[10.5px] font-semibold tabular-nums">{r.objects}</span> : null}
         </span>
       ))}
     </div>
@@ -549,6 +553,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
             {data && (
               <span className="ml-1 opacity-70 tabular-nums">
                 {f.key === 'all' ? data.counts.all : f.key === 'overdue' ? data.counts.overdue
+                  : f.key === 'builders' ? (data.counts.builders ?? 0)
                   : f.key === 'window' ? (data.counts.queues?.window ?? 0) : f.key === 'missed' ? (data.counts.queues?.missed ?? 0)
                   : f.key === 'faded' ? (data.counts.queues?.faded ?? 0) : f.key === 'rest' ? (data.counts.queues?.rest ?? 0)
                   : f.key === 'active' ? data.counts.active : f.key === 'inactive' ? data.counts.inactive

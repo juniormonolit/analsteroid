@@ -14,6 +14,7 @@ import { fetchLastContacts, fetchPendingExclusions, type CustomerContact, type E
 import { fetchTeamRoster, fetchTeamCustomers } from '@/features/customers/engine/team';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
+import { fetchClientObjectCounts, BUILDER_MIN_OBJECTS } from '@/lib/bitrix/dealAddress';
 
 // «Мои заказчики» (фича Серёги 01.08): постраничный список клиентов менеджера.
 // Доступ — тот же рубеж canViewManager, что у всей карточки (менеджер — себя,
@@ -41,8 +42,8 @@ import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair,
 // Очереди по окну повторной продажи (задача владельца 17.09): window — окно
 // открыто (≤ 22 дн. после отгрузки, контакта нет), missed — окно упущено,
 // faded — постоянник затих. 'overdue' оставлен для старых деп-линков = все три.
-export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused';
-const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'window', 'missed', 'faded', 'rest', 'never', 'sleeping', 'refused'] as const;
+export type CustomerFilter = 'all' | 'active' | 'inactive' | 'overdue' | 'window' | 'missed' | 'faded' | 'rest' | 'never' | 'sleeping' | 'refused' | 'builders';
+const FILTER_KEYS = ['all', 'active', 'inactive', 'overdue', 'window', 'missed', 'faded', 'rest', 'never', 'sleeping', 'refused', 'builders'] as const;
 const PAGE_SIZE_MAX = 100;
 
 /** Строка после применения отметок: сигналы снузнутых погашены, bucket/mark в ответе. */
@@ -54,6 +55,8 @@ type XRow = CustomerRow & {
   modifiers: CustomerModifier[];
   queue: QueueInfo;
   lastContact: CustomerContact | null;
+  /** Сколько разных объектов (адресов) — задача владельца 21.09, deal_addresses. */
+  objects: number;
   pendingExclusion: Pick<ExclusionRequest, 'id' | 'reason' | 'requestedBy' | 'createdAt'> | null;
   /** Командный вид (team=1): чей это заказчик. */
   managerId?: string;
@@ -131,6 +134,8 @@ function applyFilter(rows: XRow[], filter: CustomerFilter): XRow[] {
     case 'faded': return bought.filter(r => r.queue.queue === 'faded');
     case 'rest': return bought.filter(r => r.queue.queue === 'rest');
     case 'overdue': return bought.filter(r => r.queue.queue !== 'rest');
+    // Строители (21.09): возят на разные объекты — отдельный список на проработку.
+    case 'builders': return bought.filter(r => (r.objects ?? 0) >= BUILDER_MIN_OBJECTS);
     default: return bought;
   }
 }
@@ -149,7 +154,7 @@ export async function GET(req: NextRequest) {
   const empty = () => NextResponse.json({
     total: 0,
     counts: {
-      all: 0, active: 0, inactive: 0, overdue: 0, refusedNoCall: 0,
+      all: 0, active: 0, inactive: 0, overdue: 0, builders: 0, refusedNoCall: 0,
       sections: { regular: 0, regularAtRisk: 0, once: 0, never: 0 },
       sleeping: 0, refused: 0, refusedByReason: {},
       queues: { window: 0, missed: 0, faded: 0, rest: 0, autoLostNoCall: 0 },
@@ -201,11 +206,14 @@ export async function GET(req: NextRequest) {
   // Отметки — свежим запросом поверх кэша движка (снуз/«не звонить» действуют
   // сразу). У снузнутых сигналы/«под угрозой» гасятся здесь же.
   const keys = engineRows.map(r => r.clientKey);
-  const [marks, catSettings, contacts, pending] = await Promise.all([
+  const [marks, catSettings, contacts, pending, objects] = await Promise.all([
     fetchCustomerMarks(keys),
     fetchCategorySettings(),
     fetchLastContacts(keys),
     fetchPendingExclusions(keys),
+    // Сколько разных объектов возит заказчик (задача владельца 21.09): 2+ —
+    // «потенциальный строитель», модификатор 🏗 и отдельный фильтр вкладки.
+    fetchClientObjectCounts(keys),
   ]);
   const today = todayYmdMsk();
   const now = Date.now();
@@ -222,8 +230,11 @@ export async function GET(req: NextRequest) {
     const q = assignQueue(r, lastContact?.contactedAt ?? null, now);
     const queue: QueueInfo = snoozedActive ? { ...q, queue: 'rest' } : q;
     const pe = pending.get(r.clientKey);
+    const objs = objects.get(r.clientKey) ?? 0;
+    const mods = objs >= BUILDER_MIN_OBJECTS ? [...modifiers, 'builder' as const] : modifiers;
     return {
-      ...base, bucket, snoozedActive, mark, category, modifiers, queue, lastContact,
+      ...base, bucket, snoozedActive, mark, category, modifiers: mods, queue, lastContact,
+      objects: objs,
       pendingExclusion: pe ? { id: pe.id, reason: pe.reason, requestedBy: pe.requestedBy, createdAt: pe.createdAt } : null,
     };
   });
@@ -305,6 +316,7 @@ export async function GET(req: NextRequest) {
       active: bought.filter(r => r.activeCount > 0).length,
       inactive: bought.filter(r => r.activeCount === 0).length,
       overdue: bought.filter(r => r.queue.queue !== 'rest').length,
+      builders: bought.filter(r => (r.objects ?? 0) >= BUILDER_MIN_OBJECTS).length,
       refusedNoCall: searched.filter(r => r.refusedNoCall).length,
       queues: {
         window: bought.filter(r => r.queue.queue === 'window').length,

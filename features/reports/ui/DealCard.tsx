@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';
-import { X, ExternalLink, ArrowDownLeft, ArrowUpRight, Mic, AlertTriangle } from 'lucide-react';
+import { X, ExternalLink, ArrowDownLeft, ArrowUpRight, Mic, AlertTriangle, MapPin } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
@@ -214,6 +214,19 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
     enabled: tab === 'activities',
     staleTime: 60_000,
   });
+
+  // Адрес объекта (задача владельца 21.09: «Давай быстро запрашивать при заходе
+  // в карточку сделки… чтобы было видно по его объектам»). Отдельным лёгким
+  // запросом: адреса нет в sa-БД, он живёт в Битриксе (UF_ADDRESS_COORDS) и
+  // кэшируется в deal_addresses — первый показ дозаполняет кэш.
+  const { data: addrData } = useQuery({
+    queryKey: ['deal-address', dealId],
+    queryFn: () => fetch(`/api/deals/addresses?ids=${dealId}`).then(r => r.json()) as Promise<{
+      addresses: Record<string, { address: string | null; lat: number | null; lon: number | null }>
+    }>,
+    staleTime: 5 * 60_000,
+  });
+  const addr = addrData?.addresses?.[String(dealId)] ?? null;
   const activities = useMemo(() => actData?.activities ?? [], [actData]);
   const activitiesCount = data?.activitiesCount ?? 0;
   // Фильтр по типу: владелец просил «сортировать по типу», а типов в снимке
@@ -373,6 +386,25 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
                       <Row label="Категория КЦ" value={deal.product_group_name ?? 'Без группы'} />
                       <Row label="По наибольшему" value={deal.head_group_name ?? 'Без группы'} />
                     </Section>
+
+                    {/* Объект — адрес доставки из Битрикса. Координаты есть не
+                        всегда (иногда менеджер пишет просто «Выборг») — тогда
+                        показываем адрес без ссылки на карту. */}
+                    {addr?.address && (
+                      <Section title="Объект">
+                        <div className="flex items-start gap-2 text-sm text-[var(--color-text)]">
+                          <MapPin size={14} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
+                          <span className="min-w-0 flex-1 break-words">{addr.address}</span>
+                          {addr.lat !== null && addr.lon !== null && (
+                            <a href={`https://yandex.ru/maps/?pt=${addr.lon},${addr.lat}&z=16&l=map`}
+                              target="_blank" rel="noopener noreferrer" title="Открыть на карте"
+                              className="tap-target shrink-0 text-[var(--color-accent)] hover:underline">
+                              <ExternalLink size={13} className="inline" />
+                            </a>
+                          )}
+                        </div>
+                      </Section>
+                    )}
 
                     <Section title={`История стадий${data?.stageHistory?.length ? ` · ${data.stageHistory.length}` : ''}`}>
                       {data?.stageHistory?.length ? (
