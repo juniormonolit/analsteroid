@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { getSession, SESSION_COOKIE } from '@/lib/auth/session';
+import { EnterButton } from './EnterButton';
 
 // Вход из локального приложения Битрикса (правка владельца 05.08: «в локальное
 // приложение Битрикса надо выводить по сути /profile, сейчас там заглушка»).
@@ -45,14 +46,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ t
             Ваш браузер не разрешает вход внутри окна Битрикса — так устроена его защита
             от чужих cookie. Это не ошибка доступа: вы уже опознаны, нужен один клик.
           </p>
-          <a
-            href={`/api/bitrix/enter?t=${encodeURIComponent(handoff)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="min-h-11 inline-flex items-center rounded-xl bg-[var(--color-accent)] px-5 py-2.5 text-sm font-semibold text-[var(--color-text-inverse)] hover:opacity-90"
-          >
-            Открыть кабинет
-          </a>
+          <EnterButton href={`/api/bitrix/enter?t=${encodeURIComponent(handoff)}`}>Открыть кабинет</EnterButton>
           <p className="text-xs">
             Ссылка одноразовая и действует 10 минут. Если вкладка закрылась — вернитесь
             в этот раздел портала и нажмите кнопку ещё раз.
