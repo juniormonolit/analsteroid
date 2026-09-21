@@ -32,7 +32,7 @@ import {
   type CustomerRow, type CallSignal, type CustomerCategory,
 } from '@/features/customers/engine/customers';
 import {
-  fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair,
+  fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair, fetchCrossSellPriorities,
 } from '@/features/customers/engine/crossSell';
 import { resolveClientNames } from '@/lib/bitrix/clientNames';
 
@@ -653,12 +653,13 @@ async function scoredCandidates(managerBitrixId: number): Promise<ScoredCandidat
   const candidates = rows.filter(r => r.signals.length > 0);
   if (candidates.length === 0) return [];
 
-  const [blocked, matrix, categorySettings, scoring] = await Promise.all([
+  const [blocked, matrix, categorySettings, scoring, priorities] = await Promise.all([
     systemDb().query<{ client_key: string }>(ADVICE_COOLDOWN_SQL, [managerBitrixId, candidates.map(c => c.clientKey)])
       .then(r => new Set(r.rows.map(x => x.client_key))).catch(() => new Set<string>()),
     fetchCrossSellMatrix(),
     fetchCategorySettings(),
     fetchAdviceScoringSettings(),
+    fetchCrossSellPriorities(),
   ]);
 
   const out: ScoredCandidate[] = [];
@@ -672,7 +673,14 @@ async function scoredCandidates(managerBitrixId: number): Promise<ScoredCandidat
     const { category } = classifyCategory(row, categorySettings);
     const score = scoreCandidate(row, top.pct, rec.fallback, category, scoring);
     if (score.total < scoring.scoreThreshold) continue; // ниже порога — совета не будет вовсе (лучше только цифры, чем слабый совет)
-    out.push({ row, group: top.group, basedOn: rec.basedOn, fallback: rec.fallback, pct: top.pct, score });
+    // Ручной приоритет из «Настройки → Что предложить» (владелец 21.09) меняет
+    // ТОЛЬКО то, чем закрывать звонок, — кого звать и стоит ли вообще, решает
+    // прежний статистический скоринг (пороги на нём откалиброваны). Берём
+    // приоритет лишь с известной вероятностью: в тексте рядом печатается «(N%)»,
+    // и «(0%)» по паре, которой в матрице не было, было бы враньём.
+    const manualTop = recommendFor(matrix, lastGroups, priorities)?.items.find(i => i.manual && i.pct > 0);
+    const shown = manualTop ?? top;
+    out.push({ row, group: shown.group, basedOn: rec.basedOn, fallback: rec.fallback, pct: shown.pct, score });
   }
   out.sort((a, b) => b.score.total - a.score.total);
   return out;

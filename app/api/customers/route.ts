@@ -13,7 +13,7 @@ import {
 import { fetchLastContacts, fetchPendingExclusions, type CustomerContact, type ExclusionRequest } from '@/features/customers/engine/contacts';
 import { fetchTeamRoster, fetchTeamCustomers } from '@/features/customers/engine/team';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
-import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair } from '@/features/customers/engine/crossSell';
+import { fetchCrossSellMatrix, recommendFor, fetchCrossSellBadges, badgeForPair, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
 
 // «Мои заказчики» (фича Серёги 01.08): постраничный список клиентов менеджера.
 // Доступ — тот же рубеж canViewManager, что у всей карточки (менеджер — себя,
@@ -235,12 +235,13 @@ export async function GET(req: NextRequest) {
   if (keyParam) {
     const found = all.find(r => r.clientKey === keyParam);
     if (!found) return NextResponse.json({ row: null });
-    const [names, matrix, csBadges] = await Promise.all([
+    const [names, matrix, csBadges, priorities] = await Promise.all([
       resolveClientNames([found.clientKey]),
       fetchCrossSellMatrix(),
       fetchCrossSellBadges(),
+      fetchCrossSellPriorities(),
     ]);
-    const rec = recommendFor(matrix, found.lastGroups);
+    const rec = recommendFor(matrix, found.lastGroups, priorities);
     if (rec) rec.items = rec.items.map(it => ({ ...it, badge: badgeForPair(csBadges, rec.basedOn, it.group) }));
     return NextResponse.json({ row: { ...found, name: names.get(found.clientKey) ?? null, recommend: rec } });
   }
@@ -267,15 +268,19 @@ export async function GET(req: NextRequest) {
   const pageRows = filtered.slice(start, start + pageSize);
 
   // Имена — только для видимой страницы (ленивый добор из Битрикса + кэш);
-  // кросс-селл рекомендация «что предложить» — из матрицы переходов (Redis 24ч);
+  // кросс-селл рекомендация «что предложить» — из матрицы переходов (Redis 24ч)
+  // поверх ручных приоритетов из настроек (правка владельца 21.09: «после
+  // газобетона я бы поставил кровлю, утеплитель, плитные и только потом
+  // по статистике»);
   // к рекомендации — бейдж и ебаллы за допродажу пары (доработка Серёги 01.08).
-  const [names, matrix, csBadges] = await Promise.all([
+  const [names, matrix, csBadges, priorities] = await Promise.all([
     resolveClientNames(pageRows.map(r => r.clientKey)),
     fetchCrossSellMatrix(),
     fetchCrossSellBadges(),
+    fetchCrossSellPriorities(),
   ]);
   const rows = pageRows.map(r => {
-    const rec = recommendFor(matrix, r.lastGroups);
+    const rec = recommendFor(matrix, r.lastGroups, priorities);
     if (rec) {
       rec.items = rec.items.map(it => ({ ...it, badge: badgeForPair(csBadges, rec.basedOn, it.group) }));
     }

@@ -401,12 +401,14 @@ function RecommendCell({ rec }: { rec: Recommendation | null }) {
   const top = rec.items[0];
   const title = [
     rec.fallback ? 'Мало статистики по группе клиента — общий топ по базе:' : `После: ${rec.basedOn.join(', ')} чаще всего покупают:`,
-    ...rec.items.map(it => `${it.group} — ${it.pct}%`),
+    ...rec.items.map(it => `${it.manual ? '📌 ' : ''}${it.group}${it.pct > 0 ? ` — ${it.pct}%` : ''}`),
+    ...(rec.items.some(it => it.manual) ? ['📌 — приоритет задан вручную в настройках'] : []),
   ].join('\n');
   return (
     <div className="flex items-center gap-1 whitespace-nowrap text-xs" title={title}>
+      {top.manual && <span>📌</span>}
       <span className="max-w-[150px] truncate">{top.group}</span>
-      <span className="font-semibold tabular-nums text-[var(--color-accent)]">{top.pct}%</span>
+      {top.pct > 0 && <span className="font-semibold tabular-nums text-[var(--color-accent)]">{top.pct}%</span>}
       {rec.items.length > 1 && <span className="text-[var(--color-text-muted)]">+{rec.items.length - 1}</span>}
     </div>
   );

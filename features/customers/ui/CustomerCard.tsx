@@ -106,6 +106,7 @@ function JourneyTab({ purchases, loading, recommend, onDealOpen }: {
 
   const first = purchases[0];
   const last = purchases[purchases.length - 1];
+  const statItems = (recommend?.items ?? []).filter(i => !i.manual);
   const ltv = purchases.reduce((s, p) => s + p.amount, 0);
   const distinctGroups = new Set(purchases.flatMap(p => p.groups.map(g => g.name ?? 'Без группы'))).size;
   const firstMs = new Date(first.deliveredAt).getTime();
@@ -170,13 +171,16 @@ function JourneyTab({ purchases, loading, recommend, onDealOpen }: {
 
       {/* Вилка вероятностей следующей покупки — финал дерева (та же матрица
           переходов, что «Что предложить», проценты по последним купленным группам). */}
+      {/* Здесь именно ВЕРОЯТНОСТЬ, а не совет: ручные приоритеты из настроек
+          (21.09) отфильтрованы — им место в «Что предложить», а в этой секции
+          они выглядели бы строкой «—%» посреди матрицы переходов. */}
       <Section title="Вероятная следующая покупка" hint="Матрица переходов «купил X → следом покупают Y» по истории продаж всей базы">
-        {!recommend || recommend.items.length === 0 ? (
+        {!recommend || statItems.length === 0 ? (
           <div className="text-sm text-[var(--color-text-muted)]">Статистики переходов пока нет.</div>
         ) : (
           <div className="flex flex-col gap-1">
             {recommend.fallback && <div className="text-[11px] text-[var(--color-text-muted)]">по группе клиента мало статистики — общий топ по базе</div>}
-            {recommend.items.slice(0, 5).map(it => (
+            {statItems.slice(0, 5).map(it => (
               <div key={it.group} className="flex items-center gap-2 text-[12.5px]">
                 <span className="font-semibold tabular-nums text-[var(--color-accent)] w-10 shrink-0">{it.pct}%</span>
                 <div className="flex-1 h-1.5 rounded bg-[var(--color-bg-hover)] overflow-hidden max-w-[220px]">
@@ -405,15 +409,19 @@ export function CustomerCard({ row, managerId, isSelf, onClose, markControls, zI
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <Section title="Что предложить" hint="По истории всей базы: что покупают после такого же материала. Проценты — доля повторных покупок, в которых была эта группа">
+                <Section title="Что предложить" hint="Сначала — приоритеты, заданные вручную в «Настройки → Что предложить» (📌), дальше по истории всей базы: что покупают после такого же материала. Проценты — доля повторных покупок, в которых была эта группа">
                   {!row.recommend || row.recommend.items.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">Статистики переходов пока нет.</div> : (
                     <div className="flex flex-col gap-1.5">
                       {row.recommend.fallback && <div className="text-[11px] text-[var(--color-text-muted)]">по группе клиента мало статистики — общий топ по базе</div>}
                       <div className="text-[11px] text-[var(--color-text-muted)]">после: {row.recommend.basedOn.join(', ')}</div>
-                      {row.recommend.items.slice(0, 5).map(it => (
+                      {/* до 6: три ручных приоритета + статистический топ-3 */}
+                      {row.recommend.items.slice(0, 6).map(it => (
                         <div key={it.group} className="flex items-center gap-2 text-[13px]">
-                          <span className="font-bold tabular-nums text-[var(--color-accent)] w-11 shrink-0">{it.pct}%</span>
+                          {/* У ручного приоритета (настройки 21.09) процента может не быть:
+                              такой пары в матрице переходов не встречалось — пишем «—». */}
+                          <span className="font-bold tabular-nums text-[var(--color-accent)] w-11 shrink-0">{it.pct > 0 ? `${it.pct}%` : '—'}</span>
                           <div className="w-24 h-1.5 rounded bg-[var(--color-bg-hover)] overflow-hidden shrink-0"><div className="h-full bg-[var(--color-accent)]" style={{ width: `${Math.min(100, it.pct)}%` }} /></div>
+                          {it.manual && <span title="Приоритет задан вручную в настройках">📌</span>}
                           <span className="truncate">{it.group}</span>
                           {/* Иконка бейджа и ебаллы за допродажу скрыты 21.09
                               (геймификация убрана с глаз владельцем). */}

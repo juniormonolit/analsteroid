@@ -94,9 +94,14 @@ export function CustomerTile({ r, onOpen, actions }: { r: ApiRow; onOpen: () => 
       </div>
       {/* Предложить */}
       {rec && (
-        <div className="text-[11.5px] truncate" title={r.recommend!.items.slice(0, 3).map(i => `${i.group} ${i.pct}%`).join(' · ')}>
+        <div className="text-[11.5px] truncate"
+          title={r.recommend!.items.slice(0, 4).map(i => `${i.manual ? '📌 ' : ''}${i.group}${i.pct > 0 ? ` ${i.pct}%` : ''}`).join(' · ')
+            + (r.recommend!.items.some(i => i.manual) ? '\n📌 — приоритет задан вручную в настройках' : '')}>
           <span className="text-[var(--color-text-muted)]">Предложить: </span>
-          <span className="font-semibold text-[var(--color-accent)]">{rec.pct}%</span> {rec.group}
+          {/* Ручной приоритет (настройки 21.09) — пара может не встречаться в
+              матрице переходов вовсе, тогда процента нет и рисовать «0%» нельзя. */}
+          {rec.manual && <span title="Приоритет задан вручную в настройках">📌 </span>}
+          {rec.pct > 0 && <span className="font-semibold text-[var(--color-accent)]">{rec.pct}% </span>}{rec.group}
           {r.recommend!.items.length > 1 && <span className="text-[var(--color-text-muted)]"> +{r.recommend!.items.length - 1}</span>}
           {/* Награда за допродажу (кросс-селл бейдж + ебаллы) скрыта 21.09 по
               правке владельца: геймификация временно убрана с глаз. Данные
