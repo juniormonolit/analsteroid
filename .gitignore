@@ -22,5 +22,8 @@ scripts/scriptable/
 # нечего, версия всё равно перезапишется, а таймстемп в диффе только шумит.
 /public/sw.js
 
+# Воркер MapLibre копируется в public/ на каждой сборке (scripts/copy-maplibre-worker.mjs)
+/public/maplibre/
+
 # Секреты сервера (ключ SFTP к логам Битрикса и т.п.) — никогда в git
 .secrets/

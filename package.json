@@ -5,7 +5,7 @@
   "scripts": {
     "predev": "node scripts/generate-sw.mjs",
     "dev": "next dev --port 3004",
-    "prebuild": "node scripts/generate-sw.mjs",
+    "prebuild": "node scripts/generate-sw.mjs && node scripts/copy-maplibre-worker.mjs",
     "build": "next build",
     "start": "next start --port 3004",
     "typecheck": "tsc --noEmit",

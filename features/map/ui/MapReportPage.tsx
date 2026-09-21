@@ -32,7 +32,7 @@ import { MapPin, Loader2, X, Maximize2, Minimize2, SlidersHorizontal, ZoomIn, Ch
 import { Popover } from '@/components/ui/Popover';
 import { GS_BASE_ROW, mixHex } from '@/lib/colors/google-sheets-palette';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { osmStyle, boundsOf, circlePolygon, rectPolygon, setGeoJson, dropLayers, EMPTY_FC } from './mapEngine';
+import { osmStyle, boundsOf, circlePolygon, rectPolygon, setGeoJson, EMPTY_FC, ensureWorkerUrl } from './mapEngine';
 
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 
@@ -221,6 +221,8 @@ export function MapReportPage() {
     (async () => {
       const mod = await import('maplibre-gl');
       const M = (mod as unknown as { default?: typeof mod }).default ?? mod;
+      // Адрес воркера — ДО создания карты, иначе GeoJSON не разберётся (см. mapEngine).
+      ensureWorkerUrl(M);
       if (cancelled || !mapEl.current || mapRef.current) return;
       const map = new M.Map({
         container: mapEl.current,

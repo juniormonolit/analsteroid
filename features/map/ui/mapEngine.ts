@@ -22,6 +22,26 @@ import type { Map as MlMap, GeoJSONSource, LngLatBoundsLike } from 'maplibre-gl'
 
 export const OSM_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
+/**
+ * Путь к воркеру MapLibre, который отдаём мы сами (scripts/copy-maplibre-worker.mjs
+ * кладёт его в public/maplibre на каждой сборке).
+ *
+ * БЕЗ ЭТОГО КАРТА МОЛЧА ПУСТАЯ (инцидент 21.09). MapLibre вычисляет адрес
+ * воркера как `new URL('./maplibre-gl-worker.mjs', import.meta.url)`, а внутри
+ * бандла Next `import.meta.url` — это адрес чанка (/_next/static/chunks/...),
+ * где такого файла нет. Воркер не стартует, и дальше всё выглядит исправным,
+ * кроме главного: растровые тайлы рисуются (им воркер не нужен), слои
+ * создаются, фичи в источник кладутся — а на экране ноль, потому что разбор и
+ * нарезка GeoJSON идут именно в воркере. Диагностический признак — вечное
+ * `map.isStyleLoaded() === false` при отсутствии каких-либо ошибок.
+ */
+export const WORKER_URL = '/maplibre/maplibre-gl-worker.mjs';
+
+/** Выставить адрес воркера ДО создания первой карты. Идемпотентно. */
+export function ensureWorkerUrl(ml: { config: { WORKER_URL: string } }): void {
+  if (ml.config.WORKER_URL !== WORKER_URL) ml.config.WORKER_URL = WORKER_URL;
+}
+
 /** Пустой стиль с одним растровым слоем OSM — без внешнего style.json. */
 export function osmStyle(): object {
   return {
