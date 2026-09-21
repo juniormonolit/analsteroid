@@ -579,7 +579,8 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
         title="Порядок карточек внутри очереди"
         className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
         <option value="">По срочности</option>
-        <option value="expectedValue:desc">Ожидаемые деньги ↓</option>
+        <option value="expectedValue:desc">Денег в игре ↓</option>
+        <option value="expectedNextAmount:desc">Ожидаемая сумма ↓</option>
         <option value="repeatChance:desc">Шанс на повтор ↓</option>
         <option value="sumSold:desc">Куплено на ↓</option>
         <option value="lastSoldAt:desc">Последняя покупка ↓</option>
