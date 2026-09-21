@@ -52,6 +52,18 @@ interface MapData {
   summary: { deals: number; sum: number; objects: number; clients: number; withoutCoords: number; hiddenServiceDeals: number; shown: number; truncated: boolean };
   facets: Facets;
 }
+interface ConvCell {
+  key: string; bounds: [[number, number], [number, number]]; lat: number; lon: number;
+  deals: number; sold: number; delivered: number; convSale: number; convShip: number;
+  sum: number; soldSum: number;
+  topAddresses: { address: string; deals: number; sold: number }[];
+  items: { dealId: number; amount: number; at: string | null; manager: string | null; group: string | null; address: string | null; sold: boolean; delivered: boolean }[];
+}
+interface ConvData {
+  cells: ConvCell[]; cellKm: number; minDeals: number;
+  summary: { deals: number; sold: number; delivered: number; withoutCoords: number; convSale: number; convShip: number; cells: number; hiddenCells: number; truncated: boolean };
+  facets: Facets;
+}
 interface Neighbours {
   radiusKm: number; objects: number; deals: number; sum: number; clients: number; lastAt: string | null;
   items: { key: string; address: string; lat: number; lon: number; distanceKm: number; deals: number; sum: number; clients: number; lastAt: string | null }[];
@@ -98,7 +110,31 @@ function fmtDate(iso: string | null): string {
 type Selection =
   | { kind: 'object'; object: MapObject }
   | { kind: 'cluster'; objects: MapObject[] }
+  | { kind: 'cell'; cell: ConvCell }
   | null;
+
+/** Режим карты: что именно показываем точками/квадратами. */
+type MapMode = 'objects' | 'conv_sale' | 'conv_ship';
+const MODES: { key: MapMode; label: string; hint: string }[] = [
+  { key: 'objects', label: 'Объекты', hint: 'Точки по адресам: сколько отгрузок и на сколько денег' },
+  { key: 'conv_sale', label: 'CR в продажу', hint: 'Из сделок, СОЗДАННЫХ в периоде, сколько дошло до продажи — по квадратам карты' },
+  { key: 'conv_ship', label: 'CR в отгрузку', hint: 'Из сделок, СОЗДАННЫХ в периоде, сколько дошло до отгрузки — по квадратам карты' },
+];
+const CELL_KM = [5, 10, 25, 50];
+
+/** Цвет квадрата: сравнение с СРЕДНЕЙ конверсией текущей выборки, а не с
+ *  абстрактной шкалой. Вопрос владельца — «где хуже, чем обычно», а «обычно»
+ *  у утеплителя и у щебня разное. */
+function convColor(conv: number, avg: number): string {
+  if (avg <= 0) return '#9e9e9e';
+  const r = conv / avg;
+  if (conv === 0) return '#b91c1c';
+  if (r < 0.6) return '#dc2626';
+  if (r < 0.85) return '#f97316';
+  if (r < 1.15) return '#eab308';
+  if (r < 1.4) return '#84cc16';
+  return '#16a34a';
+}
 
 export function MapReportPage() {
   const [from, setFrom] = useState(monthAgo(1));
@@ -113,6 +149,9 @@ export function MapReportPage() {
   const [max, setMax] = useState('');
   const [buildersOnly, setBuildersOnly] = useState(false);
   const [withHot, setWithHot] = useState(false);
+  const [mode, setMode] = useState<MapMode>('objects');
+  const [cellKm, setCellKm] = useState(25);
+  const [minDeals, setMinDeals] = useState(5);
   const [layer, setLayer] = useState<'points' | 'heat' | 'both'>('points');
   const [branchRadius, setBranchRadius] = useState(0);   // 0 = круги выключены
   const [fullscreen, setFullscreen] = useState(false);
@@ -132,22 +171,35 @@ export function MapReportPage() {
     return p.toString();
   }, [from, to, state, funnel, client, groups, managers, depts, min, max, buildersOnly, withHot]);
 
+  const isConv = mode !== 'objects';
   const { data, isFetching, isError } = useQuery<MapData>({
     queryKey: ['map-points', qs],
+    enabled: !isConv,
     queryFn: () => fetch(`/api/map/points?${qs}`).then(r => r.json()),
     staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
   });
+  // Конверсия — свой роут: там другая единица (квадрат сетки, а не объект) и
+  // другая когорта (сделки, СОЗДАННЫЕ в периоде), поэтому смешивать нельзя.
+  const convQs = useMemo(() => `${qs}&cell=${cellKm}&minDeals=${minDeals}`, [qs, cellKm, minDeals]);
+  const { data: conv, isFetching: convFetching, isError: convError } = useQuery<ConvData>({
+    queryKey: ['map-conversion', convQs],
+    enabled: isConv,
+    queryFn: () => fetch(`/api/map/conversion?${convQs}`).then(r => r.json()),
+    staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false,
+  });
+  // Фасеты (списки фильтров) берём из активного источника — они одинаковой формы.
+  const facets: Facets = (isConv ? conv?.facets : data?.facets) ?? { managers: [], groups: [], departments: [] };
 
   // Палитра товарных групп: восемь ведущих по деньгам получают свой цвет,
   // остальное — серое «прочее». Легенда снизу карты кликается как фильтр.
   const groupColor = useMemo(() => {
-    const top = (data?.facets.groups ?? []).slice(0, 8).map(g => g.group);
+    const top = facets.groups.slice(0, 8).map(g => g.group);
     const colors = [GS_BASE_ROW[6], GS_BASE_ROW[4], GS_BASE_ROW[2], GS_BASE_ROW[8], GS_BASE_ROW[1], GS_BASE_ROW[5], GS_BASE_ROW[9], GS_BASE_ROW[3]]
       .map(c => mixHex(c, '#000000', 0.12));
     const m = new Map<string, string>();
     top.forEach((g, i) => m.set(g, colors[i % colors.length]!));
     return m;
-  }, [data?.facets.groups]);
+  }, [facets.groups]);
   const colorOf = useCallback((o: MapObject) => (o.hot ? '#f59e0b' : groupColor.get(o.topGroup ?? '') ?? OTHER_COLOR), [groupColor]);
 
   // ── Карта ────────────────────────────────────────────────────────────────
@@ -156,6 +208,7 @@ export function MapReportPage() {
   const pointsRef = useRef<import('leaflet').LayerGroup | null>(null);
   const heatRef = useRef<import('leaflet').Layer | null>(null);
   const circlesRef = useRef<import('leaflet').LayerGroup | null>(null);
+  const cellsRef = useRef<import('leaflet').LayerGroup | null>(null);
   const [leaflet, setLeaflet] = useState<typeof import('leaflet') | null>(null);
 
   useEffect(() => {
@@ -194,7 +247,7 @@ export function MapReportPage() {
     const map = mapRef.current;
     if (!L || !map || !data) return;
     if (pointsRef.current) { map.removeLayer(pointsRef.current); pointsRef.current = null; }
-    if (layer === 'heat') return;
+    if (layer === 'heat' || isConv) return;
 
     const cluster = (L as unknown as { markerClusterGroup: (o: object) => import('leaflet').LayerGroup & { on: (e: string, cb: (x: { layer: { getAllChildMarkers: () => unknown[] } }) => void) => void } })
       .markerClusterGroup({
@@ -236,7 +289,7 @@ export function MapReportPage() {
     });
     map.addLayer(cluster);
     pointsRef.current = cluster;
-  }, [leaflet, data, layer, colorOf]);
+  }, [leaflet, data, layer, colorOf, isConv]);
 
   // Тепловая карта: вес точки — деньги, поэтому «горячо» там, где выручка, а
   // не там, где просто много мелких отгрузок.
@@ -245,13 +298,53 @@ export function MapReportPage() {
     const map = mapRef.current;
     if (!leaflet || !map || !data) return;
     if (heatRef.current) { map.removeLayer(heatRef.current); heatRef.current = null; }
-    if (layer === 'points' || !L.heatLayer) return;
+    if (layer === 'points' || isConv || !L.heatLayer) return;
     const maxSum = Math.max(1, ...data.objects.map(o => o.sum));
     const pts = data.objects.map(o => [o.lat, o.lon, Math.max(0.15, o.sum / maxSum)] as [number, number, number]);
     const heat = L.heatLayer(pts, { radius: 26, blur: 20, maxZoom: 12, minOpacity: 0.25 });
     heat.addTo(map);
     heatRef.current = heat;
-  }, [leaflet, data, layer]);
+  }, [leaflet, data, layer, isConv]);
+
+  // Квадраты конверсии (правка владельца 21.09: «где территориально у меня
+  // самая низкая конверсия?»). Считаем не по объекту — по одному адресу с
+  // двумя сделками конверсия всегда 0% или 100%, это шум, — а по квадратам
+  // сетки с порогом по числу сделок. Цвет — относительно СРЕДНЕЙ конверсии
+  // текущей выборки: «хуже, чем обычно у этого товара», а не по абсолютной
+  // шкале, где утеплитель и щебень несравнимы.
+  useEffect(() => {
+    const L = leaflet;
+    const map = mapRef.current;
+    if (!L || !map) return;
+    if (cellsRef.current) { map.removeLayer(cellsRef.current); cellsRef.current = null; }
+    if (!isConv || !conv) return;
+
+    const avg = mode === 'conv_sale' ? conv.summary.convSale : conv.summary.convShip;
+    const maxDeals = Math.max(1, ...conv.cells.map(c => c.deals));
+    const g = L.layerGroup();
+    for (const c of conv.cells) {
+      const value = mode === 'conv_sale' ? c.convSale : c.convShip;
+      const color = convColor(value, avg);
+      // Прозрачность по объёму: квадрат на 5 сделках не должен кричать так же,
+      // как квадрат на 200 — иначе «проблема» найдётся там, где просто мало данных.
+      const opacity = 0.25 + 0.45 * Math.sqrt(c.deals / maxDeals);
+      const rect = L.rectangle(c.bounds, { color, weight: 1, fillColor: color, fillOpacity: opacity });
+      rect.bindTooltip(
+        `${mode === 'conv_sale' ? 'CR в продажу' : 'CR в отгрузку'}: <b>${value}%</b>` +
+        `<br>${mode === 'conv_sale' ? c.sold : c.delivered} из ${c.deals} сделок` +
+        `<br>средняя по выборке ${avg}%`,
+        { direction: 'top' },
+      );
+      rect.on('click', () => setSelected({ kind: 'cell', cell: c }));
+      g.addLayer(rect);
+    }
+    g.addTo(map);
+    cellsRef.current = g;
+    if (conv.cells.length > 0) {
+      const b = L.latLngBounds(conv.cells.flatMap(c => [c.bounds[0], c.bounds[1]] as [number, number][]));
+      map.fitBounds(b.pad(0.1), { maxZoom: 11 });
+    }
+  }, [leaflet, conv, isConv, mode]);
 
   // Круги «домашней зоны» вокруг филиалов.
   useEffect(() => {
@@ -276,10 +369,10 @@ export function MapReportPage() {
   useEffect(() => {
     const L = leaflet;
     const map = mapRef.current;
-    if (!L || !map || !data || data.objects.length === 0) return;
+    if (!L || !map || isConv || !data || data.objects.length === 0) return;
     const b = L.latLngBounds(data.objects.map(o => [o.lat, o.lon] as [number, number]));
     map.fitBounds(b.pad(0.1), { maxZoom: 12 });
-  }, [leaflet, data]);
+  }, [leaflet, data, isConv]);
 
   const zoomTo = (objs: MapObject[]) => {
     const L = leaflet, map = mapRef.current;
@@ -292,30 +385,65 @@ export function MapReportPage() {
     set(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
 
   const s = data?.summary;
+  const cs = conv?.summary;
   const activeFilters = groups.length + managers.length + depts.length + (buildersOnly ? 1 : 0) + (min ? 1 : 0) + (max ? 1 : 0);
 
   return (
     <div className={`${fullscreen ? 'fixed inset-0 z-50 bg-[var(--color-bg)]' : 'h-full'} flex flex-col overflow-x-hidden`}>
       {/* ── Шапка ── */}
       <div className="shrink-0 border-b border-[var(--color-border)] px-3 sm:px-4 py-2 flex flex-wrap items-center gap-2">
-        <h1 className="text-[15px] font-bold text-[var(--color-text)]">Карта объектов</h1>
-        <div className="hidden sm:flex items-center gap-3 text-[11.5px] text-[var(--color-text-muted)]">
-          <span>сделок <b className="text-[var(--color-text)] tabular-nums">{s ? s.deals.toLocaleString('ru-RU') : '…'}</b></span>
-          <span>на <b className="text-[var(--color-text)] tabular-nums">{s ? fmtMoney(s.sum) : '…'}</b></span>
-          <span>объектов <b className="text-[var(--color-text)] tabular-nums">{s ? s.objects.toLocaleString('ru-RU') : '…'}</b></span>
-          <span>заказчиков <b className="text-[var(--color-text)] tabular-nums">{s ? s.clients.toLocaleString('ru-RU') : '…'}</b></span>
-          <span title="Сделки выборки без адреса или без координат — на карту не попали">без координат <b className="text-[var(--color-text)] tabular-nums">{s ? s.withoutCoords.toLocaleString('ru-RU') : '…'}</b></span>
+        <h1 className="text-[15px] font-bold text-[var(--color-text)]">Карта</h1>
+        <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] p-0.5">
+          {MODES.map(m => (
+            <button key={m.key} type="button" title={m.hint} onClick={() => { setMode(m.key); setSelected(null); }}
+              className={`min-h-11 sm:min-h-0 rounded px-2 py-1 text-[11px] font-semibold whitespace-nowrap ${mode === m.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+              {m.label}
+            </button>
+          ))}
         </div>
-        {isFetching && <Loader2 size={14} className="animate-spin text-[var(--color-text-muted)]" />}
-        <div className="ml-auto flex items-center gap-1">
-          <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] p-0.5">
-            {([['points', 'Точки'], ['heat', 'Тепло'], ['both', 'Оба']] as const).map(([k, label]) => (
-              <button key={k} type="button" onClick={() => setLayer(k)}
-                className={`min-h-11 sm:min-h-0 rounded px-2 py-1 text-[11px] font-semibold ${layer === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
-                {label}
-              </button>
-            ))}
+        {!isConv && (
+          <div className="hidden sm:flex items-center gap-3 text-[11.5px] text-[var(--color-text-muted)]">
+            <span>сделок <b className="text-[var(--color-text)] tabular-nums">{s ? s.deals.toLocaleString('ru-RU') : '…'}</b></span>
+            <span>на <b className="text-[var(--color-text)] tabular-nums">{s ? fmtMoney(s.sum) : '…'}</b></span>
+            <span>объектов <b className="text-[var(--color-text)] tabular-nums">{s ? s.objects.toLocaleString('ru-RU') : '…'}</b></span>
+            <span>заказчиков <b className="text-[var(--color-text)] tabular-nums">{s ? s.clients.toLocaleString('ru-RU') : '…'}</b></span>
+            <span title="Сделки выборки без адреса или без координат — на карту не попали">без координат <b className="text-[var(--color-text)] tabular-nums">{s ? s.withoutCoords.toLocaleString('ru-RU') : '…'}</b></span>
           </div>
+        )}
+        {isConv && (
+          <div className="hidden sm:flex items-center gap-3 text-[11.5px] text-[var(--color-text-muted)]">
+            <span title="Сделки, СОЗДАННЫЕ в периоде, — знаменатель конверсии">сделок создано <b className="text-[var(--color-text)] tabular-nums">{cs ? cs.deals.toLocaleString('ru-RU') : '…'}</b></span>
+            <span>CR в продажу <b className="text-[var(--color-text)] tabular-nums">{cs ? `${cs.convSale}%` : '…'}</b></span>
+            <span>CR в отгрузку <b className="text-[var(--color-text)] tabular-nums">{cs ? `${cs.convShip}%` : '…'}</b></span>
+            <span>квадратов <b className="text-[var(--color-text)] tabular-nums">{cs ? cs.cells.toLocaleString('ru-RU') : '…'}</b></span>
+            <span title="Квадраты, где сделок меньше порога — спрятаны, чтобы 0% на двух сделках не выглядел проблемой">скрыто мелких <b className="text-[var(--color-text)] tabular-nums">{cs ? cs.hiddenCells.toLocaleString('ru-RU') : '…'}</b></span>
+          </div>
+        )}
+        {(isFetching || convFetching) && <Loader2 size={14} className="animate-spin text-[var(--color-text-muted)]" />}
+        <div className="ml-auto flex items-center gap-1">
+          {!isConv && (
+            <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] p-0.5">
+              {([['points', 'Точки'], ['heat', 'Тепло'], ['both', 'Оба']] as const).map(([k, label]) => (
+                <button key={k} type="button" onClick={() => setLayer(k)}
+                  className={`min-h-11 sm:min-h-0 rounded px-2 py-1 text-[11px] font-semibold ${layer === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {isConv && (
+            <>
+              <select value={cellKm} onChange={e => setCellKm(Number(e.target.value))} title="Размер квадрата сетки"
+                className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[11px] font-semibold">
+                {CELL_KM.map(k => <option key={k} value={k}>квадрат {k} км</option>)}
+              </select>
+              <select value={minDeals} onChange={e => setMinDeals(Number(e.target.value))}
+                title="Сколько сделок должно быть в квадрате, чтобы его показывать: на двух сделках конверсия ничего не значит"
+                className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[11px] font-semibold">
+                {[3, 5, 10, 20, 50].map(k => <option key={k} value={k}>от {k} сделок</option>)}
+              </select>
+            </>
+          )}
           <select value={branchRadius} onChange={e => setBranchRadius(Number(e.target.value))}
             title="Круги вокруг филиалов — «домашняя зона» доставки"
             className="min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[11px] font-semibold">
@@ -368,11 +496,11 @@ export function MapReportPage() {
             заметный способ — вот эти три кнопки в ряду фильтров. Списки
             приходят с сервера по ТЕКУЩЕЙ выборке (с суммами) и не схлопываются
             при выборе: каждый фасет считается без своего же фильтра. */}
-        <MultiSelect label="Группы" items={(data?.facets.groups ?? []).map(g => ({ key: g.group, label: g.group, deals: g.deals, sum: g.sum, color: groupColor.get(g.group) }))}
+        <MultiSelect label="Группы" items={facets.groups.map(g => ({ key: g.group, label: g.group, deals: g.deals, sum: g.sum, color: groupColor.get(g.group) }))}
           selected={groups} onChange={setGroups} searchPlaceholder="Поиск группы" />
-        <MultiSelect label="Менеджеры" items={(data?.facets.managers ?? []).map(m => ({ key: m.id, label: m.name, deals: m.deals, sum: m.sum }))}
+        <MultiSelect label="Менеджеры" items={facets.managers.map(m => ({ key: m.id, label: m.name, deals: m.deals, sum: m.sum }))}
           selected={managers} onChange={setManagers} searchPlaceholder="Поиск менеджера" />
-        <MultiSelect label="Отделы" items={(data?.facets.departments ?? []).map(d => ({ key: d.department, label: d.department, deals: d.deals, sum: d.sum }))}
+        <MultiSelect label="Отделы" items={facets.departments.map(d => ({ key: d.department, label: d.department, deals: d.deals, sum: d.sum }))}
           selected={depts} onChange={setDepts} searchPlaceholder="Поиск отдела" />
         <input value={min} onChange={e => setMin(e.target.value.replace(/\D/g, ''))} placeholder="сумма от" inputMode="numeric"
           className="w-[104px] min-h-11 sm:min-h-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[16px] sm:text-xs" />
@@ -397,7 +525,7 @@ export function MapReportPage() {
       {(groups.length > 0 || managers.length > 0 || depts.length > 0) && (
         <div className="shrink-0 flex flex-wrap items-center gap-1.5 px-3 sm:px-4 py-1.5">
           {depts.map(d => <Chip key={d} onClick={() => toggle(depts, d, setDepts)}>{d}</Chip>)}
-          {managers.map(m => <Chip key={m} onClick={() => toggle(managers, m, setManagers)}>{data?.facets.managers.find(x => x.id === m)?.name ?? m}</Chip>)}
+          {managers.map(m => <Chip key={m} onClick={() => toggle(managers, m, setManagers)}>{facets.managers.find(x => x.id === m)?.name ?? m}</Chip>)}
           {groups.map(g => <Chip key={g} onClick={() => toggle(groups, g, setGroups)}>{g}</Chip>)}
         </div>
       )}
@@ -412,17 +540,38 @@ export function MapReportPage() {
           Выборка упёрлась в потолок 60 000 сделок — сузьте период или фильтры.
         </div>
       )}
-      {isError && <div className="shrink-0 px-4 pb-1 text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить данные карты.</div>}
+      {(isError || convError) && <div className="shrink-0 px-4 pb-1 text-sm text-[var(--color-negative,#e03131)]">Не удалось загрузить данные карты.</div>}
+      {isConv && cs?.truncated && (
+        <div className="shrink-0 px-3 sm:px-4 pb-1 text-[11px] text-[var(--color-negative,#e03131)]">
+          Выборка упёрлась в потолок 80 000 сделок — сузьте период или фильтры.
+        </div>
+      )}
+      {isConv && !!cs?.withoutCoords && (
+        <div className="shrink-0 px-3 sm:px-4 pb-1 text-[11px] text-[var(--color-text-muted)]">
+          Без пригодного адреса — <b>{cs.withoutCoords.toLocaleString('ru-RU')}</b> сделок выборки: в конверсии по районам они не участвуют.
+        </div>
+      )}
 
       {/* ── Карта + панель: тянутся по высоте экрана ── */}
       <div className="min-h-0 flex-1 flex flex-col lg:flex-row gap-2 p-2 sm:p-3">
         <div className="min-h-[320px] flex-1 flex flex-col gap-1.5">
           <div ref={mapEl} className="min-h-0 flex-1 w-full rounded-xl border border-[var(--color-border)] overflow-hidden z-0" />
           {/* Легенда товарных групп — она же фильтр в один клик */}
-          {(data?.facets.groups.length ?? 0) > 0 && (
+          {isConv && cs && (
+            <div className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-[var(--color-text-muted)]">
+              <span>Цвет — конверсия относительно средней по выборке ({mode === 'conv_sale' ? cs.convSale : cs.convShip}%):</span>
+              {([['хуже в 1,7+ раза', '#dc2626'], ['ниже средней', '#f97316'], ['около средней', '#eab308'], ['выше средней', '#84cc16'], ['лучше в 1,4+ раза', '#16a34a']] as const).map(([label, color]) => (
+                <span key={label} className="flex items-center gap-1">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ background: color }} />{label}
+                </span>
+              ))}
+              <span>· насыщенность — сколько сделок в квадрате</span>
+            </div>
+          )}
+          {!isConv && facets.groups.length > 0 && (
             <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px]">
               <span className="text-[var(--color-text-muted)]">Цвет — товарная группа, клик по ней фильтрует:</span>
-              {data!.facets.groups.slice(0, 8).map(g => {
+              {facets.groups.slice(0, 8).map(g => {
                 const on = groups.includes(g.group);
                 return (
                   <button key={g.group} type="button" onClick={() => toggle(groups, g.group, setGroups)}
@@ -456,17 +605,23 @@ export function MapReportPage() {
             <ClusterPanel objects={selected.objects} onClose={() => setSelected(null)} onDeal={setOpenDealId}
               onZoom={() => zoomTo(selected.objects)} onObject={o => setSelected({ kind: 'object', object: o })} />
           )}
+          {selected?.kind === 'cell' && (
+            <CellPanel cell={selected.cell} mode={mode} avg={mode === 'conv_sale' ? (cs?.convSale ?? 0) : (cs?.convShip ?? 0)}
+              onClose={() => setSelected(null)} onDeal={setOpenDealId}
+              onZoom={() => { const map = mapRef.current; if (map) map.fitBounds(selected.cell.bounds as unknown as [[number, number], [number, number]]); }} />
+          )}
           {!selected && (
             <div className="rounded-xl border border-dashed border-[var(--color-border)] px-3 py-3 text-[12px] text-[var(--color-text-muted)]">
-              Клик по точке — объект и его сделки. Клик по кластеру — все сделки внутри него списком.
-              Цвет точки — ведущая товарная группа объекта.
+              {isConv
+                ? 'Квадрат — район. Цвет — конверсия относительно средней по выборке, насыщенность — объём сделок. Клик по квадрату покажет его сделки: какие дошли до продажи, какие нет.'
+                : 'Клик по точке — объект и его сделки. Клик по кластеру — все сделки внутри него списком. Цвет точки — ведущая товарная группа объекта.'}
             </div>
           )}
-          <FacetList title="Отделы" rows={(data?.facets.departments ?? []).slice(0, 10).map(d => ({ key: d.department, label: d.department, deals: d.deals, sum: d.sum }))}
+          <FacetList title="Отделы" rows={facets.departments.slice(0, 10).map(d => ({ key: d.department, label: d.department, deals: d.deals, sum: d.sum }))}
             active={depts} onToggle={k => toggle(depts, k, setDepts)} />
-          <FacetList title="Менеджеры" rows={(data?.facets.managers ?? []).slice(0, 12).map(m => ({ key: m.id, label: m.name, deals: m.deals, sum: m.sum }))}
+          <FacetList title="Менеджеры" rows={facets.managers.slice(0, 12).map(m => ({ key: m.id, label: m.name, deals: m.deals, sum: m.sum }))}
             active={managers} onToggle={k => toggle(managers, k, setManagers)} />
-          <FacetList title="Товарные группы" rows={(data?.facets.groups ?? []).slice(0, 14).map(g => ({ key: g.group, label: g.group, deals: g.deals, sum: g.sum }))}
+          <FacetList title="Товарные группы" rows={facets.groups.slice(0, 14).map(g => ({ key: g.group, label: g.group, deals: g.deals, sum: g.sum }))}
             active={groups} onToggle={k => toggle(groups, k, setGroups)} color={g => groupColor.get(g)} />
         </div>
       </div>
@@ -776,5 +931,77 @@ function MultiSelect({ label, items, selected, onChange, searchPlaceholder }: {
         <button type="button" onClick={() => onChange([])} className="text-[var(--color-text-muted)] hover:underline">сбросить</button>
       </div>
     </Popover>
+  );
+}
+
+/** Панель квадрата конверсии: цифры района и его сделки — что дошло, что нет. */
+function CellPanel({ cell, mode, avg, onClose, onDeal, onZoom }: {
+  cell: ConvCell; mode: MapMode; avg: number; onClose: () => void; onDeal: (id: number) => void; onZoom: () => void;
+}) {
+  const [only, setOnly] = useState<'all' | 'lost'>('all');
+  const value = mode === 'conv_sale' ? cell.convSale : cell.convShip;
+  const num = mode === 'conv_sale' ? cell.sold : cell.delivered;
+  const label = mode === 'conv_sale' ? 'CR в продажу' : 'CR в отгрузку';
+  const items = only === 'all' ? cell.items : cell.items.filter(i => (mode === 'conv_sale' ? !i.sold : !i.delivered));
+  const delta = avg > 0 ? Math.round((value - avg) * 10) / 10 : 0;
+
+  return (
+    <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 flex flex-col gap-2">
+      <PanelHead title={`Район ${cell.lat.toFixed(2)}, ${cell.lon.toFixed(2)}`} onClose={onClose} onZoom={onZoom} />
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="text-[22px] font-bold tabular-nums" style={{ color: convColor(value, avg) }}>{value}%</span>
+        <span className="text-[11.5px] text-[var(--color-text-muted)]">
+          {label} · {num} из {cell.deals} сделок · средняя по выборке {avg}%
+          {delta !== 0 && <b className={delta < 0 ? 'text-[var(--color-negative,#e03131)]' : 'text-[var(--color-positive,#2f9e44)]'}> ({delta > 0 ? '+' : ''}{delta} п.п.)</b>}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-3 text-[11.5px] text-[var(--color-text-muted)]">
+        <span>сумма сделок <b className="text-[var(--color-text)]">{fmtMoney(cell.sum)}</b></span>
+        <span>из них продано <b className="text-[var(--color-text)]">{fmtMoney(cell.soldSum)}</b></span>
+      </div>
+
+      <Section title="Адреса района">
+        <div className="flex flex-col gap-0.5 max-h-[22vh] overflow-y-auto">
+          {cell.topAddresses.map(a => (
+            <div key={a.address} className="flex items-center gap-2 text-[11.5px]">
+              <span className="min-w-0 flex-1 truncate" title={a.address}>{a.address}</span>
+              <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">{a.sold}/{a.deals}</span>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <div className="flex gap-0.5 rounded-lg border border-[var(--color-border)] p-0.5">
+        {([['all', `Все сделки · ${cell.items.length}`], ['lost', mode === 'conv_sale' ? 'Не продались' : 'Не отгрузились']] as const).map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setOnly(k)}
+            className={`min-h-11 sm:min-h-0 flex-1 rounded px-2 py-1 text-[11.5px] font-semibold ${only === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-col gap-1 max-h-[38vh] overflow-y-auto">
+        {items.map(it => (
+          <button key={it.dealId} onClick={() => onDeal(it.dealId)}
+            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-left hover:border-[var(--color-accent)]">
+            <div className="flex items-center gap-2 text-[12px]">
+              <span className="font-mono font-semibold text-[var(--color-accent)]">#{it.dealId}</span>
+              <span className="text-[var(--color-text-muted)]">создана {fmtDate(it.at)}</span>
+              <span className="ml-auto font-semibold tabular-nums">{fmtMoney(it.amount)}</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
+              <span className={it.delivered ? 'text-[var(--color-positive,#2f9e44)]' : it.sold ? 'text-[var(--color-accent)]' : ''}>
+                {it.delivered ? 'отгружена' : it.sold ? 'продана' : 'не дошла'}
+              </span>
+              <span className="min-w-0 flex-1 truncate">· {[it.group, it.manager].filter(Boolean).join(' · ')}</span>
+            </div>
+            {it.address && <div className="text-[11px] text-[var(--color-text-muted)] truncate" title={it.address}>{it.address}</div>}
+          </button>
+        ))}
+        {items.length === 0 && <span className="px-1 py-1 text-[11.5px] text-[var(--color-text-muted)]">Пусто.</span>}
+      </div>
+      {cell.deals > cell.items.length && (
+        <div className="text-[11px] text-[var(--color-text-muted)]">Показаны первые {cell.items.length} из {cell.deals} сделок района.</div>
+      )}
+    </div>
   );
 }
