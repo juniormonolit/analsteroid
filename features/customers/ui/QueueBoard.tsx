@@ -200,9 +200,50 @@ function useQueuePages(managerId: string, isSelf: boolean, filter: string, searc
   });
 }
 
-function QueueColumn({ queue, managerId, isSelf, search, category, sort, onOpen, renderActions, single, team, mgr, dept }: {
+
+// ── Группировка доски (правка владельца 22.09: «фильтры по отделам и по
+// менеджерам + группировка, как в основных отчётах») ────────────────────────
+// В отчётах группировка — это подзаголовок с итогом над своей пачкой строк.
+// На доске очередей то же самое, только внутри колонки: очередь остаётся
+// главным измерением (её смысл — срочность), а отдел/менеджер разбивают её на
+// пачки. Считается по УЖЕ ЗАГРУЖЕННЫМ карточкам — колонка подгружается
+// постранично, поэтому в заголовке честно написано «из загруженных».
+export type GroupMode = 'none' | 'dept' | 'mgr';
+
+export interface GroupedRows { key: string; label: string; rows: ApiRow[]; sum: number }
+
+export function groupRows(rows: ApiRow[], mode: GroupMode, deptOf: Record<string, string>): GroupedRows[] {
+  if (mode === 'none') return [{ key: '', label: '', rows, sum: 0 }];
+  const map = new Map<string, GroupedRows>();
+  for (const r of rows) {
+    const mid = r.managerId ?? '';
+    const label = mode === 'dept'
+      ? (deptOf[mid] || 'Без отдела')
+      : (r.managerName || (mid ? `#${mid}` : 'Без менеджера'));
+    const key = mode === 'dept' ? label : (mid || label);
+    const g = map.get(key) ?? { key, label, rows: [], sum: 0 };
+    g.rows.push(r);
+    g.sum += r.sumSold ?? 0;
+    map.set(key, g);
+  }
+  return [...map.values()].sort((a, b) => b.rows.length - a.rows.length || a.label.localeCompare(b.label, 'ru'));
+}
+
+function GroupHead({ g }: { g: GroupedRows }) {
+  return (
+    <div className="flex items-baseline gap-2 border-b border-[var(--color-border)] pb-0.5 pt-1"
+      title="Группировка считается по уже загруженным карточкам колонки — ниже есть кнопка «Ещё»">
+      <span className="min-w-0 truncate text-[11.5px] font-bold text-[var(--color-text)]">{g.label}</span>
+      <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-muted)]">{g.rows.length}</span>
+      {g.sum > 0 && <span className="ml-auto shrink-0 text-[11px] tabular-nums text-[var(--color-text-muted)]">{fmtMoney(g.sum)}</span>}
+    </div>
+  );
+}
+
+function QueueColumn({ queue, managerId, isSelf, search, category, sort, onOpen, renderActions, single, team, mgr, dept, group = 'none', deptOf = {} }: {
   queue: CustomerQueue | 'archive'; managerId: string; isSelf: boolean; search: string; category: string; sort: string;
   onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; single: boolean; filterKey?: string; team?: boolean; mgr?: string; dept?: string;
+  group?: GroupMode; deptOf?: Record<string, string>;
 }) {
   const q = useQueuePages(managerId, isSelf, queue, search, category, sort, team, mgr, dept);
   const rows = useMemo(() => (q.data?.pages ?? []).flatMap(p => p.rows), [q.data]);
@@ -225,9 +266,22 @@ function QueueColumn({ queue, managerId, isSelf, search, category, sort, onOpen,
           {queue === 'window' ? 'Все окна закрыты звонком 👍' : 'Пусто'}
         </div>
       ) : (
-        <div className={single ? 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2' : 'flex flex-col gap-2'}>
-          {rows.map(r => <CustomerTile key={r.clientKey} r={r} onOpen={() => onOpen(r)} actions={renderActions(r)} />)}
-        </div>
+        group === 'none' ? (
+          <div className={single ? 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2' : 'flex flex-col gap-2'}>
+            {rows.map(r => <CustomerTile key={r.clientKey} r={r} onOpen={() => onOpen(r)} actions={renderActions(r)} />)}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {groupRows(rows, group, deptOf).map(g => (
+              <div key={g.key} className="flex flex-col gap-1.5">
+                <GroupHead g={g} />
+                <div className={single ? 'grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2' : 'flex flex-col gap-2'}>
+                  {g.rows.map(r => <CustomerTile key={r.clientKey} r={r} onOpen={() => onOpen(r)} actions={renderActions(r)} />)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
       )}
       {q.hasNextPage && (
         <button type="button" onClick={() => q.fetchNextPage()} disabled={q.isFetchingNextPage}
@@ -240,26 +294,28 @@ function QueueColumn({ queue, managerId, isSelf, search, category, sort, onOpen,
 }
 
 /** Доска: filter='all' — четыре очереди колонками; иначе одна очередь/вкладка сеткой карточек. */
-export function QueueBoard({ managerId, isSelf, filter, search, category, sort, onOpen, renderActions, team, mgr, dept }: {
+export function QueueBoard({ managerId, isSelf, filter, search, category, sort, onOpen, renderActions, team, mgr, dept, group = 'none', deptOf = {} }: {
   managerId: string; isSelf: boolean; filter: string; search: string; category: string; sort: string;
   onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; team?: boolean; mgr?: string; dept?: string;
+  /** Группировка карточек внутри очереди — только в командном виде. */
+  group?: GroupMode; deptOf?: Record<string, string>;
 }) {
   if (filter === 'all') {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 items-start">
         {QUEUE_ORDER.map(qk => (
           <Fragment key={qk}>
-            <QueueColumn queue={qk} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} single={false} team={team} mgr={mgr} dept={dept} />
+            <QueueColumn queue={qk} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} single={false} team={team} mgr={mgr} dept={dept} group={group} deptOf={deptOf} />
           </Fragment>
         ))}
       </div>
     );
   }
   const asQueue = (['window', 'missed', 'faded', 'rest'] as string[]).includes(filter) ? (filter as CustomerQueue) : 'archive';
-  return <QueueColumnByFilter filter={filter} queue={asQueue} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} team={team} mgr={mgr} dept={dept} />;
+  return <QueueColumnByFilter filter={filter} queue={asQueue} managerId={managerId} isSelf={isSelf} search={search} category={category} sort={sort} onOpen={onOpen} renderActions={renderActions} team={team} mgr={mgr} dept={dept} group={group} deptOf={deptOf} />;
 }
 
-function QueueColumnByFilter(p: { filter: string; queue: CustomerQueue | 'archive'; managerId: string; isSelf: boolean; search: string; category: string; sort: string; onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; team?: boolean; mgr?: string; dept?: string }) {
+function QueueColumnByFilter(p: { filter: string; queue: CustomerQueue | 'archive'; managerId: string; isSelf: boolean; search: string; category: string; sort: string; onOpen: (r: ApiRow) => void; renderActions: (r: ApiRow) => React.ReactNode; team?: boolean; mgr?: string; dept?: string; group?: GroupMode; deptOf?: Record<string, string> }) {
   const q = useQueuePages(p.managerId, p.isSelf, p.filter, p.search, p.category, p.sort, p.team, p.mgr, p.dept);
   const rows = useMemo(() => (q.data?.pages ?? []).flatMap(x => x.rows), [q.data]);
   const total = q.data?.pages[0]?.total ?? null;
@@ -268,9 +324,20 @@ function QueueColumnByFilter(p: { filter: string; queue: CustomerQueue | 'archiv
       {q.isLoading ? <div className="text-sm text-[var(--color-text-muted)]">Считаем заказчиков… (первое открытие может занять до минуты)</div>
         : q.isError ? <div className="text-sm text-[var(--color-negative)]">Не удалось загрузить список заказчиков.</div>
         : rows.length === 0 ? <div className="rounded-xl border border-dashed border-[var(--color-border)] px-3 py-8 text-center text-sm text-[var(--color-text-muted)]">Пусто — либо фильтры узкие, либо у этой роли нет своих клиентов.</div>
-        : (
+        : (p.group ?? 'none') === 'none' ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2">
             {rows.map(r => <CustomerTile key={r.clientKey} r={r} onOpen={() => p.onOpen(r)} actions={p.renderActions(r)} />)}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {groupRows(rows, p.group ?? 'none', p.deptOf ?? {}).map(g => (
+              <div key={g.key} className="flex flex-col gap-1.5">
+                <GroupHead g={g} />
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2">
+                  {g.rows.map(r => <CustomerTile key={r.clientKey} r={r} onOpen={() => p.onOpen(r)} actions={p.renderActions(r)} />)}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       {q.hasNextPage && (

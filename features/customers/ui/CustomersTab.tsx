@@ -449,6 +449,10 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   const team = canTeam && scope === 'team';
   const [mgr, setMgr] = useState<string>(''); // командный вид: один менеджер или все
   const [dept, setDept] = useState<string>(''); // командный вид: отдел
+  // Группировка карточек внутри очереди (правка владельца 22.09: «+ группировка,
+  // как в основных отчётах»). Только в командном виде: у своего списка группировать
+  // нечего — там один менеджер и один отдел.
+  const [group, setGroup] = useState<'none' | 'dept' | 'mgr'>('none');
 
   // Деп-линк по заказчику (задача 2822): одноразовый запрос при заходе — после
   // первого ответа (найден/не найден) ключ сбрасывается, повторные ререндеры
@@ -502,6 +506,9 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
   const rosterAll = rosterData?.counts.managers ?? [];
   const depts = useMemo(() => [...new Set(rosterAll.map(m => m.departmentName ?? ''))].filter(Boolean).sort((a, b) => a.localeCompare(b, 'ru')), [rosterAll]);
   const mgrOptions = useMemo(() => rosterAll.filter(m => !dept || (m.departmentName ?? '') === dept), [rosterAll, dept]);
+  // managerId → отдел: доска группирует карточки по отделу, а в самой карточке
+  // отдела нет — только менеджер. Берём из того же ростера, что и селекты.
+  const deptOf = useMemo(() => Object.fromEntries(rosterAll.map(m => [m.id, m.departmentName ?? ''])), [rosterAll]);
   const rows = data?.rows ?? [];
 
   // Карточка открыта — держим строку свежей после мутаций: доска грузит очереди
@@ -535,12 +542,43 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
       {canTeam && (
         <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5" title="Свои заказчики или весь отдел (все менеджеры подконтрольных отделов)">
           {([['own', isSelf ? 'Мои' : 'Свои'], ['team', 'Отдел']] as const).map(([k, label]) => (
-            <button key={k} type="button" onClick={() => { setScope(k); setMgr(''); setDept(''); }}
+            <button key={k} type="button" onClick={() => { setScope(k); setMgr(''); setDept(''); setGroup('none'); }}
               className={`min-h-11 sm:min-h-0 rounded-lg px-3 py-1 text-xs font-bold whitespace-nowrap transition-colors ${scope === k ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
               {label}
             </button>
           ))}
         </div>
+      )}
+      {/* Отдел / менеджер / группировка — только в командном виде (правка
+          владельца 22.09). Списки берутся из ростера БЕЗ фильтров, поэтому не
+          схлопываются сами собой при выборе; менеджеры сужаются выбранным
+          отделом — это обычная вложенность, а не потеря вариантов. */}
+      {team && depts.length > 0 && (
+        <select value={dept} onChange={e => { setDept(e.target.value); setMgr(''); setPage(1); }}
+          title="Фильтр по отделу подконтрольной структуры"
+          className="min-h-11 sm:min-h-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
+          <option value="">Все отделы ({depts.length})</option>
+          {depts.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+      )}
+      {team && mgrOptions.length > 0 && (
+        <select value={mgr} onChange={e => { setMgr(e.target.value); setPage(1); }}
+          title="Фильтр по менеджеру: в скобках — сколько у него открытых окон и упущенных"
+          className="min-h-11 sm:min-h-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold max-w-[220px]">
+          <option value="">Все менеджеры ({mgrOptions.length})</option>
+          {mgrOptions.map(m => (
+            <option key={m.id} value={m.id}>{m.name}{m.window || m.missed ? ` (🔥${m.window}/${m.missed})` : ''}</option>
+          ))}
+        </select>
+      )}
+      {team && (
+        <select value={group} onChange={e => setGroup(e.target.value as 'none' | 'dept' | 'mgr')}
+          title="Группировка карточек внутри очереди — как группировка строк в обычных отчётах"
+          className="min-h-11 sm:min-h-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
+          <option value="none">Без группировки</option>
+          <option value="dept">Группировать по отделам</option>
+          <option value="mgr">Группировать по менеджерам</option>
+        </select>
       )}
       <div className="flex gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-0.5 overflow-x-auto">
         {FILTERS.map(f => (
@@ -639,6 +677,7 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
         sort={sort ? `${sort.key}:${sort.dir}` : ''}
         onOpen={r => setCardRow(r)}
         team={team} mgr={mgr || undefined} dept={dept || undefined}
+        group={group} deptOf={deptOf}
         renderActions={r => <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} managerId={r.managerId ?? managerId} isSelf={team ? false : isSelf} />} />
 
       {cardRowLive && (
