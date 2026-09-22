@@ -11,14 +11,39 @@ import { DEAL_FIELDS, DEFAULT_DEAL_FIELDS } from '@/lib/reports/dealFields';
 
 const CATEGORY_ORDER = ['Сделки', 'Брони', 'Продажи', 'Отгрузки', 'Конверсии', 'Отказы', 'Планы', 'Дела и задачи', 'Прочее'];
 
-// Ширина панели: максимум места, но так, чтобы справа влезла доке-панель настроек
-// метрики (до 480px) + запас на правое поле. Резерв 500px = ширина панели (480) + ~20px
-// поле, чтобы на 1440+ доке-панель раскрылась на полные 480px, а её правый край не
-// упирался в край экрана (см. HighlightEditor: доке-класс w-[480px] + inline max-width,
-// который на 1366/1280 мягко ужимает панель под остаток места, а не даёт ей вылезти).
+/** Ширина сайдбара приложения — панель метрик начинается сразу за ним. */
+const SIDEBAR_W = 220;
+/** Ширина доке-панели настроек метрики (HighlightEditor, класс w-[480px]). */
+const DOCK_W = 480;
+
+// Ширина панели (правка владельца 22.09: «сделай пошире, можно даже до 80%
+// экрана»). Была формула `innerWidth - 220 - 500`, где 500 — резерв под доке-
+// панель настроек метрики справа. На ноутбучных 1440 она упиралась в нижнюю
+// границу 720: список метрик забирает фиксированные 440, правой колонке
+// («Выбрано» + группы) оставалось 280 — и названия ломались ПОСЕРЕДИНЕ СЛОВА
+// («на текущи / й день»), потому что под имя оставалось ~55px.
+//
+// Теперь панель занимает 80% ширины окна. Резерв под доке-панель убран из
+// формулы: вместо того чтобы вечно ужимать основную панель ради возможной
+// второй, док сам прижимается к правому краю экрана, когда места справа не
+// осталось (см. getHighlightDockLeft).
 export function getMetricPanelWidth(): number {
   if (typeof window === 'undefined') return 960;
-  return Math.max(720, Math.min(1040, window.innerWidth - 220 - 500));
+  const w = window.innerWidth;
+  return Math.max(720, Math.min(Math.round(w * 0.8), w - SIDEBAR_W - 24));
+}
+
+/**
+ * Левая граница доке-панели настроек метрики. По умолчанию — сразу справа от
+ * панели метрик, но если там уже не помещается, прижимаем к правому краю
+ * экрана: панель настроек ляжет поверх правой части панели метрик. Раньше
+ * вместо этого ужимали саму панель метрик — и страдал основной сценарий
+ * (выбор метрик) ради вспомогательного (настройка одной из них).
+ */
+export function getHighlightDockLeft(): number {
+  const base = SIDEBAR_W + getMetricPanelWidth();
+  if (typeof window === 'undefined') return base;
+  return Math.max(SIDEBAR_W, Math.min(base, window.innerWidth - DOCK_W - 16));
 }
 
 // Охват метрики по названию: (перв.) / (повт.) / без суффикса = все
@@ -250,16 +275,19 @@ function MetricSelector({
               onDragOver={e => { e.preventDefault(); setDragOverIdx(i); }}
               onDrop={() => handleDrop(i)}
               onDragEnd={() => { setDraggingIdx(null); setDragOverIdx(null); dragItem.current = null; }}
-              className={`flex items-center gap-2 px-3 py-2 hover:bg-[var(--color-bg-hover)] transition-colors ${draggingIdx === i ? 'opacity-40' : ''} ${dragOverIdx === i && draggingIdx !== i ? 'border-t-2 border-[var(--color-accent)]' : ''}`}>
+              className={`flex flex-wrap items-center gap-2 px-3 py-2 hover:bg-[var(--color-bg-hover)] transition-colors ${draggingIdx === i ? 'opacity-40' : ''} ${dragOverIdx === i && draggingIdx !== i ? 'border-t-2 border-[var(--color-accent)]' : ''}`}>
               <GripVertical size={14} className="text-[var(--color-text-muted)] cursor-grab shrink-0" />
-              <div className="flex-1 min-w-0">
+              {/* min-w — чтобы имя переносилось ПО СЛОВАМ, а не по буквам, даже
+                  когда колонка узкая (правка 22.09); при нехватке места строка
+                  переносится целиком, а не давит имя в ноль. */}
+              <div className="flex-1 min-w-[150px]">
                 {/* Как в списке слева: имя переносится, а не обрезается (11.08). */}
                 <div className="text-sm text-[var(--color-text)] break-words">{m.nameRu}</div>
                 <div className="text-xs text-[var(--color-text-muted)] truncate">{m.category ?? 'Прочие'}</div>
               </div>
               {withGroups && (
                 <select value={groupOf.get(m.id) ?? ''} onChange={e => assignMetric(m.id, e.target.value || null)} onClick={e => e.stopPropagation()} title="Группа колонки"
-                  className="text-xs bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-1.5 py-1 text-[var(--color-text-muted)] max-w-[110px] outline-none focus:border-[var(--color-accent)]">
+                  className="shrink-0 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-1.5 py-1 text-[var(--color-text-muted)] max-w-[140px] outline-none focus:border-[var(--color-accent)]">
                   <option value="">— без группы</option>
                   {columnGroups.map(g => <option key={g.name} value={g.name}>{g.name}</option>)}
                 </select>

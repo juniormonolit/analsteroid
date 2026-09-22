@@ -15,7 +15,7 @@ import { FilterBar, countAllDepartmentIds } from './FilterBar';
 import { ReportToolbar } from './ReportToolbar';
 import { MobileReportBar } from './MobileReportBar';
 import { ReportTable } from './ReportTable';
-import { MetricPanel, getMetricPanelWidth } from './MetricPanel';
+import { MetricPanel, getHighlightDockLeft } from './MetricPanel';
 import { ViewSettings, loadViewPrefs, saveViewPrefs, DEFAULT_VIEW_PREFS, type ViewPrefs } from './ViewSettings';
 import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
@@ -2075,7 +2075,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             key={configuringMetricId}
             // Док-режим (рядом с панелью метрик) — только на десктопе: на телефоне
             // панель метрик во весь экран, редактор выезжает поверх справа
-            anchorLeft={showMetricPanel && !isMobile ? 220 + getMetricPanelWidth() : undefined}
+            anchorLeft={showMetricPanel && !isMobile ? getHighlightDockLeft() : undefined}
             metricName={m?.nameRu ?? configuringMetricId}
             dataType={m?.dataType}
             initial={effectiveHighlights[configuringMetricId] ?? null}
