@@ -313,6 +313,8 @@ export async function GET(req: NextRequest) {
   // из мини-отчёта шлёт оба).
   const params: unknown[] = [fromDate.toISOString(), toExcl.toISOString()];
   let dimensionFilter = '';
+  /** Ограничение по пачке (режим «Последние N закрытых сделок»). */
+  let batchFilter = '';
 
   // Список сделок пачки. Считается тем же движком, что и сама выборка отчёта
   // (dealBatches.selectBatchDeals), с теми же фильтрами сделок — иначе список и
@@ -331,12 +333,14 @@ export async function GET(req: NextRequest) {
       clientType: clientType === 'b2c' ? 'b2c' : clientType === 'b2b' ? 'b2b' : 'all',
     });
     params.push(sel.dealIds);
-    // $1/$2 (период) в режиме пачек не используются ни одной веткой, но обязаны
-    // встретиться в тексте запроса: параметр без единого упоминания Postgres не
-    // типизирует и валит запрос 42P18 (живой баг дрилла 28.09). Заведомо истинное
-    // условие — тот же приём, что в ветке STAGE_NOW_STAGE_IDS выше.
-    dimensionFilter += ` AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
-    dimensionFilter += ` AND d.deal_id = ANY($${params.length}::bigint[])`;
+    // ОТДЕЛЬНАЯ переменная, а не dimensionFilter: ниже ветка managerId делает
+    // `dimensionFilter = ...` (присваивание, не +=) и стирала этот кусок вместе с
+    // типизацией $1/$2 — дрилл падал 42P18 «could not determine data type of
+    // parameter $1» (живой баг 28.09, найден по логу самого SQL).
+    // $1/$2 (период) в режиме пачек не нужны ни одной ветке, но обязаны встретиться
+    // в тексте запроса: параметр без единого упоминания Postgres не типизирует.
+    batchFilter = ` AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`
+      + ` AND d.deal_id = ANY($${params.length}::bigint[])`;
   }
 
   if (companyId && /^\d+$/.test(companyId)) {
@@ -512,6 +516,7 @@ export async function GET(req: NextRequest) {
     LEFT JOIN funnels f         ON f.id  = d.funnel_id
     WHERE ${metricDateFilter}
       ${dimensionFilter}
+      ${batchFilter}
       ${funnelFilter}
       ${clientFilter}
       ${dealFilterWhere}
@@ -531,6 +536,7 @@ export async function GET(req: NextRequest) {
     ${extraJoin}
     WHERE ${metricDateFilter}
       ${dimensionFilter}
+      ${batchFilter}
       ${funnelFilter}
       ${clientFilter}
       ${dealFilterWhere}
