@@ -119,9 +119,21 @@ export async function buildDashboard(dailyTarget = DEFAULT_TARGET, scope?: RopSc
       if (!v) { v = managersOfNode(n, visibleRows, chains); cache.set(n.id, v); }
       return v;
     };
+    // ИТОГИ узла считаются по ВСЕМ его менеджерам, а список строк — только по видимым
+    // (баг владельца 28.09: «на телевизоре план на день нормальный, а на /rop неверный»).
+    // Причина была в том, что у безымянных слотов Битрикса (manager2204 и т.п.) план
+    // есть, а из списка их прячет правило заглушек — вместе с планом. В Москве так
+    // терялось 875 000 ₽ в день у десяти человек. Телевизор всегда считал по всем
+    // (feed.ts::slideFor), поэтому и расходился.
+    const cacheAll = new Map<string, RosterManager[]>();
+    const mgrsAll = (n: TvNode): RosterManager[] => {
+      let v = cacheAll.get(n.id);
+      if (!v) { v = managersOfNode(n, orgRows, chains); cacheAll.set(n.id, v); }
+      return v;
+    };
     const build = (n: TvNode): TvDashNode => {
       const ms = mgrs(n);
-      const t = totalsOf(ms, facts as Map<string, Record<FactId, number>>, plans);
+      const t = totalsOf(mgrsAll(n), facts as Map<string, Record<FactId, number>>, plans);
       const children = n.children.map(build).filter(c => c.managerCount > 0);
       const childIds = new Set<string>();
       for (const c of children) for (const id of c.allManagerIds) childIds.add(id);
