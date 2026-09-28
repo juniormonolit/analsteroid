@@ -413,7 +413,7 @@ export async function GET(req: NextRequest) {
              FROM sa.org_resolved_hierarchy
             WHERE department_id = ANY($1::uuid[]) AND is_active = true`,
           [teamDeptIds],
-        )
+        ).catch(e => { console.error('[reports/deals] запрос отделов команды упал:', e instanceof Error ? e.message : e); throw e; })
       : { rows: [] as { id: string }[] };
     dimensionFilter += ` AND ${managerIdsWhere(res.rows.map(r => r.id).filter(id => /^\d+$/.test(id)))}`;
   }
@@ -430,10 +430,10 @@ export async function GET(req: NextRequest) {
       const res = await analyticsDb().query<{ id: string }>(
         `SELECT DISTINCT manager_bitrix_user_id::text AS id
            FROM sa.org_resolved_hierarchy
-          WHERE department_id IN (SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1))
+          WHERE department_id IN (SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1::text[]))
             AND is_active = true`,
         [departmentIds],
-      );
+      ).catch(e => { console.error('[reports/deals] запрос отделов отчёта упал:', e instanceof Error ? e.message : e); throw e; });
       allowed = new Set(res.rows.map(r => r.id));
     }
     if (accountType && accountType !== 'all') {
