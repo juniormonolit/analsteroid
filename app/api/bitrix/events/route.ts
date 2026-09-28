@@ -89,6 +89,47 @@ function authenticateEvent(data: Record<string, unknown>): NextResponse | null {
 //
 // Битрикс шлёт события form-encoded с плоскими ключами вида
 // data[PARAMS][MESSAGE]; работаем прямо по этим ключам.
+/** «Отчёт», «отчет», «report» — с любым регистром, точкой или восклицательным знаком. */
+const REPORT_CMD_RE = /^\s*(отч[ёе]т|report)\s*[.!?]*\s*$/i;
+
+/**
+ * Отправить человеку его расписания прямо сейчас. Возвращает число отправленных.
+ * Берём именно РАСПИСАНИЯ получателя: «типовой отчёт» для каждого свой, и он уже
+ * настроен в «Настройки → Расписания отчётов» — дублировать это понятие незачем.
+ */
+async function sendSchedulesOnDemand(bitrixUserId: string): Promise<number> {
+  if (!/^\d+$/.test(bitrixUserId)) return 0;
+  const { systemDb } = await import('@/lib/db/clients');
+  const { sendReportScheduleNow } = await import('@/lib/jobs/reportSchedules');
+  const { sendBitrixBotMessage } = await import('@/lib/bitrix/notify');
+  const r = await systemDb().query<{ id: string; name: string | null }>(
+    `SELECT s.id::text, t.name FROM report_schedules s
+       LEFT JOIN report_templates t ON t.id = s.template_id
+      WHERE s.recipient_bitrix_id = $1 AND s.enabled = true
+      ORDER BY s.send_time`,
+    [bitrixUserId],
+  );
+  if (r.rows.length === 0) {
+    await sendBitrixBotMessage(
+      bitrixUserId,
+      'Отчёт по команде «Отчёт» приходит тем, кому он настроен в «Настройки → Расписания отчётов». Для вас расписаний нет — попросите администратора добавить.',
+      undefined, 'report_schedules',
+    ).catch(() => 0);
+    return 0;
+  }
+  let sent = 0;
+  for (const row of r.rows) {
+    try {
+      await sendReportScheduleNow(row.id);
+      sent++;
+    } catch (e) {
+      console.error('[bitrix/events] «Отчёт» не собрался:', row.name, e instanceof Error ? e.message : e);
+      await sendBitrixBotMessage(bitrixUserId, `Не удалось собрать «${row.name ?? 'отчёт'}». Попробуйте ещё раз через минуту.`, undefined, 'report_schedules').catch(() => 0);
+    }
+  }
+  return sent;
+}
+
 export async function POST(req: NextRequest) {
   const contentType = req.headers.get('content-type') || '';
   const data: Record<string, unknown> = {};
@@ -122,11 +163,16 @@ export async function POST(req: NextRequest) {
         text: str('data[PARAMS][MESSAGE]'),
         replyToBitrixMessageId: replyIdRaw ? Number(replyIdRaw) : null,
       });
-      // Не чат по сделке → возможно, это ответ на понедельничный вопрос бота
-      // «Как погодка на той неделе была?» (спец-отчёт «Данные по годам», 28.08).
-      // recordWeatherAnswer сам возвращает null, если вопросов человеку не было.
+      // Команда «Отчёт» (ТЗ владельца 28.09: «научим его команде „Отчет“, чтобы он по
+      // этой команде слал типовой отчёт»). Типовой — это буквально то, что человек и
+      // так получает по расписанию (report_schedules), поэтому команда просто шлёт его
+      // сейчас: второго определения «типового отчёта» не заводим. Кому расписаний не
+      // настроено — честно об этом говорим, а не молчим.
       let handledBy = handledByDealChats ? 'deal_chat' : 'unhandled';
-      if (!handledByDealChats) {
+      if (!handledByDealChats && REPORT_CMD_RE.test(str('data[PARAMS][MESSAGE]'))) {
+        const sent = await sendSchedulesOnDemand(str('data[PARAMS][FROM_USER_ID]'));
+        handledBy = sent > 0 ? 'report_command' : 'report_command_empty';
+      } else if (!handledByDealChats) {
         const { recordWeatherAnswer } = await import('@/lib/weather/weeklyWeather');
         const w = await recordWeatherAnswer(str('data[PARAMS][FROM_USER_ID]'), str('data[PARAMS][MESSAGE]'));
         if (w) handledBy = 'weather';
