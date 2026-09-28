@@ -536,9 +536,23 @@ export async function GET(req: NextRequest) {
       ${dealFilterWhere}
   `;
 
+  // Диагностика 28.09: дрилл в режиме пачек падал 42P18, а из лога было не понять,
+  // КАКОЙ из запросов роута виноват (стек показывает только обёртку пула). Логируем
+  // сам текст и форму параметров — один раз, при ошибке.
+  const runQuery = async <T extends import('pg').QueryResultRow>(text: string, tag: string) => {
+    try {
+      return await db.query<T>(text, params);
+    } catch (e) {
+      console.error(`[reports/deals] ${tag} упал: ${e instanceof Error ? e.message : e}`);
+      console.error(`[reports/deals] batchOn=${batchOn} metricFilter=${metricFilter || '—'} params=${params.map(p => Array.isArray(p) ? `array(${p.length})` : typeof p).join(',')}`);
+      console.error(`[reports/deals] SQL: ${text.replace(/\s+/g, ' ').slice(0, 600)}`);
+      throw e;
+    }
+  };
+
   const [res, countRes, mgrInfo, srcMap] = await Promise.all([
-    db.query(sql, params),
-    db.query<{ total_count: number; total_amount: string }>(countSql, params),
+    runQuery<Record<string, unknown>>(sql, 'список'),
+    runQuery<{ total_count: number; total_amount: string }>(countSql, 'итог'),
     loadManagerInfoMap(),
     loadSourceMap(),
   ]);
