@@ -87,6 +87,11 @@ export async function POST(req: NextRequest) {
     // buildDealFilterWhere (lib/metrics/dealFilters.ts): поля и операторы из
     // белого списка, значения экранируются, потому что приходят от человека.
     dealFilters,
+    // Режим «Последние N закрытых сделок» (ТЗ владельца 28.09): население отчёта
+    // задаётся не периодом, а последними N закрытыми сделками КАЖДОГО менеджера.
+    // { size, useZombies } | null. Работает только в разрезе by-managers: «последние
+    // N сделок» — понятие менеджера, у товарной группы или источника его нет.
+    batch: batchInput,
   } = body;
 
   // Сделочные фильтры отчёта для СПЕЦ-ДВИЖКОВ (аудит владельца 31.08: «все
@@ -154,6 +159,16 @@ export async function POST(req: NextRequest) {
   // дорисовки план-строк, которая могла добавить чужих).
   const filterScopedRows = (rows: ReportRow[]): ReportRow[] =>
     scope.kind === 'all' || reportSlug !== 'by-managers' ? rows : rows.filter(r => canSeeManager(scope, r.dimensionId));
+
+  // Валидация режима пачек. Сравнение с прошлым периодом в нём отключено: «прошлая
+  // пачка» — это отдельная сущность (графики по пачкам, вторая очередь), а не
+  // календарный период, и мешать их в одной таблице нельзя.
+  const batch = batchInput && typeof batchInput === 'object' && reportSlug === 'by-managers'
+    ? {
+        size: Math.min(5000, Math.max(5, Math.round(Number((batchInput as { size?: unknown }).size)) || 100)),
+        useZombies: (batchInput as { useZombies?: unknown }).useZombies === true,
+      }
+    : null;
 
   const opts = {
     period: { from: new Date(period.from), to: new Date(period.to) },
@@ -225,8 +240,10 @@ export async function POST(req: NextRequest) {
 
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
-      fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter }),
-      fetchByManagers({ ...compOpts, productGroupMode, productGroupId, productGroupIds, sourceFilter }),
+      fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter, ...(batch ? { batch } : {}) }),
+      batch
+        ? Promise.resolve([] as ReportRow[])
+        : fetchByManagers({ ...compOpts, productGroupMode, productGroupId, productGroupIds, sourceFilter }),
     ]);
   } else if (reportSlug === 'by-product-groups') {
     [currentRows, compRows] = await Promise.all([
@@ -266,9 +283,12 @@ export async function POST(req: NextRequest) {
   // тот же код зовёт конструктор «Мой отчёт» (/api/my-report), чтобы его блок
   // метрик совпадал с основным отчётом (инцидент 07.09: в конструкторе планы были 0 —
   // строки fetchByManagers план-метрик не содержат, их дорисовывал только этот роут).
+  // В режиме пачек планы не дорисовываем: план привязан к календарю (месяц, рабочие
+  // дни), а у пачки из N сделок календарного окна нет. Иначе в таблице оказались бы
+  // числа за выбранный период рядом с фактами по пачке — молча несопоставимые.
   ({ current: currentRows, comparison: compRows } = await enrichPlanMetrics({
     withDeps,
-    isManagersReport: reportSlug === 'by-managers',
+    isManagersReport: reportSlug === 'by-managers' && !batch,
     mskTodayStr,
     current: { rows: currentRows, fromStr: periodFromStr, toStr: periodToStr },
     comparison: { rows: compRows, fromStr: compPeriodFromStr, toStr: compPeriodToStr },

@@ -28,6 +28,7 @@ import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, Compari
 import type { DateRange, CalendarUnit } from '@/lib/period';
 import type { PeriodsDimension, CompareMode } from '@/features/reports/engine/byPeriods';
 import { PeriodReportControls } from './PeriodReportControls';
+import { BatchModeControl, type BatchModeState } from './BatchModeControl';
 import { bucketRange, comparisonBucketOf } from '@/features/reports/lib/periodBuckets';
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
@@ -487,6 +488,11 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // Режим «Сравнение» (п. Н2 спеки): выбор сущностей живёт в состоянии страницы (не в
   // БД) — так он переживает закрытие/повторное открытие слайдера в рамках сессии.
   const [showComparison, setShowComparison] = useState(false);
+  // Режим выборки «Последние N закрытых сделок» (ТЗ владельца 28.09). Только разрез
+  // «по менеджерам»: «последние N сделок» — понятие менеджера, у товарной группы или
+  // источника его нет. Сравнение с прошлым периодом в этом режиме выключается: прошлая
+  // пачка — это не календарный период, мешать их в одной таблице нельзя.
+  const [batchMode, setBatchMode] = useState<BatchModeState>({ on: false, size: 100, useZombies: false });
   const [compareIds, setCompareIds]     = useState<string[]>([]);
   const [showMetricPanel, setShowMetricPanel]       = useState(false);
   const [showSaveModal, setShowSaveModal]           = useState(false);
@@ -894,7 +900,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // «По клиентам» (задача 10.08): строка = клиент. Группировки/группы/тип
   // аккаунта неприменимы; дрилл строки — плоский список сделок клиента.
   const clientMode = reportSlug === 'by-clients';
-  const queryKey = ['report', reportSlug, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters,
+  const batchAvailable = reportSlug === 'by-managers';
+  const batchActive = batchAvailable && batchMode.on;
+  const queryKey = ['report', reportSlug, batchActive ? batchMode : null, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters,
     periodMode ? periodUnit : null, periodMode ? periodDimension : null, periodMode ? compareMode : null];
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
@@ -917,6 +925,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           createdTimeFilter,
           firstTouchFilter,
           dealFilters: dealFilters.length ? dealFilters : undefined,
+          ...(batchActive ? { batch: { size: batchMode.size, useZombies: batchMode.useZombies } } : {}),
           ...(periodMode ? { unit: periodUnit, dimension: periodDimension, compareMode } : {}),
         }),
       });
@@ -1685,7 +1694,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           showDepartments: !sourceMode,
           // «По периодам»: второго диапазона нет — база сравнения построчная
           // (переключатель «Сравнение» в шапке отчёта, PeriodReportControls).
-          showComparison: !periodMode,
+          showComparison: !periodMode && !batchActive,
           sourceDimension: sourceMode ? sourceDimension : undefined,
           onSourceDimensionChange: sourceMode ? setSourceDimension : undefined,
           // Кнопка настройки метрик доступна в обоих режимах (задача 1564: вернуть в
@@ -1776,6 +1785,21 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           </>
         );
       })()}
+
+      {/* Режим выборки (ТЗ владельца 28.09): календарный период или последние N
+          закрытых сделок каждого менеджера. Крупный переключатель в шапке, потому
+          что он меняет смысл всех чисел таблицы разом. */}
+      {batchAvailable && (
+        <BatchModeControl
+          value={batchMode}
+          onChange={v => {
+            setBatchMode(v);
+            // Колонки сравнения в режиме пачек пустые по построению — гасим их сразу,
+            // чтобы человек не увидел «-100 %» там, где сравнивать просто не с чем.
+            if (v.on) setShowComparison(false);
+          }}
+        />
+      )}
 
       {/* Шапка отчёта «По периодам» (задача 09.08): шаг группировки, разрез дрилла
           и база сравнения — три контрола, которых нет у остальных отчётов. */}

@@ -205,10 +205,14 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   }
 }
 
-function genDealsExpr(m: Metric): string {
+function genDealsExpr(m: Metric, batch = false): string {
+  // Режим пачек (ТЗ владельца 28.09, features/reports/engine/dealBatches.ts):
+  // население задано СПИСКОМ сделок, а не периодом, поэтому рамки периода у каждой
+  // метрики снимаются, остаётся только «событие метрики вообще случилось». Так
+  // «Кол-во сделок» = размер пачки, а «Продаж» = сколько из этой пачки продано —
+  // ровно то, что нужно для конверсии внутри пачки.
   const when: string[] = [
-    `d.${m.dateField} >= $1`,
-    `d.${m.dateField} < $2`,
+    ...(batch ? [`d.${m.dateField} IS NOT NULL`] : [`d.${m.dateField} >= $1`, `d.${m.dateField} < $2`]),
     ...m.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
   ];
   const cond = when.join(' AND ');
@@ -227,11 +231,10 @@ function genDealsExpr(m: Metric): string {
   }
 }
 
-function genEventsExpr(m: Metric): string {
+function genEventsExpr(m: Metric, batch = false): string {
   const evtWhere: string[] = [
     `de.deal_id = d.deal_id`,
-    `de.${m.dateField} >= $1`,
-    `de.${m.dateField} < $2`,
+    ...(batch ? [] : [`de.${m.dateField} >= $1`, `de.${m.dateField} < $2`]),
     ...m.filters.map(f => resolveFilterClause(f, 'de')).filter(Boolean),
   ];
   const where = evtWhere.join('\n       AND ');
@@ -257,6 +260,8 @@ function genEventsExpr(m: Metric): string {
 export function buildCollectedSQL(
   metrics: Metric[],
   dim: DimensionConfig,
+  /** Режим «пачек»: население задаёт dim.notNullWhere (список deal_id), периода нет. */
+  batch = false,
 ): string {
   const collected = metrics.filter(
     m => m.metricType === 'collected' && m.aggFn && m.aggField && m.dateField,
@@ -269,8 +274,8 @@ export function buildCollectedSQL(
   // WHERE: a deal is in scope if any of its date fields fall in the period,
   // OR if it has any event in period (for event-sourced metrics).
   const dateFields = [...new Set(dealsM.map(m => m.dateField!))];
-  const dateConds  = dateFields.map(f => `(d.${f} >= $1 AND d.${f} < $2)`);
-  if (eventsM.length > 0) {
+  const dateConds  = batch ? [] : dateFields.map(f => `(d.${f} >= $1 AND d.${f} < $2)`);
+  if (!batch && eventsM.length > 0) {
     const evtDateField = eventsM[0].dateField!;
     dateConds.push(
       `EXISTS (SELECT 1 FROM deal_events _e WHERE _e.deal_id = d.deal_id AND _e.${evtDateField} >= $1 AND _e.${evtDateField} < $2)`,
@@ -281,17 +286,18 @@ export function buildCollectedSQL(
     `${dim.idExpr} AS dimension_id`,
     ...(dim.nameExpr ? [`${dim.nameExpr} AS dimension_name`] : []),
     ...(dim.funnelBreakdown ? [`d.funnel_id`] : []),
-    ...dealsM.map(genDealsExpr),
-    ...eventsM.map(genEventsExpr),
+    ...dealsM.map(m => genDealsExpr(m, batch)),
+    ...eventsM.map(m => genEventsExpr(m, batch)),
   ];
 
   const whereParts: string[] = [];
   if (dim.notNullWhere) whereParts.push(dim.notNullWhere);
   if (dateConds.length > 0) {
     whereParts.push(`(\n    ${dateConds.join('\n    OR ')}\n  )`);
-  } else {
+  } else if (!batch) {
     whereParts.push('1=0'); // no metrics → no rows
   }
+  // batch: население целиком задано notNullWhere (d.deal_id = ANY(...)), доп. рамок нет
 
   return `
 SELECT

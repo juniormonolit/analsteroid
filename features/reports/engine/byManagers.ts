@@ -2,6 +2,7 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
+import { selectBatchDeals, type BatchSelection } from './dealBatches';
 import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
 import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import { fetchDealsActivitiesSnapshot } from './dealsActivities';
@@ -130,6 +131,14 @@ export interface ByManagersOptions {
   firstTouchFilter?: FirstTouchFilter;
   /** «Фильтр сделок» (задача 07.08): режет сам набор сделок отчёта. */
   dealFilters?: DealFilter[];
+  /**
+   * Режим «Последние N закрытых сделок» (ТЗ владельца 28.09, dealBatches.ts).
+   * Заменяет период: у КАЖДОГО менеджера берутся последние N его закрытых сделок,
+   * метрики считаются по этому набору. period в этом режиме игнорируется (но
+   * остаётся в сигнатуре — от него зависят планы/активность, которые в пачках
+   * не имеют смысла и в отчёт не попадают).
+   */
+  batch?: { size: number; useZombies: boolean; batchIndex?: number };
 }
 
 export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRow[]> {
@@ -164,7 +173,9 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   // занятых позиционных параметров — main collected-запрос ($1/$2 период) и снимок
   // «Стадии (сейчас)» (только $1 CURATED_STAGE_IDS) — поэтому строим ДВА варианта.
   const pgFilterInput = { productGroupMode: pgMode, productGroupId: pgId, productGroupIds: opts.productGroupIds };
-  const pgFilterMain = buildProductGroupFilter(pgFilterInput, 2); // после [fromIso, toExclIso]
+  // В режиме пачек первым параметром идёт массив deal_id, а не пара дат — значит у
+  // пг-фильтра сдвигается номер первого плейсхолдера (1 занятый вместо 2).
+  const pgFilterMain = buildProductGroupFilter(pgFilterInput, opts.batch ? 1 : 2); // после [fromIso, toExclIso] | [dealIds]
   const pgFilterSnap = buildProductGroupFilter(pgFilterInput, 1); // после [CURATED_STAGE_IDS]
   const pgKey = productGroupCacheKey(pgFilterInput);
 
@@ -261,11 +272,40 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
 
   // Analytics row cache (pills are NOT part of the key; pgKey/srcKey/offhKey ARE — they change the scope)
   // L1: in-memory Map, per-instance, 10 min. L2: Redis, shared across instances/restarts.
-  const key   = mkKey(fromIso, toExclIso, metricIds, pgKey, srcKey, offhKey);
+  // Режим пачек: население — последние N закрытых сделок каждого менеджера
+  // (ТЗ владельца 28.09). Выбор сделок учитывает те же фильтры отчёта, что и
+  // основной запрос (srcWhere/offhWhere — самодостаточный SQL с инлайн-литералами),
+  // чтобы «последние 100 по ЖБИ» означало именно это.
+  let batchSel: BatchSelection | null = null;
+  if (opts.batch) {
+    const batchExtra = [srcWhere, offhWhere].filter(Boolean).join(' AND ');
+    batchSel = await selectBatchDeals({
+      size: opts.batch.size,
+      useZombies: opts.batch.useZombies,
+      batchIndex: opts.batch.batchIndex,
+      extraWhere: batchExtra || undefined,
+    });
+  }
+
+  const key   = batchSel
+    ? mkKey(`batch:${batchSel.size}:${batchSel.useZombies ? 'z' : 'nz'}:${opts.batch?.batchIndex ?? 1}`,
+            String(batchSel.dealIds.length), metricIds, pgKey, srcKey, offhKey)
+    : mkKey(fromIso, toExclIso, metricIds, pgKey, srcKey, offhKey);
   let   entry = _rowCache.get(key);
 
   if (!entry || Date.now() - entry.at > ROW_TTL) {
-    const rows = await cached(`rpt:mgr:${key}`, reportTtl(toExclIso), async () => {
+    const rows = await cached(`rpt:mgr:${key}`, batchSel ? 5 * 60 : reportTtl(toExclIso), async () => {
+      if (batchSel) {
+        if (batchSel.dealIds.length === 0) return [];
+        const dimBatch = {
+          ...dimConfigMain,
+          notNullWhere: `${dimConfigMain.notNullWhere} AND d.deal_id = ANY($1::bigint[])`,
+        };
+        const sqlB = buildCollectedSQL(collected, dimBatch, true);
+        if (!sqlB) return [];
+        const resB = await analyticsDb().query<FlatRow>(sqlB, [batchSel.dealIds, ...(pgFilterMain?.params ?? [])]);
+        return resB.rows;
+      }
       const sql = buildCollectedSQL(collected, dimConfigMain);
       if (!sql) return [];
       const res = await analyticsDb().query<FlatRow>(sql, [fromIso, toExclIso, ...(pgFilterMain?.params ?? [])]);
