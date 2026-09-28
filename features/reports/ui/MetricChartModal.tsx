@@ -43,6 +43,10 @@ function autoGran(period: DateRange): Gran {
   return 'month';
 }
 const GRAN_LABELS: Record<Gran, string> = { day: 'День', week: 'Неделя', month: 'Месяц' };
+// В режиме пачек кнопки шага времени становятся выбором глубины: сколько пачек назад
+// показывать (ТЗ владельца 28.09). Подписи и смысл разные, механика та же.
+const BATCH_COUNTS: Record<Gran, number> = { day: 6, week: 12, month: 24 };
+const BATCH_LABELS: Record<Gran, string> = { day: '6 пачек', week: '12 пачек', month: '24 пачки' };
 
 function fmtVal(v: number | null, m: Metric): string {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
@@ -121,7 +125,7 @@ function DeltaTooltip({ active, payload, metric }: {
   );
 }
 
-export function MetricChartModal({ target, metric, reportSlug, period, comparison, hasComparison, filters, onClose }: {
+export function MetricChartModal({ target, metric, reportSlug, period, comparison, hasComparison, filters, batch, onClose }: {
   target: MetricChartTarget;
   metric: Metric;
   reportSlug: string;
@@ -138,6 +142,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
     /** «Фильтр сделок» отчёта — график обязан считаться по тому же срезу, что ячейка. */
     dealFilters?: DealFilter[];
   };
+  /** Режим пачек: ось X — пачки по N закрытых сделок, а не даты. */
+  batch?: { size: number; useZombies: boolean } | null;
   onClose: () => void;
 }) {
   useEscapeClose(onClose);
@@ -188,7 +194,8 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
     queryKey: ['metric-series', target.metricId, target.dimensionId, gran, reportSlug,
       period.from.toISOString(), period.to.toISOString(),
       comparison.from.toISOString(), comparison.to.toISOString(),
-      hasComparison, showCmpOverlay, layout, JSON.stringify(filters), target.managerIds, target.productGroupId],
+      hasComparison, showCmpOverlay, layout, JSON.stringify(filters), target.managerIds, target.productGroupId,
+      batch ? `${batch.size}:${batch.useZombies}` : null],
     queryFn: async () => {
       const res = await fetch('/api/reports/metric-series', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -216,6 +223,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           createdTimeFilter: filters.createdTimeFilter,
           firstTouchFilter: filters.firstTouchFilter,
           dealFilters: filters.dealFilters?.length ? filters.dealFilters : undefined,
+          ...(batch ? { batch, batchCount: BATCH_COUNTS[gran] } : {}),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -411,7 +419,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
               {(['day', 'week', 'month'] as Gran[]).map(g => (
                 <button key={g} type="button" onClick={() => setGran(g)}
                   className={`px-2.5 py-1 text-[11px] font-semibold ${gran === g ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
-                  {GRAN_LABELS[g]}
+                  {batch ? BATCH_LABELS[g] : GRAN_LABELS[g]}
                 </button>
               ))}
             </div>

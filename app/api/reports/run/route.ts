@@ -170,6 +170,10 @@ export async function POST(req: NextRequest) {
       }
     : null;
 
+  // Состав выборки пачек — в ответ, чтобы шапка показала «сколько сделок у скольких
+  // менеджеров» (замечание владельца 28.09: «не понятно, как считается кол-во входящих»).
+  let batchMeta: { size: number; useZombies: boolean; deals: number; managers: number; zombies: number } | null = null;
+
   const opts = {
     period: { from: new Date(period.from), to: new Date(period.to) },
     dealScope,
@@ -240,7 +244,8 @@ export async function POST(req: NextRequest) {
 
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
-      fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter, ...(batch ? { batch } : {}) }),
+      fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter,
+        ...(batch ? { batch, onBatchMeta: (m) => { batchMeta = { size: m.size, useZombies: m.useZombies, deals: m.dealIds.length, managers: m.managersCovered, zombies: m.zombieCount }; } } : {}) }),
       batch
         ? Promise.resolve([] as ReportRow[])
         : fetchByManagers({ ...compOpts, productGroupMode, productGroupId, productGroupIds, sourceFilter }),
@@ -1030,6 +1035,7 @@ export async function POST(req: NextRequest) {
       comparisonPeriod: { from: comparisonPeriod.from, to: comparisonPeriod.to },
       cacheHit: false,
       durationMs: Date.now() - start,
+      ...(batchMeta ? { batch: batchMeta } : {}),
     },
   });
 }

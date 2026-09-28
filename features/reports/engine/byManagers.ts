@@ -139,6 +139,8 @@ export interface ByManagersOptions {
    * не имеют смысла и в отчёт не попадают).
    */
   batch?: { size: number; useZombies: boolean; batchIndex?: number };
+  /** Колбэк с составом выборки — чтобы шапка отчёта могла честно показать, что именно попало в пачки. */
+  onBatchMeta?: (meta: BatchSelection) => void;
 }
 
 export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRow[]> {
@@ -285,6 +287,7 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
       batchIndex: opts.batch.batchIndex,
       extraWhere: batchExtra || undefined,
     });
+    opts.onBatchMeta?.(batchSel);
   }
 
   const key   = batchSel

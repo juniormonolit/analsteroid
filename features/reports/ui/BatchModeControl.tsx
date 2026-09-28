@@ -29,9 +29,15 @@ function zombieHint(s: DealBatchSettings | null): string {
   return parts.length ? parts.join(' или ') : 'ни одно правило не включено';
 }
 
-export function BatchModeControl({ value, onChange }: {
+export interface BatchMeta {
+  size: number; useZombies: boolean; deals: number; managers: number; zombies: number;
+}
+
+export function BatchModeControl({ value, onChange, meta }: {
   value: BatchModeState;
   onChange: (v: BatchModeState) => void;
+  /** Что реально попало в выборку — приходит из ответа отчёта. */
+  meta?: BatchMeta | null;
 }) {
   const [settings, setSettings] = useState<DealBatchSettings | null>(null);
   const [draft, setDraft] = useState(String(value.size));
@@ -77,8 +83,13 @@ export function BatchModeControl({ value, onChange }: {
             <Skull size={14} className="text-[var(--color-text-muted)]" /> Считать зомби проигранными
           </label>
 
-          <span className="text-xs text-[var(--color-text-muted)] basis-full sm:basis-auto">
-            {value.useZombies ? `зомби: ${zombieHint(settings)}` : 'только продажи, отгрузки и отказы'}
+          <span className="text-xs text-[var(--color-text-muted)] basis-full">
+            {meta
+              ? `в выборке ${meta.deals.toLocaleString('ru-RU')} ${plural(meta.deals, 'сделка', 'сделки', 'сделок')} у ${meta.managers} ${plural(meta.managers, 'менеджера', 'менеджеров', 'менеджеров')}${meta.useZombies ? `, из них зомби ${meta.zombies.toLocaleString('ru-RU')}` : ''}. `
+              : ''}
+            Метрики считаются по этим сделкам целиком, без учёта дат; планы и сравнение недоступны.
+            {' '}
+            {value.useZombies ? `Зомби: ${zombieHint(settings)}.` : 'Только продажи, отгрузки и отказы.'}
             <a href="/settings/deal-batches" className="inline-flex items-center gap-1 ml-2 text-[var(--color-accent)] hover:underline">
               <Settings2 size={12} /> настроить
             </a>

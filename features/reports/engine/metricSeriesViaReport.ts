@@ -3,6 +3,7 @@ import { loadMetrics, withDependencies } from '@/lib/metrics/catalog';
 import { computeTotals } from './calculated';
 import { STAGE_SNAPSHOT_GROUPS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import { bucketStartYmd, nextBucketYmd, type MetricSeriesOptions, type MetricSeriesResult, type SeriesBucket, type SeriesGranularity } from './metricSeries';
+import { batchBucketDates } from './dealBatches';
 import type { Metric, ReportRow } from '@/lib/metrics/types';
 
 // ── Универсальный график: любая метрика каталога ─────────────────────────────
@@ -188,4 +189,107 @@ export async function fetchMetricSeriesViaReport(
   });
 
   return { supported: true, buckets: out, cumulativeBuckets: cumulative, total };
+}
+
+/**
+ * График по ПАЧКАМ (ТЗ владельца 28.09, вторая часть): точка = одна пачка из N
+ * закрытых сделок каждого менеджера, справа последняя пачка, левее — предыдущие.
+ * Так видно тренд конверсии на одинаковой базе, без перекоса календарных периодов.
+ *
+ * Значение точки считается тем же прогоном отчёта, что и обычный универсальный путь
+ * (runForPeriod), только вместо периода подставляется batchIndex — поэтому проценты
+ * и средние берутся формулой отчёта, а не складыванием точек.
+ *
+ * Подпись точки — МЕДИАННАЯ дата закрытия сделок пачки (batchBucketDates): у разных
+ * менеджеров пачка закрывается в разные дни, единой границы у неё нет. Формат тот же
+ * YYYY-MM-DD, что у обычных бакетов, поэтому ось X и тултипы работают без переделок.
+ */
+export async function fetchMetricSeriesByBatches(
+  opts: MetricSeriesOptions & {
+    reportSlug?: string;
+    batch: { size: number; useZombies: boolean };
+    batchCount: number;
+  },
+): Promise<MetricSeriesResult> {
+  const all = await loadMetrics();
+  const metric = all.find(m => m.id === opts.metricId);
+  if (!metric) return { supported: false, reason: 'Метрика не найдена', buckets: [], cumulativeBuckets: [], total: null };
+
+  const snapshot = snapshotReason(metric.id);
+  if (snapshot) return { supported: false, reason: snapshot, buckets: [], cumulativeBuckets: [], total: null };
+  // Планы привязаны к календарю — у пачки календарного окна нет (та же причина, по
+  // которой план-метрики не дорисовываются в режиме пачек в /api/reports/run).
+  if (metric.id.startsWith('plan_')) {
+    return { supported: false, reason: 'План привязан к календарю, у пачки сделок его нет', buckets: [], cumulativeBuckets: [], total: null };
+  }
+
+  const count = Math.min(24, Math.max(2, Math.round(opts.batchCount) || 6));
+  const forTotals = withDependencies([metric], all);
+  const period = { from: opts.period.from.toISOString(), to: opts.period.to.toISOString() };
+  const baseBody: Record<string, unknown> = {
+    reportSlug: opts.reportSlug ?? 'by-managers',
+    metricIds: [metric.id],
+    dealScope: opts.dealScope ?? 'all',
+    clientType: opts.clientType ?? 'all',
+    departmentIds: opts.departmentIds,
+    productGroupMode: opts.productGroupMode ?? 'kc',
+    productGroupIds: opts.productGroupIds,
+    createdTimeFilter: opts.createdTimeFilter ?? 'all',
+    firstTouchFilter: opts.firstTouchFilter ?? 'all',
+    dealFilters: opts.dealFilters,
+    grouping: 'none',
+    period,
+    comparisonPeriod: period,
+  };
+
+  const dates = await batchBucketDates({
+    size: opts.batch.size, useZombies: opts.batch.useZombies, count,
+    managerIds: opts.managerIds ?? null,
+  });
+
+  const values: (number | null)[] = new Array(count).fill(null);
+  let failed: string | null = null;
+  for (let i = 0; i < count; i += CONCURRENCY) {
+    const chunk = Array.from({ length: Math.min(CONCURRENCY, count - i) }, (_, k) => i + k);
+    const res = await Promise.all(chunk.map(async idx => {
+      try {
+        const resp = await runForPeriod({
+          ...baseBody,
+          batch: { size: opts.batch.size, useZombies: opts.batch.useZombies, batchIndex: idx + 1 },
+        });
+        return { idx, value: valueOf(resp, metric, forTotals, opts) };
+      } catch (e) {
+        failed ??= e instanceof Error ? e.message : String(e);
+        return { idx, value: null };
+      }
+    }));
+    for (const r of res) values[r.idx] = r.value;
+  }
+  if (failed && values.every(v => v === null)) {
+    return { supported: false, reason: `Не удалось построить: ${failed}`, buckets: [], cumulativeBuckets: [], total: null };
+  }
+
+  // Слева старые пачки, справа последняя — как на обычном графике время идёт вправо.
+  const out: SeriesBucket[] = [];
+  for (let bi = count; bi >= 1; bi--) {
+    const bucket = dates.get(bi);
+    if (!bucket) continue; // пачки столько назад нет — у менеджеров кончились сделки
+    out.push({ bucket, value: values[bi - 1] });
+  }
+  // Медианы двух соседних пачек могут совпасть (мало данных) — ключи бакетов должны
+  // быть уникальными, иначе точки схлопнутся: оставляем первую из совпавших.
+  const seenKeys = new Set<string>();
+  const uniq = out.filter(b => (seenKeys.has(b.bucket) ? false : (seenKeys.add(b.bucket), true)));
+
+  const additive = metric.metricType === 'collected'
+    || (metric.metricType === 'external' && metric.aggregationFn === 'sum');
+  let acc = 0; let seen = false;
+  const cumulative: SeriesBucket[] = uniq.map(b => {
+    if (!additive) return b;
+    if (b.value !== null) { acc += b.value; seen = true; }
+    return { bucket: b.bucket, value: seen ? acc : null };
+  });
+
+  // «Итого» = последняя пачка: именно её показывает ячейка отчёта в режиме пачек.
+  return { supported: true, buckets: uniq, cumulativeBuckets: cumulative, total: values[0] ?? null };
 }

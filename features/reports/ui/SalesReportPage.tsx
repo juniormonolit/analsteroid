@@ -888,6 +888,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // той же длины, как раньше), через onComparisonChange={setComparison} ниже.
   const handlePeriodChange = useCallback((p: DateRange) => {
     setPeriod(p);
+    // Тронул период — значит хочет календарь: выходим из режима пачек (правка
+    // владельца 28.09, иначе выбор дат молча ни на что не влияет).
+    setBatchMode(prev => (prev.on ? { ...prev, on: false } : prev));
   }, []);
 
   // fetchedMetricIds only grows — removals don't trigger re-fetch, additions do
@@ -1791,6 +1794,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           что он меняет смысл всех чисел таблицы разом. */}
       {batchAvailable && (
         <BatchModeControl
+          meta={data?.meta?.batch}
           value={batchMode}
           onChange={v => {
             setBatchMode(v);
@@ -1960,6 +1964,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
             comparison={comparison}
             hasComparison={comparisonDisplay !== 'current'}
             filters={{ dealScope, clientType, productGroupMode, departmentIds, createdTimeFilter, firstTouchFilter, dealFilters }}
+            batch={batchActive ? { size: batchMode.size, useZombies: batchMode.useZombies } : null}
             onClose={() => setChartTarget(null)}
           />
         );

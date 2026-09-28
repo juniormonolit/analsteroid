@@ -124,3 +124,56 @@ SELECT deal_id, current_manager_id::text AS manager_id, is_zombie
   }
   return { dealIds, managersCovered: managers.size, zombieCount, size, useZombies: opts.useZombies, settings };
 }
+
+/**
+ * Опорные даты пачек для оси X графика: медиана даты закрытия внутри каждой пачки.
+ * Пачки у разных менеджеров закрываются в разные дни, одной «границы» у пачки нет —
+ * медиана честно отвечает на вопрос «когда в среднем закрыта эта сотня».
+ * Возвращает YYYY-MM-DD по возрастанию индекса пачки (1 = последняя).
+ */
+export async function batchBucketDates(opts: {
+  size: number; useZombies: boolean; count: number;
+  managerIds?: string[] | null; extraWhere?: string;
+}): Promise<Map<number, string>> {
+  const settings = await getDealBatchSettings();
+  const size = Math.min(5000, Math.max(5, Math.round(opts.size) || settings.defaultBatchSize));
+  const count = Math.min(24, Math.max(1, Math.round(opts.count) || 1));
+  const extra = opts.extraWhere ? ` AND (${opts.extraWhere})` : '';
+  const mgrWhere = opts.managerIds && opts.managerIds.length ? ' AND d.current_manager_id = ANY($1::bigint[])' : '';
+  const params: unknown[] = opts.managerIds && opts.managerIds.length ? [opts.managerIds.map(Number)] : [];
+  const zombieSql = opts.useZombies ? zombieClosedAtSql(settings) : null;
+  const zombiePart = zombieSql
+    ? `
+    UNION ALL
+    SELECT d.current_manager_id, ${zombieSql} AS closed_at
+      FROM deals d
+      ${settings.stage.enabled ? `LEFT JOIN LATERAL (
+        SELECT MAX(e.event_at) AS entered FROM deal_events e
+         WHERE e.deal_id = d.deal_id AND e.stage_id = d.stage_id
+      ) _se ON true` : ''}
+     WHERE d.current_manager_id IS NOT NULL
+       AND d.sold_at IS NULL AND d.delivered_at IS NULL AND d.lost_at IS NULL
+       AND (${zombieSql}) IS NOT NULL AND (${zombieSql}) <= now()${mgrWhere}${extra}`
+    : '';
+
+  const sql = `
+WITH u AS (
+    SELECT d.current_manager_id, ${CLOSED_AT_SQL} AS closed_at
+      FROM deals d
+     WHERE d.current_manager_id IS NOT NULL
+       AND (d.sold_at IS NOT NULL OR d.delivered_at IS NOT NULL OR d.lost_at IS NOT NULL)${mgrWhere}${extra}${zombiePart}
+), r AS (
+    SELECT closed_at, row_number() OVER (PARTITION BY current_manager_id ORDER BY closed_at DESC) AS rn
+      FROM u
+)
+SELECT ceil(rn::numeric / ${size})::int AS bi,
+       to_char((percentile_cont(0.5) WITHIN GROUP (ORDER BY closed_at))::date, 'YYYY-MM-DD') AS d
+  FROM r
+ WHERE rn <= ${size * count}
+ GROUP BY 1 ORDER BY 1`;
+
+  const res = await analyticsDb().query<{ bi: number; d: string }>(sql, params);
+  const out = new Map<number, string>();
+  for (const row of res.rows) if (row.d) out.set(Number(row.bi), row.d);
+  return out;
+}

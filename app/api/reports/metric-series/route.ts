@@ -4,7 +4,7 @@ import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/se
 import { fetchMetricSeries, type SeriesGranularity } from '@/features/reports/engine/metricSeries';
 import { fetchBookingCallRateSeries, BOOKING_SERIES_METRICS } from '@/features/reports/engine/bookingCallRate';
 import { fetchStageConversionSeries, stagePairForMetric } from '@/features/reports/engine/stageConversions';
-import { fetchMetricSeriesViaReport } from '@/features/reports/engine/metricSeriesViaReport';
+import { fetchMetricSeriesViaReport, fetchMetricSeriesByBatches } from '@/features/reports/engine/metricSeriesViaReport';
 import { validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import type { DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 
@@ -109,6 +109,23 @@ export async function POST(req: NextRequest) {
           if (native.supported) return native;
           return fetchMetricSeriesViaReport({ ...common, period: o.period, reportSlug });
         };
+
+  // Режим пачек (ТЗ владельца 28.09): ось X — не даты, а пачки по N закрытых сделок
+  // назад. Сравнение и «предыдущий период» тут не рисуются: у пачки нет календарного
+  // аналога, а вторая линия из дат рядом с пачками вводила бы в заблуждение.
+  const batchInput = body.batch as { size?: unknown; useZombies?: unknown } | undefined;
+  if (batchInput && typeof batchInput === 'object') {
+    const size = Math.min(5000, Math.max(5, Math.round(Number(batchInput.size)) || 100));
+    const batchCount = Math.min(24, Math.max(2, Math.round(Number(body.batchCount)) || 6));
+    const series = await fetchMetricSeriesByBatches({
+      ...common,
+      period: { from: new Date(body.period.from), to: new Date(body.period.to) },
+      reportSlug,
+      batch: { size, useZombies: batchInput.useZombies === true },
+      batchCount,
+    });
+    return NextResponse.json({ granularity, current: series, comparison: null, previous: null, batch: true });
+  }
 
   const current = await fetchSeries({
     period: { from: new Date(body.period.from), to: new Date(body.period.to) },
