@@ -3,7 +3,7 @@ import { loadMetrics, withDependencies } from '@/lib/metrics/catalog';
 import { computeTotals } from './calculated';
 import { STAGE_SNAPSHOT_GROUPS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import { bucketStartYmd, nextBucketYmd, type MetricSeriesOptions, type MetricSeriesResult, type SeriesBucket, type SeriesGranularity } from './metricSeries';
-import { batchBucketDates } from './dealBatches';
+import { batchBucketDates, type BatchSpan } from './dealBatches';
 import type { Metric, ReportRow } from '@/lib/metrics/types';
 
 // ── Универсальный график: любая метрика каталога ─────────────────────────────
@@ -210,7 +210,7 @@ export async function fetchMetricSeriesByBatches(
     batch: { size: number; useZombies: boolean };
     batchCount: number;
   },
-): Promise<MetricSeriesResult> {
+): Promise<MetricSeriesResult & { spans?: Record<string, BatchSpan & { index: number }> }> {
   const all = await loadMetrics();
   const metric = all.find(m => m.id === opts.metricId);
   if (!metric) return { supported: false, reason: 'Метрика не найдена', buckets: [], cumulativeBuckets: [], total: null };
@@ -271,10 +271,12 @@ export async function fetchMetricSeriesByBatches(
 
   // Слева старые пачки, справа последняя — как на обычном графике время идёт вправо.
   const out: SeriesBucket[] = [];
+  const spans: Record<string, BatchSpan & { index: number }> = {};
   for (let bi = count; bi >= 1; bi--) {
-    const bucket = dates.get(bi);
-    if (!bucket) continue; // пачки столько назад нет — у менеджеров кончились сделки
-    out.push({ bucket, value: values[bi - 1] });
+    const span = dates.get(bi);
+    if (!span) continue; // пачки столько назад нет — у менеджеров кончились сделки
+    out.push({ bucket: span.median, value: values[bi - 1] });
+    spans[span.median] = { ...span, index: bi };
   }
   // Медианы двух соседних пачек могут совпасть (мало данных) — ключи бакетов должны
   // быть уникальными, иначе точки схлопнутся: оставляем первую из совпавших.
@@ -291,5 +293,5 @@ export async function fetchMetricSeriesByBatches(
   });
 
   // «Итого» = последняя пачка: именно её показывает ячейка отчёта в режиме пачек.
-  return { supported: true, buckets: uniq, cumulativeBuckets: cumulative, total: values[0] ?? null };
+  return { supported: true, buckets: uniq, cumulativeBuckets: cumulative, total: values[0] ?? null, spans };
 }

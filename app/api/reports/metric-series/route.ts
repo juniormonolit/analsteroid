@@ -124,7 +124,10 @@ export async function POST(req: NextRequest) {
       batch: { size, useZombies: batchInput.useZombies === true },
       batchCount,
     });
-    return NextResponse.json({ granularity, current: series, comparison: null, previous: null, batch: true });
+    // spans — диапазон и размер каждой пачки: тултип показывает «сделки с … по …»,
+    // потому что подпись точки — только медиана (вопрос владельца 28.09).
+    const { spans, ...rest } = series;
+    return NextResponse.json({ granularity, current: rest, comparison: null, previous: null, batch: true, batchSpans: spans ?? {} });
   }
 
   const current = await fetchSeries({

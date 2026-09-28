@@ -34,7 +34,11 @@ export interface MetricChartTarget {
 type Gran = 'day' | 'week' | 'month';
 interface Bucket { bucket: string; value: number | null }
 interface SeriesRes { supported: boolean; reason?: string; buckets: Bucket[]; cumulativeBuckets?: Bucket[]; total: number | null }
-interface ApiRes { granularity: Gran; current: SeriesRes; comparison: SeriesRes | null; previous: SeriesRes | null }
+interface ApiRes {
+  granularity: Gran; current: SeriesRes; comparison: SeriesRes | null; previous: SeriesRes | null;
+  /** Режим пачек: диапазон и размер каждой пачки, ключ — дата-медиана бакета. */
+  batchSpans?: Record<string, BatchSpan>;
+}
 
 function autoGran(period: DateRange): Gran {
   const days = (period.to.getTime() - period.from.getTime()) / 86_400_000 + 1;
@@ -85,7 +89,16 @@ interface ChartRow {
   previous: number | null; prevLabel: string | null;
   comparison: number | null; cmpLabel: string | null;
   isPrev: boolean;
+  /** Режим пачек: что за пачка стоит за точкой (подпись точки — только медиана). */
+  batchNote?: string | null;
 }
+
+/** Диапазон и размер пачки — приходит с сервером вместе с серией (batchSpans). */
+interface BatchSpan { median: string; from: string; to: string; count: number; index: number }
+const fmtSpanDate = (ymd: string): string => {
+  const [y, m, d] = ymd.split('-');
+  return `${d}.${m}.${y.slice(2)}`;
+};
 
 /** Тултип с разницей между периодами (правка владельца 25.08: «навожусь на июль
  *  и сразу вижу этот год, тот год и рост/падение»). Свой компонент вместо
@@ -104,6 +117,9 @@ function DeltaTooltip({ active, payload, metric }: {
       <div className="font-semibold text-[var(--color-text)]">
         {row.label}{row.isPrev ? ' · предыдущий период' : ''}
       </div>
+      {row.batchNote && (
+        <div className="text-[var(--color-text-muted)]" style={{ marginTop: 2 }}>{row.batchNote}</div>
+      )}
       {row.value !== null && (
         <div className="mt-1 tabular-nums" style={{ color: 'var(--color-accent)' }}>
           {row.isPrev ? 'Значение' : 'Текущий'}: <b>{fmtVal(row.value, metric)}</b>
@@ -313,6 +329,9 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
           comparison: mb?.value ?? null,
           cmpLabel: mb?.label ?? null,
           isPrev: false,
+          // В наложении режима пачек нет (сравнивать пачку не с чем), поле нужно
+          // только для однородности типа строк графика.
+          batchNote: null as string | null,
           trendPrev: null as number | null,
           trendCur: null as number | null,
         };
@@ -327,6 +346,7 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
     // куском): стыковый недельный/месячный бакет — ОДНА полная точка, а не два
     // огрызка по границе периодов (скрин владельца 25.08 с «ямой»). Фолбэк на
     // серию текущего периода — если union не пришла (старый кэш, сбой запроса).
+    const spanByBucket = data?.batchSpans as Record<string, BatchSpan> | undefined;
     const canvas = data?.previous?.supported ? pick(data.previous) : pick(data?.current);
     // Шов: первый бакет, начавшийся не раньше старта текущего периода. Стыковый
     // бакет, начавшийся в предыдущем периоде и захвативший начало текущего,
@@ -351,6 +371,14 @@ export function MetricChartModal({ target, metric, reportSlug, period, compariso
         // категорийная ось по label якорила подложку/шов по первому совпадению.
         x: String(i),
         label: fmtBucketLabel(b.bucket, gran),
+        // Подпись точки в режиме пачек — медиана даты закрытия; сам диапазон пачки
+        // шире, поэтому показываем его в тултипе (вопрос владельца 28.09: «это
+        // медианное окно даты по пачке?»).
+        batchNote: (() => {
+          const sp = spanByBucket?.[b.bucket];
+          if (!sp) return null;
+          return `пачка ${sp.index}: ${sp.count} ${sp.count % 10 === 1 && sp.count % 100 !== 11 ? 'сделка' : 'сделок'}, закрыты с ${fmtSpanDate(sp.from)} по ${fmtSpanDate(sp.to)}`;
+        })(),
         value: b.value,
         previous: null as number | null,
         prevLabel: null as string | null,

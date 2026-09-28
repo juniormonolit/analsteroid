@@ -131,10 +131,20 @@ SELECT deal_id, current_manager_id::text AS manager_id, is_zombie
  * медиана честно отвечает на вопрос «когда в среднем закрыта эта сотня».
  * Возвращает YYYY-MM-DD по возрастанию индекса пачки (1 = последняя).
  */
+export interface BatchSpan {
+  /** Медианная дата закрытия — ею подписана точка графика. */
+  median: string;
+  /** Реальный диапазон пачки: от самой старой сделки к самой свежей. */
+  from: string;
+  to: string;
+  /** Сколько сделок в пачке (последняя, самая дальняя, может быть неполной). */
+  count: number;
+}
+
 export async function batchBucketDates(opts: {
   size: number; useZombies: boolean; count: number;
   managerIds?: string[] | null; extraWhere?: string;
-}): Promise<Map<number, string>> {
+}): Promise<Map<number, BatchSpan>> {
   const settings = await getDealBatchSettings();
   const size = Math.min(5000, Math.max(5, Math.round(opts.size) || settings.defaultBatchSize));
   const count = Math.min(24, Math.max(1, Math.round(opts.count) || 1));
@@ -170,13 +180,19 @@ SELECT ceil(rn::numeric / ${size})::int AS bi,
        -- percentile_DISC, не CONT: continuous-вариант умеет только числа и интервалы,
        -- по timestamptz Postgres падает (42883, живой баг графика пачек 28.09).
        -- Дискретная медиана и логичнее: это реальная дата одной из сделок пачки.
-       to_char((percentile_disc(0.5) WITHIN GROUP (ORDER BY closed_at))::date, 'YYYY-MM-DD') AS d
+       to_char((percentile_disc(0.5) WITHIN GROUP (ORDER BY closed_at))::date, 'YYYY-MM-DD') AS d,
+       to_char(min(closed_at)::date, 'YYYY-MM-DD') AS d_from,
+       to_char(max(closed_at)::date, 'YYYY-MM-DD') AS d_to,
+       count(*)::int AS n
   FROM r
  WHERE rn <= ${size * count}
  GROUP BY 1 ORDER BY 1`;
 
-  const res = await analyticsDb().query<{ bi: number; d: string }>(sql, params);
-  const out = new Map<number, string>();
-  for (const row of res.rows) if (row.d) out.set(Number(row.bi), row.d);
+  const res = await analyticsDb().query<{ bi: number; d: string; d_from: string; d_to: string; n: number }>(sql, params);
+  const out = new Map<number, BatchSpan>();
+  for (const row of res.rows) {
+    if (!row.d) continue;
+    out.set(Number(row.bi), { median: row.d, from: row.d_from, to: row.d_to, count: Number(row.n) });
+  }
   return out;
 }
