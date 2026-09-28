@@ -51,6 +51,8 @@ export interface Deal {
   manager_name: string;
   stage_name: string | null;
   stage_event_type: string | null;
+  /** Режим пачек: сделка попала в выборку как «зомби» (висяк, засчитанный проигранным). */
+  is_zombie?: boolean;
   product_group_display: string;
   funnel_name: string | null;
   // Задача #2385: группировка списка сделок drill-down «По отделу/По филиалу» — те
@@ -310,13 +312,26 @@ function dealCell(deal: Deal, key: string) {
     const color = dealStageColor(deal);
     const text = deal.stage_name ?? '—';
     return (
-      <span
-        className="inline-block px-1.5 py-0.5 rounded whitespace-nowrap"
-        style={color
-          ? { backgroundColor: `color-mix(in srgb, ${color} var(--color-highlight-pct, 68%), var(--color-mix-base, white))`, color: 'var(--color-num, #000)' }
-          : { backgroundColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
-      >
-        {text}
+      <span className="inline-flex items-center gap-1 whitespace-nowrap">
+        <span
+          className="inline-block px-1.5 py-0.5 rounded"
+          style={color
+            ? { backgroundColor: `color-mix(in srgb, ${color} var(--color-highlight-pct, 68%), var(--color-mix-base, white))`, color: 'var(--color-num, #000)' }
+            : { backgroundColor: 'var(--color-border)', color: 'var(--color-text-muted)' }}
+        >
+          {text}
+        </span>
+        {/* Зомби (режим пачек): сделка не продана и не проиграна, в выборку попала по
+            правилу висяка — без пометки она читается как живая (правка владельца 28.09). */}
+        {deal.is_zombie && (
+          <span
+            title="Зомби: сделка не продана и не проиграна, в выборку попала как висяк по правилам из «Настройки → Пачки сделок и зомби»"
+            className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider"
+            style={{ backgroundColor: 'var(--warning-bg, #FEF7E0)', color: 'var(--warning-text, #B26000)' }}
+          >
+            зомби
+          </span>
+        )}
       </span>
     );
   }
@@ -568,6 +583,13 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
             см. dealsCountLabel. Итог теперь из безлимитного агрегата (total_count/
             total_amount), не из reduce по обрезанному списку (#2369). */}
         {`Итого: ${dealsCountLabel(totalCount)}`} · {fmtMoney(totalAmount)}
+        {/* Сколько из выборки — зомби (режим пачек): счёт по загруженным строкам,
+            поэтому при обрезке списка показываем «минимум» (правка владельца 28.09). */}
+        {deals.some(d => d.is_zombie) && (
+          <span className="ml-2 text-[var(--color-text-muted)]">
+            · зомби: {isTruncated ? 'от ' : ''}{deals.filter(d => d.is_zombie).length}
+          </span>
+        )}
         {isTruncated && (
           <span className="ml-2 text-[var(--color-text-muted)]">
             (показаны первые {deals.length} из {totalCount})

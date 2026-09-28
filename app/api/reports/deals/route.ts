@@ -504,6 +504,10 @@ export async function GET(req: NextRequest) {
       NULL::timestamptz AS expected_close_date,  -- нет в sa.deals; форму ответа сохраняем
       d.source_id,
       d.current_manager_id::text AS manager_id,
+      -- Зомби пачки: внутри выборки «последние N закрытых» открытая сделка может
+      -- оказаться только по зомби-правилу, значит признак вычисляется прямо здесь,
+      -- без отдельного параметра (правка владельца 28.09: «надо как-то их пометить»).
+      (${batchOn ? `d.sold_at IS NULL AND d.delivered_at IS NULL AND d.lost_at IS NULL` : 'false'}) AS is_zombie,
       s.name  AS stage_name,
       s.event_type AS stage_event_type,
       pg.name AS product_group_name,
