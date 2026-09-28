@@ -107,7 +107,10 @@ export async function buildDashboard(dailyTarget = DEFAULT_TARGET, scope?: RopSc
       || (!!r.short_login && plans.has(r.short_login)));
     const managers: Record<string, TvDashManager> = {};
     for (const m of all) {
-      if (isPlaceholderName(m.name) && !recentActive.has(m.managerId)) continue;
+      // То же правило, что у visibleRows выше: без этой строки человек попадал в
+      // дерево (allManagerIds), но не в справочник — и таблица его не рисовала.
+      const hasPlan = !!m.login && plans.has(m.login);
+      if (isPlaceholderName(m.name) && !recentActive.has(m.managerId) && !hasPlan) continue;
       const f = facts.get(m.managerId);
       const sc = f ? f.primary_sales_count + f.repeat_sales_count : 0;
       const bc = f ? f.reservations_count : 0;
