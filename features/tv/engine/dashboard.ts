@@ -96,7 +96,15 @@ export async function buildDashboard(dailyTarget = DEFAULT_TARGET, scope?: RopSc
     const plans = planRes.byLogin;
 
     // видимые люди: нормальное ФИО или движение за 5 рабочих дней (то же правило, что на ТВ)
-    const visibleRows: OrgRow[] = orgRows.filter(r => !isPlaceholderName(r.manager_name) || recentActive.has(r.manager_id));
+    // Кого вообще показываем строкой. Имя-заглушка (manager2011, User 4398) сама по
+    // себе не повод прятать: решение владельца 28.09 — «если есть план, он точно
+    // должен учитываться». Раньше правило смотрело только на движение за 5 рабочих
+    // дней, и 11 человек с планом на 906 250 ₽/день выпадали из списков, хотя их план
+    // сидел в итогах — сумма строк не сходилась с итогом отдела.
+    const visibleRows: OrgRow[] = orgRows.filter(r =>
+      !isPlaceholderName(r.manager_name)
+      || recentActive.has(r.manager_id)
+      || (!!r.short_login && plans.has(r.short_login)));
     const managers: Record<string, TvDashManager> = {};
     for (const m of all) {
       if (isPlaceholderName(m.name) && !recentActive.has(m.managerId)) continue;

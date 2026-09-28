@@ -205,7 +205,12 @@ const BRANCH_HOLD_SEC = 15; // затем отделы каждого филиа
 function slideFor(node: TvNode, managers: RosterManager[], childManagers: Map<string, RosterManager[]>,
   facts: Map<string, Record<FactId, number>>, plans: Map<string, { planSales: number }>,
   avatars: Map<string, string | null>, recentActive: Set<string>, dailyTarget: number): TvFeedSlide {
-  const shown = managers.filter(m => !isPlaceholderName(m.name) || recentActive.has(m.managerId));
+  // См. dashboard.ts: план сам по себе — основание показать человека (решение
+  // владельца 28.09), даже если в Битриксе у него вместо ФИО стоит логин.
+  const shown = managers.filter(m =>
+    !isPlaceholderName(m.name)
+    || recentActive.has(m.managerId)
+    || (!!m.login && plans.has(m.login)));
   const rows: TvFeedManager[] = shown.map(m => {
     const f = facts.get(m.managerId);
     const plan = m.login ? plans.get(m.login)?.planSales ?? 0 : 0;
