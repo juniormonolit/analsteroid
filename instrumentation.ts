@@ -67,6 +67,41 @@ export async function register() {
   scheduleHowAreWe();
   scheduleB24Diag();
   scheduleDealAddresses();
+  scheduleHealthCheck();
+}
+
+// Сторож систем (ТЗ владельца 28.09: «придумай ежедневный обходчик, который пишет мне
+// в „Аналитика“ каждое утро в 9, что все системы работают»). Повод — ночной синк
+// оргструктуры падал с permission denied, и об этом узнали только вручную из app.log.
+// Тик раз в 10 минут: состояние пишется всегда, о НОВОЙ поломке критичной системы бот
+// сообщает сразу, сводка — раз в сутки в час из настроек канала (по умолчанию 9 МСК).
+function scheduleHealthCheck() {
+  let running = false;
+  let lastSummaryDate = '';
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { healthTick } = await import('./lib/jobs/healthCheck');
+      const { getBotFunctionConfig } = await import('./lib/bitrix/notify');
+      const msk = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+      const [date, time] = msk.split(' ');
+      const hour = Number(time.slice(0, 2));
+      const cfg = await getBotFunctionConfig('system_health');
+      const summaryHour = typeof cfg.hour === 'number' ? cfg.hour : 9;
+      // Окно на час: тик десятиминутный, ловим первый заход в нужный час за сутки.
+      const summary = hour === summaryHour && lastSummaryDate !== date;
+      const checks = await healthTick(summary);
+      if (summary) lastSummaryDate = date;
+      const bad = checks.filter(c => !c.ok);
+      if (bad.length) console.warn('[health] проблемы:', bad.map(c => `${c.title}: ${c.detail}`).join(' | '));
+      else console.log(`[health] ок, проверок ${checks.length}${summary ? ', сводка отправлена' : ''}`);
+    } catch (err) {
+      console.error('[health] тик не удался:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setTimeout(() => { void tick(); }, 2 * 60 * 1000);
+  setInterval(() => { void tick(); }, 10 * 60 * 1000);
 }
 
 // Адреса объектов сделок (задача владельца 21.09). Днём — только новые сделки

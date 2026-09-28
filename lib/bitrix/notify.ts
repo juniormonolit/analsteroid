@@ -88,6 +88,9 @@ export const BOT_FUNCTION_KEYS = [
   'manager_digest_daily', 'manager_digest_weekly', 'rop_digest', 'advice_feedback', 'scenarios',
   'gamification', 'deal_chats',
   'how_are_we', 'b24_diag_alerts',
+  // Сторож систем (ТЗ владельца 28.09): утренняя сводка «всё работает» + срочное
+  // сообщение о новой поломке. Включён по умолчанию — выключенный сторож бесполезен.
+  'system_health',
 ] as const;
 export type BotChannel = (typeof BOT_FUNCTION_KEYS)[number];
 
