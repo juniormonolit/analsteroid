@@ -1996,6 +1996,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           accountType={accountType}
           dealFields={dealFields}
           dealFilters={dealFilters}
+          batch={batchActive ? { size: batchMode.size, useZombies: batchMode.useZombies } : null}
           sortBy={sortBy}
           sortDir={sortDir}
           grouped={drilldownGrouped}

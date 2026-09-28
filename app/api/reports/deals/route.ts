@@ -11,6 +11,7 @@ import { DRILL_RULES, NO_DEAL_LIST_METRIC_IDS } from '@/features/reports/engine/
 import type { Metric } from '@/lib/metrics/types';
 import { buildDealFilterWhere, validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import { addDays, startOfDay } from 'date-fns';
+import { selectBatchDeals } from '@/features/reports/engine/dealBatches';
 import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
 
 // «Вошло в стадию: …» (метрики 107) — metricId → {stage_id группы, воронка}.
@@ -141,6 +142,13 @@ export async function GET(req: NextRequest) {
   // список ходит в этот роут, а фильтр туда не доезжал. Разбор тот же
   // (buildDealFilterWhere), поэтому разъехаться уже не может.
   const dealFiltersRaw = sp.get('dealFilters');
+  // Режим «Последние N закрытых сделок» (ТЗ владельца 28.09): список обязан показывать
+  // ТЕ ЖЕ сделки, из которых сложилась ячейка, — то есть пачку, а не период. Рамки дат
+  // у метрик в этом режиме снимаются (как в sqlGen), население задаёт список deal_id.
+  const batchSizeRaw = Number(sp.get('batchSize'));
+  const batchOn = Number.isFinite(batchSizeRaw) && batchSizeRaw >= 5;
+  const batchSize = batchOn ? Math.min(5000, Math.round(batchSizeRaw)) : 0;
+  const batchZombies = sp.get('batchZombies') === '1';
 
   if ((!managerId && !managerIds.length && !productGroup && !productGroups.length && !sourceDim && !teamId && !contactId && !companyId && !all) || !from || !to) {
     return NextResponse.json({ error: 'managerId, productGroup, sourceDim+sourceVal, teamId, contactId or all=1, plus from/to required' }, { status: 400 });
@@ -183,7 +191,13 @@ export async function GET(req: NextRequest) {
 
   // ── Metric filter (generic, from the metrics catalog) ────────────────────
   // Default window: a deal is in scope if ANY of its stage dates falls in the period.
-  let metricDateFilter = `(
+  // В режиме пачек население целиком задаёт список deal_id (добавляется ниже),
+  // поэтому дефолтное окно по датам заменяется на «любая сделка пачки». $1/$2 всё
+  // равно обязаны встретиться в тексте запроса, иначе Postgres не типизирует
+  // параметр (42P18) — тот же приём, что в ветке STAGE_NOW_STAGE_IDS.
+  let metricDateFilter = batchOn
+    ? `$1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`
+    : `(
     d.created_at >= $1 AND d.created_at < $2
     OR d.sold_at >= $1 AND d.sold_at < $2
     OR d.delivered_at >= $1 AND d.delivered_at < $2
@@ -265,9 +279,10 @@ export async function GET(req: NextRequest) {
         const evtConds = metric.filters.map(f => resolveFilterClause(f, 'de')).filter(Boolean);
         extraJoin = `JOIN (
           SELECT DISTINCT de.deal_id FROM deal_events de
-          WHERE de.${metric.dateField} >= $1 AND de.${metric.dateField} < $2
+          WHERE ${batchOn ? `de.${metric.dateField} IS NOT NULL` : `de.${metric.dateField} >= $1 AND de.${metric.dateField} < $2`}
             ${evtConds.length ? 'AND ' + evtConds.join(' AND ') : ''}
         ) _evt ON _evt.deal_id = d.deal_id`;
+        if (batchOn) metricDateFilter = `$1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
         metricDateFilter = '1=1';
       } else {
         // Deals-sourced: same date window + filters the metric itself uses in sqlGen.
@@ -282,7 +297,9 @@ export async function GET(req: NextRequest) {
         metricDateFilter = '(' + legs
           .map(leg => {
             const conds = [
-              `d.${leg.dateField} >= $1 AND d.${leg.dateField} < $2`,
+              // Пачка — уже готовое население: у метрики остаётся только «событие
+              // случилось», без рамок периода (та же замена, что в sqlGen::genDealsExpr).
+              batchOn ? `d.${leg.dateField} IS NOT NULL` : `d.${leg.dateField} >= $1 AND d.${leg.dateField} < $2`,
               ...leg.filters.map(f => resolveFilterClause(f, 'd')).filter(Boolean),
             ];
             return `(${conds.join(' AND ')})`;
@@ -297,6 +314,22 @@ export async function GET(req: NextRequest) {
   // из мини-отчёта шлёт оба).
   const params: unknown[] = [fromDate.toISOString(), toExcl.toISOString()];
   let dimensionFilter = '';
+
+  // Список сделок пачки. Считается тем же движком, что и сама выборка отчёта
+  // (dealBatches.selectBatchDeals), с теми же фильтрами сделок — иначе список и
+  // ячейка разъедутся. Ограничение по менеджерам берём из дрилла: строка менеджера —
+  // его пачка, «Итого»/отдел — пачки всех.
+  if (batchOn) {
+    const mgrs = managerId ? [managerId] : managerIds.length ? managerIds : null;
+    const sel = await selectBatchDeals({
+      size: batchSize,
+      useZombies: batchZombies,
+      managerIds: mgrs,
+      extraWhere: dealFilterSql || undefined,
+    });
+    params.push(sel.dealIds);
+    dimensionFilter += ` AND d.deal_id = ANY($${params.length}::bigint[])`;
+  }
 
   if (companyId && /^\d+$/.test(companyId)) {
     params.push(Number(companyId));

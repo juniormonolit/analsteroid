@@ -105,6 +105,8 @@ interface Props {
   dealFields?: string[];
   /** «Фильтр сделок» отчёта — дрилл-даун обязан резать тем же условием. */
   dealFilters?: DealFilter[];
+  /** Режим «Последние N закрытых сделок»: список должен показывать сделки пачки, не периода. */
+  batch?: { size: number; useZombies: boolean } | null;
   sortBy?: string | null;
   sortDir?: 'asc' | 'desc';
   // Report-level «Группировка в drilldown» setting (true = grouped mini-report, false = flat deals)
@@ -582,7 +584,7 @@ export function DealsListBody({ query, fetchOverride, dealFields, onDealOpen, ta
 // Общие query-параметры дрилл-даун сделок. ВАЖНО: фильтр отделов передаётся всегда
 // (отчёт применяет его к цифрам — сделки обязаны совпадать); тип аккаунтов — только
 // для отчёта по менеджерам (в остальных отчётах движок его игнорирует).
-function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | 'productGroupMode' | 'departmentIds' | 'accountType' | 'dimensionType' | 'periodDimension' | 'dealFilters'>): Record<string, string> {
+function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | 'productGroupMode' | 'departmentIds' | 'accountType' | 'dimensionType' | 'periodDimension' | 'dealFilters' | 'batch'>): Record<string, string> {
   return {
     from: p.period.from.toISOString(),
     to: p.period.to.toISOString(),
@@ -601,6 +603,11 @@ function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | '
     // применял, а список сделок нет. Добавлять фильтр в каждый сборщик по
     // отдельности нельзя: следующий забудут ровно так же.
     ...(p.dealFilters?.length ? { dealFilters: JSON.stringify(p.dealFilters) } : {}),
+    // Режим «Последние N закрытых сделок» (ТЗ владельца 28.09): без этих двух
+    // параметров список показывал бы сделки ПЕРИОДА, а ячейка считалась по пачке —
+    // ровно тот разрыв, из-за которого дрилл и заводился (см. комментарий про
+    // «Фильтр сделок» выше: единая точка, чтобы следующий сборщик не забыл).
+    ...(p.batch ? { batchSize: String(p.batch.size), batchZombies: p.batch.useZombies ? '1' : '0' } : {}),
   };
 }
 
@@ -785,7 +792,7 @@ export function ClientDealsView({ target, dimensionType, period, dealScope, clie
 }
 
 // ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
-function FlatDealsView({ target, dimensionType, periodDimension, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen, tableScale, dealFilters }: Props) {
+function FlatDealsView({ target, dimensionType, periodDimension, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen, tableScale, dealFilters, batch }: Props) {
   // Групповые цели: отдел → teamId; филиал → менеджерское измерение branch;
   // «Итого» → весь срез (фильтры отчёта по отделам/типу аккаунтов — в baseDealParams)
   const dimensionParams: Record<string, string> =
@@ -804,7 +811,7 @@ function FlatDealsView({ target, dimensionType, periodDimension, period, dealSco
     : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
     : { productGroup: target.id };
   const params = new URLSearchParams({
-    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, periodDimension, dealFilters }),
+    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, periodDimension, dealFilters, batch }),
     ...dimensionParams,
     ...(target.metricId ? { metricFilter: target.metricId } : {}),
   });
@@ -815,7 +822,7 @@ function FlatDealsView({ target, dimensionType, periodDimension, period, dealSco
 function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
   const { sub, onBack, period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, dealFields, onDealOpen, tableScale, dealFilters } = props;
   const params = new URLSearchParams({
-    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, periodDimension: props.periodDimension, dealFilters }),
+    ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, periodDimension: props.periodDimension, dealFilters, batch: props.batch }),
     ...(sub.managerId ? { managerId: sub.managerId } : {}),
     ...(sub.productGroup !== undefined ? { productGroup: sub.productGroup } : {}),
     ...(sub.sourceDim && sub.sourceVal !== undefined ? { sourceDim: sub.sourceDim, sourceVal: sub.sourceVal } : {}),
