@@ -167,6 +167,10 @@ export async function POST(req: NextRequest) {
     ? {
         size: Math.min(5000, Math.max(5, Math.round(Number((batchInput as { size?: unknown }).size)) || 100)),
         useZombies: (batchInput as { useZombies?: unknown }).useZombies === true,
+        // Номер пачки: 1 = последняя, 2 = предыдущая и т.д. Без него график по пачкам
+        // считал все точки по одной и той же последней сотне и выходил прямой линией
+        // (баг 28.09, владелец: «все выстраивается в линию»).
+        batchIndex: Math.min(24, Math.max(1, Math.round(Number((batchInput as { batchIndex?: unknown }).batchIndex)) || 1)),
       }
     : null;
 
