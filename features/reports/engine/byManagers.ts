@@ -286,6 +286,9 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
       useZombies: opts.batch.useZombies,
       batchIndex: opts.batch.batchIndex,
       extraWhere: batchExtra || undefined,
+      // Пилюли режут саму пачку: «Первичные» + 100 = сто последних закрытых первичных.
+      funnelScope: dealScope === 'primary' ? 'primary' : dealScope === 'repeat' ? 'repeat' : 'all',
+      clientType: clientType === 'b2c' ? 'b2c' : clientType === 'b2b' ? 'b2b' : 'all',
     });
     opts.onBatchMeta?.(batchSel);
   }

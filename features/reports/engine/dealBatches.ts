@@ -36,6 +36,26 @@ export interface BatchSelection {
   settings: DealBatchSettings;
 }
 
+export type BatchFunnelScope = 'primary' | 'repeat' | 'all';
+export type BatchClientType = 'all' | 'b2c' | 'b2b';
+
+/**
+ * Пилюли отчёта режут САМУ пачку, а не её результат (правка владельца 28.09:
+ * «выбирая режим 100 последних закрытых сделок, хочу видеть цифры именно по этим
+ * 100»). При «Первичные» пачка — это 100 последних закрытых ПЕРВИЧНЫХ сделок, и
+ * «Кол-во сделок (перв.)» в таблице ровно 100, а не «сколько первичных случайно
+ * попало в 100 закрытых любых».
+ */
+export function scopeWhereSql(funnel: BatchFunnelScope = 'all', client: BatchClientType = 'all'): string {
+  const parts: string[] = [];
+  if (funnel === 'primary') parts.push('d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = false)');
+  else if (funnel === 'repeat') parts.push('d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)');
+  // Физики/юрики — те же номера воронок, что в commonDealWhere.ts
+  if (client === 'b2c') parts.push('d.funnel_id IN (0, 2)');
+  else if (client === 'b2b') parts.push('d.funnel_id IN (1, 3)');
+  return parts.join(' AND ');
+}
+
 export interface BatchSelectOptions {
   /** Размер пачки на менеджера. */
   size: number;
@@ -47,6 +67,10 @@ export interface BatchSelectOptions {
   extraWhere?: string;
   /** Ограничить набор менеджеров (bitrix id). Пусто = все. */
   managerIds?: string[] | null;
+  /** Пилюля «Первичные/Повторные/Все» — режет саму пачку. */
+  funnelScope?: BatchFunnelScope;
+  /** Пилюля «Физики/Юрики» — тоже режет саму пачку. */
+  clientType?: BatchClientType;
 }
 
 /**
@@ -76,7 +100,8 @@ export async function selectBatchDeals(opts: BatchSelectOptions): Promise<BatchS
   const settings = await getDealBatchSettings();
   const size = Math.min(5000, Math.max(5, Math.round(opts.size) || settings.defaultBatchSize));
   const idx = Math.max(1, Math.round(opts.batchIndex ?? 1));
-  const extra = opts.extraWhere ? ` AND (${opts.extraWhere})` : '';
+  const scopeSql = scopeWhereSql(opts.funnelScope, opts.clientType);
+  const extra = [opts.extraWhere, scopeSql].filter(Boolean).map(w => ` AND (${w})`).join('');
   const mgrWhere = opts.managerIds && opts.managerIds.length
     ? ` AND d.current_manager_id = ANY($1::bigint[])`
     : '';
@@ -144,11 +169,13 @@ export interface BatchSpan {
 export async function batchBucketDates(opts: {
   size: number; useZombies: boolean; count: number;
   managerIds?: string[] | null; extraWhere?: string;
+  funnelScope?: BatchFunnelScope; clientType?: BatchClientType;
 }): Promise<Map<number, BatchSpan>> {
   const settings = await getDealBatchSettings();
   const size = Math.min(5000, Math.max(5, Math.round(opts.size) || settings.defaultBatchSize));
   const count = Math.min(24, Math.max(1, Math.round(opts.count) || 1));
-  const extra = opts.extraWhere ? ` AND (${opts.extraWhere})` : '';
+  const scopeSql = scopeWhereSql(opts.funnelScope, opts.clientType);
+  const extra = [opts.extraWhere, scopeSql].filter(Boolean).map(w => ` AND (${w})`).join('');
   const mgrWhere = opts.managerIds && opts.managerIds.length ? ' AND d.current_manager_id = ANY($1::bigint[])' : '';
   const params: unknown[] = opts.managerIds && opts.managerIds.length ? [opts.managerIds.map(Number)] : [];
   const zombieSql = opts.useZombies ? zombieClosedAtSql(settings) : null;

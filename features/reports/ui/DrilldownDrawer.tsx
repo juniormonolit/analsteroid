@@ -1279,14 +1279,20 @@ export function DrilldownDrawer(props: Props) {
   // Групповые цели (отдел/филиал/итого) всегда открываются плоским списком сделок
   const isGroupTarget = !!target.kind;
   // Local grouping state: metric-click opens flat automatically; otherwise report setting.
-  const [localGrouped, setLocalGrouped] = useState<boolean>(target.metricId || isGroupTarget ? false : (grouped ?? true));
+  // В режиме пачек мини-отчёт недоступен: он считает свои строки обычным прогоном
+  // отчёта по ПЕРИОДУ (см. queryFn ниже, /api/reports/run без batch), а разрезы
+  // мини-отчёта (товарные группы, источники) пачек вообще не знают. Показываем
+  // плоский список — ровно те сделки, из которых сложилась ячейка.
+  const batchMode = !!props.batch;
+  const [localGrouped, setLocalGrouped] = useState<boolean>(
+    batchMode || target.metricId || isGroupTarget ? false : (grouped ?? true));
   // Follow external changes of the report setting (e.g. from «Вид» inside the drawer),
   // without overriding the initial metric-click auto-flat.
   const prevGrouped = useRef(grouped);
   useEffect(() => {
     if (prevGrouped.current !== grouped) {
       prevGrouped.current = grouped;
-      setLocalGrouped(grouped ?? true);
+      setLocalGrouped(batchMode ? false : (grouped ?? true));
     }
   }, [grouped]);
   function handleToggle(v: boolean) {

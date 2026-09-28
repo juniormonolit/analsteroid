@@ -282,7 +282,6 @@ export async function GET(req: NextRequest) {
           WHERE ${batchOn ? `de.${metric.dateField} IS NOT NULL` : `de.${metric.dateField} >= $1 AND de.${metric.dateField} < $2`}
             ${evtConds.length ? 'AND ' + evtConds.join(' AND ') : ''}
         ) _evt ON _evt.deal_id = d.deal_id`;
-        if (batchOn) metricDateFilter = `$1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
         metricDateFilter = '1=1';
       } else {
         // Deals-sourced: same date window + filters the metric itself uses in sqlGen.
@@ -326,8 +325,17 @@ export async function GET(req: NextRequest) {
       useZombies: batchZombies,
       managerIds: mgrs,
       extraWhere: dealFilterSql || undefined,
+      // Те же пилюли, что режут пачку в таблице (byManagers): иначе список
+      // окажется шире ячейки ровно на сделки другой воронки.
+      funnelScope: scope === 'primary' ? 'primary' : scope === 'repeat' ? 'repeat' : 'all',
+      clientType: clientType === 'b2c' ? 'b2c' : clientType === 'b2b' ? 'b2b' : 'all',
     });
     params.push(sel.dealIds);
+    // $1/$2 (период) в режиме пачек не используются ни одной веткой, но обязаны
+    // встретиться в тексте запроса: параметр без единого упоминания Postgres не
+    // типизирует и валит запрос 42P18 (живой баг дрилла 28.09). Заведомо истинное
+    // условие — тот же приём, что в ветке STAGE_NOW_STAGE_IDS выше.
+    dimensionFilter += ` AND $1::timestamptz IS NOT NULL AND $2::timestamptz IS NOT NULL`;
     dimensionFilter += ` AND d.deal_id = ANY($${params.length}::bigint[])`;
   }
 
