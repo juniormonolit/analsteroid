@@ -167,7 +167,10 @@ WITH u AS (
       FROM u
 )
 SELECT ceil(rn::numeric / ${size})::int AS bi,
-       to_char((percentile_cont(0.5) WITHIN GROUP (ORDER BY closed_at))::date, 'YYYY-MM-DD') AS d
+       -- percentile_DISC, не CONT: continuous-вариант умеет только числа и интервалы,
+       -- по timestamptz Postgres падает (42883, живой баг графика пачек 28.09).
+       -- Дискретная медиана и логичнее: это реальная дата одной из сделок пачки.
+       to_char((percentile_disc(0.5) WITHIN GROUP (ORDER BY closed_at))::date, 'YYYY-MM-DD') AS d
   FROM r
  WHERE rn <= ${size * count}
  GROUP BY 1 ORDER BY 1`;
