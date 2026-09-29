@@ -6,12 +6,35 @@
 
 ---
 
+## 2026-09-29 — Деплой «Продажи → Реализация» на прод (#8034)
+
+Санкция Сергея Афанасьева 29.09 18:51 МСК («ОК»). `feat/realizations-section`
+(676c32a) была fast-forward от `origin/dev-asteroid` (afa2ef1) — влита пушем
+`feat/realizations-section:dev-asteroid`, без merge-коммита. Выкат `deploy.sh` из
+worktree `analsteroid-realizations` (гард свежести и сверка схем dev↔prod — зелёные,
+миграций в ветке нет). Прод: BUILD_ID `Nlhg9ejfquzY0HKQ-L2YX`, Login 200 / Static 200,
+pg-модуль 20/20, на 8100 один процесс (зомби нет). Диск сервера 62 до/после:
+`/` 145G, занято 78G, свободно 67G (54%); `/home/junior` 11G, 61 tar-бэкап —
+утечку бэкапов deploy.sh не трогали, только замерили.
+
+**Смоук (тестовые учётки zzz_8034_admin — «Администратор», zzz_8034_user —
+«Пользователь»; после проверки деактивированы, is_active=false).**
+`/sales/realizations` и `/sales/realizations/responses` — 200 у админа; у
+не-админа страница 200, но с экраном AccessDenied (гейт в layout), данных нет.
+`/api/realizations/{requests,summary,tasks}` у не-админа — 403, у админа 200 (tasks
+без параметра — 400, ожидаемо). `POST /api/reports/run` slug `requests-response`
+за 31.07–29.09: админ 200, не-админ 403; «Запросы: всего» = 12 699 (сравнение
+14 412), в работе 38, новых 63, завершено 12 627 — совпало с ожидаемым. GRANT на
+`sa.bitrix_task_current`/`sa.bitrix_flows` у роли приложения на проде есть (503 из
+записи выше не воспроизвёлся). Скриншот прод-экрана —
+`owners-inbox/screenshots/realizations-8034/prod-responses.png`.
+
 ## 2026-09-29 — «Продажи → Реализация»: ответы на запросы, заявки и логисты (#8034)
 
 Просьба Сергея Афанасьева 29.09: вернуть «Реализацию» из скрытых внутрь «Продажи»,
 доступ только роли «Администратор», наполнить отчётами. Ветка
-`feat/realizations-section` (worktree `analsteroid-realizations`), в `dev-asteroid`
-не вливалась, на прод не выкатывалась.
+`feat/realizations-section` (worktree `analsteroid-realizations`), влита в `dev-asteroid`
+и выкачена на прод (см. запись «Деплой» выше).
 
 **Доступ.** Одна функция `lib/realizations/access.ts: canViewRealizations` —
 супер-админ или `roleName === 'Администратор'` (НЕ `hasPerm('section.realization')`:
