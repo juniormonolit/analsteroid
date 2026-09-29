@@ -7,7 +7,7 @@ import { summaryToMetrics } from '@/lib/realizations/logistMetrics';
 import { mskYmd } from '@/lib/realizations/period';
 
 // Движок «Сводки по логистам» / «Регионов» для /api/reports/run (задача #8126).
-// Считает ТОЙ ЖЕ buildSummary, что прежний /api/realizations/summary — формулы не
+// Считает ТОЙ ЖЕ buildSummary, что прежний /api/realizations/summary (удалён в #8126) — формулы не
 // меняются; «Итого» — общая строка buildSummary (медианы по всей совокупности).
 
 

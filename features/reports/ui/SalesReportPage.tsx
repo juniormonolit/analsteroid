@@ -317,6 +317,9 @@ interface Props {
   defaultMetricIds?: string[];
   /** Группы колонок по умолчанию (отчёты «Реализации», задача #8126). */
   defaultColumnGroups?: { name: string; metricIds: string[] }[];
+  /** Градиент по умолчанию: включить у метрик и «меньше = лучше» (#8126). */
+  defaultHeatmapMetricIds?: string[];
+  defaultHeatmapInvertedIds?: string[];
 }
 
 const SOURCE_DIMENSION_LABELS: Record<string, string> = {
@@ -336,7 +339,7 @@ const DEFAULT_METRIC_IDS = [
   'primary_shipments_amount',
 ];
 
-export function SalesReportPage({ reportSlug, title, preset, isNew = false, defaultMetricIds, defaultColumnGroups }: Props) {
+export function SalesReportPage({ reportSlug, title, preset, isNew = false, defaultMetricIds, defaultColumnGroups, defaultHeatmapMetricIds, defaultHeatmapInvertedIds }: Props) {
   const startMetricIds = defaultMetricIds ?? DEFAULT_METRIC_IDS;
   const isMobile = useIsMobile();
   const router = useRouter();
@@ -525,8 +528,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const [metricThresholdOverrides, setMetricThresholdOverrides] = useState<Record<string, number>>({});
   const [accentedMetricIds, setAccentedMetricIds] = useState<string[]>([]);
   const [barMetricIds, setBarMetricIds] = useState<string[]>([]);
-  const [heatmapMetricIds, setHeatmapMetricIds] = useState<string[]>([]);
-  const [heatmapInvertedIds, setHeatmapInvertedIds] = useState<string[]>([]);
+  const [heatmapMetricIds, setHeatmapMetricIds] = useState<string[]>(defaultHeatmapMetricIds ?? []);
+  const [heatmapInvertedIds, setHeatmapInvertedIds] = useState<string[]>(defaultHeatmapInvertedIds ?? []);
   const [colorizeMetrics, setColorizeMetrics] = useState(false);
   // «Зебра» (правка владельца 09.07): лёгкая полосатость чётных строк ReportTable,
   // по умолчанию выкл (текущее поведение, вариант C без зебры).
@@ -638,8 +641,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setMetricThresholdOverrides(p.metricThresholdOverrides ?? {});
     setAccentedMetricIds(p.accentedMetricIds ?? []);
     setBarMetricIds(p.barMetricIds ?? []);
-    setHeatmapMetricIds(p.heatmapMetricIds ?? []);
-    setHeatmapInvertedIds(p.heatmapInvertedIds ?? []);
+    setHeatmapMetricIds(p.heatmapMetricIds ?? defaultHeatmapMetricIds ?? []);
+    setHeatmapInvertedIds(p.heatmapInvertedIds ?? defaultHeatmapInvertedIds ?? []);
     setColorizeMetrics(p.colorizeMetrics ?? false);
     setZebra(p.zebra ?? false);
     setBorderMode(p.borderMode ?? 'grid');
@@ -764,8 +767,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setMetricThresholdOverrides(s.metricThresholdOverrides ?? {});
     setAccentedMetricIds(s.accentedMetricIds ?? []);
     setBarMetricIds(s.barMetricIds ?? []);
-    setHeatmapMetricIds(s.heatmapMetricIds ?? []);
-    setHeatmapInvertedIds(s.heatmapInvertedIds ?? []);
+    setHeatmapMetricIds(s.heatmapMetricIds ?? defaultHeatmapMetricIds ?? []);
+    setHeatmapInvertedIds(s.heatmapInvertedIds ?? defaultHeatmapInvertedIds ?? []);
     setColorizeMetrics(s.colorizeMetrics ?? false);
     setZebra(s.zebra ?? false);
     setBorderMode((s.borderMode ?? 'grid') as BorderMode);
@@ -1802,6 +1805,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           onGroupingChange: sourceMode || periodMode || clientMode ? undefined : setGrouping,
           // Сводка логистов: отделы оргструктуры к логистам не относятся (#8126).
           showDepartments: !sourceMode && !REALIZATION_SLUGS.includes(reportSlug),
+          // Сводка логистов: группа строки = регион; «Регионы» — строки и есть регионы (#8126).
+          groupingOptions: reportSlug === REGIONS_SLUG
+            ? [{ value: 'none' as Grouping, label: 'Без групп.' }, { value: 'total' as Grouping, label: 'Итого' }]
+            : REALIZATION_SLUGS.includes(reportSlug)
+              ? [{ value: 'none' as Grouping, label: 'Без групп.' }, { value: 'team' as Grouping, label: 'По региону' }, { value: 'total' as Grouping, label: 'Итого' }]
+              : undefined,
           // «По периодам»: второго диапазона нет — база сравнения построчная
           // (переключатель «Сравнение» в шапке отчёта, PeriodReportControls).
           showComparison: !periodMode && !batchActive,

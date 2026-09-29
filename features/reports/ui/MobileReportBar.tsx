@@ -51,7 +51,7 @@ export function MobileReportBar(props: Props) {
   const {
     period, comparison, departmentIds, search = '', grouping,
     onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange,
-    onOpenMetricPanel, metricsBadge, showDepartments = true, showComparison = true, sourceDimension, onSourceDimensionChange,
+    onOpenMetricPanel, metricsBadge, showDepartments = true, showComparison = true, sourceDimension, onSourceDimensionChange, groupingOptions,
     dealScope, onDealScopeChange, clientType, onClientTypeChange,
     productGroupMode, onProductGroupModeChange, showProductGroupPicker,
     comparisonDisplay, onComparisonDisplayChange, hasMixedDisplay,
@@ -150,7 +150,7 @@ export function MobileReportBar(props: Props) {
               {onSourceDimensionChange && sourceDimension !== undefined ? (
                 <SourceDimensionSelector sourceDimension={sourceDimension} onSourceDimensionChange={onSourceDimensionChange} stacked />
               ) : onGroupingChange && grouping !== undefined ? (
-                <GroupingSelector grouping={grouping} onGroupingChange={onGroupingChange} stacked />
+                <GroupingSelector grouping={grouping} onGroupingChange={onGroupingChange} stacked options={groupingOptions} />
               ) : null}
 
               <div className="border-t border-[var(--color-border)] pt-4 flex flex-col gap-2.5 [&>button]:w-full [&>button]:justify-center [&>button]:py-2">

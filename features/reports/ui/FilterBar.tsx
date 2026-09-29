@@ -38,6 +38,8 @@ export interface FilterBarProps {
   onOpenMetricPanel?: () => void;
   metricsBadge?: number;
   showDepartments?: boolean; // false = скрыть выбор отделов (маркетинг)
+  /** Свой набор кнопок группировки (сводка логистов: «Без групп.» / «По региону» / «Итого», #8126). */
+  groupingOptions?: { value: Grouping; label: string }[];
   // false = скрыть второй диапазон «Сравнение» (отчёт «По периодам», 09.08:
   // база сравнения там построчная, своим переключателем в шапке отчёта)
   showComparison?: boolean;
@@ -537,18 +539,20 @@ export function SourceDimensionSelector({ sourceDimension, onSourceDimensionChan
 
 // ── Группировка — вынесена отдельным компонентом (задача 1714). `stacked` — вариант
 // для мобильной панели «Фильтры» (подпись сверху, сегменты растянуты на всю ширину).
-export function GroupingSelector({ grouping, onGroupingChange, stacked = false }: {
+export function GroupingSelector({ grouping, onGroupingChange, stacked = false, options }: {
   grouping: Grouping; onGroupingChange: (g: Grouping) => void; stacked?: boolean;
+  options?: { value: Grouping; label: string }[];
 }) {
+  const opts = options ?? (['none', 'team', 'branch', 'total'] as Grouping[]).map(g => ({ value: g, label: GROUPING_LABELS[g] }));
   const segs = (
     <div className={`flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm ${stacked ? 'w-full' : ''}`}>
-      {(['none', 'team', 'branch', 'total'] as Grouping[]).map(g => (
+      {opts.map(({ value: g, label }) => (
         <button
           key={g}
           onClick={() => onGroupingChange(g)}
           className={`${stacked ? 'flex-1' : 'px-3'} py-1.5 transition-colors ${grouping === g ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
         >
-          {GROUPING_LABELS[g]}
+          {label}
         </button>
       ))}
     </div>
@@ -569,7 +573,7 @@ export function GroupingSelector({ grouping, onGroupingChange, stacked = false }
   );
 }
 
-export function FilterBar({ period, comparison, departmentIds, search = '', grouping, onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange, onOpenMetricPanel, metricsBadge, showDepartments = true, showComparison = true, sourceDimension, onSourceDimensionChange }: Props) {
+export function FilterBar({ period, comparison, departmentIds, search = '', grouping, onPeriodChange, onComparisonChange, onDepartmentIdsChange, onSearchChange, onGroupingChange, onOpenMetricPanel, metricsBadge, showDepartments = true, showComparison = true, sourceDimension, onSourceDimensionChange, groupingOptions }: Props) {
   return (
     <div className="flex items-center gap-2 px-3 sm:px-6 py-2.5 bg-[var(--color-bg-surface)] border-b border-[var(--color-border)] flex-wrap">
 
@@ -603,7 +607,7 @@ export function FilterBar({ period, comparison, departmentIds, search = '', grou
 
       {/* ── Grouping (far right, labeled — matches the legacy tool everyone knows) ── */}
       {onGroupingChange && grouping !== undefined && (
-        <GroupingSelector grouping={grouping} onGroupingChange={onGroupingChange} />
+        <GroupingSelector grouping={grouping} onGroupingChange={onGroupingChange} options={groupingOptions} />
       )}
     </div>
   );

@@ -125,3 +125,12 @@ export const LOGIST_DRILL_STATUS: Record<string, string> = {
   lg_fix_pct: 'grp:shipped', lg_no_purchase: 'grp:shipped', lg_margin_base: 'grp:shipped', lg_excl_broken: 'grp:shipped',
   lg_margin: 'grp:shipped', lg_margin_pct: 'grp:shipped', lg_d_sale: 'grp:shipped', lg_d_cost: 'grp:shipped', lg_d_ratio: 'grp:shipped',
 };
+
+/**
+ * Раскраска (градиент) по смыслу метрики (доработка #8126): у долей градиент включён
+ * по умолчанию, но шкала «больше = лучше» красила высокую долю отмен в зелёный.
+ * Здесь — где больше = хуже (шкала инвертирована), и счётчики-«плохие» метрики, у
+ * которых градиент включаем явно (по умолчанию он только у долей).
+ */
+export const LOGIST_HEATMAP_ON_IDS = ['lg_overdue', 'lg_overdue30', 'lg_no_purchase', 'lg_excl_broken', 'lg_cycle_days', 'lg_react_hours'];
+export const LOGIST_HEATMAP_INVERTED_IDS = ['lg_cancel_pct', 'lg_fix_pct', 'lg_d_ratio', ...LOGIST_HEATMAP_ON_IDS];

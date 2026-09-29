@@ -15,7 +15,7 @@ import { parseFilters, matchRow } from '../lib/realizations/filters.ts';
 import { buildSummary, statusTimes, median, percentile, mskDate, type ReqRow } from '../lib/realizations/metrics.ts';
 import { RESPONSE_DRILL_RULES, responseDrillRule, parseDrillMetric } from '../lib/realizations/responseDrill.ts';
 import { RESPONSE_METRICS } from '../lib/realizations/responseMetrics.ts';
-import { LOGIST_METRICS, LOGIST_COLUMN_GROUPS, LOGIST_DEFAULT_METRIC_IDS, summaryToMetrics } from '../lib/realizations/logistMetrics.ts';
+import { LOGIST_METRICS, LOGIST_COLUMN_GROUPS, LOGIST_DEFAULT_METRIC_IDS, LOGIST_HEATMAP_ON_IDS, LOGIST_HEATMAP_INVERTED_IDS, summaryToMetrics } from '../lib/realizations/logistMetrics.ts';
 import { computeCalculated } from '../features/reports/engine/calculated.ts';
 import { parseSortParam, nextSort, sortRows } from '../lib/hooks/sortCore.ts';
 import { fmtRub, fmtInt, fmtMlnRub, fmtPct, humanName } from '../features/realizations/ui/format.ts';
@@ -139,6 +139,12 @@ for (const r of [...s.rows, s.total]) {
 check(LOGIST_METRICS.every(m => !/М\d|integrity|зеркал/i.test(`${m.nameRu} ${m.description}`)), 'подписи метрик без кодов М и жаргона');
 const grouped = new Set(LOGIST_COLUMN_GROUPS.flatMap(g => g.metricIds));
 check(LOGIST_DEFAULT_METRIC_IDS.every(id => grouped.has(id)), 'каждая видимая колонка — в группе');
+
+// 5.5 Раскраска: где больше = хуже — шкала инвертирована (доработка #8126)
+for (const id of ['lg_cancel_pct', 'lg_fix_pct', 'lg_d_ratio', 'lg_overdue', 'lg_overdue30', 'lg_no_purchase', 'lg_excl_broken'])
+  check(LOGIST_HEATMAP_INVERTED_IDS.includes(id), `«больше = хуже»: ${id} красится инвертированно`);
+check(!LOGIST_HEATMAP_INVERTED_IDS.includes('lg_on_time_pct') && !LOGIST_HEATMAP_INVERTED_IDS.includes('lg_margin_pct'), 'в срок и маржа — обычная шкала (больше = лучше)');
+check(LOGIST_HEATMAP_ON_IDS.every(id => LOGIST_METRICS.some(m => m.id === id && m.dataType !== 'percent')), 'явный градиент — только у счётчиков (доли и так с градиентом)');
 
 console.log(`assert-realizations: ${passed} passed, ${failures} failed`);
 if (failures) process.exit(1);
