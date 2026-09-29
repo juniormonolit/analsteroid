@@ -3,6 +3,7 @@ import { toSqlInterval, type DateRange } from '@/lib/period';
 import { loadManagerInfoMap } from '@/lib/marketing/sources';
 import type { ReportRow } from '@/lib/metrics/types';
 import { RESPONSE_EXCLUDED_FLOWS } from '@/lib/realizations/responseMetrics';
+import { responseDrillRule } from '@/lib/realizations/responseDrill';
 
 // Движок отчёта «Ответы на запросы» (slug 'requests-response', задача #8034).
 // Строка = менеджер-постановщик (bitrix created_by); метрики — rr_* из
@@ -154,8 +155,12 @@ export interface RequestTaskItem {
   responsible: string | null; dealId: number | null; dealSoldAt: string | null; dealDeliveredAt: string | null; dealAmount: number | null;
 }
 
-/** Дриллдаун: задачи-запросы менеджера за период (до 2000 строк). managerId = '__all__' — все. */
-export async function fetchRequestTasks(period: DateRange, managerId: string): Promise<RequestTaskItem[]> {
+/**
+ * Дриллдаун: задачи-запросы менеджера за период (до 2000 строк). managerId = '__all__' — все.
+ * metricId — колонка ячейки (задача #8126): список режется тем же условием, что и
+ * агрегат (lib/realizations/responseDrill.ts), сделочные метрики — строка на сделку.
+ */
+export async function fetchRequestTasks(period: DateRange, managerId: string, metricId?: string | null): Promise<RequestTaskItem[]> {
   const { from, toExcl } = toSqlInterval(period);
   const params: unknown[] = [from, toExcl, RESPONSE_EXCLUDED_FLOWS];
   let extra = '';
@@ -164,12 +169,19 @@ export async function fetchRequestTasks(period: DateRange, managerId: string): P
     params.push(ids);
     extra = `and t.created_by = any($${params.length}::int[])`;
   }
+  const rule = responseDrillRule(metricId);
+  const where = rule.where ? `where ${rule.where}` : '';
+  const cols = `rq.task_id, rq.title, rq.flow_name, rq.status, rq.created_at, rq.date_start, rq.closed_at, rq.first_answer_at,
+  rq.responsible_name, rq.deal_id, d.sold_at, d.delivered_at, d.amount`;
+  // perDeal: одна строка на сделку — последний по времени запрос по ней.
+  const body = rule.perDeal
+    ? `select * from (select distinct on (rq.deal_id) ${cols} from rq left join sa.deals d on d.deal_id = rq.deal_id ${where}
+  order by rq.deal_id, rq.created_at desc) x order by x.created_at desc limit 2000`
+    : `select ${cols} from rq left join sa.deals d on d.deal_id = rq.deal_id ${where}
+order by rq.created_at desc limit 2000`;
   const res = await analyticsDb().query(`
 with ${requestTasksCte(extra)}
-select rq.task_id, rq.title, rq.flow_name, rq.status, rq.created_at, rq.date_start, rq.closed_at, rq.first_answer_at,
-  rq.responsible_name, rq.deal_id, d.sold_at, d.delivered_at, d.amount
-from rq left join sa.deals d on d.deal_id = rq.deal_id
-order by rq.created_at desc limit 2000`, params);
+${body}`, params);
   const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
   return res.rows.map(r => ({
     taskId: Number(r.task_id), title: r.title ?? null, flow: r.flow_name ?? null, status: r.status === null ? null : Number(r.status),

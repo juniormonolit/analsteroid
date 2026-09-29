@@ -434,3 +434,12 @@ button, a { -webkit-tap-highlight-color: transparent; }
   }
   .slide-backdrop-fade { transition: none; }
 }
+
+/* Единое кольцо фокуса DS (задача #8126, находка 24): 2px --border-focus с отступом
+   2px, только при навигации с клавиатуры. Вешается классом на кнопки заголовков
+   таблиц, вкладки и кликабельные строки раздела «Реализация». */
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+tr.focus-ring:focus-visible { outline-offset: -2px; }

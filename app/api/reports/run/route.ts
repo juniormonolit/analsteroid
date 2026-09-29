@@ -30,6 +30,8 @@ import {
 import { computeRatingValues } from '@/features/manager-card/engine/ratings';
 import { fetchRequestResponse } from '@/features/reports/engine/requestResponse';
 import { RESPONSE_SLUG, RESPONSE_METRIC_IDS } from '@/lib/realizations/responseMetrics';
+import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_METRIC_IDS } from '@/lib/realizations/logistMetrics';
+import { fetchLogistReport } from '@/features/reports/engine/realizationLogists';
 import { canViewRealizations } from '@/lib/realizations/access';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
@@ -108,7 +110,7 @@ export async function POST(req: NextRequest) {
 
   // «Ответы на запросы» (раздел «Реализация», задача #8034) — только роль
   // «Администратор» (и супер-админ); та же проверка, что у меню и /api/realizations/*.
-  if (reportSlug === RESPONSE_SLUG && !canViewRealizations(session)) {
+  if ((reportSlug === RESPONSE_SLUG || REALIZATION_SLUGS.includes(reportSlug)) && !canViewRealizations(session)) {
     return NextResponse.json({ error: 'Недостаточно прав: раздел «Реализация» доступен только роли «Администратор»' }, { status: 403 });
   }
   if (!isValidPeriodInput(period)) {
@@ -255,6 +257,7 @@ export async function POST(req: NextRequest) {
   } | null = null;
 
   let responseGrand: { cur: Record<string, number | null> | null; comp: Record<string, number | null> | null } | null = null;
+  let logistGrand: { cur: Record<string, number | null>; comp: Record<string, number | null> } | null = null;
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
       fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter,
@@ -309,6 +312,19 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Нет доступа к задачам Битрикса в базе (sa.bitrix_task_current / sa.bitrix_flows): роли приложения нужен GRANT SELECT' }, { status: 503 });
       }
       return NextResponse.json({ error: 'Не удалось посчитать «Ответы на запросы»' }, { status: 502 });
+    }
+  } else if (REALIZATION_SLUGS.includes(reportSlug)) {
+    // «Сводка по логистам» / «Регионы» (задача #8126): строки = логисты (группа —
+    // регион) или регионы, по данным заявок 1С; формулы — buildSummary.
+    try {
+      const by = reportSlug === REGIONS_SLUG ? 'region' : 'logist';
+      const [cur, comp] = await Promise.all([fetchLogistReport(opts.period, by), fetchLogistReport(compOpts.period, by)]);
+      currentRows = cur.rows;
+      compRows = comp.rows;
+      logistGrand = { cur: cur.grand, comp: comp.grand };
+    } catch (e) {
+      console.error('[reports/run realizations]', (e as Error).message ?? e);
+      return NextResponse.json({ error: 'Не удалось получить заявки из 1С для сводки логистов' }, { status: 502 });
     }
   }
 
@@ -1060,6 +1076,15 @@ export async function POST(req: NextRequest) {
 
   // «Итого» «Ответов на запросы» — общая строка GROUPING SETS: медианы и доли по
   // всей совокупности, сделки без дубля (сумма строк была бы неверной).
+  // «Итого» сводки логистов — общая строка buildSummary (медианы по всей совокупности).
+  if (logistGrand) {
+    for (const id of LOGIST_METRIC_IDS) {
+      if (!withDeps.some(m => m.id === id)) continue;
+      const current = logistGrand.cur[id] ?? null;
+      const comparison = logistGrand.comp[id] ?? null;
+      totals[id] = { current, comparison, ...computeDelta(current, comparison) };
+    }
+  }
   if (responseGrand) {
     for (const id of RESPONSE_METRIC_IDS) {
       if (!withDeps.some(m => m.id === id)) continue;

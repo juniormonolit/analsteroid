@@ -80,3 +80,10 @@ export const RESPONSE_DEFAULT_METRIC_IDS = RESPONSE_METRICS.filter(m => !m.isHid
 
 /** Метрики-медианы: «Итого» — медиана по всей совокупности, не сумма строк. */
 export const RESPONSE_MEDIAN_IDS = ['rr_time_to_work_med_h', 'rr_cycle_med_h', 'rr_first_answer_med_h'];
+
+/** Группы колонок по умолчанию (задача #8126, находка 21): как «БРОНИ И ПРОДАЖИ» в «Продажах». */
+export const RESPONSE_COLUMN_GROUPS: { name: string; metricIds: string[] }[] = [
+  { name: 'Запросы', metricIds: ['rr_requests_total', 'rr_requests_new', 'rr_requests_in_work', 'rr_requests_closed', 'rr_closed_no_take'] },
+  { name: 'Скорость', metricIds: ['rr_time_to_work_med_h', 'rr_cycle_med_h', 'rr_answered', 'rr_first_answer_med_h', 'rr_answer_lt3_pct', 'rr_answer_lt9_pct'] },
+  { name: 'Сделки', metricIds: ['rr_deals', 'rr_sold_deals', 'rr_sold_amount', 'rr_delivered_deals', 'rr_delivered_amount'] },
+];

@@ -4,9 +4,10 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { DealFilterButton } from './DealFilterButton';
 import { describeDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
-import { useUrlState, dateRangeParam, enumParam, stringParam, type UrlDateRange } from '@/lib/hooks/useUrlState';
+import { useUrlState, useUrlStateBatch, dateRangeParam, enumParam, stringParam, type UrlDateRange } from '@/lib/hooks/useUrlState';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Trash2, Info, Filter } from 'lucide-react';
+import { format } from 'date-fns';
 import { hasPerm } from '@/lib/auth/perms';
 import type { SessionUser } from '@/lib/auth/session';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
@@ -48,8 +49,9 @@ import { ReportTabsBar } from './ReportTabsBar';
 import { MetricBreakdownProvider, MetricBreakdownContext, type BreakdownReportContext } from './MetricBreakdownContext';
 import { loadTabsStore, saveTabsStore, newTabId, type ReportTab, type ReportTabSnapshot, type ReportTabsStore } from '@/features/reports/lib/reportTabs';
 import { diffFromPreset } from '@/features/reports/lib/presetDiff';
-import { RESPONSE_SLUG } from '@/lib/realizations/responseMetrics';
+import { RESPONSE_SLUG, RESPONSE_RELIABLE_FROM } from '@/lib/realizations/responseMetrics';
 import { RequestTasksDrill } from '@/features/realizations/ui/RequestTasksDrill';
+import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_DRILL_STATUS } from '@/lib/realizations/logistMetrics';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -313,6 +315,8 @@ interface Props {
   /** Стартовый набор колонок вместо DEFAULT_METRIC_IDS (отчёты с собственным
    *  набором метрик, напр. «Ответы на запросы», задача #8034). */
   defaultMetricIds?: string[];
+  /** Группы колонок по умолчанию (отчёты «Реализации», задача #8126). */
+  defaultColumnGroups?: { name: string; metricIds: string[] }[];
 }
 
 const SOURCE_DIMENSION_LABELS: Record<string, string> = {
@@ -332,7 +336,7 @@ const DEFAULT_METRIC_IDS = [
   'primary_shipments_amount',
 ];
 
-export function SalesReportPage({ reportSlug, title, preset, isNew = false, defaultMetricIds }: Props) {
+export function SalesReportPage({ reportSlug, title, preset, isNew = false, defaultMetricIds, defaultColumnGroups }: Props) {
   const startMetricIds = defaultMetricIds ?? DEFAULT_METRIC_IDS;
   const isMobile = useIsMobile();
   const router = useRouter();
@@ -489,7 +493,17 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useUrlState<string>('q', stringParam(''));
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
-  const [tasksDrill, setTasksDrill]     = useState<{ managerId: string; name: string; metricName?: string } | null>(null);
+  const [tasksDrill, setTasksDrill]     = useState<{ managerId: string; name: string; metricId?: string; metricName?: string } | null>(null);
+  // Открытый дрилл и график — в URL (задача #8126, правило «у каждого состояния свой
+  // URL»): ?drill=<id строки>&drillMetric=<metricId>, ?chart=<id строки>&chartMetric=.
+  // URL — источник правды: клик пишет адрес, эффект ниже открывает панель по адресу
+  // (так же открывается прямой заход по ссылке и «назад» в браузере закрывает её).
+  const nullableParam = { parse: (raw: string) => raw || null, serialize: (v: string | null) => v, default: null as string | null, mode: 'push' as const };
+  const [drillParam] = useUrlState<string | null>('drill', nullableParam);
+  const [drillMetricParam] = useUrlState<string | null>('drillMetric', nullableParam);
+  const [chartParam] = useUrlState<string | null>('chart', nullableParam);
+  const [chartMetricParam] = useUrlState<string | null>('chartMetric', nullableParam);
+  const patchUrl = useUrlStateBatch('push');
   // «График из отчёта» (фича Серёги 01.08): цель открытого графика метрики.
   const [chartTarget, setChartTarget]   = useState<MetricChartTarget | null>(null);
   // Режим «Сравнение» (п. Н2 спеки): выбор сущностей живёт в состоянии страницы (не в
@@ -573,7 +587,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     serialize: (v) => (v.length ? JSON.stringify(v) : null),
     default: [],
   });
-  const [columnGroups, setColumnGroups] = useState<{ name: string; metricIds: string[] }[]>([]);
+  const [columnGroups, setColumnGroups] = useState<{ name: string; metricIds: string[] }[]>(defaultColumnGroups ?? []);
   const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
 
   useEffect(() => { setViewPrefs(loadViewPrefs()); }, []);
@@ -640,7 +654,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setDrilldownDimension((p.drilldownDimension as DrilldownDimension) ?? 'contact_type');
     if (!keep('sortBy')) setSortBy(p.sortBy ?? null);
     if (!keep('sortDir')) setSortDir(p.sortDir ?? 'desc');
-    setColumnGroups(p.columnGroups ?? []);
+    setColumnGroups(p.columnGroups ?? defaultColumnGroups ?? []);
     // «По периодам» (миграция 170): у отчётов остальных типов колонки пустые —
     // дефолты те же, что у нового отчёта.
     if (!keep('unit')) setPeriodUnit((p.periodUnit as CalendarUnit) ?? 'month');
@@ -765,7 +779,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setDrilldownDimension((s.drilldownDimension ?? 'contact_type') as DrilldownDimension);
     if (!keep('sortBy')) setSortBy(s.sortBy ?? null);
     if (!keep('sortDir')) setSortDir((s.sortDir ?? 'desc') as 'asc' | 'desc');
-    setColumnGroups(s.columnGroups ?? []);
+    setColumnGroups(s.columnGroups ?? defaultColumnGroups ?? []);
     setMetricFilters((s.metricFilters ?? {}) as MetricFilters);
     // «Фильтр сделок» — как и остальные настройки отчёта, применяется из пресета,
     // но keep() уважает уже стоящий в URL фильтр: ссылка с фильтром важнее
@@ -911,6 +925,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   // аккаунта неприменимы; дрилл строки — плоский список сделок клиента.
   const clientMode = reportSlug === 'by-clients';
   const batchAvailable = reportSlug === 'by-managers';
+  // Отчёты раздела «Реализация» (задача #8126): не сделочные — сделочные фильтры скрыты.
+  const realizationMode = reportSlug === RESPONSE_SLUG || REALIZATION_SLUGS.includes(reportSlug);
   const batchActive = batchAvailable && batchMode.on;
   const queryKey = ['report', reportSlug, batchActive ? batchMode : null, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters,
     periodMode ? periodUnit : null, periodMode ? periodDimension : null, periodMode ? compareMode : null];
@@ -1212,8 +1228,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setMetricFilters({});
   }, []);
 
-  const handleRowClick = useCallback(
+  const applyRowClick = useCallback(
     (id: string, name: string) => {
+      // «Ответы на запросы»: клик по имени строки — все её запросы (как ячейка «всего»).
+      if (reportSlug === RESPONSE_SLUG) { applyCellClickRef.current?.(id, name, 'rr_requests_total'); return; }
       // Агрегированные строки отделов внутри филиала → сделки отдела
       if (id.startsWith('__ugroup__')) {
         // Этап 2 (задача 2653): список сделок ВСЕХ участников группы —
@@ -1228,7 +1246,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
       else setDrilldown({ id, name });
     },
     // userGroups/dimensionType — дрилл пользовательских групп (задача 2653, этап 2)
-    [userGroups, dimensionType]
+    [userGroups, dimensionType, reportSlug]
   );
 
   // Клик по #логину менеджера (dimensionSubtitle) — только в отчёте «по менеджерам»
@@ -1248,7 +1266,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     [router, period]
   );
 
-  const handleCellClick = useCallback(
+  const applyCellClick = useCallback(
     (id: string, name: string, metricId: string) => {
       const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
         ?? availableMetrics.find((x: { id: string }) => x.id === metricId);
@@ -1262,7 +1280,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           : id.startsWith('__branch__') ? rowsNow.filter(r => (r.branchName ?? '') === id.slice('__branch__'.length)).map(r => r.dimensionId)
           : id.startsWith('__ugroup__') ? (userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [])
           : [id];
-        setTasksDrill({ managerId: ids.filter(x => /^\d+$/.test(x)).join(',') || '__all__', name, metricName: m?.nameRu });
+        setTasksDrill({ managerId: ids.filter(x => /^\d+$/.test(x)).join(',') || '__all__', name, metricId, metricName: m?.nameRu });
         return;
       }
       // Групповые строки и «Итого» открывают плоский список сделок всего среза
@@ -1302,7 +1320,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   // пользовательской группы/Итого — участники видимого отчёта: так же учитываются
   // отделы и тип аккаунта, отфильтрованные на этом слое); by-product-groups —
   // товарная группа строки (тот же buildProductGroupFilter на сервере).
-  const handleMetricChart = useCallback(
+  const applyMetricChart = useCallback(
     (id: string, name: string, metricId: string) => {
       const findRow = (rs: GroupedMergedRow[]): MergedRow | undefined => {
         for (const r of rs) {
@@ -1334,14 +1352,18 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
         // Разрез источников: строка ≠ менеджер/группа — поддержан только «Итого»
         // (фильтры источников в серию пока не транслируются — осознанное ограничение v1).
         if (id !== '__total__') { alert('График по строкам источников пока не поддержан — используйте иконку в заголовке метрики («Итого»)'); return; }
-      } else if (reportSlug === 'by-managers') {
-        if (id === '__total__') managerIds = baseRows.map(r => r.dimensionId);
+      } else if (reportSlug === 'by-managers' || reportSlug === RESPONSE_SLUG) {
+        // «Ответы на запросы» (#8126, находка 3): строка = менеджер-постановщик — график
+        // ограничивается строкой так же, как в «Менеджерах» (раньше рисовался ряд «Итого»).
+        if (id === '__total__') managerIds = reportSlug === RESPONSE_SLUG ? undefined : baseRows.map(r => r.dimensionId);
         else if (id.startsWith('__team__')) { const t = id.slice(8); managerIds = baseRows.filter(r => (r.teamId ?? '__no_team__') === t).map(r => r.dimensionId); }
         else if (id.startsWith('__branch__')) { const b = id.slice(10); managerIds = baseRows.filter(r => (r.branchName ?? 'СПб') === b).map(r => r.dimensionId); }
         else if (id === NOGROUP_ROW_ID) managerIds = userGroupFreeIds;
         else if (id.startsWith('__ugroup__')) managerIds = userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [];
         else managerIds = [id];
         if (managerIds !== undefined && managerIds.length === 0) return;
+      } else if (REALIZATION_SLUGS.includes(reportSlug)) {
+        if (id !== '__total__') { alert('График по строке логиста пока не поддержан — используйте иконку в заголовке метрики («Итого»)'); return; }
       } else if (reportSlug === 'by-product-groups') {
         if (id !== '__total__' && !id.startsWith('__')) {
           // kc: '__none__' уже в id; by_max: строковое имя head-группы (включая «Без группы»).
@@ -1354,6 +1376,67 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     },
     [data?.rows, data?.totals, displayRows, reportSlug, sourceMode, periodMode, productGroupMode, userGroups, userGroupFreeIds, userGroupBusy],
   );
+
+  // ── Дрилл/график ⇄ URL (задача #8126) ─────────────────────────────────────
+  const applyCellClickRef = useRef<typeof applyCellClick | null>(null);
+  applyCellClickRef.current = applyCellClick;
+  const rowNameOf = useCallback((id: string): string => {
+    if (id === '__total__') return 'Итого';
+    const walk = (rs: GroupedMergedRow[]): string | null => {
+      for (const r of rs) {
+        if (r.dimensionId === id) return r.dimensionName;
+        if (r.children) { const c = walk(r.children as GroupedMergedRow[]); if (c) return c; }
+      }
+      return null;
+    };
+    return walk(displayRows as GroupedMergedRow[]) ?? userGroups.find(g => `__ugroup__${g.id}` === id)?.name ?? 'Строка отчёта';
+  }, [displayRows, userGroups]);
+  // Сводка логистов / регионы: дрилл = список «Заявки» с фильтром строки (и статусом
+  // метрики, где он однозначен) — это отдельная страница со своим адресом.
+  const openRealizationRequests = useCallback((id: string, metricId: string | null) => {
+    const qs = new URLSearchParams({ period: `${period.from.toISOString()},${period.to.toISOString()}` });
+    if (id !== '__total__' && !id.startsWith('__')) qs.set(reportSlug === REGIONS_SLUG ? 'region' : 'logist', id);
+    else if (id.startsWith('__team__')) qs.set('region', id.slice('__team__'.length));
+    const st = metricId ? LOGIST_DRILL_STATUS[metricId] : undefined;
+    if (st) qs.set('status', st);
+    router.push(`/realizations/requests?${qs}`);
+  }, [period, reportSlug, router]);
+  const handleRowClick = useCallback((id: string) => {
+    if (REALIZATION_SLUGS.includes(reportSlug)) { openRealizationRequests(id, null); return; }
+    patchUrl({ drill: id, drillMetric: null });
+  }, [patchUrl, reportSlug, openRealizationRequests]);
+  const handleCellClick = useCallback((id: string, _name: string, metricId: string) => {
+    if (REALIZATION_SLUGS.includes(reportSlug)) { openRealizationRequests(id, metricId); return; }
+    patchUrl({ drill: id, drillMetric: metricId });
+  }, [patchUrl, reportSlug, openRealizationRequests]);
+  const handleMetricChart = useCallback((id: string, _name: string, metricId: string) => patchUrl({ chart: id, chartMetric: metricId }), [patchUrl]);
+  const closeDrillUrl = useCallback(() => patchUrl({ drill: null, drillMetric: null }), [patchUrl]);
+  const closeChartUrl = useCallback(() => patchUrl({ chart: null, chartMetric: null }), [patchUrl]);
+  const appliedDrill = useRef<string | null>(null);
+  const drillKey = drillParam ? `${drillParam}|${drillMetricParam ?? ''}` : null;
+  useEffect(() => {
+    if (!drillKey || !drillParam) {
+      if (appliedDrill.current) { appliedDrill.current = null; setDrilldown(null); setTasksDrill(null); }
+      return;
+    }
+    if (appliedDrill.current === drillKey || !data) return; // ждём строки — нужны имя и состав групп
+    appliedDrill.current = drillKey;
+    setDrilldown(null); setTasksDrill(null);
+    const name = rowNameOf(drillParam);
+    if (drillMetricParam) applyCellClick(drillParam, name, drillMetricParam);
+    else applyRowClick(drillParam, name);
+  }, [drillKey, data]); // eslint-disable-line react-hooks/exhaustive-deps
+  const appliedChart = useRef<string | null>(null);
+  const chartKey = chartParam && chartMetricParam ? `${chartParam}|${chartMetricParam}` : null;
+  useEffect(() => {
+    if (!chartKey || !chartParam || !chartMetricParam) {
+      if (appliedChart.current) { appliedChart.current = null; setChartTarget(null); }
+      return;
+    }
+    if (appliedChart.current === chartKey || !data) return;
+    appliedChart.current = chartKey;
+    applyMetricChart(chartParam, rowNameOf(chartParam), chartMetricParam);
+  }, [chartKey, data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Экспорт отчёта (задача 1706): буфер (TSV)/Excel/PDF/PNG — единый снимок таблицы
   // (buildExportTable, features/reports/lib/tableExport.ts) форматирует значения ПО ТИПУ
@@ -1386,7 +1469,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     : sourceMode
     ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
     : reportSlug === 'by-product-groups' ? 'Товарная группа'
-    : reportSlug === RESPONSE_SLUG ? 'Менеджер (постановщик)' : 'Менеджер';
+    : reportSlug === RESPONSE_SLUG ? 'Менеджер (постановщик)'
+    : reportSlug === REGIONS_SLUG ? 'Регион'
+    : REALIZATION_SLUGS.includes(reportSlug) ? 'Логист' : 'Менеджер';
 
   // Ref на корневой прокручиваемый div таблицы (ReportTable.tsx) — нужен PNG/PDF-снимку
   // (captureTableNode временно разворачивает его в overflow:visible на время снимка,
@@ -1715,7 +1800,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           onDepartmentIdsChange: setDepartmentIds,
           onSearchChange: setSearch,
           onGroupingChange: sourceMode || periodMode || clientMode ? undefined : setGrouping,
-          showDepartments: !sourceMode,
+          // Сводка логистов: отделы оргструктуры к логистам не относятся (#8126).
+          showDepartments: !sourceMode && !REALIZATION_SLUGS.includes(reportSlug),
           // «По периодам»: второго диапазона нет — база сравнения построчная
           // (переключатель «Сравнение» в шапке отчёта, PeriodReportControls).
           showComparison: !periodMode && !batchActive,
@@ -1783,8 +1869,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           // тоже доступен: фильтр режет сделки, а не сущности строк.
           userGroupsSlot: (
             <>
-              <DealFilterButton value={dealFilters} onChange={setDealFilters} />
-              {!sourceMode && !periodMode && !clientMode && (
+              {/* «Ответы на запросы» и отчёты логистов — не про сделки: «Фильтр сделок»
+                  и «Создать группу» там ничего не режут (задача #8126, находка 20). */}
+              {!realizationMode && <DealFilterButton value={dealFilters} onChange={setDealFilters} />}
+              {!sourceMode && !periodMode && !clientMode && !realizationMode && (
                 <CreateGroupButton
                   active={groupSelectMode}
                   onClick={() => (groupSelectMode ? exitGroupSelect() : setGroupSelectMode(true))}
@@ -1807,6 +1895,23 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
             <FilterBar {...filterBarProps} />
             <ReportToolbar {...reportToolbarProps} />
           </>
+        );
+      })()}
+
+      {/* Оговорки данных «Реализации» — один баннер над таблицей (#8126, находка 14). */}
+      {realizationMode && (() => {
+        const early = reportSlug === RESPONSE_SLUG && format(period.from, 'yyyy-MM-dd') < RESPONSE_RELIABLE_FROM;
+        const text = reportSlug === RESPONSE_SLUG
+          ? (early
+            ? 'Период начинается раньше 07.09.2026: до этой даты у части запросов нет ответа в Битриксе, «Первый ответ» и доли быстрых ответов там занижены.'
+            : 'Первый ответ считается надёжно с 07.09.2026. Время — по Москве.')
+          : 'Заявки и работа логистов по данным 1С, суммы без НДС. Маржа предварительная — методика ещё не согласована. Данные обновляются раз в 5 минут.';
+        return (
+          <div role="status" className={`mx-3 sm:mx-6 mt-2 flex items-start gap-2 rounded-lg border px-3 py-2 text-[13px] text-[var(--color-text)] ${early
+            ? 'border-[var(--warning-text)]/30 bg-[var(--warning-bg)]' : 'border-[var(--color-accent)]/25 bg-[var(--blue-50)]'}`}>
+            <Info size={16} className={`mt-px shrink-0 ${early ? 'text-[var(--warning-text)]' : 'text-[var(--color-accent)]'}`} aria-hidden />
+            <span>{text}</span>
+          </div>
         );
       })()}
 
@@ -1986,7 +2091,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
             hasComparison={comparisonDisplay !== 'current'}
             filters={{ dealScope, clientType, productGroupMode, departmentIds, createdTimeFilter, firstTouchFilter, dealFilters }}
             batch={batchActive ? { size: batchMode.size, useZombies: batchMode.useZombies } : null}
-            onClose={() => setChartTarget(null)}
+            onClose={closeChartUrl}
           />
         );
       })()}
@@ -2064,14 +2169,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
               onBorderModeChange={setBorderMode}
             />
           }
-          onClose={() => setDrilldown(null)}
+          onClose={closeDrillUrl}
         />
         </MetricBreakdownContext.Provider>
       )}
 
       {tasksDrill && (
-        <RequestTasksDrill managerId={tasksDrill.managerId} name={tasksDrill.name} metricName={tasksDrill.metricName}
-          period={period} onClose={() => setTasksDrill(null)} />
+        <RequestTasksDrill key={`${tasksDrill.managerId}|${tasksDrill.metricId ?? ''}`} managerId={tasksDrill.managerId} name={tasksDrill.name}
+          metricId={tasksDrill.metricId} metricName={tasksDrill.metricName}
+          period={period} onClose={closeDrillUrl} />
       )}
 
       {showComparison && (

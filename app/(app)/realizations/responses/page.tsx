@@ -1,5 +1,5 @@
 import { SalesReportPage } from '@/features/reports/ui/SalesReportPage';
-import { RESPONSE_SLUG, RESPONSE_DEFAULT_METRIC_IDS } from '@/lib/realizations/responseMetrics';
+import { RESPONSE_SLUG, RESPONSE_DEFAULT_METRIC_IDS, RESPONSE_COLUMN_GROUPS } from '@/lib/realizations/responseMetrics';
 
 // «Реализация → Ответы на запросы» (задача #8034) — отчёт на общем
 // движке (SalesReportPage → /api/reports/run, slug 'requests-response').
@@ -7,5 +7,5 @@ import { RESPONSE_SLUG, RESPONSE_DEFAULT_METRIC_IDS } from '@/lib/realizations/r
 export const metadata = { title: 'Ответы на запросы' };
 
 export default function Page() {
-  return <SalesReportPage reportSlug={RESPONSE_SLUG} title="Ответы на запросы" defaultMetricIds={RESPONSE_DEFAULT_METRIC_IDS} />;
+  return <SalesReportPage reportSlug={RESPONSE_SLUG} title="Ответы на запросы" defaultMetricIds={RESPONSE_DEFAULT_METRIC_IDS} defaultColumnGroups={RESPONSE_COLUMN_GROUPS} />;
 }

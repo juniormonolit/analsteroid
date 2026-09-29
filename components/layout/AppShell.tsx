@@ -392,7 +392,10 @@ const NAV: NavItem[] = [
     label: 'Реализация', icon: <Truck size={18} />, visible: canViewRealizations,
     children: [
       { label: 'Ответы на запросы', href: '/realizations/responses' },
-      { label: 'Заявки и логисты', href: '/realizations' },
+      // Каждый отчёт — отдельный пункт (задача #8126, находка 9), без вкладок-пилюль.
+      { label: 'Заявки', href: '/realizations/requests' },
+      { label: 'Сводка по логистам', href: '/realizations/logists' },
+      { label: 'Регионы', href: '/realizations/regions' },
     ],
   },
   // «Графики» (задача владельца 28.07): конструктор графиков по метрикам отчётов +

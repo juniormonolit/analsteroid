@@ -132,7 +132,7 @@ select r.id, r.number, r.doc_date, r.status, r.posted, r.shipment_date::text shi
   r.shipment_time_start::text shipment_time_start, r.shipment_time_end::text shipment_time_end,
   r.address, r.amount, r.payment_form, r.payment_method, r.comment, r.shipment_comment,
   r.cancel_reason, r.not_shipped_comment, r.creation_date_1c,
-  b.name buyer, m.name manager, l.name logist, o.name organization
+  b.name buyer, m.name manager, r.logist_id, l.name logist, o.name organization
 from sd.requests r
 left join sd.counterparties b on b.id = r.buyer_id
 left join sd.counterparties o on o.id = r.organization_id

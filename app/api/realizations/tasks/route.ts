@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { guardRealizations } from '../guard';
 import { fetchRequestTasks } from '@/features/reports/engine/requestResponse';
+import { parseDrillMetric } from '@/lib/realizations/responseDrill';
 
 // Дриллдаун отчёта «Ответы на запросы»: задачи-запросы менеджера за период.
 // managerId — Bitrix id постановщика (через запятую — группа), '__all__' — все.
+// metricId — колонка ячейки: список = население числа в ячейке (задача #8126).
 export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
@@ -13,10 +15,11 @@ export async function GET(req: NextRequest) {
   const from = new Date(sp.get('from') ?? '');
   const to = new Date(sp.get('to') ?? '');
   const managerId = sp.get('managerId') ?? '';
+  const metricId = parseDrillMetric(sp.get('metricId'));
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return NextResponse.json({ error: 'Период задан неверно' }, { status: 400 });
   if (managerId !== '__all__' && !/^\d+(,\d+)*$/.test(managerId)) return NextResponse.json({ error: 'Некорректный менеджер' }, { status: 400 });
   try {
-    const items = await fetchRequestTasks({ from, to }, managerId);
+    const items = await fetchRequestTasks({ from, to }, managerId, metricId);
     return NextResponse.json({ items, truncated: items.length >= 2000 });
   } catch (e) {
     const msg = (e as Error).message ?? '';

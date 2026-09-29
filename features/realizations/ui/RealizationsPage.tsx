@@ -1,28 +1,30 @@
 'use client';
-// «Продажи → Реализация» (задача #8034, просьба Сергея 29.09). Отчёты по
-// логистам на данных базы Диспетчера (схема sd — зеркало 1С), этап 1:
-//   • «Заявки» — список sd.requests с фильтрами и карточкой заявки;
-//   • «Сводка по логистам» — метрики М1–М9, М11, М12 из предложения Софьи;
-//   • «Регионы» — та же сводка по регионам (СПБ/МСК/КРД).
+// «Реализация → Заявки» (задача #8034, переделка #8126 по аудиту Полины). Список
+// заявок 1С по плановой дате отгрузки с фильтрами региона / логиста / статуса.
+// «Сводка по логистам» и «Регионы» — отдельные отчёты на общем движке
+// (/realizations/logists, /realizations/regions), здесь только список.
+//
+// Всё состояние — в адресе: период (?period= — тот же формат и тот же дефолт, что
+// у отчётов «Продаж»), фильтры, сортировка (?sort=), страница (?page=), открытая
+// карточка (?request=<id>). Тулбар — компоненты «Продаж» (PeriodRangeControls),
+// на телефоне — [период][Фильтры N], остальное раскрывается ниже.
 // Доступ — только роль «Администратор» (гейт в layout и во всех API).
 // Маржа — без НДС, методика ещё не согласована: подписана «предварительно».
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, AlertTriangle, ChevronDown, ChevronUp, Info } from 'lucide-react';
-import { RequestCardModal } from './RequestCardModal';
-import { DASH, fmt1, fmtDate, fmtInt, fmtMln, fmtPct, fmtRub } from './format';
-import type { SummaryRow, StatusTimeRow } from '@/lib/realizations/metrics';
+import Link from 'next/link';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { Loader2, AlertTriangle, Info, Download, RefreshCw, SlidersHorizontal, ChevronLeft, ChevronRight } from 'lucide-react';
+import { RequestCardPanel } from './RequestCardPanel';
+import { DASH, fmtDate, fmtInt, fmtMlnRub, fmtPct, fmtRub, humanName } from './format';
 import { REGIONS, REGION_LABEL, type Region } from '@/lib/realizations/region';
-import { defaultPeriod } from '@/lib/realizations/filters';
-
-type Tab = 'requests' | 'logists' | 'regions';
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'requests', label: 'Заявки' },
-  { key: 'logists', label: 'Сводка по логистам' },
-  { key: 'regions', label: 'Регионы' },
-];
+import { defaultPeriod as reportDefaultPeriod, recomputeComparison, type DateRange } from '@/lib/period';
+import { useUrlState, useUrlStateBatch, dateRangeParam, stringParam, intParam } from '@/lib/hooks/useUrlState';
+import { useUrlSort, sortRows } from '@/lib/hooks/useUrlSort';
+import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
+import { SortableTh } from '@/components/ui/SortableTh';
+import { mskYmd } from '@/lib/realizations/period';
 
 interface LogistOpt { id: string; name: string; region: Region }
 interface RequestItem {
@@ -35,457 +37,271 @@ interface RequestsResp {
   totals: { salesNv: number; purchNv: number; marginNv: number; mSalesNv: number };
   options: { logists: LogistOpt[]; statuses: string[] };
 }
-interface OrphanRow { creator: string; n: number; amountVat: number; nAccountable: number }
-interface SummaryResp {
-  today: string; rows: SummaryRow[]; total: SummaryRow; statusTimes: StatusTimeRow[]; orphans: OrphanRow[];
-  options: { logists: LogistOpt[] };
-}
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   const body = await res.json().catch(() => ({}));
+  if (res.status === 403) throw new Error('Недостаточно прав: раздел «Реализация» доступен только роли «Администратор»');
   if (!res.ok) throw new Error(body?.error || `Ошибка ${res.status}`);
   return body as T;
 }
 
-// ── Общие стили (как в остальных экранах Монолитики) ─────────────────────────
-const inputCls = 'min-h-9 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-xs text-[var(--color-text)] focus:outline-none focus:border-[var(--color-border-focus)]';
-const thCls = 'sticky top-0 z-10 bg-[var(--color-table-header)] border-b border-[var(--color-border)] px-2 py-1.5 text-[11px] font-semibold text-[var(--color-text-muted)] whitespace-nowrap select-none';
-const tdCls = 'border-b border-[var(--color-table-row-border,var(--color-border))] px-2 py-1.5 whitespace-nowrap';
+const PAGE_SIZE = 100;
+const selectCls = 'focus-ring h-9 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 text-[16px] sm:text-[13px] text-[var(--color-text)] outline-none focus:border-[var(--color-border-focus)]';
+const tdCls = 'border-b border-[var(--color-table-row-border,var(--color-border))] px-2 h-[34px] whitespace-nowrap';
 const numCls = 'text-right tabular-nums';
 
-function presetPeriods(today: string) {
-  const [y, m] = today.split('-').map(Number);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const last = (yy: number, mm: number) => new Date(Date.UTC(yy, mm, 0)).getUTCDate();
-  const pm = m === 1 ? 12 : m - 1, py = m === 1 ? y - 1 : y;
-  return [
-    { key: '30', label: '30 дней', ...defaultPeriod() },
-    { key: 'cur', label: 'Текущий месяц', from: `${y}-${pad(m)}-01`, to: `${y}-${pad(m)}-${pad(last(y, m))}` },
-    { key: 'prev', label: 'Прошлый месяц', from: `${py}-${pad(pm)}-01`, to: `${py}-${pad(pm)}-${pad(last(py, pm))}` },
-  ];
-}
-
+/** Бейдж статуса DS: точка + текст, контраст AA (находка 17). */
 function StatusBadge({ status, grp }: { status: string; grp: RequestItem['grp'] }) {
-  const cls = grp === 'shipped'
-    ? 'bg-[var(--color-positive)]/12 text-[var(--color-positive)] border-[var(--color-positive)]/30'
-    : grp === 'cancelled'
-      ? 'bg-[var(--color-negative)]/10 text-[var(--color-negative)] border-[var(--color-negative)]/30'
-      : 'bg-[var(--color-accent)]/10 text-[var(--color-accent)] border-[var(--color-accent)]/30';
-  return <span className={`inline-block max-w-[220px] truncate rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`} title={status}>{status}</span>;
-}
-
-function MarginCell({ v, sales, broken, noPurch, cancelled }: { v: number | null; sales?: number | null; broken?: boolean; noPurch?: boolean; cancelled?: boolean }) {
-  if (cancelled) return <span className="text-[var(--color-text-muted)]">{DASH}</span>;
-  if (broken) return <span className="inline-flex items-center gap-1 text-[var(--color-warning)]" title="Есть приобретение с integrity_ok = false (сумма задвоена) — заявка исключена из маржи"><AlertTriangle size={12} />искл.</span>;
-  if (noPurch) return <span className="text-[var(--color-text-muted)]" title="Нет приобретений — себестоимости в базе нет">нет закупки</span>;
-  if (v === null) return <span className="text-[var(--color-text-muted)]">{DASH}</span>;
-  const pct = sales ? (100 * v) / sales : null;
+  const tone = grp === 'shipped'
+    ? 'bg-[var(--success-bg)] text-[var(--success-text)]'
+    : grp === 'cancelled' ? 'bg-[var(--danger-bg)] text-[var(--danger-text)]' : 'bg-[var(--blue-50)] text-[var(--brand)]';
   return (
-    <span className={v < 0 ? 'text-[var(--color-negative)]' : 'text-[var(--color-positive)]'}>
-      {fmtRub(v)}{pct !== null && <span className="ml-1 text-[10px] opacity-80">{fmtPct(pct)}</span>}
+    <span className={`inline-flex max-w-[220px] items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold ${tone}`} title={status}>
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" aria-hidden />
+      <span className="truncate">{status}</span>
     </span>
   );
 }
 
-// ── Сортировка таблиц (клик по заголовку — правило Серёги) ───────────────────
-type SortState<K extends string> = { key: K; dir: 'asc' | 'desc' };
-function useSort<T, K extends string>(rows: T[], init: SortState<K>, get: (r: T, k: K) => number | string | null) {
-  const [sort, setSort] = useState<SortState<K>>(init);
-  const sorted = useMemo(() => {
-    const out = [...rows];
-    out.sort((a, b) => {
-      const va = get(a, sort.key), vb = get(b, sort.key);
-      if (va === vb) return 0;
-      if (va === null || va === undefined) return 1;
-      if (vb === null || vb === undefined) return -1;
-      const c = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb), 'ru');
-      return sort.dir === 'asc' ? c : -c;
-    });
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, sort]);
-  const toggle = (key: K) => setSort(s => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }));
-  return { sorted, sort, toggle };
-}
-function SortTh<K extends string>({ k, label, sort, toggle, right, title }: { k: K; label: string; sort: SortState<K>; toggle: (k: K) => void; right?: boolean; title?: string }) {
-  const active = sort.key === k;
+function MarginCell({ v, sales, broken, noPurch, cancelled }: { v: number | null; sales?: number | null; broken?: boolean; noPurch?: boolean; cancelled?: boolean }) {
+  if (cancelled) return <span className="text-[var(--color-text-muted)]">{DASH}</span>;
+  if (broken) return <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--warning-text)]" title="Сумма закупки задвоена в 1С — заявка не входит в маржу"><AlertTriangle size={12} aria-hidden />закупка задвоена</span>;
+  if (noPurch) return <span className="text-xs text-[var(--color-text-muted)]" title="Приобретений нет — себестоимости в 1С нет">нет закупки</span>;
+  if (v === null) return <span className="text-[var(--color-text-muted)]">{DASH}</span>;
+  const pct = sales ? (100 * v) / sales : null;
   return (
-    <th className={`${thCls} ${right ? 'text-right' : 'text-left'} cursor-pointer hover:text-[var(--color-text)]`} onClick={() => toggle(k)} title={title}>
-      <span className={`inline-flex items-center gap-0.5 ${right ? 'flex-row-reverse' : ''}`}>
-        {label}
-        {active ? (sort.dir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />) : <span className="w-[11px]" />}
-      </span>
-    </th>
+    <span className={v < 0 ? 'text-[var(--danger-text)]' : 'text-[var(--color-text)]'}>
+      {fmtRub(v)}{pct !== null && <span className="ml-1 text-xs text-[var(--color-text-muted)]">{fmtPct(pct)}</span>}
+    </span>
   );
-}
-
-function Loading() {
-  return <div className="flex items-center gap-2 py-10 justify-center text-sm text-[var(--color-text-muted)]"><Loader2 size={16} className="animate-spin" />Считаем по базе Диспетчера…</div>;
-}
-function ErrorBox({ msg }: { msg: string }) {
-  return <div className="rounded-lg border border-[var(--color-negative)]/40 bg-[var(--color-negative)]/10 px-3 py-2 text-sm text-[var(--color-negative)]">{msg}</div>;
-}
-function Empty({ text }: { text: string }) {
-  return <div className="py-10 text-center text-sm text-[var(--color-text-muted)]">{text}</div>;
 }
 
 function Kpi({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2.5">
-      <div className="text-[11px] text-[var(--color-text-muted)]">{label}</div>
-      <div className="mt-0.5 text-lg font-bold tabular-nums text-[var(--color-text)]">{value}</div>
-      {hint && <div className="mt-0.5 text-[10px] text-[var(--color-text-muted)] truncate" title={hint}>{hint}</div>}
+    <div className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-3">
+      <div className="text-[13px] text-[var(--color-text-muted)]">{label}</div>
+      <div className="mt-0.5 text-[24px] sm:text-[28px] leading-tight font-semibold tabular-nums text-[var(--color-text)]">{value}</div>
+      {hint && <div className="mt-0.5 text-xs text-[var(--color-text-muted)] truncate" title={hint}>{hint}</div>}
     </div>
   );
 }
 
-// ── Страница ─────────────────────────────────────────────────────────────────
-export function RealizationsPage() {
-  const router = useRouter();
-  const sp = useSearchParams();
-  const def = defaultPeriod();
-  const tab = (TABS.find(t => t.key === sp.get('tab'))?.key ?? 'requests') as Tab;
-  const from = sp.get('from') || def.from;
-  const to = sp.get('to') || def.to;
-  const region = (REGIONS as string[]).includes(sp.get('region') ?? '') ? (sp.get('region') as Region) : '';
-  const logist = sp.get('logist') ?? '';
-  const status = sp.get('status') ?? '';
-  const [cardId, setCardId] = useState<string | null>(null);
+type ReqKey = 'number' | 'docDate' | 'status' | 'buyer' | 'manager' | 'logist' | 'shipmentDate' | 'salesNv' | 'purchNv' | 'marginNv';
+const REQ_KEYS: readonly ReqKey[] = ['number', 'docDate', 'status', 'buyer', 'manager', 'logist', 'shipmentDate', 'salesNv', 'purchNv', 'marginNv'];
+const REQ_DEFAULT_SORT = { key: 'shipmentDate' as ReqKey, dir: 'desc' as const };
 
-  function setParams(patch: Record<string, string | null>) {
-    const next = new URLSearchParams(sp.toString());
-    for (const [k, v] of Object.entries(patch)) { if (v) next.set(k, v); else next.delete(k); }
-    router.replace(`/realizations?${next.toString()}`, { scroll: false });
+export function RealizationsPage() {
+  const sp = useSearchParams();
+  const pathname = usePathname();
+  const initialPeriod = useMemo(() => {
+    // Старые ссылки (?from=&to= ГГГГ-ММ-ДД) — продолжают открывать тот же период.
+    const f = sp.get('from'), t = sp.get('to');
+    if (f && t && /^\d{4}-\d{2}-\d{2}$/.test(f) && /^\d{4}-\d{2}-\d{2}$/.test(t)) {
+      return { from: new Date(`${f}T00:00:00+03:00`), to: new Date(`${t}T23:59:59.999+03:00`) };
+    }
+    return reportDefaultPeriod();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [period, setPeriod] = useUrlState<DateRange>('period', dateRangeParam(initialPeriod));
+  const [region, setRegion] = useUrlState<string>('region', stringParam(''));
+  const [logist, setLogist] = useUrlState<string>('logist', stringParam(''));
+  const [status, setStatus] = useUrlState<string>('status', stringParam(''));
+  const [page, setPage] = useUrlState<number>('page', intParam(1));
+  const [cardId, setCardId] = useUrlState<string | null>('request', { parse: raw => raw || null, serialize: v => v, default: null, mode: 'push' });
+  const { sort, toggle } = useUrlSort<ReqKey>('sort', REQ_KEYS, REQ_DEFAULT_SORT);
+  const patch = useUrlStateBatch('replace');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  const regionOk = (REGIONS as string[]).includes(region) ? (region as Region) : '';
+  const from = mskYmd(period.from), to = mskYmd(period.to);
+  const qs = new URLSearchParams({ from, to, ...(regionOk ? { region: regionOk } : {}), ...(logist ? { logist } : {}), ...(status ? { status } : {}) });
+  const q = useQuery<RequestsResp>({
+    queryKey: ['realizations', 'requests', qs.toString()],
+    queryFn: () => getJson(`/api/realizations/requests?${qs}`),
+    staleTime: 60_000,
+  });
+
+  const items = q.data?.items ?? [];
+  const sorted = useMemo(() => sortRows(items, sort, (r, k) => (k === 'buyer' ? humanName(r.buyer) : k === 'manager' ? humanName(r.manager) : r[k]) as number | string | null), [items, sort]);
+  const pages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const curPage = Math.min(Math.max(1, page), pages);
+  const pageRows = sorted.slice((curPage - 1) * PAGE_SIZE, curPage * PAGE_SIZE);
+  const logistOpts = (q.data?.options.logists ?? []).filter(l => !regionOk || l.region === regionOk);
+  const activeFilters = [regionOk, logist, status].filter(Boolean).length;
+  const cardHref = (id: string) => { const n = new URLSearchParams(sp.toString()); n.set('request', id); return `${pathname}?${n}`; };
+
+  function resetFilters() { patch({ region: null, logist: null, status: null, page: null }); }
+  function showPrevMonth() {
+    const d = new Date(period.from); const first = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+    const last = new Date(d.getFullYear(), d.getMonth(), 0, 23, 59, 59, 999);
+    setPeriod({ from: first, to: last });
+  }
+  function exportCsv() {
+    const head = ['Номер', 'Дата', 'Статус', 'Покупатель', 'Менеджер', 'Логист', 'Плановая отгрузка', 'Продажа без НДС', 'Закупка без НДС', 'Маржа без НДС'];
+    const esc = (v: unknown) => { const s = v === null || v === undefined ? '' : String(v); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const lines = sorted.map(r => [r.number, fmtDate(r.docDate), r.status, humanName(r.buyer) ?? 'Без покупателя', humanName(r.manager) ?? '', r.logist ?? '',
+      fmtDate(r.shipmentDate), r.salesNv ?? '', r.purchasesN ? r.purchNv ?? '' : '', r.broken ? 'закупка задвоена' : r.marginNv ?? ''].map(esc).join(';'));
+    const blob = new Blob(['﻿' + [head.join(';'), ...lines].join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `zayavki-${from}-${to}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  const qs = new URLSearchParams({ from, to, ...(region ? { region } : {}), ...(logist ? { logist } : {}) });
-  const reqQs = new URLSearchParams(qs); if (status) reqQs.set('status', status);
-
-  const requestsQ = useQuery<RequestsResp>({
-    queryKey: ['realizations', 'requests', reqQs.toString()],
-    queryFn: () => getJson(`/api/realizations/requests?${reqQs}`),
-    enabled: tab === 'requests', staleTime: 60_000,
-  });
-  const by = tab === 'regions' ? 'region' : 'logist';
-  const summaryQ = useQuery<SummaryResp>({
-    queryKey: ['realizations', 'summary', by, qs.toString()],
-    queryFn: () => getJson(`/api/realizations/summary?${qs}&by=${by}`),
-    enabled: tab !== 'requests', staleTime: 60_000,
-  });
-
-  const logistOpts = (tab === 'requests' ? requestsQ.data?.options.logists : summaryQ.data?.options.logists) ?? [];
-  const logistsInRegion = logistOpts.filter(l => !region || l.region === region);
-  const statuses = requestsQ.data?.options.statuses ?? [];
-  const presets = presetPeriods(new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10));
+  const filters = (
+    <>
+      <select aria-label="Регион" value={regionOk} onChange={e => patch({ region: e.target.value || null, logist: null, page: null })} className={selectCls}>
+        <option value="">Все регионы</option>
+        {REGIONS.map(r => <option key={r} value={r}>{REGION_LABEL[r]}</option>)}
+      </select>
+      <select aria-label="Логист" value={logist} onChange={e => patch({ logist: e.target.value || null, page: null })} className={`${selectCls} sm:max-w-[240px]`}>
+        <option value="">Все логисты</option>
+        {logistOpts.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+        <option value="__none">Логист не указан</option>
+      </select>
+      <select aria-label="Статус" value={status} onChange={e => patch({ status: e.target.value || null, page: null })} className={`${selectCls} sm:max-w-[220px]`}>
+        <option value="">Все статусы</option>
+        <optgroup label="Группы">
+          <option value="grp:shipped">Отгружено (все)</option>
+          <option value="grp:cancelled">Отмена (все)</option>
+          <option value="grp:in_work">В работе (все)</option>
+        </optgroup>
+        <optgroup label="Статусы 1С">
+          {(q.data?.options.statuses ?? []).map(s => <option key={s} value={s}>{s}</option>)}
+        </optgroup>
+      </select>
+      {activeFilters > 0 && (
+        <button type="button" onClick={resetFilters} className="focus-ring h-9 rounded-lg px-2 text-[13px] font-medium text-[var(--brand)] hover:underline">Сбросить фильтры</button>
+      )}
+    </>
+  );
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden bg-[var(--color-bg)]">
       <div className="flex flex-col gap-3 p-4 sm:p-6">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h1 className="text-xl font-bold text-[var(--color-text)]">Заявки и логисты</h1>
-          <span className="text-xs text-[var(--color-text-muted)]">заявки и метрики логистов · база Диспетчера (зеркало 1С) · суммы без НДС</span>
+          <h1 className="text-xl font-semibold text-[var(--color-text)]">Заявки</h1>
+          <span className="text-[13px] text-[var(--color-text-muted)]">заявки и работа логистов по данным 1С, суммы без НДС</span>
         </div>
 
-        {/* Вкладки — flex-wrap (3 вкладки, без горизонтального скролла, CLAUDE.md п.12) */}
-        <div className="flex flex-wrap gap-1.5" role="tablist">
-          {TABS.map(t => (
-            <button key={t.key} type="button" role="tab" aria-selected={tab === t.key}
-              onClick={() => setParams({ tab: t.key === 'requests' ? null : t.key })}
-              className={`min-h-9 rounded-full border px-3.5 text-xs font-semibold transition-colors ${tab === t.key
-                ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
-              {t.label}
+        {/* Тулбар: одна строка на десктопе (как FilterBar «Продаж»), на телефоне —
+            [период][Фильтры N], фильтры раскрываются под ним (находка 19). */}
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2">
+          <PeriodRangeControls period={period} comparison={recomputeComparison(period)} showComparison={false}
+            onPeriodChange={p => { patch({ page: null, from: null, to: null }); setPeriod(p); }} onComparisonChange={() => {}} />
+          <div className="hidden sm:flex flex-wrap items-center gap-2">{filters}</div>
+          <button type="button" onClick={() => setFiltersOpen(o => !o)} aria-expanded={filtersOpen}
+            className="focus-ring sm:hidden inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[13px] font-medium text-[var(--color-text)]">
+            <SlidersHorizontal size={16} aria-hidden />Фильтры{activeFilters ? <span className="rounded-full bg-[var(--color-accent)] px-1.5 text-xs text-[var(--color-text-inverse)]">{activeFilters}</span> : null}
+          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <button type="button" onClick={exportCsv} disabled={!sorted.length} title="Скачать список (CSV для Excel)"
+              className="focus-ring inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[13px] font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50">
+              <Download size={16} aria-hidden /><span className="hidden sm:inline">Скачать</span>
             </button>
-          ))}
-        </div>
-
-        {/* Фильтры */}
-        <div className="grid grid-cols-2 gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 sm:flex sm:flex-wrap sm:items-end">
-          <label className="flex min-w-0 flex-col gap-1 text-[11px] text-[var(--color-text-muted)]">
-            Плановая отгрузка с
-            <input type="date" value={from} max={to} onChange={e => e.target.value && setParams({ from: e.target.value })} className={inputCls} />
-          </label>
-          <label className="flex min-w-0 flex-col gap-1 text-[11px] text-[var(--color-text-muted)]">
-            по
-            <input type="date" value={to} min={from} onChange={e => e.target.value && setParams({ to: e.target.value })} className={inputCls} />
-          </label>
-          <div className="col-span-2 flex flex-wrap gap-1 sm:col-span-1 sm:self-end">
-            {presets.map(p => (
-              <button key={p.key} type="button" onClick={() => setParams({ from: p.from, to: p.to })}
-                className={`min-h-9 rounded-lg border px-2.5 text-[11px] font-medium ${from === p.from && to === p.to
-                  ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                  : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]'}`}>
-                {p.label}
-              </button>
-            ))}
+            <button type="button" onClick={() => q.refetch()} title="Обновить" aria-label="Обновить"
+              className="focus-ring inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
+              <RefreshCw size={16} className={q.isFetching ? 'animate-spin' : ''} aria-hidden />
+            </button>
           </div>
-          <label className="flex min-w-0 flex-col gap-1 text-[11px] text-[var(--color-text-muted)]">
-            Регион
-            <select value={region} onChange={e => setParams({ region: e.target.value || null, logist: null })} className={inputCls}>
-              <option value="">Все регионы</option>
-              {REGIONS.map(r => <option key={r} value={r}>{REGION_LABEL[r]}</option>)}
-            </select>
-          </label>
-          <label className="flex min-w-0 flex-col gap-1 text-[11px] text-[var(--color-text-muted)] sm:min-w-[220px]">
-            Логист
-            <select value={logist} onChange={e => setParams({ logist: e.target.value || null })} className={inputCls}>
-              <option value="">Все логисты</option>
-              {logistsInRegion.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              <option value="__none">Логист не указан</option>
-            </select>
-          </label>
-          {tab === 'requests' && (
-            <label className="col-span-2 flex min-w-0 flex-col gap-1 text-[11px] text-[var(--color-text-muted)] sm:col-span-1 sm:min-w-[200px]">
-              Статус
-              <select value={status} onChange={e => setParams({ status: e.target.value || null })} className={inputCls}>
-                <option value="">Все статусы</option>
-                <optgroup label="Группы">
-                  <option value="grp:shipped">Отгружено (все)</option>
-                  <option value="grp:cancelled">Отмена (все)</option>
-                  <option value="grp:in_work">В работе (все)</option>
-                </optgroup>
-                <optgroup label="Статусы 1С">
-                  {statuses.map(s => <option key={s} value={s}>{s}</option>)}
-                </optgroup>
-              </select>
-            </label>
-          )}
-          {(region || logist || status) && (
-            <button type="button" onClick={() => setParams({ region: null, logist: null, status: null })}
-              className="col-span-2 min-h-9 rounded-lg px-2 text-[11px] font-medium text-[var(--color-accent)] hover:underline sm:col-span-1 sm:self-end">
-              Сбросить фильтры
-            </button>
-          )}
+          {filtersOpen && <div className="sm:hidden grid w-full grid-cols-1 gap-2">{filters}</div>}
         </div>
 
-        {tab === 'requests' && <RequestsTab q={requestsQ} onOpen={setCardId} />}
-        {tab !== 'requests' && (
-          <SummaryTab q={summaryQ} by={by}
-            onPick={row => by === 'logist'
-              ? setParams({ tab: null, logist: row.key === '__total' ? null : row.key })
-              : setParams({ tab: 'logists', region: row.key === '__total' ? null : row.key, logist: null })} />
-        )}
+        {/* Оговорки данных — один баннер (находка 14). */}
+        <div role="status" className="flex items-start gap-2 rounded-lg border border-[var(--color-accent)]/25 bg-[var(--blue-50)] px-3 py-2 text-[13px] text-[var(--color-text)]">
+          <Info size={16} className="mt-px shrink-0 text-[var(--color-accent)]" aria-hidden />
+          <span>Период — по плановой дате отгрузки. Маржа предварительная — методика ещё не согласована; заявки с задвоенной в 1С суммой закупки в маржу не входят. Данные обновляются раз в 5 минут.</span>
+        </div>
 
-        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-[var(--color-text-muted)]">
-          <Info size={12} className="mt-px shrink-0" />
-          <span>
-            Период — по плановой дате отгрузки. Дубли заявок (один номер у одного покупателя) схлопнуты до последней копии.
-            Маржа — без НДС, предварительно: методика ещё не согласована. Приобретения с задвоенной суммой (integrity_ok = false)
-            исключают заявку из маржи и помечены «искл.». Данные обновляются раз в 5 минут.
-          </span>
-        </p>
+        {q.isLoading && <div className="flex items-center gap-2 py-10 justify-center text-sm text-[var(--color-text-muted)]"><Loader2 size={16} className="animate-spin" />Загружаем заявки…</div>}
+        {q.error && <div className="rounded-lg border border-[var(--danger-text)]/30 bg-[var(--danger-bg)] px-3 py-2 text-sm text-[var(--danger-text)]">{(q.error as Error).message}</div>}
+        {q.data && (items.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-12 text-center">
+            <div className="text-[15px] font-semibold text-[var(--color-text)]">Заявок нет</div>
+            <div className="max-w-md text-[13px] text-[var(--color-text-muted)]">
+              {activeFilters ? 'За выбранный период с этими фильтрами заявок не найдено.' : 'За выбранный период заявок с плановой отгрузкой нет.'}
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              {activeFilters > 0 && <button type="button" onClick={resetFilters} className="focus-ring h-9 rounded-lg bg-[var(--color-accent)] px-3 text-[13px] font-medium text-[var(--color-text-inverse)]">Сбросить фильтры</button>}
+              <button type="button" onClick={showPrevMonth} className="focus-ring h-9 rounded-lg border border-[var(--color-border)] px-3 text-[13px] font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">Показать прошлый месяц</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Kpi label="Заявок" value={fmtInt(q.data.total)} />
+              <Kpi label="Сумма продажи" value={fmtMlnRub(q.data.totals.salesNv)} hint="без НДС, все заявки выборки" />
+              <Kpi label="Маржа" value={fmtMlnRub(q.data.totals.marginNv)} hint="без НДС, предварительно" />
+              <Kpi label="Маржа, %" value={fmtPct(q.data.totals.mSalesNv ? (100 * q.data.totals.marginNv) / q.data.totals.mSalesNv : null)} hint="по заявкам с закупками" />
+            </div>
+            <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+              <div className="scroll-x max-h-[70dvh] overflow-auto">
+                <table className="w-full border-collapse text-[13px] text-[var(--color-text)]">
+                  <thead>
+                    <tr>
+                      {([['number', 'Номер', 'left'], ['docDate', 'Дата', 'left'], ['status', 'Статус', 'left'], ['buyer', 'Покупатель', 'left'],
+                        ['manager', 'Менеджер', 'left'], ['logist', 'Логист', 'left'], ['shipmentDate', 'Плановая отгрузка', 'left'],
+                        ['salesNv', 'Продажа, ₽', 'right'], ['purchNv', 'Закупка, ₽', 'right'], ['marginNv', 'Маржа, ₽ (предв.)', 'right']] as [ReqKey, string, 'left' | 'right'][])
+                        .map(([k, label, align], i) => (
+                          <SortableTh key={k} label={label} align={align} sticky={i === 0} active={sort.key === k} dir={sort.dir} onClick={() => { toggle(k); setPage(1); }} />
+                        ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pageRows.map(r => (
+                      <tr key={r.id} className="report-row focus-ring cursor-pointer" onClick={() => setCardId(r.id)} tabIndex={0}
+                        onKeyDown={e => { if (e.key === 'Enter') setCardId(r.id); }}>
+                        <td className={`${tdCls} sticky left-0 z-10 bg-[var(--color-bg-surface)]`}>
+                          <Link href={cardHref(r.id)} scroll={false} onClick={e => { e.preventDefault(); e.stopPropagation(); setCardId(r.id); }}
+                            className="focus-ring rounded-sm font-semibold text-[var(--brand)] hover:underline tabular-nums">{r.number}</Link>
+                        </td>
+                        <td className={`${tdCls} tabular-nums`}>{fmtDate(r.docDate)}</td>
+                        <td className={tdCls}><StatusBadge status={r.status} grp={r.grp} /></td>
+                        <td className={`${tdCls} max-w-[220px] truncate`} title={r.buyer ?? ''}>{humanName(r.buyer) ?? <span className="text-[var(--color-text-muted)]">Без покупателя</span>}</td>
+                        <td className={`${tdCls} max-w-[180px] truncate`} title={r.manager ?? ''}>{humanName(r.manager) ?? DASH}</td>
+                        <td className={`${tdCls} max-w-[200px] truncate`} title={r.logist ?? ''}>
+                          {r.logistId ? (
+                            <button type="button" onClick={e => { e.stopPropagation(); patch({ logist: r.logistId, page: null }); }} title="Показать заявки этого логиста"
+                              className="focus-ring rounded-sm hover:text-[var(--brand)] hover:underline">{r.logist ?? DASH}</button>
+                          ) : <span className="text-[var(--color-text-muted)]">не указан</span>}
+                        </td>
+                        <td className={`${tdCls} tabular-nums`}>{fmtDate(r.shipmentDate)}</td>
+                        <td className={`${tdCls} ${numCls}`}>{fmtRub(r.salesNv)}</td>
+                        <td className={`${tdCls} ${numCls}`}>{r.purchasesN ? fmtRub(r.purchNv) : DASH}</td>
+                        <td className={`${tdCls} ${numCls}`}>
+                          <MarginCell v={r.marginNv} sales={r.salesNv} broken={r.broken} noPurch={!r.purchasesN} cancelled={r.grp === 'cancelled'} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="font-semibold">
+                      <td className={`${tdCls} sticky left-0 bottom-0 z-20 bg-[var(--blue-50)] border-l-[3px] border-l-[var(--color-accent)]`}>Итого</td>
+                      <td colSpan={6} className={`${tdCls} sticky bottom-0 bg-[var(--blue-50)] text-[var(--color-text-muted)] font-normal`}>{fmtInt(q.data.total)} заявок</td>
+                      <td className={`${tdCls} ${numCls} sticky bottom-0 bg-[var(--blue-50)]`}>{fmtRub(q.data.totals.salesNv)}</td>
+                      <td className={`${tdCls} ${numCls} sticky bottom-0 bg-[var(--blue-50)]`}>{fmtRub(q.data.totals.purchNv)}</td>
+                      <td className={`${tdCls} ${numCls} sticky bottom-0 bg-[var(--blue-50)]`}>{fmtRub(q.data.totals.marginNv)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] px-3 py-2 text-[13px] text-[var(--color-text-muted)]">
+                <span>Показаны {fmtInt((curPage - 1) * PAGE_SIZE + 1)}–{fmtInt(Math.min(curPage * PAGE_SIZE, sorted.length))} из {fmtInt(q.data.total)}{q.data.truncated ? ' (выборка ограничена 5 000 строк — сузьте фильтры)' : ''}</span>
+                {pages > 1 && (
+                  <nav className="ml-auto flex items-center gap-1" aria-label="Страницы">
+                    <button type="button" disabled={curPage <= 1} onClick={() => setPage(curPage - 1)} aria-label="Предыдущая страница"
+                      className="focus-ring inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text)] disabled:opacity-40"><ChevronLeft size={16} /></button>
+                    <span className="px-2 tabular-nums text-[var(--color-text)]">{curPage} из {pages}</span>
+                    <button type="button" disabled={curPage >= pages} onClick={() => setPage(curPage + 1)} aria-label="Следующая страница"
+                      className="focus-ring inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--color-border)] text-[var(--color-text)] disabled:opacity-40"><ChevronRight size={16} /></button>
+                  </nav>
+                )}
+              </div>
+            </div>
+          </>
+        ))}
       </div>
 
-      {cardId && <RequestCardModal id={cardId} onClose={() => setCardId(null)} />}
+      {cardId && <RequestCardPanel key={cardId} id={cardId} onClose={() => setCardId(null)}
+        onPickLogist={id => { patch({ logist: id, region: null, page: null, request: null }); }} />}
     </div>
-  );
-}
-
-// ── Вкладка «Заявки» ─────────────────────────────────────────────────────────
-type ReqKey = 'number' | 'docDate' | 'status' | 'buyer' | 'manager' | 'logist' | 'shipmentDate' | 'salesNv' | 'purchNv' | 'marginNv';
-function RequestsTab({ q, onOpen }: { q: ReturnType<typeof useQuery<RequestsResp>>; onOpen: (id: string) => void }) {
-  const items = q.data?.items ?? [];
-  const { sorted, sort, toggle } = useSort<RequestItem, ReqKey>(items, { key: 'shipmentDate', dir: 'desc' }, (r, k) => r[k] as number | string | null);
-  const [limit, setLimit] = useState(300);
-  useEffect(() => setLimit(300), [q.data]);
-  if (q.isLoading) return <Loading />;
-  if (q.error) return <ErrorBox msg={(q.error as Error).message} />;
-  if (!q.data) return null;
-  const t = q.data.totals;
-  return (
-    <>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Kpi label="Заявок" value={fmtInt(q.data.total)} />
-        <Kpi label="Сумма продажи" value={`${fmtMln(t.salesNv)} млн`} hint="без НДС, все заявки выборки" />
-        <Kpi label="Маржа (база)" value={`${fmtMln(t.marginNv)} млн`} hint="без НДС, предварительно" />
-        <Kpi label="Маржа, %" value={fmtPct(t.mSalesNv ? (100 * t.marginNv) / t.mSalesNv : null)} hint="заявки с закупками, без искл." />
-      </div>
-      {items.length === 0 ? <Empty text="За выбранный период и фильтры заявок нет" /> : (
-        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-          <div className="scroll-x max-h-[70dvh] overflow-y-auto">
-            <table className="w-full border-collapse text-xs text-[var(--color-text)]">
-              <thead>
-                <tr>
-                  <SortTh k="number" label="Номер" sort={sort} toggle={toggle} />
-                  <SortTh k="docDate" label="Дата" sort={sort} toggle={toggle} />
-                  <SortTh k="status" label="Статус" sort={sort} toggle={toggle} />
-                  <SortTh k="buyer" label="Покупатель" sort={sort} toggle={toggle} />
-                  <SortTh k="manager" label="Менеджер" sort={sort} toggle={toggle} />
-                  <SortTh k="logist" label="Логист" sort={sort} toggle={toggle} />
-                  <SortTh k="shipmentDate" label="План. отгрузка" sort={sort} toggle={toggle} />
-                  <SortTh k="salesNv" label="Продажа" sort={sort} toggle={toggle} right title="Сумма строк заявки без НДС" />
-                  <SortTh k="purchNv" label="Закупка" sort={sort} toggle={toggle} right title="Сумма приобретений без НДС" />
-                  <SortTh k="marginNv" label="Маржа" sort={sort} toggle={toggle} right title="Без НДС, предварительно" />
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.slice(0, limit).map(r => (
-                  <tr key={r.id} className="report-row cursor-pointer" onClick={() => onOpen(r.id)} tabIndex={0}
-                    onKeyDown={e => { if (e.key === 'Enter') onOpen(r.id); }}>
-                    <td className={`${tdCls} font-semibold text-[var(--color-accent)]`}>{r.number}</td>
-                    <td className={tdCls}>{fmtDate(r.docDate)}</td>
-                    <td className={tdCls}><StatusBadge status={r.status} grp={r.grp} /></td>
-                    <td className={`${tdCls} max-w-[220px] truncate`} title={r.buyer ?? ''}>{r.buyer ?? DASH}</td>
-                    <td className={`${tdCls} max-w-[180px] truncate`} title={r.manager ?? ''}>{r.manager ?? DASH}</td>
-                    <td className={`${tdCls} max-w-[200px] truncate`} title={r.logist ?? ''}>{r.logist ?? DASH}</td>
-                    <td className={tdCls}>{fmtDate(r.shipmentDate)}</td>
-                    <td className={`${tdCls} ${numCls}`}>{fmtRub(r.salesNv)}</td>
-                    <td className={`${tdCls} ${numCls}`}>{r.purchasesN ? fmtRub(r.purchNv) : DASH}</td>
-                    <td className={`${tdCls} ${numCls}`}>
-                      <MarginCell v={r.marginNv} sales={r.salesNv} broken={r.broken} noPurch={!r.purchasesN} cancelled={r.grp === 'cancelled'} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
-            <span>Показано {fmtInt(Math.min(limit, sorted.length))} из {fmtInt(q.data.total)}{q.data.truncated ? ' (выборка ограничена 5 000 строк — сузьте фильтры)' : ''}</span>
-            {sorted.length > limit && (
-              <button type="button" onClick={() => setLimit(l => l + 500)} className="min-h-9 rounded-lg border border-[var(--color-border)] px-3 font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]">
-                Показать ещё
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
-// ── Вкладки «Сводка по логистам» и «Регионы» ────────────────────────────────
-type SumKey = 'label' | 'total' | 'shipped' | 'cancelled' | 'inWork' | 'cancelPct' | 'onTimePct' | 'cycleDaysMed' | 'reactHoursMed'
-  | 'fixPct' | 'shippedNoPurchase' | 'salesNv' | 'avgCheckNv' | 'marginBaseN' | 'exclBroken' | 'marginNv' | 'marginPct'
-  | 'overdue' | 'overdue30' | 'dSale' | 'dCost' | 'dCostToSalePct';
-const SUM_COLS: { k: SumKey; label: string; title: string; fmt: (r: SummaryRow) => React.ReactNode }[] = [
-  { k: 'total', label: 'Заявок', title: 'М1: заявок с плановой отгрузкой в периоде', fmt: r => fmtInt(r.total) },
-  { k: 'shipped', label: 'Отгр.', title: 'М1: отгружено / выполнено', fmt: r => fmtInt(r.shipped) },
-  { k: 'cancelled', label: 'Отмена', title: 'М1: отменено', fmt: r => fmtInt(r.cancelled) },
-  { k: 'inWork', label: 'В работе', title: 'М1: ещё в работе', fmt: r => fmtInt(r.inWork) },
-  { k: 'cancelPct', label: 'Отмен %', title: 'М1: доля отмен', fmt: r => fmtPct(r.cancelPct) },
-  { k: 'onTimePct', label: 'В срок %', title: 'М2: первое «Отгружено» (МСК) не позже плановой даты; знаменатель — отгруженные с событием в истории', fmt: r => fmtPct(r.onTimePct) },
-  { k: 'cycleDaysMed', label: 'Цикл, дн', title: 'М3: медиана «Новая заявка → Отгружено», дни', fmt: r => fmt1(r.cycleDaysMed) },
-  { k: 'reactHoursMed', label: 'Реакция, ч', title: 'М4: медиана «Новая заявка → Взята в работу», часы', fmt: r => fmt1(r.reactHoursMed) },
-  { k: 'overdue', label: 'Просрочено', title: 'М5: сейчас (все даты): плановая отгрузка прошла, заявка в работе', fmt: r => fmtInt(r.overdue) },
-  { k: 'overdue30', label: '>30 дн', title: 'М5: из просроченных — старше 30 дней', fmt: r => fmtInt(r.overdue30) },
-  { k: 'fixPct', label: 'Правки %', title: 'М6: доля отгруженных, возвращавшихся в «Отгружено, требует правки логиста»', fmt: r => fmtPct(r.fixPct) },
-  { k: 'shippedNoPurchase', label: 'Без приобр.', title: 'М7: отгружено без единого приобретения', fmt: r => fmtInt(r.shippedNoPurchase) },
-  { k: 'salesNv', label: 'Выручка, млн', title: 'М8: выручка отгруженного, без НДС', fmt: r => fmtMln(r.salesNv) },
-  { k: 'avgCheckNv', label: 'Ср. чек', title: 'М8: выручка / число отгруженных, без НДС', fmt: r => fmtRub(r.avgCheckNv) },
-  { k: 'marginBaseN', label: 'База маржи', title: 'М9: отгруженные с приобретениями, без integrity_ok=false', fmt: r => fmtInt(r.marginBaseN) },
-  { k: 'exclBroken', label: 'Искл.', title: 'М9: отгруженные, исключённые из маржи (задвоенные приобретения)', fmt: r => r.exclBroken ? <span className="text-[var(--color-warning)]">{fmtInt(r.exclBroken)}</span> : '0' },
-  { k: 'marginNv', label: 'Маржа, млн', title: 'М9: Σ продажи − Σ закупки по базе, без НДС, предварительно', fmt: r => <span className={(r.marginNv ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''}>{fmtMln(r.marginNv)}</span> },
-  { k: 'marginPct', label: 'Маржа %', title: 'М9: маржа / продажа базы, без НДС, предварительно', fmt: r => <span className={(r.marginPct ?? 0) < 0 ? 'text-[var(--color-negative)]' : ''}>{fmtPct(r.marginPct)}</span> },
-  { k: 'dSale', label: 'Доставка: выручка, млн', title: 'М11: строки заявки с номенклатурой «…доставк…», без НДС', fmt: r => fmtMln(r.dSale || null) },
-  { k: 'dCost', label: 'Доставка: расход, млн', title: 'М11: строки приобретений «Доставка» / «Доставка для логистов», без НДС', fmt: r => fmtMln(r.dCost || null) },
-  { k: 'dCostToSalePct', label: 'Расход / выручка', title: 'М11: расход на доставку к выручке за доставку', fmt: r => fmtPct(r.dCostToSalePct) },
-];
-
-function SummaryTab({ q, by, onPick }: { q: ReturnType<typeof useQuery<SummaryResp>>; by: 'logist' | 'region'; onPick: (r: SummaryRow) => void }) {
-  const rows = q.data?.rows ?? [];
-  const { sorted, sort, toggle } = useSort<SummaryRow, SumKey>(rows, { key: 'total', dir: 'desc' }, (r, k) => r[k] as number | string | null);
-  if (q.isLoading) return <Loading />;
-  if (q.error) return <ErrorBox msg={(q.error as Error).message} />;
-  if (!q.data) return null;
-  const t = q.data.total;
-  return (
-    <>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Kpi label="Заявок" value={fmtInt(t.total)} hint={`отгр. ${fmtInt(t.shipped)} · отмена ${fmtInt(t.cancelled)} · в работе ${fmtInt(t.inWork)}`} />
-        <Kpi label="В срок" value={fmtPct(t.onTimePct)} hint={`из ${fmtInt(t.shipWithHist)} отгруженных с историей`} />
-        <Kpi label="Просрочено сейчас" value={fmtInt(t.overdue)} hint={`старше 30 дн. — ${fmtInt(t.overdue30)}`} />
-        <Kpi label="Выручка отгруженного" value={`${fmtMln(t.salesNv)} млн`} hint={`ср. чек ${fmtRub(t.avgCheckNv)}`} />
-        <Kpi label="Маржа заявок" value={fmtPct(t.marginPct)} hint={`${fmtMln(t.marginNv)} млн · без НДС, предварительно`} />
-        <Kpi label="Доставка: расход / выручка" value={fmtPct(t.dCostToSalePct)} hint={`${fmtMln(t.dCost)} / ${fmtMln(t.dSale)} млн`} />
-      </div>
-
-      {rows.length === 0 ? <Empty text="За выбранный период и фильтры заявок нет" /> : (
-        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-          <div className="scroll-x max-h-[70dvh] overflow-y-auto">
-            <table className="w-full border-collapse text-xs text-[var(--color-text)]">
-              <thead>
-                <tr>
-                  <SortTh k="label" label={by === 'logist' ? 'Логист' : 'Регион'} sort={sort} toggle={toggle} />
-                  {by === 'logist' && <th className={`${thCls} text-left`}>Регион</th>}
-                  {SUM_COLS.map(c => <SortTh key={c.k} k={c.k} label={c.label} title={c.title} sort={sort} toggle={toggle} right />)}
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map(r => (
-                  <tr key={r.key} className="report-row cursor-pointer" onClick={() => onPick(r)} tabIndex={0}
-                    onKeyDown={e => { if (e.key === 'Enter') onPick(r); }}
-                    title={by === 'logist' ? 'Открыть заявки логиста' : 'Логисты региона'}>
-                    <td className={`${tdCls} max-w-[260px] truncate font-medium`}>{by === 'region' ? REGION_LABEL[r.key as Region] ?? r.label : r.label}</td>
-                    {by === 'logist' && <td className={`${tdCls} text-[var(--color-text-muted)]`}>{r.region ?? DASH}</td>}
-                    {SUM_COLS.map(c => <td key={c.k} className={`${tdCls} ${numCls}`}>{c.fmt(r)}</td>)}
-                  </tr>
-                ))}
-                <tr className="font-semibold">
-                  <td className={`${tdCls} bg-[var(--color-totals-bg,var(--color-bg-hover))]`}>Итого</td>
-                  {by === 'logist' && <td className={`${tdCls} bg-[var(--color-totals-bg,var(--color-bg-hover))]`} />}
-                  {SUM_COLS.map(c => <td key={c.k} className={`${tdCls} ${numCls} bg-[var(--color-totals-bg,var(--color-bg-hover))]`}>{c.fmt(t)}</td>)}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div className="border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
-            Наведите на заголовок — формула метрики. Клик по строке — {by === 'logist' ? 'заявки логиста' : 'логисты региона'}.
-            Просрочки (М5) — на сегодня, {fmtDate(q.data.today)}, по всем плановым датам.
-          </div>
-        </div>
-      )}
-
-      <div className="grid gap-3 lg:grid-cols-2">
-        <section className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-          <h2 className="px-3 pt-3 text-sm font-semibold text-[var(--color-text)]">Время в статусах (М4)</h2>
-          <p className="px-3 pb-2 text-[11px] text-[var(--color-text-muted)]">От записи статуса до следующей записи истории; текущий статус не входит; статусы с &lt;20 интервалами скрыты.</p>
-          {q.data.statusTimes.length === 0 ? <Empty text="Нет истории статусов" /> : (
-            <div className="scroll-x">
-              <table className="w-full border-collapse text-xs text-[var(--color-text)]">
-                <thead><tr>
-                  <th className={`${thCls} text-left`}>Статус</th>
-                  <th className={`${thCls} text-right`}>Интервалов</th>
-                  <th className={`${thCls} text-right`}>Медиана, ч</th>
-                  <th className={`${thCls} text-right`}>90-й процентиль, ч</th>
-                </tr></thead>
-                <tbody>{q.data.statusTimes.map(s => (
-                  <tr key={s.status} className="report-row">
-                    <td className={tdCls}>{s.status}</td>
-                    <td className={`${tdCls} ${numCls}`}>{fmtInt(s.n)}</td>
-                    <td className={`${tdCls} ${numCls}`}>{fmt1(s.medianH)}</td>
-                    <td className={`${tdCls} ${numCls}`}>{fmt1(s.p90H)}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
-          )}
-        </section>
-        <section className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-          <h2 className="px-3 pt-3 text-sm font-semibold text-[var(--color-text)]">Закупки без привязки к заявке (М12)</h2>
-          <p className="px-3 pb-2 text-[11px] text-[var(--color-text-muted)]">Приобретения с пустой заявкой за период (по дате документа), по автору. Не попадают в маржу; фильтры региона и логиста к ним не применяются.</p>
-          {q.data.orphans.length === 0 ? <Empty text="Таких приобретений нет" /> : (
-            <div className="scroll-x">
-              <table className="w-full border-collapse text-xs text-[var(--color-text)]">
-                <thead><tr>
-                  <th className={`${thCls} text-left`}>Автор</th>
-                  <th className={`${thCls} text-right`}>Документов</th>
-                  <th className={`${thCls} text-right`}>Сумма, млн (с НДС)</th>
-                  <th className={`${thCls} text-right`}>Из них подотчёт</th>
-                </tr></thead>
-                <tbody>{q.data.orphans.map(o => (
-                  <tr key={o.creator} className="report-row">
-                    <td className={tdCls}>{o.creator}</td>
-                    <td className={`${tdCls} ${numCls}`}>{fmtInt(o.n)}</td>
-                    <td className={`${tdCls} ${numCls}`}>{fmtMln(o.amountVat)}</td>
-                    <td className={`${tdCls} ${numCls}`}>{fmtInt(o.nAccountable)}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      </div>
-    </>
   );
 }

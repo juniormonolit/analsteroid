@@ -5,12 +5,21 @@
  *  2. regionOf — метка (СПБ/МСК/КРД) в ФИО и правило номера логиста.
  *  3. parseFilters / matchRow — валидация периода, фильтры региона/логиста/статуса.
  *  4. buildSummary — М1, М2 (МСК-дата), М3, М4, М6–М9, М11, М5 и разрез по регионам.
+ *  5. #8126: дрилл «Ответов» по колонке, сортировка в URL, форматы DS, человеческие
+ *     имена, метрики сводки логистов (те же числа, что buildSummary, доли — формулой).
  * Запуск: npm run test:realizations
  */
 import { canViewRealizations } from '../lib/realizations/access.ts';
 import { regionOf } from '../lib/realizations/region.ts';
 import { parseFilters, matchRow } from '../lib/realizations/filters.ts';
 import { buildSummary, statusTimes, median, percentile, mskDate, type ReqRow } from '../lib/realizations/metrics.ts';
+import { RESPONSE_DRILL_RULES, responseDrillRule, parseDrillMetric } from '../lib/realizations/responseDrill.ts';
+import { RESPONSE_METRICS } from '../lib/realizations/responseMetrics.ts';
+import { LOGIST_METRICS, LOGIST_COLUMN_GROUPS, LOGIST_DEFAULT_METRIC_IDS, summaryToMetrics } from '../lib/realizations/logistMetrics.ts';
+import { computeCalculated } from '../features/reports/engine/calculated.ts';
+import { parseSortParam, nextSort, sortRows } from '../lib/hooks/sortCore.ts';
+import { fmtRub, fmtInt, fmtMlnRub, fmtPct, humanName } from '../features/realizations/ui/format.ts';
+import { mskYmd } from '../lib/realizations/period.ts';
 
 let failures = 0, passed = 0;
 function check(cond: boolean, label: string) { if (cond) { passed++; return; } failures++; console.error(`FAIL ${label}`); }
@@ -93,6 +102,43 @@ const st = statusTimes([...Array(25)].map((_, i) => ({ logist_id: 'L1', status: 
 check(st.length === 1 && st[0].n === 25 && st[0].medianH === 12, 'М4 время в статусах, редкие скрыты');
 const empty = buildSummary([], [], 'logist', '2026-09-29', names);
 check(empty.rows.length === 0 && empty.total.total === 0 && empty.total.onTimePct === null && empty.total.marginPct === null, 'пустые данные без NaN');
+
+
+// 5. Задача #8126
+// 5.1 Дрилл «Ответов»: у каждой метрики отчёта есть правило; неизвестный id не проходит в SQL.
+check(RESPONSE_METRICS.every(m => RESPONSE_DRILL_RULES[m.id]), 'правило дрилла у каждой rr_* метрики');
+check(parseDrillMetric('rr_requests_new') === 'rr_requests_new' && parseDrillMetric("x'; drop") === null && parseDrillMetric(null) === null, 'metricId только из словаря');
+check(responseDrillRule('rr_requests_new').where === 'rq.status in (1, 2)', 'новые = статус 1, 2 (как в агрегате)');
+check(responseDrillRule(undefined).where === '' && responseDrillRule('нет такой').where === '', 'без метрики — все запросы');
+check(responseDrillRule('rr_sold_deals').perDeal === true && responseDrillRule('rr_sold_deals').unit === 'deals', 'сделочные метрики — строка на сделку');
+check(Object.values(RESPONSE_DRILL_RULES).every(r => !/;|--/.test(r.where)), 'условия без ; и комментариев');
+// 5.2 Сортировка: цикл убывание → возрастание → по умолчанию, разбор параметра
+check(JSON.stringify(nextSort({ key: null, dir: 'desc' }, 'a')) === '{"key":"a","dir":"desc"}', 'первый клик — убывание');
+check(nextSort({ key: 'a', dir: 'desc' }, 'a').dir === 'asc' && nextSort({ key: 'a', dir: 'asc' }, 'a').key === null, 'второй — возрастание, третий — сброс');
+check(parseSortParam('salesNv:asc', ['salesNv'] as const)?.dir === 'asc' && parseSortParam('evil:asc', ['salesNv'] as const) === null, 'параметр сортировки из белого списка');
+const srt = sortRows([{ v: 2 }, { v: null }, { v: 5 }], { key: 'v', dir: 'desc' }, (r, _k) => r.v);
+check(srt.map(r => r.v).join(',') === '5,2,', 'пустые значения — внизу');
+// 5.3 Форматы DS: минус U+2212, «млн ₽» с одним знаком
+check(fmtRub(-480000) === '\u2212480\u00a0000\u00a0₽', 'минус — U+2212, полная сумма');
+check(fmtMlnRub(355_100_000) === '355,1\u00a0млн\u00a0₽' && fmtMlnRub(0) === '0\u00a0₽', 'KPI млн ₽ с одним знаком');
+check(fmtInt(null) === '—' && fmtPct(12.34) === '12,3\u00a0%', 'пусто — тире, проценты');
+check(humanName('Менеджер2913 (Королькова)') === 'Королькова (Менеджер2913)', 'техимя → фамилия первой');
+check(humanName('- - 3404') === null && humanName('') === null && humanName('ООО Ромашка') === 'ООО Ромашка', 'мусорные имена → «Без покупателя»');
+check(mskYmd(new Date('2026-08-31T21:00:00.000Z')) === '2026-09-01' && mskYmd(new Date('2026-09-28T20:59:59.999Z')) === '2026-09-28', 'границы МСК-суток');
+// 5.4 Сводка логистов на движке: те же числа, что buildSummary (доли — формулой по счётчикам)
+const calc = LOGIST_METRICS.filter(m => m.metricType === 'calculated');
+for (const r of [...s.rows, s.total]) {
+  const raw = summaryToMetrics(r);
+  const out = computeCalculated(raw, calc);
+  const same = (a: number | null | undefined, b: number | null) => (b === null ? a === null || a === undefined : near(a ?? null, b, 1e-6));
+  check(same(out.lg_cancel_pct, r.cancelPct) && same(out.lg_on_time_pct, r.onTimePct) && same(out.lg_fix_pct, r.fixPct)
+    && same(out.lg_margin_pct, r.marginPct) && same(out.lg_avg_check, r.avgCheckNv) && same(out.lg_d_ratio, r.dCostToSalePct),
+    `доли логиста ${r.key} совпадают с buildSummary`);
+  check(out.lg_total === r.total && out.lg_overdue === r.overdue && out.lg_margin === r.marginNv && out.lg_excl_broken === r.exclBroken, `счётчики ${r.key}`);
+}
+check(LOGIST_METRICS.every(m => !/М\d|integrity|зеркал/i.test(`${m.nameRu} ${m.description}`)), 'подписи метрик без кодов М и жаргона');
+const grouped = new Set(LOGIST_COLUMN_GROUPS.flatMap(g => g.metricIds));
+check(LOGIST_DEFAULT_METRIC_IDS.every(id => grouped.has(id)), 'каждая видимая колонка — в группе');
 
 console.log(`assert-realizations: ${passed} passed, ${failures} failed`);
 if (failures) process.exit(1);

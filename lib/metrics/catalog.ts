@@ -2,6 +2,7 @@ import { ycAnalyticsDb } from '@/lib/db/clients';
 import type { Metric } from './types';
 import { resolveAutoColor } from './entity-colors';
 import { RESPONSE_METRICS } from '@/lib/realizations/responseMetrics';
+import { LOGIST_METRICS } from '@/lib/realizations/logistMetrics';
 
 let _cache: Metric[] | null = null;
 let _cacheAt = 0;
@@ -105,6 +106,8 @@ export async function loadMetrics(): Promise<Metric[]> {
   // таких id нет в таблице metrics — дописываем определения из кода.
   const inDb = new Set(_cache.map(m => m.id));
   for (const m of RESPONSE_METRICS) if (!inDb.has(m.id)) _cache.push({ ...m });
+  // «Сводка по логистам» / «Регионы» (задача #8126) — тем же способом.
+  for (const m of LOGIST_METRICS) if (!inDb.has(m.id)) _cache.push({ ...m });
 
   // Формула с русскими названиями — для «?» у метрик (правка владельца 17.08).
   // Считается здесь, а не в UI: только у каталога гарантированно есть ПОЛНЫЙ список
