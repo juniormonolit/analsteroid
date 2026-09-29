@@ -21,6 +21,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     });
   } catch (e) {
     console.error('[realizations/card]', e);
-    return NextResponse.json({ error: 'Не удалось получить данные базы Диспетчера' }, { status: 502 });
+    return NextResponse.json({ error: 'Не удалось получить заявки из 1С — попробуйте обновить страницу' }, { status: 502 });
   }
 }

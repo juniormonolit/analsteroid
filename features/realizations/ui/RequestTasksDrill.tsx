@@ -134,7 +134,7 @@ export function RequestTasksDrill({ managerId, name, metricId, metricName, perio
               </tr></thead>
               <tbody>{sorted.map(t => (
                 <tr key={`${t.taskId}-${t.dealId ?? ''}`} className="report-row">
-                  <td className={`${td} sticky left-0 z-10 bg-[var(--color-bg)] max-w-[280px] truncate`} title={t.title ?? ''}>
+                  <td className={`${td} sticky left-0 z-10 bg-[var(--color-bg)] max-w-[160px] sm:max-w-[280px] truncate`} title={t.title ?? ''}>
                     <span className="text-[var(--color-text-muted)]">#{t.taskId}</span> {t.title ?? DASH}
                   </td>
                   <td className={td}>{t.flow ?? DASH}</td>

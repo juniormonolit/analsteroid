@@ -9,7 +9,7 @@ export default async function RealizationsLayout({ children }: { children: React
   const session = await getSession();
   if (!session) redirect('/login');
   if (!canViewRealizations(session)) {
-    return <AccessDenied reason="Раздел «Реализация» — заявки и метрики логистов по данным Диспетчера. Доступен только роли «Администратор»." />;
+    return <AccessDenied reason="Раздел «Реализация» — заявки, ответы на запросы и работа логистов по данным 1С и Битрикса. Доступен только роли «Администратор»." />;
   }
   return <>{children}</>;
 }

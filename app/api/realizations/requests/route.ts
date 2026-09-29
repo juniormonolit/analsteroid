@@ -36,6 +36,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (e) {
     console.error('[realizations/requests]', e);
-    return NextResponse.json({ error: 'Не удалось получить данные базы Диспетчера' }, { status: 502 });
+    return NextResponse.json({ error: 'Не удалось получить заявки из 1С — попробуйте обновить страницу' }, { status: 502 });
   }
 }

@@ -81,7 +81,7 @@ function Kpi({ label, value, hint }: { label: string; value: string; hint?: stri
   return (
     <div className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-3">
       <div className="text-[13px] text-[var(--color-text-muted)]">{label}</div>
-      <div className="mt-0.5 text-[24px] sm:text-[28px] leading-tight font-semibold tabular-nums text-[var(--color-text)]">{value}</div>
+      <div className="mt-0.5 text-[20px] sm:text-[28px] leading-tight whitespace-nowrap font-semibold tabular-nums text-[var(--color-text)]">{value}</div>
       {hint && <div className="mt-0.5 text-xs text-[var(--color-text-muted)] truncate" title={hint}>{hint}</div>}
     </div>
   );
