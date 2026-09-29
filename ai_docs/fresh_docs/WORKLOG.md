@@ -6,6 +6,35 @@
 
 ---
 
+## 2026-09-29 — «Реализация» — раздел верхнего уровня под «Продажи» (#8089)
+
+Правка Сергея Афанасьева 29.09: «Реализация» не подгруппа «Продажи», а отдельный
+раздел бокового меню сразу под «Продажи» (на одном уровне с «Продажи»/«Графики»).
+Ветка `fix/realizations-top-level` от `origin/dev-asteroid` (aff5f72), worktree
+`analsteroid-realizations-top`. В `dev-asteroid` НЕ влита, прод не тронут — выкат отдельно.
+
+**Что сделано.** Меню: пункт «Реализация» (иконка Truck, подпункты «Ответы на запросы» и
+«Заявки и логисты») — в `NAV` AppShell между «Продажи» и «Графики», раскрытие как у
+«Продажи» (шеврон слева, аккордеон `expanded`, активный пункт подсвечен; при заходе на
+`/realizations*` раскрыт сразу). Гейт пункта — новое поле `NavItem.visible` =
+`canViewRealizations` (та же функция, что в layout и API). Подгруппа из
+`SalesSidebarSection` удалена. Роуты перенесены `git mv`: `app/(app)/sales/realizations/*` →
+`app/(app)/realizations/*` (layout-гейт, `page.tsx`, `responses/page.tsx`); внутренняя
+ссылка `router.replace` в `RealizationsPage` теперь на `/realizations`. Старые адреса
+`/sales/realizations` и `/sales/realizations/*` → редирект (307) на `/realizations/*` через
+`redirects()` в `next.config.ts`, query сохраняется. API `/api/realizations/*` не менялись
+(пути и так без `/sales`). Сами отчёты, `lib/realizations/*` (кроме комментария) не тронуты.
+
+**Проверка.** `npm run build` — OK (роуты `/realizations`, `/realizations/responses`);
+`test:realizations` 43/0, `test:reports` 98/0 (Node 22, `NODE_OPTIONS=--experimental-strip-types`).
+Скриншоты — `owners-inbox/screenshots/realizations-8089/` (админ десктоп + 375px, не-админ
+десктоп + 375px, прямой заход не-админа → AccessDenied, редирект старого адреса).
+Реальная БД `system` из этой среды недоступна (пароль в `.env.local` устарел), поэтому
+стенд — одноразовый локальный Postgres 16 с минимальными таблицами users/roles/user_sessions
+(роль «Администратор» и «Пользователь»); данных отчётов нет — в отчётах «Нет данных» ожидаемо.
+Не-админ: пункта в меню нет, `/realizations` → AccessDenied, `/api/realizations/summary` 403
+(без сессии 401). Стенд и его данные удалены после проверки.
+
 ## 2026-09-29 — Деплой «Продажи → Реализация» на прод (#8034)
 
 Санкция Сергея Афанасьева 29.09 18:51 МСК («ОК»). `feat/realizations-section`

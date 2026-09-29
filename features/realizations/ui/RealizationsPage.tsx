@@ -156,7 +156,7 @@ export function RealizationsPage() {
   function setParams(patch: Record<string, string | null>) {
     const next = new URLSearchParams(sp.toString());
     for (const [k, v] of Object.entries(patch)) { if (v) next.set(k, v); else next.delete(k); }
-    router.replace(`/sales/realizations?${next.toString()}`, { scroll: false });
+    router.replace(`/realizations?${next.toString()}`, { scroll: false });
   }
 
   const qs = new URLSearchParams({ from, to, ...(region ? { region } : {}), ...(logist ? { logist } : {}) });

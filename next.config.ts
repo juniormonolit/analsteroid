@@ -15,6 +15,14 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
+  // «Реализация» переехала с /sales/realizations/* на /realizations/* (#8089) —
+  // старые адреса (закладки, ссылки в чатах) ведут на новые; query сохраняется.
+  async redirects() {
+    return [
+      { source: '/sales/realizations', destination: '/realizations', permanent: false },
+      { source: '/sales/realizations/:path*', destination: '/realizations/:path*', permanent: false },
+    ];
+  },
   async headers() {
     return [
       {

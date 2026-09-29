@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -305,23 +305,6 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
       {/* «Повторные» и «Товарная матрица» переехали в «Ещё» (правка владельца
           17.08) — блок «Продажи» остаётся витринам отчётов. */}
 
-      {/* «Реализация» (задача #8034, просьба Сергея 29.09) — вернули из скрытых
-          внутрь «Продажи»: заявки и метрики логистов по базе Диспетчера. Пункт
-          виден ТОЛЬКО роли «Администратор» (и супер-админу); серверные гейты —
-          app/(app)/sales/realizations/layout.tsx и /api/realizations/*,
-          та же функция canViewRealizations. */}
-      {canViewRealizations(user) && (
-        <div className={subgroupCls}>
-          <div className={subgroupLabelCls}><span className="flex-1 text-left">Реализация</span></div>
-          <Link href="/sales/realizations/responses" className={linkCls('/sales/realizations/responses')}>
-            <span className="flex-1 min-w-0 break-words line-clamp-2">Ответы на запросы</span>
-          </Link>
-          <Link href="/sales/realizations" className={linkCls('/sales/realizations')}>
-            <span className="flex-1 min-w-0 break-words line-clamp-2">Заявки и логисты</span>
-          </Link>
-        </div>
-      )}
-
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
@@ -392,14 +375,26 @@ interface NavItem {
   isSales?: boolean;
   children?: { label: string; href: string }[];
   perm?: PermKey; // без права — пункт не показывается
+  visible?: (user: SessionUser) => boolean; // произвольный гейт (когда PermKey не подходит)
 }
 
-// «Реализация» вернулась 29.09 (#8034) подпунктом «Продажи», только «Администратор»
-// (см. SalesSidebarSection). Исходно «Реализация»/«Маркетинг»/«Найм» спрятаны (правка Иосифа
+// «Реализация» вернулась 29.09 (#8034), с #8089 — отдельный раздел первого уровня под
+// «Продажи», только «Администратор». Исходно «Реализация»/«Маркетинг»/«Найм» спрятаны (правка Иосифа
 // 16.07, оптимизация меню): Реализация и Найм были заглушками «Скоро», маркетинг-
 // пресеты живут по прямым URL (/marketing/*) и вернутся в меню, когда попросят.
 const NAV: NavItem[] = [
   { label: 'Продажи', icon: <BarChart3 size={18} />, isSales: true, perm: 'section.sales' },
+  // «Реализация» (задача #8089, правка Сергея 29.09): раздел ПЕРВОГО уровня сразу
+  // под «Продажи» (до «Графиков») (раньше #8034 — подгруппа внутри «Продажи»). Виден только роли
+  // «Администратор» и супер-админу — та же canViewRealizations, что в layout
+  // раздела (app/(app)/realizations/layout.tsx) и в /api/realizations/*.
+  {
+    label: 'Реализация', icon: <Truck size={18} />, visible: canViewRealizations,
+    children: [
+      { label: 'Ответы на запросы', href: '/realizations/responses' },
+      { label: 'Заявки и логисты', href: '/realizations' },
+    ],
+  },
   // «Графики» (задача владельца 28.07): конструктор графиков по метрикам отчётов +
   // дефолтные кривые «вероятность продажи от дней в стадии». Раздел первого уровня,
   // а не в «Ещё» — владелец строит его как рабочий инструмент анализа воронки.
@@ -537,7 +532,7 @@ function SidebarBody({
     <>
           {/* Nav */}
           <nav ref={navRef} onDragOver={handleNavDragOverAutoScroll} className="flex-1 overflow-y-auto py-2 px-2">
-            {NAV.filter(item => !item.perm || hasPerm(user, item.perm)).map(item => (
+            {NAV.filter(item => (!item.perm || hasPerm(user, item.perm)) && (!item.visible || item.visible(user))).map(item => (
               <div key={item.label}>
                 {item.disabled ? (
                   <RailTooltip collapsed={collapsed} label={`${item.label} · скоро`}>
@@ -601,15 +596,14 @@ function SidebarBody({
                     <RailTooltip collapsed={collapsed} label={item.label}>
                       <button
                         onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                        className={`w-full ${navItemBase(collapsed)} ${NAV_ITEM_INACTIVE}`}
+                        className={`w-full ${navItemBase(collapsed)} ${item.children.some(c => pathname === c.href) ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                       >
-                        <span className={navIconCls(false)}>{item.icon}</span>
-                        {!collapsed && <>
-                          <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>
-                          {expanded === item.label
-                            ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />
-                            : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0" />}
-                        </>}
+                        {/* Шеврон слева, как у «Продажи» (дисклоужер-паттерн) */}
+                        {!collapsed && (expanded === item.label
+                          ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0 -mr-1" />
+                          : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0 -mr-1" />)}
+                        <span className={navIconCls(item.children.some(c => pathname === c.href))}>{item.icon}</span>
+                        {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>}
                       </button>
                     </RailTooltip>
                     {!collapsed && expanded === item.label && (
@@ -794,7 +788,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   // тоггл сворачивания (кнопка PanelLeft/PanelLeftClose) не трогаем.
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [expanded, setExpanded] = useState<string>('Продажи');
+  const [expanded, setExpanded] = useState<string>(pathname.startsWith('/realizations') ? 'Реализация' : 'Продажи');
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [ideasOpen, setIdeasOpen] = useState(false);
   const router = useRouter();
