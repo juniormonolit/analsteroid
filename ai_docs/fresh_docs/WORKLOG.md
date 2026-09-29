@@ -35,6 +35,26 @@
 Не-админ: пункта в меню нет, `/realizations` → AccessDenied, `/api/realizations/summary` 403
 (без сессии 401). Стенд и его данные удалены после проверки.
 
+## 2026-09-29 — Деплой «Реализация» верхним разделом на прод (#8089)
+
+Санкция Сергея Афанасьева 29.09 19:55 МСК. `fix/realizations-top-level` (159b5ae)
+была fast-forward от `origin/dev-asteroid` (aff5f72) — влита пушем
+`159b5ae:dev-asteroid`, без merge-коммита. `git pull origin dev-asteroid` перед
+выкатом — уже актуально, гард свежести и сверка схем зелёные, миграций нет,
+`ALLOW_STALE_DEPLOY` не использовался. Выкат `deploy.sh` из worktree
+`analsteroid-realizations-top`. Прод: BUILD_ID `4SN3eHm9441u6JeSlcxba`, Login 200 /
+Static 200, pg-модуль 20/20, на 8100 один процесс. Диск сервера 62 до/после:
+`/` 145G, занято 79G, свободно 67G (55%); `/home/junior` 11G, prod-backups 6 файлов.
+
+**Смоук (zzz_8034_admin / zzz_8034_user временно активированы, после проверки
+снова is_active=false; вход админа после деактивации — 401).** У админа
+`/realizations` и `/realizations/responses` — 200; `/sales/realizations` и
+`/sales/realizations/responses` — 307 на новые адреса; `/api/realizations/summary`
+— 200 с данными. У не-админа пункта меню нет, `/api/realizations/summary` — 403.
+`POST /api/reports/run` slug `requests-response`: админ 200 (193 строки, «Запросы:
+всего» 12 703 за 31.07–29.09), не-админ 403. Скриншот меню под админом —
+`owners-inbox/screenshots/realizations-8089/prod-menu.png`.
+
 ## 2026-09-29 — Деплой «Продажи → Реализация» на прод (#8034)
 
 Санкция Сергея Афанасьева 29.09 18:51 МСК («ОК»). `feat/realizations-section`
