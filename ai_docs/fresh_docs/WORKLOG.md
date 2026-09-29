@@ -67,6 +67,34 @@ Postgres 16 (миграции + заглушки users/roles/metrics, учётк
 
 ---
 
+## 2026-09-29 — Деплой «Реализация: юзабилити» на прод (#8126, этап 3)
+
+Требование Сергея Афанасьева («приведи всё в порядок»). `fix/realizations-usability`
+(1170d94) была fast-forward от `origin/dev-asteroid` (92c10c7) — влита пушем
+`HEAD:dev-asteroid`, без merge-коммита. Миграций в ветке нет (в диффе ни одного
+файла из `migrations/`). `git pull origin dev-asteroid` перед выкатом — актуально,
+гард свежести и сверка схем зелёные, `ALLOW_STALE_DEPLOY` не использовался.
+Выкат `deploy.sh` из worktree `analsteroid-realizations-usability`. Прод: BUILD_ID
+`fIydyvOtx5aMbRc26EuPW`, Login 200 / Static 200, pg-модуль 20/20, на 8100 один
+процесс. Диск сервера 62 до/после: `/` 145G, занято 79G, свободно 67G (55%);
+`/home/junior` 11G, prod-backups 6 файлов.
+
+Первый запуск `deploy.sh` упал на сверке схем: в новом worktree не было
+gitignored `.env.local` (ECONNREFUSED 127.0.0.1:6432). Гард не обходили —
+скопировали `.env.local` из соседнего worktree, повторный запуск прошёл штатно.
+
+**Смоук (zzz_8034_admin / zzz_8034_user временно активированы, после проверки
+снова is_active=false; вход админа после деактивации — 401).** Админ:
+`/realizations/{responses,requests,logists,regions}` — 200; `POST /api/reports/run`
+для `requests-response`, `realizations-logists`, `realizations-regions` — 200 с
+данными; `/realizations` → 307 на `/realizations/requests`, `?tab=logists` и
+`?tab=regions` → 307 на одноимённые страницы, `/sales/realizations[/responses]` → 307;
+`/api/realizations/summary` — 404 (удалён). Дриллдаун по
+`?drill=1918&drillMetric=rr_requests_new` открывается боковой панелью, строк 2 =
+числу в ячейке (1–28.09). Пользователь: пункта меню нет, `/api/reports/run` — 403,
+`/api/realizations/summary` — 404. Скриншоты —
+`owners-inbox/screenshots/realizations-8126-fix/prod-drill.png`, `prod-logists.png`.
+
 ## 2026-09-29 — «Реализация» — раздел верхнего уровня под «Продажи» (#8089)
 
 Правка Сергея Афанасьева 29.09: «Реализация» не подгруппа «Продажи», а отдельный
