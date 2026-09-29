@@ -183,7 +183,7 @@ export function RealizationsPage() {
     <div className="h-full overflow-y-auto overflow-x-hidden bg-[var(--color-bg)]">
       <div className="flex flex-col gap-3 p-4 sm:p-6">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h1 className="text-xl font-bold text-[var(--color-text)]">Реализация</h1>
+          <h1 className="text-xl font-bold text-[var(--color-text)]">Заявки и логисты</h1>
           <span className="text-xs text-[var(--color-text-muted)]">заявки и метрики логистов · база Диспетчера (зеркало 1С) · суммы без НДС</span>
         </div>
 

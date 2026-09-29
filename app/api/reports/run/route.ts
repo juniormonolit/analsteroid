@@ -28,6 +28,9 @@ import {
   type ClientMetricsDimension,
 } from '@/features/reports/engine/clientMetrics';
 import { computeRatingValues } from '@/features/manager-card/engine/ratings';
+import { fetchRequestResponse } from '@/features/reports/engine/requestResponse';
+import { RESPONSE_SLUG, RESPONSE_METRIC_IDS } from '@/lib/realizations/responseMetrics';
+import { canViewRealizations } from '@/lib/realizations/access';
 import { computeCalculated, computeTotals, computeDelta } from '@/features/reports/engine/calculated';
 import { applyGrouping } from '@/features/reports/engine/grouping';
 import { enrichPlanMetrics } from '@/features/reports/engine/planMetrics';
@@ -103,6 +106,11 @@ export async function POST(req: NextRequest) {
     createdTimeFilter, firstTouchFilter, dealFilters,
   };
 
+  // «Ответы на запросы» (раздел «Реализация», задача #8034) — только роль
+  // «Администратор» (и супер-админ); та же проверка, что у меню и /api/realizations/*.
+  if (reportSlug === RESPONSE_SLUG && !canViewRealizations(session)) {
+    return NextResponse.json({ error: 'Недостаточно прав: раздел «Реализация» доступен только роли «Администратор»' }, { status: 403 });
+  }
   if (!isValidPeriodInput(period)) {
     return NextResponse.json({ error: 'period.from и period.to обязательны и должны быть валидными датами' }, { status: 400 });
   }
@@ -246,6 +254,7 @@ export async function POST(req: NextRequest) {
     curTouch?: TouchAndFirstCallRow; compTouch?: TouchAndFirstCallRow;
   } | null = null;
 
+  let responseGrand: { cur: Record<string, number | null> | null; comp: Record<string, number | null> | null } | null = null;
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
       fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter,
@@ -281,6 +290,26 @@ export async function POST(req: NextRequest) {
       fetchByDealBuckets({ xField, period: opts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, managerId, createdTimeFilter, firstTouchFilter, dealFilters }),
       fetchByDealBuckets({ xField, period: compOpts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, managerId, createdTimeFilter, firstTouchFilter, dealFilters }),
     ]);
+  } else if (reportSlug === RESPONSE_SLUG) {
+    // «Ответы на запросы» (задача #8034): строка = менеджер-постановщик задачи в
+    // потоке снабжения (sa.bitrix_task_current + sa.bitrix_flows), метрики rr_*.
+    // «Итого» — из общей строки той же выборки (медианы, distinct-сделки).
+    try {
+      const [cur, comp] = await Promise.all([
+        fetchRequestResponse(opts.period, { departmentIds }),
+        fetchRequestResponse(compOpts.period, { departmentIds }),
+      ]);
+      currentRows = cur.rows;
+      compRows = comp.rows;
+      responseGrand = { cur: cur.grand, comp: comp.grand };
+    } catch (e) {
+      const msg = (e as Error).message ?? '';
+      console.error('[reports/run requests-response]', msg);
+      if (/permission denied/i.test(msg)) {
+        return NextResponse.json({ error: 'Нет доступа к задачам Битрикса в базе (sa.bitrix_task_current / sa.bitrix_flows): роли приложения нужен GRANT SELECT' }, { status: 503 });
+      }
+      return NextResponse.json({ error: 'Не удалось посчитать «Ответы на запросы»' }, { status: 502 });
+    }
   }
 
 
@@ -1026,6 +1055,17 @@ export async function POST(req: NextRequest) {
       const current = cur ? round1ps(cur.medianHours[def.bucket]) : null;
       const comparison = comp ? round1ps(comp.medianHours[def.bucket]) : null;
       totals[def.id] = { current, comparison, ...computeDelta(current, comparison) };
+    }
+  }
+
+  // «Итого» «Ответов на запросы» — общая строка GROUPING SETS: медианы и доли по
+  // всей совокупности, сделки без дубля (сумма строк была бы неверной).
+  if (responseGrand) {
+    for (const id of RESPONSE_METRIC_IDS) {
+      if (!withDeps.some(m => m.id === id)) continue;
+      const current = responseGrand.cur?.[id] ?? null;
+      const comparison = responseGrand.comp?.[id] ?? null;
+      totals[id] = { current, comparison, ...computeDelta(current, comparison) };
     }
   }
 

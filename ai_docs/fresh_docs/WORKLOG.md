@@ -6,6 +6,46 @@
 
 ---
 
+## 2026-09-29 — «Продажи → Реализация»: ответы на запросы, заявки и логисты (#8034)
+
+Просьба Сергея Афанасьева 29.09: вернуть «Реализацию» из скрытых внутрь «Продажи»,
+доступ только роли «Администратор», наполнить отчётами. Ветка
+`feat/realizations-section` (worktree `analsteroid-realizations`), в `dev-asteroid`
+не вливалась, на прод не выкатывалась.
+
+**Доступ.** Одна функция `lib/realizations/access.ts: canViewRealizations` —
+супер-админ или `roleName === 'Администратор'` (НЕ `hasPerm('section.realization')`:
+право из матрицы выдаётся любой роли). Три слоя: пункт меню (AppShell,
+SalesSidebarSection), серверный layout `app/(app)/sales/realizations/layout.tsx`
+(AccessDenied), API — `app/api/realizations/guard.ts` (401/403) и гейт
+slug `requests-response` в `app/api/reports/run/route.ts` (403).
+
+**«Ответы на запросы» — на общем движке отчётов.** Страница
+`/sales/realizations/responses` = `SalesReportPage` с `reportSlug='requests-response'`
+→ `/api/reports/run` → ветка диспатча → `features/reports/engine/requestResponse.ts`
+(строка = менеджер-постановщик задачи в потоке снабжения; `sa.bitrix_task_current` +
+`sa.bitrix_flows` без «Поддержки», «Актов сверок», «Коррекции заявок»; сделки —
+`sa.deals` по deal_id). «Итого» — общая строка GROUPING SETS (медианы, distinct-сделки).
+Метрики `rr_*` объявлены КОДОМ (`lib/realizations/responseMetrics.ts`), `catalog.ts`
+дописывает их к каталогу, если в таблице metrics таких id нет; из общего
+`/api/catalog/metrics` они вырезаны (в других отчётах были бы пустыми). Дриллдаун —
+свой (`RequestTasksDrill` + `/api/realizations/tasks`): общий DrilldownDrawer умеет
+только сделки. `SalesReportPage` получил проп `defaultMetricIds`.
+**Блокер данных:** у роли приложения (SA_PG_USER) нет SELECT на
+`sa.bitrix_task_current` / `sa.bitrix_flows` — отчёт отвечает 503 с понятным текстом
+до GRANT. SQL проверен на локальной фикстуре Postgres 16 (ожидаемые значения совпали).
+
+**«Заявки и логисты»** (`/sales/realizations`, этап 1 брифа) — отдельный экран на
+данных sd (база Диспетчера, тот же пул SA — у роли есть SELECT на sd): список заявок
+с фильтрами и карточкой, сводка по логистам М1–М9, М11, М12, разрез по регионам.
+Методика — предложение Софьи #7971 (дедуп «номер + buyer_id», integrity_ok=false
+вне маржи, маржа без НДС, предварительно). Сверка с её CSV за 31.08–29.09 — в отчёте
+задачи. На общий движок ещё НЕ переведён (BACKLOG).
+
+Тесты: `npm run test:realizations` (43 проверки, без БД; на Node 22.15 —
+`NODE_OPTIONS=--experimental-strip-types`). typecheck, lint:responsive (0 новых),
+build — зелёные.
+
 ## 2026-09-28 — Бот «Аналитик»: команда «Отчёт»
 
 ТЗ владельца: «научим его команде „Отчет“, чтобы он по этой команде слал типовой отчёт».

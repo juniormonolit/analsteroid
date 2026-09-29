@@ -312,8 +312,12 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
           та же функция canViewRealizations. */}
       {canViewRealizations(user) && (
         <div className={subgroupCls}>
+          <div className={subgroupLabelCls}><span className="flex-1 text-left">Реализация</span></div>
+          <Link href="/sales/realizations/responses" className={linkCls('/sales/realizations/responses')}>
+            <span className="flex-1 min-w-0 break-words line-clamp-2">Ответы на запросы</span>
+          </Link>
           <Link href="/sales/realizations" className={linkCls('/sales/realizations')}>
-            <span className="flex-1 min-w-0 break-words line-clamp-2">Реализация</span>
+            <span className="flex-1 min-w-0 break-words line-clamp-2">Заявки и логисты</span>
           </Link>
         </div>
       )}

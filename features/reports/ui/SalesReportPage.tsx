@@ -48,6 +48,8 @@ import { ReportTabsBar } from './ReportTabsBar';
 import { MetricBreakdownProvider, MetricBreakdownContext, type BreakdownReportContext } from './MetricBreakdownContext';
 import { loadTabsStore, saveTabsStore, newTabId, type ReportTab, type ReportTabSnapshot, type ReportTabsStore } from '@/features/reports/lib/reportTabs';
 import { diffFromPreset } from '@/features/reports/lib/presetDiff';
+import { RESPONSE_SLUG } from '@/lib/realizations/responseMetrics';
+import { RequestTasksDrill } from '@/features/realizations/ui/RequestTasksDrill';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -308,6 +310,9 @@ interface Props {
   // с задачи 2990 «Сохранить» показывается всегда вне зависимости от basic, см.
   // ReportToolbar.tsx; forceShowSave/isNew ниже оставлен как безвредный no-op.)
   isNew?: boolean;
+  /** Стартовый набор колонок вместо DEFAULT_METRIC_IDS (отчёты с собственным
+   *  набором метрик, напр. «Ответы на запросы», задача #8034). */
+  defaultMetricIds?: string[];
 }
 
 const SOURCE_DIMENSION_LABELS: Record<string, string> = {
@@ -327,7 +332,8 @@ const DEFAULT_METRIC_IDS = [
   'primary_shipments_amount',
 ];
 
-export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Props) {
+export function SalesReportPage({ reportSlug, title, preset, isNew = false, defaultMetricIds }: Props) {
+  const startMetricIds = defaultMetricIds ?? DEFAULT_METRIC_IDS;
   const isMobile = useIsMobile();
   const router = useRouter();
   const qc = useQueryClient();
@@ -467,8 +473,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   // `owners-inbox/analsteroid-incident-2870-wave1-rollback.html`. Период/срез/
   // группировка/сортировка на URL остаются — там «URL побеждает при первом
   // монтировании» корректная семантика (диплинк), у набора метрик — нет.
-  const [metricIds, setMetricIds]       = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
-  const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(isNew ? [] : DEFAULT_METRIC_IDS);
+  const [metricIds, setMetricIds]       = useState<string[]>(isNew ? [] : startMetricIds);
+  const [fetchedMetricIds, setFetchedMetricIds] = useState<string[]>(isNew ? [] : startMetricIds);
   // Выбор отделов — настройка АККАУНТА, не отчёта (задача Иосифа 15.07, миграция 102):
   // одно значение на пользователя для всех отчётов; из конфигов сохранённых отчётов
   // departmentIds больше не применяется (см. пропуск в useEffect preset ниже).
@@ -483,6 +489,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useUrlState<string>('q', stringParam(''));
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
+  const [tasksDrill, setTasksDrill]     = useState<{ managerId: string; name: string; metricName?: string } | null>(null);
   // «График из отчёта» (фича Серёги 01.08): цель открытого графика метрики.
   const [chartTarget, setChartTarget]   = useState<MetricChartTarget | null>(null);
   // Режим «Сравнение» (п. Н2 спеки): выбор сущностей живёт в состоянии страницы (не в
@@ -1245,6 +1252,19 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     (id: string, name: string, metricId: string) => {
       const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
         ?? availableMetrics.find((x: { id: string }) => x.id === metricId);
+      // «Ответы на запросы» (задача #8034): дрилл — список задач-запросов, а не
+      // сделок (DrilldownDrawer умеет только сделки). Группы отделов/«Итого» —
+      // все менеджеры среза.
+      if (reportSlug === RESPONSE_SLUG) {
+        const rowsNow = (data?.rows ?? []) as MergedRow[];
+        const ids = id === '__total__' ? rowsNow.map(r => r.dimensionId)
+          : id.startsWith('__team__') ? rowsNow.filter(r => (r.teamId ?? '') === id.slice('__team__'.length)).map(r => r.dimensionId)
+          : id.startsWith('__branch__') ? rowsNow.filter(r => (r.branchName ?? '') === id.slice('__branch__'.length)).map(r => r.dimensionId)
+          : id.startsWith('__ugroup__') ? (userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [])
+          : [id];
+        setTasksDrill({ managerId: ids.filter(x => /^\d+$/.test(x)).join(',') || '__all__', name, metricName: m?.nameRu });
+        return;
+      }
       // Групповые строки и «Итого» открывают плоский список сделок всего среза
       if (id.startsWith('__ugroup__')) {
         // «Без группы» (31.07 №1): дрилл по объединению всех свободных сущностей —
@@ -1273,7 +1293,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
         setDrilldown({ id, name, metricId, metricName: m?.nameRu });
       }
     },
-    [catalogMetrics, availableMetrics, userGroups, userGroupFreeIds, dimensionType]
+    [catalogMetrics, availableMetrics, userGroups, userGroupFreeIds, dimensionType, reportSlug, data]
   );
 
   // «График из отчёта» (фича Серёги 01.08): открыть график динамики метрики для
@@ -1365,7 +1385,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
     ? 'Период'
     : sourceMode
     ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
-    : reportSlug === 'by-product-groups' ? 'Товарная группа' : 'Менеджер';
+    : reportSlug === 'by-product-groups' ? 'Товарная группа'
+    : reportSlug === RESPONSE_SLUG ? 'Менеджер (постановщик)' : 'Менеджер';
 
   // Ref на корневой прокручиваемый div таблицы (ReportTable.tsx) — нужен PNG/PDF-снимку
   // (captureTableNode временно разворачивает его в overflow:visible на время снимка,
@@ -2046,6 +2067,11 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false }: Pr
           onClose={() => setDrilldown(null)}
         />
         </MetricBreakdownContext.Provider>
+      )}
+
+      {tasksDrill && (
+        <RequestTasksDrill managerId={tasksDrill.managerId} name={tasksDrill.name} metricName={tasksDrill.metricName}
+          period={period} onClose={() => setTasksDrill(null)} />
       )}
 
       {showComparison && (

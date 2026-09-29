@@ -12,6 +12,7 @@ const REPORT_SLUG_LABEL: Record<string, string> = {
   'by-product-groups': 'По товарным группам',
   'by-periods': 'По периодам',
   'by-clients': 'По клиентам',
+  'requests-response': 'Ответы на запросы',
 };
 function slugLabel(slug: string): string {
   return REPORT_SLUG_LABEL[slug] ?? slug;
