@@ -24,6 +24,7 @@ import { useChangelogQuery } from '@/features/changelog/ui/useChangelogQuery';
 import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
 import { useTheme } from '@/lib/hooks/useTheme';
 import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
+import { canViewRealizations } from '@/lib/realizations/access';
 import { BottomTabBar } from '@/components/layout/BottomTabBar';
 
 // Ширина развёрнутого сайдбара (задача 1575, полировка шапки/меню): было 260 —
@@ -304,6 +305,19 @@ function SalesSidebarSection({ collapsed, pathname, user }: { collapsed: boolean
       {/* «Повторные» и «Товарная матрица» переехали в «Ещё» (правка владельца
           17.08) — блок «Продажи» остаётся витринам отчётов. */}
 
+      {/* «Реализация» (задача #8034, просьба Сергея 29.09) — вернули из скрытых
+          внутрь «Продажи»: заявки и метрики логистов по базе Диспетчера. Пункт
+          виден ТОЛЬКО роли «Администратор» (и супер-админу); серверные гейты —
+          app/(app)/sales/realizations/layout.tsx и /api/realizations/*,
+          та же функция canViewRealizations. */}
+      {canViewRealizations(user) && (
+        <div className={subgroupCls}>
+          <Link href="/sales/realizations" className={linkCls('/sales/realizations')}>
+            <span className="flex-1 min-w-0 break-words line-clamp-2">Реализация</span>
+          </Link>
+        </div>
+      )}
+
       {/* Роп монитор — стандартные + общие отчёты витрины rop_monitor */}
       <div className={subgroupCls}>
         <button onClick={() => setOpenStd(v => !v)} className={subgroupLabelCls}>
@@ -376,7 +390,8 @@ interface NavItem {
   perm?: PermKey; // без права — пункт не показывается
 }
 
-// «Реализация»/«Маркетинг»/«Найм» спрятаны «до востребования» (правка Иосифа
+// «Реализация» вернулась 29.09 (#8034) подпунктом «Продажи», только «Администратор»
+// (см. SalesSidebarSection). Исходно «Реализация»/«Маркетинг»/«Найм» спрятаны (правка Иосифа
 // 16.07, оптимизация меню): Реализация и Найм были заглушками «Скоро», маркетинг-
 // пресеты живут по прямым URL (/marketing/*) и вернутся в меню, когда попросят.
 const NAV: NavItem[] = [

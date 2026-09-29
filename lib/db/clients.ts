@@ -78,3 +78,12 @@ export function systemDb(): Pool {
   if (!_system) _system = makeYcPool(process.env.YC_SYSTEM_DB ?? 'system');
   return _system;
 }
+
+// База Диспетчера (схема sd — зеркало 1С) живёт в том же MLT Supabase, что и
+// sa: роль SA_PG_USER имеет на sd USAGE+SELECT. Отдельный пул не нужен — это тот
+// же Postgres; раздел «Реализация» (задача #8034) читает sd только SELECT'ами.
+// Без SA-подключения (YC-фолбэк analyticsDb) схемы sd нет — честная ошибка.
+export function sdDb(): Pool {
+  if (!process.env.SA_PG_USER) throw new Error('sd недоступна: не задано подключение SA_PG_* (MLT Supabase)');
+  return analyticsDb();
+}

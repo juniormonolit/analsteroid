@@ -1,0 +1,98 @@
+/**
+ * Assert-скрипт раздела «Продажи → Реализация» (задача #8034), без БД.
+ *  1. canViewRealizations — только «Администратор» и супер-админ; роль с
+ *     явным section.realization / джокером section.* без роли — НЕ проходит.
+ *  2. regionOf — метка (СПБ/МСК/КРД) в ФИО и правило номера логиста.
+ *  3. parseFilters / matchRow — валидация периода, фильтры региона/логиста/статуса.
+ *  4. buildSummary — М1, М2 (МСК-дата), М3, М4, М6–М9, М11, М5 и разрез по регионам.
+ * Запуск: npm run test:realizations
+ */
+import { canViewRealizations } from '../lib/realizations/access.ts';
+import { regionOf } from '../lib/realizations/region.ts';
+import { parseFilters, matchRow } from '../lib/realizations/filters.ts';
+import { buildSummary, statusTimes, median, percentile, mskDate, type ReqRow } from '../lib/realizations/metrics.ts';
+
+let failures = 0, passed = 0;
+function check(cond: boolean, label: string) { if (cond) { passed++; return; } failures++; console.error(`FAIL ${label}`); }
+const near = (a: number | null, b: number, eps = 1e-6) => a !== null && Math.abs(a - b) < eps;
+
+// 1. Доступ
+check(canViewRealizations({ isSuperadmin: false, roleName: 'Администратор' }), 'админ проходит');
+check(canViewRealizations({ isSuperadmin: true, roleName: null }), 'супер-админ проходит');
+check(!canViewRealizations({ isSuperadmin: false, roleName: 'РОП' }), 'РОП не проходит');
+check(!canViewRealizations({ isSuperadmin: false, roleName: 'Директор' }), 'Директор не проходит');
+check(!canViewRealizations({ isSuperadmin: false, roleName: 'администратор ' }), 'похожая роль не проходит');
+check(!canViewRealizations(null), 'без сессии не проходит');
+
+// 2. Регион
+check(regionOf('Глимнурова Эльвина (СПБ) Л106') === 'СПБ', 'метка СПБ');
+check(regionOf('Рыбальченко Кирилл (СПб) Л3') === 'СПБ', 'метка СПб в другом регистре');
+check(regionOf('Исаковский Алексей (МСК) Л2201') === 'МСК', 'метка МСК');
+check(regionOf('Кирилюк Анатолий (КРД) Л303') === 'КРД', 'метка КРД');
+check(regionOf('Иванов Игорь (СПБ) Л2') === 'СПБ', 'метка важнее номера (Л2 = Логист02)');
+check(regionOf('Без Метки Л2201') === 'МСК', 'номер 2** → МСК');
+check(regionOf('Без Метки Л301') === 'КРД', 'номер 3** → КРД');
+check(regionOf('Без Метки Л106') === 'СПБ', 'номер 1** → СПБ');
+check(regionOf('Без Метки Л7') === 'СПБ', 'короткий номер → СПБ');
+check(regionOf('Афанасьев Сергей Витальевич') === 'Без региона', 'не логист → без региона');
+check(regionOf(null) === 'Без региона', 'пусто → без региона');
+
+// 3. Фильтры
+const now = new Date('2026-09-29T09:00:00Z');
+const f0 = parseFilters(new URLSearchParams(''), now);
+check(!('error' in f0) && f0.from === '2026-08-31' && f0.to === '2026-09-29', 'дефолтный период 30 дней');
+check('error' in parseFilters(new URLSearchParams('from=2026-09-10&to=2026-09-01'), now), 'from > to — ошибка');
+check('error' in parseFilters(new URLSearchParams("from=2026-09-10'&to=2026-09-11"), now), 'мусор в дате — ошибка');
+check('error' in parseFilters(new URLSearchParams('from=2024-01-01&to=2026-01-01'), now), 'период > года — ошибка');
+const f1 = parseFilters(new URLSearchParams('region=МСК&logist=abc&status=grp:shipped'), now);
+check(!('error' in f1) && f1.region === 'МСК' && f1.logist === null && f1.status === 'grp:shipped', 'регион ок, мусорный логист отброшен');
+const rowMsk = { logist_id: '11111111-1111-1111-1111-111111111111', logist: 'X (МСК) Л2201', status: 'Отгружено', grp: 'shipped' as const };
+check(matchRow(rowMsk, { region: 'МСК', logist: null, status: 'grp:shipped' }), 'match регион+группа');
+check(!matchRow(rowMsk, { region: 'СПБ', logist: null, status: null }), 'чужой регион отсечён');
+check(!matchRow(rowMsk, { region: null, logist: null, status: 'Выполнено' }), 'точный статус');
+check(matchRow({ ...rowMsk, logist_id: null }, { region: null, logist: '__none', status: null }), 'логист не указан');
+
+// 4. Сводка
+const base: ReqRow = {
+  id: 'r', number: '1', doc_date: null, status: 'Отгружено', grp: 'shipped', buyer: null, manager: null,
+  logist_id: 'L1', logist: 'А (СПБ) Л106', shipment_date: '2026-09-10', creation_date_1c: '2026-09-01T09:00:00Z',
+  sales_nv: 1000, sales_vat: 1200, d_sale: 100, purchases_n: 1, broken: false, purch_nv: 800, d_cost: 150,
+  first_ship: '2026-09-10T20:30:00Z', first_new: '2026-09-05T09:00:00Z', first_take: '2026-09-05T11:00:00Z', had_fix: false,
+};
+const rows: ReqRow[] = [
+  // в срок: 20:30Z 10.09 = 23:30 МСК 10.09 ≤ плана
+  { ...base, id: 'a' },
+  // не в срок: 21:30Z 10.09 = 00:30 МСК 11.09 > плана 10.09
+  { ...base, id: 'b', first_ship: '2026-09-10T21:30:00Z', had_fix: true, broken: true },
+  // отгружено без приобретения и без истории — выпадает из М2/М3, в М7
+  { ...base, id: 'c', purchases_n: 0, purch_nv: null, first_ship: null, first_new: null, first_take: null, sales_nv: 500 },
+  { ...base, id: 'd', grp: 'cancelled', status: 'Отмена', first_ship: null, sales_nv: 9999 },
+  { ...base, id: 'e', grp: 'in_work', status: 'Взята в работу', first_ship: null, logist_id: 'L2', logist: 'Б (МСК) Л2201', first_take: '2026-09-05T13:00:00Z' },
+];
+check(mskDate('2026-09-10T21:30:00Z') === '2026-09-11', 'МСК-дата после полуночи');
+const names = new Map([['L1', 'А (СПБ) Л106'], ['L2', 'Б (МСК) Л2201']]);
+const od = [{ logist_id: 'L1', shipment_date: '2026-08-01' }, { logist_id: 'L1', shipment_date: '2026-09-20' }, { logist_id: 'L2', shipment_date: '2026-09-25' }];
+const s = buildSummary(rows, od, 'logist', '2026-09-29', names);
+const a = s.rows.find(r => r.key === 'L1')!;
+check(a.total === 4 && a.shipped === 3 && a.cancelled === 1 && a.inWork === 0, 'М1 по логисту');
+check(near(a.cancelPct, 25), 'М1 доля отмен');
+check(a.shipWithHist === 2 && near(a.onTimePct, 50), 'М2 в срок по МСК-дате');
+check(a.fixPct !== null && near(a.fixPct, 100 / 3), 'М6 правки');
+check(a.shippedNoPurchase === 1, 'М7 без приобретения');
+check(a.salesNv === 2500 && near(a.avgCheckNv, 2500 / 3), 'М8 выручка и чек (отмена не входит)');
+check(a.marginBaseN === 1 && a.exclBroken === 1 && a.marginNv === 200 && near(a.marginPct, 20), 'М9 маржа без задвоенных');
+check(a.dSale === 200 && a.dCost === 300, 'М11 доставка: a + c, задвоенная b исключена');
+check(a.overdue === 2 && a.overdue30 === 1 && a.oldestOverdue === '2026-08-01', 'М5 просрочки');
+check(s.total.total === 5 && s.total.overdue === 3, 'Итого');
+check(near(s.total.reactHoursMed, 2), 'М4 реакция медиана'); // 2,2,(c без истории),2,4 → [2,2,2,4] → 2
+const rg = buildSummary(rows, od, 'region', '2026-09-29', names);
+check(rg.rows.length === 2 && rg.rows.find(r => r.key === 'МСК')?.total === 1 && rg.rows.find(r => r.key === 'СПБ')?.overdue === 2, 'разрез по регионам');
+check(median([3, 1, 2]) === 2 && median([1, 2, 3, 4]) === 2.5 && median([]) === null, 'медиана');
+check(near(percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.9), 9.1), 'p90 как percentile_cont');
+const st = statusTimes([...Array(25)].map((_, i) => ({ logist_id: 'L1', status: 'Новая заявка', hours: i })).concat([{ logist_id: 'L1', status: 'Редкий', hours: 1 }]));
+check(st.length === 1 && st[0].n === 25 && st[0].medianH === 12, 'М4 время в статусах, редкие скрыты');
+const empty = buildSummary([], [], 'logist', '2026-09-29', names);
+check(empty.rows.length === 0 && empty.total.total === 0 && empty.total.onTimePct === null && empty.total.marginPct === null, 'пустые данные без NaN');
+
+console.log(`assert-realizations: ${passed} passed, ${failures} failed`);
+if (failures) process.exit(1);
