@@ -6,6 +6,35 @@
 
 ---
 
+## 2026-09-30 — Звонки логистов: карта va.logist_bitrix_map вместо disp (задача #8357)
+
+Решение Сергея Афанасьева (30.09): «в Диспетчере не править», карту «логист 1С → Bitrix id»
+держать в его схеме va. Основа — сверка #8353 (правило «логин Битрикса logistNNN = код 1С ЛNNN»
+через `sa.org_resolved_hierarchy`, общих учёток нет, слоты переходят из рук в руки).
+
+**База (MLT, роль postgres, одна транзакция).** `va.logist_bitrix_map` (logist_1c_id, logist_code,
+logist_name, bitrix_user_id, valid_from, valid_to — null = действует, source rule|exception, basis,
+note, updated_at), индексы (bitrix_user_id, valid_from) и (logist_1c_id), триггер не пускает двух
+логистов на одну учётку в один момент. Пересборка — `va.refresh_logist_bitrix_map()`: правило из
+оргструктуры + интервалы по `sa.employee_name_history` (контроль — фамилия 1С в имени слота),
+исключения upsert. Сейчас 30 строк: rule 26, exception 4 (Бибиков Л8 → 1848, Галив Л110 → 1942,
+Пастушков Л301 → 2081 — личные учётки; Товпа Л2005 → 2062 — смена фамилии, подтвердил Сергей).
+View `va.logist_bitrix_users` (фильтр ветки n8n) пересоздан поверх карты — действующие строки,
+28 учёток (было 18 из disp). SQL и откат — `life-os/owners-inbox/n8n/va-logist-bitrix-map{,-rollback}.sql`.
+
+**Код.** Звонок → логист по `va.logist_bitrix_map` на момент `started_at` (`MAP_ON` в SQL,
+`resolveCallLogist` — JS-эталон); строка логиста получает числа, если учётка была за ним в
+периоде (`callLogists`). Правило «у кого показывать общую учётку» (`callAttribution`, shared,
+sharedWith в дрилле) и запасной мост из `sd.users_1c.bitrix_user_id` удалены.
+
+**Проверка.** typecheck, `npm run build`, все `test:*` (realizations 117/0), `check-logist-calls`
+problems=0 (13 звонков 30.09, все привязаны), `check-metric-definitions` с окружением прода
+metrics=543 problems=0. Выкат `deploy.sh`: Login 200 / Static 200, BUILD `zyql4E9c1d6SHFr7EcP9G`.
+Смоук (zzz_8034_admin временно is_active=true, сессия в user_sessions, после — удалена и
+is_active=false, запрос с ней → 401): `/realizations/logists` 200, `reports/run`
+realizations-logists / -regions 200 (6 логистов со звонками, регионы 2+10+1 = 13),
+`/api/realizations/calls` 200, 13 звонков. Старый и новый резолв 13 звонков 30.09 — совпали все.
+
 ## 2026-09-30 — Звонки в «Сводке по логистам» и «Регионах» (задача #8314)
 
 Запрос Сергея Афанасьева: «в отчёты по логистам добавить метрики по звонкам: кол-во
