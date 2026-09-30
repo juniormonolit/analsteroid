@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
+import { superadminTargetError } from '@/lib/auth/userManageGuard';
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
@@ -10,6 +11,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   const { id } = await params;
   const body = await req.json();
+
+  // Аудит 29.09 (#8256): супер-админа меняет только супер-админ; свою роль и
+  // активность не-супер-админ не меняет (иначе повышает себя или запирает).
+  const targetDenied = await superadminTargetError(session, id);
+  if (targetDenied) return targetDenied;
+  if (!session!.isSuperadmin && id === session!.id && (body.role_id !== undefined || body.is_active !== undefined)) {
+    return NextResponse.json({ error: 'Свою роль и активность меняет только супер-админ' }, { status: 403 });
+  }
 
   const fields: string[] = [];
   const values: unknown[] = [];

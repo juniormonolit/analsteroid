@@ -45,7 +45,9 @@ function resolveBuildId(): string {
   ];
   for (const p of candidates) {
     try {
-      const v = fs.readFileSync(p, 'utf8').trim();
+      // turbopackIgnore: иначе Next 16.3 трассирует ВЕСЬ проект в .next/standalone
+      // (исходники, owners-inbox, .env* — всё уезжает в серверную сборку, #8256).
+      const v = fs.readFileSync(/*turbopackIgnore: true*/ p, 'utf8').trim();
       if (v) { _buildId = v; return _buildId; }
     } catch { /* пробуем следующий кандидат */ }
   }

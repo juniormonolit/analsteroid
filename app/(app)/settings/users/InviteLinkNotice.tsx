@@ -9,12 +9,17 @@
 // Показывать ссылку админу безопасно: это одноразовый токен на установку
 // пароля со сроком 7 дней, а не пароль. Пароли в открытом виде мы не
 // пересылаем нигде и никогда.
+//
+// Аудит 29.09 (#8256): при ПОВТОРНОЙ отправке существующей учётке ссылку видит
+// только супер-админ (иначе «Администратор» выключал чужую учётку, переприглашал
+// и входил под ней). Без ссылки блок показывает только статус доставки.
 
 import { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 
 export function InviteLinkNotice({ link, delivered, name }: {
-  link: string;
+  /** Нет ссылки — API её не отдал (повторное приглашение не супер-админом). */
+  link?: string | null;
   delivered: boolean;
   /** Кому приглашение — чтобы админ не перепутал, если приглашает нескольких. */
   name?: string;
@@ -22,6 +27,7 @@ export function InviteLinkNotice({ link, delivered, name }: {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
+    if (!link) return;
     await navigator.clipboard.writeText(link);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -39,11 +45,15 @@ export function InviteLinkNotice({ link, delivered, name }: {
           : `Бот не доставил приглашение${name ? ` — ${name}` : ''}`}
       </span>
       <span className="text-[12px] leading-snug text-[var(--color-text-muted)]">
-        {delivered
-          ? 'Если человек скажет, что ничего не приходило — передайте ссылку сами. Одноразовая, действует 7 дней.'
-          : 'Скорее всего бот в режиме тишины. Передайте ссылку сами — она рабочая, одноразовая, действует 7 дней.'}
+        {!link
+          ? (delivered
+            ? 'Если человек скажет, что ничего не приходило — ссылку может выдать супер-админ.'
+            : 'Скорее всего бот в режиме тишины. Ссылку приглашения может выдать супер-админ.')
+          : delivered
+            ? 'Если человек скажет, что ничего не приходило — передайте ссылку сами. Одноразовая, действует 7 дней.'
+            : 'Скорее всего бот в режиме тишины. Передайте ссылку сами — она рабочая, одноразовая, действует 7 дней.'}
       </span>
-      <div className="flex items-center gap-2">
+      {link && <div className="flex items-center gap-2">
         {/* break-all — токен длинный (два UUID) и без переноса растягивал модалку
             за край экрана на 375px. */}
         <code className="min-w-0 flex-1 break-all rounded bg-[var(--color-bg)] px-2 py-1.5 text-[11px] text-[var(--color-text)]">
@@ -57,7 +67,7 @@ export function InviteLinkNotice({ link, delivered, name }: {
           {copied ? <Check size={14} /> : <Copy size={14} />}
           {copied ? 'Скопировано' : 'Копировать'}
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

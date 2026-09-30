@@ -17,6 +17,21 @@ const TZ = 'Europe/Moscow';
 // (та же, что в features/reports/engine/managerActivity.ts и lib/plans/dailyPlan.ts
 // для «рабочих дней»; отдельного часового понятия «рабочее время» до этой задачи
 // в коде не было — введено здесь).
+// Аудит безопасности 29.09 (#8256, находка D1): значение фильтра приходит из
+// тела запроса и раньше инлайнилось в SQL как `= '${filter}'` без проверки —
+// SQL-инъекция для любого залогиненного. Теперь — закрытый список значений:
+// роуты отвечают 400 (lib/reports/requestValidation.ts), а сами WHERE-билдеры
+// бросают исключение на всё, что не из списка (второй рубеж для прочих вызовов).
+export const CREATED_TIME_FILTERS: readonly CreatedTimeFilter[] = ['all', 'business_hours', 'weekday_after_hours', 'weekend'];
+export const FIRST_TOUCH_FILTERS: readonly FirstTouchFilter[] = ['all', 'off_hours', 'business_hours'];
+
+export function isCreatedTimeFilter(v: unknown): v is CreatedTimeFilter {
+  return typeof v === 'string' && (CREATED_TIME_FILTERS as readonly string[]).includes(v);
+}
+export function isFirstTouchFilter(v: unknown): v is FirstTouchFilter {
+  return typeof v === 'string' && (FIRST_TOUCH_FILTERS as readonly string[]).includes(v);
+}
+
 export const WORKDAY_START_HOUR = 9;
 export const WORKDAY_END_HOUR = 18;
 
@@ -52,6 +67,7 @@ function createdBucketExpr(tsExpr: string): string {
  */
 export function createdTimeWhere(alias: string, filter: CreatedTimeFilter | undefined): string {
   if (!filter || filter === 'all') return '';
+  if (!isCreatedTimeFilter(filter)) throw new Error('createdTimeFilter: недопустимое значение');
   return `(${createdBucketExpr(`${alias}.created_at`)}) = '${filter}'`;
 }
 
@@ -99,6 +115,7 @@ function nextBusinessOpenExpr(tsExpr: string): string {
  */
 export function firstTouchWhere(alias: string, filter: FirstTouchFilter | undefined): string {
   if (!filter || filter === 'all') return '';
+  if (!isFirstTouchFilter(filter)) throw new Error('firstTouchFilter: недопустимое значение');
   const firstEvent = `(SELECT MIN(_fe.event_at) FROM deal_events _fe WHERE _fe.deal_id = ${alias}.deal_id)`;
   const nextOpen = nextBusinessOpenExpr(`${alias}.created_at`);
   const cmp = filter === 'business_hours' ? '>=' : '<';

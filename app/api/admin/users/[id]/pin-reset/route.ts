@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
+import { superadminTargetError } from '@/lib/auth/userManageGuard';
 import { PIN_DEFAULT_THRESHOLD_MLT, PIN_FREEZE_HOURS } from '@/lib/auth/pin';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 
@@ -17,6 +18,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (denied) return denied as NextResponse;
 
   const { id } = await params;
+  const targetDenied = await superadminTargetError(session, id);
+  if (targetDenied) return targetDenied as NextResponse;
   const target = await systemDb().query<{ id: string; bitrix_user_id: string | null; pin_hash: string | null }>(
     `SELECT id, bitrix_user_id, pin_hash FROM users WHERE id = $1`, [id],
   );

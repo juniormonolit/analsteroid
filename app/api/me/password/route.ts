@@ -3,6 +3,8 @@ import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { getSession, SESSION_COOKIE } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
+import { authLimiter, tooManyAttempts } from '@/lib/auth/loginRateLimit';
+import { clientIpFromHeaders } from '@/lib/http/clientIp';
 
 // Смена собственного пароля из ЛК.
 export async function PATCH(req: NextRequest) {
@@ -17,6 +19,12 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Новый пароль должен быть не короче 8 символов' }, { status: 400 });
   }
 
+  // Перебор текущего пароля с чужой сессии — тот же лимит, что у входа (#8256).
+  const ip = clientIpFromHeaders(req.headers);
+  const limiter = authLimiter();
+  const blocked = await limiter.blocked(ip, session.login);
+  if (blocked) return tooManyAttempts(blocked.retryAfterSec);
+
   const db = systemDb();
   const res = await db.query<{ password_hash: string }>(
     `SELECT password_hash FROM users WHERE id = $1`,
@@ -25,7 +33,11 @@ export async function PATCH(req: NextRequest) {
   if (!res.rows.length) return NextResponse.json({ error: 'Пользователь не найден' }, { status: 404 });
 
   const ok = await bcrypt.compare(oldPassword, res.rows[0].password_hash);
-  if (!ok) return NextResponse.json({ error: 'Неверный текущий пароль' }, { status: 403 });
+  if (!ok) {
+    await limiter.recordFailure(ip, session.login);
+    return NextResponse.json({ error: 'Неверный текущий пароль' }, { status: 403 });
+  }
+  await limiter.recordSuccess(ip, session.login);
 
   const hash = await bcrypt.hash(newPassword, 10);
   await db.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [hash, session.id]);

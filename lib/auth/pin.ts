@@ -12,6 +12,7 @@
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import type { NextRequest } from 'next/server';
+import { clientIpFromHeaders } from '../http/clientIp';
 import type { Pool, PoolClient } from 'pg';
 import { createNotification, pushViaAnalitik } from '@/features/badges/engine/notifications';
 
@@ -65,19 +66,11 @@ export async function hashPin(pin: string): Promise<string> {
 // сравнения при каждом заходе, без затрат на пересчёт на старте процесса.
 const DUMMY_PIN_HASH = '$2b$12$UJWta5/6UPxYtKwpR603De.b.mRZDfW453augDsK9Y3ZkKS3.RTE.';
 
-// ── IP клиента (спека §7, «проверить у Артёма») ──────────────────────────────
-// Прод и дев стоят за Caddy (`reverse_proxy`), который сам проставляет
-// X-Forwarded-For на каждый апстрим-запрос — на этом хосте Caddy является
-// крайней точкой (слушает 80/443 напрямую, ss -tlnp подтверждён), второго
-// прокси перед ним нет. Читать первый (левый) адрес — это оригинальный клиент,
-// Caddy дописывает себя справа.
+// ── IP клиента (спека §7) ─────────────────────────────────────────────────────
+// Аудит 29.09 (#8256, A4): левый адрес X-Forwarded-For подделывается клиентом;
+// берём адрес, добавленный нашим Caddy (правый), — см. lib/http/clientIp.ts.
 export function getClientIp(req: NextRequest): string | null {
-  const xff = req.headers.get('x-forwarded-for');
-  if (xff) {
-    const first = xff.split(',')[0]?.trim();
-    if (first) return first;
-  }
-  return null;
+  return clientIpFromHeaders(req.headers);
 }
 
 export function getUserAgent(req: NextRequest): string | null {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { reportFiltersError } from '@/lib/reports/requestValidation';
 import { getSession } from '@/lib/auth/session';
 import { loadMetrics, resolveMetricIds, withDependencies } from '@/lib/metrics/catalog';
 import { fetchByManagers } from '@/features/reports/engine/byManagers';
@@ -66,6 +67,9 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = await req.json();
+  // Аудит 29.09 (#8256): поля, которые движки вставляют в SQL, — до всего остального.
+  const filtersError = reportFiltersError(body);
+  if (filtersError) return NextResponse.json({ error: filtersError }, { status: 400 });
   const {
     reportSlug = 'by-managers',
     period,

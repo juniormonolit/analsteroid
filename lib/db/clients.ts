@@ -5,7 +5,9 @@ import path from 'path';
 function makeYcSslConfig() {
   const caPath = process.env.YC_PG_SSL_CA_PATH;
   if (!caPath) return { rejectUnauthorized: false };
-  const resolved = path.isAbsolute(caPath) ? caPath : path.join(process.cwd(), caPath);
+  // turbopackIgnore: путь из env — без пометки Next 16.3 трассирует весь проект
+  // в .next/standalone (#8256).
+  const resolved = path.isAbsolute(caPath) ? caPath : path.join(/*turbopackIgnore: true*/ process.cwd(), caPath);
   try {
     return { ca: fs.readFileSync(resolved).toString(), rejectUnauthorized: true };
   } catch {

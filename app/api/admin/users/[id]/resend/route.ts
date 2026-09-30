@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
+import { superadminTargetError } from '@/lib/auth/userManageGuard';
 import { createAndSendInvite } from '@/lib/invites/tokens';
 import { getPublicOrigin } from '@/lib/http/publicOrigin';
 
@@ -11,6 +12,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (denied) return denied;
 
   const { id } = await params;
+  const targetDenied = await superadminTargetError(session, id);
+  if (targetDenied) return targetDenied;
   const db = systemDb();
 
   const res = await db.query<{ display_name: string; bitrix_user_id: string | null; is_active: boolean }>(
@@ -24,5 +27,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const invite = await createAndSendInvite(id, user.bitrix_user_id, user.display_name, getPublicOrigin(req));
 
+  // Аудит 29.09 (#8256): ссылка приглашения = возможность задать пароль чужой
+  // учётке и войти под ней. «Администратору» не отдаём — только доставка ботом в
+  // Битрикс; супер-админу ссылка остаётся (фолбэк на режим тишины бота).
+  if (!session!.isSuperadmin) {
+    return NextResponse.json({ ok: true, inviteDelivered: invite.delivered });
+  }
   return NextResponse.json({ ok: true, inviteLink: invite.link, inviteDelivered: invite.delivered });
 }

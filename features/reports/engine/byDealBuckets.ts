@@ -166,7 +166,11 @@ export async function fetchByDealBuckets(opts: ByDealBucketsOptions): Promise<Re
   }
 
   const whereParts: string[] = [];
-  if (managerId) whereParts.push(`d.current_manager_id = ${managerId}`);
+  if (managerId) {
+    // Аудит 29.09 (#8256, D2): managerId приходит из тела запроса — только число.
+    if (!/^\d{1,18}$/.test(String(managerId))) throw new Error('managerId: ожидается числовой ID');
+    whereParts.push(`d.current_manager_id = ${managerId}`);
+  }
   if (deptManagerWhere) whereParts.push(deptManagerWhere);
   const df = buildDealFilterWhere(opts.dealFilters);
   const offhWhereStr = [createdTimeWhere('d', createdTimeFilter), firstTouchWhere('d', firstTouchFilter), df.sql]

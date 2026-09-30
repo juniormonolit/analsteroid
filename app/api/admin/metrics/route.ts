@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { ycAnalyticsDb } from '@/lib/db/clients';
 import { invalidateMetricsCache } from '@/lib/metrics/catalog';
+import { metricDefinitionError } from '@/lib/metrics/metricValidation';
 
 export async function GET() {
   const session = await getSession();
@@ -34,6 +35,9 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   const body = await req.json();
+  // Аудит 29.09 (#8256, D3): определение метрики попадает в SQL отчётов.
+  const defError = metricDefinitionError(body ?? {}, { requireId: true });
+  if (defError) return NextResponse.json({ error: defError }, { status: 400 });
   const db = ycAnalyticsDb();
 
   const res = await db.query(`

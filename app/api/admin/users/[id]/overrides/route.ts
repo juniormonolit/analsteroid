@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { permError, sanitizeSectionOverrides } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
+import { superadminTargetError } from '@/lib/auth/userManageGuard';
 
 // Права v2: персональные исключения видимости разделов (union с правами роли,
 // см. lib/auth/session.ts). Выдавать могут и админы, и супер-админ —
@@ -27,6 +28,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   if (denied) return denied;
 
   const { id } = await params;
+  const targetDenied = await superadminTargetError(session, id);
+  if (targetDenied) return targetDenied;
   const body = await req.json().catch(() => ({}));
   const sectionOverrides = sanitizeSectionOverrides(body.sectionOverrides);
 

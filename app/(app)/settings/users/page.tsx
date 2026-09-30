@@ -54,7 +54,7 @@ export default function UsersPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   // Ссылка после повторной отправки приглашения (показываем на экране, а не
   // надеемся на бота — см. InviteLinkNotice).
-  const [resentInvite, setResentInvite] = useState<{ link: string; delivered: boolean } | null>(null);
+  const [resentInvite, setResentInvite] = useState<{ link: string | null; delivered: boolean } | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -83,7 +83,7 @@ export default function UsersPage() {
       else {
         // Ссылку показываем всегда: бот в режиме тишины ничего не доставит, и
         // «отправлено повторно» без ссылки — обещание, которое не выполнено.
-        setResentInvite({ link: data.inviteLink as string, delivered: !!data.inviteDelivered });
+        setResentInvite({ link: (data.inviteLink as string | undefined) ?? null, delivered: !!data.inviteDelivered });
         setMessage(null);
         load();
       }

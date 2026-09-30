@@ -3,6 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { permError } from '@/lib/auth/perms';
 import { ycAnalyticsDb } from '@/lib/db/clients';
 import { invalidateMetricsCache } from '@/lib/metrics/catalog';
+import { metricDefinitionError } from '@/lib/metrics/metricValidation';
 
 // JSON с детерминированным порядком ключей — для сравнения filters «как есть в БД»
 // с тем, что пришло в body. jsonb хранит ключи в своём порядке (по длине, потом по
@@ -37,6 +38,9 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const { id } = await params;
   const body = await req.json();
+  // Аудит 29.09 (#8256, D3): определение метрики попадает в SQL отчётов.
+  const defError = metricDefinitionError(body ?? {}, { requireId: false });
+  if (defError) return NextResponse.json({ error: defError }, { status: 400 });
   const db = ycAnalyticsDb();
 
   // Отметка «Проверено» (миграция 192) не должна переживать правку ОПРЕДЕЛЕНИЯ

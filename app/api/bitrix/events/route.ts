@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { timingSafeEqual } from 'crypto';
 import { handleIncomingBotMessage, handleBindDealCommand } from '@/lib/deal-chats/service';
 import { handleAdviceFeedback } from '@/lib/bot/feedback';
 import { systemDb } from '@/lib/db/clients';
+import { authenticateBitrixEvent } from '@/lib/bitrix/eventsAuth';
 
 // Журнал входящих (панель управления «Аналитиком», 09.09): каждое сообщение/клик
 // человека боту — строкой, с пометкой, какой обработчик его забрал. Не бросает:
@@ -24,63 +24,24 @@ async function logInbound(row: {
   }
 }
 
-// ── Аутентификация вебхука (аудит 09.09, ACCESS_AUDIT_2026-09-09.md, «главная
-// дыра» №1): роут был полностью открыт — любой из интернета мог подделать
-// «ответ менеджера», привязку сделки и клики по кнопкам. Битрикс с каждым
-// событием присылает auth[application_token] (секрет приложения, выдаётся при
-// установке обработчика) и auth[domain] (портал). Проверяем:
-//   * домен обязан совпасть с BITRIX_PORTAL_DOMAIN (дефолт — td.monolit-crm.ru,
-//     тот же захардкоженный портал, что в lib/bots/callControlAdmin.ts);
-//   * если задан BITRIX_EVENTS_APP_TOKEN — токен обязан совпасть (constant-time),
-//     иначе 403;
-//   * если env НЕ задан — событие принимаем (не ломать бота до настройки), но один
-//     раз за процесс пишем в лог полученный токен, чтобы админ перенёс его в
-//     start.sh (прод читает env только оттуда — см. память prod-env-not-from-envlocal).
-const DEFAULT_PORTAL_DOMAIN = 'td.monolit-crm.ru';
-let appTokenWarned = false;
+// ── Аутентификация вебхука: lib/bitrix/eventsAuth.ts (аудит 09.09 + 29.09, #8256).
+// С 29.09 fail-closed: без BITRIX_EVENTS_APP_TOKEN в окружении события отклоняются.
+let notConfiguredWarned = false;
 
-function pickAuth(data: Record<string, unknown>): { token: string; domain: string } {
-  // form-data: плоские ключи auth[application_token] / auth[domain];
-  // JSON: вложенный объект auth: { application_token, domain }.
-  const nested = (data.auth && typeof data.auth === 'object' ? data.auth : {}) as Record<string, unknown>;
-  const token = String(data['auth[application_token]'] ?? nested.application_token ?? '');
-  const domain = String(data['auth[domain]'] ?? nested.domain ?? '');
-  return { token, domain: domain.toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '') };
-}
-
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a, 'utf8');
-  const bb = Buffer.from(b, 'utf8');
-  // timingSafeEqual бросает при разной длине — сравниваем длину отдельно,
-  // а потом буферы одинаковой длины (тот же приём, что в admin/org-sync).
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
-}
-
-/** null — событие подлинное; иначе готовый ответ 403. */
+/** null — событие подлинное; иначе готовый ответ 403. Токен в лог — только первые 4 символа. */
 function authenticateEvent(data: Record<string, unknown>): NextResponse | null {
-  const { token, domain } = pickAuth(data);
-  const expectedDomain = (process.env.BITRIX_PORTAL_DOMAIN || DEFAULT_PORTAL_DOMAIN).toLowerCase();
-  if (domain !== expectedDomain) {
-    console.warn('[bitrix/events] отклонено: чужой домен', JSON.stringify(domain));
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const r = authenticateBitrixEvent(data);
+  if (r.ok) return null;
+  if (r.reason === 'domain') {
+    console.warn('[bitrix/events] отклонено: чужой домен');
+  } else if (r.reason === 'token_mismatch') {
+    console.warn(`[bitrix/events] отклонено: application_token не совпал (получен ${r.hint})`);
+  } else if (!notConfiguredWarned) {
+    notConfiguredWarned = true;
+    console.error('[bitrix/events] BITRIX_EVENTS_APP_TOKEN не задан — ВСЕ события отклоняются (fail-closed). '
+      + `Задайте его в start.sh = auth[application_token] событий Битрикса (получен ${r.hint}).`);
   }
-  const expectedToken = process.env.BITRIX_EVENTS_APP_TOKEN || '';
-  if (!expectedToken) {
-    if (!appTokenWarned) {
-      appTokenWarned = true;
-      console.warn(
-        `[bitrix/events] BITRIX_EVENTS_APP_TOKEN не задан — события принимаются без проверки токена. `
-        + `Настройте BITRIX_EVENTS_APP_TOKEN=${token || '<пусто: Битрикс не прислал application_token>'} в start.sh и перезапустите.`,
-      );
-    }
-    return null;
-  }
-  if (!token || !safeEqual(token, expectedToken)) {
-    console.warn('[bitrix/events] отклонено: application_token не совпал');
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  return null;
+  return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 }
 
 // Обработчик событий бота «Аналитик». Сейчас обслуживает чаты по сделкам
@@ -146,7 +107,9 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   const event = String(data.event ?? '');
-  console.log('[bitrix/events]', event || 'unknown event', JSON.stringify(data).slice(0, 500));
+  // Без auth[*]: там application_token и access-токены — в лог не пишем (#8256).
+  const loggable = Object.fromEntries(Object.entries(data).filter(([k]) => k !== 'auth' && !k.startsWith('auth[')));
+  console.log('[bitrix/events]', event || 'unknown event', JSON.stringify(loggable).slice(0, 500));
 
   const str = (key: string): string => String(data[key] ?? '');
   const botId = process.env.BITRIX_BOT_ID || '';

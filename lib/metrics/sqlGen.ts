@@ -78,6 +78,32 @@ function complexClientSubquery(): string {
     )`;
 }
 
+// ── Защита от «хранимой SQL-конструкции» (аудит 29.09, #8256, находка D3) ────
+// Определения метрик (id, agg_field, date_field, filters[].field/value) лежат в
+// таблице metrics и правятся из админки — раньше они вставлялись в SQL сырыми
+// (`'${f.value}'`, `d.${f.field}`, `AS ${m.id}`). Теперь имена — только
+// SQL-идентификаторы, значения — литералы с экранированием кавычки (при
+// standard_conforming_strings=on, как на обеих БД, этого достаточно), прочее —
+// исключение, а не тихо битый/опасный SQL. Та же проверка стоит на записи
+// метрики (lib/metrics/metricValidation.ts) — там это 400 вместо сохранения.
+const SQL_IDENT_RE = /^[a-z_][a-z0-9_]{0,62}$/i;
+export function isSqlIdent(v: unknown): v is string {
+  return typeof v === 'string' && SQL_IDENT_RE.test(v);
+}
+function sqlIdent(v: unknown, what: string): string {
+  if (!isSqlIdent(v)) throw new Error(`sqlGen: недопустимое имя (${what})`);
+  return v;
+}
+function sqlLit(v: unknown): string {
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) throw new Error('sqlGen: недопустимое числовое значение фильтра');
+    return String(v);
+  }
+  if (typeof v === 'boolean') return `'${v}'`;
+  if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`;
+  throw new Error('sqlGen: недопустимое значение фильтра');
+}
+
 export interface DimensionConfig {
   idExpr: string;           // SQL expr for the ID column, e.g. "d.current_manager_id::text"
   nameExpr?: string;        // SQL expr for name (optional, e.g. for product groups)
@@ -137,7 +163,7 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
     return '';
   }
   if (f.field === 'event_type') {
-    return `de.stage_id IN (SELECT id FROM stages WHERE event_type = '${f.value}')`;
+    return `de.stage_id IN (SELECT id FROM stages WHERE event_type = ${sqlLit(f.value)})`;
   }
   // stage_type — это КОЛОНКА stages.stage_type (NEW/WORK/WON/LOSS), а не event_type.
   // Баг, найденный по жалобе владельца 11.08: здесь стояло `event_type = '<value>'`,
@@ -176,6 +202,8 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
     if (!/^[a-z_][a-z0-9_]*$/i.test(other) || !/^[a-z_][a-z0-9_]*$/i.test(f.field)) return '';
     return `(${a}.${f.field} IS NULL OR ${a}.${f.field} > ${a}.${other})`;
   }
+  // Дальше f.field клеится как колонка `${a}.${f.field}` — только идентификатор.
+  sqlIdent(f.field, 'поле фильтра');
   // is_null / is_not_null: special handling for product_rows (also check empty jsonb array)
   if (f.op === 'is_null') {
     if (f.field === 'products') {
@@ -193,12 +221,14 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   }
 
   const vals = Array.isArray(f.value)
-    ? (f.value as (string | number)[]).map(v => typeof v === 'string' ? `'${v}'` : String(v)).join(', ')
+    ? (f.value as unknown[]).map(sqlLit).join(', ')
     : null;
 
+  // eq/neq исторически сравнивали строковым литералом и для чисел ('5') — сохраняем.
+  const scalar = (v: unknown) => sqlLit(typeof v === 'number' ? String(v) : v);
   switch (f.op) {
-    case 'eq':      return `${a}.${f.field} = '${f.value}'`;
-    case 'neq':     return `${a}.${f.field} != '${f.value}'`;
+    case 'eq':      return `${a}.${f.field} = ${scalar(f.value)}`;
+    case 'neq':     return `${a}.${f.field} != ${scalar(f.value)}`;
     case 'in':      return vals ? `${a}.${f.field} IN (${vals})` : '';
     case 'not_in':  return vals ? `${a}.${f.field} NOT IN (${vals})` : '';
     default: return '';
@@ -267,6 +297,11 @@ export function buildCollectedSQL(
     m => m.metricType === 'collected' && m.aggFn && m.aggField && m.dateField,
   );
   if (collected.length === 0) return '';
+  for (const m of collected) {
+    sqlIdent(m.id, 'id метрики');
+    sqlIdent(m.aggField, 'agg_field');
+    sqlIdent(m.dateField, 'date_field');
+  }
 
   const dealsM  = collected.filter(m => m.source === 'deals');
   const eventsM = collected.filter(m => m.source === 'deal_events');

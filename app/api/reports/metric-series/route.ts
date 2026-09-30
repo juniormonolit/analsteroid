@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { reportFiltersError } from '@/lib/reports/requestValidation';
 import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
 import { fetchMetricSeries, type SeriesGranularity } from '@/features/reports/engine/metricSeries';
 import { fetchBookingCallRateSeries, BOOKING_SERIES_METRICS } from '@/features/reports/engine/bookingCallRate';
@@ -29,6 +30,9 @@ export async function POST(req: NextRequest) {
   if (!body || typeof body.metricId !== 'string' || !validPeriod(body.period)) {
     return NextResponse.json({ error: 'metricId и period обязательны' }, { status: 400 });
   }
+  // Аудит 29.09 (#8256): поля, которые движки вставляют в SQL.
+  const filtersError = reportFiltersError(body);
+  if (filtersError) return NextResponse.json({ error: filtersError }, { status: 400 });
   const granularity: SeriesGranularity = GRANS.includes(body.granularity) ? body.granularity : 'day';
   let managerIds = Array.isArray(body.managerIds)
     ? (body.managerIds as unknown[]).filter((v): v is string => typeof v === 'string' && /^\d+$/.test(v)).slice(0, 1000)

@@ -163,7 +163,11 @@ export async function fetchByProductGroups(opts: ByProductGroupsOptions): Promis
 
   // Combine WHERE conditions (managerId for drilldown, deptManagerWhere for dept filter)
   const whereParts: string[] = [];
-  if (managerId) whereParts.push(`d.current_manager_id = ${managerId}`);
+  if (managerId) {
+    // Аудит 29.09 (#8256, D2): managerId приходит из тела запроса — только число.
+    if (!/^\d{1,18}$/.test(String(managerId))) throw new Error('managerId: ожидается числовой ID');
+    whereParts.push(`d.current_manager_id = ${managerId}`);
+  }
   if (managerIds.length > 0) whereParts.push(`d.current_manager_id IN (${managerIds.join(',')})`);
   if (deptManagerWhere) whereParts.push(deptManagerWhere);
   // Задача 1569: фильтры по нерабочему времени — не funnel-based, идут в WHERE
