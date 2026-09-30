@@ -1,5 +1,6 @@
 import type { Metric } from '../metrics/types';
 import type { SummaryRow } from './metrics';
+import { CALL_METRICS, CALL_COLUMN_GROUP } from './callMetrics';
 
 // «Сводка по логистам» и «Регионы» на общем движке отчётов (задача #8126, аудит
 // Полины, находки 7, 10, 11, 18): slug'и ниже идут через /api/reports/run →
@@ -88,7 +89,7 @@ const DEFS: Def[] = [
     description: 'Расход на доставку к выручке за доставку. Больше 100 % — доставка в минус.' },
 ];
 
-export const LOGIST_METRICS: Metric[] = DEFS.map((d, i) => ({
+const SUMMARY_METRICS: Metric[] = DEFS.map((d, i) => ({
   id: d.id, nameRu: d.nameRu, nameShortRu: d.nameShortRu, description: d.description,
   humanDescription: d.description, formulaHuman: null,
   calcOk: true, fillOk: true,
@@ -99,6 +100,8 @@ export const LOGIST_METRICS: Metric[] = DEFS.map((d, i) => ({
   source: 'deals', aggFn: null, aggField: null, dateField: null, filters: [], tags: ['realizations'],
   isCollectOk: true, isCalcOk: true, color: null,
 }));
+// Группа «Звонки» (задача #8314) — отдельный модуль callMetrics.ts, те же slug'и.
+export const LOGIST_METRICS: Metric[] = [...SUMMARY_METRICS, ...CALL_METRICS];
 export const LOGIST_METRIC_IDS = LOGIST_METRICS.map(m => m.id);
 export const LOGIST_DEFAULT_METRIC_IDS = LOGIST_METRICS.filter(m => !m.isHiddenInUi).map(m => m.id);
 
@@ -113,6 +116,7 @@ export const LOGIST_COLUMN_GROUPS: { name: string; metricIds: string[] }[] = [
   { name: 'Сроки', metricIds: ['lg_on_time_pct', 'lg_cycle_days', 'lg_react_hours', 'lg_overdue', 'lg_overdue30', 'lg_fix_pct'] },
   { name: 'Деньги, без НДС', metricIds: ['lg_sales', 'lg_avg_check', 'lg_no_purchase', 'lg_margin_base', 'lg_excl_broken', 'lg_margin', 'lg_margin_pct'] },
   { name: 'Доставка', metricIds: ['lg_d_sale', 'lg_d_cost', 'lg_d_ratio'] },
+  CALL_COLUMN_GROUP,
 ];
 
 /**
@@ -132,5 +136,5 @@ export const LOGIST_DRILL_STATUS: Record<string, string> = {
  * Здесь — где больше = хуже (шкала инвертирована), и счётчики-«плохие» метрики, у
  * которых градиент включаем явно (по умолчанию он только у долей).
  */
-export const LOGIST_HEATMAP_ON_IDS = ['lg_overdue', 'lg_overdue30', 'lg_no_purchase', 'lg_excl_broken', 'lg_cycle_days', 'lg_react_hours'];
-export const LOGIST_HEATMAP_INVERTED_IDS = ['lg_cancel_pct', 'lg_fix_pct', 'lg_d_ratio', ...LOGIST_HEATMAP_ON_IDS];
+export const LOGIST_HEATMAP_ON_IDS = ['lg_overdue', 'lg_overdue30', 'lg_no_purchase', 'lg_excl_broken', 'lg_cycle_days', 'lg_react_hours', 'lc_missed_in'];
+export const LOGIST_HEATMAP_INVERTED_IDS = ['lg_cancel_pct', 'lg_fix_pct', 'lg_d_ratio', 'lc_short_pct', ...LOGIST_HEATMAP_ON_IDS];

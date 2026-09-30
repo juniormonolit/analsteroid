@@ -51,7 +51,9 @@ import { loadTabsStore, saveTabsStore, newTabId, type ReportTab, type ReportTabS
 import { diffFromPreset } from '@/features/reports/lib/presetDiff';
 import { RESPONSE_SLUG, RESPONSE_RELIABLE_FROM } from '@/lib/realizations/responseMetrics';
 import { RequestTasksDrill } from '@/features/realizations/ui/RequestTasksDrill';
-import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_DRILL_STATUS } from '@/lib/realizations/logistMetrics';
+import { LogistCallsDrill } from '@/features/realizations/ui/LogistCallsDrill';
+import { isCallMetric } from '@/lib/realizations/callMetrics';
+import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_DRILL_STATUS, LOGIST_METRICS } from '@/lib/realizations/logistMetrics';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -497,6 +499,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const [search, setSearch]             = useUrlState<string>('q', stringParam(''));
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
   const [tasksDrill, setTasksDrill]     = useState<{ managerId: string; name: string; metricId?: string; metricName?: string } | null>(null);
+  // Группа «Звонки» сводки логистов (#8314): scope — query-строка строки отчёта для /api/realizations/calls.
+  const [callsDrill, setCallsDrill]     = useState<{ scope: string; name: string; metricId: string; metricName?: string } | null>(null);
   // Открытый дрилл и график — в URL (задача #8126, правило «у каждого состояния свой
   // URL»): ?drill=<id строки>&drillMetric=<metricId>, ?chart=<id строки>&chartMetric=.
   // URL — источник правды: клик пишет адрес, эффект ниже открывает панель по адресу
@@ -1072,6 +1076,13 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     staleTime: 5 * 60 * 1000,
   });
   const catalogMetrics = catalogData?.metrics ?? [];
+  // Подытоги групп (регион в сводке логистов): каталог /api/catalog/metrics метрики
+  // «Реализации» не отдаёт, без их определений подытог складывал доли (300 %) и
+  // суммировал несуммируемое. Для этих slug'ов добавляем определения из кода (#8314).
+  const groupingMetrics = useMemo(
+    () => (REALIZATION_SLUGS.includes(reportSlug) ? [...catalogMetrics, ...LOGIST_METRICS] : catalogMetrics),
+    [catalogMetrics, reportSlug],
+  );
 
   const availableMetrics = data?.metrics ?? [];
 
@@ -1164,9 +1175,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     let grouped: GroupedMergedRow[];
     if (!sourceMode && !periodMode && !clientMode && activeUserGroups.length > 0) {
       // «Без группы» — только при grouping='none' (решение выше, у applyUserGroups).
-      const applied = applyUserGroups(data?.rows ?? [], activeUserGroups, catalogMetrics, grouping === 'none');
+      const applied = applyUserGroups(data?.rows ?? [], activeUserGroups, groupingMetrics, grouping === 'none');
       if (grouping === 'none' || grouping === 'total') {
-        grouped = grouping === 'none' ? applied : applyClientGrouping(applied, grouping, catalogMetrics);
+        grouped = grouping === 'none' ? applied : applyClientGrouping(applied, grouping, groupingMetrics);
       } else {
         const fits = (r: GroupedMergedRow) =>
           !r.dimensionId.startsWith('__ugroup__')
@@ -1175,10 +1186,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
         const hoisted = applied
           .filter(r => !fits(r))
           .map(r => ({ ...r, dimensionName: `${r.dimensionName} · сборная` }));
-        grouped = [...hoisted, ...applyClientGrouping(inRows, grouping, catalogMetrics)];
+        grouped = [...hoisted, ...applyClientGrouping(inRows, grouping, groupingMetrics)];
       }
     } else {
-      grouped = applyClientGrouping(data?.rows ?? [], grouping, catalogMetrics);
+      grouped = applyClientGrouping(data?.rows ?? [], grouping, groupingMetrics);
     }
     if (!search.trim()) return grouped;
     const q = search.trim().toLowerCase();
@@ -1198,7 +1209,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
         return { ...r, children: filteredChildren };
       })
       .filter(Boolean) as typeof grouped;
-  }, [data?.rows, grouping, search, catalogMetrics, sourceMode, activeUserGroups]);
+  }, [data?.rows, grouping, search, groupingMetrics, sourceMode, activeUserGroups]);
 
   // Общее число отделов — только для диагноз-пилюли составного empty state (задача
   // 1698, кейс 10Б). Тот же queryKey, что у DepartmentPicker внутри FilterBar — React
@@ -1273,6 +1284,14 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     (id: string, name: string, metricId: string) => {
       const m = catalogMetrics.find((x: { id: string }) => x.id === metricId)
         ?? availableMetrics.find((x: { id: string }) => x.id === metricId);
+      // Звонки логистов (#8314): дрилл — список звонков строки (логист / регион / все).
+      if (REALIZATION_SLUGS.includes(reportSlug) && isCallMetric(metricId)) {
+        const scope = id === '__total__' || (id.startsWith('__') && !id.startsWith('__team__')) ? ''
+          : id.startsWith('__team__') ? `region=${encodeURIComponent(id.slice('__team__'.length))}`
+          : reportSlug === REGIONS_SLUG ? `region=${encodeURIComponent(id)}` : `logist=${encodeURIComponent(id)}`;
+        setCallsDrill({ scope, name, metricId, metricName: m?.nameRu });
+        return;
+      }
       // «Ответы на запросы» (задача #8034): дрилл — список задач-запросов, а не
       // сделок (DrilldownDrawer умеет только сделки). Группы отделов/«Итого» —
       // все менеджеры среза.
@@ -1409,7 +1428,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     patchUrl({ drill: id, drillMetric: null });
   }, [patchUrl, reportSlug, openRealizationRequests]);
   const handleCellClick = useCallback((id: string, _name: string, metricId: string) => {
-    if (REALIZATION_SLUGS.includes(reportSlug)) { openRealizationRequests(id, metricId); return; }
+    // Звонки (#8314) — своя панель со своим адресом (?drill=&drillMetric=lc_…), остальное — список «Заявки».
+    if (REALIZATION_SLUGS.includes(reportSlug) && !isCallMetric(metricId)) { openRealizationRequests(id, metricId); return; }
     patchUrl({ drill: id, drillMetric: metricId });
   }, [patchUrl, reportSlug, openRealizationRequests]);
   const handleMetricChart = useCallback((id: string, _name: string, metricId: string) => patchUrl({ chart: id, chartMetric: metricId }), [patchUrl]);
@@ -1419,12 +1439,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const drillKey = drillParam ? `${drillParam}|${drillMetricParam ?? ''}` : null;
   useEffect(() => {
     if (!drillKey || !drillParam) {
-      if (appliedDrill.current) { appliedDrill.current = null; setDrilldown(null); setTasksDrill(null); }
+      if (appliedDrill.current) { appliedDrill.current = null; setDrilldown(null); setTasksDrill(null); setCallsDrill(null); }
       return;
     }
     if (appliedDrill.current === drillKey || !data) return; // ждём строки — нужны имя и состав групп
     appliedDrill.current = drillKey;
-    setDrilldown(null); setTasksDrill(null);
+    setDrilldown(null); setTasksDrill(null); setCallsDrill(null);
     const name = rowNameOf(drillParam);
     if (drillMetricParam) applyCellClick(drillParam, name, drillMetricParam);
     else applyRowClick(drillParam, name);
@@ -2186,6 +2206,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
       {tasksDrill && (
         <RequestTasksDrill key={`${tasksDrill.managerId}|${tasksDrill.metricId ?? ''}`} managerId={tasksDrill.managerId} name={tasksDrill.name}
           metricId={tasksDrill.metricId} metricName={tasksDrill.metricName}
+          period={period} onClose={closeDrillUrl} />
+      )}
+
+      {callsDrill && (
+        <LogistCallsDrill key={`${callsDrill.scope}|${callsDrill.metricId}`} scope={callsDrill.scope} name={callsDrill.name}
+          metricId={callsDrill.metricId} metricName={callsDrill.metricName}
           period={period} onClose={closeDrillUrl} />
       )}
 

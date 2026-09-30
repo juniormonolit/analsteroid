@@ -20,6 +20,7 @@ import { computeCalculated } from '../features/reports/engine/calculated.ts';
 import { parseSortParam, nextSort, sortRows } from '../lib/hooks/sortCore.ts';
 import { fmtRub, fmtInt, fmtMlnRub, fmtPct, humanName } from '../features/realizations/ui/format.ts';
 import { mskYmd } from '../lib/realizations/period.ts';
+import { aggregateCallsJs, callAggToMetrics, callAttribution, callWorkdays, callDrillWhere, maskPhone, toCallAgg, sqlCallList, SQL_CALL_AGG, CALL_METRICS, CALL_COLUMN_GROUP, EMPTY_CALL_AGG } from '../lib/realizations/callMetrics.ts';
 
 let failures = 0, passed = 0;
 function check(cond: boolean, label: string) { if (cond) { passed++; return; } failures++; console.error(`FAIL ${label}`); }
@@ -145,6 +146,64 @@ for (const id of ['lg_cancel_pct', 'lg_fix_pct', 'lg_d_ratio', 'lg_overdue', 'lg
   check(LOGIST_HEATMAP_INVERTED_IDS.includes(id), `«больше = хуже»: ${id} красится инвертированно`);
 check(!LOGIST_HEATMAP_INVERTED_IDS.includes('lg_on_time_pct') && !LOGIST_HEATMAP_INVERTED_IDS.includes('lg_margin_pct'), 'в срок и маржа — обычная шкала (больше = лучше)');
 check(LOGIST_HEATMAP_ON_IDS.every(id => LOGIST_METRICS.some(m => m.id === id && m.dataType !== 'percent')), 'явный градиент — только у счётчиков (доли и так с градиентом)');
+
+// 6. Звонки логистов (#8314): агрегат, раскладка по метрикам, доли формулой, мост Bitrix → 1С
+const calls = [
+  { direction: 'outbound', duration_seconds: 45, failed_code: '200', transcription_status: 'transcribed', phone: '+79110000001' },
+  { direction: 'outbound', duration_seconds: 0, failed_code: '480', transcription_status: 'skipped', phone: '+79110000002' },
+  { direction: 'inbound', duration_seconds: 433, failed_code: '200', transcription_status: 'transcribed', phone: '+79110000001' },
+  { direction: 'inbound', duration_seconds: 17, failed_code: '304', transcription_status: 'skipped', phone: '+79110000003' },
+  { direction: 'inbound', duration_seconds: 5, failed_code: '200', transcription_status: 'queued', phone: '+79110000004' },
+  { direction: 'inbound', duration_seconds: 0, failed_code: null, transcription_status: null, phone: null },
+];
+const ca = aggregateCallsJs(calls);
+check(ca.total === 6 && ca.nOut === 2 && ca.nIn === 4, 'звонки: всего / исх / вх');
+check(ca.secOut === 45 && ca.secIn === 438, 'звонки: секунды исх / вх — только состоявшиеся (дозвон пропущенного 17 с не в счёт)');
+check(ca.secOut + ca.secIn === ca.secAnswered, 'минуты исх + вх = минуты состоявшихся');
+check(ca.answered === 3 && ca.secAnswered === 483 && ca.inAnswered === 2, 'состоявшиеся = код 200');
+check(ca.inMissed === 2, 'пропущенные входящие: код ≠ 200, в т.ч. без кода');
+check(ca.shortN === 1 && ca.transcribedN === 2 && ca.phones === 4, 'короткие < 10 с среди состоявшихся, расшифровка, уникальные номера');
+const cm = computeCalculated(callAggToMetrics(ca, 4), CALL_METRICS.filter(m => m.metricType === 'calculated'));
+check(near(cm.lc_out_min, 0.75) && near(cm.lc_in_min, 438 / 60), 'минуты исх/вх');
+check(near(cm.lc_avg_talk_min, 483 / 60 / 3), 'средний разговор, мин — формулой = прямому счёту');
+check(near(cm.lc_answered_in_pct, 50) && near(cm.lc_short_pct, 100 / 3) && near(cm.lc_transcribed_pct, 200 / 3), 'доли отвеченных входящих, коротких, с расшифровкой');
+check(near(cm.lc_per_workday, 1.5), 'звонков в рабочий день = всего / рабочие дни');
+const raw = callAggToMetrics(ca, 4);
+for (const m of CALL_METRICS.filter(x => x.metricType === 'calculated')) check(near(cm[m.id], raw[m.id] as number), `формула ${m.id} = прямой счёт`);
+check(Object.values(callAggToMetrics(null, 4)).every(v => v === null), 'без учётки Битрикса — «—», не нули');
+const zero = computeCalculated(callAggToMetrics(EMPTY_CALL_AGG, 4), CALL_METRICS.filter(m => m.metricType === 'calculated'));
+check(zero.lc_total === 0 && zero.lc_answered_in_pct === null && zero.lc_avg_talk_min === null, 'ноль звонков — счётчики 0, доли без деления на ноль');
+check(toCallAgg({ total: '3', n_out: 1, sec_out: '12.5' }).total === 3 && toCallAgg({ sec_out: '12.5' }).secOut === 12.5, 'строка SQL → агрегат');
+// Подытог региона: доли — формулой по суммам счётчиков, а не среднее долей
+const a1 = aggregateCallsJs(calls.slice(0, 2)), a2 = aggregateCallsJs(calls.slice(2));
+const sum = Object.fromEntries(Object.keys(EMPTY_CALL_AGG).map(k => [k, (a1 as never)[k] + (a2 as never)[k]])) as typeof ca;
+check(near(computeCalculated(callAggToMetrics(sum, 4), CALL_METRICS.filter(m => m.metricType === 'calculated')).lc_avg_talk_min, 483 / 60 / 3), 'подытог: средний разговор из сумм');
+// Рабочие дни: с 30.09.2026, не позже сегодня, производственный календарь
+check(callWorkdays('2026-09-01', '2026-09-30', '2026-09-30') === 1, 'сентябрь: данные только за 30.09 → 1 рабочий день');
+check(callWorkdays('2026-10-01', '2026-10-31', '2026-10-31') === 22, 'октябрь 2026 — 22 рабочих дня');
+check(callWorkdays('2026-10-01', '2026-10-31', '2026-10-05') === 3, 'текущий месяц обрезан сегодняшним днём (1, 2, 5 окт.)');
+check(callWorkdays('2026-09-01', '2026-09-20', '2026-09-30') === 0, 'период до начала данных — 0 дней');
+check(callWorkdays('2026-11-02', '2026-11-06', '2026-12-01') === 4, '4 ноября — праздник');
+// Мост: общая учётка Битрикса — у одного логиста (сверенная, затем больше заявок)
+const own = callAttribution([
+  { logistId: 'a', bitrixId: '1997', name: 'Ткачев Кирилл (СПБ) Л109', verified: true, load: 541 },
+  { logistId: 'b', bitrixId: '1997', name: 'Качанова Инна (СПБ) Л111', verified: true, load: 681 },
+  { logistId: 'c', bitrixId: '2062', name: 'Товпа Алена (МСК) Л2005', verified: false, load: 158 },
+  { logistId: 'd', bitrixId: '2062', name: 'Марьина Мария (МСК) Л2004', verified: true, load: 13 },
+  { logistId: 'e', bitrixId: 'x', name: 'мусор', verified: true, load: 1 },
+]);
+check(own.get('1997')?.logistId === 'b' && own.get('1997')?.shared.length === 1, 'общая учётка → самый загруженный, остальные в shared');
+check(own.get('2062')?.logistId === 'd' && own.get('2062')?.region === 'МСК', 'сверенная связь важнее загрузки; регион по ФИО');
+check(!own.has('x') && own.size === 2, 'нечисловой Bitrix id отброшен');
+// ПДн и SQL
+check(maskPhone('+79111234567') === '••• 45-67' && maskPhone(null) === null && maskPhone('12') === '••••', 'номер — только последние 4 цифры');
+check(!/\d{5}/.test(maskPhone('+79111234567') ?? ''), 'в маске нет длинных цифр');
+check(callDrillWhere('lc_missed_in').where.includes("'inbound'") && callDrillWhere('lc_total').where === '' && callDrillWhere('lg_total').where === '', 'дрилл: условие по колонке, «всего» — без условия');
+check(/grouping sets \(\(m\.k\), \(\)\)/.test(SQL_CALL_AGG) && /at time zone 'Europe\/Moscow'/.test(SQL_CALL_AGG), 'SQL: итог grouping set (), московские сутки');
+check(!/recording_url|raw_text|formatted_dialogue/.test(SQL_CALL_AGG + sqlCallList('x')), 'SQL: записи и тексты разговоров не читаем');
+check(CALL_COLUMN_GROUP.metricIds.every(id => CALL_METRICS.some(m => m.id === id && !m.isHiddenInUi)) && CALL_COLUMN_GROUP.metricIds.length === 12, 'группа «Звонки» — 12 видимых колонок');
+check(CALL_METRICS.every(m => m.description && m.description.length > 20), 'у каждой метрики звонков есть описание');
+check(LOGIST_DEFAULT_METRIC_IDS.includes('lc_total') && LOGIST_HEATMAP_INVERTED_IDS.includes('lc_missed_in') && LOGIST_HEATMAP_INVERTED_IDS.includes('lc_short_pct'), 'звонки в колонках по умолчанию; пропущенные/короткие — «больше = хуже»');
 
 console.log(`assert-realizations: ${passed} passed, ${failures} failed`);
 if (failures) process.exit(1);
