@@ -20,7 +20,7 @@ import { computeCalculated } from '../features/reports/engine/calculated.ts';
 import { parseSortParam, nextSort, sortRows } from '../lib/hooks/sortCore.ts';
 import { fmtRub, fmtInt, fmtMlnRub, fmtPct, humanName } from '../features/realizations/ui/format.ts';
 import { mskYmd } from '../lib/realizations/period.ts';
-import { aggregateCallsJs, callAggToMetrics, callAttribution, callWorkdays, callDrillWhere, maskPhone, toCallAgg, sqlCallList, SQL_CALL_AGG, CALL_METRICS, CALL_COLUMN_GROUP, EMPTY_CALL_AGG } from '../lib/realizations/callMetrics.ts';
+import { aggregateCallsJs, callAggToMetrics, callLogists, resolveCallLogist, callWorkdays, callDrillWhere, maskPhone, toCallAgg, sqlCallList, SQL_CALL_AGG, SQL_CALL_LOGIST_MAP, CALL_METRICS, CALL_COLUMN_GROUP, EMPTY_CALL_AGG, type CallMapRow } from '../lib/realizations/callMetrics.ts';
 
 let failures = 0, passed = 0;
 function check(cond: boolean, label: string) { if (cond) { passed++; return; } failures++; console.error(`FAIL ${label}`); }
@@ -184,17 +184,21 @@ check(callWorkdays('2026-10-01', '2026-10-31', '2026-10-31') === 22, 'октяб
 check(callWorkdays('2026-10-01', '2026-10-31', '2026-10-05') === 3, 'текущий месяц обрезан сегодняшним днём (1, 2, 5 окт.)');
 check(callWorkdays('2026-09-01', '2026-09-20', '2026-09-30') === 0, 'период до начала данных — 0 дней');
 check(callWorkdays('2026-11-02', '2026-11-06', '2026-12-01') === 4, '4 ноября — праздник');
-// Мост: общая учётка Битрикса — у одного логиста (сверенная, затем больше заявок)
-const own = callAttribution([
-  { logistId: 'a', bitrixId: '1997', name: 'Ткачев Кирилл (СПБ) Л109', verified: true, load: 541 },
-  { logistId: 'b', bitrixId: '1997', name: 'Качанова Инна (СПБ) Л111', verified: true, load: 681 },
-  { logistId: 'c', bitrixId: '2062', name: 'Товпа Алена (МСК) Л2005', verified: false, load: 158 },
-  { logistId: 'd', bitrixId: '2062', name: 'Марьина Мария (МСК) Л2004', verified: true, load: 13 },
-  { logistId: 'e', bitrixId: 'x', name: 'мусор', verified: true, load: 1 },
-]);
-check(own.get('1997')?.logistId === 'b' && own.get('1997')?.shared.length === 1, 'общая учётка → самый загруженный, остальные в shared');
-check(own.get('2062')?.logistId === 'd' && own.get('2062')?.region === 'МСК', 'сверенная связь важнее загрузки; регион по ФИО');
-check(!own.has('x') && own.size === 2, 'нечисловой Bitrix id отброшен');
+// Мост #8357: va.logist_bitrix_map с интервалами — логист на учётке в момент звонка
+const MAP8357: CallMapRow[] = [
+  { logistId: 'marina', bitrixId: '7450', name: 'Марьина Мария (МСК) Л2004', validFrom: '2023-12-31T21:00:00.000Z', validTo: '2026-08-04T01:00:10.369Z' },
+  { logistId: 'tkachev', bitrixId: '2000', name: 'Ткачев Кирилл (СПБ) Л109', validFrom: '2023-12-31T21:00:00.000Z', validTo: null },
+  { logistId: 'kach', bitrixId: '2004', name: 'Качанова Инна (СПБ) Л111', validFrom: '2023-12-31T21:00:00.000Z', validTo: null },
+  { logistId: 'nest', bitrixId: '7460', name: 'Нестеров Юрий (МСК) Л2214', validFrom: '2026-08-20T01:00:06.056Z', validTo: null },
+  { logistId: 'bad', bitrixId: 'x', name: 'мусор', validFrom: '2023-12-31T21:00:00.000Z', validTo: null },
+];
+check(resolveCallLogist(MAP8357, '7450', '2026-07-29T10:00:00Z') === 'marina' && resolveCallLogist(MAP8357, '7450', '2026-09-30T10:00:00Z') === null, 'учётка перешла: звонок до valid_to — логисту, после — никому');
+check(resolveCallLogist(MAP8357, '7450', '2026-08-04T01:00:10.369Z') === null && resolveCallLogist(MAP8357, '7460', '2026-08-20T01:00:06.056Z') === 'nest', 'valid_to не включается, valid_from включается');
+check(resolveCallLogist(MAP8357, '2000', '2026-09-30T12:00:00Z') === 'tkachev' && resolveCallLogist(MAP8357, '9999', '2026-09-30T12:00:00Z') === null && resolveCallLogist(MAP8357, '2000', null) === null, 'резолв по учётке и времени; чужая учётка и пустое время — никому');
+const lgSep = callLogists(MAP8357, '2026-09-01', '2026-09-30');
+check(lgSep.has('tkachev') && lgSep.has('nest') && !lgSep.has('marina') && !lgSep.has('bad') && lgSep.get('nest')?.region === 'МСК', 'в периоде: учётка сдана раньше — «—»; нечисловой id отброшен; регион по ФИО');
+check(callLogists(MAP8357, '2026-08-01', '2026-08-03').has('marina') && !callLogists(MAP8357, '2026-08-01', '2026-08-19').has('nest'), 'пересечение периода и интервала — по московским суткам');
+check(/lm\.valid_from/.test(SQL_CALL_AGG) && /c\.started_at < lm\.valid_to/.test(SQL_CALL_AGG) && /va\.logist_bitrix_map/.test(sqlCallList('')) && !/disp\./.test(SQL_CALL_AGG + sqlCallList('') + SQL_CALL_LOGIST_MAP), 'SQL: резолв через va.logist_bitrix_map по started_at, disp не читаем');
 // ПДн и SQL
 check(maskPhone('+79111234567') === '••• 45-67' && maskPhone(null) === null && maskPhone('12') === '••••', 'номер — только последние 4 цифры');
 check(!/\d{5}/.test(maskPhone('+79111234567') ?? ''), 'в маске нет длинных цифр');

@@ -6,10 +6,11 @@ import { regionOf, type Region } from './region';
 // «добавить метрики по звонкам: кол-во, время исходящих и входящих, что ещё можно»).
 // Данные — va.calls_logist (звонки логистов из Битрикса, копятся с 30.09.2026 17:52 МСК).
 // Ключ звонка к логисту — portal_user_id = Bitrix id; логист в отчёте — пользователь 1С
-// (sd.users_1c). Мост — disp.logist_bitrix_map. Одной учётной записью Битрикса иногда
-// пользуются несколько логистов 1С: звонок нельзя разделить, поэтому он показывается у
-// ОДНОГО логиста (сверенная связь, затем самый загруженный по заявкам за 180 дней), —
-// «Итого» и подытоги регионов при этом без двойного счёта (callAttribution ниже).
+// (sd.users_1c). Мост — va.logist_bitrix_map (задача #8357, схема va Сергея Афанасьева):
+// строка = логист 1С на учётке Битрикса в интервале [valid_from, valid_to). Звонок относится
+// к логисту, за которым учётка закреплена в момент started_at. Карта в базе не допускает двух
+// логистов на одной учётке в один момент (триггер), поэтому звонок попадает ровно в одну
+// строку отчёта — «Итого» и подытоги регионов без двойного счёта. Общих учёток больше нет.
 //
 // Здесь только чистые функции без БД: SQL-текст, раскладка агрегата по метрикам,
 // рабочие дни — их проверяет scripts/assert-realizations.ts.
@@ -24,13 +25,16 @@ const ANSWERED_SQL = `'${ANSWERED_CODE}'`;
 export const SHORT_CALL_SEC = 10;
 
 // ── Агрегат по ключу (логист 1С или регион) ─────────────────────────────────
-// $1, $2 — даты периода по Москве (включительно); $3 — Bitrix id, $4 — ключ строки
-// (параллельные массивы: какой строке отчёта принадлежат звонки этого Bitrix id).
+// $1, $2 — даты периода по Москве (включительно); $3 — id логиста 1С, $4 — ключ строки
+// (параллельные массивы: какой строке отчёта принадлежат звонки этого логиста).
 // Граница по started_at (индекс idx_calls_logist_started), сутки — московские.
 // grouping sets: строка на ключ + общая строка «Итого» (is_total) — уникальные номера
 // в «Итого» считаются по всей совокупности, а не суммой строк.
+/** Звонок c → строка карты lm, действующая в момент звонка (valid_to не включается). */
+export const MAP_ON = `lm.bitrix_user_id = c.portal_user_id and c.started_at >= lm.valid_from and (lm.valid_to is null or c.started_at < lm.valid_to)`;
+
 export const SQL_CALL_AGG = `
-with m(uid, k) as (select * from unnest($3::bigint[], $4::text[]))
+with m(lid, k) as (select * from unnest($3::text[], $4::text[]))
 select m.k, (grouping(m.k) = 1) is_total,
   count(*)::int total,
   count(*) filter (where c.direction = 'outbound')::int n_out,
@@ -44,31 +48,27 @@ select m.k, (grouping(m.k) = 1) is_total,
   count(*) filter (where c.failed_code = ${ANSWERED_SQL} and c.duration_seconds < ${SHORT_CALL_SEC})::int short_n,
   count(*) filter (where c.failed_code = ${ANSWERED_SQL} and c.transcription_status = 'transcribed')::int transcribed_n,
   count(distinct c.phone)::int phones
-from va.calls_logist c join m on m.uid = c.portal_user_id
+from va.calls_logist c
+join va.logist_bitrix_map lm on ${MAP_ON}
+join m on m.lid = lm.logist_1c_id::text
 where c.started_at >= ($1::date)::timestamp at time zone 'Europe/Moscow'
   and c.started_at < ($2::date + 1)::timestamp at time zone 'Europe/Moscow'
 group by grouping sets ((m.k), ())`;
 
-/** Связь логист 1С ↔ Bitrix + загрузка по заявкам (для выбора владельца общей учётки). */
+/** Карта логист 1С ↔ Bitrix с интервалами (имя — текущее из 1С). */
 export const SQL_CALL_LOGIST_MAP = `
-select m.logist_id::text logist_id, m.bitrix_user_id::text bitrix_id, coalesce(u.name, m.name) name, m.verified,
-  (select count(*) from sd.requests r where r.logist_id = m.logist_id and not coalesce(r.deleted, false)
-     and r.shipment_date >= current_date - 180)::int load
-from disp.logist_bitrix_map m left join sd.users_1c u on u.id = m.logist_id
-where m.bitrix_user_id is not null`;
+select m.logist_1c_id::text logist_id, m.bitrix_user_id::text bitrix_id, coalesce(u.name, m.logist_name) name,
+  m.valid_from, m.valid_to
+from va.logist_bitrix_map m left join sd.users_1c u on u.id = m.logist_1c_id`;
 
-/** Запасной мост, если чтение disp у роли приложения снимут: поле bitrix_user_id в 1С. */
-export const SQL_CALL_LOGIST_MAP_FALLBACK = `
-select u.id::text logist_id, u.bitrix_user_id::text bitrix_id, u.name, true verified, 0 load
-from sd.users_1c u where u.bitrix_user_id is not null`;
-
-/** Список звонков для дрилла. $1,$2 — даты, $3 — Bitrix id; условие метрики — CALL_DRILL_WHERE. */
+/** Список звонков для дрилла. $1,$2 — даты, $3 — id логистов 1С; условие метрики — CALL_DRILL_WHERE. */
 export function sqlCallList(where: string): string {
   return `
 select c.id::text id, c.started_at, c.direction, c.phone, c.duration_seconds, c.failed_code, c.failed_reason,
-  c.transcription_status, c.portal_user_id::text bitrix_id
+  c.transcription_status, lm.logist_1c_id::text logist_id
 from va.calls_logist c
-where c.portal_user_id = any($3::bigint[])
+join va.logist_bitrix_map lm on ${MAP_ON}
+where lm.logist_1c_id::text = any($3::text[])
   and c.started_at >= ($1::date)::timestamp at time zone 'Europe/Moscow'
   and c.started_at < ($2::date + 1)::timestamp at time zone 'Europe/Moscow'
   ${where ? `and ${where}` : ''}
@@ -76,29 +76,39 @@ order by c.started_at desc
 limit 2000`;
 }
 
-export interface CallMapRow { logistId: string; bitrixId: string; name: string; verified: boolean; load: number }
-export interface CallOwner { logistId: string; name: string; region: Region; shared: string[] }
+export interface CallMapRow { logistId: string; bitrixId: string; name: string; validFrom: string; validTo: string | null }
+export interface CallLogist { logistId: string; name: string; region: Region }
+
+const msOf = (v: string | Date | null | undefined) => (v === null || v === undefined ? NaN : v instanceof Date ? v.getTime() : Date.parse(v));
+const mskStart = (ymd: string) => Date.parse(`${ymd}T00:00:00+03:00`);
+
+/** Строка SQL-карты → CallMapRow (даты — ISO). */
+export function toCallMapRow(r: Record<string, unknown>): CallMapRow {
+  const iso = (v: unknown) => (v === null || v === undefined ? null : new Date(v as string | Date).toISOString());
+  return { logistId: String(r.logist_id), bitrixId: String(r.bitrix_id), name: String(r.name ?? ''), validFrom: iso(r.valid_from) ?? '', validTo: iso(r.valid_to) };
+}
 
 /**
- * Bitrix id → логист 1С, у которого показываются звонки. Общая учётка: сверенная связь
- * важнее, затем больше заявок за 180 дней, затем id (стабильно). shared — остальные
- * логисты 1С на той же учётке (подсказка в описании/дрилле).
+ * Логисты 1С, у которых в периоде (московские даты, включительно) была учётка Битрикса:
+ * их строки отчёта получают числа (0, если звонков не было), остальные — «—».
  */
-export function callAttribution(map: CallMapRow[]): Map<string, CallOwner> {
-  const byBitrix = new Map<string, CallMapRow[]>();
+export function callLogists(map: CallMapRow[], fromYmd: string, toYmd: string): Map<string, CallLogist> {
+  const lo = mskStart(fromYmd), hi = mskStart(toYmd) + 86_400_000;
+  const out = new Map<string, CallLogist>();
   for (const r of map) {
-    if (!/^\d+$/.test(r.bitrixId)) continue;
-    const list = byBitrix.get(r.bitrixId) ?? [];
-    list.push(r);
-    byBitrix.set(r.bitrixId, list);
-  }
-  const out = new Map<string, CallOwner>();
-  for (const [bid, list] of byBitrix) {
-    const sorted = [...list].sort((a, b) => Number(b.verified) - Number(a.verified) || b.load - a.load || a.logistId.localeCompare(b.logistId));
-    const top = sorted[0];
-    out.set(bid, { logistId: top.logistId, name: top.name, region: regionOf(top.name), shared: sorted.slice(1).map(x => x.name) });
+    const f = msOf(r.validFrom), t = r.validTo === null ? Infinity : msOf(r.validTo);
+    if (!/^\d+$/.test(r.bitrixId) || Number.isNaN(f) || !(f < hi && t > lo)) continue;
+    if (!out.has(r.logistId)) out.set(r.logistId, { logistId: r.logistId, name: r.name, region: regionOf(r.name) });
   }
   return out;
+}
+
+/** Эталон резолва звонка на JS (то же, что MAP_ON в SQL): логист 1С на учётке в момент звонка. */
+export function resolveCallLogist(map: CallMapRow[], bitrixId: string, startedAt: string | Date | null): string | null {
+  const at = msOf(startedAt);
+  if (Number.isNaN(at)) return null;
+  const hits = map.filter(r => r.bitrixId === bitrixId && msOf(r.validFrom) <= at && (r.validTo === null || at < msOf(r.validTo)));
+  return hits.length === 1 ? hits[0].logistId : null;
 }
 
 /** Рабочие дни (производственный календарь РФ) в периоде, обрезанном датой начала данных и сегодня. */
@@ -160,11 +170,11 @@ type Def = Pick<Metric, 'id' | 'nameRu' | 'nameShortRu' | 'dataType' | 'decimalP
   & { get: (a: CallAgg, workdays: number) => number | null };
 
 const pct = (a: number, b: number) => (b > 0 ? (a / b) * 100 : null);
-const SHARED = ' Если одной учётной записью Битрикса пользуются несколько логистов 1С, звонки показываются у одного из них (сверенная связь, затем больше заявок) — без двойного счёта.';
+const OWNER = ' Звонок относится к логисту, за которым учётная запись Битрикса закреплена в момент звонка (учётки переходят от логиста к логисту — считается по дате звонка).';
 
 const DEFS: Def[] = [
   { id: 'lc_total', nameRu: 'Звонков всего', nameShortRu: 'Всего', dataType: 'int', decimalPlaces: 0, aggregationFn: 'sum', get: a => a.total,
-    description: `Все звонки логиста в Битриксе за период — входящие и исходящие, состоявшиеся и нет. Данные есть с 30.09.2026.${SHARED}` },
+    description: `Все звонки логиста в Битриксе за период — входящие и исходящие, состоявшиеся и нет. Данные есть с 30.09.2026.${OWNER}` },
   { id: 'lc_out', nameRu: 'Исходящих звонков', nameShortRu: 'Исходящих', dataType: 'int', decimalPlaces: 0, aggregationFn: 'sum', get: a => a.nOut,
     description: 'Звонки, которые логист сделал сам, включая недозвоны.' },
   { id: 'lc_in', nameRu: 'Входящих звонков', nameShortRu: 'Входящих', dataType: 'int', decimalPlaces: 0, aggregationFn: 'sum', get: a => a.nIn,
@@ -220,7 +230,7 @@ export const CALL_METRICS: Metric[] = DEFS.map((d, i) => ({
 }));
 export const CALL_METRIC_IDS = CALL_METRICS.map(m => m.id);
 
-/** Агрегат → значения метрик строки. agg = null — у логиста нет учётки Битрикса (или она за другим логистом): «—». */
+/** Агрегат → значения метрик строки. agg = null — у логиста в периоде нет учётки Битрикса: «—». */
 export function callAggToMetrics(agg: CallAgg | null, workdays: number): Record<string, number | null> {
   return Object.fromEntries(DEFS.map(d => [d.id, agg ? d.get(agg, workdays) : null]));
 }

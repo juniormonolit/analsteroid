@@ -7,7 +7,7 @@ import {
   SQL_CARD_HEAD, SQL_CARD_LINES, SQL_CARD_PURCHASES, SQL_CARD_HISTORY,
 } from './sql';
 import { toReqRow, type ReqRow, type OverdueRow, type StatusInterval } from './metrics';
-import { SQL_CALL_AGG, SQL_CALL_LOGIST_MAP, SQL_CALL_LOGIST_MAP_FALLBACK, sqlCallList, toCallAgg, type CallAgg, type CallMapRow } from './callMetrics';
+import { SQL_CALL_AGG, SQL_CALL_LOGIST_MAP, sqlCallList, toCallAgg, toCallMapRow, type CallAgg, type CallMapRow } from './callMetrics';
 
 const TTL = 300;
 
@@ -57,27 +57,16 @@ export async function loadRequestCard(id: string) {
   return { head: head.rows[0], lines: lines.rows, purchases: purchases.rows, history: history.rows };
 }
 
-// ── Звонки логистов (задача #8314): va.calls_logist + мост disp.logist_bitrix_map ──
+// ── Звонки логистов (#8314, карта #8357): va.calls_logist + мост va.logist_bitrix_map ──
 
 export async function loadCallLogistMap(): Promise<CallMapRow[]> {
-  return cached('realizations:call-map:v1', TTL, async () => {
-    let rows: Record<string, unknown>[];
-    try {
-      rows = (await sdDb().query(SQL_CALL_LOGIST_MAP)).rows;
-    } catch (e) {
-      // Чтение disp у роли приложения планируют снять — тогда мост из поля 1С.
-      if (!/permission denied/i.test((e as Error).message ?? '')) throw e;
-      console.warn('[realizations calls] disp.logist_bitrix_map недоступна, мост по sd.users_1c.bitrix_user_id');
-      rows = (await sdDb().query(SQL_CALL_LOGIST_MAP_FALLBACK)).rows;
-    }
-    return rows.map(r => ({ logistId: String(r.logist_id), bitrixId: String(r.bitrix_id), name: String(r.name ?? ''), verified: !!r.verified, load: Number(r.load ?? 0) }));
-  });
+  return cached('realizations:call-map:v2', TTL, async () => (await sdDb().query(SQL_CALL_LOGIST_MAP)).rows.map(toCallMapRow));
 }
 
-/** Агрегат звонков по ключам строк: uids[i] → keys[i]. Итог — общая строка (grouping set ()). */
-export async function loadCallAgg(from: string, to: string, uids: string[], keys: string[]): Promise<{ byKey: Map<string, CallAgg>; total: CallAgg | null }> {
-  const sig = uids.map((u, i) => `${u}=${keys[i]}`).sort().join(',');
-  const rows = await cached(`realizations:calls:v1:${from}:${to}:${sig}`, 120, async () => (await sdDb().query(SQL_CALL_AGG, [from, to, uids, keys])).rows);
+/** Агрегат звонков по ключам строк: logistIds[i] → keys[i]. Итог — общая строка (grouping set ()). */
+export async function loadCallAgg(from: string, to: string, logistIds: string[], keys: string[]): Promise<{ byKey: Map<string, CallAgg>; total: CallAgg | null }> {
+  const sig = logistIds.map((u, i) => `${u}=${keys[i]}`).sort().join(',');
+  const rows = await cached(`realizations:calls:v2:${from}:${to}:${sig}`, 120, async () => (await sdDb().query(SQL_CALL_AGG, [from, to, logistIds, keys])).rows);
   const byKey = new Map<string, CallAgg>();
   let total: CallAgg | null = null;
   for (const r of rows) {
@@ -89,9 +78,9 @@ export async function loadCallAgg(from: string, to: string, uids: string[], keys
 
 export interface CallListRow {
   id: string; started_at: string; direction: string; phone: string | null; duration_seconds: number | null;
-  failed_code: string | null; failed_reason: string | null; transcription_status: string | null; bitrix_id: string;
+  failed_code: string | null; failed_reason: string | null; transcription_status: string | null; logist_id: string;
 }
-export async function loadCallList(from: string, to: string, uids: string[], where: string): Promise<CallListRow[]> {
-  const { rows } = await sdDb().query(sqlCallList(where), [from, to, uids]);
+export async function loadCallList(from: string, to: string, logistIds: string[], where: string): Promise<CallListRow[]> {
+  const { rows } = await sdDb().query(sqlCallList(where), [from, to, logistIds]);
   return rows as CallListRow[];
 }

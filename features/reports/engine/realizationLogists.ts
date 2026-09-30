@@ -1,7 +1,7 @@
 import type { DateRange } from '@/lib/period';
 import type { ReportRow } from '@/lib/metrics/types';
 import { loadPeriodRows, loadOverdue, loadLogists, loadCallLogistMap, loadCallAgg } from '@/lib/realizations/data';
-import { callAttribution, callAggToMetrics, callWorkdays, CALLS_DATA_FROM, EMPTY_CALL_AGG, type CallAgg } from '@/lib/realizations/callMetrics';
+import { callLogists, callAggToMetrics, callWorkdays, CALLS_DATA_FROM, EMPTY_CALL_AGG, type CallAgg } from '@/lib/realizations/callMetrics';
 import { buildSummary } from '@/lib/realizations/metrics';
 import { REGION_LABEL, type Region } from '@/lib/realizations/region';
 import { summaryToMetrics } from '@/lib/realizations/logistMetrics';
@@ -26,16 +26,16 @@ async function loadCallsFor(from: string, to: string, today: string, by: 'logist
   const empty = { owned: new Set<string>(), byKey: new Map<string, CallAgg>(), total: null as CallAgg | null, workdays, extra: new Map<string, { name: string; region: Region }>() };
   if (to < CALLS_DATA_FROM) return empty; // до начала сбора звонков данных нет — «—», а не нули
   try {
-    const owners = callAttribution(await loadCallLogistMap());
-    const uids: string[] = [], keys: string[] = [];
+    const logists = callLogists(await loadCallLogistMap(), from, to);
+    const ids: string[] = [], keys: string[] = [];
     const owned = new Set<string>();
     const extra = new Map<string, { name: string; region: Region }>();
-    for (const [uid, o] of owners) {
+    for (const o of logists.values()) {
       const key = by === 'logist' ? o.logistId : o.region;
-      uids.push(uid); keys.push(key); owned.add(key);
+      ids.push(o.logistId); keys.push(key); owned.add(key);
       if (by === 'logist') extra.set(o.logistId, { name: o.name, region: o.region });
     }
-    const { byKey, total } = uids.length ? await loadCallAgg(from, to, uids, keys) : { byKey: new Map<string, CallAgg>(), total: null };
+    const { byKey, total } = ids.length ? await loadCallAgg(from, to, ids, keys) : { byKey: new Map<string, CallAgg>(), total: null };
     return { owned, byKey, total: total ?? EMPTY_CALL_AGG, workdays, extra };
   } catch (e) {
     console.error('[reports/run realizations calls]', (e as Error).message ?? e);

@@ -62,7 +62,7 @@ export function LogistCallsDrill({ scope, name, metricId, metricName, period, on
   qs.set('from', localPeriod.from.toISOString());
   qs.set('to', localPeriod.to.toISOString());
   if (metricId) qs.set('metricId', metricId);
-  const q = useQuery<{ items: CallDrillItem[]; truncated: boolean; hasAccount: boolean; sharedWith: string | null; note: string | null; shared: string[] }>({
+  const q = useQuery<{ items: CallDrillItem[]; truncated: boolean; hasAccount: boolean; note: string | null }>({
     queryKey: ['realizations', 'calls', qs.toString()],
     queryFn: async () => {
       const res = await fetch(`/api/realizations/calls?${qs}`);
@@ -108,8 +108,7 @@ export function LogistCallsDrill({ scope, name, metricId, metricName, period, on
       {q.data && (rows.length === 0 ? (
         <div className="py-12 text-center text-sm text-[var(--color-text-muted)]">
           {q.data.hasAccount ? 'За период в этой колонке звонков нет.'
-            : q.data.sharedWith ? `Учётная запись Битрикса общая — её звонки показаны у логиста ${q.data.sharedWith}.`
-            : 'У логиста нет учётной записи Битрикса — звонки не к кому привязать.'}
+            : 'За период у логиста нет учётной записи Битрикса — звонки не к кому привязать.'}
           {changed ? (
             <button type="button" onClick={() => setLocalPeriod(defaultPeriod)} className="focus-ring ml-2 font-medium text-[var(--brand)] hover:underline">Вернуть период отчёта</button>
           ) : null}
@@ -120,9 +119,6 @@ export function LogistCallsDrill({ scope, name, metricId, metricName, period, on
             <span className="font-semibold">Итого: {fmtInt(rows.length)} {callsWord(rows.length)}{q.data.truncated ? ' (показаны последние 2 000)' : ''}</span>
             <span className="text-[var(--color-text-muted)]">исходящих {fmtInt(nOut)} · входящих {fmtInt(rows.length - nOut)} · на линии {fmt1(lineMin)} мин</span>
             {q.data.note && <span className="text-xs text-[var(--color-text-muted)]">· {q.data.note}</span>}
-            {q.data.shared.length > 0 && (
-              <span className="text-xs text-[var(--color-text-muted)]">· учётка Битрикса общая с: {q.data.shared.join(', ')}</span>
-            )}
           </div>
           <div className="flex-1 min-h-0 overflow-auto border-t border-[var(--color-border)]">
             <table className="w-full border-collapse text-[13px] text-[var(--color-text)]">
