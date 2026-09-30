@@ -53,7 +53,7 @@ import { RESPONSE_SLUG, RESPONSE_RELIABLE_FROM } from '@/lib/realizations/respon
 import { RequestTasksDrill } from '@/features/realizations/ui/RequestTasksDrill';
 import { LogistCallsDrill } from '@/features/realizations/ui/LogistCallsDrill';
 import { isCallMetric } from '@/lib/realizations/callMetrics';
-import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_DRILL_STATUS, LOGIST_METRICS } from '@/lib/realizations/logistMetrics';
+import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_DRILL_STATUS, LOGIST_METRICS, needsCallUpgrade, upgradeLogistView } from '@/lib/realizations/logistMetrics';
 
 type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
@@ -605,6 +605,22 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   // источник — users.table_scale (см. ViewSettings.tsx — «Размер шрифта» убран оттуда).
   const { tableScaleMult } = useTableScale();
 
+  // #8314: вид «Сводки по логистам», сохранённый до группы «Звонки» (только lg_-колонки),
+  // дополняется звонками после применения — функциональные апдейты идут после setX(...)
+  // пресета/снапшота в той же пачке. Флаг ставит applyPreset/applyTabSnapshot.
+  const callUpgradePending = useRef(false);
+  const applyCallUpgrade = () => {
+    if (!callUpgradePending.current) return;
+    callUpgradePending.current = false;
+    const up = (f: (v: ReturnType<typeof upgradeLogistView>) => string[], key: 'metricIds' | 'heatmapOn' | 'heatmapInverted') =>
+      (list: string[]) => f(upgradeLogistView({ metricIds: [], columnGroups: [], heatmapOn: [], heatmapInverted: [], [key]: list }));
+    setMetricIds(up(v => v.metricIds, 'metricIds'));
+    setFetchedMetricIds(up(v => v.metricIds, 'metricIds'));
+    setHeatmapMetricIds(up(v => v.heatmapOn, 'heatmapOn'));
+    setHeatmapInvertedIds(up(v => v.heatmapInverted, 'heatmapInverted'));
+    setColumnGroups(g => upgradeLogistView({ metricIds: [], columnGroups: g, heatmapOn: [], heatmapInverted: [] }).columnGroups);
+  };
+
   // Задача 2824 + 2881: применение пресета сохранённого отчёта к состоянию экрана,
   // вынесено в отдельный callback (раньше было телом эффекта ниже) — тот же код
   // теперь нужен из ДВУХ мест: (1) на монтировании/смене пресета — с приоритетом
@@ -647,6 +663,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setBarMetricIds(p.barMetricIds ?? []);
     setHeatmapMetricIds(p.heatmapMetricIds ?? defaultHeatmapMetricIds ?? []);
     setHeatmapInvertedIds(p.heatmapInvertedIds ?? defaultHeatmapInvertedIds ?? []);
+    if (REALIZATION_SLUGS.includes(reportSlug) && needsCallUpgrade(p.metricIds)) callUpgradePending.current = true;
     setColorizeMetrics(p.colorizeMetrics ?? false);
     setZebra(p.zebra ?? false);
     setBorderMode(p.borderMode ?? 'grid');
@@ -662,6 +679,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     if (!keep('sortBy')) setSortBy(p.sortBy ?? null);
     if (!keep('sortDir')) setSortDir(p.sortDir ?? 'desc');
     setColumnGroups(p.columnGroups ?? defaultColumnGroups ?? []);
+    applyCallUpgrade();
     // «По периодам» (миграция 170): у отчётов остальных типов колонки пустые —
     // дефолты те же, что у нового отчёта.
     if (!keep('unit')) setPeriodUnit((p.periodUnit as CalendarUnit) ?? 'month');
@@ -773,6 +791,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setBarMetricIds(s.barMetricIds ?? []);
     setHeatmapMetricIds(s.heatmapMetricIds ?? defaultHeatmapMetricIds ?? []);
     setHeatmapInvertedIds(s.heatmapInvertedIds ?? defaultHeatmapInvertedIds ?? []);
+    if (REALIZATION_SLUGS.includes(reportSlug) && needsCallUpgrade(s.metricIds)) callUpgradePending.current = true;
     setColorizeMetrics(s.colorizeMetrics ?? false);
     setZebra(s.zebra ?? false);
     setBorderMode((s.borderMode ?? 'grid') as BorderMode);
@@ -787,6 +806,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     if (!keep('sortBy')) setSortBy(s.sortBy ?? null);
     if (!keep('sortDir')) setSortDir((s.sortDir ?? 'desc') as 'asc' | 'desc');
     setColumnGroups(s.columnGroups ?? defaultColumnGroups ?? []);
+    applyCallUpgrade();
     setMetricFilters((s.metricFilters ?? {}) as MetricFilters);
     // «Фильтр сделок» — как и остальные настройки отчёта, применяется из пресета,
     // но keep() уважает уже стоящий в URL фильтр: ссылка с фильтром важнее
@@ -1289,7 +1309,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
         const scope = id === '__total__' || (id.startsWith('__') && !id.startsWith('__team__')) ? ''
           : id.startsWith('__team__') ? `region=${encodeURIComponent(id.slice('__team__'.length))}`
           : reportSlug === REGIONS_SLUG ? `region=${encodeURIComponent(id)}` : `logist=${encodeURIComponent(id)}`;
-        setCallsDrill({ scope, name, metricId, metricName: m?.nameRu });
+        // Каталог метрики «Реализации» не отдаёт, а в data.metrics — только выбранные колонки.
+        setCallsDrill({ scope, name, metricId, metricName: m?.nameRu ?? LOGIST_METRICS.find(x => x.id === metricId)?.nameRu });
         return;
       }
       // «Ответы на запросы» (задача #8034): дрилл — список задач-запросов, а не

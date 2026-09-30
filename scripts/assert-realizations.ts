@@ -15,7 +15,7 @@ import { parseFilters, matchRow } from '../lib/realizations/filters.ts';
 import { buildSummary, statusTimes, median, percentile, mskDate, type ReqRow } from '../lib/realizations/metrics.ts';
 import { RESPONSE_DRILL_RULES, responseDrillRule, parseDrillMetric } from '../lib/realizations/responseDrill.ts';
 import { RESPONSE_METRICS } from '../lib/realizations/responseMetrics.ts';
-import { LOGIST_METRICS, LOGIST_COLUMN_GROUPS, LOGIST_DEFAULT_METRIC_IDS, LOGIST_HEATMAP_ON_IDS, LOGIST_HEATMAP_INVERTED_IDS, summaryToMetrics } from '../lib/realizations/logistMetrics.ts';
+import { LOGIST_METRICS, LOGIST_COLUMN_GROUPS, LOGIST_DEFAULT_METRIC_IDS, LOGIST_HEATMAP_ON_IDS, LOGIST_HEATMAP_INVERTED_IDS, summaryToMetrics, needsCallUpgrade, upgradeLogistView } from '../lib/realizations/logistMetrics.ts';
 import { computeCalculated } from '../features/reports/engine/calculated.ts';
 import { parseSortParam, nextSort, sortRows } from '../lib/hooks/sortCore.ts';
 import { fmtRub, fmtInt, fmtMlnRub, fmtPct, humanName } from '../features/realizations/ui/format.ts';
@@ -204,6 +204,14 @@ check(!/recording_url|raw_text|formatted_dialogue/.test(SQL_CALL_AGG + sqlCallLi
 check(CALL_COLUMN_GROUP.metricIds.every(id => CALL_METRICS.some(m => m.id === id && !m.isHiddenInUi)) && CALL_COLUMN_GROUP.metricIds.length === 12, 'группа «Звонки» — 12 видимых колонок');
 check(CALL_METRICS.every(m => m.description && m.description.length > 20), 'у каждой метрики звонков есть описание');
 check(LOGIST_DEFAULT_METRIC_IDS.includes('lc_total') && LOGIST_HEATMAP_INVERTED_IDS.includes('lc_missed_in') && LOGIST_HEATMAP_INVERTED_IDS.includes('lc_short_pct'), 'звонки в колонках по умолчанию; пропущенные/короткие — «больше = хуже»');
+
+// 6.1 Старые вкладки/отчёты (до #8314) получают группу «Звонки», выбор пользователя со звонками — нет
+const OLD = LOGIST_DEFAULT_METRIC_IDS.filter(id => id.startsWith('lg_'));
+check(needsCallUpgrade(OLD) && needsCallUpgrade(['lg_total']) && !needsCallUpgrade([]) && !needsCallUpgrade(['lg_total', 'lc_total']) && !needsCallUpgrade(['all_core']), 'апгрейд вида: только чистые lg_-виды');
+const upv = upgradeLogistView({ metricIds: OLD, columnGroups: LOGIST_COLUMN_GROUPS.filter(g => g.name !== 'Звонки'), heatmapOn: ['lg_overdue'], heatmapInverted: ['lg_cancel_pct'] });
+check(upv.metricIds.length === OLD.length + 12 && upv.metricIds.slice(0, OLD.length).join() === OLD.join(), 'апгрейд: звонки дописаны в конец, порядок старых колонок сохранён');
+check(upv.columnGroups.some(g => g.name === 'Звонки') && upv.heatmapOn.includes('lc_missed_in') && upv.heatmapInverted.includes('lc_short_pct') && upv.heatmapOn.includes('lg_overdue'), 'апгрейд: группа и раскраска звонков');
+check(upgradeLogistView({ metricIds: upv.metricIds, columnGroups: upv.columnGroups, heatmapOn: [], heatmapInverted: [] }).columnGroups.length === upv.columnGroups.length, 'апгрейд идемпотентен');
 
 console.log(`assert-realizations: ${passed} passed, ${failures} failed`);
 if (failures) process.exit(1);

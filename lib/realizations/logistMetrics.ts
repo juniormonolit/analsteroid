@@ -138,3 +138,25 @@ export const LOGIST_DRILL_STATUS: Record<string, string> = {
  */
 export const LOGIST_HEATMAP_ON_IDS = ['lg_overdue', 'lg_overdue30', 'lg_no_purchase', 'lg_excl_broken', 'lg_cycle_days', 'lg_react_hours', 'lc_missed_in'];
 export const LOGIST_HEATMAP_INVERTED_IDS = ['lg_cancel_pct', 'lg_fix_pct', 'lg_d_ratio', 'lc_short_pct', ...LOGIST_HEATMAP_ON_IDS];
+
+/**
+ * Вид, сохранённый до группы «Звонки» (#8314): вкладки/отчёты хранят свой список колонок,
+ * и у всех, кто открывал сводку раньше, там ровно прежние lg_-колонки — новые метрики
+ * не появились бы. Если в виде только lg_-колонки (звонков нет вообще), дописываем группу
+ * «Звонки» и её раскраску. Вид, где пользователь уже что-то выбрал из звонков, не трогаем.
+ */
+export function needsCallUpgrade(ids: string[] | null | undefined): boolean {
+  return !!ids && ids.length > 0 && ids.every(id => id.startsWith('lg_'));
+}
+export function upgradeLogistView(v: {
+  metricIds: string[]; columnGroups: { name: string; metricIds: string[] }[]; heatmapOn: string[]; heatmapInverted: string[];
+}) {
+  const add = (list: string[], extra: string[]) => [...list, ...extra.filter(id => !list.includes(id))];
+  const hasCallGroup = v.columnGroups.some(g => g.metricIds.some(id => id.startsWith('lc_')));
+  return {
+    metricIds: add(v.metricIds, CALL_COLUMN_GROUP.metricIds),
+    columnGroups: v.columnGroups.length && !hasCallGroup ? [...v.columnGroups, CALL_COLUMN_GROUP] : v.columnGroups,
+    heatmapOn: add(v.heatmapOn, LOGIST_HEATMAP_ON_IDS.filter(id => id.startsWith('lc_'))),
+    heatmapInverted: add(v.heatmapInverted, LOGIST_HEATMAP_INVERTED_IDS.filter(id => id.startsWith('lc_'))),
+  };
+}
