@@ -6,6 +6,46 @@
 
 ---
 
+## 2026-09-30 — Деплой исправлений безопасности на прод (#8256/#8257)
+
+Санкция Сергея Афанасьева 30.09 («вот это почини»), ревью Глеба — GO с условиями. `fix/security-audit-code`
+(d108630) — fast-forward от `origin/dev-asteroid` (eb90a25), влита пушем `HEAD:dev-asteroid` без merge-коммита.
+Миграций нет. Гард свежести зелёный, `ALLOW_STALE_DEPLOY` не использовался. Прод: BUILD_ID `CXtH70rJY3Cg0m1tYOyCd`,
+Next 16.3.7, pg-модуль 20/20, 8100 слушает только 127.0.0.1. Диск 62 до/после: `/` 145G, занято 79G, свободно 66G (55%).
+
+**Условия Глеба по порядку.**
+1. `scripts/check-metric-definitions.ts` с окружением прода (из start.sh) до переключения: `metrics=543 problems=0`, exit 0.
+2. `application_token` Битрикса взят из app.log прода (8 предупреждений, одно значение, 36 симв.) → файл 600 root
+   на 62 в `/root/backups/monolitika-8257/`. В чат/отчёты не передавался.
+3. `BITRIX_EVENTS_APP_TOKEN` добавлен в `start.sh` прода (одна строка, файл 600), `HOSTNAME=127.0.0.1` на месте.
+   Копия прежнего start.sh — `/root/backups/monolitika-8257/start.sh.pre-8256`.
+4. `deploy.sh` → Login 200 / Static 200. Смоук (zzz_8034_admin временно is_active=true, после — false, вход → 401):
+   `/login` 200, вход 200, `POST /api/reports/run` (requests-response) 200 с данными, `/realizations/responses` 200,
+   инъекция в `createdTimeFilter` → 400 «недопустимое значение», снаружи `62.113.100.67:8100` — таймаут.
+5. URL событий бота «Аналитик» переведён `imbot.update` на секретный путь (`result:true`); без токена и старый,
+   и секретный путь → 403 (fail-closed), случайный сегмент → 404. Живого события от Битрикса за 26 минут
+   ожидания не пришло (трафик бота редкий — десятки событий на весь прежний лог), ошибок токена в логе нет.
+6. Старый путь `/api/bitrix/events` в Caddy **пока открыт**: условие «закрыть после подтверждённого события» не
+   выполнено. Готовый конфиг — `/root/backups/monolitika-8257/junior-monolitika.caddy.close403` (единственная
+   правка — `respond 403` в `handle @bitrix_events_legacy`). Применить после первого принятого события на
+   секретном пути. Старый путь и так fail-closed (без верного токена — 403).
+7. Прежний app.log (в нём полный токен в 8 предупреждениях старой версии) перенесён в
+   `/root/backups/monolitika-8257/app.log.pre-8256` (600 root), `app.log` очищен (copytruncate; процесс пишет
+   с O_APPEND, логирование продолжилось). Новая версия токен не пишет (только 4 символа и длина).
+   Бэкапы deploy.sh — ротация keep-3 штатная (`prod-backups/`), чужие архивы в корне не трогались.
+
+Ченджлог (`changelog_entries`) не пополнялся: видимых пользователю функций нет (только отказы на атаки и лимит входа).
+
+**Грабля: Next обновился, а deploy.sh не везёт node_modules.** Тарбол deploy.sh содержит только
+`.next/standalone/.next/*`, `server.js` и статику, а `.next/standalone/node_modules` на проде остался от прошлых
+выкатов (next 16.2.9). Новая сборка 16.3.7 на старом рантайме: страницы 200, но все POST/API → 405,
+в логе `TypeError: getVaryParamsAccumulator is not a function`. Починено за ~2 минуты: прежний каталог перенесён
+в `prod-backups/standalone-node_modules.pre-8256`, залит `.next/standalone/node_modules` из новой сборки, рестарт.
+После — ошибок нет. **При любом обновлении зависимостей (next, react и т.п.) везти `.next/standalone/node_modules`
+целиком**; в deploy.sh этого пока нет — задача на доработку скрипта.
+
+---
+
 ## 2026-09-30 — Безопасность: исправления по аудиту Глеба 29.09 (#8256)
 
 Санкция Сергея 30.09 («вот это почини»). Основа — `owners-inbox/security/monolitika-security-audit-gleb-20260929.html`
