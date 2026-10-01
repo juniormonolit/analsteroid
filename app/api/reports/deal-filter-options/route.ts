@@ -22,7 +22,9 @@ export async function GET() {
     const fields = Object.entries(DEAL_FILTER_FIELDS).map(([key, def]) => ({
       key,
       label: def.label,
-      kind: def.customSql ? 'enum' : def.kind,
+      // 'enum' = «есть справочник значений», а не «есть своё SQL-выражение»:
+      // у «Суммы по товару» выражение своё, но вводится она числом (01.10.2026).
+      kind: def.options ? 'enum' : def.kind,
       options: def.options ?? null,
       ops: opsForField(key),
     }));

@@ -39,6 +39,7 @@ const OP_LABEL: Record<DealFilterOp, string> = {
   eq: '= равно', neq: '≠ не равно', in: 'одно из', not_in: 'кроме',
   gt: '> больше', gte: '≥ больше или равно', lt: '< меньше', lte: '≤ меньше или равно',
   between: 'между', is_null: 'не заполнено', is_not_null: 'заполнено',
+  contains: 'содержит', not_contains: 'не содержит',
 };
 
 export function useDealFilterOptions() {
@@ -207,6 +208,11 @@ function ValueInput({ def, filter, opts, onChange }: {
   const cls = 'min-h-11 w-full rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 text-[16px] sm:text-sm';
   if (!def) return null;
 
+  // Товар — поиск, а не список: названий 60 тысяч (см. api/reports/product-search).
+  if (def.options === 'product_search') {
+    return <ProductSearchInput value={String(filter.value ?? '')} onChange={onChange} cls={cls} />;
+  }
+
   if (filter.op === 'between') {
     const arr = Array.isArray(filter.value) ? filter.value : ['', ''];
     return (
@@ -247,4 +253,82 @@ function ValueInput({ def, filter, opts, onChange }: {
       onChange={e => onChange(e.target.value)}
       placeholder={def.kind === 'number' ? '50000' : ''} />
   );
+}
+
+/**
+ * Поле «Товар»: подстрока + живой список того, что она ловит.
+ *
+ * Значение фильтра — ИМЕННО ПОДСТРОКА, а не выбранный пункт списка. Так и
+ * задумано: один товар лежит в данных под десятками названий («Роклайт» — 25
+ * строк и 12 product_id), и выбор одного названия поймал бы меньшую часть
+ * сделок. Список внизу — не выбор значения, а проверка улова: видно, что
+ * поймает подстрока, прежде чем строить отчёт. Клик по строке сужает запрос до
+ * этого названия, если нужна именно одна позиция.
+ */
+function ProductSearchInput({ value, onChange, cls }: {
+  value: string;
+  onChange: (v: string) => void;
+  cls: string;
+}) {
+  const [q, setQ] = useState(value);
+  useEffect(() => { setQ(value); }, [value]);
+  // Дебаунс: запрос к серверу — полный проход по сделкам (~1,3 с), на каждую
+  // букву его слать нельзя.
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(q), 450);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const { data, isFetching } = useQuery<ProductSearchResponse>({
+    queryKey: ['product-search', debounced],
+    enabled: debounced.trim().length >= 3,
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/product-search?q=${encodeURIComponent(debounced.trim())}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 10 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const short = q.trim().length > 0 && q.trim().length < 3;
+  return (
+    <span className="flex flex-col gap-1">
+      <input className={cls} type="text" value={q}
+        onChange={e => { setQ(e.target.value); onChange(e.target.value); }}
+        placeholder="роклайт" />
+      {short && <span className="text-[11px] text-[var(--color-text-muted)]">Нужно хотя бы 3 буквы</span>}
+      {isFetching && <span className="text-[11px] text-[var(--color-text-muted)]">Ищу…</span>}
+      {data && !data.tooShort && (
+        data.deals === 0
+          ? <span className="text-[11px] text-[var(--color-negative)]">Ничего не найдено — фильтр даст пустой отчёт</span>
+          : (
+            <>
+              <span className="text-[11px] text-[var(--color-text-muted)]">
+                Поймает {data.deals.toLocaleString('ru-RU')} сделок, {data.names.toLocaleString('ru-RU')} назв.
+              </span>
+              <span className="scroll-x max-h-32 overflow-y-auto rounded border border-[var(--color-border)]">
+                {data.items.map(it => (
+                  <button key={it.name} type="button"
+                    onClick={() => { setQ(it.name); onChange(it.name); }}
+                    title="Сузить фильтр до этого названия"
+                    className="flex w-full items-center justify-between gap-2 px-2 py-1 text-left text-[11px] hover:bg-[var(--color-bg-hover)]">
+                    <span className="truncate">{it.name}</span>
+                    <span className="shrink-0 tabular-nums text-[var(--color-text-muted)]">{it.deals}</span>
+                  </button>
+                ))}
+              </span>
+            </>
+          )
+      )}
+    </span>
+  );
+}
+
+interface ProductSearchResponse {
+  items: { name: string; deals: number; lines: number; sum: number }[];
+  names: number;
+  deals: number;
+  tooShort?: boolean;
 }

@@ -33,6 +33,7 @@ import type { PoolClient } from 'pg';
 export type DealFilterOp =
   | 'eq' | 'neq' | 'in' | 'not_in'
   | 'gt' | 'gte' | 'lt' | 'lte' | 'between'
+  | 'contains' | 'not_contains'
   | 'is_null' | 'is_not_null';
 
 export interface DealFilter {
@@ -42,7 +43,7 @@ export interface DealFilter {
   value?: string | number | (string | number)[] | null;
 }
 
-type FieldKind = 'number' | 'date' | 'text' | 'int';
+type FieldKind = 'number' | 'date' | 'text' | 'int' | 'bool';
 
 interface FieldDef {
   /** Колонка в sa.deals. */
@@ -51,19 +52,86 @@ interface FieldDef {
   label: string;
   /** Справочник значений для пикера (см. dealFilterOptions ниже; client_kind и
    *  stage_entered_presets — статические, отдаются роутом без запроса в БД). */
-  options?: 'funnels' | 'stages' | 'head_groups' | 'sources' | 'client_kind' | 'stage_entered_presets';
-  /** Псевдополе: своё SQL-выражение вместо d.<column> (тип клиента = воронка). */
-  customSql?: (op: DealFilterOp, values: string[]) => string;
+  options?: 'funnels' | 'stages' | 'head_groups' | 'sources' | 'client_kind' | 'stage_entered_presets'
+    | 'product_groups' | 'bool' | 'product_search';
+  /** Псевдополе: своё SQL-выражение вместо d.<column> (тип клиента = воронка).
+   *  ctx нужен полям, которые зависят от ДРУГОГО условия того же фильтра —
+   *  «Сумма по товару» без «Товара» не имеет смысла (см. FilterCtx). */
+  customSql?: (op: DealFilterOp, values: string[], ctx: FilterCtx) => string;
+  /** Операторы поля, если их нельзя вывести из kind/customSql. */
+  ops?: DealFilterOp[];
 }
 
-const NUM_OPS: DealFilterOp[] = ['gt', 'gte', 'lt', 'lte', 'between', 'eq', 'neq'];
+/** Контекст набора фильтров: условия, которые смотрят друг на друга. */
+export interface FilterCtx {
+  /** SQL-литерал '%роклайт%' из условия «Товар», если оно есть в наборе. */
+  productLike: string | null;
+}
+
+const NUM_OPS: DealFilterOp[] = ['gt', 'gte', 'lt', 'lte', 'between', 'eq', 'neq', 'is_null', 'is_not_null'];
 const SET_OPS: DealFilterOp[] = ['in', 'not_in', 'eq', 'neq', 'is_null', 'is_not_null'];
-const DATE_OPS: DealFilterOp[] = ['gte', 'lte', 'between'];
+// Свободный текст без справочника: «содержит» — главный оператор, с него и
+// начинаем (искать сделку по куску названия нужнее, чем по точному совпадению).
+const TEXT_OPS: DealFilterOp[] = ['contains', 'not_contains', 'eq', 'neq', 'is_null', 'is_not_null'];
+const DATE_OPS: DealFilterOp[] = ['gte', 'lte', 'between', 'is_null', 'is_not_null'];
+const BOOL_OPS: DealFilterOp[] = ['eq', 'neq'];
 
 // ЮЛ/ФЛ определяются номером воронки — ровно так же, как funnel_type b2b/b2c в
 // sqlGen.ts::resolveFilterClause. Держим ту же карту, а не заводим вторую правду.
 const B2C_FUNNELS = [0, 2];
 const B2B_FUNNELS = [1, 3];
+
+// ── Позиции сделки (sa.deals.products) ───────────────────────────────────────
+// products — jsonb-массив строк вида {name, product_id, quantity, price, sum,
+// head_group_id, head_group_name, type}. Живая проверка 01.10.2026: 259 518
+// сделок, у 218 538 массив непустой, 470 214 позиций, 60 056 разных названий и
+// 37 379 product_id. quantity и sum — ВСЕГДА jsonb-число (проверено по всем
+// 470 тыс. строк), поэтому ::numeric безопасен без защиты от текста.
+//
+// ПОЧЕМУ ПОИСК ПО ПОДСТРОКЕ, А НЕ ВЫБОР ИЗ СПРАВОЧНИКА: один товар живёт в
+// данных под десятками названий. «Роклайт» — это 25 разных строк и 12 разных
+// product_id («Утеплитель Технониколь Роклайт 50 % компрессия 100 х 600 х 1200
+// мм», та же строка с хвостом «| 17 куб 1,26 тон», «Технониколь Роклайт
+// 1200*600*50», у части позиций product_id вообще NULL). Выбор одного значения
+// из списка поймал бы меньшую часть сделок и соврал бы молча.
+//
+// ОГРАНИЧЕНИЕ ПО СКОРОСТИ: индекса под ILIKE внутри jsonb нет, условие даёт
+// Seq Scan по sa.deals (замер 01.10: 1,3 с на полном проходе 259 тыс. строк).
+// В отчёте условие идёт в AND с периодом и скоупом, поэтому на практике
+// разбирается уже урезанный набор. Если станет узким местом — лечится
+// trigram-индексом по products::text, но это чужая схема (БД Миши), трогать её
+// в одностороннем порядке не стали.
+const PRODUCT_ARR = `CASE WHEN jsonb_typeof(d.products) = 'array' THEN d.products ELSE '[]'::jsonb END`;
+
+/** Литерал '%текст%' для ILIKE: кавычки удваиваются, %/_/\\ экранируются,
+ *  иначе «скидка 50%» ловила бы всё подряд. */
+function sqlLike(v: unknown): string | null {
+  const raw = String(v ?? '').trim();
+  if (raw.length === 0 || raw.length > MAX_STR) return null;
+  const esc = raw.replace(/[\\%_]/g, m => '\\' + m).replace(/'/g, "''");
+  return `'%${esc}%'`;
+}
+
+/** Сумма/количество ПО СТРОКАМ, попавшим под условие «Товар». */
+function productAgg(field: 'sum' | 'quantity', like: string): string {
+  return `(SELECT COALESCE(SUM((pl->>'${field}')::numeric), 0)
+      FROM jsonb_array_elements(${PRODUCT_ARR}) pl WHERE pl->>'name' ILIKE ${like})`;
+}
+
+// У агрегата по позициям «не заполнено» не бывает: нет строк — сумма 0.
+const NUM_OPS_NO_NULL: DealFilterOp[] = ['gt', 'gte', 'lt', 'lte', 'between', 'eq', 'neq'];
+
+/** «Сумма/количество по товару» <оператор> <значение>. */
+function cmpAgg(field: 'sum' | 'quantity', op: DealFilterOp, values: string[], like: string): string {
+  const agg = productAgg(field, like);
+  if (op === 'between') {
+    const a = sqlNumber(values[0]); const b = sqlNumber(values[1]);
+    return a === null || b === null ? '' : `${agg} BETWEEN ${a} AND ${b}`;
+  }
+  const n = sqlNumber(values[0]);
+  const sym = { eq: '=', neq: '!=', gt: '>', gte: '>=', lt: '<', lte: '<=' }[op as 'eq'];
+  return n === null || !sym ? '' : `${agg} ${sym} ${n}`;
+}
 
 export const DEAL_FILTER_FIELDS: Record<string, FieldDef> = {
   amount:          { column: 'amount',          kind: 'number', label: 'Сумма сделки, ₽' },
@@ -110,16 +178,76 @@ export const DEAL_FILTER_FIELDS: Record<string, FieldDef> = {
         : `d.funnel_id IN (${list})`;
     },
   },
+  // ── Товар в позициях сделки (задача владельца 01.10.2026) ──────────────────
+  // «Хочу сделки в работе с чеком больше 300 тысяч на роклайт». Три поля:
+  // «Товар» задаёт, ЧТО ищем, «Сумма/Количество по товару» — сколько ЭТОГО
+  // товара в сделке. Разделять их на независимые условия было нельзя: два
+  // независимых фильтра «есть роклайт» И «есть позиция дороже 300 тыс.»
+  // поймали бы сделку, где роклайта на 5 тысяч, а на 300 тысяч — бетон.
+  // Поэтому сумма и количество считаются ТОЛЬКО по строкам, попавшим под
+  // условие «Товар», и без него не имеют смысла (валидация ниже это требует).
+  product_name: {
+    column: 'products', kind: 'text', label: 'Товар (в позициях сделки)',
+    options: 'product_search', ops: ['contains', 'not_contains'],
+    customSql: (op, values) => {
+      const like = sqlLike(values[0]);
+      if (!like) return '';
+      const has = `EXISTS (SELECT 1 FROM jsonb_array_elements(${PRODUCT_ARR}) pl WHERE pl->>'name' ILIKE ${like})`;
+      return op === 'not_contains' ? `NOT ${has}` : has;
+    },
+  },
+  product_sum: {
+    column: 'products', kind: 'number', label: 'Сумма по товару, ₽', ops: NUM_OPS_NO_NULL,
+    customSql: (op, values, ctx) => ctx.productLike ? cmpAgg('sum', op, values, ctx.productLike) : '',
+  },
+  product_qty: {
+    column: 'products', kind: 'number', label: 'Количество по товару', ops: NUM_OPS_NO_NULL,
+    customSql: (op, values, ctx) => ctx.productLike ? cmpAgg('quantity', op, values, ctx.productLike) : '',
+  },
+
+  // ── Остальные колонки sa.deals (задача владельца 01.10.2026: «фильтровать по
+  // любому полю из deals») ───────────────────────────────────────────────────
+  // Список намеренно РУЧНОЙ, а не из information_schema: белый список — это
+  // граница безопасности (см. блок «Про безопасность» выше), и подпись на
+  // русском полезнее сырого имени колонки. Не вошли сюда products и activities:
+  // это jsonb-массивы, сравнивать их целиком бессмысленно — у products для
+  // этого есть три поля выше, у activities фильтры живут в метриках «Дела».
+  deal_id:            { column: 'deal_id',            kind: 'int',  label: 'ID сделки',          ops: NUM_OPS },
+  deal_name:          { column: 'deal_name',          kind: 'text', label: 'Название сделки',    ops: TEXT_OPS },
+  deal_type:          { column: 'deal_type',          kind: 'text', label: 'Тип сделки',         ops: TEXT_OPS },
+  is_reserved:        { column: 'is_reserved',        kind: 'bool', label: 'Бронь',              options: 'bool' },
+  head_group_id:      { column: 'head_group_id',      kind: 'int',  label: 'ID товарной группы (by_max)', ops: NUM_OPS },
+  product_group_id:   { column: 'product_group_id',   kind: 'int',  label: 'Товарная группа (kc)', options: 'product_groups' },
+  current_manager_id: { column: 'current_manager_id', kind: 'int',  label: 'ID менеджера (Битрикс)', ops: NUM_OPS },
+  team_id:            { column: 'team_id',            kind: 'int',  label: 'ID команды',         ops: NUM_OPS },
+  lead_id:            { column: 'lead_id',            kind: 'int',  label: 'ID лида',            ops: NUM_OPS },
+  contact_id:         { column: 'contact_id',         kind: 'int',  label: 'ID контакта',        ops: NUM_OPS },
+  company_id:         { column: 'company_id',         kind: 'int',  label: 'ID компании',        ops: NUM_OPS },
+  manager_history:    { column: 'manager_history',    kind: 'text', label: 'История менеджеров', ops: TEXT_OPS },
+
+  // Даты. is_null/is_not_null здесь — рабочий инструмент, а не формальность:
+  // «Дата продажи не заполнена» = сделка ещё не продана.
+  updated_at:     { column: 'updated_at',     kind: 'date', label: 'Дата изменения' },
+  reserved_at:    { column: 'reserved_at',    kind: 'date', label: 'Дата брони' },
+  confirmed_at:   { column: 'confirmed_at',   kind: 'date', label: 'Дата подтверждения' },
+  sold_at:        { column: 'sold_at',        kind: 'date', label: 'Дата продажи' },
+  delivered_at:   { column: 'delivered_at',   kind: 'date', label: 'Дата отгрузки' },
+  lost_at:        { column: 'lost_at',        kind: 'date', label: 'Дата потери' },
+  last_event_at:  { column: 'last_event_at',  kind: 'date', label: 'Дата последнего события' },
+  mlt_date_sale:  { column: 'mlt_date_sale',  kind: 'date', label: 'Дата продажи (МЛТ)' },
 };
 
 export function opsForField(field: string): DealFilterOp[] {
   const def = DEAL_FILTER_FIELDS[field];
   if (!def) return [];
+  if (def.ops) return def.ops;                     // поле объявило операторы само
   if (field === 'stage_entered_at') return ['eq']; // пресеты периодов, «не равно» не имеет смысла
   if (def.customSql) return ['eq', 'neq'];
+  if (def.kind === 'bool') return BOOL_OPS;
   if (def.kind === 'number' || def.kind === 'int') return def.options ? SET_OPS : NUM_OPS;
   if (def.kind === 'date') return DATE_OPS;
-  return SET_OPS;
+  // Текст со справочником — выбор из списка; свободный текст — «содержит».
+  return def.options ? SET_OPS : TEXT_OPS;
 }
 
 const MAX_FILTERS = 20;
@@ -143,13 +271,28 @@ function sqlText(v: unknown): string | null {
 function litFor(kind: FieldKind, v: unknown): string | null {
   if (kind === 'number' || kind === 'int') return sqlNumber(v);
   if (kind === 'date') return sqlDate(v);
+  if (kind === 'bool') {
+    const s = String(v ?? '').trim().toLowerCase();
+    return s === 'true' ? 'TRUE' : s === 'false' ? 'FALSE' : null;
+  }
   return sqlText(v);
+}
+
+const EMPTY_CTX: FilterCtx = { productLike: null };
+
+/** Контекст набора: достаём условие «Товар», от которого зависят «Сумма/
+ *  Количество по товару». Берём ПЕРВОЕ условие «содержит» — именно оно
+ *  задаёт строки, по которым считается агрегат. */
+function ctxOf(filters: DealFilter[]): FilterCtx {
+  const pf = filters.find(f => f.field === 'product_name' && f.op === 'contains');
+  const v = pf ? (Array.isArray(pf.value) ? pf.value[0] : pf.value) : null;
+  return { productLike: v != null ? sqlLike(v) : null };
 }
 
 /** Один фильтр → SQL-условие. Невалидный фильтр даёт '' и молча пропускается —
  *  так же ведёт себя resolveFilterClause: наполовину применённый фильтр опаснее
  *  непримененного, а форму условий валидирует UI и роут до этого места. */
-function clauseFor(f: DealFilter): string {
+function clauseFor(f: DealFilter, ctx: FilterCtx = EMPTY_CTX): string {
   const def = DEAL_FILTER_FIELDS[f.field];
   if (!def) return '';
   if (!opsForField(f.field).includes(f.op)) return '';
@@ -157,10 +300,20 @@ function clauseFor(f: DealFilter): string {
 
   if (def.customSql) {
     const vals = (Array.isArray(f.value) ? f.value : [f.value]).map(v => String(v ?? ''));
-    return def.customSql(f.op, vals.slice(0, MAX_LIST));
+    return def.customSql(f.op, vals.slice(0, MAX_LIST), ctx);
   }
   if (f.op === 'is_null') return `${col} IS NULL`;
   if (f.op === 'is_not_null') return `${col} IS NOT NULL`;
+
+  // «Содержит» — ILIKE по подстроке. Только для текста: на числе и дате
+  // Postgres молча привёл бы колонку к тексту и сравнивал '2026-10-01' как
+  // строку, а человек ждал бы сравнения дат.
+  if (f.op === 'contains' || f.op === 'not_contains') {
+    if (def.kind !== 'text') return '';
+    const like = sqlLike(Array.isArray(f.value) ? f.value[0] : f.value);
+    if (like === null) return '';
+    return f.op === 'contains' ? `${col} ILIKE ${like}` : `(${col} IS NULL OR ${col} NOT ILIKE ${like})`;
+  }
 
   if (f.op === 'between') {
     if (!Array.isArray(f.value) || f.value.length !== 2) return '';
@@ -196,7 +349,9 @@ function clauseFor(f: DealFilter): string {
  */
 export function buildDealFilterWhere(filters: DealFilter[] | undefined | null): { sql: string; key: string } {
   if (!Array.isArray(filters) || filters.length === 0) return { sql: '', key: 'none' };
-  const parts = filters.slice(0, MAX_FILTERS).map(clauseFor).filter(Boolean);
+  const list = filters.slice(0, MAX_FILTERS);
+  const ctx = ctxOf(list);
+  const parts = list.map(f => clauseFor(f, ctx)).filter(Boolean);
   if (parts.length === 0) return { sql: '', key: 'none' };
   return {
     sql: parts.join(' AND '),
@@ -212,7 +367,15 @@ export function validateDealFilters(input: unknown): string | null {
   if (input === undefined || input === null) return null;
   if (!Array.isArray(input)) return 'dealFilters должен быть массивом';
   if (input.length > MAX_FILTERS) return `dealFilters: максимум ${MAX_FILTERS} условий`;
-  for (const f of input as DealFilter[]) {
+  const all = input as DealFilter[];
+  const ctx = ctxOf(all);
+  // «Сумма/Количество по товару» без условия «Товар ... содержит» посчиталось бы
+  // по пустому множеству строк (всегда 0) и молча выкинуло бы все сделки.
+  // Лучше внятная ошибка, чем пустой отчёт с плашкой «фильтр применён».
+  if (!ctx.productLike && all.some(f => f?.field === 'product_sum' || f?.field === 'product_qty')) {
+    return 'dealFilters: «Сумма по товару» и «Количество по товару» работают только вместе с условием «Товар … содержит» — иначе непонятно, по какому товару считать';
+  }
+  for (const f of all) {
     if (!f || typeof f !== 'object') return 'dealFilters: условие должно быть объектом';
     if (!DEAL_FILTER_FIELDS[f.field]) return `dealFilters: неизвестное поле «${f.field}»`;
     if (!opsForField(f.field).includes(f.op)) return `dealFilters: оператор «${f.op}» недопустим для поля «${f.field}»`;
@@ -222,10 +385,11 @@ export function validateDealFilters(input: unknown): string | null {
     // строился ПО ВСЕМ сделкам, пока плашка над таблицей уверяла, что фильтр
     // применён. Молча непримененный фильтр опаснее ошибки: человек делает вывод
     // по цифрам, которые считают не то, что он думает.
-    if (f.op !== 'is_null' && f.op !== 'is_not_null' && clauseFor(f) === '') {
+    if (f.op !== 'is_null' && f.op !== 'is_not_null' && clauseFor(f, ctx) === '') {
       const def = DEAL_FILTER_FIELDS[f.field];
       const hint = def.kind === 'number' || def.kind === 'int' ? 'нужно число'
         : def.kind === 'date' ? 'нужна дата в формате ГГГГ-ММ-ДД'
+        : def.kind === 'bool' ? 'нужно «да» или «нет»'
         : 'значение пустое или слишком длинное';
       return `dealFilters: «${def.label}» — ${hint}`;
     }
@@ -249,6 +413,7 @@ export function describeDealFilters(filters: DealFilter[] | undefined | null): s
   const OP_LABEL: Record<string, string> = {
     eq: '=', neq: '≠', gt: '>', gte: '≥', lt: '<', lte: '≤',
     in: 'из', not_in: 'кроме', between: 'от', is_null: 'не заполнено', is_not_null: 'заполнено',
+    contains: 'содержит', not_contains: 'не содержит',
   };
   return filters.flatMap(f => {
     const def = DEAL_FILTER_FIELDS[f.field];
@@ -258,6 +423,12 @@ export function describeDealFilters(filters: DealFilter[] | undefined | null): s
       return [`${def.label}: ${(p?.label ?? String(f.value ?? '')).toLowerCase()}`];
     }
     if (f.op === 'is_null' || f.op === 'is_not_null') return [`${def.label}: ${OP_LABEL[f.op]}`];
+    // Булево показываем словом: «Бронь = true» в плашке над таблицей читается
+    // как технический мусор.
+    if (def.kind === 'bool') {
+      const yes = String(Array.isArray(f.value) ? f.value[0] : f.value) === 'true';
+      return [`${def.label}: ${(f.op === 'neq') !== yes ? 'да' : 'нет'}`];
+    }
     if (f.op === 'between' && Array.isArray(f.value)) return [`${def.label}: от ${f.value[0]} до ${f.value[1]}`];
     const v = Array.isArray(f.value) ? f.value.join(', ') : String(f.value ?? '');
     return [`${def.label} ${OP_LABEL[f.op] ?? f.op} ${v}`];
@@ -266,16 +437,19 @@ export function describeDealFilters(filters: DealFilter[] | undefined | null): s
 
 /** Справочники значений для пикера (см. app/api/reports/deal-filter-options). */
 export async function dealFilterOptions(client: PoolClient): Promise<Record<string, { value: string; label: string }[]>> {
-  const [funnels, stages, heads, sources] = await Promise.all([
+  const [funnels, stages, heads, sources, pgroups] = await Promise.all([
     client.query<{ id: number; name: string }>(`SELECT id, name FROM funnels ORDER BY name`),
     client.query<{ id: string; name: string }>(`SELECT id, name FROM stages ORDER BY name`),
     client.query<{ v: string }>(`SELECT DISTINCT head_group_name v FROM sa.deals WHERE head_group_name IS NOT NULL ORDER BY 1`),
     client.query<{ v: string }>(`SELECT DISTINCT source_id v FROM sa.deals WHERE source_id IS NOT NULL ORDER BY 1`),
+    client.query<{ id: number; name: string }>(`SELECT id, name FROM sa.product_groups WHERE is_active = true ORDER BY name`),
   ]);
   return {
     funnels: funnels.rows.map(r => ({ value: String(r.id), label: r.name })),
     stages: stages.rows.map(r => ({ value: r.id, label: r.name })),
     head_groups: heads.rows.map(r => ({ value: r.v, label: r.v })),
     sources: sources.rows.map(r => ({ value: r.v, label: r.v })),
+    product_groups: pgroups.rows.map(r => ({ value: String(r.id), label: r.name })),
+    bool: [{ value: 'true', label: 'Да' }, { value: 'false', label: 'Нет' }],
   };
 }
