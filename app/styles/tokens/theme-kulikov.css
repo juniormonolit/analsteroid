@@ -1,0 +1,160 @@
+/* ТЕМА «ДИЗАЙН КУЛИКОВА» (id: kulikov) — визуальный язык monolit.shop.
+   Эталон — макеты docs/design/monolitika-redesign-monolitshop-20261006/
+   (00-stil.html — токены, index.html — экраны, logo-robot.html — логотип).
+
+   Устроена как «Классическая» (theme-classic.css): плоская, без стекла, прикладные
+   color-токены переопределяются НАПРЯМУЮ под :root[data-theme="kulikov"], поэтому
+   компоненты перекрашиваются сами, без правок в разметке.
+   Файл подключается в globals.css ПОСЛЕДНИМ из тем. Остальные темы не затронуты:
+   всё ниже живёт под селектором data-theme="kulikov".
+
+   Справа подписано имя токена макета (00-stil.html, блок :root, префикс c-). */
+:root[data-theme="kulikov"] {
+  /* ── Поверхности и текст ─────────────────────────────────────────────── */
+  --color-bg: #F3F6F7;                 /* c-bg */
+  --color-bg-surface: #FFFFFF;         /* c-surface */
+  --color-bg-hover: #F3F4F6;           /* c-muted-bg */
+  --color-border: #E5E7EB;             /* c-border */
+  --color-border-strong: #D1D5DB;      /* c-border-strong */
+  --color-border-focus: #005CA9;       /* c-primary */
+  --color-text: #343433;               /* c-text */
+  /* muted на фоне #F3F6F7: у макета для этого отдельный c-text-muted-bg (AA 5,4:1).
+     В приложении приглушённый текст — один токен и на карточках, и на фоне страницы,
+     поэтому берём более тёмный из двух. */
+  --color-text-muted: #5F6672;         /* c-text-muted-bg */
+  --color-text-secondary: var(--color-text-muted);
+  --color-text-inverse: #FFFFFF;       /* c-on-primary */
+  --color-num: #343433;
+  --color-mix-base: #FFFFFF;
+  --color-highlight-pct: 68%;
+
+  /* ── Акцент: синий бренда. Жёлтый (c-accent) в интерфейс не выносится ─── */
+  --color-accent: #005CA9;             /* c-primary */
+  --color-accent-hover: #003780;       /* c-primary-hover */
+  --color-accent-soft: #E5EEF6;        /* c-primary-soft */
+
+  /* ── Статусы ─────────────────────────────────────────────────────────── */
+  --color-positive: #007A1B;           /* c-success-text (AA на белом) */
+  --color-negative: #D40000;           /* c-error */
+  --color-negative-soft: #FBE5E5;      /* c-error-bg */
+  --color-warning: #9A6B00;            /* .st.warn макета */
+  --color-error: #D40000;
+
+  /* ── Сайдбар ─────────────────────────────────────────────────────────── */
+  --color-sidebar-bg: #FFFFFF;
+  --color-sidebar-border: var(--color-border);
+  --color-sidebar-text: var(--color-text);
+  --color-sidebar-text-muted: var(--color-text-muted);
+  --color-sidebar-hover-bg: var(--color-bg-hover);
+  /* Активный пункт — мягкая заливка + синий текст (как подпункт в макете). Сплошная
+     синяя плашка с белым текстом сюда не подходит: эти же два токена красят подпункты
+     и нижний таб-бар на телефоне, где фона нет, а белый текст пропал бы. */
+  --color-sidebar-active: var(--color-accent);
+  --color-sidebar-active-bg: var(--color-accent-soft);
+  --color-sidebar-guide: #E5E7EB;
+
+  /* ── Таблицы: шапка нейтральная, без жёлтого ─────────────────────────── */
+  --color-table-header: #E7ECEF;       /* c-th */
+  --color-totals-bg: #F3F4F6;          /* tfoot макета: c-muted-bg (непрозрачный — строка итогов sticky) */
+  --color-table-row-hover: #E5EEF6;    /* c-primary-soft: заметно и поверх зебры */
+  --color-table-stripe: #F7F9FA;
+  --color-table-row-border: #E5E7EB;   /* c-border */
+  --color-report-zebra: #F7F9FA;
+
+  /* ── Прочие прикладные токены ────────────────────────────────────────── */
+  --color-top1-border: #F2CC7F;        /* c-accent — золото лидера остаётся золотом */
+  --color-top1-glow: #F2CC7F33;
+  --color-top1-bg: #FCF3E1;            /* c-accent-soft */
+  --color-top1-text: #7A5600;
+  --color-swatch-border: rgba(15, 23, 42, .16);
+  --color-tooltip-bg: #020217;         /* c-ink */
+  --color-tooltip-text: #FFFFFF;
+  /* Логотип с роботом (components/ui/KulikovBrand.tsx) — есть только в этой теме */
+  --color-brand-ink: #020217;          /* c-ink: черта и «МОНОЛИТИКА» */
+  --color-brand-tile: #E7ECEF;         /* плитка под головой робота, .rhead макета */
+
+  /* ── Шрифт: Montserrat (в макетах он же встроен как MNT) ─────────────── */
+  --font-ui: 'Montserrat', 'Segoe UI', Arial, sans-serif;
+
+  /* ── Радиусы 1:1 с сайтом (r-sm/md/lg/xl макета). На них же стоят
+     tailwind-классы rounded-sm/md/lg/xl ─────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 16px;
+
+  /* ── Тени: плоские, шкала sh-sm/md/lg макета ─────────────────────────── */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, .08);
+  --shadow-hover: 0 4px 12px rgba(0, 0, 0, .1);
+  --shadow-modal: 0 8px 24px rgba(0, 0, 0, .12);
+  --shadow-toast: 0 4px 12px rgba(0, 0, 0, .1);
+  --focus-ring: 0 0 0 2px #005CA9;
+
+  /* ── Гасим стекло (тот же приём, что в классической теме) ────────────── */
+  --bg-app: var(--color-bg);
+  --glass-blur: none;
+  --glass-border: var(--color-border);
+  --glass-side: var(--color-sidebar-bg);
+  --surface-app: var(--color-bg);
+  --surface-card: var(--color-bg-surface);
+  --surface-overlay: var(--color-bg-surface);
+  --surface-sunken: var(--color-bg-hover);
+  --surface-selected: var(--color-accent-soft);
+
+  /* ── Токены дизайн-системы, которые компоненты читают напрямую, минуя
+     color-алиасы: держим в той же палитре, чтобы не протекал синий Glass ── */
+  --text-primary: var(--color-text);
+  --text-secondary: var(--color-text-muted);
+  --text-tertiary: #7C818B;            /* c-text-light */
+  --text-on-brand: var(--color-text-inverse);
+  --text-link: var(--color-accent);
+  --text-brand: var(--color-accent);
+  --text-on-app: var(--color-text);
+  --text-on-app-secondary: var(--color-text-muted);
+  --brand: #005CA9;
+  --interactive: var(--color-accent);
+  --interactive-hover: var(--color-accent-hover);
+  --interactive-active: #003780;
+  --border-default: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --border-focus: var(--color-border-focus);
+  --blue-50: #F0F5FA;
+  --blue-100: #E5EEF6;                 /* c-primary-soft */
+  --blue-200: #C2D6EA;
+  --blue-500: #005CA9;
+  --blue-600: #004A8A;
+  --blue-700: #003780;
+  --gray-50: #F3F6F7;
+  --gray-100: #F3F4F6;
+  --gray-200: #E5E7EB;
+  --gray-300: #D1D5DB;
+  --gray-900: #343433;
+  --success: #009B22;       --success-bg: #E5F5E9;  --success-text: #007A1B;
+  --danger: #D40000;        --danger-bg: #FBE5E5;   --danger-text: #D40000;  --danger-fill: #D40000;
+  --warning: #E0B45A;       --warning-bg: #FCF3E1;  --warning-text: #7A5600;
+  --info: #0055C4;          --info-bg: #E5EEF9;     --info-text: #0055C4;
+  /* Серии графиков макета: синий факт, графитовый план, серое сравнение */
+  --chart-1: #005CA9;  --chart-2: #343433;  --chart-3: #7C818B;
+  --chart-4: #8FB4DA;  --chart-5: #003780;  --chart-6: #D1D5DB;
+}
+
+/* Амбиент-пятна «стекла» в этой теме не нужны — фон плоский. */
+:root[data-theme="kulikov"] body::before { display: none; }
+
+/* Шапка таблицы отчёта — всегда нейтральная. Режим «раскрасить показатели» красит
+   ячейку шапки цветом категории инлайн-стилем (ReportTable.tsx, colorizeStyle) — отсюда
+   жёлтые шапки. В этой теме шапка одного цвета, поэтому !important: иначе инлайн-стиль
+   не перебить. Цветная полоска категории над ячейкой (класс metric-color-strip) тоже
+   скрыта — в макетах шапка плоская. Сам режим и его настройка не тронуты: в других
+   темах всё красится как раньше. */
+:root[data-theme="kulikov"] .report-thead th { background-color: var(--color-table-header) !important; }
+:root[data-theme="kulikov"] .metric-color-strip { display: none; }
+
+/* Логотип сайдбара. В разметке лежат ОБА варианта (components/ui/KulikovBrand.tsx),
+   переключение — только CSS по data-theme: без JS и без вспышки при загрузке, потому
+   что атрибут ставит анти-вспышечный скрипт в app/layout.tsx ещё до первой отрисовки.
+   Первое правило — единственное в файле вне селектора темы: оно прячет робота во всех
+   остальных темах, их вид не меняется. */
+.brand-kulikov { display: none; }
+:root[data-theme="kulikov"] .brand-default { display: none; }
+:root[data-theme="kulikov"] .brand-kulikov { display: flex; }

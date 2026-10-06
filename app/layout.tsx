@@ -61,7 +61,7 @@ export const viewport: Viewport = {
 const THEME_ANTI_FLASH_SCRIPT = `
 try {
   var t = localStorage.getItem('theme');
-  document.documentElement.setAttribute('data-theme', ['classic','light','dark','mono'].indexOf(t) !== -1 ? t : 'classic');
+  document.documentElement.setAttribute('data-theme', ['classic','light','dark','mono','kulikov'].indexOf(t) !== -1 ? t : 'classic');
 } catch (e) {
   document.documentElement.setAttribute('data-theme', 'classic');
 }

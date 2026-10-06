@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
-export type Theme = 'classic' | 'light' | 'dark' | 'mono';
+export type Theme = 'classic' | 'light' | 'dark' | 'mono' | 'kulikov';
 const STORAGE_KEY = 'theme';
 // Порядок и НАЗВАНИЯ — формулировки владельца (04.08): классическая первая, она же
 // значение по умолчанию; стеклянные — по желанию. «Синее стекло» — это прежняя dark
@@ -10,12 +10,22 @@ const STORAGE_KEY = 'theme';
 // Значения в БД НЕ переименованы намеренно: 'light'/'dark'/'mono' уже лежат в
 // users.theme у 33 пользователей и в CHECK-ограничении, переименование потребовало бы
 // миграции данных без всякой пользы — меняется только подпись в интерфейсе.
-export const THEME_ORDER: Theme[] = ['classic', 'light', 'dark', 'mono'];
+//
+// Пятая тема — 'kulikov', «Дизайн Куликова» (06.10, задача #8857): визуальный язык
+// monolit.shop по макетам docs/design/monolitika-redesign-monolitshop-20261006/,
+// токены — tokens/theme-kulikov.css. Дефолт у всех прежний ('classic'); пользователю
+// с логином kulikov тему один раз включает миграция 224 — и только если у него стоит
+// дефолтная 'classic', то есть сам он тему не выбирал.
+// Список значений продублирован ещё в трёх местах, менять вместе: ALLOWED
+// (app/api/me/theme/route.ts), анти-вспышечный скрипт (app/layout.tsx) и
+// CHECK users_theme_check (миграция 224).
+export const THEME_ORDER: Theme[] = ['classic', 'light', 'dark', 'mono', 'kulikov'];
 export const THEME_LABEL: Record<Theme, string> = {
   classic: 'Классическая',
   light: 'Светлое стекло',
   dark: 'Синее стекло',
   mono: 'Серое стекло',
+  kulikov: 'Дизайн Куликова',
 };
 export const DEFAULT_THEME: Theme = 'classic';
 

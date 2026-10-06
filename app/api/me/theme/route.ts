@@ -10,7 +10,8 @@ import { systemDb } from '@/lib/db/clients';
 // НАМЕРЕННО не в lib/auth/session.ts (см. комментарий в table-scale/route.ts и в
 // самой миграции 070) — getSession() на пути КАЖДОГО запроса, отдельный SELECT здесь
 // падает только на этом эндпоинте, если колонки ещё нет (до наката миграции Артёмом).
-const ALLOWED = new Set(['classic', 'light', 'dark', 'mono']);
+// 'kulikov' — «Дизайн Куликова» (задача #8857), значение в CHECK добавляет миграция 224.
+const ALLOWED = new Set(['classic', 'light', 'dark', 'mono', 'kulikov']);
 
 export async function GET() {
   const session = await getSession();
@@ -29,7 +30,7 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const theme = String(body.theme ?? '');
   if (!ALLOWED.has(theme)) {
-    return NextResponse.json({ error: 'theme must be classic, light, dark or mono' }, { status: 400 });
+    return NextResponse.json({ error: 'theme must be classic, light, dark, mono or kulikov' }, { status: 400 });
   }
 
   await systemDb().query(`UPDATE users SET theme = $1 WHERE id = $2`, [theme, session.id]);

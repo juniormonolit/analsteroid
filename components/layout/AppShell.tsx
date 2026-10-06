@@ -17,6 +17,7 @@ import { Avatar } from '@/components/ui/Avatar';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { BrandLogo } from '@/components/ui/BrandLogo';
+import { KulikovLockup, KulikovHead } from '@/components/ui/KulikovBrand';
 import { MltCoinDefs } from '@/components/icons/MltCoin';
 import type { SavedReport, TrashedReport } from '@/lib/saved-reports/types';
 import { ChangelogPanel } from '@/features/changelog/ui/ChangelogPanel';
@@ -853,7 +854,10 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           >
             {collapsed ? (
               <Link href="/home" title="Монолитика — на главную">
-                <BrandLogo size={18} />
+                {/* Два варианта знака; какой виден — решает CSS по data-theme
+                    (классы brand-default / brand-kulikov, tokens/theme-kulikov.css). */}
+                <BrandLogo size={18} className="brand-default" />
+                <KulikovHead size={36} className="brand-kulikov" />
               </Link>
             ) : (
               <>
@@ -861,13 +865,20 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                     пунктов меню (правка Иосифа 16.07): x иконки «Продажи» =
                     px-2 нава (8) + mx-1 пункта (4) + px-2.5 пункта (10) = 22px.
                     Кнопки сворачивания в шапке больше нет — ручка на кромке. */}
-                <div className="flex items-center gap-2 pl-[22px] pr-3 pt-3 pb-1 min-w-0">
+                <div className="brand-default flex items-center gap-2 pl-[22px] pr-3 pt-3 pb-1 min-w-0">
                   <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
                     <BrandLogo size={22} className="shrink-0" />
                     <span className="text-[var(--color-sidebar-text)] font-semibold text-sm leading-none tracking-wide truncate">Монолитика</span>
                   </Link>
                 </div>
-                <span className={`pl-[22px] pr-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
+                <span className={`brand-default pl-[22px] pr-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
+                {/* Тема «Дизайн Куликова» (#8857): вместо знака со слоганом — робот
+                    Монолитик, черта и «МОНОЛИТИКА / аналитика». В остальных темах
+                    скрыт (brand-kulikov), а прежний лочап и слоган выше — наоборот
+                    (brand-default). Переключение — CSS, см. tokens/theme-kulikov.css. */}
+                <Link href="/home" className="brand-kulikov items-center pl-[22px] pr-3 pt-4 pb-3.5 min-w-0" title="На главную">
+                  <KulikovLockup />
+                </Link>
               </>
             )}
           </div>
@@ -890,9 +901,13 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                   Лайт/Про убран и здесь (правка Иосифа 16.07, остался в ЛК). */}
               <div className="flex flex-col border-b border-[var(--color-sidebar-border)] shrink-0">
                 <div className="flex items-center justify-between gap-2 pl-[22px] pr-3 pt-3 pb-1">
-                  <Link href="/home" className="flex items-center gap-2 min-w-0" title="На главную">
+                  <Link href="/home" className="brand-default flex items-center gap-2 min-w-0" title="На главную">
                     <BrandLogo size={22} className="shrink-0" />
                     <span className="text-[var(--color-sidebar-text)] font-semibold text-sm leading-none tracking-wide truncate">Монолитика</span>
+                  </Link>
+                  {/* Тема «Дизайн Куликова» — тот же лочап с роботом, что в десктопном сайдбаре */}
+                  <Link href="/home" className="brand-kulikov items-center min-w-0 pb-2" title="На главную">
+                    <KulikovLockup compact />
                   </Link>
                   <button
                     onClick={() => setMobileOpen(false)}
@@ -901,7 +916,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
                     <X size={18} />
                   </button>
                 </div>
-                <span className={`pl-[22px] pr-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
+                <span className={`brand-default pl-[22px] pr-3 pb-2.5 ${BRAND_TAGLINE_CLS}`}>{BRAND_TAGLINE_TEXT}</span>
               </div>
               <SidebarBody
                 collapsed={false} pathname={pathname} user={user}
@@ -920,7 +935,8 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               контрола на одно и то же действие — лишний хром на 375px. */}
           <div className={`${embedded ? 'hidden' : 'md:hidden'} flex items-center gap-1.5 h-12 px-3 bg-[var(--color-sidebar-bg)] border-b border-[var(--color-sidebar-border)] shrink-0 [backdrop-filter:var(--glass-blur)]`}>
             <Link href="/home" className="flex items-center gap-1.5 min-w-0" title="На главную">
-              <BrandLogo size={20} className="shrink-0" />
+              <BrandLogo size={20} className="brand-default shrink-0" />
+              <KulikovHead size={30} className="brand-kulikov" />
               <span className="text-[var(--color-sidebar-text)] font-semibold text-sm tracking-wide truncate">Монолитика</span>
             </Link>
           </div>

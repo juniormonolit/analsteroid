@@ -527,7 +527,9 @@ export function ReportTable({
   }
   function colorizeBar(m: Metric) {
     if (!colorizeMetrics || !m.color) return null;
-    return <span className="absolute top-0 left-0 right-0 h-[3px] pointer-events-none" style={{ backgroundColor: m.color }} />;
+    // metric-color-strip — класс-якорь без собственных стилей: тема «Дизайн Куликова»
+    // прячет по нему полоску, там шапка таблицы нейтральная (tokens/theme-kulikov.css).
+    return <span className="metric-color-strip absolute top-0 left-0 right-0 h-[3px] pointer-events-none" style={{ backgroundColor: m.color }} />;
   }
 
   // Accent (правка 09.07, встреча): заливка убрана целиком (была color-mix-заливка
