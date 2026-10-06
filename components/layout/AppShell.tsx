@@ -495,6 +495,17 @@ function SidebarBody({
     if (moreActive) setMoreOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
+  // Список «Ещё» теперь прокручивается сам (07.10, #8857) — значит, активный пункт
+  // из нижней части списка может оказаться за краем. Доводим его в видимую область
+  // при раскрытии и при переходе: тот же принцип, что у лент вкладок (CLAUDE.md,
+  // правило 12). block: 'nearest' — если пункт и так виден, ничего не двигается.
+  const moreListRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    moreListRef.current
+      ?.querySelector<HTMLElement>('[data-more-active="true"]')
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [moreOpen, pathname]);
   // «Что изменилось?» — пункт внизу сайдбара (задача владельца, макет
   // changelog-notifications-mock.html): доступен всем, независимо от ролей/прав.
   const { data: changelogData } = useChangelogQuery();
@@ -535,7 +546,13 @@ function SidebarBody({
   return (
     <>
           {/* Nav */}
-          <nav ref={navRef} onDragOver={handleNavDragOverAutoScroll} className="flex-1 overflow-y-auto py-2 px-2">
+          {/* min-h-36 — нижняя граница верхнего меню (07.10, #8857): раньше её не было,
+              и раскрытый блок «Ещё» (17 пунктов, сам не прокручивался) сжимал это меню
+              до 16px паддингов, а на окнах ниже ~930px ещё и выталкивал строку
+              пользователя за экран. Теперь при нехватке высоты уступает список «Ещё»
+              (у него своя прокрутка, см. ниже), а «Продажи / Реализация / Графики»
+              остаются видны. Когда места хватает, раскладка прежняя. */}
+          <nav ref={navRef} onDragOver={handleNavDragOverAutoScroll} className="flex-1 min-h-36 overflow-y-auto py-2 px-2">
             {NAV.filter(item => (!item.perm || hasPerm(user, item.perm)) && (!item.visible || item.visible(user))).map(item => (
               <div key={item.label}>
                 {item.disabled ? (
@@ -653,7 +670,7 @@ function SidebarBody({
               кнопкой в шапку панели ченджлога, «Корзина» — в ЛК. */}
           {/* Аудит 09.09: блок показываем, если есть «Ещё» (только админам) или «Настройки». */}
           {(moreItems.length > 0 || hasPerm(user, 'section.settings')) && (
-            <div className="border-t border-[var(--color-sidebar-border)] pt-1 px-2">
+            <div className="flex flex-col min-h-0 border-t border-[var(--color-sidebar-border)] pt-1 px-2">
               {moreItems.length > 0 && (
                 <>
                   <RailTooltip collapsed={collapsed} label="Ещё">
@@ -672,20 +689,28 @@ function SidebarBody({
                       </>}
                     </button>
                   </RailTooltip>
-                  {moreOpen && moreItems.map(mi => {
-                    const active = pathname.startsWith(mi.href);
-                    return (
-                      <RailTooltip key={mi.href} collapsed={collapsed} label={mi.label}>
-                        <Link
-                          href={mi.href}
-                          className={`${navItemBase(collapsed)} ${collapsed ? '' : 'ml-4'} ${active ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
-                        >
-                          <span className={navIconCls(active)}>{mi.icon}</span>
-                          {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{mi.label}</span>}
-                        </Link>
-                      </RailTooltip>
-                    );
-                  })}
+                  {/* Список «Ещё» прокручивается сам (07.10, #8857): min-h-0 разрешает ему
+                      сжиматься внутри колонки, кнопка «Ещё» и «Настройки» при этом не
+                      сжимаются. Когда всё помещается, прокрутки нет и вид прежний. */}
+                  {moreOpen && (
+                    <div ref={moreListRef} className="min-h-0 overflow-y-auto overscroll-contain">
+                      {moreItems.map(mi => {
+                        const active = pathname.startsWith(mi.href);
+                        return (
+                          <RailTooltip key={mi.href} collapsed={collapsed} label={mi.label}>
+                            <Link
+                              href={mi.href}
+                              data-more-active={active ? 'true' : undefined}
+                              className={`${navItemBase(collapsed)} ${collapsed ? '' : 'ml-4'} ${active ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+                            >
+                              <span className={navIconCls(active)}>{mi.icon}</span>
+                              {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2">{mi.label}</span>}
+                            </Link>
+                          </RailTooltip>
+                        );
+                      })}
+                    </div>
+                  )}
                 </>
               )}
               {hasPerm(user, 'section.settings') && (
