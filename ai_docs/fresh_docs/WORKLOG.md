@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-10-07 — Иконка вкладки v2: светлая плитка (#9023-доп.)
+
+**Что было.** Голова робота стояла на тёмной плитке #1F2937; заказчик показал образец: голова на светлой серой скруглённой плитке.
+
+**Причина.** Просьба заказчика (образец в owners-inbox/favicon-robot-9023/v2/compare-sheet.png).
+
+**Починено.** Ветка `feat/favicon-light-tile`. Источник головы — вырезка из `robot-full.png` (Полина), 327x171, `public/brand/monolitik-head-hires.png` (старый 144x75 оставлен для UI-брендинга). `scripts/generate-pwa-icons.mjs`: плитка #E9EDF0, скругление 22%, голова 88% ширины (favicon 92%), apple 84% без скругления, maskable 60% на всю площадь. Перегенерированы favicon.ico (16/32/48), icon.png, apple-icon.png, public/icons/*. `app/manifest.ts` — только комментарий.
+
+**Проверено.** tsc 0, build ок, next start :3994 — /favicon.ico /icon.png /apple-icon.png /manifest.webmanifest /icons/icon-maskable-512.png — 200; сервер убит по PID.
+
 ## 2026-10-07 — Иконка вкладки: робот Монолитик (#9023-доп.)
 
 **Что было.** Иконка вкладки (`app/icon.svg`), PWA-иконки и apple-touch были «три столбика» из `public/icons/icon-mark.svg`; ТВ-страница ссылалась на `/icon.svg`.

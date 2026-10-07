@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Генерирует все иконки приложения (вкладка, apple-touch, PWA) из головы робота
- * Монолитика: public/brand/monolitik-head.png (задача 9023, Сергей одобрил:
+ * Монолитика: public/brand/monolitik-head-hires.png (задача 9023, Сергей одобрил:
  * иконка одна для всех тем). Источник правды — только этот PNG; результат
  * коммитится, руками не править, при смене маскота перегенерировать:
  *
@@ -13,7 +13,7 @@
  *   app/apple-icon.png                    180 (полный квадрат, iOS скругляет сам)
  *   public/icons/icon-192.png, icon-512.png            (purpose "any", скруглённая плитка)
  *   public/icons/icon-maskable-192.png, -512.png       (purpose "maskable", поля ~10%+)
- * Фон везде — тёмная плитка #1F2937. На 16–48 px голова вписана почти впритык.
+ * Фон везде — светлая серая плитка #E9EDF0 (v2, по образцу заказчика). На 16–48 px голова вписана почти впритык.
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -21,8 +21,8 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const BG = '#1F2937';
-const head = readFileSync(join(ROOT, 'public', 'brand', 'monolitik-head.png'));
+const BG = '#E9EDF0';
+const head = readFileSync(join(ROOT, 'public', 'brand', 'monolitik-head-hires.png'));
 const meta = await sharp(head).metadata();
 
 /** @param size сторона; @param fill доля стороны под ширину головы; @param radius доля скругления плитки (0 = полный квадрат) */
@@ -48,18 +48,18 @@ async function out(rel, buf) {
 }
 
 // Вкладка: 16/32/48 — голова на 94% ширины; 512 — с воздухом.
-await out('app/icon.png', await render(512, 0.84, 0.2));
-await out('app/apple-icon.png', await render(180, 0.8, 0));
-await out('public/icons/icon-192.png', await render(192, 0.84, 0.2));
-await out('public/icons/icon-512.png', await render(512, 0.84, 0.2));
-// maskable: безопасная зона — круг 80%; голова шире высоты, 66% ширины укладывается в круг.
-await out('public/icons/icon-maskable-192.png', await render(192, 0.66, 0));
-await out('public/icons/icon-maskable-512.png', await render(512, 0.66, 0));
+await out('app/icon.png', await render(512, 0.88, 0.22));
+await out('app/apple-icon.png', await render(180, 0.84, 0));
+await out('public/icons/icon-192.png', await render(192, 0.88, 0.22));
+await out('public/icons/icon-512.png', await render(512, 0.88, 0.22));
+// maskable: безопасная зона — круг 80%; голова шире высоты, 60% ширины укладывается в круг.
+await out('public/icons/icon-maskable-192.png', await render(192, 0.6, 0));
+await out('public/icons/icon-maskable-512.png', await render(512, 0.6, 0));
 
 // favicon.ico: ICO-контейнер с тремя PNG.
 const sizes = [16, 32, 48];
 const pngs = [];
-for (const s of sizes) pngs.push(await render(s, 0.94, 0.16));
+for (const s of sizes) pngs.push(await render(s, 0.92, 0.22));
 const dir = Buffer.alloc(6 + 16 * sizes.length);
 dir.writeUInt16LE(0, 0); dir.writeUInt16LE(1, 2); dir.writeUInt16LE(sizes.length, 4);
 let offset = dir.length;
@@ -75,5 +75,5 @@ await out('app/favicon.ico', Buffer.concat([dir, ...pngs]));
 // Превью 16/32 для показа (не часть сборки).
 if (process.env.PREVIEW_DIR) {
   mkdirSync(process.env.PREVIEW_DIR, { recursive: true });
-  for (const s of [16, 32]) writeFileSync(join(process.env.PREVIEW_DIR, `favicon-${s}.png`), await render(s, 0.94, 0.16));
+  for (const s of [16, 32]) writeFileSync(join(process.env.PREVIEW_DIR, `favicon-${s}.png`), await render(s, 0.92, 0.22));
 }
