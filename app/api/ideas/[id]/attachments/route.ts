@@ -43,7 +43,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 // Загрузить скриншоты к идее (несколько за раз). Любой залогиненный пользователь —
-// инструмент внутренний. Валидация: только картинки, ≤5 МБ, суммарно ≤5 на идею.
+// инструмент внутренний. Валидация: только картинки, ≤8 МБ, суммарно ≤6 на идею.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
