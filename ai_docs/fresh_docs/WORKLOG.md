@@ -25507,3 +25507,9 @@ server-status (auto+full), ACTIVE HTTP REQUESTS, MySQL PROCESSLIST, InnoDB STATU
 - Бэкфил с рабочей машины: 197 снимков (110 критичных, ср. load 58; 87 высоких). Доля запросов
   Монолитики среди активных — 6,7 %. Ключ на прод положить должен владелец (копирование
   секрета на сервер заблокировано классификатором) — команда в ответе владельцу.
+
+## 2026-10-07 — Пулы pg: ужаты и закэшированы в globalThis (#8968)
+**Что было:** `lib/db/clients.ts` создавал пулы `max: 15`, idle 30 с, кэш в переменных модуля. Пул тенанта Supavisor на 62 (session-mode) — 15 соединений, поэтому один пул Монолитики мог занять его целиком.
+**Причина:** лимит на пул равен лимиту тенанта; плюс чанки Next и HMR импортируют модуль заново и плодят дубли пулов (до 3 пулов к одной БД: analyticsDb-фолбэк, ycAnalyticsDb, systemDb — каждый ×N экземпляров модуля).
+**Починено:** `max` из env `SA_PG_POOL_MAX` / `YC_PG_POOL_MAX` (по умолчанию 8), `idleTimeoutMillis` 10 с, `connectionTimeoutMillis` без изменений. Пулы лежат в `globalThis.__analsteroidSaPool` / `__analsteroidYcPool` (Map по имени БД, поэтому фолбэк `analyticsDb()` и `ycAnalyticsDb()` на YC делят один пул). Других `new Pool/Client` в коде приложения нет (остальное — скрипты/миграции; `lib/tv/notifier.ts` с LISTEN не тронут). Тест `npm run test:pool`.
+**Проверено:** `npx tsc --noEmit` чисто, `npm run build` зелёный (без .env.local), `npm run test:pool` — два экземпляра модуля дают один и тот же пул, max sa=8 / yc из env. К БД не подключался, на прод не выкатывалось.
