@@ -77,7 +77,7 @@ const DEFAULT_GROUP = 2;
  */
 /** Разделы ЛК, доступные не супер-админам (решение владельца 17.09). «Мой отдел» —
  *  только руководителям (canManageRequests — тот же признак «РОП и старше»). */
-const RESTRICTED_KEYS = new Set(['tab:customers', 'tab:stats', 'report', 'team']); // «Настройки» тоже скрыты (владелец 17.09)
+const RESTRICTED_KEYS = new Set(['tab:customers', 'tab:stats', 'report', 'team', 'settings']); // «Настройки» — личные (тема, пароль), нужны всем; их ошибочно прятали вместе с остальным (07.10)
 
 export function useProfileNav({ mode, canManageRequests = false, restricted = false }: {
   mode: 'manager' | 'department' | 'none';
