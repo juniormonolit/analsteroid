@@ -1,14 +1,25 @@
-import { NextResponse } from 'next/server';
-import { renderTvPage } from '@/features/tv/engine/page';
+import { NextRequest, NextResponse } from 'next/server';
+import { isTvMock, mockToken } from '@/features/tv/mock';
+import { renderTvScreen } from '@/features/tv/ui/tvScreen';
 
 // Публичная страница телевизора (без сессии, см. proxy.ts PUBLIC). Телевизор
 // открывает ровно этот адрес: получает токен устройства, показывает код привязки,
 // после привязки в админке — дашборд своего экрана. Готовый HTML без React:
 // причины — в шапке features/tv/engine/page.ts (движки ТВ-браузеров 2016–2019).
+//
+// Страницу собирает движок, оформление поверх неё кладёт renderTvScreen
+// (features/tv/ui/tvScreen.ts).
+//
+// Мок-режим (TV_MOCK=1 и не production, см. features/tv/mock.ts): устройству нечем
+// зарегистрироваться без базы, поэтому экран рисуется сразу по «токену экрана», в
+// котором зашиты тема и сцены из адреса (/tv?theme=light&scene=event).
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  return new NextResponse(renderTvPage({ mode: 'device' }), {
+export async function GET(req: NextRequest) {
+  const html = isTvMock()
+    ? renderTvScreen({ mode: 'screen', token: mockToken(req.nextUrl.searchParams) })
+    : renderTvScreen({ mode: 'device' });
+  return new NextResponse(html, {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
