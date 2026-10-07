@@ -26,7 +26,26 @@ function attachIdleErrorHandler(pool: Pool): Pool {
   return pool;
 }
 
+// Размер пула из env: пул тенанта Supavisor (session-mode) всего 15 соединений на всё
+// приложение, поэтому по умолчанию 8 на каждый из пулов (#8968).
+function poolMax(envName: string, fallback = 8): number {
+  const n = Number(process.env[envName]);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+// Пулы живут в globalThis: отдельные чанки Next и HMR иначе импортируют модуль заново
+// и плодят дубли пулов (#8968). YC-пулы — по имени БД.
+declare global {
+  // eslint-disable-next-line no-var
+  var __analsteroidSaPool: Pool | undefined;
+  // eslint-disable-next-line no-var
+  var __analsteroidYcPool: Map<string, Pool> | undefined;
+}
+
 function makeYcPool(database: string): Pool {
+  const cache = (globalThis.__analsteroidYcPool ??= new Map<string, Pool>());
+  const cached = cache.get(database);
+  if (cached) return cached;
   const config: PoolConfig = {
     host: process.env.YC_PG_HOST!,
     port: Number(process.env.YC_PG_PORT ?? 6432),
@@ -34,26 +53,29 @@ function makeYcPool(database: string): Pool {
     password: process.env.YC_PG_PASSWORD!,
     database,
     ssl: makeYcSslConfig(),
-    max: 15,
-    idleTimeoutMillis: 30_000,
+    max: poolMax('YC_PG_POOL_MAX'),
+    idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
   };
-  return attachIdleErrorHandler(new Pool(config));
+  const pool = attachIdleErrorHandler(new Pool(config));
+  cache.set(database, pool);
+  return pool;
 }
 
 // Misha's self-hosted Supabase, schema `sa`
 function makeSaPool(): Pool {
-  return attachIdleErrorHandler(new Pool({
+  if (globalThis.__analsteroidSaPool) return globalThis.__analsteroidSaPool;
+  return (globalThis.__analsteroidSaPool = attachIdleErrorHandler(new Pool({
     host:     process.env.SA_PG_HOST ?? '127.0.0.1',
     port:     Number(process.env.SA_PG_PORT ?? 5432),
     user:     process.env.SA_PG_USER!,
     password: process.env.SA_PG_PASSWORD!,
     database: 'postgres',
     ssl:      false,
-    max: 15,
-    idleTimeoutMillis: 30_000,
+    max: poolMax('SA_PG_POOL_MAX'),
+    idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
-  }));
+  })));
 }
 
 let _analytics: Pool | null = null;
