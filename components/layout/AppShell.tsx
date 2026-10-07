@@ -15,6 +15,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
 import { Avatar } from '@/components/ui/Avatar';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
+import { Popover } from '@/components/ui/Popover';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { BrandLogo } from '@/components/ui/BrandLogo';
 import { KulikovLockup, KulikovHead } from '@/components/ui/KulikovBrand';
@@ -543,6 +544,19 @@ function SidebarBody({
     }
   }
 
+  // Флайаут свёрнутой рельсы (баг kulikov 07.10): в свёрнутом режиме список
+  // раздела («Продажи» — отчёты, «Реализация» — item.children) раньше не рисовался
+  // вовсе (`!collapsed && expanded === …`), клик по иконке ничего не делал. Теперь
+  // клик открывает Radix-поповер справа от иконки с ТЕМ ЖЕ списком. Открыт максимум
+  // один флайаут; закрывается по переходу (pathname), по клику на ссылку внутри,
+  // при разворачивании рельсы. Esc/клик вне/стрелки/фокус — штатно у Radix.
+  const [flyout, setFlyout] = useState('');
+  useEffect(() => { setFlyout(''); }, [pathname, collapsed]);
+  const closeOnLink = (e: React.MouseEvent<HTMLElement>) => {
+    if ((e.target as HTMLElement).closest('a')) setFlyout('');
+  };
+  const FLYOUT_CLS = 'w-64 p-2 max-h-[min(80vh,640px)]';
+
   return (
     <>
           {/* Nav */}
@@ -583,6 +597,28 @@ function SidebarBody({
                         через .group на <aside>); на таче видна всегда (правило
                         CLAUDE.md №5). В свёрнутой рельсе — только иконка раздела. */}
                     <div className="row-reveal flex items-center">
+                      {collapsed ? (
+                        <Popover
+                          side="right" align="start" sideOffset={8}
+                          open={flyout === item.label}
+                          onOpenChange={o => setFlyout(o ? item.label : '')}
+                          tooltip={item.label}
+                          className={FLYOUT_CLS}
+                          trigger={
+                            <button
+                              type="button"
+                              aria-label={item.label}
+                              className={`w-full ${navItemBase(true)} ${salesActive ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+                            >
+                              <span className={navIconCls(salesActive)}>{item.icon}</span>
+                            </button>
+                          }
+                        >
+                          <div onClick={closeOnLink}>
+                            <SalesSidebarSection collapsed={false} pathname={pathname} user={user} />
+                          </div>
+                        </Popover>
+                      ) : (
                       <RailTooltip collapsed={collapsed} label={item.label}>
                         <button
                           onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
@@ -597,6 +633,7 @@ function SidebarBody({
                           {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>}
                         </button>
                       </RailTooltip>
+                      )}
                       {!collapsed && (
                         <CreateReportButton
                           label=""
@@ -614,7 +651,45 @@ function SidebarBody({
                   </>
                 ) : item.children ? (
                   <>
-                    <RailTooltip collapsed={collapsed} label={item.label}>
+                    {collapsed ? (
+                      <Popover
+                        side="right" align="start" sideOffset={8}
+                        open={flyout === item.label}
+                        onOpenChange={o => setFlyout(o ? item.label : '')}
+                        tooltip={item.label}
+                        className={FLYOUT_CLS}
+                        trigger={
+                          <button
+                            type="button"
+                            aria-label={item.label}
+                            className={`w-full ${navItemBase(true)} ${item.children.some(c => pathname === c.href) ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+                          >
+                            <span className={navIconCls(item.children.some(c => pathname === c.href))}>{item.icon}</span>
+                          </button>
+                        }
+                      >
+                        <div onClick={closeOnLink}>
+                          <div className="px-2 pt-1 pb-1.5 text-[10px] font-medium uppercase tracking-[0.07em] text-[var(--color-sidebar-text-muted)]">{item.label}</div>
+                          {item.children.map(child => {
+                            const active = pathname === child.href;
+                            return (
+                              <Link
+                                key={child.href}
+                                href={child.href}
+                                className={`flex items-start gap-1.5 py-1.5 px-2 my-0.5 text-[13px] leading-[1.35] rounded-[7px] relative transition-colors ${
+                                  active
+                                    ? 'text-[var(--color-sidebar-active)] bg-[var(--color-sidebar-active-bg)] font-semibold'
+                                    : 'text-[var(--color-sidebar-text)] hover:bg-[var(--color-sidebar-hover-bg)]'
+                                }`}
+                              >
+                                <span className="flex-1 min-w-0 break-words line-clamp-2">{child.label}</span>
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      </Popover>
+                    ) : (
+                      <RailTooltip collapsed={collapsed} label={item.label}>
                       <button
                         onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
                         className={`w-full ${navItemBase(collapsed)} ${item.children.some(c => pathname === c.href) ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
@@ -627,6 +702,7 @@ function SidebarBody({
                         {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>}
                       </button>
                     </RailTooltip>
+                    )}
                     {!collapsed && expanded === item.label && (
                       <div className="ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]">
                         {item.children.map(child => {
