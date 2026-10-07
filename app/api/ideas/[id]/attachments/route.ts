@@ -43,7 +43,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 // Загрузить скриншоты к идее (несколько за раз). Любой залогиненный пользователь —
-// инструмент внутренний. Валидация: только картинки, ≤8 МБ, суммарно ≤6 на идею.
+// инструмент внутренний. Валидация: только картинки, ≤5 МБ, суммарно ≤5 на идею.
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -81,7 +81,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: `Недопустимый тип файла: ${f.name}` }, { status: 400 });
     }
     if (f.size > IDEA_ATTACH_MAX_BYTES) {
-      return NextResponse.json({ error: `Файл больше 8 МБ: ${f.name}` }, { status: 400 });
+      return NextResponse.json({ error: `Файл больше ${IDEA_ATTACH_MAX_BYTES / 1024 / 1024} МБ: ${f.name}` }, { status: 400 });
     }
   }
 

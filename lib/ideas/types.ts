@@ -39,7 +39,7 @@ export const IDEA_BODY_MAX_LEN = 4000;
 
 export const IDEA_ADMIN_STATUSES: IdeaStatus[] = ['planned', 'in_progress', 'done', 'rejected'];
 
-// Ограничения вложений-скриншотов (MVP): только картинки, до 8 МБ каждая, до 6 на идею.
-export const IDEA_ATTACH_MAX_BYTES = 8 * 1024 * 1024;
-export const IDEA_ATTACH_MAX_COUNT = 6;
+// Ограничения вложений-скриншотов (MVP): только картинки, до 5 МБ каждая, до 5 на идею.
+export const IDEA_ATTACH_MAX_BYTES = 5 * 1024 * 1024;
+export const IDEA_ATTACH_MAX_COUNT = 5;
 export const IDEA_ATTACH_ALLOWED_MIME = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
