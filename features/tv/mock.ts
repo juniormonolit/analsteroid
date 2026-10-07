@@ -27,9 +27,9 @@
 //   /tv?scene=pairing         экран с кодом привязки телевизора
 //   /tv?scene=empty           экран без отделов
 // Несколько сцен — через запятую: /tv?theme=light&scene=event,banner
-// Прежнее оформление для сравнения: /tv?skin=kulikov (по умолчанию — то, что стоит на
-// телевизорах, см. DEFAULT_TV_SKIN в features/tv/ui/tvScreen.ts). Сочетается со
-// сценами: /tv?skin=kulikov&theme=light
+// Прежние оформления для сравнения: /tv?skin=graphite и /tv?skin=kulikov (по умолчанию —
+// то, что стоит на телевизорах, см. DEFAULT_TV_SKIN в features/tv/ui/tvScreen.ts).
+// Сочетается со сценами: /tv?skin=graphite&theme=light
 //
 // Все имена и цифры вымышленные.
 
@@ -72,6 +72,7 @@ function mgr(id: string, name: string, plan: number, salesCount: number, salesSu
 
 // Набор нарочно неровный: лидер с перевыполнением, 451% и «12,5 млн ₽» (самая широкая
 // строка плитки), менеджер без плана («—»), почти ноль, совсем ноль, длинная фамилия.
+// В первом отделе десять человек — чтобы рейтинг 6–10 в оформлении «Кольца» был полным.
 const DEPTS: Record<string, { branch: string; dept: string; ticker: string | null; managers: TvFeedManager[] }> = {
   'branch:spb': {
     branch: 'Санкт-Петербург', dept: 'СПб · Юр. лица 1', ticker: null,
@@ -85,6 +86,7 @@ const DEPTS: Record<string, { branch: string; dept: string; ticker: string | nul
       mgr('m07', 'Татьяна Белова', 0, 1, 148_000, 2, 73_500),
       mgr('m08', 'Артём Фёдоров', 500_000, 1, 9_400, 1, 31_000),
       mgr('m09', 'Константин Александровский-Преображенский', 450_000, 0, 0, 0, 0),
+      mgr('m10', 'Лилия Ахметова', 400_000, 0, 0, 1, 45_000),
     ],
   },
   'branch:msk': {

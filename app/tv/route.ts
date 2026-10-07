@@ -13,7 +13,7 @@ import { DEFAULT_TV_SKIN, isTvSkinId, renderTvScreen } from '@/features/tv/ui/tv
 // Мок-режим (TV_MOCK=1 и не production, см. features/tv/mock.ts): устройству нечем
 // зарегистрироваться без базы, поэтому экран рисуется сразу по «токену экрана», в
 // котором зашиты тема и сцены из адреса (/tv?theme=light&scene=event). Там же — и
-// только там — можно включить прежнее оформление для сравнения: /tv?skin=kulikov.
+// только там — можно включить прежние оформления для сравнения: /tv?skin=graphite|kulikov.
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
