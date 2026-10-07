@@ -142,6 +142,16 @@ Chrome на моке. На прод не выкатывалось.
 
 ---
 
+## 2026-10-07 — Иконка вкладки v2: светлая плитка (#9023-доп.)
+
+**Что было.** Голова робота стояла на тёмной плитке #1F2937; заказчик показал образец: голова на светлой серой скруглённой плитке.
+
+**Причина.** Просьба заказчика (образец в owners-inbox/favicon-robot-9023/v2/compare-sheet.png).
+
+**Починено.** Ветка `feat/favicon-light-tile`. Источник головы — вырезка из `robot-full.png` (Полина), 327x171, `public/brand/monolitik-head-hires.png` (старый 144x75 оставлен для UI-брендинга). `scripts/generate-pwa-icons.mjs`: плитка #E9EDF0, скругление 22%, голова 88% ширины (favicon 92%), apple 84% без скругления, maskable 60% на всю площадь. Перегенерированы favicon.ico (16/32/48), icon.png, apple-icon.png, public/icons/*. `app/manifest.ts` — только комментарий.
+
+**Проверено.** tsc 0, build ок, next start :3994 — /favicon.ico /icon.png /apple-icon.png /manifest.webmanifest /icons/icon-maskable-512.png — 200; сервер убит по PID.
+
 ## 2026-10-07 — Иконка вкладки: робот Монолитик (#9023-доп.)
 
 **Что было.** Иконка вкладки (`app/icon.svg`), PWA-иконки и apple-touch были «три столбика» из `public/icons/icon-mark.svg`; ТВ-страница ссылалась на `/icon.svg`.
@@ -25686,3 +25696,8 @@ server-status (auto+full), ACTIVE HTTP REQUESTS, MySQL PROCESSLIST, InnoDB STATU
 **Выкат на прод 07.10.2026 по санкции Михаила.** Ветка `hotfix/pg-pool-8968` = прод (23a9ce1) + cherry-pick 441bbbd → коммит 3ad12e1; «Настройки видны всем» (3f4714b) на прод НЕ ушло. Next 16.3.7, `npm run test:pool` и build зелёные (чистый worktree, без .env.local), BUILD_ID `pqOPnCvx7fi_FyC5kf8-k` (было `rssuvNOlAzkyltedKfre7`). `fix/pg-pool-8968` влит в `dev-asteroid` fast-forward (441bbbd), чтобы следующая сборка не откатила фикс. Миграций нет, `SA_PG_POOL_MAX`/`YC_PG_POOL_MAX` в env прода не заданы (по умолчанию 8).
 **Проверено:** один процесс на :8100, вход/`/home`/«по менеджерам»/«по периодам» — 200 (test_alfred_admin), ошибок 5xx нет. Соединения нового процесса через 3–6 мин: к 127.0.0.1:5432 — 4–5, к YC :6432 — 2–5 (до выката 5 и 10–14); `MaxClientsInSessionMode` в логе supabase-pooler после выката — 0 (за час до выката было 12).
 **Откат:** снапшот `/home/junior/analsteroid-snapshots/prod-pre-8968-20261007-1011.tar.gz` (.next/standalone, .next/static, start.sh).
+
+## 2026-10-07 — Флайаут «Продажи»/«Реализация» в свёрнутом сайдбаре
+**Что было:** в свёрнутой рельсе (52px) клик по иконкам «Продажи» и «Реализация» ничего не делал (баг-репорт kulikov; во всех темах). Кнопки лишь переключали `expanded`, а список рисовался под `!collapsed && expanded === …`. «Графики» (ссылка) и «Ещё» (иконки пунктов в самой рельсе) работали.
+**Починено:** `components/layout/AppShell.tsx` — в свёрнутом режиме иконка открывает `Popover` (Radix) справа: у «Продажи» — тот же `SalesSidebarSection` (Роп монитор / Отчёты Стаса / Повторные / Избранное), у «Реализация» — `item.children`; активный пункт подсвечен; клик по ссылке/смена pathname/разворот рельсы закрывают флайаут (один открытый за раз). `components/ui/Popover.tsx` — необязательные `tooltip` (подсказка на триггере, скрыта пока открыт) и `sideOffset`; прочие вызовы не затронуты. Развёрнутый режим и мобильный drawer (`collapsed={false}`) не менялись.
+**Проверено:** `tsc --noEmit` чисто, `npm run build` зелёный; `next start` с подменой pg (preload) и моком API, Playwright 1440: kulikov/classic/dark — флайаут открывается, Esc и клик вне закрывают, клик по пункту переходит и закрывает, активный подсвечен, Tab уходит внутрь; 390 — aside скрыт, без горизонтального скролла. Скриншоты — life-os/owners-inbox/sidebar-collapsed-bug/fix-*.png. Не проверено: прод-контент отчётов и стрелки клавиатуры (поведение Radix, свой код не добавлялся).

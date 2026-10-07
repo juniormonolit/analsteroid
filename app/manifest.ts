@@ -19,7 +19,7 @@ import type { MetadataRoute } from 'next';
 // историческим '/manager/me' навсегда, даже когда такого маршрута не станет; это не
 // адрес перехода, а строка-идентификатор.
 //
-// Иконки — public/icons/, сгенерированы из public/brand/monolitik-head.png
+// Иконки — public/icons/, сгенерированы из public/brand/monolitik-head-hires.png
 // скриптом scripts/generate-pwa-icons.mjs (см. его шапку про регенерацию).
 export default function manifest(): MetadataRoute.Manifest {
   return {

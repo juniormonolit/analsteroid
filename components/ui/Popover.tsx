@@ -1,6 +1,7 @@
 'use client';
 import * as RadixPopover from '@radix-ui/react-popover';
 import { twMerge } from 'tailwind-merge';
+import { Tooltip } from '@/components/ui/Tooltip';
 
 /**
  * Единый адаптивный поповер (Radix Popover). Главное отличие от самописных
@@ -33,6 +34,8 @@ export function Popover({
   className,
   open,
   onOpenChange,
+  tooltip,
+  sideOffset = 4,
 }: {
   trigger: React.ReactNode;
   children: React.ReactNode;
@@ -41,15 +44,22 @@ export function Popover({
   className?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Подсказка на триггере (рельса свёрнутого сайдбара). Нужна `open` (controlled):
+      пока панель открыта, подсказка не рисуется. Tooltip стоит СНАРУЖИ Trigger —
+      компонент Tooltip props на ребёнка не пробрасывает, обратный порядок не работает. */
+  tooltip?: string;
+  sideOffset?: number;
 }) {
   return (
     <RadixPopover.Root open={open} onOpenChange={onOpenChange}>
-      <RadixPopover.Trigger asChild>{trigger}</RadixPopover.Trigger>
+      <Tooltip content={tooltip} side="right" disabled={!tooltip || !!open}>
+        <RadixPopover.Trigger asChild>{trigger}</RadixPopover.Trigger>
+      </Tooltip>
       <RadixPopover.Portal>
         <RadixPopover.Content
           align={align}
           side={side}
-          sideOffset={4}
+          sideOffset={sideOffset}
           collisionPadding={8}
           className={twMerge(
             // Регресс #2999 (04.08): та же дыра, что и у Modal.tsx — --color-bg-surface
