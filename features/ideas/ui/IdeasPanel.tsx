@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, X, ImagePlus, Trash2 } from 'lucide-react';
+import { ArrowLeft, X, ImagePlus, Paperclip, Trash2 } from 'lucide-react';
 import { useSlideClose } from '@/lib/hooks/useSlideClose';
 import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SlideBackdrop } from '@/components/ui/SlideBackdrop';
@@ -44,7 +44,7 @@ function validateFiles(files: File[], alreadyHas: number): string | null {
   }
   for (const f of files) {
     if (!IDEA_ATTACH_ALLOWED_MIME.includes(f.type)) return `Только картинки (png, jpg, gif, webp): ${f.name}`;
-    if (f.size > IDEA_ATTACH_MAX_BYTES) return `Файл больше 8 МБ: ${f.name}`;
+    if (f.size > IDEA_ATTACH_MAX_BYTES) return `Файл больше ${IDEA_ATTACH_MAX_BYTES / 1024 / 1024} МБ: ${f.name}`;
   }
   return null;
 }
@@ -151,7 +151,7 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
       className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center p-4 cursor-zoom-out"
       onClick={onClose}
     >
-      <button className="absolute top-4 right-4 text-white/80 hover:text-white" onClick={onClose}>
+      <button aria-label="Закрыть просмотр" className="absolute top-4 right-4 text-white/80 hover:text-white" onClick={onClose}>
         <X size={26} />
       </button>
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -188,8 +188,9 @@ function AttachmentThumbs({ idea, canDelete, onView, onChanged }: {
           <div key={a.id} className="relative group">
             <button
               onClick={() => onView({ src, alt: a.filename })}
-              className="block h-16 w-16 rounded-md overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg-hover)] cursor-zoom-in"
+              className="block h-[72px] w-[72px] rounded-[9px] overflow-hidden bg-[var(--color-bg-hover)] cursor-zoom-in"
               title={a.filename}
+              aria-label={`Открыть: ${a.filename}`}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={src} alt={a.filename} loading="lazy" className="h-full w-full object-cover" />
@@ -200,6 +201,7 @@ function AttachmentThumbs({ idea, canDelete, onView, onChanged }: {
                 disabled={busyId === a.id}
                 className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[var(--color-bg-overlay)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm disabled:opacity-40"
                 title="Удалить скриншот"
+                aria-label={`Удалить: ${a.filename}`}
               >
                 <Trash2 size={11} />
               </button>
@@ -390,6 +392,7 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
   const [previews, setPreviews] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // object-URL превью выбранных, но ещё не загруженных картинок.
@@ -401,18 +404,54 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
 
   const canSubmit = title.trim().length > 0 && body.trim().length > 0 && !saving;
 
+  // Единая точка добавления картинок: выбор файла, вставка из буфера, drag&drop.
+  // Валидные принимаем (до лимита), по отклонённым — понятная ошибка.
+  function addFiles(picked: File[]) {
+    if (!picked.length) return;
+    const accepted: File[] = [];
+    let err: string | null = null;
+    for (const f of picked) {
+      if (files.length + accepted.length >= IDEA_ATTACH_MAX_COUNT) {
+        err = `Максимум ${IDEA_ATTACH_MAX_COUNT} картинок на идею`;
+        break;
+      }
+      const vErr = validateFiles([f], 0);
+      if (vErr) {
+        err = vErr;
+        continue;
+      }
+      const ext = f.type.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png';
+      // скриншоты из буфера приходят с именем image.png — даём уникальное имя
+      const name = !f.name || /^image\.\w+$/.test(f.name) ? `screenshot-${Date.now()}-${accepted.length + 1}.${ext}` : f.name;
+      accepted.push(name === f.name ? f : new File([f], name, { type: f.type }));
+    }
+    setError(err);
+    if (accepted.length) setFiles(prev => [...prev, ...accepted]);
+  }
+
   function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const picked = Array.from(e.target.files ?? []);
     e.target.value = '';
-    if (!picked.length) return;
-    const next = [...files, ...picked];
-    const vErr = validateFiles(next, 0);
-    if (vErr) {
-      setError(vErr);
-      return;
-    }
-    setError(null);
-    setFiles(next);
+    addFiles(picked);
+  }
+
+  function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const imgs = Array.from(e.clipboardData?.items ?? [])
+      .filter(it => it.kind === 'file' && it.type.startsWith('image/'))
+      .map(it => it.getAsFile())
+      .filter((f): f is File => !!f);
+    if (!imgs.length) return; // обычный текст вставляется как всегда
+    // если в буфере и текст, и картинка (копия из Excel/Word) — текст не блокируем
+    if (!e.clipboardData.types.includes('text/plain')) e.preventDefault();
+    addFiles(imgs);
+  }
+
+  function onDrop(e: React.DragEvent) {
+    setDragOver(false);
+    const imgs = Array.from(e.dataTransfer?.files ?? []).filter(f => f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    e.preventDefault();
+    addFiles(imgs);
   }
 
   function removeFile(i: number) {
@@ -455,12 +494,13 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
   return (
     <>
       <div className="flex items-center gap-2.5 px-5 sm:px-6 py-4 border-b border-[var(--color-border)] shrink-0">
-        <button onClick={onBack} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0">
+        <button onClick={onBack} aria-label="Назад к списку идей" className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0">
           <ArrowLeft size={18} />
         </button>
         <h2 className="text-[17px] font-bold text-[var(--color-text)] m-0">Предложить идею</h2>
         <button
           onClick={onCloseMobile}
+          aria-label="Закрыть"
           className="ml-auto sm:hidden text-[var(--color-text-muted)] hover:text-[var(--color-text)] shrink-0"
         >
           <X size={18} />
@@ -473,55 +513,64 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
         </div>
 
         <div className="mb-4">
-          <label className="block text-xs font-bold text-[var(--color-text)] mb-1.5">Название</label>
+          <label htmlFor="idea-title" className="block text-xs font-bold text-[var(--color-text)] mb-1.5">Название</label>
           <input
+            id="idea-title"
             type="text"
             value={title}
             onChange={e => setTitle(e.target.value)}
             maxLength={IDEA_TITLE_MAX_LEN}
             placeholder="Например: экспорт в Excel"
-            className="w-full border border-[var(--color-border)] rounded-[9px] px-3 py-2.5 text-[13px] text-[var(--color-text)] bg-[var(--color-bg-hover)] placeholder:text-[var(--color-text-muted)]"
+            className="w-full rounded-[9px] px-3 py-2.5 text-[13px] text-[var(--color-text)] bg-[var(--color-bg-hover)] placeholder:text-[var(--color-text-muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
           />
         </div>
 
-        <div className="mb-4">
-          <label className="block text-xs font-bold text-[var(--color-text)] mb-1.5">Описание</label>
+        <div
+          className="mb-4"
+          onDragOver={e => { if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); setDragOver(true); } }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+        >
+          <label htmlFor="idea-body" className="block text-xs font-bold text-[var(--color-text)] mb-1.5">Описание</label>
           <textarea
+            id="idea-body"
             value={body}
             onChange={e => setBody(e.target.value)}
+            onPaste={onPaste}
             maxLength={IDEA_BODY_MAX_LEN}
-            placeholder="Что именно нужно и зачем — чем подробнее, тем быстрее решим"
-            className="w-full h-[110px] resize-none border border-[var(--color-border)] rounded-[9px] px-3 py-2.5 text-[13px] leading-[1.5] text-[var(--color-text)] bg-[var(--color-bg-hover)] placeholder:text-[var(--color-text-muted)]"
+            aria-describedby="idea-attach-hint"
+            placeholder="Что именно нужно и зачем — чем подробнее, тем быстрее решим. Скриншот можно вставить из буфера (Ctrl/Cmd+V)"
+            className={`w-full h-[110px] resize-none rounded-[9px] px-3 py-2.5 text-[13px] leading-[1.5] text-[var(--color-text)] bg-[var(--color-bg-hover)] placeholder:text-[var(--color-text-muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)] ${dragOver ? 'outline outline-2 outline-[var(--color-accent)]' : ''}`}
           />
-        </div>
 
-        <div className="mb-4">
-          <label className="block text-xs font-bold text-[var(--color-text)] mb-1.5">
-            Скриншоты <span className="font-normal text-[var(--color-text-muted)]">(необязательно, до {IDEA_ATTACH_MAX_COUNT})</span>
-          </label>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2 mt-2.5" role="list" aria-label="Прикреплённые картинки">
             {previews.map((src, i) => (
-              <div key={src} className="relative">
+              <div key={src} role="listitem" className="relative">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={src} alt="" className="h-16 w-16 object-cover rounded-md border border-[var(--color-border)]" />
+                <img src={src} alt={`Картинка ${i + 1}: ${files[i]?.name ?? ''}`} className="h-[72px] w-[72px] object-cover rounded-[9px] bg-[var(--color-bg-hover)]" />
                 <button
+                  type="button"
                   onClick={() => removeFile(i)}
-                  className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-[var(--color-bg-overlay)] border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm"
+                  className="absolute -top-1.5 -right-1.5 h-6 w-6 rounded-full bg-[var(--color-bg-overlay)] text-[var(--color-text-muted)] hover:text-[var(--color-negative)] flex items-center justify-center shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+                  aria-label={`Убрать картинку ${i + 1}`}
                   title="Убрать"
                 >
-                  <X size={11} />
+                  <X size={12} />
                 </button>
               </div>
             ))}
             {files.length < IDEA_ATTACH_MAX_COUNT && (
               <button
+                type="button"
                 onClick={() => inputRef.current?.click()}
-                className="h-16 w-16 rounded-md border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:border-[var(--color-accent)] flex items-center justify-center"
-                title="Добавить скриншот"
+                className="inline-flex items-center gap-1.5 h-9 px-3 rounded-[9px] bg-[var(--color-bg-hover)] text-[12.5px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
               >
-                <ImagePlus size={18} />
+                <Paperclip size={14} aria-hidden="true" /> Прикрепить
               </button>
             )}
+          </div>
+          <div id="idea-attach-hint" className="text-[11.5px] text-[var(--color-text-muted)] mt-1.5">
+            Картинки: вставка из буфера, перетаскивание или кнопка. До {IDEA_ATTACH_MAX_COUNT} шт., до {IDEA_ATTACH_MAX_BYTES / 1024 / 1024} МБ, png, jpg, webp, gif.
           </div>
           <input
             ref={inputRef}
@@ -533,7 +582,7 @@ function FormView({ onBack, onSubmitted, onCloseMobile }: {
           />
         </div>
 
-        {error && <div className="text-xs text-[var(--color-negative)] mb-3">{error}</div>}
+        {error && <div role="alert" className="text-xs text-[var(--color-negative)] mb-3">{error}</div>}
 
         <button
           onClick={submit}

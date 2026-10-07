@@ -81,7 +81,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: `Недопустимый тип файла: ${f.name}` }, { status: 400 });
     }
     if (f.size > IDEA_ATTACH_MAX_BYTES) {
-      return NextResponse.json({ error: `Файл больше 8 МБ: ${f.name}` }, { status: 400 });
+      return NextResponse.json({ error: `Файл больше ${IDEA_ATTACH_MAX_BYTES / 1024 / 1024} МБ: ${f.name}` }, { status: 400 });
     }
   }
 

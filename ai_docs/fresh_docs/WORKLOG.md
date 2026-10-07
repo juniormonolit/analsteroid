@@ -92,6 +92,37 @@ Chrome на моке. На прод не выкатывалось.
 
 ---
 
+## 2026-10-07 — Иконка вкладки: робот Монолитик (#9023-доп.)
+
+**Что было.** Иконка вкладки (`app/icon.svg`), PWA-иконки и apple-touch были «три столбика» из `public/icons/icon-mark.svg`; ТВ-страница ссылалась на `/icon.svg`.
+
+**Причина.** Сергей одобрил: иконка вкладки и PWA = голова робота Монолитика, одна для всех тем.
+
+**Починено.** Источник — `public/brand/monolitik-head.png` (144×75, голова). `scripts/generate-pwa-icons.mjs` переписан: тёмная плитка #1F2937 + голова → `app/icon.png` 512, `app/favicon.ico` (16/32/48), `app/apple-icon.png` 180, `public/icons/icon-{192,512}.png`, `icon-maskable-{192,512}.png` (голова 66% ширины, безопасная зона). Удалены `app/icon.svg` и `public/icons/icon-mark.svg` (две разные иконки не отдаются). `proxy.ts` PUBLIC: `/icon.svg` → `/icon.png`, `/favicon.ico`; ТВ-страница ссылается на `/icon.png`. Подмены favicon по теме в коде нет (KulikovBrand — только UI). Не тронуто: iOS splash-экраны (`generate-splash-screens.mjs`) остались со старым знаком, источник мал по разрешению (144 px, на 512 мягковат).
+
+**Проверено.** `tsc --noEmit` 0, `npm run build` ок; `next start`: /icon.png, /favicon.ico, /apple-icon.png, /manifest.webmanifest, /icons/* — 200, байты /icon.png = app/icon.png, /icon.svg больше не отдаётся; в `<head>` favicon.ico + icon.png + apple-touch-icon. PNG для показа: owners-inbox/favicon-robot-9023/. На прод не катилось.
+
+## 2026-10-07 — «Есть идея?»: вставка картинок из буфера, drag&drop, «Прикрепить» (#9023)
+
+**Что было.** В форме идеи скриншоты можно было только выбрать через файловый диалог (до 6 шт., до 8 МБ).
+
+**Причина.** Просьба Сергея: вставлять скриншот из буфера (Ctrl/Cmd+V) прямо в поле описания.
+
+**Починено.** Ветка `feat/idea-paste-images-9023` от `dev-asteroid`. Хранилище и API вложений уже были
+(`idea_attachments`, миграция 101, БД YC system; `/api/ideas/[id]/attachments`), новой миграции нет.
+`features/ideas/ui/IdeasPanel.tsx` (FormView): onPaste в textarea берёт `image/*` из буфера (текст
+вставляется как обычно), drag&drop на блок описания, кнопка «Прикрепить» (Lucide Paperclip), единый
+`addFiles` с проверкой лимитов и понятной ошибкой; миниатюры 72 px с крестиком; поля формы без рамок,
+aria-label на кнопках, label связаны с полями. Лимиты прежние: 6 картинок и 8 МБ (`lib/ideas/types.ts`,
+общие для клиента и сервера). URL-контракт не менялся: панель открывается как раньше. В ленте идей
+миниатюры по-прежнему открываются по клику в лайтбоксе.
+
+**Проверено.** `tsc --noEmit` и `npm run build` чисто. Playwright на next start с фиктивными env
+(API замокан): синтетический paste, удаление, лимит 5, файл >5 МБ, drop, обычный текст не блокируется;
+темы classic и kulikov, ошибок консоли нет.
+
+---
+
 ## 2026-10-07 — «Настройки» ЛК снова видны всем (выбор темы)
 
 Сама страница `/profile/settings` не гейтилась правами (layout и page только требуют сессию),
