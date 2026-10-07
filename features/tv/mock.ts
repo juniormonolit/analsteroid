@@ -27,6 +27,9 @@
 //   /tv?scene=pairing         экран с кодом привязки телевизора
 //   /tv?scene=empty           экран без отделов
 // Несколько сцен — через запятую: /tv?theme=light&scene=event,banner
+// Прежнее оформление для сравнения: /tv?skin=kulikov (по умолчанию — то, что стоит на
+// телевизорах, см. DEFAULT_TV_SKIN в features/tv/ui/tvScreen.ts). Сочетается со
+// сценами: /tv?skin=kulikov&theme=light
 //
 // Все имена и цифры вымышленные.
 

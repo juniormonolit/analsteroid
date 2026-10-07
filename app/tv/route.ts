@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isTvMock, mockToken } from '@/features/tv/mock';
-import { renderTvScreen } from '@/features/tv/ui/tvScreen';
+import { DEFAULT_TV_SKIN, isTvSkinId, renderTvScreen } from '@/features/tv/ui/tvScreen';
 
 // Публичная страница телевизора (без сессии, см. proxy.ts PUBLIC). Телевизор
 // открывает ровно этот адрес: получает токен устройства, показывает код привязки,
@@ -12,12 +12,15 @@ import { renderTvScreen } from '@/features/tv/ui/tvScreen';
 //
 // Мок-режим (TV_MOCK=1 и не production, см. features/tv/mock.ts): устройству нечем
 // зарегистрироваться без базы, поэтому экран рисуется сразу по «токену экрана», в
-// котором зашиты тема и сцены из адреса (/tv?theme=light&scene=event).
+// котором зашиты тема и сцены из адреса (/tv?theme=light&scene=event). Там же — и
+// только там — можно включить прежнее оформление для сравнения: /tv?skin=kulikov.
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
+  const q = req.nextUrl.searchParams;
+  const skin = q.get('skin');
   const html = isTvMock()
-    ? renderTvScreen({ mode: 'screen', token: mockToken(req.nextUrl.searchParams) })
+    ? renderTvScreen({ mode: 'screen', token: mockToken(q) }, isTvSkinId(skin) ? skin : DEFAULT_TV_SKIN)
     : renderTvScreen({ mode: 'device' });
   return new NextResponse(html, {
     headers: {

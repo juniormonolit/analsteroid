@@ -1,5 +1,5 @@
-// Страница телевизора с оформлением «Дизайн Куликова» (задача: поменять внешний вид
-// экрана ТВ, не трогая движок и API).
+// Страница телевизора с оформлением (задача: поменять внешний вид экрана ТВ, не трогая
+// движок и API).
 //
 // Движок (features/tv/engine/page.ts) собирает страницу целиком — разметку, базовые
 // стили и скрипт — и остаётся как был. Здесь к ГОТОВОЙ странице добавляется второй
@@ -17,6 +17,19 @@
 import { renderTvPage, type TvPageConfig } from '../engine/page';
 import { isTvMock } from '../mock';
 import { TV_SKIN_CSS } from './tvSkin';
+import { TV_SKIN_GRAPHITE_CSS } from './tvSkinGraphite';
+
+// Оформлений два. На телевизорах всегда работает DEFAULT_TV_SKIN — выбора у экрана
+// нет (для него понадобились бы настройка экрана и правка движка). Второе оставлено
+// для сравнения: в мок-режиме его можно включить адресом /tv?skin=kulikov.
+//   graphite — «Графит», по референсу владельца от 07.10, выбран им (tvSkinGraphite.ts)
+//   kulikov  — «Дизайн Куликова», язык monolit.shop, первый вариант (tvSkin.ts)
+const TV_SKINS = { graphite: TV_SKIN_GRAPHITE_CSS, kulikov: TV_SKIN_CSS } as const;
+export type TvSkinId = keyof typeof TV_SKINS;
+export const DEFAULT_TV_SKIN: TvSkinId = 'graphite';
+export function isTvSkinId(v: string | null): v is TvSkinId {
+  return v !== null && Object.prototype.hasOwnProperty.call(TV_SKINS, v);
+}
 
 function patchOnce(html: string, find: string, replacement: string, what: string): string {
   const at = html.indexOf(find);
@@ -27,9 +40,9 @@ function patchOnce(html: string, find: string, replacement: string, what: string
   return html.slice(0, at) + replacement + html.slice(at + find.length);
 }
 
-export function renderTvScreen(cfg: TvPageConfig): string {
+export function renderTvScreen(cfg: TvPageConfig, skin: TvSkinId = DEFAULT_TV_SKIN): string {
   let html = renderTvPage(cfg);
-  html = patchOnce(html, '</head>', `<style id="tv-skin">${TV_SKIN_CSS}</style>\n</head>`, 'оформление');
+  html = patchOnce(html, '</head>', `<style id="tv-skin" data-skin="${skin}">${TV_SKINS[skin]}</style>\n</head>`, 'оформление');
   if (isTvMock()) {
     html = patchOnce(html, '"api":"/api/tv/feed"', '"api":"/tv/mock/feed"', 'мок: фид');
     html = patchOnce(html, "new EventSource('/api/tv/stream')", "new EventSource('/tv/mock/stream')", 'мок: поток событий');
