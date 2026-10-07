@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 // /login, ломая ровно ту фичу, ради которой их добавили.
 const PUBLIC = [
   '/login', '/api/auth/login', '/invite', '/bot-avatar.png', '/bx',
-  '/manifest.webmanifest', '/icon.svg', '/apple-icon.png', '/icons',
+  '/manifest.webmanifest', '/icon.png', '/favicon.ico', '/apple-icon.png', '/icons',
   '/sw.js', '/offline.html',
   // ТВ-дашборды (задача 07.09): телевизор открывает /tv без всякой сессии —
   // устройство идентифицируется своим токеном и кодом привязки (features/tv).
