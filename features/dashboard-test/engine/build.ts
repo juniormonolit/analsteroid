@@ -53,6 +53,8 @@ export interface DashTestManager {
   bookCount: number;
 }
 
+export interface DashTestOrgCity { id: string; name: string; depts: { id: string; name: string }[] }
+
 export interface DashTestResponse {
   /** День, за который посчитаны цифры (ГГГГ-ММ-ДД, Москва). */
   day: string;
@@ -62,6 +64,10 @@ export interface DashTestResponse {
   lastDataDayMode: boolean;
   generatedAt: string;
   root: DashTestNode;
+  /** Оргструктура для фильтров «Филиал» / «Департамент» — ВСЕ филиалы и департаменты, где есть
+   *  менеджеры, независимо от плана и продаж за день. В root узлы без плана и движения за день
+   *  отброшены, и в выходной (нет плана) фильтры пропадали целиком (найдено 10.10, суббота). */
+  org: DashTestOrgCity[];
   /** Строки менеджеров по id — для окна «Менеджеры». */
   managers: Record<string, DashTestManager>;
 }
@@ -81,7 +87,7 @@ async function lastDataDay(today: string): Promise<string> {
 export async function buildDashboardTest(): Promise<DashTestResponse> {
   const today = mskTodayStr();
   const day = DASHBOARD_TEST_USE_LAST_DATA_DAY ? await lastDataDay(today) : today;
-  return cached(`dashtest:v2:${day}`, TTL_SEC, async () => {
+  return cached(`dashtest:v3:${day}`, TTL_SEC, async () => {
     const fromIso = mskMidnightIso(day);
     const toExclIso = mskMidnightIso(addDaysStr(day, 1));
     const [tree, orgRows, chains] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains()]);
@@ -145,9 +151,29 @@ export async function buildDashboardTest(): Promise<DashTestResponse> {
     };
 
     const root = build(tree.root, 0);
+    // В фильтрах — подразделения с планом продаж на месяц (как в карточках «Сегодня» в будни:
+    // без стажировки и отделов без плана). Если планов на месяц в базе нет — все, где есть менеджеры.
+    // Филиалы — по плану месяца (крупные первыми), департаменты — по алфавиту.
+    const monthFrom = `${day.slice(0, 8)}01`;
+    const monthTo = addDaysStr(`${addDaysStr(monthFrom, 32).slice(0, 8)}01`, -1);
+    const monthPlans = (await computePeriodPlanByLogin(monthFrom, monthTo, monthTo)).byLogin;
+    const weight = (n: TvNode) => {
+      const ms = managersOfNode(n, orgRows, chains);
+      return { staff: ms.length, plan: ms.reduce((sum, m) => sum + (m.login ? monthPlans.get(m.login)?.planSales ?? 0 : 0), 0) };
+    };
+    const byPlan = monthPlans.size > 0;
+    const keep = (w: { staff: number; plan: number }) => (byPlan ? w.plan > 0 : w.staff > 0);
+    const org: DashTestOrgCity[] = tree.root.children
+      .map(c => ({ c, w: weight(c) }))
+      .filter(x => keep(x.w))
+      .sort((a, b) => (b.w.plan - a.w.plan) || (b.w.staff - a.w.staff) || a.c.name.localeCompare(b.c.name, 'ru'))
+      .map(({ c }) => ({
+        id: c.id, name: c.name,
+        depts: c.children.filter(d => keep(weight(d))).map(d => ({ id: d.id, name: d.name })).sort((a, b) => a.name.localeCompare(b.name, 'ru')),
+      }));
     return {
       day, today, isToday: day === today, lastDataDayMode: DASHBOARD_TEST_USE_LAST_DATA_DAY,
-      generatedAt: new Date().toISOString(), root, managers,
+      generatedAt: new Date().toISOString(), root, org, managers,
     };
   });
 }

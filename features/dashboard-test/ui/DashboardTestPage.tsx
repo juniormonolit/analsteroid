@@ -284,7 +284,7 @@ function ViewCity({ city }: { city: DashTestNode }) {
 const BRANCH_KEY: Record<string, string> = {
   'Санкт-Петербург': 'spb', 'Москва': 'msk', 'Краснодар': 'krd', 'Екатеринбург': 'ekb',
 };
-const cityKey = (n: DashTestNode) => BRANCH_KEY[n.name] ?? n.id;
+const cityKey = (n: { id: string; name: string }) => BRANCH_KEY[n.name] ?? n.id;
 
 function findNode(n: DashTestNode, id: string): DashTestNode | null {
   if (n.id === id) return n;
@@ -590,8 +590,11 @@ export function DashboardTestPage() {
   const [modal, setModal] = useState<{ nodeId: string; sort: Metric; deals: DealsTarget | null } | null>(null);
   const openManagers = (nodeId: string, metric: Metric) => setModal({ nodeId, sort: metric, deals: null });
   const closeManagers = () => setModal(null);
-  const cities = data?.root.children ?? [];
+  // Филиалы для фильтров — из всей оргструктуры (data.org), а не из карточек «Сегодня»: там
+  // нет филиалов без плана и продаж за день, и в выходной фильтры пропадали (10.10).
+  const cities = data?.org ?? [];
   const city = cities.find(c => cityKey(c) === tab);
+  const cityNode = data && city ? findNode(data.root, city.id) : null;
   const view = city ? 'city' : 'all';
 
   // Фильтр «Департамент»: пункты — названия департаментов выбранного города (или всех городов).
@@ -603,11 +606,11 @@ export function DashboardTestPage() {
     if (d) u.searchParams.set('dept', d); else u.searchParams.delete('dept');
     window.history.replaceState(null, '', u);
   };
-  const cityShort = (c: DashTestNode) => BRANCH_SHORT[c.name] ?? c.name;
+  const cityShort = (c: { name: string }) => BRANCH_SHORT[c.name] ?? c.name;
   // периоды: оргструктура для фильтров графиков (у каждого графика есть свои — см. PeriodView)
   const scopeTree: ScopeTree = {
     rootId: data?.root.id ?? '',
-    cities: cities.map(c => ({ id: c.id, name: c.name, short: cityShort(c), depts: c.children.map(d => ({ id: d.id, name: d.name, label: deptLabel(d.name) })) })),
+    cities: cities.map(c => ({ id: c.id, name: c.name, short: cityShort(c), depts: c.depts.map(d => ({ id: d.id, name: d.name, label: deptLabel(d.name) })) })),
   };
   // «ЖБИ» в списке есть, только когда выбрана Москва; без филиала ЖБИ входит в НЦ (правило — в PeriodView)
   const deptLabels = scopeDeptLabels(scopeTree, city?.id ?? null);
@@ -798,7 +801,7 @@ export function DashboardTestPage() {
         {period === 'today' ? (
           <OpenManagersCtx.Provider value={openManagers}>
             {data && view === 'all' && <ViewAll root={data.root} />}
-            {data && view === 'city' && city && <ViewCity city={city} />}
+            {data && view === 'city' && city && (cityNode ? <ViewCity city={cityNode} /> : <div className="text-sm" style={{ color: C.muted }}>За этот день у филиала нет плана и продаж.</div>)}
           </OpenManagersCtx.Provider>
         ) : data && (
           <PeriodView period={period} offset={offset} tree={scopeTree} sel={{ cityId: city?.id ?? null, dept: activeDept }}
