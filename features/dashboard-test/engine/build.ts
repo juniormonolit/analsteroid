@@ -23,7 +23,7 @@ import type { RosterManager } from '@/lib/org/teamRoster';
 // ВРЕМЕННО, ПОКА РАЗДЕЛ В РАБОТЕ. В локальной копии базы «сегодня» может быть пустым,
 // поэтому берём последний день, за который есть продажи. ПЕРЕД ВЫКЛАДКОЙ НА ПРОД
 // поставить false — тогда дашборд всегда показывает сегодняшний день (решение владельца 08.10).
-export const DASHBOARD_TEST_USE_LAST_DATA_DAY = true;
+export const DASHBOARD_TEST_USE_LAST_DATA_DAY = false;
 
 export interface DashTestNode {
   id: string;

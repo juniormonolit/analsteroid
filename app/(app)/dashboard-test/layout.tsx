@@ -4,7 +4,7 @@ import { hasPerm } from '@/lib/auth/perms';
 import { AccessDenied } from '@/components/ui/AccessDenied';
 import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 
-export const metadata = { title: 'Дашборд тест — Аналстероид' };
+export const metadata = { title: 'Дашборд — Аналстероид' };
 
 // Гейт пункта меню «Ещё» — тот же паттерн, что у «Сотрудников»: администратор
 // ИЛИ явное право роли из «Настройки → Матрица прав».
@@ -12,7 +12,7 @@ export default async function DashboardTestLayout({ children }: { children: Reac
   const session = await getSession();
   if (!session) redirect('/login');
   if (!hasFullManagerAccess(session) && !hasPerm(session, 'section.dashboard_test')) {
-    return <AccessDenied reason="Раздел «Дашборд тест» — черновик дашборда директора по продажам. Доступ выдаёт администратор в «Настройки → Матрица прав»." />;
+    return <AccessDenied reason="Раздел «Дашборд» — черновик дашборда директора по продажам. Доступ выдаёт администратор в «Настройки → Матрица прав»." />;
   }
   return <>{children}</>;
 }

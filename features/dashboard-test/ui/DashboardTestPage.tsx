@@ -1,12 +1,12 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode, type UIEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Box, CalendarDays, ExternalLink, Moon, RotateCcw, ShoppingCart, Sun, Target, Wallet, X } from 'lucide-react';
 import type { DashTestManager, DashTestNode, DashTestResponse } from '../engine/build';
 import type { DashTestDeal, DashTestDealsResponse } from '../engine/deals';
 import { MONTHS_NOM, MONTHS_SHORT, WEEKDAYS_SHORT, isDashPeriod, periodRange, weekdayIndex, type DashPeriod } from '../shared';
-import { DatePicker, PeriodView, scopeDeptLabels, shortRange, useDashPeriod, type ScopeTree } from './PeriodView';
+import { branchColor, DatePicker, PeriodView, scopeDeptLabels, shortRange, useDashPeriod, type ScopeTree } from './PeriodView';
 import { C, FONT, FONT_FACES, THEME_CSS, readTheme, subscribeTheme, writeTheme, type ThemeName } from './theme';
 
 // «Дашборд тест» — черновик дашборда директора по продажам (задача владельца 08.10).
@@ -155,18 +155,26 @@ function NodeCard({ node, level }: { node: DashTestNode; level: 'city' | 'deptHe
             <span className="min-w-0 truncate text-[15px] font-bold" style={{ color: C.text }} title={node.name}>{deptLabel(node.name)}</span>
           )}
         </div>
+        {/* Правки владельца 10.10: кольцо «% плана на день» — у левого края карточки, как в итоге
+            сверху («на всех плитках процент прижат слева, а не справа»); счётчики продаж и броней в
+            штуках — у правого края («эти иконки были прижаты к праву»). Было: счётчики слева,
+            кольцо справа. Итог сверху (TotalBand) устроен по-своему и этих правок не касается. */}
         <div className="flex min-w-0 items-center gap-2 @md:gap-4">
-          <div className="flex shrink-0 flex-col gap-2">
-            <Count kind="sales" value={node.salesCount} onClick={() => openManagers(node.id, 'sales')} />
-            <Count kind="book" value={node.bookCount} onClick={() => openManagers(node.id, 'book')} />
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <Line label="План" value={node.plan} color={C.text} />
-            <Line label="Факт" value={node.fact} color={C.successText} />
-            <Line label="Брони" value={node.bookSum} color={C.primary} />
-          </div>
           <div className="w-[60px] shrink-0 @xs:w-[72px] @sm:w-[84px] @lg:w-[104px]">
             <Ring pct={node.pct} />
+          </div>
+          {/* «План / Факт / Брони» — ровно по центру между кольцом и счётчиками (владелец 10.10:
+              «были ровно по центру, кроме итого по всем филиалам»); подписи строк выровнены между собой */}
+          <div className="flex min-w-0 flex-1 justify-center">
+            <div className="flex min-w-0 max-w-full flex-col gap-1.5">
+              <Line label="План" value={node.plan} color={C.text} />
+              <Line label="Факт" value={node.fact} color={C.successText} />
+              <Line label="Брони" value={node.bookSum} color={C.primary} />
+            </div>
+          </div>
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <Count kind="sales" value={node.salesCount} onClick={() => openManagers(node.id, 'sales')} />
+            <Count kind="book" value={node.bookCount} onClick={() => openManagers(node.id, 'book')} />
           </div>
         </div>
       </div>
@@ -194,6 +202,8 @@ function TotalTile({ icon, label, color, onClick, children }: { icon: ReactNode;
   );
 }
 
+/* Итог 10.10 пробовали сделать в раскладке карточки отдела (кольцо справа, «План / Факт / Брони»
+   строками) — владелец посмотрел и сказал «верни как было». */
 function TotalBand({ node }: { node: DashTestNode }) {
   const openManagers = useContext(OpenManagersCtx);
   return (
@@ -503,8 +513,8 @@ function ManagersModal({ node, managers, day, sort, onSort, deals, onDeals, onCl
 
 /** Кнопка-вкладка. tone — цвет выбранной: синий (по умолчанию) или жёлтый акцент
  *  (фильтр «Департамент», чтобы два фильтра различались цветом). */
-function TabButton({ active, onClick, tone = 'primary', children }: { active: boolean; onClick: () => void; tone?: 'primary' | 'accent'; children: ReactNode }) {
-  const on = tone === 'accent' ? { background: C.accent, color: C.onAccent } : { background: C.primary, color: C.onPrimary };
+function TabButton({ active, onClick, tone = 'primary', color, children }: { active: boolean; onClick: () => void; tone?: 'primary' | 'accent'; /** свой цвет выбранной (филиал — цветом филиала, 10.10) */ color?: string; children: ReactNode }) {
+  const on = tone === 'accent' ? { background: C.accent, color: C.onAccent } : color ? { background: color, color: C.onAccent } : { background: C.primary, color: C.onPrimary };
   return (
     <button type="button" role="tab" aria-selected={active} onClick={onClick}
       className="min-h-[36px] cursor-pointer rounded-lg px-4 text-[14px] font-bold leading-none transition-colors"
@@ -604,19 +614,78 @@ export function DashboardTestPage() {
   // На «Сегодня» фильтра нет (решение владельца 09.10) — он только у недели, месяца и года;
   // выбранный департамент при этом помнится и вернётся, когда снова откроют период.
   const activeDept = period !== 'today' && dept && deptLabels.includes(dept) ? dept : null;
-  // «Сбросить все фильтры» (владелец 09.10): филиал и департамент страницы — на «Все», свои
-  // фильтры блоков — тоже. Период и выбранная дата не трогаются: это не фильтры, а что смотрим.
-  const [blocksOwn, setBlocksOwn] = useState(false);
-  const [resetKey, setResetKey] = useState(0);
-  const canReset = view !== 'all' || !!activeDept || (period !== 'today' && blocksOwn);
-  const resetAll = () => { pickTab('all'); pickDept(null); setResetKey(k => k + 1); };
+  // «Сбросить все фильтры» (владелец 09.10): филиал и департамент — на «Все». Период и выбранная
+  // дата не трогаются: это не фильтры, а что смотрим. Своих фильтров у блоков больше нет (10.10).
+  const canReset = view !== 'all' || !!activeDept;
+  const resetAll = () => { pickTab('all'); pickDept(null); };
+  // Панель периода и фильтров закреплена сверху (владелец 10.10: «один фильтр вверху, при скролле
+  // прикрепляется к верху, им всегда можно воспользоваться»). Пока страница наверху — панель как
+  // была; прокрутили — сжимается в одну строку, чтобы не занимать экран. Порог с запасом в обе
+  // стороны, чтобы панель не дёргалась туда-обратно на границе.
+  const [stuck, setStuck] = useState(false);
+  // Блок, который сейчас под панелью (сделки / брони / продажи / отгрузки), — меткой его цвета в
+  // сжатой панели (владелец 10.10: цвета этапов, «чтобы при прокрутке было понятно»).
+  const [stage, setStage] = useState<{ key: string; title: string } | null>(null);
+  const onScroll = (e: UIEvent<HTMLDivElement>) => {
+    const root = e.currentTarget;
+    const t = root.scrollTop;
+    setStuck(s => (s ? t > 24 : t > 160));
+    const edge = root.getBoundingClientRect().top + 140;
+    let cur: { key: string; title: string } | null = null;
+    root.querySelectorAll<HTMLElement>('section[data-stage]').forEach(el => {
+      if (el.getBoundingClientRect().top <= edge) cur = { key: el.dataset.stage ?? '', title: el.dataset.title ?? '' };
+    });
+    const next = cur as { key: string; title: string } | null;
+    setStage(s => (s?.key === next?.key ? s : next));
+  };
+  const STAGE_COLORS: Record<string, { bg: string; line: string }> = {
+    deals: { bg: C.dealsBg, line: C.deals }, resv: { bg: C.resvBg, line: C.resv },
+    sales: { bg: C.salesBg, line: C.sales }, ship: { bg: C.shipBg, line: C.ship },
+  };
+  const stageColor = stage ? STAGE_COLORS[stage.key] : undefined;
   const modalNode = data && modal ? findNode(data.root, modal.nodeId) : null;
+  // Части панели фильтров — общие для обычной и сжатой (закреплённой) панели.
+  const branchTabs = (
+    <div role="tablist" aria-label="Филиал" className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-[10px] p-1" style={{ background: C.surface }}>
+      <TabButton active={view === 'all'} onClick={() => pickTab('all')}>Все</TabButton>
+      {cities.map(c => (
+        <TabButton key={c.id} active={view === 'city' && city?.id === c.id} color={branchColor(BRANCH_SHORT[c.name] ?? c.name)} onClick={() => pickTab(cityKey(c))}>
+          {BRANCH_SHORT[c.name] ?? c.name}
+        </TabButton>
+      ))}
+    </div>
+  );
+  const deptTabs = period !== 'today' && deptLabels.length > 0 ? (
+    <div role="tablist" aria-label="Департамент" className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-[10px] p-1" style={{ background: C.surface }}>
+      <TabButton tone="accent" active={!activeDept} onClick={() => pickDept(null)}>Все</TabButton>
+      {deptLabels.map(l => <TabButton key={l} tone="accent" active={activeDept === l} onClick={() => pickDept(l)}>{l}</TabButton>)}
+    </div>
+  ) : null;
+  // появляется, когда есть что сбрасывать: выбран филиал или департамент
+  const resetBtn = canReset ? (
+    <button type="button" onClick={resetAll} title="Филиал и департамент — «Все»"
+      className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-[10px] px-3 text-[14px] font-bold leading-none" style={{ color: C.muted }}>
+      <RotateCcw size={16} className="shrink-0" />Сбросить все фильтры
+    </button>
+  ) : null;
+  const dateBox = data ? (
+    <div className="flex min-h-[44px] min-w-0 max-w-full items-center rounded-[10px] px-1 py-1" style={{ background: C.surface }}>
+      {period === 'today' ? (
+        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2.5 text-[14px] font-bold">
+          <CalendarDays size={16} className="shrink-0" style={{ color: C.primary }} />{dayLabel(data.day)}
+          {!data.isToday && <span className="font-medium" style={{ color: C.muted }}>последний день с продажами</span>}
+        </span>
+      ) : periodData ? (
+        <DatePicker key={period} period={period} offset={offset} maxOffset={periodData.maxOffset} today={periodData.today} onChange={setOffset} />
+      ) : <span className="px-2.5 text-[14px]" style={{ color: C.muted }}>…</span>}
+    </div>
+  ) : null;
 
   return (
-    <div className="dt-root flex h-full flex-col overflow-auto" data-dt-theme={theme} style={{ background: C.bg, color: C.text, fontFamily: FONT }}>
+    <div className="dt-root flex h-full flex-col overflow-auto" onScroll={onScroll} data-dt-theme={theme} style={{ background: C.bg, color: C.text, fontFamily: FONT }}>
       <style>{FONT_FACES + THEME_CSS}</style>
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 pt-5">
-        <h1 className="text-[28px] font-bold leading-tight">Дашборд тест</h1>
+        <h1 className="text-[28px] font-bold leading-tight">Дашборд</h1>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           {updatedAt && (
             <span className="inline-flex items-center gap-1.5 text-[13px] font-medium" style={{ color: C.muted }}>
@@ -633,6 +702,43 @@ export function DashboardTestPage() {
         </div>
       </div>
 
+      <div className="sticky top-0 z-30 pb-1" style={{ background: C.bg, boxShadow: stuck ? '0 8px 18px -12px rgba(0,0,0,.4)' : undefined }}>
+      {stuck ? (
+        // сжатая панель: период, филиал, департамент, «Сбросить», дата — одной строкой. На узком
+        // экране фильтры — одной строкой с прокруткой вбок, дата — под ними (иначе панель занимает
+        // полэкрана телефона).
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
+          <div className="flex w-full min-w-0 flex-nowrap items-center gap-x-4 overflow-x-auto md:w-auto md:flex-1 md:flex-wrap md:gap-y-2 md:overflow-visible">
+            {period !== 'today' && stage && stageColor && (
+              <span className="inline-flex min-h-[44px] shrink-0 items-center gap-2 whitespace-nowrap rounded-[10px] px-3.5 text-[15px] font-bold"
+                style={{ background: stageColor.bg, color: C.text, boxShadow: `inset 0 -3px 0 ${stageColor.line}` }}>
+                <span aria-hidden className="inline-block h-3 w-3 rounded-[3px]" style={{ background: stageColor.line }} />{stage.title}
+              </span>
+            )}
+            <div role="tablist" aria-label="Период" className="inline-flex shrink-0 items-center gap-1 rounded-[10px] p-1" style={{ background: C.surface }}>
+              {PERIOD_TABS.map(p => {
+                const on = period === p.key;
+                return (
+                  <button key={p.key} type="button" role="tab" aria-selected={on} onClick={() => pickPeriod(p.key)}
+                    className="min-h-[36px] cursor-pointer whitespace-nowrap rounded-lg px-4 text-[14px] font-bold leading-none transition-colors"
+                    style={on ? { background: C.primary, color: C.onPrimary } : { background: 'transparent', color: C.text }}>
+                    {p.label}{on && <span className="ml-1.5 font-medium tabular-nums" style={{ opacity: 0.8 }}>{periodSub(p.key, offset)}</span>}
+                  </button>
+                );
+              })}
+            </div>
+            {data && <div className="shrink-0">{branchTabs}</div>}
+            {deptTabs && <div className="shrink-0">{deptTabs}</div>}
+            {canReset && (
+              <button type="button" onClick={resetAll} title="Сбросить все фильтры: филиал и департамент — «Все»"
+                className="inline-flex min-h-[44px] shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[10px] px-2 text-[14px] font-bold leading-none" style={{ color: C.muted }}>
+                <RotateCcw size={16} className="shrink-0" />Сбросить
+              </button>
+            )}
+          </div>
+          {dateBox && <div className="min-w-0 max-w-full md:ml-auto">{dateBox}</div>}
+        </div>
+      ) : (<>
       {/* Полоса периода (переделана по просьбе владельца 09.10 — прежняя плашка по центру висела
           отдельно от всего). Одна полоса во всю ширину, вкладки — по центру; у каждой вкладки второй
           строкой её даты, выбранная — синяя. По умолчанию «Сегодня». Выбор даты стоит ниже, в ряду
@@ -667,47 +773,24 @@ export function DashboardTestPage() {
               <div className="flex items-center gap-1.5 px-1 text-[12px] font-bold uppercase tracking-wide" style={{ color: C.muted }}>
                 <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: C.primary }} />Филиал
               </div>
-              <div role="tablist" aria-label="Филиал" className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-[10px] p-1" style={{ background: C.surface }}>
-                <TabButton active={view === 'all'} onClick={() => pickTab('all')}>Все</TabButton>
-                {cities.map(c => (
-                  <TabButton key={c.id} active={view === 'city' && city?.id === c.id} onClick={() => pickTab(cityKey(c))}>
-                    {BRANCH_SHORT[c.name] ?? c.name}
-                  </TabButton>
-                ))}
-              </div>
+              {branchTabs}
             </div>
-            {period !== 'today' && deptLabels.length > 0 && (
+            {deptTabs && (
               <div className="flex min-w-0 max-w-full flex-col gap-1">
                 <div className="flex items-center gap-1.5 px-1 text-[12px] font-bold uppercase tracking-wide" style={{ color: C.muted }}>
                   <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[3px]" style={{ background: C.accent }} />Департамент
                 </div>
-                <div role="tablist" aria-label="Департамент" className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-[10px] p-1" style={{ background: C.surface }}>
-                  <TabButton tone="accent" active={!activeDept} onClick={() => pickDept(null)}>Все</TabButton>
-                  {deptLabels.map(l => <TabButton key={l} tone="accent" active={activeDept === l} onClick={() => pickDept(l)}>{l}</TabButton>)}
-                </div>
+                {deptTabs}
               </div>
             )}
-            {/* появляется, когда есть что сбрасывать: выбран филиал / департамент или у блока свои фильтры */}
-            {canReset && (
-              <button type="button" onClick={resetAll} title="Филиал и департамент — «Все», у блоков — тоже"
-                className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-[10px] px-3 text-[14px] font-bold leading-none" style={{ color: C.muted }}>
-                <RotateCcw size={16} className="shrink-0" />Сбросить все фильтры
-              </button>
-            )}
+            {resetBtn}
           </div>
           {/* Выбор даты — на одной высоте с плашками фильтров, у правого края. */}
-          <div className="ml-auto flex min-h-[44px] min-w-0 max-w-full items-center rounded-[10px] px-1 py-1" style={{ background: C.surface }}>
-            {period === 'today' ? (
-              <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2.5 text-[14px] font-bold">
-                <CalendarDays size={16} className="shrink-0" style={{ color: C.primary }} />{dayLabel(data.day)}
-                {!data.isToday && <span className="font-medium" style={{ color: C.muted }}>последний день с продажами</span>}
-              </span>
-            ) : periodData ? (
-              <DatePicker key={period} period={period} offset={offset} maxOffset={periodData.maxOffset} today={periodData.today} onChange={setOffset} />
-            ) : <span className="px-2.5 text-[14px]" style={{ color: C.muted }}>…</span>}
-          </div>
+          <div className="ml-auto min-w-0 max-w-full">{dateBox}</div>
         </div>
       )}
+      </>)}
+      </div>
 
       <div className="flex-1 px-6 pb-6 pt-4">
         {isLoading && <div className="text-sm" style={{ color: C.muted }}>Считаем показатели…</div>}
@@ -721,7 +804,7 @@ export function DashboardTestPage() {
           <PeriodView period={period} offset={offset} tree={scopeTree} sel={{ cityId: city?.id ?? null, dept: activeDept }}
             // нажали на филиал / департамент в графике — включаем те же фильтры, что вверху страницы
             onFilter={(cityId, d) => { const c = cities.find(x => x.id === cityId); pickTab(c ? cityKey(c) : 'all'); pickDept(d); }}
-            resetKey={resetKey} onOwnFilters={setBlocksOwn} />
+            />
         )}
       </div>
       {/* Окно внутри .dt-root — чтобы на него действовала выбранная тема страницы. */}

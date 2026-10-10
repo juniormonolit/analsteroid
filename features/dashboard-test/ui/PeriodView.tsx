@@ -1,9 +1,9 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowDown, ArrowUp, CalendarDays, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
-import type { DashCompare, DashCompareMonth, DashCompareWeek, DashCompareYear, DashPeriodResponse } from '../engine/period';
+import type { DashCompare, DashPeriodResponse } from '../engine/period';
 import {
   MONTHS_GEN, MONTHS_NOM, MONTHS_SHORT, WEEKDAYS_SHORT, YEAR_START_MD, addDays, addMonths, mondayOf, offsetOfDay, periodLabel, periodRange, weekdayIndex,
   type DashPeriod,
@@ -214,7 +214,16 @@ function barsOf(resp: DashPeriodResponse): Bar[] {
 
 const CHART_H = 340;
 
+/** Цвет текущего периода на графиках блока — цвет его этапа (владелец 10.10: сделки — жёлтые,
+ *  брони — голубые, продажи — синие, отгрузки — зелёные; серый «с чем сравниваем» не меняется).
+ *  bar — столбцы, линии, точки, легенда; ink — числа и даты (темнее); слова — для сносок. */
+interface StageInk { bar: string; ink: string; m: string; f: string; i: string }
+const SALES_INK: StageInk = { bar: C.primary, ink: C.primary, m: 'синий', f: 'синяя', i: 'синим' };
+const StageCtx = createContext<StageInk>(SALES_INK);
+const cap1 = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
 function CreatedChart({ resp, values }: { resp: DashPeriodResponse; values: number[] }) {
+  const st = useContext(StageCtx);
   const bars = barsOf(resp);
   const dense = bars.length > 14;
   const { top, step } = niceScale(Math.max(0, ...values));
@@ -243,7 +252,7 @@ function CreatedChart({ resp, values }: { resp: DashPeriodResponse; values: numb
                   {!b.future && (
                     <>
                       <span className="mb-1 whitespace-nowrap font-bold leading-none tabular-nums" style={dense ? { fontSize: 10, writingMode: 'vertical-rl', transform: 'rotate(180deg)' } : { fontSize: 14 }}>{nf.format(values[i])}</span>
-                      <div className="w-[62%] max-w-[110px] rounded-t-[3px]" style={{ height: pct(values[i]), minHeight: values[i] > 0 ? 2 : 0, background: C.primary, opacity: b.current ? 0.5 : 1 }} />
+                      <div className="w-[62%] max-w-[110px] rounded-t-[3px]" style={{ height: pct(values[i]), minHeight: values[i] > 0 ? 2 : 0, background: st.bar, opacity: b.current ? 0.5 : 1 }} />
                     </>
                   )}
                 </div>
@@ -282,7 +291,7 @@ export function shortRange(from: string, to: string): string {
 const monthName = (day: string) => `${MONTHS_NOM[Number(day.slice(5, 7)) - 1]} ${day.slice(0, 4)}`;
 /** Плашка выбранного фильтра в заголовке графика: филиал — синяя, департамент — жёлтая
  *  (те же цвета, что у самих фильтров на странице). */
-export interface FilterTag { label: string; tone: 'primary' | 'accent' }
+export interface FilterTag { label: string; tone: 'primary' | 'accent'; /** свой цвет плашки (филиал — цветом филиала) */ color?: string }
 
 /** Заголовок карточки графика; за названием — что выбрано в фильтрах (правка владельца 09.10:
  *  «во всех названиях подставлять фильтр»), чтобы по одной карточке было видно, чьи это цифры. */
@@ -292,7 +301,7 @@ function CardTitle({ children, tags }: { children: ReactNode; tags: FilterTag[] 
       <div className="text-[20px] font-bold leading-tight">{children}</div>
       {tags.map(t => (
         <span key={`${t.tone}${t.label}`} className="rounded-md px-2 py-0.5 text-[13px] font-bold leading-snug"
-          style={t.tone === 'accent' ? { background: C.accent, color: C.onAccent } : { background: C.primary, color: C.onPrimary }}>{t.label}</span>
+          style={t.tone === 'accent' ? { background: C.accent, color: C.onAccent } : { background: t.color ?? C.primary, color: t.color ? C.onAccent : C.onPrimary }}>{t.label}</span>
       ))}
     </div>
   );
@@ -530,136 +539,8 @@ const dayNum = (d: string) => `${Number(d.slice(8, 10))}.${d.slice(5, 7)}`;
  *  подобное с подобным, а не пятницу с понедельником»). */
 const MONTH_BASE = '4 недели назад';
 
-/** Месяц накопительно: сколько сделок набрано к каждому числу — против тех же дней недели
- *  четырьмя неделями раньше (та же база, что у графика по дням). */
-function MonthCompare({ resp, cmp, nodeId, nodeTitle, tags }: { resp: DashPeriodResponse; cmp: DashCompareMonth; nodeId: string | null; nodeTitle: string; tags: FilterTag[] }) {
-  const s = cmp.series.find(x => x.id === nodeId) ?? cmp.series[0];
-  const curName = monthName(resp.from);
-  const cur = cmp.current;
-  const cm = Number(resp.from.slice(5, 7)) - 1;
-  const dayOf = (i: number) => `${resp.from.slice(0, 8)}${String(i + 1).padStart(2, '0')}`;
-  const baseDayOf = (i: number) => addDays(dayOf(i), -cmp.shiftDays);
-  const n = cmp.curDays;
-  const max = Math.max(0, ...s.cur, ...s.base);
-  const x = (i: number) => ((i + 0.5) / n) * 100;
-  const line = (pts: number[], h: (v: number) => number) => pts.map((v, i) => `${x(i)},${100 - h(v) * 100}`).join(' ');
-  const last = s.cur.length - 1;
-  const baseEnd = s.base.length - 1;
-  const curAbove = s.cur[last] >= (cur ? s.baseTotal : s.base[baseEnd] ?? 0);
-  const ringX = x(Math.min(last, Math.max(baseEnd, 0)));
-  // подсветка, подсказки и выбор дня — общие с остальными графиками месяца
-  const frame = frameOf(resp, cmp);
-  const { active, pin, col, unpin } = useFx(frame.scope);
-  const sel = pin != null && pin <= last ? pin : null;
-  /** Накоплено в базе к дню i; у сегодняшнего дня — на то же время. */
-  const baseAt = (i: number): number | null => (i === last && cur ? s.baseTotal : s.base[i] ?? null);
-  const pctAt = (i: number) => {
-    const b = baseAt(i);
-    if (i > last || b == null || b <= 0) return null;
-    const d = ((s.cur[i] - b) / b) * 100;
-    return { text: `${signed(d, nf1.format(Math.abs(d)))}%`, color: d > 0 ? C.successText : d < 0 ? C.error : C.muted };
-  };
-  const tipOf = (i: number) => () => {
-    const b = baseAt(i);
-    return (
-      <TipBox title="Сделки с начала месяца" delta={pctAt(i)}
-        hint={PIN_ON_CLICK ? 'Этот день показан сверху на всех графиках. Нажмите на него ещё раз — вернуть итог периода.' : undefined}
-        rows={[
-          i <= last ? { color: C.primary, label: `по ${dayShort(dayOf(i))}`, value: nf.format(s.cur[i]) } : null,
-          b != null ? { color: C.base, label: `по ${dayShort(baseDayOf(i))}${i === last && cur?.cutoffTime ? ', на то же время' : ''}`, value: nf.format(b) } : null,
-        ]} />
-    );
-  };
-  return (
-    <div className="@container/card min-w-0 p-4 sm:p-5" style={card}>
-      <CardTitle tags={tags}>Сделки с начала месяца, накопительно</CardTitle>
-      <div className="mt-0.5 text-[13px] font-medium" style={{ color: C.muted }}>{nodeTitle} · сколько сделок набрано к каждому числу · серая линия — те же дни недели {MONTH_BASE}</div>
-      {/* итог и общее отклонение за период — те же три числа, что на графике по дням (правка владельца 09.10) */}
-      <div className={KPI_GRID}>
-        {sel == null ? (
-          <>
-            <Kpi label={cur ? `${curName}, по сегодня · ${monthDates(cur.day, cm)}` : `${curName} · весь месяц`}>{nf.format(s.curTotal)}</Kpi>
-            <Kpi label={`${cap(MONTH_BASE)}, те же дни недели · ${cur ? shortRange(cmp.baseFrom, baseDayOf(cur.day - 1)) : shortRange(cmp.baseFrom, cmp.baseTo)}`}>{nf.format(s.baseTotal)}</Kpi>
-            <Kpi label="Отклонение, день ко дню"><Delta cur={s.curTotal} base={s.baseTotal} /></Kpi>
-          </>
-        ) : (
-          // выбран день: сколько набрано с начала месяца по этот день
-          <>
-            <Kpi on label={`Выбрано · ${monthDates(sel + 1, cm)}`}>{nf.format(s.cur[sel])}</Kpi>
-            <Kpi on label={`${cap(MONTH_BASE)} · ${shortRange(cmp.baseFrom, baseDayOf(sel))}`}>{baseAt(sel) != null ? nf.format(baseAt(sel)!) : '—'}</Kpi>
-            <Kpi on label="Отклонение по этот день"><Delta cur={s.cur[sel]} base={baseAt(sel)} /></Kpi>
-          </>
-        )}
-      </div>
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <Legend items={[{ color: C.base, label: `${cap(MONTH_BASE)} (${shortRange(cmp.baseFrom, cmp.baseTo)})` }, { color: C.primary, label: curName }]} />
-        {sel != null && <Unpin onClick={unpin} />}
-      </div>
-      <div className="mt-3">
-        <Plot max={max * 1.08} yLabel="Сделок с начала месяца" xTitle={`День недели · синим — дата ${MONTHS_GEN[cm]}, серым — дата ${MONTH_BASE}, с которой она сравнивается`} colMin={31} active={active}
-          labels={Array.from({ length: n }, (_, i) => ({
-            key: String(i), label: String(i + 1), dim: i > last,
-            lines: [
-              { text: cap(WEEKDAYS_SHORT[weekdayIndex(dayOf(i))]), color: C.text, bold: true },
-              { text: dayNum(dayOf(i)), color: C.primary, bold: true },
-              { text: dayNum(baseDayOf(i)), color: C.muted },
-            ],
-          }))}>
-          {h => (
-            <>
-              {/* под линиями — полоса подсвеченного дня; прозрачные столбцы поверх всего ловят мышь (в конце) */}
-              <div className="absolute inset-0 flex" aria-hidden>
-                {Array.from({ length: n }, (_, i) => <div key={i} className="h-full min-w-0 flex-1" style={{ borderRadius: 6, background: active === i ? C.mutedBg : undefined, boxShadow: pin === i ? `inset 0 0 0 2px ${C.primary}` : undefined, transition: 'background-color .12s' }} />)}
-              </div>
-              <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
-                <polyline points={line(s.base, h)} fill="none" style={{ stroke: C.base }} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-                <polyline points={line(s.cur, h)} fill="none" style={{ stroke: C.primary }} strokeWidth="3.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-              </svg>
-              {s.base.map((v, i) => (
-                <span key={`b${i}`} className="absolute -translate-x-1/2 translate-y-1/2 rounded-full" style={{ left: `${x(i)}%`, bottom: `${h(v) * 100}%`, width: active === i ? 10 : 7, height: active === i ? 10 : 7, background: C.base }} />
-              ))}
-              {s.cur.map((v, i) => (
-                <span key={`c${i}`} className="absolute -translate-x-1/2 translate-y-1/2 rounded-full" style={{ left: `${x(i)}%`, bottom: `${h(v) * 100}%`, width: active === i ? 13 : 9, height: active === i ? 13 : 9, background: C.primary }} />
-              ))}
-              {/* отклонение накопленного итога на каждый день (правка владельца 09.10); у сегодняшней
-                  точки база — на то же время. Стоит над верхней из двух точек; у последней — выше,
-                  чтобы не налезать на подписи концов линий. */}
-              {s.cur.map((v, i) => {
-                const base = i === last && cur ? s.baseTotal : s.base[i];
-                if (base == null || base <= 0) return null;
-                const r = Math.round(((v - base) / base) * 100);
-                return (
-                  <span key={`p${i}`} className="absolute -translate-x-1/2 whitespace-nowrap rounded-md px-0.5 py-0.5 text-[10px] font-bold leading-none tabular-nums"
-                    style={{ left: `${x(i)}%`, bottom: `calc(${h(Math.max(v, base)) * 100}% + ${i === last ? 30 : 10}px)`, color: r > 0 ? C.successText : r < 0 ? C.error : C.muted, background: C.mutedBg }}>{signed(r, String(Math.abs(r)))}%</span>
-                );
-              })}
-              {/* конец синей линии; у идущего месяца — ещё и база «на тот же момент» (кольцо) */}
-              <span className="absolute whitespace-nowrap text-[13px] font-bold tabular-nums" style={{ left: `${x(last)}%`, bottom: `${h(s.cur[last]) * 100}%`, transform: `translate(-50%, ${curAbove ? '-10px' : 'calc(100% + 12px)'})`, color: C.primary }}>{nf.format(s.cur[last])}</span>
-              {cur && (
-                <>
-                  <span className="absolute h-[11px] w-[11px] -translate-x-1/2 translate-y-1/2 rounded-full" style={{ left: `${ringX}%`, bottom: `${h(s.baseTotal) * 100}%`, border: `2px solid ${C.base}`, background: C.surface }}
-                    title={`${cap(MONTH_BASE)} на тот же момент: ${nf.format(s.baseTotal)}`} />
-                  <span className="absolute whitespace-nowrap text-[12px] font-bold tabular-nums" style={{ left: `${ringX}%`, bottom: `${h(s.baseTotal) * 100}%`, transform: `translate(-50%, ${curAbove ? 'calc(100% + 12px)' : '-12px'})`, color: C.muted }}>{nf.format(s.baseTotal)}</span>
-                </>
-              )}
-              {/* у идущего месяца конец серой линии совпадает с кольцом «на тот же момент» — второе число там лишнее */}
-              {baseEnd >= 0 && !(cur && baseEnd === last) && (
-                <span className="absolute whitespace-nowrap text-[12px] font-bold tabular-nums" style={{ left: `${x(baseEnd)}%`, bottom: `${h(s.base[baseEnd]) * 100}%`, transform: `translate(-80%, ${!cur && curAbove ? 'calc(100% + 12px)' : '-10px'})`, color: C.muted }}>{nf.format(s.base[baseEnd])}</span>
-              )}
-              <div className="absolute inset-0 flex">
-                {Array.from({ length: n }, (_, i) => <div key={i} className="h-full min-w-0 flex-1 cursor-pointer" {...col(i, tipOf(i))} />)}
-              </div>
-            </>
-          )}
-        </Plot>
-      </div>
-      <div className="mt-3 text-[12px] leading-snug" style={{ color: C.muted }}>
-        Линии — сколько сделок создано с начала месяца к концу каждого дня. Серая — те же дни недели четырьмя неделями раньше. Синяя выше серой — месяц идёт с опережением, ниже — отстаёт. Проценты — на сколько накопленный итог на этот день больше или меньше.
-        {cur && ` Кольцо на серой линии — база по тот же день${cur.cutoffTime ? ` и то же время (до ${cur.cutoffTime})` : ''}.`}
-      </div>
-    </div>
-  );
-}
+/* Отдельная карточка «Сделки с начала месяца, накопительно» (MonthCompare) удалена 10.10 по решению
+   владельца: тот же график даёт переключатель «Накопительно» на карточке сделок. */
 
 // ───────────────────────────── филиалы между собой ─────────────────────────────
 
@@ -711,11 +592,13 @@ function groupCompare(input: DashCompare | null, groups: { key: string; ids: str
   }
   return compare;
 }
-const CITY_COLORS = [C.primary, C.city2, C.city3, C.city4, C.base];
-// У филиалов цвет постоянный, а не по порядку (решение владельца 09.10): Питер — синий,
-// Москва — зелёный, Краснодар — красный. Новый филиал и департаменты берут запасные цвета.
-const BRANCH_COLORS: Record<string, string> = { 'СПБ': C.primary, 'МСК': C.cityMsk, 'КРД': C.cityKrd };
-const SPARE_COLORS = [C.city2, C.city4, C.city3, C.base];
+// У филиалов цвет постоянный, а не по порядку. Владелец 10.10: Питер — фиолетовый, Москва —
+// оранжевый, Краснодар — красный (цвета не совпадают с цветами этапов); до 10.10 Питер был синим,
+// Москва — зелёной. Потом Питер — нежная бирюза Зимнего дворца, все три нежные (владелец 10.10). Новый филиал и департаменты берут запасные цвета.
+const BRANCH_COLORS: Record<string, string> = { 'СПБ': C.citySpb, 'МСК': C.cityMsk, 'КРД': C.cityKrd };
+/** Цвет филиала по короткому имени (СПБ / МСК / КРД) — для фильтра на странице и плашек. */
+export const branchColor = (short: string): string | undefined => BRANCH_COLORS[short];
+const SPARE_COLORS = [C.dept1, C.dept2, C.dept3, C.dept4, C.base];
 
 /** Пара «текущее / база» филиала для отклонения — те же числа, что в карточке сравнения периода. */
 function branchPair(resp: DashPeriodResponse, id: string): { cur: number | null; base: number | null } | null {
@@ -748,11 +631,10 @@ function BranchCompare({ resp, branches, title, scopeId, tags, onPick }: {
   const { active, pin, col, look, unpin } = useFx(`${resp.period}|${resp.from}`);
   const found = branches.map(b => ({ b, s: resp.series.find(x => x.id === b.id) }))
     .filter((x): x is { b: PeriodBranch; s: DashPeriodResponse['series'][number] } => !!x.s);
-  const anyFixed = found.some(r => BRANCH_COLORS[r.b.short]);
   let spare = 0;
-  const rows = found.map((r, i) => ({
+  const rows = found.map(r => ({
     ...r,
-    color: BRANCH_COLORS[r.b.short] ?? (anyFixed ? SPARE_COLORS[spare++ % SPARE_COLORS.length] : CITY_COLORS[i % CITY_COLORS.length]),
+    color: BRANCH_COLORS[r.b.short] ?? SPARE_COLORS[spare++ % SPARE_COLORS.length],
   }));
   if (rows.length < 2) return null;
   // итог выбранного среза (все филиалы / город / департамент): за период и по каждому дню
@@ -863,6 +745,160 @@ function BranchCompare({ resp, branches, title, scopeId, tags, onPick }: {
       <div className="mt-3 text-[12px] leading-snug" style={{ color: C.muted }}>
         Крупное число — сделки, созданные за весь выбранный период{resp.offset === 0 ? ' на сейчас' : ''}, доля — от итога. Число в плашке над столбцами — итого за {resp.period === 'year' ? 'месяц' : 'день'}. Изменение {to} посчитано так же, как в карточке сравнения выше
         {resp.period === 'month' ? ' (те же дни недели четырьмя неделями раньше)' : resp.offset > 0 ? ' (период целиком к периоду целиком)' : resp.period === 'week' ? ' (день ко дню: те же дни недели)' : ' (по те же даты года)'}.{resp.period === 'year' && ' Январь считается с 10 января.'}
+        {resp.offset === 0 && (resp.period === 'year' ? ' Светлые столбцы — текущий месяц, он ещё не закончился.' : ' Светлые столбцы — сегодня, день ещё не закончился.')}
+      </div>
+    </div>
+  );
+}
+
+// ───────────────────── конверсии по филиалам / департаментам ─────────────────────
+// Правка владельца 10.10: «ниже конверсий из сделки в бронь и из брони в продажу сделать два
+// графика, где по филиалам ещё видно, не только по одному». Как «Сделки по филиалам», только
+// столбик — конверсия филиала (или департамента выбранного филиала) за день / месяц.
+
+/** Отклонение конверсии строки в процентных пунктах — строкой под крупным числом. */
+function DeltaPPLine({ cur, base, to }: { cur: number | null; base: number | null; to: string }) {
+  if (cur == null || base == null) return <span style={{ color: C.muted }}>нет данных для сравнения</span>;
+  const d = cur - base;
+  const color = d > 0 ? C.successText : d < 0 ? C.error : C.muted;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-1.5">
+      <span className="inline-flex items-center gap-0.5 font-bold" style={{ color }}>
+        {d !== 0 && (d > 0 ? <ArrowUp size={13} /> : <ArrowDown size={13} />)}{signed(d, nf1.format(Math.abs(d)))} п.п.
+      </span>
+      <span style={{ color: C.muted }}>{to}</span>
+    </span>
+  );
+}
+
+// Правка владельца 10.10: «давай так же сделаем продажи и отгрузки, чтоб всё было в едином стиле» —
+// та же карточка показывает и сумму (продаж / отгрузок) по филиалам: amount задан — столбик это
+// сумма строки в млн ₽, в плитке доля от итога и изменение в %, знаменателя нет.
+function BranchRatioCard({ resp, branches, title, scopeId, tags, num, den, numWord, denWord, formula, amount, onPick }: {
+  resp: DashPeriodResponse; branches: PeriodBranch[]; title: string; scopeId: string; tags: FilterTag[];
+  /** Сравнения числителя и знаменателя (для сделок — resp.compare). У суммы den не нужен. */
+  num: DashCompare | null | undefined; den?: DashCompare | null | undefined;
+  numWord: string; denWord: string; formula: string;
+  /** Сумма продаж ('sale') или отгрузок ('ship') вместо конверсии. */
+  amount?: 'sale' | 'ship';
+  onPick?: (b: PeriodBranch) => void;
+}) {
+  const { active, col, look } = useFx(`${resp.period}|${resp.from}`);
+  const pick = (id: string) => {
+    const n = bucketsOf(resp, num, id), d = amount ? null : bucketsOf(resp, den, id);
+    return n && (amount || d) ? { n, d } : null;
+  };
+  const mln = (v: number | null) => (v == null ? null : v / 1e6);
+  /** Значение строки: конверсия в % или сумма в млн ₽. */
+  const valOf = (n: number | null, d: number | null) => (amount ? mln(n) : ratio(n, d));
+  const found = branches.map(b => ({ b, nd: pick(b.id) })).filter((x): x is { b: PeriodBranch; nd: { n: Buckets; d: Buckets | null } } => !!x.nd);
+  let spare = 0;
+  const rows = found.map(r => ({
+    ...r,
+    color: BRANCH_COLORS[r.b.short] ?? SPARE_COLORS[spare++ % SPARE_COLORS.length],
+    vals: r.nd.n.cur.map((v, j) => valOf(v, r.nd.d?.cur[j] ?? null)),
+    total: valOf(r.nd.n.curTotal, r.nd.d?.curTotal ?? null),
+    baseTotal: valOf(r.nd.n.baseTotal, r.nd.d?.baseTotal ?? null),
+  }));
+  if (rows.length < 2) return null;
+  const scope = pick(scopeId);
+  const scopeVals = scope ? scope.n.cur.map((v, j) => valOf(v, scope.d?.cur[j] ?? null)) : [];
+  const bars = barsOf(resp);
+  const to = resp.period === 'week' ? (resp.offset === 0 ? 'к прошлой неделе' : 'к предыдущей неделе') : resp.period === 'month' ? 'к тем же дням 4 недели назад' : 'к прошлому году';
+  const max = Math.max(amount ? 0.001 : 1, ...rows.flatMap(r => r.vals.map(v => v ?? 0)));
+  const dense = bars.length * rows.length > 24;
+  const parts = (n: number | null, d: number | null) => (n != null && d != null ? `${numWord}: ${nf.format(n)} · ${denWord}: ${nf.format(d)}` : null);
+  /** Число на столбике / в плашке. */
+  const fmtBar = (v: number, short: boolean) => (amount ? fmtMln(v) : fmtPct(v, short));
+  /** Крупное число в плитке и в итоге. */
+  const fmtBig = (v: number | null) => (v == null ? '—' : amount ? `${fmtMln(v)} млн ₽` : `${nf1.format(v)}%`);
+  const scopeTotal = scope ? valOf(scope.n.curTotal, scope.d?.curTotal ?? null) : null;
+  const scopeBase = scope ? valOf(scope.n.baseTotal, scope.d?.baseTotal ?? null) : null;
+  /** Под числом: из чего сложилась конверсия, у суммы — доля от итога. */
+  const subOf = (n: number | null, d: number | null, whole: number | null) => (amount
+    ? (n != null && whole != null && whole > 0 ? `доля ${nf1.format((n / whole) * 100)}%` : null)
+    : parts(n, d));
+  const deltaOf = (cur: number | null, base: number | null) => (amount
+    ? <DeltaLine pair={{ cur, base }} to={to} />
+    : <DeltaPPLine cur={cur} base={base} to={to} />);
+  const tipOf = (i: number) => () => (
+    <TipBox title={`${title} · ${bars[i].title}`}
+      rows={[
+        ...rows.map(r => {
+          const v = r.vals[i];
+          return { color: r.color, label: r.b.short === r.b.name ? r.b.name : `${r.b.short} · ${r.b.name}`, value: fmtBig(v), sub: subOf(r.nd.n.cur[i], r.nd.d?.cur[i] ?? null, scope?.n.cur[i] ?? null) };
+        }),
+        scope ? { color: 'transparent', label: 'Итого', value: fmtBig(scopeVals[i]), sub: amount ? null : parts(scope.n.cur[i], scope.d?.cur[i] ?? null) } : null,
+      ]} />
+  );
+  return (
+    <div className="@container/card min-w-0 p-4 sm:p-5" style={card}>
+      <div className="flex flex-col gap-x-5 gap-y-2 @[460px]/card:flex-row @[460px]/card:items-start @[460px]/card:justify-between">
+        <div className="min-w-0 @[460px]/card:flex-1">
+          <CardTitle tags={tags}>{title}</CardTitle>
+          <div className="mt-0.5 text-[13px] font-medium" style={{ color: C.muted }}>{amount ? (amount === 'ship' ? 'Сумма отгрузок' : 'Сумма продаж') : 'Конверсия'} каждого {branches.length && title.includes('департамент') ? 'департамента' : 'филиала'} {resp.period === 'year' ? 'по месяцам' : 'по дням'} · {resp.label}</div>
+        </div>
+        <div className="@[460px]/card:shrink-0 @[460px]/card:text-right">
+          <div className="text-[12px] font-medium @[760px]/card:text-[13px]" style={{ color: C.muted }}>Итого за период</div>
+          <div className="text-[22px] font-bold leading-tight tabular-nums @[760px]/card:text-[28px]" style={{ color: C.text }}>{fmtBig(scopeTotal)}</div>
+          <div className="text-[13px] tabular-nums">{deltaOf(scopeTotal, scopeBase)}</div>
+        </div>
+      </div>
+      <div className={rows.length <= 4 ? 'mt-3 grid grid-cols-1 gap-2 @[560px]/card:grid-cols-[repeat(var(--cols),minmax(0,1fr))] @[760px]/card:gap-3' : 'mt-3 grid gap-2 @[760px]/card:gap-3'}
+        style={rows.length <= 4 ? { '--cols': rows.length } as CSSProperties : { gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 190px), 1fr))' }}>
+        {rows.map(r => (
+          <div key={r.b.id} role={onPick ? 'button' : undefined} tabIndex={onPick ? 0 : undefined} title={onPick ? `Показать только ${r.b.name}` : undefined}
+            onClick={onPick ? () => onPick(r.b) : undefined} onKeyDown={onPick ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(r.b); } } : undefined}
+            className={`min-w-0 rounded-[10px] px-3 py-2.5 @[760px]/card:px-4 @[760px]/card:py-3 ${onPick ? 'dt-click' : ''}`} style={{ background: C.mutedBg }}>
+            <div className="flex min-w-0 items-center gap-2 text-[13px] font-medium" style={{ color: C.muted }}>
+              <span className="inline-block h-3 w-3 shrink-0 rounded-[3px]" style={{ background: r.color }} />
+              <span className="font-bold" style={{ color: C.text }}>{r.b.short}</span>
+              {r.b.short !== r.b.name && <span className="min-w-0 truncate">{r.b.name}</span>}
+            </div>
+            <div className="mt-1 text-[22px] font-bold leading-tight tabular-nums @[760px]/card:text-[28px]">{fmtBig(r.total)}</div>
+            <div className="text-[12px] font-medium tabular-nums" style={{ color: C.muted }}>{subOf(r.nd.n.curTotal, r.nd.d?.curTotal ?? null, scope?.n.curTotal ?? null)}</div>
+            <div className="mt-0.5 text-[12px] tabular-nums @[760px]/card:text-[13px]">{deltaOf(r.total, r.baseTotal)}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4"><Legend items={[...rows.map(r => ({ color: r.color, label: r.b.short })), { color: C.line, label: resp.period === 'year' ? 'итого за месяц — число в плашке' : 'итого за день — число в плашке' }]} /></div>
+      <div className="mt-3">
+        <Plot max={max * 1.15} yLabel={amount ? `${amount === 'ship' ? 'Отгружено' : 'Продано'} ${resp.period === 'year' ? 'в месяц' : 'в день'}, млн ₽` : `Конверсия ${resp.period === 'year' ? 'в месяц' : 'в день'}, %`} xTitle={resp.period === 'year' ? 'Месяц' : 'День'}
+          colMin={dense ? (resp.period === 'month' ? 5 + rows.length * 9 : 8 + rows.length * 12) : 16 + rows.length * 20} active={active}
+          labels={bars.map(b => ({ key: b.key, label: b.label, sub: b.sub, dim: b.future }))}>
+          {h => (
+            <div className="flex h-full items-end">
+              {bars.map((b, i) => {
+                const top = Math.max(0, ...rows.map(r => r.vals[i] ?? 0));
+                const sv = scopeVals[i];
+                return (
+                  <div key={b.key} className="relative flex h-full min-w-0 flex-1 items-end justify-center" style={{ gap: dense ? 1 : '3%', ...(b.future ? {} : look(i)) }} {...(b.future ? {} : col(i, tipOf(i)))}>
+                    {!b.future && sv != null && (
+                      <span className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md px-1 py-0.5 font-bold leading-none tabular-nums"
+                        style={{ bottom: `calc(${h(top) * 100}% + ${dense ? 10 + fmtBar(top, true).length * 6.5 : 22}px)`, fontSize: dense ? 11 : 13, color: C.text, background: C.mutedBg, opacity: b.current ? 0.6 : 1 }}>{fmtBar(sv, dense)}</span>
+                    )}
+                    {rows.map(r => { const v = r.vals[i]; return (
+                      <div key={r.b.id} className="flex h-full flex-col items-center justify-end" style={{ width: `${(dense ? 90 : 82) / rows.length}%`, maxWidth: 64 }}>
+                        {!b.future && v != null && (
+                          <>
+                            <span className="mb-1 whitespace-nowrap font-bold leading-none tabular-nums"
+                              style={dense ? { fontSize: 10, writingMode: 'vertical-rl', transform: 'rotate(180deg)' } : { fontSize: rows.length >= 3 ? 11 : 13 }}>{fmtBar(v, dense)}</span>
+                            <div className="w-full rounded-t-[3px]" style={{ height: `${h(v) * 100}%`, minHeight: v > 0 ? 2 : 0, background: r.color, opacity: b.current ? 0.55 : 1 }} />
+                          </>
+                        )}
+                      </div>
+                    ); })}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Plot>
+      </div>
+      <div className="mt-3 text-[12px] leading-snug" style={{ color: C.muted }}>
+        {formula} {amount
+          ? <>Крупное число в плитке — сумма за весь период{resp.offset === 0 ? ' на сейчас' : ''} в млн ₽, доля — от итога, изменение {to} — в процентах. Числа над столбцами — млн ₽, в плашке — сумма всех вместе за {resp.period === 'year' ? 'месяц' : 'день'}.</>
+          : <>Крупное число в плитке — конверсия за весь период{resp.offset === 0 ? ' на сейчас' : ''}, изменение {to} — в процентных пунктах. Число в плашке над столбцами — конверсия всех вместе за {resp.period === 'year' ? 'месяц' : 'день'}.</>}{resp.period === 'year' && ' Январь считается с 10 января.'} Нажмите на плитку — фильтр по этому {title.includes('департамент') ? 'департаменту' : 'филиалу'}.
         {resp.offset === 0 && (resp.period === 'year' ? ' Светлые столбцы — текущий месяц, он ещё не закончился.' : ' Светлые столбцы — сегодня, день ещё не закончился.')}
       </div>
     </div>
@@ -1029,7 +1065,7 @@ function DeltaPP({ cur, base }: { cur: number | null; base: number | null }) {
  *  delta: 'pct' — изменение в процентах (штуки, суммы), 'pp' — в процентных пунктах (конверсии).
  *  partialMode: 'solid' — серый столбец идущего дня целиком, плотная часть — на то же время;
  *  'replace' — серое значение сразу на то же время (у конверсии «часть столбца» смысла не имеет). */
-function PairCard({ title, tags, sub, frame, cur, base, pi, basePartial, partialMode, yLabel, fmt, delta, footer, lines, totals, fmtKpi, deltaKpi, subOf, toggle, accum }: {
+function PairCard({ title, tags, sub, frame: frame0, cur, base, pi, basePartial, partialMode, yLabel, fmt, delta, footer, lines, totals, fmtKpi, deltaKpi, subOf, toggle, accum }: {
   title: string; tags: FilterTag[]; sub: string; frame: Frame;
   cur: (number | null)[]; base: (number | null)[]; pi: number | null; basePartial: number | null;
   partialMode: 'solid' | 'replace';
@@ -1053,6 +1089,13 @@ function PairCard({ title, tags, sub, frame, cur, base, pi, basePartial, partial
   /** Накопительный вид: в подсказке «по 6 окт» вместо «6 окт». */
   accum?: boolean;
 }) {
+  // цвет текущего периода — цвет этапа блока: столбцы, линии, даты под осью, слово в подписи оси
+  const st = useContext(StageCtx);
+  const frame: Frame = {
+    ...frame0,
+    xTitle: frame0.xTitle.replace('синим', st.i),
+    labels: frame0.labels.map(l => (l.lines ? { ...l, lines: l.lines.map(x => (x.color === C.primary ? { ...x, color: st.ink } : x)) } : l)),
+  };
   const short = frame.small === true;
   const n = frame.labels.length;
   const { active, pin, col, look, unpin } = useFx(frame.scope);
@@ -1102,7 +1145,7 @@ function PairCard({ title, tags, sub, frame, cur, base, pi, basePartial, partial
       <TipBox title={title} delta={change(i, false, true)}
         hint={PIN_ON_CLICK ? `Этот ${unit} показан сверху на всех графиках. Нажмите на него ещё раз — вернуть итог периода.` : undefined}
         rows={[
-          c != null ? { color: C.primary, label: `${accum ? 'по ' : ''}${frame.tips[i].cur}`, value: fmt(c, false), sub: subs?.cur } : null,
+          c != null ? { color: st.bar, label: `${accum ? 'по ' : ''}${frame.tips[i].cur}`, value: fmt(c, false), sub: subs?.cur } : null,
           b != null ? { color: C.base, label: `${accum ? 'по ' : ''}${partial ? `${frame.tips[i].base}, на то же время` : frame.tips[i].base}`, value: fmt(partial ? basePartial! : b, false), sub: subs?.base } : null,
           partial && partialMode === 'solid' && b != null ? { color: 'transparent', label: `за весь ${unit}`, value: fmt(b, false) } : null,
         ]} />
@@ -1134,7 +1177,7 @@ function PairCard({ title, tags, sub, frame, cur, base, pi, basePartial, partial
         )}
       </div>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <Legend items={[{ color: C.base, label: frame.baseLegend }, { color: C.primary, label: frame.curLegend }]} />
+        <Legend items={[{ color: C.base, label: frame.baseLegend }, { color: st.bar, label: frame.curLegend }]} />
         <div className="flex flex-wrap items-center gap-2">
           {sel != null && <Unpin onClick={unpin} />}
           {toggle}
@@ -1151,7 +1194,7 @@ function PairCard({ title, tags, sub, frame, cur, base, pi, basePartial, partial
               </div>
               <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
                 {segments(shown, h).map((pts, k) => <polyline key={`b${k}`} points={pts} fill="none" style={{ stroke: C.base }} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />)}
-                {segments(cur, h).map((pts, k) => <polyline key={`c${k}`} points={pts} fill="none" style={{ stroke: C.primary }} strokeWidth="3.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />)}
+                {segments(cur, h).map((pts, k) => <polyline key={`c${k}`} points={pts} fill="none" style={{ stroke: st.bar }} strokeWidth="3.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />)}
               </svg>
               {frame.labels.map((l, i) => {
                 const c = cur[i], b = shown[i];
@@ -1166,7 +1209,7 @@ function PairCard({ title, tags, sub, frame, cur, base, pi, basePartial, partial
                 const numbers = n <= 16 || i === n - 1;
                 const label = (v: number, blue: boolean, above: boolean) => (
                   <span className="absolute whitespace-nowrap font-bold leading-none tabular-nums"
-                    style={{ left: `${x(i)}%`, bottom: at(v), fontSize: fs, color: blue ? C.primary : C.muted, transform: `translate(-50%, ${above ? '-9px' : 'calc(100% + 9px)'})` }}>{text(v)}</span>
+                    style={{ left: `${x(i)}%`, bottom: at(v), fontSize: fs, color: blue ? st.ink : C.muted, transform: `translate(-50%, ${above ? '-9px' : 'calc(100% + 9px)'})` }}>{text(v)}</span>
                 );
                 // число нижней точки стоит под ней; у самой оси — над ней, а если и там тесно — его нет (есть в подсказке)
                 const lowPx = low != null ? h(Math.min(low, max)) * CHART_H : 0;
@@ -1175,7 +1218,7 @@ function PairCard({ title, tags, sub, frame, cur, base, pi, basePartial, partial
                 return (
                   <div key={l.key}>
                     {b != null && <span className="absolute -translate-x-1/2 translate-y-1/2 rounded-full" style={{ left: `${x(i)}%`, bottom: at(b), width: big ? 10 : 7, height: big ? 10 : 7, background: C.base }} />}
-                    {c != null && <span className="absolute -translate-x-1/2 translate-y-1/2 rounded-full" style={{ left: `${x(i)}%`, bottom: at(c), width: big ? 13 : 9, height: big ? 13 : 9, background: C.primary }} />}
+                    {c != null && <span className="absolute -translate-x-1/2 translate-y-1/2 rounded-full" style={{ left: `${x(i)}%`, bottom: at(c), width: big ? 13 : 9, height: big ? 13 : 9, background: st.bar }} />}
                     {numbers && label(hi, cTop, true)}
                     {numbers && low != null && lowWhere && label(low, !cTop, lowWhere === 'above')}
                     {nt && (
@@ -1204,7 +1247,7 @@ function PairCard({ title, tags, sub, frame, cur, base, pi, basePartial, partial
                     )}
                     <PairBar value={b != null ? Math.min(b, max) : null} h={h} color={C.base} small={frame.small} label={b != null ? text(b) : undefined}
                       solid={partialMode === 'solid' && i === pi && !over(b) ? basePartial : null} title="" />
-                    <PairBar value={c != null ? Math.min(c, max) : null} h={h} color={C.primary} small={frame.small} label={c != null ? text(c) : undefined} title="" />
+                    <PairBar value={c != null ? Math.min(c, max) : null} h={h} color={st.bar} small={frame.small} label={c != null ? text(c) : undefined} title="" />
                   </div>
                 );
               })}
@@ -1245,6 +1288,7 @@ function accumBuckets(b: Buckets): Buckets {
 /** Состояние и вид переключателя одной карточки. */
 function useAccum(frame: Frame, accLabel = 'Накопительно') {
   const [acc, setAcc] = useState(false);
+  const st = useContext(StageCtx);
   const year = frame.per === 'в месяц';
   const toggle = (
     <Seg label="Как показать" tone="neutral" value={acc ? 'acc' : 'per'} onPick={k => setAcc(k === 'acc')}
@@ -1255,7 +1299,7 @@ function useAccum(frame: Frame, accLabel = 'Накопительно') {
     acc, toggle,
     /** «в день» / «с начала недели» — в подпись оси. */
     per: acc ? `с начала ${from}` : frame.per,
-    note: acc ? ` Накопительно: каждая точка — сколько набрано с начала ${from} по этот ${year ? 'месяц' : 'день'}; синяя линия выше серой — период идёт с опережением.` : '',
+    note: acc ? ` Накопительно: каждая точка — сколько набрано с начала ${from} по этот ${year ? 'месяц' : 'день'}; ${st.f} линия выше серой — период идёт с опережением.` : '',
   };
 }
 
@@ -1266,15 +1310,16 @@ function useAccum(frame: Frame, accLabel = 'Накопительно') {
  *  чтобы подсветка, подсказки и выбор дня работали одинаково на всех графиках. */
 function DealsCard({ resp, cmp, tags, nodeTitle, frame, b: raw }: { resp: DashPeriodResponse; cmp: DashCompare; tags: FilterTag[]; nodeTitle: string; frame: Frame; b: Buckets }) {
   const ac = useAccum(frame);
+  const st = useContext(StageCtx);
   const b = ac.acc ? accumBuckets(raw) : raw;
   const going = resp.offset === 0;
   const word = cmp.mode === 'week' ? ['прошлой неделей', 'предыдущей неделей'] : cmp.mode === 'month' ? ['прошлым месяцем', 'предыдущим месяцем'] : ['прошлым годом', 'предыдущим годом'];
   const year = cmp.mode === 'year';
   const how = cmp.mode === 'week'
-    ? 'Серый столбец — тот же день прошлой недели, синий — этой. Итог сверху считается день ко дню: только по дням, которые уже наступили. Проценты над столбцами — изменение к тому же дню прошлой недели.'
+    ? `Серый столбец — тот же день прошлой недели, ${st.m} — этой. Итог сверху считается день ко дню: только по дням, которые уже наступили. Проценты над столбцами — изменение к тому же дню прошлой недели.`
     : cmp.mode === 'month'
-      ? `Серый столбец — тот же день недели четырьмя неделями раньше, синий — ${MONTHS_NOM[Number(resp.from.slice(5, 7)) - 1].toLowerCase()}. Так будни сравниваются с буднями, выходные — с выходными. Итог сверху — день ко дню. Проценты над столбцами — изменение к этому дню.`
-      : `Серый столбец — тот же месяц ${cmp.baseYear} года, синий — ${resp.from.slice(0, 4)}. Итог сверху считается по одинаковым датам. Проценты над столбцами — изменение к тому же месяцу ${cmp.baseYear} года.`;
+      ? `Серый столбец — тот же день недели четырьмя неделями раньше, ${st.m} — ${MONTHS_NOM[Number(resp.from.slice(5, 7)) - 1].toLowerCase()}. Так будни сравниваются с буднями, выходные — с выходными. Итог сверху — день ко дню. Проценты над столбцами — изменение к этому дню.`
+      : `Серый столбец — тот же месяц ${cmp.baseYear} года, ${st.m} — ${resp.from.slice(0, 4)}. Итог сверху считается по одинаковым датам. Проценты над столбцами — изменение к тому же месяцу ${cmp.baseYear} года.`;
   return (
     <PairCard title={`Сделки в сравнении с ${word[going ? 0 : 1]}`} tags={tags} frame={frame} delta="pct" partialMode={ac.acc ? 'replace' : 'solid'} lines={ac.acc} accum={ac.acc} toggle={ac.toggle}
       sub={`${nodeTitle} · ${frame.sub} · ${ac.acc ? 'сколько сделок набрано с начала периода' : `сколько сделок создано ${year ? 'в каждом месяце' : 'в каждый день'}`}`}
@@ -1299,6 +1344,7 @@ function RatioCard({ title, tags, nodeTitle, frame, num: rawNum, den: rawDen, nu
   // у конверсии кнопка — «С начала периода», а не «Накопительно»: конверсии не складываются, копятся
   // числитель и знаменатель (владелец 10.10: «а разве конверсия может быть накопительной?»)
   const ac = useAccum(frame, 'С начала периода');
+  const st = useContext(StageCtx);
   // накопительно: конверсия с начала периода — числитель и знаменатель копятся отдельно
   const nm = ac.acc ? accumBuckets(rawNum) : rawNum, dn = ac.acc ? accumBuckets(rawDen) : rawDen;
   const num = nm, den = dn;
@@ -1306,7 +1352,9 @@ function RatioCard({ title, tags, nodeTitle, frame, num: rawNum, den: rawDen, nu
   const base = num.base.map((v, i) => ratio(v, den.base[i]));
   const parts = (n: number | null, d: number | null) => (n != null && d != null ? `${numWord}: ${nf.format(n)} · ${denWord}: ${nf.format(d)}` : null);
   return (
-    <PairCard title={title} tags={tags} frame={frame} delta="pp" partialMode="replace" lines accum={ac.acc} toggle={ac.toggle}
+    // «По дням» — столбцы, «С начала периода» — линия (владелец 10.10: «где конверсии — столбчатые,
+    // а когда нажимаем накопительно, там остаётся линией»; 09.10 конверсии были переведены в линии целиком)
+    <PairCard title={title} tags={tags} frame={frame} delta="pp" partialMode="replace" lines={ac.acc} accum={ac.acc} toggle={ac.toggle}
       sub={`${nodeTitle} · ${frame.sub} · ${ac.acc ? `${what}, с начала периода` : what}`}
       cur={cur} base={base} pi={num.pi} basePartial={ratio(num.basePartial, den.basePartial)}
       yLabel={`Конверсия ${ac.per}, %`} fmt={fmtPct}
@@ -1316,7 +1364,7 @@ function RatioCard({ title, tags, nodeTitle, frame, num: rawNum, den: rawDen, nu
         cur: parts(num.cur[i], den.cur[i]),
         base: i === num.pi && num.basePartial != null ? parts(num.basePartial, den.basePartial) : parts(num.base[i], den.base[i]),
       })}
-      footer={<>Синяя линия выше серой — конверсия выросла, ниже — упала. {formula} Число в плашке над точками — на сколько процентных пунктов конверсия выше или ниже. {frame.partialNote}{ac.acc && ' С начала периода: каждая точка — конверсия за всё время с начала периода по этот день (брони и сделки с начала периода), а не только за этот день; последняя точка — итог сверху.'}</>} />
+      footer={<>{ac.acc ? `${cap1(st.f)} линия выше серой — конверсия выросла, ниже — упала.` : `${cap1(st.m)} столбец выше серого — конверсия выросла, ниже — упала.`} {formula} Число в плашке над {ac.acc ? 'точками' : 'столбцами'} — на сколько процентных пунктов конверсия выше или ниже. {frame.partialNote}{ac.acc && ' С начала периода: каждая точка — конверсия за всё время с начала периода по этот день (брони и сделки с начала периода), а не только за этот день; последняя точка — итог сверху.'}</>} />
   );
 }
 
@@ -1342,16 +1390,13 @@ function AmountCard({ title, tags, nodeTitle, frame, b: raw, ship }: { title: st
 
 /** Заголовок блока страницы: о чём графики ниже (правка владельца 09.10 — блоки «Сделки»,
  *  «Брони», «Продажи» отделены друг от друга и подписаны). */
-function SectionHead({ title, note, controls }: { title: string; note: string; /** свои фильтры блока — строкой под линией заголовка */ controls?: ReactNode }) {
+function SectionHead({ title, note, line = C.primary }: { title: string; note: string; /** цвет линии под заголовком — цвет этапа */ line?: string }) {
   return (
-    // Фильтры блока — под линией заголовка, у левого края (владелец 09.10). До этого побывали у
-    // правого края строки заголовка и слева перед названием — оба места владельцу не понравились.
-    <div>
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pb-2" style={{ borderBottom: `2px solid ${C.primary}` }}>
-        <h2 className="text-[26px] font-bold leading-tight">{title}</h2>
-        <span className="text-[13px] font-medium" style={{ color: C.muted }}>{note}</span>
-      </div>
-      {controls && <div className="mt-3">{controls}</div>}
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 pb-2" style={{ borderBottom: `3px solid ${line}` }}>
+      <h2 className="flex items-center gap-2.5 text-[26px] font-bold leading-tight">
+        <span aria-hidden className="inline-block h-4 w-4 shrink-0 rounded-[4px]" style={{ background: line }} />{title}
+      </h2>
+      <span className="text-[13px] font-medium" style={{ color: C.muted }}>{note}</span>
     </div>
   );
 }
@@ -1434,7 +1479,7 @@ function resolveScope(tree: ScopeTree, sel: ScopeSel) {
   const rowsTitle = !dept && city ? 'Сделки по департаментам' : 'Сделки по филиалам';
   // выбранные фильтры — плашками в заголовке графика (цвета те же, что у фильтров)
   const tags: FilterTag[] = [
-    ...(city ? [{ label: city.short, tone: 'primary' as const }] : []),
+    ...(city ? [{ label: city.short, tone: 'primary' as const, color: BRANCH_COLORS[city.short] }] : []),
     ...(dept ? [{ label: dept, tone: 'accent' as const }] : []),
   ];
   return { city, dept, deptLabels, title, ids, rows, rowsTitle, tags };
@@ -1475,6 +1520,7 @@ function Stub({ title, tags, text, error }: { title: string; tags: FilterTag[]; 
 function PlainCard({ resp, nodeId, nodeTitle, tags }: { resp: DashPeriodResponse; nodeId: string; nodeTitle: string; tags: FilterTag[] }) {
   const series = resp.series.find(x => x.id === nodeId);
   const year = resp.period === 'year';
+  const st = useContext(StageCtx);
   return (
     <div className="min-w-0 p-4 sm:p-5" style={card}>
       <CardTitle tags={tags}>{year ? 'Сделки по месяцам' : 'Сделки по дням'}</CardTitle>
@@ -1482,7 +1528,7 @@ function PlainCard({ resp, nodeId, nodeTitle, tags }: { resp: DashPeriodResponse
         <div className="text-[13px] font-medium" style={{ color: C.muted }}>{nodeTitle} · сколько сделок создано {year ? 'в каждом месяце' : 'в каждый день'} · {resp.label}</div>
         <div className="text-right">
           <div className="text-[13px] font-medium" style={{ color: C.muted }}>Всего сделок</div>
-          <div className="text-[28px] font-bold leading-tight tabular-nums" style={{ color: C.primary }}>{nf.format(series?.total ?? 0)}</div>
+          <div className="text-[28px] font-bold leading-tight tabular-nums" style={{ color: st.ink }}>{nf.format(series?.total ?? 0)}</div>
         </div>
       </div>
       <div className="mt-4">
@@ -1496,12 +1542,22 @@ function PlainCard({ resp, nodeId, nodeTitle, tags }: { resp: DashPeriodResponse
   );
 }
 
-type SlotKind = 'deals' | 'cumulative' | 'rows' | 'dealToResv' | 'resvToSale' | 'dealToSale' | 'amount' | 'dealToShip' | 'saleToShip' | 'shipAmount';
+/** Графики «по филиалам / департаментам»: вид → начало названия (конец — «по филиалам» или «по департаментам»). */
+const BY_BRANCH = {
+  dealToResvRows: 'Конверсия из сделки в бронь',
+  resvToSaleRows: 'Конверсия из брони в продажу',
+  dealToSaleRows: 'Конверсия из сделки в продажу',
+  amountRows: 'Сумма продаж',
+  dealToShipRows: 'Конверсия из сделки в отгрузку',
+  saleToShipRows: 'Конверсия из продажи в отгрузку',
+  shipAmountRows: 'Сумма отгрузок',
+} as const;
+type SlotKind = 'deals' | 'rows' | keyof typeof BY_BRANCH | 'dealToResv' | 'resvToSale' | 'dealToSale' | 'amount' | 'dealToShip' | 'saleToShip' | 'shipAmount';
 /** Название карточки, пока её данные грузятся или графика нет. */
 const SLOT_TITLE: Record<SlotKind, string> = {
   deals: 'Сделки в сравнении с прошлым периодом',
-  cumulative: 'Сделки с начала месяца, накопительно',
   rows: 'Сделки по филиалам',
+  ...(Object.fromEntries(Object.entries(BY_BRANCH).map(([k, v]) => [k, `${v} по филиалам`])) as Record<keyof typeof BY_BRANCH, string>),
   dealToResv: 'Конверсия из сделки в бронь',
   resvToSale: 'Конверсия из брони в продажу',
   dealToSale: 'Конверсия из сделки в продажу',
@@ -1510,7 +1566,6 @@ const SLOT_TITLE: Record<SlotKind, string> = {
   saleToShip: 'Конверсия из продажи в отгрузку',
   shipAmount: 'Сумма отгрузок',
 };
-const PERIOD_OPTS: { key: DashPeriod; label: string }[] = [{ key: 'week', label: 'Неделя' }, { key: 'month', label: 'Месяц' }, { key: 'year', label: 'Год' }];
 
 /** Одно место графика в блоке: свой запрос данных (одинаковые периоды у разных графиков — один
  *  запрос, его делит кэш) и нужная карточка внутри. Период, филиал и департамент задаёт блок. */
@@ -1540,11 +1595,32 @@ function ChartSlot({ kind, period, offset, tree, sel, onFilter }: {
               if (!row) return;
               if (sc.city && !sc.dept) onFilter(sc.city.id, row.short); else onFilter(row.key, sc.dept);
             } : undefined} />;
+    } else if (kind in BY_BRANCH) {
+      // графики «… по филиалам / департаментам» (брони 10.10, продажи и отгрузки 10.10 — «в едином стиле»)
+      const by = sc.rowsTitle.replace('Сделки ', '');
+      const x = resp.extra;
+      const spec = {
+        dealToResvRows: { num: x?.reservations, den: cmp, numWord: 'броней', denWord: 'сделок', formula: 'Конверсия — первичные брони за день, делённые на первичные сделки, созданные в этот день.' },
+        resvToSaleRows: { num: x?.salesReserved, den: x?.reservations, numWord: 'продаж из брони', denWord: 'броней', formula: 'Конверсия — первичные продажи за день, у которых была бронь, делённые на первичные брони за этот день.' },
+        dealToSaleRows: { num: x?.sales, den: cmp, numWord: 'продаж', denWord: 'сделок', formula: 'Конверсия — первичные продажи за день, делённые на первичные сделки, созданные в этот день.' },
+        amountRows: { num: x?.salesAmount, numWord: '', denWord: '', amount: 'sale' as const, formula: 'Сумма всех продаж по дате продажи — первичных и повторных.' },
+        dealToShipRows: { num: x?.shipments, den: cmp, numWord: 'отгрузок', denWord: 'сделок', formula: 'Конверсия — первичные отгрузки за день, делённые на первичные сделки, созданные в этот день.' },
+        saleToShipRows: { num: x?.shipmentsSold, den: x?.sales, numWord: 'отгрузок после продажи', denWord: 'продаж', formula: 'Конверсия — первичные отгрузки за день, у которых была продажа, делённые на первичные продажи за этот день.' },
+        shipAmountRows: { num: x?.shipmentsAmount, numWord: '', denWord: '', amount: 'ship' as const, formula: 'Сумма всех отгрузок по дате отгрузки — первичных и повторных.' },
+      }[kind as keyof typeof BY_BRANCH];
+      const t = `${BY_BRANCH[kind as keyof typeof BY_BRANCH]} ${by}`;
+      body = sc.rows.length < 2
+        ? <Stub title={t} tags={sc.tags} text="Сравнивать некого: выбраны и филиал, и департамент. Поставьте в одном из фильтров «Все»." />
+        : <BranchRatioCard resp={resp} title={t} scopeId={SCOPE} tags={sc.tags} branches={sc.rows.map(r => ({ id: `grp:${r.key}`, name: r.name, short: r.short }))}
+            {...spec}
+            onPick={onFilter ? b => {
+              const row = sc.rows.find(r => `grp:${r.key}` === b.id);
+              if (!row) return;
+              if (sc.city && !sc.dept) onFilter(sc.city.id, row.short); else onFilter(row.key, sc.dept);
+            } : undefined} />;
     } else if (kind === 'deals') {
       const b = bucketsOf(resp, cmp, SCOPE);
       body = !cmp || !b ? <PlainCard {...p} /> : <DealsCard resp={resp} cmp={cmp} tags={sc.tags} nodeTitle={sc.title} frame={frameOf(resp, cmp)} b={b} />;
-    } else if (kind === 'cumulative') {
-      body = cmp?.mode === 'month' ? <MonthCompare {...p} cmp={cmp} /> : none;
     } else {
       const frame = cmp ? frameOf(resp, cmp) : null;
       const deals = bucketsOf(resp, cmp, SCOPE);
@@ -1585,8 +1661,6 @@ function ChartSlot({ kind, period, offset, tree, sel, onFilter }: {
   return <>{body}</>;
 }
 
-/** Свой фильтр блока: действует, пока фильтр страницы, поверх которого он выбран (over), не изменился. */
-interface Own<T> { over: string; value: T }
 /** Включить фильтры страницы «Филиал» и «Департамент» (по нажатию на плитку в графике). */
 type OnFilter = (cityId: string | null, dept: string | null) => void;
 
@@ -1600,70 +1674,49 @@ type OnFilter = (cityId: string | null, dept: string | null) => void;
 // один столбец — в две колонки там не помещается даже неделя.
 const GRID = 'grid grid-cols-1 gap-5 @[1300px]:grid-cols-2 [&>*:last-child:nth-child(odd)]:col-span-full';
 
-/** Блок страницы: заголовок, в нём свои фильтры блока (период, филиал, департамент), ниже — графики. */
-function Block({ title, note, kinds, period: pagePeriod, offset: pageOffset, tree, sel, onFilter, onChanged }: {
-  title: string; note: string;
+/** Блок страницы: заголовок и графики. Свои фильтры у блоков убраны (владелец 10.10: «уберём
+ *  фильтр под каждым блоком, сделаем один вверху, который при прокрутке прикрепляется к верху») —
+ *  период, филиал и департамент у всех блоков те, что выбраны в закреплённой панели страницы. */
+// Цвета этапов (владелец 10.10: «у нас внутреннее ранжирование цветом: сделки — нежно-жёлтый,
+// брони — нежно-голубой, продажи — нежно-синий, отгрузки — нежно-зелёный; обыграй, чтобы при
+// прокрутке было понятно»): блок лежит на подложке своего цвета, линия и метка у заголовка —
+// тот же цвет плотнее. Белые карточки графиков на подложке не меняются.
+const STAGE: Record<'deals' | 'resv' | 'sales' | 'ship', { bg: string; line: string; ink: StageInk }> = {
+  deals: { bg: C.dealsBg, line: C.deals, ink: { bar: C.dealsBar, ink: C.dealsInk, m: 'жёлтый', f: 'жёлтая', i: 'жёлтым' } },
+  resv: { bg: C.resvBg, line: C.resv, ink: { bar: C.resvBar, ink: C.resvInk, m: 'голубой', f: 'голубая', i: 'голубым' } },
+  sales: { bg: C.salesBg, line: C.sales, ink: SALES_INK },
+  ship: { bg: C.shipBg, line: C.ship, ink: { bar: C.shipBar, ink: C.shipInk, m: 'зелёный', f: 'зелёная', i: 'зелёным' } },
+};
+
+function Block({ title, note, stage, kinds, period, offset, tree, sel, onFilter }: {
+  title: string; note: string; stage: keyof typeof STAGE;
   /** Какие графики в блоке при его периоде. */
   kinds: (period: DashPeriod) => SlotKind[];
   period: DashPeriod; offset: number; tree: ScopeTree; sel: ScopeSel; onFilter?: OnFilter;
-  /** Блок сообщает, настроен ли он не как страница (для «Сбросить все фильтры»). */
-  onChanged?: (title: string, changed: boolean) => void;
 }) {
-  const [ownPeriod, setOwnPeriod] = useState<Own<DashPeriod> | null>(null);
-  const [ownCity, setOwnCity] = useState<Own<string | null> | null>(null);
-  const [ownDept, setOwnDept] = useState<Own<string | null> | null>(null);
-  const overP = `${pagePeriod}|${pageOffset}`, overC = String(sel.cityId), overD = String(sel.dept);
-  const period: DashPeriod = ownPeriod?.over === overP ? ownPeriod.value : pagePeriod;
-  // свой период блока — всегда текущая неделя / месяц / год; выбор даты на странице листает только её период
-  const offset = period === pagePeriod ? pageOffset : 0;
-  const cityId = ownCity?.over === overC ? ownCity.value : sel.cityId;
-  const sc = resolveScope(tree, { cityId, dept: ownDept?.over === overD ? ownDept.value : sel.dept });
-  const changed = period !== pagePeriod || cityId !== sel.cityId || sc.dept !== resolveScope(tree, sel).dept;
-  useEffect(() => { onChanged?.(title, changed); }, [onChanged, title, changed]);
-  const controls = (
-    // между группами фильтров 16px (было 6 — владелец 09.10: «сделай отступ между фильтрами больше»)
-    <div className="flex max-w-full flex-wrap items-center gap-x-4 gap-y-2">
-      <Seg label={`Период блока «${title}»`} tone="neutral" options={PERIOD_OPTS} value={period} onPick={k => setOwnPeriod({ over: overP, value: k as DashPeriod })} />
-      <Seg label={`Филиал блока «${title}»`} tone="primary" value={cityId ?? ''} onPick={k => setOwnCity({ over: overC, value: k || null })}
-        options={[{ key: '', label: 'Все' }, ...tree.cities.map(c => ({ key: c.id, label: c.short }))]} />
-      {sc.deptLabels.length > 0 && (
-        <Seg label={`Департамент блока «${title}»`} tone="accent" value={sc.dept ?? ''} onPick={k => setOwnDept({ over: overD, value: k || null })}
-          options={[{ key: '', label: 'Все' }, ...sc.deptLabels.map(l => ({ key: l, label: l }))]} />
-      )}
-      {changed && (
-        <button type="button" onClick={() => { setOwnPeriod(null); setOwnCity(null); setOwnDept(null); }} title="Вернуть этому блоку фильтры страницы"
-          className="min-h-[30px] cursor-pointer rounded-md px-2 text-[12px] font-bold leading-none underline underline-offset-2" style={{ color: C.muted }}>Сбросить</button>
-      )}
-    </div>
-  );
   return (
-    <section className="flex flex-col gap-4">
-      <SectionHead title={title} note={note} controls={controls} />
+    // data-stage / data-title — по ним закреплённая панель страницы показывает, в каком блоке читатель
+    <StageCtx.Provider value={STAGE[stage].ink}>
+    <section data-stage={stage} data-title={title} className="flex flex-col gap-4 rounded-[20px] p-3 sm:p-5" style={{ background: STAGE[stage].bg }}>
+      <SectionHead title={title} note={note} line={STAGE[stage].line} />
       <div className={GRID}>
-        {kinds(period).map(kind => <ChartSlot key={kind} kind={kind} period={period} offset={offset} tree={tree} sel={{ cityId, dept: sc.dept }} onFilter={onFilter} />)}
+        {kinds(period).map(kind => <ChartSlot key={kind} kind={kind} period={period} offset={offset} tree={tree} sel={sel} onFilter={onFilter} />)}
       </div>
     </section>
+    </StageCtx.Provider>
   );
 }
 
-export function PeriodView({ period, offset, tree, sel, onFilter, resetKey, onOwnFilters }: {
-  /** Период и дата, выбранные на странице, — значение по умолчанию для всех блоков. */
+export function PeriodView({ period, offset, tree, sel, onFilter }: {
+  /** Период и дата, выбранные на странице. */
   period: DashPeriod; offset: number;
   tree: ScopeTree;
   /** Филиал и департамент, выбранные на странице. */
   sel: ScopeSel;
   /** Нажали на филиал / департамент в графике — страница включает фильтр по нему. */
   onFilter?: OnFilter;
-  /** «Сбросить все фильтры» на странице: при смене числа блоки забывают свои фильтры. */
-  resetKey?: number;
-  /** Есть ли хоть один блок, настроенный не как страница, — чтобы страница показала «Сбросить все фильтры». */
-  onOwnFilters?: (any: boolean) => void;
 }) {
-  const [own, setOwn] = useState<Record<string, boolean>>({});
-  const onChanged = useCallback((title: string, changed: boolean) => setOwn(o => (o[title] === changed ? o : { ...o, [title]: changed })), []);
-  const anyOwn = Object.values(own).some(Boolean);
-  useEffect(() => { onOwnFilters?.(anyOwn); }, [onOwnFilters, anyOwn]);
-  const g = { period, offset, tree, sel, onFilter, onChanged };
+  const g = { period, offset, tree, sel, onFilter };
   // Выбранный день (общий для графиков одного периода) и подсказка у места нажатия — см. «интерактивность графиков».
   const [pin, setPin] = useState<FxAt | null>(null);
   const [tip, setTip] = useState<{ node: ReactNode; x: number; y: number } | null>(null);
@@ -1712,15 +1765,14 @@ export function PeriodView({ period, offset, tree, sel, onFilter, resetKey, onOw
       {/* между блоками 56px (было 40 — владелец 09.10 попросил «чуть больше»); pt-6 — такой же
           воздух между фильтрами и первым блоком (было 16px, стало 40 — «здесь тоже») */}
       <div className="@container flex flex-col gap-14 pt-6">
-        {/* накопительный график — только когда у блока выбран месяц */}
-        <Block {...g} key={`deals:${resetKey ?? 0}`} title="Сделки" note="Первичные сделки, созданные за период" kinds={p => (p === 'month' ? ['deals', 'cumulative', 'rows'] : ['deals', 'rows'])} />
-        <Block {...g} key={`resv:${resetKey ?? 0}`} title="Брони" note="Сколько сделок доходит до брони и сколько броней — до продажи" kinds={() => ['dealToResv', 'resvToSale']} />
-        <Block {...g} key={`sales:${resetKey ?? 0}`} title="Продажи" note="Сколько сделок доходит до продажи и на какую сумму продано" kinds={() => ['dealToSale', 'amount']} />
+        <Block {...g} key="deals" stage="deals" title="Сделки" note="Первичные сделки, созданные за период" kinds={() => ['deals', 'rows']} />
+        <Block {...g} key="resv" stage="resv" title="Брони" note="Сколько сделок доходит до брони и сколько броней — до продажи" kinds={() => ['dealToResv', 'resvToSale', 'dealToResvRows', 'resvToSaleRows']} />
+        <Block {...g} key="sales" stage="sales" title="Продажи" note="Сколько сделок доходит до продажи и на какую сумму продано" kinds={() => ['dealToSale', 'amount', 'dealToSaleRows', 'amountRows']} />
         {/* блок «Отгрузки» (владелец 10.10) */}
-        <Block {...g} key={`ship:${resetKey ?? 0}`} title="Отгрузки" note="Сколько сделок и продаж доходит до отгрузки и на какую сумму отгружено" kinds={() => ['dealToShip', 'saleToShip', 'shipAmount']} />
+        <Block {...g} key="ship" stage="ship" title="Отгрузки" note="Сколько сделок и продаж доходит до отгрузки и на какую сумму отгружено" kinds={() => ['dealToShip', 'saleToShip', 'dealToShipRows', 'saleToShipRows', 'shipAmount', 'shipAmountRows']} />
       </div>
       <div className="text-[12px] leading-snug" style={{ color: C.muted }}>
-        Сделки, брони, отгрузки и конверсии считаются по первичным сделкам, повторные не входят (сделки — метрика «Кол-во сделок (перв.)»); суммы продаж и отгрузок — все продажи и отгрузки. Город и департамент — по текущему менеджеру сделки. Все периоды — по календарным дням. Переключатели в заголовке блока меняют только графики этого блока; фильтры вверху страницы — все блоки сразу. Нажмите на день на любом графике — появится подсказка с его цифрами (нажать ещё раз, мимо графика или Esc — убрать). Нажатие на плитку филиала или департамента в «Сделки по филиалам» включает фильтр по нему.
+        Сделки, брони, отгрузки и конверсии считаются по первичным сделкам, повторные не входят (сделки — метрика «Кол-во сделок (перв.)»); суммы продаж и отгрузок — все продажи и отгрузки. Город и департамент — по текущему менеджеру сделки. Все периоды — по календарным дням. Период, филиал и департамент — в панели вверху страницы, она остаётся на экране при прокрутке. Нажмите на день на любом графике — появится подсказка с его цифрами (нажать ещё раз, мимо графика или Esc — убрать). Нажатие на плитку филиала или департамента в «Сделки по филиалам» включает фильтр по нему.
       </div>
     </div>
     </FxCtx.Provider>

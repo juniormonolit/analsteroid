@@ -446,7 +446,7 @@ function SidebarBody({
   const moreItems = [
     // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
     // продажам; первым в списке, пока раздел дорабатывается.
-    { href: '/dashboard-test', label: 'Дашборд тест', icon: <LayoutDashboard size={18} />, ok: canMore('section.dashboard_test') },
+    { href: '/dashboard-test', label: 'Дашборд', icon: <LayoutDashboard size={18} />, ok: canMore('section.dashboard_test') },
     // «Повторные» и «Товарная матрица» — из блока «Продажи» (правка владельца 17.08:
     // «убери эти пункты в Ещё»). «Повторные» строже остальных: супер-админ или
     // явное право (роль «Администратор» без джокера пункт не видит — как до 10.09).
