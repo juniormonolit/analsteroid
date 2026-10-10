@@ -94,11 +94,12 @@ function Money({ value }: { value: number }) {
 const card = { background: C.surface, borderRadius: 10 } as const;
 
 /** Подпись уровня: «1 Итого», «2 Города и отделы». */
-function LevelLabel({ n, children }: { n: number; children: ReactNode }) {
+function LevelLabel({ n, children, scoped }: { n: number; children: ReactNode; scoped?: boolean }) {
   return (
     <div className="mb-2 flex items-center gap-2 text-[13px] font-bold uppercase tracking-wide" style={{ color: C.muted }}>
       <span className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px]" style={{ background: C.primary, color: C.onPrimary }}>{n}</span>
       {children}
+      {scoped && <span className="text-[12px] font-normal normal-case tracking-normal" style={{ color: C.muted }}>в рамках вашего доступа</span>}
     </div>
   );
 }
@@ -243,10 +244,10 @@ function DeptColumns({ city, min }: { city: DashTestNode; min: number }) {
 const EMPTY = 'За этот день нет ни плана, ни продаж.';
 
 /** Вкладка «Все»: итого → блок на каждый город: город, его отделы и команды отделов. */
-function ViewAll({ root }: { root: DashTestNode }) {
+function ViewAll({ root, scoped }: { root: DashTestNode; scoped: boolean }) {
   return (
     <>
-      <LevelLabel n={1}>Итого — все филиалы</LevelLabel>
+      <LevelLabel n={1} scoped={scoped}>Итого — все филиалы</LevelLabel>
       <TotalBand node={root} />
       <div className="mt-6">
         <LevelLabel n={2}>Города: отделы и их команды</LevelLabel>
@@ -266,10 +267,10 @@ function ViewAll({ root }: { root: DashTestNode }) {
 }
 
 /** Вкладка города: только этот город — итог, отделы и команды. */
-function ViewCity({ city }: { city: DashTestNode }) {
+function ViewCity({ city, scoped }: { city: DashTestNode; scoped: boolean }) {
   return (
     <>
-      <LevelLabel n={1}>Итого — {city.name}</LevelLabel>
+      <LevelLabel n={1} scoped={scoped}>Итого — {city.name}</LevelLabel>
       <TotalBand node={city} />
       <div className="mt-6">
         <LevelLabel n={2}>Отделы, под каждым — его команды</LevelLabel>
@@ -800,8 +801,8 @@ export function DashboardTestPage() {
         {isError && <div className="text-sm" style={{ color: C.error }}>Не удалось загрузить дашборд. Обновите страницу.</div>}
         {period === 'today' ? (
           <OpenManagersCtx.Provider value={openManagers}>
-            {data && view === 'all' && <ViewAll root={data.root} />}
-            {data && view === 'city' && city && (cityNode ? <ViewCity city={cityNode} /> : <div className="text-sm" style={{ color: C.muted }}>За этот день у филиала нет плана и продаж.</div>)}
+            {data && view === 'all' && <ViewAll root={data.root} scoped={!!data.scoped} />}
+            {data && view === 'city' && city && (cityNode ? <ViewCity city={cityNode} scoped={!!data.scoped} /> : <div className="text-sm" style={{ color: C.muted }}>За этот день у филиала нет плана и продаж.</div>)}
           </OpenManagersCtx.Provider>
         ) : data && (
           <PeriodView period={period} offset={offset} tree={scopeTree} sel={{ cityId: city?.id ?? null, dept: activeDept }}

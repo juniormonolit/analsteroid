@@ -64,6 +64,8 @@ export interface DashTestResponse {
   isToday: boolean;
   /** true — включён временный режим «последний день с данными». */
   lastDataDayMode: boolean;
+  /** true — цифры только по срезу доступа пользователя (не админ): UI подписывает итоги. */
+  scoped: boolean;
   generatedAt: string;
   root: DashTestNode;
   /** Оргструктура для фильтров «Филиал» / «Департамент» — ВСЕ филиалы и департаменты, где есть
@@ -94,7 +96,7 @@ async function lastDataDay(today: string): Promise<string> {
 export async function buildDashboardTest(scope?: SessionScope): Promise<DashTestResponse> {
   const today = mskTodayStr();
   const day = DASHBOARD_TEST_USE_LAST_DATA_DAY ? await lastDataDay(today) : today;
-  return cached(`dashtest:v4:${day}:${scopeCacheKey(scope)}`, TTL_SEC, async () => {
+  return cached(`dashtest:v5:${day}:${scopeCacheKey(scope)}`, TTL_SEC, async () => {
     const fromIso = mskMidnightIso(day);
     const toExclIso = mskMidnightIso(addDaysStr(day, 1));
     const [tree, orgRowsAll, chains] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains()]);
@@ -182,7 +184,7 @@ export async function buildDashboardTest(scope?: SessionScope): Promise<DashTest
         depts: c.children.filter(d => keep(weight(d))).map(d => ({ id: d.id, name: d.name })).sort((a, b) => a.name.localeCompare(b.name, 'ru')),
       }));
     return {
-      day, today, isToday: day === today, lastDataDayMode: DASHBOARD_TEST_USE_LAST_DATA_DAY,
+      day, today, isToday: day === today, lastDataDayMode: DASHBOARD_TEST_USE_LAST_DATA_DAY, scoped: !!visibleSet,
       generatedAt: new Date().toISOString(), root, org, managers,
     };
   });
