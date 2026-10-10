@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-10-10 — Тема «Дизайн Куликова» по умолчанию для всех (задача #9374, Артём)
+
+**Что было.** Дефолт темы — `classic` (колонка `users.theme` DEFAULT, `DEFAULT_THEME` в
+`useTheme.ts`, анти-вспышечный скрипт в `app/layout.tsx`, fallback в `/api/me/theme`).
+В `system`: 41 `classic`, 1 `kulikov`.
+
+**Причина.** Просьба владельца; Сергей 10.10 21:23 МСК: вариант A («1А, 2 только
+администратор» — права на разделы остаются только у Администратора, не менялись).
+
+**Сделано.** Миграция 225: `SET DEFAULT 'kulikov'` + `UPDATE users SET theme='kulikov'
+WHERE theme='classic'` (осознанный выбор «classic» от дефолта в данных не отличить — как
+в 148/224; light/dark/mono не тронуты). До правки `pg_dump` таблицы users. Дефолт в коде
+и скрипте на `kulikov`. Запись в changelog «Тема Куликова по умолчанию».
+
+**Откат.** `ALTER TABLE users ALTER COLUMN theme SET DEFAULT 'classic'` и возврат
+`classic` по дампу `/root/backups/users-pre-theme-kulikov-20261010.sql` (id, у кого было
+classic); код — откат сборки из `prod-backups/standalone-full-pre-theme-*.tar.gz`.
+
 ## 2026-10-10 — Выкат на прод :8100: «Дашборд» и «ССП: план и факт» (задача #9374, Артём)
 
 **Что было.** Прод крутил `hotfix/local-sys-db` (dev-asteroid + SYS_PG_* на локальный
