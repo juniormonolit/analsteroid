@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -444,6 +444,13 @@ function SidebarBody({
   // ролей по-прежнему закрыт, право выдаётся точечно.
   const canMore = (key: PermKey) => adminLike || hasPerm(user, key);
   const moreItems = [
+    // «ССП: план и факт» (задача владельца 10.10; до 10.10 — «ССП тест») — декомпозиция
+    // года против факта; то же право, что у «Декомпозиции» (данные те же). Первым в
+    // списке, перед «Дашбордом» (правка владельца 10.10).
+    { href: '/ssp-test', label: 'ССП: план и факт', icon: <Target size={18} />, ok: canMore('section.decomposition') },
+    // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
+    // продажам; первым в списке, пока раздел дорабатывается.
+    { href: '/dashboard-test', label: 'Дашборд', icon: <LayoutDashboard size={18} />, ok: canMore('section.dashboard_test') },
     // «Повторные» и «Товарная матрица» — из блока «Продажи» (правка владельца 17.08:
     // «убери эти пункты в Ещё»). «Повторные» строже остальных: супер-админ или
     // явное право (роль «Администратор» без джокера пункт не видит — как до 10.09).
