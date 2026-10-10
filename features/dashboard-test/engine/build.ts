@@ -19,6 +19,8 @@ import { computePeriodPlanByLogin } from '@/lib/plans/dailyPlan';
 import { addDaysStr, fetchFactsByManager, mskMidnightIso, mskTodayStr, totalsOf } from '@/features/tv/engine/feed';
 import { buildTvTree, deptChains, loadActiveManagers, managersOfNode, type TvNode } from '@/features/tv/engine/orgTree';
 import type { RosterManager } from '@/lib/org/teamRoster';
+import { scopeManagerIds, type SessionScope } from '@/lib/org/sessionScope';
+import { scopeCacheKey } from './scope';
 
 // ВРЕМЕННО, ПОКА РАЗДЕЛ В РАБОТЕ. В локальной копии базы «сегодня» может быть пустым,
 // поэтому берём последний день, за который есть продажи. ПЕРЕД ВЫКЛАДКОЙ НА ПРОД
@@ -84,13 +86,21 @@ async function lastDataDay(today: string): Promise<string> {
   return res.rows[0]?.d ?? today;
 }
 
-export async function buildDashboardTest(): Promise<DashTestResponse> {
+/**
+ * scope — срез данных сессии (lib/org/sessionScope.ts, тот же механизм, что у «РОП — сегодня»
+ * и отчётов): менеджеры вне среза выкидываются ДО расчёта, поэтому итоги узлов, список
+ * менеджеров и оргструктура для фильтров (org) считаются только по ним. Без scope — вся компания.
+ */
+export async function buildDashboardTest(scope?: SessionScope): Promise<DashTestResponse> {
   const today = mskTodayStr();
   const day = DASHBOARD_TEST_USE_LAST_DATA_DAY ? await lastDataDay(today) : today;
-  return cached(`dashtest:v3:${day}`, TTL_SEC, async () => {
+  return cached(`dashtest:v4:${day}:${scopeCacheKey(scope)}`, TTL_SEC, async () => {
     const fromIso = mskMidnightIso(day);
     const toExclIso = mskMidnightIso(addDaysStr(day, 1));
-    const [tree, orgRows, chains] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains()]);
+    const [tree, orgRowsAll, chains] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains()]);
+    const visible = scope ? scopeManagerIds(scope) : null; // null — без ограничения
+    const visibleSet = visible ? new Set(visible) : null;
+    const orgRows = visibleSet ? orgRowsAll.filter(r => visibleSet.has(r.manager_id)) : orgRowsAll;
 
     const all = managersOfNode(tree.root, orgRows, chains);
     const idsNum = [...new Set(all.map(m => Number(m.managerId)).filter(n => Number.isInteger(n) && n > 0))];

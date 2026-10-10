@@ -39,6 +39,8 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL, isSqlIdent } from '@/lib/metrics/sqlGen';
 import type { Metric } from '@/lib/metrics/types';
 import { mskMidnightIso, mskTodayStr } from '@/features/tv/engine/feed';
+import { scopeManagerIds, type SessionScope } from '@/lib/org/sessionScope';
+import { scopeCacheKey } from './scope';
 import { buildTvTree, deptChains, loadActiveManagers, managersOfNode } from '@/features/tv/engine/orgTree';
 import { addDays, countsInYear, maxPeriodOffset, periodBuckets, periodLabel, periodRange, weekdayIndex, type DashPeriod } from '../shared';
 
@@ -194,7 +196,7 @@ async function loadByManager(group: Metric[], idsNum: number[], keyFmt: 'day' | 
   return out;
 }
 
-export async function buildDashboardPeriod(period: DashPeriod, offsetRaw: number): Promise<DashPeriodResponse> {
+export async function buildDashboardPeriod(period: DashPeriod, offsetRaw: number, scope?: SessionScope): Promise<DashPeriodResponse> {
   const today = mskTodayStr();
   const maxOffset = maxPeriodOffset(period, today, await earliestDay(today));
   const offset = Math.max(0, Math.min(Number.isInteger(offsetRaw) ? offsetRaw : 0, maxOffset));
@@ -203,8 +205,12 @@ export async function buildDashboardPeriod(period: DashPeriod, offsetRaw: number
   const baseRange = offset + 1 <= maxOffset ? periodRange(period, offset + 1, today) : null;
 
   // год — два года по дням, запрос тяжелее: держим в кэше дольше
-  return cached(`dashtest:period:v11:${period}:${from}`, period === 'year' ? 300 : 60, async () => {
-    const [tree, orgRows, chains, catalog] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains(), loadMetrics()]);
+  return cached(`dashtest:period:v12:${period}:${from}:${scopeCacheKey(scope)}`, period === 'year' ? 300 : 60, async () => {
+    const [tree, orgRowsAll, chains, catalog] = await Promise.all([buildTvTree(), loadActiveManagers(), deptChains(), loadMetrics()]);
+    // срез данных сессии: менеджеры вне среза не попадают ни в один узел и ни в один запрос
+    const visible = scope ? scopeManagerIds(scope) : null;
+    const visibleSet = visible ? new Set(visible) : null;
+    const orgRows = visibleSet ? orgRowsAll.filter(r => visibleSet.has(r.manager_id)) : orgRowsAll;
     // своя метрика «отгрузки после продажи» — копия первичных отгрузок с условием «продажа была»
     const shipBase = catalog.find(m => m.id === 'primary_shipments_count');
     const metrics: Metric[] = shipBase
@@ -226,7 +232,10 @@ export async function buildDashboardPeriod(period: DashPeriod, offsetRaw: number
 
     // Узлы: компания, филиалы и департаменты филиалов (для фильтра «Департамент» на
     // странице: НЦ по всем филиалам = сумма серий НЦ каждого филиала — складывает страница).
-    const nodes = [tree.root, ...tree.root.children, ...tree.root.children.flatMap(b => b.children)];
+    const allNodes = [tree.root, ...tree.root.children, ...tree.root.children.flatMap(b => b.children)];
+    // С ограничением по срезу узлы, где у человека нет ни одного менеджера, не отдаём вовсе
+    // (компания — всегда): иначе страница получила бы чужие филиалы с нулями.
+    const nodes = visibleSet ? allNodes.filter((n, i) => i === 0 || managersOfNode(n, orgRows, chains).length > 0) : allNodes;
     // менеджер → в какие узлы входит (компания, его филиал, его департамент)
     const nodesOfManager = new Map<string, number[]>();
     nodes.forEach((n, i) => {

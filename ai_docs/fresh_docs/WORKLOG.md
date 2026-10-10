@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-10-10 — «Дашборд»: доступ всем ролям, данные по срезу сессии (задача #9395, ветка feat/dashboard-scope)
+
+**Что было.** Раздел /dashboard-test (право section.dashboard_test) видели админы и роли с галкой,
+и все видели всю компанию. Сергей: доступ всем ролям, данные — по правам.
+
+**Сделано.** Механизм среза — существующий `lib/org/sessionScope.ts` (`getSessionScope` /
+`scopeManagerIds` / `canSeeManager`), новый не вводился. Движки `buildDashboardTest` и
+`buildDashboardPeriod` принимают scope и отбрасывают менеджеров вне среза ДО расчёта: итоги
+узлов, строки менеджеров, оргструктура для фильтров «Филиал/Департамент» и серии недели/
+месяца/года считаются только по ним. Кэш — с ключом по срезу (`engine/scope.ts`).
+`/api/dashboard-test/deals` отдаёт 403 по менеджеру вне среза. Администратор — `kind: all`, без
+изменений. Миграция 226 выдаёт section.dashboard_test всем ролям (только право).
+Накат: `node migrations/run_local.mjs migrations/226_dashboard_test_all_roles.sql` (БД system).
+
 ## 2026-10-10 — Тема «Дизайн Куликова» по умолчанию для всех (задача #9374, Артём)
 
 **Что было.** Дефолт темы — `classic` (колонка `users.theme` DEFAULT, `DEFAULT_THEME` в

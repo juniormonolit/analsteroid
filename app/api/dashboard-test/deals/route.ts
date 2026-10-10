@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
+import { getSessionScope, canSeeManager, scopeForbidden } from '@/lib/org/sessionScope';
 import { hasFullManagerAccess } from '@/lib/org/managerAccess';
 import { buildDashboardTest } from '@/features/dashboard-test/engine/build';
 import { fetchManagerDeals } from '@/features/dashboard-test/engine/deals';
@@ -22,8 +23,11 @@ export async function GET(req: NextRequest) {
   if (kind !== 'sales' && kind !== 'book') {
     return NextResponse.json({ error: 'type должен быть sales или book' }, { status: 400 });
   }
+  const scope = await getSessionScope(session);
+  // менеджер вне среза сессии — отказ, как у остальных роутов данных (сделки чужого менеджера)
+  if (!canSeeManager(scope, managerId)) return scopeForbidden();
   try {
-    const dash = await buildDashboardTest();
+    const dash = await buildDashboardTest(scope);
     if (!dash.managers[managerId]) {
       return NextResponse.json({ day: dash.day, kind, managerId, deals: [], totalCount: 0, totalAmount: 0 }, { headers: { 'Cache-Control': 'no-store' } });
     }
