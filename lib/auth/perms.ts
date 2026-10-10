@@ -54,6 +54,10 @@ export const PERM_SECTIONS = [
   { key: 'section.transition_matrix', label: 'Матрица переходов' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.widget_constructor', label: 'Виджеты' },
+  // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
+  // продажам: план / факт / брони по всем филиалам, филиалам и их отделам.
+  // Пункт меню «Ещё», гейт как у остальных: админ ИЛИ явное право роли.
+  { key: 'section.dashboard_test', label: 'Дашборд тест' },
 ] as const;
 
 export const PERM_ACTIONS = [
@@ -133,6 +137,7 @@ export type SectionKey = (typeof PERM_SECTIONS)[number]['key'];
 // ИЛИ явное право роли; джокер «Все разделы» покрывает section.*-пункты, но не
 // «Чаты» (action.*). Данные внутри разделов всё равно режутся срезом сессии.
 export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
+  { key: 'section.dashboard_test', label: 'Дашборд тест' },
   { key: 'section.repeat', label: 'Повторные' },
   { key: 'section.product_matrix', label: 'Товарная матрица' },
   { key: 'section.transition_matrix', label: 'Матрица переходов' },
