@@ -2,6 +2,7 @@ import type { SessionUser } from '@/lib/auth/session';
 import { getCallControlManagedDepts } from './callControlScope';
 import { getUserDepartmentOptions, resolveManagersForDepartments } from './teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
+import { loadDepartments } from './deptCategories';
 
 // Кто вправе смотреть карточку КОНКРЕТНОГО менеджера (задача владельца 30.07,
 // «Вариант Б»: ЛК открывается всем менеджерам из Битрикса, пользователи создаются
@@ -41,25 +42,66 @@ export async function managedDepartmentIds(session: SessionUser): Promise<string
  * филиала, в котором директор сам числится в оргструктуре. Если его нет в
  * org_resolved_hierarchy (не менеджер) — филиал не определить, остаются КЗ-отделы
  * и назначения админа.
+ *
+ * Правка 11.10 (#9395, вариант A Сергея): отдел, в поддереве которого есть менеджеры ДРУГИХ
+ * филиалов («Отдел продаж», «Дирекция» — над всеми филиалами), корнем филиала не берётся:
+ * expandDepartmentSubtree развернул бы его до всей компании, и Директор СПб видел бы всех.
+ * Сотрудники, привязанные к такому отделу напрямую, остаются видимыми директору своего
+ * филиала — отдельным списком (branchDirectManagerIds), а не через отделы.
  */
+async function branchScopeFor(bitrixUserId: string): Promise<{ deptIds: string[]; directManagerIds: string[] }> {
+  const rows = (await analyticsDb().query<{ department_id: string | null; manager_id: string; branch: string | null }>(
+    `SELECT department_id::text AS department_id, manager_bitrix_user_id::text AS manager_id, branch
+       FROM sa.org_resolved_hierarchy WHERE is_active`,
+  )).rows;
+  const me = rows.find(r => r.manager_id === bitrixUserId);
+  if (!me) return { deptIds: [], directManagerIds: [] };
+  const { byId, byBitrixId } = await loadDepartments();
+  const uuidByBitrix = new Map<string, string>();
+  for (const [uuid, v] of byId) uuidByBitrix.set(v.bitrixId, uuid);
+  // какие филиалы (непустые) есть в поддереве каждого отдела: идём от отдела менеджера вверх
+  const branchesIn = new Map<string, Set<string>>();
+  for (const r of rows) {
+    if (!r.branch || !r.department_id) continue;
+    let cur = byId.get(r.department_id);
+    const seen = new Set<string>([r.department_id]);
+    if (!branchesIn.has(r.department_id)) branchesIn.set(r.department_id, new Set());
+    branchesIn.get(r.department_id)!.add(r.branch);
+    for (let guard = 0; cur?.parentBitrixId && guard < 15; guard++) {
+      const parent = byBitrixId.get(cur.parentBitrixId);
+      if (!parent) break;
+      const uuid = uuidByBitrix.get(parent.bitrixId);
+      if (!uuid || seen.has(uuid)) break;
+      seen.add(uuid);
+      if (!branchesIn.has(uuid)) branchesIn.set(uuid, new Set());
+      branchesIn.get(uuid)!.add(r.branch);
+      cur = parent;
+    }
+  }
+  const deptIds = new Set<string>();
+  const direct = new Set<string>();
+  for (const r of rows) {
+    if (r.branch !== me.branch || !r.department_id) continue;
+    if ((branchesIn.get(r.department_id)?.size ?? 0) > 1) direct.add(r.manager_id); // отдел над филиалами
+    else deptIds.add(r.department_id);
+  }
+  return { deptIds: [...deptIds], directManagerIds: [...direct] };
+}
+
 async function branchDepartmentIds(bitrixUserId: string): Promise<string[]> {
-  const res = await analyticsDb().query<{ department_id: string }>(
-    `SELECT DISTINCT department_id::text AS department_id
-       FROM sa.org_resolved_hierarchy
-      WHERE is_active AND department_id IS NOT NULL
-        AND branch IS NOT DISTINCT FROM (
-          SELECT branch FROM sa.org_resolved_hierarchy
-           WHERE manager_bitrix_user_id::text = $1 AND is_active LIMIT 1)
-        AND EXISTS (SELECT 1 FROM sa.org_resolved_hierarchy o2
-                     WHERE o2.manager_bitrix_user_id::text = $1 AND o2.is_active)`,
-    [bitrixUserId],
-  );
-  return res.rows.map(r => r.department_id);
+  return (await branchScopeFor(bitrixUserId)).deptIds;
+}
+
+/** Менеджеры филиала Директора, привязанные напрямую к отделу над филиалами (см. branchScopeFor). */
+export async function branchDirectManagerIds(session: SessionUser): Promise<string[]> {
+  if (session.roleName !== 'Директор' || !session.bitrixUserId) return [];
+  return (await branchScopeFor(session.bitrixUserId)).directManagerIds;
 }
 
 export async function canViewManager(session: SessionUser, managerBitrixId: string): Promise<boolean> {
   if (session.bitrixUserId && session.bitrixUserId === managerBitrixId) return true;
   if (hasFullManagerAccess(session)) return true;
+  if ((await branchDirectManagerIds(session)).includes(managerBitrixId)) return true;
   const deptIds = await managedDepartmentIds(session);
   if (deptIds.length === 0) return false;
   const roster = await resolveManagersForDepartments(deptIds);
@@ -100,6 +142,7 @@ export async function filterViewableManagers(
   if (hasFullManagerAccess(session)) return managerBitrixIds;
   const allowed = new Set<string>();
   if (session.bitrixUserId) allowed.add(session.bitrixUserId);
+  for (const id of await branchDirectManagerIds(session)) allowed.add(id);
   const deptIds = await managedDepartmentIds(session);
   if (deptIds.length > 0) {
     for (const m of await resolveManagersForDepartments(deptIds)) allowed.add(m.managerId);
