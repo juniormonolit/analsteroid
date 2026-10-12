@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { SIDEBAR_COOKIE } from '@/lib/sidebar-cookie';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
@@ -884,7 +885,16 @@ function SidebarBody({
   );
 }
 
-export function AppShell({ children, user }: { children: React.ReactNode; user: SessionUser }) {
+// Состояние сайдбара (свёрнут/развёрнут) помним в cookie: layout читает её на сервере
+// и отдаёт initialCollapsed — первый кадр сразу верный, без мигания и hydration mismatch.
+
+function saveSidebarCollapsed(v: boolean) {
+  try {
+    document.cookie = `${SIDEBAR_COOKIE}=${v ? '1' : '0'}; path=/; max-age=31536000; SameSite=Lax`;
+  } catch { /* cookie недоступны — просто не запоминаем */ }
+}
+
+export function AppShell({ children, user, initialCollapsed = false }: { children: React.ReactNode; user: SessionUser; initialCollapsed?: boolean }) {
   const pathname = usePathname();
   // Внутри Битрикса основное меню приложения НЕ показываем (правка владельца
   // 05.08: «зачем-то основное меню показывается… внутри Битрикса не надо,
@@ -898,7 +908,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   // UI/UX-аудита: владелец отменил спецкейс «Главная — свёрнутая рельса» из
   // брифа Главной, чтобы поведение было одинаковым на всех страницах). Ручной
   // тоггл сворачивания (кнопка PanelLeft/PanelLeftClose) не трогаем.
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<string>(pathname.startsWith('/realizations') ? 'Реализация' : 'Продажи');
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -934,8 +944,10 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           style={{ width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED }}
         >
           <button
-            onClick={() => setCollapsed(v => !v)}
+            onClick={() => { const next = !collapsed; setCollapsed(next); saveSidebarCollapsed(next); }}
             title={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            aria-expanded={!collapsed}
             className="hover-reveal absolute -right-3 top-1/2 -translate-y-1/2 z-30 w-6 h-6 rounded-full border border-[var(--color-sidebar-border)] bg-[var(--color-bg-surface)] shadow-md flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:border-[var(--color-sidebar-active)] transition-colors"
           >
             {collapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
