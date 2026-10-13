@@ -64,50 +64,118 @@ export const CALLER_ISSUES_GROUP_ID = 64;
 /** Окно «логистических» задач для колонок цены/запроса/неотвеченных: ACTIVITY_DATE за 14 дней. */
 export const LOGIST_TASK_WINDOW_DAYS = 14;
 
-/** Сколько карточек одной колонки отдаём на экран (остальное — в счётчике «показано N из M»). */
-export const CARDS_PER_COLUMN = 100;
+/** Потолок строк одной колонки из БД (страховка; реальные колонки — до ~1000). */
+export const COLUMN_ROW_LIMIT = 3000;
+/** Сколько карточек одного менеджера в полосе показываем; остальное — «ещё N». */
+export const CARDS_PER_MANAGER = 50;
 
+// ── Циклы дня (SalesKanbanConfig::getCycles) ────────────────────────────────────────────────
+export type CycleKey = 'ONE' | 'TWO' | 'THREE' | 'END' | 'OTHER';
+export interface CycleDef { key: CycleKey; title: string; short: string }
+export const CYCLES: readonly CycleDef[] = [
+  { key: 'ONE', title: '1 цикл (до 12:00)', short: '1 цикл' },
+  { key: 'TWO', title: '2 цикл (до 16:00)', short: '2 цикл' },
+  { key: 'THREE', title: '3 цикл (до 17:30)', short: '3 цикл' },
+  { key: 'END', title: '4 цикл (с 17:30) - Приятное завершение дня', short: '4 цикл' },
+  { key: 'OTHER', title: 'Другое', short: 'Другое' },
+];
+export const CYCLE_KEYS = CYCLES.map(c => c.key) as CycleKey[];
+/** Режим «все колонки» (CYCLE_ALL в MltSalesKanbanService; в Битриксе — снимок для отчёта). */
+export const CYCLE_ALL = 'ALL';
+export type CycleParam = CycleKey | typeof CYCLE_ALL;
+export const CYCLE_PARAMS: readonly CycleParam[] = [...CYCLE_KEYS, CYCLE_ALL];
+
+export function parseCycleParam(raw: string | null | undefined): CycleParam | null {
+  return raw && (CYCLE_PARAMS as readonly string[]).includes(raw) ? (raw as CycleParam) : null;
+}
+
+/** Текущий цикл по времени МСК: до 12:00 — 1-й, до 16:00 — 2-й, до 17:30 — 3-й, дальше — 4-й. */
+export function currentCycleByTime(now: Date = new Date()): CycleKey {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now);
+  const h = Number(parts.find(p => p.type === 'hour')?.value ?? 0);
+  const m = Number(parts.find(p => p.type === 'minute')?.value ?? 0);
+  const minutes = h * 60 + m;
+  if (minutes < 12 * 60) return 'ONE';
+  if (minutes < 16 * 60) return 'TWO';
+  if (minutes < 17 * 60 + 30) return 'THREE';
+  return 'END';
+}
+
+// ── Колонки (SalesKanbanConfig::getColumns('default'), порядок и названия — как в Битриксе) ─
 export type ColumnKey =
-  | 'unprocessedDeals' | 'newDeals' | 'logistRequest' | 'betterPrice' | 'logistNotAnswered'
-  | 'withTasksOnControl' | 'withBigDealsTasks' | 'withRepeatingDealsTasks'
-  | 'debtTasks' | 'updTasks' | 'callerIssuesTasks'
-  | 'failedToday' | 'failedFromSaleToday' | 'failedFromSaleThisWeek' | 'allSales';
-
-export type ColumnGroup = 'work' | 'logist' | 'tasks' | 'result';
+  | 'unprocessedDeals' | 'noActivities' | 'reservedWithActivitiesForToday' | 'confirmedReservedWithActivitiesForToday'
+  | 'betterPrice' | 'logistRequest' | 'shipmentToday' | 'logistNotAnswered' | 'withBigDealsTasks' | 'stageCalled'
+  | 'repeatedSaleImportant' | 'unprocessedSecondary' | 'regularClients' | 'stageCalledLowPriority' | 'secondaryToday'
+  | 'shipmentTomorrow' | 'withRepeatingDealsTasks' | 'debtTasks' | 'callerIssuesTasks' | 'newDeals' | 'noProducts'
+  | 'withExpiredActivities' | 'withActivitiesForToday' | 'withTasksOnControl' | 'failedToday' | 'failedFromSaleToday'
+  | 'failedFromSaleThisWeek' | 'allSales' | 'updTasks';
 
 export interface ColumnDef {
   key: ColumnKey;
   title: string;
   kind: 'deals' | 'tasks';
-  group: ColumnGroup;
-  /** Тон полоски колонки (CSS-токен в UI). */
-  tone: 'neutral' | 'negative' | 'warning' | 'positive' | 'accent';
-  /** Подсказка под заголовком — коротко, как колонка считается. */
-  hint: string;
+  /** Циклы, в которых колонка видна; null — «всегда» (без отметки цикла в Битриксе). */
+  cycle: CycleKey[] | null;
+  /** Цвет шапки (CSS-цвет из конфига Битрикса); null — нейтральный. */
+  color: string | null;
+  /** «light» в конфиге Битрикса — тёмный текст на светлой шапке. */
+  light: boolean;
+  /** Считается ли колонка в Монолитике. false — стоит на месте, пустая, с пометкой. */
+  computed: boolean;
+  /** Одна фраза «почему не считается» (только при computed=false). */
+  missing?: string;
 }
 
-/** Порядок — как в SalesKanbanConfig::getColumns('default') для колонок первой партии. */
+const WHY_ACTIVITIES = 'нужны актуальные дела по сделке, а в sa они лежат снимком на момент последнего изменения сделки';
+const WHY_HISTORY = 'нужны дела по сделке и история покупок клиента, а дела в sa устаревают';
+const WHY_PRODUCTS = 'правка товаров без смены сделки в sa не приходит';
+
+const c = (
+  key: ColumnKey, title: string, kind: 'deals' | 'tasks', cycle: CycleKey[] | null,
+  color: string | null, light: boolean, missing?: string,
+): ColumnDef => ({ key, title, kind, cycle, color, light, computed: !missing, ...(missing ? { missing } : {}) });
+
+// CSS-цвета из конфига Битрикса (имена → hex).
+const FIREBRICK = '#b22222', DARKBLUE = '#00008b', DARKSEAGREEN = '#8fbc8f', LIGHTSKYBLUE = '#87cefa', SEAGREEN = '#2e8b57',
+  GOLDENROD = '#daa520', TEAL = '#008080', DARKGOLDENROD = '#b8860b', DARKCYAN = '#008b8b', MIDNIGHTBLUE = '#191970', GREEN = '#008000';
+
 export const COLUMNS: readonly ColumnDef[] = [
-  { key: 'unprocessedDeals', title: 'Необработанные', kind: 'deals', group: 'work', tone: 'negative', hint: 'Первичные сделки на стадии «Срочно обработать»' },
-  { key: 'newDeals', title: 'Созданы сегодня', kind: 'deals', group: 'work', tone: 'accent', hint: 'Первичные сделки, созданные с 00:00 МСК' },
-  { key: 'betterPrice', title: 'Есть цена дешевле', kind: 'deals', group: 'logist', tone: 'warning', hint: 'Стадия «цена дешевле» и есть ответ логиста за 14 дней' },
-  { key: 'logistRequest', title: 'Запрос логисту', kind: 'deals', group: 'logist', tone: 'accent', hint: 'Стадия запроса и есть ответ логиста за 14 дней' },
-  { key: 'logistNotAnswered', title: 'Логист не ответил', kind: 'deals', group: 'logist', tone: 'negative', hint: 'Задача логисту открыта (14 дней), ответа ещё нет' },
-  { key: 'withTasksOnControl', title: 'Ответ логиста не принят', kind: 'deals', group: 'logist', tone: 'warning', hint: 'Задача логисту ждёт контроля менеджера' },
-  { key: 'withBigDealsTasks', title: 'Большие сделки', kind: 'deals', group: 'tasks', tone: 'accent', hint: 'Есть открытая задача в группах «Большие сделки»' },
-  { key: 'withRepeatingDealsTasks', title: 'Повторные сделки', kind: 'deals', group: 'tasks', tone: 'accent', hint: 'Есть открытая задача в группах «Повторные продажи»' },
-  { key: 'debtTasks', title: 'Клиенты Долги', kind: 'tasks', group: 'tasks', tone: 'warning', hint: 'Открытые задачи группы «Клиенты ДОЛГИ»' },
-  { key: 'updTasks', title: 'Клиенты УПД', kind: 'tasks', group: 'tasks', tone: 'warning', hint: 'Открытые задачи группы «Клиенты УПД»' },
-  { key: 'callerIssuesTasks', title: 'Проблемы коллеры', kind: 'tasks', group: 'tasks', tone: 'warning', hint: 'Открытые задачи группы «Проблемы коллеры»' },
-  { key: 'failedToday', title: 'Отказы за сегодня', kind: 'deals', group: 'result', tone: 'neutral', hint: 'Сделки, закрытые отказом с 00:00 МСК' },
-  { key: 'failedFromSaleToday', title: 'Отказы из продаж (сегодня)', kind: 'deals', group: 'result', tone: 'negative', hint: 'Отказ сегодня у сделки, которая раньше была «Продано»' },
-  { key: 'failedFromSaleThisWeek', title: 'Отказы из продаж (7 дней)', kind: 'deals', group: 'result', tone: 'negative', hint: 'То же за последние 7 дней' },
-  { key: 'allSales', title: 'Все продажи', kind: 'deals', group: 'result', tone: 'positive', hint: 'Сделки сейчас на стадии «Продано»' },
+  c('unprocessedDeals', 'Необработанные', 'deals', null, FIREBRICK, false),
+  c('noActivities', 'Без дел', 'deals', null, null, false, WHY_ACTIVITIES),
+  c('reservedWithActivitiesForToday', 'Брони с делами на сегодня', 'deals', ['ONE'], DARKBLUE, false, WHY_ACTIVITIES),
+  c('confirmedReservedWithActivitiesForToday', 'Подтв. брони с делами на сегодня', 'deals', ['ONE'], DARKSEAGREEN, true, WHY_ACTIVITIES),
+  c('betterPrice', 'Есть цена дешевле', 'deals', null, LIGHTSKYBLUE, true),
+  c('logistRequest', 'Запрос логисту', 'deals', null, LIGHTSKYBLUE, true),
+  c('shipmentToday', 'Продано, отгружается сегодня', 'deals', ['END'], SEAGREEN, false, WHY_ACTIVITIES),
+  c('logistNotAnswered', 'Логист не ответил', 'deals', null, null, false),
+  c('withBigDealsTasks', 'Большие сделки', 'deals', ['OTHER'], null, false),
+  c('stageCalled', 'Созвонился и озвучил', 'deals', ['TWO'], GOLDENROD, true, WHY_ACTIVITIES),
+  c('repeatedSaleImportant', 'Выйти на повторную продажу', 'deals', ['TWO'], TEAL, false, WHY_HISTORY),
+  c('unprocessedSecondary', 'Необработанные повторные', 'deals', ['THREE'], DARKGOLDENROD, false, WHY_HISTORY),
+  c('regularClients', 'Постоянные клиенты', 'deals', ['TWO'], DARKCYAN, false, WHY_HISTORY),
+  c('stageCalledLowPriority', 'Созвонился и озвучил', 'deals', ['THREE'], GOLDENROD, true, WHY_ACTIVITIES),
+  c('secondaryToday', 'Повторные на сегодня', 'deals', ['THREE'], MIDNIGHTBLUE, false, WHY_HISTORY),
+  c('shipmentTomorrow', 'Продано, отгружается завтра', 'deals', ['ONE', 'THREE'], DARKSEAGREEN, true, WHY_ACTIVITIES),
+  c('withRepeatingDealsTasks', 'Повторные сделки', 'deals', ['THREE'], null, false),
+  c('debtTasks', 'Клиенты Долги', 'tasks', ['END'], null, false),
+  c('callerIssuesTasks', 'Проблемы коллеры', 'tasks', ['END'], null, false),
+  c('newDeals', 'Созданы сегодня', 'deals', ['TWO', 'THREE'], null, false),
+  c('noProducts', 'Без товаров', 'deals', ['END'], null, false, WHY_PRODUCTS),
+  c('withExpiredActivities', 'С просроченными делами', 'deals', ['END'], null, false, WHY_ACTIVITIES),
+  c('withActivitiesForToday', 'С делами на сегодня', 'deals', ['END'], null, false, WHY_ACTIVITIES),
+  c('withTasksOnControl', 'Ответ логиста не принят', 'deals', ['END'], null, false),
+  c('failedToday', 'Отказы за сегодня', 'deals', ['OTHER'], null, false),
+  c('failedFromSaleToday', 'Отказы из продаж (сегодня)', 'deals', ['OTHER'], null, false),
+  c('failedFromSaleThisWeek', 'Отказы из продаж (7 дней)', 'deals', ['OTHER'], null, false),
+  c('allSales', 'Все продажи', 'deals', ['OTHER'], GREEN, false),
+  c('updTasks', 'Клиенты УПД', 'tasks', null, null, false),
 ];
 
-export const GROUP_TITLES: Record<ColumnGroup, string> = {
-  work: 'Заявки', logist: 'Логисты', tasks: 'Задачи', result: 'Результат',
-};
+/** Колонки, видимые во вкладке: «всегда» + отмеченные этим циклом; ALL — все 29. Логика initColumns(). */
+export function columnsForCycle(cycle: CycleParam): ColumnDef[] {
+  if (cycle === CYCLE_ALL) return [...COLUMNS];
+  return COLUMNS.filter(col => !col.cycle || col.cycle.includes(cycle));
+}
 
 /** Ссылка на сделку/задачу в Битриксе (только ссылка, в Битрикс ничего не пишем). */
 export const BITRIX_PORTAL = 'https://td.monolit-crm.ru';
