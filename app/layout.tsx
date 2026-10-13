@@ -54,16 +54,16 @@ export const viewport: Viewport = {
 // раньше React/гидратации, поэтому нет «моргания» светлым перед перекраской. Работает и
 // на /login (неавторизован, но зеркало в localStorage уже могло остаться от предыдущей
 // сессии — п.4 брифа «Логин-страница тоже темнеет при тёмной, если тема известна из
-// localStorage»). Дефолт (нет записи/невалидное значение/ошибка) — 'classic' (решение
+// localStorage»). Дефолт (нет записи/невалидное значение/ошибка) — 'kulikov' (решение
 // владельца: по умолчанию у всех вид до редизайна), атрибут
 // всё равно ставится явно (см. комментарий в lib/hooks/useTheme.ts — 'light' больше не
 // «атрибут не ставится», т.к. mono и light должны различаться одним и тем же способом).
 const THEME_ANTI_FLASH_SCRIPT = `
 try {
   var t = localStorage.getItem('theme');
-  document.documentElement.setAttribute('data-theme', ['classic','light','dark','mono','kulikov'].indexOf(t) !== -1 ? t : 'classic');
+  document.documentElement.setAttribute('data-theme', ['classic','light','dark','mono','kulikov'].indexOf(t) !== -1 ? t : 'kulikov');
 } catch (e) {
-  document.documentElement.setAttribute('data-theme', 'classic');
+  document.documentElement.setAttribute('data-theme', 'kulikov');
 }
 `;
 

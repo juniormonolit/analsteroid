@@ -20,7 +20,7 @@ export async function GET() {
     `SELECT theme FROM users WHERE id = $1`,
     [session.id]
   );
-  return NextResponse.json({ theme: res.rows[0]?.theme ?? 'classic' });
+  return NextResponse.json({ theme: res.rows[0]?.theme ?? 'kulikov' });
 }
 
 export async function PATCH(req: NextRequest) {

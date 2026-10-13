@@ -13,7 +13,7 @@ const STORAGE_KEY = 'theme';
 //
 // Пятая тема — 'kulikov', «Дизайн Куликова» (06.10, задача #8857): визуальный язык
 // monolit.shop по макетам docs/design/monolitika-redesign-monolitshop-20261006/,
-// токены — tokens/theme-kulikov.css. Дефолт у всех прежний ('classic'); пользователю
+// токены — tokens/theme-kulikov.css. Дефолт с 10.10 — 'kulikov' (решение владельца, миграция 225); пользователю
 // с логином kulikov тему один раз включает миграция 224 — и только если у него стоит
 // дефолтная 'classic', то есть сам он тему не выбирал.
 // Список значений продублирован ещё в трёх местах, менять вместе: ALLOWED
@@ -27,7 +27,7 @@ export const THEME_LABEL: Record<Theme, string> = {
   mono: 'Серое стекло',
   kulikov: 'Дизайн Куликова',
 };
-export const DEFAULT_THEME: Theme = 'classic';
+export const DEFAULT_THEME: Theme = 'kulikov';
 
 // Тёмная тема (задача Николая, макет owners-inbox/analsteroid-dark-theme-mock.html),
 // расширено до трёх тем (задача 2999, дизайн-система «Монолитика Glass» — light/dark/mono,

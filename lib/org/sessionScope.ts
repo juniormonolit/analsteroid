@@ -1,6 +1,6 @@
 import type { SessionUser } from '@/lib/auth/session';
 import { loadDepartments } from './deptCategories';
-import { hasFullManagerAccess, managedDepartmentIds } from './managerAccess';
+import { branchDirectManagerIds, hasFullManagerAccess, managedDepartmentIds } from './managerAccess';
 import { resolveManagersForDepartments } from './teamRoster';
 
 // ── Срез данных сессии — ОДИН механизм для всех роутов данных и справочников ─────
@@ -45,8 +45,8 @@ export async function expandDepartmentSubtree(rootUuids: string[]): Promise<Set<
 
 export async function getSessionScope(session: SessionUser): Promise<SessionScope> {
   if (hasFullManagerAccess(session)) return { kind: 'all' };
-  const roots = await managedDepartmentIds(session);
-  const self = session.bitrixUserId ? [session.bitrixUserId] : [];
+  const [roots, direct] = await Promise.all([managedDepartmentIds(session), branchDirectManagerIds(session)]);
+  const self = [...(session.bitrixUserId ? [session.bitrixUserId] : []), ...direct];
   if (roots.length === 0) return { kind: 'self', managerIds: new Set(self) };
   const [deptIds, roster] = await Promise.all([
     expandDepartmentSubtree(roots),

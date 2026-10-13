@@ -2,17 +2,18 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { SIDEBAR_COOKIE } from '@/lib/sidebar-cookie';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   BarChart3,
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, Puzzle,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
-import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
+import { hasPerm, hasRopKanbanPilot, isReportAdmin, type PermKey } from '@/lib/auth/perms';
 import { Avatar } from '@/components/ui/Avatar';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { Popover } from '@/components/ui/Popover';
@@ -444,6 +445,13 @@ function SidebarBody({
   // ролей по-прежнему закрыт, право выдаётся точечно.
   const canMore = (key: PermKey) => adminLike || hasPerm(user, key);
   const moreItems = [
+    // «ССП: план и факт» (задача владельца 10.10; до 10.10 — «ССП тест») — декомпозиция
+    // года против факта; то же право, что у «Декомпозиции» (данные те же). Первым в
+    // списке, перед «Дашбордом» (правка владельца 10.10).
+    { href: '/ssp-test', label: 'ССП: план и факт', icon: <Target size={18} />, ok: canMore('section.decomposition') },
+    // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
+    // продажам; первым в списке, пока раздел дорабатывается.
+    { href: '/dashboard-test', label: 'Дашборд', icon: <LayoutDashboard size={18} />, ok: canMore('section.dashboard_test') },
     // «Повторные» и «Товарная матрица» — из блока «Продажи» (правка владельца 17.08:
     // «убери эти пункты в Ещё»). «Повторные» строже остальных: супер-админ или
     // явное право (роль «Администратор» без джокера пункт не видит — как до 10.09).
@@ -477,6 +485,9 @@ function SidebarBody({
     // «Телевизоры» (ТЗ владельца 07.09) — ТВ-дашборды отделов; закрытый раздел
     // по паттерну section.offload. Публичная страница телевизора — /tv (без сессии).
     { href: '/screens', label: 'Телевизоры', icon: <Tv size={18} />, ok: canMore('section.tv') },
+    // «Канбан РОПа» (пилот, задача #9625) — скрытый раздел только на чтение; пункт виден
+    // ТОЛЬКО при личном ключе (hasRopKanbanPilot), админ/супер-админ без него — не видят.
+    { href: '/rop-kanban', label: 'Канбан РОПа (пилот)', icon: <LayoutGrid size={18} />, ok: hasRopKanbanPilot(user) },
     { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: canMore('section.summary') },
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: canMore('section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: canMore('section.decomposition') },
@@ -880,7 +891,16 @@ function SidebarBody({
   );
 }
 
-export function AppShell({ children, user }: { children: React.ReactNode; user: SessionUser }) {
+// Состояние сайдбара (свёрнут/развёрнут) помним в cookie: layout читает её на сервере
+// и отдаёт initialCollapsed — первый кадр сразу верный, без мигания и hydration mismatch.
+
+function saveSidebarCollapsed(v: boolean) {
+  try {
+    document.cookie = `${SIDEBAR_COOKIE}=${v ? '1' : '0'}; path=/; max-age=31536000; SameSite=Lax`;
+  } catch { /* cookie недоступны — просто не запоминаем */ }
+}
+
+export function AppShell({ children, user, initialCollapsed = false }: { children: React.ReactNode; user: SessionUser; initialCollapsed?: boolean }) {
   const pathname = usePathname();
   // Внутри Битрикса основное меню приложения НЕ показываем (правка владельца
   // 05.08: «зачем-то основное меню показывается… внутри Битрикса не надо,
@@ -894,7 +914,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   // UI/UX-аудита: владелец отменил спецкейс «Главная — свёрнутая рельса» из
   // брифа Главной, чтобы поведение было одинаковым на всех страницах). Ручной
   // тоггл сворачивания (кнопка PanelLeft/PanelLeftClose) не трогаем.
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expanded, setExpanded] = useState<string>(pathname.startsWith('/realizations') ? 'Реализация' : 'Продажи');
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -930,8 +950,10 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           style={{ width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED }}
         >
           <button
-            onClick={() => setCollapsed(v => !v)}
+            onClick={() => { const next = !collapsed; setCollapsed(next); saveSidebarCollapsed(next); }}
             title={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+            aria-expanded={!collapsed}
             className="hover-reveal absolute -right-3 top-1/2 -translate-y-1/2 z-30 w-6 h-6 rounded-full border border-[var(--color-sidebar-border)] bg-[var(--color-bg-surface)] shadow-md flex items-center justify-center text-[var(--color-sidebar-text-muted)] hover:text-[var(--color-sidebar-active)] hover:border-[var(--color-sidebar-active)] transition-colors"
           >
             {collapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
