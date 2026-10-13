@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-10-13 — Метрика «CR Сделка → Бронь (перв., физлица)» + «Базовый минимум»
+
+Новая метрика по аналогии с «CR Сделка → Бронь (перв.)», но только физлица. Два служебных
+collected-счётчика (`primary_b2c_deals_count` по created_at, `primary_b2c_reservations_count`
+по reserved_at; скрыты в UI) с фильтрами `funnel_type=primary` И `funnel_type=b2c` (AND,
+воронки 0/2) и calculated `cr_deal_to_reservation_primary_b2c` = брони / сделки * 100.
+Только «перв., физлица» — по просьбе владельца; тройка/юрлица не делались.
+- `migrations/225_cr_deal_to_reservation_primary_b2c.sql` (БД analytics) — каталог.
+- `migrations/226_basic_minimum_add_cr_primary_b2c.sql` (БД system) — вставляет метрику в
+  `saved_reports.metric_ids` «Базовый минимум» сразу после «CR Сделка → Бронь» (якорь — первый
+  из id cr_deal_to_reservation[_all|_repeat]; точный id в отчёте из репо не виден).
+Миграции НЕ накачены: с этой машины БД не отвечает (connection timeout). Накатить 225, затем
+226 командами из шапок файлов, проверить значение в отчёте.
+
 ## 2026-10-07 — Экран ТВ: вид «Кольца» по макету владельца (оформление + расположение)
 
 **Что было.** В ветке `design/tv-kulikov` экран ТВ стоял в оформлении «Графит» (запись
