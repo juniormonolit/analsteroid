@@ -21,6 +21,9 @@ import { fmtMoney, fmtDate, dealBitrixUrl } from '@/features/customers/ui/shared
 
 const DAY_MS = 86_400_000;
 
+/** Дата строки списка: отгрузка → продажа → отказ → создание. */
+const dealDate = (d: ModuleDeal) => d.deliveredAt ?? d.soldAt ?? d.lostAt ?? d.createdAt;
+
 type Tone = 'muted' | 'neg' | 'warn' | 'ok';
 const TONE_STYLE: Record<Tone, React.CSSProperties> = {
   muted: { color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-hover)' },
@@ -205,21 +208,21 @@ function ObjectFields({ data, objectKey, params }: { data: ClientModuleData; obj
 function DealRow({ d, gap, showStatus }: { d: ModuleDeal; gap: number | null; showStatus: boolean }) {
   const [open, setOpen] = useState(false);
   const st = dealStatus(d);
-  const date = d.deliveredAt ?? d.soldAt ?? d.createdAt;
+  const date = dealDate(d);
   const total = d.products.reduce((s, p) => s + p.sum, 0);
   return (
     <div className="py-1.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px]">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] sm:gap-x-3">
         <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} aria-label={open ? 'Скрыть товары' : 'Показать товары'}
           className="tap-target -ml-1 shrink-0 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
           {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </button>
-        <span className="w-[76px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtDate(date)}</span>
+        <span className="shrink-0 tabular-nums text-[var(--color-text-muted)] sm:w-[76px]">{fmtDate(date)}</span>
         <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="shrink-0 font-mono text-[var(--color-accent)] hover:underline">#{d.dealId}</a>
-        <span className="min-w-0 flex-1 basis-[180px] truncate" title={[...d.groups, d.name ?? ''].filter(Boolean).join(' · ')}>
+        <span className="order-last min-w-0 basis-full truncate pl-6 sm:order-none sm:flex-1 sm:basis-[180px] sm:pl-0" title={[...d.groups, d.name ?? ''].filter(Boolean).join(' · ')}>
           {d.groups.length > 0 ? d.groups.join(', ') : (d.name ?? 'без товарных групп')}
         </span>
-        {showStatus && <Chip tone={st.tone}>{st.label}</Chip>}
+        {showStatus && !d.deliveredAt && <Chip tone={st.tone}>{st.label}</Chip>}
         {gap !== null && <Chip>↓ {gap} дн.</Chip>}
         <span className="ml-auto whitespace-nowrap font-semibold tabular-nums">{d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
       </div>
@@ -293,7 +296,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
   const noAddress = data.deals.filter(d => d.deliveredAt && d.objectKeys.length === 0).length;
 
   const listDeals = (allDeals ? scopedDeals : scopedDeals.filter(d => d.deliveredAt));
-  const sortedList = [...listDeals].sort((a, b) => (a.deliveredAt ?? a.soldAt ?? a.createdAt ?? '').localeCompare(b.deliveredAt ?? b.soldAt ?? b.createdAt ?? ''));
+  const sortedList = [...listDeals].sort((a, b) => (dealDate(a) ?? '').localeCompare(dealDate(b) ?? ''));
   const groupMax = stats.groups[0]?.sum ?? 0;
 
   return (
