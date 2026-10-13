@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-10-13 — Выкат «Канбан РОПа» v2 на прод (задача #9625, Артём; «Катай» Сергея 16:57 МСК)
+
+Прод :8100 собран из merge-коммита `46bc411` (ветка `prod-release-dashboard-20261010`): `feat/rop-kanban-pilot` (6e78de7)
++ `origin/dev-asteroid` (76c290a). Причина слияния: в 16:31 на проде уже стоял выкат модуля «Карточка клиента»
+из dev-asteroid, а ветка прод-релиза его не содержала — сборка из 6e78de7 без слияния откатила бы его. Конфликты
+(AppShell — иконки, perms — `section.modules` + `section.dashboard_test`, WORKLOG) разрешены объединением.
+Миграция 228 (`system.rop_manager_cycles`) накатана в локальный `analsteroid-sys-pg` под sysadmin (docker exec),
+роли приложения `JanCloude` выданы только SELECT, INSERT, UPDATE на эту таблицу. BUILD_ID `kYauU5XD8UXWlV84GrOng`.
+Бэкап для отката: `prod-backups/standalone-pre-ropkanban-v2-20261013-170357.tar.gz` + `start.sh.pre-ropkanban-v2-20261013-170357`.
+Запись в `changelog_entries` добавлена. Проверено: /login 200, /api/rop-kanban и /api/rop-kanban/cycles без сессии 401,
+upsert под JanCloude в транзакции с ROLLBACK проходит.
+
+---
+
 ## 2026-10-13 — Метрика «CR Сделка → Бронь (перв., физлица)» + «Базовый минимум»
 
 Новая метрика по аналогии с «CR Сделка → Бронь (перв.)», но только физлица. Два служебных
