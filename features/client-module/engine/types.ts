@@ -30,10 +30,13 @@ export interface ModuleRequest { number: string; date: string | null }
 
 export interface ModuleObject {
   key: string;
+  /** Адрес из заявок 1С (для ручного объекта — его «идеальный» адрес). */
   address: string;
   lat: number | null;
   lon: number | null;
   requests: ModuleRequest[];
+  /** Объект заведён менеджером вручную (в заявках 1С его нет — сделки к нему не привязаны). */
+  manual: boolean;
 }
 
 export const CLIENT_TYPES = [
@@ -59,7 +62,20 @@ export const HOUSE_TYPES = [
 export type HouseType = (typeof HOUSE_TYPES)[number]['value'];
 
 export interface ClientProfile { clientType: ClientType | null; occupation: string; note: string; updatedBy: string | null; updatedAt: string | null }
-export interface ObjectProfile { buildStage: BuildStage | null; houseType: HouseType | null; note: string; updatedBy: string | null; updatedAt: string | null }
+export interface ObjectProfile {
+  buildStage: BuildStage | null;
+  /** Стадию закрыл админ в Битриксе («Стройка завершена» / «Неактуален») — виджет её не перетирает. */
+  closedStage: 'done' | 'inactive' | null;
+  houseType: HouseType | null;
+  note: string;
+  /** «Адрес идеальный» и его точка (sa.client_module_objects.address/lat/lon). */
+  idealAddress: string | null;
+  lat: number | null;
+  lon: number | null;
+  bitrixItemId: number | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+}
 
 export interface ClientModuleData {
   ref: ClientRef;
@@ -77,7 +93,12 @@ export interface ClientModuleData {
 }
 
 export const EMPTY_PROFILE: ClientProfile = { clientType: null, occupation: '', note: '', updatedBy: null, updatedAt: null };
-export const EMPTY_OBJECT_PROFILE: ObjectProfile = { buildStage: null, houseType: null, note: '', updatedBy: null, updatedAt: null };
+export const EMPTY_OBJECT_PROFILE: ObjectProfile = {
+  buildStage: null, closedStage: null, houseType: null, note: '', idealAddress: null, lat: null, lon: null, bitrixItemId: null, updatedBy: null, updatedAt: null,
+};
+
+/** Ключ нового объекта, заведённого вручную (не из заявок 1С). */
+export const NEW_OBJECT_KEY = 'new';
 
 // ── Объекты ────────────────────────────────────────────────────────────────
 

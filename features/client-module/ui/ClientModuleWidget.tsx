@@ -11,13 +11,14 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, ExternalLink, HelpCircle, MapPin, Building2, User } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, HelpCircle, MapPin, Building2, User, Plus } from 'lucide-react';
 import {
-  type ClientModuleData, type ModuleDeal, type ClientType, type BuildStage, type HouseType,
-  CLIENT_TYPES, BUILD_STAGES, HOUSE_TYPES, TYPES_WITH_OCCUPATION, EMPTY_OBJECT_PROFILE,
+  type ClientModuleData, type ModuleDeal, type ModuleObject, type ClientType, type BuildStage, type HouseType,
+  CLIENT_TYPES, BUILD_STAGES, HOUSE_TYPES, TYPES_WITH_OCCUPATION, EMPTY_OBJECT_PROFILE, NEW_OBJECT_KEY,
   computeStats, dealStatus,
 } from '../engine/types';
 import { fmtMoney, fmtDate, dealBitrixUrl } from '@/features/customers/ui/shared';
+import { AddressPicker, type GeoValue, type GeoHint } from '@/features/geo/ui/AddressPicker';
 
 const DAY_MS = 86_400_000;
 
@@ -102,7 +103,7 @@ function useSave(params: Record<string, string>) {
   const qc = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const save = async (payload: object) => {
+  const save = async (payload: object): Promise<{ objectKey?: string | null } | null> => {
     setSaving(true); setError(null);
     try {
       const r = await fetch('/api/modules/client-card/profile', {
@@ -110,9 +111,12 @@ function useSave(params: Record<string, string>) {
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error ?? 'Не удалось сохранить');
+      if (j.warning) setError(j.warning);
       await qc.invalidateQueries({ queryKey: ['client-module'] });
+      return j;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить');
+      return null;
     } finally { setSaving(false); }
   };
   return { save, saving, error };
@@ -158,23 +162,73 @@ function ClientFields({ data, params }: { data: ClientModuleData; params: Record
 
 // ── Ручные поля объекта ─────────────────────────────────────────────────────
 
-function ObjectFields({ data, objectKey, params }: { data: ClientModuleData; objectKey: string; params: Record<string, string> }) {
-  const prof = data.objectProfiles[objectKey] ?? EMPTY_OBJECT_PROFILE;
+/** Объект: адрес («Адрес идеальный» с картой), стадия стройки, тип дома,
+ *  заметка. object = null — новый объект, заведённый вручную. */
+function ObjectFields({ data, object, params, onCreated }: {
+  data: ClientModuleData; object: ModuleObject | null; params: Record<string, string>; onCreated?: (key: string) => void;
+}) {
+  const key = object?.key ?? NEW_OBJECT_KEY;
+  const prof = data.objectProfiles[key] ?? EMPTY_OBJECT_PROFILE;
+  const savedGeo = useMemo<GeoValue | null>(() => (prof.lat !== null && prof.lon !== null
+    ? { lat: prof.lat, lon: prof.lon, address: prof.idealAddress ?? '', settlement: null, area: null, region: null, precision: 'pin', source: 'manual', confirmed: true }
+    : null), [prof]);
+  const [geo, setGeo] = useState<GeoValue | null>(savedGeo);
+  const [editAddr, setEditAddr] = useState(!object || !savedGeo);
   const [stage, setStage] = useState<BuildStage | null>(prof.buildStage);
   const [house, setHouse] = useState<HouseType | null>(prof.houseType);
   const [note, setNote] = useState(prof.note);
-  useEffect(() => { setStage(prof.buildStage); setHouse(prof.houseType); setNote(prof.note); }, [prof]);
+  useEffect(() => {
+    setGeo(savedGeo); setEditAddr(!object || !savedGeo);
+    setStage(prof.buildStage); setHouse(prof.houseType); setNote(prof.note);
+  }, [prof, savedGeo, object]);
   const { save, saving, error } = useSave(params);
   const selfBuilder = data.profile.clientType === 'self_builder';
-  const dirty = stage !== prof.buildStage || house !== prof.houseType || note !== prof.note;
+
+  const geoChanged = !!geo && (!savedGeo || geo.lat !== savedGeo.lat || geo.lon !== savedGeo.lon || geo.address !== savedGeo.address);
+  const dirty = geoChanged || stage !== prof.buildStage || house !== prof.houseType || note !== prof.note;
+  const geoBlocked = geoChanged && !geo!.confirmed;
+  const hints: GeoHint[] = object && !object.manual && object.lat !== null && object.lon !== null
+    ? [{ label: 'Точка из заявки 1С', lat: object.lat, lon: object.lon }] : [];
+
+  const onSave = async () => {
+    const r = await save({ object: {
+      key,
+      buildStage: selfBuilder ? stage : null,
+      houseType: selfBuilder ? house : null,
+      note,
+      ideal: geoChanged ? { address: geo!.address, lat: geo!.lat, lon: geo!.lon } : undefined,
+      address1c: object && !object.manual ? object.address : undefined,
+    } });
+    if (r?.objectKey && !object) onCreated?.(r.objectKey);
+  };
+
   return (
-    <Section title="Объект: заполняет менеджер">
+    <Section title={object ? 'Объект: заполняет менеджер' : 'Новый объект'}>
+      <div className="mb-1 text-[12px] text-[var(--color-text-muted)]">Адрес идеальный</div>
+      {editAddr ? (
+        <AddressPicker value={geo} onChange={setGeo} hints={hints} seedQuery={object && !object.manual ? object.address : null} />
+      ) : (
+        <div className="flex flex-wrap items-start gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-[12.5px]">
+          <MapPin size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--color-positive, #2f9e44)' }} />
+          <div className="min-w-0 flex-1">
+            <div className="break-words font-medium">{savedGeo!.address || 'Адрес без подписи'}</div>
+            <div className="text-[11.5px] tabular-nums text-[var(--color-text-muted)]">{savedGeo!.lat.toFixed(6)}, {savedGeo!.lon.toFixed(6)}</div>
+          </div>
+          <button type="button" onClick={() => setEditAddr(true)} className="min-h-9 shrink-0 rounded-lg border border-[var(--color-border)] px-3 text-[12px]">Изменить</button>
+        </div>
+      )}
+
+      {prof.closedStage && (
+        <div className="mt-2.5 text-[12px] text-[var(--color-text-muted)]">
+          В Битриксе стадия: <b>{prof.closedStage === 'done' ? 'Стройка завершена' : 'Неактуален'}</b> (поставил администратор).
+        </div>
+      )}
       {selfBuilder ? (
         <>
-          <div className="mb-1 text-[12px] text-[var(--color-text-muted)]">Стадия строительства</div>
+          <div className="mb-1 mt-2.5 text-[12px] text-[var(--color-text-muted)]">Стадия строительства</div>
           <div className="flex flex-col gap-1.5">
-            {BUILD_STAGES.map(s => (
-              <OptionRow key={s.value} name={`bs-${objectKey}`} label={s.label} hint={s.hint} checked={stage === s.value} onSelect={() => setStage(s.value)} />
+            {BUILD_STAGES.map(st => (
+              <OptionRow key={st.value} name={`bs-${key}`} label={st.label} hint={st.hint} checked={stage === st.value} onSelect={() => setStage(st.value)} />
             ))}
           </div>
           <div className="mb-1 mt-2.5 text-[12px] text-[var(--color-text-muted)]">Тип дома</div>
@@ -188,7 +242,7 @@ function ObjectFields({ data, objectKey, params }: { data: ClientModuleData; obj
           </div>
         </>
       ) : (
-        <div className="text-[12px] text-[var(--color-text-muted)]">
+        <div className="mt-2.5 text-[12px] text-[var(--color-text-muted)]">
           Стадия стройки и тип дома заполняются, когда тип клиента — «Строит себе» (переключитесь на «Весь клиент»).
         </div>
       )}
@@ -196,9 +250,15 @@ function ObjectFields({ data, objectKey, params }: { data: ClientModuleData; obj
         <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Заметка по объекту</span>
         <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} maxLength={2000} className={inputCls} />
       </label>
-      <SaveBar dirty={dirty} saving={saving} error={error ?? (data.profilesAvailable ? null : 'Хранилище ручных полей ещё не создано — сохранение пока недоступно')}
-        disabled={!data.profilesAvailable} savedAt={savedLine(prof.updatedBy, prof.updatedAt)}
-        onSave={() => save({ object: { key: objectKey, buildStage: selfBuilder ? stage : null, houseType: selfBuilder ? house : null, note } })} />
+      <SaveBar
+        dirty={dirty && (object !== null || !!geo)}
+        saving={saving}
+        error={error ?? (!data.profilesAvailable ? 'Хранилище ручных полей ещё не создано — сохранение пока недоступно'
+          : geoBlocked ? 'Точка стоит неточно — перетащите её на объект или отметьте «Точка стоит верно»'
+          : !object && !geo ? 'Сначала найдите адрес нового объекта' : null)}
+        disabled={!data.profilesAvailable || geoBlocked || (!object && !geo)}
+        savedAt={savedLine(prof.updatedBy, prof.updatedAt)}
+        onSave={() => void onSave()} />
     </Section>
   );
 }
@@ -320,17 +380,29 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
           <button key={obj.key} type="button" onClick={() => setScope(obj.key)} title={obj.address}
             className={`inline-flex min-h-9 max-w-full items-center gap-1 rounded-lg border px-3 text-[12.5px] ${scope === obj.key ? 'border-[var(--color-accent)] font-semibold text-[var(--color-accent)]' : 'border-[var(--color-border)]'}`}>
             <MapPin size={12} className="shrink-0" />
-            <span className="truncate max-w-[220px]">Объект {i + 1}: {obj.address}</span>
-            <span className="shrink-0 text-[var(--color-text-muted)]">· {shipped}/{deals}</span>
+            <span className="truncate max-w-[220px]">Объект {i + 1}: {data.objectProfiles[obj.key]?.idealAddress || obj.address}</span>
+            <span className="shrink-0 text-[var(--color-text-muted)]">{obj.manual ? '· вручную' : `· ${shipped}/${deals}`}</span>
           </button>
         ))}
+        {data.profilesAvailable && (
+          <button type="button" onClick={() => setScope(NEW_OBJECT_KEY)}
+            className={`inline-flex min-h-9 items-center gap-1 rounded-lg border border-dashed px-3 text-[12.5px] ${scope === NEW_OBJECT_KEY ? 'border-[var(--color-accent)] font-semibold text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>
+            <Plus size={12} /> Новый объект
+          </button>
+        )}
       </div>
       {!data.addressesAvailable && (
         <div className="text-[12px] text-[var(--color-text-muted)]">Адреса заявок 1С сейчас недоступны — объекты не показаны.</div>
       )}
 
-      {curObject && (
+      {scope === NEW_OBJECT_KEY && (
+        <ObjectFields key="new" data={data} object={null} params={params} onCreated={k => setScope(k)} />
+      )}
+
+      {scope !== NEW_OBJECT_KEY && <>
+      {curObject && !curObject.manual && (
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-[12.5px]">
+          <div className="text-[11px] text-[var(--color-text-muted)]">Адрес из заявок 1С</div>
           <div className="flex items-start gap-1.5"><MapPin size={14} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" /><span className="min-w-0 break-words">{curObject.address}</span></div>
           {curObject.requests.length > 0 && (
             <div className="mt-1 text-[11.5px] text-[var(--color-text-muted)]">
@@ -355,7 +427,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
       {/* Ручные поля */}
       {scope === 'all'
         ? <ClientFields data={data} params={params} />
-        : <ObjectFields key={scope} data={data} objectKey={scope} params={params} />}
+        : <ObjectFields key={scope} data={data} object={curObject} params={params} />}
 
       {/* е: товарные группы по всем отгрузкам */}
       <Section title={`Товарные группы по отгрузкам · ${stats.groups.length}`}>
@@ -399,6 +471,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
           </div>
         )}
       </Section>
+      </>}
     </div>
   );
 }

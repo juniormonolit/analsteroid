@@ -3,8 +3,12 @@ import { resolveClientNames } from '@/lib/bitrix/clientNames';
 import {
   type ClientRef, type ClientModuleData, type ModuleDeal, type ModuleObject, type ModuleProduct,
   type ClientProfile, type ObjectProfile, type ClientType, type BuildStage, type HouseType,
-  CLIENT_TYPES, BUILD_STAGES, HOUSE_TYPES, EMPTY_PROFILE, requestObjectKey,
+  CLIENT_TYPES, BUILD_STAGES, HOUSE_TYPES, EMPTY_PROFILE, NEW_OBJECT_KEY, requestObjectKey,
 } from './types';
+import {
+  BitrixWriteError, readClientFromBitrix, writeClientToBitrix, writeObjectToBitrix, type StoredStage,
+} from './bitrix';
+import { validLatLon } from '@/lib/geo/parse';
 
 // Модуль «Карточка клиента» (ТЗ владельца 13.10): данные для виджета, который
 // потом встанет в карточку контакта/компании Битрикса. Пока живёт в «Ещё →
@@ -103,7 +107,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
         const address = (r.address ?? '').trim() || null;
         const key = requestObjectKey(address, okLat, okLon);
         if (!key) continue;
-        const obj = objects.get(key) ?? { key, address: address ?? `${okLat}, ${okLon}`, lat: okLat, lon: okLon, requests: [] };
+        const obj = objects.get(key) ?? { key, address: address ?? `${okLat}, ${okLon}`, lat: okLat, lon: okLon, requests: [], manual: false };
         // Самый свежий адрес объекта — как подпись (строки пишут по-разному).
         if (address) obj.address = address;
         if (obj.lat === null && okLat !== null) { obj.lat = okLat; obj.lon = okLon; }
@@ -139,7 +143,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     };
   });
 
-  // ── Ручные поля (sa_org/005) ────────────────────────────────────────────
+  // ── Ручные поля (копия Битрикса в sa, sa_org/005) ─────────────────────
   let profile: ClientProfile = EMPTY_PROFILE;
   const objectProfiles: Record<string, ObjectProfile> = {};
   let profilesAvailable = true;
@@ -148,20 +152,51 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
       db.query<{ client_type: string | null; occupation: string; note: string; updated_by: string | null; updated_at: Date }>(
         `SELECT client_type, occupation, note, updated_by, updated_at FROM sa.client_module_profiles WHERE client_ref = $1`, [ref],
       ),
-      db.query<{ object_key: string; build_stage: string | null; house_type: string | null; note: string; updated_by: string | null; updated_at: Date }>(
-        `SELECT object_key, build_stage, house_type, note, updated_by, updated_at FROM sa.client_module_objects WHERE client_ref = $1`, [ref],
+      db.query<{ object_key: string; build_stage: string | null; house_type: string | null; note: string; address: string | null; lat: number | null; lon: number | null; bitrix_item_id: string | null; updated_by: string | null; updated_at: Date }>(
+        `SELECT object_key, build_stage, house_type, note, address, lat, lon, bitrix_item_id::text AS bitrix_item_id, updated_by, updated_at
+           FROM sa.client_module_objects WHERE client_ref = $1 AND NOT is_deleted`, [ref],
       ),
     ]);
     const pr = p.rows[0];
-    if (pr) profile = {
-      clientType: isOneOf(CLIENT_TYPES, pr.client_type) ? pr.client_type as ClientType : null,
-      occupation: pr.occupation, note: pr.note, updatedBy: pr.updated_by, updatedAt: iso(pr.updated_at),
-    };
-    for (const r of o.rows) objectProfiles[r.object_key] = {
-      buildStage: isOneOf(BUILD_STAGES, r.build_stage) ? r.build_stage as BuildStage : null,
-      houseType: isOneOf(HOUSE_TYPES, r.house_type) ? r.house_type as HouseType : null,
-      note: r.note, updatedBy: r.updated_by, updatedAt: iso(r.updated_at),
-    };
+    if (pr) {
+      profile = {
+        clientType: isOneOf(CLIENT_TYPES, pr.client_type) ? pr.client_type as ClientType : null,
+        occupation: pr.occupation, note: pr.note, updatedBy: pr.updated_by, updatedAt: iso(pr.updated_at),
+      };
+    } else {
+      // Первое открытие клиента: строки в sa ещё нет — разово подтягиваем поля
+      // из Битрикса (там ~19 тыс. старых «Типов клиента») и кладём копию в sa.
+      // Тот же ленивый паттерн, что у имён клиентов (lib/bitrix/clientNames.ts).
+      const bxp = await withTimeout(readClientFromBitrix(ref), 5000, null);
+      if (bxp && (bxp.clientType || bxp.occupation || bxp.note)) {
+        profile = { clientType: bxp.clientType, occupation: bxp.occupation, note: bxp.note, updatedBy: null, updatedAt: null };
+        await db.query(
+          `INSERT INTO sa.client_module_profiles (client_ref, client_type, client_type_enum_id, occupation, note, bitrix_synced_at)
+           VALUES ($1, $2, $3, $4, $5, now()) ON CONFLICT (client_ref) DO NOTHING`,
+          [ref, bxp.clientType, bxp.enumId, bxp.occupation, bxp.note],
+        ).catch(() => {});
+      }
+    }
+    for (const r of o.rows) {
+      objectProfiles[r.object_key] = {
+        buildStage: isOneOf(BUILD_STAGES, r.build_stage) ? r.build_stage as BuildStage : null,
+        closedStage: r.build_stage === 'done' || r.build_stage === 'inactive' ? r.build_stage : null,
+        houseType: isOneOf(HOUSE_TYPES, r.house_type) ? r.house_type as HouseType : null,
+        note: r.note,
+        idealAddress: r.address,
+        lat: r.lat !== null ? Number(r.lat) : null,
+        lon: r.lon !== null ? Number(r.lon) : null,
+        bitrixItemId: r.bitrix_item_id !== null ? Number(r.bitrix_item_id) : null,
+        updatedBy: r.updated_by, updatedAt: iso(r.updated_at),
+      };
+      // Объект, заведённый вручную (в заявках 1С его нет), — отдельной вкладкой.
+      if (!objects.has(r.object_key) && r.object_key.startsWith('m')) {
+        objects.set(r.object_key, {
+          key: r.object_key, address: r.address ?? 'Новый объект', manual: true, requests: [],
+          lat: r.lat !== null ? Number(r.lat) : null, lon: r.lon !== null ? Number(r.lon) : null,
+        });
+      }
+    }
   } catch {
     profilesAvailable = false; // миграция sa_org/005 ещё не накатана
   }
@@ -184,42 +219,108 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   };
 }
 
-// ── Сохранение ручных полей ───────────────────────────────────────────────
+// ── Сохранение ручных полей: СНАЧАЛА Битрикс, при успехе — sa ─────────────
+// Битрикс не принял — в sa ничего не пишем, менеджер видит ошибку (копия не
+// может обогнать оригинал). Битрикс принял, а sa упала — расхождение закроет
+// ночная сверка (lib/jobs/clientModuleSync.ts), менеджеру сообщаем честно.
 
 export class ProfilesNotReadyError extends Error {}
+export class MirrorWriteError extends Error {}
+export { BitrixWriteError };
+
+function isNotReady(e: unknown): boolean {
+  return e instanceof Error && /does not exist|permission denied/i.test(e.message);
+}
 
 export async function saveClientProfile(ref: ClientRef, input: { clientType: unknown; occupation: unknown; note: unknown }, by: string): Promise<void> {
   const clientType = isOneOf(CLIENT_TYPES, input.clientType) ? input.clientType : null;
   const occupation = typeof input.occupation === 'string' ? input.occupation.slice(0, 500) : '';
   const note = typeof input.note === 'string' ? input.note.slice(0, 2000) : '';
+
+  const enumId = await writeClientToBitrix(ref, { clientType, occupation, note });
   try {
     await analyticsDb().query(
-      `INSERT INTO sa.client_module_profiles (client_ref, client_type, occupation, note, updated_by, updated_at)
-       VALUES ($1, $2, $3, $4, $5, now())
-       ON CONFLICT (client_ref) DO UPDATE SET client_type = EXCLUDED.client_type, occupation = EXCLUDED.occupation,
-         note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-      [ref, clientType, occupation, note, by],
+      `INSERT INTO sa.client_module_profiles (client_ref, client_type, client_type_enum_id, occupation, note, updated_by, updated_at, bitrix_synced_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now(), now())
+       ON CONFLICT (client_ref) DO UPDATE SET client_type = EXCLUDED.client_type, client_type_enum_id = EXCLUDED.client_type_enum_id,
+         occupation = EXCLUDED.occupation, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now(), bitrix_synced_at = now()`,
+      [ref, clientType, enumId, occupation, note, by],
     );
   } catch (e) {
-    if (e instanceof Error && /does not exist|permission denied/i.test(e.message)) throw new ProfilesNotReadyError(e.message);
-    throw e;
+    if (isNotReady(e)) throw new ProfilesNotReadyError(e instanceof Error ? e.message : String(e));
+    throw new MirrorWriteError(e instanceof Error ? e.message : String(e));
   }
 }
 
-export async function saveObjectProfile(ref: ClientRef, objectKey: string, input: { buildStage: unknown; houseType: unknown; note: unknown }, by: string): Promise<void> {
+export interface ObjectSaveInput {
+  buildStage: unknown;
+  houseType: unknown;
+  note: unknown;
+  /** «Адрес идеальный»: подтверждённая точка из каскада резолва. */
+  ideal?: { address?: unknown; lat?: unknown; lon?: unknown } | null;
+  /** Адрес из заявок 1С (справка, кладётся в поле «Адрес» элемента). */
+  address1c?: unknown;
+}
+
+/** Сохраняет объект; возвращает его ключ (для нового ручного объекта — созданный). */
+export async function saveObjectProfile(ref: ClientRef, objectKeyIn: string, input: ObjectSaveInput, by: string): Promise<string> {
   const buildStage = isOneOf(BUILD_STAGES, input.buildStage) ? input.buildStage : null;
   const houseType = isOneOf(HOUSE_TYPES, input.houseType) ? input.houseType : null;
   const note = typeof input.note === 'string' ? input.note.slice(0, 2000) : '';
+  const address1c = typeof input.address1c === 'string' ? input.address1c.slice(0, 500) : null;
+  let idealAddress: string | null = null, lat: number | null = null, lon: number | null = null;
+  if (input.ideal) {
+    const la = Number(input.ideal.lat), lo = Number(input.ideal.lon);
+    if (validLatLon(la, lo)) { lat = la; lon = lo; }
+    idealAddress = typeof input.ideal.address === 'string' ? input.ideal.address.trim().slice(0, 500) || null : null;
+  }
+
+  const isNew = objectKeyIn === NEW_OBJECT_KEY;
+  if (isNew && (lat === null || !idealAddress)) throw new Error('Для нового объекта нужен подтверждённый адрес');
+  const objectKey = isNew ? `m${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}` : objectKeyIn.slice(0, 300);
+
+  const db = analyticsDb();
+  type Prev = { bitrix_item_id: string | null; build_stage: string | null; address: string | null; lat: number | null; lon: number | null };
+  let prev: Prev | undefined;
   try {
-    await analyticsDb().query(
-      `INSERT INTO sa.client_module_objects (client_ref, object_key, build_stage, house_type, note, updated_by, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, now())
-       ON CONFLICT (client_ref, object_key) DO UPDATE SET build_stage = EXCLUDED.build_stage, house_type = EXCLUDED.house_type,
-         note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-      [ref, objectKey.slice(0, 300), buildStage, houseType, note, by],
-    );
+    prev = (await db.query<Prev>(
+      `SELECT bitrix_item_id::text AS bitrix_item_id, build_stage, address, lat, lon FROM sa.client_module_objects WHERE client_ref = $1 AND object_key = $2`,
+      [ref, objectKey],
+    )).rows[0];
   } catch (e) {
-    if (e instanceof Error && /does not exist|permission denied/i.test(e.message)) throw new ProfilesNotReadyError(e.message);
+    if (isNotReady(e)) throw new ProfilesNotReadyError(e instanceof Error ? e.message : String(e));
     throw e;
   }
+
+  // Адрес не передан (сохраняли только стадию/заметку) — оставляем прежний.
+  if (input.ideal === undefined && prev) {
+    idealAddress = prev.address;
+    lat = prev.lat !== null ? Number(prev.lat) : null;
+    lon = prev.lon !== null ? Number(prev.lon) : null;
+  }
+
+  // Стадию, закрытую админом («завершена»/«неактуален»), виджет не перетирает,
+  // если менеджер её не выбирал заново.
+  const prevClosed = prev?.build_stage === 'done' || prev?.build_stage === 'inactive';
+  const stage: StoredStage | undefined = buildStage ?? (prevClosed ? undefined : null);
+
+  const itemId = await writeObjectToBitrix(ref, {
+    itemId: prev?.bitrix_item_id ? Number(prev.bitrix_item_id) : null,
+    key: objectKey, address1c, idealAddress, lat, lon, stage, houseType, note,
+  });
+
+  try {
+    await db.query(
+      `INSERT INTO sa.client_module_objects
+         (client_ref, object_key, bitrix_item_id, address, lat, lon, build_stage, house_type, note, is_deleted, updated_by, updated_at, bitrix_synced_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10, now(), now())
+       ON CONFLICT (client_ref, object_key) DO UPDATE SET bitrix_item_id = EXCLUDED.bitrix_item_id, address = EXCLUDED.address,
+         lat = EXCLUDED.lat, lon = EXCLUDED.lon, build_stage = EXCLUDED.build_stage, house_type = EXCLUDED.house_type,
+         note = EXCLUDED.note, is_deleted = false, updated_by = EXCLUDED.updated_by, updated_at = now(), bitrix_synced_at = now()`,
+      [ref, objectKey, itemId, idealAddress, lat, lon, stage === undefined ? prev?.build_stage ?? null : stage, houseType, note, by],
+    );
+  } catch (e) {
+    throw new MirrorWriteError(e instanceof Error ? e.message : String(e));
+  }
+  return objectKey;
 }
