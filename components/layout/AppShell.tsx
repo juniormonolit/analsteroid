@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
-import { hasPerm, isReportAdmin, type PermKey } from '@/lib/auth/perms';
+import { hasPerm, hasRopKanbanPilot, isReportAdmin, type PermKey } from '@/lib/auth/perms';
 import { Avatar } from '@/components/ui/Avatar';
 import { Tooltip, TooltipProvider } from '@/components/ui/Tooltip';
 import { Popover } from '@/components/ui/Popover';
@@ -485,6 +485,9 @@ function SidebarBody({
     // «Телевизоры» (ТЗ владельца 07.09) — ТВ-дашборды отделов; закрытый раздел
     // по паттерну section.offload. Публичная страница телевизора — /tv (без сессии).
     { href: '/screens', label: 'Телевизоры', icon: <Tv size={18} />, ok: canMore('section.tv') },
+    // «Канбан РОПа» (пилот, задача #9625) — скрытый раздел только на чтение; пункт виден
+    // ТОЛЬКО при личном ключе (hasRopKanbanPilot), админ/супер-админ без него — не видят.
+    { href: '/rop-kanban', label: 'Канбан РОПа (пилот)', icon: <LayoutGrid size={18} />, ok: hasRopKanbanPilot(user) },
     { href: '/summary', label: 'Сводная', icon: <Gauge size={18} />, ok: canMore('section.summary') },
     { href: '/plans', label: 'Планы', icon: <ClipboardList size={18} />, ok: canMore('section.plans') },
     { href: '/decomposition', label: 'Декомпозиция', icon: <Network size={18} />, ok: canMore('section.decomposition') },

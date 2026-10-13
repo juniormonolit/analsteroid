@@ -53,6 +53,15 @@ const nextConfig: NextConfig = {
         headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
       },
       {
+        // Скрытый пилот «Канбан РОПа» (задача #9625).
+        source: '/rop-kanban',
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
+      },
+      {
+        source: '/api/rop-kanban',
+        headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow, noarchive' }],
+      },
+      {
         // Встроенные страницы: фреймить может только портал (и мы сами).
         source: '/bx/:path*',
         headers: [

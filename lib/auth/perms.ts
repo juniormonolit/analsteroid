@@ -44,6 +44,11 @@ export const PERM_SECTIONS = [
   // владелец явно через «Настройки → Роли» — какие роли получают доступ по
   // умолчанию ещё не решено (см. открытые вопросы в отчёте задачи).
   { key: 'section.rop_today', label: 'РОП — сегодня' },
+  // «Канбан РОПа» (пилот, задача #9625) — скрытый раздел только на чтение, выдаётся ЛИЧНО
+  // через users.section_overrides. Особый ключ: проверяется hasRopKanbanPilot(), а не
+  // hasPerm() — ни джокер section.*, ни супер-админ его не открывают (иначе раздел увидели
+  // бы все админы). Роли ключ тоже можно выдать (шаг 8 плана — «дать роли РОП»), но только явно.
+  { key: 'section.rop_kanban_pilot', label: 'Канбан РОПа (пилот, только персонально)' },
   // Пункты меню «Ещё», не имевшие собственного ключа (задача Иосифа 10.09:
   // «в матрице прав отдельно разрешать доступ роли к пунктам из „Ещё“»).
   // До этого их закрывал только жёсткий гейт аудита 09.09 «только админ»;
@@ -165,6 +170,15 @@ export function sanitizeSectionOverrides(raw: unknown): SectionKey[] {
   if (!Array.isArray(raw)) return [];
   const valid = new Set<string>(PERM_SECTIONS.map((p) => p.key));
   return [...new Set(raw.filter((k): k is SectionKey => typeof k === 'string' && valid.has(k)))];
+}
+
+// Пилот «Канбан РОПа» (#9625): доступ — ТОЛЬКО явный ключ в эффективных правах сессии
+// (роль ∪ section_overrides). Не hasPerm(): тот пропускает супер-админа и джокер section.*
+// (роль «Администратор»), а пилот по решению владельца открыт трём людям, не всем админам.
+// Тот же подход, что у action.rop_today.full_access. Принимает SessionUser и из клиента
+// (AppShell), поэтому без обращения к БД.
+export function hasRopKanbanPilot(session: Pick<SessionUser, 'permissions'> | null): boolean {
+  return !!session && session.permissions.includes('section.rop_kanban_pilot');
 }
 
 export function hasPerm(session: SessionUser | null, key: PermKey): boolean {
