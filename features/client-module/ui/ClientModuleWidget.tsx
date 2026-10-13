@@ -9,6 +9,7 @@
 // computeStats (engine/types.ts). Ручные поля: тип клиента — на клиенте,
 // стадия стройки / тип дома — на объекте (решение владельца 13.10).
 
+import { apiFetch } from '@/lib/client/apiFetch';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, ExternalLink, HelpCircle, MapPin, Building2, User, Plus } from 'lucide-react';
@@ -106,7 +107,7 @@ function useSave(params: Record<string, string>) {
   const save = async (payload: object): Promise<{ objectKey?: string | null } | null> => {
     setSaving(true); setError(null);
     try {
-      const r = await fetch('/api/modules/client-card/profile', {
+      const r = await apiFetch('/api/modules/client-card/profile', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...params, ...payload }),
       });
       const j = await r.json().catch(() => ({}));
@@ -318,7 +319,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
     queryKey: ['client-module', qs],
     enabled: qs.length > 0,
     queryFn: async () => {
-      const r = await fetch(`/api/modules/client-card?${qs}`);
+      const r = await apiFetch(`/api/modules/client-card?${qs}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? 'Ошибка загрузки');
       return j;

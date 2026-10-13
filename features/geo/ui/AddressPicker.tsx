@@ -9,6 +9,7 @@
 // отметит «точка стоит верно». Компонент общий: сначала объекты в модуле
 // «Карточка клиента», дальше — окно адреса в сделке (BACKLOG).
 
+import { apiFetch } from '@/lib/client/apiFetch';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { MapPin, Search, Loader2, ExternalLink, Crosshair } from 'lucide-react';
@@ -44,7 +45,7 @@ const isSure = (p: Precision) => p === 'pin' || p === 'house';
 const toValue = (c: GeoCandidate): GeoValue => ({ ...c, confirmed: isSure(c.precision) });
 
 async function reverse(lat: number, lon: number): Promise<GeoCandidate | null> {
-  const r = await fetch(`/api/geo/reverse?lat=${lat}&lon=${lon}`);
+  const r = await apiFetch(`/api/geo/reverse?lat=${lat}&lon=${lon}`);
   if (!r.ok) return null;
   return (await r.json()).candidate ?? null;
 }
@@ -132,7 +133,7 @@ export function AddressPicker({ value, onChange, hints = [], seedQuery }: {
     if (q.length < 3 || looksLikeUrl(q) || parseCoords(q) || text === quietText.current) { setSuggest([]); return; }
     const my = ++seq.current;
     const t = setTimeout(async () => {
-      const r = await fetch(`/api/geo/suggest?q=${encodeURIComponent(q)}`).then(x => x.json()).catch(() => null);
+      const r = await apiFetch(`/api/geo/suggest?q=${encodeURIComponent(q)}`).then(x => x.json()).catch(() => null);
       if (my === seq.current) setSuggest(r?.candidates ?? []);
     }, 350);
     return () => clearTimeout(t);
@@ -143,7 +144,7 @@ export function AddressPicker({ value, onChange, hints = [], seedQuery }: {
     if (!q) return;
     seq.current++; quietText.current = input; setSuggest([]); setBusy(true); setResult(null);
     try {
-      const r: ResolveResult = await fetch('/api/geo/resolve', {
+      const r: ResolveResult = await apiFetch('/api/geo/resolve', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: q }),
       }).then(x => x.json());
       setResult(r);

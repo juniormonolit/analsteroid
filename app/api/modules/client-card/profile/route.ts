@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { canUseModules } from '@/lib/auth/modulesAccess';
+import { moduleActor } from '@/lib/bitrix/widgetGrant';
 import {
   parseClientRef, saveClientProfile, saveObjectProfile,
   ProfilesNotReadyError, BitrixWriteError, MirrorWriteError, type ObjectSaveInput,
@@ -16,24 +15,22 @@ import {
 //         object?: {key, buildStage, houseType, note, ideal?: {address, lat, lon}, address1c?} }
 // key = 'new' — новый объект, заведённый вручную; в ответе — его ключ.
 export async function PUT(req: NextRequest) {
-  const session = await getSession();
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  if (!canUseModules(session)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-
   const body = await req.json().catch(() => null) as Record<string, unknown> | null;
   if (!body) return NextResponse.json({ error: 'Некорректный запрос' }, { status: 400 });
   const str = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : null);
   const ref = parseClientRef(str(body.contactId), str(body.companyId));
   if (!ref) return NextResponse.json({ error: 'Укажите ID контакта или компании' }, { status: 400 });
+  const actor = await moduleActor(req, ref);
+  if (!actor) return NextResponse.json({ error: 'Нет доступа — откройте карточку клиента заново' }, { status: 403 });
 
   try {
     const client = body.client as Record<string, unknown> | undefined;
     const object = body.object as (ObjectSaveInput & { key?: unknown }) | undefined;
-    if (client) await saveClientProfile(ref, { clientType: client.clientType, occupation: client.occupation, note: client.note }, session.login);
+    if (client) await saveClientProfile(ref, { clientType: client.clientType, occupation: client.occupation, note: client.note }, actor);
     let objectKey: string | null = null;
     if (object) {
       if (typeof object.key !== 'string' || !object.key) return NextResponse.json({ error: 'Не указан объект' }, { status: 400 });
-      objectKey = await saveObjectProfile(ref, object.key, object, session.login);
+      objectKey = await saveObjectProfile(ref, object.key, object, actor);
     }
     return NextResponse.json({ ok: true, objectKey });
   } catch (e) {

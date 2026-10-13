@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Search } from 'lucide-react';
 import { ClientModuleWidget } from './ClientModuleWidget';
+import { BitrixTabBlock } from './BitrixTabBlock';
 
 type Kind = 'contact' | 'company';
 
@@ -64,6 +65,7 @@ export function ModulesPage() {
               Открыть
             </button>
           </form>
+          <BitrixTabBlock />
         </div>
 
         {(urlContact || urlCompany) ? (
