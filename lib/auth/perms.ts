@@ -63,6 +63,10 @@ export const PERM_SECTIONS = [
   // продажам: план / факт / брони по всем филиалам, филиалам и их отделам.
   // Пункт меню «Ещё», гейт как у остальных: админ ИЛИ явное право роли.
   { key: 'section.dashboard_test', label: 'Дашборд' },
+  // «Модули» (ТЗ владельца 13.10) — превью модулей, которые потом встраиваются
+  // в Битрикс (первый — «Карточка клиента»). Закрытый пункт «Ещё»: по умолчанию
+  // только администратор, остальным — явно через «Матрицу прав».
+  { key: 'section.modules', label: 'Модули' },
 ] as const;
 
 export const PERM_ACTIONS = [
@@ -158,6 +162,7 @@ export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
   { key: 'section.decomposition', label: 'Декомпозиция' },
   { key: 'section.metrics', label: 'Метрики' },
   { key: 'section.widget_constructor', label: 'Виджеты' },
+  { key: 'section.modules', label: 'Модули' },
   // «Снять с продажи» (задача #6260) — action.*, как «Чаты»: гейт по действию,
   // не по section.*, джокер «Все разделы» его НЕ покрывает.
   { key: 'action.deals.unsell', label: 'Снять с продажи' },

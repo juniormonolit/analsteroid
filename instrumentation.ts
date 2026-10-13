@@ -74,6 +74,7 @@ export async function register() {
   scheduleHowAreWe();
   scheduleB24Diag();
   scheduleDealAddresses();
+  scheduleClientModuleSync();
   scheduleHealthCheck();
 }
 
@@ -126,6 +127,31 @@ function scheduleDealAddresses() {
   };
   setTimeout(() => { void tick(); }, 3 * 60 * 1000);      // не на старте — дать приложению подняться
   setInterval(() => { void tick(); }, 30 * 60 * 1000);
+}
+
+// Сверка модуля «Карточка клиента» Битрикс → sa (решение владельца 13.10:
+// правка полей только из виджета, сверка периодически). Раз в сутки в 03:xx МСК;
+// тик раз в 15 минут, флаг дня в памяти (инстанс один — дублей не будет).
+function scheduleClientModuleSync() {
+  let lastDate = '';
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    const [date, time] = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' }).split(' ');
+    if (date === lastDate || !time.startsWith('03:')) return;
+    running = true;
+    try {
+      const { runClientModuleSync } = await import('./lib/jobs/clientModuleSync');
+      const r = await runClientModuleSync();
+      lastDate = date;
+      console.log('[clientModuleSync] готово:', JSON.stringify(r));
+    } catch (err) {
+      console.error('[clientModuleSync] упала:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+  setInterval(() => { void tick(); }, 15 * 60 * 1000);
 }
 
 // Дайджест «Как дела?» (задача владельца 15.09): несколько выпусков в день по
