@@ -31,6 +31,13 @@ export async function register() {
   setInterval(run, 10 * 60 * 1000);
 
   // Отчёт «МОСКВА» владельцу (получатель — env, как было).
+  // Хотфикс (инцидент YC 08.10): стенд на восстановленной копии боевой system —
+  // рассылки и пишущие джобы глушатся целиком, остаётся только пересчёт plan:summary.
+  if (process.env.DISABLE_BACKGROUND_JOBS === '1') {
+    console.log('[jobs] DISABLE_BACKGROUND_JOBS=1 — рассылки и фоновые джобы не запущены');
+    return;
+  }
+
   scheduleDailyReport({
     name: 'dailyReport',
     lockPrefix: 'daily-report',

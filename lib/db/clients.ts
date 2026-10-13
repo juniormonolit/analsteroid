@@ -42,17 +42,37 @@ declare global {
   var __analsteroidYcPool: Map<string, Pool> | undefined;
 }
 
+// Хотфикс (инцидент YC 08.10): system/analytics можно увести на локальный Postgres
+// через SYS_PG_*; без них — прежние YC-значения. SYS_PG_SSL: 'disable' (по умолчанию
+// для SYS_PG_HOST) | 'require' (без проверки CA) | 'yc' (как у YC, с CA из YC_PG_SSL_CA_PATH).
+function ycConnection(): Pick<PoolConfig, 'host' | 'port' | 'user' | 'password' | 'ssl'> {
+  const env = process.env;
+  if (env.SYS_PG_HOST) {
+    const sslMode = (env.SYS_PG_SSL ?? 'disable').toLowerCase();
+    return {
+      host: env.SYS_PG_HOST,
+      port: Number(env.SYS_PG_PORT ?? 5432),
+      user: env.SYS_PG_USER ?? env.YC_PG_USER,
+      password: env.SYS_PG_PASSWORD ?? env.YC_PG_PASSWORD,
+      ssl: sslMode === 'yc' ? makeYcSslConfig() : sslMode === 'require' ? { rejectUnauthorized: false } : false,
+    };
+  }
+  return {
+    host: env.YC_PG_HOST!,
+    port: Number(env.YC_PG_PORT ?? 6432),
+    user: env.YC_PG_USER!,
+    password: env.YC_PG_PASSWORD!,
+    ssl: makeYcSslConfig(),
+  };
+}
+
 function makeYcPool(database: string): Pool {
   const cache = (globalThis.__analsteroidYcPool ??= new Map<string, Pool>());
   const cached = cache.get(database);
   if (cached) return cached;
   const config: PoolConfig = {
-    host: process.env.YC_PG_HOST!,
-    port: Number(process.env.YC_PG_PORT ?? 6432),
-    user: process.env.YC_PG_USER!,
-    password: process.env.YC_PG_PASSWORD!,
+    ...ycConnection(),
     database,
-    ssl: makeYcSslConfig(),
     max: poolMax('YC_PG_POOL_MAX'),
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
