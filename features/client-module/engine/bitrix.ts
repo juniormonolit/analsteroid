@@ -1,8 +1,10 @@
 import { bx } from '@/lib/bitrix/notify';
-import type { ClientRef, ClientType, BuildStage, HouseType } from './types';
+import type { ClientRef, ClientType } from './types';
 
 // Модуль «Карточка клиента» ↔ Битрикс (решение владельца 13.10): источник
-// правды по ручным полям — Битрикс, sa — копия для чтения приложением.
+// правды по ручным полям КЛИЕНТА — Битрикс, sa — копия для чтения приложением.
+// Объекты в Битрикс НЕ пишутся (v2, 13.10 вечер: смарт-процесс «Объекты»
+// упразднён, объекты живут только в Монолитике).
 // Виджет пишет СНАЧАЛА сюда, при успехе — в sa; ручная правка этих полей в
 // интерфейсе Битрикса закрыта (EDIT_IN_LIST=N, права смарт-процесса — только
 // чтение), расхождения закрывает ночная сверка (lib/jobs/clientModuleSync.ts).
@@ -19,20 +21,6 @@ const TYPE_ENUM: Record<'contact' | 'company', Record<ClientType, number>> = {
   contact: { construction_org: 153, own_needs_org: 1118, foreman: 154, self_builder: 155 },
   company: { construction_org: 180, own_needs_org: 1120, foreman: 181, self_builder: 182 },
 };
-
-// ── Смарт-процесс «Объекты» ────────────────────────────────────────────────
-export const OBJECTS_ENTITY_TYPE_ID = 1108;
-const STAGE = { none: 'DT1108_25:NEW', start: 'DT1108_25:PREPARATION', mid_end: 'DT1108_25:CLIENT', done: 'DT1108_25:SUCCESS', inactive: 'DT1108_25:FAIL' } as const;
-export const OBJ = {
-  address1c: 'UF_CRM_18_ADDRESS',
-  addressIdeal: 'UF_CRM_18_ADDRESS_IDEAL',
-  lat: 'UF_CRM_18_LAT',
-  lon: 'UF_CRM_18_LON',
-  houseType: 'UF_CRM_18_HOUSE_TYPE',
-  note: 'UF_CRM_18_NOTE',
-  key: 'UF_CRM_18_OBJECT_KEY',
-} as const;
-const HOUSE_ENUM: Record<HouseType, number> = { frame: 1124, aerated: 1125 };
 
 export class BitrixWriteError extends Error {}
 
@@ -109,103 +97,6 @@ export async function writeClientToBitrix(ref: ClientRef, v: { clientType: Clien
     params: { REGISTER_SONET_EVENT: 'N' },
   });
   return enumId;
-}
-
-// ── Объект ──────────────────────────────────────────────────────────────────
-
-export type StoredStage = BuildStage | 'done' | 'inactive' | null;
-
-export function stageFromBitrix(stageId: unknown): StoredStage {
-  switch (stageId) {
-    case STAGE.start: return 'start';
-    case STAGE.mid_end: return 'mid_end';
-    case STAGE.done: return 'done';
-    case STAGE.inactive: return 'inactive';
-    default: return null;
-  }
-}
-
-export function houseFromBitrix(v: unknown): HouseType | null {
-  const n = Number(v);
-  return n === HOUSE_ENUM.frame ? 'frame' : n === HOUSE_ENUM.aerated ? 'aerated' : null;
-}
-
-export interface BitrixObjectInput {
-  itemId: number | null;
-  key: string;
-  address1c: string | null;
-  idealAddress: string | null;
-  lat: number | null;
-  lon: number | null;
-  /** undefined — стадию не трогать (её мог поставить админ: «завершена»/«неактуален»). */
-  stage: StoredStage | undefined;
-  houseType: HouseType | null;
-  note: string;
-}
-
-export interface BitrixObjectRow {
-  id: number;
-  title: string;
-  stageId: string;
-  contactId: number | null;
-  companyId: number | null;
-  [uf: string]: unknown;
-}
-
-const ITEM_SELECT = ['id', 'title', 'stageId', 'contactId', 'companyId', ...Object.values(OBJ)];
-
-/** Создаёт или обновляет элемент «Объекты» и возвращает его ID. Повторный вызов
- *  без itemId не плодит дубли: сначала ищем элемент по ключу объекта у клиента. */
-export async function writeObjectToBitrix(ref: ClientRef, o: BitrixObjectInput): Promise<number> {
-  const entity = entityOf(ref);
-  const clientId = idOf(ref);
-
-  let itemId = o.itemId;
-  if (!itemId) {
-    const found = await call<{ items: BitrixObjectRow[] }>('crm.item.list', {
-      entityTypeId: OBJECTS_ENTITY_TYPE_ID, useOriginalUfNames: 'Y', select: ITEM_SELECT,
-      filter: { [OBJ.key]: o.key },
-    });
-    const mine = (found?.items ?? []).find(i => (entity === 'contact' ? Number(i.contactId) : Number(i.companyId)) === clientId);
-    itemId = mine ? Number(mine.id) : null;
-  }
-
-  const fields: Record<string, unknown> = {
-    title: (o.idealAddress || o.address1c || 'Объект').slice(0, 250),
-    [OBJ.key]: o.key,
-    [OBJ.address1c]: o.address1c ?? '',
-    [OBJ.addressIdeal]: o.idealAddress ?? '',
-    [OBJ.lat]: o.lat ?? '',
-    [OBJ.lon]: o.lon ?? '',
-    [OBJ.houseType]: o.houseType ? HOUSE_ENUM[o.houseType] : '',
-    [OBJ.note]: o.note,
-  };
-  if (o.stage !== undefined) fields.stageId = o.stage ? STAGE[o.stage] : STAGE.none;
-
-  if (itemId) {
-    await call('crm.item.update', { entityTypeId: OBJECTS_ENTITY_TYPE_ID, id: itemId, useOriginalUfNames: 'Y', fields });
-    return itemId;
-  }
-  if (entity === 'contact') fields.contactIds = [clientId]; else fields.companyId = clientId;
-  if (fields.stageId === undefined) fields.stageId = STAGE.none;
-  const r = await callOnce<{ item: { id: number } }>('crm.item.add', { entityTypeId: OBJECTS_ENTITY_TYPE_ID, useOriginalUfNames: 'Y', fields });
-  const id = Number(r?.item?.id);
-  if (!id) throw new BitrixWriteError('Битрикс не вернул ID созданного объекта');
-  return id;
-}
-
-/** Все элементы «Объектов» — для ночной сверки. */
-export async function listAllObjectsFromBitrix(): Promise<BitrixObjectRow[]> {
-  const out: BitrixObjectRow[] = [];
-  for (let start = 0; start < 100_000;) {
-    const body = await bx(webhook(), 'crm.item.list', {
-      entityTypeId: OBJECTS_ENTITY_TYPE_ID, useOriginalUfNames: 'Y', select: ITEM_SELECT, order: { id: 'ASC' }, start,
-    }) as { result: { items: BitrixObjectRow[] }; next?: number };
-    out.push(...(body.result?.items ?? []));
-    if (!body.next) break;
-    start = body.next;
-  }
-  return out;
 }
 
 /** Поля клиентов пачкой (≤50 ID) — для ночной сверки. */

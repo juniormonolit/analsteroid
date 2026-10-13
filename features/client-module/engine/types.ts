@@ -1,13 +1,20 @@
 // Модуль «Карточка клиента» (ТЗ владельца 13.10) — типы и ЧИСТЫЕ расчёты.
 // Модуль без импорта БД: его читает и сервер (engine/clientModule.ts), и клиент
-// (UI пересчитывает те же цифры по выбранному объекту — одна формула на клиента
-// и на объект, как требует ТЗ: «те же самые поля, но по этому объекту»).
+// (UI пересчитывает те же цифры по выбранному срезу — одна формула на клиента
+// и на объект).
+//
+// v2 (13.10, вечер): объекты ведутся ТОЛЬКО в Монолитике (смарт-процесс в
+// Битриксе упразднён), карточка — табы «Обзор / Сделки / Объекты».
 
 import { objectKey as addrObjectKey, isPickupAddress } from '@/lib/bitrix/addressUtils';
 
 export type ClientRef = `c${number}` | `k${number}`;
 
 export interface ModuleProduct { name: string; quantity: number; price: number; sum: number; group: string | null; isService: boolean }
+
+/** Стадия сделки для фильтра «Сделок»: отгрузка / продажа / в работе / отказ. */
+export type DealStage = 'shipped' | 'sold' | 'active' | 'lost';
+export const DEAL_STAGE_LABEL: Record<DealStage, string> = { shipped: 'Отгрузка', sold: 'Продажа', active: 'В работе', lost: 'Отказ' };
 
 export interface ModuleDeal {
   dealId: number;
@@ -18,25 +25,35 @@ export interface ModuleDeal {
   deliveredAt: string | null;
   lostAt: string | null;
   stageName: string | null;
+  stage: DealStage;
   managerName: string | null;
   products: ModuleProduct[];
-  /** Товарные группы сделки (без услуг/доставки) — строка списка «как на скрине». */
+  /** Товарные группы сделки (без услуг/доставки), по убыванию суммы. */
   groups: string[];
-  /** Объекты (адреса заявок 1С/Пульта), к которым относится сделка. */
-  objectKeys: string[];
+  /** Группа с наибольшей суммой в сделке. */
+  topGroup: string | null;
+  /** Объект сделки (один): ручная привязка → адрес заявки 1С → адрес сделки в Битриксе. */
+  objectKey: string | null;
+  /** Привязка к объекту поставлена менеджером вручную. */
+  objectManual: boolean;
 }
 
 export interface ModuleRequest { number: string; date: string | null }
 
+export type AddressSource = '1c' | 'bitrix' | 'manual';
+export const ADDRESS_SOURCE_LABEL: Record<AddressSource, string> = { '1c': 'из заявки 1С', bitrix: 'из адреса сделки в Битриксе', manual: 'указан менеджером' };
+
 export interface ModuleObject {
   key: string;
-  /** Адрес из заявок 1С (для ручного объекта — его «идеальный» адрес). */
+  /** Автоматический адрес (1С/Битрикс); для ручного объекта — указанный менеджером. */
   address: string;
   lat: number | null;
   lon: number | null;
   requests: ModuleRequest[];
-  /** Объект заведён менеджером вручную (в заявках 1С его нет — сделки к нему не привязаны). */
+  /** Объект заведён менеджером вручную (в заявках/сделках адреса нет). */
   manual: boolean;
+  /** Откуда автоматический адрес. */
+  source: AddressSource;
 }
 
 export const CLIENT_TYPES = [
@@ -62,19 +79,54 @@ export const HOUSE_TYPES = [
 export type HouseType = (typeof HOUSE_TYPES)[number]['value'];
 
 export interface ClientProfile { clientType: ClientType | null; occupation: string; note: string; updatedBy: string | null; updatedAt: string | null }
+
+/** Статус объекта (правило владельца 13.10). */
+export type ObjectStatus = 'new' | 'active' | 'done';
+export const OBJECT_STATUS_LABEL: Record<ObjectStatus, string> = { new: 'Новый', active: 'В работе', done: 'Завершён' };
+
 export interface ObjectProfile {
   buildStage: BuildStage | null;
-  /** Стадию закрыл админ в Битриксе («Стройка завершена» / «Неактуален») — виджет её не перетирает. */
-  closedStage: 'done' | 'inactive' | null;
   houseType: HouseType | null;
   note: string;
-  /** «Адрес идеальный» и его точка (sa.client_module_objects.address/lat/lon). */
+  /** Адрес, поправленный/подтверждённый менеджером (sa.client_module_objects.address/lat/lon). */
   idealAddress: string | null;
   lat: number | null;
   lon: number | null;
-  bitrixItemId: number | null;
+  /** Менеджер подтвердил или поправил адрес — плашка «Проверь адрес» больше не нужна. */
+  addressConfirmed: boolean;
+  /** «Завершён» поставлен вручную. */
+  doneManual: boolean;
   updatedBy: string | null;
   updatedAt: string | null;
+}
+
+export interface Recommendation {
+  group: string;
+  /** Вопрос из скрипта продаж (майндкарта стройки) — с него менеджер заходит. */
+  ask: string | null;
+  /** После какой отгруженной группы задан вопрос `ask` (или сработал ручной приоритет). */
+  after: string | null;
+  /** Историческая вероятность (%) перехода pctAfter → group по всей базе. */
+  pct: number | null;
+  pctAfter: string | null;
+  /** Что сработало: цепочка стройки, история переходов, ручной приоритет «Что предложить». */
+  sources: ('chain' | 'history' | 'priority')[];
+}
+
+/** Лестница стадий объекта (правка владельца 13.10): в центре — текущая группа
+ *  (последняя отгруженная на объект), выше — что предложить, ниже — предыдущие
+ *  этапы стройки: купленные у нас (со сделкой) или «скорее всего купил не у нас». */
+export interface LadderStep {
+  group: string;
+  /** Наша отгрузка этой группы на объект (последняя), если была. */
+  deal: { dealId: number; date: string | null; amount: number } | null;
+  /** Этап предшествует текущему по цепочке стройки. */
+  byChain: boolean;
+}
+export interface StageLadder {
+  current: { group: string; dealId: number; date: string | null } | null;
+  next: Recommendation[];
+  before: LadderStep[];
 }
 
 export interface ClientModuleData {
@@ -84,26 +136,34 @@ export interface ClientModuleData {
   name: string | null;
   deals: ModuleDeal[];
   objects: ModuleObject[];
-  /** sa.request_addresses прочиталась (false — view недоступна, объекты пусты честно). */
+  /** Адреса прочитались хотя бы из одного источника (1С/Битрикс). */
   addressesAvailable: boolean;
   profile: ClientProfile;
   objectProfiles: Record<string, ObjectProfile>;
-  /** Таблицы ручных полей накатаны (миграция sa_org/005) — можно сохранять. */
+  /** Таблицы ручных полей в sa есть — можно сохранять. */
   profilesAvailable: boolean;
+  /** Миграция sa_org/006 накатана: ручной статус, подтверждение адреса, перепривязка сделок. */
+  v2Available: boolean;
+  /** N: сколько дней после последней отгрузки объект считается «В работе». */
+  activeDays: number;
+  recommendations: { client: Recommendation[]; byObject: Record<string, StageLadder> };
 }
 
 export const EMPTY_PROFILE: ClientProfile = { clientType: null, occupation: '', note: '', updatedBy: null, updatedAt: null };
 export const EMPTY_OBJECT_PROFILE: ObjectProfile = {
-  buildStage: null, closedStage: null, houseType: null, note: '', idealAddress: null, lat: null, lon: null, bitrixItemId: null, updatedBy: null, updatedAt: null,
+  buildStage: null, houseType: null, note: '', idealAddress: null, lat: null, lon: null,
+  addressConfirmed: false, doneManual: false, updatedBy: null, updatedAt: null,
 };
 
-/** Ключ нового объекта, заведённого вручную (не из заявок 1С). */
+/** Ключ нового объекта, заведённого вручную. */
 export const NEW_OBJECT_KEY = 'new';
+/** N по умолчанию (пока миграция 006 не накатана / настройка не задана). */
+export const DEFAULT_ACTIVE_DAYS = 90;
 
 // ── Объекты ────────────────────────────────────────────────────────────────
 
-/** Ключ объекта по адресу заявки. Та же формула, что у «Карты объектов» и
- *  карточки заказчика (lib/bitrix/addressUtils.objectKey): координаты до ~100 м,
+/** Ключ объекта по адресу (заявки 1С или сделки Битрикса — одна формула, поэтому
+ *  один и тот же участок из двух источников совпадает): координаты до ~100 м,
  *  без них — нормализованная строка. Самовывоз («Париж») объектом не считается. */
 export function requestObjectKey(address: string | null, lat: number | null, lon: number | null): string | null {
   if (!address && (lat === null || lon === null)) return null;
@@ -111,22 +171,48 @@ export function requestObjectKey(address: string | null, lat: number | null, lon
   return addrObjectKey({ address, lat, lon });
 }
 
-// ── Расчёт полей ТЗ (а–g) ─────────────────────────────────────────────────
-
 const DAY_MS = 86_400_000;
 
-export interface GroupStat { group: string; sum: number; deals: number }
+export function dealStage(d: Pick<ModuleDeal, 'deliveredAt' | 'lostAt' | 'soldAt'>): DealStage {
+  if (d.deliveredAt) return 'shipped';
+  if (d.lostAt) return 'lost';
+  if (d.soldAt) return 'sold';
+  return 'active';
+}
+
+/** «Активная» сделка — ещё не отгружена и не проиграна. */
+export const isOpenDeal = (d: ModuleDeal) => d.stage === 'active' || d.stage === 'sold';
+
+/** Статус объекта (правило владельца 13.10):
+ *   Завершён — вручную, либо > N дней с последней отгрузки и нет активных сделок;
+ *   В работе — есть активная сделка или с последней отгрузки ≤ N дней;
+ *   Новый    — заведён вручную, сделок ещё нет. */
+export function objectStatus(deals: ModuleDeal[], o: { manual: boolean; doneManual: boolean }, activeDays: number, now = Date.now()): ObjectStatus {
+  if (o.doneManual) return 'done';
+  if (deals.some(isOpenDeal)) return 'active';
+  const last = deals.reduce<number>((m, d) => (d.deliveredAt ? Math.max(m, new Date(d.deliveredAt).getTime()) : m), 0);
+  if (last && (now - last) / DAY_MS <= activeDays) return 'active';
+  if (!last && o.manual) return 'new';
+  return deals.length === 0 ? 'new' : 'done';
+}
+
+// ── Расчёт показателей (ТЗ а–ж) ──────────────────────────────────────────
+
+export interface GroupStat { group: string; sum: number; deals: number; lastAt: string | null }
 
 export interface ModuleStats {
-  shipped: number;              // а) отгруженных
-  total: number;                // а) всех сделок (включая отказы — решение владельца 13.10)
-  ltv: number;                  // б) сумма отгруженных
-  avgCheck: number | null;      // в) средний чек отгрузок
-  cycleDays: number | null;     // г) среднее время между отгрузками
-  lastShippedAt: string | null; // д) последняя отгрузка
-  daysSinceLast: number | null; // д) дней с последней
-  groups: GroupStat[];          // е) товарные группы по всем отгрузкам
-  objects: number;              // ж) уникальных адресов по отгрузкам
+  shipped: number;              // отгруженных
+  total: number;                // всех сделок (включая отказы)
+  ltv: number;                  // сумма отгруженных
+  avgCheck: number | null;      // средний чек отгрузок
+  cycleDays: number | null;     // среднее время между отгрузками
+  lastShippedAt: string | null; // последняя отгрузка
+  daysSinceLast: number | null;
+  firstShippedAt: string | null;
+  open: number;                 // активных сделок (в работе + продано, не отгружено)
+  openSum: number;
+  groups: GroupStat[];          // товарные группы по всем отгрузкам
+  objects: number;              // уникальных объектов по отгрузкам
 }
 
 export function computeStats(deals: ModuleDeal[], now = Date.now()): ModuleStats {
@@ -137,11 +223,9 @@ export function computeStats(deals: ModuleDeal[], now = Date.now()): ModuleStats
   if (shippedDeals.length >= 2) {
     const first = new Date(shippedDeals[0].deliveredAt!).getTime();
     const last = new Date(shippedDeals[shippedDeals.length - 1].deliveredAt!).getTime();
-    // Среднее интервалов = (последняя − первая) / (n − 1) — то же, что среднее
-    // попарных разниц соседних отгрузок, без накопления округлений.
+    // Среднее интервалов = (последняя − первая) / (n − 1).
     cycleDays = Math.round((last - first) / DAY_MS / (shippedDeals.length - 1));
   }
-
   const lastShippedAt = shippedDeals.length ? shippedDeals[shippedDeals.length - 1].deliveredAt : null;
   const daysSinceLast = lastShippedAt ? Math.max(0, Math.floor((now - new Date(lastShippedAt).getTime()) / DAY_MS)) : null;
 
@@ -150,15 +234,16 @@ export function computeStats(deals: ModuleDeal[], now = Date.now()): ModuleStats
     const seen = new Set<string>();
     for (const p of d.products) {
       if (p.isService || !p.group) continue;
-      const cur = g.get(p.group) ?? { group: p.group, sum: 0, deals: 0 };
+      const cur = g.get(p.group) ?? { group: p.group, sum: 0, deals: 0, lastAt: null };
       cur.sum += p.sum;
       if (!seen.has(p.group)) { cur.deals += 1; seen.add(p.group); }
+      if (!cur.lastAt || d.deliveredAt! > cur.lastAt) cur.lastAt = d.deliveredAt;
       g.set(p.group, cur);
     }
   }
-
   const objects = new Set<string>();
-  for (const d of shippedDeals) for (const k of d.objectKeys) objects.add(k);
+  for (const d of shippedDeals) if (d.objectKey) objects.add(d.objectKey);
+  const open = deals.filter(isOpenDeal);
 
   return {
     shipped: shippedDeals.length,
@@ -168,15 +253,13 @@ export function computeStats(deals: ModuleDeal[], now = Date.now()): ModuleStats
     cycleDays,
     lastShippedAt,
     daysSinceLast,
+    firstShippedAt: shippedDeals[0]?.deliveredAt ?? null,
+    open: open.length,
+    openSum: open.reduce((s, d) => s + d.amount, 0),
     groups: [...g.values()].sort((a, b) => b.sum - a.sum),
     objects: objects.size,
   };
 }
 
-/** Статус сделки для списка «все сделки». */
-export function dealStatus(d: ModuleDeal): { label: string; tone: 'ok' | 'neg' | 'muted' | 'warn' } {
-  if (d.deliveredAt) return { label: 'Отгружена', tone: 'ok' };
-  if (d.lostAt) return { label: 'Отказ', tone: 'neg' };
-  if (d.soldAt) return { label: 'Продана', tone: 'warn' };
-  return { label: d.stageName ?? 'В работе', tone: 'muted' };
-}
+/** Дата строки сделки в таблице — дата создания (ТЗ: «Дата создания»). */
+export const dealSortDate = (d: ModuleDeal) => d.createdAt ?? d.soldAt ?? d.deliveredAt ?? '';

@@ -34,7 +34,7 @@ export function ModulesPage() {
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
-      <div className="mx-auto flex max-w-[960px] flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6">
+      <div className="mx-auto flex max-w-[1100px] flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6">
         <div>
           <h1 className="text-lg font-semibold">Модули</h1>
           <p className="mt-0.5 text-[13px] text-[var(--color-text-muted)]">
@@ -45,8 +45,8 @@ export function ModulesPage() {
         <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3.5">
           <div className="text-[13px] font-semibold">Карточка клиента</div>
           <div className="mt-0.5 text-[12px] text-[var(--color-text-muted)]">
-            Встанет вкладкой в карточку контакта/компании Битрикса: отгрузки, LTV, средний чек, цикл повторки,
-            товарные группы, объекты (адреса заявок 1С) и ручные поля менеджера.
+            Вкладка карточки контакта/компании в Битриксе: обзор клиента (показатели, заметки, что предложить),
+            все сделки таблицей и объекты — со статусами, лестницей стадий и цепочкой сделок.
           </div>
           <form onSubmit={submit} className="mt-3 flex flex-col gap-2 sm:flex-row">
             <div className="flex shrink-0 rounded-lg border border-[var(--color-border)] p-0.5 text-sm">
@@ -73,7 +73,7 @@ export function ModulesPage() {
           // чтобы превью честно показывало, как он будет выглядеть там.
           <div className="rounded-xl border border-dashed border-[var(--color-border)] p-2 sm:p-4">
             <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">Превью виджета</div>
-            <div className="mx-auto max-w-[760px]">
+            <div className="mx-auto max-w-[1000px]">
               <ClientModuleWidget contactId={urlContact || undefined} companyId={urlCompany || undefined} />
             </div>
           </div>
