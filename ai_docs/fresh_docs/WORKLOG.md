@@ -24,7 +24,7 @@
 - Зона данных — `ropScope()` + `scopeRows()` как у /rop (множество менеджеров = mgrsAll(root) из dashboard.ts).
 - Читаем sa пулом `analyticsDb()` (junior_user, read-only), только SELECT; в Битрикс ничего не пишем и не вызываем.
 - Код: features/rop-kanban/{engine/config.ts,engine/kanban.ts,ui/RopKanbanPage.tsx}; тест `npm run test:rop-kanban`.
-- dev-only: migrations/dev_seed_zzz_rop_kanban.sql (zzz_rop_kanban, zzz_rop_kanban_admin, контроль zzz_scope_super).
+- dev-only: migrations/dev/dev_seed_zzz_rop_kanban.sql (zzz_rop_kanban, zzz_rop_kanban_admin, контроль zzz_scope_super).
 
 **Решения/допущения (из Битрикса перенесено точно, кроме отмеченного).**
 - Enum'ов DealStageIds/SonetGroupIds в скачанной копии кода нет — id стадий сопоставлены по живому sa.stages (воронки 0/1/2/3 =
@@ -42,46 +42,7 @@
 zzz_scope_admin, zzz_scope_super (супер-админ без ключа), zzz_scope_rop, zzz_scope_manager — пункта нет, прямой URL «Недостаточно
 прав», API 403. Сверка с прямым SQL по sa (все 15 колонок + шапка, две зоны: отдел РОПа 63 менеджера, вся компания 270) — совпало.
 
-**Выкат на прод — только по «катай» Сергея.** Миграция 227 катится на system ДО выката кода; логины проверить на проде
-(`SELECT login, display_name FROM users WHERE login IN (...)`), dev-логины mikhail.dev/sergey.dev на проде отсутствуют — ок.
-
----
-
-## 2026-10-13 — «Канбан РОПа»: скрытый пилот на данных sa, только чтение (задача #9625, ветка feat/rop-kanban-pilot)
-
-**Что было.** Канбан РОПа живёт в Битриксе (MltSalesKanbanService, SQL прямо в таблицы портала). План переезда
-(owners-inbox/kanban-sa-va-assessment-20261013.html) — начать со скрытого раздела в Монолитике рядом с /rop.
-Здесь шаги 1–2 плана, только dev, прод не трогали.
-
-**Сделано.**
-- Доступ: ключ `section.rop_kanban_pilot`, выдаётся ЛИЧНО через `users.section_overrides` (миграция 227: kolosenkov,
-  mikhail.dev, bx2098, sergey.dev, kulikov). Проверка — `hasRopKanbanPilot()` (lib/auth/perms.ts): только явный ключ в
-  правах сессии, НЕ hasPerm — ни джокер `section.*`, ни супер-админ раздел не открывают (как action.rop_today.full_access).
-  Ключ добавлен в PERM_SECTIONS, иначе sanitizeSectionOverrides стёр бы его при правке пользователя в админке.
-- Раздел `/rop-kanban` (группа `(app)`, пункт «Канбан РОПа (пилот)» в «Ещё» только у носителей ключа), API `/api/rop-kanban`
-  (403 без ключа). Нет прав → явное «Недостаточно прав» на том же адресе (layout-гейт).
-- 15 колонок первой партии + шапка «продажи/брони сегодня»; фильтр по менеджеру `?manager=<id>` (URL-адресуем). Карточка:
-  название, сумма, стадия, менеджер, дата, ссылка на сделку в Битриксе; задачи (Долги/УПД/Коллеры) — название, исполнитель, срок.
-- Зона данных — `ropScope()` + `scopeRows()` как у /rop (множество менеджеров = mgrsAll(root) из dashboard.ts).
-- Читаем sa пулом `analyticsDb()` (junior_user, read-only), только SELECT; в Битрикс ничего не пишем и не вызываем.
-- Код: features/rop-kanban/{engine/config.ts,engine/kanban.ts,ui/RopKanbanPage.tsx}; тест `npm run test:rop-kanban`.
-- dev-only: migrations/dev_seed_zzz_rop_kanban.sql (zzz_rop_kanban, zzz_rop_kanban_admin, контроль zzz_scope_super).
-
-**Решения/допущения (из Битрикса перенесено точно, кроме отмеченного).**
-- Enum'ов DealStageIds/SonetGroupIds в скачанной копии кода нет — id стадий сопоставлены по живому sa.stages (воронки 0/1/2/3 =
-  Primary B2C/B2B, Secondary B2C/B2B). Сомнительно одно: «Запрос логисту» = стадия «Сделал запрос снабженцу, созвонился с
-  заказчиком» (EXECUTING, C1:EXECUTING, C2:PREPARATION, C3:PREPARATION). Подтвердит шаг 3 плана (сверка с Битрикс-канбаном).
-- Группы задач (логистика 23 шт., большие сделки 72/74/79/80/81/108, повторные 73/82/106, долги 40, УПД 63, коллеры 64) зашиты
-  константами: у junior_user нет SELECT на sa.bitrix_groups и sa.bitrix_logist_groups (читал владелец БД, read-only, 13.10).
-- Окно 14 дней для логистических задач в Битриксе — по `b_tasks.ACTIVITY_DATE`; в sa ближайшее поле `changed_at`. Возможен сдвиг.
-- Отказы за сегодня — `lost_at` + стадия LOSS (в Битриксе MOVED_TIME). «Отказы из продаж» и шапка — по sa.deal_events (история стадий).
-- «Ответ логиста не принят» — как в коде Битрикса, без окна по дате (задачи статус 4 за всё время); колонка может быть большой.
-- Не в первой партии (шаги 4–7): колонки на делах, контакт/телефон, UF-поля, звонки, смена ответственного.
-
-**Проверено (dev, свободный порт :8112, ветка не на :8102).** typecheck, `npm run build`, test:rop-kanban (14 ok), lint:responsive
-(новых нарушений в rop-kanban нет). Браузер: zzz_rop_kanban / zzz_rop_kanban_admin — раздел и пункт меню есть, 15 колонок;
-zzz_scope_admin, zzz_scope_super (супер-админ без ключа), zzz_scope_rop, zzz_scope_manager — пункта нет, прямой URL «Недостаточно
-прав», API 403. Сверка с прямым SQL по sa (все 15 колонок + шапка, две зоны: отдел РОПа 63 менеджера, вся компания 270) — совпало.
+**Доработка по ревью Глеба (13.10).** dev-сид перенесён в migrations/dev/ с гардом current_database()='system_dev'; test:rop-kanban с --experimental-strip-types; в PersonalOverridesModal джокер роли не показывает пилотный ключ как «уже открыто ролью».
 
 **Выкат на прод — только по «катай» Сергея.** Миграция 227 катится на system ДО выката кода; логины проверить на проде
 (`SELECT login, display_name FROM users WHERE login IN (...)`), dev-логины mikhail.dev/sergey.dev на проде отсутствуют — ок.

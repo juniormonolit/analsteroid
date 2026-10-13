@@ -1,4 +1,11 @@
 -- DEV ONLY (не накатывать на прод): тестовые zzz_-пользователи для проверки пилота
+DO $$
+BEGIN
+  IF current_database() <> 'system_dev' THEN
+    RAISE EXCEPTION 'dev-сид: запрещён вне system_dev (текущая БД: %)', current_database();
+  END IF;
+END $$;
+
 -- «Канбан РОПа» (#9625). Пароль/хэш копируется у существующего zzz_scope_rop — новых секретов нет.
 --   zzz_rop_kanban       — роль РОП, оргпривязка как у zzz_scope_rop (зона отдела) + личный доступ к пилоту
 --   zzz_rop_kanban_admin — роль «Администратор» (полный охват по action.rop_today.full_access) + личный доступ

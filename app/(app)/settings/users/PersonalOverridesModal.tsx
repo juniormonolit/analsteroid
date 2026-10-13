@@ -28,6 +28,8 @@ export function PersonalOverridesModal({ userId, userName, rolePermissions, onCl
   // Роль с джокером «Все разделы» уже открывает всё — личные исключения ей ни к
   // чему, показываем всё как «даёт роль» (см. ALL_SECTIONS_PERM в perms.ts).
   const roleGivesAll = useMemo(() => hasAllSections(rolePermissions), [rolePermissions]);
+  // Пилот «Канбан РОПа» (#9625): джокер section.* его НЕ открывает (hasRopKanbanPilot) — не показываем «уже открыто ролью».
+  const givenByRole = (key: string) => (roleGivesAll && key !== 'section.rop_kanban_pilot') || roleSet.has(key);
 
   useEffect(() => {
     fetch(`/api/admin/users/${userId}/overrides`)
@@ -38,7 +40,7 @@ export function PersonalOverridesModal({ userId, userName, rolePermissions, onCl
   }, [userId]);
 
   function toggle(key: string) {
-    if (roleGivesAll || roleSet.has(key)) return; // уже даёт роль — переключать нечего
+    if (givenByRole(key)) return; // уже даёт роль — переключать нечего
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -85,7 +87,7 @@ export function PersonalOverridesModal({ userId, userName, rolePermissions, onCl
             <div className="px-3 py-4 text-sm text-[var(--color-text-muted)]">Загрузка...</div>
           ) : (
             PERM_SECTIONS.map((p) => {
-              const fromRole = roleGivesAll || roleSet.has(p.key);
+              const fromRole = givenByRole(p.key);
               const checked = fromRole || selected.has(p.key);
               return (
                 <label
