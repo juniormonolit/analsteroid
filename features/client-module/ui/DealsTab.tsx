@@ -73,6 +73,10 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
   const [group, setGroup] = useState('');
   const [stages, setStages] = useState<Set<DealStage>>(new Set());
   const [open, setOpen] = useState<Set<number>>(new Set());
+  // Массовая привязка к объекту (аудит 14.10: «78 сделок без объекта — разложить»).
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [target, setTarget] = useState('');
+  const bulk = useSave(params);
 
   const groups = useMemo(() => [...new Set(data.deals.flatMap(d => d.groups))].sort((a, b) => a.localeCompare(b, 'ru')), [data.deals]);
   const rows = useMemo(() => data.deals
@@ -113,6 +117,17 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
         </div>
         <span className="ml-auto text-[12px] text-[var(--color-text-muted)]">{rows.length} на <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(sum)}</b></span>
       </div>
+      {data.v2Available && data.objects.length > 0 && rows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-[12px] text-[var(--color-text-muted)]">
+          <label className="inline-flex min-h-9 cursor-pointer items-center gap-1.5">
+            <input type="checkbox" className="h-4 w-4 accent-[var(--color-accent)]"
+              checked={rows.every(d => picked.has(d.dealId))}
+              onChange={e => setPicked(e.target.checked ? new Set([...picked, ...rows.map(d => d.dealId)]) : new Set([...picked].filter(id => !rows.some(d => d.dealId === id))))} />
+            выбрать все по фильтру
+          </label>
+          <span>· отметьте сделки галочками, чтобы привязать их к объекту</span>
+        </div>
+      )}
 
       {rows.length === 0 && <div className="rounded-xl border border-[var(--color-border)] px-3 py-6 text-center text-[13px] text-[var(--color-text-muted)]">Сделок по фильтру нет</div>}
 
@@ -123,7 +138,13 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
             const isOpen = open.has(d.dealId);
             return (
               <div key={d.dealId}>
-                <button type="button" onClick={() => setOpen(toggle(open, d.dealId))} aria-expanded={isOpen} className="flex w-full items-start gap-2 px-3 py-2 text-left">
+                <div className="flex items-start">
+                {data.v2Available && data.objects.length > 0 && (
+                  <label className="flex min-h-11 shrink-0 cursor-pointer items-start pl-3 pt-2.5" aria-label="Выбрать сделку">
+                    <input type="checkbox" className="h-4 w-4 accent-[var(--color-accent)]" checked={picked.has(d.dealId)} onChange={() => setPicked(toggle(picked, d.dealId))} />
+                  </label>
+                )}
+                <button type="button" onClick={() => setOpen(toggle(open, d.dealId))} aria-expanded={isOpen} className="flex min-w-0 flex-1 items-start gap-2 px-3 py-2 text-left">
                   <span className="mt-0.5 shrink-0 text-[var(--color-text-muted)]">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-2 text-[13px]">
@@ -137,6 +158,7 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
                     </span>
                   </span>
                 </button>
+                </div>
                 {isOpen && (
                   <>
                     <div className="px-3 pb-1"><a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[12px] text-[var(--color-accent)] hover:underline">Открыть в Битриксе</a></div>
@@ -154,6 +176,7 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr className="border-b border-[var(--color-border)] text-left text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
+                {data.v2Available && data.objects.length > 0 && <th className="w-7 px-1 py-2" />}
                 <th className="w-7 px-1 py-2" />
                 <th className="px-2 py-2 font-semibold">Создана</th>
                 <th className="px-2 py-2 font-semibold">Название</th>
@@ -169,6 +192,11 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
                 return (
                   <Fragment key={d.dealId}>
                     <tr onClick={() => setOpen(toggle(open, d.dealId))} className={`cursor-pointer border-b border-[var(--color-border)] ${isOpen ? 'bg-[var(--color-bg-hover)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+                      {data.v2Available && data.objects.length > 0 && (
+                        <td className="px-1 py-1.5 align-top" onClick={e => e.stopPropagation()}>
+                          <input type="checkbox" aria-label="Выбрать сделку" className="h-4 w-4 cursor-pointer accent-[var(--color-accent)]" checked={picked.has(d.dealId)} onChange={() => setPicked(toggle(picked, d.dealId))} />
+                        </td>
+                      )}
                       <td className="px-1 py-1.5 align-top text-[var(--color-text-muted)]">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</td>
                       <td className="whitespace-nowrap px-2 py-1.5 align-top tabular-nums text-[var(--color-text-muted)]">{fmtD(d.createdAt)}</td>
                       <td className="max-w-[240px] px-2 py-1.5 align-top">
@@ -184,7 +212,7 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
                     </tr>
                     {isOpen && (
                       <tr className="border-b border-[var(--color-border)]">
-                        <td colSpan={7} className="p-0"><DealRowExpanded d={d} data={data} params={params} /></td>
+                        <td colSpan={8} className="p-0"><DealRowExpanded d={d} data={data} params={params} /></td>
                       </tr>
                     )}
                   </Fragment>
@@ -192,6 +220,27 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {picked.size > 0 && (
+        <div className="sticky bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-3 py-2 shadow-lg">
+          <span className="text-[13px] font-semibold">Выбрано {picked.size}</span>
+          <select className={`${selectCls} min-w-0 flex-1 sm:max-w-[260px]`} value={target} onChange={e => setTarget(e.target.value)} aria-label="Объект для выбранных сделок">
+            <option value="">Объект…</option>
+            {data.objects.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+            <option value="__auto">Вернуть автоматически (по адресу)</option>
+          </select>
+          <button type="button" disabled={!target || bulk.saving}
+            onClick={async () => {
+              const r = await bulk.save({ deals: { dealIds: [...picked], objectKey: target === '__auto' ? '' : target } });
+              if (r) { setPicked(new Set()); setTarget(''); }
+            }}
+            className="min-h-10 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-semibold text-white disabled:opacity-40">
+            {bulk.saving ? 'Привязываем…' : 'Привязать'}
+          </button>
+          <button type="button" onClick={() => setPicked(new Set())} className="min-h-10 px-2 text-[12px] text-[var(--color-text-muted)]">снять выбор</button>
+          {bulk.error && <span className="basis-full text-[12px]" style={{ color: 'var(--color-negative, #e03131)' }}>{bulk.error}</span>}
         </div>
       )}
     </div>

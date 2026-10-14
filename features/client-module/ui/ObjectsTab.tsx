@@ -14,7 +14,7 @@ import {
   BUILD_STAGES, HOUSE_TYPES, EMPTY_OBJECT_PROFILE, NEW_OBJECT_KEY, ADDRESS_SOURCE_LABEL,
   computeStats, objectStatus,
 } from '../engine/types';
-import { Section, Chip, StatusChip, StatusDot, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup, fmtD, dealTitle } from './parts';
+import { Section, Chip, StatusChip, StatusDot, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup, fmtD, dealTitle, useDismiss } from './parts';
 import { STAGE_TONE } from './parts';
 import { shortAddress } from '../engine/objectClusters';
 
@@ -22,7 +22,7 @@ const DAY_MS = 86_400_000;
 
 // ── Лестница стадий ──────────────────────────────────────────────────────────
 
-function Ladder({ ladder }: { ladder: StageLadder | undefined }) {
+function Ladder({ ladder, onDismiss, hidden, onRestore }: { ladder: StageLadder | undefined; onDismiss?: (g: string) => void; hidden?: string[]; onRestore?: (g: string) => void }) {
   if (!ladder?.current) {
     return <div className="text-[12.5px] text-[var(--color-text-muted)]">На этот объект ещё ничего не отгружали — лестница появится после первой отгрузки.</div>;
   }
@@ -39,6 +39,7 @@ function Ladder({ ladder }: { ladder: StageLadder | undefined }) {
               <span className="min-w-0 flex-1 text-[13px] font-semibold">{r.group}</span>
               {r.pct !== null && <Chip title={`После «${r.pctAfter}» следующей покупкой берут «${r.group}» в ${r.pct}% случаев (по всей базе)`}>{r.pct}%</Chip>}
               {r.sources.includes('priority') && <Chip tone="accent">приоритет</Chip>}
+              {onDismiss && <button type="button" onClick={() => onDismiss(r.group)} title="Не предлагать на этот объект" className="tap-target text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-negative,#e03131)]">не предлагать</button>}
             </div>
             {r.ask && <div className="mt-0.5 text-[12px] leading-snug text-[var(--color-text-muted)]">Спросите: <span className="text-[var(--color-text)]">«{r.ask.replace(/^[-–—\s]+/, '')}»</span></div>}
           </div>
@@ -46,6 +47,11 @@ function Ladder({ ladder }: { ladder: StageLadder | undefined }) {
       ))}
       {ladder.next.length === 0 && (
         <div className={`${rail} pb-2 text-[12px] text-[var(--color-text-muted)]`}>Что предложить следующим — подсказок нет.</div>
+      )}
+      {hidden && hidden.length > 0 && (
+        <div className={`${rail} pb-2 text-[11.5px] text-[var(--color-text-muted)]`}>
+          скрыто: {hidden.map((g, i) => <span key={g}>{i > 0 ? ', ' : ''}{shortGroup(g)}{onRestore && <> (<button type="button" onClick={() => onRestore(g)} className="text-[var(--color-accent)]">вернуть</button>)</>}</span>)}
+        </div>
       )}
 
       {/* Центр — текущая группа. */}
@@ -171,6 +177,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
   // «Проверь адрес» — только где это важно (аудит 14.10: чип у всех объектов перестал быть сигналом).
   const needsCheck = !object.manual && !prof.addressConfirmed && s.shipped >= 2;
   const { save, saving, error } = useSave(params);
+  const dis = useDismiss(data, params, object.key);
   const chain = [...deals].sort((a, b) => (a.deliveredAt ?? a.createdAt ?? '').localeCompare(b.deliveredAt ?? b.createdAt ?? ''));
 
   return (
@@ -210,7 +217,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="min-w-0">
               <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Стадии и что предложить</div>
-              <Ladder ladder={data.recommendations.byObject[object.key]} />
+              <Ladder ladder={data.recommendations.byObject[object.key]} onDismiss={dis.onDismiss} onRestore={dis.onRestore} hidden={data.dismissed.byObject[object.key]} />
             </div>
             <div className="min-w-0">
               <div className="mb-1.5 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">

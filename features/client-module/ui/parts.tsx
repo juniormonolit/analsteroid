@@ -147,17 +147,28 @@ export const savedLine = (by: string | null, at: string | null) => (at ? `Сох
 
 // ── «Что предложить» ────────────────────────────────────────────────────────
 
-export function RecList({ recs, empty }: { recs: Recommendation[]; empty: string }) {
-  if (recs.length === 0) return <div className="text-[12.5px] text-[var(--color-text-muted)]">{empty}</div>;
+export function RecList({ recs, empty, onDismiss, hidden, onRestore }: {
+  recs: Recommendation[]; empty: string;
+  /** «Не предлагать» (миграция 007). Нет — кнопки не показываем. */
+  onDismiss?: (group: string) => void;
+  hidden?: string[];
+  onRestore?: (group: string) => void;
+}) {
+  const [showHidden, setShowHidden] = useState(false);
   return (
     <div className="flex flex-col gap-1.5">
+      {recs.length === 0 && <div className="text-[12.5px] text-[var(--color-text-muted)]">{empty}</div>}
       {recs.map(r => (
         <div key={r.group} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <Lightbulb size={14} className="shrink-0 text-[var(--color-warning,#e8590c)]" />
             <span className="min-w-0 flex-1 text-[13px] font-semibold">{r.group}</span>
-            {r.pct !== null && <Chip title={`Исторически после «${r.pctAfter}» следующей покупкой берут «${r.group}» в ${r.pct}% случаев`}>{r.pct}% после «{shortGroup(r.pctAfter)}»</Chip>}
+            {r.pct !== null && <Chip title={`После «${r.pctAfter}» следующей покупкой берут «${r.group}» в ${r.pct}% случаев (клиенты того же профиля)`}>{r.pct}% после «{shortGroup(r.pctAfter)}»</Chip>}
             {r.sources.includes('priority') && <Chip tone="accent" title="Ручной приоритет «Настройки → Что предложить»">приоритет</Chip>}
+            {onDismiss && (
+              <button type="button" onClick={() => onDismiss(r.group)} title="Не предлагать этому клиенту"
+                className="tap-target text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-negative,#e03131)]">не предлагать</button>
+            )}
           </div>
           {r.ask && (
             <div className="mt-1 pl-[22px] text-[12px] leading-snug text-[var(--color-text-muted)]">
@@ -166,8 +177,34 @@ export function RecList({ recs, empty }: { recs: Recommendation[]; empty: string
           )}
         </div>
       ))}
+      {hidden && hidden.length > 0 && (
+        <div className="text-[11.5px] text-[var(--color-text-muted)]">
+          <button type="button" onClick={() => setShowHidden(v => !v)} className="min-h-8 hover:text-[var(--color-text)]">скрыто {hidden.length} · {showHidden ? 'свернуть' : 'показать'}</button>
+          {showHidden && (
+            <div className="flex flex-wrap gap-1.5">
+              {hidden.map(g => (
+                <span key={g} className="inline-flex items-center gap-1 rounded bg-[var(--color-bg-hover)] px-1.5 py-0.5">
+                  {shortGroup(g)}
+                  {onRestore && <button type="button" onClick={() => onRestore(g)} className="tap-target text-[var(--color-accent)]">вернуть</button>}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+/** «Не предлагать» / «вернуть» для рекомендаций клиента (objectKey '') или объекта. */
+export function useDismiss(data: ClientModuleData, params: Record<string, string>, objectKey = '') {
+  const { save, error } = useSave(params);
+  if (!data.dismissAvailable) return { onDismiss: undefined, onRestore: undefined, error: null };
+  return {
+    onDismiss: (group: string) => void save({ dismiss: { group, objectKey, active: true } }),
+    onRestore: (group: string) => void save({ dismiss: { group, objectKey, active: false } }),
+    error,
+  };
 }
 
 export function shortGroup(g: string | null): string {

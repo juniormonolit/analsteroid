@@ -10,6 +10,7 @@ import {
 } from './types';
 import { BitrixWriteError, readClientFromBitrix, writeClientToBitrix } from './bitrix';
 import { recommendGroups, stageLadder, profileKind } from './recommend';
+import { fetchProfileMatrices } from './profileMatrix';
 import { clusterAddresses, settlementLabel, placeDetail } from './objectClusters';
 import { validLatLon } from '@/lib/geo/parse';
 
@@ -309,18 +310,37 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   }
 
   // ── Рекомендации: клиент целиком и каждый объект ─────────────────────────
-  const [matrix, priorities, settings] = await Promise.all([
+  const [globalMatrix, profileMatrices, priorities, settings] = await Promise.all([
     withTimeout(fetchCrossSellMatrix(), 8000, null),
+    withTimeout(fetchProfileMatrices(), 8000, null),
     withTimeout(fetchCrossSellPriorities(), 3000, null),
     getActiveDays(),
   ]);
   // Тип дома клиента для цепочки — если на всех объектах указан один и тот же.
   const houses = new Set(Object.values(objectProfiles).map(p => p.houseType).filter(Boolean));
   const clientHouse = houses.size === 1 ? [...houses][0] as HouseType : null;
+  // «Не предлагать» (миграция 007): клиентские скрытия действуют и на все объекты.
+  const dismissedClient = new Set<string>();
+  const dismissedObj = new Map<string, Set<string>>();
+  let dismissAvailable = true;
+  try {
+    const dr = await db.query<{ object_key: string; group_name: string }>(
+      `SELECT object_key, group_name FROM sa.client_module_dismissed WHERE client_ref = $1 AND active`, [ref],
+    );
+    for (const r of dr.rows) {
+      if (!r.object_key) dismissedClient.add(r.group_name);
+      else { const k = memberOf.get(r.object_key) ?? r.object_key; dismissedObj.set(k, new Set([...(dismissedObj.get(k) ?? []), r.group_name])); }
+    }
+  } catch { dismissAvailable = false; }
+
   const kind = profileKind(profile.clientType, deals);
+  // Матрица переходов по профилю клиента (подрядчики отдельно от частников, аудит
+  // 14.10); пока не посчитана (первый расчёт ~2–3 с, дальше Redis) — общая.
+  const matrix = profileMatrices?.[kind] && profileMatrices[kind].globalTotal > 0 ? profileMatrices[kind] : globalMatrix;
   const byObject: Record<string, StageLadder> = {};
   for (const o of objects.values()) {
-    byObject[o.key] = stageLadder(deals.filter(d => d.objectKey === o.key), objectProfiles[o.key]?.houseType ?? null, matrix, priorities, kind);
+    const ex = new Set([...dismissedClient, ...(dismissedObj.get(o.key) ?? [])]);
+    byObject[o.key] = stageLadder(deals.filter(d => d.objectKey === o.key), objectProfiles[o.key]?.houseType ?? null, matrix, priorities, kind, ex);
   }
 
   const names = await withTimeout(resolveClientNames([ref]), 4000, new Map<string, string | null>());
@@ -339,7 +359,9 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     v2Available: v2Available && settings.available,
     activeDays: settings.days,
     profileKind: kind,
-    recommendations: { client: recommendGroups(deals, clientHouse, matrix, priorities, kind), byObject },
+    dismissed: { client: [...dismissedClient], byObject: Object.fromEntries([...dismissedObj].map(([k, v]) => [k, [...v]])) },
+    dismissAvailable,
+    recommendations: { client: recommendGroups(deals, clientHouse, matrix, priorities, kind, dismissedClient), byObject },
   };
 }
 
@@ -484,4 +506,45 @@ export async function saveDealObject(ref: ClientRef, dealId: number, objectKey: 
     if (isNotReady(e)) throw new V2NotReadyError('Нужна миграция sa_org/006');
     throw e;
   }
+}
+
+/** «Не предлагать» / вернуть рекомендацию (миграция 007). objectKey '' — весь клиент. */
+export async function saveDismiss(ref: ClientRef, group: string, objectKey: string, active: boolean, by: string): Promise<void> {
+  try {
+    await analyticsDb().query(
+      `INSERT INTO sa.client_module_dismissed (client_ref, object_key, group_name, active, updated_by, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (client_ref, object_key, group_name) DO UPDATE SET active = EXCLUDED.active, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [ref, objectKey.slice(0, 300), group.slice(0, 200), active, by],
+    );
+  } catch (e) {
+    if (isNotReady(e)) throw new V2NotReadyError('Нужна миграция sa_org/007');
+    throw e;
+  }
+}
+
+/** Массовая привязка сделок к объекту (аудит 14.10: «78 сделок без объекта — разложить»).
+ *  Берутся только сделки этого клиента; objectKey '' — вернуть автоматическую. */
+export async function saveDealObjects(ref: ClientRef, dealIds: number[], objectKey: string, by: string): Promise<number> {
+  const db = analyticsDb();
+  const ids = [...new Set(dealIds.filter(n => Number.isInteger(n) && n > 0))].slice(0, 1000);
+  if (ids.length === 0) return 0;
+  const own = await db.query<{ deal_id: string }>(
+    `SELECT d.deal_id::text AS deal_id FROM sa.deals d WHERE d.deal_id = ANY($1::bigint[]) AND ${ref.startsWith('k') ? 'd.company_id' : 'd.contact_id'} = $2`,
+    [ids, Number(ref.slice(1))],
+  );
+  const mine = own.rows.map(r => Number(r.deal_id));
+  if (mine.length === 0) return 0;
+  try {
+    await db.query(
+      `INSERT INTO sa.client_module_deal_objects (deal_id, client_ref, object_key, updated_by, updated_at)
+       SELECT unnest($1::bigint[]), $2, $3, $4, now()
+       ON CONFLICT (deal_id) DO UPDATE SET client_ref = EXCLUDED.client_ref, object_key = EXCLUDED.object_key, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      [mine, ref, objectKey.slice(0, 300), by],
+    );
+  } catch (e) {
+    if (isNotReady(e)) throw new V2NotReadyError('Нужна миграция sa_org/006');
+    throw e;
+  }
+  return mine.length;
 }

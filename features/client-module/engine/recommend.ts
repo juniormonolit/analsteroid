@@ -55,6 +55,8 @@ export function recommendGroups(
   matrix: CrossSellMatrix | null,
   priorities: CrossSellPriorities | null,
   kind: ClientProfileKind = 'builder',
+  /** «Не предлагать» (sa.client_module_dismissed) — отсекаются ДО топ-3, место занимает следующая. */
+  excluded: ReadonlySet<string> = new Set(),
 ): Recommendation[] {
   const shipped = deals.filter(d => d.deliveredAt).sort((a, b) => b.deliveredAt!.localeCompare(a.deliveredAt!));
   if (shipped.length === 0) return [];
@@ -126,6 +128,7 @@ export function recommendGroups(
   });
 
   return [...cand.entries()]
+    .filter(([g]) => !excluded.has(g))
     .sort((a, b) => b[1].score - a[1].score)
     .slice(0, TOP)
     .map(([group, c]) => ({ group, ask: c.ask, after: c.after, pct: c.pct, pctAfter: c.pctAfter, sources: [...c.sources] }));
@@ -142,6 +145,7 @@ export function stageLadder(
   matrix: CrossSellMatrix | null,
   priorities: CrossSellPriorities | null,
   kind: ClientProfileKind = 'builder',
+  excluded: ReadonlySet<string> = new Set(),
 ): StageLadder {
   const shipped = deals.filter(d => d.deliveredAt).sort((a, b) => b.deliveredAt!.localeCompare(a.deliveredAt!));
   const goods = shipped.filter(d => d.topGroup && !EXCLUDED.test(d.topGroup));
@@ -172,7 +176,7 @@ export function stageLadder(
   }
   // Что предлагаем выше — не может одновременно быть «уже купил» ниже (в карте
   // бывают встречные переходы: утеплитель → кровля и кровля → утеплитель).
-  const next = recommendGroups(deals, house, matrix, priorities, kind);
+  const next = recommendGroups(deals, house, matrix, priorities, kind, excluded);
   const before: LadderStep[] = [];
   const seen = new Set<string>([current, ...next.map(r => r.group)]);
   // Сначала наши прошлые отгрузки (по свежести), затем этапы цепочки, которых у нас не было.

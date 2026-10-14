@@ -76,7 +76,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
       </div>
 
 
-      {tab === 'overview' && <OverviewTab data={data}
+      {tab === 'overview' && <OverviewTab data={data} params={params}
         onOpenObject={k => { setFocusObject(k || null); setTab('objects'); }}
         onOpenDeals={f => { setDealsFilter(prev => ({ object: f.object, n: prev.n + 1 })); setTab('deals'); }} />}
       {tab === 'deals' && <DealsTab key={dealsFilter.n} data={data} params={params} initialObject={dealsFilter.object ?? null} />}

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { moduleActor } from '@/lib/bitrix/widgetGrant';
 import {
-  parseClientRef, saveClientProfile, saveObjectProfile, saveDealObject,
+  parseClientRef, saveClientProfile, saveObjectProfile, saveDealObject, saveDealObjects, saveDismiss,
   ProfilesNotReadyError, BitrixWriteError, MirrorWriteError, V2NotReadyError, type ObjectSaveInput,
 } from '@/features/client-module/engine/clientModule';
 
@@ -34,6 +34,20 @@ export async function PUT(req: NextRequest) {
       if (typeof object.key !== 'string' || !object.key) return NextResponse.json({ error: 'Не указан объект' }, { status: 400 });
       objectKey = await saveObjectProfile(ref, object.key, object, actor);
     }
+    // Массовая привязка: { deals: { dealIds: number[], objectKey } }.
+    const many = body.deals as { dealIds?: unknown; objectKey?: unknown } | undefined;
+    if (many) {
+      if (!Array.isArray(many.dealIds) || typeof many.objectKey !== 'string') return NextResponse.json({ error: 'Некорректный список сделок' }, { status: 400 });
+      const n = await saveDealObjects(ref, many.dealIds.map(Number), many.objectKey, actor);
+      return NextResponse.json({ ok: true, objectKey: null, updated: n });
+    }
+    // «Не предлагать»: { dismiss: { group, objectKey?, active } }.
+    const dismiss = body.dismiss as { group?: unknown; objectKey?: unknown; active?: unknown } | undefined;
+    if (dismiss) {
+      if (typeof dismiss.group !== 'string' || !dismiss.group) return NextResponse.json({ error: 'Не указана группа' }, { status: 400 });
+      await saveDismiss(ref, dismiss.group, typeof dismiss.objectKey === 'string' ? dismiss.objectKey : '', dismiss.active !== false, actor);
+      return NextResponse.json({ ok: true, objectKey: null });
+    }
     const deal = body.deal as { dealId?: unknown; objectKey?: unknown } | undefined;
     if (deal) {
       const dealId = Number(deal.dealId);
@@ -47,7 +61,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: `Битрикс не принял изменения — ничего не сохранено. ${e.message}` }, { status: 502 });
     }
     if (e instanceof V2NotReadyError) {
-      return NextResponse.json({ error: 'Это действие станет доступно после миграции sa_org/006 (статусы и привязка сделок к объектам)' }, { status: 503 });
+      return NextResponse.json({ error: `Это действие станет доступно после миграции (${e.message.replace('Нужна миграция ', '')})` }, { status: 503 });
     }
     if (e instanceof ProfilesNotReadyError) {
       return NextResponse.json({ error: 'Хранилище ручных полей в sa недоступно — сохранение невозможно' }, { status: 503 });

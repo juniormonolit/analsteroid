@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { ArrowRight, MapPin, HelpCircle } from 'lucide-react';
 import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, computeStats, objectStatus, EMPTY_OBJECT_PROFILE } from '../engine/types';
-import { Section, RecList, StatusDot, shortGroup, fmtD, daysAgoShort } from './parts';
+import { Section, RecList, StatusDot, shortGroup, fmtD, daysAgoShort, useDismiss } from './parts';
 
 function BigStat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: React.ReactNode }) {
   return (
@@ -21,12 +21,14 @@ function BigStat({ label, value, sub }: { label: string; value: React.ReactNode;
   );
 }
 
-export function OverviewTab({ data, onOpenObject, onOpenDeals }: {
+export function OverviewTab({ data, params, onOpenObject, onOpenDeals }: {
   data: ClientModuleData;
+  params: Record<string, string>;
   onOpenObject: (key: string) => void;
   onOpenDeals: (filter: { object?: string }) => void;
 }) {
   const [allGroups, setAllGroups] = useState(false);
+  const dis = useDismiss(data, params);
   const stats = computeStats(data.deals);
   const lastDeal = [...data.deals].filter(d => d.deliveredAt).sort((a, b) => b.deliveredAt!.localeCompare(a.deliveredAt!))[0];
   const lastObj = lastDeal?.objectKey ? data.objects.find(o => o.key === lastDeal.objectKey)?.label : null;
@@ -100,7 +102,8 @@ export function OverviewTab({ data, onOpenObject, onOpenDeals }: {
           <span title="По цепочке стройки (майндкарта), истории переходов по базе и приоритетам «Что предложить». Подрядчикам — только общие этапы и частые переходы."
             className="cursor-help text-[var(--color-text-muted)]"><HelpCircle size={14} /></span>
         }>
-          <RecList recs={data.recommendations.client} empty="Предложить по истории нечего." />
+          <RecList recs={data.recommendations.client} empty="Предложить по истории нечего." onDismiss={dis.onDismiss} onRestore={dis.onRestore} hidden={data.dismissed.client} />
+          {dis.error && <div className="mt-1 text-[11.5px]" style={{ color: 'var(--color-negative, #e03131)' }}>{dis.error}</div>}
         </Section>
       </div>
 
