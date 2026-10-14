@@ -24,12 +24,37 @@ const W_HISTORY = 1.5;
 const W_PRIORITY = 0.8;
 const MIN_HISTORY = 30; // меньше переходов из группы — история шумная, не учитываем
 const TOP = 3;
+/** История без поддержки цепочки/приоритета — только от 10% (аудит 14.10: «4% после
+ *  сухих смесей» — шум, из-за которого менеджер перестаёт читать блок). */
+const MIN_PCT_ALONE = 0.10;
+/** «Сейчас» на объекте — не мелочь: ≥ 50 тыс ₽ или ≥ 5% суммы объекта. */
+const CURRENT_MIN_AMOUNT = 50_000;
+const CURRENT_MIN_SHARE = 0.05;
+const CURRENT_WINDOW_DAYS = 45;
+
+/** Профиль клиента для рекомендаций (аудит 14.10): подрядчику, который возит ЖБИ
+ *  и щебень, не предлагаем «газобетон и фасад под сайдинг» с листов дома. */
+export type ClientProfileKind = 'builder' | 'contractor';
+const CONTRACTOR_GROUPS = /(жби|щебень|песок|бетон и раствор|дорожные плиты|аэродромные|асфальт|грунт|фбс|кольца|лотки|опоры|керамзит|вторичные|арматура|плиты перекрытия|прочий металлопрокат|трубы)/i;
+
+export function profileKind(clientType: string | null, deals: ModuleDeal[]): ClientProfileKind {
+  if (clientType === 'self_builder' || clientType === 'foreman') return 'builder';
+  if (clientType === 'construction_org' || clientType === 'own_needs_org') return 'contractor';
+  // Тип не указан — по составу отгрузок: больше половины суммы ЖБИ/нерудка/бетон → подрядчик.
+  let all = 0, heavy = 0;
+  for (const d of deals) if (d.deliveredAt) for (const p of d.products) {
+    if (p.isService || !p.group) continue;
+    all += p.sum; if (CONTRACTOR_GROUPS.test(p.group)) heavy += p.sum;
+  }
+  return all > 0 && heavy / all > 0.5 ? 'contractor' : 'builder';
+}
 
 export function recommendGroups(
   deals: ModuleDeal[],
   house: HouseType | null,
   matrix: CrossSellMatrix | null,
   priorities: CrossSellPriorities | null,
+  kind: ClientProfileKind = 'builder',
 ): Recommendation[] {
   const shipped = deals.filter(d => d.deliveredAt).sort((a, b) => b.deliveredAt!.localeCompare(a.deliveredAt!));
   if (shipped.length === 0) return [];
@@ -37,14 +62,19 @@ export function recommendGroups(
   const taken = new Set<string>();
   for (const d of shipped) for (const g of d.groups) taken.add(g);
 
-  // Группы последних отгрузок, по свежести (максимум три разных).
+  // Группы последних отгрузок, по свежести (максимум три разных). Мелочь (штукатурка
+  // на 12 тыс у подрядчика с миллионами) направление не задаёт — берём крупные
+  // отгрузки, а если крупных нет — все.
+  const total = shipped.reduce((s, d) => s + d.amount, 0);
+  const bigOnes = shipped.filter(d => d.amount >= CURRENT_MIN_AMOUNT || d.amount >= total * CURRENT_MIN_SHARE);
   const recent: string[] = [];
-  for (const d of shipped) {
+  for (const d of (bigOnes.length ? bigOnes : shipped)) {
     for (const g of d.groups) if (!recent.includes(g) && !EXCLUDED.test(g)) recent.push(g);
     if (recent.length >= RECENCY.length) break;
   }
 
-  const houses: ChainHouse[] = house ? ['any', house] : ['any', 'frame', 'aerated'];
+  // Подрядчику — только общие листы карты (нерудка, бетон), без «дома».
+  const houses: ChainHouse[] = kind === 'contractor' ? ['any'] : house ? ['any', house] : ['any', 'frame', 'aerated'];
   type Cand = { score: number; ask: string | null; askScore: number; after: string | null; pct: number | null; pctAfter: string | null; sources: Set<Recommendation['sources'][number]> };
   const cand = new Map<string, Cand>();
   const get = (g: string) => {
@@ -76,7 +106,8 @@ export function recommendGroups(
       for (const [to, cnt] of Object.entries(row.to)) {
         if (taken.has(to) || EXCLUDED.test(to) || to === from) continue;
         const p = cnt / row.total;
-        if (p < 0.03) continue;
+        // Слабая история (<10%) — только в подкрепление цепочки/приоритета, сама по себе шум.
+        if (p < 0.03 || (p < MIN_PCT_ALONE && !cand.has(to))) continue;
         const c = get(to);
         c.score += w * W_HISTORY * p;
         c.sources.add('history');
@@ -110,17 +141,25 @@ export function stageLadder(
   house: HouseType | null,
   matrix: CrossSellMatrix | null,
   priorities: CrossSellPriorities | null,
+  kind: ClientProfileKind = 'builder',
 ): StageLadder {
   const shipped = deals.filter(d => d.deliveredAt).sort((a, b) => b.deliveredAt!.localeCompare(a.deliveredAt!));
-  const last = shipped.find(d => d.topGroup && !EXCLUDED.test(d.topGroup));
-  if (!last) return { current: null, next: [], before: [] };
+  const goods = shipped.filter(d => d.topGroup && !EXCLUDED.test(d.topGroup));
+  if (goods.length === 0) return { current: null, next: [], before: [] };
+  // «Сейчас» (аудит 14.10): не последняя отгрузка (штукатурка на 12 тыс на объекте
+  // в 2,4 млн), а самая крупная за 45 дней до последней — и не мелочь.
+  const total = goods.reduce((s, d) => s + d.amount, 0);
+  const lastAt = new Date(goods[0].deliveredAt!).getTime();
+  const big = (d: ModuleDeal) => d.amount >= CURRENT_MIN_AMOUNT || d.amount >= total * CURRENT_MIN_SHARE;
+  const recent = goods.filter(d => lastAt - new Date(d.deliveredAt!).getTime() <= CURRENT_WINDOW_DAYS * 86_400_000 && big(d));
+  const last = recent.sort((a, b) => b.amount - a.amount)[0] ?? goods.find(big) ?? goods[0];
   const current = last.topGroup!;
 
   // Наша последняя отгрузка каждой группы на объект.
   const ours = new Map<string, { dealId: number; date: string | null; amount: number }>();
   for (const d of shipped) for (const g of d.groups) if (!ours.has(g)) ours.set(g, { dealId: d.dealId, date: d.deliveredAt, amount: d.amount });
 
-  const houses: ChainHouse[] = house ? ['any', house] : ['any', 'frame', 'aerated'];
+  const houses: ChainHouse[] = kind === 'contractor' ? ['any'] : house ? ['any', house] : ['any', 'frame', 'aerated'];
   // Предыдущие этапы — только прямые шаги карты: на листе дома (каркас/газобетон)
   // глубина ≤ 1, на общих листах (нерудка, бетон) — только depth 0, иначе для
   // каркасного дома внизу всплывают «Бетон»/«Керамзит» из дальних веток.
@@ -133,7 +172,7 @@ export function stageLadder(
   }
   // Что предлагаем выше — не может одновременно быть «уже купил» ниже (в карте
   // бывают встречные переходы: утеплитель → кровля и кровля → утеплитель).
-  const next = recommendGroups(deals, house, matrix, priorities);
+  const next = recommendGroups(deals, house, matrix, priorities, kind);
   const before: LadderStep[] = [];
   const seen = new Set<string>([current, ...next.map(r => r.group)]);
   // Сначала наши прошлые отгрузки (по свежести), затем этапы цепочки, которых у нас не было.

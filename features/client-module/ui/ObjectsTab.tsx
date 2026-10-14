@@ -7,14 +7,15 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, MapPin, Plus, ArrowUp, CircleDot, Check } from 'lucide-react';
-import { fmtMoney, fmtDate, dealBitrixUrl } from '@/features/customers/ui/shared';
+import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
 import { AddressPicker, type GeoValue, type GeoHint } from '@/features/geo/ui/AddressPicker';
 import {
   type ClientModuleData, type ModuleObject, type StageLadder, type BuildStage, type HouseType,
   BUILD_STAGES, HOUSE_TYPES, EMPTY_OBJECT_PROFILE, NEW_OBJECT_KEY, ADDRESS_SOURCE_LABEL,
   computeStats, objectStatus,
 } from '../engine/types';
-import { Section, Chip, StatusChip, StageChip, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup } from './parts';
+import { Section, Chip, StatusChip, StatusDot, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup, fmtD, dealTitle } from './parts';
+import { STAGE_TONE } from './parts';
 import { shortAddress } from '../engine/objectClusters';
 
 const DAY_MS = 86_400_000;
@@ -54,7 +55,7 @@ function Ladder({ ladder }: { ladder: StageLadder | undefined }) {
           <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">Сейчас</div>
           <div className="text-[14px] font-bold">{ladder.current.group}</div>
           <div className="text-[11.5px] text-[var(--color-text-muted)]">
-            последняя отгрузка {fmtDate(ladder.current.date)} · <a href={dealBitrixUrl(ladder.current.dealId)} target="_blank" rel="noreferrer" className="font-mono text-[var(--color-accent)] hover:underline">#{ladder.current.dealId}</a>
+            главная отгрузка за 45 дн. · <a href={dealBitrixUrl(ladder.current.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline" title="Открыть сделку в Битриксе">{fmtD(ladder.current.date)}</a>
           </div>
         </div>
       </div>
@@ -67,7 +68,7 @@ function Ladder({ ladder }: { ladder: StageLadder | undefined }) {
             <span className={`min-w-0 flex-1 basis-[150px] ${s.deal ? '' : 'text-[var(--color-text-muted)]'}`}>{s.group}</span>
             {s.deal ? (
               <span className="inline-flex items-center gap-1 text-[11.5px] text-[var(--color-positive,#2f9e44)]">
-                <Check size={12} /> у нас: <a href={dealBitrixUrl(s.deal.dealId)} target="_blank" rel="noreferrer" className="font-mono hover:underline">#{s.deal.dealId}</a> {fmtDate(s.deal.date)}{s.deal.amount > 0 ? ` · ${fmtMoney(s.deal.amount)}` : ''}
+                <Check size={12} /> у нас · {fmtD(s.deal.date)}
               </span>
             ) : (
               <Chip tone="warn" title="По цепочке стройки этот этап идёт раньше текущего, но у нас отгрузки не было — вероятно, брал в другом месте">скорее всего купил не у нас</Chip>
@@ -158,7 +159,7 @@ function ObjectEditor({ data, object, params, onCreated, onCancel }: {
 
 // ── Карточка объекта ─────────────────────────────────────────────────────────
 
-function ObjectCard({ data, object, params, defaultOpen }: { data: ClientModuleData; object: ModuleObject; params: Record<string, string>; defaultOpen: boolean }) {
+function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: ClientModuleData; object: ModuleObject; params: Record<string, string>; defaultOpen: boolean; onOpenDeals?: (key: string) => void }) {
   const [open, setOpen] = useState(defaultOpen);
   const [editing, setEditing] = useState(false);
   const prof = data.objectProfiles[object.key] ?? EMPTY_OBJECT_PROFILE;
@@ -167,30 +168,25 @@ function ObjectCard({ data, object, params, defaultOpen }: { data: ClientModuleD
   const status = objectStatus(deals, { manual: object.manual, doneManual: prof.doneManual }, data.activeDays);
   const address = prof.idealAddress || object.address;
   const title = prof.idealAddress ? shortAddress(prof.idealAddress) : object.label;
-  const needsCheck = !object.manual && !prof.addressConfirmed;
+  // «Проверь адрес» — только где это важно (аудит 14.10: чип у всех объектов перестал быть сигналом).
+  const needsCheck = !object.manual && !prof.addressConfirmed && s.shipped >= 2;
   const { save, saving, error } = useSave(params);
   const chain = [...deals].sort((a, b) => (a.deliveredAt ?? a.createdAt ?? '').localeCompare(b.deliveredAt ?? b.createdAt ?? ''));
 
   return (
     <section id={`obj-${object.key}`} className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-      <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} className="flex w-full items-start gap-2 px-3.5 py-3 text-left">
-        <MapPin size={16} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
+      <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} className="flex w-full items-start gap-2.5 px-3.5 py-2.5 text-left">
+        <StatusDot s={status} />
         <span className="min-w-0 flex-1">
-          <span className="block break-words text-[14px] font-semibold">{title}</span>
-          {title !== address && <span className="block break-words text-[11.5px] text-[var(--color-text-muted)]">{address}</span>}
-          <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-[var(--color-text-muted)]">
-            <StatusChip s={status} />
+          <span className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-[15px] font-semibold">{title}</span>
             {needsCheck && <Chip tone="warn">проверь адрес</Chip>}
-            {object.variants > 1 && <Chip title="Адрес в заявках/сделках записан по-разному — варианты склеены в один объект">склеено {object.variants} написания адреса</Chip>}
-            <span>отгружено {s.shipped} на <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(s.ltv)}</b></span>
-            {s.open > 0 && <span>· в работе {s.open}</span>}
-            {s.lastShippedAt && <span>· посл. отгрузка {fmtDate(s.lastShippedAt)}</span>}
+            <span className="ml-auto text-[13px] font-semibold tabular-nums">{fmtMoney(s.ltv)}</span>
           </span>
-          {s.groups.length > 0 && (
-            <span className="mt-1.5 flex flex-wrap gap-1">
-              {s.groups.slice(0, 6).map(g => <Chip key={g.group}>{shortGroup(g.group)}</Chip>)}
-            </span>
-          )}
+          <span className="mt-0.5 block truncate text-[12px] text-[var(--color-text-muted)]">
+            {s.shipped} отгр.{s.lastShippedAt ? ` · посл. ${fmtD(s.lastShippedAt)}` : ''}{s.open > 0 ? ` · в работе ${s.open}` : ''}
+            {s.groups.length > 0 ? ` · ${s.groups.slice(0, 3).map(g => shortGroup(g.group)).join(', ')}${s.groups.length > 3 ? ` +${s.groups.length - 3}` : ''}` : ''}
+          </span>
         </span>
         {open ? <ChevronDown size={18} className="mt-0.5 shrink-0" /> : <ChevronRight size={18} className="mt-0.5 shrink-0" />}
       </button>
@@ -211,35 +207,27 @@ function ObjectCard({ data, object, params, defaultOpen }: { data: ClientModuleD
               </div>
             </div>
           )}
-          {object.requests.length > 0 && (
-            <div className="text-[11.5px] text-[var(--color-text-muted)]">
-              Заявки 1С: {object.requests.map(r => `№${r.number.replace(/^0+/, '')}${r.date ? ` от ${fmtDate(r.date)}` : ''}`).join(', ')}
-            </div>
-          )}
-
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="min-w-0">
               <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Стадии и что предложить</div>
               <Ladder ladder={data.recommendations.byObject[object.key]} />
             </div>
             <div className="min-w-0">
-              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Цепочка сделок · {chain.length}</div>
+              <div className="mb-1.5 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                <span className="flex-1">Сделки по объекту · {chain.length}</span>
+                {onOpenDeals && chain.length > 0 && <button type="button" onClick={() => onOpenDeals(object.key)} className="min-h-8 normal-case tracking-normal text-[12px] font-normal text-[var(--color-accent)]">все в «Сделках» →</button>}
+              </div>
               {chain.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Сделок по объекту нет</div> : (
                 <div className="flex flex-col divide-y divide-[var(--color-border)] text-[12.5px]">
-                  {chain.map((d, i) => {
-                    const prev = i > 0 ? chain[i - 1] : null;
-                    const gap = prev?.deliveredAt && d.deliveredAt ? Math.round((new Date(d.deliveredAt).getTime() - new Date(prev.deliveredAt).getTime()) / DAY_MS) : null;
-                    return (
-                      <div key={d.dealId} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5">
-                        <span className="tabular-nums text-[var(--color-text-muted)]">{fmtDate(d.deliveredAt ?? d.createdAt)}</span>
-                        <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="font-mono text-[var(--color-accent)] hover:underline">#{d.dealId}</a>
-                        <StageChip s={d.stage} />
-                        {gap !== null && <Chip>↓ {gap} дн.</Chip>}
-                        <span className="ml-auto font-semibold tabular-nums">{d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
-                        <span className="basis-full truncate text-[12px] text-[var(--color-text-muted)]" title={d.groups.join(', ')}>{d.groups.length ? d.groups.map(shortGroup).join(', ') : (d.name ?? '')}</span>
-                      </div>
-                    );
-                  })}
+                  {[...chain].reverse().slice(0, 8).map(d => (
+                    <div key={d.dealId} className="flex items-center gap-2 py-1.5">
+                      <span className="h-2 w-2 shrink-0 rounded-full" title={d.stage} style={{ background: STAGE_TONE[d.stage] === 'ok' ? 'var(--color-positive,#2f9e44)' : STAGE_TONE[d.stage] === 'neg' ? 'var(--color-negative,#e03131)' : STAGE_TONE[d.stage] === 'warn' ? 'var(--color-warning,#e8590c)' : 'var(--color-accent)' }} />
+                      <span className="w-[62px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtD(d.deliveredAt ?? d.createdAt)}</span>
+                      <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate hover:underline" title={d.groups.join(', ')}>{d.topGroup ? shortGroup(d.topGroup) : dealTitle(d)}</a>
+                      <span className="shrink-0 font-semibold tabular-nums">{d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
+                    </div>
+                  ))}
+                  {chain.length > 8 && <div className="py-1.5 text-[12px] text-[var(--color-text-muted)]">…ещё {chain.length - 8}</div>}
                 </div>
               )}
             </div>
@@ -258,6 +246,14 @@ function ObjectCard({ data, object, params, defaultOpen }: { data: ClientModuleD
             {error && <span className="text-[12px]" style={{ color: 'var(--color-negative, #e03131)' }}>{error}</span>}
           </div>
           {prof.note && !editing && <div className="whitespace-pre-wrap rounded-lg bg-[var(--color-bg)] px-2.5 py-2 text-[12.5px]">{prof.note}</div>}
+          <details className="text-[12px] text-[var(--color-text-muted)]">
+            <summary className="min-h-9 cursor-pointer select-none py-1.5">Данные объекта</summary>
+            <div className="flex flex-col gap-1 pb-1 pl-3">
+              <div><span className="text-[var(--color-text)]">Адрес:</span> {address} <span>({prof.idealAddress ? 'указан менеджером' : ADDRESS_SOURCE_LABEL[object.source]})</span></div>
+              {object.variants > 1 && <div>Склеено {object.variants} написания адреса из заявок и сделок.</div>}
+              {object.requests.length > 0 && <div>Заявки 1С ({object.requests.length}): {object.requests.map(r => `№${r.number.replace(/^0+/, '')} от ${fmtD(r.date)}`).join(', ')}</div>}
+            </div>
+          </details>
           {editing && <ObjectEditor data={data} object={object} params={params} onCancel={() => setEditing(false)} />}
         </div>
       )}
@@ -265,7 +261,7 @@ function ObjectCard({ data, object, params, defaultOpen }: { data: ClientModuleD
   );
 }
 
-export function ObjectsTab({ data, params, focus }: { data: ClientModuleData; params: Record<string, string>; focus: string | null }) {
+export function ObjectsTab({ data, params, focus, onOpenDeals }: { data: ClientModuleData; params: Record<string, string>; focus: string | null; onOpenDeals?: (key: string) => void }) {
   const [creating, setCreating] = useState(false);
   const [justCreated, setJustCreated] = useState<string | null>(null);
   const order = { active: 0, new: 1, done: 2 } as const;
@@ -302,7 +298,7 @@ export function ObjectsTab({ data, params, focus }: { data: ClientModuleData; pa
       )}
       {objects.length === 0 && !creating && <div className="py-6 text-center text-[13px] text-[var(--color-text-muted)]">Объектов нет: адресов в заявках и сделках не нашлось.</div>}
       {objects.map(({ o }) => (
-        <ObjectCard key={o.key} data={data} object={o} params={params} defaultOpen={o.key === focus || o.key === justCreated || objects.length === 1} />
+        <ObjectCard key={o.key} data={data} object={o} params={params} onOpenDeals={onOpenDeals} defaultOpen={o.key === focus || o.key === justCreated || objects.length === 1} />
       ))}
     </div>
   );

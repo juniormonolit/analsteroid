@@ -6,11 +6,27 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { HelpCircle, Lightbulb, Pencil } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
-import { fmtDate } from '@/features/customers/ui/shared';
+
 import {
   type ClientModuleData, type ClientType, type Recommendation, type ObjectStatus, type DealStage,
   CLIENT_TYPES, TYPES_WITH_OCCUPATION, OBJECT_STATUS_LABEL, DEAL_STAGE_LABEL,
 } from '../engine/types';
+
+/** Дата «ДД.ММ.ГГ» — экономим место (правка владельца 14.10: «26, а не 2026»). */
+export function fmtD(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const [y, m, d] = iso.slice(0, 10).split('-');
+  return `${d}.${m}.${y.slice(2)}`;
+}
+
+/** Название сделки для людей: Битрикс по умолчанию называет «Сделка #267347» —
+ *  такое заменяем на первый товар сделки (ID владелец просил не выводить). */
+export function dealTitle(d: { name: string | null; products: { name: string; isService: boolean }[]; topGroup: string | null }): string {
+  const n = (d.name ?? '').trim();
+  if (n && !/^сделка\s*#?\s*\d+$/i.test(n)) return n;
+  const p = d.products.find(x => !x.isService) ?? d.products[0];
+  return p?.name ?? d.topGroup ?? 'Сделка';
+}
 
 export type Tone = 'muted' | 'neg' | 'warn' | 'ok' | 'accent';
 const TONE_STYLE: Record<Tone, React.CSSProperties> = {
@@ -28,6 +44,17 @@ export function Chip({ children, tone = 'muted', title }: { children: React.Reac
 export const STATUS_TONE: Record<ObjectStatus, Tone> = { new: 'accent', active: 'ok', done: 'muted' };
 export const STAGE_TONE: Record<DealStage, Tone> = { shipped: 'ok', sold: 'warn', active: 'accent', lost: 'neg' };
 export const StatusChip = ({ s }: { s: ObjectStatus }) => <Chip tone={STATUS_TONE[s]}>{OBJECT_STATUS_LABEL[s]}</Chip>;
+const DOT: Record<ObjectStatus, string> = { new: 'var(--color-accent)', active: 'var(--color-positive, #2f9e44)', done: 'var(--color-text-muted)' };
+/** Статус объекта точкой (аудит 14.10: чип на каждом объекте — шум). */
+export const StatusDot = ({ s }: { s: ObjectStatus }) => (
+  <span title={OBJECT_STATUS_LABEL[s]} aria-label={OBJECT_STATUS_LABEL[s]} className="mt-[7px] h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: DOT[s] }} />
+);
+
+/** «сегодня» / «вчера» / «N дн. назад». */
+export function daysAgoShort(iso: string): string {
+  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  return d <= 0 ? 'сегодня' : d === 1 ? 'вчера' : `${d} дн. назад`;
+}
 export const StageChip = ({ s }: { s: DealStage }) => <Chip tone={STAGE_TONE[s]}>{DEAL_STAGE_LABEL[s]}</Chip>;
 
 export function Section({ title, right, children, className = '' }: { title: React.ReactNode; right?: React.ReactNode; children: React.ReactNode; className?: string }) {
@@ -116,7 +143,7 @@ export function useSave(params: Record<string, string>) {
   return { save, saving, error };
 }
 
-export const savedLine = (by: string | null, at: string | null) => (at ? `Сохранено ${fmtDate(at)}${by ? ` · ${by}` : ''}` : null);
+export const savedLine = (by: string | null, at: string | null) => (at ? `Сохранено ${fmtD(at)}${by ? ` · ${by}` : ''}` : null);
 
 // ── «Что предложить» ────────────────────────────────────────────────────────
 
@@ -149,10 +176,12 @@ export function shortGroup(g: string | null): string {
 }
 
 // ── Клиент: тип, «чем занимается», заметка ─────────────────────────────────
+// Аудит 14.10: четыре радиокнопки на треть первого экрана ради поля, которое
+// заполняют один раз, — свёрнуто в строку под именем; редактор раскрывается.
 
-export function ClientFields({ data, params }: { data: ClientModuleData; params: Record<string, string> }) {
+export function ClientBar({ data, params }: { data: ClientModuleData; params: Record<string, string> }) {
   const p = data.profile;
-  const [edit, setEdit] = useState(!p.clientType && !p.note);
+  const [edit, setEdit] = useState(false);
   const [type, setType] = useState<ClientType | null>(p.clientType);
   const [occupation, setOccupation] = useState(p.occupation);
   const [note, setNote] = useState(p.note);
@@ -161,52 +190,47 @@ export function ClientFields({ data, params }: { data: ClientModuleData; params:
   const dirty = type !== p.clientType || occupation !== p.occupation || note !== p.note;
   const typeLabel = CLIENT_TYPES.find(t => t.value === p.clientType)?.label;
 
-  if (!edit) {
-    return (
-      <Section title="Клиент" right={
-        <button type="button" onClick={() => setEdit(true)} className="inline-flex min-h-9 items-center gap-1 rounded-lg border border-[var(--color-border)] px-2.5 text-[12px]">
-          <Pencil size={12} /> Изменить
-        </button>
-      }>
-        <div className="text-[13px]"><span className="text-[var(--color-text-muted)]">Тип: </span><b>{typeLabel ?? 'не указан'}</b></div>
-        {p.occupation && <div className="mt-1 text-[13px]"><span className="text-[var(--color-text-muted)]">Чем занимается: </span>{p.occupation}</div>}
-        <div className="mt-2 whitespace-pre-wrap rounded-lg bg-[var(--color-bg)] px-2.5 py-2 text-[13px]">
-          {p.note || <span className="text-[var(--color-text-muted)]">Заметки нет</span>}
-        </div>
-        {savedLine(p.updatedBy, p.updatedAt) && <div className="mt-1.5 text-[11px] text-[var(--color-text-muted)]">{savedLine(p.updatedBy, p.updatedAt)}</div>}
-      </Section>
-    );
-  }
-
   return (
-    <Section title="Клиент" right={(p.clientType || p.note) ? (
-      <button type="button" onClick={() => setEdit(false)} className="min-h-9 rounded-lg px-2.5 text-[12px] text-[var(--color-text-muted)]">Отмена</button>
-    ) : undefined}>
-      <div className="mb-1 text-[12px] text-[var(--color-text-muted)]">Тип клиента</div>
-      <div className="flex flex-col gap-1.5">
-        {CLIENT_TYPES.map(t => (
-          <OptionRow key={t.value} name={`ct-${data.ref}`} label={t.label} hint={t.hint} checked={type === t.value} onSelect={() => setType(t.value)} />
-        ))}
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]">
+        <button type="button" onClick={() => setEdit(v => !v)}
+          className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 ${typeLabel ? 'border-transparent bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] font-semibold text-[var(--color-accent)]' : 'border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>
+          {typeLabel ?? 'Тип клиента не указан'} <Pencil size={11} />
+        </button>
+        {p.occupation && <span className="text-[var(--color-text-muted)]">{p.occupation}</span>}
+        <button type="button" onClick={() => setEdit(true)} className="min-h-8 min-w-0 max-w-full truncate text-left text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title={p.note || undefined}>
+          {p.note ? <>📝 {p.note}</> : '+ заметка'}
+        </button>
       </div>
-      {type && TYPES_WITH_OCCUPATION.has(type) && (
-        <label className="mt-2.5 block">
-          <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Чем занимается</span>
-          <input value={occupation} onChange={e => setOccupation(e.target.value)} maxLength={500} placeholder="Например: кровля и фасады, частные дома" className={inputCls} />
-        </label>
+      {edit && (
+        <div className="mt-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {CLIENT_TYPES.map(t => (
+              <OptionRow key={t.value} name={`ct-${data.ref}`} label={t.label} hint={t.hint} checked={type === t.value} onSelect={() => setType(t.value)} />
+            ))}
+          </div>
+          {type && TYPES_WITH_OCCUPATION.has(type) && (
+            <label className="mt-2 block">
+              <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Чем занимается</span>
+              <input value={occupation} onChange={e => setOccupation(e.target.value)} maxLength={500} placeholder="Например: фундаменты, дороги, кровля" className={inputCls} />
+            </label>
+          )}
+          {type === 'self_builder' && <div className="mt-2 text-[12px] text-[var(--color-text-muted)]">Стадию стройки и тип дома — у каждого объекта (вкладка «Объекты»).</div>}
+          <label className="mt-2 block">
+            <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Заметка</span>
+            <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} maxLength={2000} className={inputCls} />
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <SaveBar dirty={dirty} saving={saving} error={error ?? (data.profilesAvailable ? null : 'Хранилище ручных полей недоступно')}
+              disabled={!data.profilesAvailable} savedAt={savedLine(p.updatedBy, p.updatedAt)}
+              onSave={async () => {
+                const r = await save({ client: { clientType: type, occupation: type && TYPES_WITH_OCCUPATION.has(type) ? occupation : '', note } });
+                if (r) setEdit(false);
+              }} />
+            <button type="button" onClick={() => setEdit(false)} className="mt-2 min-h-11 rounded-lg px-3 text-sm text-[var(--color-text-muted)]">Закрыть</button>
+          </div>
+        </div>
       )}
-      {type === 'self_builder' && (
-        <div className="mt-2 text-[12px] text-[var(--color-text-muted)]">Стадию стройки и тип дома укажите у каждого объекта — вкладка «Объекты».</div>
-      )}
-      <label className="mt-2.5 block">
-        <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Заметка</span>
-        <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} maxLength={2000} className={inputCls} />
-      </label>
-      <SaveBar dirty={dirty} saving={saving} error={error ?? (data.profilesAvailable ? null : 'Хранилище ручных полей недоступно — сохранение невозможно')}
-        disabled={!data.profilesAvailable} savedAt={savedLine(p.updatedBy, p.updatedAt)}
-        onSave={async () => {
-          const r = await save({ client: { clientType: type, occupation: type && TYPES_WITH_OCCUPATION.has(type) ? occupation : '', note } });
-          if (r) setEdit(false);
-        }} />
-    </Section>
+    </div>
   );
 }

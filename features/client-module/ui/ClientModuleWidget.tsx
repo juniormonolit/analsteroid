@@ -14,8 +14,8 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ExternalLink, Building2, User } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
-import { type ClientModuleData, CLIENT_TYPES } from '../engine/types';
-import { Chip } from './parts';
+import { type ClientModuleData } from '../engine/types';
+import { ClientBar } from './parts';
 import { OverviewTab } from './OverviewTab';
 import { DealsTab } from './DealsTab';
 import { ObjectsTab } from './ObjectsTab';
@@ -37,7 +37,8 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
   });
   const [tab, setTab] = useState<Tab>('overview');
   const [focusObject, setFocusObject] = useState<string | null>(null);
-  useEffect(() => { setTab('overview'); setFocusObject(null); }, [qs]);
+  const [dealsFilter, setDealsFilter] = useState<{ object?: string; n: number }>({ n: 0 });
+  useEffect(() => { setTab('overview'); setFocusObject(null); setDealsFilter({ n: 0 }); }, [qs]);
 
   if (!qs) return null;
   if (isLoading) return <div className="p-4 text-sm text-[var(--color-text-muted)]">Загружаем клиента…</div>;
@@ -45,7 +46,6 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
 
   const bitrixUrl = `https://td.monolit-crm.ru/crm/${data.clientType}/details/${data.clientId}/`;
   const title = data.name ?? (data.clientType === 'contact' ? `Контакт #${data.clientId}` : `Компания #${data.clientId}`);
-  const typeLabel = CLIENT_TYPES.find(t => t.value === data.profile.clientType)?.label;
   const tabs: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Обзор' },
     { key: 'deals', label: `Сделки · ${data.deals.length}` },
@@ -54,13 +54,15 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {data.clientType === 'company' ? <Building2 size={18} className="shrink-0 text-[var(--color-text-muted)]" /> : <User size={18} className="shrink-0 text-[var(--color-text-muted)]" />}
-        <h2 className="min-w-0 break-words text-[16px] font-bold">{title}</h2>
-        {typeLabel && <Chip tone="accent">{typeLabel}</Chip>}
-        <a href={bitrixUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex min-h-9 items-center gap-1 text-[12px] text-[var(--color-accent)] hover:underline">
-          Битрикс <ExternalLink size={12} />
-        </a>
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          {data.clientType === 'company' ? <Building2 size={18} className="shrink-0 text-[var(--color-text-muted)]" /> : <User size={18} className="shrink-0 text-[var(--color-text-muted)]" />}
+          <h2 className="min-w-0 break-words text-[17px] font-bold">{title}</h2>
+          <a href={bitrixUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex min-h-9 items-center gap-1 text-[12px] text-[var(--color-accent)] hover:underline">
+            Битрикс <ExternalLink size={12} />
+          </a>
+        </div>
+        <ClientBar data={data} params={params} />
       </div>
 
       {/* Три вкладки — переносом, без горизонтальной ленты (правило 12 CLAUDE.md). */}
@@ -73,13 +75,12 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
         ))}
       </div>
 
-      {!data.v2Available && data.profilesAvailable && (
-        <div className="text-[11.5px] text-[var(--color-text-muted)]">Ручные статусы объектов, подтверждение адресов и перепривязка сделок заработают после миграции sa_org/006; статусы пока считаются автоматически (N = {data.activeDays} дн.).</div>
-      )}
 
-      {tab === 'overview' && <OverviewTab data={data} params={params} onOpenObject={k => { setFocusObject(k); setTab('objects'); }} />}
-      {tab === 'deals' && <DealsTab data={data} params={params} />}
-      {tab === 'objects' && <ObjectsTab data={data} params={params} focus={focusObject} />}
+      {tab === 'overview' && <OverviewTab data={data}
+        onOpenObject={k => { setFocusObject(k || null); setTab('objects'); }}
+        onOpenDeals={f => { setDealsFilter(prev => ({ object: f.object, n: prev.n + 1 })); setTab('deals'); }} />}
+      {tab === 'deals' && <DealsTab key={dealsFilter.n} data={data} params={params} initialObject={dealsFilter.object ?? null} />}
+      {tab === 'objects' && <ObjectsTab data={data} params={params} focus={focusObject} onOpenDeals={k => { setDealsFilter(prev => ({ object: k, n: prev.n + 1 })); setTab('deals'); }} />}
     </div>
   );
 }

@@ -1,86 +1,132 @@
 'use client';
-// Таб «Обзор» карточки клиента — первый экран для работы (правка владельца
-// 13.10): сводка, заметки, показатели, что предложить, товарные группы и объекты.
+// Таб «Обзор» — первый экран для работы. Редизайн 14.10 по аудиту (Fable):
+// три главные цифры + серая строка остального; баннер «сделки без объекта»;
+// две колонки «Что везём и куда» (объекты в работе) / «Предложить клиенту»;
+// товарные группы — топ-5. Блок клиента (тип, заметка) — компактной строкой в
+// шапке виджета (ClientBar), а не радиокнопками на треть экрана.
 
-import { MapPin } from 'lucide-react';
-import { fmtMoney, fmtDate } from '@/features/customers/ui/shared';
+import { useState } from 'react';
+import { ArrowRight, MapPin, HelpCircle } from 'lucide-react';
+import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, computeStats, objectStatus, EMPTY_OBJECT_PROFILE } from '../engine/types';
-import { Section, Stat, RecList, ClientFields, StatusChip, shortGroup } from './parts';
-import { shortAddress } from '../engine/objectClusters';
+import { Section, RecList, StatusDot, shortGroup, fmtD, daysAgoShort } from './parts';
 
-export function OverviewTab({ data, params, onOpenObject }: { data: ClientModuleData; params: Record<string, string>; onOpenObject: (key: string) => void }) {
+function BigStat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: React.ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2.5">
+      <div className="text-[11.5px] text-[var(--color-text-muted)]">{label}</div>
+      <div className="mt-0.5 truncate text-[20px] font-bold leading-tight tabular-nums">{value}</div>
+      {sub && <div className="mt-0.5 truncate text-[12px] text-[var(--color-text-muted)]">{sub}</div>}
+    </div>
+  );
+}
+
+export function OverviewTab({ data, onOpenObject, onOpenDeals }: {
+  data: ClientModuleData;
+  onOpenObject: (key: string) => void;
+  onOpenDeals: (filter: { object?: string }) => void;
+}) {
+  const [allGroups, setAllGroups] = useState(false);
   const stats = computeStats(data.deals);
+  const lastDeal = [...data.deals].filter(d => d.deliveredAt).sort((a, b) => b.deliveredAt!.localeCompare(a.deliveredAt!))[0];
+  const lastObj = lastDeal?.objectKey ? data.objects.find(o => o.key === lastDeal.objectKey)?.label : null;
+  const noObj = data.deals.filter(d => !d.objectKey);
+  const noObjSum = noObj.reduce((s, d) => s + d.amount, 0);
   const groupMax = stats.groups[0]?.sum ?? 0;
+  const groups = allGroups ? stats.groups : stats.groups.slice(0, 5);
+
   const objects = data.objects.map(o => {
     const deals = data.deals.filter(d => d.objectKey === o.key);
     const prof = data.objectProfiles[o.key] ?? EMPTY_OBJECT_PROFILE;
-    const st = objectStatus(deals, { manual: o.manual, doneManual: prof.doneManual }, data.activeDays);
-    const s = computeStats(deals);
-    return { o, prof, st, s };
-  }).sort((a, b) => ({ active: 0, new: 1, done: 2 }[a.st] - { active: 0, new: 1, done: 2 }[b.st]) || (b.s.lastShippedAt ?? '').localeCompare(a.s.lastShippedAt ?? ''));
-  const activeObjects = objects.filter(x => x.st === 'active').length;
+    return { o, st: objectStatus(deals, { manual: o.manual, doneManual: prof.doneManual }, data.activeDays), s: computeStats(deals), ladder: data.recommendations.byObject[o.key] };
+  });
+  const working = objects.filter(x => x.st !== 'done').sort((a, b) => (b.s.lastShippedAt ?? '').localeCompare(a.s.lastShippedAt ?? ''));
+  const doneCount = objects.length - working.length;
+  const openN = stats.open;
 
   return (
-    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_300px]">
-      <div className="flex min-w-0 flex-col gap-3">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          <Stat label="Отгружено / всего сделок" value={<>{stats.shipped} / {stats.total}</>} sub={stats.total - stats.shipped > 0 ? `${stats.total - stats.shipped} в других статусах` : 'все отгружены'} />
-          <Stat label="LTV (сумма отгрузок)" value={fmtMoney(stats.ltv)} sub={stats.firstShippedAt ? `клиент с ${fmtDate(stats.firstShippedAt)}` : undefined} />
-          <Stat label="Средний чек отгрузки" value={stats.avgCheck !== null ? fmtMoney(stats.avgCheck) : '—'} />
-          <Stat label="Цикл повторки" value={stats.cycleDays !== null ? `${stats.cycleDays} дн.` : '—'} sub={stats.cycleDays !== null ? 'среднее между отгрузками' : 'нужно 2+ отгрузки'} />
-          <Stat label="Последняя отгрузка" value={fmtDate(stats.lastShippedAt)} sub={stats.daysSinceLast !== null ? `${stats.daysSinceLast} дн. назад` : undefined} />
-          <Stat label="В работе сейчас" value={stats.open > 0 ? `${stats.open} на ${fmtMoney(stats.openSum)}` : 'нет'} sub={`объектов: ${data.objects.length}, в работе ${activeObjects}`} />
-        </div>
-
-        <Section title="Что предложить клиенту">
-          <RecList recs={data.recommendations.client} empty="Отгрузок ещё не было — предложить по истории нечего." />
-          <div className="mt-1.5 text-[11px] text-[var(--color-text-muted)]">По цепочке стройки (майндкарта), истории переходов по базе и приоритетам «Что предложить». По каждому объекту — во вкладке «Объекты».</div>
-        </Section>
-
-        <Section title={`Товарные группы по отгрузкам · ${stats.groups.length}`}>
-          {stats.groups.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Отгрузок с товарами нет</div> : (
-            <div className="flex flex-col gap-1.5">
-              {stats.groups.map(g => (
-                <div key={g.group} className="text-[12.5px]">
-                  <div className="flex items-baseline gap-2">
-                    <span className="min-w-0 flex-1 truncate" title={g.group}>{g.group}</span>
-                    <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{g.deals} отгр. · посл. {fmtDate(g.lastAt)}</span>
-                    <span className="shrink-0 font-semibold tabular-nums">{fmtMoney(g.sum)}</span>
-                  </div>
-                  <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
-                    <div className="h-full rounded-full bg-[var(--color-accent)]" style={{ width: `${groupMax > 0 ? Math.max(2, (g.sum / groupMax) * 100) : 0}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Section>
+    <div className="flex flex-col gap-3">
+      {/* Три главные цифры: сколько, когда последний раз и что, что в работе. */}
+      <div className="grid gap-2 sm:grid-cols-3">
+        <BigStat label="Отгружено" value={fmtMoney(stats.ltv)} sub={`${stats.shipped} отгрузок${stats.firstShippedAt ? ` · клиент с ${fmtD(stats.firstShippedAt)}` : ''}`} />
+        <BigStat label="Последняя отгрузка" value={stats.lastShippedAt ? daysAgoShort(stats.lastShippedAt) : '—'}
+          sub={lastDeal ? `${shortGroup(lastDeal.topGroup) || '—'}${lastObj ? ` → ${lastObj}` : ''}` : undefined} />
+        <BigStat label="В работе сейчас" value={openN > 0 ? fmtMoney(stats.openSum) : 'нет'}
+          sub={openN > 0 ? `${openN} ${openN === 1 ? 'сделка' : openN < 5 ? 'сделки' : 'сделок'}` : undefined} />
+      </div>
+      <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-0.5 text-[12px] text-[var(--color-text-muted)]">
+        {stats.avgCheck !== null && <span>ср. чек {fmtMoney(stats.avgCheck)}</span>}
+        {stats.cycleDays !== null && <span>· повтор каждые {stats.cycleDays} дн.</span>}
+        <span>· сделок {stats.total}{stats.total - stats.shipped > 0 ? `, не отгружено ${stats.total - stats.shipped}` : ''}</span>
       </div>
 
-      <div className="flex min-w-0 flex-col gap-3">
-        <ClientFields data={data} params={params} />
-        <Section title={`Объекты · ${data.objects.length}`}>
-          {objects.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Адресов по сделкам нет. Объект можно завести во вкладке «Объекты».</div> : (
-            <div className="flex flex-col gap-1">
-              {objects.slice(0, 6).map(({ o, prof, st, s }) => (
-                <button key={o.key} type="button" onClick={() => onOpenObject(o.key)}
-                  className="flex min-h-11 items-start gap-2 rounded-lg px-1.5 py-1.5 text-left hover:bg-[var(--color-bg-hover)]">
-                  <MapPin size={13} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
+      {noObj.length > 0 && (
+        <button type="button" onClick={() => onOpenDeals({ object: '__none' })}
+          className="flex min-h-11 items-center gap-2 rounded-xl border border-[color-mix(in_srgb,var(--color-warning,#e8590c)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warning,#e8590c)_7%,transparent)] px-3 py-2 text-left text-[12.5px]">
+          <MapPin size={15} className="shrink-0 text-[var(--color-warning,#e8590c)]" />
+          <span className="min-w-0 flex-1"><b>{noObj.length} сделок на {fmtMoney(noObjSum)} без объекта</b> — адреса нет или он неточный. Разложить по объектам</span>
+          <ArrowRight size={15} className="shrink-0" />
+        </button>
+      )}
+
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+        <Section title={`Что везём и куда · ${working.length}`} right={doneCount > 0 ? <span className="text-[11.5px] text-[var(--color-text-muted)]">ещё {doneCount} завершено</span> : undefined}>
+          {working.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Объектов в работе нет.</div> : (
+            <div className="flex flex-col divide-y divide-[var(--color-border)]">
+              {working.slice(0, 6).map(({ o, st, s, ladder }) => (
+                <button key={o.key} type="button" onClick={() => onOpenObject(o.key)} className="flex min-h-11 items-start gap-2 rounded-md px-1 py-2 text-left hover:bg-[var(--color-bg-hover)]">
+                  <StatusDot s={st} />
                   <span className="min-w-0 flex-1">
-                    <span className="line-clamp-2 text-[12.5px]" title={prof.idealAddress || o.address}>{prof.idealAddress ? shortAddress(prof.idealAddress) : o.label}</span>
-                    <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
-                      <StatusChip s={st} />
-                      {s.groups[0] && <span>{shortGroup(s.groups[0].group)}{s.groups.length > 1 ? ` +${s.groups.length - 1}` : ''}</span>}
-                      {s.ltv > 0 && <span className="tabular-nums">{fmtMoney(s.ltv)}</span>}
+                    <span className="flex items-baseline gap-2">
+                      <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold">{o.label}</span>
+                      <span className="shrink-0 text-[12.5px] font-semibold tabular-nums">{fmtMoney(s.ltv)}</span>
                     </span>
+                    <span className="block truncate text-[12px] text-[var(--color-text-muted)]">
+                      {ladder?.current ? shortGroup(ladder.current.group) : (s.groups[0] ? shortGroup(s.groups[0].group) : 'отгрузок нет')}
+                      {s.groups.length > 1 ? ` +${s.groups.length - 1}` : ''}{s.lastShippedAt ? ` · ${fmtD(s.lastShippedAt)}` : ''}
+                    </span>
+                    {ladder?.next[0] && (
+                      <span className="mt-0.5 block truncate text-[12px] text-[var(--color-warning,#e8590c)]">→ предложить: {shortGroup(ladder.next[0].group)}</span>
+                    )}
                   </span>
                 </button>
               ))}
-              {objects.length > 6 && <div className="px-1.5 text-[11.5px] text-[var(--color-text-muted)]">…и ещё {objects.length - 6} — во вкладке «Объекты»</div>}
+              {working.length > 6 && <button type="button" onClick={() => onOpenObject('')} className="min-h-10 text-left text-[12px] text-[var(--color-accent)]">ещё {working.length - 6} — во вкладке «Объекты»</button>}
             </div>
           )}
         </Section>
+
+        <Section title="Предложить клиенту" right={
+          <span title="По цепочке стройки (майндкарта), истории переходов по базе и приоритетам «Что предложить». Подрядчикам — только общие этапы и частые переходы."
+            className="cursor-help text-[var(--color-text-muted)]"><HelpCircle size={14} /></span>
+        }>
+          <RecList recs={data.recommendations.client} empty="Предложить по истории нечего." />
+        </Section>
       </div>
+
+      <Section title={`Товарные группы по отгрузкам · ${stats.groups.length}`}>
+        {stats.groups.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Отгрузок с товарами нет</div> : (
+          <div className="flex flex-col gap-1.5">
+            {groups.map(g => (
+              <div key={g.group} className="text-[12.5px]">
+                <div className="flex items-baseline gap-2">
+                  <span className="min-w-0 flex-1 truncate" title={g.group}>{g.group}</span>
+                  <span className="shrink-0 text-[11.5px] text-[var(--color-text-muted)]">{g.deals} отгр. · {fmtD(g.lastAt)}</span>
+                  <span className="w-[76px] shrink-0 text-right font-semibold tabular-nums">{fmtMoney(g.sum)}</span>
+                </div>
+                <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
+                  <div className="h-full rounded-full bg-[var(--color-accent)]" style={{ width: `${groupMax > 0 ? Math.max(2, (g.sum / groupMax) * 100) : 0}%` }} />
+                </div>
+              </div>
+            ))}
+            {stats.groups.length > 5 && (
+              <button type="button" onClick={() => setAllGroups(v => !v)} className="mt-0.5 min-h-9 self-start text-[12px] text-[var(--color-accent)]">
+                {allGroups ? 'свернуть' : `ещё ${stats.groups.length - 5}`}
+              </button>
+            )}
+          </div>
+        )}
+      </Section>
     </div>
   );
 }

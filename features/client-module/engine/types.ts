@@ -152,6 +152,8 @@ export interface ClientModuleData {
   v2Available: boolean;
   /** N: сколько дней после последней отгрузки объект считается «В работе». */
   activeDays: number;
+  /** Профиль для рекомендаций: частный стройщик/прораб или подрядчик (ЖБИ/нерудка/бетон). */
+  profileKind: 'builder' | 'contractor';
   recommendations: { client: Recommendation[]; byObject: Record<string, StageLadder> };
 }
 

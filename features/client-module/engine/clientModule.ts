@@ -9,8 +9,8 @@ import {
   requestObjectKey, dealStage,
 } from './types';
 import { BitrixWriteError, readClientFromBitrix, writeClientToBitrix } from './bitrix';
-import { recommendGroups, stageLadder } from './recommend';
-import { clusterAddresses, shortAddress } from './objectClusters';
+import { recommendGroups, stageLadder, profileKind } from './recommend';
+import { clusterAddresses, settlementLabel, placeDetail } from './objectClusters';
 import { validLatLon } from '@/lib/geo/parse';
 
 // Модуль «Карточка клиента» (ТЗ владельца 13.10). Один виджет для «Ещё → Модули»
@@ -251,7 +251,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
       };
       // Объект, заведённый менеджером вручную (ключ 'm…').
       if (!objects.has(r.object_key) && r.object_key.startsWith('m')) {
-        objects.set(r.object_key, { key: r.object_key, address: r.address ?? 'Новый объект', label: shortAddress(r.address ?? 'Новый объект'), lat, lon, requests: [], manual: true, source: 'manual', variants: 1 });
+        objects.set(r.object_key, { key: r.object_key, address: r.address ?? 'Новый объект', label: settlementLabel(r.address ?? 'Новый объект'), lat, lon, requests: [], manual: true, source: 'manual', variants: 1 });
       }
     }
 
@@ -296,6 +296,18 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     return { ...base, stage: dealStage(base) };
   });
 
+  // ── Подписи объектов: населённый пункт; два объекта в одном пункте — с улицей ──
+  for (const o of objects.values()) {
+    const ideal = objectProfiles[o.key]?.idealAddress;
+    if (ideal) { o.address = ideal; o.label = settlementLabel(ideal); }
+  }
+  const byLabel = new Map<string, ModuleObject[]>();
+  for (const o of objects.values()) byLabel.set(o.label, [...(byLabel.get(o.label) ?? []), o]);
+  for (const [, list] of byLabel) {
+    if (list.length < 2) continue;
+    for (const o of list) { const d = placeDetail(o.address); if (d && d !== o.label) o.label = `${o.label} · ${d}`; }
+  }
+
   // ── Рекомендации: клиент целиком и каждый объект ─────────────────────────
   const [matrix, priorities, settings] = await Promise.all([
     withTimeout(fetchCrossSellMatrix(), 8000, null),
@@ -305,9 +317,10 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   // Тип дома клиента для цепочки — если на всех объектах указан один и тот же.
   const houses = new Set(Object.values(objectProfiles).map(p => p.houseType).filter(Boolean));
   const clientHouse = houses.size === 1 ? [...houses][0] as HouseType : null;
+  const kind = profileKind(profile.clientType, deals);
   const byObject: Record<string, StageLadder> = {};
   for (const o of objects.values()) {
-    byObject[o.key] = stageLadder(deals.filter(d => d.objectKey === o.key), objectProfiles[o.key]?.houseType ?? null, matrix, priorities);
+    byObject[o.key] = stageLadder(deals.filter(d => d.objectKey === o.key), objectProfiles[o.key]?.houseType ?? null, matrix, priorities, kind);
   }
 
   const names = await withTimeout(resolveClientNames([ref]), 4000, new Map<string, string | null>());
@@ -325,7 +338,8 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     profilesAvailable,
     v2Available: v2Available && settings.available,
     activeDays: settings.days,
-    recommendations: { client: recommendGroups(deals, clientHouse, matrix, priorities), byObject },
+    profileKind: kind,
+    recommendations: { client: recommendGroups(deals, clientHouse, matrix, priorities, kind), byObject },
   };
 }
 

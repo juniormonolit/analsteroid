@@ -71,6 +71,48 @@ export function shortAddress(address: string): string {
   return (parts.length ? parts.slice(0, 3) : [address]).join(', ');
 }
 
+// Префиксы населённых пунктов (DaData/1С пишут «г Талдом», «пгт Вербилки», «д Сярьги»).
+// После префикса обязательно буква/кавычка: «д 4» — номер дома, а не деревня.
+// Границы слов явные — \b в JS не работает с кириллицей.
+const SETTLEMENT_PREFIX = /^(г|город|пгт|рп|п|пос|поселок|посёлок|д|дер|деревня|с|село|ст-ца|станица|х|хутор|м-в|массив|кп|снт|днп|тсн|сдт|дачный поселок)\.?\s+(?=[«"А-ЯЁа-яёA-Za-z])/i;
+const KEEP_PREFIX = /^(снт|днп|тсн|сдт|кп)(?:\s|$)/i;
+const REGION_FIRST = /(област|(?:^|\s)обл(?:\.|\s|$)|(?:^|\s)край(?:\s|$)|республик|(?:^|\s)респ(?:\.|\s|$)|^г\.?\s*москва$|^москва$|^г\.?\s*санкт-петербург$|^санкт-петербург$)/i;
+const STREET = /(улица|(?:^|\s)ул\.?\s|проспект|пр-кт|проезд|пр-д|шоссе|переулок|пер\.|дорога|бульвар|набережная|микрорайон|мкр)/i;
+
+/** Подпись объекта — населённый пункт (правка владельца 14.10: «Поварово»,
+ *  «Богослово»). Адреса бывают в двух порядках: «мелкое → крупное» (заявки 1С,
+ *  OSM: «…, микрорайон Поваровка, Поварово, городской округ…») и «крупное →
+ *  мелкое» (DaData: «Московская обл, г Талдом, пгт Вербилки, ул Забырина, д 4»). */
+export function settlementLabel(address: string): string {
+  const raw = address.split(',').map(p => p.trim()).filter(Boolean);
+  const bigFirst = raw.length > 1 && REGION_FIRST.test(raw[0]);
+  const withPrefix = raw.filter(p => SETTLEMENT_PREFIX.test(p));
+  const clean = (p: string) => (KEEP_PREFIX.test(p) ? p : p.replace(SETTLEMENT_PREFIX, '')).trim();
+  if (withPrefix.length) {
+    // Самый «мелкий» пункт: в порядке «крупное → мелкое» — последний, иначе первый.
+    return clean(bigFirst ? withPrefix[withPrefix.length - 1] : withPrefix[0]);
+  }
+  const parts = addressParts(address);
+  if (parts.length === 0) return address;
+  // Без префиксов (OSM-формат «мелкое → крупное»): пункт — последняя значимая часть;
+  // если это Москва/Петербург и перед ним есть район/посёлок — «Обухово (СПб)».
+  const last = parts[parts.length - 1];
+  if (parts.length >= 2 && BIG_CITY.test(norm(last))) {
+    const prev = parts[parts.length - 2];
+    if (!/\d/.test(prev) && !/(улица|проспект|проезд|шоссе|дорога|переулок)/i.test(prev)) return `${prev} (${/петербург/i.test(last) ? 'СПб' : 'Москва'})`;
+    return last;
+  }
+  return SETTLEMENT_PREFIX.test(last) ? clean(last) : last;
+}
+
+/** Уточнение к подписи, если у клиента два объекта в одном пункте: улица/ориентир. */
+export function placeDetail(address: string): string {
+  const raw = address.split(',').map(p => p.trim()).filter(Boolean);
+  const street = raw.find(p => STREET.test(p));
+  const pick = street ?? addressParts(address).find(p => !/^\d+[а-яa-z]?$/i.test(p) && !REGION_FIRST.test(p)) ?? '';
+  return pick.replace(/(^|\s)(улица|ул\.?)(\s|$)/i, ' ').trim();
+}
+
 const inRussia = (lat: number, lon: number) => lat >= 41 && lat <= 82 && (lon >= 19 || lon <= -168);
 
 /** Адрес годится в объект? Иностранный / «только город» — нет. */
@@ -141,6 +183,11 @@ export function clusterAddresses(raw: RawAddress[]): AddressCluster[] {
     const lat = withCoords.length ? withCoords.reduce((s, m) => s + m.lat!, 0) / withCoords.length : null;
     const lon = withCoords.length ? withCoords.reduce((s, m) => s + m.lon!, 0) / withCoords.length : null;
     const address = main.address ?? (lat !== null ? `${lat.toFixed(6)}, ${lon!.toFixed(6)}` : '');
-    return { key: main.key, members: ms.map(m => m.key), address, label: shortAddress(address), lat, lon };
+    // Подпись — пункт, который чаще всего встречается среди написаний адреса
+    // (у «Волги» один вариант с «Ногинском» не должен перебить «Богослово»).
+    const votes = new Map<string, number>();
+    for (const m of ms) if (m.address) { const l = settlementLabel(m.address); votes.set(l, (votes.get(l) ?? 0) + m.weight); }
+    const label = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? settlementLabel(address);
+    return { key: main.key, members: ms.map(m => m.key), address, label, lat, lon };
   });
 }
