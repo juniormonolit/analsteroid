@@ -117,15 +117,39 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
         </div>
         <span className="ml-auto text-[12px] text-[var(--color-text-muted)]">{rows.length} на <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(sum)}</b></span>
       </div>
+      {/* Привязка к объекту — здесь же, над списком (правка владельца 14.10): во
+          вкладке Битрикса фрейм растягивается под весь список, и панель «внизу»
+          оказывалась под сотней сделок. Отметил → выбрал объект → «Привязать». */}
       {data.v2Available && data.objects.length > 0 && rows.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 text-[12px] text-[var(--color-text-muted)]">
+        <div className={`flex flex-wrap items-center gap-2 rounded-xl px-2 py-1.5 text-[12px] ${picked.size > 0 ? 'border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_6%,transparent)]' : 'text-[var(--color-text-muted)]'}`}>
           <label className="inline-flex min-h-9 cursor-pointer items-center gap-1.5">
             <input type="checkbox" className="h-4 w-4 accent-[var(--color-accent)]"
               checked={rows.every(d => picked.has(d.dealId))}
               onChange={e => setPicked(e.target.checked ? new Set([...picked, ...rows.map(d => d.dealId)]) : new Set([...picked].filter(id => !rows.some(d => d.dealId === id))))} />
-            выбрать все по фильтру
+            {picked.size > 0 ? <b className="text-[13px] text-[var(--color-text)]">Выбрано {picked.size}</b> : 'выбрать все по фильтру'}
           </label>
-          <span>· отметьте сделки галочками, чтобы привязать их к объекту</span>
+          {picked.size === 0 ? (
+            <span>· отметьте сделки — объект выбирается здесь же</span>
+          ) : (
+            <>
+              <span className="text-[var(--color-text-muted)]">→ привязать к</span>
+              <select className={`${selectCls} min-w-0 flex-1 sm:max-w-[240px]`} value={target} onChange={e => setTarget(e.target.value)} aria-label="Объект для выбранных сделок">
+                <option value="">выберите объект…</option>
+                {data.objects.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                <option value="__auto">вернуть автоматически (по адресу)</option>
+              </select>
+              <button type="button" disabled={!target || bulk.saving}
+                onClick={async () => {
+                  const r = await bulk.save({ deals: { dealIds: [...picked], objectKey: target === '__auto' ? '' : target } });
+                  if (r) { setPicked(new Set()); setTarget(''); }
+                }}
+                className="min-h-10 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-semibold text-white disabled:opacity-40">
+                {bulk.saving ? 'Привязываем…' : 'Привязать'}
+              </button>
+              <button type="button" onClick={() => { setPicked(new Set()); setTarget(''); }} className="min-h-10 px-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">снять выбор</button>
+            </>
+          )}
+          {bulk.error && <span className="basis-full" style={{ color: 'var(--color-negative, #e03131)' }}>{bulk.error}</span>}
         </div>
       )}
 
@@ -223,26 +247,6 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
         </div>
       )}
 
-      {picked.size > 0 && (
-        <div className="sticky bottom-2 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-3 py-2 shadow-lg">
-          <span className="text-[13px] font-semibold">Выбрано {picked.size}</span>
-          <select className={`${selectCls} min-w-0 flex-1 sm:max-w-[260px]`} value={target} onChange={e => setTarget(e.target.value)} aria-label="Объект для выбранных сделок">
-            <option value="">Объект…</option>
-            {data.objects.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-            <option value="__auto">Вернуть автоматически (по адресу)</option>
-          </select>
-          <button type="button" disabled={!target || bulk.saving}
-            onClick={async () => {
-              const r = await bulk.save({ deals: { dealIds: [...picked], objectKey: target === '__auto' ? '' : target } });
-              if (r) { setPicked(new Set()); setTarget(''); }
-            }}
-            className="min-h-10 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-semibold text-white disabled:opacity-40">
-            {bulk.saving ? 'Привязываем…' : 'Привязать'}
-          </button>
-          <button type="button" onClick={() => setPicked(new Set())} className="min-h-10 px-2 text-[12px] text-[var(--color-text-muted)]">снять выбор</button>
-          {bulk.error && <span className="basis-full text-[12px]" style={{ color: 'var(--color-negative, #e03131)' }}>{bulk.error}</span>}
-        </div>
-      )}
     </div>
   );
 }
