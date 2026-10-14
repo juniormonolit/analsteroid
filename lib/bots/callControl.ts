@@ -155,7 +155,19 @@ async function resumeAfterDowntime(
      WHERE status = 'open' AND last_missed_at < $1`,
     [resumeFrom]
   );
-  await db.query(`UPDATE call_control_settings SET va_sync_cursor = $1, updated_at = now() WHERE id = 1`, [resumeFrom]);
+  // Курсор событий — туда же: иначе накопленные за простой события вебхука (выкат
+  // 14.10: ~111 тыс.) разбираются по 2000 в минуту, и свежие пропущенные ждут в
+  // хвосте очереди около часа. Старые события ничего не дают: кейсов до окна нет,
+  // а перезвоны всё равно ловит сверка по 48 ч (шаг 1б).
+  await db.query(
+    `UPDATE call_control_settings
+     SET va_sync_cursor = $1,
+         last_processed_event_id = GREATEST(last_processed_event_id,
+           COALESCE((SELECT max(id) FROM call_events WHERE received_at < $1), 0)),
+         updated_at = now()
+     WHERE id = 1`,
+    [resumeFrom]
+  );
   console.warn(
     `[callControl] возврат после простоя: курсор ${cursor.toISOString()} → ${resumeFrom.toISOString()}, ` +
       `закрыто старых кейсов: ${closed.rowCount ?? 0} (история не эскалируется)`
@@ -258,6 +270,11 @@ export async function runCallControlCycle(): Promise<string> {
     console.warn('[callControl] синк va.calls не удался:', e instanceof Error ? e.message : e);
   }
   await warnIfVaStale(settings.mirrorBitrixUserId);
+  // Синк мог перемотать курсор событий (возврат после простоя) — перечитываем.
+  {
+    const r = await db.query(`SELECT last_processed_event_id FROM call_control_settings WHERE id = 1`);
+    settings.lastProcessedEventId = Number(r.rows[0]?.last_processed_event_id ?? settings.lastProcessedEventId);
+  }
 
   // --- 1. Обработка новых событий (по курсору, в порядке id). ГИБРИД (инцидент
   // 14.07, ложное уведомление успевшему менеджеру): ПРОПУЩЕННЫЕ — только из синка
