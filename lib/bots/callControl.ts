@@ -122,10 +122,45 @@ const VA_SYNC_OVERLAP_MS = 60_000;
 const VA_STALE_MINUTES = 60;
 const WORK_HOURS_MSK: [number, number] = [9, 21];
 let lastStaleWarnAt = 0; // in-memory антиспам (процесс на инстанс один)
+// Возврат после простоя: разрыв курсора с va.calls больше суток → не догонять историю.
+const VA_RESUME_GAP_MS = 24 * 60 * 60 * 1000;
+const VA_RESUME_WINDOW_MS = 30 * 60 * 1000;
 
 function mskHour(): number {
   const msk = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
   return parseInt(msk.slice(11, 13), 10);
+}
+
+/**
+ * Возврат после простоя бота (инцидент YC 08.10: прод ушёл на копию system от 04.08,
+ * фоновые джобы выключены неделю). Если курсор отстал от va.calls больше чем на
+ * VA_RESUME_GAP_MS — звонки шли, а бот лежал: прогнать эту историю значит разослать
+ * лавину «срочно перезвони» по давно отработанным звонкам. Поэтому курсор → последние
+ * VA_RESUME_WINDOW_MS (свежие пропущенные ещё актуальны), открытые кейсы старше окна
+ * закрываются без уведомлений. Тихие выходные сюда не попадают: курсор старый, но и
+ * в va.calls нового нет — сравниваем с max(created_at) va, а не с часами.
+ */
+async function resumeAfterDowntime(
+  db: ReturnType<typeof systemDb>,
+  an: ReturnType<typeof analyticsDb>,
+  cursor: Date
+): Promise<Date> {
+  const res = await an.query(`SELECT max(created_at) AS last FROM va.calls`);
+  const last: Date | null = res.rows[0]?.last ?? null;
+  if (!last || last.getTime() - cursor.getTime() <= VA_RESUME_GAP_MS) return cursor;
+
+  const resumeFrom = new Date(Date.now() - VA_RESUME_WINDOW_MS);
+  const closed = await db.query(
+    `UPDATE call_control_cases SET status = 'resolved', resolved_at = now(), updated_at = now()
+     WHERE status = 'open' AND last_missed_at < $1`,
+    [resumeFrom]
+  );
+  await db.query(`UPDATE call_control_settings SET va_sync_cursor = $1, updated_at = now() WHERE id = 1`, [resumeFrom]);
+  console.warn(
+    `[callControl] возврат после простоя: курсор ${cursor.toISOString()} → ${resumeFrom.toISOString()}, ` +
+      `закрыто старых кейсов: ${closed.rowCount ?? 0} (история не эскалируется)`
+  );
+  return resumeFrom;
 }
 
 /** Перекладывает новые строки va.calls в call_events. Возвращает max(created_at) va. */
@@ -133,7 +168,8 @@ async function syncFromVaCalls(db: ReturnType<typeof systemDb>): Promise<Date | 
   const an = analyticsDb();
   const cur = await db.query(`SELECT va_sync_cursor FROM call_control_settings WHERE id = 1`);
   // Первый запуск: берём с текущего момента (историю не превращаем в эскалации).
-  const cursor: Date = cur.rows[0]?.va_sync_cursor ?? new Date();
+  let cursor: Date = cur.rows[0]?.va_sync_cursor ?? new Date();
+  if (Date.now() - cursor.getTime() > VA_RESUME_GAP_MS) cursor = await resumeAfterDowntime(db, an, cursor);
 
   const rows = await an.query(
     `SELECT bitrix_call_id, deal_id, manager_id, direction::text AS direction,

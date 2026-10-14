@@ -33,8 +33,13 @@ export async function register() {
   // Отчёт «МОСКВА» владельцу (получатель — env, как было).
   // Хотфикс (инцидент YC 08.10): стенд на восстановленной копии боевой system —
   // рассылки и пишущие джобы глушатся целиком, остаётся только пересчёт plan:summary.
+  // BACKGROUND_JOBS_ALLOW — точечные исключения из рубильника (через запятую). После
+  // ухода с YC (13.10) так включён «Контроль звонков»: он живёт на sa (va.calls) +
+  // локальной system; остальные пишущие джобы ждут решения по данным копии от 04.08.
   if (process.env.DISABLE_BACKGROUND_JOBS === '1') {
-    console.log('[jobs] DISABLE_BACKGROUND_JOBS=1 — рассылки и фоновые джобы не запущены');
+    const allow = new Set((process.env.BACKGROUND_JOBS_ALLOW ?? '').split(',').map(s => s.trim()).filter(Boolean));
+    if (allow.has('callControl')) scheduleCallControl();
+    console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
 
