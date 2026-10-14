@@ -15,7 +15,7 @@ import {
   computeStats, objectStatus,
 } from '../engine/types';
 import { Section, Chip, StatusChip, StatusDot, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup, fmtD, dealTitle, useDismiss } from './parts';
-import { STAGE_TONE } from './parts';
+import { TzMetrics, Purchases } from './TzBlocks';
 import { shortAddress } from '../engine/objectClusters';
 
 const DAY_MS = 86_400_000;
@@ -178,7 +178,6 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
   const needsCheck = !object.manual && !prof.addressConfirmed && s.shipped >= 2;
   const { save, saving, error } = useSave(params);
   const dis = useDismiss(data, params, object.key);
-  const chain = [...deals].sort((a, b) => (a.deliveredAt ?? a.createdAt ?? '').localeCompare(b.deliveredAt ?? b.createdAt ?? ''));
 
   return (
     <section id={`obj-${object.key}`} className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
@@ -214,29 +213,18 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
               </div>
             </div>
           )}
+          {/* Те же показатели, что у клиента, — по этому объекту (ТЗ). */}
+          <TzMetrics s={s} />
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="min-w-0">
               <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Стадии и что предложить</div>
               <Ladder ladder={data.recommendations.byObject[object.key]} onDismiss={dis.onDismiss} onRestore={dis.onRestore} hidden={data.dismissed.byObject[object.key]} />
             </div>
             <div className="min-w-0">
-              <div className="mb-1.5 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-                <span className="flex-1">Сделки по объекту · {chain.length}</span>
-                {onOpenDeals && chain.length > 0 && <button type="button" onClick={() => onOpenDeals(object.key)} className="min-h-8 normal-case tracking-normal text-[12px] font-normal text-[var(--color-accent)]">все в «Сделках» →</button>}
-              </div>
-              {chain.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Сделок по объекту нет</div> : (
-                <div className="flex flex-col divide-y divide-[var(--color-border)] text-[12.5px]">
-                  {[...chain].reverse().slice(0, 8).map(d => (
-                    <div key={d.dealId} className="flex items-center gap-2 py-1.5">
-                      <span className="h-2 w-2 shrink-0 rounded-full" title={d.stage} style={{ background: STAGE_TONE[d.stage] === 'ok' ? 'var(--color-positive,#2f9e44)' : STAGE_TONE[d.stage] === 'neg' ? 'var(--color-negative,#e03131)' : STAGE_TONE[d.stage] === 'warn' ? 'var(--color-warning,#e8590c)' : 'var(--color-accent)' }} />
-                      <span className="w-[62px] shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtD(d.deliveredAt ?? d.createdAt)}</span>
-                      <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="min-w-0 flex-1 truncate hover:underline" title={d.groups.join(', ')}>{d.topGroup ? shortGroup(d.topGroup) : dealTitle(d)}</a>
-                      <span className="shrink-0 font-semibold tabular-nums">{d.amount > 0 ? fmtMoney(d.amount) : '—'}</span>
-                    </div>
-                  ))}
-                  {chain.length > 8 && <div className="py-1.5 text-[12px] text-[var(--color-text-muted)]">…ещё {chain.length - 8}</div>}
-                </div>
-              )}
+              {/* Список сделок по объекту «как на скрине» ТЗ: дата, группы, ↓ интервал, сумма, стрелка → товары. */}
+              <Purchases deals={deals} title="Покупки по объекту" />
+              {s.open > 0 && <div className="mt-1 text-[12px] text-[var(--color-text-muted)]">ещё в работе: {s.open} на {fmtMoney(s.openSum)}</div>}
+              {onOpenDeals && deals.length > 0 && <button type="button" onClick={() => onOpenDeals(object.key)} className="mt-1 min-h-9 text-[12px] text-[var(--color-accent)]">все сделки объекта (с отказами) в «Сделках» →</button>}
             </div>
           </div>
 

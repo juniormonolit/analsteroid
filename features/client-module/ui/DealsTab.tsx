@@ -11,6 +11,7 @@ import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
 import { type ClientModuleData, type ModuleDeal, type DealStage, DEAL_STAGE_LABEL, dealSortDate } from '../engine/types';
 import { StageChip, selectCls, useSave, shortGroup, fmtD, dealTitle } from './parts';
 import { shortAddress } from '../engine/objectClusters';
+import { Purchases } from './TzBlocks';
 
 const STAGES: DealStage[] = ['shipped', 'sold', 'active', 'lost'];
 
@@ -73,6 +74,9 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
   const [group, setGroup] = useState('');
   const [stages, setStages] = useState<Set<DealStage>>(new Set());
   const [open, setOpen] = useState<Set<number>>(new Set());
+  // Вид: таблица всех сделок с фильтрами (правка владельца 13.10) или «Покупки» —
+  // список отгрузок ровно как на скрине ТЗ (дата, группы, ↓ интервал, сумма, товары).
+  const [mode, setMode] = useState<'table' | 'purchases'>('table');
   // Массовая привязка к объекту (аудит 14.10: «78 сделок без объекта — разложить»).
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [target, setTarget] = useState('');
@@ -93,6 +97,12 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
 
   return (
     <div className="flex flex-col gap-2">
+      <div className="flex w-fit rounded-lg border border-[var(--color-border)] p-0.5 text-[12.5px]">
+        {([['table', 'Все сделки'], ['purchases', 'Покупки (отгрузки)']] as const).map(([v, l]) => (
+          <button key={v} type="button" onClick={() => setMode(v)} aria-pressed={mode === v}
+            className={`min-h-9 rounded-md px-3 ${mode === v ? 'bg-[var(--color-bg-hover)] font-semibold' : 'text-[var(--color-text-muted)]'}`}>{l}</button>
+        ))}
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <select className={`${selectCls} w-full sm:w-auto sm:max-w-[220px]`} value={obj} onChange={e => setObj(e.target.value)} aria-label="Объект">
           <option value="">Все объекты</option>
@@ -103,7 +113,7 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
           <option value="">Все товарные группы</option>
           {groups.map(g => <option key={g} value={g}>{g}</option>)}
         </select>
-        <div className="flex flex-wrap gap-1">
+        {mode === 'table' && <div className="flex flex-wrap gap-1">
           {STAGES.map(st => (
             <button key={st} type="button" onClick={() => setStages(toggle(stages, st))} aria-pressed={stages.has(st)} className={chip(stages.has(st))}>
               {DEAL_STAGE_LABEL[st]} <span className="tabular-nums opacity-70">{stageCount(st)}</span>
@@ -114,12 +124,19 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
               Без объекта <span className="tabular-nums opacity-70">{noObj}</span>
             </button>
           )}
-        </div>
-        <span className="ml-auto text-[12px] text-[var(--color-text-muted)]">{rows.length} на <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(sum)}</b></span>
+        </div>}
+        {mode === 'table' && <span className="ml-auto text-[12px] text-[var(--color-text-muted)]">{rows.length} на <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(sum)}</b></span>}
       </div>
       {/* Привязка к объекту — здесь же, над списком (правка владельца 14.10): во
           вкладке Битрикса фрейм растягивается под весь список, и панель «внизу»
           оказывалась под сотней сделок. Отметил → выбрал объект → «Привязать». */}
+      {mode === 'purchases' && (
+        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2.5">
+          <Purchases deals={data.deals.filter(d => (!obj || (obj === '__none' ? !d.objectKey : d.objectKey === obj)) && (!group || d.groups.includes(group)))}
+            title={obj ? (obj === '__none' ? 'Покупки без объекта' : `Покупки · ${objectLabel(data, obj)}`) : 'Покупки клиента'} />
+        </div>
+      )}
+      {mode === 'table' && <>
       {data.v2Available && data.objects.length > 0 && rows.length > 0 && (
         <div className={`flex flex-wrap items-center gap-2 rounded-xl px-2 py-1.5 text-[12px] ${picked.size > 0 ? 'border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_6%,transparent)]' : 'text-[var(--color-text-muted)]'}`}>
           <label className="inline-flex min-h-9 cursor-pointer items-center gap-1.5">
@@ -247,6 +264,7 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
         </div>
       )}
 
+      </>}
     </div>
   );
 }

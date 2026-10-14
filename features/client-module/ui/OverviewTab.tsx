@@ -9,17 +9,8 @@ import { useState } from 'react';
 import { ArrowRight, MapPin, HelpCircle } from 'lucide-react';
 import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, computeStats, objectStatus, EMPTY_OBJECT_PROFILE } from '../engine/types';
-import { Section, RecList, StatusDot, shortGroup, fmtD, daysAgoShort, useDismiss } from './parts';
-
-function BigStat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: React.ReactNode }) {
-  return (
-    <div className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2.5">
-      <div className="text-[11.5px] text-[var(--color-text-muted)]">{label}</div>
-      <div className="mt-0.5 truncate text-[20px] font-bold leading-tight tabular-nums">{value}</div>
-      {sub && <div className="mt-0.5 truncate text-[12px] text-[var(--color-text-muted)]">{sub}</div>}
-    </div>
-  );
-}
+import { Section, RecList, StatusDot, shortGroup, fmtD, useDismiss } from './parts';
+import { TzMetrics } from './TzBlocks';
 
 export function OverviewTab({ data, params, onOpenObject, onOpenDeals }: {
   data: ClientModuleData;
@@ -48,18 +39,12 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals }: {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Три главные цифры: сколько, когда последний раз и что, что в работе. */}
-      <div className="grid gap-2 sm:grid-cols-3">
-        <BigStat label="Отгружено" value={fmtMoney(stats.ltv)} sub={`${stats.shipped} отгрузок${stats.firstShippedAt ? ` · клиент с ${fmtD(stats.firstShippedAt)}` : ''}`} />
-        <BigStat label="Последняя отгрузка" value={stats.lastShippedAt ? daysAgoShort(stats.lastShippedAt) : '—'}
-          sub={lastDeal ? `${shortGroup(lastDeal.topGroup) || '—'}${lastObj ? ` → ${lastObj}` : ''}` : undefined} />
-        <BigStat label="В работе сейчас" value={openN > 0 ? fmtMoney(stats.openSum) : 'нет'}
-          sub={openN > 0 ? `${openN} ${openN === 1 ? 'сделка' : openN < 5 ? 'сделки' : 'сделок'}` : undefined} />
-      </div>
+      {/* Показатели а–ж ровно по ТЗ (аудит ТЗ↔реальность 14.10: при редизайне
+          пропали «8 / 10», LTV, дата последней отгрузки и число объектов). */}
+      <TzMetrics s={stats} objects={{ total: data.objects.length, active: working.filter(x => x.st === 'active').length }} />
       <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-0.5 text-[12px] text-[var(--color-text-muted)]">
-        {stats.avgCheck !== null && <span>ср. чек {fmtMoney(stats.avgCheck)}</span>}
-        {stats.cycleDays !== null && <span>· повтор каждые {stats.cycleDays} дн.</span>}
-        <span>· сделок {stats.total}{stats.total - stats.shipped > 0 ? `, не отгружено ${stats.total - stats.shipped}` : ''}</span>
+        {openN > 0 ? <span>Сейчас в работе: <b className="text-[var(--color-text)]">{openN} {openN === 1 ? 'сделка' : openN < 5 ? 'сделки' : 'сделок'} на {fmtMoney(stats.openSum)}</b></span> : <span>Активных сделок нет</span>}
+        {lastDeal && <span>· последняя отгрузка: {shortGroup(lastDeal.topGroup) || '—'}{lastObj ? ` → ${lastObj}` : ''}</span>}
       </div>
 
       {noObj.length > 0 && (
