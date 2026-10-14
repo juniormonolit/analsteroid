@@ -6,6 +6,7 @@ import { MapPin } from 'lucide-react';
 import { fmtMoney, fmtDate } from '@/features/customers/ui/shared';
 import { type ClientModuleData, computeStats, objectStatus, EMPTY_OBJECT_PROFILE } from '../engine/types';
 import { Section, Stat, RecList, ClientFields, StatusChip, shortGroup } from './parts';
+import { shortAddress } from '../engine/objectClusters';
 
 export function OverviewTab({ data, params, onOpenObject }: { data: ClientModuleData; params: Record<string, string>; onOpenObject: (key: string) => void }) {
   const stats = computeStats(data.deals);
@@ -66,7 +67,7 @@ export function OverviewTab({ data, params, onOpenObject }: { data: ClientModule
                   className="flex min-h-11 items-start gap-2 rounded-lg px-1.5 py-1.5 text-left hover:bg-[var(--color-bg-hover)]">
                   <MapPin size={13} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
                   <span className="min-w-0 flex-1">
-                    <span className="line-clamp-2 text-[12.5px]">{prof.idealAddress || o.address}</span>
+                    <span className="line-clamp-2 text-[12.5px]" title={prof.idealAddress || o.address}>{prof.idealAddress ? shortAddress(prof.idealAddress) : o.label}</span>
                     <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
                       <StatusChip s={st} />
                       {s.groups[0] && <span>{shortGroup(s.groups[0].group)}{s.groups.length > 1 ? ` +${s.groups.length - 1}` : ''}</span>}

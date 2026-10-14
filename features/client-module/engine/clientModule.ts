@@ -10,6 +10,7 @@ import {
 } from './types';
 import { BitrixWriteError, readClientFromBitrix, writeClientToBitrix } from './bitrix';
 import { recommendGroups, stageLadder } from './recommend';
+import { clusterAddresses, shortAddress } from './objectClusters';
 import { validLatLon } from '@/lib/geo/parse';
 
 // Модуль «Карточка клиента» (ТЗ владельца 13.10). Один виджет для «Ещё → Модули»
@@ -117,10 +118,28 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   );
   const dealIds = dealsRes.rows.map(r => Number(r.deal_id));
 
-  // ── Объекты: 1) заявки 1С ───────────────────────────────────────────────
-  const objects = new Map<string, ModuleObject>();
-  const dealAuto = new Map<number, string>();   // сделка → объект по адресу
+  // ── Объекты: адреса из заявок 1С и сделок Битрикса → склейка ─────────────
+  // Сначала собираем «сырые» адреса (ключ requestObjectKey — по нему сохранены
+  // ручные поля), потом склеиваем похожие в один объект (objectClusters.ts:
+  // координаты ≤ 500 м или похожий текст в том же населённом пункте; адрес
+  // «только город» и иностранный — не объект).
+  type Raw = { key: string; address: string | null; lat: number | null; lon: number | null; source: '1c' | 'bitrix'; requests: { number: string; date: string | null }[]; deals: Set<number> };
+  const raws = new Map<string, Raw>();
+  const dealRaw = new Map<number, string>();          // сделка → сырой адрес (свежая заявка побеждает)
+  const dealAddrText = new Map<number, string>();     // сделка → текст адреса (для «адрес неточный»)
   let addressesAvailable = false;
+  const addRaw = (dealId: number, address: string | null, lat: number | null, lon: number | null, source: '1c' | 'bitrix', req?: { number: string; date: string | null }) => {
+    if (address) dealAddrText.set(dealId, address);
+    const key = requestObjectKey(address, lat, lon);
+    if (!key) return;
+    const r = raws.get(key) ?? { key, address, lat, lon, source, requests: [], deals: new Set<number>() };
+    if (address) r.address = address;
+    if (r.lat === null && lat !== null) { r.lat = lat; r.lon = lon; }
+    if (req) r.requests.push(req);
+    r.deals.add(dealId);
+    raws.set(key, r);
+    dealRaw.set(dealId, key);
+  };
   if (dealIds.length > 0) {
     try {
       const addr = await db.query<{ bitrix_id: string; request_number: string | null; request_date: Date | string | null; address: string | null; lat: number | string | null; lon: number | string | null }>(
@@ -133,36 +152,40 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
       addressesAvailable = true;
       for (const r of addr.rows) {
         const lat = num(r.lat), lon = num(r.lon);
-        const okLat = lat !== null && lon !== null && validLatLon(lat, lon) ? lat : null;
-        const okLon = okLat !== null ? lon : null;
-        const address = (r.address ?? '').trim() || null;
-        const key = requestObjectKey(address, okLat, okLon);
-        if (!key) continue;
-        const obj = objects.get(key) ?? { key, address: address ?? `${okLat}, ${okLon}`, lat: okLat, lon: okLon, requests: [], manual: false, source: '1c' as const };
-        if (address) obj.address = address;            // самый свежий адрес — подпись
-        if (obj.lat === null && okLat !== null) { obj.lat = okLat; obj.lon = okLon; }
-        if (r.request_number) obj.requests.push({ number: r.request_number, date: iso(r.request_date) });
-        objects.set(key, obj);
-        dealAuto.set(Number(r.bitrix_id), key);          // по порядку — побеждает самая свежая заявка
+        const ok = lat !== null && lon !== null && validLatLon(lat, lon);
+        addRaw(Number(r.bitrix_id), (r.address ?? '').trim() || null, ok ? lat : null, ok ? lon : null, '1c',
+          r.request_number ? { number: r.request_number, date: iso(r.request_date) } : undefined);
       }
     } catch (e) {
       console.warn('[clientModule] sa.request_addresses недоступна:', e instanceof Error ? e.message : e);
     }
   }
-
-  // ── Объекты: 2) адрес сделки в Битриксе (для сделок без заявки 1С) ───────
-  const noAddr = dealIds.filter(d => !dealAuto.has(d)).slice(0, BITRIX_ADDRESS_LIMIT);
+  // Адрес сделки в Битриксе — для сделок без заявки 1С.
+  const noAddr = dealIds.filter(d => !dealRaw.has(d) && !dealAddrText.has(d)).slice(0, BITRIX_ADDRESS_LIMIT);
   if (noAddr.length > 0) {
     const bx = await withTimeout(fetchDealAddresses(noAddr), 8000, new Map());
     if (bx.size > 0) addressesAvailable = true;
     for (const [dealId, a] of bx) {
       if (a.isPickup) continue;
-      const key = requestObjectKey(a.address, a.lat, a.lon);
-      if (!key) continue;
-      if (!objects.has(key)) objects.set(key, { key, address: a.address ?? `${a.lat}, ${a.lon}`, lat: a.lat, lon: a.lon, requests: [], manual: false, source: 'bitrix' });
-      dealAuto.set(dealId, key);
+      addRaw(dealId, a.address, a.lat, a.lon, 'bitrix');
     }
   }
+
+  const clusters = clusterAddresses([...raws.values()].map(r => ({ key: r.key, address: r.address, lat: r.lat, lon: r.lon, weight: r.deals.size })));
+  const objects = new Map<string, ModuleObject>();
+  const memberOf = new Map<string, string>();         // сырой ключ → ключ объекта
+  for (const c of clusters) {
+    const ms = c.members.map(k => raws.get(k)!);
+    const requests = ms.flatMap(m => m.requests).sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+    objects.set(c.key, {
+      key: c.key, address: c.address, label: c.label, lat: c.lat, lon: c.lon, requests, manual: false,
+      source: ms.some(m => m.source === '1c') ? '1c' : 'bitrix',
+      variants: c.members.length,
+    });
+    for (const k of c.members) memberOf.set(k, c.key);
+  }
+  const dealAuto = new Map<number, string>();
+  for (const [dealId, rawKey] of dealRaw) { const o = memberOf.get(rawKey); if (o) dealAuto.set(dealId, o); }
 
   // ── Ручные поля (sa_org/005 + 006) ───────────────────────────────────────
   let profile: ClientProfile = EMPTY_PROFILE;
@@ -209,9 +232,13 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
            FROM sa.client_module_objects WHERE client_ref = $1 AND NOT is_deleted`, [ref],
       )).rows;
     }
+    // Ручные поля, сохранённые под ключом адреса, вошедшего в склеенный объект, —
+    // переносим на объект (приоритет — строка под ключом самого объекта).
+    rows.sort((x, y) => Number(memberOf.get(x.object_key) === x.object_key) - Number(memberOf.get(y.object_key) === y.object_key));
     for (const r of rows) {
       const lat = num(r.lat), lon = num(r.lon);
-      objectProfiles[r.object_key] = {
+      const target = memberOf.get(r.object_key) ?? r.object_key;
+      objectProfiles[target] = {
         buildStage: isOneOf(BUILD_STAGES, r.build_stage) ? r.build_stage as BuildStage : null,
         houseType: isOneOf(HOUSE_TYPES, r.house_type) ? r.house_type as HouseType : null,
         note: r.note,
@@ -224,7 +251,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
       };
       // Объект, заведённый менеджером вручную (ключ 'm…').
       if (!objects.has(r.object_key) && r.object_key.startsWith('m')) {
-        objects.set(r.object_key, { key: r.object_key, address: r.address ?? 'Новый объект', lat, lon, requests: [], manual: true, source: 'manual' });
+        objects.set(r.object_key, { key: r.object_key, address: r.address ?? 'Новый объект', label: shortAddress(r.address ?? 'Новый объект'), lat, lon, requests: [], manual: true, source: 'manual', variants: 1 });
       }
     }
 
@@ -232,7 +259,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
       const ov = await db.query<{ deal_id: string; object_key: string }>(
         `SELECT deal_id::text AS deal_id, object_key FROM sa.client_module_deal_objects WHERE client_ref = $1`, [ref],
       ).catch(e => { if (isMissingColumn(e)) { v2Available = false; return { rows: [] }; } throw e; });
-      for (const r of ov.rows) if (r.object_key) dealManual.set(Number(r.deal_id), r.object_key);
+      for (const r of ov.rows) if (r.object_key) dealManual.set(Number(r.deal_id), memberOf.get(r.object_key) ?? r.object_key);
     }
   } catch (e) {
     console.warn('[clientModule] ручные поля недоступны:', e instanceof Error ? e.message : e);
@@ -263,6 +290,8 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
       topGroup: groups[0] ?? null,
       objectKey,
       objectManual: !!manual && objects.has(manual),
+      // Адрес есть, но в объект не годится (только город / иностранный) — покажем в «Без объекта».
+      looseAddress: objectKey ? null : (dealAddrText.get(dealId) ?? null),
     };
     return { ...base, stage: dealStage(base) };
   });

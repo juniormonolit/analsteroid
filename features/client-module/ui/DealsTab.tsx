@@ -10,13 +10,15 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { fmtMoney, fmtDate, dealBitrixUrl } from '@/features/customers/ui/shared';
 import { type ClientModuleData, type ModuleDeal, type DealStage, DEAL_STAGE_LABEL, dealSortDate } from '../engine/types';
 import { StageChip, selectCls, useSave, shortGroup } from './parts';
+import { shortAddress } from '../engine/objectClusters';
 
 const STAGES: DealStage[] = ['shipped', 'sold', 'active', 'lost'];
 
 function objectLabel(data: ClientModuleData, key: string | null): string {
   if (!key) return '—';
   const o = data.objects.find(x => x.key === key);
-  return (data.objectProfiles[key]?.idealAddress || o?.address) ?? '—';
+  const ideal = data.objectProfiles[key]?.idealAddress;
+  return (ideal ? shortAddress(ideal) : o?.label) ?? '—';
 }
 
 function DealRowExpanded({ d, data, params }: { d: ModuleDeal; data: ClientModuleData; params: Record<string, string> }) {
@@ -139,7 +141,11 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
                     </td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-right align-top font-semibold tabular-nums">{d.amount > 0 ? fmtMoney(d.amount) : '—'}</td>
                     <td className="max-w-[200px] px-2 py-1.5 align-top text-[12px]">
-                      <span className="line-clamp-2" title={objectLabel(data, d.objectKey)}>{objectLabel(data, d.objectKey)}</span>
+                      {d.objectKey ? (
+                        <span className="line-clamp-2" title={data.objects.find(o => o.key === d.objectKey)?.address}>{objectLabel(data, d.objectKey)}</span>
+                      ) : d.looseAddress ? (
+                        <span className="line-clamp-2 text-[var(--color-text-muted)]" title={`Адрес неточный — объектом не считается: ${d.looseAddress}`}>{shortAddress(d.looseAddress)} <span className="text-[11px]">· неточный адрес</span></span>
+                      ) : <span className="text-[var(--color-text-muted)]">—</span>}
                     </td>
                     <td className="whitespace-nowrap px-2 py-1.5 align-top"><StageChip s={d.stage} /></td>
                   </tr>

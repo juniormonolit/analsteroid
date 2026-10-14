@@ -36,6 +36,8 @@ export interface ModuleDeal {
   objectKey: string | null;
   /** Привязка к объекту поставлена менеджером вручную. */
   objectManual: boolean;
+  /** Адрес у сделки есть, но объектом не стал (только город / иностранный / неточный). */
+  looseAddress: string | null;
 }
 
 export interface ModuleRequest { number: string; date: string | null }
@@ -47,6 +49,10 @@ export interface ModuleObject {
   key: string;
   /** Автоматический адрес (1С/Битрикс); для ручного объекта — указанный менеджером. */
   address: string;
+  /** Короткая подпись: «46Н-11388, микрорайон Поваровка, Поварово» (без индекса, ФО, области). */
+  label: string;
+  /** Сколько разных написаний адреса склеено в объект. */
+  variants: number;
   lat: number | null;
   lon: number | null;
   requests: ModuleRequest[];

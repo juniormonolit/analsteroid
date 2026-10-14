@@ -15,6 +15,7 @@ import {
   computeStats, objectStatus,
 } from '../engine/types';
 import { Section, Chip, StatusChip, StageChip, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup } from './parts';
+import { shortAddress } from '../engine/objectClusters';
 
 const DAY_MS = 86_400_000;
 
@@ -165,6 +166,7 @@ function ObjectCard({ data, object, params, defaultOpen }: { data: ClientModuleD
   const s = computeStats(deals);
   const status = objectStatus(deals, { manual: object.manual, doneManual: prof.doneManual }, data.activeDays);
   const address = prof.idealAddress || object.address;
+  const title = prof.idealAddress ? shortAddress(prof.idealAddress) : object.label;
   const needsCheck = !object.manual && !prof.addressConfirmed;
   const { save, saving, error } = useSave(params);
   const chain = [...deals].sort((a, b) => (a.deliveredAt ?? a.createdAt ?? '').localeCompare(b.deliveredAt ?? b.createdAt ?? ''));
@@ -174,10 +176,12 @@ function ObjectCard({ data, object, params, defaultOpen }: { data: ClientModuleD
       <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} className="flex w-full items-start gap-2 px-3.5 py-3 text-left">
         <MapPin size={16} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
         <span className="min-w-0 flex-1">
-          <span className="block break-words text-[14px] font-semibold">{address}</span>
+          <span className="block break-words text-[14px] font-semibold">{title}</span>
+          {title !== address && <span className="block break-words text-[11.5px] text-[var(--color-text-muted)]">{address}</span>}
           <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-[var(--color-text-muted)]">
             <StatusChip s={status} />
             {needsCheck && <Chip tone="warn">проверь адрес</Chip>}
+            {object.variants > 1 && <Chip title="Адрес в заявках/сделках записан по-разному — варианты склеены в один объект">склеено {object.variants} написания адреса</Chip>}
             <span>отгружено {s.shipped} на <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(s.ltv)}</b></span>
             {s.open > 0 && <span>· в работе {s.open}</span>}
             {s.lastShippedAt && <span>· посл. отгрузка {fmtDate(s.lastShippedAt)}</span>}
