@@ -15,6 +15,7 @@
     "test:unsell-deal": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-unsell-deal.ts",
     "test:rop-scope": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-rop-scope.ts",
     "test:rop-kanban": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-rop-kanban.ts",
+    "verify:supply-panel": "node --import ./scripts/ts-resolve-register.mjs scripts/supply-panel-verify.ts",
     "test:realizations": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-realizations.ts",
     "test:dashboard-drilldown": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-dashboard-drilldown.ts",
     "test:geo-parse": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-geo-parse.ts",
