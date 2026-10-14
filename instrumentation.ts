@@ -36,9 +36,12 @@ export async function register() {
   // BACKGROUND_JOBS_ALLOW — точечные исключения из рубильника (через запятую). После
   // ухода с YC (13.10) так включён «Контроль звонков»: он живёт на sa (va.calls) +
   // локальной system; остальные пишущие джобы ждут решения по данным копии от 04.08.
+  // weeklyWeather — вопрос «как погода» по понедельникам (14.10): очереди нет, спрашивает
+  // только про прошлую неделю, отправка дополнительно гейтится каналом weekly_weather.
   if (process.env.DISABLE_BACKGROUND_JOBS === '1') {
     const allow = new Set((process.env.BACKGROUND_JOBS_ALLOW ?? '').split(',').map(s => s.trim()).filter(Boolean));
     if (allow.has('callControl')) scheduleCallControl();
+    if (allow.has('weeklyWeather')) scheduleWeeklyWeather();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
