@@ -12,6 +12,7 @@ import { type ClientModuleData, computeStats, objectStatus, EMPTY_OBJECT_PROFILE
 import { Section, RecList, StatusDot, shortGroup, fmtD, useDismiss } from './parts';
 import { TzMetrics } from './TzBlocks';
 import { ClientHintCard, LegalLine } from './ClientHintCard';
+import { LastDealLine } from './LastDealLine';
 
 export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditClient }: {
   data: ClientModuleData;
@@ -50,6 +51,7 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
       {/* Показатели а–ж ровно по ТЗ (аудит ТЗ↔реальность 14.10: при редизайне
           пропали «8 / 10», LTV, дата последней отгрузки и число объектов). */}
       <TzMetrics s={stats} objects={{ total: data.objects.length, active: working.filter(x => x.st === 'active').length }} />
+      <LastDealLine data={data} />
       <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-0.5 text-[12px] text-[var(--color-text-muted)]">
         {openN > 0 ? <span>Сейчас в работе: <b className="text-[var(--color-text)]">{openN} {openN === 1 ? 'сделка' : openN < 5 ? 'сделки' : 'сделок'} на {fmtMoney(stats.openSum)}</b></span> : <span>Активных сделок нет</span>}
         {lastDeal && <span>· последняя отгрузка: {shortGroup(lastDeal.topGroup) || '—'}{lastObj ? ` → ${lastObj}` : ''}</span>}
@@ -59,7 +61,7 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
         <button type="button" onClick={() => onOpenDeals({ object: '__none' })}
           className="flex min-h-11 items-center gap-2 rounded-xl border border-[color-mix(in_srgb,var(--color-warning,#e8590c)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warning,#e8590c)_7%,transparent)] px-3 py-2 text-left text-[12.5px]">
           <MapPin size={15} className="shrink-0 text-[var(--color-warning,#e8590c)]" />
-          <span className="min-w-0 flex-1"><b>{noObj.length} сделок на {fmtMoney(noObjSum)} без объекта</b> — адреса нет или он неточный. Разложить по объектам</span>
+          <span className="min-w-0 flex-1"><b>{noObj.length} {noObj.length % 10 === 1 && noObj.length % 100 !== 11 ? 'сделка' : noObj.length % 10 >= 2 && noObj.length % 10 <= 4 && (noObj.length % 100 < 10 || noObj.length % 100 >= 20) ? 'сделки' : 'сделок'}{noObjSum > 0 ? ` на ${fmtMoney(noObjSum)}` : ''} без объекта</b> — адреса нет или он неточный. Разложить по объектам</span>
           <ArrowRight size={15} className="shrink-0" />
         </button>
       )}

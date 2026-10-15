@@ -384,6 +384,33 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   // Подсказка «что это за клиент» (владелец 15.10): воронки юрлиц 1/3, объекты
   // кроме «адрес до города», ЕГРЮЛ.
   const legal = await legalP;
+
+  // Звонки по последней сделке (владелец 15.10: «был ли звонок в последней сделке»).
+  // va.calls — звонки Битрикса с привязкой к сделке; нет доступа — строки не будет.
+  let lastDealCalls: ClientModuleData['lastDealCalls'] = null;
+  const ld = deals[0];
+  if (ld) {
+    try {
+      // Звонки клиенту, привязанные к другой сделке, тоже считаем (окно: от
+      // создания сделки до закрытия/сейчас) — чтобы не обвинить менеджера зря.
+      const c = await db.query<{ total: string; talked: string; talk_sec: string | null; last_at: Date | null; client_calls: string }>(
+        `SELECT count(*) FILTER (WHERE deal_id = $1)::text AS total,
+                count(*) FILTER (WHERE deal_id = $1 AND result = 'completed' AND duration_seconds > 0)::text AS talked,
+                sum(duration_seconds) FILTER (WHERE deal_id = $1 AND result = 'completed')::text AS talk_sec,
+                max(called_at) FILTER (WHERE deal_id = $1) AS last_at,
+                count(*) FILTER (WHERE deal_id IS DISTINCT FROM $1)::text AS client_calls
+           FROM va.calls
+          WHERE deal_id = $1
+             OR (${isCompany ? 'company_id' : 'contact_id'} = $2
+                 AND called_at >= $3::timestamptz AND called_at <= coalesce($4::timestamptz, now()) + interval '1 day')`,
+        [ld.dealId, id, ld.createdAt ?? new Date().toISOString(), ld.lostAt ?? ld.deliveredAt],
+      );
+      const r = c.rows[0];
+      lastDealCalls = { total: Number(r.total), talked: Number(r.talked), talkSec: Number(r.talk_sec ?? 0), lastAt: iso(r.last_at), clientCalls: Number(r.client_calls) };
+    } catch (e) {
+      console.warn('[clientModule] va.calls недоступна:', e instanceof Error ? e.message : e);
+    }
+  }
   const legalShare = dealsRes.rows.length ? dealsRes.rows.filter(r => r.funnel_id === 1 || r.funnel_id === 3).length / dealsRes.rows.length : 0;
   const hint = clientHint({
     entity: isCompany ? 'company' : 'contact', deals, legalShare, legal,
@@ -409,6 +436,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     recommendations: { client: recommendGroups(deals, clientHouse, matrix, priorities, kind, dismissedClient), byObject },
     legal,
     hint,
+    lastDealCalls,
   };
 }
 

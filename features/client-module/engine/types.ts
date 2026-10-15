@@ -166,6 +166,9 @@ export interface ClientModuleData {
   legal: LegalEntity | null;
   /** «Похоже, это …» — подсказка типа клиента для «Обзора». */
   hint: ClientHint;
+  /** Звонки по последней (самой свежей) сделке; null — va.calls недоступна.
+   *  clientCalls — звонки клиенту по другим сделкам, пока эта была открыта. */
+  lastDealCalls: { total: number; talked: number; talkSec: number; lastAt: string | null; clientCalls: number } | null;
 }
 
 export const EMPTY_PROFILE: ClientProfile = { clientType: null, occupation: '', note: '', updatedBy: null, updatedAt: null };
