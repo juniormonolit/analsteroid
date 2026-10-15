@@ -11,10 +11,12 @@ import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, computeStats, objectStatus, EMPTY_OBJECT_PROFILE } from '../engine/types';
 import { Section, RecList, StatusDot, shortGroup, fmtD, useDismiss } from './parts';
 import { TzMetrics } from './TzBlocks';
+import { ClientHintCard, LegalLine } from './ClientHintCard';
 
-export function OverviewTab({ data, params, onOpenObject, onOpenDeals }: {
+export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditClient }: {
   data: ClientModuleData;
   params: Record<string, string>;
+  onEditClient: () => void;
   onOpenObject: (key: string) => void;
   onOpenDeals: (filter: { object?: string }) => void;
 }) {
@@ -42,6 +44,9 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals }: {
 
   return (
     <div className="flex flex-col gap-3">
+      {/* «Похоже, это …» — подсказка типа клиента (владелец 15.10) и ЕГРЮЛ. */}
+      <ClientHintCard data={data} params={params} onEditClient={onEditClient} />
+      <LegalLine data={data} />
       {/* Показатели а–ж ровно по ТЗ (аудит ТЗ↔реальность 14.10: при редизайне
           пропали «8 / 10», LTV, дата последней отгрузки и число объектов). */}
       <TzMetrics s={stats} objects={{ total: data.objects.length, active: working.filter(x => x.st === 'active').length }} />

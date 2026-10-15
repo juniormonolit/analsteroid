@@ -2,7 +2,7 @@
 // Общие детали карточки клиента (модуль «Карточка клиента», 13.10): плашки,
 // секции, сохранение, рекомендации, ручные поля клиента. Табы — в соседних файлах.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { HelpCircle, Lightbulb, Pencil } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
@@ -222,9 +222,14 @@ export function shortGroup(g: string | null): string {
 // Аудит 14.10: четыре радиокнопки на треть первого экрана ради поля, которое
 // заполняют один раз, — свёрнуто в строку под именем; редактор раскрывается.
 
-export function ClientBar({ data, params }: { data: ClientModuleData; params: Record<string, string> }) {
+export function ClientBar({ data, params, openSignal = 0 }: { data: ClientModuleData; params: Record<string, string>; openSignal?: number }) {
   const p = data.profile;
   const [edit, setEdit] = useState(false);
+  // «Другой тип» из подсказки на «Обзоре» открывает редактор здесь.
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (openSignal > 0) { setEdit(true); rootRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+  }, [openSignal]);
   const [type, setType] = useState<ClientType | null>(p.clientType);
   const [occupation, setOccupation] = useState(p.occupation);
   const [note, setNote] = useState(p.note);
@@ -234,7 +239,7 @@ export function ClientBar({ data, params }: { data: ClientModuleData; params: Re
   const typeLabel = CLIENT_TYPES.find(t => t.value === p.clientType)?.label;
 
   return (
-    <div className="min-w-0">
+    <div ref={rootRef} className="min-w-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]">
         <button type="button" onClick={() => setEdit(v => !v)}
           className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 ${typeLabel ? 'border-transparent bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] font-semibold text-[var(--color-accent)]' : 'border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>

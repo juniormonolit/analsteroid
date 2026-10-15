@@ -11,7 +11,10 @@ import {
 import { BitrixWriteError, readClientFromBitrix, writeClientToBitrix } from './bitrix';
 import { recommendGroups, stageLadder, profileKind } from './recommend';
 import { fetchProfileMatrices } from './profileMatrix';
-import { clusterAddresses, settlementLabel, placeDetail } from './objectClusters';
+import { clusterAddresses, settlementLabel, placeDetail, isUsableAddress, isCoarseAddress } from './objectClusters';
+import { addressFromComment } from './commentAddress';
+import { fetchLegalEntity } from './legalEntity';
+import { clientHint } from './clientHint';
 import { validLatLon } from '@/lib/geo/parse';
 
 // Модуль «Карточка клиента» (ТЗ владельца 13.10). Один виджет для «Ещё → Модули»
@@ -104,11 +107,11 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   const dealsRes = await db.query<{
     deal_id: number; deal_name: string | null; amount: string | null;
     created_at: Date | null; sold_at: Date | null; delivered_at: Date | null; lost_at: Date | null;
-    stage_name: string | null; manager_name: string | null; products: unknown;
+    stage_name: string | null; manager_name: string | null; products: unknown; funnel_id: number | null;
   }>(
     `SELECT d.deal_id, d.deal_name, d.amount::text AS amount,
             d.created_at, d.sold_at, d.delivered_at, d.lost_at,
-            s.name AS stage_name, org.manager_name, d.products
+            s.name AS stage_name, org.manager_name, d.products, d.funnel_id
        FROM sa.deals d
        LEFT JOIN sa.stages s ON s.id = d.stage_id
        LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = d.current_manager_id::text
@@ -118,18 +121,20 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     [id],
   );
   const dealIds = dealsRes.rows.map(r => Number(r.deal_id));
+  // ЕГРЮЛ по ИНН из реквизитов (для подсказки «что за клиент») — параллельно с остальным.
+  const legalP = withTimeout(fetchLegalEntity(ref), 7000, null);
 
   // ── Объекты: адреса из заявок 1С и сделок Битрикса → склейка ─────────────
   // Сначала собираем «сырые» адреса (ключ requestObjectKey — по нему сохранены
   // ручные поля), потом склеиваем похожие в один объект (objectClusters.ts:
   // координаты ≤ 500 м или похожий текст в том же населённом пункте; адрес
   // «только город» и иностранный — не объект).
-  type Raw = { key: string; address: string | null; lat: number | null; lon: number | null; source: '1c' | 'bitrix'; requests: { number: string; date: string | null }[]; deals: Set<number> };
+  type Raw = { key: string; address: string | null; lat: number | null; lon: number | null; source: '1c' | '1c_comment' | 'bitrix'; requests: { number: string; date: string | null }[]; deals: Set<number> };
   const raws = new Map<string, Raw>();
   const dealRaw = new Map<number, string>();          // сделка → сырой адрес (свежая заявка побеждает)
   const dealAddrText = new Map<number, string>();     // сделка → текст адреса (для «адрес неточный»)
   let addressesAvailable = false;
-  const addRaw = (dealId: number, address: string | null, lat: number | null, lon: number | null, source: '1c' | 'bitrix', req?: { number: string; date: string | null }) => {
+  const addRaw = (dealId: number, address: string | null, lat: number | null, lon: number | null, source: '1c' | '1c_comment' | 'bitrix', req?: { number: string; date: string | null }) => {
     if (address) dealAddrText.set(dealId, address);
     const key = requestObjectKey(address, lat, lon);
     if (!key) return;
@@ -143,19 +148,48 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   };
   if (dealIds.length > 0) {
     try {
-      const addr = await db.query<{ bitrix_id: string; request_number: string | null; request_date: Date | string | null; address: string | null; lat: number | string | null; lon: number | string | null }>(
-        `SELECT bitrix_id::text AS bitrix_id, request_number, request_date, address, lat, lon
-           FROM sa.request_addresses
-          WHERE bitrix_id = ANY($1::bigint[])
-          ORDER BY request_date ASC NULLS FIRST`,
-        [dealIds],
-      );
+      type AddrRow = { bitrix_id: string; request_number: string | null; request_date: Date | string | null; address: string | null; lat: number | string | null; lon: number | string | null; comment?: string | null };
+      // Комментарий заявки (sd.requests) — только чтобы найти в нём точный адрес
+      // (commentAddress.ts); сам текст наружу не уходит. Без доступа к sd — без него.
+      let rows: AddrRow[];
+      try {
+        rows = (await db.query<AddrRow>(
+          `SELECT ra.bitrix_id::text AS bitrix_id, ra.request_number, ra.request_date, ra.address, ra.lat, ra.lon,
+                  concat_ws(E'\n', r.comment, r.shipment_comment) AS comment
+             FROM sa.request_addresses ra
+             LEFT JOIN LATERAL (
+               SELECT q.comment, q.shipment_comment FROM sd.requests q
+                WHERE q.number = ra.request_number AND q.doc_date::date = ra.request_date::date AND NOT q.deleted
+                LIMIT 1) r ON true
+            WHERE ra.bitrix_id = ANY($1::bigint[])
+            ORDER BY ra.request_date ASC NULLS FIRST`,
+          [dealIds],
+        )).rows;
+      } catch (e) {
+        console.warn('[clientModule] комментарии заявок (sd.requests) недоступны:', e instanceof Error ? e.message : e);
+        rows = (await db.query<AddrRow>(
+          `SELECT bitrix_id::text AS bitrix_id, request_number, request_date, address, lat, lon
+             FROM sa.request_addresses
+            WHERE bitrix_id = ANY($1::bigint[])
+            ORDER BY request_date ASC NULLS FIRST`,
+          [dealIds],
+        )).rows;
+      }
       addressesAvailable = true;
-      for (const r of addr.rows) {
+      for (const r of rows) {
         const lat = num(r.lat), lon = num(r.lon);
         const ok = lat !== null && lon !== null && validLatLon(lat, lon);
-        addRaw(Number(r.bitrix_id), (r.address ?? '').trim() || null, ok ? lat : null, ok ? lon : null, '1c',
-          r.request_number ? { number: r.request_number, date: iso(r.request_date) } : undefined);
+        const field = { address: (r.address ?? '').trim() || null, lat: ok ? lat : null, lon: ok ? lon : null };
+        const req = r.request_number ? { number: r.request_number, date: iso(r.request_date) } : undefined;
+        // Решение владельца 15.10: нормальный адрес из комментария берём вместо
+        // плохого поля (пусто / только город / нет точки) — без перепроверки.
+        const fromComment = addressFromComment(r.comment);
+        const fieldWeak = !isUsableAddress(field) || isCoarseAddress(field);
+        if (fromComment && ((fromComment.lat !== null && field.lat === null) || (fromComment.address && fieldWeak))) {
+          addRaw(Number(r.bitrix_id), fromComment.address ?? field.address, fromComment.lat ?? field.lat, fromComment.lon ?? field.lon, '1c_comment', req);
+        } else {
+          addRaw(Number(r.bitrix_id), field.address, field.lat, field.lon, '1c', req);
+        }
       }
     } catch (e) {
       console.warn('[clientModule] sa.request_addresses недоступна:', e instanceof Error ? e.message : e);
@@ -180,7 +214,8 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     const requests = ms.flatMap(m => m.requests).sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
     objects.set(c.key, {
       key: c.key, address: c.address, label: c.label, lat: c.lat, lon: c.lon, requests, manual: false,
-      source: ms.some(m => m.source === '1c') ? '1c' : 'bitrix',
+      // Источник точнее всего: комментарий 1С (там точный адрес) > поле 1С > Битрикс.
+      source: ms.some(m => m.source === '1c_comment') ? '1c_comment' : ms.some(m => m.source === '1c') ? '1c' : 'bitrix',
       variants: c.members.length,
       coarse: c.coarse,
     });
@@ -346,6 +381,15 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
 
   const names = await withTimeout(resolveClientNames([ref]), 4000, new Map<string, string | null>());
 
+  // Подсказка «что это за клиент» (владелец 15.10): воронки юрлиц 1/3, объекты
+  // кроме «адрес до города», ЕГРЮЛ.
+  const legal = await legalP;
+  const legalShare = dealsRes.rows.length ? dealsRes.rows.filter(r => r.funnel_id === 1 || r.funnel_id === 3).length / dealsRes.rows.length : 0;
+  const hint = clientHint({
+    entity: isCompany ? 'company' : 'contact', deals, legalShare, legal,
+    objects: [...objects.values()].filter(o => !o.coarse).length,
+  });
+
   return {
     ref,
     clientType: isCompany ? 'company' : 'contact',
@@ -363,6 +407,8 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     dismissed: { client: [...dismissedClient], byObject: Object.fromEntries([...dismissedObj].map(([k, v]) => [k, [...v]])) },
     dismissAvailable,
     recommendations: { client: recommendGroups(deals, clientHouse, matrix, priorities, kind, dismissedClient), byObject },
+    legal,
+    hint,
   };
 }
 

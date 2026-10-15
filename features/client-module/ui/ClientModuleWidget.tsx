@@ -37,6 +37,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
   });
   const [tab, setTab] = useState<Tab>('overview');
   const [focusObject, setFocusObject] = useState<string | null>(null);
+  const [editClient, setEditClient] = useState(0);
   const [dealsFilter, setDealsFilter] = useState<{ object?: string; n: number }>({ n: 0 });
   useEffect(() => { setTab('overview'); setFocusObject(null); setDealsFilter({ n: 0 }); }, [qs]);
 
@@ -62,7 +63,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
             Битрикс <ExternalLink size={12} />
           </a>
         </div>
-        <ClientBar data={data} params={params} />
+        <ClientBar data={data} params={params} openSignal={editClient} />
       </div>
 
       {/* Три вкладки — переносом, без горизонтальной ленты (правило 12 CLAUDE.md). */}
@@ -76,7 +77,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
       </div>
 
 
-      {tab === 'overview' && <OverviewTab data={data} params={params}
+      {tab === 'overview' && <OverviewTab data={data} params={params} onEditClient={() => setEditClient(n => n + 1)}
         onOpenObject={k => { setFocusObject(k || null); setTab('objects'); }}
         onOpenDeals={f => { setDealsFilter(prev => ({ object: f.object, n: prev.n + 1 })); setTab('deals'); }} />}
       {tab === 'deals' && <DealsTab key={dealsFilter.n} data={data} params={params} initialObject={dealsFilter.object ?? null} />}

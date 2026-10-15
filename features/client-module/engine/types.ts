@@ -6,6 +6,8 @@
 // v2 (13.10, вечер): объекты ведутся ТОЛЬКО в Монолитике (смарт-процесс в
 // Битриксе упразднён), карточка — табы «Обзор / Сделки / Объекты».
 
+import type { LegalEntity } from './legalEntity';
+import type { ClientHint } from './clientHint';
 import { objectKey as addrObjectKey, isPickupAddress } from '@/lib/bitrix/addressUtils';
 
 export type ClientRef = `c${number}` | `k${number}`;
@@ -42,8 +44,8 @@ export interface ModuleDeal {
 
 export interface ModuleRequest { number: string; date: string | null }
 
-export type AddressSource = '1c' | 'bitrix' | 'manual';
-export const ADDRESS_SOURCE_LABEL: Record<AddressSource, string> = { '1c': 'из заявки 1С', bitrix: 'из адреса сделки в Битриксе', manual: 'указан менеджером' };
+export type AddressSource = '1c' | '1c_comment' | 'bitrix' | 'manual';
+export const ADDRESS_SOURCE_LABEL: Record<AddressSource, string> = { '1c': 'из заявки 1С', '1c_comment': 'из комментария к заявке 1С', bitrix: 'из адреса сделки в Битриксе', manual: 'указан менеджером' };
 
 export interface ModuleObject {
   key: string;
@@ -160,6 +162,10 @@ export interface ClientModuleData {
   /** Профиль для рекомендаций: частный стройщик/прораб или подрядчик (ЖБИ/нерудка/бетон). */
   profileKind: 'builder' | 'contractor';
   recommendations: { client: Recommendation[]; byObject: Record<string, StageLadder> };
+  /** ЕГРЮЛ по ИНН из реквизитов Битрикса (null — ИНН нет или не нашли). */
+  legal: LegalEntity | null;
+  /** «Похоже, это …» — подсказка типа клиента для «Обзора». */
+  hint: ClientHint;
 }
 
 export const EMPTY_PROFILE: ClientProfile = { clientType: null, occupation: '', note: '', updatedBy: null, updatedAt: null };

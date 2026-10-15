@@ -107,7 +107,7 @@ function ObjectEditor({ data, object, params, onCreated, onCancel }: {
   const dirty = !!geo || stage !== prof.buildStage || house !== prof.houseType || note !== prof.note;
   const blocked = !!geo && !geo.confirmed;
   const hints: GeoHint[] = object && object.lat !== null && object.lon !== null
-    ? [{ label: object.source === '1c' ? 'Точка из заявки 1С' : 'Точка из адреса сделки', lat: object.lat, lon: object.lon }] : [];
+    ? [{ label: object.source === '1c_comment' ? 'Точка из комментария к заявке 1С' : object.source === '1c' ? 'Точка из заявки 1С' : 'Точка из адреса сделки', lat: object.lat, lon: object.lon }] : [];
 
   const onSave = async () => {
     const r = await save({ object: {
@@ -179,7 +179,8 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
   const address = prof.idealAddress || object.address;
   const title = prof.idealAddress ? shortAddress(prof.idealAddress) : object.label;
   // «Проверь адрес» — только где это важно (аудит 14.10: чип у всех объектов перестал быть сигналом).
-  const needsCheck = !object.manual && !prof.addressConfirmed && (s.shipped >= 2 || !!object.coarse);
+  // Адрес из комментария заявки 1С — точный, перепроверять не просим (владелец 15.10).
+  const needsCheck = !object.manual && !prof.addressConfirmed && object.source !== '1c_comment' && (s.shipped >= 2 || !!object.coarse);
   const { save, saving, error } = useSave(params);
   const dis = useDismiss(data, params, object.key);
 
@@ -191,6 +192,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-[15px] font-semibold">{title}</span>
             {needsCheck && <Chip tone="warn">{object.coarse ? 'адрес до города — уточни' : 'проверь адрес'}</Chip>}
+            {!object.manual && !prof.idealAddress && object.source === '1c_comment' && <Chip>адрес из комментария 1С</Chip>}
             <span className="ml-auto text-[13px] font-semibold tabular-nums">{fmtMoney(s.ltv)}</span>
           </span>
           <span className="mt-0.5 block truncate text-[12px] text-[var(--color-text-muted)]">
