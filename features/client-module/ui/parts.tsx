@@ -215,7 +215,7 @@ export function useDismiss(data: ClientModuleData, params: Record<string, string
 
 export function shortGroup(g: string | null): string {
   if (!g) return '';
-  return g.replace(/, водосточные системы$/, '').replace(/ \(Лакокрасочные материалы\)$/, '').replace(/ стальн\w+( и проволока)?$/, '');
+  return g.replace(/, водосточные системы$/, '').replace(/ \(Лакокрасочные материалы\)$/, '').replace(/ стальн[а-яё]+( и проволока)?$/, '');
 }
 
 // ── Клиент: тип, «чем занимается», заметка ─────────────────────────────────

@@ -7,10 +7,11 @@ import { getAppToken, bxApp } from '@/lib/bitrix/appToken';
 // владельца 13.10). Тот же механизм, что у пункта в левом меню
 // (app/api/admin/bitrix/left-menu): placement.* — только в контексте приложения,
 // нужен токен из открытия «Монолитики» внутри Битрикса (живёт ~час).
-// GET — что привязано, POST — привязать обе вкладки, DELETE — отвязать.
+// GET — что привязано, POST — привязать все вкладки, DELETE — отвязать.
 
 const HANDLER = () => `${(process.env.APP_BASE_URL || 'https://monolitika.mlt-it.com').replace(/\/$/, '')}/api/bitrix/app/client-card`;
-const PLACEMENTS = ['CRM_CONTACT_DETAIL_TAB', 'CRM_COMPANY_DETAIL_TAB'] as const;
+// Сделка (владелец 15.10) — карточка клиента этой сделки.
+const PLACEMENTS = ['CRM_CONTACT_DETAIL_TAB', 'CRM_COMPANY_DETAIL_TAB', 'CRM_DEAL_DETAIL_TAB'] as const;
 const TITLE = 'Карточка клиента';
 const DESCRIPTION = 'Отгрузки, LTV, средний чек, цикл повторки, товарные группы и объекты клиента';
 const NO_TOKEN = 'Нет токена приложения: откройте «Монолитику» внутри Битрикса под своим аккаунтом (любой пункт), затем вернитесь сюда — токен живёт около часа.';
