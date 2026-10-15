@@ -385,6 +385,9 @@ interface NavItem {
 // «Продажи», только «Администратор». Исходно «Реализация»/«Маркетинг»/«Найм» спрятаны (правка Иосифа
 // 16.07, оптимизация меню): Реализация и Найм были заглушками «Скоро», маркетинг-
 // пресеты живут по прямым URL (/marketing/*) и вернутся в меню, когда попросят.
+// Пункт подменю активен и на вложенных страницах (Ответы на запросы → Категории/Товары/…).
+const isChildActive = (pathname: string, href: string) => pathname === href || pathname.startsWith(`${href}/`);
+
 const NAV: NavItem[] = [
   { label: 'Продажи', icon: <BarChart3 size={18} />, isSales: true, perm: 'section.sales' },
   // «Реализация» (задача #8089, правка Сергея 29.09): раздел ПЕРВОГО уровня сразу
@@ -676,16 +679,16 @@ function SidebarBody({
                           <button
                             type="button"
                             aria-label={item.label}
-                            className={`w-full ${navItemBase(true)} ${item.children.some(c => pathname === c.href) ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+                            className={`w-full ${navItemBase(true)} ${item.children.some(c => isChildActive(pathname, c.href)) ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                           >
-                            <span className={navIconCls(item.children.some(c => pathname === c.href))}>{item.icon}</span>
+                            <span className={navIconCls(item.children.some(c => isChildActive(pathname, c.href)))}>{item.icon}</span>
                           </button>
                         }
                       >
                         <div onClick={closeOnLink}>
                           <div className="px-2 pt-1 pb-1.5 text-[10px] font-medium uppercase tracking-[0.07em] text-[var(--color-sidebar-text-muted)]">{item.label}</div>
                           {item.children.map(child => {
-                            const active = pathname === child.href;
+                            const active = isChildActive(pathname, child.href);
                             return (
                               <Link
                                 key={child.href}
@@ -706,13 +709,13 @@ function SidebarBody({
                       <RailTooltip collapsed={collapsed} label={item.label}>
                       <button
                         onClick={() => setExpanded(v => v === item.label ? '' : item.label)}
-                        className={`w-full ${navItemBase(collapsed)} ${item.children.some(c => pathname === c.href) ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
+                        className={`w-full ${navItemBase(collapsed)} ${item.children.some(c => isChildActive(pathname, c.href)) ? NAV_ITEM_ACTIVE : NAV_ITEM_INACTIVE}`}
                       >
                         {/* Шеврон слева, как у «Продажи» (дисклоужер-паттерн) */}
                         {!collapsed && (expanded === item.label
                           ? <ChevronDown size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0 -mr-1" />
                           : <ChevronRight size={14} className="text-[var(--color-sidebar-text-muted)] mt-[3px] shrink-0 -mr-1" />)}
-                        <span className={navIconCls(item.children.some(c => pathname === c.href))}>{item.icon}</span>
+                        <span className={navIconCls(item.children.some(c => isChildActive(pathname, c.href)))}>{item.icon}</span>
                         {!collapsed && <span className="flex-1 min-w-0 break-words line-clamp-2 text-left">{item.label}</span>}
                       </button>
                     </RailTooltip>
@@ -720,7 +723,7 @@ function SidebarBody({
                     {!collapsed && expanded === item.label && (
                       <div className="ml-5 pl-2.5 mb-2.5 border-l border-[var(--color-sidebar-guide)]">
                         {item.children.map(child => {
-                          const active = pathname === child.href;
+                          const active = isChildActive(pathname, child.href);
                           return (
                             <Link
                               key={child.href}

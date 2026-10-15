@@ -7,7 +7,6 @@ import { describeDealFilters, type DealFilter } from '@/lib/metrics/dealFilters'
 import { useUrlState, useUrlStateBatch, dateRangeParam, enumParam, stringParam, type UrlDateRange } from '@/lib/hooks/useUrlState';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Trash2, Info, Filter } from 'lucide-react';
-import { format } from 'date-fns';
 import { hasPerm } from '@/lib/auth/perms';
 import type { SessionUser } from '@/lib/auth/session';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
@@ -49,8 +48,8 @@ import { ReportTabsBar } from './ReportTabsBar';
 import { MetricBreakdownProvider, MetricBreakdownContext, type BreakdownReportContext } from './MetricBreakdownContext';
 import { loadTabsStore, saveTabsStore, newTabId, type ReportTab, type ReportTabSnapshot, type ReportTabsStore } from '@/features/reports/lib/reportTabs';
 import { diffFromPreset } from '@/features/reports/lib/presetDiff';
-import { RESPONSE_SLUG, RESPONSE_RELIABLE_FROM } from '@/lib/realizations/responseMetrics';
-import { RequestTasksDrill } from '@/features/realizations/ui/RequestTasksDrill';
+import { RESPONSE_SLUG, RESPONSE_CATEGORIES_SLUG, RESPONSE_SLUGS, spPickKey } from '@/lib/realizations/responseMetrics';
+import { SupplyTasksDrill } from '@/features/realizations/ui/SupplyTasksDrill';
 import { LogistCallsDrill } from '@/features/realizations/ui/LogistCallsDrill';
 import { isCallMetric } from '@/lib/realizations/callMetrics';
 import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_DRILL_STATUS, LOGIST_METRICS, needsCallUpgrade, upgradeLogistView } from '@/lib/realizations/logistMetrics';
@@ -498,7 +497,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const [highlights, setHighlights]     = useState<Record<string, MetricHighlightConfig>>({});
   const [search, setSearch]             = useUrlState<string>('q', stringParam(''));
   const [drilldown, setDrilldown]       = useState<DrilldownTarget | null>(null);
-  const [tasksDrill, setTasksDrill]     = useState<{ managerId: string; name: string; metricId?: string; metricName?: string } | null>(null);
+  const [tasksDrill, setTasksDrill]     = useState<{ filter: Record<string, string>; metric: string; name: string; metricName?: string } | null>(null);
   // Группа «Звонки» сводки логистов (#8314): scope — query-строка строки отчёта для /api/realizations/calls.
   const [callsDrill, setCallsDrill]     = useState<{ scope: string; name: string; metricId: string; metricName?: string } | null>(null);
   // Открытый дрилл и график — в URL (задача #8126, правило «у каждого состояния свой
@@ -953,7 +952,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const clientMode = reportSlug === 'by-clients';
   const batchAvailable = reportSlug === 'by-managers';
   // Отчёты раздела «Реализация» (задача #8126): не сделочные — сделочные фильтры скрыты.
-  const realizationMode = reportSlug === RESPONSE_SLUG || REALIZATION_SLUGS.includes(reportSlug);
+  const responseMode = RESPONSE_SLUGS.includes(reportSlug);
+  const realizationMode = responseMode || REALIZATION_SLUGS.includes(reportSlug);
   const batchActive = batchAvailable && batchMode.on;
   const queryKey = ['report', reportSlug, batchActive ? batchMode : null, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters,
     periodMode ? periodUnit : null, periodMode ? periodDimension : null, periodMode ? compareMode : null];
@@ -1264,8 +1264,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
 
   const applyRowClick = useCallback(
     (id: string, name: string) => {
-      // «Ответы на запросы»: клик по имени строки — все её запросы (как ячейка «всего»).
-      if (reportSlug === RESPONSE_SLUG) { applyCellClickRef.current?.(id, name, 'rr_requests_total'); return; }
+      // «Ответы на запросы»: клик по имени строки — все её запросы (как ячейка «Все запросы»).
+      if (RESPONSE_SLUGS.includes(reportSlug)) { applyCellClickRef.current?.(id, name, 'sp_req_all'); return; }
       // Агрегированные строки отделов внутри филиала → сделки отдела
       if (id.startsWith('__ugroup__')) {
         // Этап 2 (задача 2653): список сделок ВСЕХ участников группы —
@@ -1313,17 +1313,21 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
         setCallsDrill({ scope, name, metricId, metricName: m?.nameRu ?? LOGIST_METRICS.find(x => x.id === metricId)?.nameRu });
         return;
       }
-      // «Ответы на запросы» (задача #8034): дрилл — список задач-запросов, а не
-      // сделок (DrilldownDrawer умеет только сделки). Группы отделов/«Итого» —
-      // все менеджеры среза.
-      if (reportSlug === RESPONSE_SLUG) {
-        const rowsNow = (data?.rows ?? []) as MergedRow[];
-        const ids = id === '__total__' ? rowsNow.map(r => r.dimensionId)
-          : id.startsWith('__team__') ? rowsNow.filter(r => (r.teamId ?? '') === id.slice('__team__'.length)).map(r => r.dimensionId)
-          : id.startsWith('__branch__') ? rowsNow.filter(r => (r.branchName ?? '') === id.slice('__branch__'.length)).map(r => r.dimensionId)
-          : id.startsWith('__ugroup__') ? (userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [])
-          : [id];
-        setTasksDrill({ managerId: ids.filter(x => /^\d+$/.test(x)).join(',') || '__all__', name, metricId, metricName: m?.nameRu });
+      // «Ответы на запросы» (методика Панели снабжения): дрилл — список задач панели
+      // (/api/realizations/supply/tasks), а не сделок. Строка снабженца → user=<uid>,
+      // проекта-категории → group=<id>, итог региона/департамента → region/dept.
+      // Строка «Не снабженцы» (uid 0) в панели в списки не попадает — клик не открывает ничего.
+      if (RESPONSE_SLUGS.includes(reportSlug)) {
+        const pick = spPickKey(metricId);
+        if (!pick) return;
+        const filter: Record<string, string> = {};
+        if (id === '__total__') { /* без фильтра */ }
+        else if (id.startsWith('__branch__')) filter.region = id.slice('__branch__'.length);
+        else if (id.startsWith('__team__')) filter.dept = id.slice('__team__'.length);
+        else if (id.startsWith('__')) return;
+        else if (reportSlug === RESPONSE_SLUG) { if (id === '0') return; filter.user = id; }
+        else filter.group = id;
+        setTasksDrill({ filter, metric: pick, name, metricName: m?.nameRu });
         return;
       }
       // Групповые строки и «Итого» открывают плоский список сделок всего среза
@@ -1395,16 +1399,16 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
         // Разрез источников: строка ≠ менеджер/группа — поддержан только «Итого»
         // (фильтры источников в серию пока не транслируются — осознанное ограничение v1).
         if (id !== '__total__') { alert('График по строкам источников пока не поддержан — используйте иконку в заголовке метрики («Итого»)'); return; }
-      } else if (reportSlug === 'by-managers' || reportSlug === RESPONSE_SLUG) {
-        // «Ответы на запросы» (#8126, находка 3): строка = менеджер-постановщик — график
-        // ограничивается строкой так же, как в «Менеджерах» (раньше рисовался ряд «Итого»).
-        if (id === '__total__') managerIds = reportSlug === RESPONSE_SLUG ? undefined : baseRows.map(r => r.dimensionId);
+      } else if (reportSlug === 'by-managers') {
+        if (id === '__total__') managerIds = baseRows.map(r => r.dimensionId);
         else if (id.startsWith('__team__')) { const t = id.slice(8); managerIds = baseRows.filter(r => (r.teamId ?? '__no_team__') === t).map(r => r.dimensionId); }
         else if (id.startsWith('__branch__')) { const b = id.slice(10); managerIds = baseRows.filter(r => (r.branchName ?? 'СПб') === b).map(r => r.dimensionId); }
         else if (id === NOGROUP_ROW_ID) managerIds = userGroupFreeIds;
         else if (id.startsWith('__ugroup__')) managerIds = userGroups.find(x => `__ugroup__${x.id}` === id)?.member_ids ?? [];
         else managerIds = [id];
         if (managerIds !== undefined && managerIds.length === 0) return;
+      } else if (RESPONSE_SLUGS.includes(reportSlug)) {
+        if (id !== '__total__') { alert('График по строке этого отчёта пока не поддержан — используйте иконку в заголовке метрики («Итого»)'); return; }
       } else if (REALIZATION_SLUGS.includes(reportSlug)) {
         if (id !== '__total__') { alert('График по строке логиста пока не поддержан — используйте иконку в заголовке метрики («Итого»)'); return; }
       } else if (reportSlug === 'by-product-groups') {
@@ -1513,7 +1517,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     : sourceMode
     ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
     : reportSlug === 'by-product-groups' ? 'Товарная группа'
-    : reportSlug === RESPONSE_SLUG ? 'Менеджер (постановщик)'
+    : reportSlug === RESPONSE_SLUG ? 'Снабженец'
+    : reportSlug === RESPONSE_CATEGORIES_SLUG ? 'Категория'
     : reportSlug === REGIONS_SLUG ? 'Регион'
     : REALIZATION_SLUGS.includes(reportSlug) ? 'Логист' : 'Менеджер';
 
@@ -1950,16 +1955,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
 
       {/* Оговорки данных «Реализации» — один баннер над таблицей (#8126, находка 14). */}
       {realizationMode && (() => {
-        const early = reportSlug === RESPONSE_SLUG && format(period.from, 'yyyy-MM-dd') < RESPONSE_RELIABLE_FROM;
-        const text = reportSlug === RESPONSE_SLUG
-          ? (early
-            ? 'Период начинается раньше 07.09.2026: до этой даты у части запросов нет ответа в Битриксе, «Первый ответ» и доли быстрых ответов там занижены.'
-            : 'Первый ответ считается надёжно с 07.09.2026. Время — по Москве.')
+        const text = responseMode
+          ? 'По методике Панели снабжения: скорости — в рабочих часах (будни 09–18 МСК), ответ — перевод задачи в «Сделаны». Данные обновляются раз в 15 минут.'
           : 'Заявки и работа логистов по данным 1С, суммы без НДС. Маржа предварительная — методика ещё не согласована. Данные обновляются раз в 5 минут.';
         return (
-          <div role="status" className={`mx-3 sm:mx-6 mt-2 flex items-start gap-2 rounded-lg border px-3 py-2 text-[13px] text-[var(--color-text)] ${early
-            ? 'border-[var(--warning-text)]/30 bg-[var(--warning-bg)]' : 'border-[var(--color-accent)]/25 bg-[var(--blue-50)]'}`}>
-            <Info size={16} className={`mt-px shrink-0 ${early ? 'text-[var(--warning-text)]' : 'text-[var(--color-accent)]'}`} aria-hidden />
+          <div role="status" className="mx-3 sm:mx-6 mt-2 flex items-start gap-2 rounded-lg border border-[var(--color-accent)]/25 bg-[var(--blue-50)] px-3 py-2 text-[13px] text-[var(--color-text)]">
+            <Info size={16} className="mt-px shrink-0 text-[var(--color-accent)]" aria-hidden />
             <span>{text}</span>
           </div>
         );
@@ -2225,9 +2226,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
       )}
 
       {tasksDrill && (
-        <RequestTasksDrill key={`${tasksDrill.managerId}|${tasksDrill.metricId ?? ''}`} managerId={tasksDrill.managerId} name={tasksDrill.name}
-          metricId={tasksDrill.metricId} metricName={tasksDrill.metricName}
-          period={period} onClose={closeDrillUrl} />
+        <SupplyTasksDrill key={`${JSON.stringify(tasksDrill.filter)}|${tasksDrill.metric}`} filter={tasksDrill.filter} metric={tasksDrill.metric}
+          name={tasksDrill.name} metricName={tasksDrill.metricName} period={period} onClose={closeDrillUrl} />
       )}
 
       {callsDrill && (

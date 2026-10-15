@@ -30,7 +30,8 @@ import {
 } from '@/features/reports/engine/clientMetrics';
 import { computeRatingValues } from '@/features/manager-card/engine/ratings';
 import { fetchRequestResponse } from '@/features/reports/engine/requestResponse';
-import { RESPONSE_SLUG, RESPONSE_METRIC_IDS } from '@/lib/realizations/responseMetrics';
+import { RESPONSE_SLUG, RESPONSE_SLUGS, RESPONSE_METRIC_IDS } from '@/lib/realizations/responseMetrics';
+import { NoSnapshotError } from '@/lib/supplyPanel/http';
 import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_METRIC_IDS } from '@/lib/realizations/logistMetrics';
 import { fetchLogistReport } from '@/features/reports/engine/realizationLogists';
 import { canViewRealizations } from '@/lib/realizations/access';
@@ -114,7 +115,7 @@ export async function POST(req: NextRequest) {
 
   // «Ответы на запросы» (раздел «Реализация», задача #8034) — только роль
   // «Администратор» (и супер-админ); та же проверка, что у меню и /api/realizations/*.
-  if ((reportSlug === RESPONSE_SLUG || REALIZATION_SLUGS.includes(reportSlug)) && !canViewRealizations(session)) {
+  if ((RESPONSE_SLUGS.includes(reportSlug) || REALIZATION_SLUGS.includes(reportSlug)) && !canViewRealizations(session)) {
     return NextResponse.json({ error: 'Недостаточно прав: раздел «Реализация» доступен только роли «Администратор»' }, { status: 403 });
   }
   if (!isValidPeriodInput(period)) {
@@ -260,7 +261,8 @@ export async function POST(req: NextRequest) {
     curTouch?: TouchAndFirstCallRow; compTouch?: TouchAndFirstCallRow;
   } | null = null;
 
-  let responseGrand: { cur: Record<string, number | null> | null; comp: Record<string, number | null> | null } | null = null;
+  type MetricMap = Record<string, number | null>;
+  let responseGrand: { cur: MetricMap; comp: MetricMap; groups: { cur: Record<'branch' | 'team', Record<string, MetricMap>>; comp: Record<'branch' | 'team', Record<string, MetricMap>> } } | null = null;
   let logistGrand: { cur: Record<string, number | null>; comp: Record<string, number | null> } | null = null;
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
@@ -297,24 +299,22 @@ export async function POST(req: NextRequest) {
       fetchByDealBuckets({ xField, period: opts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, managerId, createdTimeFilter, firstTouchFilter, dealFilters }),
       fetchByDealBuckets({ xField, period: compOpts.period, dealScope, clientType, departmentIds, productGroupMode, productGroupIds, managerId, createdTimeFilter, firstTouchFilter, dealFilters }),
     ]);
-  } else if (reportSlug === RESPONSE_SLUG) {
-    // «Ответы на запросы» (задача #8034): строка = менеджер-постановщик задачи в
-    // потоке снабжения (sa.bitrix_task_current + sa.bitrix_flows), метрики rr_*.
-    // «Итого» — из общей строки той же выборки (медианы, distinct-сделки).
+  } else if (RESPONSE_SLUGS.includes(reportSlug)) {
+    // «Ответы на запросы» по методике Панели снабжения (решение владельца 14.10):
+    // строка = снабженец (или категория — проект снабжения), расчёт — lib/supplyPanel
+    // над снимком панели. «Итого» и подытоги регионов/департаментов — срезы панели.
     try {
+      const by = reportSlug === RESPONSE_SLUG ? 'user' : 'group';
       const [cur, comp] = await Promise.all([
-        fetchRequestResponse(opts.period, { departmentIds }),
-        fetchRequestResponse(compOpts.period, { departmentIds }),
+        fetchRequestResponse(opts.period, by),
+        fetchRequestResponse(compOpts.period, by),
       ]);
       currentRows = cur.rows;
       compRows = comp.rows;
-      responseGrand = { cur: cur.grand, comp: comp.grand };
+      responseGrand = { cur: cur.grand, comp: comp.grand, groups: { cur: cur.groups, comp: comp.groups } };
     } catch (e) {
-      const msg = (e as Error).message ?? '';
-      console.error('[reports/run requests-response]', msg);
-      if (/permission denied/i.test(msg)) {
-        return NextResponse.json({ error: 'Нет доступа к задачам Битрикса в базе (sa.bitrix_task_current / sa.bitrix_flows): роли приложения нужен GRANT SELECT' }, { status: 503 });
-      }
+      if (e instanceof NoSnapshotError) return NextResponse.json({ error: e.message }, { status: 503 });
+      console.error('[reports/run requests-response]', (e as Error).message ?? e);
       return NextResponse.json({ error: 'Не удалось посчитать «Ответы на запросы»' }, { status: 502 });
     }
   } else if (REALIZATION_SLUGS.includes(reportSlug)) {
@@ -990,7 +990,29 @@ export async function POST(req: NextRequest) {
   });
 
   // Apply grouping
-  const grouped = applyGrouping(currentRows, grouping, allMetrics);
+  let grouped = applyGrouping(currentRows, grouping, allMetrics);
+  // «Ответы на запросы»: подытог региона/департамента — срез панели, а не сумма строк
+  // (средние по событиям, сделка у нескольких снабженцев — одна). У «Категорий» регион
+  // и департамент — проекта, срезы панели по снабженцу к ним не подходят: без групп.
+  if (responseGrand && (grouping === 'branch' || grouping === 'team')) {
+    if (reportSlug !== RESPONSE_SLUG) grouped = currentRows;
+    else {
+      const kind: 'branch' | 'team' = grouping === 'branch' ? 'branch' : 'team';
+      const prefix = kind === 'branch' ? '__branch__' : '__team__';
+      const g = responseGrand.groups;
+      grouped = grouped.map(row => {
+        if (!row.dimensionId.startsWith(prefix)) return row;
+        const key = row.dimensionId.slice(prefix.length);
+        const cur = g.cur[kind][key] ?? {}, comp = g.comp[kind][key] ?? {};
+        const metrics = { ...row.metrics };
+        for (const id of RESPONSE_METRIC_IDS) if (id in metrics || id in cur) metrics[id] = cur[id] ?? null;
+        const deltas = Object.fromEntries(Object.keys(metrics).map(id => [id, {
+          current: metrics[id] ?? null, comparison: comp[id] ?? null, ...computeDelta(metrics[id] ?? null, comp[id] ?? null),
+        }]));
+        return { ...row, metrics, deltas };
+      });
+    }
+  }
 
   // Totals: агрегат текущего периода — «как раньше» (сумма collected/external, calculated
   // пересчитан из сумм — см. computeTotals). Баг 09.07 (собрание, п.3/п.6): строка «Итого»
@@ -1092,8 +1114,8 @@ export async function POST(req: NextRequest) {
   if (responseGrand) {
     for (const id of RESPONSE_METRIC_IDS) {
       if (!withDeps.some(m => m.id === id)) continue;
-      const current = responseGrand.cur?.[id] ?? null;
-      const comparison = responseGrand.comp?.[id] ?? null;
+      const current = responseGrand.cur[id] ?? null;
+      const comparison = responseGrand.comp[id] ?? null;
       totals[id] = { current, comparison, ...computeDelta(current, comparison) };
     }
   }

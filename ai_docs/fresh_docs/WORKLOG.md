@@ -6,6 +6,33 @@
 
 ---
 
+## 2026-10-15 — «Ответы на запросы» заменены отчётом по методике Панели снабжения
+
+Решения владельца 14.10 (по `SUPPLY_PANEL_RESPONSES_GAP.md`): (1) замена прежнего отчёта по
+менеджерам-постановщикам; (2) вселенная запросов — проекты снабжения, как в панели; (3) ключ
+SSH — на прод (копия ключа владельца); (4) вкладки «Товары» и «Доля запросов» — сразу.
+
+**Расчёт** — `lib/supplyPanel/` (порт calc.py / metrics.py / domcalc.py / catalog.paths панели,
+коммит панели `5504deae`): источник `ssh` (`SUPPLY_PANEL_SSH`, `SUPPLY_PANEL_SSH_KEY`) или
+`sqlite:<panel.db>`; снимок — gzip JSON (~9 МБ) в `SUPPLY_PANEL_DIR`, кэш в памяти по mtime.
+Сверка с Python панели: `npm run verify:supply-panel` (нужны `SUPPLY_PANEL_SOURCE=sqlite:…` и
+`SUPPLY_PANEL_REF` с эталонами) — 176 проверок, 0 расхождений; живой ssh-снимок — 19 с, сентябрь
+совпал с report.py панели (5 942 / 9 440 / 4,01 / 773 / 19,3 % на данных 14.10).
+**Джоба** `supplyPanelSync` (instrumentation.ts): при старте и раз в 15 минут; при рубильнике —
+через `BACKGROUND_JOBS_ALLOW=…,supplyPanelSync`. Без снимка API отвечают 503 с понятным текстом.
+**Отчёт** на общем движке: slug `requests-response` — строки = аккаунты снабженцев (регион и
+департамент снабженца для группировок), `requests-response-categories` — строки = проекты.
+Метрики `sp_<ключ панели>` (`lib/realizations/responseMetrics.ts`), Итого и подытоги
+регионов/департаментов — срезы панели, не сумма строк. Дрилл — `SupplyTasksDrill`
+(`/api/realizations/supply/tasks`, PICK панели). Вкладки «Снабженцы · Категории · Товары ·
+Доля запросов» (`app/(app)/realizations/responses/layout.tsx`), API `/api/realizations/supply/
+{tasks,goods,dom,dom-deals,meta}`. Удалены: прежний движок по `sa.bitrix_task_current`+потокам,
+`lib/realizations/responseDrill.ts`, `/api/realizations/tasks`, `RequestTasksDrill`.
+Строка «Не снабженцы» (uid 0) — без списка задач (в панели так же). Локально визуально не
+проверено: локальный dev не достаёт системную БД (сессии), дев-стенд выключен — проверка на проде.
+
+---
+
 ## 2026-10-14 — «Ответы на запросы»: разбор Панели снабжения, сверка методик
 
 Коллега передал доступ на чтение к серверу Панели снабжения (`ssh monolitika-ro@5.42.106.70`,

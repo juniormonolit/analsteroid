@@ -13,8 +13,8 @@ import { canViewRealizations } from '../lib/realizations/access.ts';
 import { regionOf } from '../lib/realizations/region.ts';
 import { parseFilters, matchRow } from '../lib/realizations/filters.ts';
 import { buildSummary, statusTimes, median, percentile, mskDate, type ReqRow } from '../lib/realizations/metrics.ts';
-import { RESPONSE_DRILL_RULES, responseDrillRule, parseDrillMetric } from '../lib/realizations/responseDrill.ts';
-import { RESPONSE_METRICS } from '../lib/realizations/responseMetrics.ts';
+import { RESPONSE_METRICS, spPickKey } from '../lib/realizations/responseMetrics.ts';
+import { PICK } from '../lib/supplyPanel/metrics.ts';
 import { LOGIST_METRICS, LOGIST_COLUMN_GROUPS, LOGIST_DEFAULT_METRIC_IDS, LOGIST_HEATMAP_ON_IDS, LOGIST_HEATMAP_INVERTED_IDS, summaryToMetrics, needsCallUpgrade, upgradeLogistView } from '../lib/realizations/logistMetrics.ts';
 import { computeCalculated } from '../features/reports/engine/calculated.ts';
 import { parseSortParam, nextSort, sortRows } from '../lib/hooks/sortCore.ts';
@@ -106,13 +106,8 @@ check(empty.rows.length === 0 && empty.total.total === 0 && empty.total.onTimePc
 
 
 // 5. Задача #8126
-// 5.1 Дрилл «Ответов»: у каждой метрики отчёта есть правило; неизвестный id не проходит в SQL.
-check(RESPONSE_METRICS.every(m => RESPONSE_DRILL_RULES[m.id]), 'правило дрилла у каждой rr_* метрики');
-check(parseDrillMetric('rr_requests_new') === 'rr_requests_new' && parseDrillMetric("x'; drop") === null && parseDrillMetric(null) === null, 'metricId только из словаря');
-check(responseDrillRule('rr_requests_new').where === 'rq.status in (1, 2)', 'новые = статус 1, 2 (как в агрегате)');
-check(responseDrillRule(undefined).where === '' && responseDrillRule('нет такой').where === '', 'без метрики — все запросы');
-check(responseDrillRule('rr_sold_deals').perDeal === true && responseDrillRule('rr_sold_deals').unit === 'deals', 'сделочные метрики — строка на сделку');
-check(Object.values(RESPONSE_DRILL_RULES).every(r => !/;|--/.test(r.where)), 'условия без ; и комментариев');
+// 5.1 Дрилл «Ответов» (методика Панели снабжения, 14.10): у каждой sp_* метрики есть список задач панели (PICK).
+check(RESPONSE_METRICS.every(m => { const k = spPickKey(m.id); return k !== null && Object.prototype.hasOwnProperty.call(PICK, k); }), 'у каждой sp_* метрики есть PICK панели');
 // 5.2 Сортировка: цикл убывание → возрастание → по умолчанию, разбор параметра
 check(JSON.stringify(nextSort({ key: null, dir: 'desc' }, 'a')) === '{"key":"a","dir":"desc"}', 'первый клик — убывание');
 check(nextSort({ key: 'a', dir: 'desc' }, 'a').dir === 'asc' && nextSort({ key: 'a', dir: 'asc' }, 'a').key === null, 'второй — возрастание, третий — сброс');

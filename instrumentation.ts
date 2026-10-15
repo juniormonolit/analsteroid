@@ -42,6 +42,7 @@ export async function register() {
     const allow = new Set((process.env.BACKGROUND_JOBS_ALLOW ?? '').split(',').map(s => s.trim()).filter(Boolean));
     if (allow.has('callControl')) scheduleCallControl();
     if (allow.has('weeklyWeather')) scheduleWeeklyWeather();
+    if (allow.has('supplyPanelSync')) scheduleSupplyPanelSync();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -76,6 +77,7 @@ export async function register() {
   scheduleRopDigest();
   scheduleRopAdviceFeedback();
   scheduleWeeklyWeather();
+  scheduleSupplyPanelSync();
   scheduleReportSchedules();
   scheduleScenarios();
   scheduleDiagnostics();
@@ -701,6 +703,30 @@ function scheduleWidgetMetrics() {
 // Гейт — НЕ env, а call_control_settings.enabled в БД (правится в /settings/bots):
 // на dev-стенде своя системная БД (junibaseone) со своим выключателем, дублей не будет.
 // Redis-замок на тик — на случай перекрытия соседних инстансов одной БД.
+// «Реализация → Ответы на запросы» (решение владельца 14.10): снимок данных Панели снабжения
+// раз в 15 минут — чаще бессмысленно, панель сама обновляется раз в 15 минут. Только чтение
+// по SSH (monolitika-ro@5.42.106.70, команды tables/sql), запись — gzip-файл в SUPPLY_PANEL_DIR.
+// Без пишущих действий в БД и рассылок — поэтому разрешена и при рубильнике (BACKGROUND_JOBS_ALLOW).
+// Первый прогон — сразу при старте, чтобы раздел не ждал 15 минут после деплоя.
+function scheduleSupplyPanelSync() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { refreshSnapshot } = await import('./lib/supplyPanel/snapshot');
+      const r = await refreshSnapshot();
+      console.log(`[supplyPanelSync] снимок ${r.builtAt}: задач ${r.tasks}, ${Math.round(r.bytes / 1024)} КБ, ${r.ms} мс`);
+    } catch (err) {
+      console.error('[supplyPanelSync] не удалось:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+  void tick();
+  setInterval(() => { void tick(); }, 15 * 60 * 1000);
+}
+
 function scheduleCallControl() {
   let running = false; // защита от наложения тиков внутри процесса
 

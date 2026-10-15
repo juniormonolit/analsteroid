@@ -113,7 +113,8 @@ export async function loadSnapshot(): Promise<Snapshot | null> {
 export async function refreshSnapshot(): Promise<{ builtAt: string; tasks: number; bytes: number; ms: number }> {
   const t0 = Date.now();
   const snap = await buildSnapshot();
-  const { bytes } = await saveSnapshot(snap);
-  g.__supplyPanelSnapshot = undefined;
+  const { file, bytes } = await saveSnapshot(snap);
+  // Свежий снимок сразу в кэш: иначе первый запрос после синка заново читал бы и распаковывал файл.
+  g.__supplyPanelSnapshot = { file, mtimeMs: (await fs.stat(file)).mtimeMs, snap };
   return { builtAt: snap.builtAt, tasks: snap.facts.tasks.length, bytes, ms: Date.now() - t0 };
 }
