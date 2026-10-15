@@ -22,7 +22,10 @@ const NOT_ADDRESS = /паспорт|тел[.:]|телефон|звонить|п�
 const PHONE = /(?:\+7|8)[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2}/g;
 const LONG_DIGITS = /\d[\d\s-]{6,}\d/g;            // паспорта, счета, индексы — без них адрес не страдает
 const COORDS = /(-?\d{2}[.,]\d{4,})\s*[,;\s]\s*(-?\d{2,3}[.,]\d{4,})/;
-const LABEL = /^\s*(?:адрес(?:\s+(?:доставки|объекта|выгрузки))?|куда|объект|разгрузка|выгрузка)\s*[:\-–—]\s*/i;
+// Подпись перед двоеточием: «Адрес:», «Доставка:», «Доставка леруа:», «Адрес объекта —».
+const LABEL = /^\s*(?:[а-яё]+\s+){0,2}(?:доставк[аиу]|адрес|куда|объект|выгрузк[аи]|разгрузк[аи])(?:\s+[а-яё]+){0,2}\s*[:\-–—]\s*/i;
+// Фрагмент про склад/самовывоз — это не объект клиента («Склад: …, Люберцы»).
+const WAREHOUSE = /^\s*(?:склад|со склада|с нашего склада|забрать|забира|самовывоз|отгрузка со?|погрузка|загрузка)/i;
 
 function coordsIn(s: string): { lat: number; lon: number; index: number } | null {
   // Ссылка на карту в комментарии — точнее всего.
@@ -41,6 +44,7 @@ function coordsIn(s: string): { lat: number; lon: number; index: number } | null
 const NOISE = /разгруз|выгруз|манипулятор|кран|заезд|въезд|машин|привез|достав|обед|утр|вечер|звон|ворот|шлагбаум|пропуск|охран|ждать|ждут/i;
 
 function clean(s: string): string {
+  s = s.replace(LABEL, '');
   s = s.split(',').filter(p => !NOISE.test(p)).join(',');
   return s.replace(/https?:\/\/\S+/g, ' ')
     .replace(LABEL, '')
@@ -65,6 +69,7 @@ export function addressFromComment(comment: string | null | undefined): CommentA
   let address: string | null = null;
   let best = 0;
   for (const seg of segments) {
+    if (WAREHOUSE.test(seg)) continue;                // склад — ни адрес, ни точка
     const c = coordsIn(seg);
     // Текст до координат в том же фрагменте — это и есть адрес точки.
     const before = c ? seg.slice(0, c.index) : seg;

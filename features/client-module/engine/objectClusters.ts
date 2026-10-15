@@ -106,8 +106,13 @@ export function settlementLabel(address: string): string {
     if (!/\d/.test(prev) && !/(улица|проспект|проезд|шоссе|дорога|переулок)/i.test(prev)) return `${prev} (${/петербург/i.test(last) ? 'СПб' : 'Москва'})`;
     return last;
   }
-  return SETTLEMENT_PREFIX.test(last) ? clean(last) : last;
+  const label = SETTLEMENT_PREFIX.test(last) ? clean(last) : last;
+  // Населённого пункта в адресе нет и последним оказался дом («1-й Верхний
+  // переулок, дом 2» → «дом 2») — подписываем улицей.
+  if (HOUSE_PART.test(label)) return parts.filter(p => !HOUSE_PART.test(p)).pop() ?? address;
+  return label;
 }
+const HOUSE_PART = /^(?:дом|д|корп|корпус|к|стр|строение|вл|влад|владение|уч|участок|кв)\.?\s*\d|^\d+[а-яё]?$/i;
 
 /** Уточнение к подписи, если у клиента два объекта в одном пункте: улица/ориентир. */
 export function placeDetail(address: string): string {
