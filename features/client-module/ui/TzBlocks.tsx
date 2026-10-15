@@ -17,6 +17,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
 import { type ModuleDeal, type ModuleStats } from '../engine/types';
 import { Chip, fmtD, dealTitle } from './parts';
+import { callTiming } from '../engine/callTiming';
 
 const DAY_MS = 86_400_000;
 
@@ -31,8 +32,10 @@ function Metric({ label, value, sub }: { label: string; value: React.ReactNode; 
 }
 
 /** Показатели а–ж (ж — только у клиента: `objects`). */
-export function TzMetrics({ s, objects }: { s: ModuleStats; objects?: { total: number; active: number } }) {
+export function TzMetrics({ s, objects, deals }: { s: ModuleStats; objects?: { total: number; active: number }; deals?: ModuleDeal[] }) {
   const other = s.total - s.shipped;
+  const timing = deals ? callTiming(deals) : null;
+  const cycle = timing?.cycle ?? s.cycleDays;
   return (
     // Плитки сами раскладываются по ширине (во вкладке Битрикса она разная): не
     // меньше 150px, без обрезки подписей «Средний чек отгруз…».
@@ -40,7 +43,9 @@ export function TzMetrics({ s, objects }: { s: ModuleStats; objects?: { total: n
       <Metric label="Отгружено / всего" value={<>{s.shipped} / {s.total}</>} sub={other > 0 ? `${other} в других статусах` : 'все отгружены'} />
       <Metric label="LTV" value={fmtMoney(s.ltv)} sub={s.firstShippedAt ? `с ${fmtD(s.firstShippedAt)}` : 'отгрузок нет'} />
       <Metric label="Средний чек отгрузки" value={s.avgCheck !== null ? fmtMoney(s.avgCheck) : '—'} />
-      <Metric label="Цикл повторки" value={s.cycleDays !== null ? `${s.cycleDays} дн.` : '—'} sub={s.cycleDays !== null ? 'между отгрузками' : 'нужно 2+ отгрузки'} />
+      {/* Одно число цикла на весь экран (аудит 15.10: плитка «9 дн.» спорила со строкой
+          «раз в 8 дней»): при 3+ покупках — медиана из callTiming, иначе среднее ТЗ. */}
+      <Metric label="Цикл повторки" value={cycle !== null ? `${cycle} дн.` : '—'} sub={timing ? `обычно, по ${timing.purchases} покупкам` : s.cycleDays !== null ? 'между отгрузками' : 'нужно 2+ отгрузки'} />
       <Metric label="Последняя отгрузка" value={s.lastShippedAt ? fmtD(s.lastShippedAt) : '—'}
         sub={s.daysSinceLast !== null ? `(${s.daysSinceLast} дн. назад)` : undefined} />
       {objects && <Metric label="Объектов" value={objects.total} sub={`в работе ${objects.active}`} />}

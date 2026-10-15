@@ -8,7 +8,7 @@
 
 import { Phone, PhoneOff } from 'lucide-react';
 import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
-import { type ClientModuleData } from '../engine/types';
+import { type ClientModuleData, isOpenDeal } from '../engine/types';
 import { Chip, fmtD, shortGroup } from './parts';
 
 const plural = (n: number, one: string, few: string, many: string) =>
@@ -18,13 +18,19 @@ export function LastDealLine({ data }: { data: ClientModuleData }) {
   const d = data.deals[0];
   if (!d) return null;
   const c = data.lastDealCalls;
+  const openMore = data.deals.slice(1).filter(isOpenDeal).length;
   const lifeDays = d.lostAt && d.createdAt ? (new Date(d.lostAt).getTime() - new Date(d.createdAt).getTime()) / 86_400_000 : null;
   const noCallsAtAll = !!c && c.total === 0 && c.clientCalls === 0;
   const flag = d.stage === 'lost' && noCallsAtAll
     ? (lifeDays !== null && lifeDays < 1 ? 'Закрыта в день создания без звонка' : `Закрыта без звонка${lifeDays !== null ? ` (за ${Math.round(lifeDays)} дн.)` : ''}`)
     : null;
+  // Причины отказа значат разное (аудит 15.10): «больше ничего не нужно» —
+  // стройка, возможно, кончилась; «не дозвонился» — просто перезвонить.
+  const reason = d.stageName ?? '';
+  const lostTone = /не дозвон/i.test(reason) ? 'warn' : /больше ничего|объектов больше нет/i.test(reason) ? 'muted' : 'neg';
+  const lostHint = /не дозвон/i.test(reason) ? ' — перезвони' : /больше ничего|объектов больше нет/i.test(reason) ? ' — стройка закончена? уточни, нет ли новой' : '';
   const outcome =
-    d.stage === 'lost' ? <Chip tone="neg">Отказ{d.stageName ? `: ${d.stageName}` : ''}{d.lostAt ? ` · ${fmtD(d.lostAt)}` : ''}</Chip>
+    d.stage === 'lost' ? <Chip tone={lostTone}>Отказ{reason ? `: ${reason}` : ''}{d.lostAt ? ` · ${fmtD(d.lostAt)}` : ''}{lostHint}</Chip>
     : d.stage === 'shipped' ? <Chip tone="ok">Отгружена {fmtD(d.deliveredAt)}</Chip>
     : d.stage === 'sold' ? <Chip tone="accent">Продана {fmtD(d.soldAt)}{d.stageName ? ` · ${d.stageName}` : ''}</Chip>
     : <Chip tone="accent">В работе{d.stageName ? ` · ${d.stageName}` : ''}</Chip>;
@@ -41,6 +47,7 @@ export function LastDealLine({ data }: { data: ClientModuleData }) {
       {/* Длинная причина отказа переносится, а не обрезается. */}
       <span className="min-w-0 max-w-full [&>span]:whitespace-normal">{outcome}</span>
       {flag && <Chip tone="neg">⚠ {flag}</Chip>}
+      {openMore > 0 && <span className="text-[var(--color-text-muted)]">· ещё {openMore} в работе</span>}
       {c && !flag && (c.total === 0
         ? <span className="inline-flex items-center gap-1" style={c.clientCalls > 0 ? { color: 'var(--color-text-muted)' } : { color: 'var(--color-warning, #e8590c)' }}>
             <PhoneOff size={13} /> по сделке звонков нет{c.clientCalls > 0 ? `, но клиенту звонили ${c.clientCalls} ${plural(c.clientCalls, 'раз', 'раза', 'раз')}` : ''}

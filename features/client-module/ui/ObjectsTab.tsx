@@ -212,7 +212,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
             </div>
           )}
           {/* Те же показатели, что у клиента, — по этому объекту (ТЗ). */}
-          <TzMetrics s={s} />
+          <TzMetrics s={s} deals={deals} />
           <div className="grid gap-3 lg:grid-cols-2">
             <div className="min-w-0">
               <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Стадии и что предложить</div>

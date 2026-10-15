@@ -6,8 +6,17 @@
 // что и на одном из прошлых, — предложить то, что на прошлом объекте он брал
 // ПОСЛЕ неё. «На «Поварово» брал арматуру (как и сейчас), а после — бетон,
 // утеплитель и газобетон. Скорее всего, строит то же самое».
+//
+// Правило 2 «Объект простаивает»: объект в работе, отгрузки не было ≥ 30 дней,
+// сделок в работе нет — позвонить, узнать, как идёт стройка, и предложить
+// следующую стадию по лестнице объекта.
+//
+// Правило 3 «Сигнал ухода»: из трёх последних закрытых сделок ≥2 — отказы
+// «Уже заказали / Дорого / Передумали», и с последней покупки прошло больше
+// обычного цикла (или циклов нет). Одного отказа мало — причины ставят небрежно.
 
-import { type ClientModuleData, type ModuleDeal, objectStatus, EMPTY_OBJECT_PROFILE } from './types';
+import { type ClientModuleData, type ModuleDeal, objectStatus, isOpenDeal, EMPTY_OBJECT_PROFILE } from './types';
+import { callTiming } from './callTiming';
 
 export interface Advice {
   id: string;
@@ -15,6 +24,8 @@ export interface Advice {
   text: string;
   /** Что предложить — для чипов. */
   groups: string[];
+  /** Тревожный совет (риск ухода) — красным. */
+  alarm?: boolean;
 }
 
 type Shipment = { group: string; at: string };
@@ -69,14 +80,66 @@ function repeatObject(data: ClientModuleData, short: (g: string) => string): Adv
       groups: next,
       // Названия групп — в именительном (склонять «Бетон и раствор» нельзя):
       // списки в скобках и после двоеточия.
-      text: `Обрати внимание: на ${sameLabel ? 'предыдущем объекте' : `объекте «${best.label}»`} заказчик брал то же, что и сейчас${current.length > 1 || !sameLabel ? ` на «${cur.o.label}»` : ''} (${best.common.slice(0, 3).map(g => lc(short(g))).join(', ')}), а после этого заказывал: ${next.map(g => lc(short(g))).join(', ')}. Скорее всего, строит то же самое — предложи эти материалы.`,
+      // Аудит 15.10: действие — первым словом, причина — следом (раньше главное
+      // пряталось в конце шестистрочной фразы).
+      text: `Предложи ${next.map(g => lc(short(g))).join(', ')}. На ${sameLabel ? 'предыдущем объекте' : `«${best.label}»`} после того же, что берёт сейчас${current.length > 1 || !sameLabel ? ` на «${cur.o.label}»` : ''} (${best.common.slice(0, 3).map(g => lc(short(g))).join(', ')}), он заказывал именно это — похоже, строит то же самое.`,
     });
   }
   return out;
 }
 
-const RULES: ((data: ClientModuleData, short: (g: string) => string) => Advice[])[] = [repeatObject];
+const STALL_DAYS = 30;
+
+function stalledObject(data: ClientModuleData, short: (g: string) => string): Advice[] {
+  const out: (Advice & { last: string })[] = [];
+  const now = Date.now();
+  for (const o of data.objects) {
+    const deals = data.deals.filter(d => d.objectKey === o.key);
+    const prof = data.objectProfiles[o.key] ?? EMPTY_OBJECT_PROFILE;
+    if (objectStatus(deals, { manual: o.manual, doneManual: prof.doneManual }, data.activeDays) !== 'active') continue;
+    if (deals.some(isOpenDeal)) continue;
+    const last = deals.reduce<string | null>((m, d) => (d.deliveredAt && (!m || d.deliveredAt > m) ? d.deliveredAt : m), null);
+    if (!last) continue;
+    const idle = Math.floor((now - new Date(last).getTime()) / 86_400_000);
+    if (idle < STALL_DAYS) continue;
+    const next = data.recommendations.byObject[o.key]?.next[0]?.group;
+    out.push({
+      last,
+      id: `stall:${o.key}`,
+      groups: next ? [next] : [],
+      text: `Позвони про «${o.label}»: ${idle} дн. без отгрузки, сделок нет. Узнай, как идёт стройка${next ? ` — по цепочке дальше ${lc(short(next))}` : ''}.`,
+    });
+  }
+  // Не больше одного — по самому свежему объекту (на 33 клиентах было 37 советов:
+  // шум, «простаивает» почти любой активный объект).
+  return out.sort((a, b) => b.last.localeCompare(a.last)).slice(0, 1).map(({ last: _l, ...a }) => a);
+}
+
+const CHURN_REASON = /уже заказ|дорого|передумал/i;
+
+function churnSignal(data: ClientModuleData): Advice[] {
+  // deals отсортированы по created_at ↓.
+  const closed = data.deals.filter(d => d.stage === 'lost' || d.stage === 'shipped').slice(0, 3);
+  const bad = closed.filter(d => d.stage === 'lost' && CHURN_REASON.test(d.stageName ?? ''));
+  if (bad.length < 2) return [];
+  const t = callTiming(data.deals);
+  const lastShip = data.deals.reduce<string | null>((m, d) => (d.deliveredAt && (!m || d.deliveredAt > m) ? d.deliveredAt : m), null);
+  const since = lastShip ? Math.floor((Date.now() - new Date(lastShip).getTime()) / 86_400_000) : null;
+  if (t && since !== null && since <= t.cycle) return [];   // покупает в своём ритме — не паникуем
+  const reasons = [...new Set(bad.map(d => d.stageName!))].map(r => `«${r}»`).join(', ');
+  return [{
+    id: 'churn',
+    groups: [],
+    alarm: true,
+    text: `Риск ухода: узнай, где сейчас берёт и почему, — предложи условия лучше. ${bad.length} из ${closed.length} последних сделок — отказ (${reasons})${since !== null ? `, с последней покупки ${since} дн.${t ? ` при обычных ${t.cycle}` : ''}` : ''}.`,
+  }];
+}
+
+const RULES: ((data: ClientModuleData, short: (g: string) => string) => Advice[])[] = [churnSignal, repeatObject, stalledObject];
 
 export function buildAdvice(data: ClientModuleData, short: (g: string) => string = g => g): Advice[] {
-  return RULES.flatMap(r => r(data, short));
+  const all = RULES.flatMap(r => r(data, short));
+  // По одному объекту — один совет: «повтор» конкретнее, чем «простаивает».
+  const repeated = new Set(all.filter(a => a.id.startsWith('repeat:')).map(a => a.id.slice(7)));
+  return all.filter(a => !(a.id.startsWith('stall:') && repeated.has(a.id.slice(6))));
 }

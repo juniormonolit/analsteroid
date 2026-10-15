@@ -13,6 +13,7 @@ import { Section, RecList, StatusDot, shortGroup, fmtD, useDismiss } from './par
 import { TzMetrics } from './TzBlocks';
 import { ClientHintCard, LegalLine } from './ClientHintCard';
 import { LastDealLine } from './LastDealLine';
+import { CallTimingLine } from './CallTimingLine';
 import { buildAdvice } from '../engine/advice';
 
 export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditClient }: {
@@ -25,8 +26,6 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
   const [allGroups, setAllGroups] = useState(false);
   const dis = useDismiss(data, params);
   const stats = computeStats(data.deals);
-  const lastDeal = [...data.deals].filter(d => d.deliveredAt).sort((a, b) => b.deliveredAt!.localeCompare(a.deliveredAt!))[0];
-  const lastObj = lastDeal?.objectKey ? data.objects.find(o => o.key === lastDeal.objectKey)?.label : null;
   const noObj = data.deals.filter(d => !d.objectKey);
   const noObjSum = noObj.reduce((s, d) => s + d.amount, 0);
   const groupMax = stats.groups[0]?.sum ?? 0;
@@ -42,31 +41,31 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
   const rank = { active: 0, new: 1, done: 2 } as const;
   const working = objects.filter(x => x.st !== 'done');
   const ordered = [...objects].sort((a, b) => rank[a.st] - rank[b.st] || (b.s.lastShippedAt ?? '').localeCompare(a.s.lastShippedAt ?? ''));
-  const openN = stats.open;
   const advice = buildAdvice(data, shortGroup);
 
   return (
     <div className="flex flex-col gap-3">
-      {/* «Похоже, это …» — подсказка типа клиента (владелец 15.10) и ЕГРЮЛ. */}
+      {/* Порядок экрана (аудит 15.10): почему звонить сейчас → что сказать →
+          куда везём / что предложить → цифры ТЗ → справочное. */}
       <ClientHintCard data={data} params={params} onEditClient={onEditClient} />
-      <LegalLine data={data} />
-      {/* Показатели а–ж ровно по ТЗ (аудит ТЗ↔реальность 14.10: при редизайне
-          пропали «8 / 10», LTV, дата последней отгрузки и число объектов). */}
-      <TzMetrics s={stats} objects={{ total: data.objects.length, active: working.filter(x => x.st === 'active').length }} />
-      <LastDealLine data={data} />
+      <div className="flex flex-col gap-2">
+        <CallTimingLine deals={data.deals} />
+        <LastDealLine data={data} />
+      </div>
       {/* «Совет» (владелец 15.10) — правила в engine/advice.ts. */}
       {advice.length > 0 && (
         <section className="rounded-xl border border-[color-mix(in_srgb,var(--color-warning,#e8590c)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-warning,#e8590c)_6%,transparent)] px-3.5 py-3">
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-warning,#e8590c)]"><Lightbulb size={14} /> Совет</div>
-          <div className="flex flex-col gap-2">
-            {advice.map(a => <p key={a.id} className="text-[13px] leading-snug">{a.text}</p>)}
-          </div>
+          <ul className="flex flex-col gap-2">
+            {advice.map(a => (
+              <li key={a.id} className="flex gap-2 text-[13.5px] leading-snug" style={a.alarm ? { color: 'var(--color-negative, #e03131)' } : undefined}>
+                {advice.length > 1 && <span aria-hidden className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />}
+                <span className="min-w-0">{a.text}</span>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
-      <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-0.5 text-[12px] text-[var(--color-text-muted)]">
-        {openN > 0 ? <span>Сейчас в работе: <b className="text-[var(--color-text)]">{openN} {openN === 1 ? 'сделка' : openN < 5 ? 'сделки' : 'сделок'} на {fmtMoney(stats.openSum)}</b></span> : <span>Активных сделок нет</span>}
-        {lastDeal && <span>· последняя отгрузка: {shortGroup(lastDeal.topGroup) || '—'}{lastObj ? ` → ${lastObj}` : ''}</span>}
-      </div>
 
       {noObj.length > 0 && (
         <button type="button" onClick={() => onOpenDeals({ object: '__none' })}
@@ -114,13 +113,17 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
         </Section>
       </div>
 
+      {/* Показатели а–ж ровно по ТЗ — видимы всегда (владелец 14.10: «куда проебался LTV»). */}
+      <TzMetrics s={stats} deals={data.deals} objects={{ total: data.objects.length, active: working.filter(x => x.st === 'active').length }} />
+      <LegalLine data={data} />
+
       <Section title={`Товарные группы по отгрузкам · ${stats.groups.length}`}>
         {stats.groups.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Отгрузок с товарами нет</div> : (
           <div className="flex flex-col gap-1.5">
             {groups.map(g => (
               <div key={g.group} className="text-[12.5px]">
                 <div className="flex items-baseline gap-2">
-                  <span className="min-w-0 flex-1 truncate" title={g.group}>{g.group}</span>
+                  <span className="min-w-0 flex-1 truncate" title={g.group}>{shortGroup(g.group)}</span>
                   <span className="shrink-0 text-[11.5px] text-[var(--color-text-muted)]">{g.deals} отгр. · {fmtD(g.lastAt)}</span>
                   <span className="w-[76px] shrink-0 text-right font-semibold tabular-nums">{fmtMoney(g.sum)}</span>
                 </div>

@@ -39,6 +39,8 @@ export function ClientHintCard({ data, params, onEditClient }: {
   const current = data.profile.clientType === 'self_builder_late' && h?.type === 'self_builder' ? 'self_builder' : data.profile.clientType;
   if (!h || !data.profilesAvailable) return null;
   if (current === h.type && h.warnings.length === 0) return null;
+  // Тип не указан — подсказка живёт в шапке (ClientBar); здесь только «спорю с указанным» и тревоги ЕГРЮЛ.
+  if (current === null && h.warnings.length === 0) return null;
   // Тип уже указан, но подсказка уверенно говорит другое — короткое «проверь».
   const disagrees = current !== null && current !== h.type;
   if (disagrees && h.confidence !== 'high' && h.warnings.length === 0) return null;
@@ -46,35 +48,38 @@ export function ClientHintCard({ data, params, onEditClient }: {
   const occupation = TYPES_WITH_OCCUPATION.has(h.type) ? (data.profile.occupation || h.occupation) : '';
   const accept = () => save({ client: { clientType: h.type, occupation, note: data.profile.note } });
 
+  // Аудит 15.10: подсказка — одна строка с кнопками, причины — по «почему?»
+  // (раньше занимала первый экран целиком, а нужна один раз на клиента).
   return (
-    <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_6%,transparent)] px-3.5 py-3">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+    <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_5%,transparent)] px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
-        <span className="text-[13.5px]">
+        <span className="min-w-0 flex-1 text-[13.5px]">
           {current === null ? 'Похоже, это' : current === h.type ? 'Тип клиента' : `Указано «${typeLabel(current)}», но похоже на`}
           {' '}<b>{typeLabel(h.type)}</b>
           {occupation && <span className="text-[var(--color-text-muted)]"> · {occupation}</span>}
+          {h.confidence !== 'high' && <span className="text-[var(--color-text-muted)]"> · {h.confidence === 'medium' ? 'вероятно' : 'не уверены'}</span>}
         </span>
-        {h.confidence !== 'high' && <Chip>{h.confidence === 'medium' ? 'вероятно' : 'не уверены'}</Chip>}
+        {current !== null && current !== h.type && (
+          <span className="flex shrink-0 gap-1.5">
+            <button type="button" onClick={accept} disabled={saving}
+              className="min-h-10 rounded-lg bg-[var(--color-accent)] px-3.5 text-[13px] font-semibold text-white disabled:opacity-60">
+              {saving ? 'Сохраняем…' : current === null ? 'Да' : 'Сменить'}
+            </button>
+            <button type="button" onClick={onEditClient} className="min-h-10 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-[13px]">
+              {current === null ? 'Другой' : 'Оставить'}
+            </button>
+          </span>
+        )}
       </div>
-      <ul className="mt-1.5 flex list-disc flex-col gap-0.5 pl-6 text-[12.5px] text-[var(--color-text-muted)]">
-        {h.reasons.map((r, i) => <li key={i}>{r}</li>)}
-      </ul>
       {h.warnings.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">{h.warnings.map((w, i) => <Chip key={i} tone="neg">{w}</Chip>)}</div>
       )}
-      {current !== h.type && (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <button type="button" onClick={accept} disabled={saving}
-            className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-[13px] font-semibold text-white disabled:opacity-60">
-            {saving ? 'Сохраняем…' : current === null ? 'Да, заполнить' : `Сменить на «${typeLabel(h.type)}»`}
-          </button>
-          <button type="button" onClick={onEditClient} className="min-h-11 rounded-lg border border-[var(--color-border)] px-4 text-[13px]">
-            {current === null ? 'Другой тип' : 'Оставить / уточнить'}
-          </button>
-          {error && <span className="text-[12px]" style={{ color: 'var(--color-negative, #e03131)' }}>{error}</span>}
-        </div>
-      )}
+      <details className="mt-0.5 text-[12.5px] text-[var(--color-text-muted)]">
+        <summary className="inline-flex min-h-8 cursor-pointer select-none items-center">почему?</summary>
+        <ul className="flex list-disc flex-col gap-0.5 pb-1 pl-5">{h.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
+      </details>
+      {error && <div className="text-[12px]" style={{ color: 'var(--color-negative, #e03131)' }}>{error}</div>}
     </div>
   );
 }

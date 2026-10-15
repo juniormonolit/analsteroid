@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { HelpCircle, Lightbulb, Pencil } from 'lucide-react';
+import { HelpCircle, Lightbulb, Pencil, Sparkles } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
 
 import {
@@ -81,12 +81,12 @@ export function Stat({ label, value, sub, hint }: { label: string; value: React.
 
 /** Вариант выбора с пояснением под «?» (ТЗ). Hover на таче не работает (правило 5
  *  CLAUDE.md) — «?» кнопка: hover показывает title, тап раскрывает пояснение. */
-export function OptionRow({ name, label, hint, checked, onSelect }: { name: string; label: string; hint?: string; checked: boolean; onSelect: () => void }) {
+export function OptionRow({ name, label, hint, checked, onSelect, showHintWhenChecked = false }: { name: string; label: string; hint?: string; checked: boolean; onSelect: () => void; showHintWhenChecked?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <div className={`rounded-lg border px-2.5 py-1 ${checked ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_7%,transparent)]' : 'border-[var(--color-border)]'}`}>
       <div className="flex min-h-9 items-center gap-2">
-        <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-[13px]">
+        <label className="flex min-h-10 min-w-0 flex-1 cursor-pointer items-center gap-2 text-[13.5px]">
           <input type="radio" name={name} checked={checked} onChange={onSelect} className="shrink-0 accent-[var(--color-accent)]" />
           <span className="min-w-0">{label}</span>
         </label>
@@ -97,7 +97,7 @@ export function OptionRow({ name, label, hint, checked, onSelect }: { name: stri
           </button>
         )}
       </div>
-      {open && hint && <div className="pb-1 pl-6 text-[12px] leading-snug text-[var(--color-text-muted)]">{hint}</div>}
+      {(open || (showHintWhenChecked && checked)) && hint && <div className="pb-1 pl-6 text-[12px] leading-snug text-[var(--color-text-muted)]">{hint}</div>}
     </div>
   );
 }
@@ -222,61 +222,145 @@ export function shortGroup(g: string | null): string {
 // Аудит 14.10: четыре радиокнопки на треть первого экрана ради поля, которое
 // заполняют один раз, — свёрнуто в строку под именем; редактор раскрывается.
 
+/** Поле, растущее по высоте вместе с текстом (заметки: «не в одну строчку»).
+ *  Минимум задаёт rows, максимум — maxRows, дальше внутренний скролл. */
+export function AutoTextarea({ value, onChange, minRows = 3, maxRows = 14, className = '', textareaRef, ...rest }:
+  { value: string; onChange: (v: string) => void; minRows?: number; maxRows?: number; textareaRef?: React.RefObject<HTMLTextAreaElement | null> }
+  & Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange' | 'rows'>) {
+  const own = useRef<HTMLTextAreaElement>(null);
+  const ref = textareaRef ?? own;
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const cs = getComputedStyle(el);
+    const line = parseFloat(cs.lineHeight) || 22;
+    const chrome = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    el.style.height = 'auto';
+    const want = el.scrollHeight + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    const max = line * maxRows + chrome;
+    el.style.height = `${Math.min(want, max)}px`;
+    // Скролл — только когда упёрлись в максимум (иначе лишняя полоса справа).
+    el.style.overflowY = want > max ? 'auto' : 'hidden';
+  }, [value, maxRows, ref]);
+  return <textarea ref={ref} value={value} onChange={e => onChange(e.target.value)} rows={minRows}
+    className={`${inputCls} resize-none leading-relaxed ${className}`} {...rest} />;
+}
+
 export function ClientBar({ data, params, openSignal = 0 }: { data: ClientModuleData; params: Record<string, string>; openSignal?: number }) {
   const p = data.profile;
-  const [edit, setEdit] = useState(false);
+  const [edit, setEdit] = useState<false | 'type' | 'note'>(false);
   // «Другой тип» из подсказки на «Обзоре» открывает редактор здесь.
   const rootRef = useRef<HTMLDivElement>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
-    if (openSignal > 0) { setEdit(true); rootRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+    if (openSignal > 0) { setEdit('type'); rootRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
   }, [openSignal]);
   const [type, setType] = useState<ClientType | null>(p.clientType);
   const [occupation, setOccupation] = useState(p.occupation);
   const [note, setNote] = useState(p.note);
-  useEffect(() => { setType(p.clientType); setOccupation(p.occupation); setNote(p.note); }, [p]);
+  const reset = () => { setType(p.clientType); setOccupation(p.occupation); setNote(p.note); };
+  useEffect(reset, [p]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Клик по заметке — курсор сразу в поле, в конец текста.
+  useEffect(() => {
+    if (edit !== 'note') return;
+    const el = noteRef.current; if (!el) return;
+    el.focus(); el.setSelectionRange(el.value.length, el.value.length);
+  }, [edit]);
   const { save, saving, error } = useSave(params);
   const dirty = type !== p.clientType || occupation !== p.occupation || note !== p.note;
   const typeLabel = CLIENT_TYPES.find(t => t.value === p.clientType)?.label;
+  const hint = data.profilesAvailable ? data.hint : null;
+  const close = () => { reset(); setEdit(false); };
+  const doSave = async () => {
+    if (!dirty || saving || !data.profilesAvailable) return;
+    const r = await save({ client: { clientType: type, occupation: type && TYPES_WITH_OCCUPATION.has(type) ? occupation : '', note } });
+    if (r) setEdit(false);
+  };
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void doSave(); }
+  };
 
   return (
     <div ref={rootRef} className="min-w-0">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]">
-        <button type="button" onClick={() => setEdit(v => !v)}
-          className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 ${typeLabel ? 'border-transparent bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] font-semibold text-[var(--color-accent)]' : 'border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>
-          {typeLabel ?? 'Тип клиента не указан'} <Pencil size={11} />
-        </button>
-        {p.occupation && <span className="text-[var(--color-text-muted)]">{p.occupation}</span>}
-        <button type="button" onClick={() => setEdit(true)} className="min-h-8 min-w-0 max-w-full truncate text-left text-[var(--color-text-muted)] hover:text-[var(--color-text)]" title={p.note || undefined}>
-          {p.note ? <>📝 {p.note}</> : '+ заметка'}
-        </button>
-      </div>
-      {edit && (
-        <div className="mt-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
-          <div className="grid gap-1.5 sm:grid-cols-2">
-            {CLIENT_TYPES.map(t => (
-              <OptionRow key={t.value} name={`ct-${data.ref}`} label={t.label} hint={t.hint} checked={type === t.value} onSelect={() => setType(t.value)} />
-            ))}
+      {!edit && (
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {/* Тип не указан — подсказка «Похоже, это …» прямо здесь (аудит 15.10:
+                раньше тип спрашивали дважды — в шапке и отдельной карточкой). */}
+            {!typeLabel && hint ? (
+              <span className="inline-flex flex-wrap items-center gap-1.5 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] py-1 pl-2.5 pr-1 text-[13px]">
+                <Sparkles size={13} className="text-[var(--color-accent)]" />
+                <span>Похоже, <b>{CLIENT_TYPES.find(t => t.value === hint.type)?.label}</b>{hint.confidence === 'high' ? '' : '?'}</span>
+                <button type="button" disabled={saving} title={hint.reasons.join('\n')}
+                  onClick={() => void save({ client: { clientType: hint.type, occupation: TYPES_WITH_OCCUPATION.has(hint.type) ? hint.occupation : '', note: p.note } })}
+                  className="min-h-8 rounded-md bg-[var(--color-accent)] px-2.5 text-[12.5px] font-semibold text-white disabled:opacity-60">{saving ? '…' : 'Да'}</button>
+                <button type="button" onClick={() => setEdit('type')} className="min-h-8 rounded-md px-2 text-[12.5px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Другой</button>
+              </span>
+            ) : (
+              <button type="button" onClick={() => setEdit('type')}
+                className={`inline-flex min-h-9 items-center gap-1.5 rounded-lg border px-2.5 text-[13px] ${typeLabel ? 'border-transparent bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] font-semibold text-[var(--color-accent)]' : 'border-dashed border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+                {typeLabel ?? 'Указать тип клиента'} <Pencil size={12} />
+              </button>
+            )}
+            {p.occupation && <span className="text-[13px] text-[var(--color-text-muted)]">{p.occupation}</span>}
           </div>
-          {type && TYPES_WITH_OCCUPATION.has(type) && (
-            <label className="mt-2 block">
-              <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Чем занимается</span>
-              <input value={occupation} onChange={e => setOccupation(e.target.value)} maxLength={500} placeholder="Например: фундаменты, дороги, кровля" className={inputCls} />
-            </label>
+          {/* Заметка — заметным блоком целиком, а не обрезанной строкой. */}
+          {p.note ? (
+            <button type="button" onClick={() => setEdit('note')} title="Изменить заметку"
+              className="group w-full rounded-xl border border-[color-mix(in_srgb,#f2c94c_55%,transparent)] bg-[color-mix(in_srgb,#f2c94c_14%,transparent)] px-3 py-2.5 text-left">
+              <span className="mb-0.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                Заметка о клиенте <Pencil size={11} className="opacity-60 group-hover:opacity-100" />
+              </span>
+              <span className="block whitespace-pre-wrap break-words text-[14px] leading-relaxed text-[var(--color-text)]">{p.note}</span>
+              {savedLine(p.updatedBy, p.updatedAt) && <span className="mt-1 block text-[11.5px] text-[var(--color-text-muted)]">{savedLine(p.updatedBy, p.updatedAt)}</span>}
+            </button>
+          ) : (
+            <button type="button" onClick={() => setEdit('note')}
+              className="flex min-h-11 w-full items-center rounded-xl border border-dashed border-[var(--color-border)] px-3 text-left text-[13px] text-[var(--color-text-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-text)]">
+              + Заметка о клиенте — что важно помнить перед звонком
+            </button>
           )}
-          {isSelfBuilder(type) && <div className="mt-2 text-[12px] text-[var(--color-text-muted)]">Тип дома (каркасный / газобетонный) — у каждого объекта (вкладка «Объекты»).</div>}
-          <label className="mt-2 block">
-            <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Заметка</span>
-            <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} maxLength={2000} className={inputCls} />
+        </div>
+      )}
+      {edit && (
+        <div onKeyDown={onKey} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 shadow-sm">
+          {/* Редактируем то, на что нажали (аудит 15.10): заметка — без пяти радио сверху. */}
+          {edit === 'type' ? (
+            <>
+            <div className="mb-1.5 text-[12px] font-semibold text-[var(--color-text-muted)]">Тип клиента</div>
+            <div className="grid gap-1.5 sm:grid-cols-2">
+              {CLIENT_TYPES.map(t => (
+                <OptionRow key={t.value} name={`ct-${data.ref}`} label={t.label} hint={t.hint} checked={type === t.value} onSelect={() => setType(t.value)} showHintWhenChecked />
+              ))}
+            </div>
+            {type && TYPES_WITH_OCCUPATION.has(type) && (
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[12px] font-semibold text-[var(--color-text-muted)]">Чем занимается</span>
+                <input value={occupation} onChange={e => setOccupation(e.target.value)} maxLength={500} placeholder="Например: фундаменты, дороги, кровля" className={inputCls} />
+              </label>
+            )}
+            {isSelfBuilder(type) && <div className="mt-2 text-[12px] text-[var(--color-text-muted)]">Тип дома (каркасный / газобетонный) — у каждого объекта (вкладка «Объекты»).</div>}
+            </>
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-[var(--color-text-muted)]">
+              Тип: <span className="text-[var(--color-text)]">{CLIENT_TYPES.find(t => t.value === type)?.label ?? 'не указан'}</span>
+              <button type="button" onClick={() => setEdit('type')} className="min-h-8 text-[var(--color-accent)] hover:underline">изменить</button>
+            </div>
+          )}
+          <label className={`${edit === 'type' ? 'mt-3' : 'mt-1'} block`}>
+            <span className="mb-1 block text-[12px] font-semibold text-[var(--color-text-muted)]">Заметка о клиенте</span>
+            <AutoTextarea textareaRef={noteRef} value={note} onChange={setNote} maxLength={2000} minRows={3}
+              placeholder="Что важно помнить: как общаться, что строит, какие договорённости…" />
+            <span className="mt-0.5 block text-right text-[11px] text-[var(--color-text-muted)]">{note.length} / 2000</span>
           </label>
-          <div className="flex flex-wrap items-center gap-2">
-            <SaveBar dirty={dirty} saving={saving} error={error ?? (data.profilesAvailable ? null : 'Хранилище ручных полей недоступно')}
-              disabled={!data.profilesAvailable} savedAt={savedLine(p.updatedBy, p.updatedAt)}
-              onSave={async () => {
-                const r = await save({ client: { clientType: type, occupation: type && TYPES_WITH_OCCUPATION.has(type) ? occupation : '', note } });
-                if (r) setEdit(false);
-              }} />
-            <button type="button" onClick={() => setEdit(false)} className="mt-2 min-h-11 rounded-lg px-3 text-sm text-[var(--color-text-muted)]">Закрыть</button>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button type="button" onClick={doSave} disabled={!dirty || saving || !data.profilesAvailable}
+              className="min-h-11 rounded-lg bg-[var(--color-accent)] px-5 text-sm font-semibold text-white disabled:opacity-40">{saving ? 'Сохраняем…' : 'Сохранить'}</button>
+            <button type="button" onClick={close} className="min-h-11 rounded-lg px-3 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Отмена</button>
+            <span className="hidden text-[11px] text-[var(--color-text-muted)] sm:inline">Ctrl/⌘+Enter — сохранить · Esc — отмена</span>
           </div>
+          {(error || !data.profilesAvailable) ? <div className="mt-1 text-[12px]" style={{ color: 'var(--color-negative, #e03131)' }}>{error ?? 'Хранилище ручных полей недоступно'}</div>
+            : savedLine(p.updatedBy, p.updatedAt) && <div className="mt-1 text-[11.5px] text-[var(--color-text-muted)]">{savedLine(p.updatedBy, p.updatedAt)}</div>}
         </div>
       )}
     </div>
