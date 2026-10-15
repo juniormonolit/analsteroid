@@ -32,6 +32,8 @@ export interface AddressCluster {
   label: string;
   lat: number | null;
   lon: number | null;
+  /** Все написания — только до города (без улицы/ориентира). */
+  coarse: boolean;
 }
 
 const MERGE_METERS = 500;
@@ -48,8 +50,10 @@ const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[«»"
 
 /** Значимые части адреса в исходном порядке (без индекса, страны, админ-слоёв). */
 export function addressParts(address: string): string[] {
-  const parts = address.split(',').map(p => p.trim()).filter(Boolean)
-    .filter(p => !/^\d{6}$/.test(p) && !ADMIN_PART.test(p));
+  const raw = address.split(',').map(p => p.trim()).filter(Boolean);
+  // Хвостовые «чистые цифры» — индекс, в т.ч. обрезанный («…, 1401»), а не пункт.
+  while (raw.length > 1 && /^\d{1,6}$/.test(raw[raw.length - 1])) raw.pop();
+  const parts = raw.filter(p => !/^\d{6}$/.test(p) && !ADMIN_PART.test(p));
   // Дубли вида «Всеволожск, Город Всеволожск».
   const out: string[] = [];
   for (const p of parts) {
@@ -124,8 +128,19 @@ export function isUsableAddress(a: { address: string | null; lat: number | null;
   if (a.lat !== null && a.lon !== null) return true;
   const parts = addressParts(a.address);
   if (parts.length === 0) return false;
-  if (parts.length === 1 && (BIG_CITY.test(norm(parts[0])) || !/\d/.test(parts[0]))) return false; // только населённый пункт
+  // Только Москва/Петербург целиком — не объект (слишком широко). Небольшой город
+  // без улицы («Одинцово…», правка 15.10) — объект, но «грубый» (isCoarseAddress).
+  if (parts.length === 1 && BIG_CITY.test(norm(parts[0]))) return false;
   return true;
+}
+
+/** Адрес только до населённого пункта (нет улицы/дома/ориентира и координат) —
+ *  объект «Одинцово» с пометкой «адрес до города — уточни». */
+export function isCoarseAddress(a: { address: string | null; lat: number | null; lon: number | null }): boolean {
+  if (a.lat !== null && a.lon !== null) return false;
+  if (!a.address) return false;
+  const parts = addressParts(a.address);
+  return parts.length <= 1 && !/\d/.test(parts[0] ?? '');
 }
 
 function meters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
@@ -188,6 +203,6 @@ export function clusterAddresses(raw: RawAddress[]): AddressCluster[] {
     const votes = new Map<string, number>();
     for (const m of ms) if (m.address) { const l = settlementLabel(m.address); votes.set(l, (votes.get(l) ?? 0) + m.weight); }
     const label = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? settlementLabel(address);
-    return { key: main.key, members: ms.map(m => m.key), address, label, lat, lon };
+    return { key: main.key, members: ms.map(m => m.key), address, label, lat, lon, coarse: ms.every(isCoarseAddress) };
   });
 }

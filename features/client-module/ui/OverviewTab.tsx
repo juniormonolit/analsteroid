@@ -33,8 +33,11 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals }: {
     const prof = data.objectProfiles[o.key] ?? EMPTY_OBJECT_PROFILE;
     return { o, st: objectStatus(deals, { manual: o.manual, doneManual: prof.doneManual }, data.activeDays), s: computeStats(deals), ladder: data.recommendations.byObject[o.key] };
   });
-  const working = objects.filter(x => x.st !== 'done').sort((a, b) => (b.s.lastShippedAt ?? '').localeCompare(a.s.lastShippedAt ?? ''));
-  const doneCount = objects.length - working.length;
+  // Все объекты (правка 15.10: «объект есть, а на обзоре объектов нет» — показывали
+  // только «в работе»): сначала в работе/новые, ниже завершённые — бледнее.
+  const rank = { active: 0, new: 1, done: 2 } as const;
+  const working = objects.filter(x => x.st !== 'done');
+  const ordered = [...objects].sort((a, b) => rank[a.st] - rank[b.st] || (b.s.lastShippedAt ?? '').localeCompare(a.s.lastShippedAt ?? ''));
   const openN = stats.open;
 
   return (
@@ -57,11 +60,11 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals }: {
       )}
 
       <div className="grid gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-        <Section title={`Что везём и куда · ${working.length}`} right={doneCount > 0 ? <span className="text-[11.5px] text-[var(--color-text-muted)]">ещё {doneCount} завершено</span> : undefined}>
-          {working.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Объектов в работе нет.</div> : (
+        <Section title={`Что везём и куда · ${objects.length}`} right={objects.length > 0 ? <span className="text-[11.5px] text-[var(--color-text-muted)]">в работе {working.length}</span> : undefined}>
+          {objects.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Объектов нет — адресов в заявках и сделках не нашлось.</div> : (
             <div className="flex flex-col divide-y divide-[var(--color-border)]">
-              {working.slice(0, 6).map(({ o, st, s, ladder }) => (
-                <button key={o.key} type="button" onClick={() => onOpenObject(o.key)} className="flex min-h-11 items-start gap-2 rounded-md px-1 py-2 text-left hover:bg-[var(--color-bg-hover)]">
+              {ordered.slice(0, 6).map(({ o, st, s, ladder }) => (
+                <button key={o.key} type="button" onClick={() => onOpenObject(o.key)} className={`flex min-h-11 items-start gap-2 rounded-md px-1 py-2 text-left hover:bg-[var(--color-bg-hover)] ${st === 'done' ? 'opacity-60' : ''}`}>
                   <StatusDot s={st} />
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-2">
@@ -72,13 +75,14 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals }: {
                       {ladder?.current ? shortGroup(ladder.current.group) : (s.groups[0] ? shortGroup(s.groups[0].group) : 'отгрузок нет')}
                       {s.groups.length > 1 ? ` +${s.groups.length - 1}` : ''}{s.lastShippedAt ? ` · ${fmtD(s.lastShippedAt)}` : ''}
                     </span>
-                    {ladder?.next[0] && (
+                    {st === 'done' && <span className="mt-0.5 block text-[12px] text-[var(--color-text-muted)]">завершён{o.coarse ? ' · адрес до города' : ''}</span>}
+                    {st !== 'done' && ladder?.next[0] && (
                       <span className="mt-0.5 block truncate text-[12px] text-[var(--color-warning,#e8590c)]">→ предложить: {shortGroup(ladder.next[0].group)}</span>
                     )}
                   </span>
                 </button>
               ))}
-              {working.length > 6 && <button type="button" onClick={() => onOpenObject('')} className="min-h-10 text-left text-[12px] text-[var(--color-accent)]">ещё {working.length - 6} — во вкладке «Объекты»</button>}
+              {ordered.length > 6 && <button type="button" onClick={() => onOpenObject('')} className="min-h-10 text-left text-[12px] text-[var(--color-accent)]">ещё {ordered.length - 6} — во вкладке «Объекты»</button>}
             </div>
           )}
         </Section>

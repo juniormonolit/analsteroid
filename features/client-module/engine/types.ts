@@ -53,6 +53,8 @@ export interface ModuleObject {
   label: string;
   /** Сколько разных написаний адреса склеено в объект. */
   variants: number;
+  /** Адрес только до города («Одинцово») — пометка «адрес до города — уточни». */
+  coarse?: boolean;
   lat: number | null;
   lon: number | null;
   requests: ModuleRequest[];

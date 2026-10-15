@@ -179,7 +179,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
   const address = prof.idealAddress || object.address;
   const title = prof.idealAddress ? shortAddress(prof.idealAddress) : object.label;
   // «Проверь адрес» — только где это важно (аудит 14.10: чип у всех объектов перестал быть сигналом).
-  const needsCheck = !object.manual && !prof.addressConfirmed && s.shipped >= 2;
+  const needsCheck = !object.manual && !prof.addressConfirmed && (s.shipped >= 2 || !!object.coarse);
   const { save, saving, error } = useSave(params);
   const dis = useDismiss(data, params, object.key);
 
@@ -190,7 +190,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
         <span className="min-w-0 flex-1">
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="text-[15px] font-semibold">{title}</span>
-            {needsCheck && <Chip tone="warn">проверь адрес</Chip>}
+            {needsCheck && <Chip tone="warn">{object.coarse ? 'адрес до города — уточни' : 'проверь адрес'}</Chip>}
             <span className="ml-auto text-[13px] font-semibold tabular-nums">{fmtMoney(s.ltv)}</span>
           </span>
           <span className="mt-0.5 block truncate text-[12px] text-[var(--color-text-muted)]">
@@ -207,7 +207,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
             <div className="rounded-lg border border-[color-mix(in_srgb,var(--color-warning,#e8590c)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-warning,#e8590c)_8%,transparent)] px-3 py-2 text-[12.5px]">
               <div className="flex items-start gap-1.5">
                 <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[var(--color-warning,#e8590c)]" />
-                <span>Проверь адрес, он проставлен автоматически ({ADDRESS_SOURCE_LABEL[object.source]}). Если не тот — поправь вручную.</span>
+                <span>{object.coarse ? `Адрес ${ADDRESS_SOURCE_LABEL[object.source]} указан только до населённого пункта — уточни точку на объекте.` : `Проверь адрес, он проставлен автоматически (${ADDRESS_SOURCE_LABEL[object.source]}). Если не тот — поправь вручную.`}</span>
               </div>
               <div className="mt-1.5 flex flex-wrap gap-2 pl-5">
                 <button type="button" disabled={saving || !data.v2Available} onClick={() => void save({ object: { key: object.key, confirmAddress: true } })}

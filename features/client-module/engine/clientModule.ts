@@ -182,6 +182,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
       key: c.key, address: c.address, label: c.label, lat: c.lat, lon: c.lon, requests, manual: false,
       source: ms.some(m => m.source === '1c') ? '1c' : 'bitrix',
       variants: c.members.length,
+      coarse: c.coarse,
     });
     for (const k of c.members) memberOf.set(k, c.key);
   }
