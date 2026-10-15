@@ -6,13 +6,14 @@
 // шапке виджета (ClientBar), а не радиокнопками на треть экрана.
 
 import { useState } from 'react';
-import { ArrowRight, MapPin, HelpCircle } from 'lucide-react';
+import { ArrowRight, MapPin, HelpCircle, Lightbulb } from 'lucide-react';
 import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, computeStats, objectStatus, EMPTY_OBJECT_PROFILE } from '../engine/types';
 import { Section, RecList, StatusDot, shortGroup, fmtD, useDismiss } from './parts';
 import { TzMetrics } from './TzBlocks';
 import { ClientHintCard, LegalLine } from './ClientHintCard';
 import { LastDealLine } from './LastDealLine';
+import { buildAdvice } from '../engine/advice';
 
 export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditClient }: {
   data: ClientModuleData;
@@ -42,6 +43,7 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
   const working = objects.filter(x => x.st !== 'done');
   const ordered = [...objects].sort((a, b) => rank[a.st] - rank[b.st] || (b.s.lastShippedAt ?? '').localeCompare(a.s.lastShippedAt ?? ''));
   const openN = stats.open;
+  const advice = buildAdvice(data, shortGroup);
 
   return (
     <div className="flex flex-col gap-3">
@@ -52,6 +54,15 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
           пропали «8 / 10», LTV, дата последней отгрузки и число объектов). */}
       <TzMetrics s={stats} objects={{ total: data.objects.length, active: working.filter(x => x.st === 'active').length }} />
       <LastDealLine data={data} />
+      {/* «Совет» (владелец 15.10) — правила в engine/advice.ts. */}
+      {advice.length > 0 && (
+        <section className="rounded-xl border border-[color-mix(in_srgb,var(--color-warning,#e8590c)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-warning,#e8590c)_6%,transparent)] px-3.5 py-3">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-warning,#e8590c)]"><Lightbulb size={14} /> Совет</div>
+          <div className="flex flex-col gap-2">
+            {advice.map(a => <p key={a.id} className="text-[13px] leading-snug">{a.text}</p>)}
+          </div>
+        </section>
+      )}
       <div className="flex flex-wrap gap-x-2 gap-y-0.5 px-0.5 text-[12px] text-[var(--color-text-muted)]">
         {openN > 0 ? <span>Сейчас в работе: <b className="text-[var(--color-text)]">{openN} {openN === 1 ? 'сделка' : openN < 5 ? 'сделки' : 'сделок'} на {fmtMoney(stats.openSum)}</b></span> : <span>Активных сделок нет</span>}
         {lastDeal && <span>· последняя отгрузка: {shortGroup(lastDeal.topGroup) || '—'}{lastObj ? ` → ${lastObj}` : ''}</span>}
