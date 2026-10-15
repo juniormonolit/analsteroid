@@ -1,4 +1,5 @@
 import { analyticsDb } from '@/lib/db/clients';
+import { bx } from '@/lib/bitrix/notify';
 import { resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchDealAddresses } from '@/lib/bitrix/dealAddress';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
@@ -97,6 +98,25 @@ export async function setActiveDays(days: number, by: string): Promise<void> {
   );
 }
 
+/** ID сделок клиента по Битриксу (до 500, вебхук только на чтение). */
+async function bitrixClientDealIds(entity: 'contact' | 'company', id: number): Promise<number[]> {
+  const w = process.env.BITRIX_WEBHOOK_URL ?? '';
+  if (!w) return [];
+  const ids: number[] = [];
+  try {
+    for (let start = 0; start < 500; start += 50) {
+      const r = await bx(w, 'crm.deal.list', {
+        filter: { [entity === 'company' ? 'COMPANY_ID' : 'CONTACT_ID']: id }, select: ['ID'], order: { ID: 'DESC' }, start,
+      }) as { result?: { ID: string }[]; next?: number };
+      for (const d of r.result ?? []) ids.push(Number(d.ID));
+      if (!r.next) break;
+    }
+  } catch (e) {
+    console.warn('[clientModule] сделки клиента из Битрикса:', e instanceof Error ? e.message : e);
+  }
+  return ids;
+}
+
 // ── Чтение ────────────────────────────────────────────────────────────────
 
 export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleData> {
@@ -104,22 +124,39 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   const isCompany = ref.startsWith('k');
   const id = Number(ref.slice(1));
 
-  const dealsRes = await db.query<{
+  type DealRow = {
     deal_id: number; deal_name: string | null; amount: string | null;
     created_at: Date | null; sold_at: Date | null; delivered_at: Date | null; lost_at: Date | null;
     stage_name: string | null; manager_name: string | null; products: unknown; funnel_id: number | null;
-  }>(
-    `SELECT d.deal_id, d.deal_name, d.amount::text AS amount,
+  };
+  const DEAL_SELECT = `SELECT d.deal_id, d.deal_name, d.amount::text AS amount,
             d.created_at, d.sold_at, d.delivered_at, d.lost_at,
             s.name AS stage_name, org.manager_name, d.products, d.funnel_id
        FROM sa.deals d
        LEFT JOIN sa.stages s ON s.id = d.stage_id
-       LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = d.current_manager_id::text
+       LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = d.current_manager_id::text`;
+  // Синк sa.deals с лета теряет клиента у части сделок (contact_id/company_id
+  // пусты, а в Битриксе клиент есть; разбор 15.10, контакт 240321: ~350 сделок
+  // с июля). Страховка: ID сделок клиента берём ещё и из Битрикса (параллельно)
+  // и дочитываем из sa те, что не нашлись по клиенту.
+  const bxIdsP = withTimeout(bitrixClientDealIds(isCompany ? 'company' : 'contact', id), 5000, [] as number[]);
+  const byClient = await db.query<DealRow>(
+    `${DEAL_SELECT}
       WHERE d.funnel_id IN (0,1,2,3) AND ${isCompany ? 'd.company_id' : 'd.contact_id'} = $1
       ORDER BY d.created_at DESC NULLS LAST, d.deal_id DESC
       LIMIT 3000`,
     [id],
   );
+  const known = new Set(byClient.rows.map(r => Number(r.deal_id)));
+  const missing = (await bxIdsP).filter(d => !known.has(d));
+  const extra = missing.length
+    ? (await db.query<DealRow>(`${DEAL_SELECT} WHERE d.funnel_id IN (0,1,2,3) AND d.deal_id = ANY($1::int[])`, [missing])).rows
+    : [];
+  if (extra.length) console.warn(`[clientModule] ${ref}: ${extra.length} сделок без клиента в sa.deals — взяты по Битриксу`);
+  const dealsRes = {
+    rows: [...byClient.rows, ...extra].sort((a, b) =>
+      (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0) || Number(b.deal_id) - Number(a.deal_id)),
+  };
   const dealIds = dealsRes.rows.map(r => Number(r.deal_id));
   // ЕГРЮЛ по ИНН из реквизитов (для подсказки «что за клиент») — параллельно с остальным.
   const legalP = withTimeout(fetchLegalEntity(ref), 7000, null);
