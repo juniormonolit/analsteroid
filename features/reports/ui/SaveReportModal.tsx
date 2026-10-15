@@ -240,6 +240,12 @@ export function SaveReportModal({
     if (!currentReportId) return false;
     // Строки ещё не загрузились — не рискуем 403, сохраняем как новый личный.
     if (!currentRow) return false;
+    // Другое имя = «сохранить как», а не перезапись (баг Зианбетовой 15.10: «больше
+    // 4 отчётов не сохраняется в избранное»). Раньше PUT по открытому отчёту молча
+    // ПЕРЕИМЕНОВЫВАЛ его: открыла «Понедельник», настроила, сохранила «Вторник» →
+    // «Понедельник» исчез, новых строк не прибавилось. Переименование — в заголовке
+    // открытого отчёта (задача 1605), не через «Сохранить».
+    if (name.trim() !== currentRow.name) return false;
     if (currentRow.isShared) {
       // Общий отчёт правим только с правом на витрины И когда сохраняем в витрину.
       return canShare && effectiveSection !== 'personal';
@@ -402,6 +408,11 @@ export function SaveReportModal({
           {currentRow && !currentRow.isShared && canOverwriteCurrent && (
             <div className="text-xs text-[var(--color-text-muted)]">
               Перезапишет ваш личный отчёт «{currentRow.name}».
+            </div>
+          )}
+          {currentRow && !currentRow.isShared && !canOverwriteCurrent && name.trim() && name.trim() !== currentRow.name && (
+            <div className="text-xs text-[var(--color-text-muted)]">
+              Создастся новый отчёт, «{currentRow.name}» останется как есть.
             </div>
           )}
           {canShare && (
