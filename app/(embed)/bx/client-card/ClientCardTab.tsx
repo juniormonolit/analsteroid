@@ -7,7 +7,7 @@ import { ClientModuleWidget } from '@/features/client-module/ui/ClientModuleWidg
 export function ClientCardTab({ contactId, companyId, token }: { contactId?: string; companyId?: string; token: string }) {
   setWidgetToken(token);
   return (
-    <div className="mx-auto max-w-[960px] px-3 py-3 sm:px-4">
+    <div className="w-full px-3 py-3 sm:px-5">
       <ClientModuleWidget contactId={contactId} companyId={companyId} />
     </div>
   );

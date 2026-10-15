@@ -34,13 +34,17 @@ function Ladder({ ladder, onDismiss, hidden, onRestore }: { ladder: StageLadder 
         <div key={r.group} className={`${rail} pb-2`}>
           <ArrowUp size={14} className="absolute left-[3px] top-1 rounded-full bg-[var(--color-bg-surface)] text-[var(--color-warning,#e8590c)]" />
           <div className="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-warning,#e8590c)_50%,transparent)] px-2.5 py-1.5">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-warning,#e8590c)]">Предложить</span>
-              <span className="min-w-0 flex-1 text-[13px] font-semibold">{r.group}</span>
-              {r.pct !== null && <Chip title={`После «${r.pctAfter}» следующей покупкой берут «${r.group}» в ${r.pct}% случаев (по всей базе)`}>{r.pct}%</Chip>}
-              {r.sources.includes('priority') && <Chip tone="accent">приоритет</Chip>}
-              {onDismiss && <button type="button" onClick={() => onDismiss(r.group)} title="Не предлагать на этот объект" className="tap-target text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-negative,#e03131)]">не предлагать</button>}
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-warning,#e8590c)]">Предложить</div>
+            <div className="flex items-start gap-2">
+              <span className="min-w-0 flex-1 text-[14px] font-semibold leading-snug">{r.group}</span>
+              {onDismiss && <button type="button" onClick={() => onDismiss(r.group)} title="Не предлагать на этот объект" className="tap-target shrink-0 whitespace-nowrap text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-negative,#e03131)]">не предлагать</button>}
             </div>
+            {(r.pct !== null || r.sources.includes('priority')) && (
+              <div className="mt-0.5 flex flex-wrap gap-1.5">
+                {r.pct !== null && <span title={`После «${r.pctAfter}» следующей покупкой берут «${r.group}» в ${r.pct}% случаев (клиенты того же профиля)`} className="rounded bg-[var(--color-bg-hover)] px-1.5 py-px text-[11.5px] font-semibold leading-snug text-[var(--color-text-muted)]">{r.pct}% берут после «{shortGroup(r.pctAfter)}»</span>}
+                {r.sources.includes('priority') && <Chip tone="accent">приоритет</Chip>}
+              </div>
+            )}
             {r.ask && <div className="mt-0.5 text-[12px] leading-snug text-[var(--color-text-muted)]">Спросите: <span className="text-[var(--color-text)]">«{r.ask.replace(/^[-–—\s]+/, '')}»</span></div>}
           </div>
         </div>

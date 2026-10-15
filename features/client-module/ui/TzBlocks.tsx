@@ -22,10 +22,10 @@ const DAY_MS = 86_400_000;
 
 function Metric({ label, value, sub }: { label: string; value: React.ReactNode; sub?: React.ReactNode }) {
   return (
-    <div className="min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2.5 py-2">
-      <div className="truncate text-[11px] text-[var(--color-text-muted)]">{label}</div>
-      <div className="mt-0.5 truncate text-[16px] font-bold leading-tight tabular-nums">{value}</div>
-      {sub && <div className="mt-0.5 truncate text-[11px] text-[var(--color-text-muted)]">{sub}</div>}
+    <div className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2.5">
+      <div className="text-[12px] leading-snug text-[var(--color-text-muted)]">{label}</div>
+      <div className="mt-1 whitespace-nowrap text-[18px] font-bold leading-tight tabular-nums">{value}</div>
+      {sub && <div className="mt-0.5 text-[11.5px] leading-snug text-[var(--color-text-muted)]">{sub}</div>}
     </div>
   );
 }
@@ -34,7 +34,9 @@ function Metric({ label, value, sub }: { label: string; value: React.ReactNode; 
 export function TzMetrics({ s, objects }: { s: ModuleStats; objects?: { total: number; active: number } }) {
   const other = s.total - s.shipped;
   return (
-    <div className={`grid grid-cols-2 gap-2 sm:grid-cols-3 ${objects ? 'lg:grid-cols-6' : 'lg:grid-cols-5'}`}>
+    // Плитки сами раскладываются по ширине (во вкладке Битрикса она разная): не
+    // меньше 150px, без обрезки подписей «Средний чек отгруз…».
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2">
       <Metric label="Отгружено / всего" value={<>{s.shipped} / {s.total}</>} sub={other > 0 ? `${other} в других статусах` : 'все отгружены'} />
       <Metric label="LTV" value={fmtMoney(s.ltv)} sub={s.firstShippedAt ? `с ${fmtD(s.firstShippedAt)}` : 'отгрузок нет'} />
       <Metric label="Средний чек отгрузки" value={s.avgCheck !== null ? fmtMoney(s.avgCheck) : '—'} />

@@ -159,19 +159,25 @@ export function RecList({ recs, empty, onDismiss, hidden, onRestore }: {
     <div className="flex flex-col gap-1.5">
       {recs.length === 0 && <div className="text-[12.5px] text-[var(--color-text-muted)]">{empty}</div>}
       {recs.map(r => (
-        <div key={r.group} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Lightbulb size={14} className="shrink-0 text-[var(--color-warning,#e8590c)]" />
-            <span className="min-w-0 flex-1 text-[13px] font-semibold">{r.group}</span>
-            {r.pct !== null && <Chip title={`После «${r.pctAfter}» следующей покупкой берут «${r.group}» в ${r.pct}% случаев (клиенты того же профиля)`}>{r.pct}% после «{shortGroup(r.pctAfter)}»</Chip>}
-            {r.sources.includes('priority') && <Chip tone="accent" title="Ручной приоритет «Настройки → Что предложить»">приоритет</Chip>}
+        <div key={r.group} className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2.5">
+          {/* Название — целой строкой (правка владельца 15.10: «Бетон / и / раствор» по слову
+              из-за процента и кнопки в той же строке); процент и вопрос — под ним. */}
+          <div className="flex items-start gap-2">
+            <Lightbulb size={15} className="mt-0.5 shrink-0 text-[var(--color-warning,#e8590c)]" />
+            <span className="min-w-0 flex-1 text-[14px] font-semibold leading-snug">{r.group}</span>
             {onDismiss && (
               <button type="button" onClick={() => onDismiss(r.group)} title="Не предлагать этому клиенту"
-                className="tap-target text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-negative,#e03131)]">не предлагать</button>
+                className="tap-target shrink-0 whitespace-nowrap text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-negative,#e03131)]">не предлагать</button>
             )}
           </div>
+          {(r.pct !== null || r.sources.includes('priority')) && (
+            <div className="mt-1 flex flex-wrap gap-1.5 pl-[23px]">
+              {r.pct !== null && <span title={`После «${r.pctAfter}» следующей покупкой берут «${r.group}» в ${r.pct}% случаев (клиенты того же профиля)`} className="rounded bg-[var(--color-bg-hover)] px-1.5 py-px text-[11.5px] font-semibold leading-snug text-[var(--color-text-muted)]">{r.pct}% берут после «{shortGroup(r.pctAfter)}»</span>}
+              {r.sources.includes('priority') && <Chip tone="accent" title="Ручной приоритет «Настройки → Что предложить»">приоритет</Chip>}
+            </div>
+          )}
           {r.ask && (
-            <div className="mt-1 pl-[22px] text-[12px] leading-snug text-[var(--color-text-muted)]">
+            <div className="mt-1 pl-[23px] text-[12.5px] leading-snug text-[var(--color-text-muted)]">
               {r.after && <>После «{shortGroup(r.after)}» спросите: </>}<span className="text-[var(--color-text)]">«{r.ask.replace(/^[-–—\s]+/, '')}»</span>
             </div>
           )}

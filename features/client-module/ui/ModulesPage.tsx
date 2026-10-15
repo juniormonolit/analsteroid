@@ -34,7 +34,7 @@ export function ModulesPage() {
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
-      <div className="mx-auto flex max-w-[1100px] flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6">
+      <div className="mx-auto flex max-w-[1600px] flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6">
         <div>
           <h1 className="text-lg font-semibold">Модули</h1>
           <p className="mt-0.5 text-[13px] text-[var(--color-text-muted)]">
@@ -73,7 +73,7 @@ export function ModulesPage() {
           // чтобы превью честно показывало, как он будет выглядеть там.
           <div className="rounded-xl border border-dashed border-[var(--color-border)] p-2 sm:p-4">
             <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">Превью виджета</div>
-            <div className="mx-auto max-w-[1000px]">
+            <div className="w-full">
               <ClientModuleWidget contactId={urlContact || undefined} companyId={urlCompany || undefined} />
             </div>
           </div>

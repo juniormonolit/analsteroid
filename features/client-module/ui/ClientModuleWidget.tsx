@@ -69,7 +69,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
       <div role="tablist" className="flex flex-wrap gap-1 border-b border-[var(--color-border)]">
         {tabs.map(t => (
           <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
-            className={`-mb-px min-h-11 border-b-2 px-3 text-[13px] ${tab === t.key ? 'border-[var(--color-accent)] font-semibold text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+            className={`-mb-px min-h-11 border-b-2 px-3 text-[13.5px] outline-none focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${tab === t.key ? 'border-[var(--color-accent)] font-semibold text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
             {t.label}
           </button>
         ))}
