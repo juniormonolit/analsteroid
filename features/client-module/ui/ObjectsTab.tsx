@@ -10,8 +10,8 @@ import { AlertTriangle, ChevronDown, ChevronRight, MapPin, Plus, ArrowUp, Circle
 import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
 import { AddressPicker, type GeoValue, type GeoHint } from '@/features/geo/ui/AddressPicker';
 import {
-  type ClientModuleData, type ModuleObject, type StageLadder, type BuildStage, type HouseType,
-  BUILD_STAGES, HOUSE_TYPES, EMPTY_OBJECT_PROFILE, NEW_OBJECT_KEY, ADDRESS_SOURCE_LABEL,
+  type ClientModuleData, type ModuleObject, type StageLadder, type HouseType,
+  HOUSE_TYPES, isSelfBuilder, EMPTY_OBJECT_PROFILE, NEW_OBJECT_KEY, ADDRESS_SOURCE_LABEL,
   computeStats, objectStatus,
 } from '../engine/types';
 import { Section, Chip, StatusChip, StatusDot, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup, fmtD, dealTitle, useDismiss } from './parts';
@@ -98,13 +98,13 @@ function ObjectEditor({ data, object, params, onCreated, onCancel }: {
   const key = object?.key ?? NEW_OBJECT_KEY;
   const prof = data.objectProfiles[key] ?? EMPTY_OBJECT_PROFILE;
   const [geo, setGeo] = useState<GeoValue | null>(null);
-  const [stage, setStage] = useState<BuildStage | null>(prof.buildStage);
   const [house, setHouse] = useState<HouseType | null>(prof.houseType);
   const [note, setNote] = useState(prof.note);
-  useEffect(() => { setStage(prof.buildStage); setHouse(prof.houseType); setNote(prof.note); }, [prof]);
+  useEffect(() => { setHouse(prof.houseType); setNote(prof.note); }, [prof]);
   const { save, saving, error } = useSave(params);
-  const selfBuilder = data.profile.clientType === 'self_builder';
-  const dirty = !!geo || stage !== prof.buildStage || house !== prof.houseType || note !== prof.note;
+  // Стадия стройки теперь в типе клиента (как в ТЗ); на объекте — только тип дома.
+  const selfBuilder = isSelfBuilder(data.profile.clientType);
+  const dirty = !!geo || house !== prof.houseType || note !== prof.note;
   const blocked = !!geo && !geo.confirmed;
   const hints: GeoHint[] = object && object.lat !== null && object.lon !== null
     ? [{ label: object.source === '1c_comment' ? 'Точка из комментария к заявке 1С' : object.source === '1c' ? 'Точка из заявки 1С' : 'Точка из адреса сделки', lat: object.lat, lon: object.lon }] : [];
@@ -112,7 +112,7 @@ function ObjectEditor({ data, object, params, onCreated, onCancel }: {
   const onSave = async () => {
     const r = await save({ object: {
       key,
-      ...(selfBuilder ? { buildStage: stage, houseType: house } : {}),
+      ...(selfBuilder ? { houseType: house } : {}),
       note,
       ...(geo ? { ideal: { address: geo.address, lat: geo.lat, lon: geo.lon } } : {}),
     } });
@@ -129,14 +129,6 @@ function ObjectEditor({ data, object, params, onCreated, onCancel }: {
       </div>
       {selfBuilder ? (
         <>
-          <div>
-            <div className="mb-1 text-[12px] text-[var(--color-text-muted)]">Стадия строительства</div>
-            <div className="flex flex-col gap-1.5">
-              {BUILD_STAGES.map(st => (
-                <OptionRow key={st.value} name={`bs-${key}`} label={st.label} hint={st.hint} checked={stage === st.value} onSelect={() => setStage(st.value)} />
-              ))}
-            </div>
-          </div>
           <div>
             <div className="mb-1 text-[12px] text-[var(--color-text-muted)]">Тип дома</div>
             <div className="grid grid-cols-2 gap-1.5">

@@ -9,7 +9,7 @@ import { apiFetch } from '@/lib/client/apiFetch';
 
 import {
   type ClientModuleData, type ClientType, type Recommendation, type ObjectStatus, type DealStage,
-  CLIENT_TYPES, TYPES_WITH_OCCUPATION, OBJECT_STATUS_LABEL, DEAL_STAGE_LABEL,
+  CLIENT_TYPES, TYPES_WITH_OCCUPATION, isSelfBuilder, OBJECT_STATUS_LABEL, DEAL_STAGE_LABEL,
 } from '../engine/types';
 
 /** Дата «ДД.ММ.ГГ» — экономим место (правка владельца 14.10: «26, а не 2026»). */
@@ -263,7 +263,7 @@ export function ClientBar({ data, params, openSignal = 0 }: { data: ClientModule
               <input value={occupation} onChange={e => setOccupation(e.target.value)} maxLength={500} placeholder="Например: фундаменты, дороги, кровля" className={inputCls} />
             </label>
           )}
-          {type === 'self_builder' && <div className="mt-2 text-[12px] text-[var(--color-text-muted)]">Стадию стройки и тип дома — у каждого объекта (вкладка «Объекты»).</div>}
+          {isSelfBuilder(type) && <div className="mt-2 text-[12px] text-[var(--color-text-muted)]">Тип дома (каркасный / газобетонный) — у каждого объекта (вкладка «Объекты»).</div>}
           <label className="mt-2 block">
             <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Заметка</span>
             <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} maxLength={2000} className={inputCls} />

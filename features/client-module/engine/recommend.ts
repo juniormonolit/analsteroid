@@ -38,7 +38,7 @@ export type ClientProfileKind = 'builder' | 'contractor';
 const CONTRACTOR_GROUPS = /(жби|щебень|песок|бетон и раствор|дорожные плиты|аэродромные|асфальт|грунт|фбс|кольца|лотки|опоры|керамзит|вторичные|арматура|плиты перекрытия|прочий металлопрокат|трубы)/i;
 
 export function profileKind(clientType: string | null, deals: ModuleDeal[]): ClientProfileKind {
-  if (clientType === 'self_builder' || clientType === 'foreman') return 'builder';
+  if (clientType === 'self_builder' || clientType === 'self_builder_late' || clientType === 'foreman') return 'builder';
   if (clientType === 'construction_org' || clientType === 'own_needs_org') return 'contractor';
   // Тип не указан — по составу отгрузок: больше половины суммы ЖБИ/нерудка/бетон → подрядчик.
   let all = 0, heavy = 0;

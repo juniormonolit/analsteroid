@@ -35,7 +35,8 @@ export function ClientHintCard({ data, params, onEditClient }: {
 }) {
   const { save, saving, error } = useSave(params);
   const h = data.hint;
-  const current = data.profile.clientType;
+  // «Строит себе» любой стадии подсказка не оспаривает — стадию знает менеджер.
+  const current = data.profile.clientType === 'self_builder_late' && h?.type === 'self_builder' ? 'self_builder' : data.profile.clientType;
   if (!h || !data.profilesAvailable) return null;
   if (current === h.type && h.warnings.length === 0) return null;
   // Тип уже указан, но подсказка уверенно говорит другое — короткое «проверь».

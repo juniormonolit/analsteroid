@@ -18,8 +18,8 @@ const NOTE_FIELD = 'UF_CRM_MLT_CLIENT_NOTE';
 
 /** ID вариантов списка «Тип клиента»: у контакта и компании поля разные. */
 const TYPE_ENUM: Record<'contact' | 'company', Record<ClientType, number>> = {
-  contact: { construction_org: 153, own_needs_org: 1118, foreman: 154, self_builder: 155 },
-  company: { construction_org: 180, own_needs_org: 1120, foreman: 181, self_builder: 182 },
+  contact: { construction_org: 153, own_needs_org: 1118, foreman: 154, self_builder: 155, self_builder_late: 1126 },
+  company: { construction_org: 180, own_needs_org: 1120, foreman: 181, self_builder: 182, self_builder_late: 1128 },
 };
 
 export class BitrixWriteError extends Error {}
