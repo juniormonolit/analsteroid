@@ -38,24 +38,20 @@ export async function register() {
   // локальной system; остальные пишущие джобы ждут решения по данным копии от 04.08.
   // weeklyWeather — вопрос «как погода» по понедельникам (14.10): очереди нет, спрашивает
   // только про прошлую неделю, отправка дополнительно гейтится каналом weekly_weather.
+  // dailyReport — отчёт «МОСКВА» в 18:00 (16.10, «почему не приходит»): ничего не пишет,
+  // читает sa + manager_plans локальной system (октябрьские планы в копии есть),
+  // отправка гейтится каналом daily_moscow_report.
   if (process.env.DISABLE_BACKGROUND_JOBS === '1') {
     const allow = new Set((process.env.BACKGROUND_JOBS_ALLOW ?? '').split(',').map(s => s.trim()).filter(Boolean));
     if (allow.has('callControl')) scheduleCallControl();
     if (allow.has('weeklyWeather')) scheduleWeeklyWeather();
     if (allow.has('supplyPanelSync')) scheduleSupplyPanelSync();
+    if (allow.has('dailyReport')) scheduleMoscowReport();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
 
-  scheduleDailyReport({
-    name: 'dailyReport',
-    lockPrefix: 'daily-report',
-    recipient: process.env.DAILY_REPORT_BITRIX_USER_ID,
-    send: async () => {
-      const { sendDailyMoscowReport } = await import('./lib/jobs/dailyMoscowReport');
-      return sendDailyMoscowReport();
-    },
-  });
+  scheduleMoscowReport();
   // Отчёт «ОБЩЕСТРОЙ по командам» Коваленко (задача владельца 03.08). Получателя
   // можно переопределить env OS_TEAMS_REPORT_BITRIX_USER_ID; дефолт — 1923, зашит
   // в самой джобе, поэтому отдельная переменная на прод-сервере не требуется.
@@ -777,6 +773,18 @@ interface DailyReportJob {
 // «МОСКВА» добавился отчёт по командам Общестроя для Коваленко). Логика замков
 // здесь выстрадана (см. историю правок 30.07 и задачи 2776) — дублировать её
 // вторым экземпляром нельзя, поэтому джоба параметризована.
+function scheduleMoscowReport() {
+  scheduleDailyReport({
+    name: 'dailyReport',
+    lockPrefix: 'daily-report',
+    recipient: process.env.DAILY_REPORT_BITRIX_USER_ID,
+    send: async () => {
+      const { sendDailyMoscowReport } = await import('./lib/jobs/dailyMoscowReport');
+      return sendDailyMoscowReport();
+    },
+  });
+}
+
 function scheduleDailyReport(job: DailyReportJob) {
   // Получателей теперь резолвит сама send() (настройки функции → env), поэтому
   // отсутствие env больше не повод не запускать джобу (реестр функций 09.09).
