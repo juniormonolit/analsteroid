@@ -57,6 +57,9 @@ export const PERM_SECTIONS = [
   { key: 'section.repeat', label: 'Повторные' },
   { key: 'section.product_matrix', label: 'Товарная матрица' },
   { key: 'section.transition_matrix', label: 'Матрица переходов' },
+  // «Вход и хвост» (задача владельца 19.10): сделки по фильтрам отчёта слева →
+  // вся последующая выручка их клиентов справа + «что будет, если убрать».
+  { key: 'section.client_tail', label: 'Вход и хвост' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.widget_constructor', label: 'Виджеты' },
   // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
@@ -150,6 +153,7 @@ export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
   { key: 'section.repeat', label: 'Повторные' },
   { key: 'section.product_matrix', label: 'Товарная матрица' },
   { key: 'section.transition_matrix', label: 'Матрица переходов' },
+  { key: 'section.client_tail', label: 'Вход и хвост' },
   { key: 'action.deal_chats', label: 'Чаты' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.offload', label: 'Разгрузка отделов' },

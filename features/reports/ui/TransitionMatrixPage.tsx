@@ -87,7 +87,7 @@ const pctStr = (v: number) => `${v.toFixed(v >= 10 ? 0 : 1)}%`;
 const CELL_PLAIN = 76;
 const CELL_CMP = 100;
 
-function Segmented<T extends string>({ value, options, onChange, ariaLabel }: {
+export function Segmented<T extends string>({ value, options, onChange, ariaLabel }: {
   value: T; options: { key: T; label: string }[]; onChange: (v: T) => void; ariaLabel: string;
 }) {
   return (
@@ -109,7 +109,7 @@ function Segmented<T extends string>({ value, options, onChange, ariaLabel }: {
 }
 
 /** Пикер менеджера с поиском по имени — список уже обрезан сервером до среза сессии. */
-function ManagerPicker({ value, onChange }: { value: Person | null; onChange: (p: Person | null) => void }) {
+export function ManagerPicker({ value, onChange }: { value: Person | null; onChange: (p: Person | null) => void }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const { data } = useQuery<{ people: Person[] }>({

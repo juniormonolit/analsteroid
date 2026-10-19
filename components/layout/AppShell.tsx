@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -464,6 +464,9 @@ function SidebarBody({
     // Y» в срезе фильтров отчёта и по менеджеру; переехала сюда из блока «Продажи»
     // по правке владельца, рядом с вероятностной «Товарной матрицей».
     { href: '/sales/transition-matrix', label: 'Матрица переходов', icon: <Grid3x3 size={18} />, ok: canMore('section.transition_matrix') },
+    // «Вход и хвост» (задача владельца 19.10) — с каких сделок клиенты заходят и
+    // какую выручку приносят потом; «что будет, если такие сделки убрать».
+    { href: '/sales/client-tail', label: 'Вход и хвост', icon: <Waypoints size={18} />, ok: canMore('section.client_tail') },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: canMore('action.deal_chats') },
