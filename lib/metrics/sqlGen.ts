@@ -1,5 +1,6 @@
 import type { Metric, MetricFilter } from './types';
 import { dealHasGoodsWhere } from './serviceGroups';
+import { isNewPurchaseSql } from './repeatRule';
 
 // ── Реестр «виртуальных» полей повторности / n-й сделки клиента ──────────────
 // Ключ — имя поля в фильтре метрики (по конвенции с ведущим «_»). Значение —
@@ -66,6 +67,44 @@ function goodsDeliverySubquery(rn: string): string {
         WHERE _gd.delivered_at IS NOT NULL AND _gd.contact_id IS NOT NULL
           AND ${dealHasGoodsWhere('_gd')}
       ) _goods_ranked WHERE rn ${rn}
+    )`;
+}
+
+// _no_repeat_after_deliv — «Отгрузки без повторных продаж» (задача владельца
+// 19.10.2026): отгрузка, после которой у заказчика (contact_id) не случилось
+// НИКАКОЙ новой покупки — ни отгрузки, ни продажи — до сегодняшнего дня.
+//
+// Лента заказчика = все его отгрузки (delivered_at) и продажи, ещё не отгруженные
+// (sold_at, без отказа: продажа, ушедшая в отказ, покупкой не считается). Дата
+// события — COALESCE(delivered_at, sold_at). Лента режется на ПОКУПКИ правилом
+// склейки (lib/metrics/repeatRule.ts): та же головная группа и < 7 дней от
+// предыдущего события — это та же покупка (песок десятью машинами), а не повтор.
+// Отгрузка подходит, если её покупка — ПОСЛЕДНЯЯ у заказчика. Все части
+// последней покупки подходят вместе: ни у одной повторной продажи не было.
+//
+// Свежие отгрузки попадают сюда естественно — у заказчика ещё не было времени
+// вернуться. Окна «прожил N дней» нет сознательно: определение владельца —
+// «не случилось никакой повторной продажи».
+function noRepeatAfterDeliverySubquery(): string {
+  return `d.deal_id IN (
+      SELECT deal_id FROM (
+        SELECT deal_id, is_ship, pno, max(pno) OVER (PARTITION BY contact_id) AS last_pno
+        FROM (
+          SELECT deal_id, contact_id, is_ship,
+                 sum(is_new) OVER (PARTITION BY contact_id ORDER BY at, deal_id ROWS UNBOUNDED PRECEDING) AS pno
+          FROM (
+            SELECT e.*, ${isNewPurchaseSql('e.at', 'e.grp', 'lag(e.at) OVER w', 'lag(e.grp) OVER w')} AS is_new
+            FROM (
+              SELECT deal_id, contact_id, COALESCE(delivered_at, sold_at) AS at,
+                     head_group_name AS grp, (delivered_at IS NOT NULL) AS is_ship
+              FROM sa.deals
+              WHERE contact_id IS NOT NULL
+                AND (delivered_at IS NOT NULL OR (sold_at IS NOT NULL AND lost_at IS NULL))
+            ) e
+            WINDOW w AS (PARTITION BY e.contact_id ORDER BY e.at, e.deal_id)
+          ) _nr_new
+        ) _nr_pno
+      ) _nr WHERE is_ship AND pno = last_pno
     )`;
 }
 
@@ -144,6 +183,8 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   }
   if (f.field === '_first_goods_deliv') return goodsDeliverySubquery('= 1');
   if (f.field === '_repeat_goods_deliv') return goodsDeliverySubquery('>= 2');
+  // «Отгрузки без повторных продаж» — см. noRepeatAfterDeliverySubquery выше.
+  if (f.field === '_no_repeat_after_deliv') return noRepeatAfterDeliverySubquery();
   // Защита: любое иное поле с ведущим «_» — тоже виртуальное и НЕ является колонкой БД.
   // Если оно дошло сюда — его забыли добавить в CLIENT_HISTORY_FIELDS. Бросаем явную
   // ошибку вместо тихого битого SQL «d.<field>» (регрессия #repeat_deliv: 42703 без
