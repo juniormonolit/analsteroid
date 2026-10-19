@@ -16,9 +16,11 @@ import type { ClientTailResult, GroupRow } from '@/features/reports/engine/clien
 // «что будет, если такие сделки убрать». Пример владельца: нерудка с чеком до
 // 50 тыс. — прямая потеря ~4 млн/мес, но клиенты после щебня могли брать бетон,
 // арматуру, кровлю. Математика и определения — в шапке engine/clientTail.ts.
-// Маржа — оценка ~10 % от выручки (решение владельца 19.10), всегда с «~».
+// Маржи в отчёте нет (правка владельца 19.10): вместо неё — сделки, отгрузки и
+// CR в отгрузку. Правило владельца: у КАЖДОГО элемента видна подпись «что и как
+// считаем» — не в hover-подсказке (на таче её не увидеть), а текстом рядом.
 
-const MARGIN_RATE = 0.1;
+const SCOPE_LABEL: Record<DealScope, string> = { primary: 'первичные', repeat: 'повторные', all: 'все' };
 
 type Person = { id: string; name: string; department: string | null; branch: string | null };
 type Window = '3' | '6' | '12' | 'all';
@@ -29,8 +31,9 @@ const rub = (v: number) => {
   if (a >= 1e3) return `${Math.round(v / 1e3).toLocaleString('ru-RU')} тыс. ₽`;
   return `${Math.round(v).toLocaleString('ru-RU')} ₽`;
 };
-const margin = (v: number) => `~${rub(v * MARGIN_RATE)}`;
 const num = (v: number) => Math.round(v).toLocaleString('ru-RU');
+const cr = (shipments: number, created: number) =>
+  created > 0 ? `${((shipments / created) * 100).toFixed(1).replace('.', ',')}%` : '—';
 
 async function fetchTail(body: unknown): Promise<ClientTailResult> {
   const res = await fetch('/api/reports/client-tail', {
@@ -43,32 +46,38 @@ async function fetchTail(body: unknown): Promise<ClientTailResult> {
   return res.json();
 }
 
-function Kpi({ label, value, sub, accent = false }: { label: string; value: string; sub?: string; accent?: boolean }) {
+/** label — что это, how — как считаем (виден всегда), sub — доп. цифра. */
+function Kpi({ label, value, how, sub, accent = false }: { label: string; value: string; how: string; sub?: string; accent?: boolean }) {
   return (
     <div className="min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2">
-      <div className="text-[11px] text-[var(--color-text-muted)] truncate">{label}</div>
+      <div className="text-[11px] font-medium text-[var(--color-text)]">{label}</div>
       <div className={`text-base sm:text-lg font-semibold tabular-nums truncate ${accent ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>{value}</div>
-      {sub && <div className="text-[11px] text-[var(--color-text-muted)] tabular-nums truncate">{sub}</div>}
+      {sub && <div className="text-[11px] text-[var(--color-text)] tabular-nums">{sub}</div>}
+      <div className="mt-0.5 text-[10px] leading-snug text-[var(--color-text-muted)]">{how}</div>
     </div>
   );
 }
 
-function GroupTable({ rows, total, showAlsoCut = false }: { rows: GroupRow[]; total: number; showAlsoCut?: boolean }) {
+function GroupTable({ rows, total, scopeLabel, showAlsoCut = false, legend }: {
+  rows: GroupRow[]; total: number; scopeLabel: string; showAlsoCut?: boolean; legend: string;
+}) {
   if (rows.length === 0) {
-    return <div className="py-6 text-center text-xs text-[var(--color-text-muted)]">Нет отгрузок</div>;
+    return <div className="py-6 text-center text-xs text-[var(--color-text-muted)]">Нет сделок и отгрузок</div>;
   }
   return (
+    <div className="flex flex-col gap-1.5">
     <div className="scroll-x">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-[11px] text-[var(--color-text-muted)] text-right">
             <th className="text-left font-medium py-1.5 pr-2">Товарная группа</th>
-            <th className="font-medium py-1.5 px-2">Выручка</th>
-            <th className="font-medium py-1.5 px-2 whitespace-nowrap">~Маржа</th>
-            <th className="font-medium py-1.5 px-2">Доля</th>
-            <th className="font-medium py-1.5 px-2">Сделок</th>
-            <th className="font-medium py-1.5 pl-2">Клиентов</th>
-            {showAlsoCut && <th className="font-medium py-1.5 pl-2 whitespace-nowrap" title="Часть хвоста, которая сама подходит под условия входа — при отсечении её бы тоже не было">Тоже под отсеч.</th>}
+            <th className="font-medium py-1.5 px-2 whitespace-nowrap">Выручка отгр.</th>
+            <th className="font-medium py-1.5 px-2 whitespace-nowrap">Доля выручки</th>
+            <th className="font-medium py-1.5 px-2 whitespace-nowrap">Сделки ({scopeLabel})</th>
+            <th className="font-medium py-1.5 px-2 whitespace-nowrap">Отгрузки ({scopeLabel})</th>
+            <th className="font-medium py-1.5 px-2 whitespace-nowrap">CR в отгр.</th>
+            <th className="font-medium py-1.5 pl-2 whitespace-nowrap">Клиентов</th>
+            {showAlsoCut && <th className="font-medium py-1.5 pl-2 whitespace-nowrap">Тоже под отсеч.</th>}
           </tr>
         </thead>
         <tbody>
@@ -80,10 +89,11 @@ function GroupTable({ rows, total, showAlsoCut = false }: { rows: GroupRow[]; to
                   <div className="truncate" title={r.group}>{r.group}</div>
                   <div className="mt-0.5 h-1 rounded bg-[var(--color-accent)]/70" style={{ width: `${Math.max(share, 1)}%` }} />
                 </td>
-                <td className="py-1.5 px-2 whitespace-nowrap">{rub(r.amount)}</td>
-                <td className="py-1.5 px-2 whitespace-nowrap text-[var(--color-text-muted)]">{margin(r.amount)}</td>
+                <td className="py-1.5 px-2 whitespace-nowrap">{r.amount ? rub(r.amount) : '—'}</td>
                 <td className="py-1.5 px-2">{share.toFixed(share >= 10 ? 0 : 1)}%</td>
-                <td className="py-1.5 px-2">{num(r.deals)}</td>
+                <td className="py-1.5 px-2">{num(r.created)}</td>
+                <td className="py-1.5 px-2">{num(r.shipments)}</td>
+                <td className="py-1.5 px-2">{cr(r.shipments, r.created)}</td>
                 <td className="py-1.5 pl-2">{num(r.clients)}</td>
                 {showAlsoCut && <td className="py-1.5 pl-2 whitespace-nowrap text-[var(--color-text-muted)]">{r.alsoCutAmount ? rub(r.alsoCutAmount) : '—'}</td>}
               </tr>
@@ -91,6 +101,8 @@ function GroupTable({ rows, total, showAlsoCut = false }: { rows: GroupRow[]; to
           })}
         </tbody>
       </table>
+    </div>
+    <p className="text-[10px] leading-snug text-[var(--color-text-muted)]">{legend}</p>
     </div>
   );
 }
@@ -154,20 +166,22 @@ export function ClientTailPage() {
   const e = data?.entry;
   const t = data?.tail;
   const multiplier = e && t && e.amount > 0 ? (e.amount + t.amount) / e.amount : null;
+  const scope = SCOPE_LABEL[dealScope];
+  const tailWindow = win === 'all' ? 'до сегодня' : `в течение ${win} мес.`;
   const scenarios = e && t ? [
     {
-      label: 'Минимум: только сами сделки',
-      hint: 'Клиенты продолжат покупать остальное как ни в чём не бывало.',
+      label: 'Минимум: только сами входные отгрузки',
+      hint: 'Считаем, что клиенты продолжат покупать остальное как ни в чём не бывало. = выручка входа.',
       amount: e.amount,
     },
     {
       label: 'Реалистично: + хвост клиентов, пришедших через эти сделки',
-      hint: `Для ${num(e.newClients)} из ${num(e.clients)} клиентов входная сделка была самой первой покупкой — без неё их могло и не быть вовсе.`,
+      hint: `Вход + хвост только тех ${num(e.newClients)} из ${num(e.clients)} клиентов, у кого входная отгрузка — самая первая покупка за всю историю: без неё их могло и не быть.`,
       amount: e.amount + t.newClientsAmount,
     },
     {
       label: 'Максимум: + весь хвост всех этих клиентов',
-      hint: 'Если, отказав в мелкой сделке, теряем клиента целиком — включая давних.',
+      hint: 'Вход + хвост всех клиентов: если, отказав в такой сделке, теряем клиента целиком — включая давних.',
       amount: e.amount + t.amount,
     },
   ] : [];
@@ -186,9 +200,11 @@ export function ClientTailPage() {
       <div className="px-3 sm:px-6 py-3 border-b border-[var(--color-border)]">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Вход и хвост</h1>
         <p className="text-xs text-[var(--color-text-muted)] mt-0.5 max-w-4xl">
-          Слева — отгрузки периода по фильтрам («с чего клиенты заходят»). Справа — всё, что эти же клиенты
-          купили после своей первой такой сделки («хвост»). Внизу — сколько выручки потеряем, если такие сделки убрать.
-          Маржа — оценка: ~10 % от выручки.
+          <b className="font-medium text-[var(--color-text)]">Вход</b> — сделки периода по фильтрам («с чего клиенты заходят»).{' '}
+          <b className="font-medium text-[var(--color-text)]">Хвост</b> — все отгрузки этих же клиентов после их первой входной отгрузки:
+          любые товары и воронки, сами входные не повторяются.{' '}
+          <b className="font-medium text-[var(--color-text)]">До входа</b> — что эти клиенты покупали раньше (их история).
+          Выручка везде — сумма отгруженных сделок по дате отгрузки; воронки 4 и 7 не учитываются.
         </p>
       </div>
 
@@ -225,48 +241,63 @@ export function ClientTailPage() {
         {e && t && data && (
           <>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <Card title="Вход — сделки по фильтрам" hint="Отгрузки периода, прошедшие все фильтры. Это то, что убираем.">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <Kpi label="Выручка" value={rub(e.amount)} sub={perMonth(e.amount)} accent />
-                  <Kpi label="~Маржа" value={margin(e.amount)} sub={months >= 1.5 ? `≈ ${margin(e.amount / months)} в мес.` : undefined} />
-                  <Kpi label="Сделок" value={num(e.deals)} sub={e.deals ? `ср. чек ${rub(e.amount / e.deals)}` : undefined} />
-                  <Kpi label="Клиентов" value={num(e.clients)} sub={`${num(e.newClients)} — первая покупка`} />
+              <Card title="Вход — сделки по фильтрам" hint={`Сделки (${scope}) периода, прошедшие все фильтры. Это то, что убираем.`}>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  <Kpi label="Выручка входа" value={rub(e.amount)} sub={perMonth(e.amount)} accent
+                    how="Сумма сделок по фильтрам, отгруженных в периоде" />
+                  <Kpi label={`Сделки (${scope})`} value={num(e.created)}
+                    how="Созданы в периоде, те же фильтры" />
+                  <Kpi label={`Отгрузки (${scope})`} value={num(e.shipments)} sub={e.shipments ? `ср. чек ${rub(e.amount / e.shipments)}` : undefined}
+                    how="Отгружены в периоде, те же фильтры" />
+                  <Kpi label={`CR Сделка → Отгрузка (${scope})`} value={cr(e.shipments, e.created)}
+                    how="Отгрузки периода ÷ сделки периода (события окна, не путь одних и тех же сделок)" />
+                  <Kpi label="Клиентов во входе" value={num(e.clients)} sub={`из них ${num(e.newClients)} — первая покупка`}
+                    how="Разных клиентов с входной отгрузкой. «Первая покупка» — раньше у клиента отгрузок не было вообще" />
                 </div>
                 {e.noClientDeals > 0 && (
                   <p className="text-[11px] text-[var(--color-text-muted)]">
-                    {num(e.noClientDeals)} сделок на {rub(e.noClientAmount)} без привязки к клиенту — во вход входят, хвост по ним не отследить.
+                    {num(e.noClientDeals)} отгр. на {rub(e.noClientAmount)} без привязки к клиенту — в выручке входа есть, хвост по ним не отследить.
                   </p>
                 )}
-                <GroupTable rows={data.entryByGroup} total={e.amount} />
+                <GroupTable rows={data.entryByGroup} total={e.amount} scopeLabel={scope}
+                  legend="Группа — по наибольшей позиции сделки. Выручка и отгрузки — по дате отгрузки в периоде, сделки — по дате создания в периоде; CR = отгрузки ÷ сделки группы. Клиентов — с отгрузкой этой группы." />
               </Card>
 
               <Card
                 title="Хвост — что эти клиенты купили потом"
-                hint={`Отгрузки тех же клиентов после первой входной сделки${win === 'all' ? ', до сегодня' : `, в течение ${win} мес.`} Сами входные сделки не повторяются.`}
+                hint={`Все отгрузки клиентов входа после их первой входной отгрузки, ${tailWindow}. Любые товары, все воронки; сами входные отгрузки не считаются.`}
               >
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <Kpi label="Выручка хвоста" value={rub(t.amount)} accent />
-                  <Kpi label="~Маржа" value={margin(t.amount)} />
-                  <Kpi label="Клиентов с хвостом" value={num(t.clients)} sub={e.clients ? `${Math.round((t.clients / e.clients) * 100)}% из ${num(e.clients)}` : undefined} />
-                  <Kpi label="Хвост к входу" value={multiplier ? `×${multiplier.toFixed(1).replace('.', ',')}` : '—'} sub="(вход + хвост) / вход" />
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  <Kpi label="Выручка хвоста" value={rub(t.amount)} accent
+                    how="Сумма отгрузок этих клиентов после первой входной" />
+                  <Kpi label="Сделки (все воронки)" value={num(t.created)}
+                    how="Созданы этими клиентами после первой входной отгрузки" />
+                  <Kpi label="Отгрузки (все воронки)" value={num(t.shipments)} sub={t.shipments ? `ср. чек ${rub(t.amount / t.shipments)}` : undefined}
+                    how="Отгружены после первой входной, кроме самих входных" />
+                  <Kpi label="CR Сделка → Отгрузка" value={cr(t.shipments, t.created)}
+                    how="Отгрузки хвоста ÷ сделки хвоста" />
+                  <Kpi label="Клиентов с хвостом" value={num(t.clients)} sub={e.clients ? `${Math.round((t.clients / e.clients) * 100)}% из ${num(e.clients)}` : undefined}
+                    how="Сколько клиентов входа потом ещё что-то купили" />
+                  <Kpi label="Хвост к входу" value={multiplier ? `×${multiplier.toFixed(1).replace('.', ',')}` : '—'}
+                    how="(Выручка входа + хвоста) ÷ выручка входа" />
                 </div>
                 <p className="text-[11px] text-[var(--color-text-muted)]">
-                  {t.alsoCutAmount > 0 && <>Из хвоста {rub(t.alsoCutAmount)} ({num(t.alsoCutDeals)} сд.) сами подходят под фильтры входа — их бы тоже отсекли. </>}
-                  До входа эти клиенты уже принесли {rub(data.before.amount)} ({num(data.before.clients)} клиентов покупали раньше).
+                  {t.alsoCutAmount > 0 && <>Из хвоста {rub(t.alsoCutAmount)} ({num(t.alsoCutDeals)} отгр.) сами подходят под фильтры входа (только позже периода) — их бы тоже отсекли. </>}
+                  До входа: {num(data.before.clients)} из {num(e.clients)} клиентов уже покупали раньше, на {rub(data.before.amount)} — это давние клиенты, а не пришедшие через эти сделки.
                 </p>
-                <GroupTable rows={data.tailByGroup} total={t.amount} showAlsoCut />
+                <GroupTable rows={data.tailByGroup} total={t.amount} scopeLabel="все воронки" showAlsoCut
+                  legend="Группа — по наибольшей позиции сделки. Отгрузки и сделки хвоста — после первой входной отгрузки клиента; CR = отгрузки ÷ сделки группы. «Тоже под отсеч.» — выручка тех отгрузок хвоста, что сами подходят под фильтры входа." />
               </Card>
             </div>
 
-            <Card title="Что будет, если убрать такие сделки" hint="Три оценки потерь — от «клиенты никуда не денутся» до «теряем клиента целиком».">
+            <Card title="Что будет, если убрать такие сделки" hint="Сколько выручки потеряем, если перестать брать входные сделки, — три оценки от «клиенты никуда не денутся» до «теряем клиента целиком».">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 {scenarios.map((s, i) => (
                   <div key={s.label} className={`min-w-0 rounded-lg border px-3 py-2.5 ${i === 1 ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'} bg-[var(--color-bg)]`}>
                     <div className="text-xs font-medium text-[var(--color-text)]">{s.label}</div>
                     <div className="mt-1 text-lg font-semibold tabular-nums text-[var(--color-text)]">−{rub(s.amount)}</div>
-                    <div className="text-sm tabular-nums text-[var(--color-text-muted)]">маржа −{margin(s.amount)}</div>
                     {months >= 1.5 && (
-                      <div className="text-[11px] tabular-nums text-[var(--color-text-muted)]">≈ −{rub(s.amount / months)} / −{margin(s.amount / months)} в мес.</div>
+                      <div className="text-[11px] tabular-nums text-[var(--color-text-muted)]">≈ −{rub(s.amount / months)} в мес.</div>
                     )}
                     <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">{s.hint}</div>
                   </div>
@@ -275,7 +306,7 @@ export function ClientTailPage() {
               <p className="flex items-start gap-1.5 text-[11px] text-[var(--color-text-muted)]">
                 <Info size={12} className="mt-0.5 shrink-0" />
                 <span>
-                  «В месяц» — за период ({months.toFixed(1).replace('.', ',')} мес.). У клиентов, зашедших в конце периода,
+                  «В месяц» — сумма ÷ длина периода ({months.toFixed(1).replace('.', ',')} мес.). У клиентов, зашедших в конце периода,
                   хвост ещё не успел нарасти — для честной оценки берите период, закончившийся несколько месяцев назад.
                 </span>
               </p>
@@ -283,18 +314,18 @@ export function ClientTailPage() {
 
             <Card
               title="Клиенты"
-              hint={`Топ-${data.clients.length} из ${num(data.clientsTotal)} по выручке хвоста.`}
+              hint={`Топ-${data.clients.length} из ${num(data.clientsTotal)} клиентов входа по выручке хвоста.`}
             >
               <div className="scroll-x">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="text-[11px] text-[var(--color-text-muted)] text-right">
+                    <tr className="text-[11px] text-[var(--color-text-muted)] text-right align-bottom">
                       <th className="text-left font-medium py-1.5 pr-2">Клиент</th>
-                      <th className="font-medium py-1.5 px-2 whitespace-nowrap">Первый вход</th>
-                      <th className="font-medium py-1.5 px-2">Вход</th>
-                      <th className="font-medium py-1.5 px-2">Хвост</th>
-                      <th className="font-medium py-1.5 px-2 whitespace-nowrap">До входа</th>
-                      <th className="text-left font-medium py-1.5 pl-2">Что брал потом</th>
+                      <th className="font-medium py-1.5 px-2">Первая входная<br />отгрузка</th>
+                      <th className="font-medium py-1.5 px-2">Вход<br /><span className="font-normal">отгрузки по фильтрам</span></th>
+                      <th className="font-medium py-1.5 px-2">Хвост<br /><span className="font-normal">отгрузки после</span></th>
+                      <th className="font-medium py-1.5 px-2">До входа<br /><span className="font-normal">отгрузки раньше</span></th>
+                      <th className="text-left font-medium py-1.5 pl-2">Что брал потом<br /><span className="font-normal">главные группы хвоста</span></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -309,11 +340,13 @@ export function ClientTailPage() {
                             <span className="truncate">{c.name ?? `Контакт #${c.contactId}`}</span>
                             <ExternalLink size={11} className="shrink-0 text-[var(--color-text-muted)]" />
                           </a>
-                          {c.isNew && <div className="text-[10px] text-[var(--color-accent)]">первая покупка</div>}
+                          {c.isNew
+                            ? <div className="text-[10px] text-[var(--color-accent)]">пришёл через вход — первая покупка</div>
+                            : <div className="text-[10px] text-[var(--color-text-muted)]">давний клиент</div>}
                         </td>
                         <td className="py-1.5 px-2 whitespace-nowrap">{new Date(c.firstEntryAt).toLocaleDateString('ru-RU')}</td>
-                        <td className="py-1.5 px-2 whitespace-nowrap">{rub(c.entryAmount)}<div className="text-[10px] text-[var(--color-text-muted)]">{c.entryDeals} сд.</div></td>
-                        <td className="py-1.5 px-2 whitespace-nowrap font-medium">{c.tailAmount ? rub(c.tailAmount) : '—'}{c.tailDeals > 0 && <div className="text-[10px] font-normal text-[var(--color-text-muted)]">{c.tailDeals} сд.</div>}</td>
+                        <td className="py-1.5 px-2 whitespace-nowrap">{rub(c.entryAmount)}<div className="text-[10px] text-[var(--color-text-muted)]">{c.entryShipments} отгр.</div></td>
+                        <td className="py-1.5 px-2 whitespace-nowrap font-medium">{c.tailAmount ? rub(c.tailAmount) : '—'}{c.tailShipments > 0 && <div className="text-[10px] font-normal text-[var(--color-text-muted)]">{c.tailShipments} отгр.</div>}</td>
                         <td className="py-1.5 px-2 whitespace-nowrap text-[var(--color-text-muted)]">{c.beforeAmount ? rub(c.beforeAmount) : '—'}</td>
                         <td className="text-left py-1.5 pl-2 text-xs text-[var(--color-text-muted)] min-w-[160px]">{c.tailGroups.join(', ') || '—'}</td>
                       </tr>
@@ -321,6 +354,10 @@ export function ClientTailPage() {
                   </tbody>
                 </table>
               </div>
+              <p className="text-[10px] leading-snug text-[var(--color-text-muted)]">
+                Вход — сумма ВСЕХ отгрузок клиента в периоде, прошедших фильтры. Хвост — все его отгрузки после первой входной
+                ({tailWindow}), любые товары и воронки, без самих входных. До входа — все его отгрузки раньше первой входной, за всю историю.
+              </p>
             </Card>
           </>
         )}

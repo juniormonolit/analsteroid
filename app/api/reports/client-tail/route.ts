@@ -42,6 +42,6 @@ export async function POST(req: NextRequest) {
     dealFilters: (body.dealFilters ?? []) as DealFilter[],
     windowMonths,
   });
-  console.log(`[client-tail] вход ${result.entry.deals} сделок, хвост ${result.tail.deals} за ${Date.now() - start} мс`);
+  console.log(`[client-tail] вход ${result.entry.shipments} отгр. / ${result.entry.created} сделок, хвост ${result.tail.shipments} отгр. за ${Date.now() - start} мс`);
   return NextResponse.json(result);
 }
