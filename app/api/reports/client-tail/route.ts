@@ -7,8 +7,8 @@ import { fetchClientTail } from '@/features/reports/engine/clientTail';
 import { validateDealFilters, type DealFilter } from '@/lib/metrics/dealFilters';
 import type { CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 
-// «Вход и хвост» (задача владельца 19.10). Период, отделы, менеджер, перв./повт.,
-// ЧЛ/ЮЛ и срез сессии разбирает общий resolveMatrixRequest (те же правила прав,
+// «Вход и хвост» (задача владельца 19.10). Вход — всегда первичные отгрузки
+// (движок), dealScope тела игнорируется. Период, отделы, менеджер, ЧЛ/ЮЛ и срез сессии разбирает общий resolveMatrixRequest (те же правила прав,
 // что у матриц); остальные фильтры отчёта — здесь.
 export async function POST(req: NextRequest) {
   const session = await getSession();
@@ -34,10 +34,10 @@ export async function POST(req: NextRequest) {
     .find(v => v === body.firstTouchFilter) ?? 'all' as FirstTouchFilter;
   const windowMonths = typeof body.windowMonths === 'number' && body.windowMonths > 0 ? body.windowMonths : null;
 
-  const { period, managerIds, departmentIds, dealScope, clientType } = parsed.opts;
+  const { period, managerIds, departmentIds, clientType } = parsed.opts;
   const start = Date.now();
   const result = await fetchClientTail({
-    period, managerIds, departmentIds, dealScope, clientType,
+    period, managerIds, departmentIds, clientType,
     productGroupMode, productGroupIds, createdTimeFilter, firstTouchFilter,
     dealFilters: (body.dealFilters ?? []) as DealFilter[],
     windowMonths,

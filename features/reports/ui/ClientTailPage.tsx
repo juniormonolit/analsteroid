@@ -7,7 +7,7 @@ import { FiltersMenu } from './FiltersMenu';
 import { DealFilterButton } from './DealFilterButton';
 import { ManagerPicker, Segmented } from './TransitionMatrixPage';
 import { applyPreset, calendarComparisonForPreset, type DateRange } from '@/lib/period';
-import type { DealScope, ClientType, ProductGroupMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
+import type { ClientType, ProductGroupMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import type { DealFilter } from '@/lib/metrics/dealFilters';
 import type { ClientTailResult, GroupRow } from '@/features/reports/engine/clientTail';
 
@@ -20,7 +20,7 @@ import type { ClientTailResult, GroupRow } from '@/features/reports/engine/clien
 // CR в отгрузку. Правило владельца: у КАЖДОГО элемента видна подпись «что и как
 // считаем» — не в hover-подсказке (на таче её не увидеть), а текстом рядом.
 
-const SCOPE_LABEL: Record<DealScope, string> = { primary: 'первичные', repeat: 'повторные', all: 'все' };
+// Вход — всегда первичные отгрузки периода (правка владельца 19.10), «До входа» нет.
 
 type Person = { id: string; name: string; department: string | null; branch: string | null };
 type Window = '3' | '6' | '12' | 'all';
@@ -124,7 +124,6 @@ export function ClientTailPage() {
   const [comparison, setComparison] = useState<DateRange>(() => calendarComparisonForPreset('this_year'));
   const [departmentIds, setDepartmentIds] = useState<string[]>([]);
   const [manager, setManager] = useState<Person | null>(null);
-  const [dealScope, setDealScope] = useState<DealScope>('all');
   const [clientType, setClientType] = useState<ClientType>('all');
   const [productGroupMode, setProductGroupMode] = useState<ProductGroupMode>('by_max');
   const [productGroupIds, setProductGroupIds] = useState<string[]>([]);
@@ -147,10 +146,10 @@ export function ClientTailPage() {
     period: { from: period.from.toISOString(), to: period.to.toISOString() },
     departmentIds,
     managerIds: manager ? [manager.id] : [],
-    dealScope, clientType, productGroupMode, productGroupIds,
+    clientType, productGroupMode, productGroupIds,
     createdTimeFilter, firstTouchFilter, dealFilters,
     windowMonths: win === 'all' ? null : Number(win),
-  }), [period, departmentIds, manager, dealScope, clientType, productGroupMode, productGroupIds, createdTimeFilter, firstTouchFilter, dealFilters, win]);
+  }), [period, departmentIds, manager, clientType, productGroupMode, productGroupIds, createdTimeFilter, firstTouchFilter, dealFilters, win]);
 
   const { data, isLoading, isFetching, error } = useQuery<ClientTailResult>({
     queryKey: ['client-tail', body],
@@ -166,7 +165,7 @@ export function ClientTailPage() {
   const e = data?.entry;
   const t = data?.tail;
   const multiplier = e && t && e.amount > 0 ? (e.amount + t.amount) / e.amount : null;
-  const scope = SCOPE_LABEL[dealScope];
+  const scope = 'первичные';
   const tailWindow = win === 'all' ? 'до сегодня' : `в течение ${win} мес.`;
   const scenarios = e && t ? [
     {
@@ -175,19 +174,14 @@ export function ClientTailPage() {
       amount: e.amount,
     },
     {
-      label: 'Реалистично: + хвост клиентов, пришедших через эти сделки',
-      hint: `Вход + хвост только тех ${num(e.newClients)} из ${num(e.clients)} клиентов, у кого входная отгрузка — самая первая покупка за всю историю: без неё их могло и не быть.`,
-      amount: e.amount + t.newClientsAmount,
-    },
-    {
-      label: 'Максимум: + весь хвост всех этих клиентов',
-      hint: 'Вход + хвост всех клиентов: если, отказав в такой сделке, теряем клиента целиком — включая давних.',
+      label: 'Максимум: + весь хвост этих клиентов',
+      hint: 'Вход + хвост: если, отказав в такой сделке, теряем клиента целиком — со всеми его последующими покупками.',
       amount: e.amount + t.amount,
     },
   ] : [];
 
   const filterMenuProps = {
-    dealScope, onDealScopeChange: setDealScope,
+    dealScope: 'primary' as const, onDealScopeChange: () => {}, hideDealScope: true,
     clientType, onClientTypeChange: setClientType,
     showProductGroupPicker: true, productGroupMode,
     onProductGroupModeChange: (m: ProductGroupMode) => { setProductGroupMode(m); setProductGroupIds([]); },
@@ -200,10 +194,9 @@ export function ClientTailPage() {
       <div className="px-3 sm:px-6 py-3 border-b border-[var(--color-border)]">
         <h1 className="text-lg font-semibold text-[var(--color-text)]">Вход и хвост</h1>
         <p className="text-xs text-[var(--color-text-muted)] mt-0.5 max-w-4xl">
-          <b className="font-medium text-[var(--color-text)]">Вход</b> — сделки периода по фильтрам («с чего клиенты заходят»).{' '}
+          <b className="font-medium text-[var(--color-text)]">Вход</b> — первичные отгрузки периода по фильтрам («с чего клиенты заходят»).{' '}
           <b className="font-medium text-[var(--color-text)]">Хвост</b> — все отгрузки этих же клиентов после их первой входной отгрузки:
           любые товары и воронки, сами входные не повторяются.{' '}
-          <b className="font-medium text-[var(--color-text)]">До входа</b> — что эти клиенты покупали раньше (их история).
           Выручка везде — сумма отгруженных сделок по дате отгрузки; воронки 4 и 7 не учитываются.
         </p>
       </div>
@@ -241,7 +234,7 @@ export function ClientTailPage() {
         {e && t && data && (
           <>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <Card title="Вход — сделки по фильтрам" hint={`Сделки (${scope}) периода, прошедшие все фильтры. Это то, что убираем.`}>
+              <Card title="Вход — сделки по фильтрам" hint="Только первичные (по воронке сделки) отгрузки периода, прошедшие все фильтры. Это то, что убираем." >
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Kpi label="Выручка входа" value={rub(e.amount)} sub={perMonth(e.amount)} accent
                     how="Сумма сделок по фильтрам, отгруженных в периоде" />
@@ -251,8 +244,8 @@ export function ClientTailPage() {
                     how="Отгружены в периоде, те же фильтры" />
                   <Kpi label={`CR Сделка → Отгрузка (${scope})`} value={cr(e.shipments, e.created)}
                     how="Отгрузки периода ÷ сделки периода (события окна, не путь одних и тех же сделок)" />
-                  <Kpi label="Клиентов во входе" value={num(e.clients)} sub={`из них ${num(e.newClients)} — первая покупка`}
-                    how="Разных клиентов с входной отгрузкой. «Первая покупка» — раньше у клиента отгрузок не было вообще" />
+                  <Kpi label="Клиентов во входе" value={num(e.clients)}
+                    how="Разных клиентов с входной отгрузкой — по ним считается хвост" />
                 </div>
                 {e.noClientDeals > 0 && (
                   <p className="text-[11px] text-[var(--color-text-muted)]">
@@ -282,16 +275,15 @@ export function ClientTailPage() {
                     how="(Выручка входа + хвоста) ÷ выручка входа" />
                 </div>
                 <p className="text-[11px] text-[var(--color-text-muted)]">
-                  {t.alsoCutAmount > 0 && <>Из хвоста {rub(t.alsoCutAmount)} ({num(t.alsoCutDeals)} отгр.) сами подходят под фильтры входа (только позже периода) — их бы тоже отсекли. </>}
-                  До входа: {num(data.before.clients)} из {num(e.clients)} клиентов уже покупали раньше, на {rub(data.before.amount)} — это давние клиенты, а не пришедшие через эти сделки.
+                  {t.alsoCutAmount > 0 && <>Из хвоста {rub(t.alsoCutAmount)} ({num(t.alsoCutDeals)} отгр.) сами подходят под фильтры входа (только позже периода) — их бы тоже отсекли.</>}
                 </p>
                 <GroupTable rows={data.tailByGroup} total={t.amount} scopeLabel="все воронки" showAlsoCut
                   legend="Группа — по наибольшей позиции сделки. Отгрузки и сделки хвоста — после первой входной отгрузки клиента; CR = отгрузки ÷ сделки группы. «Тоже под отсеч.» — выручка тех отгрузок хвоста, что сами подходят под фильтры входа." />
               </Card>
             </div>
 
-            <Card title="Что будет, если убрать такие сделки" hint="Сколько выручки потеряем, если перестать брать входные сделки, — три оценки от «клиенты никуда не денутся» до «теряем клиента целиком».">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <Card title="Что будет, если убрать такие сделки" hint="Сколько выручки потеряем, если перестать брать входные сделки, — две оценки: «клиенты никуда не денутся» и «теряем клиента целиком».">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                 {scenarios.map((s, i) => (
                   <div key={s.label} className={`min-w-0 rounded-lg border px-3 py-2.5 ${i === 1 ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'} bg-[var(--color-bg)]`}>
                     <div className="text-xs font-medium text-[var(--color-text)]">{s.label}</div>
@@ -322,9 +314,8 @@ export function ClientTailPage() {
                     <tr className="text-[11px] text-[var(--color-text-muted)] text-right align-bottom">
                       <th className="text-left font-medium py-1.5 pr-2">Клиент</th>
                       <th className="font-medium py-1.5 px-2">Первая входная<br />отгрузка</th>
-                      <th className="font-medium py-1.5 px-2">Вход<br /><span className="font-normal">отгрузки по фильтрам</span></th>
+                      <th className="font-medium py-1.5 px-2">Вход<br /><span className="font-normal">перв. отгрузки по фильтрам</span></th>
                       <th className="font-medium py-1.5 px-2">Хвост<br /><span className="font-normal">отгрузки после</span></th>
-                      <th className="font-medium py-1.5 px-2">До входа<br /><span className="font-normal">отгрузки раньше</span></th>
                       <th className="text-left font-medium py-1.5 pl-2">Что брал потом<br /><span className="font-normal">главные группы хвоста</span></th>
                     </tr>
                   </thead>
@@ -340,14 +331,10 @@ export function ClientTailPage() {
                             <span className="truncate">{c.name ?? `Контакт #${c.contactId}`}</span>
                             <ExternalLink size={11} className="shrink-0 text-[var(--color-text-muted)]" />
                           </a>
-                          {c.isNew
-                            ? <div className="text-[10px] text-[var(--color-accent)]">пришёл через вход — первая покупка</div>
-                            : <div className="text-[10px] text-[var(--color-text-muted)]">давний клиент</div>}
                         </td>
                         <td className="py-1.5 px-2 whitespace-nowrap">{new Date(c.firstEntryAt).toLocaleDateString('ru-RU')}</td>
                         <td className="py-1.5 px-2 whitespace-nowrap">{rub(c.entryAmount)}<div className="text-[10px] text-[var(--color-text-muted)]">{c.entryShipments} отгр.</div></td>
                         <td className="py-1.5 px-2 whitespace-nowrap font-medium">{c.tailAmount ? rub(c.tailAmount) : '—'}{c.tailShipments > 0 && <div className="text-[10px] font-normal text-[var(--color-text-muted)]">{c.tailShipments} отгр.</div>}</td>
-                        <td className="py-1.5 px-2 whitespace-nowrap text-[var(--color-text-muted)]">{c.beforeAmount ? rub(c.beforeAmount) : '—'}</td>
                         <td className="text-left py-1.5 pl-2 text-xs text-[var(--color-text-muted)] min-w-[160px]">{c.tailGroups.join(', ') || '—'}</td>
                       </tr>
                     ))}
@@ -355,8 +342,8 @@ export function ClientTailPage() {
                 </table>
               </div>
               <p className="text-[10px] leading-snug text-[var(--color-text-muted)]">
-                Вход — сумма ВСЕХ отгрузок клиента в периоде, прошедших фильтры. Хвост — все его отгрузки после первой входной
-                ({tailWindow}), любые товары и воронки, без самих входных. До входа — все его отгрузки раньше первой входной, за всю историю.
+                Вход — сумма ВСЕХ первичных отгрузок клиента в периоде, прошедших фильтры. Хвост — все его отгрузки после первой входной
+                ({tailWindow}), любые товары и воронки, без самих входных.
               </p>
             </Card>
           </>

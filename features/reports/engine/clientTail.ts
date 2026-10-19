@@ -3,7 +3,6 @@ import { cached } from '@/lib/cache/redis';
 import { buildCommonDealWhere, type CommonDealFilterOpts } from './commonDealWhere';
 import { resolveClientNames } from '@/lib/bitrix/clientNames';
 import type { DateRange } from '@/lib/period';
-import type { DealScope } from '@/lib/metrics/types';
 import { addDays, startOfDay } from 'date-fns';
 
 // ── «Вход и хвост» (задача владельца 19.10) ──────────────────────────────────
@@ -12,8 +11,9 @@ import { addDays, startOfDay } from 'date-fns';
 // в месяц выручки (~400 тыс. маржи). Но не принесли ли эти же клиенты потом
 // деньги на бетоне, арматуре, кровле — и не отрубаю ли я на самом деле больше?»
 //
-// ВХОД — отгрузки (delivered_at) периода, прошедшие все фильтры отчёта: отделы,
-// менеджер, перв./повт., ЧЛ/ЮЛ, товарные группы, «Фильтр сделок» (чек > 50к и
+// ВХОД — ПЕРВИЧНЫЕ отгрузки (delivered_at, воронка is_repeat=false — как
+// «Отгрузки (перв.)» каталога) периода; правка владельца 19.10: «слева всегда
+// только первичные отгрузки в периоде». Плюс все фильтры отчёта: отделы, менеджер, ЧЛ/ЮЛ, товарные группы, «Фильтр сделок» (чек > 50к и
 // т.п.), время создания / первой обработки. Те же правила выручки, что у
 // clientMetrics: сумма amount отгруженных сделок, воронки 4/7 исключены.
 //
@@ -22,12 +22,7 @@ import { addDays, startOfDay } from 'date-fns';
 // Входные сделки в хвост не попадают (они уже в «входе»). Сделки хвоста, которые
 // САМИ подходят под условия входа (кроме периода), помечены also_cut — при
 // отсечении их бы тоже не было; они входят в хвост, но видны отдельно.
-// ДО ВХОДА — отгрузки тех же клиентов раньше первой входной сделки (контекст:
-// «это вообще наш старый клиент или он пришёл через эту дверь?»).
-//
-// «Первая покупка» — входная сделка клиента = самая первая отгрузка клиента за
-// всю историю. Хвост ИМЕННО таких клиентов — то, что реально можно потерять,
-// закрыв дверь: старые клиенты, скорее всего, продолжат покупать остальное.
+// «До входа» (история клиента раньше входа) убрано по правке владельца 19.10.
 //
 // СДЕЛКИ и CR в отгрузку (правка владельца 19.10, вместо оценки маржи): «Сделки» —
 // созданные (created_at) в том же окне и по тем же условиям; CR = отгрузки ÷
@@ -43,7 +38,6 @@ export interface ClientTailOptions extends CommonDealFilterOpts {
   period: DateRange;
   managerIds?: string[];
   departmentIds?: string[];
-  dealScope?: DealScope;
   /** Окно хвоста в месяцах от первой входной сделки клиента; null — до сегодня. */
   windowMonths: number | null;
 }
@@ -56,18 +50,15 @@ export interface ClientRow {
   contactId: string;
   name: string | null;
   firstEntryAt: string;
-  isNew: boolean;
   entryShipments: number;
   entryAmount: number;
   tailShipments: number;
   tailAmount: number;
-  beforeAmount: number;
   tailGroups: string[];
 }
 export interface ClientTailResult {
-  entry: TailAgg & { noClientDeals: number; noClientAmount: number; newClients: number };
-  tail: TailAgg & { alsoCutDeals: number; alsoCutAmount: number; newClientsAmount: number };
-  before: { shipments: number; amount: number; clients: number };
+  entry: TailAgg & { noClientDeals: number; noClientAmount: number };
+  tail: TailAgg & { alsoCutDeals: number; alsoCutAmount: number };
   entryByGroup: GroupRow[];
   tailByGroup: GroupRow[];
   clients: ClientRow[];
@@ -95,8 +86,7 @@ export async function fetchClientTail(opts: ClientTailOptions): Promise<ClientTa
        WHERE orh.is_active AND orh.department_id IN (
          SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($${params.length}::text[])))`);
   }
-  if (opts.dealScope === 'primary') cond.push('d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = false)');
-  else if (opts.dealScope === 'repeat') cond.push('d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = true)');
+  cond.push('d.funnel_id IN (SELECT id FROM funnels WHERE is_repeat = false)');
   const common = buildCommonDealWhere(opts, params.length);
   if (common.sql) { cond.push(common.sql); params.push(...common.params); }
   const match = cond.length ? cond.join(' AND ') : 'true';
@@ -128,7 +118,7 @@ hist AS (
          (${match}) AS also_cut
     FROM sa.deals d
     JOIN clients c ON c.contact_id = d.contact_id
-   WHERE d.delivered_at IS NOT NULL
+   WHERE d.delivered_at >= c.first_entry_at
      AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
      AND NOT EXISTS (SELECT 1 FROM entry e WHERE e.deal_id = d.deal_id)
 ),
@@ -148,26 +138,16 @@ tail_created AS (
      AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
      AND NOT EXISTS (SELECT 1 FROM entry e WHERE e.deal_id = d.deal_id)
 ),
-first_ever AS (
-  SELECT c.contact_id,
-         NOT EXISTS (SELECT 1 FROM hist h WHERE h.contact_id = c.contact_id AND h.delivered_at < c.first_entry_at) AS is_new
-    FROM clients c
-),
 tail AS (
-  SELECT h.*, f.is_new FROM hist h
-    JOIN first_ever f ON f.contact_id = h.contact_id
+  SELECT h.* FROM hist h
    WHERE h.delivered_at >= h.first_entry_at
      AND (${pWindow} IS NULL OR h.delivered_at < h.first_entry_at + make_interval(months => ${pWindow}))
 ),
-before AS (
-  SELECT h.* FROM hist h WHERE h.delivered_at < h.first_entry_at
-),
 per_client AS (
-  SELECT c.contact_id, c.first_entry_at, c.entry_shipments, c.entry_amount, f.is_new,
+  SELECT c.contact_id, c.first_entry_at, c.entry_shipments, c.entry_amount,
          COALESCE(t.shipments, 0) AS tail_shipments, COALESCE(t.amount, 0) AS tail_amount,
-         COALESCE(b.amount, 0) AS before_amount, t.groups AS tail_groups
+         t.groups AS tail_groups
     FROM clients c
-    JOIN first_ever f USING (contact_id)
     LEFT JOIN (
       SELECT contact_id, sum(n)::int AS shipments, sum(amount)::float8 AS amount,
              (array_agg(grp ORDER BY amount DESC NULLS LAST))[1:4] AS groups
@@ -175,7 +155,6 @@ per_client AS (
                 FROM tail GROUP BY contact_id, grp) g
        GROUP BY contact_id
     ) t USING (contact_id)
-    LEFT JOIN (SELECT contact_id, sum(amount)::float8 AS amount FROM before GROUP BY contact_id) b USING (contact_id)
 )
 SELECT json_build_object(
   'entry', (SELECT json_build_object(
@@ -183,16 +162,13 @@ SELECT json_build_object(
       'amount', COALESCE(sum(amount), 0),
       'clients', count(DISTINCT contact_id),
       'noClientDeals', count(*) FILTER (WHERE contact_id IS NULL),
-      'noClientAmount', COALESCE(sum(amount) FILTER (WHERE contact_id IS NULL), 0),
-      'newClients', (SELECT count(*) FROM first_ever WHERE is_new)) FROM entry),
+      'noClientAmount', COALESCE(sum(amount) FILTER (WHERE contact_id IS NULL), 0)) FROM entry),
   'tail', (SELECT json_build_object(
       'shipments', count(*), 'created', (SELECT count(*) FROM tail_created),
       'amount', COALESCE(sum(amount), 0),
       'clients', count(DISTINCT contact_id),
       'alsoCutDeals', count(*) FILTER (WHERE also_cut),
-      'alsoCutAmount', COALESCE(sum(amount) FILTER (WHERE also_cut), 0),
-      'newClientsAmount', COALESCE(sum(amount) FILTER (WHERE is_new), 0)) FROM tail),
-  'before', (SELECT json_build_object('shipments', count(*), 'amount', COALESCE(sum(amount), 0), 'clients', count(DISTINCT contact_id)) FROM before),
+      'alsoCutAmount', COALESCE(sum(amount) FILTER (WHERE also_cut), 0)) FROM tail),
   'entryByGroup', (SELECT COALESCE(json_agg(r ORDER BY r.amount DESC), '[]') FROM (
       SELECT grp AS "group", count(*) AS shipments, COALESCE(sum(amount), 0)::float8 AS amount, count(DISTINCT contact_id) AS clients
         FROM entry GROUP BY grp) r),
@@ -204,15 +180,15 @@ SELECT json_build_object(
         FROM tail GROUP BY grp) r),
   'clientsTotal', (SELECT count(*) FROM clients),
   'clients', (SELECT COALESCE(json_agg(r), '[]') FROM (
-      SELECT contact_id::text AS "contactId", first_entry_at AS "firstEntryAt", is_new AS "isNew",
+      SELECT contact_id::text AS "contactId", first_entry_at AS "firstEntryAt",
              entry_shipments AS "entryShipments", entry_amount AS "entryAmount",
-             tail_shipments AS "tailShipments", tail_amount AS "tailAmount", before_amount AS "beforeAmount",
+             tail_shipments AS "tailShipments", tail_amount AS "tailAmount",
              COALESCE(tail_groups, '{}') AS "tailGroups"
         FROM per_client ORDER BY tail_amount DESC, entry_amount DESC LIMIT ${pTop}) r)
 ) AS result`;
 
   const key = [fromIso, toExclIso, managerIds.join(','), [...deptIds].sort().join(','),
-    opts.dealScope ?? 'all', common.key, windowMonths ?? 'all'].join('|');
+    common.key, windowMonths ?? 'all'].join('|');
 
   type Raw = Omit<ClientTailResult, 'clients' | 'entryByGroup' | 'tailByGroup'> & {
     clients: Omit<ClientRow, 'name'>[];
@@ -221,7 +197,7 @@ SELECT json_build_object(
     entryCreatedByGroup: Record<string, number>;
     tailCreatedByGroup: Record<string, number>;
   };
-  const raw = await cached(`rpt:client-tail2:${key}`, 15 * 60, async () => {
+  const raw = await cached(`rpt:client-tail3:${key}`, 15 * 60, async () => {
     const res = await analyticsDb().query<{ result: Raw }>(sql, params);
     return res.rows[0].result;
   });

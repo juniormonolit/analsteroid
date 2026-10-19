@@ -29,6 +29,8 @@ export interface FiltersFieldsProps {
   productGroupMode?: ProductGroupMode;
   onProductGroupModeChange?: (v: ProductGroupMode) => void;
   showProductGroupPicker?: boolean;
+  /** Скрыть «Тип сделок» — отчёт, где срез зафиксирован («Вход и хвост»: только первичные). */
+  hideDealScope?: boolean;
   // Тип аккаунтов — актуален только для отчёта/дрилл-дауна по менеджерам
   // (мини-отчёт с dimensionType='manager'); в основном тулбаре живёт в ViewSettings,
   // здесь — для дрилл-дауна, где это полноценный фильтр сделок.
@@ -95,13 +97,14 @@ export function FieldsGroup({ title, grouped, children }: {
 
 export function FiltersFields({
   dealScope, onDealScopeChange, clientType, onClientTypeChange, productGroupMode, onProductGroupModeChange,
-  showProductGroupPicker, accountType, onAccountTypeChange,
+  showProductGroupPicker, hideDealScope = false, accountType, onAccountTypeChange,
   createdTimeFilter, onCreatedTimeFilterChange, firstTouchFilter, onFirstTouchFilterChange,
   grouped = false,
 }: FiltersFieldsProps & { grouped?: boolean }) {
   return (
     <div className={`flex flex-col ${grouped ? 'gap-3.5' : 'gap-3'}`}>
       <FieldsGroup title="Сделки" grouped={grouped}>
+      {!hideDealScope && (
       <div>
         <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип сделок</div>
         <Seg
@@ -111,6 +114,7 @@ export function FiltersFields({
           labels={{ primary: 'Первичные', repeat: 'Повторные', all: 'Все' }}
         />
       </div>
+      )}
       <div>
         <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">Тип клиента</div>
         <Seg
