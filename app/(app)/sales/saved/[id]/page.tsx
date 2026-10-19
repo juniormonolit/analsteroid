@@ -19,10 +19,15 @@ import { AccessDenied } from '@/components/ui/AccessDenied';
 //     просто не для тебя.
 export default async function SavedReportPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ new?: string }>;
 }) {
   const { id } = await params;
+  // ?new=1 — как у /sales/by-*: открыть отчёт в СВЕЖЕЙ вкладке, без состояния,
+  // восстановленного из localStorage (reportTabs.ts) — ровно как он сохранён.
+  const { new: newParam } = await searchParams;
   const session = await getSession();
   if (!session) redirect('/login');
 
@@ -44,6 +49,7 @@ export default async function SavedReportPage({
             sort_by AS "sortBy",
             sort_dir AS "sortDir",
             COALESCE(column_groups, '[]'::jsonb) AS "columnGroups",
+            COALESCE(deal_filters, '[]'::jsonb) AS "dealFilters",
             COALESCE(accented_metric_ids, '{}') AS "accentedMetricIds",
             COALESCE(bar_metric_ids, '{}') AS "barMetricIds",
             COALESCE(heatmap_metric_ids, '{}') AS "heatmapMetricIds",
@@ -60,6 +66,9 @@ export default async function SavedReportPage({
             drilldown_grouped AS "drilldownGrouped",
             source_dimension AS "sourceDimension",
             drilldown_dimension AS "drilldownDimension",
+            period_unit AS "periodUnit",
+            period_dimension AS "periodDimension",
+            compare_mode AS "compareMode",
             is_shared AS "isShared",
             shared_section AS "sharedSection",
             period_mode AS "periodMode",
@@ -90,6 +99,7 @@ export default async function SavedReportPage({
       reportSlug={preset.reportSlug}
       title={preset.name}
       preset={preset}
+      isNew={newParam === '1'}
     />
   );
 }

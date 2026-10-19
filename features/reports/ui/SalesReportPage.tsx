@@ -359,6 +359,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const urlHasRef = useRef(searchParams);
   urlHasRef.current = searchParams;
   const urlHas = useCallback((key: string) => urlHasRef.current.has(key), []);
+  // Реальный сохранённый отчёт из БД (userLogin непустой — см. isSavedPreset) —
+  // для restore вкладки (инцидент 19.10), читается через ref по той же причине.
+  const presetRef = useRef<SavedReport | null>(null);
+  presetRef.current = preset?.userLogin ? preset : null;
 
   // Пункт 3а спеки: тумблер «Обычная/Про» из ЛК. Пока грузится/не резолвится — не
   // урезаем UI (fail-open к «Про»), чтобы не мигать тулбаром на первом рендере.
@@ -620,15 +624,18 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setColumnGroups(g => upgradeLogistView({ metricIds: [], columnGroups: g, heatmapOn: [], heatmapInverted: [] }).columnGroups);
   };
 
-  // Задача 2824 + 2881: применение пресета сохранённого отчёта к состоянию экрана,
-  // вынесено в отдельный callback (раньше было телом эффекта ниже) — тот же код
-  // теперь нужен из ДВУХ мест: (1) на монтировании/смене пресета — с приоритетом
-  // явного query-параметра диплинка (opts.respectUrl), (2) из кнопки «Вернуть
-  // исходный вид» плашки расхождения — целиком, БЕЗ оглядки на URL (осознанное
-  // действие пользователя, тот же принцип, что уже применяется в applyTabSnapshot
-  // ниже при явном выборе вкладки). metricIds — БЕЗ keep()-гейта вовсе: как
-  // объяснено у объявления состояния выше, набор метрик больше не живёт в URL.
-  const applyPreset = useCallback((p: SavedReport, opts?: { respectUrl?: boolean }) => {
+  // Инцидент 19.10 («Товары - Менеджеры»: у директора 21 товарная группа, у
+  // супер-админа 64 при одинаковом ответе сервера). Всё, что определяет ДАННЫЕ
+  // сохранённого отчёта — какие сделки, за какой период, в каком разрезе, какие
+  // строки отфильтрованы, — вынесено сюда отдельно от формата. Эта часть
+  // применяется не только на монтировании пресета, но и ПОВЕРХ восстановленной
+  // вкладки (restore ниже): старая вкладка в localStorage больше не может молча
+  // подсунуть забытый поиск/фильтр по метрике/другой период в общий отчёт.
+  // Из вкладки переживают только набор метрик, сортировка и оформление.
+  // Сессионные фильтры (поиск, по метрикам, по нерабочему времени) в отчёте не
+  // хранятся — «как сохранено» = пусто. URL-диплинк (respectUrl) по-прежнему
+  // побеждает: присланная ссылка с ?period=/?q= — осознанный срез.
+  const applyPresetData = useCallback((p: SavedReport, opts?: { respectUrl?: boolean }) => {
     const keep = (key: string) => !!opts?.respectUrl && urlHasRef.current.has(key);
     if (p.periodMode === 'relative' && p.relativePeriod) {
       const per = resolveRelativePeriod(p.relativePeriod);
@@ -644,10 +651,35 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     if (!keep('dealScope')) setDealScope(p.dealScope);
     if (!keep('clientType')) setClientType(p.clientType);
     if (!keep('grouping')) setGrouping(p.grouping);
+    if (!keep('productGroupMode')) setProductGroupMode(p.productGroupMode);
+    if (!keep('accountType')) setAccountType(p.accountType ?? 'managers');
+    if (!keep('sourceDim')) setSourceDimension((p.sourceDimension as SourceDimension) ?? 'brand');
+    // «По периодам» (миграция 170): у отчётов остальных типов колонки пустые —
+    // дефолты те же, что у нового отчёта.
+    if (!keep('unit')) setPeriodUnit((p.periodUnit as CalendarUnit) ?? 'month');
+    if (!keep('dim')) setPeriodDimension(p.periodDimension ?? 'managers');
+    if (!keep('cmpMode')) setCompareMode(p.compareMode ?? 'prev');
+    // Фильтр сделок хранится в отчёте — раньше не применялся вовсе (а
+    // /sales/saved/[id] даже не выбирал deal_filters из БД).
+    if (!keep('dealFilters')) setDealFilters(p.dealFilters ?? []);
+    if (!keep('q')) setSearch('');
+    if (!keep('createdTime')) setCreatedTimeFilter('all');
+    if (!keep('firstTouch')) setFirstTouchFilter('all');
+    setMetricFilters({});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Задача 2824 + 2881: применение пресета сохранённого отчёта к состоянию экрана
+  // целиком — данные (applyPresetData выше) + набор метрик и формат. Нужно из
+  // ДВУХ мест: (1) на монтировании/смене пресета — с приоритетом явного
+  // query-параметра диплинка (opts.respectUrl), (2) из кнопки «Вернуть исходный
+  // вид» плашки расхождения — целиком, БЕЗ оглядки на URL (осознанное действие
+  // пользователя). metricIds — БЕЗ keep()-гейта вовсе: набор метрик не живёт в URL.
+  const applyPreset = useCallback((p: SavedReport, opts?: { respectUrl?: boolean }) => {
+    const keep = (key: string) => !!opts?.respectUrl && urlHasRef.current.has(key);
+    applyPresetData(p, opts);
     if (!keep('cmpDisplay')) setComparisonDisplay(p.comparisonDisplay);
     setMetricDisplayModes(p.metricDisplayModes ?? {});
     setComparisonThreshold(p.comparisonThreshold ?? 5);
-    if (!keep('productGroupMode')) setProductGroupMode(p.productGroupMode);
     // p.departmentIds сознательно НЕ применяется: выбор отделов — настройка
     // аккаунта (useAccountDepartments), сохранённый отчёт её не перетирает.
     const ids = p.metricIds.length ? p.metricIds : ['all_core'];
@@ -668,22 +700,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setBorderMode(p.borderMode ?? 'grid');
     setThemeAccent(p.themeAccent ?? null);
     setNumberAlign(p.numberAlign ?? 'center');
-    if (!keep('accountType')) setAccountType(p.accountType ?? 'managers');
     setDrilldownDuplicate(p.drilldownDuplicateMetrics ?? true);
     setDrilldownMetricIds(p.drilldownMetricIds ?? []);
     setDealFields(p.dealFields ?? undefined);
     setDrilldownGrouped(p.drilldownGrouped ?? true);
-    if (!keep('sourceDim')) setSourceDimension((p.sourceDimension as SourceDimension) ?? 'brand');
     setDrilldownDimension((p.drilldownDimension as DrilldownDimension) ?? 'contact_type');
     if (!keep('sortBy')) setSortBy(p.sortBy ?? null);
     if (!keep('sortDir')) setSortDir(p.sortDir ?? 'desc');
     setColumnGroups(p.columnGroups ?? defaultColumnGroups ?? []);
     applyCallUpgrade();
-    // «По периодам» (миграция 170): у отчётов остальных типов колонки пустые —
-    // дефолты те же, что у нового отчёта.
-    if (!keep('unit')) setPeriodUnit((p.periodUnit as CalendarUnit) ?? 'month');
-    if (!keep('dim')) setPeriodDimension(p.periodDimension ?? 'managers');
-    if (!keep('cmpMode')) setCompareMode(p.compareMode ?? 'prev');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -703,12 +728,11 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const isSavedPreset = !!preset?.userLogin;
   const presetDiff = useMemo(() => {
     if (!isSavedPreset || !preset) return [];
-    return diffFromPreset(preset, {
-      metricIds, dealScope, clientType, grouping, comparisonDisplay,
-      productGroupMode, accountType, sourceDimension, sortBy, sortDir,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSavedPreset, preset, metricIds, dealScope, clientType, grouping, comparisonDisplay, productGroupMode, accountType, sourceDimension, sortBy, sortDir]);
+    // Решение владельца 19.10: плашка — ТОЛЬКО про добавление/удаление метрик.
+    // Сортировка/формат — личное дело смотрящего; данные (период, срез, фильтры)
+    // и так приводятся к сохранённым при каждом открытии (applyPresetData).
+    return diffFromPreset(preset, metricIds);
+  }, [isSavedPreset, preset, metricIds]);
 
   function handleResetToPreset() {
     if (!preset) return;
@@ -732,7 +756,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   //    дефолтный отчёт всегда доступен сайдбаром);
   //  * переключение снапшотит текущую вкладку синхронно ДО ухода;
   //  * restore стоит ПОСЛЕ preset-эффекта — состояние вкладки выигрывает
-  //    (это и есть «настроил и вернулся»);
+  //    (это и есть «настроил и вернулся»); у сохранённого отчёта из БД —
+  //    только метрики/сортировка/формат, данные поверх приводятся к
+  //    сохранённым (applyPresetData, инцидент 19.10);
   //  * навигация между route-ами НЕ ремоунтит SalesReportPage (React сохраняет
   //    инстанс одинакового типа) — поэтому сброс tabsRestoredRef по pathname.
   const pathname = usePathname();
@@ -846,10 +872,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     // монтировании: диплинк с явным ?dealScope=/?period=/... должен победить
     // то, что было сохранено в localStorage с прошлого визита (задача 2824).
     if (active.state) applyTabSnapshot(active.state, { respectUrl: true });
+    // Инцидент 19.10: у сохранённого отчёта данные — всегда как сохранено
+    // (см. applyPresetData), вкладка несёт только метрики/сортировку/формат.
+    // Только здесь — на открытии по URL; переключение между уже открытыми
+    // вкладками (handleTabSelect) осознанно возвращает вкладку целиком.
+    if (active.state && presetRef.current) applyPresetData(presetRef.current, { respectUrl: true });
     saveTabsStore(tabsLogin, store);
     setTabsStore(store);
     tabsRestoredRef.current = true;
-  }, [tabsLogin, pathname, isNew, title, applyTabSnapshot]);
+  }, [tabsLogin, pathname, isNew, title, applyTabSnapshot, applyPresetData]);
 
   // Персист состояния активной вкладки при каждом изменении (дёшево, <5КБ JSON).
   useEffect(() => {
@@ -1826,7 +1857,12 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
         >
           <span className="flex items-center gap-1.5 min-w-0 text-[var(--color-text)]">
             <Info size={14} style={{ color: 'var(--color-warning, #e8590c)' }} className="shrink-0" />
-            Вид изменён относительно сохранённого отчёта
+            {/* Список отличий — текстом, не только в title: на таче подсказки нет,
+                а «у меня 21 группа, у коллеги 64» объясняется именно им (19.10). */}
+            <span className="min-w-0">
+              Вид отличается от сохранённого отчёта
+              <span className="text-[var(--color-text-muted)]">: {presetDiff.join(', ')}</span>
+            </span>
           </span>
           <button
             onClick={handleResetToPreset}
