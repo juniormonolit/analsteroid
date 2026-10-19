@@ -17,6 +17,7 @@ import { addressFromComment } from './commentAddress';
 import { fetchLegalEntity } from './legalEntity';
 import { clientHint } from './clientHint';
 import { validLatLon } from '@/lib/geo/parse';
+import { reverseGeocode, type GeoCandidate } from '@/lib/geo/resolve';
 
 // Модуль «Карточка клиента» (ТЗ владельца 13.10). Один виджет для «Ещё → Модули»
 // (превью для админов) и для вкладки в карточке контакта/компании Битрикса.
@@ -374,6 +375,16 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   for (const o of objects.values()) {
     const ideal = objectProfiles[o.key]?.idealAddress;
     if (ideal) { o.address = ideal; o.label = settlementLabel(ideal); }
+  }
+  // Точка есть, а в тексте только округ/город (менеджер вставил координаты из
+  // Яндекс Карт, адрес в 1С/Битриксе — «округ Чехов»): подпись — по точке
+  // (lib/geo/resolve.ts reverseGeocode: СНТ/КП важнее деревни). Nominatim —
+  // 1 запрос/с, поэтому до 3 объектов за открытие; ответы кешируются.
+  const toLabel = [...objects.values()].filter(o => !o.manual && !objectProfiles[o.key]?.idealAddress
+    && o.lat !== null && o.lon !== null && isCoarseAddress({ address: o.address, lat: null, lon: null })).slice(0, 3);
+  if (toLabel.length) {
+    const named = await withTimeout(Promise.all(toLabel.map(o => reverseGeocode({ lat: o.lat!, lon: o.lon! }).catch(() => null))), 4500, [] as (GeoCandidate | null)[]);
+    named.forEach((g, i) => { if (g?.settlement) toLabel[i].label = g.settlement.replace(/^(тер\.?|территория)\s+/i, ''); });
   }
   const byLabel = new Map<string, ModuleObject[]>();
   for (const o of objects.values()) byLabel.set(o.label, [...(byLabel.get(o.label) ?? []), o]);

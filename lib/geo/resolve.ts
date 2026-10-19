@@ -62,6 +62,7 @@ interface DdSuggestion {
     region_with_type: string | null; area_with_type: string | null;
     city_with_type: string | null; settlement_with_type: string | null;
     city?: string | null; settlement?: string | null; street?: string | null; house?: string | null;
+    street_with_type?: string | null;
   };
 }
 
@@ -177,24 +178,56 @@ function fromNominatim(p: NmPlace): GeoCandidate | null {
   if (!validLatLon(lat, lon)) return null;
   const a = p.address ?? {};
   const settlement = a.village ?? a.hamlet ?? a.town ?? a.city ?? a.isolated_dwelling ?? a.allotments ?? a.suburb ?? null;
+  // СНТ/КП (allotments / residential) — в адрес между пунктом и улицей.
+  const territory = a.allotments && a.allotments !== settlement ? a.allotments : a.residential ?? null;
   const street = [a.road, a.house_number].filter(Boolean).join(', ');
-  const address = [a.state, a.county, settlement, street].filter(Boolean).join(', ') || p.display_name;
+  const address = [a.state, a.county, settlement, territory, street].filter(Boolean).join(', ') || p.display_name;
   return { lat, lon, address, settlement, area: a.county ?? a.municipality ?? null, region: a.state ?? null, precision: nmPrecision(p), source: 'osm' };
 }
 
 // ── Обратное геокодирование ────────────────────────────────────────────────
 
 /** Что находится в точке: адрес, населённый пункт, район, область. Точность —
- *  'pin' (точка задана человеком/ссылкой), адрес — справочный, «ближайший». */
+ *  'pin' (точка задана человеком/ссылкой), адрес — справочный, «ближайший».
+ *
+ *  Правка 19.10 (владелец: «по координатам из Яндекса подпись «округ Чехов»
+ *  вместо «КП Лесная поляна»»). Замер на 90 заявках 1С, где в комментарии есть
+ *  и точка, и название СНТ/КП: «сначала DaData, иначе OSM» попадал в название
+ *  в 46%, новое правило — в 61% (часть промахов — шум самого эталона):
+ *   • DaData отдаёт БЛИЖАЙШИЙ дом из ФИАС в радиусе 1 км — в КП домов в ФИАС
+ *     нет, и «побеждает» дом соседней деревни. Её ответ берём, только если
+ *     найденный дом ≤ 300 м от точки;
+ *   • название территории (СНТ/КП/ДНП — у DaData «тер. …», у OSM allotments /
+ *     residential) важнее деревни: если DaData его не называет, а OSM — да,
+ *     берём OSM. */
+const NEAR_HOUSE_M = 300;
+const TERRITORY = /(^|[\s.])(тер|снт|днп|днт|тсн|кп|дп|ст|жк|дск|массив)([\s.]|$)/i;
+
+function distM(a: LatLon, b: LatLon): number {
+  const R = 6371000, t = Math.PI / 180;
+  const h = Math.sin((b.lat - a.lat) * t / 2) ** 2 + Math.cos(a.lat * t) * Math.cos(b.lat * t) * Math.sin((b.lon - a.lon) * t / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
 export async function reverseGeocode(pt: LatLon, source: GeoSource = 'manual'): Promise<GeoCandidate> {
-  const key = `rev:${pt.lat.toFixed(5)},${pt.lon.toFixed(5)}`;
+  const key = `rev2:${pt.lat.toFixed(5)},${pt.lon.toFixed(5)}`;
   const base = await cached(key, async () => {
-    const dd = await dadata('geolocate/address', { lat: pt.lat, lon: pt.lon, count: 1, radius_meters: 1000 });
-    const c = dd[0] ? fromDadata(dd[0]) : null;
-    if (c) return { address: c.address, settlement: c.settlement, area: c.area, region: c.region };
-    const nm = await nominatim<NmPlace>('reverse', { lat: String(pt.lat), lon: String(pt.lon), zoom: '18' });
+    const [dd, nm] = await Promise.all([
+      dadata('geolocate/address', { lat: pt.lat, lon: pt.lon, count: 1, radius_meters: 1000 }),
+      nominatim<NmPlace>('reverse', { lat: String(pt.lat), lon: String(pt.lon), zoom: '18', addressdetails: '1' }),
+    ]);
+    const d = dd[0] ? fromDadata(dd[0]) : null;
+    const dNear = d && distM(pt, d) <= NEAR_HOUSE_M ? d : null;
+    const dTerr = dd[0]?.data.street_with_type && TERRITORY.test(dd[0].data.street_with_type) ? dd[0].data.street_with_type : null;
     const n = nm ? fromNominatim(nm) : null;
-    if (n) return { address: n.address, settlement: n.settlement, area: n.area, region: n.region };
+    const nTerr = nm?.address ? (nm.address.allotments ?? nm.address.residential ?? null) : null;
+
+    if (dNear && (dTerr || !nTerr)) {
+      return { address: dNear.address, settlement: dTerr ?? dNear.settlement, area: dNear.area, region: dNear.region };
+    }
+    if (n) return { address: n.address, settlement: nTerr ?? n.settlement, area: n.area, region: n.region };
+    // Только дальний дом DaData — его населённый пункт как ориентир, без улицы и дома.
+    if (d) return { address: [d.region, d.area, d.settlement].filter(Boolean).join(', ') || d.address, settlement: d.settlement, area: d.area, region: d.region };
     return { address: `${pt.lat.toFixed(6)}, ${pt.lon.toFixed(6)}`, settlement: null, area: null, region: null };
   });
   return { lat: pt.lat, lon: pt.lon, ...base, precision: 'pin', source };
