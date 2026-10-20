@@ -263,8 +263,9 @@ export async function buildRepeatBoard(opts: {
 
   // 1. Заказчики менеджеров (кэш движка «Моих заказчиков»).
   const rows: Row[] = [];
-  // 8 параллельно: холодный прогрев ~1 с на менеджера, дальше — Redis 10 мин.
-  const CONCURRENCY = 8;
+  // 4 параллельно: пул SA — 8 соединений (SA_PG_POOL_MAX), 8 разом забирали его целиком и
+  // соседние запросы падали по таймауту (20.10). Прогрев ~1 с на менеджера, дальше — Redis.
+  const CONCURRENCY = 4;
   for (let i = 0; i < roster.length; i += CONCURRENCY) {
     const chunk = roster.slice(i, i + CONCURRENCY);
     const lists = await Promise.all(chunk.map(m => fetchManagerCustomers(Number(m.id))

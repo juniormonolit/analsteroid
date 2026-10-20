@@ -193,10 +193,24 @@ export async function cached<T>(key: string, ttlSec: number, producer: () => Pro
  * Stale-while-revalidate поверх Redis (канбан повторных, владелец 20.10: «Redis не может
  * помочь облегчить загрузку?»). Значение младше `freshSec` отдаётся как есть; старше, но
  * младше `staleSec` — отдаётся СРАЗУ, а пересчёт уходит в фон (один на ключ: замок NX на
- * время пересчёта, чтобы десять открытых вкладок не пересчитали одно и то же десять раз).
+ * время пересчёта, чтобы десять открытых вкладок не пересчитали одно и то же десять раз;
+ * фоновые пересчёты — очередью, не больше двух одновременно).
  * Ждать приходится только при полном промахе. Падение Redis — просто `producer()`.
  */
 const _swrInflight = new Map<string, Promise<unknown>>();
+// Фоновые пересчёты — строго по очереди, не больше SWR_BG_LIMIT одновременно. Живой инцидент
+// 20.10: доска на 86 менеджеров разом протухла и запустила 86 тяжёлых пересчётов параллельно —
+// пул соединений SA кончился, соседние запросы падали «timeout exceeded when trying to connect».
+const SWR_BG_LIMIT = 2;
+let _swrBgRunning = 0;
+const _swrBgQueue: (() => void)[] = [];
+function swrBackground(task: () => Promise<unknown>): void {
+  const run = () => {
+    _swrBgRunning++;
+    task().catch(() => {}).finally(() => { _swrBgRunning--; _swrBgQueue.shift()?.(); });
+  };
+  if (_swrBgRunning < SWR_BG_LIMIT) run(); else _swrBgQueue.push(run);
+}
 export async function cachedSwr<T>(key: string, freshSec: number, staleSec: number, producer: () => Promise<T>): Promise<T> {
   const client = await redisReady();
   const fullKey = `${NS}swr:${key}`;
@@ -219,7 +233,7 @@ export async function cachedSwr<T>(key: string, freshSec: number, staleSec: numb
         const { at, v } = JSON.parse(hit) as { at: number; v: T };
         if (Date.now() - at > freshSec * 1000) {
           const lock = await client.set(`${fullKey}:lock`, '1', 'EX', 120, 'NX').catch(() => null);
-          if (lock) void compute().catch(err => warnThrottled(`swr refresh failed: ${key}`, err));
+          if (lock) swrBackground(() => compute().catch(err => warnThrottled(`swr refresh failed: ${key}`, err)));
         }
         return v;
       }

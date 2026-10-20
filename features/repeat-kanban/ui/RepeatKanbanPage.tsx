@@ -306,24 +306,37 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
 /** Показатели канбана для РОПа — снимок текущей доски (аудит Fable 20.10). Исторические
  *  (скорость взятия из пула, конверсия пул → продано за 90 дн.) — в BACKLOG. */
 function KpiStrip({ k }: { k: BoardKpi }) {
-  const items: { label: string; value: string; hint: string; tone?: 'neg' | 'warn' }[] = [
-    { label: 'Пул', value: `${rub.format(k.pool)} · ${moneyShort(k.poolPotential)}`, hint: 'Заказчиков без открытой повторной сделки и их потенциал на 12 мес. — сколько денег «лежит»' },
-    { label: 'В дозвоне', value: `${rub.format(k.inWork)} · ${moneyShort(k.inWorkPotential)}`, hint: 'Взяты в работу и в попытках связаться — сколько денег «обрабатывается»' },
-    { label: 'Дозвонились', value: k.inWork ? `${rub.format(k.reached)} из ${rub.format(k.inWork)} · ${Math.round((k.reached / k.inWork) * 100)}%` : '—', hint: 'Среди тех, кто в дозвоне: был разговор дольше 20 с или ручной контакт' },
-    { label: 'В воронке', value: `${rub.format(k.funnel)} · ${moneyShort(k.funnelSum)}`, hint: 'Повторные сделки в работе и их сумма (реальные деньги сделок, не потенциал)' },
-    { label: 'Задачи', value: `просрочено ${k.tasksOverdue} · ждут приёмки ${k.tasksControl}`, hint: 'Просроченные задачи проекта «Повторные продажи» и задачи, которые менеджер сдал, а постановщик не принял', tone: k.tasksOverdue ? 'neg' : undefined },
-    { label: 'Без задачи', value: rub.format(k.noTaskInWork), hint: 'Сделки в дозвоне и воронке, по которым нет открытой задачи', tone: k.noTaskInWork ? 'warn' : undefined },
-    { label: 'Отказы на проверке', value: `${rub.format(k.review)}${k.reviewEarly ? ` · ${k.reviewEarly} до 3 попыток` : ''}`, hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
-    { label: 'Брак', value: rub.format(k.brak), hint: 'Отказ подтверждён РОПом' },
+  // Одна плитка — одна цифра крупно + подпись мелко (владелец 20.10: «показатели с
+  // диапазонами — хуета»: «414 · 36,8 млн» читалось как диапазон).
+  const pctOf = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+  const tiles: { label: string; value: string; sub?: string; hint: string; tone?: 'neg' | 'warn' }[] = [
+    { label: 'Заказчиков в пуле', value: rub.format(k.pool), hint: 'Без открытой повторной сделки — кого можно брать в работу' },
+    { label: 'В дозвоне', value: rub.format(k.inWork), sub: `потенциал ${moneyShort(k.inWorkPotential)}`, hint: 'Взяты в работу и в попытках связаться' },
+    { label: 'Дозвонились', value: pctOf(k.reached, k.inWork), sub: `${rub.format(k.reached)} из ${rub.format(k.inWork)}`, hint: 'Среди тех, кто в дозвоне: был разговор дольше 20 с или ручной контакт' },
+    { label: 'Сделок в воронке', value: rub.format(k.funnel), sub: `на ${moneyShort(k.funnelSum)}`, hint: 'Повторные сделки в работе и их сумма' },
+    { label: 'Просрочено задач', value: rub.format(k.tasksOverdue), hint: 'Открытые задачи проекта «Повторные продажи» с прошедшим сроком', tone: k.tasksOverdue ? 'neg' : undefined },
+    { label: 'Ждут приёмки', value: rub.format(k.tasksControl), hint: 'Менеджер сдал задачу, постановщик не принял', tone: k.tasksControl ? 'warn' : undefined },
+    { label: 'Сделок без задачи', value: rub.format(k.noTaskInWork), hint: 'В дозвоне и воронке, по которым нет открытой задачи', tone: k.noTaskInWork ? 'warn' : undefined },
+    { label: 'Отказы на проверке', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} — до 3 попыток` : undefined, hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
   ];
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
-      {items.map(i => (
-        <div key={i.label} title={i.hint} className="min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2.5 py-1.5">
-          <div className="truncate text-[11px] text-[var(--color-text-muted)]">{i.label}</div>
-          <div className="truncate text-[13px] font-semibold tabular-nums" style={i.tone === 'neg' ? { color: 'var(--color-negative)' } : i.tone === 'warn' ? { color: '#b45f06' } : undefined}>{i.value}</div>
-        </div>
-      ))}
+    <div className="flex min-w-0 flex-col gap-2 lg:flex-row">
+      {/* Главная цифра — сколько денег лежит в пуле, если вернуть заказчиков. */}
+      <div className="shrink-0 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-72"
+        title="Сумма потенциалов заказчиков пула: сколько они принесут за год, если вернуть их. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр).">
+        <div className="text-[12px] opacity-85">Потенциал пула за год</div>
+        <div className="text-[26px] font-bold leading-tight tabular-nums">{moneyShort(k.poolPotential)}</div>
+        <div className="text-[12px] opacity-85">если вернуть {rub.format(k.pool)} {plural(k.pool, 'заказчика', 'заказчиков', 'заказчиков')}</div>
+      </div>
+      <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+        {tiles.map(t => (
+          <div key={t.label} title={t.hint} className="min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2.5 py-1.5">
+            <div className="truncate text-[11px] text-[var(--color-text-muted)]">{t.label}</div>
+            <div className="text-[18px] font-bold leading-tight tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
+            {t.sub && <div className="truncate text-[11px] text-[var(--color-text-muted)]">{t.sub}</div>}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -355,22 +368,19 @@ function PotentialBadge({ c }: { c: KanbanCard }) {
         <button type="button" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}
           onClick={e => { e.preventDefault(); setOpen(true); }}
           className="font-semibold text-[var(--color-text)] underline decoration-dotted underline-offset-2">
-          потенциал ~{moneyShort(p.value)}
+          потенциал {moneyShort(p.value)}
         </button>
       }>
       <div className="flex flex-col gap-1.5 text-[var(--color-text)]">
-        <div className="font-semibold">Потенциал на 12 месяцев ≈ {money(p.value)}</div>
+        <div className="text-[15px] font-bold">Потенциал ≈ {money(p.value)} за год</div>
         <div className="text-[var(--color-text-secondary)]">
-          Сколько в среднем приносят за следующий год заказчики с {BUCKET_LABEL[p.bucket] ?? `${p.bucket} покупками`} ({p.b2b ? 'юрлица' : 'физлица'}) — по всей истории продаж, {rub.format(p.n)} таких случаев:
+          Столько в среднем приносят за год заказчики с {BUCKET_LABEL[p.bucket] ?? `${p.bucket} покупками`} ({p.b2b ? 'юрлица' : 'физлица'}), <b>когда возвращаются</b>. Посчитано по всей истории продаж — {rub.format(p.n)} таких заказчиков.
         </div>
-        <div className="rounded-md bg-[var(--color-bg-surface)] px-2 py-1.5 tabular-nums">
-          <div>вернулись и купили ещё в течение года — <b>{pct(p.conv)}</b></div>
-          <div>средняя выручка вернувшегося за год — <b>{money(p.avgReturned)}</b></div>
-          <div className="mt-1 border-t border-[var(--color-border)] pt-1"><b>{pct(p.conv)} × {moneyShort(p.avgReturned)} ≈ {moneyShort(p.value)}</b></div>
+        <div className="rounded-md bg-[var(--color-accent-soft)] px-2 py-1.5 text-[var(--color-accent)]">
+          Сейчас возвращается {pct(p.conv)} — каждый возвращённый сверх этого даёт +{moneyShort(p.value)} выручки за год.
         </div>
         <div className="text-[11.5px] text-[var(--color-text-muted)]">
-          Учтены и те, кто не вернулся (у них ноль). Покупки — склеенные по правилу повторной продажи; крупные выбросы срезаны по 95-му перцентилю сегмента.
-          {c.repeatChance !== null && <> Шанс следующей отгрузки за 180 дн. — {pct(c.repeatChance)}{c.expectedValue !== null ? `, ожидаемая следующая покупка — ${moneyShort(Math.round(c.expectedValue))}` : ''}.</>}
+          Покупки склеены по правилу повторной продажи, крупные выбросы срезаны по 95-му перцентилю.
         </div>
       </div>
     </Popover>
