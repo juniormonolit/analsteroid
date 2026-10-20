@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 import { twMerge } from 'tailwind-merge';
 import { Popover } from '@/components/ui/Popover';
@@ -29,19 +29,28 @@ export function SearchMultiSelect({
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
-  const selected = useMemo(() => new Set(value), [value]);
+  // Свой текущий набор: родитель обычно хранит выбор в адресной строке, и её обновление
+  // асинхронно — два быстрых клика считали бы от старого value и затирали друг друга
+  // (поймано 20.10: отметил двоих — осталась одна). Синхронизируемся с value извне.
+  const [sel, setSel] = useState<string[]>(value);
+  const selRef = useRef(sel);
+  const valueKey = value.join(',');
+  // Сверяемся по содержимому, не по ссылке: массив из адресной строки — новый на каждый рендер.
+  useEffect(() => { setSel(value); selRef.current = value; }, [valueKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selected = useMemo(() => new Set(sel), [sel]);
+  const commit = (next: string[]) => { selRef.current = next; setSel(next); onChange(next); };
   const items = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return needle ? options.filter(o => `${o.label} ${o.hint ?? ''}`.toLowerCase().includes(needle)) : options;
   }, [options, q]);
 
   const toggle = (v: string) => {
-    const next = new Set(selected);
+    const next = new Set(selRef.current);
     if (next.has(v)) next.delete(v); else next.add(v);
-    onChange(options.map(o => o.value).filter(x => next.has(x)));
+    commit(options.map(o => o.value).filter(x => next.has(x)));
   };
-  const one = value.length === 1 ? options.find(o => o.value === value[0]) : null;
-  const buttonText = value.length === 0 ? allLabel : one ? one.label : `${value.length} ${unitLabel}`;
+  const one = sel.length === 1 ? options.find(o => o.value === sel[0]) : null;
+  const buttonText = sel.length === 0 ? allLabel : one ? one.label : `${sel.length} ${unitLabel}`;
 
   return (
     <Popover
@@ -69,11 +78,11 @@ export function SearchMultiSelect({
         </label>
         <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-3 py-1 text-xs">
           <button type="button" className="min-h-9 text-[var(--color-accent)] hover:underline disabled:opacity-40" disabled={!items.length}
-            onClick={() => onChange(options.map(o => o.value).filter(v => selected.has(v) || items.some(i => i.value === v)))}>
+            onClick={() => commit(options.map(o => o.value).filter(v => selected.has(v) || items.some(i => i.value === v)))}>
             {q ? 'Отметить найденных' : 'Отметить всех'}
           </button>
-          <button type="button" className="min-h-9 text-[var(--color-text-muted)] hover:underline disabled:opacity-40" disabled={!value.length}
-            onClick={() => onChange([])}>
+          <button type="button" className="min-h-9 text-[var(--color-text-muted)] hover:underline disabled:opacity-40" disabled={!sel.length}
+            onClick={() => commit([])}>
             Сбросить · {allLabel.toLowerCase()}
           </button>
         </div>
