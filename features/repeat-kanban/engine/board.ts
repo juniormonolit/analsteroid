@@ -173,27 +173,43 @@ async function fetchLastDeliveredDeals(keys: string[]): Promise<Map<string, numb
   return new Map(res.rows.map(r => [r.client_key, Number(r.deal_id)]));
 }
 
+/**
+ * Последняя повторная сделка каждого заказчика (по created_at).
+ * Привязка — НЕ общей формулой client_key отчётов: та отбрасывает юр-сделки без компании
+ * (funnel 3, company_id IS NULL), и у заказчика с такой ОТКРЫТОЙ сделкой доска писала «Нет
+ * активной сделки» (живой случай 20.10: контакт 182561, сделка 260068 «Отправил счёт»).
+ * Здесь, как в единой карточке клиента (контакт = все его сделки): сделка — контакта, если
+ * это розничная воронка (2) или юр-воронка (3) без компании; компании — если компания указана.
+ * Ключи доски c<id>/x<id> — один и тот же контакт.
+ */
 async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, RepeatDealInfo>> {
   if (!keys.length) return new Map();
+  const refOf = (k: string) => (k.startsWith('k') ? k : `p${k.slice(1)}`);
+  const refs = [...new Set(keys.map(refOf))];
   const res = await analyticsDb().query<RepeatDealRow>(
     `SELECT * FROM (
        SELECT DISTINCT ON (client_key) * FROM (
-         SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, d.deal_id, d.funnel_id, d.stage_id, s.name AS stage_name,
+         SELECT CASE WHEN d.funnel_id = 3 AND coalesce(d.company_id, 0) <> 0 THEN 'k'||d.company_id
+                     WHEN d.contact_id IS NOT NULL AND d.contact_id <> 0 THEN 'p'||d.contact_id END AS client_key,
+                d.deal_id, d.funnel_id, d.stage_id, s.name AS stage_name,
                 d.amount, d.created_at, d.lost_at, d.sold_at, d.delivered_at, d.current_manager_id
            FROM sa.deals d LEFT JOIN sa.stages s ON s.id = d.stage_id
           WHERE d.funnel_id = ANY($2::int[])
        ) t WHERE client_key = ANY($1::text[])
        ORDER BY client_key, created_at DESC, deal_id DESC
      ) x`,
-    [keys, [...REPEAT_FUNNEL_IDS]],
+    [refs, [...REPEAT_FUNNEL_IDS]],
   );
   const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
-  return new Map(res.rows.map(r => [r.client_key, {
+  const byRef = new Map(res.rows.map(r => [r.client_key, {
     dealId: Number(r.deal_id), funnelId: Number(r.funnel_id), stageId: r.stage_id, stageName: r.stage_name,
     amount: r.amount !== null ? Math.round(Number(r.amount)) : null,
     createdAt: iso(r.created_at)!, lostAt: iso(r.lost_at), soldAt: iso(r.sold_at), deliveredAt: iso(r.delivered_at),
     managerId: r.current_manager_id !== null ? String(r.current_manager_id) : null,
-  }]));
+  } as RepeatDealInfo]));
+  const out = new Map<string, RepeatDealInfo>();
+  for (const k of keys) { const d = byRef.get(refOf(k)); if (d) out.set(k, d); }
+  return out;
 }
 
 async function fetchDealCalls(dealIds: number[], sinceIso: string): Promise<Map<number, CallInfo[]>> {
