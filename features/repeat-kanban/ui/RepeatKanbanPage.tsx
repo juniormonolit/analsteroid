@@ -5,7 +5,7 @@
 // Битриксе) от РОПа, «выполнено» от менеджера, разбор отказа РОПом.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, ExternalLink, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -515,6 +515,28 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
 
 type CardAction = 'hide' | 'brak_now' | 'unhide';
 
+/** Редкие действия карточки — в меню «⋯» (владелец 20.10: «глупо, когда висят прямо на лице»). */
+function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; danger?: boolean }[]; onAct: (a: CardAction) => void }) {
+  const [open, setOpen] = useState(false);
+  if (!items.length) return null;
+  return (
+    <Popover open={open} onOpenChange={setOpen} align="end" className="w-48 p-1"
+      trigger={
+        <button type="button" aria-label="Ещё действия" title="Ещё действия"
+          className="tap-target inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
+          <MoreHorizontal size={16} />
+        </button>
+      }>
+      {items.map(i => (
+        <button key={i.act} type="button" onClick={() => { setOpen(false); onAct(i.act); }}
+          className={`flex min-h-11 w-full items-center rounded-md px-2 text-left text-sm hover:bg-[var(--color-bg-hover)] ${i.danger ? 'text-[#990000]' : 'text-[var(--color-text)]'}`}>
+          {i.label}
+        </button>
+      ))}
+    </Popover>
+  );
+}
+
 function Card({ c, col, canManage, canHide, onOpen, onTask, onReview, onUnbrak, onDeal, onAct }: {
   c: KanbanCard; col: ColumnKey; canManage: boolean;
   /** «Скрыть из пула» — РОП или менеджер по своему заказчику. */
@@ -537,7 +559,13 @@ function Card({ c, col, canManage, canHide, onOpen, onTask, onReview, onUnbrak, 
         <button type="button" onClick={onOpen} className="min-w-0 text-left text-sm font-semibold text-[var(--color-text)] hover:text-[var(--color-accent)]">
           <span className="line-clamp-2">{cardName(c)}</span>
         </button>
-        <TypeChip type={c.profileType} />
+        <div className="flex shrink-0 items-center gap-1">
+          <TypeChip type={c.profileType} />
+          <CardMenu items={[
+            ...(col.startsWith('pool') && canHide ? [{ label: 'Скрыть из пула', act: 'hide' as const }] : []),
+            ...(canManage && (col.startsWith('pool') || col.startsWith('touch') || (col.startsWith('st_') && col !== 'st_sold')) ? [{ label: 'Сразу в брак', act: 'brak_now' as const, danger: true }] : []),
+          ]} onAct={onAct} />
+        </div>
       </div>
       <div className="truncate text-[11.5px] text-[var(--color-text-muted)]">{c.managerName}</div>
 
@@ -639,23 +667,6 @@ function Card({ c, col, canManage, canHide, onOpen, onTask, onReview, onUnbrak, 
             className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[var(--color-accent)] px-2.5 text-xs font-medium text-white hover:opacity-90">
             Разобрать отказ
           </button>
-        )}
-        {/* «Скрыть из пула» и «Сразу в брак» (владелец 20.10). Вторичные — контуром, в один ряд. */}
-        {(col.startsWith('pool') || col.startsWith('touch') || col.startsWith('st_')) && (canHide || canManage) && (
-          <div className="flex gap-2">
-            {col.startsWith('pool') && canHide && (
-              <button type="button" onClick={() => onAct('hide')}
-                className="inline-flex min-h-11 flex-1 items-center justify-center rounded-md border border-[var(--color-border)] px-2 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
-                Скрыть из пула
-              </button>
-            )}
-            {canManage && col !== 'st_sold' && (
-              <button type="button" onClick={() => onAct('brak_now')}
-                className="inline-flex min-h-11 flex-1 items-center justify-center rounded-md border border-[#ea9999] px-2 text-xs text-[#990000] hover:bg-[#f4cccc]">
-                Сразу в брак
-              </button>
-            )}
-          </div>
         )}
         {col === 'hidden' && canHide && (
           <button type="button" onClick={() => onAct('unhide')}
