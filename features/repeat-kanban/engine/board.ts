@@ -50,6 +50,8 @@ export interface ReviewInfo {
 }
 
 export interface KanbanCard {
+  /** Колонка карточки — для журнала действий («откуда взяли»). */
+  column: ColumnKey;
   clientKey: string;
   clientType: 'contact' | 'company';
   clientId: number;
@@ -304,6 +306,8 @@ export async function buildRepeatBoard(opts: {
   /** Сколько карточек отдать по каждой колонке (пагинация «показать ещё»). */
   limits?: Partial<Record<ColumnKey, number>>;
   canManage: boolean;
+  /** Ночной снимок: имена клиентов не нужны — не ходим в Битрикс. */
+  skipNames?: boolean;
 }): Promise<RepeatBoard> {
   const now = Date.now();
   const pick = new Set(opts.selectedManagers);
@@ -435,6 +439,7 @@ export async function buildRepeatBoard(opts: {
     }
 
     buckets.get(col)!.push({
+      column: col,
       clientKey: r.clientKey, clientType: r.clientType, clientId: r.clientId, name: null,
       managerId: r.managerId, managerName: r.managerName,
       purchases: r.purchasesDelivered, sumDelivered: r.sumDelivered,
@@ -524,9 +529,11 @@ export async function buildRepeatBoard(opts: {
   }
 
   // Имена: кэш для всех видимых, ленивый добор из Битрикса — только для видимых.
-  const visibleKeys = columns.flatMap(c => c.cards.map(x => x.clientKey));
-  const names = await resolveClientNames(visibleKeys).catch(() => getCachedClientNames(visibleKeys));
-  for (const c of columns) for (const card of c.cards) card.name = names.get(card.clientKey) ?? null;
+  if (!opts.skipNames) {
+    const visibleKeys = columns.flatMap(c => c.cards.map(x => x.clientKey));
+    const names = await resolveClientNames(visibleKeys).catch(() => getCachedClientNames(visibleKeys));
+    for (const c of columns) for (const card of c.cards) card.name = names.get(card.clientKey) ?? null;
+  }
 
   const allIn = (g: string) => COLUMNS.filter(d => d.group === g).flatMap(d => kpiBuckets.get(d.key)!);
   const openTask = (c: KanbanCard) => !!c.task && c.task.state !== 'done' && c.task.state !== 'deferred';

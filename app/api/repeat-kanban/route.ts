@@ -12,6 +12,7 @@ import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
+import { logEvent, newRequestId } from '@/features/repeat-kanban/engine/log';
 import { decideReview, hideFromPool, markBrakNow, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
@@ -117,6 +118,9 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as Record<string, unknown> | null;
   if (!body || typeof body.action !== 'string') return NextResponse.json({ error: 'Некорректный запрос' }, { status: 400 });
 
+  // Журнал (миграция 231): одна кнопка = один request_id; колонку карточки присылает клиент.
+  const rid = newRequestId();
+  const columnBefore = typeof body.column === 'string' ? body.column.slice(0, 40) : null;
   try {
     // ── Действия РОПа ──────────────────────────────────────────────────────
     const { scope, managers, canManage } = await context(session);
@@ -128,8 +132,10 @@ export async function POST(req: NextRequest) {
       if (!allowed || !(await ownsClient(mid, ck))) return NextResponse.json({ error: 'Заказчик не в вашей зоне' }, { status: 403 });
       if (body.action === 'hide') {
         await hideFromPool({ clientKey: ck, until: String(body.until ?? ''), comment: String(body.comment ?? ''), session });
+        await logEvent(session, { type: 'hidden', requestId: rid, clientKey: ck, managerId: mid, columnBefore, payload: { until: body.until, comment: body.comment } });
       } else {
         await unhide(ck, session);
+        await logEvent(session, { type: 'unhidden', requestId: rid, clientKey: ck, managerId: mid, columnBefore });
       }
       return NextResponse.json({ ok: true });
     }
@@ -152,6 +158,10 @@ export async function POST(req: NextRequest) {
         : session.bitrixUserId;
       if (!creator) return NextResponse.json({ error: 'Не удалось определить постановщика: нет привязки к Битриксу' }, { status: 400 });
       const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId });
+      const type = res.dealMode === 'created' ? 'deal_task_created' : res.dealMode === 'reopened' ? 'deal_returned_from_reject' : 'task_created';
+      await logEvent(session, { type, requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
+        payload: { comment, creator, responsible: res.responsibleId } });
+      if (res.chatPosted) await logEvent(session, { type: 'task_comment_posted', requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId });
       return NextResponse.json(res);
     }
 
@@ -166,16 +176,20 @@ export async function POST(req: NextRequest) {
         comment: typeof body.comment === 'string' ? body.comment : null,
         touchesDone: Number(body.touchesDone) || 0, session,
       });
+      await logEvent(session, { type: 'reject_reviewed', requestId: rid, clientKey, managerId, columnBefore, dealId,
+        payload: { decision, reason: body.reason ?? null, comment: body.comment ?? null, attempts: Number(body.touchesDone) || 0 } });
       return NextResponse.json({ ok: true });
     }
 
     if (body.action === 'brak_now') {
       await markBrakNow({ clientKey, reason: String(body.reason ?? ''), comment: typeof body.comment === 'string' ? body.comment : null, session });
+      await logEvent(session, { type: 'rejected_direct', requestId: rid, clientKey, managerId, columnBefore, payload: { reason: body.reason, comment: body.comment ?? null } });
       return NextResponse.json({ ok: true });
     }
 
     if (body.action === 'unbrak') {
       await restoreFromBrak(clientKey, session);
+      await logEvent(session, { type: 'reject_cleared', requestId: rid, clientKey, managerId, columnBefore });
       return NextResponse.json({ ok: true });
     }
     return NextResponse.json({ error: 'Неизвестное действие' }, { status: 400 });

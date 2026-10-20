@@ -47,6 +47,7 @@ export async function register() {
     if (allow.has('weeklyWeather')) scheduleWeeklyWeather();
     if (allow.has('supplyPanelSync')) scheduleSupplyPanelSync();
     if (allow.has('dailyReport')) scheduleMoscowReport();
+    if (allow.has('repeatKanbanSnapshot')) scheduleRepeatKanbanSnapshot();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -704,6 +705,34 @@ function scheduleWidgetMetrics() {
 // по SSH (monolitika-ro@5.42.106.70, команды tables/sql), запись — gzip-файл в SUPPLY_PANEL_DIR.
 // Без пишущих действий в БД и рассылок — поэтому разрешена и при рубильнике (BACKGROUND_JOBS_ALLOW).
 // Первый прогон — сразу при старте, чтобы раздел не ждал 15 минут после деплоя.
+// Ежедневный снимок канбана повторных продаж (миграция 231, владелец 20.10): в 23:30–23:59 МСК,
+// раз в сутки — замок в Redis на дату ставится ПОСЛЕ успешного прогона (как у отчётов).
+function scheduleRepeatKanbanSnapshot() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    const msk = new Date(Date.now() + 3 * 3600_000);
+    if (msk.getUTCHours() !== 23 || msk.getUTCMinutes() < 30) return;
+    const date = msk.toISOString().slice(0, 10);
+    running = true;
+    try {
+      const { redisReady } = await import('./lib/cache/redis');
+      const redis = await redisReady();
+      if (redis && await redis.get(`repeat-kanban-snapshot:done:${date}`)) return;
+      if (redis && !(await redis.set(`repeat-kanban-snapshot:try:${date}`, '1', 'EX', 1800, 'NX'))) return;
+      const { buildDailySnapshot } = await import('./features/repeat-kanban/engine/snapshot');
+      const r = await buildDailySnapshot(date);
+      console.log(`[repeatKanbanSnapshot] ${r.date}: менеджеров ${r.managers}, записано ${r.written}, пропущено ${r.skipped}, ${Math.round(r.ms / 1000)} с`);
+      if (redis) await redis.set(`repeat-kanban-snapshot:done:${date}`, '1', 'EX', 3 * 86400);
+    } catch (err) {
+      console.error('[repeatKanbanSnapshot] не удалось:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+  setInterval(() => { void tick(); }, 5 * 60 * 1000);
+}
+
 function scheduleSupplyPanelSync() {
   let running = false;
   const tick = async () => {

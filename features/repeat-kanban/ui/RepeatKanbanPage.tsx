@@ -267,9 +267,9 @@ export function RepeatKanbanPage() {
                       onAct={async (a, c) => {
                         if (a === 'hide') setHideFor(c);
                         else if (a === 'brak_now') setBrakFor(c);
-                        else if (confirm(`Вернуть «${cardName(c)}» в пул раньше срока?`)) { await post({ action: 'unhide', clientKey: c.clientKey, managerId: c.managerId }).catch(e => alert(e.message)); refresh(); }
+                        else if (confirm(`Вернуть «${cardName(c)}» в пул раньше срока?`)) { await post({ action: 'unhide', clientKey: c.clientKey, managerId: c.managerId, column: c.column }).catch(e => alert(e.message)); refresh(); }
                       }}
-                      onUnbrak={async c => { if (confirm(`Снять брак с «${cardName(c)}»? Заказчик вернётся в пул.`)) { await post({ action: 'unbrak', clientKey: c.clientKey, managerId: c.managerId }).catch(e => alert(e.message)); refresh(); } }}
+                      onUnbrak={async c => { if (confirm(`Снять брак с «${cardName(c)}»? Заказчик вернётся в пул.`)) { await post({ action: 'unbrak', clientKey: c.clientKey, managerId: c.managerId, column: c.column }).catch(e => alert(e.message)); refresh(); } }}
                     />
                   ))}
                 </div>
@@ -696,7 +696,7 @@ function TaskModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () =
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, text });
+      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text });
       setResult(j); onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
@@ -754,7 +754,7 @@ function HideModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () =
   const [err, setErr] = useState<string | null>(null);
   const submit = async () => {
     setBusy(true); setErr(null);
-    try { await post({ action: 'hide', clientKey: card.clientKey, managerId: card.managerId, until, comment }); onSaved(); onClose(); }
+    try { await post({ action: 'hide', clientKey: card.clientKey, managerId: card.managerId, column: card.column, until, comment }); onSaved(); onClose(); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
   };
@@ -795,7 +795,7 @@ function BrakNowModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: (
   const [err, setErr] = useState<string | null>(null);
   const submit = async () => {
     setBusy(true); setErr(null);
-    try { await post({ action: 'brak_now', clientKey: card.clientKey, managerId: card.managerId, reason, comment }); onSaved(); onClose(); }
+    try { await post({ action: 'brak_now', clientKey: card.clientKey, managerId: card.managerId, column: card.column, reason, comment }); onSaved(); onClose(); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
   };
@@ -836,7 +836,7 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      await post({ action: 'review', clientKey: card.clientKey, managerId: card.managerId, dealId: card.deal?.dealId,
+      await post({ action: 'review', clientKey: card.clientKey, managerId: card.managerId, column: card.column, dealId: card.deal?.dealId,
         decision, reason: decision === 'brak' ? reason : null, comment, touchesDone: done });
       onSaved(); onClose();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
