@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
         ? (await ropOfManager(managerId)) ?? session.bitrixUserId
         : session.bitrixUserId;
       if (!creator) return NextResponse.json({ error: 'Не удалось определить постановщика: нет привязки к Битриксу' }, { status: 400 });
-      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, creatorName: session.displayName });
+      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId });
       return NextResponse.json(res);
     }
 

@@ -158,8 +158,8 @@ export interface RepeatTaskResult { dealId: number; dealMode: RepeatDealMode; ta
 
 export async function createRepeatTask(input: {
   clientKey: string; fallbackManagerId: string; creatorBitrixId: string; comment: string;
-  /** Кто нажал — подпись к сообщению в чате задачи. */
-  creatorName: string;
+  /** Кто написал комментарий (нажавший, его Битрикс-id) — автор сообщения в чате задачи. */
+  commentAuthorId: string | null;
 }): Promise<RepeatTaskResult> {
   const t = dealTargetOf(input.clientKey);
   if (!Number.isInteger(t.id) || t.id <= 0) throw new DealCreateError('Некорректный заказчик');
@@ -237,7 +237,7 @@ export async function createRepeatTask(input: {
   // постановку: задача уже есть, комментарий в любом случае лежит в её описании.
   let chatPosted = false;
   if (input.comment.trim()) {
-    chatPosted = await postToTaskChat(taskId, input.creatorName, input.comment.trim()).catch(e => {
+    chatPosted = await postToTaskChat(taskId, input.commentAuthorId ?? input.creatorBitrixId, input.comment.trim()).catch(e => {
       console.warn(`[repeat-kanban] комментарий в чат задачи ${taskId} не ушёл:`, e instanceof Error ? e.message : e);
       return false;
     });
@@ -255,24 +255,15 @@ export async function ropOfManager(managerBitrixId: string): Promise<string | nu
 }
 
 /**
- * Первое сообщение в чате задачи. У задач портала включён новый чат (у задачи есть CHAT_ID,
- * старых комментариев task.commentitem нет — проверено 20.10). Писать через вебхук нельзя:
- * автором был бы его владелец (Сергей Афанасьев, 2098), а не РОП. Поэтому пишет бот «Аналитик»
- * с подписью «Комментарий от …»: вебхук (админ) добавляет бота в чат, бот отправляет.
+ * Первое сообщение в чате задачи — КОММЕНТАРИЙ К ЗАДАЧЕ (task.commentitem.add) с автором =
+ * тем, кто его написал. Проверено 20.10 на задаче 169274: в задачах с новой карточкой такой
+ * комментарий сам появляется в чате задачи от имени автора. Первая версия писала ботом
+ * «Аналитик» — Битрикс отказал: «Вы не можете отправлять сообщения в указанный чат» (бот не
+ * участник задачи); от вебхука нельзя — автором был бы его владелец (Сергей Афанасьев).
  */
-async function postToTaskChat(taskId: number, authorName: string, comment: string): Promise<boolean> {
-  const botWebhook = (process.env.BITRIX_BOT_WEBHOOK_URL || '').replace(/\/+$/, '');
-  const botId = process.env.BITRIX_BOT_ID || '';
-  const clientId = process.env.BITRIX_BOT_CLIENT_ID || '';
-  if (!botWebhook || !botId || !clientId) return false;
-  const t = await read<{ task?: { chatId?: string | number } }>('tasks.task.get', { taskId, select: ['ID', 'CHAT_ID'] });
-  const chatId = Number(t?.task?.chatId ?? 0);
-  if (!chatId) return false;
-  // Бот — участник чата: иначе imbot.message.add в чат отклоняется. Уже участник — не ошибка.
-  await bx(taskWebhook(), 'im.chat.user.add', { CHAT_ID: chatId, USERS: [Number(botId)], HIDE_HISTORY: 'N' }).catch(() => null);
-  const res = await bx(botWebhook, 'imbot.message.add', {
-    CLIENT_ID: clientId, BOT_ID: botId, DIALOG_ID: `chat${chatId}`,
-    MESSAGE: `[b]Комментарий от ${authorName}:[/b]\n${comment}`,
+async function postToTaskChat(taskId: number, authorId: string, comment: string): Promise<boolean> {
+  const res = await bx(taskWebhook(), 'task.commentitem.add', {
+    TASKID: taskId, FIELDS: { AUTHOR_ID: Number(authorId), POST_MESSAGE: comment },
   }) as { result?: number };
   return Number(res?.result) > 0;
 }
