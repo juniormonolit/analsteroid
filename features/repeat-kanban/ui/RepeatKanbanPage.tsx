@@ -535,22 +535,23 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDeal }:
       {c.brak && <div className="text-[11px] text-[var(--color-negative)]">{c.brak.comment ?? 'Брак'} · {c.brak.by}, {fmtDay(c.brak.at)}</div>}
 
       {/* Действие. */}
-      <div className="flex flex-wrap gap-2 pt-0.5">
+      {/* Кнопки — на всю ширину карточки (правка владельца 20.10). */}
+      <div className="flex flex-col gap-2 pt-0.5">
         {canManage && col !== 'review' && col !== 'brak' && col !== 'st_sold' && (
           <button type="button" onClick={onTask}
-            className={`inline-flex min-h-11 items-center gap-1 rounded-md px-2.5 text-xs hover:opacity-90 ${c.task && c.task.state !== 'done' ? 'bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>
+            className={`inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium hover:opacity-90 ${c.task && c.task.state !== 'done' ? 'bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>
             <Plus size={13} /> {dealLabel}
           </button>
         )}
         {canManage && col === 'review' && (
           <button type="button" onClick={onReview}
-            className="inline-flex min-h-11 items-center gap-1 rounded-md bg-[var(--color-accent)] px-2.5 text-xs text-white hover:opacity-90">
+            className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[var(--color-accent)] px-2.5 text-xs font-medium text-white hover:opacity-90">
             Разобрать отказ
           </button>
         )}
         {canManage && col === 'brak' && (
           <button type="button" onClick={onUnbrak}
-            className="inline-flex min-h-11 items-center rounded-md px-2.5 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
             Снять брак
           </button>
         )}
