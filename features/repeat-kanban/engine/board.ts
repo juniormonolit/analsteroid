@@ -60,6 +60,8 @@ export interface KanbanCard {
   sumDelivered: number;
   lastDeliveredAt: string | null;
   lastDeliveredGroup: string | null;
+  /** Сделка последней отгрузки — дата на карточке кликабельна. */
+  lastDeliveredDealId: number | null;
   repeatChance: number | null;
   expectedValue: number | null;
   /** Потенциал на 12 мес. — средний «хвост» таких же заказчиков (engine/potential.ts). */
@@ -141,6 +143,20 @@ interface RepeatDealRow {
 
 /** Последняя повторная сделка каждого заказчика (по created_at). Один проход по sa.deals,
  *  тот же порядок, что у атрибуции «Моих заказчиков». */
+/** Сделка последней отгрузки каждого заказчика (любая воронка 0–3) — для ссылки с даты. */
+async function fetchLastDeliveredDeals(keys: string[]): Promise<Map<string, number>> {
+  if (!keys.length) return new Map();
+  const res = await analyticsDb().query<{ client_key: string; deal_id: number }>(
+    `SELECT DISTINCT ON (client_key) client_key, deal_id FROM (
+       SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, d.deal_id, d.delivered_at
+         FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
+     ) t WHERE client_key = ANY($1::text[])
+     ORDER BY client_key, delivered_at DESC, deal_id DESC`,
+    [keys],
+  );
+  return new Map(res.rows.map(r => [r.client_key, Number(r.deal_id)]));
+}
+
 async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, RepeatDealInfo>> {
   if (!keys.length) return new Map();
   const res = await analyticsDb().query<RepeatDealRow>(
@@ -275,12 +291,13 @@ export async function buildRepeatBoard(opts: {
   const keys = rows.map(r => r.clientKey);
 
   // 2. Свежие данные поверх кэша.
-  const [deals, marks, profileTypes, tailTable] = await Promise.all([
+  const [deals, marks, profileTypes, tailTable, lastDelivered] = await Promise.all([
     fetchLatestRepeatDeals(keys),
     fetchCustomerMarks(keys),
     Promise.all(roster.map(m => fetchClientTypes(`mgr:${m.id}`, rows.filter(r => r.managerId === m.id).map(r => r.clientKey))))
       .then(maps => new Map(maps.flatMap(mp => [...mp]))),
     fetchTailTable().catch(() => ({ seg: {} })),
+    fetchLastDeliveredDeals(keys).catch(() => new Map<string, number>()),
   ]);
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
@@ -375,6 +392,7 @@ export async function buildRepeatBoard(opts: {
       managerId: r.managerId, managerName: r.managerName,
       purchases: r.purchasesDelivered, sumDelivered: r.sumDelivered,
       lastDeliveredAt: r.lastDeliveredAt, lastDeliveredGroup: r.lastDeliveredGroup,
+      lastDeliveredDealId: lastDelivered.get(r.clientKey) ?? null,
       repeatChance: r.repeatChance, expectedValue: r.expectedValue,
       ...(() => { const p = tailPotential(tailTable, r.purchasesDelivered, r.clientType === 'company' || r.clientKey.startsWith('x')); return { potential: p?.value ?? null, potentialInfo: p }; })(),
       profileType,

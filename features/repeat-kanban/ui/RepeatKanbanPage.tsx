@@ -13,6 +13,10 @@ import { Modal } from '@/components/ui/Modal';
 import { Popover } from '@/components/ui/Popover';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
+import dynamic from 'next/dynamic';
+
+// Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
+const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 import {
   BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES,
   type ColumnDef, type ColumnGroup, type ColumnKey,
@@ -28,6 +32,7 @@ const BTN_ACTIVE = `${BTN} border-[var(--color-accent)] bg-[var(--color-accent)]
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const money = (n: number) => `${rub.format(n)} ₽`;
 const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' }) : '—');
+const fmtDayYear = (iso: string) => new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Europe/Moscow' });
 const fmtDT = (iso: string | null) => (iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' }) : '—');
 const daysAgo = (iso: string) => Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
 const fmtSec = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `${s} с`);
@@ -59,6 +64,7 @@ export function RepeatKanbanPage() {
   const poolGroups = useMemo(() => pg.split('|').filter(Boolean), [pg]);
   const [limits, setLimits] = useState<Partial<Record<ColumnKey, number>>>({});
   const [openCard, setOpenCard] = useState<KanbanCard | null>(null);
+  const [openDeal, setOpenDeal] = useState<number | null>(null);
   const [taskFor, setTaskFor] = useState<KanbanCard | null>(null);
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
 
@@ -219,7 +225,7 @@ export function RepeatKanbanPage() {
                   {COLUMNS.filter(c => c.group === g.key).map(def => (
                     <Column key={def.key} def={def} col={byKey.get(def.key)} canManage={!!data?.canManage}
                       onMore={() => setLimits(l => ({ ...l, [def.key]: (l[def.key] ?? PAGE) + PAGE }))}
-                      onOpen={setOpenCard} onTask={setTaskFor} onReview={setReviewFor}
+                      onOpen={setOpenCard} onTask={setTaskFor} onReview={setReviewFor} onDeal={setOpenDeal}
                       onUnbrak={async c => { if (confirm(`Снять брак с «${cardName(c)}»? Заказчик вернётся в пул.`)) { await post({ action: 'unbrak', clientKey: c.clientKey, managerId: c.managerId }).catch(e => alert(e.message)); refresh(); } }}
                     />
                   ))}
@@ -250,16 +256,17 @@ export function RepeatKanbanPage() {
           companyId={openCard.clientType === 'company' ? openCard.clientId : null}
           onClose={() => setOpenCard(null)} />
       )}
+      {openDeal !== null && <DealCard dealId={openDeal} onClose={() => setOpenDeal(null)} />}
       {taskFor && <TaskModal card={taskFor} onClose={() => setTaskFor(null)} onSaved={refresh} />}
       {reviewFor && <ReviewModal card={reviewFor} onClose={() => setReviewFor(null)} onSaved={refresh} />}
     </div>
   );
 }
 
-function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbrak }: {
+function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbrak, onDeal }: {
   def: ColumnDef; col: KanbanColumn | undefined; canManage: boolean;
   onMore: () => void; onOpen: (c: KanbanCard) => void; onTask: (c: KanbanCard) => void;
-  onReview: (c: KanbanCard) => void; onUnbrak: (c: KanbanCard) => void;
+  onReview: (c: KanbanCard) => void; onUnbrak: (c: KanbanCard) => void; onDeal: (dealId: number) => void;
 }) {
   const tone = def.key === 'brak' ? 'var(--color-negative)' : def.key === 'review' ? '#e69138' : def.key === 'touch_3' ? '#6aa84f' : 'var(--color-accent)';
   // В воронке итог — сумма сделок (реальные деньги), в пуле и попытках — потенциал (ожидание).
@@ -278,7 +285,7 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
         {col?.cards.map(c => (
           <Card key={c.clientKey} c={c} col={def.key} canManage={canManage}
-            onOpen={() => onOpen(c)} onTask={() => onTask(c)} onReview={() => onReview(c)} onUnbrak={() => onUnbrak(c)} />
+            onOpen={() => onOpen(c)} onTask={() => onTask(c)} onReview={() => onReview(c)} onUnbrak={() => onUnbrak(c)} onDeal={onDeal} />
         ))}
         {col && col.total > col.cards.length && (
           <button type="button" onClick={onMore}
@@ -341,7 +348,8 @@ function KpiStrip({ k }: { k: BoardKpi }) {
   );
 }
 
-const moneyShort = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')} млн ₽` : n >= 1000 ? `${Math.round(n / 1000)} тыс. ₽` : `${rub.format(n)} ₽`);
+// Неразрывные пробелы: «127 тыс. ₽» не рвётся по строкам (правка владельца 20.10).
+const moneyShort = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')}\u00a0млн\u00a0₽` : n >= 1000 ? `${Math.round(n / 1000)}\u00a0тыс.\u00a0₽` : `${rub.format(n)}\u00a0₽`);
 
 const TASK_STATE: Record<RepeatTask['state'], { label: string; bg: string; fg: string }> = {
   unread: { label: 'не просмотрена', bg: '#f4cccc', fg: '#990000' },
@@ -418,9 +426,10 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   return a;
 }
 
-function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak }: {
+function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDeal }: {
   c: KanbanCard; col: ColumnKey; canManage: boolean;
   onOpen: () => void; onTask: () => void; onReview: () => void; onUnbrak: () => void;
+  onDeal: (dealId: number) => void;
 }) {
   const isPool = col.startsWith('pool') || col === 'brak';
   const good = c.calls.filter(x => !x.missed && x.sec > 20);
@@ -441,15 +450,26 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak }: {
       <div className="truncate text-[11.5px] text-[var(--color-text-muted)]">{c.managerName}</div>
 
       {/* 2. Деньги. */}
-      <div className="flex flex-wrap items-baseline gap-x-1.5 tabular-nums">
-        <span>{c.purchases} {plural(c.purchases, 'отгрузка', 'отгрузки', 'отгрузок')} · {moneyShort(c.sumDelivered)}</span>
-        {c.potentialInfo && <>· <PotentialBadge c={c} /></>}
+      <div className="min-w-0 tabular-nums">
+        <div className="whitespace-nowrap">{c.purchases}{'\u00a0'}{plural(c.purchases, 'отгрузка', 'отгрузки', 'отгрузок')} на {moneyShort(c.sumDelivered)}</div>
+        {c.potentialInfo && <div className="whitespace-nowrap"><PotentialBadge c={c} /></div>}
       </div>
 
-      {/* 3. Последняя покупка. */}
-      <div className="text-[var(--color-text-secondary)]">
-        {c.lastDeliveredAt ? <>{fmtDay(c.lastDeliveredAt)} · {c.lastDeliveredGroup ?? 'без группы'} · <span style={old !== null && old > 120 ? { color: '#b45f06', fontWeight: 600 } : undefined}>{old} дн.</span></> : 'Отгрузок не было'}
-      </div>
+      {/* 3. Последняя отгрузка — две строки: «Отгрузка дд.мм.гг · N дн. назад» (без переноса,
+          дата открывает сделку) и товарная группа (обрезается многоточием). */}
+      {c.lastDeliveredAt ? (
+        <div className="min-w-0 text-[var(--color-text-secondary)]">
+          <div className="whitespace-nowrap">
+            {c.lastDeliveredDealId ? (
+              <button type="button" onClick={() => onDeal(c.lastDeliveredDealId!)} className="text-[var(--color-accent)] hover:underline" title="Открыть сделку последней отгрузки">
+                Отгрузка {fmtDayYear(c.lastDeliveredAt)}
+              </button>
+            ) : <>Отгрузка {fmtDayYear(c.lastDeliveredAt)}</>}
+            {' · '}<span style={old !== null && old > 120 ? { color: '#b45f06', fontWeight: 600 } : undefined}>{old}{'\u00a0'}дн. назад</span>
+          </div>
+          <div className="truncate" title={c.lastDeliveredGroup ?? undefined}>{c.lastDeliveredGroup ?? 'без товарной группы'}</div>
+        </div>
+      ) : <div className="text-[var(--color-text-muted)]">Отгрузок не было</div>}
 
       {/* 4. Сделка — строка есть всегда. */}
       <div className="truncate">
