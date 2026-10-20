@@ -73,9 +73,21 @@ function buildTree(org: OrgNode[], mgr: MgrDay[], snapDate: string, dates: strin
   }
   // Одиночный верхний узел («Дирекция» — корень оргструктуры) не уровень анализа: разворачиваем,
   // пока сверху один узел, — первым уровнем идут филиалы/департаменты.
-  let top = roots.filter(r => r.id !== '__none');
+  let top: TreeNode[] = roots.filter(r => r.id !== '__none');
   const noneNode = roots.find(r => r.id === '__none');
   while (top.length === 1 && top[0].children.some(c => c.kind === 'org')) top = top[0].children;
+  // Анализ — по продажам: первым уровнем идут подразделения «Отдела продаж» (филиалы и
+  // департаменты), всё остальное под «Дирекцией» (снабжение, бухгалтерия, люди напрямую) —
+  // в свёрнутый узел «Прочие подразделения».
+  const sales = top.find(n => n.kind === 'org' && /^отдел продаж$/i.test(n.name.trim()));
+  if (sales) {
+    const rest = top.filter(n => n !== sales);
+    top = [...sales.children];
+    if (rest.length) {
+      top.push({ id: '__other', name: 'Прочие подразделения', depth: 0, kind: 'org', agg: rest.reduce((s, c) => add(s, c.agg), ZERO),
+        children: rest, series: [], mgrIds: new Set(rest.flatMap(c => [...c.mgrIds])) });
+    }
+  }
   const finalRoots = noneNode ? [...top, noneNode] : top;
   const redepth = (n: TreeNode, d: number) => { n.depth = d; n.children.forEach(c => redepth(c, d + 1)); };
   finalRoots.forEach(r => redepth(r, 0));
