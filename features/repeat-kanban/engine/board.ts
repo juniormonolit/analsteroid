@@ -155,6 +155,8 @@ export interface RepeatBoard {
   kpi: BoardKpi | null;
   /** Битрикс-id смотрящего — менеджеру «Скрыть из пула» доступно по своим заказчикам. */
   viewerBitrixId?: string | null;
+  /** Кнопка «Аналитика» — директорам и выше. */
+  canSeeAnalytics?: boolean;
   notice: string | null;
   canManage: boolean;
 }

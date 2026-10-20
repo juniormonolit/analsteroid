@@ -186,9 +186,11 @@ export function RepeatKanbanPage() {
                 value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
                 className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-64`} />
             )}
-            <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Кто что делал, проработанность пула по отделам, журнал">
-              <BarChart3 size={16} /> Аналитика
-            </Link>
+            {data?.canSeeAnalytics && (
+              <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Кто что делал, проработанность пула по отделам, журнал">
+                <BarChart3 size={16} /> Аналитика
+              </Link>
+            )}
             <button type="button" onClick={() => refetch()} aria-label="Обновить" title="Обновить"
               className={`${BTN_IDLE} min-w-11 px-0`}>
               <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />

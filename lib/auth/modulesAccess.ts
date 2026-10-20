@@ -29,3 +29,9 @@ export async function canSessionSeeClientRef(session: SessionUser, ref: string):
   );
   return canSeeManager(scope, owner.rows[0]?.mgr);
 }
+
+/** «Аналитика канбана повторных» — директорам и выше (владелец 20.10): роли «Директор»,
+ *  «Администратор» и суперадмин. РОП и менеджер работают на доске, аналитика — не им. */
+export function canSeeRepeatKanbanAnalytics(session: Pick<SessionUser, 'isSuperadmin' | 'roleName'>): boolean {
+  return session.isSuperadmin || session.roleName === 'Администратор' || session.roleName === 'Директор';
+}

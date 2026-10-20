@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
+import { canSeeRepeatKanbanAnalytics } from '@/lib/auth/modulesAccess';
 import { ropScope, type RopScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { fetchManagerCustomers } from '@/features/customers/engine/customers';
@@ -96,7 +97,7 @@ export async function GET(req: NextRequest) {
       taskFilter: (sp.get('tasks') ?? '').split(',').filter((x): x is TaskBucket => (TASK_BUCKETS as readonly string[]).includes(x)),
       sort: (SORTS as readonly string[]).includes(sp.get('sort') ?? '') ? sp.get('sort') as BoardSort : 'default',
     });
-    return NextResponse.json({ ...board, viewerBitrixId: session.bitrixUserId }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ...board, viewerBitrixId: session.bitrixUserId, canSeeAnalytics: canSeeRepeatKanbanAnalytics(session) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[repeat-kanban]', e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось собрать канбан' }, { status: 500 });
