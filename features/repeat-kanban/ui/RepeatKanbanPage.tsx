@@ -83,7 +83,11 @@ export function RepeatKanbanPage() {
       return j as RepeatBoard;
     },
     refetchInterval: 120_000,
-    retry: false,
+    // Сразу после перезапуска сервера (выкатка) Redis ещё подключается, а пул SA занят —
+    // первый запрос может упасть по таймауту соединения. Повторяем 5xx до трёх раз с паузой,
+    // вместо красного «Не удалось собрать канбан» (живой случай 20.10).
+    retry: (n, e) => e.status >= 500 && n < 3,
+    retryDelay: n => 3000 * (n + 1),
     placeholderData: prev => prev,
   });
 
@@ -208,7 +212,7 @@ export function RepeatKanbanPage() {
 
         {error && error.status !== 403 && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">{error.message}</div>}
         {data?.notice && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">{data.notice}</div>}
-        {isLoading && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Собираю доску — первый раз по команде это до полуминуты…</div>}
+        {(isLoading || (isFetching && !data && !error)) && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Собираю доску — первый раз по команде это до полуминуты…</div>}
 
       </div>
 
