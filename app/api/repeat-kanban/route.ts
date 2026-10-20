@@ -6,6 +6,7 @@ import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { fetchManagerCustomers } from '@/features/customers/engine/customers';
 import { buildRepeatBoard } from '@/features/repeat-kanban/engine/board';
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
+import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
 import { decideReview, restoreFromBrak, ReviewError } from '@/features/repeat-kanban/engine/reviews';
@@ -19,10 +20,21 @@ export const dynamic = 'force-dynamic';
 
 const COLUMN_KEYS = new Set<string>(COLUMNS.map(c => c.key));
 
-/** Менеджеры выбранных отделов. DepartmentPicker отдаёт UUID узлов дерева оргструктуры
- *  (вместе с потомками) — резолвер тот же, что у «Моей команды» (lib/org/teamRoster). */
+/** Менеджеры выбранных отделов (вместе с потомками) — резолвер тот же, что у «Моей
+ *  команды» (lib/org/teamRoster). */
 async function managersOfDepartments(deptIds: string[]): Promise<{ id: string; name: string }[]> {
-  const rows = await resolveManagersForDepartments(deptIds);
+  // DepartmentPicker кладёт в адрес ЧИСЛОВЫЕ id отделов Битрикса (bitrix_department_id,
+  // `?dept=24,625,34`), а резолвер ждёт UUID sa.departments. Живой баг 20.10: Москва →
+  // пусто, потому что проверял руками UUID из дерева, а не то, что шлёт пикер. Берём оба.
+  const numeric = deptIds.filter(x => /^\d+$/.test(x));
+  const uuids = deptIds.filter(x => !/^\d+$/.test(x));
+  if (numeric.length) {
+    const r = await analyticsDb().query<{ id: string }>(
+      `SELECT id::text AS id FROM sa.departments WHERE bitrix_department_id::text = ANY($1::text[])`, [numeric],
+    );
+    uuids.push(...r.rows.map(x => x.id));
+  }
+  const rows = await resolveManagersForDepartments(uuids);
   const seen = new Map<string, string>();
   for (const m of rows) if (/^\d+$/.test(String(m.managerId))) seen.set(String(m.managerId), m.name || m.login || String(m.managerId));
   return [...seen].map(([id, name]) => ({ id, name })).sort((x, y) => x.name.localeCompare(y.name, 'ru'));
