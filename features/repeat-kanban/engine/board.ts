@@ -63,7 +63,10 @@ export interface KanbanCard {
   expectedValue: number | null;
   /** Тип из карточки клиента (foreman/construction_org/...), null — не заполнен. */
   profileType: string | null;
+  /** Текущая повторная сделка (в работе или на разборе). В пуле и браке — null. */
   deal: RepeatDealInfo | null;
+  /** Пул/брак: последняя повторная сделка закрыта в отказ — справочно («последний отказ»). */
+  lastLost: RepeatDealInfo | null;
   /** Окно 22 дня: начало, касания по неделям, закрыто ли уже. */
   window: { startAt: string; weeks: boolean[]; done: number; weekNo: number | null; closed: boolean } | null;
   /** Звонки по текущей повторной сделке после начала окна (свежие сверху, до 10). */
@@ -295,6 +298,7 @@ export async function buildRepeatBoard(opts: {
     else if (win && !current) col = (`touch_${win.done}`) as ColumnKey;
     else col = poolColumn(r.purchasesDelivered);
 
+    const inPool = col.startsWith('pool') || col === 'brak';
     const typeKey = profileType ?? 'none';
     typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
     if (opts.typeFilter && opts.typeFilter !== typeKey) continue;
@@ -305,8 +309,13 @@ export async function buildRepeatBoard(opts: {
       purchases: r.purchasesDelivered, sumDelivered: r.sumDelivered,
       lastDeliveredAt: r.lastDeliveredAt, lastDeliveredGroup: r.lastDeliveredGroup,
       repeatChance: r.repeatChance, expectedValue: r.expectedValue,
-      profileType, deal: current, window: win,
-      calls: callsInWindow.slice(0, 10), missedCalls: callsInWindow.filter(c => c.missed).length,
+      profileType,
+      // В пуле и браке отказная сделка — история, не «текущая»: иначе кнопка предлагала бы
+      // задачу к закрытой сделке вместо новой сделки, а окно контактов висело бы зря.
+      deal: inPool ? null : current,
+      lastLost: inPool && current && LOST_STAGES.has(current.stageId) ? current : null,
+      window: inPool ? null : win,
+      calls: inPool ? [] : callsInWindow.slice(0, 10), missedCalls: inPool ? 0 : callsInWindow.filter(c => c.missed).length,
       task, review,
       brak: mark?.kind === 'no_call' ? { reason: mark.reason, comment: mark.comment, by: mark.createdBy, at: mark.createdAt } : null,
       lostEarly: col === 'review' && (win?.done ?? 0) < TOUCHES,

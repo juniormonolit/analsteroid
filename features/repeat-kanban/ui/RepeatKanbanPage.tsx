@@ -127,7 +127,15 @@ export function RepeatKanbanPage() {
           </div>
         </header>
 
-        <div className="flex min-w-0 flex-wrap gap-2" aria-label="Тип клиента">
+        {/* Телефон: список вместо семи чипов — чипы занимали весь первый экран. */}
+        <label className="sr-only" htmlFor="rpk-type">Тип клиента</label>
+        <select id="rpk-type" value={type} onChange={e => { setType(e.target.value); setLimits({}); }}
+          className="min-h-11 w-full rounded-lg bg-[var(--color-bg-surface)] px-3 text-base text-[var(--color-text)] sm:hidden">
+          {typeChips.map(t => (
+            <option key={t.key || 'all'} value={t.key}>{t.label} · {rub.format(t.key ? data?.typeCounts[t.key] ?? 0 : totalAll)}</option>
+          ))}
+        </select>
+        <div className="hidden min-w-0 flex-wrap gap-2 sm:flex" aria-label="Тип клиента">
           {typeChips.map(t => {
             const n = t.key ? data?.typeCounts[t.key] ?? 0 : totalAll;
             const active = type === t.key;
@@ -143,7 +151,7 @@ export function RepeatKanbanPage() {
         <nav className="flex min-w-0 flex-wrap gap-2" aria-label="Перейти к группе колонок">
           {GROUPS.map(g => (
             <button key={g.key} type="button" onClick={() => jump(g.key)} title={g.hint}
-              className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
+              className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] sm:text-sm">
               {g.title}
             </button>
           ))}
@@ -297,6 +305,12 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDone }:
         <a href={dealUrl(c.deal.dealId)} target="_blank" rel="noreferrer"
           className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline">
           <ExternalLink size={12} /> <span className="truncate">#{c.deal.dealId} · {c.deal.stageName ?? c.deal.stageId}</span>
+        </a>
+      )}
+      {c.lastLost && (
+        <a href={dealUrl(c.lastLost.dealId)} target="_blank" rel="noreferrer"
+          className="flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:underline">
+          <ExternalLink size={12} /> <span className="truncate">Последний отказ {fmtDay(c.lastLost.lostAt)} · {c.lastLost.stageName ?? c.lastLost.stageId}</span>
         </a>
       )}
       {c.window && <WeekDots w={c.window} />}

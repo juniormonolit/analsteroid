@@ -10,6 +10,9 @@ import { systemDb } from '@/lib/db/clients';
 import { bx } from '@/lib/bitrix/notify';
 
 const SYNC_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Страница списка Битрикса: больше за один вызов он не отдаёт. */
+const BX_PAGE = 50;
+const NULL_NAME_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface BxContact { ID: string; NAME?: string; LAST_NAME?: string; SECOND_NAME?: string }
 interface BxCompany { ID: string; TITLE?: string }
@@ -31,11 +34,18 @@ async function fetchFromBitrix(keys: string[]): Promise<Map<string, string | nul
 
   if (contactIds.length > 0) {
     try {
-      const body = await bx(webhook, 'crm.contact.list', {
-        filter: { '@ID': contactIds },
-        select: ['ID', 'NAME', 'LAST_NAME', 'SECOND_NAME'],
-      });
-      for (const c of (body?.result ?? []) as BxContact[]) {
+      // Пачками по 50: crm.contact.list отдаёт одну страницу (50) — без нарезки всем,
+      // кто не влез, штамповалось «имени нет» на 30 дней (пойман 20.10 на канбане
+      // повторных, где ключей на запрос — сотни).
+      const rows: BxContact[] = [];
+      for (let i = 0; i < contactIds.length; i += BX_PAGE) {
+        const body = await bx(webhook, 'crm.contact.list', {
+          filter: { '@ID': contactIds.slice(i, i + BX_PAGE) },
+          select: ['ID', 'NAME', 'LAST_NAME', 'SECOND_NAME'],
+        });
+        rows.push(...((body?.result ?? []) as BxContact[]));
+      }
+      for (const c of rows) {
         const name = [c.LAST_NAME, c.NAME, c.SECOND_NAME].filter(Boolean).join(' ').trim();
         // Пишем под КАЖДЫМ префиксом, который реально запрашивался для этого
         // ID (обычно ровно один — оба сразу, только если у контакта есть и
@@ -49,11 +59,15 @@ async function fetchFromBitrix(keys: string[]): Promise<Map<string, string | nul
   }
   if (companyIds.length > 0) {
     try {
-      const body = await bx(webhook, 'crm.company.list', {
-        filter: { '@ID': companyIds },
-        select: ['ID', 'TITLE'],
-      });
-      for (const c of (body?.result ?? []) as BxCompany[]) {
+      const rows: BxCompany[] = [];
+      for (let i = 0; i < companyIds.length; i += BX_PAGE) {
+        const body = await bx(webhook, 'crm.company.list', {
+          filter: { '@ID': companyIds.slice(i, i + BX_PAGE) },
+          select: ['ID', 'TITLE'],
+        });
+        rows.push(...((body?.result ?? []) as BxCompany[]));
+      }
+      for (const c of rows) {
         out.set(`k${c.ID}`, (c.TITLE ?? '').trim() || null);
       }
     } catch (e) {
@@ -92,7 +106,10 @@ export async function resolveClientNames(keys: string[]): Promise<Map<string, st
     const fresh = new Set<string>();
     for (const r of res.rows) {
       out.set(r.client_key, r.name);
-      if (now - new Date(r.synced_at).getTime() < SYNC_TTL_MS) fresh.add(r.client_key);
+      // Пустое имя живёт сутки, не 30 дней: до 20.10 в кэш штамповались «имени нет» для
+      // всех, кто не влез в первую страницу Битрикса (см. BX_PAGE) — так они лечатся сами.
+      const ttl = r.name === null ? NULL_NAME_TTL_MS : SYNC_TTL_MS;
+      if (now - new Date(r.synced_at).getTime() < ttl) fresh.add(r.client_key);
     }
     stale = keys.filter(k => !fresh.has(k));
   } catch (e) {
