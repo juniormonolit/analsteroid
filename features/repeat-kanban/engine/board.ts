@@ -22,7 +22,7 @@ const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
 export const COLUMN_PAGE = 40;
 /** Больше стольких менеджеров разом не грузим: первый прогрев ~1 с на менеджера. */
-export const MAX_MANAGERS_AT_ONCE = 80;
+export const MAX_MANAGERS_AT_ONCE = 150;
 const GOOD_CALL_SEC = 20;
 
 export interface RepeatDealInfo {
@@ -87,7 +87,8 @@ export interface KanbanColumn { key: ColumnKey; total: number; sum: number; card
 export interface RepeatBoard {
   generatedAt: string;
   managers: { id: string; name: string }[];
-  selectedManager: string | null;
+  /** Отмеченные галочками менеджеры (пусто — все менеджеры зоны/отделов). */
+  selectedManagers: string[];
   columns: KanbanColumn[];
   typeCounts: Record<string, number>;
   notice: string | null;
@@ -196,27 +197,29 @@ function poolColumn(purchases: number): ColumnKey {
 
 export async function buildRepeatBoard(opts: {
   managers: { id: string; name: string }[];
-  selectedManager: string | null;
+  selectedManagers: string[];
   typeFilter: string | null;
   /** Сколько карточек отдать по каждой колонке (пагинация «показать ещё»). */
   limits?: Partial<Record<ColumnKey, number>>;
   canManage: boolean;
 }): Promise<RepeatBoard> {
   const now = Date.now();
-  const roster = opts.selectedManager ? opts.managers.filter(m => m.id === opts.selectedManager) : opts.managers;
+  const pick = new Set(opts.selectedManagers);
+  const roster = pick.size ? opts.managers.filter(m => pick.has(m.id)) : opts.managers;
   const base = {
-    generatedAt: new Date(now).toISOString(), managers: opts.managers, selectedManager: opts.selectedManager,
+    generatedAt: new Date(now).toISOString(), managers: opts.managers, selectedManagers: opts.selectedManagers,
     typeCounts: {}, canManage: opts.canManage,
   };
   const emptyCols = () => COLUMNS.map(c => ({ key: c.key, total: 0, sum: 0, cards: [] }));
   if (roster.length === 0) return { ...base, columns: emptyCols(), notice: 'В вашей зоне нет менеджеров.' };
   if (roster.length > MAX_MANAGERS_AT_ONCE) {
-    return { ...base, columns: emptyCols(), notice: `В зоне ${roster.length} менеджеров — выберите менеджера, чтобы открыть доску.` };
+    return { ...base, columns: emptyCols(), notice: `В зоне ${roster.length} менеджеров — отметьте менеджеров или сузьте отделы.` };
   }
 
   // 1. Заказчики менеджеров (кэш движка «Моих заказчиков»).
   const rows: Row[] = [];
-  const CONCURRENCY = 4;
+  // 8 параллельно: холодный прогрев ~1 с на менеджера, дальше — Redis 10 мин.
+  const CONCURRENCY = 8;
   for (let i = 0; i < roster.length; i += CONCURRENCY) {
     const chunk = roster.slice(i, i + CONCURRENCY);
     const lists = await Promise.all(chunk.map(m => fetchManagerCustomers(Number(m.id))

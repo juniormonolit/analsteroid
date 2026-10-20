@@ -42,7 +42,8 @@ export async function GET(req: NextRequest) {
   if (!hasPerm(session, 'section.repeat_kanban')) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const sp = new URL(req.url).searchParams;
-  const rawMgr = sp.get('manager');
+  // ?managers=id,id — отмеченные галочками (старый ?manager=id — тоже принимаем: ссылки).
+  const rawMgrs = [...(sp.get('managers') ?? '').split(','), sp.get('manager') ?? ''].filter(x => /^\d{1,10}$/.test(x));
   const type = sp.get('type');
   const limits: Partial<Record<ColumnKey, number>> = {};
   for (const [k, v] of sp) {
@@ -60,13 +61,14 @@ export async function GET(req: NextRequest) {
     const zone = new Set(ctx.managers.map(m => m.id));
     const managers = !inDepts ? ctx.managers : ctx.scope.full ? inDepts : inDepts.filter(m => zone.has(m.id));
     const canManage = ctx.canManage;
-    const selected = rawMgr && managers.some(m => m.id === rawMgr) ? rawMgr : null;
+    const inList = new Set(managers.map(m => m.id));
+    const selected = rawMgrs.filter(id => inList.has(id));
     if (inDepts && managers.length === 0) {
-      const board = await buildRepeatBoard({ managers: [], selectedManager: null, typeFilter: null, canManage });
+      const board = await buildRepeatBoard({ managers: [], selectedManagers: [], typeFilter: null, canManage });
       return NextResponse.json({ ...board, notice: 'В выбранных отделах нет менеджеров из вашей зоны.' }, { headers: { 'Cache-Control': 'no-store' } });
     }
     const board = await buildRepeatBoard({
-      managers, selectedManager: selected, typeFilter: type && /^[a-z_]{2,30}$/.test(type) ? type : null, limits, canManage,
+      managers, selectedManagers: selected, typeFilter: type && /^[a-z_]{2,30}$/.test(type) ? type : null, limits, canManage,
     });
     return NextResponse.json(board, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {

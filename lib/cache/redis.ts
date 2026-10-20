@@ -189,6 +189,47 @@ export async function cached<T>(key: string, ttlSec: number, producer: () => Pro
   return value;
 }
 
+/**
+ * Stale-while-revalidate поверх Redis (канбан повторных, владелец 20.10: «Redis не может
+ * помочь облегчить загрузку?»). Значение младше `freshSec` отдаётся как есть; старше, но
+ * младше `staleSec` — отдаётся СРАЗУ, а пересчёт уходит в фон (один на ключ: замок NX на
+ * время пересчёта, чтобы десять открытых вкладок не пересчитали одно и то же десять раз).
+ * Ждать приходится только при полном промахе. Падение Redis — просто `producer()`.
+ */
+const _swrInflight = new Map<string, Promise<unknown>>();
+export async function cachedSwr<T>(key: string, freshSec: number, staleSec: number, producer: () => Promise<T>): Promise<T> {
+  const client = await redisReady();
+  const fullKey = `${NS}swr:${key}`;
+  const store = async (value: T) => {
+    if (!client) return;
+    try { await client.set(fullKey, JSON.stringify({ at: Date.now(), v: value }), 'EX', staleSec); }
+    catch (err) { warnThrottled(`swr set failed: ${key}`, err); }
+  };
+  const compute = (): Promise<T> => {
+    const running = _swrInflight.get(fullKey) as Promise<T> | undefined;
+    if (running) return running;
+    const p = producer().then(async v => { await store(v); return v; }).finally(() => _swrInflight.delete(fullKey));
+    _swrInflight.set(fullKey, p);
+    return p;
+  };
+  if (client) {
+    try {
+      const hit = await client.get(fullKey);
+      if (hit != null) {
+        const { at, v } = JSON.parse(hit) as { at: number; v: T };
+        if (Date.now() - at > freshSec * 1000) {
+          const lock = await client.set(`${fullKey}:lock`, '1', 'EX', 120, 'NX').catch(() => null);
+          if (lock) void compute().catch(err => warnThrottled(`swr refresh failed: ${key}`, err));
+        }
+        return v;
+      }
+    } catch (err) {
+      warnThrottled('swr get failed', err);
+    }
+  }
+  return compute();
+}
+
 const LIVE_TTL_SEC = 10 * 60;             // 10 min — matches the previous in-memory behaviour
 const HISTORICAL_TTL_SEC = 24 * 60 * 60;  // 24 h
 // «Свежезакончившийся» период ещё меняется задним числом: синк доносит вчерашние

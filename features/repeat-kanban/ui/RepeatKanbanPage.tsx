@@ -3,14 +3,14 @@
 // Карточка = заказчик. Колонки двигаются только по данным (отгрузки, стадии сделки,
 // звонки) — руками ничего не перетаскивается. Ручные действия: задача (+ сделка в
 // Битриксе) от РОПа, «выполнено» от менеджера, разбор отказа РОПом.
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
 import { Modal } from '@/components/ui/Modal';
-import { SearchSelect } from '@/components/ui/SearchSelect';
+import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import {
   BRAK_REASONS, CLIENT_TYPE_ORDER, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS,
@@ -51,7 +51,7 @@ async function post(body: Record<string, unknown>) {
 
 export function RepeatKanbanPage() {
   const qc = useQueryClient();
-  const [manager, setManager] = useUrlState('manager', stringParam(''));
+  const [mgrs, setMgrs] = useUrlState('managers', listParam([]));
   const [type, setType] = useUrlState('type', stringParam(''));
   const [depts, setDepts] = useUrlState('dept', listParam([]));
   const [limits, setLimits] = useState<Partial<Record<ColumnKey, number>>>({});
@@ -60,10 +60,10 @@ export function RepeatKanbanPage() {
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', manager, type, depts, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
-      if (manager) qs.set('manager', manager);
+      if (mgrs.length) qs.set('managers', mgrs.join(','));
       if (type) qs.set('type', type);
       if (depts.length) qs.set('dept', depts.join(','));
       for (const [k, v] of Object.entries(limits)) qs.set(`n_${k}`, String(v));
@@ -83,8 +83,22 @@ export function RepeatKanbanPage() {
   const boardRef = useRef<HTMLDivElement>(null);
   const jump = (g: ColumnGroup) => {
     const el = boardRef.current?.querySelector<HTMLElement>(`[data-group="${g}"]`);
-    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
   };
+  // Конвейер — горизонтальный (правка владельца 20.10). Края показывают, что доска
+  // продолжается: затухание и стрелки только когда правда есть куда листать.
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const measure = useCallback(() => {
+    const el = boardRef.current;
+    if (!el) return;
+    setEdges({ left: el.scrollLeft > 4, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4 });
+  }, []);
+  useEffect(() => {
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [measure, data]);
+  const page = (dir: 1 | -1) => boardRef.current?.scrollBy({ left: dir * boardRef.current.clientWidth * 0.8, behavior: 'smooth' });
 
   if (error?.status === 403) return <AccessDenied reason="Канбан повторных продаж открыт ролям продаж." />;
 
@@ -96,8 +110,10 @@ export function RepeatKanbanPage() {
   const totalAll = Object.values(data?.typeCounts ?? {}).reduce((s, n) => s + n, 0);
 
   return (
-    <div className="h-full min-w-0 overflow-y-auto overflow-x-hidden">
-      <div className="flex min-w-0 flex-col gap-3 px-4 py-4 sm:px-6 sm:py-6">
+    // Экран: шапка сверху, конвейер — на всю оставшуюся высоту, колонки скроллятся внутри
+    // (как в канбане Битрикса). На телефоне страница скроллится целиком, доске — 75dvh.
+    <div className="flex h-full min-w-0 flex-col overflow-y-auto overflow-x-hidden sm:overflow-hidden">
+      <div className="flex min-w-0 shrink-0 flex-col gap-3 px-4 pt-4 sm:px-6 sm:pt-6">
         <header className="flex min-w-0 flex-wrap items-end justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-xl font-semibold text-[var(--color-text)]">Канбан повторных продаж</h1>
@@ -107,12 +123,15 @@ export function RepeatKanbanPage() {
             </p>
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setManager(''); setLimits({}); }} triggerClassName={depts.length ? BTN_ACTIVE : BTN_IDLE} />
+            {/* Отделы и менеджеры работают вместе: отделы сужают список менеджеров, внутри
+                можно отметить нескольких; не отмечен никто — все менеджеры отделов/зоны. */}
+            <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setMgrs([]); setLimits({}); }} triggerClassName={depts.length ? BTN_ACTIVE : BTN_IDLE} />
             {(data?.managers.length ?? 0) > 1 && (
-              <SearchSelect ariaLabel="Менеджер" allLabel="Все менеджеры зоны" searchPlaceholder="Поиск менеджера"
+              <SearchMultiSelect ariaLabel="Менеджеры" allLabel={depts.length ? 'Все менеджеры отделов' : 'Все менеджеры зоны'}
+                unitLabel="менеджеров" searchPlaceholder="Поиск менеджера"
                 options={data!.managers.map(m => ({ value: m.id, label: m.name }))}
-                value={manager} onChange={v => { setManager(v); setLimits({}); }}
-                className={`${BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-64`} />
+                value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
+                className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-64`} />
             )}
             <button type="button" onClick={() => refetch()} aria-label="Обновить" title="Обновить"
               className={`${BTN_IDLE} min-w-11 px-0`}>
@@ -155,17 +174,18 @@ export function RepeatKanbanPage() {
         {data?.notice && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">{data.notice}</div>}
         {isLoading && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Собираю доску — первый раз по команде это до полуминуты…</div>}
 
-        <div className="min-w-0">
-          <div ref={boardRef} className="flex min-w-0 flex-col gap-5 pb-4">
+      </div>
+
+      <div className="relative min-h-[75dvh] min-w-0 flex-1 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
+        <div ref={boardRef} onScroll={measure} className="scroll-x h-full">
+          <div className="flex h-full items-stretch gap-5">
             {GROUPS.map(g => (
-              <section key={g.key} data-group={g.key} className="flex min-w-0 scroll-mt-4 flex-col gap-2">
+              <section key={g.key} data-group={g.key} className="flex h-full shrink-0 flex-col gap-2">
                 <div className="px-1">
                   <div className="text-sm font-semibold text-[var(--color-text)]">{g.title}</div>
                   <div className="text-xs text-[var(--color-text-muted)]">{g.hint}</div>
                 </div>
-                {/* Группа — строкой на всю ширину: колонки делят экран (на широком мониторе ничего
-                    не режется), не влезли — прокручивается только эта строка. */}
-                <div className="scroll-x min-w-0 pb-1"><div className="flex items-start gap-3">
+                <div className="flex min-h-0 flex-1 items-stretch gap-3">
                   {COLUMNS.filter(c => c.group === g.key).map(def => (
                     <Column key={def.key} def={def} col={byKey.get(def.key)} canManage={!!data?.canManage}
                       onMore={() => setLimits(l => ({ ...l, [def.key]: (l[def.key] ?? PAGE) + PAGE }))}
@@ -173,11 +193,25 @@ export function RepeatKanbanPage() {
                       onUnbrak={async c => { if (confirm(`Снять брак с «${cardName(c)}»? Заказчик вернётся в пул.`)) { await post({ action: 'unbrak', clientKey: c.clientKey, managerId: c.managerId }).catch(e => alert(e.message)); refresh(); } }}
                     />
                   ))}
-                </div></div>
+                </div>
               </section>
             ))}
           </div>
         </div>
+        {edges.left && (
+          <>
+            <div aria-hidden className="pointer-events-none absolute inset-y-0 left-4 w-10 bg-gradient-to-r from-[var(--color-bg)] to-transparent sm:left-6" />
+            <button type="button" onClick={() => page(-1)} aria-label="Листать влево"
+              className={`${BTN_IDLE} absolute left-5 top-1/2 hidden min-w-11 -translate-y-1/2 px-0 shadow-md sm:inline-flex`}><ChevronLeft size={18} /></button>
+          </>
+        )}
+        {edges.right && (
+          <>
+            <div aria-hidden className="pointer-events-none absolute inset-y-0 right-4 w-10 bg-gradient-to-l from-[var(--color-bg)] to-transparent sm:right-6" />
+            <button type="button" onClick={() => page(1)} aria-label="Листать вправо"
+              className={`${BTN_IDLE} absolute right-5 top-1/2 hidden min-w-11 -translate-y-1/2 px-0 shadow-md sm:inline-flex`}><ChevronRight size={18} /></button>
+          </>
+        )}
       </div>
 
       {openCard && (
@@ -199,7 +233,7 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
 }) {
   const tone = def.key === 'brak' ? 'var(--color-negative)' : def.key === 'review' ? '#d97706' : def.key === 'touch_3' ? 'var(--color-positive)' : 'var(--color-accent)';
   return (
-    <div className="flex min-w-[260px] max-w-[85vw] flex-1 basis-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
+    <div className="flex h-full w-72 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
       <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${tone}` }} title={def.hint}>
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-sm font-semibold text-[var(--color-text)]">{def.title}</span>
@@ -207,8 +241,8 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
         </div>
         {col && col.sum > 0 && <div className="text-xs text-[var(--color-text-muted)]">в сделках {money(col.sum)}</div>}
       </div>
-      {/* Карточки скроллятся внутри колонки — строки групп не растягиваются на километр. */}
-      <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto">
+      {/* Карточки скроллятся внутри колонки — колонка на всю высоту экрана. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
       {col?.cards.map(c => (
         <Card key={c.clientKey} c={c} col={def.key} canManage={canManage}
           onOpen={() => onOpen(c)} onTask={() => onTask(c)} onReview={() => onReview(c)} onUnbrak={() => onUnbrak(c)} />

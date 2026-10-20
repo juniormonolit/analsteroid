@@ -1,5 +1,5 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
-import { cached } from '@/lib/cache/redis';
+import { cachedSwr } from '@/lib/cache/redis';
 import { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER, type CustomerQueue } from './queueRules';
 
 export { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER };
@@ -674,7 +674,10 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   // v9 (21.09) — из выборки убраны клиенты без отгрузок (раздел только про повторные).
   // v10 (21.09) — ожидаемые деньги в строке и в ранге очередей.
   // v11 (21.09) — дробные отгрузки склеены в покупки (repeatRule.ts).
-  return cached(`customers:mgr:v11:${managerBitrixId}`, 10 * 60, async () => {
+  // 20.10: stale-while-revalidate — свежие 10 мин, дальше до 12 ч отдаём сразу и
+  // пересчитываем в фоне (канбан повторных грузит десятки менеджеров разом; живые стадии,
+  // звонки и задачи он читает поверх, так что фоновое обновление списка не отстаёт).
+  return cachedSwr(`customers:mgr:v11:${managerBitrixId}`, 10 * 60, 12 * 3600, async () => {
     const [res, scoreTable] = await Promise.all([
       analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]),
       fetchRepeatScoreTable(),
