@@ -436,6 +436,9 @@ export async function buildRepeatBoard(opts: {
   const typeRank = (c: KanbanCard) => (c.profileType ? CLIENT_TYPE_ORDER[c.profileType] ?? CLIENT_TYPE_NONE_RANK : CLIENT_TYPE_NONE_RANK);
   const ev = (c: KanbanCard) => c.expectedValue ?? 0;
   const columns: KanbanColumn[] = [];
+  // Показатели доски — до фильтра по задачам: фильтр «ждёт приёмки» не должен обнулять
+  // «Потенциал пула» (у заказчиков пула задач нет). Снимок списков колонок.
+  const kpiBuckets = new Map([...buckets].map(([k, l]) => [k, [...l]]));
   // Фильтр по задачам — после сборки карточек (нужны статус и срок задачи).
   const taskCounts: Record<string, number> = {};
   const taskPick = new Set(opts.taskFilter ?? []);
@@ -495,18 +498,20 @@ export async function buildRepeatBoard(opts: {
   const names = await resolveClientNames(visibleKeys).catch(() => getCachedClientNames(visibleKeys));
   for (const c of columns) for (const card of c.cards) card.name = names.get(card.clientKey) ?? null;
 
-  const sumBy = (g: string, f: (c: KanbanColumn) => number) => columns.filter(c => COLUMNS.find(d => d.key === c.key)!.group === g).reduce((s, c) => s + f(c), 0);
-  const allIn = (g: string) => COLUMNS.filter(d => d.group === g).flatMap(d => buckets.get(d.key)!);
+  const allIn = (g: string) => COLUMNS.filter(d => d.group === g).flatMap(d => kpiBuckets.get(d.key)!);
+  const openTask = (c: KanbanCard) => !!c.task && c.task.state !== 'done' && c.task.state !== 'deferred';
+  const pot = (l: KanbanCard[]) => l.reduce((s, c) => s + (c.potential ?? 0), 0);
+  const work = [...allIn('touch'), ...allIn('stage')];
   const kpi: BoardKpi = {
-    pool: sumBy('pool', c => c.total), poolPotential: sumBy('pool', c => c.potential),
-    inWork: sumBy('touch', c => c.total), inWorkPotential: sumBy('touch', c => c.potential),
+    pool: allIn('pool').length, poolPotential: pot(allIn('pool')),
+    inWork: allIn('touch').length, inWorkPotential: pot(allIn('touch')),
     reached: allIn('touch').filter(c => c.attempts?.reached).length,
-    funnel: sumBy('stage', c => c.total), funnelSum: sumBy('stage', c => c.sum),
-    tasksOverdue: columns.reduce((s, c) => s + c.overdue, 0),
-    tasksControl: [...allIn('touch'), ...allIn('stage'), ...allIn('review')].filter(c => c.task?.state === 'control').length,
-    noTaskInWork: sumBy('touch', c => c.noTask) + sumBy('stage', c => c.noTask),
-    review: buckets.get('review')!.length, reviewEarly: buckets.get('review')!.filter(c => c.lostEarly).length,
-    brak: buckets.get('brak')!.length,
+    funnel: allIn('stage').length, funnelSum: allIn('stage').reduce((s, c) => s + (c.deal?.amount ?? 0), 0),
+    tasksOverdue: [...work, ...allIn('review')].filter(c => taskBucketOf(c, now) === 'overdue').length,
+    tasksControl: [...work, ...allIn('review')].filter(c => c.task?.state === 'control').length,
+    noTaskInWork: work.filter(c => !openTask(c)).length,
+    review: kpiBuckets.get('review')!.length, reviewEarly: kpiBuckets.get('review')!.filter(c => c.lostEarly).length,
+    brak: kpiBuckets.get('brak')!.length,
   };
   return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null };
 }
