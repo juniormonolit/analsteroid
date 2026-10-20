@@ -85,6 +85,20 @@ export function RepeatKanbanPage() {
     const el = boardRef.current?.querySelector<HTMLElement>(`[data-group="${g}"]`);
     el?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
   };
+  // Менеджеры для пикера — отдельным лёгким запросом: кнопка видна сразу, а не после
+  // сборки доски (иначе «выбор менеджера пропадает», пока доска грузится).
+  const { data: meta } = useQuery<{ managers: { id: string; name: string }[] }>({
+    queryKey: ['repeat-kanban-managers', depts],
+    queryFn: async () => {
+      const qs = new URLSearchParams({ meta: '1' });
+      if (depts.length) qs.set('dept', depts.join(','));
+      const r = await fetch(`/api/repeat-kanban?${qs}`);
+      return r.ok ? r.json() : { managers: [] };
+    },
+    staleTime: 5 * 60_000,
+  });
+  const managerOptions = meta?.managers ?? data?.managers ?? [];
+
   // Конвейер — горизонтальный (правка владельца 20.10). Края показывают, что доска
   // продолжается: затухание и стрелки только когда правда есть куда листать.
   const [edges, setEdges] = useState({ left: false, right: false });
@@ -126,10 +140,10 @@ export function RepeatKanbanPage() {
             {/* Отделы и менеджеры работают вместе: отделы сужают список менеджеров, внутри
                 можно отметить нескольких; не отмечен никто — все менеджеры отделов/зоны. */}
             <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setMgrs([]); setLimits({}); }} triggerClassName={depts.length ? BTN_ACTIVE : BTN_IDLE} />
-            {(data?.managers.length ?? 0) > 1 && (
+            {managerOptions.length > 0 && (
               <SearchMultiSelect ariaLabel="Менеджеры" allLabel={depts.length ? 'Все менеджеры отделов' : 'Все менеджеры зоны'}
                 unitLabel="менеджеров" searchPlaceholder="Поиск менеджера"
-                options={data!.managers.map(m => ({ value: m.id, label: m.name }))}
+                options={managerOptions.map(m => ({ value: m.id, label: m.name }))}
                 value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
                 className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-64`} />
             )}

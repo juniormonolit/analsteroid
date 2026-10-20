@@ -71,8 +71,14 @@ export async function GET(req: NextRequest) {
     // РОПу — пересечение с его зоной: отдел вне зоны даст пусто.
     const inDepts = deptIds.length ? await managersOfDepartments(deptIds) : null;
     const zone = new Set(ctx.managers.map(m => m.id));
+    // Зона РОПа — и менеджеры его отделов по оргструктуре (список «Телевизоров» неполон).
+    if (inDepts && !ctx.scope.full && ctx.scope.allowedDeptIds?.size) {
+      for (const m of await managersOfDepartments([...ctx.scope.allowedDeptIds])) zone.add(m.id);
+    }
     const managers = !inDepts ? ctx.managers : ctx.scope.full ? inDepts : inDepts.filter(m => zone.has(m.id));
     const canManage = ctx.canManage;
+    // ?meta=1 — только список менеджеров (для пикера: виден сразу, не ждёт сборки доски).
+    if (sp.get('meta') === '1') return NextResponse.json({ managers }, { headers: { 'Cache-Control': 'no-store' } });
     const inList = new Set(managers.map(m => m.id));
     const selected = rawMgrs.filter(id => inList.has(id));
     if (inDepts && managers.length === 0) {
