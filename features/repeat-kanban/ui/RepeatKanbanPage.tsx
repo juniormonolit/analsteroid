@@ -337,7 +337,7 @@ function KpiStrip({ k }: { k: BoardKpi }) {
         title="Сумма потенциалов заказчиков пула: сколько они принесут за год, если вернуть их. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр).">
         <div className="text-[12px] opacity-85">Потенциал пула за год</div>
         <div className="text-[26px] font-bold leading-tight tabular-nums">{moneyShort(k.poolPotential)}</div>
-        <div className="text-[12px] opacity-85">если вернуть {rub.format(k.pool)} {plural(k.pool, 'заказчика', 'заказчиков', 'заказчиков')}</div>
+        <div className="text-[12px] opacity-85">если работать с повторкой</div>
       </div>
       {/* Плитки — одной высоты с главной, всё по центру; подпись сверху, цифра крупно, пояснение
           мелко — без обрезанных «Заказчиков в п…» (правка владельца 20.10). */}
