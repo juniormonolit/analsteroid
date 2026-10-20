@@ -87,6 +87,8 @@ export async function GET(req: NextRequest) {
     }
     const board = await buildRepeatBoard({
       managers, selectedManagers: selected, typeFilter: type && /^[a-z_]{2,30}$/.test(type) ? type : null, limits, canManage,
+      // ?pg=Газобетон|Кровля — группы через «|» (в названиях групп бывают запятые).
+      poolGroups: (sp.get('pg') ?? '').split('|').map(x => x.trim()).filter(x => x.length > 0 && x.length < 120).slice(0, 50),
     });
     return NextResponse.json(board, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {

@@ -54,18 +54,21 @@ export function RepeatKanbanPage() {
   const [mgrs, setMgrs] = useUrlState('managers', listParam([]));
   const [type, setType] = useUrlState('type', stringParam(''));
   const [depts, setDepts] = useUrlState('dept', listParam([]));
+  const [pg, setPg] = useUrlState('pg', stringParam(''));
+  const poolGroups = useMemo(() => pg.split('|').filter(Boolean), [pg]);
   const [limits, setLimits] = useState<Partial<Record<ColumnKey, number>>>({});
   const [openCard, setOpenCard] = useState<KanbanCard | null>(null);
   const [taskFor, setTaskFor] = useState<KanbanCard | null>(null);
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (mgrs.length) qs.set('managers', mgrs.join(','));
       if (type) qs.set('type', type);
       if (depts.length) qs.set('dept', depts.join(','));
+      if (pg) qs.set('pg', pg);
       for (const [k, v] of Object.entries(limits)) qs.set(`n_${k}`, String(v));
       const r = await fetch(`/api/repeat-kanban?${qs}`);
       const j = await r.json().catch(() => ({}));
@@ -176,6 +179,16 @@ export function RepeatKanbanPage() {
         </div>
 
         <nav className="flex min-w-0 flex-wrap gap-2" aria-label="Перейти к группе колонок">
+          {/* Фильтр пула (владелец 20.10): последняя отгрузка — в выбранных группах, после неё
+              ничего («отгружали газобетон, а после газобетона ничего»). Группа сделки — по
+              наибольшему (head_group_name). Действует только на колонки пула. */}
+          <SearchMultiSelect ariaLabel="Пул: последняя отгрузка" allLabel="Пул: любая последняя отгрузка"
+            unitLabel="групп в пуле" searchPlaceholder="Поиск товарной группы"
+            options={Object.entries(data?.poolGroupCounts ?? {}).sort((a, b) => b[1] - a[1])
+              .map(([g, n]) => ({ value: g, label: g, hint: `${rub.format(n)} в пуле — последняя отгрузка` }))
+              .concat(poolGroups.filter(g => !(data?.poolGroupCounts ?? {})[g]).map(g => ({ value: g, label: g, hint: 'сейчас 0 в пуле' })))}
+            value={poolGroups} onChange={v => { setPg(v.join('|')); setLimits({}); }}
+            className={`${poolGroups.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-72`} />
           {GROUPS.map(g => (
             <button key={g.key} type="button" onClick={() => jump(g.key)} title={g.hint}
               className={BTN_IDLE}>

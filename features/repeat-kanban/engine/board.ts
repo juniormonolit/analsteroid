@@ -91,6 +91,8 @@ export interface RepeatBoard {
   selectedManagers: string[];
   columns: KanbanColumn[];
   typeCounts: Record<string, number>;
+  /** Пул: товарная группа ПОСЛЕДНЕЙ отгрузки («по наибольшему», head_group_name) → заказчиков. */
+  poolGroupCounts: Record<string, number>;
   notice: string | null;
   canManage: boolean;
 }
@@ -199,6 +201,9 @@ export async function buildRepeatBoard(opts: {
   managers: { id: string; name: string }[];
   selectedManagers: string[];
   typeFilter: string | null;
+  /** Фильтр пула (владелец 20.10): только заказчики, чья ПОСЛЕДНЯЯ отгрузка — в этих группах
+   *  («отгружали газобетон, а после ничего»). Колонки окна/воронки/разбора не трогает. */
+  poolGroups?: string[];
   /** Сколько карточек отдать по каждой колонке (пагинация «показать ещё»). */
   limits?: Partial<Record<ColumnKey, number>>;
   canManage: boolean;
@@ -208,7 +213,7 @@ export async function buildRepeatBoard(opts: {
   const roster = pick.size ? opts.managers.filter(m => pick.has(m.id)) : opts.managers;
   const base = {
     generatedAt: new Date(now).toISOString(), managers: opts.managers, selectedManagers: opts.selectedManagers,
-    typeCounts: {}, canManage: opts.canManage,
+    typeCounts: {}, poolGroupCounts: {}, canManage: opts.canManage,
   };
   const emptyCols = () => COLUMNS.map(c => ({ key: c.key, total: 0, sum: 0, cards: [] }));
   if (roster.length === 0) return { ...base, columns: emptyCols(), notice: 'В вашей зоне нет менеджеров.' };
@@ -246,6 +251,8 @@ export async function buildRepeatBoard(opts: {
   ]);
 
   const typeCounts: Record<string, number> = {};
+  const poolGroupCounts: Record<string, number> = {};
+  const poolGroups = new Set(opts.poolGroups ?? []);
   const buckets = new Map<ColumnKey, KanbanCard[]>(COLUMNS.map(c => [c.key, []]));
 
   for (const r of rows) {
@@ -309,6 +316,11 @@ export async function buildRepeatBoard(opts: {
     const typeKey = profileType ?? 'none';
     typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
     if (opts.typeFilter && opts.typeFilter !== typeKey) continue;
+    if (col.startsWith('pool')) {
+      const g = r.lastDeliveredGroup ?? 'Без группы';
+      poolGroupCounts[g] = (poolGroupCounts[g] ?? 0) + 1;
+      if (poolGroups.size && !poolGroups.has(g)) continue;
+    }
 
     buckets.get(col)!.push({
       clientKey: r.clientKey, clientType: r.clientType, clientId: r.clientId, name: null,
@@ -359,5 +371,5 @@ export async function buildRepeatBoard(opts: {
   const names = await resolveClientNames(visibleKeys).catch(() => getCachedClientNames(visibleKeys));
   for (const c of columns) for (const card of c.cards) card.name = names.get(card.clientKey) ?? null;
 
-  return { ...base, columns, typeCounts, notice: null };
+  return { ...base, columns, typeCounts, poolGroupCounts, notice: null };
 }
