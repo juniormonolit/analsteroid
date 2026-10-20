@@ -9,6 +9,7 @@ import { ExternalLink, RefreshCw, Phone, PhoneMissed, ClipboardList, Eye, CheckC
 import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { AccessDenied } from '@/components/ui/AccessDenied';
 import { Modal } from '@/components/ui/Modal';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import {
   BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS,
@@ -111,14 +112,10 @@ export function RepeatKanbanPage() {
           </div>
           <div className="flex min-w-0 items-center gap-2">
             {(data?.managers.length ?? 0) > 1 && (
-              <>
-                <label className="sr-only" htmlFor="rpk-manager">Менеджер</label>
-                <select id="rpk-manager" value={manager} onChange={e => { setManager(e.target.value); setLimits({}); }}
-                  className="min-h-11 min-w-0 max-w-[60vw] rounded-lg bg-[var(--color-bg-surface)] px-3 text-base text-[var(--color-text)] sm:max-w-xs sm:text-sm">
-                  <option value="">Все менеджеры зоны</option>
-                  {data!.managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </>
+              <SearchSelect ariaLabel="Менеджер" allLabel="Все менеджеры зоны" searchPlaceholder="Поиск менеджера"
+                options={data!.managers.map(m => ({ value: m.id, label: m.name }))}
+                value={manager} onChange={v => { setManager(v); setLimits({}); }}
+                className="w-[60vw] max-w-xs sm:w-64" />
             )}
             <button type="button" onClick={() => refetch()} aria-label="Обновить" title="Обновить"
               className="tap-target flex min-h-11 min-w-11 items-center justify-center rounded-lg bg-[var(--color-bg-surface)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
@@ -408,9 +405,9 @@ function TaskModal({ card, managers, onClose, onSaved }: {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1 text-sm text-[var(--color-text-secondary)]">
               Исполнитель
-              <select value={assignee} onChange={e => setAssignee(e.target.value)} className={`${fieldCls} min-h-11`}>
-                {managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
+              <SearchSelect ariaLabel="Исполнитель" searchPlaceholder="Поиск менеджера"
+                options={managers.map(m => ({ value: m.id, label: m.name }))} value={assignee} onChange={setAssignee}
+                className="w-full bg-[var(--color-bg)]" />
             </label>
             <label className="flex flex-col gap-1 text-sm text-[var(--color-text-secondary)]">
               Срок

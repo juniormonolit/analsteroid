@@ -14,6 +14,7 @@ import { coverStyle } from '@/lib/profile/covers';
 import { backgroundCss, cosmeticById } from '@/lib/profile/cosmetics';
 import { ProfileFeed } from '@/features/profile/ui/ProfileFeed';
 import { Modal } from '@/components/ui/Modal';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { PinDialog } from '@/components/ui/PinDialog';
 import { PinSetupDialog } from '@/components/ui/PinSetupDialog';
@@ -1654,11 +1655,10 @@ function GiftModal({ row, meta, onClose, onDone }: {
       title={`Подарить: ${row.item_name}`} desktopWidth="sm:max-w-sm">
         <label className="flex flex-col gap-1 text-xs text-[var(--color-text-muted)]">
           Кому (активный менеджер)
-          <select value={to} onChange={e => setTo(e.target.value === '' ? '' : Number(e.target.value))}
-            className="rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm text-[var(--color-text)]">
-            <option value="">— выберите —</option>
-            {meta.managers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+          <SearchSelect ariaLabel="Кому" placeholder="— выберите —" searchPlaceholder="Поиск менеджера"
+            options={meta.managers.map(m => ({ value: String(m.id), label: m.name }))}
+            value={to === '' ? '' : String(to)} onChange={v => setTo(v === '' ? '' : Number(v))}
+            className="w-full bg-[var(--color-bg)]" />
         </label>
         <div className="mt-2 text-xs text-[var(--color-text-muted)]">Без комиссии; срок годности сохраняется; получателю придёт уведомление.</div>
         {error && <div className="mt-2 text-xs text-[var(--color-negative,#e03131)]">{error}</div>}

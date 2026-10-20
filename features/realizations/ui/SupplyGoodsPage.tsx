@@ -12,6 +12,7 @@ import { useUrlState, dateRangeParam, stringParam } from '@/lib/hooks/useUrlStat
 import { useUrlSort, sortRows } from '@/lib/hooks/useUrlSort';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { SortableTh } from '@/components/ui/SortableTh';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 import { mskYmd } from '@/lib/realizations/period';
 import type { GoodsRow } from '@/lib/supplyPanel/metrics';
 import { DASH, fmt1, fmtDate, fmtInt, fmtPct } from './format';
@@ -116,10 +117,9 @@ export function SupplyGoodsPage() {
             <option value="">Все департаменты</option>
             {(meta.data?.depts ?? []).map(d => <option key={d} value={d}>{d}</option>)}
           </select>
-          <select aria-label="Категория" value={group} onChange={e => setGroup(e.target.value)} className={`${selectCls} max-w-full sm:max-w-[260px]`}>
-            <option value="">Все категории</option>
-            {projects.map(p => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
-          </select>
+          <SearchSelect ariaLabel="Категория" allLabel="Все категории" searchPlaceholder="Поиск категории"
+            options={projects.map(p => ({ value: String(p.id), label: p.name }))}
+            value={group} onChange={setGroup} className="max-w-full sm:max-w-[260px]" />
         </div>
 
         <div role="status" className="flex items-start gap-2 rounded-lg border border-[var(--color-accent)]/25 bg-[var(--blue-50)] px-3 py-2 text-[13px] text-[var(--color-text)]">

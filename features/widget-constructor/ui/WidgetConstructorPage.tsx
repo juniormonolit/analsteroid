@@ -7,6 +7,7 @@ import {
 } from '@/lib/widget/config';
 import type { WidgetMetricId } from '@/lib/widget/metrics';
 import { GsSwatch, GsPalettePopover } from '@/components/ui/GsColorPicker';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 
 interface MetricDef { id: WidgetMetricId; label: string; shortLabel: string; kind: 'completion' | 'money' | 'percent'; yearOnly: boolean }
 interface ScopeOpt { id: string; name: string; branch?: string }
@@ -267,12 +268,12 @@ export function WidgetConstructorPage() {
             ))}
           </div>
           {cfg.scope_kind !== 'russia' && (
-            <select value={cfg.scope_id ?? ''} onChange={e => setCfg({ scope_id: e.target.value })}
-              className="w-full py-2 px-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] text-base sm:text-sm text-[var(--color-text)]">
-              {(cfg.scope_kind === 'branch' ? catalog?.scopes.branches : catalog?.scopes.departments)?.map(o => (
-                <option key={o.id} value={o.id}>{o.name}{o.branch ? ` (${o.branch})` : ''}</option>
-              ))}
-            </select>
+            <SearchSelect
+              ariaLabel={cfg.scope_kind === 'branch' ? 'Филиал' : 'Отдел'} placeholder="— выберите —" searchPlaceholder="Поиск"
+              options={((cfg.scope_kind === 'branch' ? catalog?.scopes.branches : catalog?.scopes.departments) ?? []).map(o => ({ value: String(o.id), label: o.name, hint: o.branch ?? null }))}
+              value={cfg.scope_id ?? ''} onChange={v => setCfg({ scope_id: v })}
+              className="w-full"
+            />
           )}
         </Field>
 

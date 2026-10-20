@@ -17,6 +17,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { NoData } from '@/components/ui/NoData';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { HelpCircle, MoreHorizontal, ExternalLink } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
@@ -554,22 +555,16 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
           схлопываются сами собой при выборе; менеджеры сужаются выбранным
           отделом — это обычная вложенность, а не потеря вариантов. */}
       {team && depts.length > 0 && (
-        <select value={dept} onChange={e => { setDept(e.target.value); setMgr(''); setPage(1); }}
-          title="Фильтр по отделу подконтрольной структуры"
-          className="min-h-11 sm:min-h-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold">
-          <option value="">Все отделы ({depts.length})</option>
-          {depts.map(d => <option key={d} value={d}>{d}</option>)}
-        </select>
+        <SearchSelect ariaLabel="Отдел" allLabel={`Все отделы (${depts.length})`} searchPlaceholder="Поиск отдела"
+          options={depts.map(d => ({ value: d, label: d }))} value={dept}
+          onChange={v => { setDept(v); setMgr(''); setPage(1); }}
+          className="min-h-11 max-w-[220px] rounded-xl bg-[var(--color-bg)] px-2 text-xs font-semibold sm:min-h-0 sm:py-1.5 sm:text-xs" />
       )}
       {team && mgrOptions.length > 0 && (
-        <select value={mgr} onChange={e => { setMgr(e.target.value); setPage(1); }}
-          title="Фильтр по менеджеру: в скобках — сколько у него открытых окон и упущенных"
-          className="min-h-11 sm:min-h-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-xs font-semibold max-w-[220px]">
-          <option value="">Все менеджеры ({mgrOptions.length})</option>
-          {mgrOptions.map(m => (
-            <option key={m.id} value={m.id}>{m.name}{m.window || m.missed ? ` (🔥${m.window}/${m.missed})` : ''}</option>
-          ))}
-        </select>
+        <SearchSelect ariaLabel="Менеджер" allLabel={`Все менеджеры (${mgrOptions.length})`} searchPlaceholder="Поиск менеджера"
+          options={mgrOptions.map(m => ({ value: m.id, label: m.name, hint: m.window || m.missed ? `🔥 открытых окон ${m.window}, упущено ${m.missed}` : null }))}
+          value={mgr} onChange={v => { setMgr(v); setPage(1); }}
+          className="min-h-11 max-w-[220px] rounded-xl bg-[var(--color-bg)] px-2 text-xs font-semibold sm:min-h-0 sm:py-1.5 sm:text-xs" />
       )}
       {team && (
         <select value={group} onChange={e => setGroup(e.target.value as 'none' | 'dept' | 'mgr')}

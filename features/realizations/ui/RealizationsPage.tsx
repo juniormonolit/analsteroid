@@ -24,6 +24,7 @@ import { useUrlState, useUrlStateBatch, dateRangeParam, stringParam, intParam } 
 import { useUrlSort, sortRows } from '@/lib/hooks/useUrlSort';
 import { PeriodRangeControls } from '@/features/reports/ui/FilterBar';
 import { SortableTh } from '@/components/ui/SortableTh';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 import { mskYmd } from '@/lib/realizations/period';
 
 interface LogistOpt { id: string; name: string; region: Region }
@@ -152,11 +153,9 @@ export function RealizationsPage() {
         <option value="">Все регионы</option>
         {REGIONS.map(r => <option key={r} value={r}>{REGION_LABEL[r]}</option>)}
       </select>
-      <select aria-label="Логист" value={logist} onChange={e => patch({ logist: e.target.value || null, page: null })} className={`${selectCls} sm:max-w-[240px]`}>
-        <option value="">Все логисты</option>
-        {logistOpts.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-        <option value="__none">Логист не указан</option>
-      </select>
+      <SearchSelect ariaLabel="Логист" allLabel="Все логисты" searchPlaceholder="Поиск логиста"
+        options={[...logistOpts.map(l => ({ value: String(l.id), label: l.name })), { value: '__none', label: 'Логист не указан' }]}
+        value={logist} onChange={v => patch({ logist: v || null, page: null })} className="sm:max-w-[240px]" />
       <select aria-label="Статус" value={status} onChange={e => patch({ status: e.target.value || null, page: null })} className={`${selectCls} sm:max-w-[220px]`}>
         <option value="">Все статусы</option>
         <optgroup label="Группы">

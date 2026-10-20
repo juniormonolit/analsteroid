@@ -19,6 +19,7 @@ import { DealsListBody, ClientDealsView, type DrillTotals } from './DrilldownDra
 import { DealCard } from './DealCard';
 import { MetricInfoBody } from './MetricInfoBody';
 import type { BreakdownReportContext } from './MetricBreakdownContext';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 
 // Полноэкранный «Разбор метрики» (задача владельца 03.09): все сущности, из
 // которых сложилась цифра, с параметрами выборки. Простая метрика — один список
@@ -588,18 +589,16 @@ export function MetricBreakdownModal({ metric, ctx, onClose }: {
           <div className="flex flex-col gap-1 min-w-0">
             <label className="flex items-center gap-2 min-w-0">
               <span className="text-xs text-[var(--color-text-muted)] shrink-0">Срез</span>
-              <select
+              <SearchSelect
+                ariaLabel="Срез"
+                allLabel={ctx.dimensionType === 'manager' && ctx.totalRowIds.length ? `Итого · ${ctx.totalRowIds.length} строк отчёта` : 'Итого · весь отчёт'}
+                searchPlaceholder="Поиск"
+                options={sliceSupported ? ctx.rows.map(r => ({ value: String(r.id), label: `${DIMENSION_LABEL[ctx.dimensionType]}: ${r.name}` })) : []}
                 value={rowId ?? ''}
-                onChange={e => setRowId(e.target.value === '' ? null : e.target.value)}
+                onChange={v => setRowId(v === '' ? null : v)}
                 disabled={!sliceSupported}
-                title={sliceSupported ? undefined : SLICE_UNSUPPORTED_NOTE}
-                className="min-w-0 flex-1 sm:flex-none sm:max-w-[320px] text-base sm:text-sm min-h-11 sm:min-h-9 px-2 border border-[var(--color-border)] rounded-lg bg-[var(--color-bg-surface)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
-              >
-                <option value="">{ctx.dimensionType === 'manager' && ctx.totalRowIds.length ? `Итого · ${ctx.totalRowIds.length} строк отчёта` : 'Итого · весь отчёт'}</option>
-                {sliceSupported && ctx.rows.map(r => (
-                  <option key={r.id} value={r.id}>{DIMENSION_LABEL[ctx.dimensionType]}: {r.name}</option>
-                ))}
-              </select>
+                className="min-w-0 flex-1 sm:flex-none sm:max-w-[320px] sm:min-h-9"
+              />
             </label>
             {/* Причина блокировки — видимым текстом: на таче title не показывается
                 (на disabled-элементе iOS Safari — вообще никогда), CLAUDE.md п.5. */}

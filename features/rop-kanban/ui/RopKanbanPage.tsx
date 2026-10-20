@@ -8,6 +8,7 @@ import { ExternalLink, RefreshCw, Settings2, Check } from 'lucide-react';
 import { enumParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { AccessDenied } from '@/components/ui/AccessDenied';
 import { Modal } from '@/components/ui/Modal';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 import {
   COLUMNS, CYCLES, CYCLE_ALL, CYCLE_PARAMS, CARDS_PER_MANAGER, columnsForCycle, currentCycleByTime,
   type ColumnDef, type CycleKey, type CycleParam,
@@ -69,14 +70,9 @@ export function RopKanbanPage() {
             </p>
           </div>
           <div className="flex min-w-0 items-center gap-2">
-            <label className="sr-only" htmlFor="rk-manager">Менеджер</label>
-            <select
-              id="rk-manager" value={manager} onChange={e => setManager(e.target.value)}
-              className="min-h-11 min-w-0 max-w-[50vw] rounded-lg bg-[var(--color-bg-surface)] px-3 text-base text-[var(--color-text)] sm:max-w-xs sm:text-sm"
-            >
-              <option value="">Вся зона ответственности</option>
-              {(data?.managers ?? []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
+            <SearchSelect ariaLabel="Менеджер" allLabel="Вся зона ответственности" searchPlaceholder="Поиск менеджера"
+              options={(data?.managers ?? []).map(m => ({ value: m.id, label: m.name }))}
+              value={manager} onChange={setManager} className="w-[50vw] max-w-xs sm:w-64" />
             <button type="button" onClick={() => setSettingsOpen(true)} aria-label="Настроить циклы менеджеров" title="Настроить циклы менеджеров"
               className="tap-target flex min-h-11 min-w-11 items-center justify-center rounded-lg bg-[var(--color-bg-surface)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
               <Settings2 size={16} />

@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import type { CardSegment } from '@/features/manager-card/engine/managerCard';
 import { defaultPeriod, type DateRange } from '@/lib/period';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 
 interface TeamManager {
   managerId: string;
@@ -130,16 +131,13 @@ export function DeptRosterGrid() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {(data?.departmentOptions.length ?? 0) > 1 && (
-            <select
-              value={departmentId ?? data?.selectedDepartmentId ?? 'all'}
-              onChange={e => setDepartmentId(e.target.value)}
-              className="text-xs border border-[var(--color-border)] rounded-lg px-2 py-1.5 bg-[var(--color-bg-surface)] text-[var(--color-text)]"
-            >
-              <option value="all">Все отделы</option>
-              {data?.departmentOptions.map(o => (
-                <option key={o.id} value={o.id}>{o.name}</option>
-              ))}
-            </select>
+            <SearchSelect
+              ariaLabel="Отдел" searchPlaceholder="Поиск отдела"
+              options={[{ value: 'all', label: 'Все отделы' }, ...(data?.departmentOptions ?? []).map(o => ({ value: String(o.id), label: o.name }))]}
+              value={String(departmentId ?? data?.selectedDepartmentId ?? 'all')}
+              onChange={v => setDepartmentId(v)}
+              className="max-w-[260px] text-xs sm:text-xs"
+            />
           )}
           <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
             {(['month', 'all'] as PeriodChoice[]).map(p => (

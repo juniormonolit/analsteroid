@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 
 type Kind = 'category' | 'metric';
 type Period = 'day' | 'week' | 'month';
@@ -328,13 +329,12 @@ function TemplateForm({ value, metrics, onChange, onCancel, onSave, saving, erro
           </Field>
         ) : (
           <Field label="Метрика" hint="Только показатели по сделкам — их умеет считать общий вычислитель.">
-            <select className={fieldCls} value={value.metricId ?? ''} onChange={e => set('metricId', e.target.value)}>
-              {[...byCategory.entries()].map(([cat, list]) => (
-                <optgroup key={cat} label={cat}>
-                  {list.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </optgroup>
-              ))}
-            </select>
+            <SearchSelect
+              ariaLabel="Метрика" placeholder="— выберите метрику —" searchPlaceholder="Поиск метрики или категории"
+              options={[...byCategory.entries()].flatMap(([cat, list]) => list.map(m => ({ value: String(m.id), label: m.name, hint: cat })))}
+              value={String(value.metricId ?? '')} onChange={v => set('metricId', v)}
+              className="w-full" panelClassName="w-[380px]"
+            />
           </Field>
         )}
 
