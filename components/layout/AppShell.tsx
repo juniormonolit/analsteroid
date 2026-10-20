@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -467,6 +467,9 @@ function SidebarBody({
     // «Вход и хвост» (задача владельца 19.10) — с каких сделок клиенты заходят и
     // какую выручку приносят потом; «что будет, если такие сделки убрать».
     { href: '/sales/client-tail', label: 'Вход и хвост', icon: <Waypoints size={18} />, ok: canMore('section.client_tail') },
+    // «Канбан повторных продаж» (решения владельца 20.10) — пул заказчиков по ступеням,
+    // окно 22 дня, стадии повторной воронки, разбор отказов (REPEAT_KANBAN_SPEC.md).
+    { href: '/repeat-kanban', label: 'Канбан повторных', icon: <Columns3 size={18} />, ok: canMore('section.repeat_kanban') },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: canMore('action.deal_chats') },

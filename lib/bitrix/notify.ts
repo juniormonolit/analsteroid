@@ -86,7 +86,7 @@ export const BOT_FUNCTION_KEYS = [
   'invite_link', 'direct_access_link', 'widget_script',
   'daily_moscow_report', 'daily_os_teams_report', 'report_schedules', 'weekly_weather',
   'manager_digest_daily', 'manager_digest_weekly', 'rop_digest', 'advice_feedback', 'scenarios',
-  'gamification', 'deal_chats',
+  'gamification', 'deal_chats', 'repeat_tasks',
   'how_are_we', 'b24_diag_alerts',
   // Сторож систем (ТЗ владельца 28.09): утренняя сводка «всё работает» + срочное
   // сообщение о новой поломке. Включён по умолчанию — выключенный сторож бесполезен.
