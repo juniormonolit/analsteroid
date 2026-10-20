@@ -5,7 +5,7 @@ import { ropScope, type RopScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { fetchManagerCustomers } from '@/features/customers/engine/customers';
 import { buildRepeatBoard } from '@/features/repeat-kanban/engine/board';
-import { analyticsDb } from '@/lib/db/clients';
+import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
 import { decideReview, restoreFromBrak, ReviewError } from '@/features/repeat-kanban/engine/reviews';
@@ -19,15 +19,11 @@ export const dynamic = 'force-dynamic';
 
 const COLUMN_KEYS = new Set<string>(COLUMNS.map(c => c.key));
 
-/** Менеджеры выбранных отделов — та же связка, что у отчётов (DepartmentPicker даёт
- *  bitrix_department_id, дерево уже раскрыто до потомков). */
+/** Менеджеры выбранных отделов. DepartmentPicker отдаёт UUID узлов дерева оргструктуры
+ *  (вместе с потомками) — резолвер тот же, что у «Моей команды» (lib/org/teamRoster). */
 async function managersOfDepartments(deptIds: string[]): Promise<Set<string>> {
-  const r = await analyticsDb().query<{ id: string }>(
-    `SELECT manager_bitrix_user_id::text AS id FROM sa.org_resolved_hierarchy
-      WHERE is_active AND department_id IN (SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1::text[]))`,
-    [deptIds],
-  );
-  return new Set(r.rows.map(x => x.id));
+  const rows = await resolveManagersForDepartments(deptIds);
+  return new Set(rows.map(m => String(m.managerId)));
 }
 
 async function context(session: SessionUser) {
@@ -52,7 +48,7 @@ export async function GET(req: NextRequest) {
   }
   try {
     const ctx = await context(session);
-    const deptIds = (sp.get('dept') ?? '').split(',').filter(x => /^\d{1,10}$/.test(x)).slice(0, 300);
+    const deptIds = (sp.get('dept') ?? '').split(',').filter(x => /^[0-9a-f-]{1,40}$/i.test(x)).slice(0, 300);
     // Отделы сужают зону, но не расширяют: чужой отдел в параметре даст пустой список.
     const inDepts = deptIds.length ? await managersOfDepartments(deptIds) : null;
     const managers = inDepts ? ctx.managers.filter(m => inDepts.has(m.id)) : ctx.managers;
