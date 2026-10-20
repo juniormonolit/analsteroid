@@ -12,6 +12,7 @@ import { AccessDenied } from '@/components/ui/AccessDenied';
 import { Modal } from '@/components/ui/Modal';
 import { Popover } from '@/components/ui/Popover';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import dynamic from 'next/dynamic';
 
@@ -189,13 +190,11 @@ export function RepeatKanbanPage() {
         </header>
 
         {/* Телефон: список вместо семи чипов — чипы занимали весь первый экран. */}
-        <label className="sr-only" htmlFor="rpk-type">Тип клиента</label>
-        <select id="rpk-type" value={type} onChange={e => { setType(e.target.value); setLimits({}); }}
-          className={`${BTN_IDLE} w-full text-base sm:hidden`}>
-          {typeChips.map(t => (
-            <option key={t.key || 'all'} value={t.key}>{t.label} · {rub.format(t.key ? data?.typeCounts[t.key] ?? 0 : totalAll)}</option>
-          ))}
-        </select>
+        <div className="sm:hidden">
+          <SearchSelect ariaLabel="Тип клиента" value={type} onChange={v => { setType(v); setLimits({}); }}
+            options={typeChips.map(t => ({ value: t.key, label: `${t.label} · ${rub.format(t.key ? data?.typeCounts[t.key] ?? 0 : totalAll)}` }))}
+            className={`${type ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+        </div>
         <div className="hidden min-w-0 flex-wrap gap-2 sm:flex" aria-label="Тип клиента">
           {typeChips.map(t => {
             const n = t.key ? data?.typeCounts[t.key] ?? 0 : totalAll;
@@ -216,11 +215,9 @@ export function RepeatKanbanPage() {
             options={TASK_FILTERS.map(f => ({ value: f.value, label: f.label, hint: `${rub.format(data?.taskCounts?.[f.value] ?? 0)} заказчиков · ${f.hint}` }))}
             value={taskF} onChange={v => { setTaskF(v); setLimits({}); }}
             className={`${taskF.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-56`} />
-          <label className="sr-only" htmlFor="rpk-sort">Сортировка</label>
-          <select id="rpk-sort" value={sort} onChange={e => { setSort(e.target.value); setLimits({}); }}
-            className={`${sort !== 'default' ? BTN_ACTIVE : BTN_IDLE} text-base sm:text-sm`}>
-            {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
+          <SearchSelect ariaLabel="Сортировка" value={sort} onChange={v => { setSort(v); setLimits({}); }}
+            options={SORT_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+            className={`${sort !== 'default' ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-auto`} />
           {/* Фильтр пула (владелец 20.10): последняя отгрузка — в выбранных группах, после неё
               ничего («отгружали газобетон, а после газобетона ничего»). Группа сделки — по
               наибольшему (head_group_name). Действует только на колонки пула. */}
@@ -723,9 +720,9 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
         {decision === 'brak' && (
           <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
             Причина
-            <select value={reason} onChange={e => setReason(e.target.value)} className={`${fieldCls} min-h-11`}>
-              {BRAK_REASONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-            </select>
+            <SearchSelect ariaLabel="Причина брака" value={reason} onChange={setReason}
+              options={BRAK_REASONS.map(r => ({ value: r.value, label: r.label }))}
+              className="w-full justify-start bg-[var(--color-bg)]" />
           </label>
         )}
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">

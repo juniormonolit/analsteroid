@@ -11,8 +11,8 @@ import { Popover } from '@/components/ui/Popover';
  * и подсказке (отдел), стрелки ↑/↓ + Enter, Esc закрывает. Панель — Radix Popover:
  * сам прижимается к краям экрана, на телефоне не уезжает.
  *
- * Правило проекта (CLAUDE.md, адаптивность п.14): список людей/отделов/проектов и любой
- * динамический список длиннее ~10 пунктов — только этот компонент, не голый <select>.
+ * Правило проекта (CLAUDE.md, адаптивность п.14): НИКАКИХ нативных <select> в интерфейсе —
+ * любой выбор из списка, и длинный, и короткий (тогда без поиска), — этот компонент.
  */
 export interface SearchSelectOption {
   value: string;
@@ -28,6 +28,7 @@ export function SearchSelect({
   placeholder = 'Выберите…',
   allLabel,
   searchPlaceholder = 'Поиск…',
+  searchable,
   className,
   panelClassName,
   ariaLabel,
@@ -41,6 +42,9 @@ export function SearchSelect({
   /** Пункт «все» с пустым значением (''). Не задан — пустого пункта нет. */
   allLabel?: string;
   searchPlaceholder?: string;
+  /** Поле поиска. По умолчанию — только если вариантов больше 8: короткий список (сортировка,
+   *  причина) — тот же красивый выпадающий, без лишнего поиска. */
+  searchable?: boolean;
   /** Классы кнопки-триггера (ширина и т.п.). */
   className?: string;
   panelClassName?: string;
@@ -89,6 +93,7 @@ export function SearchSelect({
       }
     >
       <div className="flex flex-col">
+        {(searchable ?? options.length > 8) && (
         <label className="flex items-center gap-2 border-b border-[var(--color-border)] px-3">
           <Search size={14} className="shrink-0 text-[var(--color-text-muted)]" />
           <input
@@ -109,6 +114,7 @@ export function SearchSelect({
             </button>
           )}
         </label>
+        )}
         <div ref={listRef} role="listbox" className="max-h-[min(60vh,420px)] overflow-y-auto p-1">
           {items.map((o, i) => {
             const isSel = o.value === value;
