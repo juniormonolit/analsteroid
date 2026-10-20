@@ -87,6 +87,8 @@ export interface KanbanCard {
   review: ReviewInfo | null;
   /** Брак: отметка no_call (причина/комментарий/кто). */
   brak: { reason: string | null; comment: string | null; by: string; at: string } | null;
+  /** Скрыт из пула до даты (отметка snooze): комментарий обязателен. */
+  hidden: { until: string; comment: string | null; by: string; at: string } | null;
   /** Отказ до трёх недель контакта — красная плашка на разборе. */
   lostEarly: boolean;
   sleeping: boolean;
@@ -133,6 +135,7 @@ export interface BoardKpi {
   tasksOverdue: number; tasksControl: number; noTaskInWork: number;
   review: number; reviewEarly: number;
   brak: number;
+  hidden: number;
 }
 
 export interface RepeatBoard {
@@ -147,6 +150,8 @@ export interface RepeatBoard {
   /** Сколько заказчиков в каждом состоянии задачи (до фильтра по задачам). */
   taskCounts: Record<string, number>;
   kpi: BoardKpi | null;
+  /** Битрикс-id смотрящего — менеджеру «Скрыть из пула» доступно по своим заказчикам. */
+  viewerBitrixId?: string | null;
   notice: string | null;
   canManage: boolean;
 }
@@ -400,7 +405,13 @@ export async function buildRepeatBoard(opts: {
       ? Math.floor((now - lastDelMs) / DAY_MS) : null;
     // Колонка.
     let col: ColumnKey;
+    // «Скрыть из пула» действует, пока срок не вышел и пока нет открытой сделки: взяли в
+    // работу — заказчик в своей рабочей колонке, а не в «Скрытых».
+    const todayMsk = new Date(now + 3 * 3600_000).toISOString().slice(0, 10);
+    const hiddenNow = mark?.kind === 'snooze' && !!mark.snoozeUntil && mark.snoozeUntil >= todayMsk
+      && !(current && !LOST_STAGES.has(current.stageId)) && !r.hasOpenOrder;
     if (mark?.kind === 'no_call') col = 'brak';
+    else if (hiddenNow) col = 'hidden';
     else if (current && LOST_STAGES.has(current.stageId)) {
       const lostMs = current.lostAt ? new Date(current.lostAt).getTime() : new Date(current.createdAt).getTime();
       const onReview = lostMs >= new Date(REVIEW_SINCE).getTime() || task !== null;
@@ -413,7 +424,7 @@ export async function buildRepeatBoard(opts: {
     } else if (r.hasOpenOrder) col = 'st_sold';
     else col = poolColumn(r.purchasesDelivered, freshDays);
 
-    const inPool = col.startsWith('pool') || col === 'brak';
+    const inPool = col.startsWith('pool') || col === 'brak' || col === 'hidden';
     const typeKey = profileType ?? 'none';
     typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
     if (opts.typeFilter && opts.typeFilter !== typeKey) continue;
@@ -440,6 +451,7 @@ export async function buildRepeatBoard(opts: {
       calls: inPool ? [] : callsInWindow.slice(0, 10), missedCalls: inPool ? 0 : callsInWindow.filter(c => c.missed).length,
       task, review,
       brak: mark?.kind === 'no_call' ? { reason: mark.reason, comment: mark.comment, by: mark.createdBy, at: mark.createdAt } : null,
+      hidden: hiddenNow && mark ? { until: mark.snoozeUntil!, comment: mark.comment, by: mark.createdBy, at: mark.createdAt } : null,
       // Закрыли в отказ, не дозвонившись и не сделав трёх попыток — нарушение правила.
       lostEarly: col === 'review' && !(win?.reached) && (win?.count ?? 0) < TOUCHES,
       sleeping: r.sleeping, atRisk: r.atRisk,
@@ -479,6 +491,8 @@ export async function buildRepeatBoard(opts: {
     } else if (def.key === 'pool_hot') {
       // Срочно: сначала те, у кого окно закрывается раньше (больше дней с отгрузки).
       list.sort((a, b) => (b.freshDays ?? 0) - (a.freshDays ?? 0) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
+    } else if (def.key === 'hidden') {
+      list.sort((a, b) => (a.hidden?.until ?? '').localeCompare(b.hidden?.until ?? ''));
     } else if (def.key === 'review' || def.key === 'brak') {
       const at = (c: KanbanCard) => c.brak?.at ?? c.deal?.lostAt ?? '';
       list.sort((a, b) => at(b).localeCompare(at(a)));
@@ -528,6 +542,7 @@ export async function buildRepeatBoard(opts: {
     noTaskInWork: work.filter(c => !openTask(c)).length,
     review: kpiBuckets.get('review')!.length, reviewEarly: kpiBuckets.get('review')!.filter(c => c.lostEarly).length,
     brak: kpiBuckets.get('brak')!.length,
+    hidden: kpiBuckets.get('hidden')!.length,
   };
   return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null };
 }

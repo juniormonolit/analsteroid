@@ -61,3 +61,59 @@ export async function restoreFromBrak(clientKey: string, session: SessionUser): 
     [clientKey, session.displayName, session.id],
   ).catch(() => {});
 }
+
+/** «Сразу в брак» (владелец 20.10): РОП видит, что заказчик безнадёжен (10 тыс. штукатурки,
+ *  подвели) — брак без разбора отказа. Та же отметка no_call, что у брака по разбору. */
+export async function markBrakNow(input: { clientKey: string; reason: string; comment: string | null; session: SessionUser }): Promise<void> {
+  if (!BRAK_REASONS.some(r => r.value === input.reason)) throw new ReviewError('Укажите причину брака');
+  const reason = input.reason as BrakReason;
+  const comment = input.comment?.trim().slice(0, 1000) || null;
+  const note = `Сразу в брак (канбан повторных): ${NO_CALL_REASON_LABELS[reason]}${comment ? ` — ${comment}` : ''}`.slice(0, 500);
+  const db = systemDb();
+  await db.query(
+    `INSERT INTO customer_marks (client_key, kind, snooze_until, reason, comment, created_by, created_by_user_id)
+     VALUES ($1, 'no_call', NULL, $2, $3, $4, $5)
+     ON CONFLICT (client_key) DO UPDATE SET kind = 'no_call', snooze_until = NULL, reason = EXCLUDED.reason,
+       comment = EXCLUDED.comment, created_by = EXCLUDED.created_by, created_by_user_id = EXCLUDED.created_by_user_id, created_at = now()`,
+    [input.clientKey, reason, note, input.session.displayName, input.session.id],
+  );
+  await db.query(
+    `INSERT INTO customer_mark_history (client_key, action, snooze_until, reason, comment, created_by, created_by_user_id)
+     VALUES ($1, 'no_call', NULL, $2, $3, $4, $5)`,
+    [input.clientKey, reason, note, input.session.displayName, input.session.id],
+  ).catch(() => {});
+}
+
+/** «Скрыть из пула» до даты с обязательным комментарием («вернётся к стройке весной») —
+ *  колонка «Скрытые»; после даты заказчик сам возвращается в пул. Отметка snooze. */
+export async function hideFromPool(input: { clientKey: string; until: string; comment: string; session: SessionUser }): Promise<void> {
+  const comment = input.comment.trim().slice(0, 1000);
+  if (comment.length < 3) throw new ReviewError('Напишите, почему скрываете');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.until)) throw new ReviewError('Укажите дату');
+  const today = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
+  if (input.until <= today) throw new ReviewError('Дата должна быть в будущем');
+  const db = systemDb();
+  await db.query(
+    `INSERT INTO customer_marks (client_key, kind, snooze_until, reason, comment, created_by, created_by_user_id)
+     VALUES ($1, 'snooze', $2::date, NULL, $3, $4, $5)
+     ON CONFLICT (client_key) DO UPDATE SET kind = 'snooze', snooze_until = EXCLUDED.snooze_until, reason = NULL,
+       comment = EXCLUDED.comment, created_by = EXCLUDED.created_by, created_by_user_id = EXCLUDED.created_by_user_id, created_at = now()`,
+    [input.clientKey, input.until, comment, input.session.displayName, input.session.id],
+  );
+  await db.query(
+    `INSERT INTO customer_mark_history (client_key, action, snooze_until, reason, comment, created_by, created_by_user_id)
+     VALUES ($1, 'snooze', $2::date, NULL, $3, $4, $5)`,
+    [input.clientKey, input.until, comment, input.session.displayName, input.session.id],
+  ).catch(() => {});
+}
+
+/** Вернуть скрытого в пул раньше срока. */
+export async function unhide(clientKey: string, session: SessionUser): Promise<void> {
+  const db = systemDb();
+  await db.query(`DELETE FROM customer_marks WHERE client_key = $1 AND kind = 'snooze'`, [clientKey]);
+  await db.query(
+    `INSERT INTO customer_mark_history (client_key, action, snooze_until, reason, comment, created_by, created_by_user_id)
+     VALUES ($1, 'clear', NULL, NULL, 'Возвращён в пул из «Скрытых» (канбан повторных)', $2, $3)`,
+    [clientKey, session.displayName, session.id],
+  ).catch(() => {});
+}

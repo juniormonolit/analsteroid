@@ -61,6 +61,7 @@ const GROUPS: { key: ColumnGroup; title: string; hint: string }[] = [
   { key: 'touch', title: 'Дозвон', hint: `Взят в работу → до ${TOUCHES} попыток связаться (по дням)` },
   { key: 'stage', title: 'Повторная воронка', hint: 'Сделка в работе' },
   { key: 'review', title: 'Разбор', hint: 'Отказы и брак' },
+  { key: 'hidden', title: 'Скрытые', hint: 'Скрыты из пула до даты' },
 ];
 
 class ApiError extends Error { constructor(public status: number, message: string) { super(message); } }
@@ -86,6 +87,8 @@ export function RepeatKanbanPage() {
   const [openDeal, setOpenDeal] = useState<number | null>(null);
   const [taskFor, setTaskFor] = useState<KanbanCard | null>(null);
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
+  const [hideFor, setHideFor] = useState<KanbanCard | null>(null);
+  const [brakFor, setBrakFor] = useState<KanbanCard | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
     queryKey: ['repeat-kanban', mgrs, type, depts, pg, taskF, sort, limits],
@@ -236,7 +239,9 @@ export function RepeatKanbanPage() {
           ))}
         </nav>
 
-        {data?.kpi && <KpiStrip k={data.kpi} />}
+        {data?.kpi && <KpiStrip k={data.kpi} activeTask={taskF.length === 1 ? taskF[0] : null}
+          onTask={tb => { const on = taskF.length === 1 && taskF[0] === tb; setTaskF(on ? [] : [tb]); setSort(on ? 'default' : 'task'); setLimits({}); }}
+          onJump={jump} />}
 
         {error && error.status !== 403 && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">{error.message}</div>}
         {data?.notice && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">{data.notice}</div>}
@@ -258,6 +263,12 @@ export function RepeatKanbanPage() {
                     <Column key={def.key} def={def} col={byKey.get(def.key)} canManage={!!data?.canManage}
                       onMore={() => setLimits(l => ({ ...l, [def.key]: (l[def.key] ?? PAGE) + PAGE }))}
                       onOpen={setOpenCard} onTask={setTaskFor} onReview={setReviewFor} onDeal={setOpenDeal}
+                      viewerId={data?.viewerBitrixId ?? null}
+                      onAct={async (a, c) => {
+                        if (a === 'hide') setHideFor(c);
+                        else if (a === 'brak_now') setBrakFor(c);
+                        else if (confirm(`Вернуть «${cardName(c)}» в пул раньше срока?`)) { await post({ action: 'unhide', clientKey: c.clientKey, managerId: c.managerId }).catch(e => alert(e.message)); refresh(); }
+                      }}
                       onUnbrak={async c => { if (confirm(`Снять брак с «${cardName(c)}»? Заказчик вернётся в пул.`)) { await post({ action: 'unbrak', clientKey: c.clientKey, managerId: c.managerId }).catch(e => alert(e.message)); refresh(); } }}
                     />
                   ))}
@@ -291,12 +302,15 @@ export function RepeatKanbanPage() {
       {openDeal !== null && <DealCard dealId={openDeal} onClose={() => setOpenDeal(null)} />}
       {taskFor && <TaskModal card={taskFor} onClose={() => setTaskFor(null)} onSaved={refresh} />}
       {reviewFor && <ReviewModal card={reviewFor} onClose={() => setReviewFor(null)} onSaved={refresh} />}
+      {hideFor && <HideModal card={hideFor} onClose={() => setHideFor(null)} onSaved={refresh} />}
+      {brakFor && <BrakNowModal card={brakFor} onClose={() => setBrakFor(null)} onSaved={refresh} />}
     </div>
   );
 }
 
-function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbrak, onDeal }: {
-  def: ColumnDef; col: KanbanColumn | undefined; canManage: boolean;
+function Column({ def, col, canManage, viewerId, onMore, onOpen, onTask, onReview, onUnbrak, onDeal, onAct }: {
+  def: ColumnDef; col: KanbanColumn | undefined; canManage: boolean; viewerId: string | null;
+  onAct: (a: CardAction, c: KanbanCard) => void;
   onMore: () => void; onOpen: (c: KanbanCard) => void; onTask: (c: KanbanCard) => void;
   onReview: (c: KanbanCard) => void; onUnbrak: (c: KanbanCard) => void; onDeal: (dealId: number) => void;
 }) {
@@ -317,7 +331,8 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
         {col?.cards.map(c => (
           <Card key={c.clientKey} c={c} col={def.key} canManage={canManage}
-            onOpen={() => onOpen(c)} onTask={() => onTask(c)} onReview={() => onReview(c)} onUnbrak={() => onUnbrak(c)} onDeal={onDeal} />
+            onOpen={() => onOpen(c)} onTask={() => onTask(c)} onReview={() => onReview(c)} onUnbrak={() => onUnbrak(c)} onDeal={onDeal}
+            canHide={canManage || (!!viewerId && c.managerId === viewerId)} onAct={a => onAct(a, c)} />
         ))}
         {col && col.total > col.cards.length && (
           <button type="button" onClick={onMore}
@@ -344,19 +359,25 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
 
 /** Показатели канбана для РОПа — снимок текущей доски (аудит Fable 20.10). Исторические
  *  (скорость взятия из пула, конверсия пул → продано за 90 дн.) — в BACKLOG. */
-function KpiStrip({ k }: { k: BoardKpi }) {
+function KpiStrip({ k, activeTask, onTask, onJump }: {
+  k: BoardKpi; activeTask: string | null;
+  /** Клик по плитке задач — фильтр этого состояния + сортировка «по задачам» (владелец 20.10). */
+  onTask: (tb: 'control' | 'none' | 'overdue') => void;
+  /** Клик по плитке группы — перемотка доски к ней. */
+  onJump: (g: ColumnGroup) => void;
+}) {
   // Одна плитка — одна цифра крупно + подпись мелко (владелец 20.10: «показатели с
   // диапазонами — хуета»: «414 · 36,8 млн» читалось как диапазон).
   const pctOf = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '—');
-  const tiles: { label: string; value: string; sub?: string; hint: string; tone?: 'neg' | 'warn' }[] = [
-    { label: 'В пуле', value: rub.format(k.pool), sub: 'заказчиков', hint: 'Без открытой повторной сделки — кого можно брать в работу' },
-    { label: 'В дозвоне', value: rub.format(k.inWork), sub: `на ${moneyShort(k.inWorkPotential)}`, hint: 'Взяты в работу и в попытках связаться' },
-    { label: 'Дозвон', value: pctOf(k.reached, k.inWork), sub: `${rub.format(k.reached)} из ${rub.format(k.inWork)}`, hint: 'Среди тех, кто в дозвоне: был разговор дольше 20 с или ручной контакт' },
-    { label: 'В воронке', value: rub.format(k.funnel), sub: `на ${moneyShort(k.funnelSum)}`, hint: 'Повторные сделки в работе и их сумма' },
-    { label: 'Просрочено', value: rub.format(k.tasksOverdue), sub: 'задач', hint: 'Открытые задачи проекта «Повторные продажи» с прошедшим сроком', tone: k.tasksOverdue ? 'neg' : undefined },
-    { label: 'Ждут приёмки', value: rub.format(k.tasksControl), sub: 'задач', hint: 'Менеджер сдал задачу, постановщик не принял', tone: k.tasksControl ? 'warn' : undefined },
-    { label: 'Без задачи', value: rub.format(k.noTaskInWork), sub: 'сделок', hint: 'В дозвоне и воронке, по которым нет открытой задачи', tone: k.noTaskInWork ? 'warn' : undefined },
-    { label: 'Отказы', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} рано закрыты` : 'на проверке', hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
+  const tiles: { label: string; value: string; sub?: string; hint: string; tone?: 'neg' | 'warn'; task?: 'control' | 'none' | 'overdue'; jump?: ColumnGroup }[] = [
+    { label: 'В пуле', jump: 'pool', value: rub.format(k.pool), sub: 'заказчиков', hint: 'Без открытой повторной сделки — кого можно брать в работу' },
+    { label: 'В дозвоне', jump: 'touch', value: rub.format(k.inWork), sub: `на ${moneyShort(k.inWorkPotential)}`, hint: 'Взяты в работу и в попытках связаться' },
+    { label: 'Дозвон', jump: 'touch', value: pctOf(k.reached, k.inWork), sub: `${rub.format(k.reached)} из ${rub.format(k.inWork)}`, hint: 'Среди тех, кто в дозвоне: был разговор дольше 20 с или ручной контакт' },
+    { label: 'В воронке', jump: 'stage', value: rub.format(k.funnel), sub: `на ${moneyShort(k.funnelSum)}`, hint: 'Повторные сделки в работе и их сумма' },
+    { label: 'Просрочено', task: 'overdue', value: rub.format(k.tasksOverdue), sub: 'задач', hint: 'Открытые задачи проекта «Повторные продажи» с прошедшим сроком', tone: k.tasksOverdue ? 'neg' : undefined },
+    { label: 'Ждут приёмки', task: 'control', value: rub.format(k.tasksControl), sub: 'задач', hint: 'Менеджер сдал задачу, постановщик не принял', tone: k.tasksControl ? 'warn' : undefined },
+    { label: 'Без задачи', task: 'none', value: rub.format(k.noTaskInWork), sub: 'сделок', hint: 'В дозвоне и воронке, по которым нет открытой задачи', tone: k.noTaskInWork ? 'warn' : undefined },
+    { label: 'Отказы', jump: 'review', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} рано закрыты` : 'на проверке', hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
   ];
   return (
     <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-stretch">
@@ -374,12 +395,13 @@ function KpiStrip({ k }: { k: BoardKpi }) {
           // Жёсткая сетка из трёх строк фиксированной высоты — подпись / цифра / пояснение:
           // цифры всех плиток на одной линии, сколько бы строк ни занял текст (правка 20.10:
           // «все цифры прыгают»). Пояснение — одна строка с многоточием, полный текст в title.
-          <div key={t.label} title={t.sub ? `${t.hint}\n${t.sub}` : t.hint}
-            className="grid min-w-0 grid-rows-[16px_30px_16px] content-center items-center justify-items-center gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 py-2 text-center">
+          <button type="button" key={t.label} title={`${t.hint}${t.sub ? `\n${t.sub}` : ''}\n${t.task ? (activeTask === t.task ? 'Нажмите, чтобы снять фильтр' : 'Нажмите — показать только их') : 'Нажмите — перейти к колонкам'}`}
+            onClick={() => (t.task ? onTask(t.task) : t.jump && onJump(t.jump))}
+            className={`grid min-w-0 grid-rows-[16px_30px_16px] content-center items-center justify-items-center gap-1 rounded-xl border px-2 py-2 text-center transition-colors hover:bg-[var(--color-bg-hover)] ${t.task && activeTask === t.task ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
             <div className="w-full truncate text-[11.5px] font-medium leading-4 text-[var(--color-text-muted)]">{t.label}</div>
             <div className="text-[24px] font-bold leading-[30px] tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
             <div className="w-full truncate text-[11px] leading-4 text-[var(--color-text-muted)]">{t.sub ?? '\u00a0'}</div>
-          </div>
+          </button>
         ))}
       </div>
     </div>
@@ -464,8 +486,13 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   return a;
 }
 
-function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDeal }: {
+type CardAction = 'hide' | 'brak_now' | 'unhide';
+
+function Card({ c, col, canManage, canHide, onOpen, onTask, onReview, onUnbrak, onDeal, onAct }: {
   c: KanbanCard; col: ColumnKey; canManage: boolean;
+  /** «Скрыть из пула» — РОП или менеджер по своему заказчику. */
+  canHide: boolean;
+  onAct: (a: CardAction) => void;
   onOpen: () => void; onTask: () => void; onReview: () => void; onUnbrak: () => void;
   onDeal: (dealId: number) => void;
 }) {
@@ -490,7 +517,6 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDeal }:
       {/* 2. Деньги. */}
       <div className="min-w-0 tabular-nums">
         <div className="whitespace-nowrap">{c.purchases}{'\u00a0'}{plural(c.purchases, 'отгрузка', 'отгрузки', 'отгрузок')} на {moneyShort(c.sumDelivered)}</div>
-        {c.potentialInfo && <div className="whitespace-nowrap"><PotentialBadge c={c} /></div>}
       </div>
 
       {/* 3. Последняя отгрузка — две строки: «Отгрузка дд.мм.гг · N дн. назад» (без переноса,
@@ -564,6 +590,13 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDeal }:
         <div className="text-[11px] text-[#b45f06]">Возвращено менеджеру {fmtDay(c.review.decidedAt)} · {c.review.decidedBy}</div>
       )}
       {c.brak && <div className="text-[11px] text-[var(--color-negative)]">{c.brak.comment ?? 'Брак'} · {c.brak.by}, {fmtDay(c.brak.at)}</div>}
+      {c.hidden && (
+        <div className="rounded-md bg-[var(--color-bg-surface)] px-2 py-1 text-[11.5px]">
+          <div className="font-semibold text-[var(--color-text)]">Скрыт до {c.hidden.until.split('-').reverse().join('.')}</div>
+          {c.hidden.comment && <div className="text-[var(--color-text-secondary)]">«{c.hidden.comment}»</div>}
+          <div className="text-[var(--color-text-muted)]">{c.hidden.by}, {fmtDay(c.hidden.at)}</div>
+        </div>
+      )}
 
       {/* Действие. */}
       {/* Кнопки — на всю ширину карточки (правка владельца 20.10). */}
@@ -578,6 +611,29 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDeal }:
           <button type="button" onClick={onReview}
             className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[var(--color-accent)] px-2.5 text-xs font-medium text-white hover:opacity-90">
             Разобрать отказ
+          </button>
+        )}
+        {/* «Скрыть из пула» и «Сразу в брак» (владелец 20.10). Вторичные — контуром, в один ряд. */}
+        {(col.startsWith('pool') || col.startsWith('touch') || col.startsWith('st_')) && (canHide || canManage) && (
+          <div className="flex gap-2">
+            {col.startsWith('pool') && canHide && (
+              <button type="button" onClick={() => onAct('hide')}
+                className="inline-flex min-h-11 flex-1 items-center justify-center rounded-md border border-[var(--color-border)] px-2 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
+                Скрыть из пула
+              </button>
+            )}
+            {canManage && col !== 'st_sold' && (
+              <button type="button" onClick={() => onAct('brak_now')}
+                className="inline-flex min-h-11 flex-1 items-center justify-center rounded-md border border-[#ea9999] px-2 text-xs text-[#990000] hover:bg-[#f4cccc]">
+                Сразу в брак
+              </button>
+            )}
+          </div>
+        )}
+        {col === 'hidden' && canHide && (
+          <button type="button" onClick={() => onAct('unhide')}
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
+            Вернуть в пул
           </button>
         )}
         {canManage && col === 'brak' && (
@@ -657,6 +713,88 @@ function TaskModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () =
           </div>
         </div>
       )}
+    </Modal>
+  );
+}
+
+function HideModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () => void; onSaved: () => void }) {
+  const plus = (m: number) => { const d = new Date(Date.now() + 3 * 3600_000); d.setUTCMonth(d.getUTCMonth() + m); return d.toISOString().slice(0, 10); };
+  const nextMarch = () => { const d = new Date(Date.now() + 3 * 3600_000); const y = d.getUTCMonth() >= 2 ? d.getUTCFullYear() + 1 : d.getUTCFullYear(); return `${y}-03-01`; };
+  const presets = [
+    { label: '1 месяц', v: plus(1) }, { label: '3 месяца', v: plus(3) },
+    { label: 'До марта', v: nextMarch() }, { label: 'Полгода', v: plus(6) },
+  ];
+  const [until, setUntil] = useState(presets[1].v);
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try { await post({ action: 'hide', clientKey: card.clientKey, managerId: card.managerId, until, comment }); onSaved(); onClose(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setBusy(false);
+  };
+  return (
+    <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Скрыть из пула · ${cardName(card)}`} desktopWidth="sm:max-w-md">
+      <div className="flex flex-col gap-3 text-sm">
+        <div className="text-[var(--color-text-secondary)]">Заказчик уйдёт в колонку «Скрытые» и сам вернётся в пул в выбранный день.</div>
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[var(--color-text-secondary)]">До какого числа</span>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {presets.map(p => (
+              <button key={p.label} type="button" onClick={() => setUntil(p.v)}
+                className={until === p.v ? BTN_ACTIVE : BTN_IDLE}>{p.label}</button>
+            ))}
+          </div>
+          <input type="date" value={until} min={plus(0)} onChange={e => setUntil(e.target.value)} className={`${fieldCls} min-h-11`} />
+        </div>
+        <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+          Почему скрываем (обязательно)
+          <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} autoFocus
+            placeholder="Вернётся к стройке в следующем году" className={fieldCls} />
+        </label>
+        {err && <p className="text-[var(--color-negative)]">{err}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={busy || comment.trim().length < 3 || !until} onClick={submit}
+            className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">{busy ? 'Скрываю…' : 'Скрыть'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function BrakNowModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () => void; onSaved: () => void }) {
+  const [reason, setReason] = useState<string>('nothing_needed');
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    setBusy(true); setErr(null);
+    try { await post({ action: 'brak_now', clientKey: card.clientKey, managerId: card.managerId, reason, comment }); onSaved(); onClose(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setBusy(false);
+  };
+  return (
+    <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Сразу в брак · ${cardName(card)}`} desktopWidth="sm:max-w-md">
+      <div className="flex flex-col gap-3 text-sm">
+        <div className="text-[var(--color-text-secondary)]">Заказчик уйдёт в «Брак» без разбора отказа. Вернуть можно кнопкой «Снять брак».</div>
+        <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+          Причина
+          <SearchSelect ariaLabel="Причина брака" value={reason} onChange={setReason}
+            options={BRAK_REASONS.map(r => ({ value: r.value, label: r.label }))} className="w-full justify-start bg-[var(--color-bg)]" />
+        </label>
+        <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+          Комментарий
+          <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Подвели с отгрузкой, разовая штукатурка на 10 тыс." className={fieldCls} />
+        </label>
+        {err && <p className="text-[var(--color-negative)]">{err}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={busy} onClick={submit}
+            className="min-h-11 rounded-lg bg-[var(--color-negative)] px-4 text-white disabled:opacity-50">{busy ? 'Сохраняю…' : 'В брак'}</button>
+        </div>
+      </div>
     </Modal>
   );
 }

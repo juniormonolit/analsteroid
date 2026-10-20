@@ -26,9 +26,9 @@ export type ColumnKey =
   | 'pool_hot' | 'pool_1' | 'pool_2_4' | 'pool_5'
   | 'touch_0' | 'touch_1' | 'touch_2' | 'touch_3'
   | 'st_called' | 'st_supply' | 'st_offer' | 'st_cheaper' | 'st_reserved' | 'st_sold'
-  | 'review' | 'brak';
+  | 'review' | 'brak' | 'hidden';
 
-export type ColumnGroup = 'pool' | 'touch' | 'stage' | 'review';
+export type ColumnGroup = 'pool' | 'touch' | 'stage' | 'review' | 'hidden';
 
 export interface ColumnDef {
   key: ColumnKey;
@@ -55,7 +55,8 @@ export const COLUMNS: readonly ColumnDef[] = [
   { key: 'st_reserved', group: 'stage', title: 'Бронь', hint: 'Забронировано / подтверждённая бронь / счёт', stages: ['C2:EXECUTING', 'C2:5', 'C3:EXECUTING', 'C3:FINAL_INVOICE'] },
   { key: 'st_sold', group: 'stage', title: 'Продано', hint: 'Продано, ждёт отгрузки', stages: ['C2:FINAL_INVOICE', 'C3:1'] },
   { key: 'review', group: 'review', title: 'Отказ на проверке', hint: 'Сделку закрыли в отказ — РОП подтверждает брак или возвращает' },
-  { key: 'brak', group: 'review', title: 'Брак', hint: 'Отказ подтверждён РОПом' },
+  { key: 'brak', group: 'review', title: 'Брак', hint: 'Отказ подтверждён РОПом или «сразу в брак»' },
+  { key: 'hidden', group: 'hidden', title: 'Скрытые', hint: 'Скрыты из пула до даты с комментарием; после даты — сами вернутся в пул' },
 ];
 
 export const NEW_STAGES: ReadonlySet<string> = new Set(['C2:NEW', 'C3:NEW']);

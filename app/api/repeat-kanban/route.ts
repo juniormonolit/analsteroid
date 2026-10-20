@@ -12,7 +12,7 @@ import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
-import { decideReview, restoreFromBrak, ReviewError } from '@/features/repeat-kanban/engine/reviews';
+import { decideReview, hideFromPool, markBrakNow, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
 // Гейт — section.repeat_kanban (ролям продаж, миграция 230). Зона — ropScope() сессии,
@@ -95,7 +95,7 @@ export async function GET(req: NextRequest) {
       taskFilter: (sp.get('tasks') ?? '').split(',').filter((x): x is TaskBucket => (TASK_BUCKETS as readonly string[]).includes(x)),
       sort: (SORTS as readonly string[]).includes(sp.get('sort') ?? '') ? sp.get('sort') as BoardSort : 'default',
     });
-    return NextResponse.json(board, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ...board, viewerBitrixId: session.bitrixUserId }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[repeat-kanban]', e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось собрать канбан' }, { status: 500 });
@@ -120,6 +120,19 @@ export async function POST(req: NextRequest) {
   try {
     // ── Действия РОПа ──────────────────────────────────────────────────────
     const { scope, managers, canManage } = await context(session);
+    // «Скрыть из пула» / «Вернуть в пул» — и менеджеру по СВОИМ заказчикам (владелец 20.10).
+    if (body.action === 'hide' || body.action === 'unhide') {
+      const ck = String(body.clientKey ?? '');
+      const mid = String(body.managerId ?? '');
+      const allowed = KEY_RE.test(ck) && (canManage ? managers.some(m => m.id === mid) : mid === session.bitrixUserId);
+      if (!allowed || !(await ownsClient(mid, ck))) return NextResponse.json({ error: 'Заказчик не в вашей зоне' }, { status: 403 });
+      if (body.action === 'hide') {
+        await hideFromPool({ clientKey: ck, until: String(body.until ?? ''), comment: String(body.comment ?? ''), session });
+      } else {
+        await unhide(ck, session);
+      }
+      return NextResponse.json({ ok: true });
+    }
     if (!canManage) return NextResponse.json({ error: 'Действие доступно РОПу' }, { status: 403 });
     const clientKey = String(body.clientKey ?? '');
     const managerId = String(body.managerId ?? '');
@@ -153,6 +166,11 @@ export async function POST(req: NextRequest) {
         comment: typeof body.comment === 'string' ? body.comment : null,
         touchesDone: Number(body.touchesDone) || 0, session,
       });
+      return NextResponse.json({ ok: true });
+    }
+
+    if (body.action === 'brak_now') {
+      await markBrakNow({ clientKey, reason: String(body.reason ?? ''), comment: typeof body.comment === 'string' ? body.comment : null, session });
       return NextResponse.json({ ok: true });
     }
 
