@@ -4,21 +4,31 @@ import { hasPerm } from '@/lib/auth/perms';
 import { ropScope, type RopScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { fetchManagerCustomers } from '@/features/customers/engine/customers';
-import { getCachedClientNames } from '@/lib/bitrix/clientNames';
 import { buildRepeatBoard } from '@/features/repeat-kanban/engine/board';
+import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
-import { createTask, getTask, markTaskDone, markTaskRead } from '@/features/repeat-kanban/engine/tasks';
-import { createRepeatDeal, DealCreateError } from '@/features/repeat-kanban/engine/createDeal';
+import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
 import { decideReview, restoreFromBrak, ReviewError } from '@/features/repeat-kanban/engine/reviews';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
 // Гейт — section.repeat_kanban (ролям продаж, миграция 230). Зона — ropScope() сессии,
 // как у «Канбана РОПа»: РОП — свои отделы с поддеревом, менеджер — только себя.
 // Действия РОПа (задача, сделка, разбор) — только над менеджерами своей зоны и только
-// по заказчикам этого менеджера; «прочитано/выполнено» ставит только исполнитель.
+// по заказчикам этого менеджера. Задачи — в Битриксе (проект 118), закрывает их постановщик.
 export const dynamic = 'force-dynamic';
 
 const COLUMN_KEYS = new Set<string>(COLUMNS.map(c => c.key));
+
+/** Менеджеры выбранных отделов — та же связка, что у отчётов (DepartmentPicker даёт
+ *  bitrix_department_id, дерево уже раскрыто до потомков). */
+async function managersOfDepartments(deptIds: string[]): Promise<Set<string>> {
+  const r = await analyticsDb().query<{ id: string }>(
+    `SELECT manager_bitrix_user_id::text AS id FROM sa.org_resolved_hierarchy
+      WHERE is_active AND department_id IN (SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1::text[]))`,
+    [deptIds],
+  );
+  return new Set(r.rows.map(x => x.id));
+}
 
 async function context(session: SessionUser) {
   const scope: RopScope = await ropScope(session);
@@ -41,7 +51,12 @@ export async function GET(req: NextRequest) {
     if (k.startsWith('n_') && COLUMN_KEYS.has(k.slice(2)) && /^\d{1,4}$/.test(v)) limits[k.slice(2) as ColumnKey] = Number(v);
   }
   try {
-    const { managers, canManage } = await context(session);
+    const ctx = await context(session);
+    const deptIds = (sp.get('dept') ?? '').split(',').filter(x => /^\d{1,10}$/.test(x)).slice(0, 300);
+    // Отделы сужают зону, но не расширяют: чужой отдел в параметре даст пустой список.
+    const inDepts = deptIds.length ? await managersOfDepartments(deptIds) : null;
+    const managers = inDepts ? ctx.managers.filter(m => inDepts.has(m.id)) : ctx.managers;
+    const canManage = ctx.canManage;
     const selected = rawMgr && managers.some(m => m.id === rawMgr) ? rawMgr : null;
     const board = await buildRepeatBoard({
       managers, selectedManager: selected, typeFilter: type && /^[a-z_]{2,30}$/.test(type) ? type : null, limits, canManage,
@@ -69,23 +84,8 @@ export async function POST(req: NextRequest) {
   if (!body || typeof body.action !== 'string') return NextResponse.json({ error: 'Некорректный запрос' }, { status: 400 });
 
   try {
-    // ── Действия исполнителя ────────────────────────────────────────────────
-    if (body.action === 'task_read' || body.action === 'task_done') {
-      const id = Number(body.id);
-      if (!Number.isInteger(id) || !session.bitrixUserId) return NextResponse.json({ error: 'Некорректный запрос' }, { status: 400 });
-      const task = await getTask(id);
-      if (!task) return NextResponse.json({ error: 'Задача не найдена' }, { status: 404 });
-      if (task.managerBitrixId !== session.bitrixUserId) {
-        // РОП открыл чужую задачу — «прочитано» не ставим, просто отдаём её.
-        return NextResponse.json({ task, own: false });
-      }
-      if (body.action === 'task_read') await markTaskRead(id, session.bitrixUserId);
-      else await markTaskDone(id, session.bitrixUserId, typeof body.comment === 'string' ? body.comment : null);
-      return NextResponse.json({ task: await getTask(id), own: true });
-    }
-
     // ── Действия РОПа ──────────────────────────────────────────────────────
-    const { managers, canManage } = await context(session);
+    const { scope, managers, canManage } = await context(session);
     if (!canManage) return NextResponse.json({ error: 'Действие доступно РОПу' }, { status: 403 });
     const clientKey = String(body.clientKey ?? '');
     const managerId = String(body.managerId ?? '');
@@ -95,20 +95,17 @@ export async function POST(req: NextRequest) {
     if (!(await ownsClient(managerId, clientKey))) return NextResponse.json({ error: 'Заказчик не в списке менеджера' }, { status: 403 });
 
     if (body.action === 'create_task') {
-      const text = typeof body.text === 'string' ? body.text.trim() : '';
-      if (text.length < 3) return NextResponse.json({ error: 'Напишите, что сделать' }, { status: 400 });
-      const assignee = typeof body.assigneeId === 'string' && managers.some(m => m.id === body.assigneeId) ? body.assigneeId : managerId;
-      const dueAt = typeof body.dueAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.dueAt) ? `${body.dueAt}T21:00:00+03:00` : null;
-      let dealId: number | null = Number.isInteger(Number(body.dealId)) && Number(body.dealId) > 0 ? Number(body.dealId) : null;
-      let dealMode: string | null = null;
-      if (body.createDeal === true) {
-        const d = await createRepeatDeal({ clientKey, assignedBitrixId: assignee });
-        dealId = d.dealId;
-        dealMode = d.mode;
-      }
-      const name = (await getCachedClientNames([clientKey])).get(clientKey) ?? null;
-      const task = await createTask({ clientKey, clientName: name, dealId, managerBitrixId: assignee, text, dueAt, session });
-      return NextResponse.json({ task, dealId, dealMode });
+      // Задача в проекте «Повторные продажи» Битрикса по ТЗ старого канбана (createDeal.ts).
+      // Постановщик: нажал руководитель из цепочки менеджера — он (так делает и старый
+      // канбан: директор ставит задачи менеджерам своих РОПов); нажал админ со «всей
+      // компанией» — РОП менеджера по структуре (ТЗ п.3).
+      const comment = typeof body.text === 'string' ? body.text.trim() : '';
+      const creator = scope.full || !session.bitrixUserId
+        ? (await ropOfManager(managerId)) ?? session.bitrixUserId
+        : session.bitrixUserId;
+      if (!creator) return NextResponse.json({ error: 'Не удалось определить постановщика: нет привязки к Битриксу' }, { status: 400 });
+      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment });
+      return NextResponse.json(res);
     }
 
     if (body.action === 'review') {

@@ -7,6 +7,9 @@
 // C3:EXECUTING — «Отправил счёт (бронь)». Сопоставлять только по этой таблице.
 
 export const REPEAT_FUNNEL_IDS = [2, 3] as const;
+/** Проект Битрикса «Повторные продажи» — сюда ставит задачи и старый канбан /crm/mltclients/. */
+export const REPEAT_PROJECT_GROUP_ID = 118;
+export const taskUrl = (id: number) => `https://td.monolit-crm.ru/workgroups/group/${REPEAT_PROJECT_GROUP_ID}/tasks/task/view/${id}/`;
 /** Воронка для новой сделки: физлицо/контакт → 2 (B2C), компания → 3 (B2B). */
 export const NEW_DEAL_STAGE: Record<2 | 3, string> = { 2: 'C2:NEW', 3: 'C3:NEW' };
 

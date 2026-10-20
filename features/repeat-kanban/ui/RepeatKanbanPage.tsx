@@ -3,16 +3,17 @@
 // Карточка = заказчик. Колонки двигаются только по данным (отгрузки, стадии сделки,
 // звонки) — руками ничего не перетаскивается. Ручные действия: задача (+ сделка в
 // Битриксе) от РОПа, «выполнено» от менеджера, разбор отказа РОПом.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, RefreshCw, Phone, PhoneMissed, ClipboardList, Eye, CheckCircle2, AlertTriangle, Plus } from 'lucide-react';
-import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
+import { ExternalLink, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus } from 'lucide-react';
+import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
+import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
 import { Modal } from '@/components/ui/Modal';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import {
-  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS,
+  BRAK_REASONS, CLIENT_TYPE_ORDER, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS,
   type ColumnDef, type ColumnGroup, type ColumnKey,
 } from '../engine/config';
 import type { KanbanCard, KanbanColumn, RepeatBoard } from '../engine/board';
@@ -48,19 +49,19 @@ export function RepeatKanbanPage() {
   const qc = useQueryClient();
   const [manager, setManager] = useUrlState('manager', stringParam(''));
   const [type, setType] = useUrlState('type', stringParam(''));
-  const [taskParam, setTaskParam] = useUrlState('task', stringParam(''));
+  const [depts, setDepts] = useUrlState('dept', listParam([]));
   const [limits, setLimits] = useState<Partial<Record<ColumnKey, number>>>({});
   const [openCard, setOpenCard] = useState<KanbanCard | null>(null);
   const [taskFor, setTaskFor] = useState<KanbanCard | null>(null);
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
-  const [viewTask, setViewTask] = useState<{ task: RepeatTask; own: boolean } | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', manager, type, limits],
+    queryKey: ['repeat-kanban', manager, type, depts, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (manager) qs.set('manager', manager);
       if (type) qs.set('type', type);
+      if (depts.length) qs.set('dept', depts.join(','));
       for (const [k, v] of Object.entries(limits)) qs.set(`n_${k}`, String(v));
       const r = await fetch(`/api/repeat-kanban?${qs}`);
       const j = await r.json().catch(() => ({}));
@@ -72,15 +73,6 @@ export function RepeatKanbanPage() {
     placeholderData: prev => prev,
   });
 
-  // Заход по ссылке из бота (?task=ID): исполнитель — «прочитано» и окно задачи.
-  useEffect(() => {
-    if (!/^\d+$/.test(taskParam)) return;
-    let alive = true;
-    post({ action: 'task_read', id: Number(taskParam) })
-      .then(j => { if (alive) setViewTask({ task: j.task, own: j.own }); qc.invalidateQueries({ queryKey: ['repeat-kanban'] }); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [taskParam, qc]);
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['repeat-kanban'] });
   const byKey = useMemo(() => new Map<string, KanbanColumn>((data?.columns ?? []).map(c => [c.key, c])), [data]);
@@ -110,7 +102,8 @@ export function RepeatKanbanPage() {
               {data ? ` Обновлено ${fmtDT(data.generatedAt)}.` : ''}
             </p>
           </div>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setManager(''); setLimits({}); }} />
             {(data?.managers.length ?? 0) > 1 && (
               <SearchSelect ariaLabel="Менеджер" allLabel="Все менеджеры зоны" searchPlaceholder="Поиск менеджера"
                 options={data!.managers.map(m => ({ value: m.id, label: m.name }))}
@@ -172,7 +165,6 @@ export function RepeatKanbanPage() {
                       onMore={() => setLimits(l => ({ ...l, [def.key]: (l[def.key] ?? PAGE) + PAGE }))}
                       onOpen={setOpenCard} onTask={setTaskFor} onReview={setReviewFor}
                       onUnbrak={async c => { if (confirm(`Снять брак с «${cardName(c)}»? Заказчик вернётся в пул.`)) { await post({ action: 'unbrak', clientKey: c.clientKey, managerId: c.managerId }).catch(e => alert(e.message)); refresh(); } }}
-                      onDone={async t => { const comment = prompt('Что сделано? (необязательно)') ?? null; await post({ action: 'task_done', id: t.id, comment }).catch(e => alert(e.message)); refresh(); }}
                     />
                   ))}
                 </div>
@@ -188,20 +180,16 @@ export function RepeatKanbanPage() {
           companyId={openCard.clientType === 'company' ? openCard.clientId : null}
           onClose={() => setOpenCard(null)} />
       )}
-      {taskFor && data && <TaskModal card={taskFor} managers={data.managers} onClose={() => setTaskFor(null)} onSaved={refresh} />}
+      {taskFor && <TaskModal card={taskFor} onClose={() => setTaskFor(null)} onSaved={refresh} />}
       {reviewFor && <ReviewModal card={reviewFor} onClose={() => setReviewFor(null)} onSaved={refresh} />}
-      {viewTask && (
-        <TaskViewModal data={viewTask} onClose={() => { setViewTask(null); setTaskParam(''); }}
-          onDone={async comment => { await post({ action: 'task_done', id: viewTask.task.id, comment }); setViewTask(null); setTaskParam(''); refresh(); }} />
-      )}
     </div>
   );
 }
 
-function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbrak, onDone }: {
+function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbrak }: {
   def: ColumnDef; col: KanbanColumn | undefined; canManage: boolean;
   onMore: () => void; onOpen: (c: KanbanCard) => void; onTask: (c: KanbanCard) => void;
-  onReview: (c: KanbanCard) => void; onUnbrak: (c: KanbanCard) => void; onDone: (t: RepeatTask) => void;
+  onReview: (c: KanbanCard) => void; onUnbrak: (c: KanbanCard) => void;
 }) {
   const tone = def.key === 'brak' ? 'var(--color-negative)' : def.key === 'review' ? '#d97706' : def.key === 'touch_3' ? 'var(--color-positive)' : 'var(--color-accent)';
   return (
@@ -215,7 +203,7 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
       </div>
       {col?.cards.map(c => (
         <Card key={c.clientKey} c={c} col={def.key} canManage={canManage}
-          onOpen={() => onOpen(c)} onTask={() => onTask(c)} onReview={() => onReview(c)} onUnbrak={() => onUnbrak(c)} onDone={onDone} />
+          onOpen={() => onOpen(c)} onTask={() => onTask(c)} onReview={() => onReview(c)} onUnbrak={() => onUnbrak(c)} />
       ))}
       {col && col.total > col.cards.length && (
         <button type="button" onClick={onMore}
@@ -245,32 +233,45 @@ function WeekDots({ w }: { w: NonNullable<KanbanCard['window']> }) {
   );
 }
 
+const TASK_STATE: Record<RepeatTask['state'], { label: string; tone: string }> = {
+  unread: { label: 'не просмотрена', tone: 'var(--color-negative)' },
+  pending: { label: 'просмотрена, не начата', tone: 'var(--color-text-muted)' },
+  in_progress: { label: 'в работе', tone: 'var(--color-accent)' },
+  control: { label: 'ждёт контроля', tone: '#d97706' },
+  done: { label: 'принята', tone: 'var(--color-positive)' },
+  deferred: { label: 'отложена', tone: 'var(--color-text-muted)' },
+};
+
 function TaskLine({ t, c }: { t: RepeatTask; c: KanbanCard }) {
   const callAfter = c.calls.some(x => !x.missed && x.sec > 20 && x.at > t.createdAt);
-  const overdue = !t.doneAt && t.dueAt && new Date(t.dueAt).getTime() < Date.now();
-  const doneNoCall = !!t.doneAt && !callAfter;
-  const step = (ok: boolean, icon: React.ReactNode, label: string, bad = false) => (
-    <span title={label} className={`inline-flex items-center gap-0.5 ${bad ? 'text-[var(--color-negative)]' : ok ? 'text-[var(--color-positive)]' : 'text-[var(--color-text-muted)] opacity-60'}`}>{icon}</span>
-  );
+  const open = t.state !== 'done' && t.state !== 'control';
+  const overdue = open && t.deadlineAt && new Date(t.deadlineAt).getTime() < Date.now();
+  const controlDays = t.state === 'control' && t.changedAt ? daysAgo(t.changedAt) : null;
+  const doneNoCall = (t.state === 'control' || t.state === 'done') && !callAfter;
+  const st = TASK_STATE[t.state];
   return (
-    <div className={`rounded-md px-2 py-1 text-xs ${overdue || doneNoCall ? 'bg-[var(--color-negative-soft)]' : 'bg-[var(--color-bg)]'}`}>
-      <div className="flex items-center gap-2">
-        {step(true, <ClipboardList size={13} />, `Поставлена ${fmtDT(t.createdAt)} · ${t.createdBy}`)}
-        {step(!!t.readAt, <Eye size={13} />, t.readAt ? `Прочитана ${fmtDT(t.readAt)}` : 'Не прочитана')}
-        {step(!!t.doneAt, <CheckCircle2 size={13} />, t.doneAt ? `Отмечена выполненной ${fmtDT(t.doneAt)}` : 'Не выполнена')}
-        {step(callAfter, <Phone size={13} />, callAfter ? 'Был звонок после постановки' : 'Звонка после постановки нет', doneNoCall)}
-        <span className="truncate text-[var(--color-text-secondary)]" title={t.text}>{t.text}</span>
+    <a href={taskUrl(t.id)} target="_blank" rel="noreferrer"
+      className={`block rounded-md px-2 py-1 text-xs hover:opacity-90 ${overdue || doneNoCall || t.state === 'unread' ? 'bg-[var(--color-negative-soft)]' : 'bg-[var(--color-bg)]'}`}>
+      <div className="flex items-center gap-1.5">
+        <ClipboardList size={13} className="shrink-0" style={{ color: st.tone }} />
+        <span style={{ color: st.tone }}>Задача {st.label}</span>
+        <span title={callAfter ? 'Был звонок после постановки' : 'Звонка после постановки нет'}
+          className={callAfter ? 'text-[var(--color-positive)]' : 'text-[var(--color-text-muted)] opacity-60'}><Phone size={12} /></span>
       </div>
-      {overdue && <div className="mt-0.5 text-[var(--color-negative)]">Просрочена: срок {fmtDay(t.dueAt)}</div>}
-      {doneNoCall && <div className="mt-0.5 text-[var(--color-negative)]">Отмечена выполненной, но звонка нет</div>}
-      {t.doneComment && <div className="mt-0.5 text-[var(--color-text-secondary)]">«{t.doneComment}»</div>}
-    </div>
+      <div className="mt-0.5 text-[var(--color-text-muted)]">
+        {fmtDay(t.createdAt)} · {t.createdByName ?? `#${t.createdById}`} → {t.responsibleName ?? `#${t.responsibleId}`}
+        {t.deadlineAt && open ? ` · срок ${fmtDay(t.deadlineAt)}` : ''}
+      </div>
+      {overdue && <div className="text-[var(--color-negative)]">Просрочена</div>}
+      {controlDays !== null && controlDays >= 1 && <div className="text-[#d97706]">Ждёт приёмки постановщиком {controlDays} дн.</div>}
+      {doneNoCall && <div className="text-[var(--color-negative)]">Отмечена выполненной, но звонка нет</div>}
+    </a>
   );
 }
 
-function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDone }: {
+function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak }: {
   c: KanbanCard; col: ColumnKey; canManage: boolean;
-  onOpen: () => void; onTask: () => void; onReview: () => void; onUnbrak: () => void; onDone: (t: RepeatTask) => void;
+  onOpen: () => void; onTask: () => void; onReview: () => void; onUnbrak: () => void;
 }) {
   const good = c.calls.filter(x => !x.missed && x.sec > 20);
   const isPool = col.startsWith('pool');
@@ -334,7 +335,7 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDone }:
         {canManage && col !== 'review' && col !== 'brak' && (
           <button type="button" onClick={onTask}
             className="inline-flex min-h-11 items-center gap-1 rounded-md bg-[var(--color-accent-soft)] px-2.5 text-xs text-[var(--color-accent)] hover:opacity-90">
-            <Plus size={13} /> {c.deal ? 'Задача' : c.lastLost ? 'Вернуть сделку + задача' : 'Сделка + задача'}
+            <Plus size={13} /> Задача
           </button>
         )}
         {canManage && col === 'review' && (
@@ -349,12 +350,6 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDone }:
             Снять брак
           </button>
         )}
-        {c.task && !c.task.doneAt && !canManage && (
-          <button type="button" onClick={() => onDone(c.task!)}
-            className="inline-flex min-h-11 items-center gap-1 rounded-md bg-[var(--color-positive)] px-2.5 text-xs text-white hover:opacity-90">
-            <CheckCircle2 size={13} /> Выполнено
-          </button>
-        )}
       </div>
     </article>
   );
@@ -362,29 +357,21 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDone }:
 
 const fieldCls = 'w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base text-[var(--color-text)] sm:text-sm';
 
-function TaskModal({ card, managers, onClose, onSaved }: {
-  card: KanbanCard; managers: { id: string; name: string }[]; onClose: () => void; onSaved: () => void;
-}) {
+function TaskModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () => void; onSaved: () => void }) {
   const [text, setText] = useState('');
-  const [due, setDue] = useState(() => new Date(Date.now() + 3 * 3600_000 + 86_400_000).toISOString().slice(0, 10));
-  const [assignee, setAssignee] = useState(card.managerId);
-  const [createDeal, setCreateDeal] = useState(!card.deal);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<{ taskId: number; dealId: number; dealMode: string } | null>(null);
+  // Что произойдёт со сделкой — по правилам ТЗ (engine/createDeal.ts), заранее и честно.
+  const what = card.deal ? `Задача в сделку #${card.deal.dealId}, в название — «ПОСМОТРИ ЗАДАЧУ».`
+    : card.lastLost ? `Сделка #${card.lastLost.dealId} вернётся из отказа в первую стадию, в название — «ПОСМОТРИ ЗАДАЧУ».`
+    : 'Будет создана новая повторная сделка «ПОСМОТРИ ЗАДАЧУ …» (как из контакта).';
 
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const j = await post({
-        action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, assigneeId: assignee,
-        text, dueAt: due || null, createDeal, dealId: card.deal?.dealId ?? null,
-      });
-      setResult(j.dealMode === 'created' ? `Сделка #${j.dealId} создана в Битриксе, задача отправлена менеджеру.`
-        : j.dealMode === 'reopened' ? `Сделка #${j.dealId} возвращена из отказа в «Сделка», задача отправлена менеджеру.`
-        : j.dealMode === 'existing' ? `Открытая повторная сделка #${j.dealId} уже была — задача привязана к ней.`
-        : 'Задача отправлена менеджеру.');
-      onSaved();
+      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, text });
+      setResult(j); onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
   };
@@ -392,43 +379,34 @@ function TaskModal({ card, managers, onClose, onSaved }: {
   return (
     <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Задача · ${cardName(card)}`} desktopWidth="sm:max-w-lg">
       {result ? (
-        <div className="flex flex-col gap-3">
-          <p className="text-sm text-[var(--color-text)]">{result}</p>
-          <button type="button" onClick={onClose} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-sm text-white">Готово</button>
+        <div className="flex flex-col gap-3 text-sm">
+          <p className="text-[var(--color-text)]">
+            {result.dealMode === 'created' ? `Создана сделка #${result.dealId}` : result.dealMode === 'reopened' ? `Сделка #${result.dealId} возвращена из отказа` : `Сделка #${result.dealId}`}
+            {' '}и задача в проекте «Повторные продажи».
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <a href={taskUrl(result.taskId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline"><ExternalLink size={13} /> Задача #{result.taskId}</a>
+            <a href={dealUrl(result.dealId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline"><ExternalLink size={13} /> Сделка #{result.dealId}</a>
+          </div>
+          <button type="button" onClick={onClose} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">Готово</button>
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          <label className="flex flex-col gap-1 text-sm text-[var(--color-text-secondary)]">
-            Что сделать
+        <div className="flex flex-col gap-3 text-sm">
+          <p className="rounded-lg bg-[var(--color-bg-surface)] p-3 text-[var(--color-text-secondary)]">
+            {what} Исполнитель — ответственный за сделку, срок 5 дней, закрыть задачу может только постановщик.
+            В текст сами добавятся отгрузки заказчика со ссылками и анкета последней отгрузки.
+          </p>
+          <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+            Комментарий менеджеру
             <textarea value={text} onChange={e => setText(e.target.value)} rows={4} autoFocus
-              placeholder="Позвонить, узнать, как идёт стройка, предложить кровлю…" className={fieldCls} />
+              placeholder="У тебя дом без крыши — будет капать дождь — предложи металлочерепицу!" className={fieldCls} />
           </label>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1 text-sm text-[var(--color-text-secondary)]">
-              Исполнитель
-              <SearchSelect ariaLabel="Исполнитель" searchPlaceholder="Поиск менеджера"
-                options={managers.map(m => ({ value: m.id, label: m.name }))} value={assignee} onChange={setAssignee}
-                className="w-full bg-[var(--color-bg)]" />
-            </label>
-            <label className="flex flex-col gap-1 text-sm text-[var(--color-text-secondary)]">
-              Срок
-              <input type="date" value={due} onChange={e => setDue(e.target.value)} className={`${fieldCls} min-h-11`} />
-            </label>
-          </div>
-          {!card.deal && (
-            <label className="flex min-h-11 items-center gap-2 text-sm text-[var(--color-text)]">
-              <input type="checkbox" checked={createDeal} onChange={e => setCreateDeal(e.target.checked)} className="h-5 w-5" />
-              {card.lastLost
-                ? `Вернуть сделку #${card.lastLost.dealId} из отказа в работу (на исполнителя)`
-                : 'Создать повторную сделку в Битриксе (как из контакта, на исполнителя)'}
-            </label>
-          )}
-          {err && <p className="text-sm text-[var(--color-negative)]">{err}</p>}
+          {err && <p className="text-[var(--color-negative)]">{err}</p>}
           <div className="flex justify-end gap-2">
-            <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
-            <button type="button" disabled={busy || text.trim().length < 3} onClick={submit}
-              className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-sm text-white disabled:opacity-50">
-              {busy ? 'Отправляю…' : createDeal && !card.deal ? (card.lastLost ? 'Вернуть сделку и поставить задачу' : 'Создать сделку и задачу') : 'Поставить задачу'}
+            <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
+            <button type="button" disabled={busy} onClick={submit}
+              className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">
+              {busy ? 'Создаю…' : 'Поставить задачу'}
             </button>
           </div>
         </div>
@@ -512,43 +490,6 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
             {busy ? 'Сохраняю…' : 'Сохранить решение'}
           </button>
         </div>
-      </div>
-    </Modal>
-  );
-}
-
-function TaskViewModal({ data, onClose, onDone }: { data: { task: RepeatTask; own: boolean }; onClose: () => void; onDone: (comment: string | null) => Promise<void> }) {
-  const [comment, setComment] = useState('');
-  const [busy, setBusy] = useState(false);
-  const t = data.task;
-  return (
-    <Modal open onOpenChange={o => { if (!o) onClose(); }} title="Задача по заказчику" desktopWidth="sm:max-w-md">
-      <div className="flex flex-col gap-3 text-sm">
-        <p className="whitespace-pre-wrap text-[var(--color-text)]">{t.text}</p>
-        <div className="text-xs text-[var(--color-text-muted)]">
-          От {t.createdBy}, {fmtDT(t.createdAt)}{t.dueAt ? ` · срок ${fmtDay(t.dueAt)}` : ''}
-        </div>
-        {t.dealId && (
-          <a href={dealUrl(t.dealId)} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[var(--color-accent)] hover:underline">
-            <ExternalLink size={13} /> Сделка #{t.dealId}
-          </a>
-        )}
-        {t.doneAt ? (
-          <div className="text-[var(--color-positive)]">Выполнена {fmtDT(t.doneAt)}</div>
-        ) : data.own ? (
-          <>
-            <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
-              Что сделано (необязательно)
-              <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} className={fieldCls} />
-            </label>
-            <button type="button" disabled={busy} onClick={async () => { setBusy(true); await onDone(comment || null).catch(e => alert(e.message)); setBusy(false); }}
-              className="min-h-11 rounded-lg bg-[var(--color-positive)] px-4 text-white disabled:opacity-50">
-              Отметить выполненной
-            </button>
-          </>
-        ) : (
-          <div className="text-[var(--color-text-muted)]">Задача другого менеджера — отметить может только исполнитель.</div>
-        )}
       </div>
     </Modal>
   );

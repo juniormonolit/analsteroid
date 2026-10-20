@@ -15,7 +15,7 @@ import {
   COLUMNS, CLIENT_TYPE_NONE_RANK, CLIENT_TYPE_ORDER, LOST_STAGES, NEW_STAGES, REPEAT_FUNNEL_IDS, REVIEW_SINCE,
   STAGE_TO_COLUMN, TOUCHES, WEEK_DAYS, WINDOW_DAYS, WON_STAGES, type ColumnKey,
 } from './config';
-import { fetchTasksForClients, type RepeatTask } from './tasks';
+import { fetchTasksForDeals, type RepeatTask } from './tasks';
 import { fetchClientTypes } from './clientTypes';
 
 const DAY_MS = 86_400_000;
@@ -226,19 +226,20 @@ export async function buildRepeatBoard(opts: {
   const keys = rows.map(r => r.clientKey);
 
   // 2. Свежие данные поверх кэша.
-  const [deals, marks, profileTypes, tasks] = await Promise.all([
+  const [deals, marks, profileTypes] = await Promise.all([
     fetchLatestRepeatDeals(keys),
     fetchCustomerMarks(keys),
     Promise.all(roster.map(m => fetchClientTypes(`mgr:${m.id}`, rows.filter(r => r.managerId === m.id).map(r => r.clientKey))))
       .then(maps => new Map(maps.flatMap(mp => [...mp]))),
-    fetchTasksForClients(keys),
   ]);
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
-  const [calls, manual, reviews] = await Promise.all([
+  const [calls, manual, reviews, tasks] = await Promise.all([
     fetchDealCalls(activeDealIds, windowFloor),
     fetchManualContacts(keys, windowFloor),
     fetchReviews([...deals.values()].filter(d => LOST_STAGES.has(d.stageId)).map(d => d.dealId)),
+    // Задачи проекта «Повторные продажи» (Битрикс, гр. 118) — по последней повторной сделке.
+    fetchTasksForDeals([...deals.values()].map(d => d.dealId)),
   ]);
 
   const typeCounts: Record<string, number> = {};
@@ -247,7 +248,7 @@ export async function buildRepeatBoard(opts: {
   for (const r of rows) {
     const deal = deals.get(r.clientKey) ?? null;
     const mark = marks.get(r.clientKey);
-    const task = tasks.get(r.clientKey) ?? null;
+    const task = deal ? tasks.get(deal.dealId) ?? null : null;
     const profileType = profileTypes.get(r.clientKey) ?? null;
     const review = deal ? reviews.get(deal.dealId) ?? null : null;
 
@@ -265,7 +266,7 @@ export async function buildRepeatBoard(opts: {
     let windowStartMs: number | null = null;
     if (current) {
       windowStartMs = Math.max(lastDelMs, new Date(current.createdAt).getTime());
-      if (task && (task.dealId === current.dealId || task.dealId === null)) {
+      if (task && task.dealId === current.dealId) {
         windowStartMs = Math.max(windowStartMs, new Date(task.createdAt).getTime());
       }
     } else if (r.lastDeliveredAt && (now - lastDelMs) / DAY_MS <= WINDOW_DAYS && r.purchasesDelivered === 1) {
