@@ -317,30 +317,33 @@ function KpiStrip({ k }: { k: BoardKpi }) {
   // диапазонами — хуета»: «414 · 36,8 млн» читалось как диапазон).
   const pctOf = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '—');
   const tiles: { label: string; value: string; sub?: string; hint: string; tone?: 'neg' | 'warn' }[] = [
-    { label: 'Заказчиков в пуле', value: rub.format(k.pool), hint: 'Без открытой повторной сделки — кого можно брать в работу' },
+    { label: 'В пуле', value: rub.format(k.pool), sub: 'заказчиков', hint: 'Без открытой повторной сделки — кого можно брать в работу' },
     { label: 'В дозвоне', value: rub.format(k.inWork), sub: `потенциал ${moneyShort(k.inWorkPotential)}`, hint: 'Взяты в работу и в попытках связаться' },
-    { label: 'Дозвонились', value: pctOf(k.reached, k.inWork), sub: `${rub.format(k.reached)} из ${rub.format(k.inWork)}`, hint: 'Среди тех, кто в дозвоне: был разговор дольше 20 с или ручной контакт' },
-    { label: 'Сделок в воронке', value: rub.format(k.funnel), sub: `на ${moneyShort(k.funnelSum)}`, hint: 'Повторные сделки в работе и их сумма' },
-    { label: 'Просрочено задач', value: rub.format(k.tasksOverdue), hint: 'Открытые задачи проекта «Повторные продажи» с прошедшим сроком', tone: k.tasksOverdue ? 'neg' : undefined },
-    { label: 'Ждут приёмки', value: rub.format(k.tasksControl), hint: 'Менеджер сдал задачу, постановщик не принял', tone: k.tasksControl ? 'warn' : undefined },
-    { label: 'Сделок без задачи', value: rub.format(k.noTaskInWork), hint: 'В дозвоне и воронке, по которым нет открытой задачи', tone: k.noTaskInWork ? 'warn' : undefined },
-    { label: 'Отказы на проверке', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} — до 3 попыток` : undefined, hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
+    { label: 'Дозвон', value: pctOf(k.reached, k.inWork), sub: `${rub.format(k.reached)} из ${rub.format(k.inWork)}`, hint: 'Среди тех, кто в дозвоне: был разговор дольше 20 с или ручной контакт' },
+    { label: 'В воронке', value: rub.format(k.funnel), sub: `сделок на ${moneyShort(k.funnelSum)}`, hint: 'Повторные сделки в работе и их сумма' },
+    { label: 'Просрочено', value: rub.format(k.tasksOverdue), sub: 'задач', hint: 'Открытые задачи проекта «Повторные продажи» с прошедшим сроком', tone: k.tasksOverdue ? 'neg' : undefined },
+    { label: 'Ждут приёмки', value: rub.format(k.tasksControl), sub: 'задач', hint: 'Менеджер сдал задачу, постановщик не принял', tone: k.tasksControl ? 'warn' : undefined },
+    { label: 'Без задачи', value: rub.format(k.noTaskInWork), sub: 'сделок', hint: 'В дозвоне и воронке, по которым нет открытой задачи', tone: k.noTaskInWork ? 'warn' : undefined },
+    { label: 'Отказы', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} до 3 попыток` : 'на проверке', hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
   ];
   return (
-    <div className="flex min-w-0 flex-col gap-2 lg:flex-row">
+    <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-stretch">
       {/* Главная цифра — сколько денег лежит в пуле, если вернуть заказчиков. */}
-      <div className="shrink-0 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-72"
+      <div className="flex shrink-0 flex-col justify-center rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-72"
         title="Сумма потенциалов заказчиков пула: сколько они принесут за год, если вернуть их. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр).">
         <div className="text-[12px] opacity-85">Потенциал пула за год</div>
         <div className="text-[26px] font-bold leading-tight tabular-nums">{moneyShort(k.poolPotential)}</div>
         <div className="text-[12px] opacity-85">если вернуть {rub.format(k.pool)} {plural(k.pool, 'заказчика', 'заказчиков', 'заказчиков')}</div>
       </div>
-      <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+      {/* Плитки — одной высоты с главной, всё по центру; подпись сверху, цифра крупно, пояснение
+          мелко — без обрезанных «Заказчиков в п…» (правка владельца 20.10). */}
+      <div className="grid min-w-0 flex-1 auto-rows-fr grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
         {tiles.map(t => (
-          <div key={t.label} title={t.hint} className="min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2.5 py-1.5">
-            <div className="truncate text-[11px] text-[var(--color-text-muted)]">{t.label}</div>
-            <div className="text-[18px] font-bold leading-tight tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
-            {t.sub && <div className="truncate text-[11px] text-[var(--color-text-muted)]">{t.sub}</div>}
+          <div key={t.label} title={t.hint}
+            className="flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 py-2 text-center">
+            <div className="text-[11.5px] font-medium leading-tight text-[var(--color-text-muted)]">{t.label}</div>
+            <div className="text-[22px] font-bold leading-none tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
+            <div className="min-h-[14px] text-[11px] leading-tight text-[var(--color-text-muted)]">{t.sub ?? ''}</div>
           </div>
         ))}
       </div>
