@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS repeat_kanban_reviews (
 );
 CREATE INDEX IF NOT EXISTS repeat_kanban_reviews_client_idx ON repeat_kanban_reviews (client_key, decided_at DESC);
 
+-- Владелец — роль приложения (как у остальных таблиц system). Без этого, если миграцию
+-- катить под sysadmin, приложение ловит «permission denied for table repeat_kanban_tasks»
+-- (живой инцидент 20.10: первая «Сделка + задача» создала сделку 272039, задача не записалась).
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'JanCloude') THEN
+    ALTER TABLE repeat_kanban_tasks OWNER TO "JanCloude";
+    ALTER TABLE repeat_kanban_reviews OWNER TO "JanCloude";
+    ALTER SEQUENCE repeat_kanban_tasks_id_seq OWNER TO "JanCloude";
+    ALTER SEQUENCE repeat_kanban_reviews_id_seq OWNER TO "JanCloude";
+  END IF;
+END $$;
+
 UPDATE roles
    SET permissions = (SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['section.repeat_kanban'])))
  WHERE name IN ('Пользователь', 'РОП', 'Директор', 'МОП')
