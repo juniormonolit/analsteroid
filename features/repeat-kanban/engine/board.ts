@@ -111,6 +111,20 @@ export interface KanbanColumn {
 }
 
 /** Показатели канбана для РОПа (снимок текущей доски). */
+/** Состояние задачи заказчика для фильтра: none — открытой задачи нет (не ставили или приняли). */
+export type TaskBucket = 'none' | 'unread' | 'work' | 'overdue' | 'control' | 'done';
+export type BoardSort = 'default' | 'ltv' | 'potential' | 'fresh' | 'task';
+
+export function taskBucketOf(c: Pick<KanbanCard, 'task'>, now = Date.now()): TaskBucket {
+  const t = c.task;
+  if (!t || t.state === 'deferred') return 'none';
+  if (t.state === 'done') return 'done';
+  if (t.state === 'control') return 'control';
+  if (t.deadlineAt && new Date(t.deadlineAt).getTime() < now) return 'overdue';
+  if (t.state === 'unread') return 'unread';
+  return 'work';
+}
+
 export interface BoardKpi {
   pool: number; poolPotential: number;
   inWork: number; inWorkPotential: number;
@@ -130,6 +144,8 @@ export interface RepeatBoard {
   typeCounts: Record<string, number>;
   /** Пул: товарная группа ПОСЛЕДНЕЙ отгрузки («по наибольшему», head_group_name) → заказчиков. */
   poolGroupCounts: Record<string, number>;
+  /** Сколько заказчиков в каждом состоянии задачи (до фильтра по задачам). */
+  taskCounts: Record<string, number>;
   kpi: BoardKpi | null;
   notice: string | null;
   canManage: boolean;
@@ -260,6 +276,10 @@ export async function buildRepeatBoard(opts: {
   /** Фильтр пула (владелец 20.10): только заказчики, чья ПОСЛЕДНЯЯ отгрузка — в этих группах
    *  («отгружали газобетон, а после ничего»). Колонки окна/воронки/разбора не трогает. */
   poolGroups?: string[];
+  /** Фильтр по задаче заказчика (владелец 20.10: «РОП разбирает задачи на канбане»). */
+  taskFilter?: TaskBucket[];
+  /** Сортировка карточек во всех колонках: default — тип клиента → потенциал. */
+  sort?: BoardSort;
   /** Сколько карточек отдать по каждой колонке (пагинация «показать ещё»). */
   limits?: Partial<Record<ColumnKey, number>>;
   canManage: boolean;
@@ -269,7 +289,7 @@ export async function buildRepeatBoard(opts: {
   const roster = pick.size ? opts.managers.filter(m => pick.has(m.id)) : opts.managers;
   const base = {
     generatedAt: new Date(now).toISOString(), managers: opts.managers, selectedManagers: opts.selectedManagers,
-    typeCounts: {}, poolGroupCounts: {}, kpi: null, canManage: opts.canManage,
+    typeCounts: {}, poolGroupCounts: {}, taskCounts: {}, kpi: null, canManage: opts.canManage,
   };
   const emptyCols = (): KanbanColumn[] => COLUMNS.map(c => ({ key: c.key, total: 0, sum: 0, potential: 0, avgAgeDays: null, noTask: 0, overdue: 0, sleeping: 0, cards: [] }));
   if (roster.length === 0) return { ...base, columns: emptyCols(), notice: 'В вашей зоне нет менеджеров.' };
@@ -416,6 +436,22 @@ export async function buildRepeatBoard(opts: {
   const typeRank = (c: KanbanCard) => (c.profileType ? CLIENT_TYPE_ORDER[c.profileType] ?? CLIENT_TYPE_NONE_RANK : CLIENT_TYPE_NONE_RANK);
   const ev = (c: KanbanCard) => c.expectedValue ?? 0;
   const columns: KanbanColumn[] = [];
+  // Фильтр по задачам — после сборки карточек (нужны статус и срок задачи).
+  const taskCounts: Record<string, number> = {};
+  const taskPick = new Set(opts.taskFilter ?? []);
+  for (const [k, list] of buckets) {
+    const kept: KanbanCard[] = [];
+    for (const c of list) {
+      const tb = taskBucketOf(c, now);
+      taskCounts[tb] = (taskCounts[tb] ?? 0) + 1;
+      if (!taskPick.size || taskPick.has(tb)) kept.push(c);
+    }
+    buckets.set(k, kept);
+  }
+  // «По задачам»: сверху то, что требует действия РОПа.
+  const TASK_SORT: Record<TaskBucket, number> = { control: 0, overdue: 1, unread: 2, work: 3, none: 4, done: 5 };
+  const sortMode = opts.sort ?? 'default';
+  const deliveredMs = (c: KanbanCard) => (c.lastDeliveredAt ? new Date(c.lastDeliveredAt).getTime() : 0);
   for (const def of COLUMNS) {
     const list = buckets.get(def.key)!;
     if (def.group === 'touch') {
@@ -430,6 +466,11 @@ export async function buildRepeatBoard(opts: {
     } else {
       list.sort((a, b) => typeRank(a) - typeRank(b) || Number(a.sleeping) - Number(b.sleeping) || ev(b) - ev(a));
     }
+    // Явная сортировка из фильтров перекрывает колоночную по умолчанию (правка владельца 20.10).
+    if (sortMode === 'ltv') list.sort((a, b) => b.sumDelivered - a.sumDelivered);
+    else if (sortMode === 'potential') list.sort((a, b) => (b.potential ?? 0) - (a.potential ?? 0) || b.sumDelivered - a.sumDelivered);
+    else if (sortMode === 'fresh') list.sort((a, b) => deliveredMs(b) - deliveredMs(a));
+    else if (sortMode === 'task') list.sort((a, b) => TASK_SORT[taskBucketOf(a, now)] - TASK_SORT[taskBucketOf(b, now)] || typeRank(a) - typeRank(b));
     const limit = Math.max(1, Math.min(opts.limits?.[def.key] ?? COLUMN_PAGE, 2000));
     const ageOf = (c: KanbanCard): number | null => {
       const iso = def.group === 'pool' ? c.lastDeliveredAt : def.group === 'touch' ? c.attempts?.startAt ?? null : c.deal?.createdAt ?? null;
@@ -467,5 +508,5 @@ export async function buildRepeatBoard(opts: {
     review: buckets.get('review')!.length, reviewEarly: buckets.get('review')!.filter(c => c.lostEarly).length,
     brak: buckets.get('brak')!.length,
   };
-  return { ...base, columns, typeCounts, poolGroupCounts, kpi, notice: null };
+  return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null };
 }

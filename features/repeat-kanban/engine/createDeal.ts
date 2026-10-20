@@ -154,10 +154,12 @@ function deadlineIso(now = Date.now()): string {
 
 export type RepeatDealMode = 'existing' | 'reopened' | 'created';
 
-export interface RepeatTaskResult { dealId: number; dealMode: RepeatDealMode; taskId: number; responsibleId: string; createdById: string }
+export interface RepeatTaskResult { dealId: number; dealMode: RepeatDealMode; taskId: number; responsibleId: string; createdById: string; chatPosted: boolean }
 
 export async function createRepeatTask(input: {
   clientKey: string; fallbackManagerId: string; creatorBitrixId: string; comment: string;
+  /** Кто нажал — подпись к сообщению в чате задачи. */
+  creatorName: string;
 }): Promise<RepeatTaskResult> {
   const t = dealTargetOf(input.clientKey);
   if (!Number.isInteger(t.id) || t.id <= 0) throw new DealCreateError('Некорректный заказчик');
@@ -231,7 +233,16 @@ export async function createRepeatTask(input: {
   });
   const taskId = Number(task?.task?.id ?? 0);
   if (!taskId) throw new DealCreateError(`Сделка #${dealId} подготовлена, но задача в Битриксе не создалась`);
-  return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId };
+  // Комментарий РОПа — ещё и первым сообщением в чате задачи (владелец 20.10). Не роняет
+  // постановку: задача уже есть, комментарий в любом случае лежит в её описании.
+  let chatPosted = false;
+  if (input.comment.trim()) {
+    chatPosted = await postToTaskChat(taskId, input.creatorName, input.comment.trim()).catch(e => {
+      console.warn(`[repeat-kanban] комментарий в чат задачи ${taskId} не ушёл:`, e instanceof Error ? e.message : e);
+      return false;
+    });
+  }
+  return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted };
 }
 
 /** Постановщик по структуре: РОП менеджера (sa.org_resolved_hierarchy, ближайший предок с
@@ -241,4 +252,27 @@ export async function ropOfManager(managerBitrixId: string): Promise<string | nu
     `SELECT rop_bitrix_user_id AS rop FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = $1 LIMIT 1`, [managerBitrixId],
   );
   return r.rows[0]?.rop ?? null;
+}
+
+/**
+ * Первое сообщение в чате задачи. У задач портала включён новый чат (у задачи есть CHAT_ID,
+ * старых комментариев task.commentitem нет — проверено 20.10). Писать через вебхук нельзя:
+ * автором был бы его владелец (Сергей Афанасьев, 2098), а не РОП. Поэтому пишет бот «Аналитик»
+ * с подписью «Комментарий от …»: вебхук (админ) добавляет бота в чат, бот отправляет.
+ */
+async function postToTaskChat(taskId: number, authorName: string, comment: string): Promise<boolean> {
+  const botWebhook = (process.env.BITRIX_BOT_WEBHOOK_URL || '').replace(/\/+$/, '');
+  const botId = process.env.BITRIX_BOT_ID || '';
+  const clientId = process.env.BITRIX_BOT_CLIENT_ID || '';
+  if (!botWebhook || !botId || !clientId) return false;
+  const t = await read<{ task?: { chatId?: string | number } }>('tasks.task.get', { taskId, select: ['ID', 'CHAT_ID'] });
+  const chatId = Number(t?.task?.chatId ?? 0);
+  if (!chatId) return false;
+  // Бот — участник чата: иначе imbot.message.add в чат отклоняется. Уже участник — не ошибка.
+  await bx(taskWebhook(), 'im.chat.user.add', { CHAT_ID: chatId, USERS: [Number(botId)], HIDE_HISTORY: 'N' }).catch(() => null);
+  const res = await bx(botWebhook, 'imbot.message.add', {
+    CLIENT_ID: clientId, BOT_ID: botId, DIALOG_ID: `chat${chatId}`,
+    MESSAGE: `[b]Комментарий от ${authorName}:[/b]\n${comment}`,
+  }) as { result?: number };
+  return Number(res?.result) > 0;
 }

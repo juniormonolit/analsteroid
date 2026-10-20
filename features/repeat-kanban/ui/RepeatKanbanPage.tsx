@@ -39,6 +39,22 @@ const fmtSec = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60)
 const dealUrl = (id: number) => `https://td.monolit-crm.ru/crm/deal/details/${id}/`;
 const cardName = (c: KanbanCard) => c.name ?? `${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId}`;
 
+const TASK_FILTERS = [
+  { value: 'none', label: 'Без задачи', hint: 'не ставили или прошлую приняли' },
+  { value: 'unread', label: 'Не просмотрена', hint: 'менеджер ещё не открыл' },
+  { value: 'work', label: 'В работе', hint: 'открыл или начал' },
+  { value: 'overdue', label: 'Просрочена', hint: 'срок прошёл' },
+  { value: 'control', label: 'Ждёт приёмки', hint: 'менеджер сдал, постановщик не принял' },
+  { value: 'done', label: 'Принята', hint: 'постановщик принял' },
+] as const;
+const SORT_OPTIONS = [
+  { value: 'default', label: 'Сортировка: тип клиента и потенциал' },
+  { value: 'ltv', label: 'Сортировка: LTV — больше сверху' },
+  { value: 'potential', label: 'Сортировка: потенциал — больше сверху' },
+  { value: 'fresh', label: 'Сортировка: свежие отгрузки сверху' },
+  { value: 'task', label: 'Сортировка: по задачам — что разобрать' },
+] as const;
+
 const GROUPS: { key: ColumnGroup; title: string; hint: string }[] = [
   { key: 'pool', title: 'Пул', hint: 'Нет открытой повторной сделки' },
   { key: 'touch', title: 'Дозвон', hint: `Взят в работу → до ${TOUCHES} попыток связаться (по дням)` },
@@ -61,6 +77,8 @@ export function RepeatKanbanPage() {
   const [type, setType] = useUrlState('type', stringParam(''));
   const [depts, setDepts] = useUrlState('dept', listParam([]));
   const [pg, setPg] = useUrlState('pg', stringParam(''));
+  const [taskF, setTaskF] = useUrlState('tasks', listParam([]));
+  const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const poolGroups = useMemo(() => pg.split('|').filter(Boolean), [pg]);
   const [limits, setLimits] = useState<Partial<Record<ColumnKey, number>>>({});
   const [openCard, setOpenCard] = useState<KanbanCard | null>(null);
@@ -69,13 +87,15 @@ export function RepeatKanbanPage() {
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, taskF, sort, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (mgrs.length) qs.set('managers', mgrs.join(','));
       if (type) qs.set('type', type);
       if (depts.length) qs.set('dept', depts.join(','));
       if (pg) qs.set('pg', pg);
+      if (taskF.length) qs.set('tasks', taskF.join(','));
+      if (sort !== 'default') qs.set('sort', sort);
       for (const [k, v] of Object.entries(limits)) qs.set(`n_${k}`, String(v));
       const r = await fetch(`/api/repeat-kanban?${qs}`);
       const j = await r.json().catch(() => ({}));
@@ -189,7 +209,18 @@ export function RepeatKanbanPage() {
           })}
         </div>
 
-        <nav className="flex min-w-0 flex-wrap gap-2" aria-label="Перейти к группе колонок">
+        <nav className="flex min-w-0 flex-wrap gap-2" aria-label="Фильтры и переход к группам колонок">
+          {/* Фильтр по задачам (владелец 20.10): РОП разбирает задачи прямо на канбане —
+              «ждёт приёмки», «просрочена», «без задачи» и т.д.; рядом — сколько заказчиков. */}
+          <SearchMultiSelect ariaLabel="Задачи" allLabel="Задачи: все" unitLabel="состояния задач" searchPlaceholder="Поиск"
+            options={TASK_FILTERS.map(f => ({ value: f.value, label: f.label, hint: `${rub.format(data?.taskCounts?.[f.value] ?? 0)} заказчиков · ${f.hint}` }))}
+            value={taskF} onChange={v => { setTaskF(v); setLimits({}); }}
+            className={`${taskF.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-56`} />
+          <label className="sr-only" htmlFor="rpk-sort">Сортировка</label>
+          <select id="rpk-sort" value={sort} onChange={e => { setSort(e.target.value); setLimits({}); }}
+            className={`${sort !== 'default' ? BTN_ACTIVE : BTN_IDLE} text-base sm:text-sm`}>
+            {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
           {/* Фильтр пула (владелец 20.10): последняя отгрузка — в выбранных группах, после неё
               ничего («отгружали газобетон, а после газобетона ничего»). Группа сделки — по
               наибольшему (head_group_name). Действует только на колонки пула. */}
@@ -579,7 +610,7 @@ function TaskModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () =
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<{ taskId: number; dealId: number; dealMode: string } | null>(null);
+  const [result, setResult] = useState<{ taskId: number; dealId: number; dealMode: string; chatPosted?: boolean } | null>(null);
   // Что произойдёт со сделкой — по правилам ТЗ (engine/createDeal.ts), заранее и честно.
   const what = card.deal ? `Задача в сделку #${card.deal.dealId}, в название — «ПОСМОТРИ ЗАДАЧУ».`
     : card.lastLost ? `Сделка #${card.lastLost.dealId} вернётся из отказа в первую стадию, в название — «ПОСМОТРИ ЗАДАЧУ».`
@@ -600,7 +631,7 @@ function TaskModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () =
         <div className="flex flex-col gap-3 text-sm">
           <p className="text-[var(--color-text)]">
             {result.dealMode === 'created' ? `Создана сделка #${result.dealId}` : result.dealMode === 'reopened' ? `Сделка #${result.dealId} возвращена из отказа` : `Сделка #${result.dealId}`}
-            {' '}и задача в проекте «Повторные продажи».
+            {' '}и задача в проекте «Повторные продажи».{text.trim() ? (result.chatPosted ? ' Комментарий — в описании и первым сообщением в чате задачи.' : ' Комментарий — в описании задачи (в чат задачи отправить не удалось).') : ''}
           </p>
           <div className="flex flex-wrap gap-3">
             <a href={taskUrl(result.taskId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline"><ExternalLink size={13} /> Задача #{result.taskId}</a>
@@ -612,7 +643,7 @@ function TaskModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () =
         <div className="flex flex-col gap-3 text-sm">
           <p className="rounded-lg bg-[var(--color-bg-surface)] p-3 text-[var(--color-text-secondary)]">
             {what} Исполнитель — ответственный за сделку, срок 5 дней, закрыть задачу может только постановщик.
-            В текст сами добавятся отгрузки заказчика со ссылками и анкета последней отгрузки.
+            В текст сами добавятся отгрузки заказчика со ссылками и анкета последней отгрузки; комментарий уйдёт и первым сообщением в чат задачи.
           </p>
           <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
             Комментарий менеджеру

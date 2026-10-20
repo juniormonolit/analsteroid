@@ -4,7 +4,10 @@ import { hasPerm } from '@/lib/auth/perms';
 import { ropScope, type RopScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { fetchManagerCustomers } from '@/features/customers/engine/customers';
-import { buildRepeatBoard } from '@/features/repeat-kanban/engine/board';
+import { buildRepeatBoard, type BoardSort, type TaskBucket } from '@/features/repeat-kanban/engine/board';
+
+const TASK_BUCKETS = ['none', 'unread', 'work', 'overdue', 'control', 'done'] as const;
+const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task'] as const;
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
@@ -89,6 +92,8 @@ export async function GET(req: NextRequest) {
       managers, selectedManagers: selected, typeFilter: type && /^[a-z_]{2,30}$/.test(type) ? type : null, limits, canManage,
       // ?pg=Газобетон|Кровля — группы через «|» (в названиях групп бывают запятые).
       poolGroups: (sp.get('pg') ?? '').split('|').map(x => x.trim()).filter(x => x.length > 0 && x.length < 120).slice(0, 50),
+      taskFilter: (sp.get('tasks') ?? '').split(',').filter((x): x is TaskBucket => (TASK_BUCKETS as readonly string[]).includes(x)),
+      sort: (SORTS as readonly string[]).includes(sp.get('sort') ?? '') ? sp.get('sort') as BoardSort : 'default',
     });
     return NextResponse.json(board, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
@@ -133,7 +138,7 @@ export async function POST(req: NextRequest) {
         ? (await ropOfManager(managerId)) ?? session.bitrixUserId
         : session.bitrixUserId;
       if (!creator) return NextResponse.json({ error: 'Не удалось определить постановщика: нет привязки к Битриксу' }, { status: 400 });
-      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment });
+      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, creatorName: session.displayName });
       return NextResponse.json(res);
     }
 
