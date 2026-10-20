@@ -276,8 +276,10 @@ export function PeriodRangeControls({ period, comparison, onPeriodChange, onComp
 // ── Выбор отделов — общий переиспользуемый блок (дерево орг. структуры) ─────
 // Тоже вынесен наружу, чтобы дрилл-даун мог встроить тот же контрол со своим
 // независимым набором отделов.
-export function DepartmentPicker({ departmentIds, onDepartmentIdsChange }: {
+export function DepartmentPicker({ departmentIds, onDepartmentIdsChange, triggerClassName }: {
   departmentIds: string[]; onDepartmentIdsChange: (ids: string[]) => void;
+  /** Свой вид кнопки (страница со своим набором кнопок — канбан повторных). */
+  triggerClassName?: string;
 }) {
   const [showDepts, setShowDepts] = useState(false);
   const [draft, setDraft] = useState<Set<string>>(new Set(departmentIds));
@@ -319,7 +321,7 @@ export function DepartmentPicker({ departmentIds, onDepartmentIdsChange }: {
       className="w-[280px] flex flex-col overflow-hidden"
       trigger={
         <button
-          className={`flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
+          className={triggerClassName ?? `flex items-center gap-2 px-3 py-1.5 border rounded-lg text-sm transition-colors ${
             departmentIds.length > 0
               ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
               : 'border-[var(--color-border)] hover:border-[var(--color-border-focus)] text-[var(--color-text)]'

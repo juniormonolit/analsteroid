@@ -22,7 +22,7 @@ const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
 export const COLUMN_PAGE = 40;
 /** Больше стольких менеджеров разом не грузим: первый прогрев ~1 с на менеджера. */
-export const MAX_MANAGERS_AT_ONCE = 40;
+export const MAX_MANAGERS_AT_ONCE = 80;
 const GOOD_CALL_SEC = 20;
 
 export interface RepeatDealInfo {

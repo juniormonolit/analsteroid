@@ -21,9 +21,11 @@ const COLUMN_KEYS = new Set<string>(COLUMNS.map(c => c.key));
 
 /** Менеджеры выбранных отделов. DepartmentPicker отдаёт UUID узлов дерева оргструктуры
  *  (вместе с потомками) — резолвер тот же, что у «Моей команды» (lib/org/teamRoster). */
-async function managersOfDepartments(deptIds: string[]): Promise<Set<string>> {
+async function managersOfDepartments(deptIds: string[]): Promise<{ id: string; name: string }[]> {
   const rows = await resolveManagersForDepartments(deptIds);
-  return new Set(rows.map(m => String(m.managerId)));
+  const seen = new Map<string, string>();
+  for (const m of rows) if (/^\d+$/.test(String(m.managerId))) seen.set(String(m.managerId), m.name || m.login || String(m.managerId));
+  return [...seen].map(([id, name]) => ({ id, name })).sort((x, y) => x.name.localeCompare(y.name, 'ru'));
 }
 
 async function context(session: SessionUser) {
@@ -50,10 +52,19 @@ export async function GET(req: NextRequest) {
     const ctx = await context(session);
     const deptIds = (sp.get('dept') ?? '').split(',').filter(x => /^[0-9a-f-]{1,40}$/i.test(x)).slice(0, 300);
     // Отделы сужают зону, но не расширяют: чужой отдел в параметре даст пустой список.
+    // Полный доступ (админ): менеджеры отделов берутся напрямую из оргструктуры. Раньше
+    // они пересекались со списком дерева «Телевизоров» (scopeManagers), где нет, например,
+    // стажировки и части филиалов — у админа выбор отделов давал пустую доску (20.10).
+    // РОПу — пересечение с его зоной: отдел вне зоны даст пусто.
     const inDepts = deptIds.length ? await managersOfDepartments(deptIds) : null;
-    const managers = inDepts ? ctx.managers.filter(m => inDepts.has(m.id)) : ctx.managers;
+    const zone = new Set(ctx.managers.map(m => m.id));
+    const managers = !inDepts ? ctx.managers : ctx.scope.full ? inDepts : inDepts.filter(m => zone.has(m.id));
     const canManage = ctx.canManage;
     const selected = rawMgr && managers.some(m => m.id === rawMgr) ? rawMgr : null;
+    if (inDepts && managers.length === 0) {
+      const board = await buildRepeatBoard({ managers: [], selectedManager: null, typeFilter: null, canManage });
+      return NextResponse.json({ ...board, notice: 'В выбранных отделах нет менеджеров из вашей зоны.' }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     const board = await buildRepeatBoard({
       managers, selectedManager: selected, typeFilter: type && /^[a-z_]{2,30}$/.test(type) ? type : null, limits, canManage,
     });

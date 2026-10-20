@@ -20,6 +20,10 @@ import type { KanbanCard, KanbanColumn, RepeatBoard } from '../engine/board';
 import type { RepeatTask } from '../engine/tasks';
 
 const PAGE = 40;
+// Все кнопки шапки — одного вида (правка владельца 20.10: «кнопочки приведи к одному виду»).
+const BTN = 'inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-3 text-sm transition-colors';
+const BTN_IDLE = `${BTN} border-[var(--color-border)] bg-[var(--color-bg-surface)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]`;
+const BTN_ACTIVE = `${BTN} border-[var(--color-accent)] bg-[var(--color-accent)] text-white`;
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const money = (n: number) => `${rub.format(n)} ₽`;
 const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' }) : '—');
@@ -79,7 +83,7 @@ export function RepeatKanbanPage() {
   const boardRef = useRef<HTMLDivElement>(null);
   const jump = (g: ColumnGroup) => {
     const el = boardRef.current?.querySelector<HTMLElement>(`[data-group="${g}"]`);
-    el?.scrollIntoView({ behavior: 'smooth', inline: 'start', block: 'nearest' });
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   if (error?.status === 403) return <AccessDenied reason="Канбан повторных продаж открыт ролям продаж." />;
@@ -93,7 +97,7 @@ export function RepeatKanbanPage() {
 
   return (
     <div className="h-full min-w-0 overflow-y-auto overflow-x-hidden">
-      <div className="mx-auto flex min-w-0 max-w-[2400px] flex-col gap-3 px-4 py-4 sm:px-6 sm:py-6">
+      <div className="flex min-w-0 flex-col gap-3 px-4 py-4 sm:px-6 sm:py-6">
         <header className="flex min-w-0 flex-wrap items-end justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-xl font-semibold text-[var(--color-text)]">Канбан повторных продаж</h1>
@@ -103,15 +107,15 @@ export function RepeatKanbanPage() {
             </p>
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setManager(''); setLimits({}); }} />
+            <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setManager(''); setLimits({}); }} triggerClassName={depts.length ? BTN_ACTIVE : BTN_IDLE} />
             {(data?.managers.length ?? 0) > 1 && (
               <SearchSelect ariaLabel="Менеджер" allLabel="Все менеджеры зоны" searchPlaceholder="Поиск менеджера"
                 options={data!.managers.map(m => ({ value: m.id, label: m.name }))}
                 value={manager} onChange={v => { setManager(v); setLimits({}); }}
-                className="w-[60vw] max-w-xs sm:w-64" />
+                className={`${BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-64`} />
             )}
             <button type="button" onClick={() => refetch()} aria-label="Обновить" title="Обновить"
-              className="tap-target flex min-h-11 min-w-11 items-center justify-center rounded-lg bg-[var(--color-bg-surface)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
+              className={`${BTN_IDLE} min-w-11 px-0`}>
               <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
             </button>
           </div>
@@ -120,7 +124,7 @@ export function RepeatKanbanPage() {
         {/* Телефон: список вместо семи чипов — чипы занимали весь первый экран. */}
         <label className="sr-only" htmlFor="rpk-type">Тип клиента</label>
         <select id="rpk-type" value={type} onChange={e => { setType(e.target.value); setLimits({}); }}
-          className="min-h-11 w-full rounded-lg bg-[var(--color-bg-surface)] px-3 text-base text-[var(--color-text)] sm:hidden">
+          className={`${BTN_IDLE} w-full text-base sm:hidden`}>
           {typeChips.map(t => (
             <option key={t.key || 'all'} value={t.key}>{t.label} · {rub.format(t.key ? data?.typeCounts[t.key] ?? 0 : totalAll)}</option>
           ))}
@@ -131,7 +135,7 @@ export function RepeatKanbanPage() {
             const active = type === t.key;
             return (
               <button key={t.key || 'all'} type="button" onClick={() => { setType(t.key); setLimits({}); }}
-                className={`min-h-11 rounded-lg px-3 text-sm ${active ? 'bg-[var(--color-accent)] text-white' : 'bg-[var(--color-bg-surface)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+                className={active ? BTN_ACTIVE : BTN_IDLE}>
                 {t.label} <span className={active ? 'opacity-80' : 'text-[var(--color-text-muted)]'}>· {rub.format(n)}</span>
               </button>
             );
@@ -141,7 +145,7 @@ export function RepeatKanbanPage() {
         <nav className="flex min-w-0 flex-wrap gap-2" aria-label="Перейти к группе колонок">
           {GROUPS.map(g => (
             <button key={g.key} type="button" onClick={() => jump(g.key)} title={g.hint}
-              className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] sm:text-sm">
+              className={BTN_IDLE}>
               {g.title}
             </button>
           ))}
@@ -152,14 +156,16 @@ export function RepeatKanbanPage() {
         {isLoading && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Собираю доску — первый раз по команде это до полуминуты…</div>}
 
         <div className="min-w-0">
-          <div ref={boardRef} className="scroll-x flex items-start gap-4 pb-4">
+          <div ref={boardRef} className="flex min-w-0 flex-col gap-5 pb-4">
             {GROUPS.map(g => (
-              <section key={g.key} data-group={g.key} className="flex shrink-0 flex-col gap-2">
+              <section key={g.key} data-group={g.key} className="flex min-w-0 scroll-mt-4 flex-col gap-2">
                 <div className="px-1">
                   <div className="text-sm font-semibold text-[var(--color-text)]">{g.title}</div>
                   <div className="text-xs text-[var(--color-text-muted)]">{g.hint}</div>
                 </div>
-                <div className="flex items-start gap-3">
+                {/* Группа — строкой на всю ширину: колонки делят экран (на широком мониторе ничего
+                    не режется), не влезли — прокручивается только эта строка. */}
+                <div className="scroll-x min-w-0 pb-1"><div className="flex items-start gap-3">
                   {COLUMNS.filter(c => c.group === g.key).map(def => (
                     <Column key={def.key} def={def} col={byKey.get(def.key)} canManage={!!data?.canManage}
                       onMore={() => setLimits(l => ({ ...l, [def.key]: (l[def.key] ?? PAGE) + PAGE }))}
@@ -167,7 +173,7 @@ export function RepeatKanbanPage() {
                       onUnbrak={async c => { if (confirm(`Снять брак с «${cardName(c)}»? Заказчик вернётся в пул.`)) { await post({ action: 'unbrak', clientKey: c.clientKey, managerId: c.managerId }).catch(e => alert(e.message)); refresh(); } }}
                     />
                   ))}
-                </div>
+                </div></div>
               </section>
             ))}
           </div>
@@ -193,7 +199,7 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
 }) {
   const tone = def.key === 'brak' ? 'var(--color-negative)' : def.key === 'review' ? '#d97706' : def.key === 'touch_3' ? 'var(--color-positive)' : 'var(--color-accent)';
   return (
-    <div className="flex w-72 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
+    <div className="flex min-w-[260px] max-w-[85vw] flex-1 basis-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
       <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${tone}` }} title={def.hint}>
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-sm font-semibold text-[var(--color-text)]">{def.title}</span>
@@ -201,6 +207,8 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
         </div>
         {col && col.sum > 0 && <div className="text-xs text-[var(--color-text-muted)]">в сделках {money(col.sum)}</div>}
       </div>
+      {/* Карточки скроллятся внутри колонки — строки групп не растягиваются на километр. */}
+      <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto">
       {col?.cards.map(c => (
         <Card key={c.clientKey} c={c} col={def.key} canManage={canManage}
           onOpen={() => onOpen(c)} onTask={() => onTask(c)} onReview={() => onReview(c)} onUnbrak={() => onUnbrak(c)} />
@@ -211,6 +219,7 @@ function Column({ def, col, canManage, onMore, onOpen, onTask, onReview, onUnbra
           Показать ещё · осталось {rub.format(col.total - col.cards.length)}
         </button>
       )}
+      </div>
       {col && col.total === 0 && <div className="px-2 py-3 text-xs text-[var(--color-text-muted)]">Пусто</div>}
     </div>
   );
