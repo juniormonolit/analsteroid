@@ -51,7 +51,11 @@ export async function buildDailySnapshot(date = mskDate()): Promise<SnapshotResu
   let written = 0, skipped = 0;
   for (const m of mgrs) {
     try {
-      const b = await buildRepeatBoard({ managers: [{ id: m.id, name: m.name }], selectedManagers: [], typeFilter: null, canManage: false, skipNames: true });
+      // Предохранитель: один менеджер не должен держать весь снимок (зависший внешний запрос).
+      const b = await Promise.race([
+        buildRepeatBoard({ managers: [{ id: m.id, name: m.name }], selectedManagers: [], typeFilter: null, canManage: false, skipNames: true }),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('таймаут 90 с')), 90_000)),
+      ]);
       const k = b.kpi;
       if (!k) { skipped++; continue; }
       const total = k.pool + k.inWork + k.funnel + k.review + k.hidden;

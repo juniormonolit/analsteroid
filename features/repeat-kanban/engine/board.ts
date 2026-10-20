@@ -307,7 +307,7 @@ export async function buildRepeatBoard(opts: {
   /** Сколько карточек отдать по каждой колонке (пагинация «показать ещё»). */
   limits?: Partial<Record<ColumnKey, number>>;
   canManage: boolean;
-  /** Ночной снимок: имена клиентов не нужны — не ходим в Битрикс. */
+  /** Ночной снимок: имена и типы клиентов не нужны — не ходим в Битрикс. */
   skipNames?: boolean;
 }): Promise<RepeatBoard> {
   const now = Date.now();
@@ -340,6 +340,9 @@ export async function buildRepeatBoard(opts: {
   const [deals, marks, profileTypes, tailTable, lastDelivered] = await Promise.all([
     fetchLatestRepeatDeals(keys),
     fetchCustomerMarks(keys),
+    // Ночной снимок типы клиентов не использует — не ходим за ними в Битрикс (20.10: первый
+    // снимок завис на 214-м менеджере на запросе типов в Битрикс).
+    opts.skipNames ? Promise.resolve(new Map<string, string>()) :
     Promise.all(roster.map(m => fetchClientTypes(`mgr:${m.id}`, rows.filter(r => r.managerId === m.id).map(r => r.clientKey))))
       .then(maps => new Map(maps.flatMap(mp => [...mp]))),
     fetchTailTable().catch(() => ({ seg: {} })),
