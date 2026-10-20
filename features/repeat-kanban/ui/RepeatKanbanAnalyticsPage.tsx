@@ -71,11 +71,19 @@ function buildTree(org: OrgNode[], mgr: MgrDay[], snapDate: string, dates: strin
     const kids = none.map(m => ({ id: `m:${m.managerId}`, name: m.name, depth: 1, kind: 'mgr' as const, agg: add(ZERO, m), children: [], series: [] as number[], mgrIds: new Set([m.managerId]) }));
     roots.push({ id: '__none', name: 'Без отдела', depth: 0, kind: 'org', agg: kids.reduce((s, c) => add(s, c.agg), ZERO), children: kids, series: [], mgrIds: new Set(none.map(m => m.managerId)) });
   }
+  // Одиночный верхний узел («Дирекция» — корень оргструктуры) не уровень анализа: разворачиваем,
+  // пока сверху один узел, — первым уровнем идут филиалы/департаменты.
+  let top = roots.filter(r => r.id !== '__none');
+  const noneNode = roots.find(r => r.id === '__none');
+  while (top.length === 1 && top[0].children.some(c => c.kind === 'org')) top = top[0].children;
+  const finalRoots = noneNode ? [...top, noneNode] : top;
+  const redepth = (n: TreeNode, d: number) => { n.depth = d; n.children.forEach(c => redepth(c, d + 1)); };
+  finalRoots.forEach(r => redepth(r, 0));
   const fill = (n: TreeNode) => { n.series = seriesOf(n.mgrIds); n.children.forEach(fill); };
-  roots.forEach(fill);
+  finalRoots.forEach(fill);
   const allIds = new Set(last.map(m => m.managerId));
   const total: TreeNode = { id: '__total', name: 'Итого', depth: 0, kind: 'org', agg: last.reduce((s, m) => add(s, m), ZERO), children: [], series: seriesOf(allIds), mgrIds: allIds };
-  return { roots, total };
+  return { roots: finalRoots, total };
 }
 
 type SortKey = 'name' | 'total' | 'pool' | 'potential' | 'strict' | 'inWork' | 'funnel' | 'delta';
