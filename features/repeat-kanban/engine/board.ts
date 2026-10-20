@@ -254,7 +254,10 @@ export async function buildRepeatBoard(opts: {
     // Сделка «текущая», только если она после последней отгрузки (иначе это давняя
     // история — заказчик снова в пуле). Отгруженная повторка тоже уже история.
     const lastDelMs = r.lastDeliveredAt ? new Date(r.lastDeliveredAt).getTime() : 0;
-    const current = deal && !WON_STAGES.has(deal.stageId) && new Date(deal.createdAt).getTime() >= lastDelMs - 60_000
+    // Открытая (не отказ) повторная сделка — текущая всегда: её могли откатить из отказа
+    // кнопкой «Вернуть сделку» (правило владельца 20.10), и создана она тогда раньше отгрузки.
+    const current = deal && !WON_STAGES.has(deal.stageId)
+      && (!LOST_STAGES.has(deal.stageId) || new Date(deal.createdAt).getTime() >= lastDelMs - 60_000)
       ? deal : null;
 
     // Окно: от последней отгрузки или от создания сделки (что позже); задача РОПа по

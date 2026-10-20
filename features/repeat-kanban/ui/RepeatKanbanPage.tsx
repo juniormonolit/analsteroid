@@ -334,7 +334,7 @@ function Card({ c, col, canManage, onOpen, onTask, onReview, onUnbrak, onDone }:
         {canManage && col !== 'review' && col !== 'brak' && (
           <button type="button" onClick={onTask}
             className="inline-flex min-h-11 items-center gap-1 rounded-md bg-[var(--color-accent-soft)] px-2.5 text-xs text-[var(--color-accent)] hover:opacity-90">
-            <Plus size={13} /> {c.deal ? 'Задача' : 'Сделка + задача'}
+            <Plus size={13} /> {c.deal ? 'Задача' : c.lastLost ? 'Вернуть сделку + задача' : 'Сделка + задача'}
           </button>
         )}
         {canManage && col === 'review' && (
@@ -380,8 +380,9 @@ function TaskModal({ card, managers, onClose, onSaved }: {
         action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, assigneeId: assignee,
         text, dueAt: due || null, createDeal, dealId: card.deal?.dealId ?? null,
       });
-      setResult(j.dealCreated ? `Сделка #${j.dealId} создана в Битриксе, задача отправлена менеджеру.`
-        : j.dealId && createDeal ? `Открытая повторная сделка #${j.dealId} уже была — задача привязана к ней.`
+      setResult(j.dealMode === 'created' ? `Сделка #${j.dealId} создана в Битриксе, задача отправлена менеджеру.`
+        : j.dealMode === 'reopened' ? `Сделка #${j.dealId} возвращена из отказа в «Сделка», задача отправлена менеджеру.`
+        : j.dealMode === 'existing' ? `Открытая повторная сделка #${j.dealId} уже была — задача привязана к ней.`
         : 'Задача отправлена менеджеру.');
       onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
@@ -417,7 +418,9 @@ function TaskModal({ card, managers, onClose, onSaved }: {
           {!card.deal && (
             <label className="flex min-h-11 items-center gap-2 text-sm text-[var(--color-text)]">
               <input type="checkbox" checked={createDeal} onChange={e => setCreateDeal(e.target.checked)} className="h-5 w-5" />
-              Создать повторную сделку в Битриксе (как из контакта, на исполнителя)
+              {card.lastLost
+                ? `Вернуть сделку #${card.lastLost.dealId} из отказа в работу (на исполнителя)`
+                : 'Создать повторную сделку в Битриксе (как из контакта, на исполнителя)'}
             </label>
           )}
           {err && <p className="text-sm text-[var(--color-negative)]">{err}</p>}
@@ -425,7 +428,7 @@ function TaskModal({ card, managers, onClose, onSaved }: {
             <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
             <button type="button" disabled={busy || text.trim().length < 3} onClick={submit}
               className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-sm text-white disabled:opacity-50">
-              {busy ? 'Отправляю…' : createDeal && !card.deal ? 'Создать сделку и задачу' : 'Поставить задачу'}
+              {busy ? 'Отправляю…' : createDeal && !card.deal ? (card.lastLost ? 'Вернуть сделку и поставить задачу' : 'Создать сделку и задачу') : 'Поставить задачу'}
             </button>
           </div>
         </div>

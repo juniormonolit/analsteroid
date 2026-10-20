@@ -100,15 +100,15 @@ export async function POST(req: NextRequest) {
       const assignee = typeof body.assigneeId === 'string' && managers.some(m => m.id === body.assigneeId) ? body.assigneeId : managerId;
       const dueAt = typeof body.dueAt === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.dueAt) ? `${body.dueAt}T21:00:00+03:00` : null;
       let dealId: number | null = Number.isInteger(Number(body.dealId)) && Number(body.dealId) > 0 ? Number(body.dealId) : null;
-      let dealCreated = false;
+      let dealMode: string | null = null;
       if (body.createDeal === true) {
         const d = await createRepeatDeal({ clientKey, assignedBitrixId: assignee });
         dealId = d.dealId;
-        dealCreated = !d.existing;
+        dealMode = d.mode;
       }
       const name = (await getCachedClientNames([clientKey])).get(clientKey) ?? null;
       const task = await createTask({ clientKey, clientName: name, dealId, managerBitrixId: assignee, text, dueAt, session });
-      return NextResponse.json({ task, dealId, dealCreated });
+      return NextResponse.json({ task, dealId, dealMode });
     }
 
     if (body.action === 'review') {
