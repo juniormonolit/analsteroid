@@ -3,6 +3,9 @@
 // «Ещё → Модули» (превью для админов) и во вкладке карточки контакта/компании
 // Битрикса (/bx/client-card). Самодостаточен: на вход только ID клиента.
 //
+// v3 (20.10): ЕДИНАЯ карточка клиента — она же открывается панелью в приложении
+// (ClientCardDrawer) вместо карточки «Моих заказчиков»; добавлены «Покупки» (путь
+// клиента), «Звонки» (лента по всем сделкам) и «Кто вёл» (HistoryTabs.tsx).
 // v2 (13.10, вечер): «идеальная карточка» — соединение ТЗ, карточки «Моих
 // заказчиков» и развёрнутой карточки Монолитики; табы как в Монолитике, без
 // звонков: «Обзор» (сводка, заметки, показатели, что предложить) → «Сделки»
@@ -19,10 +22,16 @@ import { ClientBar } from './parts';
 import { OverviewTab } from './OverviewTab';
 import { DealsTab } from './DealsTab';
 import { ObjectsTab } from './ObjectsTab';
+import { CallsTab, ManagersBlock, PurchasesTab } from './HistoryTabs';
+import { DealOpenerContext } from './dealLink';
 
-type Tab = 'overview' | 'deals' | 'objects';
+type Tab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls';
 
-export function ClientModuleWidget({ contactId, companyId }: { contactId?: string; companyId?: string }) {
+export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
+  contactId?: string; companyId?: string;
+  /** В приложении: открыть сделку карточкой Монолитики. Нет — ссылки ведут в Битрикс. */
+  onDealOpen?: (dealId: number) => void;
+}) {
   const params: Record<string, string> = companyId ? { companyId } : contactId ? { contactId } : {};
   const qs = new URLSearchParams(params).toString();
   const { data, isLoading, error } = useQuery<ClientModuleData>({
@@ -50,10 +59,13 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
   const tabs: { key: Tab; label: string }[] = [
     { key: 'overview', label: 'Обзор' },
     { key: 'deals', label: `Сделки · ${data.deals.length}` },
+    { key: 'purchases', label: `Покупки · ${data.deals.filter(d => d.deliveredAt).length}` },
     { key: 'objects', label: `Объекты · ${data.objects.length}` },
+    { key: 'calls', label: 'Звонки' },
   ];
 
   return (
+    <DealOpenerContext.Provider value={onDealOpen ?? null}>
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
@@ -66,7 +78,7 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
         <ClientBar data={data} params={params} openSignal={editClient} />
       </div>
 
-      {/* Три вкладки — переносом, без горизонтальной ленты (правило 12 CLAUDE.md). */}
+      {/* Вкладки — переносом, без горизонтальной ленты (правило 12 CLAUDE.md). */}
       <div role="tablist" className="flex flex-wrap gap-1 border-b border-[var(--color-border)]">
         {tabs.map(t => (
           <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
@@ -82,6 +94,10 @@ export function ClientModuleWidget({ contactId, companyId }: { contactId?: strin
         onOpenDeals={f => { setDealsFilter(prev => ({ object: f.object, n: prev.n + 1 })); setTab('deals'); }} />}
       {tab === 'deals' && <DealsTab key={dealsFilter.n} data={data} params={params} initialObject={dealsFilter.object ?? null} />}
       {tab === 'objects' && <ObjectsTab data={data} params={params} focus={focusObject} onOpenDeals={k => { setDealsFilter(prev => ({ object: k, n: prev.n + 1 })); setTab('deals'); }} />}
+      {tab === 'purchases' && <PurchasesTab qs={qs} />}
+      {tab === 'calls' && <CallsTab qs={qs} />}
+      {tab === 'overview' && <ManagersBlock qs={qs} />}
     </div>
+    </DealOpenerContext.Provider>
   );
 }

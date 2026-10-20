@@ -168,7 +168,12 @@ function usePortalToBody(): (node: React.ReactNode) => React.ReactNode {
   return node => (mounted && typeof document !== 'undefined' ? createPortal(node, document.body) : null);
 }
 
-export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => void }) {
+export function DealCard({ dealId, onClose, stackZ }: {
+  dealId: number; onClose: () => void;
+  /** Слой наложения поверх других панелей: из карточки клиента, открытой поверх
+   *  сделки (z-80), вложенная сделка должна лечь ещё выше. */
+  stackZ?: number;
+}) {
   const portal = usePortalToBody();
   const { data, isLoading } = useQuery({
     queryKey: ['deal-card', dealId],
@@ -270,7 +275,7 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
   // трансформированного предка — во всех местах (дрилл отчёта, разбор метрики,
   // карточка заказчика) она снова во весь экран.
   return portal(
-    <>
+    <div style={stackZ ? { position: 'relative', zIndex: stackZ } : undefined}>
       {/* Затемнение: клик мимо карточки закрывает её. z-[65] — выше z-50 дрилл-дауна
           (карточка может открываться поверх него), ниже z-[70] самой карточки. */}
       <SlideBackdrop closing={closing} onClick={requestClose} className="z-[65]" />
@@ -709,6 +714,6 @@ export function DealCard({ dealId, onClose }: { dealId: number; onClose: () => v
           zIndex={80}
         />
       )}
-    </>,
+    </div>,
   );
 }

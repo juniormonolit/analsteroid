@@ -6,7 +6,7 @@
 //   а) Отгружено / всего сделок — «8 / 10»
 //   б) LTV — сумма отгруженных
 //   в) Средний чек отгрузок
-//   г) Цикл повторки — среднее время между отгрузками
+//   г) Цикл повторки — медиана интервалов между покупками (с 20.10; было среднее)
 //   д) Последняя отгрузка — дата (и дней с неё в скобках)
 //   ж) Количество объектов (для клиента)
 //   h) Список сделок «как на скрине»: дата, товарные группы, ↓ интервал между
@@ -14,12 +14,15 @@
 
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
+import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ModuleDeal, type ModuleStats } from '../engine/types';
 import { Chip, fmtD, dealTitle } from './parts';
 import { callTiming } from '../engine/callTiming';
+import { DealLink } from './dealLink';
 
 const DAY_MS = 86_400_000;
+/** Медиана интервала между покупками по всей базе (customers.ts GLOBAL_REPEAT_CYCLE_DAYS). */
+const GLOBAL_CYCLE_DAYS = 16;
 
 function Metric({ label, value, sub }: { label: string; value: React.ReactNode; sub?: React.ReactNode }) {
   return (
@@ -35,7 +38,10 @@ function Metric({ label, value, sub }: { label: string; value: React.ReactNode; 
 export function TzMetrics({ s, objects, deals }: { s: ModuleStats; objects?: { total: number; active: number }; deals?: ModuleDeal[] }) {
   const other = s.total - s.shipped;
   const timing = deals ? callTiming(deals) : null;
-  const cycle = timing?.cycle ?? s.cycleDays;
+  // Канон цикла (решение владельца 20.10, единая карточка): медиана интервалов между
+  // покупками при 3+ покупках, иначе медиана по всей базе — 16 дн. (как в «Моих
+  // заказчиках», GLOBAL_REPEAT_CYCLE_DAYS). Среднее ТЗ больше не показываем.
+  const cycle = timing?.cycle ?? (s.shipped > 0 ? GLOBAL_CYCLE_DAYS : null);
   return (
     // Плитки сами раскладываются по ширине (во вкладке Битрикса она разная): не
     // меньше 150px, без обрезки подписей «Средний чек отгруз…».
@@ -43,9 +49,8 @@ export function TzMetrics({ s, objects, deals }: { s: ModuleStats; objects?: { t
       <Metric label="Отгружено / всего" value={<>{s.shipped} / {s.total}</>} sub={other > 0 ? `${other} в других статусах` : 'все отгружены'} />
       <Metric label="LTV" value={fmtMoney(s.ltv)} sub={s.firstShippedAt ? `с ${fmtD(s.firstShippedAt)}` : 'отгрузок нет'} />
       <Metric label="Средний чек отгрузки" value={s.avgCheck !== null ? fmtMoney(s.avgCheck) : '—'} />
-      {/* Одно число цикла на весь экран (аудит 15.10: плитка «9 дн.» спорила со строкой
-          «раз в 8 дней»): при 3+ покупках — медиана из callTiming, иначе среднее ТЗ. */}
-      <Metric label="Цикл повторки" value={cycle !== null ? `${cycle} дн.` : '—'} sub={timing ? `обычно, по ${timing.purchases} покупкам` : s.cycleDays !== null ? 'между отгрузками' : 'нужно 2+ отгрузки'} />
+      {/* Одно число цикла на весь экран (аудит 15.10): медиана из callTiming, иначе 16 дн. по базе. */}
+      <Metric label="Цикл повторки" value={cycle !== null ? `${cycle} дн.` : '—'} sub={timing ? `медиана, по ${timing.purchases} покупкам` : s.shipped > 0 ? 'по базе — своих покупок мало' : 'отгрузок нет'} />
       <Metric label="Последняя отгрузка" value={s.lastShippedAt ? fmtD(s.lastShippedAt) : '—'}
         sub={s.daysSinceLast !== null ? `(${s.daysSinceLast} дн. назад)` : undefined} />
       {objects && <Metric label="Объектов" value={objects.total} sub={`в работе ${objects.active}`} />}
@@ -90,7 +95,7 @@ export function Purchases({ deals, title = 'Покупки' }: { deals: ModuleDe
                         </div>
                       ))}
                     <div className="flex flex-wrap gap-x-3 border-t border-[var(--color-border)] px-3 py-1.5 text-[11.5px] text-[var(--color-text-muted)]">
-                      <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline">{dealTitle(d)} — открыть в Битриксе</a>
+                      <DealLink dealId={d.dealId} className="text-left text-[var(--color-accent)] hover:underline">{dealTitle(d)} — открыть сделку</DealLink>
                       {d.managerName && <span>· {d.managerName}</span>}
                       {d.products.length > 0 && <span className="ml-auto">Итого: <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(total)}</b></span>}
                     </div>

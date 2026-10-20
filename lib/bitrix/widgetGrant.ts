@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import type { NextRequest } from 'next/server';
 import { redisReady } from '@/lib/cache/redis';
 import { getSession } from '@/lib/auth/session';
-import { canUseModules } from '@/lib/auth/modulesAccess';
+import { canUseModules, canSessionSeeClientRef } from '@/lib/auth/modulesAccess';
 
 // Пропуск виджета «Карточка клиента» во вкладке карточки контакта/компании
 // Битрикса (задача владельца 13.10). Почему не cookie, как у /api/bitrix/app:
@@ -47,6 +47,8 @@ export async function readWidgetGrant(token: string | null | undefined): Promise
 export async function moduleActor(req: NextRequest, ref: string | null): Promise<string | null> {
   const session = await getSession().catch(() => null);
   if (session && canUseModules(session)) return session.login;
+  // Единая карточка клиента в приложении: менеджер/РОП видит «своих» клиентов по сессии.
+  if (session && ref !== null && await canSessionSeeClientRef(session, ref)) return session.login;
   const grant = await readWidgetGrant(req.headers.get(WIDGET_TOKEN_HEADER));
   if (!grant) return null;
   if (ref !== null && grant.ref !== ref) return null;

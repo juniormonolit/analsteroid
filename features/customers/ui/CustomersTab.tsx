@@ -9,7 +9,7 @@
 //   * «Предложить» — топ-1 чипом, топ-3 в тултипе (награда за допродажу
 //     скрыта 21.09: геймификация временно убрана с глаз владельцем);
 //   * секции — тонкая строка-разделитель, не серый блок;
-//   * имя открывает КАРТОЧКУ КЛИЕНТА (CustomerCard.tsx) — ссылка на Битрикс,
+//   * имя открывает ЕДИНУЮ КАРТОЧКУ КЛИЕНТА (client-module ClientCardDrawer, с 20.10) — ссылка на Битрикс,
 //     история менеджеров, таймлайн, отметки и пр. переехали туда.
 // Клиент = contact_id (физ) / company_id (юр); атрибуция — менеджер последней
 // сделки; сигналы и пороги — в features/customers/engine/customers.ts.
@@ -23,7 +23,7 @@ import { HelpCircle, MoreHorizontal, ExternalLink } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import type { ActiveDealInfo, CustomerSection, NoCallReason } from '@/features/customers/engine/customers';
 import type { Recommendation } from '@/features/customers/engine/crossSell';
-import { CustomerCard } from './CustomerCard';
+import { ClientCardDrawer } from '@/features/client-module/ui/ClientCardDrawer';
 import {
   type ApiRow, REASON_LABELS, fmtMoney, fmtDate, daysAgo,
   clientBitrixUrl, dealBitrixUrl, clientDisplayName,
@@ -676,12 +676,12 @@ export function CustomersList({ managerId, isSelf, initialFilter, initialCategor
         renderActions={r => <RowMenu r={r} send={sendMark} busy={markBusy} onOpenCard={() => setCardRow(r)} managerId={r.managerId ?? managerId} isSelf={team ? false : isSelf} />} />
 
       {cardRowLive && (
-        <CustomerCard
-          row={cardRowLive}
-          managerId={cardRowLive.managerId ?? managerId}
-          isSelf={team ? false : isSelf}
+        // Единая карточка клиента (20.10): та же, что во вкладке Битрикса. Отметки
+        // списка остаются в меню строки (RowMenu) — раздел упраздняется целиком.
+        <ClientCardDrawer
+          contactId={cardRowLive.clientType === 'contact' ? cardRowLive.clientId : null}
+          companyId={cardRowLive.clientType === 'company' ? cardRowLive.clientId : null}
           onClose={() => setCardRow(null)}
-          markControls={<MarkControls r={cardRowLive} send={sendMark} busy={markBusy} managerId={cardRowLive.managerId ?? managerId} isSelf={team ? false : isSelf} />}
         />
       )}
     </div>

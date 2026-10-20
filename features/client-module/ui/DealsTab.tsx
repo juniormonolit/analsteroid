@@ -7,11 +7,12 @@
 
 import { Fragment, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
+import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, type ModuleDeal, type DealStage, DEAL_STAGE_LABEL, dealSortDate } from '../engine/types';
 import { StageChip, selectCls, useSave, shortGroup, fmtD, dealTitle } from './parts';
 import { shortAddress } from '../engine/objectClusters';
 import { Purchases } from './TzBlocks';
+import { DealLink } from './dealLink';
 
 const STAGES: DealStage[] = ['shipped', 'sold', 'active', 'lost'];
 
@@ -202,7 +203,7 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
                 </div>
                 {isOpen && (
                   <>
-                    <div className="px-3 pb-1"><a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="text-[12px] text-[var(--color-accent)] hover:underline">Открыть в Битриксе</a></div>
+                    <div className="px-3 pb-1"><DealLink dealId={d.dealId} className="text-[12px] text-[var(--color-accent)] hover:underline">Открыть сделку</DealLink></div>
                     <DealRowExpanded d={d} data={data} params={params} />
                   </>
                 )}
@@ -241,8 +242,8 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
                       <td className="px-1 py-1.5 align-top text-[var(--color-text-muted)]">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</td>
                       <td className="whitespace-nowrap px-2 py-1.5 align-top tabular-nums text-[var(--color-text-muted)]">{fmtD(d.createdAt)}</td>
                       <td className="max-w-[240px] px-2 py-1.5 align-top">
-                        <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
-                          className="line-clamp-2 text-[var(--color-accent)] hover:underline" title="Открыть сделку в Битриксе">{dealTitle(d)}</a>
+                        <DealLink dealId={d.dealId} stop
+                          className="line-clamp-2 text-left text-[var(--color-accent)] hover:underline" title="Открыть сделку">{dealTitle(d)}</DealLink>
                       </td>
                       <td className="max-w-[170px] px-2 py-1.5 align-top" title={d.groups.join(', ')}>
                         <span className="line-clamp-2">{d.topGroup ? shortGroup(d.topGroup) : <span className="text-[var(--color-text-muted)]">—</span>}{d.groups.length > 1 && <span className="text-[11px] text-[var(--color-text-muted)]"> +{d.groups.length - 1}</span>}</span>

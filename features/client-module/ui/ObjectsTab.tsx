@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, MapPin, Plus, ArrowUp, CircleDot, Check } from 'lucide-react';
-import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
+import { fmtMoney } from '@/features/customers/ui/shared';
 import { AddressPicker, type GeoValue, type GeoHint } from '@/features/geo/ui/AddressPicker';
 import {
   type ClientModuleData, type ModuleObject, type StageLadder, type HouseType,
@@ -17,6 +17,7 @@ import {
 import { Section, Chip, StatusChip, StatusDot, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup, fmtD, dealTitle, useDismiss } from './parts';
 import { TzMetrics, Purchases } from './TzBlocks';
 import { shortAddress } from '../engine/objectClusters';
+import { DealLink } from './dealLink';
 
 const DAY_MS = 86_400_000;
 
@@ -65,7 +66,7 @@ function Ladder({ ladder, onDismiss, hidden, onRestore }: { ladder: StageLadder 
           <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">Сейчас</div>
           <div className="text-[14px] font-bold">{ladder.current.group}</div>
           <div className="text-[11.5px] text-[var(--color-text-muted)]">
-            главная отгрузка за 45 дн. · <a href={dealBitrixUrl(ladder.current.dealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline" title="Открыть сделку в Битриксе">{fmtD(ladder.current.date)}</a>
+            главная отгрузка за 45 дн. · <DealLink dealId={ladder.current.dealId} className="text-[var(--color-accent)] hover:underline" title="Открыть сделку">{fmtD(ladder.current.date)}</DealLink>
           </div>
         </div>
       </div>

@@ -7,9 +7,10 @@
 // Звонки клиенту по другой сделке, пока эта была открыта, тоже засчитываются.
 
 import { Phone, PhoneOff } from 'lucide-react';
-import { fmtMoney, dealBitrixUrl } from '@/features/customers/ui/shared';
+import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, isOpenDeal } from '../engine/types';
 import { Chip, fmtD, shortGroup } from './parts';
+import { DealLink } from './dealLink';
 
 const plural = (n: number, one: string, few: string, many: string) =>
   n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
@@ -37,9 +38,9 @@ export function LastDealLine({ data }: { data: ClientModuleData }) {
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 text-[12.5px]">
-      <a href={dealBitrixUrl(d.dealId)} target="_blank" rel="noreferrer" className="font-semibold hover:underline">
+      <DealLink dealId={d.dealId} className="font-semibold hover:underline">
         Последняя сделка {fmtD(d.createdAt)}
-      </a>
+      </DealLink>
       <span className="min-w-0 text-[var(--color-text-muted)]">
         {d.groups.length ? shortGroup(d.groups[0]) + (d.groups.length > 1 ? ` +${d.groups.length - 1}` : '') : 'без товаров'}
         {d.amount > 0 ? ` · ${fmtMoney(d.amount)}` : ''}
