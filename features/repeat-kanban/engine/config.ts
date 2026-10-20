@@ -23,7 +23,7 @@ export const TOUCHES = 3;
 export const REVIEW_SINCE = '2026-10-21T00:00:00+03:00';
 
 export type ColumnKey =
-  | 'pool_1' | 'pool_2_4' | 'pool_5'
+  | 'pool_hot' | 'pool_1' | 'pool_2_4' | 'pool_5'
   | 'touch_0' | 'touch_1' | 'touch_2' | 'touch_3'
   | 'st_called' | 'st_supply' | 'st_offer' | 'st_cheaper' | 'st_reserved' | 'st_sold'
   | 'review' | 'brak';
@@ -40,6 +40,7 @@ export interface ColumnDef {
 }
 
 export const COLUMNS: readonly ColumnDef[] = [
+  { key: 'pool_hot', group: 'pool', title: 'Срочно: окно открыто', hint: `Последняя отгрузка — не больше ${22} дней назад, повторной сделки нет: самое время брать в работу` },
   { key: 'pool_1', group: 'pool', title: '1 отгрузка', hint: 'Купил один раз, повторной сделки нет' },
   { key: 'pool_2_4', group: 'pool', title: '2–4 отгрузки', hint: 'Возвращался, повторной сделки сейчас нет' },
   { key: 'pool_5', group: 'pool', title: 'Золотые рыбки', hint: '5 и более отгрузок, повторной сделки сейчас нет' },

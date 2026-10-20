@@ -89,7 +89,7 @@ export interface KanbanCard {
   lostEarly: boolean;
   sleeping: boolean;
   atRisk: boolean;
-  /** Пул: первая отгрузка свежая (≤ 22 дн.), а сделки нет — «пора брать в работу». */
+  /** Пул: окно открыто — последняя отгрузка ≤ 22 дн. назад, сделки нет (колонка «Срочно»). */
   freshDays: number | null;
 }
 
@@ -228,7 +228,10 @@ function countAttempts(startMs: number, events: { ms: number; reached: boolean }
 
 type Row = CustomerRow & { managerId: string; managerName: string };
 
-function poolColumn(purchases: number): ColumnKey {
+function poolColumn(purchases: number, freshDays: number | null = null): ColumnKey {
+  // Окно повторной продажи открыто (≤ 22 дн. с последней отгрузки) — отдельная колонка
+  // «Срочно» (владелец 20.10), при любом числе покупок: окно открывается после каждой отгрузки.
+  if (freshDays !== null) return 'pool_hot';
   if (purchases >= 5) return 'pool_5';
   if (purchases >= 2) return 'pool_2_4';
   return 'pool_1';
@@ -338,6 +341,9 @@ export async function buildRepeatBoard(opts: {
       win = { startAt: new Date(windowStartMs).toISOString(), ...countAttempts(windowStartMs, events, now) };
     }
 
+    const hasOpenDeal = !!current && !LOST_STAGES.has(current.stageId);
+    const freshDays = !hasOpenDeal && r.lastDeliveredAt && !r.hasOpenOrder && (now - lastDelMs) / DAY_MS <= WINDOW_DAYS
+      ? Math.floor((now - lastDelMs) / DAY_MS) : null;
     // Колонка.
     let col: ColumnKey;
     if (mark?.kind === 'no_call') col = 'brak';
@@ -345,13 +351,13 @@ export async function buildRepeatBoard(opts: {
       const lostMs = current.lostAt ? new Date(current.lostAt).getTime() : new Date(current.createdAt).getTime();
       const onReview = lostMs >= new Date(REVIEW_SINCE).getTime() || task !== null;
       if (onReview && (!review || review.decision === 'return')) col = 'review';
-      else col = poolColumn(r.purchasesDelivered);
+      else col = poolColumn(r.purchasesDelivered, freshDays);
     } else if (current && NEW_STAGES.has(current.stageId)) {
       col = (`touch_${Math.min(win?.count ?? 0, TOUCHES)}`) as ColumnKey;
     } else if (current && STAGE_TO_COLUMN.has(current.stageId)) {
       col = STAGE_TO_COLUMN.get(current.stageId)!;
     } else if (r.hasOpenOrder) col = 'st_sold';
-    else col = poolColumn(r.purchasesDelivered);
+    else col = poolColumn(r.purchasesDelivered, freshDays);
 
     const inPool = col.startsWith('pool') || col === 'brak';
     const typeKey = profileType ?? 'none';
@@ -382,8 +388,7 @@ export async function buildRepeatBoard(opts: {
       // Закрыли в отказ, не дозвонившись и не сделав трёх попыток — нарушение правила.
       lostEarly: col === 'review' && !(win?.reached) && (win?.count ?? 0) < TOUCHES,
       sleeping: r.sleeping, atRisk: r.atRisk,
-      freshDays: !current && r.purchasesDelivered === 1 && r.lastDeliveredAt && (now - lastDelMs) / DAY_MS <= WINDOW_DAYS
-        ? Math.floor((now - lastDelMs) / DAY_MS) : null,
+      freshDays,
     });
   }
 
@@ -397,12 +402,14 @@ export async function buildRepeatBoard(opts: {
     if (def.group === 'touch') {
       const start = (c: KanbanCard) => (c.attempts ? new Date(c.attempts.startAt).getTime() : 0);
       list.sort((a, b) => start(a) - start(b) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
+    } else if (def.key === 'pool_hot') {
+      // Срочно: сначала те, у кого окно закрывается раньше (больше дней с отгрузки).
+      list.sort((a, b) => (b.freshDays ?? 0) - (a.freshDays ?? 0) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
     } else if (def.key === 'review' || def.key === 'brak') {
       const at = (c: KanbanCard) => c.brak?.at ?? c.deal?.lostAt ?? '';
       list.sort((a, b) => at(b).localeCompare(at(a)));
     } else {
-      list.sort((a, b) => typeRank(a) - typeRank(b) || Number(b.freshDays !== null) - Number(a.freshDays !== null)
-        || Number(a.sleeping) - Number(b.sleeping) || ev(b) - ev(a));
+      list.sort((a, b) => typeRank(a) - typeRank(b) || Number(a.sleeping) - Number(b.sleeping) || ev(b) - ev(a));
     }
     const limit = Math.max(1, Math.min(opts.limits?.[def.key] ?? COLUMN_PAGE, 2000));
     const ageOf = (c: KanbanCard): number | null => {
