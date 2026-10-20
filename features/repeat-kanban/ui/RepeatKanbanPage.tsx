@@ -4,8 +4,9 @@
 // звонки) — руками ничего не перетаскивается. Ручные действия: задача (+ сделка в
 // Битриксе) от РОПа, «выполнено» от менеджера, разбор отказа РОПом.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus } from 'lucide-react';
+import { BarChart3, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -185,6 +186,9 @@ export function RepeatKanbanPage() {
                 value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
                 className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-64`} />
             )}
+            <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Кто что делал, проработанность пула по отделам, журнал">
+              <BarChart3 size={16} /> Аналитика
+            </Link>
             <button type="button" onClick={() => refetch()} aria-label="Обновить" title="Обновить"
               className={`${BTN_IDLE} min-w-11 px-0`}>
               <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
