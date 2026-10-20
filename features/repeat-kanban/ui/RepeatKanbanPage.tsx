@@ -350,7 +350,10 @@ function PotentialBadge({ c }: { c: KanbanCard }) {
   return (
     <Popover open={open} onOpenChange={setOpen} side="top" align="start" className="w-[320px] max-w-[calc(100vw-16px)] p-3 text-[12.5px] leading-snug"
       trigger={
+        // Клик только ОТКРЫВАЕТ (preventDefault глушит переключатель Radix): иначе наведение
+        // открывало, а клик тут же закрывал. Закрытие — уход мыши, клик мимо, Esc.
         <button type="button" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}
+          onClick={e => { e.preventDefault(); setOpen(true); }}
           className="font-semibold text-[var(--color-text)] underline decoration-dotted underline-offset-2">
           потенциал ~{moneyShort(p.value)}
         </button>
