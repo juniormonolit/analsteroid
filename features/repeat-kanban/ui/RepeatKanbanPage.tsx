@@ -322,13 +322,13 @@ function KpiStrip({ k }: { k: BoardKpi }) {
   const pctOf = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '—');
   const tiles: { label: string; value: string; sub?: string; hint: string; tone?: 'neg' | 'warn' }[] = [
     { label: 'В пуле', value: rub.format(k.pool), sub: 'заказчиков', hint: 'Без открытой повторной сделки — кого можно брать в работу' },
-    { label: 'В дозвоне', value: rub.format(k.inWork), sub: `потенциал ${moneyShort(k.inWorkPotential)}`, hint: 'Взяты в работу и в попытках связаться' },
+    { label: 'В дозвоне', value: rub.format(k.inWork), sub: `на ${moneyShort(k.inWorkPotential)}`, hint: 'Взяты в работу и в попытках связаться' },
     { label: 'Дозвон', value: pctOf(k.reached, k.inWork), sub: `${rub.format(k.reached)} из ${rub.format(k.inWork)}`, hint: 'Среди тех, кто в дозвоне: был разговор дольше 20 с или ручной контакт' },
-    { label: 'В воронке', value: rub.format(k.funnel), sub: `сделок на ${moneyShort(k.funnelSum)}`, hint: 'Повторные сделки в работе и их сумма' },
+    { label: 'В воронке', value: rub.format(k.funnel), sub: `на ${moneyShort(k.funnelSum)}`, hint: 'Повторные сделки в работе и их сумма' },
     { label: 'Просрочено', value: rub.format(k.tasksOverdue), sub: 'задач', hint: 'Открытые задачи проекта «Повторные продажи» с прошедшим сроком', tone: k.tasksOverdue ? 'neg' : undefined },
     { label: 'Ждут приёмки', value: rub.format(k.tasksControl), sub: 'задач', hint: 'Менеджер сдал задачу, постановщик не принял', tone: k.tasksControl ? 'warn' : undefined },
     { label: 'Без задачи', value: rub.format(k.noTaskInWork), sub: 'сделок', hint: 'В дозвоне и воронке, по которым нет открытой задачи', tone: k.noTaskInWork ? 'warn' : undefined },
-    { label: 'Отказы', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} до 3 попыток` : 'на проверке', hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
+    { label: 'Отказы', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} рано закрыты` : 'на проверке', hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
   ];
   return (
     <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-stretch">
@@ -343,11 +343,14 @@ function KpiStrip({ k }: { k: BoardKpi }) {
           мелко — без обрезанных «Заказчиков в п…» (правка владельца 20.10). */}
       <div className="grid min-w-0 flex-1 auto-rows-fr grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
         {tiles.map(t => (
-          <div key={t.label} title={t.hint}
-            className="flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 py-2 text-center">
-            <div className="text-[11.5px] font-medium leading-tight text-[var(--color-text-muted)]">{t.label}</div>
-            <div className="text-[22px] font-bold leading-none tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
-            <div className="min-h-[14px] text-[11px] leading-tight text-[var(--color-text-muted)]">{t.sub ?? ''}</div>
+          // Жёсткая сетка из трёх строк фиксированной высоты — подпись / цифра / пояснение:
+          // цифры всех плиток на одной линии, сколько бы строк ни занял текст (правка 20.10:
+          // «все цифры прыгают»). Пояснение — одна строка с многоточием, полный текст в title.
+          <div key={t.label} title={t.sub ? `${t.hint}\n${t.sub}` : t.hint}
+            className="grid min-w-0 grid-rows-[16px_30px_16px] content-center items-center justify-items-center gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 py-2 text-center">
+            <div className="w-full truncate text-[11.5px] font-medium leading-4 text-[var(--color-text-muted)]">{t.label}</div>
+            <div className="text-[24px] font-bold leading-[30px] tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
+            <div className="w-full truncate text-[11px] leading-4 text-[var(--color-text-muted)]">{t.sub ?? '\u00a0'}</div>
           </div>
         ))}
       </div>
