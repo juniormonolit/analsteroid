@@ -131,6 +131,7 @@ export function taskBucketOf(c: Pick<KanbanCard, 'task'>, now = Date.now()): Tas
 
 export interface BoardKpi {
   pool: number; poolPotential: number;
+  totalPotential: number;
   inWork: number; inWorkPotential: number;
   reached: number;
   funnel: number; funnelSum: number;
@@ -541,6 +542,8 @@ export async function buildRepeatBoard(opts: {
   const work = [...allIn('touch'), ...allIn('stage')];
   const kpi: BoardKpi = {
     pool: allIn('pool').length, poolPotential: pot(allIn('pool')),
+    // Потенциал всей базы (кроме брака): не тает от работы — работа перекладывает его из пула в работу.
+    totalPotential: pot([...allIn('pool'), ...allIn('touch'), ...allIn('stage'), ...allIn('review'), ...allIn('hidden')]),
     inWork: allIn('touch').length, inWorkPotential: pot(allIn('touch')),
     reached: allIn('touch').filter(c => c.attempts?.reached).length,
     funnel: allIn('stage').length, funnelSum: allIn('stage').reduce((s, c) => s + (c.deal?.amount ?? 0), 0),

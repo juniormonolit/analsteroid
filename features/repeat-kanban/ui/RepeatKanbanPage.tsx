@@ -404,11 +404,14 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
     <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-stretch">
       {/* Главная цифра — сколько денег лежит в пуле, если вернуть заказчиков. */}
       <div className="flex shrink-0 items-center gap-3 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-[340px]">
+        {/* Потенциал ВСЕЙ базы (кроме брака) — не тает от работы (владелец 20.10: «при проработанном
+            канбане потенциал будет 0?»); под ним — сколько из него ещё лежит нетронутым в пуле. */}
         <div className="min-w-0 flex-1"
-          title="Сумма потенциалов заказчиков пула: сколько они принесут за год, если вернуть их. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр).">
-          <div className="text-[12px] opacity-85">Потенциал пула за год</div>
-          <div className="text-[26px] font-bold leading-tight tabular-nums">{moneyShort(k.poolPotential)}</div>
+          title="Сумма потенциалов всех заказчиков, кроме брака: сколько они принесут за год, если работать с повторкой. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр). «В пуле» — та часть, по которой ещё никто не работает.">
+          <div className="text-[12px] opacity-85">Потенциал за год</div>
+          <div className="text-[26px] font-bold leading-tight tabular-nums">{moneyShort(k.totalPotential)}</div>
           <div className="text-[12px] opacity-85">если работать с повторкой</div>
+          <div className="mt-0.5 text-[11.5px] font-semibold">в пуле, не тронуто: {moneyShort(k.poolPotential)}</div>
         </div>
         <WorkedRing k={k} />
       </div>
