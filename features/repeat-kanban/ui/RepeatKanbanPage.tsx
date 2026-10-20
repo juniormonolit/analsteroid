@@ -359,6 +359,27 @@ function Column({ def, col, canManage, viewerId, onMore, onOpen, onTask, onRevie
 
 /** Показатели канбана для РОПа — снимок текущей доски (аудит Fable 20.10). Исторические
  *  (скорость взятия из пула, конверсия пул → продано за 90 дн.) — в BACKLOG. */
+/** Проработанность канбана (владелец 20.10): доля заказчиков НЕ в пуле среди всех, кроме брака.
+ *  Проработан = взят в работу / в воронке / отказ на проверке / скрыт с решением; 100 % — пул пуст. */
+function WorkedRing({ k }: { k: BoardKpi }) {
+  const total = k.pool + k.inWork + k.funnel + k.review + k.hidden;
+  const worked = total - k.pool;
+  const share = total ? worked / total : 0;
+  const r = 26, c = 2 * Math.PI * r;
+  return (
+    <div className="flex shrink-0 flex-col items-center"
+      title={`Проработано ${rub.format(worked)} из ${rub.format(total)} заказчиков (без брака): в дозвоне ${k.inWork}, в воронке ${k.funnel}, отказы на проверке ${k.review}, скрыты ${k.hidden}. В пуле осталось ${k.pool}. 100% — пул пуст, все в работе.`}>
+      <svg width="64" height="64" viewBox="0 0 64 64" aria-label={`Проработано ${Math.round(share * 100)}%`}>
+        <circle cx="32" cy="32" r={r} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="7" />
+        <circle cx="32" cy="32" r={r} fill="none" stroke="#ffffff" strokeWidth="7" strokeLinecap="round"
+          strokeDasharray={`${c * share} ${c}`} transform="rotate(-90 32 32)" />
+        <text x="32" y="36" textAnchor="middle" fill="#ffffff" fontSize="14" fontWeight="700">{Math.round(share * 100)}%</text>
+      </svg>
+      <div className="mt-0.5 whitespace-nowrap text-[11px] opacity-85">проработано</div>
+    </div>
+  );
+}
+
 function KpiStrip({ k, activeTask, onTask, onJump }: {
   k: BoardKpi; activeTask: string | null;
   /** Клик по плитке задач — фильтр этого состояния + сортировка «по задачам» (владелец 20.10). */
@@ -382,11 +403,14 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
   return (
     <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-stretch">
       {/* Главная цифра — сколько денег лежит в пуле, если вернуть заказчиков. */}
-      <div className="flex shrink-0 flex-col justify-center rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-72"
-        title="Сумма потенциалов заказчиков пула: сколько они принесут за год, если вернуть их. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр).">
-        <div className="text-[12px] opacity-85">Потенциал пула за год</div>
-        <div className="text-[26px] font-bold leading-tight tabular-nums">{moneyShort(k.poolPotential)}</div>
-        <div className="text-[12px] opacity-85">если работать с повторкой</div>
+      <div className="flex shrink-0 items-center gap-3 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-[340px]">
+        <div className="min-w-0 flex-1"
+          title="Сумма потенциалов заказчиков пула: сколько они принесут за год, если вернуть их. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр).">
+          <div className="text-[12px] opacity-85">Потенциал пула за год</div>
+          <div className="text-[26px] font-bold leading-tight tabular-nums">{moneyShort(k.poolPotential)}</div>
+          <div className="text-[12px] opacity-85">если работать с повторкой</div>
+        </div>
+        <WorkedRing k={k} />
       </div>
       {/* Плитки — одной высоты с главной, всё по центру; подпись сверху, цифра крупно, пояснение
           мелко — без обрезанных «Заказчиков в п…» (правка владельца 20.10). */}
