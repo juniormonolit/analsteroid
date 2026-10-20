@@ -43,10 +43,10 @@ export const COLUMNS: readonly ColumnDef[] = [
   { key: 'pool_1', group: 'pool', title: '1 отгрузка', hint: 'Купил один раз, повторной сделки нет' },
   { key: 'pool_2_4', group: 'pool', title: '2–4 отгрузки', hint: 'Возвращался, повторной сделки сейчас нет' },
   { key: 'pool_5', group: 'pool', title: 'Золотые рыбки', hint: '5 и более отгрузок, повторной сделки сейчас нет' },
-  { key: 'touch_0', group: 'touch', title: 'Контакт 0/3', hint: 'Окно 22 дня: ни одной недели с контактом' },
-  { key: 'touch_1', group: 'touch', title: 'Контакт 1/3', hint: 'Окно 22 дня: контакт на одной неделе из трёх' },
-  { key: 'touch_2', group: 'touch', title: 'Контакт 2/3', hint: 'Окно 22 дня: контакт на двух неделях из трёх' },
-  { key: 'touch_3', group: 'touch', title: 'Контакт 3/3', hint: 'Три недели с контактом — сделку можно закрывать' },
+  { key: 'touch_0', group: 'touch', title: 'Взят в работу', hint: 'Достали из пула: сделка создана или возвращена, задача поставлена, попыток связаться ещё не было' },
+  { key: 'touch_1', group: 'touch', title: '1-я попытка', hint: 'Был один день с попыткой связаться (звонок, в т.ч. недозвон, или контакт)' },
+  { key: 'touch_2', group: 'touch', title: '2-я попытка', hint: 'Два разных дня с попыткой связаться' },
+  { key: 'touch_3', group: 'touch', title: '3-я попытка', hint: 'Последняя: дозвон — в стадию воронки, нет — в отказ' },
   { key: 'st_called', group: 'stage', title: 'Созвонился, уточнил материалы', hint: 'Стадия повторной воронки', stages: ['C2:3', 'C3:3'] },
   { key: 'st_supply', group: 'stage', title: 'Запрос снабженцу', hint: 'Стадия повторной воронки', stages: ['C2:PREPARATION', 'C3:PREPARATION'] },
   { key: 'st_offer', group: 'stage', title: 'Материалы / КП', hint: 'B2C: заполнил материалы и запланировал звонок · B2B: отправил КП', stages: ['C2:PREPAYMENT_INVOICE', 'C3:PREPAYMENT_INVOICE'] },
@@ -93,3 +93,15 @@ export const BRAK_REASONS = [
   { value: 'other', label: 'Прочее' },
 ] as const;
 export type BrakReason = (typeof BRAK_REASONS)[number]['value'];
+
+/** Цвет чипа типа клиента (владелец 20.10: «стройорганизация должна привлекать внимание»,
+ *  аудит Fable): ценные — заливкой, остальные — контуром, «не указан» — серый пунктир.
+ *  Цвета — «Основная палитра» проекта (Google Sheets 10×8). */
+export const CLIENT_TYPE_STYLE: Record<string, { bg: string; fg: string; border: string; dashed?: boolean }> = {
+  construction_org: { bg: '#351c75', fg: '#ffffff', border: '#351c75' },
+  foreman: { bg: '#f6b26b', fg: '#783f04', border: '#e69138' },
+  self_builder: { bg: 'transparent', fg: '#38761d', border: '#6aa84f' },
+  self_builder_late: { bg: 'transparent', fg: '#134f5c', border: '#45818e' },
+  own_needs_org: { bg: 'transparent', fg: '#741b47', border: '#a64d79' },
+  none: { bg: 'transparent', fg: '#999999', border: '#b7b7b7', dashed: true },
+};

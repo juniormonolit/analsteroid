@@ -17,6 +17,7 @@ import {
 } from './config';
 import { fetchTasksForDeals, type RepeatTask } from './tasks';
 import { fetchClientTypes } from './clientTypes';
+import { fetchTailTable, tailPotential, type PotentialInfo } from './potential';
 
 const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
@@ -38,7 +39,7 @@ export interface RepeatDealInfo {
   managerId: string | null;
 }
 
-export interface CallInfo { at: string; sec: number; missed: boolean }
+export interface CallInfo { at: string; sec: number; missed: boolean; inbound: boolean }
 
 export interface ReviewInfo {
   decision: 'brak' | 'no_answer' | 'return';
@@ -61,6 +62,10 @@ export interface KanbanCard {
   lastDeliveredGroup: string | null;
   repeatChance: number | null;
   expectedValue: number | null;
+  /** Потенциал на 12 мес. — средний «хвост» таких же заказчиков (engine/potential.ts). */
+  potential: number | null;
+  /** Из чего сложился потенциал — для подсказки на карточке. */
+  potentialInfo: PotentialInfo | null;
   /** Тип из карточки клиента (foreman/construction_org/...), null — не заполнен. */
   profileType: string | null;
   /** Текущая повторная сделка (в работе или на разборе). В пуле и браке — null. */
@@ -68,7 +73,11 @@ export interface KanbanCard {
   /** Пул/брак: последняя повторная сделка закрыта в отказ — справочно («последний отказ»). */
   lastLost: RepeatDealInfo | null;
   /** Окно 22 дня: начало, касания по неделям, закрыто ли уже. */
-  window: { startAt: string; weeks: boolean[]; done: number; weekNo: number | null; closed: boolean } | null;
+  /** Попытки связаться (правка владельца 20.10): попытка = ДЕНЬ, в который был исходящий
+   *  звонок (в т.ч. недозвон), отвеченный входящий или ручная отметка контакта; считаются
+   *  по порядку от взятия в работу, без недельной сетки. reached — дозвонились (звонок > 20 с
+   *  или ручной контакт): дальше менеджер переводит сделку в стадию или закрывает в отказ. */
+  attempts: { startAt: string; days: string[]; count: number; reached: boolean; daysSinceStart: number } | null;
   /** Звонки по текущей повторной сделке после начала окна (свежие сверху, до 10). */
   calls: CallInfo[];
   missedCalls: number;
@@ -82,7 +91,31 @@ export interface KanbanCard {
   atRisk: boolean;
 }
 
-export interface KanbanColumn { key: ColumnKey; total: number; sum: number; cards: KanbanCard[] }
+export interface KanbanColumn {
+  key: ColumnKey; total: number;
+  /** Сумма открытых сделок колонки. */
+  sum: number;
+  /** Сумма потенциала (12 мес.) заказчиков колонки. */
+  potential: number;
+  /** Итого под колонкой: средний «возраст» карточки, дн. (пул — с последней отгрузки, попытки —
+   *  со взятия в работу, воронка — с создания сделки), без задачи / просрочено / спит. */
+  avgAgeDays: number | null;
+  noTask: number;
+  overdue: number;
+  sleeping: number;
+  cards: KanbanCard[];
+}
+
+/** Показатели канбана для РОПа (снимок текущей доски). */
+export interface BoardKpi {
+  pool: number; poolPotential: number;
+  inWork: number; inWorkPotential: number;
+  reached: number;
+  funnel: number; funnelSum: number;
+  tasksOverdue: number; tasksControl: number; noTaskInWork: number;
+  review: number; reviewEarly: number;
+  brak: number;
+}
 
 export interface RepeatBoard {
   generatedAt: string;
@@ -93,6 +126,7 @@ export interface RepeatBoard {
   typeCounts: Record<string, number>;
   /** Пул: товарная группа ПОСЛЕДНЕЙ отгрузки («по наибольшему», head_group_name) → заказчиков. */
   poolGroupCounts: Record<string, number>;
+  kpi: BoardKpi | null;
   notice: string | null;
   canManage: boolean;
 }
@@ -130,8 +164,8 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
 
 async function fetchDealCalls(dealIds: number[], sinceIso: string): Promise<Map<number, CallInfo[]>> {
   if (!dealIds.length) return new Map();
-  const res = await analyticsDb().query<{ deal_id: number; called_at: Date; duration_seconds: number | null; result: string | null }>(
-    `SELECT deal_id, called_at, duration_seconds, result FROM va.calls
+  const res = await analyticsDb().query<{ deal_id: number; called_at: Date; duration_seconds: number | null; result: string | null; direction: string | null }>(
+    `SELECT deal_id, called_at, duration_seconds, result, direction FROM va.calls
       WHERE deal_id = ANY($1::bigint[]) AND called_at >= $2::timestamptz
       ORDER BY called_at DESC`,
     [dealIds, sinceIso],
@@ -140,7 +174,7 @@ async function fetchDealCalls(dealIds: number[], sinceIso: string): Promise<Map<
   for (const r of res.rows) {
     const sec = Number(r.duration_seconds ?? 0);
     const list = out.get(Number(r.deal_id)) ?? [];
-    list.push({ at: new Date(r.called_at).toISOString(), sec, missed: r.result === 'missed' || sec === 0 });
+    list.push({ at: new Date(r.called_at).toISOString(), sec, missed: r.result === 'missed' || sec === 0, inbound: r.direction === 'inbound' });
     out.set(Number(r.deal_id), list);
   }
   return out;
@@ -175,18 +209,19 @@ async function fetchReviews(dealIds: number[]): Promise<Map<number, ReviewInfo>>
   } catch { return new Map(); } // до миграции 230 — без решений
 }
 
-/** Недели окна, закрытые контактом: успешный звонок (> 20 с) или ручная отметка. */
-function windowWeeks(startMs: number, contacts: number[], now: number) {
-  const weeks = [false, false, false];
-  for (const t of contacts) {
-    const d = (t - startMs) / DAY_MS;
-    if (d < 0 || d > WINDOW_DAYS) continue;
-    weeks[Math.min(TOUCHES, Math.floor(d / WEEK_DAYS) + 1) - 1] = true;
+/** День по Москве (YYYY-MM-DD) — единица «попытки». */
+const mskDay = (ms: number) => new Date(ms + 3 * 3600_000).toISOString().slice(0, 10);
+
+/** Попытки по порядку: разные дни с событием контакта начиная со старта. */
+function countAttempts(startMs: number, events: { ms: number; reached: boolean }[], now: number) {
+  const days = new Set<string>();
+  let reached = false;
+  for (const e of events.filter(x => x.ms >= startMs).sort((x, y) => x.ms - y.ms)) {
+    days.add(mskDay(e.ms));
+    if (e.reached) reached = true;
   }
-  const since = (now - startMs) / DAY_MS;
-  const closed = since > WINDOW_DAYS;
-  const weekNo = closed ? null : Math.min(TOUCHES, Math.floor(Math.max(0, since) / WEEK_DAYS) + 1);
-  return { weeks, done: weeks.filter(Boolean).length, weekNo, closed };
+  const list = [...days].sort();
+  return { days: list.slice(0, TOUCHES), count: list.length, reached, daysSinceStart: Math.max(0, Math.floor((now - startMs) / DAY_MS)) };
 }
 
 type Row = CustomerRow & { managerId: string; managerName: string };
@@ -213,9 +248,9 @@ export async function buildRepeatBoard(opts: {
   const roster = pick.size ? opts.managers.filter(m => pick.has(m.id)) : opts.managers;
   const base = {
     generatedAt: new Date(now).toISOString(), managers: opts.managers, selectedManagers: opts.selectedManagers,
-    typeCounts: {}, poolGroupCounts: {}, canManage: opts.canManage,
+    typeCounts: {}, poolGroupCounts: {}, kpi: null, canManage: opts.canManage,
   };
-  const emptyCols = () => COLUMNS.map(c => ({ key: c.key, total: 0, sum: 0, cards: [] }));
+  const emptyCols = (): KanbanColumn[] => COLUMNS.map(c => ({ key: c.key, total: 0, sum: 0, potential: 0, avgAgeDays: null, noTask: 0, overdue: 0, sleeping: 0, cards: [] }));
   if (roster.length === 0) return { ...base, columns: emptyCols(), notice: 'В вашей зоне нет менеджеров.' };
   if (roster.length > MAX_MANAGERS_AT_ONCE) {
     return { ...base, columns: emptyCols(), notice: `В зоне ${roster.length} менеджеров — отметьте менеджеров или сузьте отделы.` };
@@ -234,11 +269,12 @@ export async function buildRepeatBoard(opts: {
   const keys = rows.map(r => r.clientKey);
 
   // 2. Свежие данные поверх кэша.
-  const [deals, marks, profileTypes] = await Promise.all([
+  const [deals, marks, profileTypes, tailTable] = await Promise.all([
     fetchLatestRepeatDeals(keys),
     fetchCustomerMarks(keys),
     Promise.all(roster.map(m => fetchClientTypes(`mgr:${m.id}`, rows.filter(r => r.managerId === m.id).map(r => r.clientKey))))
       .then(maps => new Map(maps.flatMap(mp => [...mp]))),
+    fetchTailTable().catch(() => ({ seg: {} })),
   ]);
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
@@ -284,16 +320,19 @@ export async function buildRepeatBoard(opts: {
     }
 
     const dealCalls = current ? calls.get(current.dealId) ?? [] : [];
-    let win: KanbanCard['window'] = null;
+    let win: KanbanCard['attempts'] = null;
     let callsInWindow: CallInfo[] = [];
     if (windowStartMs !== null) {
       callsInWindow = dealCalls.filter(c => new Date(c.at).getTime() >= windowStartMs!);
-      const contactMs = [
-        ...r.goodCallsAfter.map(t => new Date(t).getTime()),
-        ...callsInWindow.filter(c => c.sec > GOOD_CALL_SEC).map(c => new Date(c.at).getTime()),
-        ...(manual.get(r.clientKey) ?? []).map(t => new Date(t).getTime()),
+      const events = [
+        // Исходящий — попытка всегда (и недозвон); входящий — только отвеченный.
+        ...callsInWindow.filter(c => !c.inbound || !c.missed)
+          .map(c => ({ ms: new Date(c.at).getTime(), reached: !c.missed && c.sec > GOOD_CALL_SEC })),
+        ...(manual.get(r.clientKey) ?? []).map(t => ({ ms: new Date(t).getTime(), reached: true })),
+        // Без сделки (свежая первая отгрузка) звонков по сделке нет — берём успешные по клиенту.
+        ...(current ? [] : r.goodCallsAfter.map(t => ({ ms: new Date(t).getTime(), reached: true }))),
       ];
-      win = { startAt: new Date(windowStartMs).toISOString(), ...windowWeeks(windowStartMs, contactMs, now) };
+      win = { startAt: new Date(windowStartMs).toISOString(), ...countAttempts(windowStartMs, events, now) };
     }
 
     // Колонка.
@@ -305,11 +344,11 @@ export async function buildRepeatBoard(opts: {
       if (onReview && (!review || review.decision === 'return')) col = 'review';
       else col = poolColumn(r.purchasesDelivered);
     } else if (current && NEW_STAGES.has(current.stageId)) {
-      col = (`touch_${Math.min(win?.done ?? 0, TOUCHES)}`) as ColumnKey;
+      col = (`touch_${Math.min(win?.count ?? 0, TOUCHES)}`) as ColumnKey;
     } else if (current && STAGE_TO_COLUMN.has(current.stageId)) {
       col = STAGE_TO_COLUMN.get(current.stageId)!;
     } else if (r.hasOpenOrder) col = 'st_sold';
-    else if (win && !current) col = (`touch_${win.done}`) as ColumnKey;
+    else if (win && !current) col = (`touch_${Math.min(win.count, TOUCHES)}`) as ColumnKey;
     else col = poolColumn(r.purchasesDelivered);
 
     const inPool = col.startsWith('pool') || col === 'brak';
@@ -328,16 +367,18 @@ export async function buildRepeatBoard(opts: {
       purchases: r.purchasesDelivered, sumDelivered: r.sumDelivered,
       lastDeliveredAt: r.lastDeliveredAt, lastDeliveredGroup: r.lastDeliveredGroup,
       repeatChance: r.repeatChance, expectedValue: r.expectedValue,
+      ...(() => { const p = tailPotential(tailTable, r.purchasesDelivered, r.clientType === 'company' || r.clientKey.startsWith('x')); return { potential: p?.value ?? null, potentialInfo: p }; })(),
       profileType,
       // В пуле и браке отказная сделка — история, не «текущая»: иначе кнопка предлагала бы
       // задачу к закрытой сделке вместо новой сделки, а окно контактов висело бы зря.
       deal: inPool ? null : current,
       lastLost: inPool && current && LOST_STAGES.has(current.stageId) ? current : null,
-      window: inPool ? null : win,
+      attempts: inPool ? null : win,
       calls: inPool ? [] : callsInWindow.slice(0, 10), missedCalls: inPool ? 0 : callsInWindow.filter(c => c.missed).length,
       task, review,
       brak: mark?.kind === 'no_call' ? { reason: mark.reason, comment: mark.comment, by: mark.createdBy, at: mark.createdAt } : null,
-      lostEarly: col === 'review' && (win?.done ?? 0) < TOUCHES,
+      // Закрыли в отказ, не дозвонившись и не сделав трёх попыток — нарушение правила.
+      lostEarly: col === 'review' && !(win?.reached) && (win?.count ?? 0) < TOUCHES,
       sleeping: r.sleeping, atRisk: r.atRisk,
     });
   }
@@ -350,7 +391,7 @@ export async function buildRepeatBoard(opts: {
   for (const def of COLUMNS) {
     const list = buckets.get(def.key)!;
     if (def.group === 'touch') {
-      const start = (c: KanbanCard) => (c.window ? new Date(c.window.startAt).getTime() : 0);
+      const start = (c: KanbanCard) => (c.attempts ? new Date(c.attempts.startAt).getTime() : 0);
       list.sort((a, b) => start(a) - start(b) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
     } else if (def.key === 'review' || def.key === 'brak') {
       const at = (c: KanbanCard) => c.brak?.at ?? c.deal?.lostAt ?? '';
@@ -359,9 +400,20 @@ export async function buildRepeatBoard(opts: {
       list.sort((a, b) => typeRank(a) - typeRank(b) || Number(a.sleeping) - Number(b.sleeping) || ev(b) - ev(a));
     }
     const limit = Math.max(1, Math.min(opts.limits?.[def.key] ?? COLUMN_PAGE, 2000));
+    const ageOf = (c: KanbanCard): number | null => {
+      const iso = def.group === 'pool' ? c.lastDeliveredAt : def.group === 'touch' ? c.attempts?.startAt ?? null : c.deal?.createdAt ?? null;
+      return iso ? (now - new Date(iso).getTime()) / DAY_MS : null;
+    };
+    const ages = list.map(ageOf).filter((x): x is number => x !== null);
+    const openTask = (c: KanbanCard) => c.task && c.task.state !== 'done';
     columns.push({
       key: def.key, total: list.length,
       sum: list.reduce((s, c) => s + (c.deal?.amount ?? 0), 0),
+      potential: list.reduce((s, c) => s + (c.potential ?? 0), 0),
+      avgAgeDays: ages.length ? Math.round(ages.reduce((s, x) => s + x, 0) / ages.length) : null,
+      noTask: def.group === 'touch' || def.group === 'stage' ? list.filter(c => !openTask(c)).length : 0,
+      overdue: list.filter(c => openTask(c) && c.task!.state !== 'control' && c.task!.deadlineAt && new Date(c.task!.deadlineAt).getTime() < now).length,
+      sleeping: def.group === 'pool' ? list.filter(c => c.sleeping).length : 0,
       cards: list.slice(0, limit),
     });
   }
@@ -371,5 +423,18 @@ export async function buildRepeatBoard(opts: {
   const names = await resolveClientNames(visibleKeys).catch(() => getCachedClientNames(visibleKeys));
   for (const c of columns) for (const card of c.cards) card.name = names.get(card.clientKey) ?? null;
 
-  return { ...base, columns, typeCounts, poolGroupCounts, notice: null };
+  const sumBy = (g: string, f: (c: KanbanColumn) => number) => columns.filter(c => COLUMNS.find(d => d.key === c.key)!.group === g).reduce((s, c) => s + f(c), 0);
+  const allIn = (g: string) => COLUMNS.filter(d => d.group === g).flatMap(d => buckets.get(d.key)!);
+  const kpi: BoardKpi = {
+    pool: sumBy('pool', c => c.total), poolPotential: sumBy('pool', c => c.potential),
+    inWork: sumBy('touch', c => c.total), inWorkPotential: sumBy('touch', c => c.potential),
+    reached: allIn('touch').filter(c => c.attempts?.reached).length,
+    funnel: sumBy('stage', c => c.total), funnelSum: sumBy('stage', c => c.sum),
+    tasksOverdue: columns.reduce((s, c) => s + c.overdue, 0),
+    tasksControl: [...allIn('touch'), ...allIn('stage'), ...allIn('review')].filter(c => c.task?.state === 'control').length,
+    noTaskInWork: sumBy('touch', c => c.noTask) + sumBy('stage', c => c.noTask),
+    review: buckets.get('review')!.length, reviewEarly: buckets.get('review')!.filter(c => c.lostEarly).length,
+    brak: buckets.get('brak')!.length,
+  };
+  return { ...base, columns, typeCounts, poolGroupCounts, kpi, notice: null };
 }

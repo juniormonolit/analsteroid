@@ -23,7 +23,7 @@ export async function decideReview(input: {
     if (!BRAK_REASONS.some(r => r.value === input.reason)) throw new ReviewError('Укажите причину брака');
     reason = input.reason as BrakReason;
     if (input.touchesDone < TOUCHES && !comment) {
-      throw new ReviewError(`Контактов ${input.touchesDone} из ${TOUCHES}: чтобы принять такой отказ, напишите почему`);
+      throw new ReviewError(`Попыток ${input.touchesDone} из ${TOUCHES} и без дозвона: чтобы принять такой отказ, напишите почему`);
     }
   }
   const db = systemDb();
