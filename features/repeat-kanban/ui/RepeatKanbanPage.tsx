@@ -403,6 +403,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   if (c.deal && !t && (col.startsWith('touch') || col.startsWith('st_'))) a.push({ text: 'Сделка без задачи', red: false });
   if (t?.state === 'control' && t.changedAt && daysAgo(t.changedAt) >= 1) a.push({ text: `Ждёт приёмки ${daysAgo(t.changedAt)} дн.`, red: false });
   if (c.attempts?.reached && col.startsWith('touch')) a.push({ text: 'Дозвонились — переведите стадию', red: false });
+  if (c.freshDays !== null && col.startsWith('pool')) a.push({ text: `Свежая отгрузка ${c.freshDays} дн. — пора брать`, red: false });
   if (c.sleeping && col.startsWith('pool')) a.push({ text: 'Спит', red: false });
   return a;
 }

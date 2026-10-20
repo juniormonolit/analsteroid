@@ -89,6 +89,8 @@ export interface KanbanCard {
   lostEarly: boolean;
   sleeping: boolean;
   atRisk: boolean;
+  /** Пул: первая отгрузка свежая (≤ 22 дн.), а сделки нет — «пора брать в работу». */
+  freshDays: number | null;
 }
 
 export interface KanbanColumn {
@@ -315,9 +317,10 @@ export async function buildRepeatBoard(opts: {
       if (task && task.dealId === current.dealId) {
         windowStartMs = Math.max(windowStartMs, new Date(task.createdAt).getTime());
       }
-    } else if (r.lastDeliveredAt && (now - lastDelMs) / DAY_MS <= WINDOW_DAYS && r.purchasesDelivered === 1) {
-      windowStartMs = lastDelMs; // свежая первая отгрузка без сделки — правило касаний действует
     }
+    // Без открытой повторной сделки заказчик — в ПУЛЕ всегда (владелец 20.10: «как это взят
+    // в работу без сделки?»). «Взят в работу» = сделка создана/возвращена и задача поставлена.
+    // Свежая первая отгрузка без сделки — в пуле с пометкой «пора брать» (freshDays).
 
     const dealCalls = current ? calls.get(current.dealId) ?? [] : [];
     let win: KanbanCard['attempts'] = null;
@@ -348,7 +351,6 @@ export async function buildRepeatBoard(opts: {
     } else if (current && STAGE_TO_COLUMN.has(current.stageId)) {
       col = STAGE_TO_COLUMN.get(current.stageId)!;
     } else if (r.hasOpenOrder) col = 'st_sold';
-    else if (win && !current) col = (`touch_${Math.min(win.count, TOUCHES)}`) as ColumnKey;
     else col = poolColumn(r.purchasesDelivered);
 
     const inPool = col.startsWith('pool') || col === 'brak';
@@ -380,6 +382,8 @@ export async function buildRepeatBoard(opts: {
       // Закрыли в отказ, не дозвонившись и не сделав трёх попыток — нарушение правила.
       lostEarly: col === 'review' && !(win?.reached) && (win?.count ?? 0) < TOUCHES,
       sleeping: r.sleeping, atRisk: r.atRisk,
+      freshDays: !current && r.purchasesDelivered === 1 && r.lastDeliveredAt && (now - lastDelMs) / DAY_MS <= WINDOW_DAYS
+        ? Math.floor((now - lastDelMs) / DAY_MS) : null,
     });
   }
 
@@ -397,7 +401,8 @@ export async function buildRepeatBoard(opts: {
       const at = (c: KanbanCard) => c.brak?.at ?? c.deal?.lostAt ?? '';
       list.sort((a, b) => at(b).localeCompare(at(a)));
     } else {
-      list.sort((a, b) => typeRank(a) - typeRank(b) || Number(a.sleeping) - Number(b.sleeping) || ev(b) - ev(a));
+      list.sort((a, b) => typeRank(a) - typeRank(b) || Number(b.freshDays !== null) - Number(a.freshDays !== null)
+        || Number(a.sleeping) - Number(b.sleeping) || ev(b) - ev(a));
     }
     const limit = Math.max(1, Math.min(opts.limits?.[def.key] ?? COLUMN_PAGE, 2000));
     const ageOf = (c: KanbanCard): number | null => {
