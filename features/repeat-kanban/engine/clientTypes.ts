@@ -12,8 +12,7 @@
 // Тип из карточки клиента в Монолитике главнее и читается всегда свежим: он пишется в
 // Битрикс при сохранении, а кэш Битрикса мог отстать.
 import { bx } from '@/lib/bitrix/notify';
-import { cached } from '@/lib/cache/redis';
-import { analyticsDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
 
 const FIELD = { contact: 'UF_CRM_677E46F756A7B', company: 'UF_CRM_677E46F8B8F06' } as const;
 const ENUM_TO_TYPE: Record<string, string> = {
@@ -57,21 +56,68 @@ async function fetchFromBitrix(refs: string[]): Promise<Record<string, string>> 
   return out;
 }
 
-/** Тип по каждому заказчику менеджера. cacheKey — чей список (кэш Битрикса на 6 часов). */
-export async function fetchClientTypes(cacheKey: string, keys: string[]): Promise<Map<string, string>> {
+// Общая карта типов на всю компанию (21.10, канбан на всю компанию): хранится в нашей БД
+// (customer_snapshot_meta.client_types, переживает выкатку), в памяти процесса — для чтения.
+// Новые заказчики дотягиваются из Битрикса по ID: до SYNC_LIMIT — сразу, больше — в фоне
+// (первая загрузка всей компании не должна ждать ~450 запросов). Раз в 6 ч карта
+// перепроверяется целиком в фоне — тип в Битриксе могли поменять.
+const TYPES_TTL_MS = 6 * 3600_000;
+const SYNC_LIMIT = 3000;
+interface TypesState { map: Map<string, string>; checked: Set<string>; at: number; loadP: Promise<void> | null; chain: Promise<void> }
+const gt = globalThis as unknown as { __repeatClientTypes?: TypesState };
+const ts: TypesState = (gt.__repeatClientTypes ??= { map: new Map(), checked: new Set(), at: 0, loadP: null, chain: Promise.resolve() });
+
+function loadTypes(): Promise<void> {
+  ts.loadP ??= systemDb().query<{ t: Record<string, string> | null; at: Date | null }>(
+    `SELECT client_types AS t, client_types_at AS at FROM customer_snapshot_meta WHERE id = 1`,
+  ).then(r => {
+    const row = r.rows[0];
+    if (!row?.t || !row.at) return;
+    for (const [k, v] of Object.entries(row.t)) { ts.map.set(k, v); ts.checked.add(k); }
+    ts.at = new Date(row.at).getTime();
+  }).catch(e => { console.warn('[repeat-kanban] типы из БД:', e instanceof Error ? e.message : e); ts.loadP = null; });
+  return ts.loadP;
+}
+
+/** Дотянуть типы из Битрикса (последовательно — не больше одной выгрузки разом) и сохранить. */
+function fillTypes(refs: string[], full: boolean): Promise<void> {
+  ts.chain = ts.chain.then(async () => {
+    const todo = full ? refs : refs.filter(r => !ts.checked.has(r));
+    if (!todo.length) return;
+    const got = await fetchFromBitrix(todo);
+    for (const r of todo) {
+      ts.checked.add(r);
+      if (got[r]) ts.map.set(r, got[r]); else if (full) ts.map.delete(r);
+    }
+    if (full || !ts.at) ts.at = Date.now();
+    await systemDb().query(
+      `INSERT INTO customer_snapshot_meta (id, computed_at, client_types, client_types_at) VALUES (1, to_timestamp(0), $1::jsonb, $2)
+       ON CONFLICT (id) DO UPDATE SET client_types = EXCLUDED.client_types, client_types_at = EXCLUDED.client_types_at`,
+      [JSON.stringify(Object.fromEntries(ts.map)), new Date(ts.at)],
+    ).catch(e => console.warn('[repeat-kanban] типы в БД:', e instanceof Error ? e.message : e));
+  }).catch(e => console.warn('[repeat-kanban] типы из Битрикса:', e instanceof Error ? e.message : e));
+  return ts.chain;
+}
+
+/** Тип по каждому заказчику (любой набор, хоть вся компания). */
+export async function fetchClientTypesBulk(keys: string[]): Promise<Map<string, string>> {
   if (!keys.length) return new Map();
   const refs = [...new Set(keys.map(clientRefOf))];
-  const [profiles, bx24] = await Promise.all([
-    analyticsDb().query<{ client_ref: string; client_type: string }>(
-      `SELECT client_ref, client_type FROM sa.client_module_profiles WHERE client_ref = ANY($1::text[]) AND client_type IS NOT NULL`,
-      [refs],
-    ).then(r => new Map(r.rows.map(x => [x.client_ref, x.client_type]))).catch(() => new Map<string, string>()),
-    cached(`repeat-kanban:bx-types:v1:${cacheKey}`, 6 * 3600, () => fetchFromBitrix(refs)).catch(() => ({} as Record<string, string>)),
-  ]);
+  await loadTypes();
+  if (Date.now() - ts.at > TYPES_TTL_MS && ts.at > 0) void fillTypes(refs, true);
+  const missing = refs.filter(r => !ts.checked.has(r));
+  if (missing.length) {
+    const p = fillTypes(missing, false);
+    if (missing.length <= SYNC_LIMIT) await p;
+  }
+  const profiles = await analyticsDb().query<{ client_ref: string; client_type: string }>(
+    `SELECT client_ref, client_type FROM sa.client_module_profiles WHERE client_ref = ANY($1::text[]) AND client_type IS NOT NULL`,
+    [refs],
+  ).then(r => new Map(r.rows.map(x => [x.client_ref, x.client_type]))).catch(() => new Map<string, string>());
   const out = new Map<string, string>();
   for (const k of keys) {
     const ref = clientRefOf(k);
-    const t = profiles.get(ref) ?? bx24[ref];
+    const t = profiles.get(ref) ?? ts.map.get(ref);
     if (t) out.set(k, t);
   }
   return out;

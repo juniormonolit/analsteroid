@@ -107,7 +107,8 @@ export function RepeatKanbanPage() {
       if (!r.ok) throw new ApiError(r.status, j.error ?? `Ошибка ${r.status}`);
       return j as RepeatBoard;
     },
-    refetchInterval: 120_000,
+    // Общий список заказчиков компании ещё считается (первый запуск) — спрашиваем чаще.
+    refetchInterval: q => (q.state.data?.warming ? 5_000 : 120_000),
     // Сразу после перезапуска сервера (выкатка) Redis ещё подключается, а пул SA занят —
     // первый запрос может упасть по таймауту соединения. Повторяем 5xx до трёх раз с паузой,
     // вместо красного «Не удалось собрать канбан» (живой случай 20.10).
@@ -173,6 +174,7 @@ export function RepeatKanbanPage() {
             <p className="mt-1 text-sm text-[var(--color-text-muted)]">
               Карточки двигаются сами — по отгрузкам, стадиям сделки и звонкам.
               {data ? ` Обновлено ${fmtDT(data.generatedAt)}.` : ''}
+              {data?.dataAt ? ` Стадии, звонки и задачи — сейчас, список заказчиков — на ${fmtDT(data.dataAt)}.` : ''}
             </p>
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-2">

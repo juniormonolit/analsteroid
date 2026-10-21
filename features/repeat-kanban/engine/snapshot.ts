@@ -5,6 +5,7 @@
 // Отдел и РОП повторки потом складываются из строк менеджеров и журнала действий.
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { buildRepeatBoard } from './board';
+import { refreshCompanyCustomers } from '@/features/customers/engine/customers';
 import { REPEAT_PROJECT_GROUP_ID } from './config';
 
 const mskDate = (ms = Date.now()) => new Date(ms + 3 * 3600_000).toISOString().slice(0, 10);
@@ -13,6 +14,9 @@ export interface SnapshotResult { date: string; managers: number; written: numbe
 
 export async function buildDailySnapshot(date = mskDate()): Promise<SnapshotResult> {
   const t0 = Date.now();
+  // Свежий общий список заказчиков (~16 с) — дальше доска по каждому менеджеру режет его
+  // срезом, без тяжёлого SQL на менеджера (было ~10 минут на весь снимок).
+  await refreshCompanyCustomers().catch(() => {});
   const dayStart = `${date}T00:00:00+03:00`;
   const dayEnd = `${date}T23:59:59.999+03:00`;
   const dow = new Date(`${date}T12:00:00+03:00`).getUTCDay();

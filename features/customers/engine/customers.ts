@@ -1,5 +1,6 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cachedSwr } from '@/lib/cache/redis';
+import { snapshotRowsOf, awaitSnapshot, refreshSnapshot } from './companySnapshot';
 import { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER, type CustomerQueue } from './queueRules';
 
 export { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER };
@@ -315,6 +316,7 @@ interface RawRow {
   has_open_order: boolean | null;
   good_calls_after: (string | Date)[] | null;
   purchases_delivered: string;
+  attr_mgr: string | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -354,7 +356,7 @@ attr AS (
 -- это 2 827 клиентов из 3 286 — семь восьмых работы запроса впустую.
 delivered_clients AS (SELECT DISTINCT client_key FROM cd WHERE delivered_at IS NOT NULL),
 mcd AS (
-  SELECT cd.* FROM cd
+  SELECT cd.*, attr.mgr AS attr_mgr FROM cd
   JOIN attr USING (client_key)
   JOIN delivered_clients USING (client_key)
   WHERE attr.mgr = $1
@@ -509,7 +511,7 @@ gaps AS (
   -- (та же логика, что у глобальной константы GLOBAL_REPEAT_CYCLE_DAYS).
   WHERE gap >= 1 GROUP BY 1
 )
-SELECT a.client_key,
+SELECT a.client_key, a.attr_mgr::text AS attr_mgr,
        a.deals_total::text, a.deals_sold::text, a.sum_sold::text,
        a.last_sold_at, a.last_call_at, ev.last_event_at,
        g.median_gap_days::text, g.avg_gap_days::text, g.last_gap_days::text, a.refused_no_call, a.has_open_order,
@@ -522,6 +524,7 @@ SELECT a.client_key,
        COALESCE(pu.purchases_delivered, 0)::text AS purchases_delivered
 FROM (
   SELECT m.client_key,
+         max(m.attr_mgr) AS attr_mgr,
          count(*) AS deals_total,
          count(*) FILTER (WHERE m.sold_at IS NOT NULL) AS deals_sold,
          COALESCE(sum(m.amount) FILTER (WHERE m.sold_at IS NOT NULL), 0) AS sum_sold,
@@ -552,6 +555,11 @@ LEFT JOIN auto_lost al USING (client_key)
 LEFT JOIN touches tch USING (client_key)
 LEFT JOIN purchases pu USING (client_key)
 `;
+
+// Вся компания одним запросом (общий снимок, companySnapshot.ts): тот же SQL, атрибуция та
+// же (attr считается по всем сделкам и до фильтра), просто без отсечения по менеджеру.
+const CUSTOMERS_ALL_SQL = CUSTOMERS_SQL.replace('WHERE attr.mgr = $1', 'WHERE attr.mgr IS NOT NULL');
+if (CUSTOMERS_ALL_SQL === CUSTOMERS_SQL) throw new Error('CUSTOMERS_ALL_SQL: фильтр менеджера не найден');
 
 function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
   const dealsSold = Number(r.deals_sold);
@@ -656,9 +664,9 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
 /**
  * Полный список заказчиков менеджера, отсортированный по сигналу (главная
  * сортировка из брифа): сначала «пора позвонить» по убыванию urgency, потом
- * остальные по давности последней активности. Redis-кэш 10 минут (список
- * тяжёлый — full-scan sa.deals; фильтры/поиск/пагинация режутся уже поверх
- * кэша в API-роуте).
+ * остальные по давности последней активности. Источник — общий снимок компании
+ * (companySnapshot.ts, обновляется в фоне раз в 10 минут); фильтры/поиск/пагинация
+ * режутся уже поверх в API-роуте. Версию ключа ниже менять вместе с SHAPE_VERSION снимка.
  */
 export async function fetchManagerCustomers(managerBitrixId: number): Promise<CustomerRow[]> {
   // v3 в ключе: форма строки расширена (v2 — секции/atRisk/история менеджеров,
@@ -677,29 +685,67 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   // 20.10: stale-while-revalidate — свежие 10 мин, дальше до 12 ч отдаём сразу и
   // пересчитываем в фоне (канбан повторных грузит десятки менеджеров разом; живые стадии,
   // звонки и задачи он читает поверх, так что фоновое обновление списка не отстаёт).
+  const snap = await snapshotRowsOf<CustomerRow>(managerBitrixId, computeAllCustomers);
+  if (snap) return snap.map(r => ({ ...r }));
+  // Снимка ещё нет (самый первый запуск) или он сломан — прежний путь на менеджера.
   return cachedSwr(`customers:mgr:v11:${managerBitrixId}`, 10 * 60, 12 * 3600, async () => {
     const [res, scoreTable] = await Promise.all([
       analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]),
       fetchRepeatScoreTable(),
     ]);
     const now = Date.now();
-    const rows = res.rows.map(r => toRow(r, now, managerBitrixId));
-    for (const row of rows) {
-      // Шанс считаем по ПОКУПКАМ (склеенным), а не по сырым отгрузкам: таблица
-      // частот построена на них же, иначе заказчик с 10 дробными отгрузками
-      // попадал бы в бакет «6+» (86 %) вместо своего «3» (55 %).
-      row.repeatChance = repeatChance(scoreTable, row.purchasesDelivered, row.lastDeliveredGroup, row.clientType === 'company');
-      const avgCheck = row.purchasesDelivered > 0 ? row.sumDelivered / row.purchasesDelivered : null;
-      row.expectedNextAmount = expectedNextAmount(scoreTable, avgCheck);
-      row.expectedValue = expectedRepeatValue(row.repeatChance, row.expectedNextAmount);
-    }
-    rows.sort((a, b) => {
-      if ((a.signals.length > 0) !== (b.signals.length > 0)) return a.signals.length > 0 ? -1 : 1;
-      if (a.urgency !== b.urgency) return b.urgency - a.urgency;
-      return (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? '');
-    });
-    return rows;
+    const rows = res.rows.map(r => enrich(toRow(r, now, managerBitrixId), scoreTable));
+    return rows.sort(engineOrder);
   });
+}
+
+type ScoreTable = Awaited<ReturnType<typeof fetchRepeatScoreTable>>;
+function enrich(row: CustomerRow, scoreTable: ScoreTable): CustomerRow {
+  // Шанс считаем по ПОКУПКАМ (склеенным), а не по сырым отгрузкам: таблица
+  // частот построена на них же, иначе заказчик с 10 дробными отгрузками
+  // попадал бы в бакет «6+» (86 %) вместо своего «3» (55 %).
+  row.repeatChance = repeatChance(scoreTable, row.purchasesDelivered, row.lastDeliveredGroup, row.clientType === 'company');
+  const avgCheck = row.purchasesDelivered > 0 ? row.sumDelivered / row.purchasesDelivered : null;
+  row.expectedNextAmount = expectedNextAmount(scoreTable, avgCheck);
+  row.expectedValue = expectedRepeatValue(row.repeatChance, row.expectedNextAmount);
+  return row;
+}
+function engineOrder(a: CustomerRow, b: CustomerRow): number {
+  if ((a.signals.length > 0) !== (b.signals.length > 0)) return a.signals.length > 0 ? -1 : 1;
+  if (a.urgency !== b.urgency) return b.urgency - a.urgency;
+  return (b.lastActivityAt ?? '').localeCompare(a.lastActivityAt ?? '');
+}
+
+/** Расчёт общего снимка: вся компания одним SQL, разложенная по менеджерам. */
+async function computeAllCustomers(): Promise<Map<number, CustomerRow[]>> {
+  const [res, scoreTable] = await Promise.all([
+    analyticsDb().query<RawRow>(CUSTOMERS_ALL_SQL),
+    fetchRepeatScoreTable(),
+  ]);
+  const now = Date.now();
+  const by = new Map<number, CustomerRow[]>();
+  for (const r of res.rows) {
+    const mgr = Number(r.attr_mgr);
+    if (!mgr) continue;
+    const list = by.get(mgr) ?? [];
+    list.push(enrich(toRow(r, now, mgr), scoreTable));
+    by.set(mgr, list);
+  }
+  for (const list of by.values()) list.sort(engineOrder);
+  return by;
+}
+
+/** Заказчики многих менеджеров разом (канбан повторных на всю компанию). Если общего
+ *  снимка ещё нет — ждём его расчёта до waitMs; null — не успел (UI: «данные готовятся»). */
+export async function fetchCustomersOfManagers(managerIds: number[], waitMs = 40_000): Promise<{ at: number; byMgr: Map<number, CustomerRow[]> } | null> {
+  const snap = await awaitSnapshot<CustomerRow>(computeAllCustomers, waitMs);
+  if (!snap) return null;
+  return { at: snap.at, byMgr: new Map(managerIds.map(id => [id, snap.byMgr.get(id) ?? []])) };
+}
+
+/** Принудительный пересчёт общего снимка (ночной снимок канбана, ручная кнопка). */
+export function refreshCompanyCustomers(): Promise<void> {
+  return refreshSnapshot<CustomerRow>(computeAllCustomers);
 }
 
 // ── Категории клиентов (дополнение Серёги 01.08) ─────────────────────────────

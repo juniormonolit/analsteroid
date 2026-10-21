@@ -9,21 +9,22 @@
 //   * тип клиента: карточка клиента, иначе поле Битрикса (clientTypes.ts).
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
-import { fetchManagerCustomers, fetchCustomerMarks, type CustomerRow } from '@/features/customers/engine/customers';
+import { fetchManagerCustomers, fetchCustomersOfManagers, fetchCustomerMarks, type CustomerRow } from '@/features/customers/engine/customers';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import {
   COLUMNS, CLIENT_TYPE_NONE_RANK, CLIENT_TYPE_ORDER, LOST_STAGES, NEW_STAGES, REPEAT_FUNNEL_IDS, REVIEW_SINCE,
   STAGE_TO_COLUMN, TOUCHES, WEEK_DAYS, WINDOW_DAYS, WON_STAGES, type ColumnKey,
 } from './config';
 import { fetchTasksForDeals, type RepeatTask } from './tasks';
-import { fetchClientTypes } from './clientTypes';
+import { fetchClientTypesBulk } from './clientTypes';
 import { fetchTailTable, tailPotential, type PotentialInfo } from './potential';
 
 const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
 export const COLUMN_PAGE = 40;
-/** Больше стольких менеджеров разом не грузим: первый прогрев ~1 с на менеджера. */
-export const MAX_MANAGERS_AT_ONCE = 150;
+/** Пока общего снимка нет (самый первый запуск), столько менеджеров ещё грузим старым путём
+ *  (~1,7 с на менеджера); больше — «данные готовятся», клиент повторит запрос. */
+const FALLBACK_MANAGERS = 20;
 const GOOD_CALL_SEC = 20;
 
 export interface RepeatDealInfo {
@@ -158,6 +159,10 @@ export interface RepeatBoard {
   /** Кнопка «Аналитика» — директорам и выше. */
   canSeeAnalytics?: boolean;
   notice: string | null;
+  /** Общий список заказчиков ещё считается (первый запуск) — клиент повторит запрос. */
+  warming?: boolean;
+  /** «Данные на ЧЧ:ММ»: когда посчитан общий список заказчиков (живые стадии/звонки/задачи — на сейчас). */
+  dataAt?: string | null;
   canManage: boolean;
 }
 
@@ -321,20 +326,25 @@ export async function buildRepeatBoard(opts: {
   };
   const emptyCols = (): KanbanColumn[] => COLUMNS.map(c => ({ key: c.key, total: 0, sum: 0, potential: 0, avgAgeDays: null, noTask: 0, overdue: 0, sleeping: 0, cards: [] }));
   if (roster.length === 0) return { ...base, columns: emptyCols(), notice: 'В вашей зоне нет менеджеров.' };
-  if (roster.length > MAX_MANAGERS_AT_ONCE) {
-    return { ...base, columns: emptyCols(), notice: `В зоне ${roster.length} менеджеров — отметьте менеджеров или сузьте отделы.` };
-  }
 
-  // 1. Заказчики менеджеров (кэш движка «Моих заказчиков»).
+  // 1. Заказчики менеджеров — срез общего снимка компании (companySnapshot.ts, 21.10: лимит
+  // «150 менеджеров за раз» снят — вся компания читается так же быстро, как один менеджер).
   const rows: Row[] = [];
-  // 4 параллельно: пул SA — 8 соединений (SA_PG_POOL_MAX), 8 разом забирали его целиком и
-  // соседние запросы падали по таймауту (20.10). Прогрев ~1 с на менеджера, дальше — Redis.
-  const CONCURRENCY = 4;
-  for (let i = 0; i < roster.length; i += CONCURRENCY) {
-    const chunk = roster.slice(i, i + CONCURRENCY);
-    const lists = await Promise.all(chunk.map(m => fetchManagerCustomers(Number(m.id))
-      .then(list => list.map(r => ({ ...r, managerId: m.id, managerName: m.name })))));
-    for (const l of lists) rows.push(...l);
+  let dataAt: string | null = null;
+  const snap = await fetchCustomersOfManagers(roster.map(m => Number(m.id)), roster.length > FALLBACK_MANAGERS ? 40_000 : 0);
+  if (snap) {
+    dataAt = new Date(snap.at).toISOString();
+    for (const m of roster) for (const r of snap.byMgr.get(Number(m.id)) ?? []) rows.push({ ...r, managerId: m.id, managerName: m.name });
+  } else if (roster.length <= FALLBACK_MANAGERS) {
+    // Снимка ещё нет — старый путь на менеджера, 4 параллельно (пул SA — 8 соединений).
+    const CONCURRENCY = 4;
+    for (let i = 0; i < roster.length; i += CONCURRENCY) {
+      const lists = await Promise.all(roster.slice(i, i + CONCURRENCY).map(m => fetchManagerCustomers(Number(m.id))
+        .then(list => list.map(r => ({ ...r, managerId: m.id, managerName: m.name })))));
+      for (const l of lists) rows.push(...l);
+    }
+  } else {
+    return { ...base, columns: emptyCols(), warming: true, notice: 'Список заказчиков компании готовится — меньше минуты, доска обновится сама.' };
   }
   const keys = rows.map(r => r.clientKey);
 
@@ -345,8 +355,7 @@ export async function buildRepeatBoard(opts: {
     // Ночной снимок типы клиентов не использует — не ходим за ними в Битрикс (20.10: первый
     // снимок завис на 214-м менеджере на запросе типов в Битрикс).
     opts.skipNames ? Promise.resolve(new Map<string, string>()) :
-    Promise.all(roster.map(m => fetchClientTypes(`mgr:${m.id}`, rows.filter(r => r.managerId === m.id).map(r => r.clientKey))))
-      .then(maps => new Map(maps.flatMap(mp => [...mp]))),
+    fetchClientTypesBulk(keys).catch(() => new Map<string, string>()),
     fetchTailTable().catch(() => ({ seg: {} })),
     fetchLastDeliveredDeals(keys).catch(() => new Map<string, number>()),
   ]);
@@ -559,5 +568,5 @@ export async function buildRepeatBoard(opts: {
     brak: kpiBuckets.get('brak')!.length,
     hidden: kpiBuckets.get('hidden')!.length,
   };
-  return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null };
+  return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null, dataAt };
 }
