@@ -248,7 +248,7 @@ export function RepeatKanbanPage() {
             </span>
           )}
         </header>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {data?.canManage && (
             <div className="flex min-w-0 gap-1 rounded-lg border border-[var(--color-border)] p-0.5" role="tablist" aria-label="Вид">
               <button type="button" role="tab" aria-selected={view !== 'today'} onClick={() => setView('board')}
@@ -271,7 +271,7 @@ export function RepeatKanbanPage() {
                 return { value: m.id, label: m.name, hint: `${n} из ${taskLimit} активных задач${n >= taskLimit ? ' — перегружен' : ''}` };
               })}
               value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
-              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-52`} />
+              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-44 2xl:w-56`} />
           )}
           <FiltersButton active={activeFilters} onReset={resetFilters}>
             <FilterField label="Тип клиента">
@@ -325,7 +325,7 @@ export function RepeatKanbanPage() {
             </button>
           )}
           {/* Справа — редкие кнопки; на ноутбуке только иконки (подписи — в подсказке). */}
-          <div className="flex min-w-0 items-center gap-2 sm:ml-auto">
+          <div className="flex min-w-0 items-center gap-1.5 sm:ml-auto">
             {data?.canSeeAnalytics && (
               <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Аналитика: кто что делал, проработанность по отделам, результат задач" aria-label="Аналитика">
                 <BarChart3 size={16} /> <span className="hidden 2xl:inline">Аналитика</span>
