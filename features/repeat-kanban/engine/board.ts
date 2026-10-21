@@ -10,7 +10,7 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { fetchManagerCustomers, fetchCustomersOfManagers, fetchCustomerMarks, type CustomerRow } from '@/features/customers/engine/customers';
-import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
+import { getCachedClientNames, resolveClientNames, warmClientNames } from '@/lib/bitrix/clientNames';
 import {
   COLUMNS, CLIENT_TYPE_NONE_RANK, CLIENT_TYPE_ORDER, LOST_STAGES, NEW_STAGES, REPEAT_FUNNEL_IDS, REPEAT_PROJECT_GROUP_ID, REVIEW_SINCE,
   STAGE_TO_COLUMN, TOUCHES, WEEK_DAYS, WINDOW_DAYS, WON_STAGES, type ColumnKey,
@@ -353,6 +353,9 @@ export async function buildRepeatBoard(opts: {
   taskFilter?: TaskBucket[];
   /** Пул: последняя сделка успешная / проигранная (владелец 21.10). */
   outcome?: 'won' | 'lost' | null;
+  /** Поиск заказчика (владелец 21.10): имя/название (все слова), или число — id контакта/
+   *  компании, номер сделки (текущей, отказной, последней отгрузки) или задачи. По всем колонкам. */
+  search?: string | null;
   /** Сортировка карточек во всех колонках: default — тип клиента → потенциал. */
   sort?: BoardSort;
   /** Сколько карточек отдать по каждой колонке (пагинация «показать ещё»). */
@@ -420,6 +423,14 @@ export async function buildRepeatBoard(opts: {
   const typeCounts: Record<string, number> = {};
   const poolGroupCounts: Record<string, number> = {};
   const outcomeCounts: Record<string, number> = {};
+
+  // Поиск: имена — из кэша (без Битрикса; кэш на всю компанию докачивается прогревом ниже).
+  const norm = (x: string) => x.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+  const q = opts.search ? norm(opts.search).slice(0, 80) : '';
+  const qNum = /^#?\d{2,12}$/.test(q) ? Number(q.replace('#', '')) : null;
+  const qWords = q && qNum === null ? q.split(' ').filter(Boolean) : [];
+  const searchNames = qWords.length ? await getCachedClientNames(keys).catch(() => new Map<string, string | null>()) : null;
+  if (!opts.skipNames) warmClientNames(keys);
   const poolGroups = new Set(opts.poolGroups ?? []);
   const buckets = new Map<ColumnKey, KanbanCard[]>(COLUMNS.map(c => [c.key, []]));
 
@@ -508,6 +519,11 @@ export async function buildRepeatBoard(opts: {
     typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
     if (opts.typeFilter && opts.typeFilter !== typeKey) continue;
     const lastOutcome: 'won' | 'lost' = current && LOST_STAGES.has(current.stageId) ? 'lost' : 'won';
+    if (qNum !== null && ![r.clientId, deal?.dealId, lastDelivered.get(r.clientKey), task?.id].includes(qNum)) continue;
+    if (qWords.length) {
+      const nm = norm(searchNames?.get(r.clientKey) ?? '');
+      if (!nm || !qWords.every(w => nm.includes(w))) continue;
+    }
     if (col.startsWith('pool')) {
       const g = r.lastDeliveredGroup ?? 'Без группы';
       poolGroupCounts[g] = (poolGroupCounts[g] ?? 0) + 1;
@@ -660,6 +676,10 @@ export async function buildRepeatBoard(opts: {
     hotClosing: kpiBuckets.get('pool_hot')!.filter(c => (c.freshDays ?? 0) >= WINDOW_DAYS - 3).length,
     workedByTask: [...work, ...allIn('review')].filter(c => !!c.task).length,
   };
-  return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null, dataAt,
+  const found = columns.reduce((s, c) => s + c.total, 0);
+  const notice = q && found === 0
+    ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию (все слова) и по номерам контакта, компании, сделки, задачи; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
+    : null;
+  return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice, dataAt,
     taskLimit: settings.managerTaskLimit, managerLoad, outcomeCounts, today };
 }

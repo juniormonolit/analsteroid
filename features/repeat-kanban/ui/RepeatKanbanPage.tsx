@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart3, CheckSquare, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, SlidersHorizontal } from 'lucide-react';
+import { BarChart3, CheckSquare, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -95,6 +95,10 @@ export function RepeatKanbanPage() {
   const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const [outcome, setOutcome] = useUrlState('outcome', stringParam(''));
   const [view, setView] = useUrlState('view', stringParam('board'));
+  // Поиск заказчика (владелец 21.10): ввод — сразу, запрос — через 400 мс после паузы.
+  const [q, setQ] = useUrlState('q', stringParam(''));
+  const [qInput, setQInput] = useState(q);
+  useEffect(() => { const t = setTimeout(() => { if (qInput.trim() !== q) { setQ(qInput.trim()); setLimits({}); } }, 400); return () => clearTimeout(t); }, [qInput, q, setQ]);
   const poolGroups = useMemo(() => pg.split('|').filter(Boolean), [pg]);
   const [limits, setLimits] = useState<Partial<Record<ColumnKey, number>>>({});
   const [openCard, setOpenCard] = useState<KanbanCard | null>(null);
@@ -110,7 +114,7 @@ export function RepeatKanbanPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, taskF, sort, outcome, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, taskF, sort, outcome, q, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (mgrs.length) qs.set('managers', mgrs.join(','));
@@ -120,6 +124,7 @@ export function RepeatKanbanPage() {
       if (taskF.length) qs.set('tasks', taskF.join(','));
       if (sort !== 'default') qs.set('sort', sort);
       if (outcome) qs.set('outcome', outcome);
+      if (q) qs.set('q', q);
       for (const [k, v] of Object.entries(limits)) qs.set(`n_${k}`, String(v));
       const r = await fetch(`/api/repeat-kanban?${qs}`);
       const j = await r.json().catch(() => ({}));
@@ -271,8 +276,18 @@ export function RepeatKanbanPage() {
                 return { value: m.id, label: m.name, hint: `${n} из ${taskLimit} активных задач${n >= taskLimit ? ' — перегружен' : ''}` };
               })}
               value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
-              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-44 2xl:w-56`} />
+              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-40 2xl:w-56`} />
           )}
+          <label className={`${q ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs cursor-text sm:w-40 2xl:w-56`}>
+            <Search size={16} className="shrink-0 opacity-70" />
+            <input type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder="Заказчик, № сделки"
+              aria-label="Поиск заказчика: имя, название, номер контакта, компании, сделки или задачи"
+              title="Имя или название (все слова), либо номер: контакт/компания, сделка, задача"
+              className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-current placeholder:opacity-60 sm:text-sm" />
+            {qInput && (
+              <button type="button" onClick={() => { setQInput(''); setQ(''); setLimits({}); }} aria-label="Очистить поиск" className="tap-target shrink-0 opacity-70 hover:opacity-100"><X size={14} /></button>
+            )}
+          </label>
           <FiltersButton active={activeFilters} onReset={resetFilters}>
             <FilterField label="Тип клиента">
               <SearchSelect ariaLabel="Тип клиента" value={type} onChange={v => { setType(v); setLimits({}); }}
@@ -319,9 +334,9 @@ export function RepeatKanbanPage() {
           </FiltersButton>
           {canManage && view !== 'today' && (
             <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
-              title="Отметить карточки галочками и поставить задачи всем разом"
+              title="Выбрать карточки: отметить галочками и поставить задачи всем разом" aria-label="Выбрать карточки"
               className={selectMode ? BTN_ACTIVE : BTN_IDLE}>
-              <CheckSquare size={16} /> {selectMode ? 'Отменить выбор' : 'Выбрать'}
+              <CheckSquare size={16} /> <span className={selectMode ? '' : 'sm:hidden 2xl:inline'}>{selectMode ? 'Отменить выбор' : 'Выбрать'}</span>
             </button>
           )}
           {/* Справа — редкие кнопки; на ноутбуке только иконки (подписи — в подсказке). */}

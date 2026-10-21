@@ -136,3 +136,27 @@ export async function resolveClientNames(keys: string[]): Promise<Map<string, st
   }
   return out;
 }
+
+// ── Прогрев кэша имён на всю компанию (поиск в канбане повторных, владелец 21.10) ──
+// Имена тянутся лениво — только для показанных карточек, к 21.10 в кэше было 7,2 тыс. из
+// 22,7 тыс. заказчиков, и поиск по имени нашёл бы треть. Прогрев докачивает недостающих в
+// фоне: один на процесс, не чаще раза в 30 минут, порциями по 500 (внутри — по 50 на запрос
+// Битрикса, последовательно — ~5 минут на первую полную докачку, дальше только новые).
+const WARM_EVERY_MS = 30 * 60_000;
+const gw = globalThis as unknown as { __clientNamesWarm?: { running: boolean; at: number } };
+const warm = (gw.__clientNamesWarm ??= { running: false, at: 0 });
+
+export function warmClientNames(keys: string[]): void {
+  if (warm.running || Date.now() - warm.at < WARM_EVERY_MS || keys.length === 0) return;
+  warm.running = true;
+  warm.at = Date.now();
+  void (async () => {
+    const t0 = Date.now();
+    const r = await systemDb().query<{ client_key: string }>('SELECT client_key FROM client_names WHERE client_key = ANY($1)', [keys]);
+    const have = new Set(r.rows.map(x => x.client_key));
+    const missing = [...new Set(keys)].filter(k => !have.has(k));
+    for (let i = 0; i < missing.length; i += 500) await resolveClientNames(missing.slice(i, i + 500));
+    if (missing.length) console.log(`[clientNames] прогрев: ${missing.length} имён, ${Math.round((Date.now() - t0) / 1000)} с`);
+  })().catch(e => console.warn('[clientNames] прогрев не удался:', e instanceof Error ? e.message : e))
+    .finally(() => { warm.running = false; });
+}
