@@ -424,7 +424,8 @@ export function RepeatKanbanPage() {
           companyId={openCard.clientType === 'company' ? openCard.clientId : null}
           onClose={() => setOpenCard(null)}
           // Свежая версия карточки после действий (доска перезапросилась) — по ключу заказчика.
-          sideActions={<KanbanSideActions c={liveCard(openCard)} h={handlers} />} />
+          // Комментарии задач — тот же контекст, что у доски (панель рисуется вне её дерева).
+          sideActions={<TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={liveCard(openCard)} h={handlers} /></TaskNotesCtx.Provider>} />
       )}
       {openDeal !== null && <DealCard dealId={openDeal} onClose={() => setOpenDeal(null)} />}
       {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} onClose={() => setTaskFor(null)} onSaved={refresh} />}
