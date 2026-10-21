@@ -92,16 +92,18 @@ function SettingsPanel({ state }: { state: SettingsState }) {
 function GeneralTab({ settings }: { settings: KanbanSettings }) {
   const qc = useQueryClient();
   const [limit, setLimit] = useState(String(settings.managerTaskLimit));
+  const [reassign, setReassign] = useState(settings.reassignEnabled);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const dirty = limit.trim() !== String(settings.managerTaskLimit);
+  const dirty = limit.trim() !== String(settings.managerTaskLimit) || reassign !== settings.reassignEnabled;
 
   const save = async () => {
     setBusy(true); setMsg(null);
     try {
-      const next = await api<SettingsState>('/api/repeat-kanban/settings', { method: 'PUT', body: JSON.stringify({ settings: { managerTaskLimit: Number(limit) } }) });
+      const next = await api<SettingsState>('/api/repeat-kanban/settings', { method: 'PUT', body: JSON.stringify({ settings: { managerTaskLimit: Number(limit), reassignEnabled: reassign } }) });
       qc.setQueryData(QK, next);
       setLimit(String(next.settings.managerTaskLimit));
+      setReassign(next.settings.reassignEnabled);
       setMsg({ ok: true, text: 'Сохранено' });
     } catch (e) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : 'Не удалось сохранить' });
@@ -116,6 +118,16 @@ function GeneralTab({ settings }: { settings: KanbanSettings }) {
           onChange={e => { setLimit(e.target.value); setMsg(null); }} className={`${fieldCls} max-w-[160px]`} />
         <span className="text-xs text-[var(--color-text-muted)]">
           Активные — незакрытые и не сданные на проверку задачи проекта «Повторные продажи». По умолчанию 10.
+        </span>
+      </label>
+      <label className="flex min-h-11 cursor-pointer items-start gap-2">
+        <input type="checkbox" checked={reassign} onChange={e => { setReassign(e.target.checked); setMsg(null); }} className="mt-0.5 h-4 w-4" />
+        <span>
+          <span className="font-medium">«И сменить менеджера» при постановке задачи</span>
+          <span className="block text-xs text-[var(--color-text-muted)]">
+            РОП сможет сразу передать заказчика другому менеджеру — через бизнес-процесс Битрикса «Сменить ответственного»
+            (он перепривязывает сделку, контакт, почту). Задача ставится уже новому менеджеру.
+          </span>
         </span>
       </label>
       <div className="flex flex-wrap items-center gap-2">

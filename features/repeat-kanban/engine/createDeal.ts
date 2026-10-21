@@ -2,7 +2,11 @@
 // (/crm/mltclients/, проект «Повторные продажи», группа 118; ТЗ владельца 20.10, логика
 // ОДИНАКОВАЯ со старым канбаном — он остаётся жить параллельно).
 //
-// Смотрим ПОСЛЕДНЮЮ ПОВТОРНУЮ сделку заказчика (воронки 2/3):
+// Сначала ищем ОТКРЫТУЮ повторную сделку заказчика (воронки 2/3) — среди всех, не только
+// последней (21.10, живой случай 272639: открытая 215670 «Бронь» с 30.06 была старше
+// отгруженной 267699 — канбан создал вторую сделку). Для компании — и сделки её контактов
+// (контакты, встречавшиеся в сделках компании: свежие сделки часто заведены на контакт без
+// компании, случай компании 20460). Открытой нет — смотрим ПОСЛЕДНЮЮ:
 //   * в отказе            → возвращаем в первую стадию её воронки + «ПОСМОТРИ ЗАДАЧУ» в начало названия;
 //   * отгружена / нет её  → новая сделка + «ПОСМОТРИ ЗАДАЧУ» в начале названия;
 //   * в работе            → задача в эту сделку + «ПОСМОТРИ ЗАДАЧУ» в начало названия;
@@ -155,7 +159,34 @@ function deadlineIso(now = Date.now()): string {
 
 export type RepeatDealMode = 'existing' | 'reopened' | 'created';
 
-export interface RepeatTaskResult { dealId: number; dealMode: RepeatDealMode; taskId: number; responsibleId: string; createdById: string; chatPosted: boolean }
+export interface RepeatTaskResult {
+  dealId: number; dealMode: RepeatDealMode; taskId: number; responsibleId: string; createdById: string; chatPosted: boolean;
+  /** Запущен бизнес-процесс «Сменить ответственного» (id процесса). */
+  reassignWorkflowId?: string | null;
+}
+
+/** Шаблон бизнес-процесса Битрикса «Сменить ответственного» (сделка). Менять ответственного —
+ *  ТОЛЬКО им (владелец 21.10): он перепривязывает сделку, контакт, почту и т.д. Параметр шаблона —
+ *  new_responsible_id (тип «пользователь», значение user_<id>). */
+export const REASSIGN_TEMPLATE_ID = 171;
+
+/** Контакты, встречавшиеся в сделках компании (обе стороны заполнены) — по копии sa. */
+export async function companyContacts(companyId: number): Promise<number[]> {
+  const r = await analyticsDb().query<{ contact_id: string }>(
+    `SELECT DISTINCT contact_id::text AS contact_id FROM sa.deals
+      WHERE company_id = $1 AND coalesce(contact_id, 0) <> 0 AND funnel_id IN (0, 1, 2, 3) LIMIT 20`, [companyId],
+  ).catch(() => ({ rows: [] as { contact_id: string }[] }));
+  return r.rows.map(x => Number(x.contact_id)).filter(n => n > 0);
+}
+
+async function startReassign(dealId: number, newResponsibleId: string): Promise<string> {
+  const res = await writeOnce<string>(taskWebhook(), 'bizproc.workflow.start', {
+    TEMPLATE_ID: REASSIGN_TEMPLATE_ID,
+    DOCUMENT_ID: ['crm', 'CCrmDocumentDeal', `DEAL_${dealId}`],
+    PARAMETERS: { new_responsible_id: `user_${newResponsibleId}` },
+  });
+  return String(res);
+}
 
 export async function createRepeatTask(input: {
   clientKey: string; fallbackManagerId: string; creatorBitrixId: string; comment: string;
@@ -164,16 +195,27 @@ export async function createRepeatTask(input: {
   /** Срок задачи (YYYY-MM-DD) и время (HH:MM, МСК; не задано — 19:00); дата не задана — +5 дней. */
   deadlineDate?: string | null;
   deadlineTime?: string | null;
+  /** «И сменить менеджера на …»: Битрикс-id нового ответственного (БП 171), задача — ему. */
+  newResponsibleId?: string | null;
 }): Promise<RepeatTaskResult> {
   const t = dealTargetOf(input.clientKey);
   if (!Number.isInteger(t.id) || t.id <= 0) throw new DealCreateError('Некорректный заказчик');
   const owner = t.entity === 'contact' ? 'CONTACT_ID' : 'COMPANY_ID';
   const crm = crmWebhook();
 
-  const last = (await read<BxDeal[]>('crm.deal.list', {
-    filter: { [owner]: t.id, '@CATEGORY_ID': [2, 3] },
-    select: ['ID', 'TITLE', 'CATEGORY_ID', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'ASSIGNED_BY_ID'], order: { ID: 'DESC' },
-  }))?.[0];
+  const select = ['ID', 'TITLE', 'CATEGORY_ID', 'STAGE_ID', 'STAGE_SEMANTIC_ID', 'ASSIGNED_BY_ID'];
+  const lists = [read<BxDeal[]>('crm.deal.list', { filter: { [owner]: t.id, '@CATEGORY_ID': [2, 3] }, select, order: { ID: 'DESC' } })];
+  if (t.entity === 'company') {
+    for (const c of (await companyContacts(t.id)).slice(0, 10)) {
+      lists.push(read<BxDeal[]>('crm.deal.list', { filter: { CONTACT_ID: c, '@CATEGORY_ID': [2, 3] }, select, order: { ID: 'DESC' } }));
+    }
+  }
+  const seen = new Set<string>();
+  const all = (await Promise.all(lists)).flat().filter(d => d && !seen.has(d.ID) && seen.add(d.ID))
+    .sort((a, b) => Number(b.ID) - Number(a.ID));
+  // Открытая (в работе, в т.ч. «Продано») важнее последней по номеру.
+  const open = all.find(d => d.STAGE_SEMANTIC_ID === 'P');
+  const last = open ?? all[0];
 
   if (last?.STAGE_ID && DO_NOT_TOUCH_STAGES.has(last.STAGE_ID)) {
     throw new DealCreateError(`Сделка #${last.ID} в стадии «НЕ ТРОГАТЬ — ЗАПРЕЩЕНО»: заказчика не трогаем`);
@@ -221,6 +263,17 @@ export async function createRepeatTask(input: {
     dealMode = 'created';
   }
 
+  // Смена менеджера — бизнес-процессом Битрикса (не прямой записью ASSIGNED_BY_ID), задача — новому.
+  let reassignWorkflowId: string | null = null;
+  if (input.newResponsibleId && /^\d{1,10}$/.test(input.newResponsibleId) && input.newResponsibleId !== responsibleId) {
+    try {
+      reassignWorkflowId = await startReassign(dealId, input.newResponsibleId);
+    } catch (e) {
+      throw new DealCreateError(`Сделка #${dealId} готова, но смена менеджера не запустилась: ${e instanceof Error ? e.message : e}. Задачу не ставили.`);
+    }
+    responsibleId = input.newResponsibleId;
+  }
+
   const description = await buildDescription(input.clientKey, input.comment);
   const task = await writeOnce<{ task?: { id?: string | number } }>(taskWebhook(), 'tasks.task.add', {
     fields: {
@@ -247,7 +300,7 @@ export async function createRepeatTask(input: {
       return false;
     });
   }
-  return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted };
+  return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted, reassignWorkflowId };
 }
 
 /** Постановщик по структуре: РОП менеджера (sa.org_resolved_hierarchy, ближайший предок с

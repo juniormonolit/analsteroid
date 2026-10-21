@@ -10,6 +10,10 @@ export const REASON_LABELS: Record<NoCallReason, string> = {
   competitor: 'Ушёл к конкуренту',
   negative: 'Негатив',
   other: 'Прочее',
+  // Брак канбана повторных — как в Битриксе (21.10, миграция 236): виден в истории отметок.
+  no_objects: 'Объектов больше нет',
+  expensive: 'Дорого, предложил другие материалы',
+  failed_client: 'Подвели клиента',
 };
 
 export interface ApiRow {

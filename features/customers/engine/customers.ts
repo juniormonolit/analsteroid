@@ -831,13 +831,17 @@ export function classifyCategory(r: CustomerRow, s: CustomerCategorySettings, no
 // «не звонить» должны действовать сразу, а не через 10 минут TTL.
 
 export type MarkKind = 'snooze' | 'no_call' | 'wake';
-export type NoCallReason = 'nothing_needed' | 'competitor' | 'negative' | 'other';
+export type NoCallReason = 'nothing_needed' | 'competitor' | 'negative' | 'other' | 'no_objects' | 'expensive' | 'failed_client';
 
 export const NO_CALL_REASON_LABELS: Record<NoCallReason, string> = {
   nothing_needed: 'Ничего не нужно',
   competitor: 'Ушёл к конкуренту',
   negative: 'Негатив',
   other: 'Прочее',
+  // Брак канбана повторных — как отказные стадии Битрикса (21.10, миграция 236).
+  no_objects: 'Объектов больше нет',
+  expensive: 'Дорого, предложил другие материалы',
+  failed_client: 'Подвели клиента — не хочет с нами работать',
 };
 
 export interface CustomerMark {

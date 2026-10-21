@@ -13,11 +13,11 @@ import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
-import { logEvent, newRequestId } from '@/features/repeat-kanban/engine/log';
+import { logEvent, newRequestId, type KanbanEventType } from '@/features/repeat-kanban/engine/log';
 import { decideHideRequest, decideReview, hideFromPool, markBrakNow, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
 import { rememberDealClient } from '@/features/repeat-kanban/engine/dealFixes';
-import { listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
+import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
 // Гейт — section.repeat_kanban (ролям продаж, миграция 230). Зона — ropScope() сессии,
@@ -168,35 +168,46 @@ export async function POST(req: NextRequest) {
     }
     if (!(await ownsClient(managerId, clientKey))) return NextResponse.json({ error: 'Заказчик не в списке менеджера' }, { status: 403 });
 
+    // Постановка задачи (кнопка и «Вернуть менеджеру» на разборе) — один путь (createDeal.ts).
+    const runTask = async (comment: string, logType?: KanbanEventType) => {
+      // Постановщик — тот, кто нажал (владелец 21.10, Коваленко: «от того, кто ставит»; раньше у
+      // полного доступа подставлялся РОП менеджера по структуре — все задачи шли от Осипова).
+      const creator = session.bitrixUserId ?? (await ropOfManager(managerId));
+      if (!creator) throw new DealCreateError('Не удалось определить постановщика: нет привязки к Битриксу');
+      const deadlineDate = typeof body.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.deadline) ? body.deadline : null;
+      const deadlineTime = typeof body.deadlineTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.deadlineTime) ? body.deadlineTime : '19:00';
+      // Срок в прошлом (выбрали «сегодня», а время уже прошло) — до любых действий со сделкой.
+      if (deadlineDate && new Date(`${deadlineDate}T${deadlineTime}:00+03:00`).getTime() < Date.now()) {
+        throw new DealCreateError(`Срок ${deadlineDate.split('-').reverse().join('.')} ${deadlineTime} уже прошёл — выберите время позже`);
+      }
+      // «И сменить менеджера на …» — РОП, включено в настройках, новый менеджер — из зоны.
+      let newResponsibleId: string | null = null;
+      if (typeof body.newManagerId === 'string' && /^\d{1,10}$/.test(body.newManagerId) && body.newManagerId !== managerId) {
+        if (!(await fetchKanbanSettings()).reassignEnabled) throw new DealCreateError('Смена менеджера выключена в настройках канбана');
+        if (!managers.some(m => m.id === body.newManagerId)) throw new DealCreateError('Новый менеджер не из вашей зоны');
+        newResponsibleId = body.newManagerId;
+      }
+      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime, newResponsibleId });
+      // Синк может не донести клиента новой сделки (21.10: так карточки оставались в пуле).
+      rememberDealClient(res.dealId, clientKey);
+      const type = logType ?? (res.dealMode === 'created' ? 'deal_task_created' : res.dealMode === 'reopened' ? 'deal_returned_from_reject' : 'task_created');
+      await logEvent(session, { type, requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
+        payload: { comment, creator, responsible: res.responsibleId, deadline: deadlineDate, deadlineTime, templateId: typeof body.templateId === 'number' ? body.templateId : null,
+          dealMode: res.dealMode, reassignedTo: newResponsibleId, reassignWorkflowId: res.reassignWorkflowId ?? null } });
+      if (res.chatPosted) await logEvent(session, { type: 'task_comment_posted', requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId });
+      if (newResponsibleId) await logEvent(session, { type: 'manager_reassigned', requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
+        payload: { from: managerId, to: newResponsibleId, workflowId: res.reassignWorkflowId ?? null } });
+      return res;
+    };
+
     if (body.action === 'create_task') {
-      // Задача в проекте «Повторные продажи» Битрикса по ТЗ старого канбана (createDeal.ts).
-      // Постановщик: нажал руководитель из цепочки менеджера — он (так делает и старый
-      // канбан: директор ставит задачи менеджерам своих РОПов); нажал админ со «всей
-      // компанией» — РОП менеджера по структуре (ТЗ п.3).
       let comment = typeof body.text === 'string' ? body.text.trim() : '';
       // Массовая постановка (владелец 21.10): текста нет, есть шаблон — заполняем по заказчику.
       if (!comment && typeof body.templateId === 'number') {
         const tpl = (await listTemplates()).find(t => t.id === body.templateId);
         if (tpl) comment = (await renderTemplate(tpl.body, { clientKey, managerId })).trim();
       }
-      const creator = scope.full || !session.bitrixUserId
-        ? (await ropOfManager(managerId)) ?? session.bitrixUserId
-        : session.bitrixUserId;
-      if (!creator) return NextResponse.json({ error: 'Не удалось определить постановщика: нет привязки к Битриксу' }, { status: 400 });
-      const deadlineDate = typeof body.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.deadline) ? body.deadline : null;
-      const deadlineTime = typeof body.deadlineTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.deadlineTime) ? body.deadlineTime : '19:00';
-      // Срок в прошлом (выбрали «сегодня», а время уже прошло) — до любых действий со сделкой.
-      if (deadlineDate && new Date(`${deadlineDate}T${deadlineTime}:00+03:00`).getTime() < Date.now()) {
-        return NextResponse.json({ error: `Срок ${deadlineDate.split('-').reverse().join('.')} ${deadlineTime} уже прошёл — выберите время позже` }, { status: 400 });
-      }
-      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime });
-      // Синк может не донести клиента новой сделки (21.10: так карточки оставались в пуле).
-      rememberDealClient(res.dealId, clientKey);
-      const type = res.dealMode === 'created' ? 'deal_task_created' : res.dealMode === 'reopened' ? 'deal_returned_from_reject' : 'task_created';
-      await logEvent(session, { type, requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
-        payload: { comment, creator, responsible: res.responsibleId, deadline: deadlineDate, deadlineTime, templateId: typeof body.templateId === 'number' ? body.templateId : null } });
-      if (res.chatPosted) await logEvent(session, { type: 'task_comment_posted', requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId });
-      return NextResponse.json(res);
+      return NextResponse.json(await runTask(comment));
     }
 
     if (body.action === 'review') {
@@ -212,6 +223,13 @@ export async function POST(req: NextRequest) {
       });
       await logEvent(session, { type: 'reject_reviewed', requestId: rid, clientKey, managerId, columnBefore, dealId,
         payload: { decision, reason: body.reason ?? null, comment: body.comment ?? null, attempts: Number(body.touchesDone) || 0 } });
+      // «Вернуть менеджеру» (21.10, сделка 263762: решение записалось, а сделка осталась в отказе и
+      // задачи не было — менеджер ничего не видел): отказная сделка возвращается в первую стадию,
+      // менеджеру — задача с комментарием РОПа; сделка открыта (3 попытки без дозвона) — только задача.
+      if (decision === 'return') {
+        const res = await runTask(typeof body.comment === 'string' ? body.comment.trim() : '');
+        return NextResponse.json({ ok: true, ...res });
+      }
       return NextResponse.json({ ok: true });
     }
 

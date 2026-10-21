@@ -88,13 +88,18 @@ export const CLIENT_TYPE_SHORT: Record<string, string> = {
 
 /** Решения РОПа по отказу. */
 export type ReviewDecision = 'brak' | 'no_answer' | 'return';
+/** Причины брака — как отказные стадии повторных воронок Битрикса (владелец 21.10: «такие же, как в
+ *  Битриксе»). C3:2 «Объектов больше нет», C2:APOLOGY «Больше ничего не нужно», C2/C3:LOSE «Дорого…»,
+ *  C2:1/C3:APOLOGY «Подвели клиента…». Старые значения (competitor/negative/other) — только для истории
+ *  (LEGACY_BRAK_LABELS), выбрать их больше нельзя. Миграция 236 расширила CHECK в customer_marks. */
 export const BRAK_REASONS = [
-  { value: 'nothing_needed', label: 'Ничего не нужно' },
-  { value: 'competitor', label: 'Ушёл к конкуренту' },
-  { value: 'negative', label: 'Послал / негатив' },
-  { value: 'other', label: 'Прочее' },
+  { value: 'no_objects', label: 'Объектов больше нет' },
+  { value: 'nothing_needed', label: 'Больше ничего не нужно' },
+  { value: 'expensive', label: 'Дорого, предложил другие материалы, больше ничего не нужно' },
+  { value: 'failed_client', label: 'Подвели клиента — не хочет с нами работать' },
 ] as const;
 export type BrakReason = (typeof BRAK_REASONS)[number]['value'];
+export const LEGACY_BRAK_LABELS: Record<string, string> = { competitor: 'Ушёл к конкуренту', negative: 'Негатив', other: 'Прочее' };
 
 /** Цвет чипа типа клиента (владелец 20.10: «стройорганизация должна привлекать внимание»,
  *  аудит Fable): ценные — заливкой, остальные — контуром, «не указан» — серый пунктир.

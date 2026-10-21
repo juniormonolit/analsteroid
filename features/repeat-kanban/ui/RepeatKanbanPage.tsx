@@ -164,6 +164,9 @@ export function RepeatKanbanPage() {
   const managerOptions = meta?.managers ?? data?.managers ?? [];
   const taskLimit = data?.taskLimit ?? 10;
   const loadOf = (id: string) => data?.managerLoad?.[id] ?? meta?.managers.find(m => m.id === id)?.load ?? 0;
+  // «И сменить менеджера на …» (владелец 21.10): только РОП и только если включено в настройках.
+  const reassignOpts: ReassignOpts | null = data?.canManage && data.reassignEnabled
+    ? { managers: managerOptions.map(m => ({ id: m.id, name: m.name })), loadOf } : null;
 
   // Комментарии задач — для всех видимых карточек (доска + «Сегодня»).
   const visibleTaskIds = useMemo(() => {
@@ -416,7 +419,7 @@ export function RepeatKanbanPage() {
           </div>
         </div>
       )}
-      {bulkOpen && <BulkTaskModal cards={[...selected.values()]} loadOf={loadOf} limit={taskLimit}
+      {bulkOpen && <BulkTaskModal cards={[...selected.values()]} loadOf={loadOf} limit={taskLimit} reassign={reassignOpts}
         onClose={() => setBulkOpen(false)} onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
       {openCard && (
         <CustomerCardLoader
@@ -428,7 +431,7 @@ export function RepeatKanbanPage() {
           sideActions={<TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={liveCard(openCard)} h={handlers} /></TaskNotesCtx.Provider>} />
       )}
       {openDeal !== null && <DealCard dealId={openDeal} onClose={() => setOpenDeal(null)} />}
-      {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} onClose={() => setTaskFor(null)} onSaved={refresh} />}
+      {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} reassign={reassignOpts} onClose={() => setTaskFor(null)} onSaved={refresh} />}
       {reviewFor && <ReviewModal card={reviewFor} onClose={() => setReviewFor(null)} onSaved={refresh} />}
       {hideFor && <HideModal card={hideFor} onClose={() => setHideFor(null)} onSaved={refresh} />}
       {hideReqFor && <HideModal card={hideReqFor} request onClose={() => setHideReqFor(null)} onSaved={refresh} />}
@@ -1025,8 +1028,36 @@ function OverloadNote({ name, load, limit }: { name: string; load: number; limit
   );
 }
 
-function TaskModal({ card, load, limit, onClose, onSaved }: { card: KanbanCard; load: number; limit: number; onClose: () => void; onSaved: () => void }) {
+interface ReassignOpts { managers: { id: string; name: string }[]; loadOf: (id: string) => number }
+
+/** «И сменить менеджера на …» — смена ответственного бизнес-процессом Битрикса «Сменить
+ *  ответственного» (он перепривязывает сделку, контакт, почту); задача — уже новому менеджеру. */
+function ReassignPicker({ opts, currentId, value, onChange }: { opts: ReassignOpts; currentId: string | null; value: string; onChange: (v: string) => void }) {
+  const [on, setOn] = useState(!!value);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="flex min-h-11 cursor-pointer items-center gap-2 text-[var(--color-text-secondary)]">
+        <input type="checkbox" checked={on} onChange={e => { setOn(e.target.checked); if (!e.target.checked) onChange(''); }} className="h-4 w-4" />
+        И сменить менеджера на…
+      </label>
+      {on && (
+        <>
+          <SearchSelect ariaLabel="Новый менеджер" value={value} onChange={onChange} searchable
+            options={[{ value: '', label: 'Выберите менеджера' }, ...opts.managers.filter(m => m.id !== currentId)
+              .map(m => ({ value: m.id, label: m.name, hint: `${opts.loadOf(m.id)} активных задач` }))]}
+            className={`${value ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Ответственный сменится бизнес-процессом Битрикса «Сменить ответственного» (сделка, контакт, почта), задача уйдёт новому менеджеру.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: KanbanCard; load: number; limit: number; reassign: ReassignOpts | null; onClose: () => void; onSaved: () => void }) {
   const [text, setText] = useState('');
+  const [newManager, setNewManager] = useState('');
   const [deadline, setDeadline] = useState(() => windowEnd(card));
   const [deadlineTime, setDeadlineTime] = useState('19:00');
   const [busy, setBusy] = useState(false);
@@ -1040,7 +1071,7 @@ function TaskModal({ card, load, limit, onClose, onSaved }: { card: KanbanCard; 
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text, deadline, deadlineTime });
+      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text, deadline, deadlineTime, newManagerId: newManager || undefined });
       setResult(j); onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
@@ -1066,7 +1097,9 @@ function TaskModal({ card, load, limit, onClose, onSaved }: { card: KanbanCard; 
             {what} Исполнитель — ответственный за сделку, закрыть задачу может только постановщик.
             В описание сами добавятся отгрузки заказчика со ссылками и анкета последней отгрузки; сообщение ниже уйдёт и первым сообщением в чат задачи.
           </p>
-          <OverloadNote name={card.managerName} load={load} limit={limit} />
+          <OverloadNote name={newManager ? reassign?.managers.find(m => m.id === newManager)?.name ?? card.managerName : card.managerName}
+            load={newManager && reassign ? reassign.loadOf(newManager) : load} limit={limit} />
+          {reassign && <ReassignPicker opts={reassign} currentId={card.managerId} value={newManager} onChange={setNewManager} />}
           {/* Шаблон (настройки канбана): по умолчанию подставляется отмеченный «по умолчанию»,
               уже заполненный данными заказчика; текст можно править. */}
           <TemplatePicker clientKey={card.clientKey} managerId={card.managerId} value={text} onChange={setText} />
@@ -1093,9 +1126,10 @@ function TaskModal({ card, load, limit, onClose, onSaved }: { card: KanbanCard; 
 /** Массовая постановка (аудит 21.10): одна задача на каждого выбранного заказчика, сообщение —
  *  выбранный шаблон, заполненный по каждому заказчику на сервере. По одной, с прогрессом: каждая
  *  задача — несколько вызовов Битрикса, пачкой запрос упёрся бы в таймаут прокси. */
-function BulkTaskModal({ cards, loadOf, limit, onClose, onDone }: {
-  cards: KanbanCard[]; loadOf: (managerId: string) => number; limit: number; onClose: () => void; onDone: () => void;
+function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
+  cards: KanbanCard[]; loadOf: (managerId: string) => number; limit: number; reassign: ReassignOpts | null; onClose: () => void; onDone: () => void;
 }) {
+  const [newManager, setNewManager] = useState('');
   const { data: tpl } = useQuery<{ templates: { id: number; name: string; isDefault: boolean }[] }>({
     queryKey: ['repeat-kanban-templates'],
     queryFn: async () => { const r = await fetch('/api/repeat-kanban/settings'); return r.ok ? r.json() : { templates: [] }; },
@@ -1123,7 +1157,7 @@ function BulkTaskModal({ cards, loadOf, limit, onClose, onDone }: {
       if (results.get(c.clientKey)?.ok) continue;
       const deadline = deadlineMode === 'window' ? windowEnd(c) : deadlineMode === 'today' ? mskYmd(Date.now()) : mskYmd(Date.now(), Number(deadlineMode));
       try {
-        const j = await post({ action: 'create_task', clientKey: c.clientKey, managerId: c.managerId, column: c.column, text: '', templateId: tid ? Number(tid) : undefined, deadline, deadlineTime });
+        const j = await post({ action: 'create_task', clientKey: c.clientKey, managerId: c.managerId, column: c.column, text: '', templateId: tid ? Number(tid) : undefined, deadline, deadlineTime, newManagerId: newManager && newManager !== c.managerId ? newManager : undefined });
         setResults(m => new Map(m).set(c.clientKey, { ok: true, text: `задача #${j.taskId}` }));
       } catch (e) {
         setResults(m => new Map(m).set(c.clientKey, { ok: false, text: e instanceof Error ? e.message : String(e) }));
@@ -1159,6 +1193,7 @@ function BulkTaskModal({ cards, loadOf, limit, onClose, onDone }: {
             <input type="time" value={deadlineTime} step={900} onChange={e => e.target.value && setDeadlineTime(e.target.value)} aria-label="Время срока (МСК)" className={`${fieldCls} min-h-11 w-32`} />
           </label>
         </div>
+        {reassign && <ReassignPicker opts={reassign} currentId={null} value={newManager} onChange={setNewManager} />}
         {over.length > 0 && (
           <div className="rounded-lg bg-[#fff2cc] p-2 text-[#7f6000]">
             <AlertTriangle size={13} className="mr-1 inline" />Станут перегружены (норма {limit}):{' '}
@@ -1306,11 +1341,11 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
     // Выход из дозвона: сделка ещё открыта — «недозвон» оставляет её в дозвоне (ещё попытки).
     { v: 'brak' as const, label: 'Брак', hint: 'Не дозвониться — заказчик уходит из пула (сделку закройте в Битриксе)' },
     { v: 'no_answer' as const, label: 'Ещё попытки', hint: 'Оставить в дозвоне — менеджер звонит дальше' },
-    { v: 'return' as const, label: 'Вернуть менеджеру', hint: 'Попытки формальные — пусть отработает заново' },
+    { v: 'return' as const, label: 'Вернуть менеджеру', hint: 'Попытки формальные — менеджеру уйдёт задача с вашим сообщением' },
   ] : [
     { v: 'brak' as const, label: 'Брак', hint: 'Отказ подтверждён — заказчик уходит из пула' },
     { v: 'no_answer' as const, label: 'Недозвон', hint: 'Не брак — вернуть в пул' },
-    { v: 'return' as const, label: 'Вернуть менеджеру', hint: 'Отработано плохо — пусть переоткроет сделку' },
+    { v: 'return' as const, label: 'Вернуть менеджеру', hint: 'Отработано плохо — сделка вернётся в первую стадию, менеджеру — задача с вашим сообщением' },
   ];
 
   return (
@@ -1352,13 +1387,13 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
           </label>
         )}
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
-          {needComment ? `Комментарий (обязательно: попыток ${done} из ${TOUCHES}, без дозвона)` : 'Комментарий'}
+          {decision === 'return' ? 'Сообщение менеджеру — уйдёт в задачу (обязательно)' : needComment ? `Комментарий (обязательно: попыток ${done} из ${TOUCHES}, без дозвона)` : 'Комментарий'}
           <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} className={fieldCls} />
         </label>
         {err && <p className="text-[var(--color-negative)]">{err}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
-          <button type="button" disabled={busy || (needComment && comment.trim().length < 3)} onClick={submit}
+          <button type="button" disabled={busy || ((needComment || decision === 'return') && comment.trim().length < 3)} onClick={submit}
             className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">
             {busy ? 'Сохраняю…' : 'Сохранить решение'}
           </button>

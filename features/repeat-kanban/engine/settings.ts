@@ -21,9 +21,14 @@ export class SettingsError extends Error {}
 
 // ── Настройки ──────────────────────────────────────────────────────────────
 
-export interface KanbanSettings { managerTaskLimit: number }
+export interface KanbanSettings {
+  managerTaskLimit: number;
+  /** «И сменить менеджера на …» при постановке задачи — через бизнес-процесс Битрикса «Сменить
+   *  ответственного» (шаблон 171). Выключено, пока владелец не подтвердит первый живой запуск. */
+  reassignEnabled: boolean;
+}
 
-export const DEFAULT_SETTINGS: KanbanSettings = { managerTaskLimit: 10 };
+export const DEFAULT_SETTINGS: KanbanSettings = { managerTaskLimit: 10, reassignEnabled: false };
 export const TASK_LIMIT_MIN = 1;
 export const TASK_LIMIT_MAX = 200;
 
@@ -43,6 +48,7 @@ export async function fetchKanbanSettings(): Promise<KanbanSettings> {
     const map = new Map(r.rows.map(x => [x.key, x.value]));
     const value: KanbanSettings = {
       managerTaskLimit: parseTaskLimit(map.get('manager_task_limit')) ?? DEFAULT_SETTINGS.managerTaskLimit,
+      reassignEnabled: map.get('reassign_enabled') === true,
     };
     settingsCache = { at: Date.now(), value };
     return value;
@@ -60,6 +66,7 @@ export async function saveKanbanSettings(patch: Partial<Record<keyof KanbanSetti
     if (n === null) throw new SettingsError(`Норма задач — целое число от ${TASK_LIMIT_MIN} до ${TASK_LIMIT_MAX}`);
     rows.push(['manager_task_limit', n]);
   }
+  if (patch.reassignEnabled !== undefined) rows.push(['reassign_enabled', patch.reassignEnabled === true]);
   if (!rows.length) throw new SettingsError('Нечего сохранять');
   const db = systemDb();
   for (const [key, value] of rows) {

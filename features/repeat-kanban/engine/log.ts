@@ -16,7 +16,8 @@ export type KanbanEventType =
   | 'hidden' | 'unhidden'      // «Скрыть из пула» / «Вернуть в пул»
   | 'reject_cleared'           // «Снять брак»
   | 'hide_requested'           // менеджер предложил скрыть (с 21.10 скрывает только РОП)
-  | 'hide_request_accepted' | 'hide_request_declined'; // решение РОПа по предложению
+  | 'hide_request_accepted' | 'hide_request_declined' // решение РОПа по предложению
+  | 'manager_reassigned';      // «И сменить менеджера» — запущен БП «Сменить ответственного» (21.10)
 
 export const newRequestId = () => randomUUID();
 

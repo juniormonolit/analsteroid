@@ -194,6 +194,8 @@ export interface RepeatBoard {
   /** Норма активных задач на менеджера (настройки) и текущая загрузка: менеджер → задач
    *  проекта «Повторные продажи» в работе (не сданных на проверку). */
   taskLimit?: number;
+  /** «И сменить менеджера» при постановке задачи включено в настройках (БП «Сменить ответственного»). */
+  reassignEnabled?: boolean;
   managerLoad?: Record<string, number>;
   /** Последняя сделка: успешная / проигранная — счётчики по пулу (фильтр «Последняя сделка»). */
   outcomeCounts?: Record<string, number>;
@@ -204,6 +206,7 @@ interface RepeatDealRow {
   client_key: string; deal_id: number; funnel_id: number; stage_id: string; stage_name: string | null;
   amount: string | null; created_at: Date; lost_at: Date | null; sold_at: Date | null; delivered_at: Date | null;
   current_manager_id: number | null;
+  is_open: boolean;
 }
 
 /** Последняя повторная сделка каждого заказчика (по created_at). Один проход по sa.deals,
@@ -236,7 +239,23 @@ async function fetchLastDeliveredDeals(keys: string[]): Promise<Map<string, numb
 async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, RepeatDealInfo>> {
   if (!keys.length) return new Map();
   const refOf = (k: string) => (k.startsWith('k') ? k : `p${k.slice(1)}`);
-  const refs = [...new Set(keys.map(refOf))];
+  // Компании — и сделки её контактов (21.10, компания 20460: свежие проданные сделки заведены на
+  // контакт 128037 без компании, канбан показывал «постоянника без сделок»). Контакты компании —
+  // встречавшиеся в её сделках (обе стороны заполнены).
+  const companyIds = [...new Set(keys.filter(k => k.startsWith('k')).map(k => Number(k.slice(1))))];
+  const contactsOf = new Map<string, string[]>();
+  if (companyIds.length) {
+    const cr = await analyticsDb().query<{ company_id: string; contact_id: string }>(
+      `SELECT DISTINCT company_id::text AS company_id, contact_id::text AS contact_id FROM sa.deals
+        WHERE company_id = ANY($1::bigint[]) AND coalesce(contact_id, 0) <> 0 AND funnel_id IN (0, 1, 2, 3)`, [companyIds],
+    ).catch(() => ({ rows: [] as { company_id: string; contact_id: string }[] }));
+    for (const r of cr.rows) {
+      const l = contactsOf.get(`k${r.company_id}`) ?? [];
+      if (l.length < 20) l.push(`p${r.contact_id}`);
+      contactsOf.set(`k${r.company_id}`, l);
+    }
+  }
+  const refs = [...new Set([...keys.map(refOf), ...[...contactsOf.values()].flat()])];
   // Сделки, у которых синк потерял клиента, — клиент из Битрикса (dealFixes.ts, 21.10).
   const fix = await fetchOrphanDealClients().catch(() => new Map<number, { contactId: number | null; companyId: number | null }>());
   const fixIds = [...fix.keys()];
@@ -246,7 +265,10 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
        SELECT DISTINCT ON (client_key) * FROM (
          SELECT r.ref AS client_key,
                 d.deal_id, d.funnel_id, d.stage_id, s.name AS stage_name,
-                d.amount, d.created_at, d.lost_at, d.sold_at, d.delivered_at, d.current_manager_id
+                d.amount, d.created_at, d.lost_at, d.sold_at, d.delivered_at, d.current_manager_id,
+                -- Открытая (не отказ и не отгружена, в т.ч. «Продано») — важнее самой свежей (21.10,
+                -- контакт 238334: открытая 215670 «Бронь» была старше отгруженной 267699).
+                coalesce(s.event_type NOT IN ('lost', 'shipped'), false) AS is_open
            FROM sa.deals d LEFT JOIN sa.stages s ON s.id = d.stage_id
            LEFT JOIN fix f ON f.deal_id = d.deal_id
            CROSS JOIN LATERAL unnest(ARRAY[
@@ -255,11 +277,12 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
            ]) AS r(ref)
           WHERE d.funnel_id = ANY($2::int[]) AND r.ref IS NOT NULL
        ) t WHERE client_key = ANY($1::text[])
-       ORDER BY client_key, created_at DESC, deal_id DESC
+       ORDER BY client_key, is_open DESC, created_at DESC, deal_id DESC
      ) x`,
     [refs, [...REPEAT_FUNNEL_IDS], fixIds, fixIds.map(id => fix.get(id)!.contactId), fixIds.map(id => fix.get(id)!.companyId)],
   );
   const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
+  const openRef = new Set(res.rows.filter(r => r.is_open).map(r => r.client_key));
   const byRef = new Map(res.rows.map(r => [r.client_key, {
     dealId: Number(r.deal_id), funnelId: Number(r.funnel_id), stageId: r.stage_id, stageName: r.stage_name,
     amount: r.amount !== null ? Math.round(Number(r.amount)) : null,
@@ -267,7 +290,12 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
     managerId: r.current_manager_id !== null ? String(r.current_manager_id) : null,
   } as RepeatDealInfo]));
   const out = new Map<string, RepeatDealInfo>();
-  for (const k of keys) { const d = byRef.get(refOf(k)); if (d) out.set(k, d); }
+  for (const k of keys) {
+    // Свои сделки + (для компании) сделки её контактов: открытая важнее, дальше — самая свежая.
+    const cands = [refOf(k), ...(contactsOf.get(k) ?? [])].filter(r => byRef.has(r));
+    cands.sort((a, b) => Number(openRef.has(b)) - Number(openRef.has(a)) || byRef.get(b)!.createdAt.localeCompare(byRef.get(a)!.createdAt));
+    if (cands[0]) out.set(k, byRef.get(cands[0])!);
+  }
   return out;
 }
 
@@ -699,5 +727,5 @@ export async function buildRepeatBoard(opts: {
     ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию (все слова) и по номерам контакта, компании, сделки, задачи; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
     : null;
   return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice, dataAt,
-    taskLimit: settings.managerTaskLimit, managerLoad, outcomeCounts, today };
+    taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, today };
 }
