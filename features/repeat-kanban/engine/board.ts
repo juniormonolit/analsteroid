@@ -154,6 +154,9 @@ export interface BoardKpi {
   hot: number; hotPotential: number;
   /** Из них окно закрывается в ближайшие 3 дня. */
   hotClosing: number;
+  /** Проработаны РОПом: в дозвоне/воронке/на разборе И есть задача проекта «Повторные продажи»
+   *  (сделки роботов и менеджеров без задачи — не проработка, владелец 21.10). */
+  workedByTask: number;
 }
 
 /** Режим «Сегодня» (аудит 21.10): одна лента того, что РОПу решить сегодня. */
@@ -655,6 +658,7 @@ export async function buildRepeatBoard(opts: {
     hidden: kpiBuckets.get('hidden')!.length,
     hot: kpiBuckets.get('pool_hot')!.length, hotPotential: pot(kpiBuckets.get('pool_hot')!),
     hotClosing: kpiBuckets.get('pool_hot')!.filter(c => (c.freshDays ?? 0) >= WINDOW_DAYS - 3).length,
+    workedByTask: [...work, ...allIn('review')].filter(c => !!c.task).length,
   };
   return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null, dataAt,
     taskLimit: settings.managerTaskLimit, managerLoad, outcomeCounts, today };

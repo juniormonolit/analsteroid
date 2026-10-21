@@ -508,17 +508,18 @@ function Column({ def, col, h, onMore }: { def: ColumnDef; col: KanbanColumn | u
 
 /** Показатели канбана для РОПа — снимок текущей доски (аудит Fable 20.10). Исторические
  *  (скорость взятия из пула, конверсия пул → продано за 90 дн.) — в BACKLOG. */
-/** Проработанность (владелец 21.10: «кольцо тоже должно мотивировать»). Считается не от всей
- *  базы (там всегда ~5 %), а от РАБОЧЕЙ части: у кого окно открыто, плюс кого уже взяли в работу.
- *  100 % — ни одного заказчика с открытым окном без сделки. */
+/** Проработанность (владелец 21.10). Проработан = РОП поставил задачу в проекте «Повторные
+ *  продажи» (сделки роботов/менеджеров без задачи не в счёт — первая версия давала 78 % «ни за
+ *  что»). Знаменатель — они плюс заказчики с открытым окном без сделки: каждая поставленная задача
+ *  двигает кольцо; 100 % — ни один «горячий» заказчик не висит без задачи. */
 function WorkedRing({ k }: { k: BoardKpi }) {
-  const worked = k.inWork + k.funnel + k.review;
+  const worked = k.workedByTask;
   const total = worked + k.hot;
   const share = total ? worked / total : 0;
   const r = 26, c = 2 * Math.PI * r;
   return (
     <div className="flex shrink-0 flex-col items-center"
-      title={`Проработано ${rub.format(worked)} из ${rub.format(total)}: в работе ${worked} (дозвон ${k.inWork}, воронка ${k.funnel}, разбор ${k.review}) против ${k.hot} с открытым окном без сделки. 100% — окно не горит ни у кого.`}>
+      title={`Проработано ${rub.format(worked)} из ${rub.format(total)}: по ${worked} заказчикам поставлена задача (в дозвоне, воронке или на разборе), у ${k.hot} окно открыто, а сделки и задачи нет. Сделки без задачи (${k.noTaskInWork}) не в счёт. 100% — ни один заказчик с открытым окном не висит без задачи.`}>
       <svg width="64" height="64" viewBox="0 0 64 64" aria-label={`Проработано ${Math.round(share * 100)}%`}>
         <circle cx="32" cy="32" r={r} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="7" />
         <circle cx="32" cy="32" r={r} fill="none" stroke="#ffffff" strokeWidth="7" strokeLinecap="round"
