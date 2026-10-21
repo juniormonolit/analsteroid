@@ -183,10 +183,15 @@ export async function POST(req: NextRequest) {
         : session.bitrixUserId;
       if (!creator) return NextResponse.json({ error: 'Не удалось определить постановщика: нет привязки к Битриксу' }, { status: 400 });
       const deadlineDate = typeof body.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.deadline) ? body.deadline : null;
-      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate });
+      const deadlineTime = typeof body.deadlineTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.deadlineTime) ? body.deadlineTime : '19:00';
+      // Срок в прошлом (выбрали «сегодня», а время уже прошло) — до любых действий со сделкой.
+      if (deadlineDate && new Date(`${deadlineDate}T${deadlineTime}:00+03:00`).getTime() < Date.now()) {
+        return NextResponse.json({ error: `Срок ${deadlineDate.split('-').reverse().join('.')} ${deadlineTime} уже прошёл — выберите время позже` }, { status: 400 });
+      }
+      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime });
       const type = res.dealMode === 'created' ? 'deal_task_created' : res.dealMode === 'reopened' ? 'deal_returned_from_reject' : 'task_created';
       await logEvent(session, { type, requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
-        payload: { comment, creator, responsible: res.responsibleId, deadline: deadlineDate, templateId: typeof body.templateId === 'number' ? body.templateId : null } });
+        payload: { comment, creator, responsible: res.responsibleId, deadline: deadlineDate, deadlineTime, templateId: typeof body.templateId === 'number' ? body.templateId : null } });
       if (res.chatPosted) await logEvent(session, { type: 'task_comment_posted', requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId });
       return NextResponse.json(res);
     }

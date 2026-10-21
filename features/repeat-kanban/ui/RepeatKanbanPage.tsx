@@ -1024,22 +1024,29 @@ function windowEnd(c: KanbanCard): string {
 }
 const fmtYmd = (ymd: string) => ymd.split('-').reverse().join('.');
 
-function DeadlinePicker({ card, value, onChange }: { card: KanbanCard; value: string; onChange: (v: string) => void }) {
+function DeadlinePicker({ card, value, onChange, time, onTime }: {
+  card: KanbanCard; value: string; onChange: (v: string) => void; time: string; onTime: (t: string) => void;
+}) {
+  // Владелец 21.10: «задачу должно быть можно поставить на сегодня; время по умолчанию 19:00».
   const presets = [
+    { label: 'Сегодня', v: mskYmd(Date.now()) },
     { label: 'До конца окна', v: windowEnd(card) },
     { label: '+3 дня', v: mskYmd(Date.now(), 3) },
     { label: '+7 дней', v: mskYmd(Date.now(), 7) },
   ];
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="text-[var(--color-text-secondary)]">Срок задачи (до 19:00)</span>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_auto_auto_minmax(0,1fr)]">
+      <span className="text-[var(--color-text-secondary)]">Срок задачи</span>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {presets.map(p => (
           <button key={p.label} type="button" onClick={() => onChange(p.v)} className={`${value === p.v ? BTN_ACTIVE : BTN_IDLE} whitespace-nowrap px-2`}>
             {p.label} <span className="opacity-75">· {fmtYmd(p.v).slice(0, 5)}</span>
           </button>
         ))}
-        <input type="date" value={value} min={mskYmd(Date.now(), 1)} onChange={e => e.target.value && onChange(e.target.value)} aria-label="Срок задачи" className={`${fieldCls} min-h-11`} />
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_120px] gap-2">
+        <input type="date" value={value} min={mskYmd(Date.now())} onChange={e => e.target.value && onChange(e.target.value)} aria-label="Дата срока" className={`${fieldCls} min-h-11`} />
+        <input type="time" value={time} step={900} onChange={e => e.target.value && onTime(e.target.value)} aria-label="Время срока (МСК)" className={`${fieldCls} min-h-11`} />
       </div>
     </div>
   );
@@ -1057,6 +1064,7 @@ function OverloadNote({ name, load, limit }: { name: string; load: number; limit
 function TaskModal({ card, load, limit, onClose, onSaved }: { card: KanbanCard; load: number; limit: number; onClose: () => void; onSaved: () => void }) {
   const [text, setText] = useState('');
   const [deadline, setDeadline] = useState(() => windowEnd(card));
+  const [deadlineTime, setDeadlineTime] = useState('19:00');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<{ taskId: number; dealId: number; dealMode: string; chatPosted?: boolean } | null>(null);
@@ -1068,7 +1076,7 @@ function TaskModal({ card, load, limit, onClose, onSaved }: { card: KanbanCard; 
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text, deadline });
+      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text, deadline, deadlineTime });
       setResult(j); onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
@@ -1080,7 +1088,7 @@ function TaskModal({ card, load, limit, onClose, onSaved }: { card: KanbanCard; 
         <div className="flex flex-col gap-3 text-sm">
           <p className="text-[var(--color-text)]">
             {result.dealMode === 'created' ? `Создана сделка #${result.dealId}` : result.dealMode === 'reopened' ? `Сделка #${result.dealId} возвращена из отказа` : `Сделка #${result.dealId}`}
-            {' '}и задача в проекте «Повторные продажи», срок {fmtYmd(deadline)}.{text.trim() ? (result.chatPosted ? ' Сообщение — в описании и первым сообщением в чате задачи.' : ' Сообщение — в описании задачи (в чат задачи отправить не удалось).') : ''}
+            {' '}и задача в проекте «Повторные продажи», срок {fmtYmd(deadline)} {deadlineTime}.{text.trim() ? (result.chatPosted ? ' Сообщение — в описании и первым сообщением в чате задачи.' : ' Сообщение — в описании задачи (в чат задачи отправить не удалось).') : ''}
           </p>
           <div className="flex flex-wrap gap-3">
             <a href={taskUrl(result.taskId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline"><ExternalLink size={13} /> Задача #{result.taskId}</a>
@@ -1103,7 +1111,7 @@ function TaskModal({ card, load, limit, onClose, onSaved }: { card: KanbanCard; 
             <textarea value={text} onChange={e => setText(e.target.value)} rows={10}
               placeholder="У тебя дом без крыши — будет капать дождь — предложи металлочерепицу!" className={`${fieldCls} min-h-[30dvh] resize-y sm:min-h-[240px]`} />
           </label>
-          <DeadlinePicker card={card} value={deadline} onChange={setDeadline} />
+          <DeadlinePicker card={card} value={deadline} onChange={setDeadline} time={deadlineTime} onTime={setDeadlineTime} />
           {err && <p className="text-[var(--color-negative)]">{err}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
@@ -1132,7 +1140,8 @@ function BulkTaskModal({ cards, loadOf, limit, onClose, onDone }: {
   const templates = tpl?.templates ?? [];
   const [templateId, setTemplateId] = useState<string>('');
   const tid = templateId || String(templates.find(t => t.isDefault)?.id ?? templates[0]?.id ?? '');
-  const [deadlineMode, setDeadlineMode] = useState<'window' | '3' | '7'>('window');
+  const [deadlineMode, setDeadlineMode] = useState<'today' | 'window' | '3' | '7'>('window');
+  const [deadlineTime, setDeadlineTime] = useState('19:00');
   const [results, setResults] = useState<Map<string, { ok: boolean; text: string }>>(new Map());
   const [running, setRunning] = useState(false);
   const stop = useRef(false);
@@ -1148,9 +1157,9 @@ function BulkTaskModal({ cards, loadOf, limit, onClose, onDone }: {
     for (const c of cards) {
       if (stop.current) break;
       if (results.get(c.clientKey)?.ok) continue;
-      const deadline = deadlineMode === 'window' ? windowEnd(c) : mskYmd(Date.now(), Number(deadlineMode));
+      const deadline = deadlineMode === 'window' ? windowEnd(c) : deadlineMode === 'today' ? mskYmd(Date.now()) : mskYmd(Date.now(), Number(deadlineMode));
       try {
-        const j = await post({ action: 'create_task', clientKey: c.clientKey, managerId: c.managerId, column: c.column, text: '', templateId: tid ? Number(tid) : undefined, deadline });
+        const j = await post({ action: 'create_task', clientKey: c.clientKey, managerId: c.managerId, column: c.column, text: '', templateId: tid ? Number(tid) : undefined, deadline, deadlineTime });
         setResults(m => new Map(m).set(c.clientKey, { ok: true, text: `задача #${j.taskId}` }));
       } catch (e) {
         setResults(m => new Map(m).set(c.clientKey, { ok: false, text: e instanceof Error ? e.message : String(e) }));
@@ -1175,12 +1184,16 @@ function BulkTaskModal({ cards, loadOf, limit, onClose, onDone }: {
             className="w-full justify-start bg-[var(--color-bg)]" />
         </label>
         <div className="flex flex-col gap-1.5">
-          <span className="text-[var(--color-text-secondary)]">Срок задач (до 19:00)</span>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {([['window', 'До конца окна — у каждого свой'], ['3', '+3 дня'], ['7', '+7 дней']] as const).map(([v, l]) => (
+          <span className="text-[var(--color-text-secondary)]">Срок задач</span>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {([['today', 'Сегодня'], ['window', 'До конца окна — у каждого свой'], ['3', '+3 дня'], ['7', '+7 дней']] as const).map(([v, l]) => (
               <button key={v} type="button" onClick={() => setDeadlineMode(v)} className={deadlineMode === v ? BTN_ACTIVE : BTN_IDLE}>{l}</button>
             ))}
           </div>
+          <label className="flex items-center gap-2 text-[var(--color-text-secondary)]">
+            Время
+            <input type="time" value={deadlineTime} step={900} onChange={e => e.target.value && setDeadlineTime(e.target.value)} aria-label="Время срока (МСК)" className={`${fieldCls} min-h-11 w-32`} />
+          </label>
         </div>
         {over.length > 0 && (
           <div className="rounded-lg bg-[#fff2cc] p-2 text-[#7f6000]">

@@ -161,8 +161,9 @@ export async function createRepeatTask(input: {
   clientKey: string; fallbackManagerId: string; creatorBitrixId: string; comment: string;
   /** Кто написал комментарий (нажавший, его Битрикс-id) — автор сообщения в чате задачи. */
   commentAuthorId: string | null;
-  /** Срок задачи (YYYY-MM-DD, 19:00 МСК); не задан — +5 дней. */
+  /** Срок задачи (YYYY-MM-DD) и время (HH:MM, МСК; не задано — 19:00); дата не задана — +5 дней. */
   deadlineDate?: string | null;
+  deadlineTime?: string | null;
 }): Promise<RepeatTaskResult> {
   const t = dealTargetOf(input.clientKey);
   if (!Number.isInteger(t.id) || t.id <= 0) throw new DealCreateError('Некорректный заказчик');
@@ -230,7 +231,8 @@ export async function createRepeatTask(input: {
       CREATED_BY: Number(input.creatorBitrixId),
       TASK_CONTROL: 'Y',
       ALLOW_CHANGE_DEADLINE: 'N',
-      DEADLINE: input.deadlineDate && /^\d{4}-\d{2}-\d{2}$/.test(input.deadlineDate) ? `${input.deadlineDate}T19:00:00+03:00` : deadlineIso(),
+      DEADLINE: input.deadlineDate && /^\d{4}-\d{2}-\d{2}$/.test(input.deadlineDate)
+        ? `${input.deadlineDate}T${input.deadlineTime && /^\d{2}:\d{2}$/.test(input.deadlineTime) ? input.deadlineTime : '19:00'}:00+03:00` : deadlineIso(),
       UF_CRM_TASK: [`D_${dealId}`],
     },
   });
