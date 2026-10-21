@@ -3,7 +3,7 @@
 // та же ClientModuleWidget, что во вкладке Битрикса и в «Ещё → Модули», только панелью
 // справа поверх текущей страницы. Сделки открываются карточкой сделки Монолитики.
 // Заменяет карточку «Моих заказчиков» (CustomerCard) во всех местах.
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
 import { X } from 'lucide-react';
@@ -12,12 +12,16 @@ import { ClientModuleWidget } from './ClientModuleWidget';
 // DealCard сам открывает карточку клиента — статический импорт дал бы цикл модулей.
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 
-export function ClientCardDrawer({ contactId, companyId, onClose, zIndex }: {
+export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideActions }: {
   contactId?: string | number | null;
   companyId?: string | number | null;
   onClose: () => void;
   /** Поверх чего открылись: из карточки сделки (z-70) нужен z выше её. */
   zIndex?: number;
+  /** Действия раздела, откуда открыли (канбан повторных, владелец 21.10: «кнопки — в карточке
+   *  клиента, но только при работе через канбан; приклеить к слайду слева сверху, в карточку не
+   *  вмешивать»). На компьютере — слева от панели сверху, на телефоне — полосой снизу. */
+  sideActions?: ReactNode;
 }) {
   const [mounted, setMounted] = useState(false);
   const [openDealId, setOpenDealId] = useState<number | null>(null);
@@ -32,7 +36,11 @@ export function ClientCardDrawer({ contactId, companyId, onClose, zIndex }: {
   const z = zIndex ?? 50;
   return createPortal(
     <div className="fixed inset-0 flex" style={{ zIndex: z }}>
-      <div className="hidden min-w-[10%] flex-1 cursor-pointer bg-black/40 sm:block" onClick={onClose} />
+      <div className="relative hidden min-w-[10%] flex-1 cursor-pointer bg-black/40 sm:block" onClick={onClose}>
+        {sideActions && (
+          <div className="absolute right-3 top-3 w-72 max-w-[calc(100%-24px)] cursor-default" onClick={e => e.stopPropagation()}>{sideActions}</div>
+        )}
+      </div>
       <div className="flex h-dvh w-full max-w-full shrink-0 flex-col overflow-hidden bg-[var(--color-bg)] shadow-2xl sm:w-[1100px] sm:max-w-[96vw]">
         <div className="flex shrink-0 justify-end px-2 pt-2">
           <button type="button" onClick={onClose} aria-label="Закрыть"
@@ -47,6 +55,7 @@ export function ClientCardDrawer({ contactId, companyId, onClose, zIndex }: {
             onDealOpen={setOpenDealId}
           />
         </div>
+        {sideActions && <div className="shrink-0 border-t border-[var(--color-border)] p-2 sm:hidden">{sideActions}</div>}
       </div>
       {openDealId !== null && <DealCard dealId={openDealId} onClose={() => setOpenDealId(null)} stackZ={z + 10} />}
     </div>,

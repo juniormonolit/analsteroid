@@ -10,12 +10,14 @@ import { ClientCardDrawer } from '@/features/client-module/ui/ClientCardDrawer';
 // раздел «Мои заказчики» упраздняется, отметки «Отложить/Не звонить» не нужны.
 // Доступ проверяет сервер модуля: владелец клиента (менеджер последней сделки) должен
 // быть в срезе сессии (lib/auth/modulesAccess.ts canSessionSeeClientRef).
-export function CustomerCardLoader({ contactId, companyId, onClose, zIndex }: {
+export function CustomerCardLoader({ contactId, companyId, onClose, zIndex, sideActions }: {
   contactId?: string | number | null;
   companyId?: string | number | null;
   onClose: () => void;
   /** Поверх чего открылись: из DealCard (z-70) нужен z повыше её. */
   zIndex?: number;
+  /** Действия раздела, откуда открыли (канбан повторных) — рядом с карточкой, не внутри. */
+  sideActions?: React.ReactNode;
 }) {
-  return <ClientCardDrawer contactId={contactId} companyId={companyId} onClose={onClose} zIndex={zIndex} />;
+  return <ClientCardDrawer contactId={contactId} companyId={companyId} onClose={onClose} zIndex={zIndex} sideActions={sideActions} />;
 }
