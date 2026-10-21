@@ -227,9 +227,11 @@ async function fetchLastDeliveredDeals(keys: string[]): Promise<Map<string, numb
  * Привязка — НЕ общей формулой client_key отчётов: та отбрасывает юр-сделки без компании
  * (funnel 3, company_id IS NULL), и у заказчика с такой ОТКРЫТОЙ сделкой доска писала «Нет
  * активной сделки» (живой случай 20.10: контакт 182561, сделка 260068 «Отправил счёт»).
- * Здесь, как в единой карточке клиента (контакт = все его сделки): сделка — контакта, если
- * это розничная воронка (2) или юр-воронка (3) без компании; компании — если компания указана.
- * Ключи доски c<id>/x<id> — один и тот же контакт.
+ * Здесь, как в единой карточке клиента (контакт = все его сделки): сделка принадлежит И контакту,
+ * И компании, если указаны оба (21.10, живой случай Хорев: первая покупка — юр-сделка без компании
+ * → заказчик «контакт», следующие и открытая 112192 — на компанию → заказчик «компания»; карточка
+ * клиента контакта видела сделку в работе, канбан писал «Нет активной сделки»). Обе карточки
+ * заказчика теперь видят свою открытую повторную сделку. Ключи c<id>/x<id> — один и тот же контакт.
  */
 async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, RepeatDealInfo>> {
   if (!keys.length) return new Map();
@@ -242,13 +244,16 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
     `WITH fix AS (SELECT * FROM unnest($3::bigint[], $4::bigint[], $5::bigint[]) AS f(deal_id, contact_id, company_id))
      SELECT * FROM (
        SELECT DISTINCT ON (client_key) * FROM (
-         SELECT CASE WHEN d.funnel_id = 3 AND coalesce(nullif(d.company_id, 0), f.company_id, 0) <> 0 THEN 'k'||coalesce(nullif(d.company_id, 0), f.company_id)
-                     WHEN coalesce(nullif(d.contact_id, 0), f.contact_id, 0) <> 0 THEN 'p'||coalesce(nullif(d.contact_id, 0), f.contact_id) END AS client_key,
+         SELECT r.ref AS client_key,
                 d.deal_id, d.funnel_id, d.stage_id, s.name AS stage_name,
                 d.amount, d.created_at, d.lost_at, d.sold_at, d.delivered_at, d.current_manager_id
            FROM sa.deals d LEFT JOIN sa.stages s ON s.id = d.stage_id
            LEFT JOIN fix f ON f.deal_id = d.deal_id
-          WHERE d.funnel_id = ANY($2::int[])
+           CROSS JOIN LATERAL unnest(ARRAY[
+             CASE WHEN coalesce(nullif(d.company_id, 0), f.company_id, 0) <> 0 THEN 'k'||coalesce(nullif(d.company_id, 0), f.company_id) END,
+             CASE WHEN coalesce(nullif(d.contact_id, 0), f.contact_id, 0) <> 0 THEN 'p'||coalesce(nullif(d.contact_id, 0), f.contact_id) END
+           ]) AS r(ref)
+          WHERE d.funnel_id = ANY($2::int[]) AND r.ref IS NOT NULL
        ) t WHERE client_key = ANY($1::text[])
        ORDER BY client_key, created_at DESC, deal_id DESC
      ) x`,
