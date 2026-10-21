@@ -28,16 +28,19 @@ interface Agg {
   managers: number; total: number; pool: number; poolHot: number; poolPotential: number;
   inWork: number; reached: number; funnel: number; funnelSum: number; review: number; hidden: number; brak: number;
   tasksOpen: number; tasksOverdue: number; tasksControl: number; noTask: number; actions: number; tasksCreated: number; tasksAccepted: number;
+  workedByTask: number;
 }
-const ZERO: Agg = { managers: 0, total: 0, pool: 0, poolHot: 0, poolPotential: 0, inWork: 0, reached: 0, funnel: 0, funnelSum: 0, review: 0, hidden: 0, brak: 0, tasksOpen: 0, tasksOverdue: 0, tasksControl: 0, noTask: 0, actions: 0, tasksCreated: 0, tasksAccepted: 0 };
+const ZERO: Agg = { managers: 0, total: 0, pool: 0, poolHot: 0, poolPotential: 0, inWork: 0, reached: 0, funnel: 0, funnelSum: 0, review: 0, hidden: 0, brak: 0, tasksOpen: 0, tasksOverdue: 0, tasksControl: 0, noTask: 0, actions: 0, tasksCreated: 0, tasksAccepted: 0, workedByTask: 0 };
 function add(a: Agg, m: MgrDay | Agg): Agg {
   const o = { ...a };
   for (const k of Object.keys(ZERO) as (keyof Agg)[]) if (k !== 'managers') o[k] += (m as unknown as Record<string, number>)[k] ?? 0;
   o.managers += 'managerId' in m ? 1 : (m as Agg).managers;
   return o;
 }
-// Проработано строго (ТЗ: главная) — в дозвоне + в воронке среди всех кроме брака; мягкое — всё не в пуле.
-const strict = (a: Agg) => pct1(a.inWork + a.funnel, a.total);
+// Проработано (владелец 21.10, как кольцо доски): заказчики в работе С задачей РОПа против тех, у кого
+// окно открыто, а сделки нет. Сделки роботов/менеджеров без задачи не в счёт (давали 78 % «ни за что»).
+// Имя strict оставлено — им пользуются сортировка, светофор и динамика. soft — доля не в пуле (справочно).
+const strict = (a: Agg) => pct1(a.workedByTask, a.workedByTask + a.poolHot);
 const soft = (a: Agg) => pct1(a.total - a.pool, a.total);
 
 interface TreeNode {
@@ -108,7 +111,7 @@ const COLS: { key: SortKey; label: string; hint: string }[] = [
   { key: 'total', label: 'Заказчиков', hint: 'Все, кроме брака' },
   { key: 'pool', label: 'В пуле', hint: 'Нет открытой повторной сделки; серым — «Срочно» (окно 22 дня открыто)' },
   { key: 'potential', label: 'Потенциал пула', hint: 'Годовая выручка заказчиков пула, если их вернуть' },
-  { key: 'strict', label: 'Проработано', hint: 'Строго: в дозвоне + в воронке среди всех кроме брака (скрытые и отказы на проверке — не проработаны). Взвешенно по заказчикам вверх по дереву' },
+  { key: 'strict', label: 'Проработано', hint: 'Заказчики, по которым РОП поставил задачу, среди них плюс тех, у кого окно повторной продажи открыто, а сделки нет. Сделки без задачи не в счёт. Взвешенно по заказчикам вверх по дереву' },
   { key: 'inWork', label: 'В дозвоне', hint: 'Взят в работу и попытки связаться' },
   { key: 'funnel', label: 'В воронке', hint: 'Повторные сделки в работе: штук / сумма' },
   { key: 'delta', label: 'Δ за период', hint: 'Изменение «проработано» за доступные дни, п.п.; линия — 30 дней' },
@@ -322,7 +325,7 @@ export function RepeatKanbanAnalyticsPage() {
           <td className={cell}>{rub.format(a.total)}</td>
           <td className={cell}>{rub.format(a.pool)}{a.poolHot > 0 && <span className="ml-1 text-[11px] text-[var(--color-text-muted)]">срочно {a.poolHot}</span>}</td>
           <td className={cell}>{moneyShort(a.poolPotential)}</td>
-          <td className={cell} title={`Мягко (скрытые и отказы — проработаны): ${soft(a)}%`}><Light v={st} /></td>
+          <td className={cell} title={`С задачей ${a.workedByTask} из ${a.workedByTask + a.poolHot} (окно открыто без сделки — ${a.poolHot}). Не в пуле вообще, включая сделки без задачи: ${soft(a)}%`}><Light v={st} /></td>
           <td className={cell}>{rub.format(a.inWork)}</td>
           <td className={cell}>{rub.format(a.funnel)}<span className="ml-1 text-[11px] text-[var(--color-text-muted)]">{moneyShort(a.funnelSum)}</span></td>
           <td className={cell}><div className="flex items-center justify-end gap-2"><Spark points={n.series} /><Delta points={n.series} window={periodDates.length} /></div></td>
@@ -330,7 +333,7 @@ export function RepeatKanbanAnalyticsPage() {
         {detail === n.id && (
           <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
             <td colSpan={8} className="px-4 py-2 text-[12.5px] text-[var(--color-text-secondary)]">
-              Отказы на проверке <b>{a.review}</b> · скрыто <b>{a.hidden}</b> · брак <b>{a.brak}</b> · проработано мягко <b>{soft(a)}%</b> ·
+              Отказы на проверке <b>{a.review}</b> · скрыто <b>{a.hidden}</b> · брак <b>{a.brak}</b> · с задачей <b>{a.workedByTask}</b> · не в пуле (включая сделки без задачи) <b>{soft(a)}%</b> ·
               дозвонились <b>{a.reached}</b> из {a.inWork} · задачи: открыто <b>{a.tasksOpen}</b>, просрочено <b>{a.tasksOverdue}</b>, ждут приёмки <b>{a.tasksControl}</b>,
               без задачи <b>{a.noTask}</b> · за день: действий <b>{a.actions}</b>, задач создано <b>{a.tasksCreated}</b>, принято <b>{a.tasksAccepted}</b>
             </td>
@@ -395,7 +398,7 @@ export function RepeatKanbanAnalyticsPage() {
         {/* KPI — 5 секунд. */}
         {kpi && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-            <Kpi label="Проработано (строго)" value={`${strict(kpi.cur)}%`} d={kpi.prev ? Math.round((strict(kpi.cur) - strict(kpi.prev)) * 10) / 10 : null} sub={`мягко ${soft(kpi.cur)}%`} />
+            <Kpi label="Проработано" value={`${strict(kpi.cur)}%`} d={kpi.prev ? Math.round((strict(kpi.cur) - strict(kpi.prev)) * 10) / 10 : null} sub={`с задачей ${kpi.cur.workedByTask} из ${kpi.cur.workedByTask + kpi.cur.poolHot}`} />
             <Kpi label="В пуле, заказчиков" value={rub.format(kpi.cur.pool)} d={kpi.prev ? kpi.cur.pool - kpi.prev.pool : null} better="down" sub={`срочно ${kpi.cur.poolHot}`} />
             <Kpi label="Потенциал пула" value={moneyShort(kpi.cur.poolPotential)} d={null} sub="уменьшается, когда пул очищают" />
             <Kpi label="В воронке" value={`${rub.format(kpi.cur.funnel)} сделок`} d={kpi.prev ? kpi.cur.funnel - kpi.prev.funnel : null} sub={moneyShort(kpi.cur.funnelSum)} />

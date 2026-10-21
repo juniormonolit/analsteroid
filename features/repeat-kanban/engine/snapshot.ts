@@ -71,8 +71,8 @@ export async function buildDailySnapshot(date = mskDate()): Promise<SnapshotResu
         `INSERT INTO repeat_kanban_daily (snap_date, manager_id, manager_name, department_id, department_name, is_workday,
            total, pool, pool_hot, pool_potential, in_work, reached, funnel, funnel_sum, review, hidden, brak,
            worked_pct, worked_pct_strict, tasks_open, tasks_overdue, tasks_control, no_task_in_work, columns,
-           actions, actions_by_type, tasks_created, tasks_accepted, built_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28, now())
+           actions, actions_by_type, tasks_created, tasks_accepted, worked_by_task, built_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29, now())
          ON CONFLICT (snap_date, manager_id) DO UPDATE SET
            manager_name = EXCLUDED.manager_name, department_id = EXCLUDED.department_id, department_name = EXCLUDED.department_name,
            is_workday = EXCLUDED.is_workday, total = EXCLUDED.total, pool = EXCLUDED.pool, pool_hot = EXCLUDED.pool_hot,
@@ -81,15 +81,17 @@ export async function buildDailySnapshot(date = mskDate()): Promise<SnapshotResu
            worked_pct = EXCLUDED.worked_pct, worked_pct_strict = EXCLUDED.worked_pct_strict, tasks_open = EXCLUDED.tasks_open,
            tasks_overdue = EXCLUDED.tasks_overdue, tasks_control = EXCLUDED.tasks_control, no_task_in_work = EXCLUDED.no_task_in_work,
            columns = EXCLUDED.columns, actions = EXCLUDED.actions, actions_by_type = EXCLUDED.actions_by_type,
-           tasks_created = EXCLUDED.tasks_created, tasks_accepted = EXCLUDED.tasks_accepted, built_at = now()`,
+           tasks_created = EXCLUDED.tasks_created, tasks_accepted = EXCLUDED.tasks_accepted,
+           worked_by_task = EXCLUDED.worked_by_task, built_at = now()`,
         [date, m.id, m.name, m.dept_id, m.dept_name, isWorkday,
          total, k.pool, cols.pool_hot ?? 0, Math.round(k.poolPotential), k.inWork, k.reached, k.funnel, Math.round(k.funnelSum),
          k.review, k.hidden, k.brak,
-         total ? Math.round(((total - k.pool) / total) * 1000) / 10 : 0,
+         // worked_pct — по задачам РОПа (как кольцо доски, с 21.10); strict — старая мера «дозвон+воронка».
+         k.workedByTask + (cols.pool_hot ?? 0) ? Math.round((k.workedByTask / (k.workedByTask + (cols.pool_hot ?? 0))) * 1000) / 10 : 0,
          total ? Math.round(((k.inWork + k.funnel) / total) * 1000) / 10 : 0,
          tasksOpen, k.tasksOverdue, k.tasksControl, k.noTaskInWork, JSON.stringify(cols),
          Object.values(by).reduce((s, n) => s + n, 0), JSON.stringify(by),
-         tasksCreated.get(m.id) ?? 0, tasksAccepted.get(m.id) ?? 0],
+         tasksCreated.get(m.id) ?? 0, tasksAccepted.get(m.id) ?? 0, k.workedByTask],
       );
       written++;
     } catch (e) {

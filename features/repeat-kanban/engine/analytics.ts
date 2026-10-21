@@ -18,6 +18,8 @@ export interface MgrDay {
   review: number; hidden: number; brak: number;
   tasksOpen: number; tasksOverdue: number; tasksControl: number; noTask: number;
   actions: number; actionsByType: Record<string, number>; tasksCreated: number; tasksAccepted: number;
+  /** В работе с задачей РОПа (миграция 235; до 21.10 — 0). */
+  workedByTask: number;
 }
 export interface JournalRow {
   /** kanban — клик в канбане (repeat_kanban_events); bitrix — событие из копии Битрикса (sa). */
@@ -91,6 +93,7 @@ export async function fetchKanbanAnalytics(opts: { date: string; period?: Analyt
         tasksOpen: Number(x.tasks_open), tasksOverdue: Number(x.tasks_overdue), tasksControl: Number(x.tasks_control), noTask: Number(x.no_task_in_work),
         actions: Number(x.actions), actionsByType: (x.actions_by_type as Record<string, number>) ?? {},
         tasksCreated: Number(x.tasks_created), tasksAccepted: Number(x.tasks_accepted),
+        workedByTask: Number(x.worked_by_task ?? 0),
       });
     }
   }
