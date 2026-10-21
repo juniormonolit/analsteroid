@@ -1,6 +1,6 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { bx } from '@/lib/bitrix/notify';
-import { resolveClientNames } from '@/lib/bitrix/clientNames';
+import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchDealAddresses } from '@/lib/bitrix/dealAddress';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
 import {
@@ -120,7 +120,12 @@ async function bitrixClientDealIds(entity: 'contact' | 'company', id: number): P
 
 // ── Чтение ────────────────────────────────────────────────────────────────
 
-export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleData> {
+/** light — только наша база, без внешних вызовов (Битрикс, адреса сделок, геокодер, ЕГРЮЛ):
+ *  для подстановки рекомендаций в сообщение задачи канбана повторных (владелец 21.10: «автосообщение
+ *  грузится 3–5 секунд»). Рекомендации те же — сделки, объекты из заявок 1С, профиль, матрица и
+ *  «не предлагать» читаются из БД; расходиться может только у сделок, потерянных синком sa.deals. */
+export async function fetchClientModule(ref: ClientRef, opts: { light?: boolean } = {}): Promise<ClientModuleData> {
+  const light = opts.light === true;
   const db = analyticsDb();
   const isCompany = ref.startsWith('k');
   const id = Number(ref.slice(1));
@@ -140,7 +145,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   // пусты, а в Битриксе клиент есть; разбор 15.10, контакт 240321: ~350 сделок
   // с июля). Страховка: ID сделок клиента берём ещё и из Битрикса (параллельно)
   // и дочитываем из sa те, что не нашлись по клиенту.
-  const bxIdsP = withTimeout(bitrixClientDealIds(isCompany ? 'company' : 'contact', id), 5000, [] as number[]);
+  const bxIdsP = light ? Promise.resolve([] as number[]) : withTimeout(bitrixClientDealIds(isCompany ? 'company' : 'contact', id), 5000, [] as number[]);
   const byClient = await db.query<DealRow>(
     `${DEAL_SELECT}
       WHERE d.funnel_id IN (0,1,2,3) AND ${isCompany ? 'd.company_id' : 'd.contact_id'} = $1
@@ -160,7 +165,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   };
   const dealIds = dealsRes.rows.map(r => Number(r.deal_id));
   // ЕГРЮЛ по ИНН из реквизитов (для подсказки «что за клиент») — параллельно с остальным.
-  const legalP = withTimeout(fetchLegalEntity(ref), 7000, null);
+  const legalP = light ? Promise.resolve(null) : withTimeout(fetchLegalEntity(ref), 7000, null);
 
   // ── Объекты: адреса из заявок 1С и сделок Битрикса → склейка ─────────────
   // Сначала собираем «сырые» адреса (ключ requestObjectKey — по нему сохранены
@@ -235,7 +240,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   }
   // Адрес сделки в Битриксе — для сделок без заявки 1С.
   const noAddr = dealIds.filter(d => !dealRaw.has(d) && !dealAddrText.has(d)).slice(0, BITRIX_ADDRESS_LIMIT);
-  if (noAddr.length > 0) {
+  if (noAddr.length > 0 && !light) {
     const bx = await withTimeout(fetchDealAddresses(noAddr), 8000, new Map());
     if (bx.size > 0) addressesAvailable = true;
     for (const [dealId, a] of bx) {
@@ -281,7 +286,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     } else {
       // Первое открытие клиента: разово подтягиваем поля из Битрикса (там ~19 тыс.
       // старых «Типов клиента») и кладём копию в sa.
-      const bxp = await withTimeout(readClientFromBitrix(ref), 5000, null);
+      const bxp = light ? null : await withTimeout(readClientFromBitrix(ref), 5000, null);
       if (bxp && (bxp.clientType || bxp.occupation || bxp.note)) {
         profile = { clientType: bxp.clientType, occupation: bxp.occupation, note: bxp.note, updatedBy: null, updatedAt: null };
         await db.query(
@@ -382,7 +387,7 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
   // 1 запрос/с, поэтому до 3 объектов за открытие; ответы кешируются.
   const toLabel = [...objects.values()].filter(o => !o.manual && !objectProfiles[o.key]?.idealAddress
     && o.lat !== null && o.lon !== null && isCoarseAddress({ address: o.address, lat: null, lon: null })).slice(0, 3);
-  if (toLabel.length) {
+  if (toLabel.length && !light) {
     const named = await withTimeout(Promise.all(toLabel.map(o => reverseGeocode({ lat: o.lat!, lon: o.lon! }).catch(() => null))), 4500, [] as (GeoCandidate | null)[]);
     named.forEach((g, i) => { if (g?.settlement) toLabel[i].label = g.settlement.replace(/^(тер\.?|территория)\s+/i, ''); });
   }
@@ -427,7 +432,8 @@ export async function fetchClientModule(ref: ClientRef): Promise<ClientModuleDat
     byObject[o.key] = stageLadder(deals.filter(d => d.objectKey === o.key), objectProfiles[o.key]?.houseType ?? null, matrix, priorities, kind, ex);
   }
 
-  const names = await withTimeout(resolveClientNames([ref]), 4000, new Map<string, string | null>());
+  const names = light ? await getCachedClientNames([ref]).catch(() => new Map<string, string | null>())
+    : await withTimeout(resolveClientNames([ref]), 4000, new Map<string, string | null>());
 
   // Подсказка «что это за клиент» (владелец 15.10): воронки юрлиц 1/3, объекты
   // кроме «адрес до города», ЕГРЮЛ.

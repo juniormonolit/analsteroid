@@ -274,13 +274,25 @@ function shipmentGroups(s: Shipment): string[] {
  *  recommendations.client: цепочка стройки + история + ручные приоритеты, «не предлагать»).
  *  'x' (юр-сделка без карточки компании) — это контакт, карточка открывается по нему.
  *  Карточка не собралась/пусто — кросс-селл «Моих заказчиков» по группам последней отгрузки. */
+// Кэш рекомендаций на 10 минут: окно задачи, смена шаблона и массовая постановка спрашивают
+// одного и того же заказчика по нескольку раз.
+const REC_TTL_MS = 10 * 60_000;
+const recCache = new Map<string, { at: number; groups: string[] }>();
+
 async function recommendedGroups(clientKey: string, lastGroups: string[]): Promise<string[]> {
   const ref = (clientKey.startsWith('k') ? `k${clientKey.slice(1)}` : `c${clientKey.slice(1)}`) as `c${number}` | `k${number}`;
+  const hit = recCache.get(ref);
+  if (hit && Date.now() - hit.at < REC_TTL_MS && hit.groups.length) return hit.groups;
   try {
     const { fetchClientModule } = await import('@/features/client-module/engine/clientModule');
-    const card = await withTimeout(fetchClientModule(ref), 15_000, null);
+    // light: только наша БД — без Битрикса, геокодера и ЕГРЮЛ (было 3–5 с на открытие окна).
+    const card = await withTimeout(fetchClientModule(ref, { light: true }), 6_000, null);
     const groups = card?.recommendations.client.map(r => r.group).filter(Boolean) ?? [];
-    if (groups.length) return groups.slice(0, 3);
+    if (groups.length) {
+      if (recCache.size > 5000) recCache.clear();
+      recCache.set(ref, { at: Date.now(), groups: groups.slice(0, 3) });
+      return groups.slice(0, 3);
+    }
   } catch (e) {
     console.warn('[repeat-kanban template] рекомендации карточки клиента:', e instanceof Error ? e.message : e);
   }
