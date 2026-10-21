@@ -22,6 +22,8 @@ const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { hou
 const fmtD = (ymd: string) => ymd.split('-').reverse().slice(0, 2).join('.');
 const dealUrl = (id: number) => `https://td.monolit-crm.ru/crm/deal/details/${id}/`;
 const pct1 = (a: number, b: number) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+/** Процент по-русски: «10,5%». */
+const pctRu = (v: number) => `${String(v).replace('.', ',')}%`;
 
 // ── Агрегат узла ──────────────────────────────────────────────────────────────
 interface Agg {
@@ -127,7 +129,7 @@ const sortVal = (n: TreeNode, k: SortKey): number | string => {
 
 function Light({ v }: { v: number }) {
   const st = v < 30 ? { bg: '#f4cccc', fg: '#990000' } : v < 60 ? { bg: '#fff2cc', fg: '#7f6000' } : { bg: '#d9ead3', fg: '#38761d' };
-  return <span className="inline-block min-w-[56px] rounded px-1.5 py-0.5 text-right font-bold tabular-nums" style={{ background: st.bg, color: st.fg }}>{v}%</span>;
+  return <span className="inline-block min-w-[56px] rounded px-1.5 py-0.5 text-right font-bold tabular-nums" style={{ background: st.bg, color: st.fg }}>{pctRu(v)}</span>;
 }
 function Spark({ points }: { points: number[] }) {
   if (points.length < 2) return <span className="text-[11px] text-[var(--color-text-muted)]">с {points.length ? 'первого снимка' : '—'}</span>;
@@ -398,7 +400,9 @@ export function RepeatKanbanAnalyticsPage() {
         {/* KPI — 5 секунд. */}
         {kpi && (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
-            <Kpi label="Проработано" value={`${strict(kpi.cur)}%`} d={kpi.prev ? Math.round((strict(kpi.cur) - strict(kpi.prev)) * 10) / 10 : null} sub={`с задачей ${kpi.cur.workedByTask} из ${kpi.cur.workedByTask + kpi.cur.poolHot}`} />
+            {/* Δ — только если у прошлого снимка есть мера «с задачей» (появилась 21.10, миграция 235):
+                иначе «▲11 к 20.10» — рост от несуществующего нуля. */}
+            <Kpi label="Проработано" value={pctRu(strict(kpi.cur))} d={kpi.prev && kpi.prev.workedByTask > 0 ? Math.round((strict(kpi.cur) - strict(kpi.prev)) * 10) / 10 : null} sub={`с задачей ${kpi.cur.workedByTask} из ${kpi.cur.workedByTask + kpi.cur.poolHot}`} />
             <Kpi label="В пуле, заказчиков" value={rub.format(kpi.cur.pool)} d={kpi.prev ? kpi.cur.pool - kpi.prev.pool : null} better="down" sub={`срочно ${kpi.cur.poolHot}`} />
             <Kpi label="Потенциал пула" value={moneyShort(kpi.cur.poolPotential)} d={null} sub="уменьшается, когда пул очищают" />
             <Kpi label="В воронке" value={`${rub.format(kpi.cur.funnel)} сделок`} d={kpi.prev ? kpi.cur.funnel - kpi.prev.funnel : null} sub={moneyShort(kpi.cur.funnelSum)} />

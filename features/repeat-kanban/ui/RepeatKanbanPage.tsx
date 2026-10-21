@@ -1091,7 +1091,7 @@ function BulkTaskModal({ cards, loadOf, limit, onClose, onDone }: {
               <button type="button" onClick={() => { if (okCount) onDone(); onClose(); }} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">{finished ? 'Закрыть' : 'Отмена'}</button>
               {(!finished || okCount < cards.length) && (
                 <button type="button" onClick={run} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">
-                  {finished ? 'Повторить ошибочные' : `Поставить ${rub.format(cards.length)} задач`}
+                  {finished ? 'Повторить ошибочные' : `Поставить ${rub.format(cards.length)} ${plural(cards.length, 'задачу', 'задачи', 'задач')}`}
                 </button>
               )}
             </>
