@@ -29,8 +29,10 @@ export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideAc
   useEffect(() => {
     // Открыто модальное окно поверх (окно задачи канбана из sideActions) — Esc закрывает только его.
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && openDealId === null && !document.querySelector('[role="dialog"]')) onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // capture на window — раньше, чем Radix (document, capture) закроет своё окно и уберёт его из DOM:
+    // иначе проверка выше не видит открытого окна, и Esc закрывал заодно и карточку.
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose, openDealId]);
   if (!mounted) return null;
 
