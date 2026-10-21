@@ -442,7 +442,8 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
 }
 
 // Неразрывные пробелы: «127 тыс. ₽» не рвётся по строкам (правка владельца 20.10).
-const moneyShort = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')}\u00a0млн\u00a0₽` : n >= 1000 ? `${Math.round(n / 1000)}\u00a0тыс.\u00a0₽` : `${rub.format(n)}\u00a0₽`);
+// От миллиарда — «млрд» (владелец 21.10: «5057,1 млн» → «5,1 млрд»).
+const moneyShort = (n: number) => (n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1).replace('.', ',')}\u00a0млрд\u00a0₽` : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')}\u00a0млн\u00a0₽` : n >= 1000 ? `${Math.round(n / 1000)}\u00a0тыс.\u00a0₽` : `${rub.format(n)}\u00a0₽`);
 
 const TASK_STATE: Record<RepeatTask['state'], { label: string; bg: string; fg: string }> = {
   unread: { label: 'не просмотрена', bg: '#f4cccc', fg: '#990000' },

@@ -12,7 +12,8 @@ import { taskUrl } from '../engine/config';
 import type { KanbanAnalytics, MgrDay, OrgNode, JournalRow } from '../engine/analytics';
 
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
-const moneyShort = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')} млн ₽` : n >= 1000 ? `${Math.round(n / 1000)} тыс. ₽` : `${rub.format(n)} ₽`);
+// От миллиарда — «млрд» (владелец 21.10: «5057,1 млн» → «5,1 млрд»).
+const moneyShort = (n: number) => (n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1).replace('.', ',')}\u00a0млрд\u00a0₽` : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')}\u00a0млн\u00a0₽` : n >= 1000 ? `${Math.round(n / 1000)}\u00a0тыс.\u00a0₽` : `${rub.format(n)}\u00a0₽`);
 const todayMsk = () => new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
 const fmtD = (ymd: string) => ymd.split('-').reverse().slice(0, 2).join('.');
