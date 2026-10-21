@@ -27,7 +27,8 @@ export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideAc
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   useEffect(() => { setMounted(true); }, []);
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && openDealId === null) onClose(); };
+    // Открыто модальное окно поверх (окно задачи канбана из sideActions) — Esc закрывает только его.
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && openDealId === null && !document.querySelector('[role="dialog"]')) onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, openDealId]);
