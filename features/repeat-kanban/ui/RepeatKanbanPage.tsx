@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart3, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus } from 'lucide-react';
+import { BarChart3, CheckSquare, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, SlidersHorizontal } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -226,49 +226,109 @@ export function RepeatKanbanPage() {
     { key: 'none', label: 'Тип не указан' },
   ];
   const totalAll = Object.values(data?.typeCounts ?? {}).reduce((s, n) => s + n, 0);
+  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(!!outcome) + Number(poolGroups.length > 0) + Number(sort !== 'default');
+  const resetFilters = () => { setType(''); setTaskF([]); setOutcome(''); setPg(''); setSort('default'); setLimits({}); };
 
   return (
     // Экран: шапка сверху, конвейер — на всю оставшуюся высоту, колонки скроллятся внутри
     // (как в канбане Битрикса). На телефоне страница скроллится целиком, доске — 75dvh.
     <div className="flex h-full min-w-0 flex-col overflow-y-auto overflow-x-hidden sm:overflow-hidden">
       <div className="flex min-w-0 shrink-0 flex-col gap-3 px-4 pt-4 sm:px-6 sm:pt-6">
-        <header className="flex min-w-0 flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-[var(--color-text)]">Канбан повторных продаж</h1>
-            <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-              Карточки двигаются сами — по отгрузкам, стадиям сделки и звонкам.
-              {data ? ` Обновлено ${fmtDT(data.generatedAt)}.` : ''}
-              {data?.dataAt ? ` Стадии, звонки и задачи — сейчас, список заказчиков — на ${fmtDT(data.dataAt)}.` : ''}
-            </p>
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            {/* Отделы и менеджеры работают вместе: отделы сужают список менеджеров, внутри
-                можно отметить нескольких; не отмечен никто — все менеджеры отделов/зоны. */}
-            <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setMgrs([]); setLimits({}); }} triggerClassName={depts.length ? BTN_ACTIVE : BTN_IDLE} />
-            {managerOptions.length > 0 && (
-              <SearchMultiSelect ariaLabel="Менеджеры" allLabel={depts.length ? 'Все менеджеры отделов' : 'Все менеджеры зоны'}
-                unitLabel="менеджеров" searchPlaceholder="Поиск менеджера"
-                options={managerOptions.map(m => {
-                  const n = loadOf(m.id);
-                  return { value: m.id, label: m.name, hint: `${n} из ${taskLimit} активных задач${n >= taskLimit ? ' — перегружен' : ''}` };
-                })}
-                value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
-                className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-64`} />
+        {/* Шапка в две строки (владелец 21.10: «сгруппировать все кнопки в одну строку, чтобы на
+            небольших мониторах рабочей области хватало места»): заголовок + время, ниже — одна
+            строка управления; редкие фильтры, тип клиента и переходы — в панели «Фильтры». */}
+        <header className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="text-xl font-semibold text-[var(--color-text)]"
+            title="Карточки двигаются сами — по отгрузкам, стадиям сделки и звонкам. Стадии, звонки и задачи — живые, список заказчиков обновляется раз в 10 минут.">
+            Канбан повторных продаж
+          </h1>
+          {data && (
+            <span className="text-xs text-[var(--color-text-muted)]">
+              обновлено {fmtDT(data.generatedAt)}{data.dataAt ? ` · заказчики на ${fmtDT(data.dataAt)}` : ''}
+            </span>
+          )}
+        </header>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {data?.canManage && (
+            <div className="flex min-w-0 gap-1 rounded-lg border border-[var(--color-border)] p-0.5" role="tablist" aria-label="Вид">
+              <button type="button" role="tab" aria-selected={view !== 'today'} onClick={() => setView('board')}
+                className={`inline-flex min-h-10 items-center rounded-md px-3 text-sm ${view !== 'today' ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>Доска</button>
+              <button type="button" role="tab" aria-selected={view === 'today'} onClick={() => setView('today')}
+                title="Что решить сегодня: приёмка задач, просрочки, разбор, окно закрывается"
+                className={`inline-flex min-h-10 items-center gap-1 rounded-md px-3 text-sm ${view === 'today' ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+                Сегодня{data ? <span className={view === 'today' ? 'opacity-80' : 'text-[var(--color-text-muted)]'}>· {rub.format(todayTotal)}</span> : null}
+              </button>
+            </div>
+          )}
+          {/* Отделы и менеджеры работают вместе: отделы сужают список менеджеров, внутри
+              можно отметить нескольких; не отмечен никто — все менеджеры отделов/зоны. */}
+          <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setMgrs([]); setLimits({}); }} triggerClassName={depts.length ? BTN_ACTIVE : BTN_IDLE} />
+          {managerOptions.length > 0 && (
+            <SearchMultiSelect ariaLabel="Менеджеры" allLabel={depts.length ? 'Все менеджеры отделов' : 'Все менеджеры зоны'}
+              unitLabel="менеджеров" searchPlaceholder="Поиск менеджера"
+              options={managerOptions.map(m => {
+                const n = loadOf(m.id);
+                return { value: m.id, label: m.name, hint: `${n} из ${taskLimit} активных задач${n >= taskLimit ? ' — перегружен' : ''}` };
+              })}
+              value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
+              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-52`} />
+          )}
+          <FiltersButton active={activeFilters} onReset={resetFilters}>
+            <FilterField label="Тип клиента">
+              <SearchSelect ariaLabel="Тип клиента" value={type} onChange={v => { setType(v); setLimits({}); }}
+                options={typeChips.map(t => ({ value: t.key, label: `${t.label} · ${rub.format(t.key ? data?.typeCounts[t.key] ?? 0 : totalAll)}` }))}
+                className={`${type ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            {/* Фильтр по задачам (владелец 20.10): РОП разбирает задачи прямо на канбане. */}
+            <FilterField label="Задачи">
+              <SearchMultiSelect ariaLabel="Задачи" allLabel="Задачи: все" unitLabel="состояния задач" searchPlaceholder="Поиск"
+                options={TASK_FILTERS.map(f => ({ value: f.value, label: f.label, hint: `${rub.format(data?.taskCounts?.[f.value] ?? 0)} заказчиков · ${f.hint}` }))}
+                value={taskF} onChange={v => { setTaskF(v); setLimits({}); }}
+                className={`${taskF.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            {/* Последняя сделка (владелец 21.10): в приоритете — у кого предыдущая успешная. Пул. */}
+            <FilterField label="Последняя сделка">
+              <SearchSelect ariaLabel="Последняя сделка" value={outcome} onChange={v => { setOutcome(v); setLimits({}); }}
+                options={OUTCOME_OPTIONS.map(o => ({ value: o.value, label: o.value ? `${o.label} · ${rub.format(data?.outcomeCounts?.[o.value] ?? 0)}` : o.label, hint: 'hint' in o ? `${o.hint} (в пуле)` : undefined }))}
+                className={`${outcome ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            {/* Фильтр пула (владелец 20.10): «отгружали газобетон, а после ничего». Только пул. */}
+            <FilterField label="Пул: последняя отгрузка">
+              <SearchMultiSelect ariaLabel="Пул: последняя отгрузка" allLabel="Любая товарная группа"
+                unitLabel="групп в пуле" searchPlaceholder="Поиск товарной группы"
+                options={Object.entries(data?.poolGroupCounts ?? {}).sort((x, y) => y[1] - x[1])
+                  .map(([g, n]) => ({ value: g, label: g, hint: `${rub.format(n)} в пуле — последняя отгрузка` }))
+                  .concat(poolGroups.filter(g => !(data?.poolGroupCounts ?? {})[g]).map(g => ({ value: g, label: g, hint: 'сейчас 0 в пуле' })))}
+                value={poolGroups} onChange={v => { setPg(v.join('|')); setLimits({}); }}
+                className={`${poolGroups.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            <FilterField label="Сортировка">
+              <SearchSelect ariaLabel="Сортировка" value={sort} onChange={v => { setSort(v); setLimits({}); }}
+                options={SORT_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+                className={`${sort !== 'default' ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            {view !== 'today' && (
+              <FilterField label="Перейти к колонкам">
+                <div className="flex flex-wrap gap-1.5">
+                  {GROUPS.map(g => (
+                    <button key={g.key} type="button" onClick={() => jump(g.key)} title={g.hint} className={BTN_IDLE}>{g.title}</button>
+                  ))}
+                </div>
+              </FilterField>
             )}
-            {data?.canManage && (
-              <div className="flex min-w-0 gap-1 rounded-lg border border-[var(--color-border)] p-0.5" role="tablist" aria-label="Вид">
-                <button type="button" role="tab" aria-selected={view !== 'today'} onClick={() => setView('board')}
-                  className={`inline-flex min-h-10 items-center rounded-md px-3 text-sm ${view !== 'today' ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>Доска</button>
-                <button type="button" role="tab" aria-selected={view === 'today'} onClick={() => setView('today')}
-                  title="Что решить сегодня: приёмка задач, просрочки, разбор, окно закрывается"
-                  className={`inline-flex min-h-10 items-center gap-1 rounded-md px-3 text-sm ${view === 'today' ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
-                  Сегодня{data ? <span className={view === 'today' ? 'opacity-80' : 'text-[var(--color-text-muted)]'}>· {rub.format(todayTotal)}</span> : null}
-                </button>
-              </div>
-            )}
+          </FiltersButton>
+          {canManage && view !== 'today' && (
+            <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
+              title="Отметить карточки галочками и поставить задачи всем разом"
+              className={selectMode ? BTN_ACTIVE : BTN_IDLE}>
+              <CheckSquare size={16} /> {selectMode ? 'Отменить выбор' : 'Выбрать'}
+            </button>
+          )}
+          {/* Справа — редкие кнопки; на ноутбуке только иконки (подписи — в подсказке). */}
+          <div className="flex min-w-0 items-center gap-2 sm:ml-auto">
             {data?.canSeeAnalytics && (
-              <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Кто что делал, проработанность пула по отделам, журнал">
-                <BarChart3 size={16} /> Аналитика
+              <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Аналитика: кто что делал, проработанность по отделам, результат задач" aria-label="Аналитика">
+                <BarChart3 size={16} /> <span className="hidden 2xl:inline">Аналитика</span>
               </Link>
             )}
             {data?.canManageSettings && <RepeatKanbanSettingsButton className={BTN_IDLE} />}
@@ -277,66 +337,7 @@ export function RepeatKanbanPage() {
               <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
             </button>
           </div>
-        </header>
-
-        {/* Телефон: список вместо семи чипов — чипы занимали весь первый экран. */}
-        <div className="sm:hidden">
-          <SearchSelect ariaLabel="Тип клиента" value={type} onChange={v => { setType(v); setLimits({}); }}
-            options={typeChips.map(t => ({ value: t.key, label: `${t.label} · ${rub.format(t.key ? data?.typeCounts[t.key] ?? 0 : totalAll)}` }))}
-            className={`${type ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
         </div>
-        <div className="hidden min-w-0 flex-wrap gap-2 sm:flex" aria-label="Тип клиента">
-          {typeChips.map(t => {
-            const n = t.key ? data?.typeCounts[t.key] ?? 0 : totalAll;
-            const active = type === t.key;
-            return (
-              <button key={t.key || 'all'} type="button" onClick={() => { setType(t.key); setLimits({}); }}
-                className={active ? BTN_ACTIVE : BTN_IDLE}>
-                {t.label} <span className={active ? 'opacity-80' : 'text-[var(--color-text-muted)]'}>· {rub.format(n)}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <nav className="flex min-w-0 flex-wrap gap-2" aria-label="Фильтры и переход к группам колонок">
-          {/* Фильтр по задачам (владелец 20.10): РОП разбирает задачи прямо на канбане —
-              «ждёт приёмки», «просрочена», «без задачи» и т.д.; рядом — сколько заказчиков. */}
-          <SearchMultiSelect ariaLabel="Задачи" allLabel="Задачи: все" unitLabel="состояния задач" searchPlaceholder="Поиск"
-            options={TASK_FILTERS.map(f => ({ value: f.value, label: f.label, hint: `${rub.format(data?.taskCounts?.[f.value] ?? 0)} заказчиков · ${f.hint}` }))}
-            value={taskF} onChange={v => { setTaskF(v); setLimits({}); }}
-            className={`${taskF.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-56`} />
-          <SearchSelect ariaLabel="Сортировка" value={sort} onChange={v => { setSort(v); setLimits({}); }}
-            options={SORT_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
-            className={`${sort !== 'default' ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-auto`} />
-          {/* Последняя сделка (владелец 21.10): в приоритете — у кого предыдущая успешная;
-              проигранная — та, что на карточке даёт кнопку «Вернуть сделку». Действует на пул. */}
-          <SearchSelect ariaLabel="Последняя сделка" value={outcome} onChange={v => { setOutcome(v); setLimits({}); }}
-            options={OUTCOME_OPTIONS.map(o => ({ value: o.value, label: o.value ? `${o.label} · ${rub.format(data?.outcomeCounts?.[o.value] ?? 0)}` : o.label, hint: 'hint' in o ? `${o.hint} (в пуле)` : undefined }))}
-            className={`${outcome ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-auto`} />
-          {/* Фильтр пула (владелец 20.10): последняя отгрузка — в выбранных группах, после неё
-              ничего («отгружали газобетон, а после газобетона ничего»). Группа сделки — по
-              наибольшему (head_group_name). Действует только на колонки пула. */}
-          <SearchMultiSelect ariaLabel="Пул: последняя отгрузка" allLabel="Пул: любая последняя отгрузка"
-            unitLabel="групп в пуле" searchPlaceholder="Поиск товарной группы"
-            options={Object.entries(data?.poolGroupCounts ?? {}).sort((a, b) => b[1] - a[1])
-              .map(([g, n]) => ({ value: g, label: g, hint: `${rub.format(n)} в пуле — последняя отгрузка` }))
-              .concat(poolGroups.filter(g => !(data?.poolGroupCounts ?? {})[g]).map(g => ({ value: g, label: g, hint: 'сейчас 0 в пуле' })))}
-            value={poolGroups} onChange={v => { setPg(v.join('|')); setLimits({}); }}
-            className={`${poolGroups.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-72`} />
-          {view !== 'today' && GROUPS.map(g => (
-            <button key={g.key} type="button" onClick={() => jump(g.key)} title={g.hint}
-              className={BTN_IDLE}>
-              {g.title}
-            </button>
-          ))}
-          {canManage && view !== 'today' && (
-            <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
-              title="Отметить карточки галочками и поставить задачи всем разом"
-              className={selectMode ? BTN_ACTIVE : BTN_IDLE}>
-              {selectMode ? 'Отменить выбор' : 'Выбрать карточки'}
-            </button>
-          )}
-        </nav>
 
         {data?.kpi && <KpiStrip k={data.kpi} activeTask={taskF.length === 1 ? taskF[0] : null}
           onTask={tb => { const on = taskF.length === 1 && taskF[0] === tb; setTaskF(on ? [] : [tb]); setSort(on ? 'default' : 'task'); setLimits({}); }}
@@ -412,6 +413,34 @@ export function RepeatKanbanPage() {
       {hideFor && <HideModal card={hideFor} onClose={() => setHideFor(null)} onSaved={refresh} />}
       {hideReqFor && <HideModal card={hideReqFor} request onClose={() => setHideReqFor(null)} onSaved={refresh} />}
       {brakFor && <BrakNowModal card={brakFor} onClose={() => setBrakFor(null)} onSaved={refresh} />}
+    </div>
+  );
+}
+
+/** «Фильтры» — панель с редкими фильтрами (владелец 21.10: всё управление — в одну строку). */
+function FiltersButton({ active, onReset, children }: { active: number; onReset: () => void; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen} align="start" className="w-[340px] max-w-[calc(100vw-16px)] p-3"
+      trigger={
+        <button type="button" className={active ? BTN_ACTIVE : BTN_IDLE} aria-label="Фильтры">
+          <SlidersHorizontal size={16} /> Фильтры{active ? ` · ${active}` : ''}
+        </button>
+      }>
+      <div className="flex max-h-[70dvh] flex-col gap-3 overflow-y-auto">
+        {children}
+        {active > 0 && (
+          <button type="button" onClick={onReset} className="min-h-11 rounded-lg text-sm text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">Сбросить фильтры</button>
+        )}
+      </div>
+    </Popover>
+  );
+}
+function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-xs font-medium text-[var(--color-text-muted)]">{label}</span>
+      {children}
     </div>
   );
 }
@@ -583,9 +612,9 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
           // «все цифры прыгают»). Пояснение — одна строка с многоточием, полный текст в title.
           <button type="button" key={t.label} title={`${t.hint}${t.sub ? `\n${t.sub}` : ''}\n${t.task ? (activeTask === t.task ? 'Нажмите, чтобы снять фильтр' : 'Нажмите — показать только их') : 'Нажмите — перейти к колонкам'}`}
             onClick={() => (t.task ? onTask(t.task) : t.jump && onJump(t.jump))}
-            className={`grid min-w-0 grid-rows-[16px_30px_16px] content-center items-center justify-items-center gap-1 rounded-xl border px-2 py-2 text-center transition-colors hover:bg-[var(--color-bg-hover)] ${t.task && activeTask === t.task ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
+            className={`grid min-w-0 grid-rows-[15px_28px_15px] content-center items-center justify-items-center gap-0.5 rounded-xl border px-2 py-1.5 text-center transition-colors hover:bg-[var(--color-bg-hover)] ${t.task && activeTask === t.task ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
             <div className="w-full truncate text-[11.5px] font-medium leading-4 text-[var(--color-text-muted)]">{t.label}</div>
-            <div className="text-[24px] font-bold leading-[30px] tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
+            <div className="text-[22px] font-bold leading-[28px] tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
             <div className="w-full truncate text-[11px] leading-4 text-[var(--color-text-muted)]">{t.sub ?? '\u00a0'}</div>
           </button>
         ))}
