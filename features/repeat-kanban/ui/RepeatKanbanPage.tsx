@@ -485,23 +485,37 @@ function CardFor({ c, h }: { c: KanbanCard; h: CardHandlers }) {
 
 /** «Сегодня» (аудит 21.10): одна лента того, что РОПу решить сегодня, вместо 20 тыс. карточек. */
 function TodayView({ sections, h }: { sections: TodaySection[]; h: CardHandlers }) {
+  // Горизонтально, как доска (владелец 21.10: «"Сегодня" стал вертикальным — сделай как доску»):
+  // секция = колонка на всю высоту, карточки листаются внутри; пустые секции не показываем.
   const filled = sections.filter(s => s.total > 0);
+  const TONE: Record<string, string> = { control: '#e69138', overdue: 'var(--color-negative)', hide_request: '#bf9000', review: '#e69138', closing: 'var(--color-accent)' };
   return (
-    // На телефоне прокручивается вся страница: у ленты своей прокрутки нет и она не сжимается
-    // (overflow-x-hidden сам включает overflow-y:auto — так лента схлопывалась до 36 px).
-    <div className="flex min-w-0 flex-none flex-col gap-5 px-4 pb-6 pt-3 sm:min-h-0 sm:flex-1 sm:overflow-y-auto sm:overflow-x-hidden sm:px-6">
-      {filled.length === 0 && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">На сегодня решать нечего — всё разобрано.</div>}
-      {filled.map(sec => (
-        <section key={sec.key} className="flex min-w-0 flex-col gap-2">
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <h2 className="text-base font-semibold text-[var(--color-text)]">{sec.title} · {rub.format(sec.total)}</h2>
-            <span className="text-xs text-[var(--color-text-muted)]">{sec.hint}{sec.total > sec.cards.length ? ` · показаны первые ${sec.cards.length}` : ''}</span>
+    <div className="relative min-h-[75dvh] min-w-0 flex-1 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
+      {filled.length === 0 ? (
+        <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">На сегодня решать нечего — всё разобрано.</div>
+      ) : (
+        <div className="scroll-x h-full">
+          <div className="flex h-full items-stretch gap-3">
+            {filled.map(sec => (
+              <section key={sec.key} className="flex h-full w-72 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
+                <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${TONE[sec.key] ?? 'var(--color-accent)'}` }} title={sec.hint}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <h2 className="text-sm font-semibold text-[var(--color-text)]">{sec.title}</h2>
+                    <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{rub.format(sec.total)}</span>
+                  </div>
+                  <div className="text-xs text-[var(--color-text-muted)]">{sec.hint}</div>
+                </div>
+                <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+                  {sec.cards.map(c => <CardFor key={`${sec.key}:${c.clientKey}`} c={c} h={h} />)}
+                  {sec.total > sec.cards.length && (
+                    <div className="px-2 py-2 text-xs text-[var(--color-text-muted)]">Показаны первые {sec.cards.length} из {rub.format(sec.total)} — остальные на доске через «Фильтры»</div>
+                  )}
+                </div>
+              </section>
+            ))}
           </div>
-          <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-            {sec.cards.map(c => <CardFor key={`${sec.key}:${c.clientKey}`} c={c} h={h} />)}
-          </div>
-        </section>
-      ))}
+        </div>
+      )}
     </div>
   );
 }
