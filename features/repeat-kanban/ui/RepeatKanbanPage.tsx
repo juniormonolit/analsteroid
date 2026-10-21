@@ -438,8 +438,9 @@ function FiltersButton({ active, onReset, children }: { active: number; onReset:
   return (
     <Popover open={open} onOpenChange={setOpen} align="start" className="w-[340px] max-w-[calc(100vw-16px)] p-3"
       trigger={
-        <button type="button" className={active ? BTN_ACTIVE : BTN_IDLE} aria-label="Фильтры">
-          <SlidersHorizontal size={16} /> Фильтры{active ? ` · ${active}` : ''}
+        <button type="button" className={active ? BTN_ACTIVE : BTN_IDLE} aria-label="Фильтры" title="Фильтры: тип клиента, задачи, последняя сделка, товарная группа, сортировка">
+          {/* Слово «Фильтры» — от 1440 px: на ноутбуке 1280 строка управления иначе не влезала. */}
+          <SlidersHorizontal size={16} /> <span className="hidden min-[1440px]:inline">Фильтры</span>{active ? <span>{` ${active}`}</span> : null}
         </button>
       }>
       <div className="flex max-h-[70dvh] flex-col gap-3 overflow-y-auto">
