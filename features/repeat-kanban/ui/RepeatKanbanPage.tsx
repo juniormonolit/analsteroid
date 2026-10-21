@@ -442,8 +442,9 @@ function CardFor({ c, h }: { c: KanbanCard; h: CardHandlers }) {
 function TodayView({ sections, h }: { sections: TodaySection[]; h: CardHandlers }) {
   const filled = sections.filter(s => s.total > 0);
   return (
-    // На телефоне прокручивается вся страница (своя прокрутка схлопнула бы ленту по высоте).
-    <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-x-hidden px-4 pb-6 pt-3 sm:min-h-0 sm:overflow-y-auto sm:px-6">
+    // На телефоне прокручивается вся страница: у ленты своей прокрутки нет и она не сжимается
+    // (overflow-x-hidden сам включает overflow-y:auto — так лента схлопывалась до 36 px).
+    <div className="flex min-w-0 flex-none flex-col gap-5 px-4 pb-6 pt-3 sm:min-h-0 sm:flex-1 sm:overflow-y-auto sm:overflow-x-hidden sm:px-6">
       {filled.length === 0 && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">На сегодня решать нечего — всё разобрано.</div>}
       {filled.map(sec => (
         <section key={sec.key} className="flex min-w-0 flex-col gap-2">
