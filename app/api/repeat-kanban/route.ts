@@ -16,6 +16,7 @@ import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repe
 import { logEvent, newRequestId } from '@/features/repeat-kanban/engine/log';
 import { decideHideRequest, decideReview, hideFromPool, markBrakNow, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
+import { rememberDealClient } from '@/features/repeat-kanban/engine/dealFixes';
 import { listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
@@ -189,6 +190,8 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `Срок ${deadlineDate.split('-').reverse().join('.')} ${deadlineTime} уже прошёл — выберите время позже` }, { status: 400 });
       }
       const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime });
+      // Синк может не донести клиента новой сделки (21.10: так карточки оставались в пуле).
+      rememberDealClient(res.dealId, clientKey);
       const type = res.dealMode === 'created' ? 'deal_task_created' : res.dealMode === 'reopened' ? 'deal_returned_from_reject' : 'task_created';
       await logEvent(session, { type, requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
         payload: { comment, creator, responsible: res.responsibleId, deadline: deadlineDate, deadlineTime, templateId: typeof body.templateId === 'number' ? body.templateId : null } });

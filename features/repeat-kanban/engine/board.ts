@@ -20,6 +20,7 @@ import { fetchClientTypesBulk } from './clientTypes';
 import { fetchTailTable, tailPotential, type PotentialInfo } from './potential';
 import { fetchHideRequests, type HideRequest } from './reviews';
 import { fetchKanbanSettings } from './settings';
+import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
 
 const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
@@ -108,6 +109,9 @@ export interface KanbanCard {
   dozvonFail: boolean;
   /** Менеджер предложил скрыть из пула — ждёт решения РОПа (миграция 234). */
   hideRequest: HideRequest | null;
+  /** Открытая сделка в ПЕРВИЧНОЙ воронке у повторного заказчика — ошибка менеджера при создании
+   *  (владелец 21.10: «кроме самой первой сделки все должны быть в повторной воронке»). */
+  wrongFunnel: WrongFunnelDeal | null;
 }
 
 export interface KanbanColumn {
@@ -160,7 +164,7 @@ export interface BoardKpi {
 }
 
 /** Режим «Сегодня» (аудит 21.10): одна лента того, что РОПу решить сегодня. */
-export type TodayKey = 'control' | 'overdue' | 'hide_request' | 'review' | 'closing';
+export type TodayKey = 'control' | 'overdue' | 'hide_request' | 'wrong_funnel' | 'review' | 'closing';
 export interface TodaySection { key: TodayKey; title: string; hint: string; total: number; cards: KanbanCard[] }
 
 export interface RepeatBoard {
@@ -231,19 +235,24 @@ async function fetchLatestRepeatDeals(keys: string[]): Promise<Map<string, Repea
   if (!keys.length) return new Map();
   const refOf = (k: string) => (k.startsWith('k') ? k : `p${k.slice(1)}`);
   const refs = [...new Set(keys.map(refOf))];
+  // Сделки, у которых синк потерял клиента, — клиент из Битрикса (dealFixes.ts, 21.10).
+  const fix = await fetchOrphanDealClients().catch(() => new Map<number, { contactId: number | null; companyId: number | null }>());
+  const fixIds = [...fix.keys()];
   const res = await analyticsDb().query<RepeatDealRow>(
-    `SELECT * FROM (
+    `WITH fix AS (SELECT * FROM unnest($3::bigint[], $4::bigint[], $5::bigint[]) AS f(deal_id, contact_id, company_id))
+     SELECT * FROM (
        SELECT DISTINCT ON (client_key) * FROM (
-         SELECT CASE WHEN d.funnel_id = 3 AND coalesce(d.company_id, 0) <> 0 THEN 'k'||d.company_id
-                     WHEN d.contact_id IS NOT NULL AND d.contact_id <> 0 THEN 'p'||d.contact_id END AS client_key,
+         SELECT CASE WHEN d.funnel_id = 3 AND coalesce(nullif(d.company_id, 0), f.company_id, 0) <> 0 THEN 'k'||coalesce(nullif(d.company_id, 0), f.company_id)
+                     WHEN coalesce(nullif(d.contact_id, 0), f.contact_id, 0) <> 0 THEN 'p'||coalesce(nullif(d.contact_id, 0), f.contact_id) END AS client_key,
                 d.deal_id, d.funnel_id, d.stage_id, s.name AS stage_name,
                 d.amount, d.created_at, d.lost_at, d.sold_at, d.delivered_at, d.current_manager_id
            FROM sa.deals d LEFT JOIN sa.stages s ON s.id = d.stage_id
+           LEFT JOIN fix f ON f.deal_id = d.deal_id
           WHERE d.funnel_id = ANY($2::int[])
        ) t WHERE client_key = ANY($1::text[])
        ORDER BY client_key, created_at DESC, deal_id DESC
      ) x`,
-    [refs, [...REPEAT_FUNNEL_IDS]],
+    [refs, [...REPEAT_FUNNEL_IDS], fixIds, fixIds.map(id => fix.get(id)!.contactId), fixIds.map(id => fix.get(id)!.companyId)],
   );
   const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
   const byRef = new Map(res.rows.map(r => [r.client_key, {
@@ -396,7 +405,7 @@ export async function buildRepeatBoard(opts: {
   const keys = rows.map(r => r.clientKey);
 
   // 2. Свежие данные поверх кэша.
-  const [deals, marks, profileTypes, tailTable, lastDelivered] = await Promise.all([
+  const [deals, marks, profileTypes, tailTable, lastDelivered, wrongFunnel] = await Promise.all([
     fetchLatestRepeatDeals(keys),
     fetchCustomerMarks(keys),
     // Ночной снимок типы клиентов не использует — не ходим за ними в Битрикс (20.10: первый
@@ -405,6 +414,7 @@ export async function buildRepeatBoard(opts: {
     fetchClientTypesBulk(keys).catch(() => new Map<string, string>()),
     fetchTailTable().catch(() => ({ seg: {} })),
     fetchLastDeliveredDeals(keys).catch(() => new Map<string, number>()),
+    fetchWrongFunnelDeals([...new Set(keys.map(k => (k.startsWith('k') ? k : `p${k.slice(1)}`)))]),
   ]);
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
@@ -557,6 +567,8 @@ export async function buildRepeatBoard(opts: {
       freshDays,
       lastOutcome, dozvonFail,
       hideRequest: hideReqs.get(r.clientKey) ?? null,
+      // Только если в повторной воронке открытой сделки нет — иначе это история, не ошибка сейчас.
+      wrongFunnel: hasOpenDeal ? null : wrongFunnel.get(r.clientKey.startsWith('k') ? r.clientKey : `p${r.clientKey.slice(1)}`) ?? null,
     });
   }
 
@@ -638,6 +650,7 @@ export async function buildRepeatBoard(opts: {
     { key: 'control', title: 'Ждут приёмки', hint: 'Менеджер сдал задачу — примите или верните в Битриксе', pick: c => c.task?.state === 'control', order: (a, b) => changed(a).localeCompare(changed(b)) },
     { key: 'overdue', title: 'Просрочены', hint: 'Срок задачи прошёл, менеджер не сдал', pick: c => taskBucketOf(c, now) === 'overdue', order: (a, b) => (a.task?.deadlineAt ?? '').localeCompare(b.task?.deadlineAt ?? '') },
     { key: 'hide_request', title: 'Предлагают скрыть', hint: 'Менеджер предложил скрыть заказчика из пула', pick: c => !!c.hideRequest, order: (a, b) => a.hideRequest!.at.localeCompare(b.hideRequest!.at) },
+    { key: 'wrong_funnel', title: 'Не в той воронке', hint: 'Повторная сделка заведена в первичной воронке — перенесите в «Повторные» в Битриксе', pick: c => !!c.wrongFunnel, order: (a, b) => b.wrongFunnel!.createdAt.localeCompare(a.wrongFunnel!.createdAt) },
     { key: 'review', title: 'На разборе', hint: 'Отказы и три попытки без дозвона — решите: брак, ещё попытки или вернуть', pick: c => c.column === 'review', order: (a, b) => (b.deal?.lostAt ?? b.deal?.createdAt ?? '').localeCompare(a.deal?.lostAt ?? a.deal?.createdAt ?? '') },
     { key: 'closing', title: 'Окно закрывается', hint: `Отгрузили ${WINDOW_DAYS - 3}+ дней назад, сделки нет — осталось 3 дня или меньше`, pick: c => c.column === 'pool_hot' && (c.freshDays ?? 0) >= WINDOW_DAYS - 3, order: (a, b) => lostRank(a) - lostRank(b) || (b.freshDays ?? 0) - (a.freshDays ?? 0) || ev(b) - ev(a) },
   ];

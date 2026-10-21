@@ -506,7 +506,7 @@ function TodayView({ sections, h }: { sections: TodaySection[]; h: CardHandlers 
   // Горизонтально, как доска (владелец 21.10: «"Сегодня" стал вертикальным — сделай как доску»):
   // секция = колонка на всю высоту, карточки листаются внутри; пустые секции не показываем.
   const filled = sections.filter(s => s.total > 0);
-  const TONE: Record<string, string> = { control: '#e69138', overdue: 'var(--color-negative)', hide_request: '#bf9000', review: '#e69138', closing: 'var(--color-accent)' };
+  const TONE: Record<string, string> = { control: '#e69138', overdue: 'var(--color-negative)', hide_request: '#bf9000', wrong_funnel: 'var(--color-negative)', review: '#e69138', closing: 'var(--color-accent)' };
   return (
     <div className="relative min-h-[75dvh] min-w-0 flex-1 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
       {filled.length === 0 ? (
@@ -739,6 +739,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   if (t && open && t.deadlineAt && new Date(t.deadlineAt).getTime() < Date.now()) a.push({ text: 'Задача просрочена', red: true });
   if (col === 'review' && c.lostEarly) a.push({ text: `Отказ после ${c.attempts?.count ?? 0} из ${TOUCHES} попыток`, red: true });
   if (col === 'review' && c.dozvonFail) a.push({ text: `${TOUCHES} попытки без дозвона`, red: true });
+  if (c.wrongFunnel) a.unshift({ text: `Сделка в «${c.wrongFunnel.funnelName ?? 'первичной'}» — не в повторной`, red: true });
   if (col === 'touch_3' && !c.attempts?.reached) a.push({ text: '3 попытки без дозвона', red: true });
   if (t?.state === 'unread') a.push({ text: 'Задача не просмотрена', red: true });
   const callAfter = t && c.calls.some(x => !x.missed && x.sec > 20 && x.at > t.createdAt);
@@ -842,6 +843,11 @@ function Card({ c, col, canManage, isOwn, selected, onSelect, onOpen, onTask, on
         {c.deal ? (
           <a href={dealUrl(c.deal.dealId)} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 text-[var(--color-accent)] hover:underline">
             <ExternalLink size={12} className="shrink-0" /><span className="truncate">#{c.deal.dealId} · {c.deal.stageName ?? c.deal.stageId}</span>
+          </a>
+        ) : c.wrongFunnel ? (
+          <a href={dealUrl(c.wrongFunnel.dealId)} target="_blank" rel="noreferrer" title="Повторная сделка заведена в первичной воронке — перенесите её в «Повторные» в Битриксе, тогда канбан её увидит"
+            className="inline-flex max-w-full items-center gap-1 font-semibold text-[#990000] hover:underline">
+            <ExternalLink size={12} className="shrink-0" /><span className="truncate">#{c.wrongFunnel.dealId} · {c.wrongFunnel.stageName ?? ''} · {c.wrongFunnel.funnelName ?? 'первичная воронка'}</span>
           </a>
         ) : c.lastLost ? (
           <a href={dealUrl(c.lastLost.dealId)} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 text-[var(--color-text-muted)] hover:underline">
