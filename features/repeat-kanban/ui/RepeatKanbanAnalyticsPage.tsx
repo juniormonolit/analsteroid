@@ -128,7 +128,8 @@ function Spark({ points }: { points: number[] }) {
   const step = w / (points.length - 1);
   return <svg width={w} height={h} aria-hidden><path d={points.map((p, i) => `${i ? 'L' : 'M'}${(i * step).toFixed(1)},${(h - (p / max) * h).toFixed(1)}`).join(' ')} fill="none" stroke="var(--color-accent)" strokeWidth="1.8" /></svg>;
 }
-function Delta({ points }: { points: number[] }) {
+function Delta({ points: all, window }: { points: number[]; window?: number }) {
+  const points = window ? all.slice(-window) : all;
   if (points.length < 2) return <span className="text-[11px] text-[var(--color-text-muted)]">нет сравнения</span>;
   const d = Math.round((points[points.length - 1] - points[0]) * 10) / 10;
   return <span className="tabular-nums font-semibold" style={{ color: d > 0 ? '#38761d' : d < 0 ? '#990000' : 'var(--color-text-muted)' }}>{d > 0 ? '▲' : d < 0 ? '▼' : ''}{d === 0 ? '—' : ` ${Math.abs(d)} п.п.`}</span>;
@@ -163,10 +164,11 @@ const cell = 'whitespace-nowrap px-2 py-1.5 text-right tabular-nums';
 
 export function RepeatKanbanAnalyticsPage() {
   const [date, setDate] = useState(todayMsk());
+  const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day');
   const { data, isLoading, error } = useQuery<KanbanAnalytics>({
-    queryKey: ['repeat-kanban-analytics', date],
+    queryKey: ['repeat-kanban-analytics', date, period],
     queryFn: async () => {
-      const r = await fetch(`/api/repeat-kanban/analytics?date=${date}`);
+      const r = await fetch(`/api/repeat-kanban/analytics?date=${date}&period=${period}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? 'Ошибка');
       return j;
@@ -179,6 +181,8 @@ export function RepeatKanbanAnalyticsPage() {
   const [jKinds, setJKinds] = useState<Set<string>>(new Set());
   const [jSearch, setJSearch] = useState('');
 
+  // Даты снимков внутри периода — для дельт «конец против начала»; линия — всегда 30 дней.
+  const periodDates = useMemo(() => (data ? data.dates.filter(d => d >= (period === 'day' ? (data.dates[data.dates.length - 2] ?? d) : data.fromDate)) : []), [data, period]);
   const tree = useMemo(() => (data?.snapDate ? buildTree(data.org, data.mgr, data.snapDate, data.dates) : null), [data]);
   const mgrBranch = useMemo(() => {
     // Менеджер → корень (филиал) — для стека «куда ушёл пул».
@@ -206,12 +210,13 @@ export function RepeatKanbanAnalyticsPage() {
   // KPI с дельтой к предыдущему снимку.
   const kpi = useMemo(() => {
     if (!tree || !data) return null;
-    const dates = data.dates;
-    const prevDate = dates.length > 1 ? dates[dates.length - 2] : null;
+    // База сравнения — первый снимок периода (для «день» — предыдущий снимок).
+    const prevDate = periodDates.length > 1 ? periodDates[0] : null;
     const prev = prevDate ? data.mgr.filter(m => m.date === prevDate).reduce((s, m) => add(s, m), ZERO) : null;
     return { cur: tree.total.agg, prev, prevDate };
-  }, [tree, data]);
+  }, [tree, data, periodDates]);
   const todayActions = data?.journal.filter(j => j.type !== 'task_comment_posted').length ?? 0;
+  const periodLabel = !data || period === 'day' ? fmtD(date) : `${fmtD(data.fromDate)}–${fmtD(date)}`;
 
   // Люди.
   const actors = useMemo(() => {
@@ -282,7 +287,7 @@ export function RepeatKanbanAnalyticsPage() {
           <td className={cell} title={`Мягко (скрытые и отказы — проработаны): ${soft(a)}%`}><Light v={st} /></td>
           <td className={cell}>{rub.format(a.inWork)}</td>
           <td className={cell}>{rub.format(a.funnel)}<span className="ml-1 text-[11px] text-[var(--color-text-muted)]">{moneyShort(a.funnelSum)}</span></td>
-          <td className={cell}><div className="flex items-center justify-end gap-2"><Spark points={n.series} /><Delta points={n.series} /></div></td>
+          <td className={cell}><div className="flex items-center justify-end gap-2"><Spark points={n.series} /><Delta points={n.series} window={periodDates.length} /></div></td>
         </tr>
         {detail === n.id && (
           <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
@@ -321,11 +326,21 @@ export function RepeatKanbanAnalyticsPage() {
             <h1 className="text-xl font-semibold">Аналитика канбана повторных</h1>
             <p className="mt-1 text-sm text-[var(--color-text-muted)]">Снимки пула — каждый день в 23:30 МСК, журнал — в реальном времени. История копится с 20.10.2026.</p>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+          {/* Период (владелец 21.10): состояние пула — последний снимок, действия — сумма за период,
+              дельты — конец против начала. */}
+          <div className="flex gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1" role="tablist" aria-label="Период">
+            {([['day', 'День'], ['week', 'Неделя'], ['month', '30 дней']] as const).map(([k, l]) => (
+              <button key={k} type="button" role="tab" aria-selected={period === k} onClick={() => setPeriod(k)}
+                className={`min-h-9 rounded-md px-3 text-sm ${period === k ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>{l}</button>
+            ))}
+          </div>
           <label className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
-            День
+            {period === 'day' ? 'День' : 'По'}
             <input type="date" value={date} max={todayMsk()} onChange={e => e.target.value && setDate(e.target.value)}
               className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-base sm:text-sm" />
           </label>
+          </div>
         </header>
         {error && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">{(error as Error).message}</div>}
         {isLoading && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Загружаю…</div>}
@@ -337,7 +352,7 @@ export function RepeatKanbanAnalyticsPage() {
             <Kpi label="В пуле, заказчиков" value={rub.format(kpi.cur.pool)} d={kpi.prev ? kpi.cur.pool - kpi.prev.pool : null} better="down" sub={`срочно ${kpi.cur.poolHot}`} />
             <Kpi label="Потенциал пула" value={moneyShort(kpi.cur.poolPotential)} d={null} sub="уменьшается, когда пул очищают" />
             <Kpi label="В воронке" value={`${rub.format(kpi.cur.funnel)} сделок`} d={kpi.prev ? kpi.cur.funnel - kpi.prev.funnel : null} sub={moneyShort(kpi.cur.funnelSum)} />
-            <Kpi label={date === todayMsk() ? 'Действий сегодня' : `Действий ${fmtD(date)}`} value={rub.format(todayActions)} sub={`сделок ${actors.reduce((s, a) => s + a.deals, 0)} · отказов ${actors.reduce((s, a) => s + a.reviews, 0)} · утечка ${actors.reduce((s, a) => s + a.leak, 0)}`} />
+            <Kpi label={period !== 'day' ? `Действий за ${period === 'week' ? 'неделю' : '30 дней'}` : date === todayMsk() ? 'Действий сегодня' : `Действий ${fmtD(date)}`} value={rub.format(todayActions)} sub={`сделок ${actors.reduce((s, a) => s + a.deals, 0)} · отказов ${actors.reduce((s, a) => s + a.reviews, 0)} · утечка ${actors.reduce((s, a) => s + a.leak, 0)}`} />
           </div>
         )}
 
@@ -371,7 +386,7 @@ export function RepeatKanbanAnalyticsPage() {
                     <td className={cell}><Light v={strict(tree.total.agg)} /></td>
                     <td className={cell}>{rub.format(tree.total.agg.inWork)}</td>
                     <td className={cell}>{rub.format(tree.total.agg.funnel)}<span className="ml-1 text-[11px] font-normal text-[var(--color-text-muted)]">{moneyShort(tree.total.agg.funnelSum)}</span></td>
-                    <td className={cell}><div className="flex items-center justify-end gap-2"><Spark points={tree.total.series} /><Delta points={tree.total.series} /></div></td>
+                    <td className={cell}><div className="flex items-center justify-end gap-2"><Spark points={tree.total.series} /><Delta points={tree.total.series} window={periodDates.length} /></div></td>
                   </tr>
                 </thead>
                 <tbody>{renderRows(tree.roots)}</tbody>
@@ -383,7 +398,7 @@ export function RepeatKanbanAnalyticsPage() {
         {/* Люди. */}
         <section className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-semibold">Люди · {fmtD(date)}</h2>
+            <h2 className="text-base font-semibold">Люди · {periodLabel}</h2>
             {(['actors', 'mgr'] as const).map(t => (
               <button key={t} type="button" onClick={() => setPeopleTab(t)}
                 className={`min-h-11 rounded-lg border px-3 text-sm ${peopleTab === t ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`}>
@@ -393,7 +408,7 @@ export function RepeatKanbanAnalyticsPage() {
           </div>
           <div className="scroll-x rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
             {peopleTab === 'actors' ? (
-              actors.length === 0 ? <div className="p-4 text-sm text-[var(--color-text-muted)]">За день действий в канбане не было.</div> : (
+              actors.length === 0 ? <div className="p-4 text-sm text-[var(--color-text-muted)]">За период действий в канбане не было.</div> : (
                 <table className="w-full min-w-[720px] text-sm">
                   <thead><tr className="border-b border-[var(--color-border)]">
                     <th className={`${head} text-left`}>Кто</th><th className={head}>Действий</th><th className={head}>Заказчиков</th>
@@ -432,9 +447,9 @@ export function RepeatKanbanAnalyticsPage() {
 
         {/* Куда ушёл пул. */}
         <section className="flex flex-col gap-2">
-          <h2 className="text-base font-semibold">Куда ушёл пул · {fmtD(date)}</h2>
+          <h2 className="text-base font-semibold">Куда ушёл пул · {periodLabel}</h2>
           <div className="flex flex-wrap gap-3 text-[12px]">{SINKS.map(s => <span key={s.key} className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: s.color }} />{s.label}</span>)}</div>
-          {sinks.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">За день из пула никого не брали.</div> : (
+          {sinks.length === 0 ? <div className="text-sm text-[var(--color-text-muted)]">За период из пула никого не брали.</div> : (
             <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
               {sinks.map(s => (
                 <div key={s.br} className="grid grid-cols-[160px_1fr_40px] items-center gap-2 text-sm">
@@ -465,7 +480,7 @@ export function RepeatKanbanAnalyticsPage() {
                   <svg viewBox="0 0 300 30" className="h-8 w-full" preserveAspectRatio="none" aria-hidden>
                     <path d={r.series.map((p, i) => `${i ? 'L' : 'M'}${(i * 300 / Math.max(1, r.series.length - 1)).toFixed(1)},${(30 - (p / 100) * 30).toFixed(1)}`).join(' ')} fill="none" stroke="var(--color-accent)" strokeWidth="2" />
                   </svg>
-                  <span className="text-right"><Delta points={r.series} /></span>
+                  <span className="text-right"><Delta points={r.series} window={periodDates.length} /></span>
                 </div>
               ))}
             </div>
@@ -474,7 +489,7 @@ export function RepeatKanbanAnalyticsPage() {
 
         {/* Журнал. */}
         <section className="flex flex-col gap-2">
-          <h2 className="text-base font-semibold">Журнал · {fmtD(date)}</h2>
+          <h2 className="text-base font-semibold">Журнал · {periodLabel}</h2>
           <div className="flex flex-wrap items-center gap-2">
             {(Object.keys(KIND_LABEL) as (keyof typeof KIND_LABEL)[]).map(k => (
               <button key={k} type="button" onClick={() => setJKinds(s => { const x = new Set(s); if (x.has(k)) x.delete(k); else x.add(k); return x; })}

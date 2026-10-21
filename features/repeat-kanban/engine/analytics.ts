@@ -21,6 +21,9 @@ export interface JournalRow {
 }
 export interface KanbanAnalytics {
   date: string;
+  /** Начало периода (для «день» = date). */
+  fromDate: string;
+  period: AnalyticsPeriod;
   /** Последняя дата снимка ≤ date (снимок делается в 23:30 — сегодняшнего ещё может не быть). */
   snapDate: string | null;
   dates: string[];
@@ -29,9 +32,15 @@ export interface KanbanAnalytics {
   journal: JournalRow[];
 }
 
-export async function fetchKanbanAnalytics(opts: { date: string; managerIds: string[] | null }): Promise<KanbanAnalytics> {
+export type AnalyticsPeriod = 'day' | 'week' | 'month';
+export const PERIOD_DAYS: Record<AnalyticsPeriod, number> = { day: 1, week: 7, month: 30 };
+
+export async function fetchKanbanAnalytics(opts: { date: string; period?: AnalyticsPeriod; managerIds: string[] | null }): Promise<KanbanAnalytics> {
   const db = systemDb();
-  const from = `${opts.date}T00:00:00+03:00`, to = `${opts.date}T23:59:59.999+03:00`;
+  // Период (владелец 21.10): действия и журнал — за весь период, состояние пула — последний снимок.
+  const days = PERIOD_DAYS[opts.period ?? 'day'];
+  const fromDate = new Date(new Date(`${opts.date}T12:00:00+03:00`).getTime() - (days - 1) * 86_400_000).toISOString().slice(0, 10);
+  const from = `${fromDate}T00:00:00+03:00`, to = `${opts.date}T23:59:59.999+03:00`;
   const mf = opts.managerIds;
 
   const [snapDates, journal, org] = await Promise.all([
@@ -41,7 +50,7 @@ export async function fetchKanbanAnalytics(opts: { date: string; managerIds: str
       `SELECT ts, coalesce(actor_name, actor_login) AS actor, actor_role, event_type, client_key, manager_id, column_before, deal_id, task_id, payload
          FROM repeat_kanban_events WHERE ts BETWEEN $1::timestamptz AND $2::timestamptz AND actor_type = 'user'
           ${mf ? 'AND manager_id = ANY($3::text[])' : ''}
-        ORDER BY ts DESC LIMIT 1000`, mf ? [from, to, mf] : [from, to],
+        ORDER BY ts DESC LIMIT 5000`, mf ? [from, to, mf] : [from, to],
     ).then(r => r.rows as Record<string, unknown>[]).catch(() => []),
     analyticsDb().query<{ id: string; name: string; bid: string; pbid: string | null }>(
       `SELECT id::text AS id, name, bitrix_department_id::text AS bid, parent_bitrix_department_id::text AS pbid FROM sa.departments WHERE is_active`,
@@ -75,7 +84,7 @@ export async function fetchKanbanAnalytics(opts: { date: string; managerIds: str
   const keys = [...new Set(journal.map(j => j.client_key as string | null).filter((k): k is string => !!k))];
   const names = await getCachedClientNames(keys).catch(() => new Map<string, string | null>());
   return {
-    date: opts.date, snapDate: snapDates[0] ?? null, dates: [...snapDates].reverse(), mgr, org,
+    date: opts.date, fromDate, period: opts.period ?? 'day', snapDate: snapDates[0] ?? null, dates: [...snapDates].reverse(), mgr, org,
     journal: journal.map(r => ({
       ts: new Date(r.ts as string).toISOString(), actor: String(r.actor ?? '—'), actorRole: (r.actor_role as string | null) ?? null,
       type: String(r.event_type), clientKey: (r.client_key as string | null) ?? null,

@@ -19,7 +19,9 @@ export async function GET(req: NextRequest) {
   try {
     const scope = await ropScope(session);
     const managerIds = scope.full ? null : (await scopeManagers(scope)).map(m => m.id);
-    return NextResponse.json(await fetchKanbanAnalytics({ date, managerIds }), { headers: { 'Cache-Control': 'no-store' } });
+    const p = req.nextUrl.searchParams.get('period');
+    const period = p === 'week' || p === 'month' ? p : 'day';
+    return NextResponse.json(await fetchKanbanAnalytics({ date, period, managerIds }), { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[repeat-kanban analytics]', e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось собрать аналитику' }, { status: 500 });
