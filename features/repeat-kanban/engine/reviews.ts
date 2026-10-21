@@ -117,3 +117,48 @@ export async function unhide(clientKey: string, session: SessionUser): Promise<v
     [clientKey, session.displayName, session.id],
   ).catch(() => {});
 }
+
+// ── Предложение скрыть (миграция 234) ───────────────────────────────────────
+// Скрывает только РОП; менеджер ПРЕДЛАГАЕТ (дата + комментарий), РОП принимает или отклоняет.
+export interface HideRequest { id: number; until: string; comment: string; by: string; at: string }
+
+export async function requestHide(input: { clientKey: string; managerId: string; until: string; comment: string; session: SessionUser }): Promise<void> {
+  const comment = input.comment.trim().slice(0, 1000);
+  if (comment.length < 3) throw new ReviewError('Напишите, почему скрыть');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.until)) throw new ReviewError('Укажите дату');
+  const today = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
+  if (input.until <= today) throw new ReviewError('Дата должна быть в будущем');
+  await systemDb().query(
+    `INSERT INTO repeat_kanban_hide_requests (client_key, manager_id, until, comment, requested_by, requested_by_user_id)
+     VALUES ($1, $2, $3::date, $4, $5, $6)
+     ON CONFLICT (client_key) WHERE status = 'pending' DO UPDATE SET until = EXCLUDED.until, comment = EXCLUDED.comment,
+       requested_by = EXCLUDED.requested_by, requested_by_user_id = EXCLUDED.requested_by_user_id, requested_at = now()`,
+    [input.clientKey, input.managerId, input.until, comment, input.session.displayName, input.session.id],
+  );
+}
+
+/** Решение РОПа: accept — скрыть с датой и комментарием менеджера, decline — отклонить. */
+export async function decideHideRequest(input: { clientKey: string; accept: boolean; comment: string | null; session: SessionUser }): Promise<HideRequest | null> {
+  const db = systemDb();
+  const r = await db.query<{ id: string; until: string; comment: string; requested_by: string; requested_at: Date }>(
+    `UPDATE repeat_kanban_hide_requests SET status = $2, decided_by = $3, decided_at = now(), decision_comment = $4
+      WHERE client_key = $1 AND status = 'pending'
+      RETURNING id::text, to_char(until, 'YYYY-MM-DD') AS until, comment, requested_by, requested_at`,
+    [input.clientKey, input.accept ? 'accepted' : 'declined', input.session.displayName, input.comment?.trim().slice(0, 500) || null],
+  );
+  const row = r.rows[0];
+  if (!row) throw new ReviewError('Предложение уже рассмотрено');
+  if (input.accept) {
+    await hideFromPool({ clientKey: input.clientKey, until: row.until, comment: `${row.comment} (предложил ${row.requested_by})`, session: input.session });
+  }
+  return { id: Number(row.id), until: row.until, comment: row.comment, by: row.requested_by, at: new Date(row.requested_at).toISOString() };
+}
+
+export async function fetchHideRequests(keys: string[]): Promise<Map<string, HideRequest>> {
+  if (!keys.length) return new Map();
+  const r = await systemDb().query<{ client_key: string; id: string; until: string; comment: string; requested_by: string; requested_at: Date }>(
+    `SELECT client_key, id::text, to_char(until, 'YYYY-MM-DD') AS until, comment, requested_by, requested_at
+       FROM repeat_kanban_hide_requests WHERE status = 'pending' AND client_key = ANY($1::text[])`, [keys],
+  ).catch(() => ({ rows: [] as never[] }));
+  return new Map(r.rows.map(x => [x.client_key, { id: Number(x.id), until: x.until, comment: x.comment, by: x.requested_by, at: new Date(x.requested_at).toISOString() }]));
+}

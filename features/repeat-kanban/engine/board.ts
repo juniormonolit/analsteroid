@@ -12,12 +12,14 @@ import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { fetchManagerCustomers, fetchCustomersOfManagers, fetchCustomerMarks, type CustomerRow } from '@/features/customers/engine/customers';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import {
-  COLUMNS, CLIENT_TYPE_NONE_RANK, CLIENT_TYPE_ORDER, LOST_STAGES, NEW_STAGES, REPEAT_FUNNEL_IDS, REVIEW_SINCE,
+  COLUMNS, CLIENT_TYPE_NONE_RANK, CLIENT_TYPE_ORDER, LOST_STAGES, NEW_STAGES, REPEAT_FUNNEL_IDS, REPEAT_PROJECT_GROUP_ID, REVIEW_SINCE,
   STAGE_TO_COLUMN, TOUCHES, WEEK_DAYS, WINDOW_DAYS, WON_STAGES, type ColumnKey,
 } from './config';
 import { fetchTasksForDeals, type RepeatTask } from './tasks';
 import { fetchClientTypesBulk } from './clientTypes';
 import { fetchTailTable, tailPotential, type PotentialInfo } from './potential';
+import { fetchHideRequests, type HideRequest } from './reviews';
+import { fetchKanbanSettings } from './settings';
 
 const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
@@ -98,6 +100,14 @@ export interface KanbanCard {
   atRisk: boolean;
   /** Пул: окно открыто — последняя отгрузка ≤ 22 дн. назад, сделки нет (колонка «Срочно»). */
   freshDays: number | null;
+  /** Чем кончилась последняя сделка (владелец 21.10: «в приоритете — у кого предыдущая
+   *  успешная»): won — после последней отгрузки отказов не было; lost — повторная сделка
+   *  после неё закрыта в отказ (на карточке это кнопка «Вернуть сделку»). */
+  lastOutcome: 'won' | 'lost';
+  /** Выход из дозвона (аудит 21.10): три попытки в разные дни без дозвона — на разбор РОПу. */
+  dozvonFail: boolean;
+  /** Менеджер предложил скрыть из пула — ждёт решения РОПа (миграция 234). */
+  hideRequest: HideRequest | null;
 }
 
 export interface KanbanColumn {
@@ -118,7 +128,7 @@ export interface KanbanColumn {
 /** Показатели канбана для РОПа (снимок текущей доски). */
 /** Состояние задачи заказчика для фильтра: none — открытой задачи нет (не ставили или приняли). */
 export type TaskBucket = 'none' | 'unread' | 'work' | 'overdue' | 'control' | 'done';
-export type BoardSort = 'default' | 'ltv' | 'potential' | 'fresh' | 'task';
+export type BoardSort = 'default' | 'ltv' | 'potential' | 'fresh' | 'task' | 'ev';
 
 export function taskBucketOf(c: Pick<KanbanCard, 'task'>, now = Date.now()): TaskBucket {
   const t = c.task;
@@ -140,7 +150,15 @@ export interface BoardKpi {
   review: number; reviewEarly: number;
   brak: number;
   hidden: number;
+  /** «Срочно: окно открыто» — заказчики и их потенциал: деньги под риском (окно ≤ 22 дн.). */
+  hot: number; hotPotential: number;
+  /** Из них окно закрывается в ближайшие 3 дня. */
+  hotClosing: number;
 }
+
+/** Режим «Сегодня» (аудит 21.10): одна лента того, что РОПу решить сегодня. */
+export type TodayKey = 'control' | 'overdue' | 'hide_request' | 'review' | 'closing';
+export interface TodaySection { key: TodayKey; title: string; hint: string; total: number; cards: KanbanCard[] }
 
 export interface RepeatBoard {
   generatedAt: string;
@@ -158,12 +176,21 @@ export interface RepeatBoard {
   viewerBitrixId?: string | null;
   /** Кнопка «Аналитика» — директорам и выше. */
   canSeeAnalytics?: boolean;
+  /** Кнопка «Настройки» (норма задач, шаблоны сообщений) — только админам. */
+  canManageSettings?: boolean;
   notice: string | null;
   /** Общий список заказчиков ещё считается (первый запуск) — клиент повторит запрос. */
   warming?: boolean;
   /** «Данные на ЧЧ:ММ»: когда посчитан общий список заказчиков (живые стадии/звонки/задачи — на сейчас). */
   dataAt?: string | null;
   canManage: boolean;
+  /** Норма активных задач на менеджера (настройки) и текущая загрузка: менеджер → задач
+   *  проекта «Повторные продажи» в работе (не сданных на проверку). */
+  taskLimit?: number;
+  managerLoad?: Record<string, number>;
+  /** Последняя сделка: успешная / проигранная — счётчики по пулу (фильтр «Последняя сделка»). */
+  outcomeCounts?: Record<string, number>;
+  today?: TodaySection[];
 }
 
 interface RepeatDealRow {
@@ -274,6 +301,18 @@ async function fetchReviews(dealIds: number[]): Promise<Map<number, ReviewInfo>>
   } catch { return new Map(); } // до миграции 230 — без решений
 }
 
+/** Загрузка менеджеров: задачи проекта «Повторные продажи» в работе (новая/ждёт/выполняется;
+ *  сданные на проверку — уже не на менеджере). */
+export async function fetchManagerLoad(managerIds: string[]): Promise<Record<string, number>> {
+  if (!managerIds.length) return {};
+  const r = await analyticsDb().query<{ mgr: string; n: string }>(
+    `SELECT responsible_id::text AS mgr, count(*)::text AS n FROM sa.bitrix_task_current
+      WHERE group_id = $2 AND NOT is_deleted AND status IN (1, 2, 3) AND responsible_id::text = ANY($1::text[])
+      GROUP BY 1`, [managerIds, REPEAT_PROJECT_GROUP_ID],
+  ).catch(() => ({ rows: [] as { mgr: string; n: string }[] }));
+  return Object.fromEntries(r.rows.map(x => [x.mgr, Number(x.n)]));
+}
+
 /** День по Москве (YYYY-MM-DD) — единица «попытки». */
 const mskDay = (ms: number) => new Date(ms + 3 * 3600_000).toISOString().slice(0, 10);
 
@@ -309,6 +348,8 @@ export async function buildRepeatBoard(opts: {
   poolGroups?: string[];
   /** Фильтр по задаче заказчика (владелец 20.10: «РОП разбирает задачи на канбане»). */
   taskFilter?: TaskBucket[];
+  /** Пул: последняя сделка успешная / проигранная (владелец 21.10). */
+  outcome?: 'won' | 'lost' | null;
   /** Сортировка карточек во всех колонках: default — тип клиента → потенциал. */
   sort?: BoardSort;
   /** Сколько карточек отдать по каждой колонке (пагинация «показать ещё»). */
@@ -361,16 +402,21 @@ export async function buildRepeatBoard(opts: {
   ]);
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
-  const [calls, manual, reviews, tasks] = await Promise.all([
+  const [calls, manual, reviews, tasks, hideReqs, settings, managerLoad] = await Promise.all([
     fetchDealCalls(activeDealIds, windowFloor),
     fetchManualContacts(keys, windowFloor),
-    fetchReviews([...deals.values()].filter(d => LOST_STAGES.has(d.stageId)).map(d => d.dealId)),
+    // Решения РОПа: по отказам и по «выходу из дозвона» (открытые сделки) — по всем текущим.
+    fetchReviews([...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId)),
     // Задачи проекта «Повторные продажи» (Битрикс, гр. 118) — по последней повторной сделке.
     fetchTasksForDeals([...deals.values()].map(d => d.dealId)),
+    fetchHideRequests(keys),
+    fetchKanbanSettings(),
+    opts.skipNames ? Promise.resolve({} as Record<string, number>) : fetchManagerLoad(roster.map(m => m.id)),
   ]);
 
   const typeCounts: Record<string, number> = {};
   const poolGroupCounts: Record<string, number> = {};
+  const outcomeCounts: Record<string, number> = {};
   const poolGroups = new Set(opts.poolGroups ?? []);
   const buckets = new Map<ColumnKey, KanbanCard[]>(COLUMNS.map(c => [c.key, []]));
 
@@ -424,6 +470,7 @@ export async function buildRepeatBoard(opts: {
       ? Math.floor((now - lastDelMs) / DAY_MS) : null;
     // Колонка.
     let col: ColumnKey;
+    let dozvonFail = false;
     // «Скрыть из пула» действует, пока срок не вышел и пока нет открытой сделки: взяли в
     // работу — заказчик в своей рабочей колонке, а не в «Скрытых».
     const todayMsk = new Date(now + 3 * 3600_000).toISOString().slice(0, 10);
@@ -434,10 +481,20 @@ export async function buildRepeatBoard(opts: {
     else if (current && LOST_STAGES.has(current.stageId)) {
       const lostMs = current.lostAt ? new Date(current.lostAt).getTime() : new Date(current.createdAt).getTime();
       const onReview = lostMs >= new Date(REVIEW_SINCE).getTime() || task !== null;
-      if (onReview && (!review || review.decision === 'return')) col = 'review';
+      // Решение по ЭТОМУ отказу — принятое не раньше закрытия (решение «ещё попытки» по
+      // дозвону той же сделки, принятое до отказа, разбор отказа не отменяет).
+      const decidedLost = review && new Date(review.decidedAt).getTime() >= lostMs - 60_000;
+      if (onReview && (!decidedLost || review!.decision === 'return')) col = 'review';
       else col = poolColumn(r.purchasesDelivered, freshDays);
     } else if (current && NEW_STAGES.has(current.stageId)) {
       col = (`touch_${Math.min(win?.count ?? 0, TOUCHES)}`) as ColumnKey;
+      // Выход из дозвона: три попытки в разные дни, последний день прошёл — дозвона нет. РОП
+      // решает на разборе: брак / ещё попытки («недозвон» — карточка остаётся в дозвоне) /
+      // вернуть менеджеру. Решение действует, если принято после начала этого окна.
+      const lastDay = win?.days[win.days.length - 1];
+      const decided = review && windowStartMs !== null && new Date(review.decidedAt).getTime() >= windowStartMs;
+      if (win && win.count >= TOUCHES && !win.reached && lastDay && lastDay < todayMsk
+        && (!decided || review!.decision === 'return')) { col = 'review'; dozvonFail = true; }
     } else if (current && STAGE_TO_COLUMN.has(current.stageId)) {
       col = STAGE_TO_COLUMN.get(current.stageId)!;
     } else if (r.hasOpenOrder) col = 'st_sold';
@@ -447,10 +504,13 @@ export async function buildRepeatBoard(opts: {
     const typeKey = profileType ?? 'none';
     typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
     if (opts.typeFilter && opts.typeFilter !== typeKey) continue;
+    const lastOutcome: 'won' | 'lost' = current && LOST_STAGES.has(current.stageId) ? 'lost' : 'won';
     if (col.startsWith('pool')) {
       const g = r.lastDeliveredGroup ?? 'Без группы';
       poolGroupCounts[g] = (poolGroupCounts[g] ?? 0) + 1;
+      outcomeCounts[lastOutcome] = (outcomeCounts[lastOutcome] ?? 0) + 1;
       if (poolGroups.size && !poolGroups.has(g)) continue;
+      if (opts.outcome && opts.outcome !== lastOutcome) continue;
     }
 
     buckets.get(col)!.push({
@@ -473,9 +533,11 @@ export async function buildRepeatBoard(opts: {
       brak: mark?.kind === 'no_call' ? { reason: mark.reason, comment: mark.comment, by: mark.createdBy, at: mark.createdAt } : null,
       hidden: hiddenNow && mark ? { until: mark.snoozeUntil!, comment: mark.comment, by: mark.createdBy, at: mark.createdAt } : null,
       // Закрыли в отказ, не дозвонившись и не сделав трёх попыток — нарушение правила.
-      lostEarly: col === 'review' && !(win?.reached) && (win?.count ?? 0) < TOUCHES,
+      lostEarly: col === 'review' && !dozvonFail && !(win?.reached) && (win?.count ?? 0) < TOUCHES,
       sleeping: r.sleeping, atRisk: r.atRisk,
       freshDays,
+      lastOutcome, dozvonFail,
+      hideRequest: hideReqs.get(r.clientKey) ?? null,
     });
   }
 
@@ -483,6 +545,8 @@ export async function buildRepeatBoard(opts: {
   // сначала то, где окно сгорает раньше; на разборе — свежие отказы сверху.
   const typeRank = (c: KanbanCard) => (c.profileType ? CLIENT_TYPE_ORDER[c.profileType] ?? CLIENT_TYPE_NONE_RANK : CLIENT_TYPE_NONE_RANK);
   const ev = (c: KanbanCard) => c.expectedValue ?? 0;
+  // Пул: сначала те, у кого последняя сделка успешная (владелец 21.10).
+  const lostRank = (c: KanbanCard) => (c.lastOutcome === 'lost' ? 1 : 0);
   const columns: KanbanColumn[] = [];
   // Показатели доски — до фильтра по задачам: фильтр «ждёт приёмки» не должен обнулять
   // «Потенциал пула» (у заказчиков пула задач нет). Снимок списков колонок.
@@ -510,12 +574,14 @@ export async function buildRepeatBoard(opts: {
       list.sort((a, b) => start(a) - start(b) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
     } else if (def.key === 'pool_hot') {
       // Срочно: сначала те, у кого окно закрывается раньше (больше дней с отгрузки).
-      list.sort((a, b) => (b.freshDays ?? 0) - (a.freshDays ?? 0) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
+      list.sort((a, b) => lostRank(a) - lostRank(b) || (b.freshDays ?? 0) - (a.freshDays ?? 0) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
     } else if (def.key === 'hidden') {
       list.sort((a, b) => (a.hidden?.until ?? '').localeCompare(b.hidden?.until ?? ''));
     } else if (def.key === 'review' || def.key === 'brak') {
       const at = (c: KanbanCard) => c.brak?.at ?? c.deal?.lostAt ?? '';
       list.sort((a, b) => at(b).localeCompare(at(a)));
+    } else if (def.group === 'pool') {
+      list.sort((a, b) => lostRank(a) - lostRank(b) || typeRank(a) - typeRank(b) || Number(a.sleeping) - Number(b.sleeping) || ev(b) - ev(a));
     } else {
       list.sort((a, b) => typeRank(a) - typeRank(b) || Number(a.sleeping) - Number(b.sleeping) || ev(b) - ev(a));
     }
@@ -523,6 +589,8 @@ export async function buildRepeatBoard(opts: {
     if (sortMode === 'ltv') list.sort((a, b) => b.sumDelivered - a.sumDelivered);
     else if (sortMode === 'potential') list.sort((a, b) => (b.potential ?? 0) - (a.potential ?? 0) || b.sumDelivered - a.sumDelivered);
     else if (sortMode === 'fresh') list.sort((a, b) => deliveredMs(b) - deliveredMs(a));
+    // Ожидаемые деньги: шанс на повтор × ожидаемая сумма следующей покупки.
+    else if (sortMode === 'ev') list.sort((a, b) => ev(b) - ev(a) || b.sumDelivered - a.sumDelivered);
     else if (sortMode === 'task') list.sort((a, b) => TASK_SORT[taskBucketOf(a, now)] - TASK_SORT[taskBucketOf(b, now)] || typeRank(a) - typeRank(b));
     const limit = Math.max(1, Math.min(opts.limits?.[def.key] ?? COLUMN_PAGE, 2000));
     const ageOf = (c: KanbanCard): number | null => {
@@ -543,11 +611,28 @@ export async function buildRepeatBoard(opts: {
     });
   }
 
+  // «Сегодня» — из колонок до фильтра по задачам (как показатели): что РОПу решить сегодня.
+  const TODAY_LIMIT = 60;
+  const everyCard = [...kpiBuckets.values()].flat();
+  const changed = (c: KanbanCard) => c.task?.changedAt ?? c.task?.createdAt ?? '';
+  const todayDefs: { key: TodayKey; title: string; hint: string; pick: (c: KanbanCard) => boolean; order: (a: KanbanCard, b: KanbanCard) => number }[] = [
+    { key: 'control', title: 'Ждут приёмки', hint: 'Менеджер сдал задачу — примите или верните в Битриксе', pick: c => c.task?.state === 'control', order: (a, b) => changed(a).localeCompare(changed(b)) },
+    { key: 'overdue', title: 'Просрочены', hint: 'Срок задачи прошёл, менеджер не сдал', pick: c => taskBucketOf(c, now) === 'overdue', order: (a, b) => (a.task?.deadlineAt ?? '').localeCompare(b.task?.deadlineAt ?? '') },
+    { key: 'hide_request', title: 'Предлагают скрыть', hint: 'Менеджер предложил скрыть заказчика из пула', pick: c => !!c.hideRequest, order: (a, b) => a.hideRequest!.at.localeCompare(b.hideRequest!.at) },
+    { key: 'review', title: 'На разборе', hint: 'Отказы и три попытки без дозвона — решите: брак, ещё попытки или вернуть', pick: c => c.column === 'review', order: (a, b) => (b.deal?.lostAt ?? b.deal?.createdAt ?? '').localeCompare(a.deal?.lostAt ?? a.deal?.createdAt ?? '') },
+    { key: 'closing', title: 'Окно закрывается', hint: `Отгрузили ${WINDOW_DAYS - 3}+ дней назад, сделки нет — осталось 3 дня или меньше`, pick: c => c.column === 'pool_hot' && (c.freshDays ?? 0) >= WINDOW_DAYS - 3, order: (a, b) => lostRank(a) - lostRank(b) || (b.freshDays ?? 0) - (a.freshDays ?? 0) || ev(b) - ev(a) },
+  ];
+  const today: TodaySection[] = todayDefs.map(d => {
+    const list = everyCard.filter(d.pick).sort(d.order);
+    return { key: d.key, title: d.title, hint: d.hint, total: list.length, cards: list.slice(0, TODAY_LIMIT) };
+  });
+
   // Имена: кэш для всех видимых, ленивый добор из Битрикса — только для видимых.
   if (!opts.skipNames) {
-    const visibleKeys = columns.flatMap(c => c.cards.map(x => x.clientKey));
+    const visible = [...columns.flatMap(c => c.cards), ...today.flatMap(t => t.cards)];
+    const visibleKeys = [...new Set(visible.map(x => x.clientKey))];
     const names = await resolveClientNames(visibleKeys).catch(() => getCachedClientNames(visibleKeys));
-    for (const c of columns) for (const card of c.cards) card.name = names.get(card.clientKey) ?? null;
+    for (const card of visible) card.name = names.get(card.clientKey) ?? null;
   }
 
   const allIn = (g: string) => COLUMNS.filter(d => d.group === g).flatMap(d => kpiBuckets.get(d.key)!);
@@ -567,6 +652,9 @@ export async function buildRepeatBoard(opts: {
     review: kpiBuckets.get('review')!.length, reviewEarly: kpiBuckets.get('review')!.filter(c => c.lostEarly).length,
     brak: kpiBuckets.get('brak')!.length,
     hidden: kpiBuckets.get('hidden')!.length,
+    hot: kpiBuckets.get('pool_hot')!.length, hotPotential: pot(kpiBuckets.get('pool_hot')!),
+    hotClosing: kpiBuckets.get('pool_hot')!.filter(c => (c.freshDays ?? 0) >= WINDOW_DAYS - 3).length,
   };
-  return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null, dataAt };
+  return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice: null, dataAt,
+    taskLimit: settings.managerTaskLimit, managerLoad, outcomeCounts, today };
 }

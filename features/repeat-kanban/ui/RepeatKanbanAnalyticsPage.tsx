@@ -4,11 +4,14 @@
 // директорам и выше). ТЗ Fable: KPI-ряд → иерархическая таблица (филиал → … → менеджер,
 // взвешенные % вверх по дереву, сортировка внутри уровня, светофор, Итого сверху) → люди
 // (рейтинг с антиметрикой) → «куда ушёл пул» → динамика (копится) → журнал по людям.
+// 21.10: вкладка «Результат» (задача → следующая отгрузка, RepeatResultsSection) и события
+// Битрикса в журнале и счётчиках людей (engine/bitrixEvents.ts) с пометкой источника.
 import Link from 'next/link';
 import { Fragment, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink, Info } from 'lucide-react';
 import { taskUrl } from '../engine/config';
+import { RepeatResultsSection } from './RepeatResultsSection';
 import type { KanbanAnalytics, MgrDay, OrgNode, JournalRow } from '../engine/analytics';
 
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
@@ -141,15 +144,34 @@ const EVENT_LABEL: Record<string, string> = {
   deal_task_created: 'Сделка + задача', deal_returned_from_reject: 'Сделка из отказа + задача', task_created: 'Задача в сделку',
   task_comment_posted: 'Комментарий в чат', reject_reviewed: 'Разобран отказ', rejected_direct: 'Сразу в брак',
   hidden: 'Скрыт из пула', unhidden: 'Возвращён в пул', reject_cleared: 'Снят брак',
+  // События Битрикса (source = 'bitrix').
+  bx_task_created: 'Задача в Битриксе', bx_task_submitted: 'Сдал на проверку', bx_task_closed: 'Задача завершена',
+  bx_stage: 'Стадия сделки', bx_call_reached: 'Дозвон', bx_call_attempt: 'Попытка звонка',
 };
-const KIND_OF: Record<string, 'work' | 'leak' | 'undo' | 'aux'> = {
+const KIND_OF: Record<string, 'work' | 'leak' | 'undo' | 'aux' | 'bitrix'> = {
   deal_task_created: 'work', deal_returned_from_reject: 'work', task_created: 'work', reject_reviewed: 'work',
   rejected_direct: 'leak', hidden: 'leak', unhidden: 'undo', reject_cleared: 'undo', task_comment_posted: 'aux',
+  // Задача, поставленная прямо в Битриксе, — та же работа, что «Задача в сделку» кликом.
+  bx_task_created: 'work', bx_task_submitted: 'bitrix', bx_task_closed: 'bitrix', bx_stage: 'bitrix', bx_call_reached: 'bitrix', bx_call_attempt: 'bitrix',
 };
-const KIND_LABEL = { work: 'Работа', leak: 'Утечка (скрыто, брак)', undo: 'Откаты' } as const;
+const KIND_LABEL = { work: 'Работа', leak: 'Утечка (скрыто, брак)', undo: 'Откаты', bitrix: 'Битрикс: стадии, звонки, сдача задач' } as const;
+/** Действие человека в счётчиках «Действий» (рейтинг, KPI): клики канбана без комментариев и
+ *  задачи, поставленные в Битриксе (их канбан не видел). Стадии, звонки, сдача/приёмка —
+ *  отдельными колонками «В Битриксе», чтобы десятки звонков не топили клики РОПа. */
+const isAction = (j: JournalRow) => j.type !== 'task_comment_posted' && (j.source === 'kanban' || j.type === 'bx_task_created');
+const fmtSec = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+function labelOf(j: JournalRow): string {
+  if (j.type === 'bx_stage') return `Стадия: ${String(j.payload.stageName ?? j.payload.stageId ?? '')}`;
+  if (j.type === 'bx_task_closed') return j.payload.accepted ? 'Задача принята' : 'Задача завершена';
+  if (j.type === 'bx_call_reached' || j.type === 'bx_call_attempt') {
+    const sec = Number(j.payload.sec ?? 0);
+    return `${EVENT_LABEL[j.type]}${j.payload.inbound ? ' (входящий)' : ''}${sec ? ` ${fmtSec(sec)}` : ''}`;
+  }
+  return EVENT_LABEL[j.type] ?? j.type;
+}
 /** Куда ушёл заказчик действием: для стека «куда ушёл пул». */
 function sinkOf(j: JournalRow): 'deal' | 'return' | 'noanswer' | 'hidden' | 'brak' | null {
-  if (j.type === 'deal_task_created' || j.type === 'deal_returned_from_reject' || j.type === 'task_created') return 'deal';
+  if (j.type === 'deal_task_created' || j.type === 'deal_returned_from_reject' || j.type === 'task_created' || j.type === 'bx_task_created') return 'deal';
   if (j.type === 'hidden') return 'hidden';
   if (j.type === 'rejected_direct') return 'brak';
   if (j.type === 'reject_reviewed') return j.payload.decision === 'brak' ? 'brak' : j.payload.decision === 'no_answer' ? 'noanswer' : 'return';
@@ -181,6 +203,8 @@ export function RepeatKanbanAnalyticsPage() {
   const [peopleTab, setPeopleTab] = useState<'mgr' | 'actors'>('actors');
   const [jKinds, setJKinds] = useState<Set<string>>(new Set());
   const [jSearch, setJSearch] = useState('');
+  const [jSource, setJSource] = useState<'all' | 'kanban' | 'bitrix'>('all');
+  const [view, setView] = useState<'work' | 'result'>('work');
 
   // Даты снимков внутри периода — для дельт «конец против начала»; линия — всегда 30 дней.
   const periodDates = useMemo(() => (data ? data.dates.filter(d => d >= (period === 'day' ? (data.dates[data.dates.length - 2] ?? d) : data.fromDate)) : []), [data, period]);
@@ -216,25 +240,37 @@ export function RepeatKanbanAnalyticsPage() {
     const prev = prevDate ? data.mgr.filter(m => m.date === prevDate).reduce((s, m) => add(s, m), ZERO) : null;
     return { cur: tree.total.agg, prev, prevDate };
   }, [tree, data, periodDates]);
-  const todayActions = data?.journal.filter(j => j.type !== 'task_comment_posted').length ?? 0;
+  const todayActions = data?.journal.filter(isAction).length ?? 0;
   const periodLabel = !data || period === 'day' ? fmtD(date) : `${fmtD(data.fromDate)}–${fmtD(date)}`;
 
-  // Люди.
+  // Люди: клики канбана + задачи из Битрикса — «Действий»; остальное Битрикса — отдельно
+  // (счётчики с сервера полные, журнал стадий/звонков может быть обрезан).
   const actors = useMemo(() => {
-    const m = new Map<string, { actor: string; role: string | null; total: number; deals: number; reviews: number; leak: number; clients: Set<string> }>();
+    type A = { actor: string; role: string | null; total: number; deals: number; reviews: number; leak: number; clients: Set<string>; bxStages: number; bxCalls: number; bxReached: number; bxTasks: number };
+    const m = new Map<string, A>();
+    const get = (actor: string, role: string | null) => {
+      let a = m.get(actor);
+      if (!a) { a = { actor, role, total: 0, deals: 0, reviews: 0, leak: 0, clients: new Set<string>(), bxStages: 0, bxCalls: 0, bxReached: 0, bxTasks: 0 }; m.set(actor, a); }
+      if (!a.role && role) a.role = role;
+      return a;
+    };
     for (const j of data?.journal ?? []) {
-      if (j.type === 'task_comment_posted') continue;
-      const a = m.get(j.actor) ?? { actor: j.actor, role: j.actorRole, total: 0, deals: 0, reviews: 0, leak: 0, clients: new Set<string>() };
+      if (!isAction(j)) continue;
+      const a = get(j.actor, j.actorRole);
       a.total++; if (sinkOf(j) === 'deal') a.deals++; if (j.type === 'reject_reviewed') a.reviews++; if (KIND_OF[j.type] === 'leak') a.leak++;
       if (j.clientKey) a.clients.add(j.clientKey);
-      m.set(j.actor, a);
     }
-    return [...m.values()].sort((a, b) => b.total - a.total);
+    for (const [name, c] of Object.entries(data?.bitrixCounts ?? {})) {
+      if (c.stages + c.calls + c.submitted + c.closed === 0) continue;
+      const a = get(name, null);
+      a.bxStages = c.stages; a.bxCalls = c.calls; a.bxReached = c.reached; a.bxTasks = c.submitted + c.closed;
+    }
+    return [...m.values()].sort((a, b) => b.total - a.total || (b.bxStages + b.bxCalls + b.bxTasks) - (a.bxStages + a.bxCalls + a.bxTasks));
   }, [data]);
   const mgrRating = useMemo(() => {
     if (!data?.snapDate) return [];
     const acts = new Map<string, { total: number; leak: number }>();
-    for (const j of data.journal) { if (!j.managerId || j.type === 'task_comment_posted') continue; const a = acts.get(j.managerId) ?? { total: 0, leak: 0 }; a.total++; if (KIND_OF[j.type] === 'leak') a.leak++; acts.set(j.managerId, a); }
+    for (const j of data.journal) { if (!j.managerId || !isAction(j)) continue; const a = acts.get(j.managerId) ?? { total: 0, leak: 0 }; a.total++; if (KIND_OF[j.type] === 'leak') a.leak++; acts.set(j.managerId, a); }
     return data.mgr.filter(m => m.date === data.snapDate && m.pool + m.inWork + m.funnel >= 20).map(m => {
       const a = acts.get(m.managerId) ?? { total: 0, leak: 0 };
       return { m, strict: pct1(m.inWork + m.funnel, m.total), per100: m.pool ? Math.round((a.total / m.pool) * 1000) / 10 : 0, acts: a.total, leakPct: a.total ? Math.round((a.leak / a.total) * 100) : 0 };
@@ -256,11 +292,12 @@ export function RepeatKanbanAnalyticsPage() {
   const journalGroups = useMemo(() => {
     const q = jSearch.trim().toLowerCase();
     const rows = (data?.journal ?? []).filter(j => (!jKinds.size || jKinds.has(KIND_OF[j.type] ?? 'aux'))
+      && (jSource === 'all' || j.source === jSource)
       && (!q || `${j.clientName ?? ''} ${j.clientKey ?? ''} ${j.actor}`.toLowerCase().includes(q)));
     const g = new Map<string, JournalRow[]>();
     for (const r of rows) { const l = g.get(r.actor) ?? []; l.push(r); g.set(r.actor, l); }
     return [...g.entries()].sort((a, b) => b[1].length - a[1].length);
-  }, [data, jKinds, jSearch]);
+  }, [data, jKinds, jSearch, jSource]);
   const [openActors, setOpenActors] = useState<Set<string>>(new Set());
 
   const renderRows = (nodes: TreeNode[]): React.ReactNode => sorted(nodes).map(n => {
@@ -343,6 +380,15 @@ export function RepeatKanbanAnalyticsPage() {
           </label>
           </div>
         </header>
+        {/* Вкладки: две — переносом (flex-wrap), без горизонтальной ленты (CLAUDE.md, правило 12). */}
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Раздел аналитики">
+          {([['work', 'Проработка'], ['result', 'Результат: задача → отгрузка']] as const).map(([k, l]) => (
+            <button key={k} type="button" role="tab" aria-selected={view === k} onClick={() => setView(k)}
+              className={`min-h-11 rounded-lg border px-4 text-sm font-medium ${view === k ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`}>{l}</button>
+          ))}
+        </div>
+        {view === 'result' && <RepeatResultsSection date={date} period={period} />}
+        {view === 'work' && (<>
         {error && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-negative)]">{(error as Error).message}</div>}
         {isLoading && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Загружаю…</div>}
 
@@ -403,24 +449,30 @@ export function RepeatKanbanAnalyticsPage() {
             {(['actors', 'mgr'] as const).map(t => (
               <button key={t} type="button" onClick={() => setPeopleTab(t)}
                 className={`min-h-11 rounded-lg border px-3 text-sm ${peopleTab === t ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`}>
-                {t === 'actors' ? 'Кто работал в канбане' : 'Менеджеры — рейтинг'}
+                {t === 'actors' ? 'Кто работал: канбан и Битрикс' : 'Менеджеры — рейтинг'}
               </button>
             ))}
           </div>
           <div className="scroll-x rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
             {peopleTab === 'actors' ? (
-              actors.length === 0 ? <div className="p-4 text-sm text-[var(--color-text-muted)]">За период действий в канбане не было.</div> : (
-                <table className="w-full min-w-[720px] text-sm">
+              actors.length === 0 ? <div className="p-4 text-sm text-[var(--color-text-muted)]">За период действий не было.</div> : (
+                <table className="w-full min-w-[960px] text-sm">
                   <thead><tr className="border-b border-[var(--color-border)]">
                     <th className={`${head} text-left`}>Кто</th><th className={head}>Действий</th><th className={head}>Заказчиков</th>
-                    <th className={head}>Сделок + задач</th><th className={head}>Разобрано отказов</th>
+                    <th className={head} title="Клики в канбане и задачи, поставленные прямо в Битриксе">Сделок + задач</th><th className={head}>Разобрано отказов</th>
                     <th className={head} title="Доля «скрыто + сразу в брак» от всех действий: высокая — пул чистят не работой">Утечка</th>
+                    <th className={head} title="Битрикс: смены стадий повторных сделок (кроме сделанных канбаном)">Стадий</th>
+                    <th className={head} title="Битрикс: звонки по сделкам задач проекта после постановки — всего / дозвон > 20 с">Звонков / дозвон</th>
+                    <th className={head} title="Битрикс: задачи сданы на проверку и завершены/приняты">Сдано / принято</th>
                   </tr></thead>
                   <tbody>{actors.map((a, i) => (
                     <tr key={a.actor} className="border-b border-[var(--color-border)] last:border-0">
                       <td className="px-2 py-1.5"><span className="mr-1">{i < 3 ? ['🥇', '🥈', '🥉'][i] : ''}</span><b>{a.actor}</b>{a.role && <span className="ml-1 text-[11px] text-[var(--color-text-muted)]">{a.role}</span>}</td>
                       <td className={`${cell} font-bold`}>{a.total}</td><td className={cell}>{a.clients.size}</td><td className={cell}>{a.deals}</td><td className={cell}>{a.reviews}</td>
-                      <td className={cell} style={a.total && a.leak / a.total > 0.25 ? { color: '#990000', fontWeight: 700 } : { color: 'var(--color-text-muted)' }}>{a.total ? Math.round((a.leak / a.total) * 100) : 0}%</td>
+                      <td className={cell} style={a.total && a.leak / a.total > 0.25 ? { color: '#990000', fontWeight: 700 } : { color: 'var(--color-text-muted)' }}>{a.total ? `${Math.round((a.leak / a.total) * 100)}%` : '—'}</td>
+                      <td className={cell}>{a.bxStages || '—'}</td>
+                      <td className={cell}>{a.bxCalls ? <>{a.bxCalls}<span className="ml-1 text-[11px] text-[var(--color-text-muted)]">/ {a.bxReached}</span></> : '—'}</td>
+                      <td className={cell}>{a.bxTasks || '—'}</td>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -491,6 +543,11 @@ export function RepeatKanbanAnalyticsPage() {
         {/* Журнал. */}
         <section className="flex flex-col gap-2">
           <h2 className="text-base font-semibold">Журнал · {periodLabel}</h2>
+          <p className="text-[12px] text-[var(--color-text-muted)]">
+            Клики в канбане и события Битрикса: задачи проекта, поставленные не из канбана, сдача и приёмка задач, смены стадий повторных сделок, звонки по сделкам задач.
+            «Сдал на проверку» — по последнему изменению задачи (истории статусов в копии нет).
+            {data?.bitrixTruncated && ' Стадий и звонков слишком много — в журнале последние 3000 каждого вида; счётчики в «Людях» — полные.'}
+          </p>
           <div className="flex flex-wrap items-center gap-2">
             {(Object.keys(KIND_LABEL) as (keyof typeof KIND_LABEL)[]).map(k => (
               <button key={k} type="button" onClick={() => setJKinds(s => { const x = new Set(s); if (x.has(k)) x.delete(k); else x.add(k); return x; })}
@@ -498,6 +555,13 @@ export function RepeatKanbanAnalyticsPage() {
                 {KIND_LABEL[k]}
               </button>
             ))}
+            {/* Источник: клики канбана / события копии Битрикса. */}
+            <div className="flex gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1" role="tablist" aria-label="Источник">
+              {([['all', 'Все'], ['kanban', 'Канбан'], ['bitrix', 'Битрикс']] as const).map(([k, l]) => (
+                <button key={k} type="button" role="tab" aria-selected={jSource === k} onClick={() => setJSource(k)}
+                  className={`min-h-9 rounded-md px-3 text-sm ${jSource === k ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>{l}</button>
+              ))}
+            </div>
             <input value={jSearch} onChange={e => setJSearch(e.target.value)} placeholder="Поиск по заказчику или человеку"
               className="min-h-11 min-w-[200px] flex-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-base sm:max-w-xs sm:text-sm" />
           </div>
@@ -512,13 +576,14 @@ export function RepeatKanbanAnalyticsPage() {
                       className="flex min-h-11 w-full flex-wrap items-center gap-x-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-bg-hover)]">
                       {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       <b>{actor}</b><span className="text-[var(--color-text-muted)]">— {rows.length} действий:</span>
-                      <span className="text-[var(--color-text-secondary)]">{Object.entries(cnt).map(([t, n]) => `${EVENT_LABEL[t] ?? t} ${n}`).join(', ')}</span>
+                      <span className="text-[var(--color-text-secondary)]">{Object.entries(cnt).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${EVENT_LABEL[t] ?? t} ${n}`).join(', ')}</span>
                     </button>
                     {isOpen && rows.map((j, i) => (
                       <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-[var(--color-border)] px-3 py-1.5 pl-9 text-[12.5px]">
                         <span className="w-12 shrink-0 tabular-nums text-[var(--color-text-muted)]">{fmtTime(j.ts)}</span>
                         <span style={{ color: KIND_OF[j.type] === 'leak' ? '#b45f06' : KIND_OF[j.type] === 'undo' ? 'var(--color-text-muted)' : undefined }}>
-                          {EVENT_LABEL[j.type] ?? j.type}{j.type === 'reject_reviewed' && j.payload.decision ? ` · ${j.payload.decision === 'brak' ? 'брак' : j.payload.decision === 'no_answer' ? 'недозвон' : 'вернуть'}` : ''}
+                          {j.source === 'bitrix' && <span className="mr-1 rounded border border-[var(--color-border)] px-1 text-[10.5px] text-[var(--color-text-muted)]">Битрикс</span>}
+                          {labelOf(j)}{j.type === 'reject_reviewed' && j.payload.decision ? ` · ${j.payload.decision === 'brak' ? 'брак' : j.payload.decision === 'no_answer' ? 'недозвон' : 'вернуть'}` : ''}
                         </span>
                         <span className="font-medium">{j.clientName ?? j.clientKey ?? ''}</span>
                         {j.dealId && <a href={dealUrl(j.dealId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-[var(--color-accent)] hover:underline"><ExternalLink size={11} />#{j.dealId}</a>}
@@ -532,6 +597,7 @@ export function RepeatKanbanAnalyticsPage() {
             </div>
           )}
         </section>
+        </>)}
       </div>
     </div>
   );

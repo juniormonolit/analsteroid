@@ -1,20 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionUser } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
-import { canSeeRepeatKanbanAnalytics } from '@/lib/auth/modulesAccess';
+import { canManageRepeatKanbanSettings, canSeeRepeatKanbanAnalytics } from '@/lib/auth/modulesAccess';
 import { ropScope, type RopScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { fetchManagerCustomers } from '@/features/customers/engine/customers';
 import { buildRepeatBoard, type BoardSort, type TaskBucket } from '@/features/repeat-kanban/engine/board';
 
 const TASK_BUCKETS = ['none', 'unread', 'work', 'overdue', 'control', 'done'] as const;
-const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task'] as const;
+const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task', 'ev'] as const;
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
 import { logEvent, newRequestId } from '@/features/repeat-kanban/engine/log';
-import { decideReview, hideFromPool, markBrakNow, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
+import { decideHideRequest, decideReview, hideFromPool, markBrakNow, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
+import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
+import { listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
 // Гейт — section.repeat_kanban (ролям продаж, миграция 230). Зона — ropScope() сессии,
@@ -83,7 +85,11 @@ export async function GET(req: NextRequest) {
     const managers = !inDepts ? ctx.managers : ctx.scope.full ? inDepts : inDepts.filter(m => zone.has(m.id));
     const canManage = ctx.canManage;
     // ?meta=1 — только список менеджеров (для пикера: виден сразу, не ждёт сборки доски).
-    if (sp.get('meta') === '1') return NextResponse.json({ managers }, { headers: { 'Cache-Control': 'no-store' } });
+    // Загрузка менеджеров (норма задач) — рядом с именами в пикере.
+    if (sp.get('meta') === '1') {
+      const load = await fetchManagerLoad(managers.map(m => m.id));
+      return NextResponse.json({ managers: managers.map(m => ({ ...m, load: load[m.id] ?? 0 })) }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     const inList = new Set(managers.map(m => m.id));
     const selected = rawMgrs.filter(id => inList.has(id));
     if (inDepts && managers.length === 0) {
@@ -95,9 +101,10 @@ export async function GET(req: NextRequest) {
       // ?pg=Газобетон|Кровля — группы через «|» (в названиях групп бывают запятые).
       poolGroups: (sp.get('pg') ?? '').split('|').map(x => x.trim()).filter(x => x.length > 0 && x.length < 120).slice(0, 50),
       taskFilter: (sp.get('tasks') ?? '').split(',').filter((x): x is TaskBucket => (TASK_BUCKETS as readonly string[]).includes(x)),
+      outcome: sp.get('outcome') === 'won' || sp.get('outcome') === 'lost' ? sp.get('outcome') as 'won' | 'lost' : null,
       sort: (SORTS as readonly string[]).includes(sp.get('sort') ?? '') ? sp.get('sort') as BoardSort : 'default',
     });
-    return NextResponse.json({ ...board, viewerBitrixId: session.bitrixUserId, canSeeAnalytics: canSeeRepeatKanbanAnalytics(session) }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ...board, viewerBitrixId: session.bitrixUserId, canSeeAnalytics: canSeeRepeatKanbanAnalytics(session), canManageSettings: canManageRepeatKanbanSettings(session) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[repeat-kanban]', e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось собрать канбан' }, { status: 500 });
@@ -125,12 +132,23 @@ export async function POST(req: NextRequest) {
   try {
     // ── Действия РОПа ──────────────────────────────────────────────────────
     const { scope, managers, canManage } = await context(session);
-    // «Скрыть из пула» / «Вернуть в пул» — и менеджеру по СВОИМ заказчикам (владелец 20.10).
+    // «Предложить скрыть» — менеджер по СВОЕМУ заказчику (владелец 21.10: скрывает только РОП,
+    // менеджер предлагает — аудит Fable: «менеджер может прятать неудобных»).
+    if (body.action === 'request_hide') {
+      const ck = String(body.clientKey ?? '');
+      const mid = String(body.managerId ?? '');
+      const allowed = KEY_RE.test(ck) && (mid === session.bitrixUserId || (canManage && managers.some(m => m.id === mid)));
+      if (!allowed || !(await ownsClient(mid, ck))) return NextResponse.json({ error: 'Заказчик не в вашей зоне' }, { status: 403 });
+      await requestHide({ clientKey: ck, managerId: mid, until: String(body.until ?? ''), comment: String(body.comment ?? ''), session });
+      await logEvent(session, { type: 'hide_requested', requestId: rid, clientKey: ck, managerId: mid, columnBefore, payload: { until: body.until, comment: body.comment } });
+      return NextResponse.json({ ok: true });
+    }
+    // «Скрыть из пула» / «Вернуть в пул» — только РОП (с 21.10; раньше — и менеджер по своим).
     if (body.action === 'hide' || body.action === 'unhide') {
       const ck = String(body.clientKey ?? '');
       const mid = String(body.managerId ?? '');
-      const allowed = KEY_RE.test(ck) && (canManage ? managers.some(m => m.id === mid) : mid === session.bitrixUserId);
-      if (!allowed || !(await ownsClient(mid, ck))) return NextResponse.json({ error: 'Заказчик не в вашей зоне' }, { status: 403 });
+      const allowed = KEY_RE.test(ck) && canManage && managers.some(m => m.id === mid);
+      if (!allowed || !(await ownsClient(mid, ck))) return NextResponse.json({ error: canManage ? 'Заказчик не в вашей зоне' : 'Скрывает РОП — предложите скрыть' }, { status: 403 });
       if (body.action === 'hide') {
         await hideFromPool({ clientKey: ck, until: String(body.until ?? ''), comment: String(body.comment ?? ''), session });
         await logEvent(session, { type: 'hidden', requestId: rid, clientKey: ck, managerId: mid, columnBefore, payload: { until: body.until, comment: body.comment } });
@@ -153,15 +171,21 @@ export async function POST(req: NextRequest) {
       // Постановщик: нажал руководитель из цепочки менеджера — он (так делает и старый
       // канбан: директор ставит задачи менеджерам своих РОПов); нажал админ со «всей
       // компанией» — РОП менеджера по структуре (ТЗ п.3).
-      const comment = typeof body.text === 'string' ? body.text.trim() : '';
+      let comment = typeof body.text === 'string' ? body.text.trim() : '';
+      // Массовая постановка (владелец 21.10): текста нет, есть шаблон — заполняем по заказчику.
+      if (!comment && typeof body.templateId === 'number') {
+        const tpl = (await listTemplates()).find(t => t.id === body.templateId);
+        if (tpl) comment = (await renderTemplate(tpl.body, { clientKey, managerId })).trim();
+      }
       const creator = scope.full || !session.bitrixUserId
         ? (await ropOfManager(managerId)) ?? session.bitrixUserId
         : session.bitrixUserId;
       if (!creator) return NextResponse.json({ error: 'Не удалось определить постановщика: нет привязки к Битриксу' }, { status: 400 });
-      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId });
+      const deadlineDate = typeof body.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.deadline) ? body.deadline : null;
+      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate });
       const type = res.dealMode === 'created' ? 'deal_task_created' : res.dealMode === 'reopened' ? 'deal_returned_from_reject' : 'task_created';
       await logEvent(session, { type, requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
-        payload: { comment, creator, responsible: res.responsibleId } });
+        payload: { comment, creator, responsible: res.responsibleId, deadline: deadlineDate, templateId: typeof body.templateId === 'number' ? body.templateId : null } });
       if (res.chatPosted) await logEvent(session, { type: 'task_comment_posted', requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId });
       return NextResponse.json(res);
     }
@@ -185,6 +209,14 @@ export async function POST(req: NextRequest) {
     if (body.action === 'brak_now') {
       await markBrakNow({ clientKey, reason: String(body.reason ?? ''), comment: typeof body.comment === 'string' ? body.comment : null, session });
       await logEvent(session, { type: 'rejected_direct', requestId: rid, clientKey, managerId, columnBefore, payload: { reason: body.reason, comment: body.comment ?? null } });
+      return NextResponse.json({ ok: true });
+    }
+
+    if (body.action === 'decide_hide') {
+      const accept = body.accept === true;
+      const req = await decideHideRequest({ clientKey, accept, comment: typeof body.comment === 'string' ? body.comment : null, session });
+      await logEvent(session, { type: accept ? 'hide_request_accepted' : 'hide_request_declined', requestId: rid, clientKey, managerId, columnBefore,
+        payload: { until: req?.until, comment: req?.comment, by: req?.by } });
       return NextResponse.json({ ok: true });
     }
 

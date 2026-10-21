@@ -35,3 +35,10 @@ export async function canSessionSeeClientRef(session: SessionUser, ref: string):
 export function canSeeRepeatKanbanAnalytics(session: Pick<SessionUser, 'isSuperadmin' | 'roleName'>): boolean {
   return session.isSuperadmin || session.roleName === 'Администратор' || session.roleName === 'Директор';
 }
+
+/** «Настройки канбана повторных» (норма задач, шаблоны сообщений) — только админам
+ *  (владелец 21.10): суперадмин или роль «Администратор». Читать шаблоны и норму может
+ *  любой с доступом к доске — это гейт только на ИЗМЕНЕНИЕ. */
+export function canManageRepeatKanbanSettings(session: Pick<SessionUser, 'isSuperadmin' | 'roleName'>): boolean {
+  return session.isSuperadmin || session.roleName === 'Администратор';
+}
