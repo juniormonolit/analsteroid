@@ -436,58 +436,15 @@ export function RepeatKanbanPage() {
   );
 }
 
-/** Действия канбана рядом с карточкой клиента (владелец 21.10): те же, что на карточке доски —
- *  главная кнопка, «⋯»-действия, состояние задачи и последний комментарий. */
+/** Карточка канбана рядом с карточкой клиента (владелец 21.10: «давай её целиком тут магнитить»):
+ *  та же карточка, что на доске, — со всеми данными, задачей, комментарием и кнопками. На телефоне
+ *  (полоса под карточкой клиента) — с ограничением высоты и своей прокруткой. */
 function KanbanSideActions({ c, h }: { c: KanbanCard; h: CardHandlers }) {
-  const col = c.column;
-  const def = COLUMNS.find(x => x.key === col);
-  const isOwn = !!h.viewerId && c.managerId === h.viewerId;
-  const note = useContext(TaskNotesCtx)[String(c.task?.id ?? '')];
-  const dealLabel = c.deal ? 'Задача' : c.lastLost ? 'Вернуть сделку + задача' : 'Сделка + задача';
-  const btn = 'inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-lg px-3 text-sm font-medium hover:opacity-90';
-  const ghost = `${btn} border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]`;
+  const def = COLUMNS.find(x => x.key === c.column);
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg)] p-3 text-sm shadow-2xl">
-      <div className="hidden text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)] sm:block">Канбан повторных</div>
-      <div className="hidden sm:block">
-        <div className="font-semibold text-[var(--color-text)]">{def?.title ?? col}</div>
-        <div className="text-xs text-[var(--color-text-muted)]">{c.managerName}{c.deal ? ` · сделка #${c.deal.dealId}` : ''}</div>
-      </div>
-      {c.task && (
-        <a href={taskUrl(c.task.id)} target="_blank" rel="noreferrer" className="hidden items-center gap-1.5 text-xs hover:opacity-90 sm:flex">
-          <span className="rounded px-1.5 py-0.5 font-semibold" style={{ background: TASK_STATE[c.task.state].bg, color: TASK_STATE[c.task.state].fg }}>
-            <ClipboardList size={11} className="mr-0.5 inline" />{TASK_STATE[c.task.state].label}
-          </span>
-          <span className="truncate text-[var(--color-text-muted)]">задача #{c.task.id}</span>
-        </a>
-      )}
-      {note && (
-        <div className="hidden rounded-md border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-2 py-1 text-xs sm:block" title={note.text}>
-          <div className="text-[var(--color-text-muted)]">{shortName(note.author)} · {fmtDT(note.at)}</div>
-          <div className="line-clamp-4 whitespace-pre-line text-[var(--color-text)]">{note.text}</div>
-        </div>
-      )}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-1">
-        {h.canManage && canTaskCol(col) && (
-          <button type="button" onClick={() => h.onTask(c)} className={`${btn} bg-[var(--color-accent)] text-white`}><Plus size={14} /> {dealLabel}</button>
-        )}
-        {h.canManage && col === 'review' && (
-          <button type="button" onClick={() => h.onReview(c)} className={`${btn} bg-[var(--color-accent)] text-white`}>{c.dozvonFail ? 'Разобрать дозвон' : 'Разобрать отказ'}</button>
-        )}
-        {c.hideRequest && h.canManage && (
-          <>
-            <button type="button" onClick={() => h.onAct('accept_hide', c)} className={`${btn} bg-[#7f6000] text-white`}>Скрыть, как предлагают</button>
-            <button type="button" onClick={() => h.onAct('decline_hide', c)} className={ghost}>Отклонить скрытие</button>
-          </>
-        )}
-        {col.startsWith('pool') && h.canManage && !c.hideRequest && <button type="button" onClick={() => h.onAct('hide', c)} className={ghost}>Скрыть из пула</button>}
-        {col.startsWith('pool') && !h.canManage && isOwn && !c.hideRequest && <button type="button" onClick={() => h.onAct('request_hide', c)} className={ghost}>Предложить скрыть</button>}
-        {col === 'hidden' && h.canManage && <button type="button" onClick={() => h.onAct('unhide', c)} className={ghost}>Вернуть в пул</button>}
-        {h.canManage && (col.startsWith('pool') || col.startsWith('touch') || (col.startsWith('st_') && col !== 'st_sold')) && (
-          <button type="button" onClick={() => h.onAct('brak_now', c)} className={`${ghost} text-[#990000]`}>Сразу в брак</button>
-        )}
-        {h.canManage && col === 'brak' && <button type="button" onClick={() => h.onUnbrak(c)} className={ghost}>Снять брак</button>}
-      </div>
+    <div className="flex max-h-[40dvh] flex-col gap-1.5 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2 shadow-2xl sm:max-h-[calc(100dvh-24px)]">
+      <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">Канбан повторных · {def?.title ?? c.column}</div>
+      <CardFor c={c} h={h} />
     </div>
   );
 }
