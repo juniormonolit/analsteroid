@@ -646,8 +646,9 @@ export async function buildRepeatBoard(opts: {
     inWork: allIn('touch').length, inWorkPotential: pot(allIn('touch')),
     reached: allIn('touch').filter(c => c.attempts?.reached).length,
     funnel: allIn('stage').length, funnelSum: allIn('stage').reduce((s, c) => s + (c.deal?.amount ?? 0), 0),
-    tasksOverdue: [...work, ...allIn('review')].filter(c => taskBucketOf(c, now) === 'overdue').length,
-    tasksControl: [...work, ...allIn('review')].filter(c => c.task?.state === 'control').length,
+    // По всем карточкам, как в «Сегодня»: сданная задача по сделке, ушедшей в пул, тоже ждёт приёмки.
+    tasksOverdue: everyCard.filter(c => taskBucketOf(c, now) === 'overdue').length,
+    tasksControl: everyCard.filter(c => c.task?.state === 'control').length,
     noTaskInWork: work.filter(c => !openTask(c)).length,
     review: kpiBuckets.get('review')!.length, reviewEarly: kpiBuckets.get('review')!.filter(c => c.lostEarly).length,
     brak: kpiBuckets.get('brak')!.length,

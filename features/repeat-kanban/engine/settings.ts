@@ -212,9 +212,11 @@ function midSentence(group: string): string {
   return g.length > 1 && g[0] !== g[0].toLowerCase() && g[1] === g[1].toLowerCase() && g[1] !== g[1].toUpperCase()
     ? g[0].toLowerCase() + g.slice(1) : g;
 }
-/** «a», «a и b», «a, b и c». */
+/** «a», «a и b», «a, b и c». Если в названиях групп уже есть «и» («теплоизоляция и утеплитель»),
+ *  то только через запятую — иначе выходило «…утеплитель и окна и двери». */
 function joinRu(items: string[]): string {
   if (items.length <= 1) return items[0] ?? '';
+  if (items.some(x => / и /i.test(x))) return items.join(', ');
   return `${items.slice(0, -1).join(', ')} и ${items[items.length - 1]}`;
 }
 

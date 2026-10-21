@@ -323,13 +323,13 @@ export function RepeatKanbanPage() {
               .concat(poolGroups.filter(g => !(data?.poolGroupCounts ?? {})[g]).map(g => ({ value: g, label: g, hint: 'сейчас 0 в пуле' })))}
             value={poolGroups} onChange={v => { setPg(v.join('|')); setLimits({}); }}
             className={`${poolGroups.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-72`} />
-          {GROUPS.map(g => (
+          {view !== 'today' && GROUPS.map(g => (
             <button key={g.key} type="button" onClick={() => jump(g.key)} title={g.hint}
               className={BTN_IDLE}>
               {g.title}
             </button>
           ))}
-          {canManage && (
+          {canManage && view !== 'today' && (
             <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
               title="Отметить карточки галочками и поставить задачи всем разом"
               className={selectMode ? BTN_ACTIVE : BTN_IDLE}>
@@ -442,7 +442,8 @@ function CardFor({ c, h }: { c: KanbanCard; h: CardHandlers }) {
 function TodayView({ sections, h }: { sections: TodaySection[]; h: CardHandlers }) {
   const filled = sections.filter(s => s.total > 0);
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-y-auto overflow-x-hidden px-4 pb-6 pt-3 sm:px-6">
+    // На телефоне прокручивается вся страница (своя прокрутка схлопнула бы ленту по высоте).
+    <div className="flex min-w-0 flex-1 flex-col gap-5 overflow-x-hidden px-4 pb-6 pt-3 sm:min-h-0 sm:overflow-y-auto sm:px-6">
       {filled.length === 0 && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">На сегодня решать нечего — всё разобрано.</div>}
       {filled.map(sec => (
         <section key={sec.key} className="flex min-w-0 flex-col gap-2">
@@ -562,9 +563,9 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
           <div className="mt-0.5 text-[11.5px] font-semibold">в пуле, не тронуто: {moneyShort(k.poolPotential)}</div>
           {/* Деньги под риском (владелец 21.10: «прикольно»): окно повторной продажи открыто,
               сделки нет — через ≤ 22 дня заказчик «остынет». */}
-          <button type="button" onClick={() => onJump('pool')} className="mt-1 inline-flex min-h-6 items-center rounded bg-white/15 px-1.5 text-left text-[11.5px] font-semibold hover:bg-white/25"
+          <button type="button" onClick={() => onJump('pool')} className="mt-1 inline-flex min-h-6 max-w-full items-center whitespace-nowrap rounded bg-white/15 px-1.5 text-left text-[11.5px] font-semibold hover:bg-white/25"
             title={`У ${k.hot} заказчиков открыто окно повторной продажи (отгрузка ≤ 22 дней назад, сделки нет); у ${k.hotClosing} закрывается в ближайшие 3 дня. Сумма — их потенциал за год.`}>
-            под риском: {moneyShort(k.hotPotential)} · {rub.format(k.hot)} в окне
+            под риском: {moneyShort(k.hotPotential)} · {rub.format(k.hot)} зак.
           </button>
         </div>
         <WorkedRing k={k} />
@@ -909,9 +910,9 @@ function DeadlinePicker({ card, value, onChange }: { card: KanbanCard; value: st
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-[var(--color-text-secondary)]">Срок задачи (до 19:00)</span>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_auto_auto_minmax(0,1fr)]">
         {presets.map(p => (
-          <button key={p.label} type="button" onClick={() => onChange(p.v)} className={value === p.v ? BTN_ACTIVE : BTN_IDLE}>
+          <button key={p.label} type="button" onClick={() => onChange(p.v)} className={`${value === p.v ? BTN_ACTIVE : BTN_IDLE} whitespace-nowrap px-2`}>
             {p.label} <span className="opacity-75">· {fmtYmd(p.v).slice(0, 5)}</span>
           </button>
         ))}
