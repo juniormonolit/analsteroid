@@ -327,9 +327,9 @@ export function RepeatKanbanPage() {
                 return { value: m.id, label: m.name, hint: `${n} из ${taskLimit} активных задач${n >= taskLimit ? ' — перегружен' : ''}` };
               })}
               value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
-              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-40 min-[1800px]:w-56`} />
+              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-40 min-[112.5rem]:w-56`} />
           )}
-          <label className={`${q ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs cursor-text sm:w-40 min-[1800px]:w-56`}>
+          <label className={`${q ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs cursor-text sm:w-40 min-[112.5rem]:w-56`}>
             <Search size={16} className="shrink-0 opacity-70" />
             <input type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder="Заказчик, тег, № сделки"
               aria-label="Поиск заказчика: имя, название, номер контакта, компании, сделки или задачи"
@@ -412,17 +412,17 @@ export function RepeatKanbanPage() {
             <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
               title="Выбрать карточки: отметить галочками и поставить задачи всем разом" aria-label="Выбрать карточки"
               className={selectMode ? BTN_ACTIVE : BTN_IDLE}>
-              <CheckSquare size={16} /> <span className={selectMode ? '' : 'sm:hidden min-[1800px]:inline'}>{selectMode ? 'Отменить выбор' : 'Выбрать'}</span>
+              <CheckSquare size={16} /> <span className={selectMode ? '' : 'sm:hidden min-[112.5rem]:inline'}>{selectMode ? 'Отменить выбор' : 'Выбрать'}</span>
             </button>
           )}
           {/* Справа — редкие кнопки; на ноутбуке только иконки (подписи — в подсказке). */}
           <div className="flex min-w-0 items-center gap-1.5 sm:ml-auto">
             <Link href="/repeat-kanban/guide" className={BTN_IDLE} title="Инструкция: как работать с канбаном" aria-label="Как работать?">
-              <HelpCircle size={16} /> <span className="hidden min-[420px]:inline sm:hidden min-[1800px]:inline">Как работать?</span>
+              <HelpCircle size={16} /> <span className="hidden min-[420px]:inline sm:hidden min-[112.5rem]:inline">Как работать?</span>
             </Link>
             {data?.canSeeAnalytics && (
               <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Аналитика: кто что делал, проработанность по отделам, результат задач" aria-label="Аналитика">
-                <BarChart3 size={16} /> <span className="hidden min-[1800px]:inline">Аналитика</span>
+                <BarChart3 size={16} /> <span className="hidden min-[112.5rem]:inline">Аналитика</span>
               </Link>
             )}
             {data?.canManageSettings && <RepeatKanbanSettingsButton className={BTN_IDLE} />}
@@ -551,7 +551,7 @@ function FiltersButton({ active, onReset, children }: { active: number; onReset:
       trigger={
         <button type="button" className={active ? BTN_ACTIVE : BTN_IDLE} aria-label="Фильтры" title="Фильтры: тип клиента, задачи, последняя сделка, товарная группа, сортировка">
           {/* Слово «Фильтры» — от 1800 px (владелец 22.10: на ноутбуке ~1700 px кнопки уезжали во второй ряд). */}
-          <SlidersHorizontal size={16} /> <span className="hidden min-[1800px]:inline">Фильтры</span>{active ? <span>{` ${active}`}</span> : null}
+          <SlidersHorizontal size={16} /> <span className="hidden min-[112.5rem]:inline">Фильтры</span>{active ? <span>{` ${active}`}</span> : null}
         </button>
       }>
       <div className="flex max-h-[70dvh] flex-col gap-3 overflow-y-auto">
@@ -741,7 +741,7 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
         <WorkedRing k={k} />
       </button>
       {/* Восемь в ряд — от 1440 px; уже — два ряда по четыре (на 1280 плитка выходила бы ~72 px). */}
-      <div className="grid min-w-0 flex-1 auto-rows-fr grid-cols-2 gap-1.5 sm:grid-cols-4 min-[1440px]:grid-cols-8">
+      <div className="grid min-w-0 flex-1 auto-rows-fr grid-cols-2 gap-1.5 sm:grid-cols-4 min-[90rem]:grid-cols-8">
         {tiles.map(t => (
           // Жёсткая сетка из трёх строк — цифры всех плиток на одной линии (правка 20.10: «все цифры
           // прыгают»). Подпись и пояснение — в одну строку с многоточием, полный текст в title.

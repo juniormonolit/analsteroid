@@ -54,7 +54,7 @@ export function RepeatKanbanSettingsButton({ className }: { className?: string }
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} className={className ?? BTN_IDLE} title="Настройки: норма задач на менеджера, шаблоны сообщений к задаче" aria-label="Настройки">
-        <Settings size={16} /> <span className="hidden min-[1800px]:inline">Настройки</span>
+        <Settings size={16} /> <span className="hidden min-[112.5rem]:inline">Настройки</span>
       </button>
       <Drawer open={open} onOpenChange={setOpen} title="Настройки канбана повторных">
         {open && <SettingsPanel state={data} />}
