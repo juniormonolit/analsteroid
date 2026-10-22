@@ -37,13 +37,44 @@ export function memoPlain(reportMd: string, createdAt: string): string {
   ].join('\n');
 }
 
-/** Тот же текст в BB-коде Битрикса — для описания задачи. */
-export function memoBbcode(reportMd: string, createdAt: string): string {
+// ── BB-коды Битрикса (проверено владельцем 23.10 в чате бота и чате задачи): работают [B] [I] [U] [S]
+// [COLOR] [SIZE] [URL] [USER] и строка «>>» (цитата); НЕ работают [LIST]/[*], [QUOTE], [TABLE] —
+// поэтому списки строками с «•», акценты — жирным и цветом.
+const RED = '#cc0000';
+/** #888 на тёмной теме мобильного Битрикса почти не виден (разбор Fable 23.10). */
+const GRAY = '#999999';
+/** Модель пишет «[компания]» и т.п. — квадратные скобки не должны съедаться как тег. */
+const safe = (t: string) => t.replace(/\[(?=\/?(?:B|I|U|S|COLOR|SIZE|URL|USER|CODE)\b)/gi, '［').replace(/\*\*/g, '');
+
+/** Префиксы памятки (промпт v7) — жирным выделяется только он, не полстроки. */
+const PREFIX = /^(Зайти с|Предложить|Уточнить|Когда|Сроки|Не забыть|Риск|Важно):\s*/i;
+
+/** Строка памятки → BB: «•» и жирный префикс; «Не забыть/риск» — ⚠️ и красный ТОЛЬКО префикс
+ *  (красная строка целиком читается как «ошибка»). Старые отчёты без префиксов — просто «•». */
+function bbLine(line: string): string {
+  const t = safe(line.replace(/^—\s*/, '').trim());
+  const m = t.match(PREFIX);
+  if (!m) return `• ${t}`;
+  const rest = t.slice(m[0].length);
+  if (/^(не забыть|риск|важно)/i.test(m[1])) return `⚠️ [COLOR=${RED}][B]${m[1]}:[/B][/COLOR] ${rest}`;
+  return `• [B]${m[1]}:[/B] ${rest}`;
+}
+
+const DAY = 86_400_000;
+function bbHeader(createdAt: string, updated?: boolean): string {
+  const old = Date.now() - new Date(createdAt).getTime() > MEMO_FRESH_DAYS * DAY;
+  const when = old ? `[COLOR=${RED}]анализ ${fmtD(createdAt)} — проверь актуальность[/COLOR]` : `[COLOR=${GRAY}]· ИИ, анализ ${fmtD(createdAt)}${updated ? ' · обновлено' : ''}[/COLOR]`;
+  return `🧠 [B]Перед звонком[/B] ${when}`;
+}
+
+/** Памятка в BB-коде — для описания задачи и комментария в её чат (там `updated` — «обновлено»). */
+export function memoBbcode(reportMd: string, createdAt: string, opts: { updated?: boolean } = {}): string {
   const short = memoLines(reportMd);
-  if (short) return [`[B]Памятка ИИ по звонкам с заказчиком (анализ от ${fmtD(createdAt)}):[/B]`, ...short].join('\n');
-  return [
-    `[B]Памятка ИИ по звонкам с заказчиком (анализ от ${fmtD(createdAt)}):[/B]`,
-    '[I]Что предложить:[/I]', ...plainLines(section(reportMd, 3)),
-    '[I]Риски и обещания:[/I]', ...plainLines(section(reportMd, 4)),
-  ].join('\n');
+  const body = short
+    ? short.map(bbLine)
+    : [
+      '[B]Что предложить:[/B]', ...plainLines(section(reportMd, 3)).map(bbLine),
+      '[B]Риски и обещания:[/B]', ...plainLines(section(reportMd, 4)).map(l => `⚠️ ${safe(l.replace(/^—\s*/, ''))}`),
+    ];
+  return [bbHeader(createdAt, opts.updated), ...body].join('\n');
 }

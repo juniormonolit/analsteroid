@@ -39,12 +39,12 @@ const SOLD_STAGES = new Set(['C2:FINAL_INVOICE', 'C3:1']);
 const DEADLINE_DAYS = 5;
 
 /** Анкета последней отгруженной сделки — порядок и подписи как в шаблоне ТЗ. */
-const QUESTIONS: { field: string; label: string }[] = [
-  { field: 'UF_CRM_1789046051', label: 'Для каких целей / Что строит?' },
-  { field: 'UF_CRM_1765277142894', label: 'Материал приобретался на этап:' },
-  { field: 'UF_CRM_1765277177195', label: 'Следующий этап строительства:' },
-  { field: 'UF_CRM_1765277542864', label: 'Следующим будет закупать:' },
-  { field: 'UF_CRM_1765277651257', label: 'Строитель или прораб:' },
+const QUESTIONS: { field: string; label: string; short: string }[] = [
+  { field: 'UF_CRM_1789046051', label: 'Для каких целей / Что строит?', short: 'строит' },
+  { field: 'UF_CRM_1765277142894', label: 'Материал приобретался на этап:', short: 'этап' },
+  { field: 'UF_CRM_1765277177195', label: 'Следующий этап строительства:', short: 'следующий этап' },
+  { field: 'UF_CRM_1765277542864', label: 'Следующим будет закупать:', short: 'дальше закупает' },
+  { field: 'UF_CRM_1765277651257', label: 'Строитель или прораб:', short: 'кто' },
 ];
 
 function crmWebhook(): string {
@@ -116,26 +116,46 @@ async function dealEnumTexts(): Promise<Record<string, Record<string, string>>> 
 
 const rubFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 
-/** Текст задачи по шаблону ТЗ (BB-код Битрикса, как у живых задач проекта 118). */
-async function buildDescription(clientKey: string, comment: string): Promise<string> {
+/** Отгрузок в описании задачи: больше — скролл на телефоне до сути; остальное — итоговой строкой. */
+const SHIPPED_IN_TASK = 5;
+const ddmmyyyy = (d: Date) => new Date(new Date(d).getTime() + 3 * 3600_000).toISOString().slice(0, 10).split('-').reverse().join('.');
+
+/**
+ * Текст задачи (BB-код Битрикса). Владелец 23.10 («делай всё целиком»), по разбору Fable:
+ * сначала то, что нужно для звонка, потом контекст —
+ *   памятка ИИ (если есть свежий анализ) → «От РОПа» (серой цитатой >>, отделить человека от системы)
+ *   → последние 5 отгрузок с датами + итог → анкета последней сделки одной строкой.
+ * BB-коды — только рабочие (проверено 23.10): [LIST]/[QUOTE]/[TABLE] Битрикс не рисует → «•» и «>>».
+ * Жирный — только в памятке и заголовках блоков; суммы обычным шрифтом.
+ */
+export async function buildDescription(clientKey: string, comment: string, memoBb: string | null): Promise<string> {
   const members = await memberKeysOf(clientKey); // склейка: отгрузки всех карточек человека
-  const shipped = await analyticsDb().query<{ deal_id: number; head_group_name: string | null; deal_name: string | null; amount: string | null }>(
-    `SELECT deal_id, head_group_name, deal_name, amount FROM (
+  const shipped = await analyticsDb().query<{ deal_id: number; head_group_name: string | null; deal_name: string | null; amount: string | null; delivered_at: Date; n: number; total: string }>(
+    `SELECT deal_id, head_group_name, deal_name, amount, delivered_at,
+            count(*) OVER ()::int AS n, sum(amount) OVER ()::text AS total
+       FROM (
        SELECT d.*, (${CLIENT_KEY_CASE_SQL}) AS client_key FROM sa.deals d
         WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
           AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
      ) t WHERE client_key = ANY($1::text[]) ORDER BY delivered_at DESC, deal_id DESC LIMIT 30`,
     [members, members.map(k => Number(k.slice(1)))],
   );
-  const lines: string[] = ['[B]Отгружали этому заказчику:[/B]'];
-  for (const r of shipped.rows) {
-    const label = r.head_group_name || r.deal_name || `Сделка #${r.deal_id}`;
-    lines.push(`-  [url=/crm/deal/details/${r.deal_id}/]${label}[/url] - ${rubFmt.format(Math.round(Number(r.amount ?? 0)))} руб`);
-  }
-  if (!shipped.rows.length) lines.push('—');
-  if (comment.trim()) lines.push('', comment.trim());
+  const lines: string[] = [];
+  if (memoBb) lines.push(memoBb, '');
+  if (comment.trim()) lines.push('[B]От РОПа:[/B]', ...comment.trim().split('\n').map(l => `>>${l}`), '');
 
-  const last = shipped.rows[0];
+  const rows = shipped.rows;
+  if (rows.length) {
+    const n = rows[0].n;
+    lines.push(`[B]Отгружали[/B]${n > SHIPPED_IN_TASK ? ` [COLOR=#999999](последние ${SHIPPED_IN_TASK} из ${n})[/COLOR]` : ''}`);
+    for (const r of rows.slice(0, SHIPPED_IN_TASK)) {
+      const label = r.head_group_name || r.deal_name || `Сделка #${r.deal_id}`;
+      lines.push(`• ${ddmmyyyy(r.delivered_at)} — [url=/crm/deal/details/${r.deal_id}/]${label}[/url] — ${rubFmt.format(Math.round(Number(r.amount ?? 0)))} ₽`);
+    }
+    if (n > 1) lines.push(`[COLOR=#999999]Всего отгрузок: ${n} на ${rubFmt.format(Math.round(Number(rows[0].total ?? 0)))} ₽[/COLOR]`);
+  }
+
+  const last = rows[0];
   if (last) {
     try {
       const [deal, enums] = await Promise.all([read<BxDeal>('crm.deal.get', { id: last.deal_id }), dealEnumTexts()]);
@@ -144,14 +164,14 @@ async function buildDescription(clientKey: string, comment: string): Promise<str
         const raw = deal?.[q.field];
         const vals = (Array.isArray(raw) ? raw : [raw]).filter(v => v !== null && v !== undefined && v !== '' && v !== false);
         const text = vals.map(v => enums[q.field]?.[String(v)] ?? String(v)).join(', ').trim();
-        if (text) answers.push(`${q.label} ${text}`);
+        if (text) answers.push(`${q.short}: ${text}`);
       }
-      if (answers.length) lines.push('', '[B]По последней успешной сделке:[/B]', ...answers);
+      if (answers.length) lines.push('', `[B]Анкета по последней сделке:[/B] ${answers.join(' · ')}`);
     } catch (e) {
       console.warn('[repeat-kanban] анкета последней отгрузки не прочиталась:', e instanceof Error ? e.message : e);
     }
   }
-  return lines.join('\n');
+  return lines.join('\n').trim() || '—';
 }
 
 /** Срок по умолчанию: +5 дней, 19:00 МСК — как у задач старого канбана (если РОП не выбрал
@@ -288,7 +308,7 @@ export async function createRepeatTask(input: {
   // Памятка ИИ (этап 1.5 «ИИ-анализа звонков»): есть свежий отчёт по заказчику — «что предложить» и
   // «риски» дописываются в описание задачи (без оценки менеджера). Не нашлась или упала — без неё.
   const memo = await freshMemoForClientKey(input.clientKey);
-  const description = (await buildDescription(input.clientKey, input.comment)) + (memo ? `\n\n${memo.bbcode}` : '');
+  const description = await buildDescription(input.clientKey, input.comment, memo?.bbcode ?? null);
   const task = await writeOnce<{ task?: { id?: string | number } }>(taskWebhook(), 'tasks.task.add', {
     fields: {
       TITLE: title,

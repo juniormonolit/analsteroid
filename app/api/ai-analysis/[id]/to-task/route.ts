@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
 import { getAnalysis } from '@/features/ai-analysis/engine/store';
-import { markMemoInserted, openRepeatTask } from '@/features/ai-analysis/engine/memoStore';
-import { memoPlain } from '@/features/ai-analysis/engine/memo';
+import { markMemoInserted, memoAlreadyInTask, openRepeatTask } from '@/features/ai-analysis/engine/memoStore';
+import { memoBbcode } from '@/features/ai-analysis/engine/memo';
 import { postToTaskChat } from '@/features/repeat-kanban/engine/createDeal';
 import type { ClientRef } from '@/features/client-module/engine/types';
 
@@ -21,7 +21,11 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   try {
     const task = await openRepeatTask(a.clientRef as ClientRef);
     if (!task) return NextResponse.json({ error: 'У заказчика нет открытой задачи в «Повторных продажах»' }, { status: 404 });
-    const ok = await postToTaskChat(task.id, session.bitrixUserId, memoPlain(a.reportMd, a.createdAt));
+    // Та же памятка уже в задаче (в описании при постановке или комментарием) — второй раз не шлём:
+    // в мобильном Битриксе чат под описанием, менеджер увидел бы её дважды (разбор Fable 23.10).
+    const already = await memoAlreadyInTask(task.id);
+    if (already.includes(a.id)) return NextResponse.json({ error: 'Эта памятка уже есть в задаче' }, { status: 409 });
+    const ok = await postToTaskChat(task.id, session.bitrixUserId, memoBbcode(a.reportMd, a.createdAt, { updated: already.length > 0 }));
     if (!ok) return NextResponse.json({ error: 'Битрикс не принял комментарий' }, { status: 502 });
     await markMemoInserted(a.id, task.id);
     return NextResponse.json({ taskId: task.id, responsibleName: task.responsibleName });

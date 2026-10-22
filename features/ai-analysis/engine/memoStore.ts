@@ -39,6 +39,12 @@ export async function markMemoInserted(analysisId: number, taskId: number): Prom
     console.warn('[aiAnalysis] отметка памятки:', e instanceof Error ? e.message : e));
 }
 
+/** Какие анализы уже вставлены в эту задачу (описание при постановке или комментарий). */
+export async function memoAlreadyInTask(taskId: number): Promise<number[]> {
+  const r = await systemDb().query<{ id: string }>(`SELECT id FROM ai_analyses WHERE task_id = $1 AND memo_inserted_at IS NOT NULL`, [taskId]).catch(() => ({ rows: [] as { id: string }[] }));
+  return r.rows.map(x => Number(x.id));
+}
+
 const OPEN_STATES = new Set<RepeatTask['state']>(['unread', 'pending', 'in_progress', 'control']);
 
 /** Открытая (не завершённая, не отложенная) задача канбана по любой сделке заказчика — самая свежая. */
