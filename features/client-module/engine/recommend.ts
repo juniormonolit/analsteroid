@@ -12,8 +12,10 @@ import type { CrossSellMatrix, CrossSellPriorities } from '@/features/customers/
 //    весит больше глубокого;
 //  • история — матрица переходов «отгрузили X → следующей покупкой Y» по всей
 //    базе (та же, что у «Моих заказчиков», crossSell.ts);
-//  • ручные приоритеты «Настройки → Что предложить» (владелец 21.09) — чтобы
-//    новая карточка не спорила с уже настроенным.
+//  • ручные приоритеты «Ещё → Что предложить» (владелец 21.09) — с 22.10 ГЛАВНЫЙ сигнал
+//    («карточка и предлагаемые материалы должны основываться прежде всего на этом, а не только
+//    на статистике и майндкарте»): они занимают места в топе первыми, цепочка и история —
+//    только оставшиеся места (см. конец recommendGroups).
 // Свежесть: группы последней отгрузки весят 1, предыдущей — 0.7, ещё раньше — 0.5.
 // Уже отгруженные на срез группы не предлагаем (их видно в «Товарных группах»).
 
@@ -127,11 +129,51 @@ export function recommendGroups(
     });
   });
 
-  return [...cand.entries()]
-    .filter(([g]) => !excluded.has(g))
-    .sort((a, b) => b[1].score - a[1].score)
-    .slice(0, TOP)
-    .map(([group, c]) => ({ group, ask: c.ask, after: c.after, pct: c.pct, pctAfter: c.pctAfter, sources: [...c.sources] }));
+  // Ручные приоритеты — прежде всего (владелец 22.10). Как на странице «Что предложить» и в «Моих
+  // заказчиках» (crossSell.ts → recommendFor): у самой свежей отгруженной группы, для которой они
+  // заданы, слот = место в списке (пустой слот — место майндкарты/статистики). Приоритеты остальных
+  // свежих групп идут сразу следом, перед майндкартой и статистикой. Уже купленное, «не предлагать»
+  // и служебные группы пропускаются — место достаётся следующему.
+  const okManual = (g: string | null | undefined): g is string => !!g && !taken.has(g) && !EXCLUDED.test(g) && !excluded.has(g);
+  const fresh = recent.slice(0, RECENCY.length);
+  const primaryFrom = fresh.find(f => (priorities?.[f] ?? []).some(okManual)) ?? null;
+  const slots = new Map<number, string>();
+  // Явно пустой слот (null) держит место за майндкартой/статистикой; уже купленный или «не
+  // предлагать» приоритет места не держит — следующие ручные сдвигаются вверх.
+  if (primaryFrom) {
+    let pos = 0;
+    for (const g of priorities![primaryFrom] ?? []) {
+      if (g === null) { pos++; continue; }
+      if (!okManual(g)) continue;
+      if (pos < TOP) slots.set(pos, g);
+      pos++;
+    }
+  }
+  const manualAfter = new Map<string, string>();
+  if (primaryFrom) for (const g of slots.values()) manualAfter.set(g, primaryFrom);
+  const extra: string[] = [];
+  for (const f of fresh) {
+    if (f === primaryFrom) continue;
+    for (const g of priorities?.[f] ?? []) if (okManual(g) && !manualAfter.has(g)) { extra.push(g); manualAfter.set(g, f); }
+  }
+  const used = new Set(slots.values());
+  const queue = [
+    ...extra.filter(g => !used.has(g)),
+    ...[...cand.entries()].filter(([g]) => !excluded.has(g) && !manualAfter.has(g)).sort((a, b) => b[1].score - a[1].score).map(([g]) => g),
+  ];
+  const order: string[] = [];
+  for (let pos = 0; pos < TOP; pos++) {
+    const g = slots.get(pos) ?? queue.shift();
+    if (g) order.push(g);
+  }
+  return order.map(group => {
+    const c = get(group);
+    const from = manualAfter.get(group);
+    // Для ручного приоритета «после» — та группа, к которой он задан; вопрос из майндкарты — только
+    // если он про эту же пару (иначе «после X спросите…» ссылался бы не на ту отгрузку).
+    const ask = from && c.after !== from ? null : c.ask;
+    return { group, ask, after: from ?? c.after, pct: c.pct, pctAfter: c.pctAfter, sources: [...c.sources] };
+  });
 }
 
 /** Лестница стадий объекта: текущая группа (последняя отгрузка на объект),

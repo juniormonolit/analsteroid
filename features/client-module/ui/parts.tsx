@@ -173,7 +173,7 @@ export function RecList({ recs, empty, onDismiss, hidden, onRestore }: {
           {(r.pct !== null || r.sources.includes('priority')) && (
             <div className="mt-1 flex flex-wrap gap-1.5 pl-[23px]">
               {r.pct !== null && <span title={`После «${r.pctAfter}» следующей покупкой берут «${r.group}» в ${r.pct}% случаев (клиенты того же профиля)`} className="rounded bg-[var(--color-bg-hover)] px-1.5 py-px text-[11.5px] font-semibold leading-snug text-[var(--color-text-muted)]">{r.pct}% берут после «{shortGroup(r.pctAfter)}»</span>}
-              {r.sources.includes('priority') && <Chip tone="accent" title="Ручной приоритет «Настройки → Что предложить»">приоритет</Chip>}
+              {r.sources.includes('priority') && <Chip tone="accent" title="Ручной приоритет «Ещё → Что предложить» — идёт первым">приоритет</Chip>}
             </div>
           )}
           {r.ask && (
