@@ -385,7 +385,7 @@ export function MarketingSourcesPage() {
                   <div className="scroll-x hidden max-h-[calc(100dvh-230px)] min-h-[320px] overflow-y-auto rounded-xl border border-[var(--color-border)] @3xl:block">
                     <table className="w-full min-w-[740px] table-fixed text-sm">
                       <colgroup>
-                        <col className="w-10" /><col /><col className="w-[200px]" /><col className="w-[112px]" /><col className="w-[76px]" /><col className="w-[88px]" /><col className="w-11" />
+                        <col className="w-10" /><col /><col className="w-[184px]" /><col className="w-[104px]" /><col className="w-[76px]" /><col className="w-[104px]" /><col className="w-11" />
                       </colgroup>
                       <thead>
                         <tr>
@@ -606,7 +606,7 @@ export function MarketingSourcesPage() {
 function SourceTitle({ s }: { s: Source }) {
   return (
     <div className="min-w-0">
-      <div className="truncate text-[var(--color-text)]" title={s.name}>{displayName(s)}</div>
+      <div className="line-clamp-2 break-words leading-snug text-[var(--color-text)]" title={s.name}>{displayName(s)}</div>
       <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--color-text-muted)]">
         <span className="shrink-0">ID {s.sourceId}</span>
         {!s.inDirectory && <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] px-1.5 font-medium text-[var(--color-accent)]">новый</span>}
@@ -668,13 +668,13 @@ function GroupsPanel({
       <div className="flex flex-col gap-1.5">
         <button type="button" onClick={() => onFilter(ALL)} className={tile(groupFilter === ALL)}>
           <span className="text-sm font-medium text-[var(--color-text)]">Все</span>
-          <span className="text-[11px] tabular-nums text-[var(--color-text-muted)]">{fmtInt(c(ALL).n)} ист. · {fmtInt(c(ALL).d90)} сд.</span>
+          <span className="whitespace-nowrap text-[11px] tabular-nums text-[var(--color-text-muted)]">{fmtInt(c(ALL).n)} ист. · {fmtInt(c(ALL).d90)} сд.</span>
         </button>
         <button type="button" onClick={() => onFilter(UNASSIGNED)} className={tile(groupFilter === UNASSIGNED)}
           style={c(UNASSIGNED).n > 0 ? { borderColor: WARN } : undefined}>
-          <span className="text-sm font-medium" style={{ color: c(UNASSIGNED).n > 0 ? WARN : 'var(--color-text)' }}>Не распределено</span>
-          <span className="text-[11px] tabular-nums text-[var(--color-text-muted)]">
-            {unassignedActive > 0 ? `${unassignedActive} разобрать · ` : ''}{fmtInt(c(UNASSIGNED).n)} ист.
+          <span className="whitespace-nowrap text-sm font-medium" style={{ color: c(UNASSIGNED).n > 0 ? WARN : 'var(--color-text)' }}>Не распределено</span>
+          <span className="whitespace-nowrap text-[11px] tabular-nums text-[var(--color-text-muted)]">
+            {unassignedActive > 0 ? `${unassignedActive} разобрать` : `${fmtInt(c(UNASSIGNED).n)} ист.`}
           </span>
         </button>
       </div>
