@@ -12,7 +12,7 @@ const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task', 'ev'] as const;
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
-import { createRepeatTask, DealCreateError, ropOfManager } from '@/features/repeat-kanban/engine/createDeal';
+import { createRepeatTask, DealCreateError, ropOfManager, closeDealAsLost } from '@/features/repeat-kanban/engine/createDeal';
 import { logEvent, newRequestId, type KanbanEventType } from '@/features/repeat-kanban/engine/log';
 import { decideHideRequest, decideReview, hideFromPool, markBrakNow, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
@@ -221,8 +221,13 @@ export async function POST(req: NextRequest) {
         comment: typeof body.comment === 'string' ? body.comment : null,
         touchesDone: Number(body.touchesDone) || 0, session,
       });
+      // Брак → сделка закрывается и в Битриксе (22.10). Отказная уже закрыта — вернётся already_closed.
+      const dealClosed = decision === 'brak'
+        ? await closeDealAsLost({ dealId, clientKey, reason: String(body.reason ?? ''), comment: typeof body.comment === 'string' ? body.comment : null, authorId: session.bitrixUserId })
+            .catch(e => { console.warn('[repeat-kanban] закрытие сделки при браке:', e instanceof Error ? e.message : e); return 'error' as const; })
+        : null;
       await logEvent(session, { type: 'reject_reviewed', requestId: rid, clientKey, managerId, columnBefore, dealId,
-        payload: { decision, reason: body.reason ?? null, comment: body.comment ?? null, attempts: Number(body.touchesDone) || 0 } });
+        payload: { decision, reason: body.reason ?? null, comment: body.comment ?? null, attempts: Number(body.touchesDone) || 0, dealClosed } });
       // «Вернуть менеджеру» (21.10, сделка 263762: решение записалось, а сделка осталась в отказе и
       // задачи не было — менеджер ничего не видел): отказная сделка возвращается в первую стадию,
       // менеджеру — задача с комментарием РОПа; сделка открыта (3 попытки без дозвона) — только задача.
@@ -235,8 +240,15 @@ export async function POST(req: NextRequest) {
 
     if (body.action === 'brak_now') {
       await markBrakNow({ clientKey, reason: String(body.reason ?? ''), comment: typeof body.comment === 'string' ? body.comment : null, session });
-      await logEvent(session, { type: 'rejected_direct', requestId: rid, clientKey, managerId, columnBefore, payload: { reason: body.reason, comment: body.comment ?? null } });
-      return NextResponse.json({ ok: true });
+      // Открытая повторная сделка карточки закрывается в Битриксе в стадию по причине (22.10).
+      const brakDealId = Number(body.dealId);
+      const dealClosed = Number.isInteger(brakDealId) && brakDealId > 0
+        ? await closeDealAsLost({ dealId: brakDealId, clientKey, reason: String(body.reason ?? ''), comment: typeof body.comment === 'string' ? body.comment : null, authorId: session.bitrixUserId })
+            .catch(e => { console.warn('[repeat-kanban] закрытие сделки при браке:', e instanceof Error ? e.message : e); return 'error' as const; })
+        : null;
+      await logEvent(session, { type: 'rejected_direct', requestId: rid, clientKey, managerId, columnBefore, dealId: brakDealId > 0 ? brakDealId : null,
+        payload: { reason: body.reason, comment: body.comment ?? null, dealClosed } });
+      return NextResponse.json({ ok: true, dealClosed });
     }
 
     if (body.action === 'decide_hide') {

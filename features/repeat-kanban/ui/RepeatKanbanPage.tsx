@@ -747,6 +747,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   if (t && open && t.deadlineAt && new Date(t.deadlineAt).getTime() < Date.now()) a.push({ text: 'Задача просрочена', red: true });
   if (col === 'review' && c.lostEarly) a.push({ text: `Отказ после ${c.attempts?.count ?? 0} из ${TOUCHES} попыток`, red: true });
   if (col === 'review' && c.dozvonFail) a.push({ text: `${TOUCHES} попытки без дозвона`, red: true });
+  if (c.returned) a.unshift({ text: `Вернулся сам: ${c.returned.missed ? 'пропущенный' : 'звонил'} ${fmtDT(c.returned.at)} — перезвоните`, red: true });
   if (c.openDealInBrak) a.unshift({ text: `Сделка #${c.openDealInBrak} открыта в Битриксе — закройте`, red: true });
   if (c.wrongFunnel) a.unshift({ text: `Сделка в «${c.wrongFunnel.funnelName ?? 'первичной'}» — не в повторной`, red: true });
   if (col === 'touch_3' && !c.attempts?.reached) a.push({ text: '3 попытки без дозвона', red: true });
@@ -1295,14 +1296,15 @@ function BrakNowModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: (
   const [err, setErr] = useState<string | null>(null);
   const submit = async () => {
     setBusy(true); setErr(null);
-    try { await post({ action: 'brak_now', clientKey: card.clientKey, managerId: card.managerId, column: card.column, reason, comment }); onSaved(); onClose(); }
+    try { await post({ action: 'brak_now', clientKey: card.clientKey, managerId: card.managerId, column: card.column, reason, comment, dealId: card.deal?.dealId ?? card.openDealInBrak ?? undefined }); onSaved(); onClose(); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
   };
   return (
     <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Сразу в брак · ${cardName(card)}`} desktopWidth="sm:max-w-md">
       <div className="flex flex-col gap-3 text-sm">
-        <div className="text-[var(--color-text-secondary)]">Заказчик уйдёт в «Брак» без разбора отказа. Вернуть можно кнопкой «Снять брак».</div>
+        <div className="text-[var(--color-text-secondary)]">Заказчик уйдёт в «Брак» без разбора отказа. Вернуть можно кнопкой «Снять брак».
+          {card.deal ? ` Сделка #${card.deal.dealId} закроется в Битриксе в отказную стадию по выбранной причине, комментарий — в ленту сделки.` : ''}</div>
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
           Причина
           <SearchSelect ariaLabel="Причина брака" value={reason} onChange={setReason}
@@ -1345,7 +1347,7 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
 
   const options = card.dozvonFail ? [
     // Выход из дозвона: сделка ещё открыта — «недозвон» оставляет её в дозвоне (ещё попытки).
-    { v: 'brak' as const, label: 'Брак', hint: 'Не дозвониться — заказчик уходит из пула (сделку закройте в Битриксе)' },
+    { v: 'brak' as const, label: 'Брак', hint: 'Не дозвониться — заказчик уходит из пула, сделка закроется в Битриксе по причине' },
     { v: 'no_answer' as const, label: 'Ещё попытки', hint: 'Оставить в дозвоне — менеджер звонит дальше' },
     { v: 'return' as const, label: 'Вернуть менеджеру', hint: 'Попытки формальные — менеджеру уйдёт задача с вашим сообщением' },
   ] : [

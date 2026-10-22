@@ -325,3 +325,37 @@ async function postToTaskChat(taskId: number, authorId: string, comment: string)
   }) as { result?: number };
   return Number(res?.result) > 0;
 }
+
+// ── Брак → сделка закрывается в Битриксе (владелец 22.10: «да» на «брак сам закрывает сделку в
+// отказ с той же причиной»). Причины брака = отказные стадии повторных воронок; у B2C нет «Объектов
+// больше нет», у B2B — «Больше ничего не нужно»: берём ближайшую по смыслу стадию той же воронки.
+const LOST_STAGE_BY_REASON: Record<2 | 3, Record<string, string>> = {
+  2: { no_objects: 'C2:APOLOGY', nothing_needed: 'C2:APOLOGY', expensive: 'C2:LOSE', failed_client: 'C2:1' },
+  3: { no_objects: 'C3:2', nothing_needed: 'C3:2', expensive: 'C3:LOSE', failed_client: 'C3:APOLOGY' },
+};
+
+export type CloseResult = 'closed' | 'already_closed' | 'not_repeat' | 'sold' | 'not_client';
+
+/** Закрыть открытую повторную сделку заказчика в отказную стадию по причине брака + комментарий
+ *  РОПа в ленту сделки. Сделка проверяется по Битриксу: повторная воронка, открыта, не «Продано»,
+ *  клиент — этот заказчик (контакт, компания или контакт этой компании). */
+export async function closeDealAsLost(input: { dealId: number; clientKey: string; reason: string; comment: string | null; authorId: string | null }): Promise<CloseResult> {
+  const deal = await read<BxDeal & { CONTACT_ID?: string | null; COMPANY_ID?: string | null }>('crm.deal.get', { id: input.dealId });
+  const cat = Number(deal?.CATEGORY_ID);
+  if (cat !== 2 && cat !== 3) return 'not_repeat';
+  if (deal.STAGE_SEMANTIC_ID !== 'P') return 'already_closed';
+  if (deal.STAGE_ID && SOLD_STAGES.has(deal.STAGE_ID)) return 'sold';
+  const id = Number(input.clientKey.slice(1));
+  const contactId = Number(deal.CONTACT_ID) || 0, companyId = Number(deal.COMPANY_ID) || 0;
+  const mine = input.clientKey.startsWith('k')
+    ? companyId === id || (contactId > 0 && (await companyContacts(id)).includes(contactId))
+    : contactId === id;
+  if (!mine) return 'not_client';
+  const stage = LOST_STAGE_BY_REASON[cat][input.reason] ?? (cat === 2 ? 'C2:APOLOGY' : 'C3:2');
+  await writeOnce(crmWebhook(), 'crm.deal.update', { id: input.dealId, fields: { STAGE_ID: stage }, params: { REGISTER_SONET_EVENT: 'Y' } });
+  const text = `Брак из канбана повторных (Монолитика)${input.comment?.trim() ? `: ${input.comment.trim()}` : ''}`;
+  await writeOnce(crmWebhook(), 'crm.timeline.comment.add', {
+    fields: { ENTITY_ID: input.dealId, ENTITY_TYPE: 'deal', COMMENT: text, ...(input.authorId ? { AUTHOR_ID: Number(input.authorId) } : {}) },
+  }).catch(e => console.warn('[repeat-kanban] комментарий к сделке при браке:', e instanceof Error ? e.message : e));
+  return 'closed';
+}

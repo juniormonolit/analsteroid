@@ -116,6 +116,8 @@ export interface KanbanCard {
    *  брак, но не закрываю сделку — будет светиться?»): в канбане заказчик в «Браке», но сделка висит
    *  у менеджера — номер, чтобы её закрыли. */
   openDealInBrak: number | null;
+  /** Отказник/брак сам позвонил после отказа — карточка в «Срочно» (22.10). */
+  returned: { at: string; missed: boolean } | null;
 }
 
 export interface KanbanColumn {
@@ -350,6 +352,21 @@ async function fetchReviews(dealIds: number[]): Promise<Map<number, ReviewInfo>>
   } catch { return new Map(); } // до миграции 230 — без решений
 }
 
+/** Входящие звонки заказчиков за 90 дней — самый свежий на заказчика (ref p<контакт> / k<компания>).
+ *  «Отказник вернулся» (владелец 22.10): позвонил сам после брака или отказа — в «Срочно». */
+async function fetchInboundCalls(refs: string[]): Promise<Map<string, { at: string; missed: boolean }>> {
+  if (!refs.length) return new Map();
+  const r = await analyticsDb().query<{ ref: string; called_at: Date; result: string | null }>(
+    `SELECT DISTINCT ON (r.ref) r.ref, c.called_at, c.result FROM va.calls c
+       CROSS JOIN LATERAL unnest(ARRAY[
+         CASE WHEN coalesce(c.contact_id, 0) <> 0 THEN 'p'||c.contact_id END,
+         CASE WHEN coalesce(c.company_id, 0) <> 0 THEN 'k'||c.company_id END]) AS r(ref)
+      WHERE c.direction = 'inbound' AND c.called_at > now() - interval '90 days' AND r.ref = ANY($1::text[])
+      ORDER BY r.ref, c.called_at DESC`, [refs],
+  ).catch(e => { console.warn('[repeat-kanban] входящие звонки:', e instanceof Error ? e.message : e); return { rows: [] }; });
+  return new Map(r.rows.map(x => [x.ref, { at: new Date(x.called_at).toISOString(), missed: x.result === 'missed' }]));
+}
+
 /** Загрузка менеджеров: задачи проекта «Повторные продажи» в работе (новая/ждёт/выполняется;
  *  сданные на проверку — уже не на менеджере). */
 export async function fetchManagerLoad(managerIds: string[]): Promise<Record<string, number>> {
@@ -442,7 +459,8 @@ export async function buildRepeatBoard(opts: {
   const keys = rows.map(r => r.clientKey);
 
   // 2. Свежие данные поверх кэша.
-  const [deals, marks, profileTypes, tailTable, lastDelivered, wrongFunnel] = await Promise.all([
+  const refOfKey = (k: string) => (k.startsWith('k') ? k : `p${k.slice(1)}`);
+  const [deals, marks, profileTypes, tailTable, lastDelivered, wrongFunnel, inbound] = await Promise.all([
     fetchLatestRepeatDeals(keys),
     fetchCustomerMarks(keys),
     // Ночной снимок типы клиентов не использует — не ходим за ними в Битрикс (20.10: первый
@@ -452,6 +470,7 @@ export async function buildRepeatBoard(opts: {
     fetchTailTable().catch(() => ({ seg: {} })),
     fetchLastDeliveredDeals(keys).catch(() => new Map<string, number>()),
     fetchWrongFunnelDeals([...new Set(keys.map(k => (k.startsWith('k') ? k : `p${k.slice(1)}`)))]),
+    fetchInboundCalls([...new Set(keys.map(refOfKey))]),
   ]);
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
@@ -537,7 +556,12 @@ export async function buildRepeatBoard(opts: {
     const todayMsk = new Date(now + 3 * 3600_000).toISOString().slice(0, 10);
     const hiddenNow = mark?.kind === 'snooze' && !!mark.snoozeUntil && mark.snoozeUntil >= todayMsk
       && !(current && !LOST_STAGES.has(current.stageId)) && !r.hasOpenOrder;
-    if (mark?.kind === 'no_call') col = 'brak';
+    // «Вернулся»: после брака или отказа заказчик сам позвонил (даже пропущенный) — в «Срочно».
+    const refusedAt = mark?.kind === 'no_call' ? mark.createdAt
+      : current && LOST_STAGES.has(current.stageId) ? current.lostAt ?? current.createdAt : null;
+    const inb = inbound.get(refOfKey(r.clientKey));
+    const returned = inb && refusedAt && new Date(inb.at).getTime() > new Date(refusedAt).getTime() ? inb : null;
+    if (mark?.kind === 'no_call' && !returned) col = 'brak';
     else if (hiddenNow) col = 'hidden';
     else if (current && LOST_STAGES.has(current.stageId)) {
       const lostMs = current.lostAt ? new Date(current.lostAt).getTime() : new Date(current.createdAt).getTime();
@@ -561,6 +585,7 @@ export async function buildRepeatBoard(opts: {
     } else if (r.hasOpenOrder) col = 'st_sold';
     else col = poolColumn(r.purchasesDelivered, freshDays);
 
+    if (returned && col.startsWith('pool')) col = 'pool_hot';
     const inPool = col.startsWith('pool') || col === 'brak' || col === 'hidden';
     const typeKey = profileType ?? 'none';
     typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
@@ -605,6 +630,7 @@ export async function buildRepeatBoard(opts: {
       lastOutcome, dozvonFail,
       hideRequest: hideReqs.get(r.clientKey) ?? null,
       openDealInBrak: col === 'brak' && hasOpenDeal && current ? current.dealId : null,
+      returned: col === 'pool_hot' ? returned ?? null : null,
       // Только если в повторной воронке открытой сделки нет — иначе это история, не ошибка сейчас.
       wrongFunnel: hasOpenDeal ? null : wrongFunnel.get(r.clientKey.startsWith('k') ? r.clientKey : `p${r.clientKey.slice(1)}`) ?? null,
     });
@@ -643,7 +669,8 @@ export async function buildRepeatBoard(opts: {
       list.sort((a, b) => start(a) - start(b) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
     } else if (def.key === 'pool_hot') {
       // Срочно: сначала те, у кого окно закрывается раньше (больше дней с отгрузки).
-      list.sort((a, b) => lostRank(a) - lostRank(b) || (b.freshDays ?? 0) - (a.freshDays ?? 0) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
+      // «Вернулся сам» — первым: клиент ждёт звонка.
+      list.sort((a, b) => Number(!!b.returned) - Number(!!a.returned) || lostRank(a) - lostRank(b) || (b.freshDays ?? 0) - (a.freshDays ?? 0) || typeRank(a) - typeRank(b) || ev(b) - ev(a));
     } else if (def.key === 'hidden') {
       list.sort((a, b) => (a.hidden?.until ?? '').localeCompare(b.hidden?.until ?? ''));
     } else if (def.key === 'review' || def.key === 'brak') {
