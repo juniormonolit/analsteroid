@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { superadminError } from '@/lib/auth/perms';
+import { permError } from '@/lib/auth/perms';
 import { systemDb } from '@/lib/db/clients';
 import {
   MANUAL_MAX, fetchCrossSellMatrix, fetchCrossSellPriorities, recommendFor,
@@ -14,14 +14,14 @@ import {
 // Словарь групп берём из САМОЙ матрицы переходов (Redis 24 ч) — это ровно то
 // множество head-групп, которым оперирует рекомендация; отдельный справочник
 // разошёлся бы с ней (услуги/доставка/«Разное» из матрицы исключены).
-// Правит только супер-админ, как и остальные настройки расчёта.
+// Правит админ (section.settings) — правка владельца 22.10, раньше только супер-админ.
 
 /** Сколько статистических групп показывать в подсказке строки (владелец 21.09). */
 const STAT_SHOWN = 6;
 
 export async function GET() {
   const session = await getSession();
-  const denied = superadminError(session);
+  const denied = permError(session, 'section.settings');
   if (denied) return denied;
 
   const [matrix, priorities] = await Promise.all([fetchCrossSellMatrix(), fetchCrossSellPriorities()]);
@@ -48,7 +48,7 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   const session = await getSession();
-  const denied = superadminError(session);
+  const denied = permError(session, 'section.settings');
   if (denied) return denied;
 
   const body = await req.json().catch(() => null) as { fromGroup?: unknown; groups?: unknown } | null;
