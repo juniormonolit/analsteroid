@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 import { buildDeals, buildFacts, nowMsk } from './calc';
 import type { DealsData, Facts } from './calc';
 import { loadTables, openSource } from './source';
+import { checkPanelVersion } from './version';
 import type { Source, Tables } from './source';
 
 const gzipP = promisify(gzip);
@@ -113,6 +114,7 @@ export async function loadSnapshot(): Promise<Snapshot | null> {
 export async function refreshSnapshot(): Promise<{ builtAt: string; tasks: number; bytes: number; ms: number }> {
   const t0 = Date.now();
   const snap = await buildSnapshot();
+  await checkPanelVersion(); // раз в сутки: не изменилась ли методика панели
   const { file, bytes } = await saveSnapshot(snap);
   // Свежий снимок сразу в кэш: иначе первый запрос после синка заново читал бы и распаковывал файл.
   g.__supplyPanelSnapshot = { file, mtimeMs: (await fs.stat(file)).mtimeMs, snap };

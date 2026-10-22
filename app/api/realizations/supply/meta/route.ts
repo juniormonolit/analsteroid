@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { guardRealizations } from '../../guard';
 import { NoSnapshotError, requireSnapshot } from '@/lib/supplyPanel/http';
+import { lastPanelVersion } from '@/lib/supplyPanel/version';
 
 // «Ответы на запросы»: свежесть данных и справочники фильтров (регионы, департаменты, проекты).
 export async function GET() {
@@ -12,6 +13,8 @@ export async function GET() {
     const uniq = (xs: (string | null)[]) => [...new Set(xs.filter((x): x is string => !!x))].sort((a, b) => a.localeCompare(b, 'ru'));
     return NextResponse.json({
       builtAt: s.builtAt, pulledAt: s.pulledAt, catalogAt: s.catalogAt, goodsSince: s.facts.goods_since,
+      // methodChanged — код панели новее порта: цифры могут расходиться с панелью до переноса правок.
+      methodChanged: lastPanelVersion()?.matches === false,
       regions: uniq(projects.map(p => p.region)), depts: uniq(projects.map(p => p.dept)), projects,
     });
   } catch (e) {

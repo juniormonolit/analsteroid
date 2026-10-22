@@ -4,6 +4,8 @@
 // этот класс багов (правило 12 CLAUDE.md) снят структурно, как в TabBar настроек наград.
 // Вкладки — ссылки (у каждой свой адрес), активная — по pathname.
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 
 const TABS = [
@@ -15,7 +17,16 @@ const TABS = [
 
 export function ResponsesTabs() {
   const pathname = usePathname().replace(/\/$/, '');
+  // Сторож методики (lib/supplyPanel/version.ts): код панели новее нашего порта — цифры могут разойтись.
+  const [methodChanged, setMethodChanged] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/realizations/supply/meta').then(r => (r.ok ? r.json() : null))
+      .then(d => { if (alive && d?.methodChanged) setMethodChanged(true); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
   return (
+    <>
     <nav aria-label="Разделы отчёта" className="shrink-0 flex flex-wrap gap-1 border-b border-[var(--color-border)] bg-[var(--color-bg)] px-3 sm:px-6">
       {TABS.map(t => {
         const active = pathname === t.href;
@@ -31,5 +42,12 @@ export function ResponsesTabs() {
         );
       })}
     </nav>
+    {methodChanged && (
+      <div role="status" className="shrink-0 mx-3 sm:mx-6 mt-2 flex items-start gap-2 rounded-lg border border-[var(--warning-text)]/30 bg-[var(--warning-bg)] px-3 py-2 text-[13px] text-[var(--color-text)]">
+        <AlertTriangle size={16} className="mt-px shrink-0 text-[var(--warning-text)]" aria-hidden />
+        <span>Методика Панели снабжения обновилась, а расчёт здесь — ещё по прежней версии. Цифры могут расходиться с панелью, пока правки не перенесены.</span>
+      </div>
+    )}
+    </>
   );
 }

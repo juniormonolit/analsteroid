@@ -2,13 +2,14 @@
  * Сверка TS-порта «Ответов на запросы» (lib/supplyPanel) с эталоном Python (Панель снабжения): побитово.
  *   SUPPLY_PANEL_SOURCE=sqlite:<panel.db> SUPPLY_PANEL_REF=<каталог эталона> npm run verify:supply-panel
  * Каталог эталона: facts.json, deals.json (calc.py / domcalc.py по тому же panel.db), cases.json и expected.json
- * (дамп metrics.py — scratchpad/supply/scripts/dump_ref.py). Сравниваются facts, deals и все срезы/списки/деревья.
+ * (дамп metrics.py — scratchpad/supply/scripts/gen_ref.py <panel.db> <каталог эталона>; «сейчас» для «Без ответа» зафиксировано в cases.json). Сравниваются facts, deals и все срезы/списки/деревья.
  * Код выхода 1 при любом расхождении. Ничего не пишет в БД и не ходит по сети (источник — только sqlite).
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildSnapshot, loadSnapshot, saveSnapshot } from '../lib/supplyPanel/snapshot.ts';
+import { ts } from '../lib/supplyPanel/calc.ts';
 import { aggregate, domDealsList, domTree, goodsTasks, goodsTree, listTasks, parseDt } from '../lib/supplyPanel/metrics.ts';
 import type { Filter } from '../lib/supplyPanel/metrics.ts';
 
@@ -82,9 +83,10 @@ async function main() {
 
   const cases = readJson('cases.json'), exp = readJson('expected.json');
   snap.deals.built_at = deals.built_at; // dom_tree отдаёт built_at из deals.json — время сборки не сравниваем
+  const now = ts(cases.now)!; // «сейчас» эталона: от него считается ожидание запросов без ответа
   const t1 = Date.now();
-  for (const c of cases.agg) check(`aggregate ${c.id}`, aggregate(snap.facts, ...dt(c.period), norm(c.filter)), exp.agg[c.id]);
-  for (const c of cases.list) check(`list_tasks ${c.id}`, listTasks(snap.facts, ...dt(c.period), c.metric, norm(c.filter)), exp.list[c.id]);
+  for (const c of cases.agg) check(`aggregate ${c.id}`, aggregate(snap.facts, ...dt(c.period), norm(c.filter), now), exp.agg[c.id]);
+  for (const c of cases.list) check(`list_tasks ${c.id}`, listTasks(snap.facts, ...dt(c.period), c.metric, norm(c.filter), now), exp.list[c.id]);
   for (const c of cases.goods) check(`goods_tree ${c.id}`, goodsTree(snap.facts, ...dt(c.period), norm(c.filter)), exp.goods[c.id]);
   for (const c of cases.goods_tasks) check(`goods_tasks ${c.id}`, [...goodsTasks(snap.facts, c.path)].sort((a, b) => a - b), exp.goods_tasks[c.id]);
   for (const c of cases.dom) check(`dom_tree ${c.id}`, domTree(snap.deals, ...dt(c.period), c.region), exp.dom[c.id]);

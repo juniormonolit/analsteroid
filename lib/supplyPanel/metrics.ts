@@ -1,12 +1,12 @@
 /**
  * Показатели за период из фактов calc.ts — порт refresh/metrics.py Панели снабжения (общий для API и сверки).
- * Источник — Панель снабжения, коммит 5504deae64a35b817f2a17e14cfc19b9f242f4c6; методика — docs/Методика.md.
+ * Источник — Панель снабжения, коммит b744b1e9594f26755bbc993d48b723e6d66c5e77 (расчёт не менялся с fdde67f7); методика — docs/Методика.md.
  * Период полуоткрытый [d0, d1); время — наивное МСК, строкой «ГГГГ-ММ-ДД ЧЧ:ММ:СС» (см. parseDt).
  *
  * Совпадение с Python побитово: округление — pyRound (банковское по точному значению), порядок сумм по сделкам —
  * порядок обхода set[int] CPython (pySetOrder), сортировки устойчивы, строки сравниваются по кодовым точкам.
  */
-import { fmt, isoOfDay, ts, weekdayOfDay } from './calc';
+import { fmt, isoOfDay, nowMskSec, ts, weekdayOfDay } from './calc';
 import type { Cycle, DealRow, DealsData, Facts, GoodsItem, Task } from './calc';
 import { cmpNum, cmpStr, pyMedian, pyRound, pyRound0, pySetOrder, pyStr } from './pyCompat';
 
@@ -26,6 +26,40 @@ export interface Filter {
   user?: number | Iterable<number> | null;
   dept?: string | null;
   person?: string | null;
+}
+
+/** Статус Bitrix24 «Отклонена». */
+export const REJECTED = 7;
+
+/** Запрос без ответа: последний цикл не закрыт ответом и задача не отклонена. */
+export function isPending(t: Task): boolean {
+  return t.cycles[t.cycles.length - 1]!.done === null && t.status !== REJECTED;
+}
+
+/** work_hours из metrics.py: будни wh[0]–wh[1], праздники (ISO-даты) исключены; округление round(x, 3). */
+function workHoursWith(a: number | null, b: number | null, holidays: Set<string>, wh: readonly [number, number]): number {
+  if (a === null || b === null || b <= a) return 0.0;
+  let total = 0;
+  for (let d = Math.floor(a / 86400), last = Math.floor(b / 86400); d <= last; d++) {
+    if (weekdayOfDay(d) >= 5 || holidays.has(isoOfDay(d))) continue;
+    const lo = Math.max(a, d * 86400 + wh[0] * 3600);
+    const hi = Math.min(b, d * 86400 + wh[1] * 3600);
+    if (hi > lo) total += hi - lo;
+  }
+  return pyRound(total / 3600, 3);
+}
+
+/**
+ * Сколько ждёт запрос без ответа: [рабочие часы с начала текущего цикла (создания или последнего возобновления),
+ * календарные часы от создания] до now (секунды МСК).
+ */
+export function pendingWait(facts: Facts, t: Task, now: number): [number, number] {
+  const created = ts(t.created)!, start = ts(t.cycles[t.cycles.length - 1]!.start);
+  const wh = (facts.work_hours && facts.work_hours.length ? facts.work_hours : [9, 18]) as [number, number];
+  return [
+    workHoursWith(start, now, new Set(facts.holidays), wh),
+    pyRound(Math.max(0.0, now - created) / 3600, 2),
+  ];
 }
 
 /** Рабочие дни, которые хотя бы частично попадают в период. */
@@ -151,10 +185,12 @@ export function* events(facts: Facts, d0: Dt, d1: Dt, f: Filter = {}): Generator
 export const PICK: Record<string, [EventKind | EventKind[], ((c: Cycle) => boolean) | null]> = {
   cr_sale_pct: [['sold', 'lost'], null], cr_ship_pct: [['shipped', 'lost'], null],
   new: ['new', null], new_per_day: ['new', null],
+  pending: ['new', null], // без ответа до сих пор — условие на задачу: TASK_COND
   reopens: ['reopen', null], reopens_per_day: ['reopen', null],
   req_all: [['new', 'reopen'], null], req_all_per_day: [['new', 'reopen'], null],
   done: ['answer', c => c.n === 1],
-  all_answer_h: ['answer', null],
+  all_answer_h: ['answer', null], all_answer_med_h: ['answer', null],
+  all_answer_sum_h: ['answer', null], all_answer_share_pct: ['answer', null],
   answer_h: ['answer', c => c.n === 1], answer_med_h: ['answer', c => c.n === 1],
   take_h: ['answer', c => c.n === 1 && !c.skip_take],
   exec_h: ['answer', c => c.n === 1 && !c.skip_take],
@@ -171,28 +207,39 @@ export const PICK: Record<string, [EventKind | EventKind[], ((c: Cycle) => boole
   shipments: ['shipped', null], ship_amount: ['shipped', null], ship_conversion_pct: ['shipped', null],
 };
 
-const avg = (xs: number[]): number | null => {
-  if (!xs.length) return null;
+/** Условия на задачу (а не на цикл) — для показателей, где событие «new», но важно состояние задачи сейчас. */
+const TASK_COND: Record<string, (t: Task) => boolean> = { pending: isPending };
+
+/** sum() по списку float: слева направо (CPython 3.9, без компенсации). */
+const sumList = (xs: number[]): number => {
   let s = 0;
   for (const x of xs) s += x;
-  return pyRound(s / xs.length, 2);
+  return s;
 };
+const avg = (xs: number[]): number | null => (xs.length ? pyRound(sumList(xs) / xs.length, 2) : null);
 const med = (xs: number[]): number | null => (xs.length ? pyRound(pyMedian(xs), 2) : null);
 
 interface Acc {
-  new: number; reopens: number; done: number; skip_take: number; reopened: number; gt3: number; gt9: number;
+  new: number; pending: number; pending_wait: number[]; reopens: number; done: number; skip_take: number; reopened: number; gt3: number; gt9: number;
   answers: number; repeat: number; reopen_by_self: number; reopen_by_creator: number;
   take: number[]; exec: number[]; answer: number[]; all_answer: number[]; cycle: number[]; repeat_answer: number[];
   sold_tasks: number; deals: Set<number>; shipped_tasks: number; ship_deals: Set<number>; lost_deals: Set<number>;
+  /** Уникальные запросы периода: сделка (несколько задач по одной сделке — один запрос), без сделки — задача. */
+  req: Set<string>;
 }
 const newAcc = (): Acc => ({
-  new: 0, reopens: 0, done: 0, skip_take: 0, reopened: 0, gt3: 0, gt9: 0, answers: 0, repeat: 0, reopen_by_self: 0, reopen_by_creator: 0,
+  new: 0, pending: 0, pending_wait: [], reopens: 0, done: 0, skip_take: 0, reopened: 0, gt3: 0, gt9: 0, answers: 0, repeat: 0, reopen_by_self: 0, reopen_by_creator: 0,
   take: [], exec: [], answer: [], all_answer: [], cycle: [], repeat_answer: [],
-  sold_tasks: 0, deals: new Set(), shipped_tasks: 0, ship_deals: new Set(), lost_deals: new Set(),
+  sold_tasks: 0, deals: new Set(), shipped_tasks: 0, ship_deals: new Set(), lost_deals: new Set(), req: new Set(),
 });
 
-function add(a: Acc, kind: EventKind, t: Task, c: Cycle | null): void {
-  if (kind === 'new') a.new++;
+/** pend — рабочие часы ожидания, если задача до сих пор без ответа (считает aggregate), иначе null. */
+function add(a: Acc, kind: EventKind, t: Task, c: Cycle | null, pend: number | null): void {
+  if (kind === 'new') {
+    a.new++;
+    a.req.add(t.deal ? `d${t.deal}` : `t${t.id}`);
+    if (pend !== null) { a.pending++; a.pending_wait.push(pend); }
+  }
   else if (kind === 'sold') { a.sold_tasks++; a.deals.add(t.deal!); }
   else if (kind === 'shipped') { a.shipped_tasks++; a.ship_deals.add(t.deal!); }
   else if (kind === 'lost') a.lost_deals.add(t.deal!);
@@ -257,6 +304,9 @@ export interface AggRow {
   gt3: number; gt3_pct: number | null; gt9: number; gt9_pct: number | null;
   answers: number; answers_per_day: number | null; repeat: number; repeat_answer_h: number | null;
   reopen_by_self: number; reopen_by_creator: number;
+  pending: number; pending_pct: number | null; pending_gt9: number; pending_max_h: number | null;
+  all_answer_med_h: number | null; all_answer_sum_h: number | null; all_answer_share_pct?: number | null;
+  requests: number;
   sales: number; amount: number; sold_tasks: number; conversion_pct: number | null;
   shipments: number; ship_amount: number; shipped_tasks: number; ship_conversion_pct: number | null;
   lost: number; cr_sale_pct: number | null; cr_ship_pct: number | null;
@@ -269,19 +319,21 @@ export interface Aggregate {
 
 const pct = (x: number, y: number): number | null => (y ? pyRound((100 * x) / y, 1) : null);
 
-export function aggregate(facts: Facts, d0: Dt, d1: Dt, f: Filter = {}): Aggregate {
+/** now — «сейчас» (секунды МСК) для ожидания запросов без ответа; по умолчанию текущее время, в сверке фиксируется. */
+export function aggregate(facts: Facts, d0: Dt, d1: Dt, f: Filter = {}, now: number = nowMskSec()): Aggregate {
   const acc = {
     user: new AccMap(), person: new AccMap(), group: new AccMap(), gtree: new AccMap(), dept: new AccMap(),
     region: new AccMap(), tree: new AccMap(), dtree: new AccMap(), total: new AccMap(),
   };
   for (const [kind, t, c, uid, g, who, reg, dep] of events(facts, d0, d1, f)) {
+    const pend = kind === 'new' && isPending(t) ? pendingWait(facts, t, now)[0] : null;
     const cuts: [AccMap, unknown[]][] = [
       [acc.user, [uid]], [acc.person, [uid, who]], [acc.group, [g]], [acc.dept, [dep]], [acc.region, [reg]], [acc.total, ['']],
       [acc.gtree, [g, uid]], [acc.gtree, [g, uid, who]],
       [acc.tree, [reg]], [acc.tree, [reg, dep]], [acc.tree, [reg, dep, g]], [acc.tree, [reg, dep, g, uid]], [acc.tree, [reg, dep, g, uid, who]],
       [acc.dtree, [dep]], [acc.dtree, [dep, reg]], [acc.dtree, [dep, reg, g]], [acc.dtree, [dep, reg, g, uid]], [acc.dtree, [dep, reg, g, uid, who]],
     ];
-    for (const [m, key] of cuts) add(m.get(key), kind, t, c);
+    for (const [m, key] of cuts) add(m.get(key), kind, t, c, pend);
   }
 
   const holidays = new Set(facts.holidays);
@@ -292,9 +344,13 @@ export function aggregate(facts: Facts, d0: Dt, d1: Dt, f: Filter = {}): Aggrega
   const out = (key: number | string | null, a: Acc, name: string): AggRow => ({
     key, name,
     new: a.new, new_per_day: perDay(a.new),
+    pending: a.pending, pending_pct: pct(a.pending, a.new),
+    pending_gt9: a.pending_wait.filter(h => h > 9).length,
+    pending_max_h: a.pending_wait.length ? pyRound(a.pending_wait.reduce((m, h) => (h > m ? h : m), -Infinity), 2) : null,
     reopens: a.reopens, reopens_per_day: perDay(a.reopens),
     req_all: a.new + a.reopens, req_all_per_day: perDay(a.new + a.reopens),
-    all_answer_h: avg(a.all_answer),
+    all_answer_h: avg(a.all_answer), all_answer_med_h: med(a.all_answer),
+    all_answer_sum_h: a.all_answer.length ? pyRound(sumList(a.all_answer), 2) : null,
     take_h: avg(a.take), exec_h: avg(a.exec),
     answer_h: avg(a.answer), answer_med_h: med(a.answer), cycle_h: avg(a.cycle),
     done: a.done, skip_take: a.skip_take, skip_take_pct: pct(a.skip_take, a.done),
@@ -304,9 +360,11 @@ export function aggregate(facts: Facts, d0: Dt, d1: Dt, f: Filter = {}): Aggrega
     repeat: a.repeat, repeat_answer_h: avg(a.repeat_answer),
     reopen_by_self: a.reopen_by_self, reopen_by_creator: a.reopen_by_creator,
     sales: a.deals.size, amount: pyRound0(sumDeals(deals, a.deals)),
-    sold_tasks: a.sold_tasks, conversion_pct: pct(a.sold_tasks, a.new),
+    // конверсия (решение Дмитрия 21.10.2026): продажи — по сделкам, запросы — без повторов по одной сделке
+    requests: a.req.size,
+    sold_tasks: a.sold_tasks, conversion_pct: pct(a.deals.size, a.req.size),
     shipments: a.ship_deals.size, ship_amount: pyRound0(sumDeals(deals, a.ship_deals)),
-    shipped_tasks: a.shipped_tasks, ship_conversion_pct: pct(a.shipped_tasks, a.new),
+    shipped_tasks: a.shipped_tasks, ship_conversion_pct: pct(a.ship_deals.size, a.req.size),
     lost: a.lost_deals.size,
     cr_sale_pct: pct(a.deals.size, a.deals.size + a.lost_deals.size),
     cr_ship_pct: pct(a.ship_deals.size, a.ship_deals.size + a.lost_deals.size),
@@ -399,6 +457,17 @@ export function aggregate(facts: Facts, d0: Dt, d1: Dt, f: Filter = {}): Aggrega
   res.tree = level(acc.tree, tIdx, [regionName, deptName, gname, uname], []);
   res.dtree = level(acc.dtree, dIdx, [deptName, regionName, gname, uname], []);
   res.total = out('', acc.total.m.get(enc(['']))?.a ?? newAcc(), 'Итого');
+  // доля в общем времени ответа: сумма рабочих часов всех ответов строки от суммы по итогу
+  const totalSum = res.total.all_answer_sum_h || 0;
+  const share = (rows: AggRow[]): void => {
+    for (const r of rows) {
+      r.all_answer_share_pct = totalSum && r.all_answer_sum_h ? pyRound((100 * r.all_answer_sum_h) / totalSum, 1) : null;
+      share(r.children ?? []);
+      share(r.persons ?? []);
+    }
+  };
+  for (const cut of [res.user, res.group, res.region, res.dept, res.tree, res.dtree]) share(cut);
+  res.total.all_answer_share_pct = totalSum ? 100.0 : null;
   return res;
 }
 
@@ -409,6 +478,7 @@ export interface TaskListRow {
   created: string | null; supplier: number | null; supplier_name: string; manager_id: number | null; manager_who: string | null;
   deal: number | null; cycle: number; start: string | null; take: string | null; done: string | null; accept: string | null;
   take_min: number | null; exec_min: number | null; answer_min: number | null; cycle_min: number | null;
+  wait_min: number | null; age_h: number | null;
   skip_take: boolean | null; reopens: number; reopen_by: string | null;
   sold: string | null; shipped: string | null; lost: string | null; outcome: string | null;
 }
@@ -416,24 +486,27 @@ export interface TaskListRow {
 const OUTCOME: Record<string, string> = { sold: 'продана', shipped: 'отгружена', lost: 'проиграна' };
 
 /** Задачи, из которых сложился показатель metric: по одной строке на событие. */
-export function listTasks(facts: Facts, d0: Dt, d1: Dt, metric: string, f: Filter = {}): TaskListRow[] {
+export function listTasks(facts: Facts, d0: Dt, d1: Dt, metric: string, f: Filter = {}, now: number = nowMskSec()): TaskListRow[] {
   const pick = Object.prototype.hasOwnProperty.call(PICK, metric) ? PICK[metric] : undefined;
   if (!pick) throw new Error(`неизвестный показатель ${metric}`);
   const [kind, cond] = pick;
   const kinds: EventKind[] = Array.isArray(kind) ? kind : [kind];
+  const tcond = Object.prototype.hasOwnProperty.call(TASK_COND, metric) ? TASK_COND[metric]! : null;
   const byDeal = metric.startsWith('cr_'); // CR считается по сделкам: одна строка на сделку
   const rows: TaskListRow[] = [];
   const seen = new Set<string>();
   const mins = (h: number | null): number | null => (h === null ? null : pyRound0(h * 60));
   for (const [k, t, c, uid, , who, reg, dep] of events(facts, d0, d1, f)) {
-    if (!kinds.includes(k) || (cond && !cond(c!))) continue;
+    if (!kinds.includes(k) || (cond && !cond(c!)) || (tcond && !tcond(t))) continue;
     if (byDeal) {
       const key = `${pyStr(t.deal)}\u0001${k}`;
       if (seen.has(key)) continue;
       seen.add(key);
     }
     const c1 = t.cycles[0]!;
-    const cc = c || c1;
+    const cc = c || (tcond ? t.cycles[t.cycles.length - 1]! : c1); // «без ответа» — текущий (последний) цикл задачи
+    // запрос без ответа: сколько ждёт — рабочие минуты и календарные часы от создания до сейчас
+    const [waitH, ageH] = isPending(t) ? pendingWait(facts, t, now) : [null, null];
     const deal = t.deal ? own(facts.deals, String(t.deal)) : undefined;
     rows.push({
       id: t.id, g: t.g, dept: dep, project_dept: deptOf(facts, t.g), region: reg,
@@ -442,13 +515,15 @@ export function listTasks(facts: Facts, d0: Dt, d1: Dt, metric: string, f: Filte
       cycle: cc.n, start: cc.start, take: cc.take, done: cc.done, accept: cc.accept,
       take_min: mins(cc.take_h), exec_min: mins(cc.exec_h),
       answer_min: mins(cc.answer_h), cycle_min: mins(cc.cycle_h),
+      wait_min: mins(waitH), age_h: ageH,
       skip_take: cc.skip_take, reopens: t.cycles.filter(x => x.reopen).length,
       reopen_by: cc.reopen_by,
       sold: deal ? deal.sold : null, shipped: deal ? deal.shipped : null, lost: deal ? deal.lost : null,
       outcome: OUTCOME[k] ?? null,
     });
   }
-  rows.sort((a, b) => cmpStr(a.done || a.created || '', b.done || b.created || ''));
+  if (metric === 'pending') rows.sort((a, b) => cmpNum(-(a.wait_min || 0), -(b.wait_min || 0))); // самые давние сверху
+  else rows.sort((a, b) => cmpStr(a.done || a.created || '', b.done || b.created || ''));
   return rows;
 }
 

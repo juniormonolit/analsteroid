@@ -1,6 +1,6 @@
 /**
  * Факты по задачам снабжения — порт refresh/calc.py и refresh/domcalc.py Панели снабжения («Ответы на запросы»).
- * Источник — Панель снабжения, коммит 5504deae64a35b817f2a17e14cfc19b9f242f4c6 (VERSION).
+ * Источник — Панель снабжения, коммит b744b1e9594f26755bbc993d48b723e6d66c5e77 (расчёт не менялся с fdde67f7) (VERSION).
  * Обновлять при смене методики; справочники — lib/supplyPanel/refs/*.json (копии refresh/*.json панели).
  * Результат обязан совпадать с Python побитово (см. scripts/supply-panel-verify.ts): та же форма, что facts.json / deals.json.
  *
@@ -128,10 +128,6 @@ export function holder(holders: Holders, uid: number | null, when: string | null
   return name;
 }
 
-export function isTest(title: string | null): boolean {
-  return /Падорина/i.test(title || '') || /\| *(888|777) /.test(title || '');
-}
-
 function pyInt(s: string): number {
   const t = s.trim();
   if (!/^[+-]?\d+(_\d+)*$/.test(t)) throw new Error(`invalid literal for int(): ${s}`);
@@ -210,7 +206,8 @@ export function buildTask(task: TaskRow, events: Event[], holders: Holders): Tas
   const respUid = first ? first.by : resp;
   const res: Task = {
     id: task.task_id, g: task.group_id, created: fmt(created), resp: respUid, status, deal: task.deal_id,
-    test: isTest(task.title), cycles: out,
+    // «тестовые» задачи не отсеиваются (решение Дмитрия 21.10.2026): поле оставлено, его читает metrics (events, majority)
+    test: false, cycles: out,
   };
   const respWho = holder(holders, respUid, first ? first.done : fmt(created));
   const mgrWho = holder(holders, task.created_by, fmt(created));
@@ -309,6 +306,11 @@ const pad = (n: number) => String(n).padStart(2, '0');
 export function nowMsk(now = new Date()): string {
   const d = new Date(now.getTime() + 3 * 3600_000);
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+/** Текущее время МСК, секунды от эпохи (наивное время как UTC), без долей секунды — как now_msk() в metrics.py. */
+export function nowMskSec(now = new Date()): number {
+  return Math.floor(now.getTime() / 1000) + 3 * 3600;
 }
 
 const metaValue = (meta: Row[], key: string): string | null => {
@@ -463,7 +465,7 @@ export function buildDeals(t: Tables, now = new Date()): DealsData {
   const tasks = new Map<number, number[]>();
   for (const r of t.tasks) {
     if (r.is_deleted !== 0 || r.deal_id === null || !projectIds.has(r.group_id as number) || denied.has(r.task_id)) continue;
-    if (isTest(r.title as string | null)) continue;
+    // правило «тестовых» задач снято 21.10.2026 — ничего не исключаем
     const l = tasks.get(r.deal_id as number);
     if (l) l.push(r.task_id as number); else tasks.set(r.deal_id as number, [r.task_id as number]);
   }

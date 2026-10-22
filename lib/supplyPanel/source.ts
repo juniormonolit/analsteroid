@@ -130,7 +130,7 @@ export interface Source {
   describe: string;
 }
 
-function sshArgs(): string[] {
+export function sshArgs(): string[] {
   const key = process.env.SUPPLY_PANEL_SSH_KEY;
   const host = process.env.SUPPLY_PANEL_SSH || DEFAULT_HOST;
   const a: string[] = [];
