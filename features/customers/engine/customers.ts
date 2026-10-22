@@ -344,7 +344,7 @@ function toIso(v: string | Date | null): string | null {
 // 01.08 на проде), поэтому результат живёт в Redis-кэше 10 минут (ниже).
 const CUSTOMERS_SQL = `
 WITH cd AS (
-  -- Склейка «один человек — один заказчик» (merge.ts, миграция 240): $1/$2 — пары член → каноничный
+  -- Склейка «один человек — один заказчик» (merge.ts, миграция 243): $1/$2 — пары член → каноничный
   -- ключ; сделки переписываются на каноничный ДО агрегации. Пустые массивы — прежний расчёт.
   SELECT t.deal_id, t.deal_name, t.amount, t.created_at, t.sold_at, t.lost_at, t.delivered_at,
          t.head_group_name, t.stage_id, t.current_manager_id,

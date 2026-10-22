@@ -3,7 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { canManageRepeatKanbanSettings } from '@/lib/auth/modulesAccess';
 import { mergePreview } from '@/features/customers/engine/merge';
 
-// Склейка заказчиков (миграция 240) — сводка для админов перед включением флага customer_merge:
+// Склейка заказчиков (миграция 243) — сводка для админов перед включением флага customer_merge:
 // сколько пар склеится автоматически, сколько ручных решений, примеры (в т.ч. Хорев).
 export const dynamic = 'force-dynamic';
 

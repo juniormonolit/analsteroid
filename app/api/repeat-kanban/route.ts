@@ -166,7 +166,7 @@ export async function POST(req: NextRequest) {
     }
     if (!canManage) return NextResponse.json({ error: 'Действие доступно РОПу' }, { status: 403 });
 
-    // ── Склейка заказчиков «один человек — один заказчик» (миграция 240, владелец 22.10: «объединять
+    // ── Склейка заказчиков «один человек — один заказчик» (миграция 243, владелец 22.10: «объединять
     // может только РОП и старше»). Обе карточки — в зоне РОПа; применится при пересчёте снимка (~20 с).
     if (body.action === 'merge' || body.action === 'unmerge') {
       if (!(await isFeatureEnabled('customer_merge'))) return NextResponse.json({ error: 'Склейка заказчиков ещё не включена' }, { status: 400 });
