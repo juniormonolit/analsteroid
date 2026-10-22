@@ -1,7 +1,7 @@
 // Версии системного промпта (этап 2, migrations/248 ai_prompts). Активна одна; нет активной —
 // встроенный промпт из кода (prompt.ts). Правят только супер-админы через /settings/ai-analysis.
 import { systemDb } from '@/lib/db/clients';
-import { PROMPT_VERSION, REPORT_SECTIONS, systemPrompt } from './prompt';
+import { PROMPT_VERSION, REQUIRED_SECTIONS, systemPrompt } from './prompt';
 
 export interface ActivePrompt { version: string; body: string; builtin: boolean }
 export interface PromptVersion { id: number; version: string; note: string | null; isActive: boolean; createdBy: string; createdAt: string; body: string }
@@ -31,7 +31,7 @@ const invalidate = () => { g.__aiPromptCache = undefined; };
 export function validatePrompt(body: string): string | null {
   if (body.trim().length < 200) return 'Промпт слишком короткий';
   if (body.length > 100_000) return 'Промпт слишком длинный (больше 100 тыс. символов)';
-  const missing = REPORT_SECTIONS.filter(s => !new RegExp(`^###\\s*${s.n}\\.`, 'm').test(body));
+  const missing = REQUIRED_SECTIONS.filter(s => !new RegExp(`^###\\s*${s.n}\\.`, 'm').test(body));
   if (missing.length) return `В формате отчёта нет разделов: ${missing.map(s => `«### ${s.n}. ${s.title}»`).join(', ')} — по ним вкладка разбирает отчёт`;
   return null;
 }

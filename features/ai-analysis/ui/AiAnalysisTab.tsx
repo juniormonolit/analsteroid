@@ -15,7 +15,7 @@ import { MonolitikHelper } from '@/components/mascot/MonolitikHelper';
 import type { CallListItem } from '../engine/collect';
 import type { AnalysisRow } from '../engine/store';
 import type { QuoteCheck } from '../engine/verify';
-import { memoPlain } from '../engine/memo';
+import { memoLines, memoPlain } from '../engine/memo';
 import { CLIENT_TYPES } from '@/features/client-module/engine/types';
 import Link from 'next/link';
 
@@ -329,11 +329,29 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
       )}
       {lastDone && !active && !failed && (
         <MonolitikHelper pose="done" title="Отчёт готов"
-          text={`Прочитал ${lastDone.callsCount ?? withText} разговоров. Цитаты с ✓ найдены в звонках — по клику откроется место.`}
-          actions={
-            <div className="flex flex-wrap gap-2">
+          text={`Прочитал ${lastDone.callsCount ?? withText} разговоров. Ниже — памятка менеджеру и полный отчёт; цитаты с ✓ найдены в звонках.`} />
+      )}
+      {lastDone && (() => {
+        const lines = memoLines(lastDone.reportMd ?? '');
+        return (
+          <section className="min-w-0 rounded-xl border-2 border-[var(--color-accent)] p-3">
+            <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2">
+              <h3 className="text-[15px] font-bold">Памятка менеджеру</h3>
+              <span className="text-[11.5px] text-[var(--color-text-muted)]">уходит в задачу при постановке из канбана (отчёт не старше 14 дней)</span>
+            </div>
+            {lines ? (
+              <div className="flex flex-col gap-1 text-[14px] leading-relaxed">
+                {lines.map((l, i) => <div key={i} className="break-words">{l}</div>)}
+              </div>
+            ) : (
+              <div className="text-[13px] text-[var(--color-text-muted)]">
+                Этот отчёт сделан старой версией — короткой памятки в нём нет, в задачу уйдут разделы «Что предложить» и «Риски» целиком.
+                Нажмите «Обновить анализ», чтобы получить короткую.
+              </div>
+            )}
+            <div className="mt-2 flex flex-wrap gap-2">
               <button type="button" onClick={copyMemo} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[13px]">
-                {copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Скопировано' : 'Скопировать памятку'}
+                {copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Скопировано' : 'Скопировать'}
               </button>
               {client.data.openTask && (
                 <button type="button" disabled={toTask.isPending || toTask.isSuccess} onClick={() => toTask.mutate(lastDone.id)}
@@ -343,8 +361,9 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
                 </button>
               )}
             </div>
-          } />
-      )}
+          </section>
+        );
+      })()}
 
       {/* Отчёт */}
       {lastDone && (
