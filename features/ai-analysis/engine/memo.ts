@@ -2,6 +2,8 @@
 // v5 модель пишет её сама — раздел 8, 3–5 коротких строк (владелец 23.10: «менеджер такую кучу читать
 // заебётся»); в старых отчётах раздела нет — собираем из «что предложить» + «риски» (длинно).
 // Чистые функции — и сервер (описание задачи, BB-код), и вкладка (карточка памятки, копирование).
+// Владелец 23.10: «не хочу, чтобы менеджеры знали, что это ИИ пишет» — в тексте для менеджера нет слов
+// «ИИ», «анализ», «модель» и мозга-эмодзи; шапка — «📞 Перед звонком · по разговорам на <дата>».
 
 /** Отчёт моложе — вставляем в задачу автоматически; старше — уже мог устареть. */
 export const MEMO_FRESH_DAYS = 14;
@@ -29,9 +31,9 @@ export function memoLines(reportMd: string): string[] | null {
 
 export function memoPlain(reportMd: string, createdAt: string): string {
   const short = memoLines(reportMd);
-  if (short) return [`Памятка ИИ (анализ звонков от ${fmtD(createdAt)}):`, ...short].join('\n');
+  if (short) return [`Перед звонком (по разговорам на ${fmtD(createdAt)}):`, ...short].join('\n');
   return [
-    `Памятка ИИ (анализ звонков от ${fmtD(createdAt)}):`, '',
+    `Перед звонком (по разговорам на ${fmtD(createdAt)}):`, '',
     'Что предложить:', ...plainLines(section(reportMd, 3)), '',
     'Риски и обещания:', ...plainLines(section(reportMd, 4)),
   ].join('\n');
@@ -63,8 +65,8 @@ function bbLine(line: string): string {
 const DAY = 86_400_000;
 function bbHeader(createdAt: string, updated?: boolean): string {
   const old = Date.now() - new Date(createdAt).getTime() > MEMO_FRESH_DAYS * DAY;
-  const when = old ? `[COLOR=${RED}]анализ ${fmtD(createdAt)} — проверь актуальность[/COLOR]` : `[COLOR=${GRAY}]· ИИ, анализ ${fmtD(createdAt)}${updated ? ' · обновлено' : ''}[/COLOR]`;
-  return `🧠 [B]Перед звонком[/B] ${when}`;
+  const when = old ? `[COLOR=${RED}]по разговорам на ${fmtD(createdAt)} — проверь актуальность[/COLOR]` : `[COLOR=${GRAY}]· по разговорам на ${fmtD(createdAt)}${updated ? ' · обновлено' : ''}[/COLOR]`;
+  return `📞 [B]Перед звонком[/B] ${when}`;
 }
 
 /** Памятка в BB-коде — для описания задачи и комментария в её чат (там `updated` — «обновлено»). */
