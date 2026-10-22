@@ -24,6 +24,8 @@ import { fetchKanbanSettings } from './settings';
 import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
 import { fetchQueuedByClient } from './queueRead';
 import { fetchShippedGroups } from './shippedGroups';
+import { fetchCustomerTags } from './tags';
+import { NO_TAG, type TagDef } from './tagColors';
 
 const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
@@ -123,6 +125,8 @@ export interface KanbanCard {
   returned: { at: string; missed: boolean } | null;
   /** Склеенный заказчик (merge.ts): исходные карточки, кроме самой (пусто — не склеен). */
   members: { key: string; source: MergeSource; name: string | null }[];
+  /** Теги (миграция 245): id видимых смотрящему тегов — базовые и его личные. */
+  tags: number[];
   /** Заказчик в очереди задач (миграция 237): кому выдастся, кто поставил. */
   queued: { id: number; managerId: string; by: string | null; at: string } | null;
 }
@@ -145,7 +149,7 @@ export interface KanbanColumn {
 /** Показатели канбана для РОПа (снимок текущей доски). */
 /** Состояние задачи заказчика для фильтра: none — открытой задачи нет (не ставили или приняли). */
 export type TaskBucket = 'none' | 'unread' | 'work' | 'overdue' | 'control' | 'done';
-export type BoardSort = 'default' | 'ltv' | 'potential' | 'fresh' | 'task' | 'ev';
+export type BoardSort = 'default' | 'ltv' | 'potential' | 'fresh' | 'task' | 'ev' | 'tag';
 
 export function taskBucketOf(c: Pick<KanbanCard, 'task'>, now = Date.now()): TaskBucket {
   const t = c.task;
@@ -193,6 +197,9 @@ export interface RepeatBoard {
   poolGroupCounts: Record<string, number>;
   /** Режим «отгружали когда-либо за период»: группа → заказчиков на всей доске (до фильтра групп). */
   everGroupCounts?: Record<string, number>;
+  /** Теги, видимые смотрящему (базовые + личные), и сколько заказчиков с каждым (до фильтра тегов). */
+  tagDefs?: TagDef[];
+  tagCounts?: Record<string, number>;
   /** Сколько заказчиков в каждом состоянии задачи (до фильтра по задачам). */
   taskCounts: Record<string, number>;
   kpi: BoardKpi | null;
@@ -433,6 +440,10 @@ export async function buildRepeatBoard(opts: {
   /** Поиск заказчика (владелец 21.10): имя/название (все слова), или число — id контакта/
    *  компании, номер сделки (текущей, отказной, последней отгрузки) или задачи. По всем колонкам. */
   search?: string | null;
+  /** Пользователь (users.id) — его личные теги видны и ищутся. Нет — только базовые не грузим вовсе. */
+  viewerUserId?: string | null;
+  /** Фильтр по тегам: id тегов (любой из) и/или NO_TAG — «без тегов». */
+  tags?: string[];
   /** Сортировка карточек во всех колонках: default — тип клиента → потенциал. */
   sort?: BoardSort;
   /** Сколько карточек отдать по каждой колонке (пагинация «показать ещё»). */
@@ -548,6 +559,13 @@ export async function buildRepeatBoard(opts: {
   const poolGroups = new Set(opts.poolGroups ?? []);
   const shipped = opts.groupsEver ? await fetchShippedGroups(opts.groupsEver.from, opts.groupsEver.to) : null;
   const everGroupCounts: Record<string, number> = {};
+  // Теги: по всем исходным ключам склейки, свёрнуты к каноничному (объединение).
+  const tagData = opts.viewerUserId ? await fetchCustomerTags(allKeys, opts.viewerUserId) : null;
+  const tagsOf = (r: Row) => [...new Set(membersOf(r).flatMap(k => tagData?.byKey.get(k) ?? []))];
+  const tagName = new Map((tagData?.defs ?? []).map(d => [d.id, d.name]));
+  const tagRank = new Map((tagData?.defs ?? []).map((d, i) => [d.id, i]));
+  const tagPick = new Set(opts.tags ?? []);
+  const tagCounts: Record<string, number> = {};
   const buckets = new Map<ColumnKey, KanbanCard[]>(COLUMNS.map(c => [c.key, []]));
 
   for (const r of rows) {
@@ -643,9 +661,16 @@ export async function buildRepeatBoard(opts: {
     const lastOutcome: 'won' | 'lost' = current && LOST_STAGES.has(current.stageId) ? 'lost' : 'won';
     const lastDelDealId = r.lastDeliveredDealId ?? lastDelivered.get(r.clientKey) ?? null;
     if (qNum !== null && ![...membersOf(r).map(k => Number(k.slice(1))), deal?.dealId, lastDelDealId, task?.id].includes(qNum)) continue;
+    const cardTags = tagsOf(r);
     if (qWords.length) {
-      const nm = membersOf(r).map(k => norm(searchNames?.get(k) ?? '')).join(' | ');
+      // Имя/название и названия тегов (владелец 22.10: «сортировку (и поиск) по ним»).
+      const nm = [...membersOf(r).map(k => norm(searchNames?.get(k) ?? '')), ...cardTags.map(t => norm(tagName.get(t) ?? ''))].filter(Boolean).join(' | ');
       if (!nm || !qWords.every(w => nm.includes(w))) continue;
+    }
+    if (tagData) {
+      for (const t of cardTags) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
+      if (!cardTags.length) tagCounts[NO_TAG] = (tagCounts[NO_TAG] ?? 0) + 1;
+      if (tagPick.size && !(cardTags.some(t => tagPick.has(String(t))) || (!cardTags.length && tagPick.has(NO_TAG)))) continue;
     }
     if (shipped) {
       // Склеенный заказчик — группы всех его исходных карточек.
@@ -689,6 +714,7 @@ export async function buildRepeatBoard(opts: {
       members: membersOf(r).filter(k => k !== r.clientKey).map(k => ({ key: k, source: aliasMap.get(k)?.source ?? 'auto_company', name: null })),
       openDealInBrak: col === 'brak' && hasOpenDeal && current ? current.dealId : null,
       returned: col === 'pool_hot' ? returned ?? null : null,
+      tags: [...cardTags].sort((a, b) => (tagRank.get(a) ?? 99) - (tagRank.get(b) ?? 99)),
       queued: (() => { const q = queuedMap.get(r.clientKey); return q ? { id: q.id, managerId: q.managerId, by: q.queuedByName, at: q.createdAt } : null; })(),
       // Только если в повторной воронке открытой сделки нет — иначе это история, не ошибка сейчас.
       wrongFunnel: hasOpenDeal ? null : membersOf(r).map(k => wrongFunnel.get(k.startsWith('k') ? k : `p${k.slice(1)}`)).find(Boolean) ?? null,
@@ -746,6 +772,11 @@ export async function buildRepeatBoard(opts: {
     else if (sortMode === 'fresh') list.sort((a, b) => deliveredMs(b) - deliveredMs(a));
     // Ожидаемые деньги: шанс на повтор × ожидаемая сумма следующей покупки.
     else if (sortMode === 'ev') list.sort((a, b) => ev(b) - ev(a) || b.sumDelivered - a.sumDelivered);
+    // По тегам: сначала с тегами — в порядке тегов (базовые, потом свои), внутри — по потенциалу.
+    else if (sortMode === 'tag') {
+      const first = (c: KanbanCard) => (c.tags.length ? tagRank.get(c.tags[0]) ?? 98 : 99);
+      list.sort((a, b) => first(a) - first(b) || b.tags.length - a.tags.length || (b.potential ?? 0) - (a.potential ?? 0));
+    }
     else if (sortMode === 'task') list.sort((a, b) => TASK_SORT[taskBucketOf(a, now)] - TASK_SORT[taskBucketOf(b, now)] || typeRank(a) - typeRank(b));
     const limit = Math.max(1, Math.min(opts.limits?.[def.key] ?? COLUMN_PAGE, 2000));
     const ageOf = (c: KanbanCard): number | null => {
@@ -818,8 +849,8 @@ export async function buildRepeatBoard(opts: {
   };
   const found = columns.reduce((s, c) => s + c.total, 0);
   const notice = q && found === 0
-    ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию (все слова) и по номерам контакта, компании, сделки, задачи; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
+    ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию и тегам (все слова) и по номерам контакта, компании, сделки, задачи; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
     : null;
-  return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, taskCounts, kpi, notice, dataAt,
+  return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, tagDefs: tagData?.defs, tagCounts: tagData ? tagCounts : undefined, taskCounts, kpi, notice, dataAt,
     taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, today };
 }

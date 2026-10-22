@@ -8,7 +8,7 @@ import { fetchManagerCustomers } from '@/features/customers/engine/customers';
 import { buildRepeatBoard, type BoardSort, type TaskBucket } from '@/features/repeat-kanban/engine/board';
 
 const TASK_BUCKETS = ['none', 'unread', 'work', 'overdue', 'control', 'done'] as const;
-const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task', 'ev'] as const;
+const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task', 'ev', 'tag'] as const;
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
 import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
@@ -23,6 +23,8 @@ import { refreshCompanyCustomers } from '@/features/customers/engine/customers';
 import { enqueue, fetchQueueItem, issueNow, removeByClient, removeFromQueue, setBoost, type DeadlineRule } from '@/features/repeat-kanban/engine/queue';
 import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
 import { resolvePeriod } from '@/features/repeat-kanban/engine/shippedGroups';
+import { setCustomerTags, TagError } from '@/features/repeat-kanban/engine/tags';
+import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
 // Гейт — section.repeat_kanban (ролям продаж, миграция 230). Зона — ropScope() сессии,
@@ -111,6 +113,9 @@ export async function GET(req: NextRequest) {
       taskFilter: (sp.get('tasks') ?? '').split(',').filter((x): x is TaskBucket => (TASK_BUCKETS as readonly string[]).includes(x)),
       outcome: sp.get('outcome') === 'won' || sp.get('outcome') === 'lost' ? sp.get('outcome') as 'won' | 'lost' : null,
       search: (sp.get('q') ?? '').trim().slice(0, 80) || null,
+      // ?tags=12,15,none — теги (любой из), none — без тегов (миграция 245).
+      viewerUserId: session.id,
+      tags: (sp.get('tags') ?? '').split(',').filter(x => /^\d{1,9}$/.test(x) || x === NO_TAG).slice(0, 50),
       sort: (SORTS as readonly string[]).includes(sp.get('sort') ?? '') ? sp.get('sort') as BoardSort : 'default',
     });
     return NextResponse.json({ ...board, mergeEnabled: await isFeatureEnabled('customer_merge'), viewerBitrixId: session.bitrixUserId, canSeeAnalytics: canSeeRepeatKanbanAnalytics(session), canManageSettings: canManageRepeatKanbanSettings(session) }, { headers: { 'Cache-Control': 'no-store' } });
@@ -151,6 +156,17 @@ export async function POST(req: NextRequest) {
       await requestHide({ clientKey: ck, managerId: mid, until: String(body.until ?? ''), comment: String(body.comment ?? ''), session });
       await logEvent(session, { type: 'hide_requested', requestId: rid, clientKey: ck, managerId: mid, columnBefore, payload: { until: body.until, comment: body.comment } });
       return NextResponse.json({ ok: true });
+    }
+    // Теги заказчика (миграция 245, владелец 22.10): РОП — по заказчикам своей зоны, менеджер — по своим.
+    // Ставятся/снимаются только видимые смотрящему теги: базовые и его личные.
+    if (body.action === 'set_tags') {
+      const ck = String(body.clientKey ?? '');
+      const mid = String(body.managerId ?? '');
+      const allowed = KEY_RE.test(ck) && (mid === session.bitrixUserId || managers.some(m => m.id === mid));
+      if (!allowed || !(await ownsClient(mid, ck))) return NextResponse.json({ error: 'Заказчик не в вашей зоне' }, { status: 403 });
+      const tags = await setCustomerTags(session, ck, body.tagIds);
+      await logEvent(session, { type: 'tags_set', requestId: rid, clientKey: ck, managerId: mid, columnBefore, payload: { tags } });
+      return NextResponse.json({ ok: true, tags });
     }
     // «Скрыть из пула» / «Вернуть в пул» — только РОП (с 21.10; раньше — и менеджер по своим).
     if (body.action === 'hide' || body.action === 'unhide') {
@@ -346,7 +362,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ error: 'Неизвестное действие' }, { status: 400 });
   } catch (e) {
-    if (e instanceof DealCreateError || e instanceof ReviewError) return NextResponse.json({ error: e.message }, { status: 400 });
+    if (e instanceof DealCreateError || e instanceof ReviewError || e instanceof TagError) return NextResponse.json({ error: e.message }, { status: 400 });
     console.error('[repeat-kanban POST]', e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось выполнить действие' }, { status: 500 });
   }

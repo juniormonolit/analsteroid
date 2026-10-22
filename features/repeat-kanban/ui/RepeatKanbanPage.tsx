@@ -28,6 +28,8 @@ import type { BoardKpi, KanbanCard, KanbanColumn, RepeatBoard, TodaySection } fr
 import type { TaskNote } from '../engine/taskNotes';
 import type { RepeatTask } from '../engine/tasks';
 import { QueueView } from './QueueView';
+import { TagChip, TagsModal } from './TagsModal';
+import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
 // Все кнопки шапки — одного вида (правка владельца 20.10: «кнопочки приведи к одному виду»).
@@ -59,6 +61,7 @@ const SORT_OPTIONS = [
   { value: 'fresh', label: 'Сортировка: свежие отгрузки сверху' },
   { value: 'task', label: 'Сортировка: по задачам — что разобрать' },
   { value: 'ev', label: 'Сортировка: ожидаемые деньги (шанс × чек)' },
+  { value: 'tag', label: 'Сортировка: по тегам — с тегами сверху' },
 ] as const;
 const OUTCOME_OPTIONS = [
   { value: '', label: 'Последняя сделка: любая' },
@@ -68,6 +71,8 @@ const OUTCOME_OPTIONS = [
 
 /** Последние комментарии задач видимых карточек — грузятся отдельно от доски (идут в Битрикс). */
 const TaskNotesCtx = createContext<Record<string, TaskNote>>({});
+/** Словарь тегов смотрящего (базовые + личные) — для плашек на карточках. */
+const TagDefsCtx = createContext<Map<number, TagDef>>(new Map());
 
 const GROUPS: { key: ColumnGroup; title: string; hint: string }[] = [
   { key: 'pool', title: 'Пул', hint: 'Нет открытой повторной сделки' },
@@ -99,6 +104,7 @@ export function RepeatKanbanPage() {
   const [pgt, setPgt] = useUrlState('pgt', stringParam(''));
   const ever = pgm === 'ever';
   const [taskF, setTaskF] = useUrlState('tasks', listParam([]));
+  const [tagF, setTagF] = useUrlState('tags', listParam([]));
   const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const [outcome, setOutcome] = useUrlState('outcome', stringParam(''));
   const [view, setView] = useUrlState('view', stringParam('board'));
@@ -115,6 +121,7 @@ export function RepeatKanbanPage() {
   const [hideFor, setHideFor] = useState<KanbanCard | null>(null);
   const [brakFor, setBrakFor] = useState<KanbanCard | null>(null);
   const [mergeFor, setMergeFor] = useState<KanbanCard | null>(null);
+  const [tagsFor, setTagsFor] = useState<KanbanCard | null>(null);
   const [hideReqFor, setHideReqFor] = useState<KanbanCard | null>(null);
   // Массовая постановка задач (аудит 21.10: «в работе без задачи» — разом): режим выбора.
   const [selectMode, setSelectMode] = useState(false);
@@ -122,7 +129,7 @@ export function RepeatKanbanPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, sort, outcome, q, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, sort, outcome, q, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (mgrs.length) qs.set('managers', mgrs.join(','));
@@ -134,6 +141,7 @@ export function RepeatKanbanPage() {
         if (pgp === 'custom') { if (pgf) qs.set('pgf', pgf); if (pgt) qs.set('pgt', pgt); }
       }
       if (taskF.length) qs.set('tasks', taskF.join(','));
+      if (tagF.length) qs.set('tags', tagF.join(','));
       if (sort !== 'default') qs.set('sort', sort);
       if (outcome) qs.set('outcome', outcome);
       if (q) qs.set('q', q);
@@ -220,6 +228,7 @@ export function RepeatKanbanPage() {
       else if (a === 'request_hide') setHideReqFor(c);
       else if (a === 'brak_now') setBrakFor(c);
       else if (a === 'merge') setMergeFor(c);
+      else if (a === 'tags') setTagsFor(c);
       else if (a === 'accept_hide' || a === 'decline_hide') {
         const ok = a === 'accept_hide'
           ? confirm(`Скрыть «${cardName(c)}» ${fmtHideUntil(c.hideRequest?.until ?? '')}, как предлагает менеджер?`)
@@ -261,9 +270,10 @@ export function RepeatKanbanPage() {
     { key: 'none', label: 'Тип не указан' },
   ];
   const totalAll = Object.values(data?.typeCounts ?? {}).reduce((s, n) => s + n, 0);
-  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(!!outcome) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
-  const resetFilters = () => { setType(''); setTaskF([]); setOutcome(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
+  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!outcome) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
+  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setOutcome(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
   const groupCounts = (ever ? data?.everGroupCounts : data?.poolGroupCounts) ?? {};
+  const tagDefMap = new Map((data?.tagDefs ?? []).map(t => [t.id, t]));
 
   return (
     // Экран: шапка сверху, конвейер — на всю оставшуюся высоту, колонки скроллятся внутри
@@ -314,9 +324,9 @@ export function RepeatKanbanPage() {
           )}
           <label className={`${q ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs cursor-text sm:w-40 2xl:w-56`}>
             <Search size={16} className="shrink-0 opacity-70" />
-            <input type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder="Заказчик, № сделки"
+            <input type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder="Заказчик, тег, № сделки"
               aria-label="Поиск заказчика: имя, название, номер контакта, компании, сделки или задачи"
-              title="Имя или название (все слова), либо номер: контакт/компания, сделка, задача"
+              title="Имя, название или тег (все слова), либо номер: контакт/компания, сделка, задача"
               className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-current placeholder:opacity-60 sm:text-sm" />
             {qInput && (
               <button type="button" onClick={() => { setQInput(''); setQ(''); setLimits({}); }} aria-label="Очистить поиск" className="tap-target shrink-0 opacity-70 hover:opacity-100"><X size={14} /></button>
@@ -328,6 +338,16 @@ export function RepeatKanbanPage() {
                 options={typeChips.map(t => ({ value: t.key, label: `${t.label} · ${rub.format(t.key ? data?.typeCounts[t.key] ?? 0 : totalAll)}` }))}
                 className={`${type ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
             </FilterField>
+            {/* Теги (владелец 22.10): любой из отмеченных; «Без тегов» — у кого нет ни одного видимого. */}
+            {(data?.tagDefs?.length ?? 0) > 0 && (
+              <FilterField label="Теги">
+                <SearchMultiSelect ariaLabel="Теги" allLabel="Теги: любые" unitLabel="тегов" searchPlaceholder="Поиск тега"
+                  options={[...(data?.tagDefs ?? []).map(t => ({ value: String(t.id), label: t.name, hint: `${rub.format(data?.tagCounts?.[t.id] ?? 0)} заказчиков · ${t.system ? 'базовый' : 'ваш'}` })),
+                    { value: NO_TAG, label: 'Без тегов', hint: `${rub.format(data?.tagCounts?.[NO_TAG] ?? 0)} заказчиков` }]}
+                  value={tagF} onChange={v => { setTagF(v); setLimits({}); }}
+                  className={`${tagF.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+              </FilterField>
+            )}
             {/* Фильтр по задачам (владелец 20.10): РОП разбирает задачи прямо на канбане. */}
             <FilterField label="Задачи">
               <SearchMultiSelect ariaLabel="Задачи" allLabel="Задачи: все" unitLabel="состояния задач" searchPlaceholder="Поиск"
@@ -416,6 +436,7 @@ export function RepeatKanbanPage() {
 
       </div>
 
+      <TagDefsCtx.Provider value={tagDefMap}>
       <TaskNotesCtx.Provider value={notes ?? {}}>
       {view === 'queue' && data?.canManage ? (
         <QueueView onChanged={() => refetch()} />
@@ -458,6 +479,7 @@ export function RepeatKanbanPage() {
         </div>
       )}
       </TaskNotesCtx.Provider>
+      </TagDefsCtx.Provider>
 
       {selectMode && selected.size > 0 && (
         <div className="sticky bottom-0 z-20 flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border)] bg-[var(--color-bg)] px-4 py-2 sm:px-6">
@@ -477,7 +499,7 @@ export function RepeatKanbanPage() {
           onClose={() => setOpenCard(null)}
           // Свежая версия карточки после действий (доска перезапросилась) — по ключу заказчика.
           // Комментарии задач — тот же контекст, что у доски (панель рисуется вне её дерева).
-          sideActions={<TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={liveCard(openCard)} h={handlers} /></TaskNotesCtx.Provider>} />
+          sideActions={<TagDefsCtx.Provider value={tagDefMap}><TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={liveCard(openCard)} h={handlers} /></TaskNotesCtx.Provider></TagDefsCtx.Provider>} />
       )}
       {openDeal !== null && <DealCard dealId={openDeal} onClose={() => setOpenDeal(null)} />}
       {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} reassign={reassignOpts} onClose={() => setTaskFor(null)} onSaved={refresh} />}
@@ -486,6 +508,8 @@ export function RepeatKanbanPage() {
       {hideReqFor && <HideModal card={hideReqFor} request onClose={() => setHideReqFor(null)} onSaved={refresh} />}
       {brakFor && <BrakNowModal card={brakFor} onClose={() => setBrakFor(null)} onSaved={refresh} />}
       {mergeFor && <MergeModal card={mergeFor} onClose={() => setMergeFor(null)} onSaved={refresh} />}
+      {tagsFor && <TagsModal title={cardName(tagsFor)} clientKey={tagsFor.clientKey} managerId={tagsFor.managerId} column={tagsFor.column}
+        current={tagsFor.tags ?? []} defs={data?.tagDefs ?? []} onClose={() => setTagsFor(null)} onSaved={refresh} onDefsChanged={refresh} />}
     </div>
   );
 }
@@ -809,7 +833,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   return a;
 }
 
-type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge';
+type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags';
 
 /** Редкие действия карточки — в меню «⋯» (владелец 20.10: «глупо, когда висят прямо на лице»). */
 function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; danger?: boolean }[]; onAct: (a: CardAction) => void }) {
@@ -831,6 +855,14 @@ function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; d
       ))}
     </Popover>
   );
+}
+
+/** Теги на карточке (миграция 245) — плашки в цветах тегов, перенос строкой. */
+function CardTags({ ids }: { ids: number[] }) {
+  const defs = useContext(TagDefsCtx);
+  const tags = ids.map(id => defs.get(id)).filter((t): t is TagDef => !!t);
+  if (!tags.length) return null;
+  return <div className="flex min-w-0 flex-wrap gap-1">{tags.map(t => <TagChip key={t.id} tag={t} />)}</div>;
 }
 
 function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelect, onOpen, onTask, onReview, onUnbrak, onDeal, onAct }: {
@@ -869,12 +901,14 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           <CardMenu items={[
             ...(col.startsWith('pool') && canManage ? [{ label: 'Скрыть из пула', act: 'hide' as const }] : []),
             ...(col.startsWith('pool') && !canManage && isOwn && !c.hideRequest ? [{ label: 'Предложить скрыть', act: 'request_hide' as const }] : []),
+            ...(canManage || isOwn ? [{ label: 'Теги…', act: 'tags' as const }] : []),
             ...(canMerge ? [{ label: 'Объединить с…', act: 'merge' as const }] : []),
             ...(canManage && (col.startsWith('pool') || col.startsWith('touch') || (col.startsWith('st_') && col !== 'st_sold')) ? [{ label: 'Сразу в брак', act: 'brak_now' as const, danger: true }] : []),
           ]} onAct={onAct} />
         </div>
       </div>
       <div className="truncate text-[11.5px] text-[var(--color-text-muted)]">{c.managerName}</div>
+      {c.tags?.length > 0 && <CardTags ids={c.tags} />}
       {c.members.length > 0 && <MembersBadge c={c} canMerge={canMerge} onUnmerge={onUnmerge} />}
       {c.queued && (
         <div className="truncate rounded bg-[var(--color-bg-surface)] px-1.5 py-0.5 text-[11.5px] text-[var(--color-text-secondary)]" title="Задача выдастся автоматически, когда у менеджера освободится место (вкладка «Очередь»)">
