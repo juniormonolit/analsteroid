@@ -46,7 +46,7 @@ const LOST_STAGES = ['C2:LOSE', 'C2:APOLOGY', 'C2:1', 'C2:2', 'C3:LOSE', 'C3:APO
 const mskDate = (d: Date | string | null) => (d ? new Date(new Date(d).getTime() + 3 * 3600_000).toISOString().slice(0, 10) : null);
 
 /** Ключи заказчика в терминах CLIENT_KEY_CASE_SQL (c/x — контакт, k — компания) со склейкой. */
-async function clientKeys(ref: ClientRef): Promise<string[]> {
+export async function clientKeys(ref: ClientRef): Promise<string[]> {
   const id = ref.slice(1);
   const seeds = ref.startsWith('k') ? [`k${id}`] : [`c${id}`, `x${id}`];
   const all = new Set<string>();

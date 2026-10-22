@@ -29,6 +29,7 @@ import { analyticsDb } from '@/lib/db/clients';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID } from './config';
+import { freshMemoForClientKey, markMemoInserted } from '@/features/ai-analysis/engine/memoStore';
 
 export class DealCreateError extends Error {}
 
@@ -284,7 +285,10 @@ export async function createRepeatTask(input: {
     responsibleId = input.newResponsibleId;
   }
 
-  const description = await buildDescription(input.clientKey, input.comment);
+  // Памятка ИИ (этап 1.5 «ИИ-анализа звонков»): есть свежий отчёт по заказчику — «что предложить» и
+  // «риски» дописываются в описание задачи (без оценки менеджера). Не нашлась или упала — без неё.
+  const memo = await freshMemoForClientKey(input.clientKey);
+  const description = (await buildDescription(input.clientKey, input.comment)) + (memo ? `\n\n${memo.bbcode}` : '');
   const task = await writeOnce<{ task?: { id?: string | number } }>(taskWebhook(), 'tasks.task.add', {
     fields: {
       TITLE: title,
@@ -301,6 +305,7 @@ export async function createRepeatTask(input: {
   });
   const taskId = Number(task?.task?.id ?? 0);
   if (!taskId) throw new DealCreateError(`Сделка #${dealId} подготовлена, но задача в Битриксе не создалась`);
+  if (memo) await markMemoInserted(memo.analysisId, taskId);
   // Комментарий РОПа — ещё и первым сообщением в чате задачи (владелец 20.10). Не роняет
   // постановку: задача уже есть, комментарий в любом случае лежит в её описании.
   let chatPosted = false;

@@ -9,17 +9,20 @@
 // ⚠ — не найдена в звонках (возможна ошибка модели — проверить по записи).
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronDown, Copy, Phone, PhoneMissed, ThumbsDown, ThumbsUp, TriangleAlert } from 'lucide-react';
+import { Check, ChevronDown, Copy, Phone, PhoneMissed, Send, ThumbsDown, ThumbsUp, TriangleAlert } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
 import { MonolitikHelper } from '@/components/mascot/MonolitikHelper';
 import type { CallListItem } from '../engine/collect';
 import type { AnalysisRow } from '../engine/store';
 import type { QuoteCheck } from '../engine/verify';
+import { memoPlain } from '../engine/memo';
 
 interface ClientPayload {
   ref: string;
   calls: CallListItem[];
   analyses: AnalysisRow[];
+  /** Открытая задача канбана по заказчику — для «В открытую задачу». */
+  openTask: { id: number; responsibleName: string | null } | null;
   promptVersion: string;
   quota: { used: number; max: number };
 }
@@ -132,13 +135,6 @@ function SectionBody({ md, quotes, onQuote, danger }: { md: string; quotes: Map<
   );
 }
 
-/** Памятка менеджеру: «что предложить» + «риски», без оценки менеджера. */
-function memoText(a: AnalysisRow): string {
-  const s = splitSections(a.reportMd ?? '');
-  const clean = (t: string | undefined) => (t ?? '—').replace(/\*\*/g, '').replace(/^\s*[-*•]\s+/gm, '— ').trim();
-  return `Памятка ИИ (анализ звонков от ${fmtD(a.createdAt)}):\n\nЧто предложить:\n${clean(s.get(3))}\n\nРиски и обещания:\n${clean(s.get(4))}`;
-}
-
 function CallsList({ qs, calls, openId, highlights }: { qs: string; calls: CallListItem[]; openId: string | null; highlights: QuoteCheck[] }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const isOpen = (id: string) => open.has(id) || openId === id;
@@ -238,6 +234,14 @@ export function AiAnalysisTab({ qs, params }: { qs: string; params: Record<strin
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-analysis-client', qs] }),
   });
+  const toTask = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await apiFetch(`/api/ai-analysis/${id}/to-task`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ?? 'Не удалось отправить памятку');
+      return j as { taskId: number; responsibleName: string | null };
+    },
+  });
   const feedback = useMutation({
     mutationFn: async (v: { id: number; feedback: 'useful' | 'inaccurate'; note?: string }) => {
       const r = await apiFetch(`/api/ai-analysis/${v.id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) });
@@ -266,7 +270,7 @@ export function AiAnalysisTab({ qs, params }: { qs: string; params: Record<strin
   };
   const copyMemo = async () => {
     if (!lastDone) return;
-    try { await navigator.clipboard.writeText(memoText(lastDone)); setCopied(true); setTimeout(() => setCopied(false), 2500); } catch { /* нет доступа к буферу */ }
+    try { await navigator.clipboard.writeText(memoPlain(lastDone.reportMd ?? '', lastDone.createdAt)); setCopied(true); setTimeout(() => setCopied(false), 2500); } catch { /* нет доступа к буферу */ }
   };
 
   return (
@@ -292,6 +296,7 @@ export function AiAnalysisTab({ qs, params }: { qs: string; params: Record<strin
         </div>
       </div>
       {run.error && <div className="text-sm text-[var(--color-negative)]">{run.error.message}</div>}
+      {toTask.error && <div className="text-sm text-[var(--color-negative)]">{toTask.error.message}</div>}
 
       {/* Монолитик */}
       {withText === 0 && (
@@ -309,9 +314,18 @@ export function AiAnalysisTab({ qs, params }: { qs: string; params: Record<strin
         <MonolitikHelper pose="done" title="Отчёт готов"
           text={`Прочитал ${lastDone.callsCount ?? withText} разговоров. Цитаты с ✓ найдены в звонках — по клику откроется место.`}
           actions={
-            <button type="button" onClick={copyMemo} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[13px]">
-              {copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Скопировано' : 'Скопировать памятку'}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={copyMemo} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[13px]">
+                {copied ? <Check size={14} /> : <Copy size={14} />}{copied ? 'Скопировано' : 'Скопировать памятку'}
+              </button>
+              {client.data.openTask && (
+                <button type="button" disabled={toTask.isPending || toTask.isSuccess} onClick={() => toTask.mutate(lastDone.id)}
+                  title={`Комментарием в чат задачи #${client.data.openTask.id}${client.data.openTask.responsibleName ? ` (${client.data.openTask.responsibleName})` : ''}`}
+                  className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 text-[13px] disabled:opacity-60">
+                  <Send size={14} />{toTask.isSuccess ? 'Отправлено в задачу' : toTask.isPending ? 'Отправляю…' : 'В открытую задачу'}
+                </button>
+              )}
+            </div>
           } />
       )}
 

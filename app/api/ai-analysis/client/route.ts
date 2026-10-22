@@ -5,6 +5,7 @@ import { parseClientRef } from '@/features/client-module/engine/clientModule';
 import { listClientCalls } from '@/features/ai-analysis/engine/collect';
 import { countToday, listForClient, MAX_PER_DAY } from '@/features/ai-analysis/engine/store';
 import { PROMPT_VERSION } from '@/features/ai-analysis/engine/prompt';
+import { openRepeatTask } from '@/features/ai-analysis/engine/memoStore';
 
 // Вкладка «ИИ-анализ» карточки клиента: звонки заказчика (без текстов, ?texts=1 — с текстами) +
 // прошлые анализы + лимит. Только право action.ai_call_analysis (решение владельца 22.10: «видят
@@ -18,12 +19,14 @@ export async function GET(req: NextRequest) {
   if (!ref) return NextResponse.json({ error: 'Укажите ID контакта или компании' }, { status: 400 });
   const withText = sp.get('texts') === '1';
   try {
-    const [calls, analyses, usedToday] = await Promise.all([
+    const [calls, analyses, usedToday, task] = await Promise.all([
       listClientCalls(ref, withText),
       withText ? Promise.resolve([]) : listForClient(ref),
       withText ? Promise.resolve(0) : countToday(session.login),
+      withText ? Promise.resolve(null) : openRepeatTask(ref).catch(() => null),
     ]);
-    return NextResponse.json({ ref, calls, analyses, promptVersion: PROMPT_VERSION, quota: { used: usedToday, max: MAX_PER_DAY } });
+    const openTask = task ? { id: task.id, responsibleName: task.responsibleName } : null;
+    return NextResponse.json({ ref, calls, analyses, openTask, promptVersion: PROMPT_VERSION, quota: { used: usedToday, max: MAX_PER_DAY } });
   } catch (e) {
     console.error('[ai-analysis/client]', e);
     return NextResponse.json({ error: 'Не удалось загрузить звонки заказчика' }, { status: 500 });
