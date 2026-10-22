@@ -352,7 +352,7 @@ async function fetchReviews(dealIds: number[]): Promise<Map<number, ReviewInfo>>
   } catch { return new Map(); } // до миграции 230 — без решений
 }
 
-/** Входящие звонки заказчиков за 90 дней — самый свежий на заказчика (ref p<контакт> / k<компания>).
+/** Входящие звонки заказчиков за 30 дней (старше — уже не «вернулся сейчас») — самый свежий на заказчика (ref p<контакт> / k<компания>).
  *  «Отказник вернулся» (владелец 22.10): позвонил сам после брака или отказа — в «Срочно». */
 async function fetchInboundCalls(refs: string[]): Promise<Map<string, { at: string; missed: boolean }>> {
   if (!refs.length) return new Map();
@@ -361,7 +361,7 @@ async function fetchInboundCalls(refs: string[]): Promise<Map<string, { at: stri
        CROSS JOIN LATERAL unnest(ARRAY[
          CASE WHEN coalesce(c.contact_id, 0) <> 0 THEN 'p'||c.contact_id END,
          CASE WHEN coalesce(c.company_id, 0) <> 0 THEN 'k'||c.company_id END]) AS r(ref)
-      WHERE c.direction = 'inbound' AND c.called_at > now() - interval '90 days' AND r.ref = ANY($1::text[])
+      WHERE c.direction = 'inbound' AND c.called_at > now() - interval '30 days' AND r.ref = ANY($1::text[])
       ORDER BY r.ref, c.called_at DESC`, [refs],
   ).catch(e => { console.warn('[repeat-kanban] входящие звонки:', e instanceof Error ? e.message : e); return { rows: [] }; });
   return new Map(r.rows.map(x => [x.ref, { at: new Date(x.called_at).toISOString(), missed: x.result === 'missed' }]));
