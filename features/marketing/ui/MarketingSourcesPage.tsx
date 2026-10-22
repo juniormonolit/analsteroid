@@ -341,7 +341,7 @@ export function MarketingSourcesPage() {
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
                 {/* Группы: от 1280px — липкая колонка слева, уже — выбор + окно управления (иначе таблице
                     при боковом меню приложения оставалось ~330px). */}
-                <aside className="hidden w-80 shrink-0 xl:sticky xl:top-3 xl:block">{groupsPanel}</aside>
+                <aside className="hidden w-72 shrink-0 xl:sticky xl:top-3 xl:block">{groupsPanel}</aside>
 
                 <section className="@container flex min-w-0 flex-1 flex-col gap-2">
                   <div className="flex items-center gap-2 xl:hidden">
@@ -380,12 +380,12 @@ export function MarketingSourcesPage() {
                     </div>
                   </div>
 
-                  {/* Таблица — когда самой области ≥ 896px (container query, не ширина окна: боковое меню
+                  {/* Таблица — когда самой области ≥ 768px (container query, не ширина окна: боковое меню
                       приложения съедает до 300px); своя прокрутка по высоте — шапка остаётся видна. */}
-                  <div className="scroll-x hidden max-h-[calc(100dvh-230px)] min-h-[320px] overflow-y-auto rounded-xl border border-[var(--color-border)] @4xl:block">
-                    <table className="w-full min-w-[720px] table-fixed text-sm">
+                  <div className="scroll-x hidden max-h-[calc(100dvh-230px)] min-h-[320px] overflow-y-auto rounded-xl border border-[var(--color-border)] @3xl:block">
+                    <table className="w-full min-w-[740px] table-fixed text-sm">
                       <colgroup>
-                        <col className="w-11" /><col /><col className="w-[220px]" /><col className="w-[124px]" /><col className="w-[84px]" /><col className="w-[96px]" /><col className="w-12" />
+                        <col className="w-10" /><col /><col className="w-[200px]" /><col className="w-[112px]" /><col className="w-[76px]" /><col className="w-[88px]" /><col className="w-11" />
                       </colgroup>
                       <thead>
                         <tr>
@@ -394,7 +394,7 @@ export function MarketingSourcesPage() {
                           </th>
                           <SortableTh label="Источник" active={sort.key === 'name'} dir={sort.dir} onClick={() => toggleSort('name')} />
                           <SortableTh label="Группа" active={sort.key === 'group'} dir={sort.dir} onClick={() => toggleSort('group')} />
-                          <SortableTh label="Сделок за 90 дн." align="right" active={sort.key === 'deals90'} dir={sort.dir} onClick={() => toggleSort('deals90')} />
+                          <SortableTh label="За 90 дн." align="right" active={sort.key === 'deals90'} dir={sort.dir} onClick={() => toggleSort('deals90')} />
                           <SortableTh label="Всего" align="right" active={sort.key === 'deals'} dir={sort.dir} onClick={() => toggleSort('deals')} />
                           <SortableTh label="Без сделок" align="right" title="Сколько прошло с последней сделки" active={sort.key === 'idle'} dir={sort.dir} onClick={() => toggleSort('idle')} />
                           <th scope="col" className="sticky top-0 z-20 border-b border-[var(--color-border)] bg-[var(--color-table-header)]" />
@@ -446,7 +446,7 @@ export function MarketingSourcesPage() {
                   </div>
 
                   {/* Карточки (узкая область): таблица в 375px уносила название при свайпе. */}
-                  <div className="flex flex-col gap-2 @4xl:hidden">
+                  <div className="flex flex-col gap-2 @3xl:hidden">
                     {visible.map(s => {
                       const gid = liveGroupOf(s);
                       const g = gid !== undefined ? groupById.get(gid) : undefined;
@@ -477,7 +477,7 @@ export function MarketingSourcesPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--color-text-muted)]">
-                    <span>Показано {fmtInt(visible.length)} из {fmtInt(filtered.length)}<span className="hidden @4xl:inline"> · Shift+клик — выбрать диапазон, Esc — снять выбор</span></span>
+                    <span>Показано {fmtInt(visible.length)} из {fmtInt(filtered.length)}<span className="hidden @3xl:inline"> · Shift+клик — выбрать диапазон, Esc — снять выбор</span></span>
                     {filtered.length > limit && (
                       <button type="button" className={btn} onClick={() => setLimit(l => l + PAGE)}>Показать ещё {fmtInt(Math.min(PAGE, filtered.length - limit))}</button>
                     )}
@@ -651,7 +651,7 @@ function GroupsPanel({
 }) {
   const c = (k: string) => counts.get(k) ?? { n: 0, d90: 0 };
   const tile = (active: boolean) =>
-    `flex min-h-11 min-w-0 flex-col items-start justify-center rounded-lg border px-2.5 py-1.5 text-left ${active ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`;
+    `flex min-h-11 min-w-0 items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left ${active ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`;
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
       <div className="flex items-center gap-1">
@@ -665,7 +665,7 @@ function GroupsPanel({
       )}
 
       {/* «Все» и «Не распределено» — плашками: это не группы, а режимы просмотра. */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex flex-col gap-1.5">
         <button type="button" onClick={() => onFilter(ALL)} className={tile(groupFilter === ALL)}>
           <span className="text-sm font-medium text-[var(--color-text)]">Все</span>
           <span className="text-[11px] tabular-nums text-[var(--color-text-muted)]">{fmtInt(c(ALL).n)} ист. · {fmtInt(c(ALL).d90)} сд.</span>
