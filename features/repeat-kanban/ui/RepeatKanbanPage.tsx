@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart3, CheckSquare, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BarChart3, CheckSquare, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -364,6 +364,9 @@ export function RepeatKanbanPage() {
           )}
           {/* Справа — редкие кнопки; на ноутбуке только иконки (подписи — в подсказке). */}
           <div className="flex min-w-0 items-center gap-1.5 sm:ml-auto">
+            <Link href="/repeat-kanban/guide" className={BTN_IDLE} title="Инструкция: как работать с канбаном" aria-label="Как работать?">
+              <HelpCircle size={16} /> <span className="hidden min-[420px]:inline">Как работать?</span>
+            </Link>
             {data?.canSeeAnalytics && (
               <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Аналитика: кто что делал, проработанность по отделам, результат задач" aria-label="Аналитика">
                 <BarChart3 size={16} /> <span className="hidden 2xl:inline">Аналитика</span>
