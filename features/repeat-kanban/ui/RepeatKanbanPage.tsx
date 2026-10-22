@@ -688,17 +688,17 @@ function WorkedRing({ k }: { k: BoardKpi }) {
   const worked = k.workedByTask;
   const total = worked + k.hot;
   const share = total ? worked / total : 0;
-  const r = 19, c = 2 * Math.PI * r;
+  const r = 14, c = 2 * Math.PI * r;
   return (
-    <div className="flex shrink-0 flex-col items-center"
+    <span className="inline-flex shrink-0 items-center"
       title={`Проработано ${rub.format(worked)} из ${rub.format(total)}: по ${worked} заказчикам поставлена задача (в дозвоне, воронке или на разборе), у ${k.hot} окно открыто, а сделки и задачи нет. Сделки без задачи (${k.noTaskInWork}) не в счёт. 100% — ни один заказчик с открытым окном не висит без задачи.`}>
-      <svg width="48" height="48" viewBox="0 0 48 48" aria-label={`Проработано ${Math.round(share * 100)}%`}>
-        <circle cx="24" cy="24" r={r} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="5" />
-        <circle cx="24" cy="24" r={r} fill="none" stroke="#ffffff" strokeWidth="5" strokeLinecap="round"
-          strokeDasharray={`${c * share} ${c}`} transform="rotate(-90 24 24)" />
-        <text x="24" y="28" textAnchor="middle" fill="#ffffff" fontSize="12" fontWeight="700">{Math.round(share * 100)}%</text>
+      <svg width="36" height="36" viewBox="0 0 36 36" aria-label={`Проработано ${Math.round(share * 100)}%`}>
+        <circle cx="18" cy="18" r={r} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="4" />
+        <circle cx="18" cy="18" r={r} fill="none" stroke="#ffffff" strokeWidth="4" strokeLinecap="round"
+          strokeDasharray={`${c * share} ${c}`} transform="rotate(-90 18 18)" />
+        <text x="18" y="21.5" textAnchor="middle" fill="#ffffff" fontSize="9.5" fontWeight="700">{Math.round(share * 100)}%</text>
       </svg>
-    </div>
+    </span>
   );
 }
 
@@ -723,32 +723,23 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
     { label: 'Отказы', jump: 'review', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} рано закрыты` : 'на проверке', hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
   ];
   // Компактно (владелец 22.10: «на экране ноута потенциал и прочие показатели занимают слишком дохуя
-  // места»): синяя плитка — две строки, плитки — подпись / цифра / пояснение мелко; от 1440 px — всё в
-  // один ряд высотой ~56 px (было ~190 px в два ряда). Полностью убрать — кнопка «Скрыть показатели».
+  // места», «в 1 строчку без лишних подписей, допинфа по наведению»): синяя плитка — одна строка,
+  // плитки — подпись и цифра, пояснение — в title; от 1440 px всё в один ряд ~48 px (было ~190).
   return (
     <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-stretch">
       {/* Главная цифра — сколько денег лежит в пуле, если вернуть заказчиков. */}
-      <div className="brand-chevrons flex shrink-0 items-center gap-2.5 rounded-xl bg-[var(--color-accent)] px-3 py-1.5 text-white lg:w-[330px]">
-        {/* Потенциал ВСЕЙ базы (кроме брака) — не тает от работы (владелец 20.10: «при проработанном
-            канбане потенциал будет 0?»); рядом — сколько из него ещё лежит нетронутым в пуле. */}
-        <div className="min-w-0 flex-1"
-          title="Потенциал за год, если работать с повторкой: сумма потенциалов всех заказчиков, кроме брака. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр). «В пуле» — та часть, по которой ещё никто не работает.">
-          <div className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap">
-            <span className="text-[11.5px] opacity-85">Потенциал за год</span>
-            <span className="text-[20px] font-bold leading-tight tabular-nums">{moneyShort(k.totalPotential)}</span>
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] font-semibold">
-            <span className="whitespace-nowrap">в пуле: {moneyShort(k.poolPotential)}</span>
-            {/* Деньги под риском (владелец 21.10: «прикольно»): окно повторной продажи открыто,
-                сделки нет — через ≤ 22 дня заказчик «остынет». */}
-            <button type="button" onClick={() => onJump('pool')} className="inline-flex min-h-6 max-w-full items-center whitespace-nowrap rounded bg-white/15 px-1.5 text-left hover:bg-white/25"
-              title={`Под риском: у ${k.hot} заказчиков открыто окно повторной продажи (отгрузка ≤ 22 дней назад, сделки нет); у ${k.hotClosing} закрывается в ближайшие 3 дня. Сумма — их потенциал за год.`}>
-              риск {moneyShort(k.hotPotential)} · {rub.format(k.hot)}
-            </button>
-          </div>
-        </div>
+      {/* Одна строка (владелец 22.10: «потенциал и кольцо в 1 строчку без лишних подписей, допинфа по
+          наведению»): «в пуле» и «под риском» — в подсказке; клик — к пулу. Потенциал ВСЕЙ базы, кроме
+          брака, — не тает от работы (владелец 20.10). */}
+      <button type="button" onClick={() => onJump('pool')}
+        title={`Потенциал за год, если работать с повторкой: ${moneyShort(k.totalPotential)} — сумма потенциалов всех заказчиков, кроме брака (средняя годовая выручка вернувшихся таких же заказчиков).\nВ пуле, не тронуто: ${moneyShort(k.poolPotential)}.\nПод риском: ${moneyShort(k.hotPotential)} — у ${rub.format(k.hot)} заказчиков открыто окно повторной продажи (отгрузка ≤ 22 дней назад, сделки нет), у ${rub.format(k.hotClosing)} закрывается в ближайшие 3 дня.\nНажмите — перейти к пулу.`}
+        className="brand-chevrons flex min-h-11 shrink-0 items-center justify-between gap-2 rounded-xl bg-[var(--color-accent)] px-3 py-1 text-left text-white hover:opacity-95 lg:w-[250px]">
+        <span className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap">
+          <span className="text-[12px] opacity-85">Потенциал</span>
+          <span className="text-[19px] font-bold tabular-nums">{moneyShort(k.totalPotential)}</span>
+        </span>
         <WorkedRing k={k} />
-      </div>
+      </button>
       {/* Восемь в ряд — от 1440 px; уже — два ряда по четыре (на 1280 плитка выходила бы ~72 px). */}
       <div className="grid min-w-0 flex-1 auto-rows-fr grid-cols-2 gap-1.5 sm:grid-cols-4 min-[1440px]:grid-cols-8">
         {tiles.map(t => (
@@ -756,10 +747,9 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
           // прыгают»). Подпись и пояснение — в одну строку с многоточием, полный текст в title.
           <button type="button" key={t.label} title={`${t.label}: ${t.hint}${t.sub ? `\n${t.sub}` : ''}\n${t.task ? (activeTask === t.task ? 'Нажмите, чтобы снять фильтр' : 'Нажмите — показать только их') : 'Нажмите — перейти к колонкам'}`}
             onClick={() => (t.task ? onTask(t.task) : t.jump && onJump(t.jump))}
-            className={`grid min-w-0 grid-rows-[14px_22px_13px] content-center items-center justify-items-center rounded-xl border px-1.5 py-1 text-center transition-colors hover:bg-[var(--color-bg-hover)] ${t.task && activeTask === t.task ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
+            className={`grid min-w-0 grid-rows-[14px_22px] content-center items-center justify-items-center rounded-xl border px-1.5 py-1 text-center transition-colors hover:bg-[var(--color-bg-hover)] ${t.task && activeTask === t.task ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
             <div className="w-full truncate text-[11px] font-medium leading-[14px] text-[var(--color-text-muted)]">{t.label}</div>
             <div className="text-[18px] font-bold leading-[22px] tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
-            <div className="w-full truncate text-[10.5px] leading-[13px] text-[var(--color-text-muted)]">{t.sub ?? '\u00a0'}</div>
           </button>
         ))}
       </div>
