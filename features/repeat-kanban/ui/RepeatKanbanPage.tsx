@@ -345,15 +345,6 @@ export function RepeatKanbanPage() {
                 options={SORT_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
                 className={`${sort !== 'default' ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
             </FilterField>
-            {view !== 'today' && view !== 'queue' && (
-              <FilterField label="Перейти к колонкам">
-                <div className="flex flex-wrap gap-1.5">
-                  {GROUPS.map(g => (
-                    <button key={g.key} type="button" onClick={() => jump(g.key)} title={g.hint} className={BTN_IDLE}>{g.title}</button>
-                  ))}
-                </div>
-              </FilterField>
-            )}
           </FiltersButton>
           {canManage && view !== 'today' && view !== 'queue' && (
             <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
