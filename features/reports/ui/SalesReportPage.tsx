@@ -33,7 +33,8 @@ import { bucketRange, comparisonBucketOf } from '@/features/reports/lib/periodBu
 import type { MetricHighlightConfig, SavedReport, SavedReportInput } from '@/lib/saved-reports/types';
 import { resolveRelativePeriod, resolveComparison } from '@/lib/saved-reports/period';
 import type { MetricFilters, MetricConditionFilter } from '@/lib/reports/metricFilter';
-import { type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { parseSourceDimension, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { useSourceDimensionOptions } from '@/features/marketing/lib/useMarketingCatalog';
 import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { isHeatmapEnabled, isRelativeDataType, toggleHeatmap } from '@/lib/metrics/heatmapDefault';
@@ -323,11 +324,6 @@ interface Props {
   defaultHeatmapInvertedIds?: string[];
 }
 
-const SOURCE_DIMENSION_LABELS: Record<string, string> = {
-  brand: 'Бренд', platform: 'Витрина', contact_type: 'Тип контакта',
-  ad_channel: 'Канал', channel_group: 'Канал (крупно)', branch: 'Филиал', source: 'Источник',
-};
-
 const DEFAULT_METRIC_IDS = [
   'primary_deals_count',
   'primary_reservations_count',
@@ -551,9 +547,13 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const [drilldownMetricIds, setDrilldownMetricIds] = useState<string[]>([]);
   const [dealFields, setDealFields] = useState<string[] | undefined>(undefined);
   const [drilldownGrouped, setDrilldownGrouped] = useState(true);
-  const [sourceDimension, setSourceDimension] = useUrlState<SourceDimension>('sourceDim', enumParam(
-    ['brand', 'platform', 'contact_type', 'ad_channel', 'channel_group', 'branch', 'source'], 'brand',
-  ));
+  // Встроенные разрезы справочника + группировки «Ещё → Источники» (`g:<id>`).
+  const [sourceDimension, setSourceDimension] = useUrlState<SourceDimension>('sourceDim', {
+    parse: (raw) => parseSourceDimension(raw) ?? 'brand',
+    serialize: (v) => v,
+    default: 'brand',
+  });
+  const { labelOf: sourceDimLabelOf } = useSourceDimensionOptions();
   const [drilldownDimension, setDrilldownDimension] = useState<DrilldownDimension>('contact_type');
   const [sortBy, setSortBy] = useUrlState<string | null>('sortBy', {
     parse: (raw) => raw,
@@ -1546,7 +1546,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     : periodMode
     ? 'Период'
     : sourceMode
-    ? (SOURCE_DIMENSION_LABELS[sourceDimension] ?? 'Источник')
+    ? sourceDimLabelOf(sourceDimension)
     : reportSlug === 'by-product-groups' ? 'Товарная группа'
     : reportSlug === RESPONSE_SLUG ? 'Снабженец'
     : reportSlug === RESPONSE_CATEGORIES_SLUG ? 'Категория'

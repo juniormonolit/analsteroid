@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { SalesReportPage } from '@/features/reports/ui/SalesReportPage';
-import { MARKETING_PRESETS } from '@/lib/marketing/presets';
+import { MARKETING_PRESETS, CUSTOM_GROUPING_DIMENSION } from '@/lib/marketing/presets';
+import { listGroupingDimensions } from '@/lib/marketing/groupings';
 import type { SavedReport } from '@/lib/saved-reports/types';
 import { defaultPeriod, defaultComparison } from '@/lib/period';
 
@@ -26,6 +27,12 @@ export default async function MarketingPresetPage({
   // календарный «весь предыдущий месяц», что расходилось с comparisonMode:
   // 'previous_tail' ниже). Календарная семантика (calendarComparisonForPreset)
   // остаётся только для явного клика по быстрой кнопке-пресету в FilterBar.tsx.
+  // «Общий отчёт» — по первой группировке «Ещё → Источники»; без группировок (или без
+  // доступа к БД структуры) — по источникам как есть.
+  const sourceDimension = p.sourceDimension === CUSTOM_GROUPING_DIMENSION
+    ? ((await listGroupingDimensions().catch(() => []))[0]?.key ?? 'source')
+    : p.sourceDimension;
+
   const period = defaultPeriod();
   const comparison = defaultComparison();
 
@@ -45,7 +52,7 @@ export default async function MarketingPresetPage({
     metricHighlights: {},
     metricDisplayModes: {},
     comparisonThreshold: 5,
-    sourceDimension: p.sourceDimension,
+    sourceDimension,
     drilldownDimension: p.drilldownDimension,
     drilldownGrouped: p.drilldownGrouped ?? true,
     periodMode: 'fixed',

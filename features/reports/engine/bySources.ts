@@ -4,7 +4,7 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import {
-  loadSourceMap, dimensionValue, resolveSourceIds, sourceIdsWhere,
+  loadSourceMap, loadDimensionResolver, resolveSourceIds, sourceIdsWhere, sourceIdMatcher,
   loadManagerBranchMap, resolveBranchManagerIds, managerIdsWhere,
   NO_SOURCE_LABEL, UNDEFINED_LABEL, type SourceDimension,
 } from '@/lib/marketing/sources';
@@ -170,10 +170,12 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   const allRows      = [...rows, ...pillRows] as FlatRow[];
   const allMetricIds = [...metricIds, ...STAGE_SNAPSHOT_METRIC_IDS];
 
-  const [funnels, sourceMap, mgrBranch] = await Promise.all([
+  const [funnels, sourceMap, mgrBranch, dimResolve] = await Promise.all([
     loadFunnels(),
     loadSourceMap(),
     isBranchDim ? loadManagerBranchMap() : Promise.resolve(null),
+    // Встроенные измерения и группировки «Ещё → Источники» (`g:<id>`) — одним резолвером.
+    isBranchDim || dim === 'source' ? Promise.resolve(null) : loadDimensionResolver(dim as Exclude<SourceDimension, 'branch'>),
   ]);
 
   // Funnel-пилюли
@@ -195,10 +197,9 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
     : null;
 
   // In-memory фильтр по source_id (source-измерение + source-фильтр)
-  let allowedIds: Set<string> | 'null' | null = null;
+  let allowed: ((rid: string) => boolean) | null = null;
   if (filter && !isBranchDim && filter.dimension !== 'branch') {
-    const ids = await resolveSourceIds(filter.dimension, filter.value);
-    allowedIds = ids === 'null' ? 'null' : new Set(ids);
+    allowed = sourceIdMatcher(await resolveSourceIds(filter.dimension, filter.value));
   }
 
   // Резолвинг raw dimension_id → финальный groupId (та же логика, что и в основном
@@ -208,13 +209,10 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
     if (isBranchDim) {
       return rid === '__null__' ? UNDEFINED_LABEL : (mgrBranch!.get(rid) ?? UNDEFINED_LABEL);
     }
-    if (allowedIds !== null) {
-      if (allowedIds === 'null') { if (rid !== '__null__') return null; }
-      else if (!allowedIds.has(rid)) return null;
-    }
+    if (allowed !== null && !allowed(rid)) return null;
     if (rid === '__null__') return '__null__';
     if (dim === 'source') return rid;
-    return dimensionValue(sourceMap.get(rid), dim);
+    return dimResolve!(rid);
   }
 
   // Агрегация по значению измерения
@@ -231,17 +229,14 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
       groupName = rid === '__null__' ? UNDEFINED_LABEL : (mgrBranch!.get(rid) ?? UNDEFINED_LABEL);
       groupId = groupName;
     } else {
-      if (allowedIds !== null) {
-        if (allowedIds === 'null') { if (rid !== '__null__') continue; }
-        else if (!allowedIds.has(rid)) continue;
-      }
+      if (allowed !== null && !allowed(rid)) continue;
       if (rid === '__null__') {
         groupId = '__null__'; groupName = NO_SOURCE_LABEL;
       } else if (dim === 'source') {
         const info = sourceMap.get(rid);
         groupId = rid; groupName = info?.name || `#${rid}`;
       } else {
-        groupName = dimensionValue(sourceMap.get(rid), dim);
+        groupName = dimResolve!(rid);
         groupId = groupName;
       }
     }

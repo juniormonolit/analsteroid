@@ -21,7 +21,9 @@ const CustomerCardLoader = dynamic(
   () => import('@/features/customers/ui/CustomerCardLoader').then(m => m.CustomerCardLoader),
   { ssr: false },
 );
-import { DRILLDOWN_DIMENSIONS, dimensionLabel, UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { UNDEFINED_LABEL, UNASSIGNED_LABEL, NO_SOURCE_LABEL, isCustomDimension, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { useMarketingCatalog, useSourceDimensionOptions } from '@/features/marketing/lib/useMarketingCatalog';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 import { branchLabel } from '@/lib/org/branchLabel';
 import { computeCalculated } from '@/features/reports/engine/calculated';
 import { ReportTable, type RowDeltas } from './ReportTable';
@@ -876,7 +878,6 @@ function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
 // Одна таблица на все три типа цели (менеджер / товарная группа / источник):
 // рендерится тем же ReportTable, что и основной отчёт, — со всеми настройками
 // метрик (тепловая карта, подсветки, режимы сравнения, десятичные, акценты).
-interface SourceInfoLite { source_id: string; contact_type: string | null; branch: string | null; platform: string | null; brand: string | null; ad_channel: string | null; channel_group: string | null }
 
 // Тип сортировки мини-отчёта (2-й уровень drill-down) — поднят в DrilldownDrawer
 // (см. MiniReportSort ниже), чтобы переживать переход на суб-дрилл (3-й уровень,
@@ -1100,14 +1101,15 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
 
   // Справочник источников + карта менеджер→филиал — раскладка сделок по второй
   // сущности маркетингового дрилл-дауна
-  const { data: srcCatalog } = useQuery({
-    queryKey: ['marketing-sources'],
-    queryFn: () => fetch('/api/catalog/marketing-sources').then(r => r.json()) as Promise<{ sources: SourceInfoLite[]; managerBranches: Record<string, string> }>,
-    staleTime: 10 * 60 * 1000,
-    enabled: dimensionType === 'source' && dim !== 'manager',
-  });
+  const { data: srcCatalog } = useMarketingCatalog(dimensionType === 'source' && dim !== 'manager');
   const srcMap = useMemo(() => new Map((srcCatalog?.sources ?? []).map(s => [s.source_id, s])), [srcCatalog]);
   const mgrBranches = useMemo(() => srcCatalog?.managerBranches ?? {}, [srcCatalog]);
+  // Группировка «Ещё → Источники» (`g:<id>`): source_id → название группы.
+  const customAssign = useMemo(
+    () => (isCustomDimension(dim) ? srcCatalog?.groupings?.find(g => g.key === dim)?.assign : undefined) ?? null,
+    [srcCatalog, dim],
+  );
+  const { labelOf: dimLabelOf } = useSourceDimensionOptions(true);
 
   const metrics: Metric[] = runData?.metrics ?? [];
   const rawRows: MiniGroupRow[] = runData?.rows ?? [];
@@ -1133,6 +1135,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
       else if (dim === 'branch') key = mgrBranches[d.manager_id] ?? UNDEFINED_LABEL; // филиал = по менеджеру сделки
       else if (dim === 'source') key = d.source_id ?? '__null__';
       else if (!d.source_id) key = NO_SOURCE_LABEL;
+      else if (isCustomDimension(dim)) key = customAssign?.[d.source_id] ?? UNASSIGNED_LABEL;
       else {
         const info = srcMap.get(d.source_id);
         key = info ? (info[dim] ?? UNDEFINED_LABEL) : UNDEFINED_LABEL;
@@ -1141,7 +1144,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
       m.get(key)!.push(d);
     }
     return m;
-  }, [deals, dimensionType, periodRowsAreManagers, dim, srcMap, mgrBranches]);
+  }, [deals, dimensionType, periodRowsAreManagers, dim, srcMap, mgrBranches, customAssign]);
 
   // Счётчик сделок строки — в подзаголовок измерения
   const rows = useMemo(() => rawRows.map(r => {
@@ -1191,7 +1194,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   const label = dimensionType === 'period' ? (periodRowsAreManagers ? 'Менеджер' : 'Товарная группа')
     : dimensionType === 'manager' ? 'Товарная группа'
     : dimensionType === 'product-group' ? 'Менеджер'
-    : dimensionLabel(dim);
+    : dimLabelOf(dim);
 
   // Группировка секций (задача #2390) — только когда строки реально менеджеры
   // (rowsAreManagers, см. выше); иначе селектор скрыт, rows идут как есть.
@@ -1252,6 +1255,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
 
 export function DrilldownDrawer(props: Props) {
   const { target, dimensionType, grouped, onGroupedChange, toolbarExtras, drilldownDimension, onDrilldownDimensionChange, onClose, metricIds } = props;
+  const { options: drillDimOptions, labelOf: dimLabelOf } = useSourceDimensionOptions(true);
   // Карточка сделки (клик по строке в любом списке сделок)
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   // Суб-дрилл из мини-отчёта (клик по цифре)
@@ -1352,7 +1356,7 @@ export function DrilldownDrawer(props: Props) {
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
               {format(localPeriod.from, 'd MMM', { locale: ru })} — {format(localPeriod.to, 'd MMM yyyy', { locale: ru })}
               {localGrouped && (dimensionType === 'manager' ? ' · по товарным группам'
-                : dimensionType === 'source' ? ` · по: ${dimensionLabel(drilldownDimension ?? 'contact_type').toLowerCase()}`
+                : dimensionType === 'source' ? ` · по: ${dimLabelOf(drilldownDimension ?? 'contact_type').toLowerCase()}`
                 : ' · по менеджерам')}
               {!localGrouped && ' · все сделки'}
             </p>
@@ -1362,15 +1366,13 @@ export function DrilldownDrawer(props: Props) {
             {dimensionType === 'source' && onDrilldownDimensionChange && (
               <>
                 <span className="text-xs text-[var(--color-text-muted)]">Разбивка</span>
-                <select
+                <SearchSelect
+                  ariaLabel="Разбивка"
                   value={drilldownDimension ?? 'contact_type'}
-                  onChange={e => { setSub(null); onDrilldownDimensionChange(e.target.value as DrilldownDimension); }}
-                  className="px-2 py-1 text-xs border border-[var(--color-border)] rounded-lg bg-[var(--color-bg-surface)] text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]"
-                >
-                  {DRILLDOWN_DIMENSIONS.map(d => (
-                    <option key={d.key} value={d.key}>{d.label}</option>
-                  ))}
-                </select>
+                  onChange={v => { setSub(null); onDrilldownDimensionChange(v as DrilldownDimension); }}
+                  options={drillDimOptions.map(d => ({ value: d.key, label: d.label, hint: d.custom ? 'группировка' : null }))}
+                  className="text-xs"
+                />
               </>
             )}
             {!isGroupTarget && (

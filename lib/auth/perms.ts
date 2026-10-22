@@ -76,6 +76,10 @@ export const PERM_SECTIONS = [
   // в Битрикс (первый — «Карточка клиента»). Закрытый пункт «Ещё»: по умолчанию
   // только администратор, остальным — явно через «Матрицу прав».
   { key: 'section.modules', label: 'Модули' },
+  // «Источники» (задача владельца 22.10) — структура маркетинговых источников: руководитель
+  // маркетинга заводит группировки/группы и раскладывает по ним source_id Битрикса; на этой
+  // структуре строится «Маркетинг → Общий отчёт». Пункт «Ещё»: админ ИЛИ явное право роли.
+  { key: 'section.marketing_sources', label: 'Источники (структура маркетинга)' },
 ] as const;
 
 export const PERM_ACTIONS = [
@@ -175,6 +179,7 @@ export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
   { key: 'section.metrics', label: 'Метрики' },
   { key: 'section.widget_constructor', label: 'Виджеты' },
   { key: 'section.modules', label: 'Модули' },
+  { key: 'section.marketing_sources', label: 'Источники' },
   // «Снять с продажи» (задача #6260) — action.*, как «Чаты»: гейт по действию,
   // не по section.*, джокер «Все разделы» его НЕ покрывает.
   { key: 'action.deals.unsell', label: 'Снять с продажи' },

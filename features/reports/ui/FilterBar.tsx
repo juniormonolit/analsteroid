@@ -6,7 +6,9 @@ import { ru } from 'date-fns/locale';
 import { ChevronDown, ChevronRight, Building2, ArrowLeftRight, Search, X, SlidersHorizontal, Layers } from 'lucide-react';
 import type { DateRange } from '@/lib/period';
 import type { Grouping } from '@/lib/metrics/types';
-import { SOURCE_DIMENSIONS, type SourceDimension } from '@/lib/marketing/dimensions';
+import { SearchSelect } from '@/components/ui/SearchSelect';
+import { type SourceDimension } from '@/lib/marketing/dimensions';
+import { useSourceDimensionOptions } from '@/features/marketing/lib/useMarketingCatalog';
 import { recomputeComparison, calendarComparisonForPreset } from '@/lib/period';
 import { Popover } from '@/components/ui/Popover';
 import { DateRangePicker, type PeriodChangeMeta } from './DateRangePicker';
@@ -510,18 +512,17 @@ export function SearchField({ search, onSearchChange, widthClassName = 'w-44' }:
 export function SourceDimensionSelector({ sourceDimension, onSourceDimensionChange, stacked = false }: {
   sourceDimension: SourceDimension; onSourceDimensionChange: (d: SourceDimension) => void; stacked?: boolean;
 }) {
+  // Группировки «Ещё → Источники» + встроенные разрезы: их может быть сколько угодно,
+  // поэтому выбор из списка с поиском, а не полоса сегментов.
+  const { options } = useSourceDimensionOptions();
   const segs = (
-    <div className={`flex border border-[var(--color-border)] rounded-lg overflow-hidden text-sm ${stacked ? 'w-full' : ''}`}>
-      {SOURCE_DIMENSIONS.map(d => (
-        <button
-          key={d.key}
-          onClick={() => onSourceDimensionChange(d.key)}
-          className={`${stacked ? 'flex-1' : 'px-2.5'} py-1.5 transition-colors whitespace-nowrap ${sourceDimension === d.key ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
-        >
-          {d.label}
-        </button>
-      ))}
-    </div>
+    <SearchSelect
+      ariaLabel="Сущность"
+      value={sourceDimension}
+      onChange={v => onSourceDimensionChange(v as SourceDimension)}
+      options={options.map(d => ({ value: d.key, label: d.label, hint: d.custom ? 'группировка' : null }))}
+      className={stacked ? 'w-full' : 'min-w-[160px]'}
+    />
   );
   if (stacked) {
     return (

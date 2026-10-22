@@ -51,7 +51,13 @@ export interface MarketingPreset {
   drilldownGrouped?: boolean;
 }
 
+// «Общий отчёт» (задача владельца 22.10): строки — группы пользовательской группировки из
+// «Ещё → Источники», раскрытие — источники внутри группы. sourceDimension 'custom' —
+// маркер: страница подставляет первую группировку (`g:<id>`), выбор в «Сущности».
+export const CUSTOM_GROUPING_DIMENSION = 'custom';
+
 export const MARKETING_PRESETS: Record<string, MarketingPreset> = {
+  'general':           { title: 'Общий отчёт',             sourceDimension: CUSTOM_GROUPING_DIMENSION, drilldownDimension: 'source', metricIds: BASE_METRICS },
   'brand-contacts':    { title: 'Бренды: типы контактов',  sourceDimension: 'brand',         drilldownDimension: 'contact_type',  metricIds: BASE_METRICS },
   'channel-brands':    { title: 'Каналы: бренды',          sourceDimension: 'channel_group', drilldownDimension: 'brand',         metricIds: BASE_METRICS },
   'platform-channels': { title: 'Витрины: каналы',         sourceDimension: 'platform',      drilldownDimension: 'ad_channel',    metricIds: BASE_METRICS },

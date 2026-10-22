@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone, Tags,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -519,6 +519,9 @@ function SidebarBody({
     // «Модули» (ТЗ владельца 13.10) — превью модулей для встраивания в Битрикс
     // (первый — «Карточка клиента»): админ ИЛИ явное право роли.
     { href: '/modules', label: 'Модули', icon: <Puzzle size={18} />, ok: canMore('section.modules') },
+    // «Источники» (задача владельца 22.10) — структура маркетинговых источников: группировки
+    // и группы, по которым строится «Маркетинг → Общий отчёт».
+    { href: '/marketing-sources', label: 'Источники', icon: <Tags size={18} />, ok: canMore('section.marketing_sources') },
     // «Снять с продажи» (задача #6260, санкция Серёги 11.09) — ручная очистка
     // sold_at ошибочно проданной сделки. Гейт по действию (как «Чаты»), не по
     // section.*: директор и выше, РОПу право не выдаётся по умолчанию.

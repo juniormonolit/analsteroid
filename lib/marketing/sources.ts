@@ -1,7 +1,11 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
-import { UNDEFINED_LABEL, NO_SOURCE_LABEL, type SourceDimension } from './dimensions';
+import {
+  UNDEFINED_LABEL, NO_SOURCE_LABEL, UNASSIGNED_LABEL, isCustomDimension, customDimensionId,
+  type SourceDimension, type BuiltinSourceDimension,
+} from './dimensions';
+import { loadGroupings } from './groupings';
 
-export { UNDEFINED_LABEL, NO_SOURCE_LABEL };
+export { UNDEFINED_LABEL, NO_SOURCE_LABEL, UNASSIGNED_LABEL };
 export type { SourceDimension, DrilldownDimension } from './dimensions';
 
 export interface SourceInfo {
@@ -17,6 +21,10 @@ export interface SourceInfo {
 }
 
 let _cache: Map<string, SourceInfo> | null = null;
+
+export function invalidateSourceMap(): void {
+  _cache = null;
+}
 let _cacheAt = 0;
 const TTL = 10 * 60 * 1000;
 
@@ -31,16 +39,53 @@ export async function loadSourceMap(): Promise<Map<string, SourceInfo>> {
   return _cache;
 }
 
-/** Значение измерения для источника (label группы в отчёте). */
-export function dimensionValue(info: SourceInfo | undefined, dim: SourceDimension): string {
+/** Значение встроенного измерения для источника (label группы в отчёте). */
+export function dimensionValue(info: SourceInfo | undefined, dim: BuiltinSourceDimension): string {
   if (!info) return UNDEFINED_LABEL; // source_id есть в deals, но нет в справочнике
   if (dim === 'source') return info.name || info.source_id;
   return info[dim] ?? UNDEFINED_LABEL;
 }
 
+/**
+ * source_id → label группы для любого измерения, включая пользовательские группировки
+ * (`g:<id>`). Источник, не разложенный в группировке, — «Не распределено».
+ */
+export async function loadDimensionResolver(dim: Exclude<SourceDimension, 'branch'>): Promise<(sourceId: string) => string> {
+  if (isCustomDimension(dim)) {
+    const g = (await loadGroupings()).get(customDimensionId(dim));
+    if (!g) return () => UNASSIGNED_LABEL;
+    const names = new Map(g.groups.map(x => [x.id, x.name]));
+    return (sid) => {
+      const gid = g.assign.get(sid);
+      return gid !== undefined ? (names.get(gid) ?? UNASSIGNED_LABEL) : UNASSIGNED_LABEL;
+    };
+  }
+  const map = await loadSourceMap();
+  return (sid) => dimensionValue(map.get(sid), dim);
+}
+
+/**
+ * Набор source_id значения измерения: список, «сделки без source_id» ('null') или
+ * «все непустые, кроме перечисленных» (exclude) — так выражается «Не распределено»
+ * пользовательской группировки, куда попадают и источники, которых нет в справочнике.
+ */
+export type SourceIdSet = string[] | 'null' | { exclude: string[] };
+
 /** source_id'ы, попадающие в значение измерения (для фильтров WHERE/дрилл-даунов). */
-export async function resolveSourceIds(dim: SourceDimension, value: string): Promise<string[] | 'null'> {
+export async function resolveSourceIds(dim: SourceDimension, value: string): Promise<SourceIdSet> {
   if (value === NO_SOURCE_LABEL || value === '__null__') return 'null'; // сделки без source_id
+  if (isCustomDimension(dim)) {
+    const g = (await loadGroupings()).get(customDimensionId(dim));
+    if (!g) return value === UNASSIGNED_LABEL ? { exclude: [] } : [];
+    if (value === UNASSIGNED_LABEL) {
+      // Разложенные в существующие группы — исключаем; остальное (вкл. неизвестные id) — сюда.
+      const live = new Set(g.groups.map(x => x.id));
+      return { exclude: [...g.assign].filter(([, gid]) => live.has(gid)).map(([sid]) => sid) };
+    }
+    const grp = g.groups.find(x => x.name === value);
+    if (!grp) return [];
+    return [...g.assign].filter(([, gid]) => gid === grp.id).map(([sid]) => sid);
+  }
   const map = await loadSourceMap();
   if (dim === 'source') {
     // value = source_id
@@ -48,17 +93,36 @@ export async function resolveSourceIds(dim: SourceDimension, value: string): Pro
   }
   const ids: string[] = [];
   for (const info of map.values()) {
-    if ((info[dim] ?? UNDEFINED_LABEL) === value) ids.push(info.source_id);
+    if ((info[dim as Exclude<BuiltinSourceDimension, 'source'>] ?? UNDEFINED_LABEL) === value) ids.push(info.source_id);
   }
   return ids;
 }
 
+function quoteIds(ids: string[]): string {
+  return ids.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
+}
+
 /** SQL-условие по source_id (текстовые id инлайним с экранированием кавычек). */
-export function sourceIdsWhere(ids: string[] | 'null'): string {
+export function sourceIdsWhere(ids: SourceIdSet): string {
   if (ids === 'null') return 'd.source_id IS NULL';
+  if (!Array.isArray(ids)) {
+    return ids.exclude.length === 0
+      ? 'd.source_id IS NOT NULL'
+      : `(d.source_id IS NOT NULL AND d.source_id NOT IN (${quoteIds(ids.exclude)}))`;
+  }
   if (ids.length === 0) return '1=0';
-  const quoted = ids.map(id => `'${id.replace(/'/g, "''")}'`).join(',');
-  return `d.source_id IN (${quoted})`;
+  return `d.source_id IN (${quoteIds(ids)})`;
+}
+
+/** То же условие в памяти: rid — source_id или '__null__' для сделок без источника. */
+export function sourceIdMatcher(ids: SourceIdSet): (rid: string) => boolean {
+  if (ids === 'null') return rid => rid === '__null__';
+  if (!Array.isArray(ids)) {
+    const ex = new Set(ids.exclude);
+    return rid => rid !== '__null__' && !ex.has(rid);
+  }
+  const set = new Set(ids);
+  return rid => set.has(rid);
 }
 
 // ── Филиал менеджера ─────────────────────────────────────────────────────────
