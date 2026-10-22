@@ -22,7 +22,10 @@ const plural = (n: number, one: string, few: string, many: string) => {
 };
 const ddmm = (iso: string) => new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' });
 const mskYmd = (ms = Date.now()) => new Date(ms + 3 * 3600_000).toISOString().slice(0, 10);
-const nameOf = (c: KanbanCard) => (c.name ?? `${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId}`).replace(/\s+/g, ' ').trim();
+const nameOf = (c: KanbanCard) => {
+  const n = (c.name ?? '').replace(/\s+/g, ' ').trim();
+  return /[A-Za-zА-Яа-яЁё]/.test(n) ? n : `${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId}`; // «-», «111» и т.п.
+};
 const firstName = (full: string) => full.trim().split(/\s+/)[0] || full;
 const daysAgo = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
 
@@ -37,7 +40,7 @@ const OPENERS = [
 export function composeMorning(managerId: string, managerName: string, cards: KanbanCard[], dateStr: string): MorningMessage | null {
   const todayEnd = new Date(`${dateStr}T23:59:59+03:00`).getTime();
   const openTask = (c: KanbanCard) => c.task && c.task.state !== 'done' && c.task.state !== 'control';
-  const returned = cards.filter(c => c.returned && c.column.startsWith('pool') && !openTask(c));
+  const returned = cards.filter(c => c.returned && daysAgo(c.returned.at) <= 7 && c.column.startsWith('pool') && !openTask(c)); // «перезвони сегодня» — только про свежие звонки
   const fresh = cards
     .filter(c => c.column === 'pool_hot' && !c.returned && !openTask(c) && !c.queued && c.lastDeliveredAt && daysAgo(c.lastDeliveredAt) >= 1) // в день отгрузки звонить рано
     .sort((a, b) => queueScore(b, 0) - queueScore(a, 0));
