@@ -18,6 +18,7 @@
     "verify:supply-panel": "node --import ./scripts/ts-resolve-register.mjs scripts/supply-panel-verify.ts",
     "test:realizations": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-realizations.ts",
     "test:dashboard-drilldown": "node --import ./scripts/ts-resolve-register.mjs scripts/assert-dashboard-drilldown.ts",
+    "test:ai-mask": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-ai-mask.ts",
     "test:geo-parse": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-geo-parse.ts",
     "test:pool": "node --experimental-strip-types --import ./scripts/ts-resolve-register.mjs scripts/assert-pool-singleton-8968.ts",
     "test:security": "node --import ./scripts/test-stubs/register.mjs scripts/assert-security-8256.ts"
