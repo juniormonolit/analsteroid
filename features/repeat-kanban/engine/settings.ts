@@ -26,9 +26,11 @@ export interface KanbanSettings {
   /** «И сменить менеджера на …» при постановке задачи — через бизнес-процесс Битрикса «Сменить
    *  ответственного» (шаблон 171). Выключено, пока владелец не подтвердит первый живой запуск. */
   reassignEnabled: boolean;
+  /** Очередь задач (миграция 237): сколько новых задач из очереди выдавать менеджеру в день. */
+  queueDailyLimit: number;
 }
 
-export const DEFAULT_SETTINGS: KanbanSettings = { managerTaskLimit: 10, reassignEnabled: false };
+export const DEFAULT_SETTINGS: KanbanSettings = { managerTaskLimit: 10, reassignEnabled: false, queueDailyLimit: 3 };
 export const TASK_LIMIT_MIN = 1;
 export const TASK_LIMIT_MAX = 200;
 
@@ -49,6 +51,7 @@ export async function fetchKanbanSettings(): Promise<KanbanSettings> {
     const value: KanbanSettings = {
       managerTaskLimit: parseTaskLimit(map.get('manager_task_limit')) ?? DEFAULT_SETTINGS.managerTaskLimit,
       reassignEnabled: map.get('reassign_enabled') === true,
+      queueDailyLimit: parseTaskLimit(map.get('queue_daily_limit')) ?? DEFAULT_SETTINGS.queueDailyLimit,
     };
     settingsCache = { at: Date.now(), value };
     return value;
@@ -67,6 +70,11 @@ export async function saveKanbanSettings(patch: Partial<Record<keyof KanbanSetti
     rows.push(['manager_task_limit', n]);
   }
   if (patch.reassignEnabled !== undefined) rows.push(['reassign_enabled', patch.reassignEnabled === true]);
+  if (patch.queueDailyLimit !== undefined) {
+    const n = parseTaskLimit(patch.queueDailyLimit);
+    if (n === null) throw new SettingsError(`Выдача из очереди в день — целое число от ${TASK_LIMIT_MIN} до ${TASK_LIMIT_MAX}`);
+    rows.push(['queue_daily_limit', n]);
+  }
   if (!rows.length) throw new SettingsError('Нечего сохранять');
   const db = systemDb();
   for (const [key, value] of rows) {

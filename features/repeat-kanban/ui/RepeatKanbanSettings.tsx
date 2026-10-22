@@ -93,16 +93,18 @@ function GeneralTab({ settings }: { settings: KanbanSettings }) {
   const qc = useQueryClient();
   const [limit, setLimit] = useState(String(settings.managerTaskLimit));
   const [reassign, setReassign] = useState(settings.reassignEnabled);
+  const [daily, setDaily] = useState(String(settings.queueDailyLimit ?? 3));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const dirty = limit.trim() !== String(settings.managerTaskLimit) || reassign !== settings.reassignEnabled;
+  const dirty = limit.trim() !== String(settings.managerTaskLimit) || reassign !== settings.reassignEnabled || daily.trim() !== String(settings.queueDailyLimit ?? 3);
 
   const save = async () => {
     setBusy(true); setMsg(null);
     try {
-      const next = await api<SettingsState>('/api/repeat-kanban/settings', { method: 'PUT', body: JSON.stringify({ settings: { managerTaskLimit: Number(limit), reassignEnabled: reassign } }) });
+      const next = await api<SettingsState>('/api/repeat-kanban/settings', { method: 'PUT', body: JSON.stringify({ settings: { managerTaskLimit: Number(limit), reassignEnabled: reassign, queueDailyLimit: Number(daily) } }) });
       qc.setQueryData(QK, next);
       setLimit(String(next.settings.managerTaskLimit));
+      setDaily(String(next.settings.queueDailyLimit));
       setReassign(next.settings.reassignEnabled);
       setMsg({ ok: true, text: 'Сохранено' });
     } catch (e) {
@@ -118,6 +120,14 @@ function GeneralTab({ settings }: { settings: KanbanSettings }) {
           onChange={e => { setLimit(e.target.value); setMsg(null); }} className={`${fieldCls} max-w-[160px]`} />
         <span className="text-xs text-[var(--color-text-muted)]">
           Активные — незакрытые и не сданные на проверку задачи проекта «Повторные продажи». По умолчанию 10.
+        </span>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="font-medium">Очередь: новых задач менеджеру в день</span>
+        <input type="number" inputMode="numeric" min={1} max={200} step={1} value={daily}
+          onChange={e => { setDaily(e.target.value); setMsg(null); }} className={`${fieldCls} max-w-[160px]`} />
+        <span className="text-xs text-[var(--color-text-muted)]">
+          Из очереди задачи выдаются, пока у менеджера активных меньше нормы, но не больше этого числа в день — по будням с 9 до 18 МСК. По умолчанию 3.
         </span>
       </label>
       <label className="flex min-h-11 cursor-pointer items-start gap-2">

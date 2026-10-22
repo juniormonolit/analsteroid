@@ -48,6 +48,7 @@ export async function register() {
     if (allow.has('supplyPanelSync')) scheduleSupplyPanelSync();
     if (allow.has('dailyReport')) scheduleMoscowReport();
     if (allow.has('repeatKanbanSnapshot')) scheduleRepeatKanbanSnapshot();
+    if (allow.has('repeatQueueIssue')) scheduleRepeatQueueIssue();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -75,6 +76,7 @@ export async function register() {
   scheduleRopAdviceFeedback();
   scheduleWeeklyWeather();
   scheduleSupplyPanelSync();
+  scheduleRepeatQueueIssue();
   scheduleReportSchedules();
   scheduleScenarios();
   scheduleDiagnostics();
@@ -731,6 +733,34 @@ function scheduleRepeatKanbanSnapshot() {
     }
   };
   setInterval(() => { void tick(); }, 5 * 60 * 1000);
+}
+
+// Очередь задач канбана повторных (миграция 237, владелец 22.10): раз в 2 минуты выдаёт позиции «до нормы»
+// (рабочие часы МСК проверяет сам прогон). Пишет в Битрикс (сделки/задачи) — только по позициям, которые
+// поставил РОП; Redis-замок — чтобы два процесса не выдали одно и то же.
+function scheduleRepeatQueueIssue() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const { redisReady } = await import('./lib/cache/redis');
+      const redis = await redisReady();
+      if (redis && !(await redis.set('repeat-queue:issue:lock', String(process.pid), 'EX', 300, 'NX'))) return;
+      try {
+        const { runQueueIssue } = await import('./features/repeat-kanban/engine/queue');
+        const r = await runQueueIssue();
+        if (r.issued || r.removed || r.failed) console.log(`[repeatQueueIssue] менеджеров ${r.managers}, выдано ${r.issued}, снято ${r.removed}, ошибок ${r.failed}`);
+      } finally {
+        if (redis) await redis.del('repeat-queue:issue:lock').catch(() => {});
+      }
+    } catch (err) {
+      console.error('[repeatQueueIssue] не удалось:', err instanceof Error ? err.message : err);
+    } finally {
+      running = false;
+    }
+  };
+  setInterval(() => { void tick(); }, 2 * 60 * 1000);
 }
 
 function scheduleSupplyPanelSync() {

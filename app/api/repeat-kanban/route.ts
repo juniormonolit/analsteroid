@@ -17,6 +17,7 @@ import { logEvent, newRequestId, type KanbanEventType } from '@/features/repeat-
 import { decideHideRequest, decideReview, hideFromPool, markBrakNow, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
 import { rememberDealClient } from '@/features/repeat-kanban/engine/dealFixes';
+import { enqueue, fetchQueueItem, issueNow, removeByClient, removeFromQueue, setBoost, type DeadlineRule } from '@/features/repeat-kanban/engine/queue';
 import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
@@ -161,6 +162,49 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
     if (!canManage) return NextResponse.json({ error: 'Действие доступно РОПу' }, { status: 403 });
+
+    // ── Очередь задач (миграция 237, владелец 22.10) ──────────────────────────
+    if (body.action.startsWith('queue_')) {
+      const zone = new Set(managers.map(m => m.id));
+      if (body.action === 'queue_add') {
+        if (!session.bitrixUserId) return NextResponse.json({ error: 'Нет привязки к Битриксу — некому быть постановщиком' }, { status: 400 });
+        const raw = (Array.isArray(body.items) ? body.items : []).slice(0, 3000) as { clientKey?: unknown; managerId?: unknown }[];
+        // Проверка «заказчик у этого менеджера» — по менеджеру один раз (список из снимка).
+        const own = new Map<string, Set<string>>();
+        const items: { clientKey: string; managerId: string }[] = [];
+        let skipped = 0;
+        for (const it of raw) {
+          const ck = String(it.clientKey ?? ''), mid = String(it.managerId ?? '');
+          if (!KEY_RE.test(ck) || !zone.has(mid)) { skipped++; continue; }
+          if (!own.has(mid)) own.set(mid, new Set((await fetchManagerCustomers(Number(mid))).map(r => r.clientKey)));
+          if (!own.get(mid)!.has(ck)) { skipped++; continue; }
+          items.push({ clientKey: ck, managerId: mid });
+        }
+        let newResponsibleId: string | null = null;
+        if (typeof body.newManagerId === 'string' && /^\d{1,10}$/.test(body.newManagerId)) {
+          if (!(await fetchKanbanSettings()).reassignEnabled) return NextResponse.json({ error: 'Смена менеджера выключена в настройках канбана' }, { status: 400 });
+          if (!zone.has(body.newManagerId)) return NextResponse.json({ error: 'Новый менеджер не из вашей зоны' }, { status: 403 });
+          newResponsibleId = body.newManagerId;
+        }
+        const rule = (['window', 'today', '3', '7'] as const).includes(body.deadlineRule as DeadlineRule) ? body.deadlineRule as DeadlineRule : 'window';
+        const time = typeof body.deadlineTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.deadlineTime) ? body.deadlineTime : '19:00';
+        const r = await enqueue({
+          items, queuedBy: session.bitrixUserId, queuedByName: session.displayName,
+          templateId: typeof body.templateId === 'number' ? body.templateId : null,
+          comment: typeof body.comment === 'string' && body.comment.trim() ? body.comment.trim().slice(0, 3000) : null,
+          deadlineRule: rule, deadlineTime: time, newResponsibleId,
+        });
+        return NextResponse.json({ ...r, skipped });
+      }
+      const qid = Number(body.id);
+      const item = Number.isInteger(qid) && qid > 0 ? await fetchQueueItem(qid) : null;
+      if (!item || !zone.has(item.managerId)) return NextResponse.json({ error: 'Позиция не найдена в вашей зоне' }, { status: 404 });
+      if (body.action === 'queue_remove') { await removeFromQueue(qid, 'manual', session.bitrixUserId); return NextResponse.json({ ok: true }); }
+      if (body.action === 'queue_boost') { await setBoost(qid, Number(body.boost) || 0); return NextResponse.json({ ok: true }); }
+      if (body.action === 'queue_issue_now') return NextResponse.json(await issueNow(qid, session.bitrixUserId));
+      return NextResponse.json({ error: 'Неизвестное действие очереди' }, { status: 400 });
+    }
+
     const clientKey = String(body.clientKey ?? '');
     const managerId = String(body.managerId ?? '');
     if (!KEY_RE.test(clientKey) || !managers.some(m => m.id === managerId)) {
@@ -188,6 +232,8 @@ export async function POST(req: NextRequest) {
         newResponsibleId = body.newManagerId;
       }
       const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime, newResponsibleId });
+      // Поставили «Сразу» — позиция этого заказчика в очереди больше не нужна.
+      await removeByClient(clientKey, 'manual', session.bitrixUserId).catch(() => {});
       // Синк может не донести клиента новой сделки (21.10: так карточки оставались в пуле).
       rememberDealClient(res.dealId, clientKey);
       const type = logType ?? (res.dealMode === 'created' ? 'deal_task_created' : res.dealMode === 'reopened' ? 'deal_returned_from_reject' : 'task_created');

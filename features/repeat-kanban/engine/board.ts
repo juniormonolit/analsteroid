@@ -21,6 +21,7 @@ import { fetchTailTable, tailPotential, type PotentialInfo } from './potential';
 import { fetchHideRequests, type HideRequest } from './reviews';
 import { fetchKanbanSettings } from './settings';
 import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
+import { fetchQueuedByClient } from './queueRead';
 
 const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
@@ -118,6 +119,8 @@ export interface KanbanCard {
   openDealInBrak: number | null;
   /** Отказник/брак сам позвонил после отказа — карточка в «Срочно» (22.10). */
   returned: { at: string; missed: boolean } | null;
+  /** Заказчик в очереди задач (миграция 237): кому выдастся, кто поставил. */
+  queued: { id: number; managerId: string; by: string | null; at: string } | null;
 }
 
 export interface KanbanColumn {
@@ -472,6 +475,7 @@ export async function buildRepeatBoard(opts: {
     fetchWrongFunnelDeals([...new Set(keys.map(k => (k.startsWith('k') ? k : `p${k.slice(1)}`)))]),
     fetchInboundCalls([...new Set(keys.map(refOfKey))]),
   ]);
+  const queuedMap = opts.skipNames ? new Map() : await fetchQueuedByClient(keys).catch(() => new Map());
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
   const [calls, manual, reviews, tasks, hideReqs, settings, managerLoad] = await Promise.all([
@@ -631,6 +635,7 @@ export async function buildRepeatBoard(opts: {
       hideRequest: hideReqs.get(r.clientKey) ?? null,
       openDealInBrak: col === 'brak' && hasOpenDeal && current ? current.dealId : null,
       returned: col === 'pool_hot' ? returned ?? null : null,
+      queued: (() => { const q = queuedMap.get(r.clientKey); return q ? { id: q.id, managerId: q.managerId, by: q.queuedByName, at: q.createdAt } : null; })(),
       // Только если в повторной воронке открытой сделки нет — иначе это история, не ошибка сейчас.
       wrongFunnel: hasOpenDeal ? null : wrongFunnel.get(r.clientKey.startsWith('k') ? r.clientKey : `p${r.clientKey.slice(1)}`) ?? null,
     });

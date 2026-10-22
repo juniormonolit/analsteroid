@@ -27,6 +27,7 @@ import {
 import type { BoardKpi, KanbanCard, KanbanColumn, RepeatBoard, TodaySection } from '../engine/board';
 import type { TaskNote } from '../engine/taskNotes';
 import type { RepeatTask } from '../engine/tasks';
+import { QueueView } from './QueueView';
 
 const PAGE = 40;
 // Все кнопки шапки — одного вида (правка владельца 20.10: «кнопочки приведи к одному виду»).
@@ -266,13 +267,16 @@ export function RepeatKanbanPage() {
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {data?.canManage && (
             <div className="flex min-w-0 gap-1 rounded-lg border border-[var(--color-border)] p-0.5" role="tablist" aria-label="Вид">
-              <button type="button" role="tab" aria-selected={view !== 'today'} onClick={() => setView('board')}
-                className={`inline-flex min-h-10 items-center rounded-md px-3 text-sm ${view !== 'today' ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>Доска</button>
+              <button type="button" role="tab" aria-selected={view !== 'today' && view !== 'queue'} onClick={() => setView('board')}
+                className={`inline-flex min-h-10 items-center rounded-md px-3 text-sm ${view !== 'today' && view !== 'queue' ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>Доска</button>
               <button type="button" role="tab" aria-selected={view === 'today'} onClick={() => setView('today')}
                 title="Что решить сегодня: приёмка задач, просрочки, разбор, окно закрывается"
                 className={`inline-flex min-h-10 items-center gap-1 rounded-md px-3 text-sm ${view === 'today' ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
                 Сегодня{data ? <span className={view === 'today' ? 'opacity-80' : 'text-[var(--color-text-muted)]'}>· {rub.format(todayTotal)}</span> : null}
               </button>
+              <button type="button" role="tab" aria-selected={view === 'queue'} onClick={() => setView('queue')}
+                title="Очередь задач: выдаются менеджерам по срочности, когда освобождается место"
+                className={`inline-flex min-h-10 items-center rounded-md px-3 text-sm ${view === 'queue' ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>Очередь</button>
             </div>
           )}
           {/* Отделы и менеджеры работают вместе: отделы сужают список менеджеров, внутри
@@ -332,7 +336,7 @@ export function RepeatKanbanPage() {
                 options={SORT_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
                 className={`${sort !== 'default' ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
             </FilterField>
-            {view !== 'today' && (
+            {view !== 'today' && view !== 'queue' && (
               <FilterField label="Перейти к колонкам">
                 <div className="flex flex-wrap gap-1.5">
                   {GROUPS.map(g => (
@@ -342,7 +346,7 @@ export function RepeatKanbanPage() {
               </FilterField>
             )}
           </FiltersButton>
-          {canManage && view !== 'today' && (
+          {canManage && view !== 'today' && view !== 'queue' && (
             <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
               title="Выбрать карточки: отметить галочками и поставить задачи всем разом" aria-label="Выбрать карточки"
               className={selectMode ? BTN_ACTIVE : BTN_IDLE}>
@@ -375,7 +379,9 @@ export function RepeatKanbanPage() {
       </div>
 
       <TaskNotesCtx.Provider value={notes ?? {}}>
-      {view === 'today' && data?.canManage ? (
+      {view === 'queue' && data?.canManage ? (
+        <QueueView onChanged={() => refetch()} />
+      ) : view === 'today' && data?.canManage ? (
         <TodayView sections={data?.today ?? []} h={handlers} />
       ) : (
       <div className="relative min-h-[75dvh] min-w-0 flex-1 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
@@ -826,6 +832,11 @@ function Card({ c, col, canManage, isOwn, selected, onSelect, onOpen, onTask, on
         </div>
       </div>
       <div className="truncate text-[11.5px] text-[var(--color-text-muted)]">{c.managerName}</div>
+      {c.queued && (
+        <div className="truncate rounded bg-[var(--color-bg-surface)] px-1.5 py-0.5 text-[11.5px] text-[var(--color-text-secondary)]" title="Задача выдастся автоматически, когда у менеджера освободится место (вкладка «Очередь»)">
+          В очереди{c.queued.by ? ` · поставил ${shortName(c.queued.by)}` : ''} · {fmtDay(c.queued.at)}
+        </div>
+      )}
 
       {/* 2. Деньги. */}
       <div className="min-w-0 tabular-nums">
@@ -1062,6 +1073,45 @@ function ReassignPicker({ opts, currentId, value, onChange }: { opts: ReassignOp
   );
 }
 
+// ── Очередь (миграция 237): «Сразу» или «В очередь» в окнах задачи ──────────────────────────
+type TaskMode = 'now' | 'queue';
+function useTemplates() {
+  const { data } = useQuery<{ templates: { id: number; name: string; isDefault: boolean }[]; settings?: { queueDailyLimit?: number; managerTaskLimit?: number } }>({
+    queryKey: ['repeat-kanban-templates'],
+    queryFn: async () => { const r = await fetch('/api/repeat-kanban/settings'); return r.ok ? r.json() : { templates: [] }; },
+    staleTime: 60_000,
+  });
+  return { templates: data?.templates ?? [], dailyLimit: data?.settings?.queueDailyLimit ?? 3 };
+}
+function ModeToggle({ mode, onChange }: { mode: TaskMode; onChange: (m: TaskMode) => void }) {
+  const tab = (m: TaskMode, label: string, hint: string) => (
+    <button type="button" role="tab" aria-selected={mode === m} onClick={() => onChange(m)} title={hint}
+      className={`inline-flex min-h-10 flex-1 items-center justify-center rounded-md px-3 text-sm ${mode === m ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>{label}</button>
+  );
+  return (
+    <div className="flex gap-1 rounded-lg border border-[var(--color-border)] p-0.5" role="tablist" aria-label="Когда ставить">
+      {tab('now', 'Сразу', 'Сделка и задача — прямо сейчас')}
+      {tab('queue', 'В очередь', 'Задача выдастся менеджеру, когда у него освободится место — по срочности')}
+    </div>
+  );
+}
+function QueueRuleFields({ rule, onRule, time, onTime }: { rule: 'today' | 'window' | '3' | '7'; onRule: (r: 'today' | 'window' | '3' | '7') => void; time: string; onTime: (t: string) => void }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[var(--color-text-secondary)]">Срок — считается в момент выдачи</span>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {([['today', 'В день выдачи'], ['window', 'До конца окна'], ['3', '+3 дня'], ['7', '+7 дней']] as const).map(([v, l]) => (
+          <button key={v} type="button" onClick={() => onRule(v)} className={rule === v ? BTN_ACTIVE : BTN_IDLE}>{l}</button>
+        ))}
+      </div>
+      <label className="flex items-center gap-2 text-[var(--color-text-secondary)]">
+        Время
+        <input type="time" value={time} step={900} onChange={e => e.target.value && onTime(e.target.value)} aria-label="Время срока (МСК)" className={`${fieldCls} min-h-11 w-32`} />
+      </label>
+    </div>
+  );
+}
+
 function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: KanbanCard; load: number; limit: number; reassign: ReassignOpts | null; onClose: () => void; onSaved: () => void }) {
   const [text, setText] = useState('');
   const [newManager, setNewManager] = useState('');
@@ -1070,6 +1120,23 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<{ taskId: number; dealId: number; dealMode: string; chatPosted?: boolean } | null>(null);
+  const [mode, setMode] = useState<TaskMode>('now');
+  const { templates, dailyLimit } = useTemplates();
+  const [qTemplate, setQTemplate] = useState('');
+  const qTid = qTemplate || String(templates.find(t => t.isDefault)?.id ?? templates[0]?.id ?? '');
+  const [qComment, setQComment] = useState('');
+  const [qRule, setQRule] = useState<'today' | 'window' | '3' | '7'>('window');
+  const [queued, setQueued] = useState<{ added: number; updated: number } | null>(null);
+  const submitQueue = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const j = await post({ action: 'queue_add', items: [{ clientKey: card.clientKey, managerId: card.managerId }], templateId: qTid ? Number(qTid) : undefined,
+        comment: qComment, deadlineRule: qRule, deadlineTime, newManagerId: newManager || undefined });
+      if (!j.added && !j.updated) throw new Error('Не удалось поставить в очередь');
+      setQueued(j); onSaved();
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setBusy(false);
+  };
   // Что произойдёт со сделкой — по правилам ТЗ (engine/createDeal.ts), заранее и честно.
   const what = card.deal ? `Задача в сделку #${card.deal.dealId}, в название — «ПОСМОТРИ ЗАДАЧУ».`
     : card.lastLost ? `Сделка #${card.lastLost.dealId} вернётся из отказа в первую стадию, в название — «ПОСМОТРИ ЗАДАЧУ».`
@@ -1086,7 +1153,15 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
 
   return (
     <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Задача · ${cardName(card)}`} desktopWidth="sm:max-w-2xl">
-      {result ? (
+      {queued ? (
+        <div className="flex flex-col gap-3 text-sm">
+          <p className="text-[var(--color-text)]">
+            {queued.updated ? 'Позиция в очереди обновлена.' : 'Поставлено в очередь.'} Задача выдастся {newManager ? shortName(reassign?.managers.find(m => m.id === newManager)?.name ?? '') : shortName(card.managerName)},
+            когда у него активных задач станет меньше {limit}, — не больше {dailyLimit} в день, по будням с 9 до 18. Порядок — по срочности. Следить — вкладка «Очередь».
+          </p>
+          <button type="button" onClick={onClose} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">Готово</button>
+        </div>
+      ) : result ? (
         <div className="flex flex-col gap-3 text-sm">
           <p className="text-[var(--color-text)]">
             {result.dealMode === 'created' ? `Создана сделка #${result.dealId}` : result.dealMode === 'reopened' ? `Сделка #${result.dealId} возвращена из отказа` : `Сделка #${result.dealId}`}
@@ -1106,22 +1181,42 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
           </p>
           <OverloadNote name={newManager ? reassign?.managers.find(m => m.id === newManager)?.name ?? card.managerName : card.managerName}
             load={newManager && reassign ? reassign.loadOf(newManager) : load} limit={limit} />
+          <ModeToggle mode={mode} onChange={setMode} />
           {reassign && <ReassignPicker opts={reassign} currentId={card.managerId} value={newManager} onChange={setNewManager} />}
-          {/* Шаблон (настройки канбана): по умолчанию подставляется отмеченный «по умолчанию»,
-              уже заполненный данными заказчика; текст можно править. */}
-          <TemplatePicker clientKey={card.clientKey} managerId={card.managerId} value={text} onChange={setText} />
-          <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
-            Сообщение менеджеру
-            <textarea value={text} onChange={e => setText(e.target.value)} rows={10}
-              placeholder="У тебя дом без крыши — будет капать дождь — предложи металлочерепицу!" className={`${fieldCls} min-h-[30dvh] resize-y sm:min-h-[240px]`} />
-          </label>
-          <DeadlinePicker card={card} value={deadline} onChange={setDeadline} time={deadlineTime} onTime={setDeadlineTime} />
+          {mode === 'now' ? (
+            <>
+              {/* Шаблон (настройки канбана): по умолчанию подставляется отмеченный «по умолчанию»,
+                  уже заполненный данными заказчика; текст можно править. */}
+              <TemplatePicker clientKey={card.clientKey} managerId={card.managerId} value={text} onChange={setText} />
+              <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+                Сообщение менеджеру
+                <textarea value={text} onChange={e => setText(e.target.value)} rows={10}
+                  placeholder="У тебя дом без крыши — будет капать дождь — предложи металлочерепицу!" className={`${fieldCls} min-h-[30dvh] resize-y sm:min-h-[240px]`} />
+              </label>
+              <DeadlinePicker card={card} value={deadline} onChange={setDeadline} time={deadlineTime} onTime={setDeadlineTime} />
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-[var(--color-text-muted)]">Сообщение соберётся по шаблону в момент выдачи — с актуальными данными заказчика.</p>
+              <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+                Шаблон сообщения
+                <SearchSelect ariaLabel="Шаблон сообщения" value={qTid} onChange={setQTemplate}
+                  options={templates.length ? templates.map(t => ({ value: String(t.id), label: `${t.name}${t.isDefault ? ' · по умолчанию' : ''}` })) : [{ value: '', label: 'Шаблонов нет — без сообщения' }]}
+                  className="w-full justify-start bg-[var(--color-bg)]" />
+              </label>
+              <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+                Добавка от РОПа (необязательно)
+                <textarea value={qComment} onChange={e => setQComment(e.target.value)} rows={4} placeholder="Добавится в конце сообщения" className={fieldCls} />
+              </label>
+              <QueueRuleFields rule={qRule} onRule={setQRule} time={deadlineTime} onTime={setDeadlineTime} />
+            </>
+          )}
           {err && <p className="text-[var(--color-negative)]">{err}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
-            <button type="button" disabled={busy} onClick={submit}
+            <button type="button" disabled={busy} onClick={mode === 'queue' ? submitQueue : submit}
               className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">
-              {busy ? 'Создаю…' : 'Поставить задачу'}
+              {busy ? 'Сохраняю…' : mode === 'queue' ? 'Поставить в очередь' : 'Поставить задачу'}
             </button>
           </div>
         </div>
@@ -1137,12 +1232,11 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
   cards: KanbanCard[]; loadOf: (managerId: string) => number; limit: number; reassign: ReassignOpts | null; onClose: () => void; onDone: () => void;
 }) {
   const [newManager, setNewManager] = useState('');
-  const { data: tpl } = useQuery<{ templates: { id: number; name: string; isDefault: boolean }[] }>({
-    queryKey: ['repeat-kanban-templates'],
-    queryFn: async () => { const r = await fetch('/api/repeat-kanban/settings'); return r.ok ? r.json() : { templates: [] }; },
-    staleTime: 60_000,
-  });
-  const templates = tpl?.templates ?? [];
+  const { templates, dailyLimit } = useTemplates();
+  // «В очередь» по умолчанию для пачки (владелец 22.10: «чтобы задачи не сыпались на менеджера»).
+  const [mode, setMode] = useState<TaskMode>(cards.length > 3 ? 'queue' : 'now');
+  const [qComment, setQComment] = useState('');
+  const [queued, setQueued] = useState<{ added: number; updated: number; skipped: number } | null>(null);
   const [templateId, setTemplateId] = useState<string>('');
   const tid = templateId || String(templates.find(t => t.isDefault)?.id ?? templates[0]?.id ?? '');
   const [deadlineMode, setDeadlineMode] = useState<'today' | 'window' | '3' | '7'>('window');
@@ -1157,7 +1251,17 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
   const over = [...perMgr].filter(([id, m]) => loadOf(id) + m.n > limit);
   const done = results.size;
 
+  const runQueue = async () => {
+    setRunning(true);
+    try {
+      const j = await post({ action: 'queue_add', items: cards.map(c => ({ clientKey: c.clientKey, managerId: c.managerId })),
+        templateId: tid ? Number(tid) : undefined, comment: qComment, deadlineRule: deadlineMode, deadlineTime, newManagerId: newManager || undefined });
+      setQueued(j);
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+    setRunning(false);
+  };
   const run = async () => {
+    if (mode === 'queue') return runQueue();
     setRunning(true); stop.current = false;
     for (const c of cards) {
       if (stop.current) break;
@@ -1176,8 +1280,19 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
   const finished = !running && done > 0;
 
   return (
-    <Modal open onOpenChange={o => { if (!o && !running) { if (okCount) onDone(); onClose(); } }} title={`Задачи · ${rub.format(cards.length)} заказчиков`} desktopWidth="sm:max-w-2xl">
+    <Modal open onOpenChange={o => { if (!o && !running) { if (okCount || queued) onDone(); onClose(); } }} title={`Задачи · ${rub.format(cards.length)} заказчиков`} desktopWidth="sm:max-w-2xl">
+      {queued ? (
+        <div className="flex flex-col gap-3 text-sm">
+          <p className="text-[var(--color-text)]">
+            В очередь: новых {rub.format(queued.added)}, обновлено {rub.format(queued.updated)}{queued.skipped ? `, пропущено ${queued.skipped} (не у этих менеджеров)` : ''}.
+            Задачи будут выдаваться менеджерам по срочности, пока у них активных меньше {limit}, — не больше {dailyLimit} в день каждому, по будням с 9 до 18.
+            Прогноз и порядок — во вкладке «Очередь».
+          </p>
+          <button type="button" onClick={() => { onDone(); onClose(); }} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">Готово</button>
+        </div>
+      ) : (
       <div className="flex flex-col gap-3 text-sm">
+        <ModeToggle mode={mode} onChange={setMode} />
         <p className="rounded-lg bg-[var(--color-bg-surface)] p-3 text-[var(--color-text-secondary)]">
           Каждому заказчику — своя задача в проекте «Повторные продажи» по тем же правилам, что у кнопки на карточке
           (сделка создаётся, возвращается из отказа или берётся текущая). Сообщение — шаблон, заполненный данными каждого заказчика.
@@ -1201,7 +1316,13 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
           </label>
         </div>
         {reassign && <ReassignPicker opts={reassign} currentId={null} value={newManager} onChange={setNewManager} />}
-        {over.length > 0 && (
+        {mode === 'queue' && (
+          <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+            Добавка от РОПа ко всем (необязательно)
+            <textarea value={qComment} onChange={e => setQComment(e.target.value)} rows={3} placeholder="Добавится в конце каждого сообщения" className={fieldCls} />
+          </label>
+        )}
+        {mode === 'now' && over.length > 0 && (
           <div className="rounded-lg bg-[#fff2cc] p-2 text-[#7f6000]">
             <AlertTriangle size={13} className="mr-1 inline" />Станут перегружены (норма {limit}):{' '}
             {over.map(([id, m]) => `${shortName(m.name)} — ${loadOf(id) + m.n}`).join(', ')}. Поставить всё равно можно.
@@ -1229,13 +1350,14 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
               <button type="button" onClick={() => { if (okCount) onDone(); onClose(); }} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">{finished ? 'Закрыть' : 'Отмена'}</button>
               {(!finished || okCount < cards.length) && (
                 <button type="button" onClick={run} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">
-                  {finished ? 'Повторить ошибочные' : `Поставить ${rub.format(cards.length)} ${plural(cards.length, 'задачу', 'задачи', 'задач')}`}
+                  {finished ? 'Повторить ошибочные' : mode === 'queue' ? `В очередь · ${rub.format(cards.length)}` : `Поставить ${rub.format(cards.length)} ${plural(cards.length, 'задачу', 'задачи', 'задач')}`}
                 </button>
               )}
             </>
           )}
         </div>
       </div>
+      )}
     </Modal>
   );
 }
