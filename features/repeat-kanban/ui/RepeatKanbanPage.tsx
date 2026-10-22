@@ -108,6 +108,7 @@ export function RepeatKanbanPage() {
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
   const [hideFor, setHideFor] = useState<KanbanCard | null>(null);
   const [brakFor, setBrakFor] = useState<KanbanCard | null>(null);
+  const [mergeFor, setMergeFor] = useState<KanbanCard | null>(null);
   const [hideReqFor, setHideReqFor] = useState<KanbanCard | null>(null);
   // Массовая постановка задач (аудит 21.10: «в работе без задачи» — разом): режим выбора.
   const [selectMode, setSelectMode] = useState(false);
@@ -208,6 +209,7 @@ export function RepeatKanbanPage() {
       if (a === 'hide') setHideFor(c);
       else if (a === 'request_hide') setHideReqFor(c);
       else if (a === 'brak_now') setBrakFor(c);
+      else if (a === 'merge') setMergeFor(c);
       else if (a === 'accept_hide' || a === 'decline_hide') {
         const ok = a === 'accept_hide'
           ? confirm(`Скрыть «${cardName(c)}» до ${c.hideRequest?.until.split('-').reverse().join('.')}, как предлагает менеджер?`)
@@ -215,6 +217,13 @@ export function RepeatKanbanPage() {
         if (ok) { await post({ action: 'decide_hide', accept: a === 'accept_hide', clientKey: c.clientKey, managerId: c.managerId, column: c.column }).catch(e => alert(e.message)); refresh(); }
       }
       else if (confirm(`Вернуть «${cardName(c)}» в пул раньше срока?`)) { await post({ action: 'unhide', clientKey: c.clientKey, managerId: c.managerId, column: c.column }).catch(e => alert(e.message)); refresh(); }
+    },
+    canMerge: canManage && !!data?.mergeEnabled,
+    onUnmerge: async (c, m) => {
+      if (!confirm(`Разъединить: «${m.name ?? m.key}» снова станет отдельной карточкой. Продолжить?`)) return;
+      await post({ action: 'unmerge', clientKey: c.clientKey, managerId: c.managerId, memberKey: m.key, column: c.column }).catch(e => alert(e.message));
+      alert('Готово. Карточки разделятся при обновлении списка заказчиков — меньше минуты.');
+      refresh();
     },
     onUnbrak: async c => { if (confirm(`Снять брак с «${cardName(c)}»? Заказчик вернётся в пул.`)) { await post({ action: 'unbrak', clientKey: c.clientKey, managerId: c.managerId, column: c.column }).catch(e => alert(e.message)); refresh(); } },
   };
@@ -447,6 +456,7 @@ export function RepeatKanbanPage() {
       {hideFor && <HideModal card={hideFor} onClose={() => setHideFor(null)} onSaved={refresh} />}
       {hideReqFor && <HideModal card={hideReqFor} request onClose={() => setHideReqFor(null)} onSaved={refresh} />}
       {brakFor && <BrakNowModal card={brakFor} onClose={() => setBrakFor(null)} onSaved={refresh} />}
+      {mergeFor && <MergeModal card={mergeFor} onClose={() => setMergeFor(null)} onSaved={refresh} />}
     </div>
   );
 }
@@ -501,6 +511,8 @@ interface CardHandlers {
   /** Режим выбора карточек для массовой постановки задач. */
   select: { has: (clientKey: string) => boolean; toggle: (c: KanbanCard) => void; addAll: (cs: KanbanCard[]) => void } | null;
   onAct: (a: CardAction, c: KanbanCard) => void;
+  /** Склейка заказчиков: РОП и старше, флаг customer_merge. */
+  canMerge: boolean; onUnmerge: (c: KanbanCard, m: KanbanCard['members'][number]) => void;
   onOpen: (c: KanbanCard) => void; onTask: (c: KanbanCard) => void;
   onReview: (c: KanbanCard) => void; onUnbrak: (c: KanbanCard) => void; onDeal: (dealId: number) => void;
 }
@@ -508,7 +520,7 @@ interface CardHandlers {
 function CardFor({ c, h }: { c: KanbanCard; h: CardHandlers }) {
   const sel = h.select && canTaskCol(c.column) ? h.select : null;
   return (
-    <Card c={c} col={c.column} canManage={h.canManage}
+    <Card c={c} col={c.column} canManage={h.canManage} canMerge={h.canMerge} onUnmerge={m => h.onUnmerge(c, m)}
       selected={sel ? sel.has(c.clientKey) : null} onSelect={sel ? () => sel.toggle(c) : undefined}
       onOpen={() => h.onOpen(c)} onTask={() => h.onTask(c)} onReview={() => h.onReview(c)} onUnbrak={() => h.onUnbrak(c)} onDeal={h.onDeal}
       isOwn={!!h.viewerId && c.managerId === h.viewerId} onAct={a => h.onAct(a, c)} />
@@ -768,7 +780,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   return a;
 }
 
-type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide';
+type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge';
 
 /** Редкие действия карточки — в меню «⋯» (владелец 20.10: «глупо, когда висят прямо на лице»). */
 function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; danger?: boolean }[]; onAct: (a: CardAction) => void }) {
@@ -792,8 +804,9 @@ function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; d
   );
 }
 
-function Card({ c, col, canManage, isOwn, selected, onSelect, onOpen, onTask, onReview, onUnbrak, onDeal, onAct }: {
+function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelect, onOpen, onTask, onReview, onUnbrak, onDeal, onAct }: {
   c: KanbanCard; col: ColumnKey; canManage: boolean;
+  canMerge: boolean; onUnmerge: (m: KanbanCard['members'][number]) => void;
   /** null — не в режиме выбора (или карточку нельзя выбрать). */
   selected: boolean | null; onSelect?: () => void;
   /** Заказчик смотрящего менеджера: «Скрыть» — только РОП, менеджер ПРЕДЛАГАЕТ (владелец 21.10). */
@@ -827,11 +840,13 @@ function Card({ c, col, canManage, isOwn, selected, onSelect, onOpen, onTask, on
           <CardMenu items={[
             ...(col.startsWith('pool') && canManage ? [{ label: 'Скрыть из пула', act: 'hide' as const }] : []),
             ...(col.startsWith('pool') && !canManage && isOwn && !c.hideRequest ? [{ label: 'Предложить скрыть', act: 'request_hide' as const }] : []),
+            ...(canMerge ? [{ label: 'Объединить с…', act: 'merge' as const }] : []),
             ...(canManage && (col.startsWith('pool') || col.startsWith('touch') || (col.startsWith('st_') && col !== 'st_sold')) ? [{ label: 'Сразу в брак', act: 'brak_now' as const, danger: true }] : []),
           ]} onAct={onAct} />
         </div>
       </div>
       <div className="truncate text-[11.5px] text-[var(--color-text-muted)]">{c.managerName}</div>
+      {c.members.length > 0 && <MembersBadge c={c} canMerge={canMerge} onUnmerge={onUnmerge} />}
       {c.queued && (
         <div className="truncate rounded bg-[var(--color-bg-surface)] px-1.5 py-0.5 text-[11.5px] text-[var(--color-text-secondary)]" title="Задача выдастся автоматически, когда у менеджера освободится место (вкладка «Очередь»)">
           В очереди{c.queued.by ? ` · поставил ${shortName(c.queued.by)}` : ''} · {fmtDay(c.queued.at)}
@@ -1407,6 +1422,130 @@ function HideModal({ card, request = false, onClose, onSaved }: { card: KanbanCa
             className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">{busy ? 'Сохраняю…' : request ? 'Предложить' : 'Скрыть'}</button>
         </div>
       </div>
+    </Modal>
+  );
+}
+
+const MERGE_SOURCE: Record<string, string> = { auto_contact: 'авто: тот же контакт', auto_company: 'авто: контакт компании', manual: 'вручную' };
+const keyLabel = (k: string) => `${k.startsWith('k') ? 'Компания' : k.startsWith('x') ? 'Контакт (юр.)' : 'Контакт'} #${k.slice(1)}`;
+
+/** «Объединено: N карточки» — из каких карточек Битрикса собран заказчик; РОП может разъединить. */
+function MembersBadge({ c, canMerge, onUnmerge }: { c: KanbanCard; canMerge: boolean; onUnmerge: (m: KanbanCard['members'][number]) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen} align="start" className="w-[320px] max-w-[calc(100vw-16px)] p-3 text-[12.5px]"
+      trigger={
+        <button type="button" className="self-start rounded bg-[var(--color-bg-surface)] px-1.5 py-0.5 text-[11.5px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
+          title="Один человек — несколько карточек в Битриксе: отгрузки и потенциал посчитаны вместе">
+          Объединено: {c.members.length + 1} {plural(c.members.length + 1, 'карточка', 'карточки', 'карточек')}
+        </button>
+      }>
+      <div className="flex flex-col gap-2">
+        <div className="font-semibold text-[var(--color-text)]">Один заказчик из нескольких карточек Битрикса</div>
+        <div className="text-[var(--color-text-secondary)]">Главная: {cardName(c)} · {keyLabel(c.clientKey)}</div>
+        {c.members.map(m => (
+          <div key={m.key} className="flex items-center gap-2 border-t border-[var(--color-border)] pt-2">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[var(--color-text)]">{m.name ?? keyLabel(m.key)}</div>
+              <div className="text-[11.5px] text-[var(--color-text-muted)]">{keyLabel(m.key)} · {MERGE_SOURCE[m.source] ?? m.source}</div>
+            </div>
+            {canMerge && (
+              <button type="button" onClick={() => { setOpen(false); onUnmerge(m); }}
+                className="min-h-9 shrink-0 rounded-md border border-[var(--color-border)] px-2 text-[12px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Разъединить</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </Popover>
+  );
+}
+
+/** «Объединить с…» (РОП и старше): найти вторую карточку того же человека, выбрать главную. */
+function MergeModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () => void; onSaved: () => void }) {
+  const [q, setQ] = useState('');
+  const [found, setFound] = useState<KanbanCard[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [other, setOther] = useState<KanbanCard | null>(null);
+  const [primary, setPrimary] = useState<'self' | 'other'>('self');
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 2) { setFound(null); return; }
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await fetch(`/api/repeat-kanban?q=${encodeURIComponent(term)}`);
+        const j = await r.json() as RepeatBoard;
+        const seen = new Set<string>([card.clientKey]);
+        setFound((j.columns ?? []).flatMap(c => c.cards).filter(c => !seen.has(c.clientKey) && seen.add(c.clientKey)).slice(0, 30));
+      } catch { setFound([]); }
+      setSearching(false);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [q, card.clientKey]);
+  const submit = async () => {
+    if (!other) return;
+    setBusy(true); setErr(null);
+    try {
+      await post({ action: 'merge', clientKey: card.clientKey, managerId: card.managerId, otherKey: other.clientKey, otherManagerId: other.managerId, primary, comment, column: card.column });
+      setDone(true); onSaved();
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setBusy(false);
+  };
+  const pill = (on: boolean) => `min-h-11 flex-1 rounded-lg border px-3 text-left text-sm ${on ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`;
+  return (
+    <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Объединить · ${cardName(card)}`} desktopWidth="sm:max-w-lg">
+      {done ? (
+        <div className="flex flex-col gap-3 text-sm">
+          <p className="text-[var(--color-text)]">Готово. Карточки станут одним заказчиком при обновлении списка — меньше минуты: отгрузки, потенциал и сделки посчитаются вместе. Разъединить — плашка «Объединено» на карточке.</p>
+          <div className="flex justify-end"><button type="button" onClick={onClose} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">Закрыть</button></div>
+        </div>
+      ) : (
+      <div className="flex flex-col gap-3 text-sm">
+        <p className="text-[var(--color-text-secondary)]">Один человек в Битриксе бывает несколькими карточками (контакт, юр-сделки, компания). Найдите вторую карточку — дальше это будет один заказчик.</p>
+        <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+          Вторая карточка — имя, номер контакта/компании или сделки
+          <input value={q} onChange={e => { setQ(e.target.value); setOther(null); }} placeholder="Хорев или 15105" className={fieldCls} autoFocus />
+        </label>
+        {searching && <p className="text-[var(--color-text-muted)]">Ищу…</p>}
+        {!other && found && (
+          found.length === 0 ? <p className="text-[var(--color-text-muted)]">Ничего не нашлось в вашей зоне.</p> : (
+            <div className="flex max-h-64 flex-col divide-y divide-[var(--color-border)] overflow-y-auto rounded-lg border border-[var(--color-border)]">
+              {found.map(f => (
+                <button key={f.clientKey} type="button" onClick={() => setOther(f)} className="flex min-h-11 flex-col items-start px-3 py-1.5 text-left hover:bg-[var(--color-bg-hover)]">
+                  <span className="text-[var(--color-text)]">{cardName(f)}</span>
+                  <span className="text-[11.5px] text-[var(--color-text-muted)]">{keyLabel(f.clientKey)} · {f.managerName} · {f.purchases} {plural(f.purchases, 'отгрузка', 'отгрузки', 'отгрузок')}</span>
+                </button>
+              ))}
+            </div>
+          )
+        )}
+        {other && (
+          <>
+            <div className="text-[var(--color-text-secondary)]">Какая карточка главная — на неё ставятся сделки и задачи:</div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button type="button" onClick={() => setPrimary('self')} className={pill(primary === 'self')}>{cardName(card)}<br /><span className="text-[11.5px] opacity-80">{keyLabel(card.clientKey)} · {card.managerName}</span></button>
+              <button type="button" onClick={() => setPrimary('other')} className={pill(primary === 'other')}>{cardName(other)}<br /><span className="text-[11.5px] opacity-80">{keyLabel(other.clientKey)} · {other.managerName}</span></button>
+            </div>
+            {other.managerId !== card.managerId && (
+              <p className="text-[#b45f06]">Менеджеры разные: заказчик останется у менеджера последней сделки, второй увидит его в «ранее работал с».</p>
+            )}
+            <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+              Комментарий (необязательно)
+              <textarea value={comment} onChange={e => setComment(e.target.value)} rows={2} placeholder="Один человек: ИП и физлицо" className={fieldCls} />
+            </label>
+          </>
+        )}
+        {err && <p className="text-[var(--color-negative)]">{err}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
+          <button type="button" disabled={busy || !other} onClick={submit} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">{busy ? 'Объединяю…' : 'Объединить'}</button>
+        </div>
+      </div>
+      )}
     </Modal>
   );
 }

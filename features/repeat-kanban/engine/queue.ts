@@ -111,7 +111,8 @@ export async function removeFromQueue(id: number, reason: string, by: string | n
 
 /** Ручная постановка «Сразу» по заказчику из очереди — позиция снимается (причина manual). */
 export async function removeByClient(clientKey: string, reason: string, by: string | null): Promise<void> {
-  const r = await systemDb().query(`SELECT id FROM repeat_task_queue WHERE client_key = $1 AND status = 'queued'`, [clientKey]);
+  const { memberKeysOf } = await import('@/features/customers/engine/merge');
+  const r = await systemDb().query(`SELECT id FROM repeat_task_queue WHERE client_key = ANY($1::text[]) AND status = 'queued'`, [await memberKeysOf(clientKey)]);
   for (const x of r.rows) await removeFromQueue(Number(x.id), reason, by);
 }
 
@@ -164,7 +165,8 @@ async function boardCardsOf(managerId: string, managerName: string): Promise<Map
   const big = Object.fromEntries(['pool_hot', 'pool_1', 'pool_2_4', 'pool_5', 'touch_0', 'touch_1', 'touch_2', 'touch_3',
     'st_called', 'st_supply', 'st_offer', 'st_cheaper', 'st_reserved', 'st_sold', 'review', 'brak', 'hidden'].map(k => [k, 5000]));
   const b = await buildRepeatBoard({ managers: [{ id: managerId, name: managerName }], selectedManagers: [], typeFilter: null, canManage: false, skipNames: true, limits: big });
-  return new Map(b.columns.flatMap(c => c.cards).map(c => [c.clientKey, c]));
+  // Позиция могла встать на исходный ключ до склейки заказчиков (merge.ts) — ищем и по членам.
+  return new Map(b.columns.flatMap(c => c.cards).flatMap(c => [[c.clientKey, c] as const, ...c.members.map(m => [m.key, c] as const)]));
 }
 
 /** Почему позицию надо снять (по свежей карточке доски), или null — можно выдавать. */
@@ -186,17 +188,19 @@ export async function issueItem(item: QueueItem, card: KanbanCard | null, opts: 
       WHERE id = $1 AND status = 'queued' RETURNING id`, [item.id],
   );
   if (!lock.rowCount) return { id: item.id, ok: false, error: 'уже выдаётся или снята' };
+  // Склейка заказчиков: позиция на исходном ключе выдаётся на каноничный (карточка доски).
+  const ck = card?.clientKey ?? item.clientKey;
   try {
     const tpl = await getTemplate(item.templateId);
-    const body = tpl ? (await renderTemplate(tpl.body, { clientKey: item.clientKey, managerId: item.managerId }).catch(() => '')).trim() : '';
+    const body = tpl ? (await renderTemplate(tpl.body, { clientKey: ck, managerId: item.managerId }).catch(() => '')).trim() : '';
     const comment = [body, item.comment?.trim()].filter(Boolean).join('\n\n');
     const res = await createRepeatTask({
-      clientKey: item.clientKey, fallbackManagerId: item.managerId,
+      clientKey: ck, fallbackManagerId: item.managerId,
       creatorBitrixId: opts.creatorOverride ?? item.queuedBy, comment, commentAuthorId: opts.creatorOverride ?? item.queuedBy,
       deadlineDate: deadlineFor(item.deadlineRule, card), deadlineTime: item.deadlineTime,
       newResponsibleId: item.newResponsibleId,
     });
-    rememberDealClient(res.dealId, item.clientKey);
+    rememberDealClient(res.dealId, ck);
     await db.query(
       `UPDATE repeat_task_queue SET status = 'issued', issued_task_id = $2, issued_deal_id = $3, issued_at = now(), last_error = NULL, updated_at = now()
         WHERE id = $1`, [item.id, res.taskId, res.dealId],

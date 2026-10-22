@@ -21,7 +21,7 @@ const LOCK_TTL_SEC = 300;
 const RETRY_AFTER_FAIL_MS = 60_000;
 /** Форма строки снимка. Менять ВМЕСТЕ с версией ключа customers:mgr:vN в customers.ts:
  *  снимок в БД переживает выкатку, и без версии новый код читал бы строки старой формы. */
-const SHAPE_VERSION = 'v11';
+const SHAPE_VERSION = 'v12'; // v12 (22.10) — склейка заказчиков, memberKeys в строке
 
 export type SnapshotProducer<R> = () => Promise<Map<number, R[]>>;
 interface Snap { at: number; byMgr: Map<number, unknown[]>; total: number }

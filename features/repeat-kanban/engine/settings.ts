@@ -12,6 +12,7 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { memberKeysOf } from '@/features/customers/engine/merge';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities, recommendFor } from '@/features/customers/engine/crossSell';
 import { REPEAT_SPLIT_GAP_DAYS } from '@/lib/metrics/repeatRule';
 import { WINDOW_DAYS } from './config';
@@ -246,6 +247,7 @@ interface Shipment { dealId: number; at: Date; amount: number; head: string | nu
 /** Отгрузки заказчика по той же формуле client_key, что у доски и «Моих заказчиков».
  *  Префильтр по contact_id/company_id — чтобы не гонять CASE по всей sa.deals. */
 async function fetchShipments(clientKey: string): Promise<Shipment[]> {
+  const members = await memberKeysOf(clientKey); // склейка заказчиков (merge.ts)
   const r = await analyticsDb().query<{ deal_id: number; delivered_at: Date; amount: string | null; head_group_name: string | null; grps: string[] | null }>(
     `SELECT deal_id, delivered_at, amount, head_group_name, grps FROM (
        SELECT d.deal_id, d.delivered_at, d.amount::text AS amount, d.head_group_name,
@@ -255,10 +257,10 @@ async function fetchShipments(clientKey: string): Promise<Shipment[]> {
               (${CLIENT_KEY_CASE_SQL}) AS client_key
          FROM sa.deals d
         WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
-          AND (d.contact_id = $2 OR d.company_id = $2)
-     ) t WHERE client_key = $1
+          AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
+     ) t WHERE client_key = ANY($1::text[])
      ORDER BY delivered_at, deal_id`,
-    [clientKey, Number(clientKey.slice(1))],
+    [members, members.map(k => Number(k.slice(1)))],
   );
   return r.rows.map(x => ({
     dealId: Number(x.deal_id), at: new Date(x.delivered_at), amount: Math.round(Number(x.amount ?? 0)),
@@ -414,13 +416,14 @@ export async function sampleClient(): Promise<{ clientKey: string; managerId: st
 /** Менеджер заказчика по атрибуции (последняя сделка), как у доски. */
 export async function clientManagerId(clientKey: string): Promise<string | null> {
   if (!CLIENT_KEY_RE.test(clientKey)) return null;
+  const members = await memberKeysOf(clientKey);
   const r = await analyticsDb().query<{ mgr: string | null }>(
     `SELECT mgr FROM (
        SELECT d.current_manager_id::text AS mgr, d.created_at, d.deal_id, (${CLIENT_KEY_CASE_SQL}) AS client_key
          FROM sa.deals d
-        WHERE d.funnel_id IN (0,1,2,3) AND (d.contact_id = $2 OR d.company_id = $2)
-     ) t WHERE client_key = $1 ORDER BY created_at DESC NULLS LAST, deal_id DESC LIMIT 1`,
-    [clientKey, Number(clientKey.slice(1))],
+        WHERE d.funnel_id IN (0,1,2,3) AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
+     ) t WHERE client_key = ANY($1::text[]) ORDER BY created_at DESC NULLS LAST, deal_id DESC LIMIT 1`,
+    [members, members.map(k => Number(k.slice(1)))],
   );
   return r.rows[0]?.mgr ?? null;
 }

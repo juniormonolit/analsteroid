@@ -11,6 +11,7 @@ import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { fetchManagerCustomers, fetchCustomersOfManagers, fetchCustomerMarks, type CustomerRow } from '@/features/customers/engine/customers';
 import { getCachedClientNames, resolveClientNames, warmClientNames } from '@/lib/bitrix/clientNames';
+import { fetchAliasMap, type AliasInfo, type MergeSource } from '@/features/customers/engine/merge';
 import {
   COLUMNS, CLIENT_TYPE_NONE_RANK, CLIENT_TYPE_ORDER, LOST_STAGES, NEW_STAGES, REPEAT_FUNNEL_IDS, REPEAT_PROJECT_GROUP_ID, REVIEW_SINCE,
   STAGE_TO_COLUMN, TOUCHES, WEEK_DAYS, WINDOW_DAYS, WON_STAGES, type ColumnKey,
@@ -119,6 +120,8 @@ export interface KanbanCard {
   openDealInBrak: number | null;
   /** Отказник/брак сам позвонил после отказа — карточка в «Срочно» (22.10). */
   returned: { at: string; missed: boolean } | null;
+  /** Склеенный заказчик (merge.ts): исходные карточки, кроме самой (пусто — не склеен). */
+  members: { key: string; source: MergeSource; name: string | null }[];
   /** Заказчик в очереди задач (миграция 237): кому выдастся, кто поставил. */
   queued: { id: number; managerId: string; by: string | null; at: string } | null;
 }
@@ -178,6 +181,8 @@ export interface TodaySection { key: TodayKey; title: string; hint: string; tota
 
 export interface RepeatBoard {
   generatedAt: string;
+  /** Склейка заказчиков включена (флаг customer_merge) — показывать «Объединить с…» РОПу. */
+  mergeEnabled?: boolean;
   managers: { id: string; name: string }[];
   /** Отмеченные галочками менеджеры (пусто — все менеджеры зоны/отделов). */
   selectedManagers: string[];
@@ -460,32 +465,63 @@ export async function buildRepeatBoard(opts: {
     return { ...base, columns: emptyCols(), warming: true, notice: 'Список заказчиков компании готовится — меньше минуты, доска обновится сама.' };
   }
   const keys = rows.map(r => r.clientKey);
+  // Склейка заказчиков (merge.ts): отметки, сделки, звонки, очередь могли быть записаны на любой
+  // исходный ключ человека — читаем по всем членам и сворачиваем к каноничному ключу строки.
+  const primaryOf = new Map<string, string>();
+  for (const r of rows) for (const k of r.memberKeys ?? [r.clientKey]) primaryOf.set(k, r.clientKey);
+  const allKeys = [...primaryOf.keys()];
+  const membersOf = (r: Row) => r.memberKeys ?? [r.clientKey];
+  const fold = <V,>(m: Map<string, V>, better: (a: V, b: V) => boolean = () => false): Map<string, V> => {
+    if (allKeys.length === keys.length) return m;
+    const out = new Map<string, V>();
+    // Сначала значения самого каноничного ключа (при равенстве побеждают они), потом членов.
+    const own = (k: string) => Number(primaryOf.get(k) === k);
+    for (const [k, v] of [...m].sort(([a], [b]) => own(b) - own(a))) {
+      const p = primaryOf.get(k) ?? k;
+      const cur = out.get(p);
+      if (cur === undefined || better(v, cur)) out.set(p, v);
+    }
+    return out;
+  };
+  const isOpen = (d: RepeatDealInfo) => !WON_STAGES.has(d.stageId) && !LOST_STAGES.has(d.stageId);
+  const MARK_RANK: Record<string, number> = { no_call: 3, snooze: 2, wake: 1 };
 
   // 2. Свежие данные поверх кэша.
   const refOfKey = (k: string) => (k.startsWith('k') ? k : `p${k.slice(1)}`);
-  const [deals, marks, profileTypes, tailTable, lastDelivered, wrongFunnel, inbound] = await Promise.all([
-    fetchLatestRepeatDeals(keys),
-    fetchCustomerMarks(keys),
+  const [dealsRaw, marksRaw, profileTypesRaw, tailTable, lastDelivered, wrongFunnel, inbound] = await Promise.all([
+    fetchLatestRepeatDeals(allKeys),
+    fetchCustomerMarks(allKeys),
     // Ночной снимок типы клиентов не использует — не ходим за ними в Битрикс (20.10: первый
     // снимок завис на 214-м менеджере на запросе типов в Битрикс).
     opts.skipNames ? Promise.resolve(new Map<string, string>()) :
-    fetchClientTypesBulk(keys).catch(() => new Map<string, string>()),
+    fetchClientTypesBulk(allKeys).catch(() => new Map<string, string>()),
     fetchTailTable().catch(() => ({ seg: {} })),
-    fetchLastDeliveredDeals(keys).catch(() => new Map<string, number>()),
-    fetchWrongFunnelDeals([...new Set(keys.map(k => (k.startsWith('k') ? k : `p${k.slice(1)}`)))]),
-    fetchInboundCalls([...new Set(keys.map(refOfKey))]),
+    // Сделка последней отгрузки — из строки снимка (v12); запрос — только для старых строк без неё.
+    rows.some(r => r.lastDeliveredDealId === undefined) ? fetchLastDeliveredDeals(keys).catch(() => new Map<string, number>()) : Promise.resolve(new Map<string, number>()),
+    fetchWrongFunnelDeals([...new Set(allKeys.map(k => (k.startsWith('k') ? k : `p${k.slice(1)}`)))]),
+    fetchInboundCalls([...new Set(allKeys.map(refOfKey))]),
   ]);
-  const queuedMap = opts.skipNames ? new Map() : await fetchQueuedByClient(keys).catch(() => new Map());
+  // Открытая сделка важнее закрытой, дальше — свежая; брак любого члена сильнее отсрочки.
+  const deals = fold(dealsRaw, (a, b) => (isOpen(a) !== isOpen(b) ? isOpen(a) : a.createdAt > b.createdAt));
+  const marks = fold(marksRaw, (a, b) => (MARK_RANK[a.kind] ?? 0) > (MARK_RANK[b.kind] ?? 0)
+    || (a.kind === b.kind && a.kind === 'snooze' && (a.snoozeUntil ?? '') > (b.snoozeUntil ?? '')));
+  const profileTypes = fold(profileTypesRaw);
+  const queuedMap = fold(opts.skipNames ? new Map() : await fetchQueuedByClient(allKeys).catch(() => new Map()));
   const windowFloor = new Date(now - (WINDOW_DAYS + 120) * DAY_MS).toISOString();
   const activeDealIds = [...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId);
   const [calls, manual, reviews, tasks, hideReqs, settings, managerLoad] = await Promise.all([
     fetchDealCalls(activeDealIds, windowFloor),
-    fetchManualContacts(keys, windowFloor),
+    fetchManualContacts(allKeys, windowFloor).then(m => {
+      if (allKeys.length === keys.length) return m;
+      const out = new Map<string, string[]>();
+      for (const [k, v] of m) { const p = primaryOf.get(k) ?? k; out.set(p, [...(out.get(p) ?? []), ...v]); }
+      return out;
+    }),
     // Решения РОПа: по отказам и по «выходу из дозвона» (открытые сделки) — по всем текущим.
     fetchReviews([...deals.values()].filter(d => !WON_STAGES.has(d.stageId)).map(d => d.dealId)),
     // Задачи проекта «Повторные продажи» (Битрикс, гр. 118) — по последней повторной сделке.
     fetchTasksForDeals([...deals.values()].map(d => d.dealId)),
-    fetchHideRequests(keys),
+    fetchHideRequests(allKeys).then(m => fold(m)),
     fetchKanbanSettings(),
     opts.skipNames ? Promise.resolve({} as Record<string, number>) : fetchManagerLoad(roster.map(m => m.id)),
   ]);
@@ -499,7 +535,9 @@ export async function buildRepeatBoard(opts: {
   const q = opts.search ? norm(opts.search).slice(0, 80) : '';
   const qNum = /^#?\d{2,12}$/.test(q) ? Number(q.replace('#', '')) : null;
   const qWords = q && qNum === null ? q.split(' ').filter(Boolean) : [];
-  const searchNames = qWords.length ? await getCachedClientNames(keys).catch(() => new Map<string, string | null>()) : null;
+  const searchNames = qWords.length ? await getCachedClientNames(allKeys).catch(() => new Map<string, string | null>()) : null;
+  // Источник склейки — для плашки «N карточек» (кэш 5 мин; флаг выключен — пустая карта).
+  const aliasMap = allKeys.length === keys.length ? new Map<string, AliasInfo>() : await fetchAliasMap().catch(() => new Map<string, AliasInfo>());
   if (!opts.skipNames) warmClientNames(keys);
   const poolGroups = new Set(opts.poolGroups ?? []);
   const buckets = new Map<ColumnKey, KanbanCard[]>(COLUMNS.map(c => [c.key, []]));
@@ -563,7 +601,7 @@ export async function buildRepeatBoard(opts: {
     // «Вернулся»: после брака или отказа заказчик сам позвонил (даже пропущенный) — в «Срочно».
     const refusedAt = mark?.kind === 'no_call' ? mark.createdAt
       : current && LOST_STAGES.has(current.stageId) ? current.lostAt ?? current.createdAt : null;
-    const inb = inbound.get(refOfKey(r.clientKey));
+    const inb = membersOf(r).map(k => inbound.get(refOfKey(k))).filter(Boolean).sort((a, b) => b!.at.localeCompare(a!.at))[0];
     const returned = inb && refusedAt && new Date(inb.at).getTime() > new Date(refusedAt).getTime() ? inb : null;
     if (mark?.kind === 'no_call' && !returned) col = 'brak';
     else if (hiddenNow) col = 'hidden';
@@ -595,9 +633,10 @@ export async function buildRepeatBoard(opts: {
     typeCounts[typeKey] = (typeCounts[typeKey] ?? 0) + 1;
     if (opts.typeFilter && opts.typeFilter !== typeKey) continue;
     const lastOutcome: 'won' | 'lost' = current && LOST_STAGES.has(current.stageId) ? 'lost' : 'won';
-    if (qNum !== null && ![r.clientId, deal?.dealId, lastDelivered.get(r.clientKey), task?.id].includes(qNum)) continue;
+    const lastDelDealId = r.lastDeliveredDealId ?? lastDelivered.get(r.clientKey) ?? null;
+    if (qNum !== null && ![...membersOf(r).map(k => Number(k.slice(1))), deal?.dealId, lastDelDealId, task?.id].includes(qNum)) continue;
     if (qWords.length) {
-      const nm = norm(searchNames?.get(r.clientKey) ?? '');
+      const nm = membersOf(r).map(k => norm(searchNames?.get(k) ?? '')).join(' | ');
       if (!nm || !qWords.every(w => nm.includes(w))) continue;
     }
     if (col.startsWith('pool')) {
@@ -614,9 +653,9 @@ export async function buildRepeatBoard(opts: {
       managerId: r.managerId, managerName: r.managerName,
       purchases: r.purchasesDelivered, sumDelivered: r.sumDelivered,
       lastDeliveredAt: r.lastDeliveredAt, lastDeliveredGroup: r.lastDeliveredGroup,
-      lastDeliveredDealId: lastDelivered.get(r.clientKey) ?? null,
+      lastDeliveredDealId: lastDelDealId,
       repeatChance: r.repeatChance, expectedValue: r.expectedValue,
-      ...(() => { const p = tailPotential(tailTable, r.purchasesDelivered, r.clientType === 'company' || r.clientKey.startsWith('x')); return { potential: p?.value ?? null, potentialInfo: p }; })(),
+      ...(() => { const p = tailPotential(tailTable, r.purchasesDelivered, membersOf(r).some(k => k.startsWith('k') || k.startsWith('x'))); return { potential: p?.value ?? null, potentialInfo: p }; })(),
       profileType,
       // В пуле и браке отказная сделка — история, не «текущая»: иначе кнопка предлагала бы
       // задачу к закрытой сделке вместо новой сделки, а окно контактов висело бы зря.
@@ -633,11 +672,12 @@ export async function buildRepeatBoard(opts: {
       freshDays,
       lastOutcome, dozvonFail,
       hideRequest: hideReqs.get(r.clientKey) ?? null,
+      members: membersOf(r).filter(k => k !== r.clientKey).map(k => ({ key: k, source: aliasMap.get(k)?.source ?? 'auto_company', name: null })),
       openDealInBrak: col === 'brak' && hasOpenDeal && current ? current.dealId : null,
       returned: col === 'pool_hot' ? returned ?? null : null,
       queued: (() => { const q = queuedMap.get(r.clientKey); return q ? { id: q.id, managerId: q.managerId, by: q.queuedByName, at: q.createdAt } : null; })(),
       // Только если в повторной воронке открытой сделки нет — иначе это история, не ошибка сейчас.
-      wrongFunnel: hasOpenDeal ? null : wrongFunnel.get(r.clientKey.startsWith('k') ? r.clientKey : `p${r.clientKey.slice(1)}`) ?? null,
+      wrongFunnel: hasOpenDeal ? null : membersOf(r).map(k => wrongFunnel.get(k.startsWith('k') ? k : `p${k.slice(1)}`)).find(Boolean) ?? null,
     });
   }
 
@@ -732,9 +772,12 @@ export async function buildRepeatBoard(opts: {
   // Имена: кэш для всех видимых, ленивый добор из Битрикса — только для видимых.
   if (!opts.skipNames) {
     const visible = [...columns.flatMap(c => c.cards), ...today.flatMap(t => t.cards)];
-    const visibleKeys = [...new Set(visible.map(x => x.clientKey))];
+    const visibleKeys = [...new Set(visible.flatMap(x => [x.clientKey, ...x.members.map(m => m.key)]))];
     const names = await resolveClientNames(visibleKeys).catch(() => getCachedClientNames(visibleKeys));
-    for (const card of visible) card.name = names.get(card.clientKey) ?? null;
+    for (const card of visible) {
+      card.name = names.get(card.clientKey) ?? null;
+      for (const m of card.members) m.name = names.get(m.key) ?? null;
+    }
   }
 
   const allIn = (g: string) => COLUMNS.filter(d => d.group === g).flatMap(d => kpiBuckets.get(d.key)!);

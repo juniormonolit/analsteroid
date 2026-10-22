@@ -27,6 +27,7 @@ import { bx } from '@/lib/bitrix/notify';
 import { cached } from '@/lib/cache/redis';
 import { analyticsDb } from '@/lib/db/clients';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { memberKeysOf } from '@/features/customers/engine/merge';
 import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID } from './config';
 
 export class DealCreateError extends Error {}
@@ -116,12 +117,14 @@ const rubFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 
 /** Текст задачи по шаблону ТЗ (BB-код Битрикса, как у живых задач проекта 118). */
 async function buildDescription(clientKey: string, comment: string): Promise<string> {
+  const members = await memberKeysOf(clientKey); // склейка: отгрузки всех карточек человека
   const shipped = await analyticsDb().query<{ deal_id: number; head_group_name: string | null; deal_name: string | null; amount: string | null }>(
     `SELECT deal_id, head_group_name, deal_name, amount FROM (
        SELECT d.*, (${CLIENT_KEY_CASE_SQL}) AS client_key FROM sa.deals d
         WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
-     ) t WHERE client_key = $1 ORDER BY delivered_at DESC, deal_id DESC LIMIT 30`,
-    [clientKey],
+          AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
+     ) t WHERE client_key = ANY($1::text[]) ORDER BY delivered_at DESC, deal_id DESC LIMIT 30`,
+    [members, members.map(k => Number(k.slice(1)))],
   );
   const lines: string[] = ['[B]Отгружали этому заказчику:[/B]'];
   for (const r of shipped.rows) {
@@ -200,6 +203,10 @@ export async function createRepeatTask(input: {
 }): Promise<RepeatTaskResult> {
   const t = dealTargetOf(input.clientKey);
   if (!Number.isInteger(t.id) || t.id <= 0) throw new DealCreateError('Некорректный заказчик');
+  // Склейка (merge.ts): у человека с юр-сделками (x) новая сделка — в юр-воронку; открытую ищем по всем его контактам.
+  const members = await memberKeysOf(input.clientKey);
+  if (t.entity === 'contact' && members.some(k => k.startsWith('x'))) t.funnel = 3;
+  const memberContacts = [...new Set(members.filter(k => !k.startsWith('k')).map(k => Number(k.slice(1))))].filter(id => !(t.entity === 'contact' && id === t.id));
   const owner = t.entity === 'contact' ? 'CONTACT_ID' : 'COMPANY_ID';
   const crm = crmWebhook();
 
@@ -209,6 +216,9 @@ export async function createRepeatTask(input: {
     for (const c of (await companyContacts(t.id)).slice(0, 10)) {
       lists.push(read<BxDeal[]>('crm.deal.list', { filter: { CONTACT_ID: c, '@CATEGORY_ID': [2, 3] }, select, order: { ID: 'DESC' } }));
     }
+  }
+  for (const c of memberContacts.slice(0, 10)) {
+    lists.push(read<BxDeal[]>('crm.deal.list', { filter: { CONTACT_ID: c, '@CATEGORY_ID': [2, 3] }, select, order: { ID: 'DESC' } }));
   }
   const seen = new Set<string>();
   const all = (await Promise.all(lists)).flat().filter(d => d && !seen.has(d.ID) && seen.add(d.ID))
@@ -345,11 +355,12 @@ export async function closeDealAsLost(input: { dealId: number; clientKey: string
   if (cat !== 2 && cat !== 3) return 'not_repeat';
   if (deal.STAGE_SEMANTIC_ID !== 'P') return 'already_closed';
   if (deal.STAGE_ID && SOLD_STAGES.has(deal.STAGE_ID)) return 'sold';
-  const id = Number(input.clientKey.slice(1));
   const contactId = Number(deal.CONTACT_ID) || 0, companyId = Number(deal.COMPANY_ID) || 0;
-  const mine = input.clientKey.startsWith('k')
-    ? companyId === id || (contactId > 0 && (await companyContacts(id)).includes(contactId))
-    : contactId === id;
+  let mine = false;
+  for (const k of await memberKeysOf(input.clientKey)) { // склейка: сделка любой карточки человека
+    const id = Number(k.slice(1));
+    if (k.startsWith('k') ? companyId === id || (contactId > 0 && (await companyContacts(id)).includes(contactId)) : contactId === id) { mine = true; break; }
+  }
   if (!mine) return 'not_client';
   const stage = LOST_STAGE_BY_REASON[cat][input.reason] ?? (cat === 2 ? 'C2:APOLOGY' : 'C3:2');
   await writeOnce(crmWebhook(), 'crm.deal.update', { id: input.dealId, fields: { STAGE_ID: stage }, params: { REGISTER_SONET_EVENT: 'Y' } });

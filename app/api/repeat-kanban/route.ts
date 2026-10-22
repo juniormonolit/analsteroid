@@ -17,6 +17,9 @@ import { logEvent, newRequestId, type KanbanEventType } from '@/features/repeat-
 import { decideHideRequest, decideReview, hideFromPool, markBrakNow, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
 import { rememberDealClient } from '@/features/repeat-kanban/engine/dealFixes';
+import { isFeatureEnabled } from '@/lib/featureFlags';
+import { memberKeysOf, saveMerge, saveUnmerge } from '@/features/customers/engine/merge';
+import { refreshCompanyCustomers } from '@/features/customers/engine/customers';
 import { enqueue, fetchQueueItem, issueNow, removeByClient, removeFromQueue, setBoost, type DeadlineRule } from '@/features/repeat-kanban/engine/queue';
 import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
 
@@ -107,7 +110,7 @@ export async function GET(req: NextRequest) {
       search: (sp.get('q') ?? '').trim().slice(0, 80) || null,
       sort: (SORTS as readonly string[]).includes(sp.get('sort') ?? '') ? sp.get('sort') as BoardSort : 'default',
     });
-    return NextResponse.json({ ...board, viewerBitrixId: session.bitrixUserId, canSeeAnalytics: canSeeRepeatKanbanAnalytics(session), canManageSettings: canManageRepeatKanbanSettings(session) }, { headers: { 'Cache-Control': 'no-store' } });
+    return NextResponse.json({ ...board, mergeEnabled: await isFeatureEnabled('customer_merge'), viewerBitrixId: session.bitrixUserId, canSeeAnalytics: canSeeRepeatKanbanAnalytics(session), canManageSettings: canManageRepeatKanbanSettings(session) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[repeat-kanban]', e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось собрать канбан' }, { status: 500 });
@@ -162,6 +165,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
     if (!canManage) return NextResponse.json({ error: 'Действие доступно РОПу' }, { status: 403 });
+
+    // ── Склейка заказчиков «один человек — один заказчик» (миграция 240, владелец 22.10: «объединять
+    // может только РОП и старше»). Обе карточки — в зоне РОПа; применится при пересчёте снимка (~20 с).
+    if (body.action === 'merge' || body.action === 'unmerge') {
+      if (!(await isFeatureEnabled('customer_merge'))) return NextResponse.json({ error: 'Склейка заказчиков ещё не включена' }, { status: 400 });
+      const zone = new Set(managers.map(m => m.id));
+      const by = { login: session.login, name: session.displayName ?? null, bitrixId: session.bitrixUserId ?? null };
+      const ck = String(body.clientKey ?? ''), mid = String(body.managerId ?? '');
+      if (!KEY_RE.test(ck) || !zone.has(mid) || !(await ownsClient(mid, ck))) return NextResponse.json({ error: 'Заказчик не в вашей зоне' }, { status: 403 });
+      if (body.action === 'merge') {
+        const other = String(body.otherKey ?? ''), otherMid = String(body.otherManagerId ?? '');
+        if (!KEY_RE.test(other) || other === ck || !zone.has(otherMid) || !(await ownsClient(otherMid, other))) return NextResponse.json({ error: 'Вторая карточка не в вашей зоне' }, { status: 403 });
+        const primary = body.primary === 'other' ? other : ck;
+        const member = primary === ck ? other : ck;
+        const comment = typeof body.comment === 'string' && body.comment.trim() ? body.comment.trim().slice(0, 500) : null;
+        await saveMerge({ memberKey: member, primaryKey: primary, comment, by });
+        await logEvent(session, { type: 'customers_merged', requestId: rid, clientKey: primary, managerId: mid, columnBefore,
+          payload: { member, primary, comment, managersBefore: [mid, otherMid] } });
+      } else {
+        const member = String(body.memberKey ?? '');
+        if (!KEY_RE.test(member) || !(await memberKeysOf(ck)).includes(member)) return NextResponse.json({ error: 'Эта карточка не входит в заказчика' }, { status: 400 });
+        const how = await saveUnmerge({ memberKey: member, by });
+        await logEvent(session, { type: how === 'split' ? 'customers_split' : 'customers_unmerged', requestId: rid, clientKey: ck, managerId: mid, columnBefore, payload: { member } });
+      }
+      // Пересчёт снимка (~20 с) — в фоне; доска обновится сама (опрос раз в минуту).
+      void refreshCompanyCustomers().catch(e => console.warn('[repeat-kanban merge] пересчёт снимка:', e instanceof Error ? e.message : e));
+      return NextResponse.json({ ok: true });
+    }
 
     // ── Очередь задач (миграция 237, владелец 22.10) ──────────────────────────
     if (body.action.startsWith('queue_')) {

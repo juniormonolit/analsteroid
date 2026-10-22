@@ -7,6 +7,7 @@ export { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER };
 export type { CustomerQueue };
 import { fetchRepeatScoreTable, repeatChance, expectedNextAmount, expectedRepeatValue } from './repeatScore';
 import { CLIENT_KEY_CASE_SQL, deriveClientType } from './clientKey';
+import { aliasArrays, fetchAliasMap, type AliasInfo } from './merge';
 
 // ── «Мои заказчики» (фича Серёги 01.08) ──────────────────────────────────────
 // Список клиентов менеджера с сигналом «пора позвонить». Мотив: анализ показал,
@@ -280,6 +281,10 @@ export interface CustomerRow {
   /** Ожидаемые деньги от следующего звонка, ₽ = шанс × ожидаемая сумма.
    *  Главный ответ на «кому выгоднее звонить» (правка владельца 21.09). */
   expectedValue: number | null;
+  /** Сделка последней отгрузки (дата на карточке канбана кликабельна). */
+  lastDeliveredDealId: number | null;
+  /** Исходные ключи склеенного заказчика (merge.ts), включая сам clientKey; без склейки — [clientKey]. */
+  memberKeys: string[];
 }
 
 interface RawRow {
@@ -317,6 +322,8 @@ interface RawRow {
   good_calls_after: (string | Date)[] | null;
   purchases_delivered: string;
   attr_mgr: string | null;
+  member_keys: string[] | null;
+  last_delivered_deal: string | number | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -337,14 +344,20 @@ function toIso(v: string | Date | null): string | null {
 // 01.08 на проде), поэтому результат живёт в Redis-кэше 10 минут (ниже).
 const CUSTOMERS_SQL = `
 WITH cd AS (
-  SELECT * FROM (
+  -- Склейка «один человек — один заказчик» (merge.ts, миграция 240): $1/$2 — пары член → каноничный
+  -- ключ; сделки переписываются на каноничный ДО агрегации. Пустые массивы — прежний расчёт.
+  SELECT t.deal_id, t.deal_name, t.amount, t.created_at, t.sold_at, t.lost_at, t.delivered_at,
+         t.head_group_name, t.stage_id, t.current_manager_id,
+         coalesce(al.primary_key, t.raw_key) AS client_key, t.raw_key
+  FROM (
     SELECT d.deal_id, d.deal_name, d.amount, d.created_at, d.sold_at, d.lost_at,
            d.delivered_at, d.head_group_name, d.stage_id, d.current_manager_id,
-           (${CLIENT_KEY_CASE_SQL}) AS client_key
+           (${CLIENT_KEY_CASE_SQL}) AS raw_key
     FROM sa.deals d
     WHERE d.funnel_id IN (0,1,2,3)
   ) t
-  WHERE client_key IS NOT NULL
+  LEFT JOIN unnest($1::text[], $2::text[]) AS al(member_key, primary_key) ON al.member_key = t.raw_key
+  WHERE t.raw_key IS NOT NULL
 ),
 attr AS (
   SELECT DISTINCT ON (client_key) client_key, current_manager_id AS mgr
@@ -359,7 +372,7 @@ mcd AS (
   SELECT cd.*, attr.mgr AS attr_mgr FROM cd
   JOIN attr USING (client_key)
   JOIN delivered_clients USING (client_key)
-  WHERE attr.mgr = $1
+  WHERE attr.mgr = $3
 ),
 deal_calls AS (
   SELECT c.deal_id, max(c.called_at) AS last_call_at
@@ -519,12 +532,13 @@ SELECT a.client_key, a.attr_mgr::text AS attr_mgr,
        o.active_deals, lg.last_groups,
        ls.last_sold_amount::text, ls.last_sold_groups,
        mh.manager_history,
-       ld.last_delivered_at, ld.last_delivered_amount::text, ld.last_delivered_group,
+       ld.last_delivered_at, ld.last_delivered_amount::text, ld.last_delivered_group, ld.last_delivered_deal,
        gc.last_good_call_at, al.auto_repeat_lost_no_call, tch.good_calls_after,
-       COALESCE(pu.purchases_delivered, 0)::text AS purchases_delivered
+       COALESCE(pu.purchases_delivered, 0)::text AS purchases_delivered, a.member_keys
 FROM (
   SELECT m.client_key,
          max(m.attr_mgr) AS attr_mgr,
+         array_agg(DISTINCT m.raw_key) AS member_keys,
          count(*) AS deals_total,
          count(*) FILTER (WHERE m.sold_at IS NOT NULL) AS deals_sold,
          COALESCE(sum(m.amount) FILTER (WHERE m.sold_at IS NOT NULL), 0) AS sum_sold,
@@ -558,7 +572,7 @@ LEFT JOIN purchases pu USING (client_key)
 
 // Вся компания одним запросом (общий снимок, companySnapshot.ts): тот же SQL, атрибуция та
 // же (attr считается по всем сделкам и до фильтра), просто без отсечения по менеджеру.
-const CUSTOMERS_ALL_SQL = CUSTOMERS_SQL.replace('WHERE attr.mgr = $1', 'WHERE attr.mgr IS NOT NULL');
+const CUSTOMERS_ALL_SQL = CUSTOMERS_SQL.replace('WHERE attr.mgr = $3', 'WHERE attr.mgr IS NOT NULL');
 if (CUSTOMERS_ALL_SQL === CUSTOMERS_SQL) throw new Error('CUSTOMERS_ALL_SQL: фильтр менеджера не найден');
 
 function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
@@ -658,6 +672,8 @@ function toRow(r: RawRow, now: number, managerBitrixId: number): CustomerRow {
     repeatChance: null,      // проставляются в fetchManagerCustomers из таблицы частот
     expectedNextAmount: null,
     expectedValue: null,
+    lastDeliveredDealId: r.last_delivered_deal !== null && r.last_delivered_deal !== undefined ? Number(r.last_delivered_deal) : null,
+    memberKeys: r.member_keys?.length ? [r.client_key, ...r.member_keys.filter(k => k !== r.client_key)] : [r.client_key],
   };
 }
 
@@ -688,9 +704,9 @@ export async function fetchManagerCustomers(managerBitrixId: number): Promise<Cu
   const snap = await snapshotRowsOf<CustomerRow>(managerBitrixId, computeAllCustomers);
   if (snap) return snap.map(r => ({ ...r }));
   // Снимка ещё нет (самый первый запуск) или он сломан — прежний путь на менеджера.
-  return cachedSwr(`customers:mgr:v11:${managerBitrixId}`, 10 * 60, 12 * 3600, async () => {
+  return cachedSwr(`customers:mgr:v12:${managerBitrixId}`, 10 * 60, 12 * 3600, async () => {
     const [res, scoreTable] = await Promise.all([
-      analyticsDb().query<RawRow>(CUSTOMERS_SQL, [managerBitrixId]),
+      fetchAliasMap().catch(() => new Map<string, AliasInfo>()).then(m => analyticsDb().query<RawRow>(CUSTOMERS_SQL, [...aliasArrays(m), managerBitrixId])),
       fetchRepeatScoreTable(),
     ]);
     const now = Date.now();
@@ -704,7 +720,7 @@ function enrich(row: CustomerRow, scoreTable: ScoreTable): CustomerRow {
   // Шанс считаем по ПОКУПКАМ (склеенным), а не по сырым отгрузкам: таблица
   // частот построена на них же, иначе заказчик с 10 дробными отгрузками
   // попадал бы в бакет «6+» (86 %) вместо своего «3» (55 %).
-  row.repeatChance = repeatChance(scoreTable, row.purchasesDelivered, row.lastDeliveredGroup, row.clientType === 'company');
+  row.repeatChance = repeatChance(scoreTable, row.purchasesDelivered, row.lastDeliveredGroup, row.memberKeys.some(k => k.startsWith('k')));
   const avgCheck = row.purchasesDelivered > 0 ? row.sumDelivered / row.purchasesDelivered : null;
   row.expectedNextAmount = expectedNextAmount(scoreTable, avgCheck);
   row.expectedValue = expectedRepeatValue(row.repeatChance, row.expectedNextAmount);
@@ -719,7 +735,8 @@ function engineOrder(a: CustomerRow, b: CustomerRow): number {
 /** Расчёт общего снимка: вся компания одним SQL, разложенная по менеджерам. */
 async function computeAllCustomers(): Promise<Map<number, CustomerRow[]>> {
   const [res, scoreTable] = await Promise.all([
-    analyticsDb().query<RawRow>(CUSTOMERS_ALL_SQL),
+    fetchAliasMap({ force: true }).catch(e => { console.warn('[customers] склейка недоступна:', e instanceof Error ? e.message : e); return new Map<string, AliasInfo>(); })
+      .then(m => analyticsDb().query<RawRow>(CUSTOMERS_ALL_SQL, aliasArrays(m))),
     fetchRepeatScoreTable(),
   ]);
   const now = Date.now();
