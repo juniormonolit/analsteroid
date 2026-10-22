@@ -44,7 +44,7 @@ best AS (
   FROM pairs p JOIN cstat s USING (company_id)
   WHERE s.n_contacts <= $1
   ORDER BY p.contact_id, p.deals DESC, p.last_at DESC
-)
+),
 -- Только ключи, которые реально есть у контакта (розничные сделки → c, юр-сделки без компании → x).
 own AS (
   SELECT contact_id, bool_or(funnel_id IN (0,2)) AS has_c, bool_or(funnel_id IN (1,3) AND coalesce(company_id, 0) = 0) AS has_x
