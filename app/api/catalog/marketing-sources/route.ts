@@ -21,7 +21,7 @@ export async function GET() {
   return NextResponse.json({
     sources: [...map.values()],
     managerBranches,
-    // Группировки «Ещё → Источники» (миграция 240): измерения `g:<id>` для селекторов
+    // Группировки «Ещё → Источники» (миграция 239): измерения `g:<id>` для селекторов
     // отчёта и раскладки сделок дрилл-дауна на клиенте (source_id → название группы).
     groupings: [...groupings.values()].map(g => {
       const names = new Map(g.groups.map(x => [x.id, x.name]));

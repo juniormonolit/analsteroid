@@ -1,4 +1,4 @@
--- 240: «один человек — один заказчик» (владелец 22.10, вариант Б; план — консультация Fable).
+-- 243: «один человек — один заказчик» (владелец 22.10, вариант Б; план — консультация Fable).
 -- Автосклейка считается каждый раз из sa (features/customers/engine/merge.ts):
 --   (а) c<контакт> и x<контакт> одного контакта — всегда один заказчик;
 --   (б) контакт ↔ компания по совместным сделкам (компания с ≤ 3 контактами в сделках).
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS customer_merge_links (
 );
 CREATE INDEX IF NOT EXISTS customer_merge_links_primary_idx ON customer_merge_links (primary_key);
 
-INSERT INTO feature_flags (key, enabled, updated_by) VALUES ('customer_merge', false, 'deploy-240')
+INSERT INTO feature_flags (key, enabled, updated_by) VALUES ('customer_merge', false, 'deploy-240 (файл переименован в 243)')
 ON CONFLICT (key) DO NOTHING;
 
 DO $$ BEGIN
