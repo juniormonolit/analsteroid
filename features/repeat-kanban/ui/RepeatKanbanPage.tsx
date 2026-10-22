@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart3, CheckSquare, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BarChart3, CheckSquare, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -127,6 +127,10 @@ export function RepeatKanbanPage() {
   const [hideReqFor, setHideReqFor] = useState<KanbanCard | null>(null);
   // Массовая постановка задач (аудит 21.10: «в работе без задачи» — разом): режим выбора.
   const [selectMode, setSelectMode] = useState(false);
+  // «Скрыть показатели» (владелец 22.10: на ноутбуке плитки занимают слишком много места) — помним в браузере.
+  const [kpiHidden, setKpiHiddenState] = useState(false);
+  useEffect(() => { try { setKpiHiddenState(localStorage.getItem('repeatKanban.kpiHidden') === '1'); } catch { /* приватный режим */ } }, []);
+  const setKpiHidden = (v: boolean) => { setKpiHiddenState(v); try { localStorage.setItem('repeatKanban.kpiHidden', v ? '1' : '0'); } catch { /* приватный режим */ } };
   const [selected, setSelected] = useState<Map<string, KanbanCard>>(new Map());
   const [bulkOpen, setBulkOpen] = useState(false);
 
@@ -323,9 +327,9 @@ export function RepeatKanbanPage() {
                 return { value: m.id, label: m.name, hint: `${n} из ${taskLimit} активных задач${n >= taskLimit ? ' — перегружен' : ''}` };
               })}
               value={mgrs} onChange={v => { setMgrs(v); setLimits({}); }}
-              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-40 2xl:w-56`} />
+              className={`${mgrs.length ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs justify-start sm:w-40 min-[1800px]:w-56`} />
           )}
-          <label className={`${q ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs cursor-text sm:w-40 2xl:w-56`}>
+          <label className={`${q ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs cursor-text sm:w-40 min-[1800px]:w-56`}>
             <Search size={16} className="shrink-0 opacity-70" />
             <input type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder="Заказчик, тег, № сделки"
               aria-label="Поиск заказчика: имя, название, номер контакта, компании, сделки или задачи"
@@ -408,20 +412,27 @@ export function RepeatKanbanPage() {
             <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
               title="Выбрать карточки: отметить галочками и поставить задачи всем разом" aria-label="Выбрать карточки"
               className={selectMode ? BTN_ACTIVE : BTN_IDLE}>
-              <CheckSquare size={16} /> <span className={selectMode ? '' : 'sm:hidden 2xl:inline'}>{selectMode ? 'Отменить выбор' : 'Выбрать'}</span>
+              <CheckSquare size={16} /> <span className={selectMode ? '' : 'sm:hidden min-[1800px]:inline'}>{selectMode ? 'Отменить выбор' : 'Выбрать'}</span>
             </button>
           )}
           {/* Справа — редкие кнопки; на ноутбуке только иконки (подписи — в подсказке). */}
           <div className="flex min-w-0 items-center gap-1.5 sm:ml-auto">
             <Link href="/repeat-kanban/guide" className={BTN_IDLE} title="Инструкция: как работать с канбаном" aria-label="Как работать?">
-              <HelpCircle size={16} /> <span className="hidden min-[420px]:inline">Как работать?</span>
+              <HelpCircle size={16} /> <span className="hidden min-[420px]:inline sm:hidden min-[1800px]:inline">Как работать?</span>
             </Link>
             {data?.canSeeAnalytics && (
               <Link href="/repeat-kanban/analytics" className={BTN_IDLE} title="Аналитика: кто что делал, проработанность по отделам, результат задач" aria-label="Аналитика">
-                <BarChart3 size={16} /> <span className="hidden 2xl:inline">Аналитика</span>
+                <BarChart3 size={16} /> <span className="hidden min-[1800px]:inline">Аналитика</span>
               </Link>
             )}
             {data?.canManageSettings && <RepeatKanbanSettingsButton className={BTN_IDLE} />}
+            {data?.kpi && (
+              <button type="button" onClick={() => setKpiHidden(!kpiHidden)} aria-pressed={kpiHidden}
+                aria-label={kpiHidden ? 'Показать показатели' : 'Скрыть показатели'} title={kpiHidden ? 'Показать показатели' : 'Скрыть показатели — больше места под доску'}
+                className={`${BTN_IDLE} min-w-11 px-0`}>
+                {kpiHidden ? <ChevronsDown size={16} /> : <ChevronsUp size={16} />}
+              </button>
+            )}
             <button type="button" onClick={() => refetch()} aria-label="Обновить" title="Обновить"
               className={`${BTN_IDLE} min-w-11 px-0`}>
               <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
@@ -429,7 +440,7 @@ export function RepeatKanbanPage() {
           </div>
         </div>
 
-        {data?.kpi && <KpiStrip k={data.kpi} activeTask={taskF.length === 1 ? taskF[0] : null}
+        {data?.kpi && !kpiHidden && <KpiStrip k={data.kpi} activeTask={taskF.length === 1 ? taskF[0] : null}
           onTask={tb => { const on = taskF.length === 1 && taskF[0] === tb; setTaskF(on ? [] : [tb]); setSort(on ? 'default' : 'task'); setLimits({}); }}
           onJump={jump} />}
 
@@ -539,8 +550,8 @@ function FiltersButton({ active, onReset, children }: { active: number; onReset:
     <Popover open={open} onOpenChange={setOpen} align="start" className="w-[340px] max-w-[calc(100vw-16px)] p-3"
       trigger={
         <button type="button" className={active ? BTN_ACTIVE : BTN_IDLE} aria-label="Фильтры" title="Фильтры: тип клиента, задачи, последняя сделка, товарная группа, сортировка">
-          {/* Слово «Фильтры» — от 1440 px: на ноутбуке 1280 строка управления иначе не влезала. */}
-          <SlidersHorizontal size={16} /> <span className="hidden min-[1440px]:inline">Фильтры</span>{active ? <span>{` ${active}`}</span> : null}
+          {/* Слово «Фильтры» — от 1800 px (владелец 22.10: на ноутбуке ~1700 px кнопки уезжали во второй ряд). */}
+          <SlidersHorizontal size={16} /> <span className="hidden min-[1800px]:inline">Фильтры</span>{active ? <span>{` ${active}`}</span> : null}
         </button>
       }>
       <div className="flex max-h-[70dvh] flex-col gap-3 overflow-y-auto">
@@ -677,17 +688,16 @@ function WorkedRing({ k }: { k: BoardKpi }) {
   const worked = k.workedByTask;
   const total = worked + k.hot;
   const share = total ? worked / total : 0;
-  const r = 26, c = 2 * Math.PI * r;
+  const r = 19, c = 2 * Math.PI * r;
   return (
     <div className="flex shrink-0 flex-col items-center"
       title={`Проработано ${rub.format(worked)} из ${rub.format(total)}: по ${worked} заказчикам поставлена задача (в дозвоне, воронке или на разборе), у ${k.hot} окно открыто, а сделки и задачи нет. Сделки без задачи (${k.noTaskInWork}) не в счёт. 100% — ни один заказчик с открытым окном не висит без задачи.`}>
-      <svg width="64" height="64" viewBox="0 0 64 64" aria-label={`Проработано ${Math.round(share * 100)}%`}>
-        <circle cx="32" cy="32" r={r} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="7" />
-        <circle cx="32" cy="32" r={r} fill="none" stroke="#ffffff" strokeWidth="7" strokeLinecap="round"
-          strokeDasharray={`${c * share} ${c}`} transform="rotate(-90 32 32)" />
-        <text x="32" y="36" textAnchor="middle" fill="#ffffff" fontSize="14" fontWeight="700">{Math.round(share * 100)}%</text>
+      <svg width="48" height="48" viewBox="0 0 48 48" aria-label={`Проработано ${Math.round(share * 100)}%`}>
+        <circle cx="24" cy="24" r={r} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="5" />
+        <circle cx="24" cy="24" r={r} fill="none" stroke="#ffffff" strokeWidth="5" strokeLinecap="round"
+          strokeDasharray={`${c * share} ${c}`} transform="rotate(-90 24 24)" />
+        <text x="24" y="28" textAnchor="middle" fill="#ffffff" fontSize="12" fontWeight="700">{Math.round(share * 100)}%</text>
       </svg>
-      <div className="mt-0.5 whitespace-nowrap text-[11px] opacity-85">проработано</div>
     </div>
   );
 }
@@ -712,42 +722,44 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
     { label: 'Без задачи', task: 'none', value: rub.format(k.noTaskInWork), sub: 'сделок', hint: 'В дозвоне и воронке, по которым нет открытой задачи', tone: k.noTaskInWork ? 'warn' : undefined },
     { label: 'Отказы', jump: 'review', value: rub.format(k.review), sub: k.reviewEarly ? `${k.reviewEarly} рано закрыты` : 'на проверке', hint: 'Ждут решения РОПа; «до 3 попыток» — закрыты, не дозвонившись и не сделав трёх попыток', tone: k.reviewEarly ? 'neg' : undefined },
   ];
+  // Компактно (владелец 22.10: «на экране ноута потенциал и прочие показатели занимают слишком дохуя
+  // места»): синяя плитка — две строки, плитки — подпись / цифра / пояснение мелко; от 1440 px — всё в
+  // один ряд высотой ~56 px (было ~190 px в два ряда). Полностью убрать — кнопка «Скрыть показатели».
   return (
     <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-stretch">
       {/* Главная цифра — сколько денег лежит в пуле, если вернуть заказчиков. */}
-      <div className="brand-chevrons flex shrink-0 items-center gap-3 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-[340px]">
+      <div className="brand-chevrons flex shrink-0 items-center gap-2.5 rounded-xl bg-[var(--color-accent)] px-3 py-1.5 text-white lg:w-[330px]">
         {/* Потенциал ВСЕЙ базы (кроме брака) — не тает от работы (владелец 20.10: «при проработанном
-            канбане потенциал будет 0?»); под ним — сколько из него ещё лежит нетронутым в пуле. */}
+            канбане потенциал будет 0?»); рядом — сколько из него ещё лежит нетронутым в пуле. */}
         <div className="min-w-0 flex-1"
-          title="Сумма потенциалов всех заказчиков, кроме брака: сколько они принесут за год, если работать с повторкой. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр). «В пуле» — та часть, по которой ещё никто не работает.">
-          <div className="text-[12px] opacity-85">Потенциал за год</div>
-          <div className="text-[26px] font-bold leading-tight tabular-nums">{moneyShort(k.totalPotential)}</div>
-          <div className="text-[12px] opacity-85">если работать с повторкой</div>
-          <div className="mt-0.5 text-[11.5px] font-semibold">в пуле, не тронуто: {moneyShort(k.poolPotential)}</div>
-          {/* Деньги под риском (владелец 21.10: «прикольно»): окно повторной продажи открыто,
-              сделки нет — через ≤ 22 дня заказчик «остынет». */}
-          <button type="button" onClick={() => onJump('pool')} className="mt-1 inline-flex min-h-6 max-w-full items-center whitespace-nowrap rounded bg-white/15 px-1.5 text-left text-[11.5px] font-semibold hover:bg-white/25"
-            title={`У ${k.hot} заказчиков открыто окно повторной продажи (отгрузка ≤ 22 дней назад, сделки нет); у ${k.hotClosing} закрывается в ближайшие 3 дня. Сумма — их потенциал за год.`}>
-            под риском: {moneyShort(k.hotPotential)} · {rub.format(k.hot)} зак.
-          </button>
+          title="Потенциал за год, если работать с повторкой: сумма потенциалов всех заказчиков, кроме брака. Потенциал заказчика — средняя годовая выручка вернувшихся таких же заказчиков (по числу покупок, физ/юр). «В пуле» — та часть, по которой ещё никто не работает.">
+          <div className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap">
+            <span className="text-[11.5px] opacity-85">Потенциал за год</span>
+            <span className="text-[20px] font-bold leading-tight tabular-nums">{moneyShort(k.totalPotential)}</span>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] font-semibold">
+            <span className="whitespace-nowrap">в пуле: {moneyShort(k.poolPotential)}</span>
+            {/* Деньги под риском (владелец 21.10: «прикольно»): окно повторной продажи открыто,
+                сделки нет — через ≤ 22 дня заказчик «остынет». */}
+            <button type="button" onClick={() => onJump('pool')} className="inline-flex min-h-6 max-w-full items-center whitespace-nowrap rounded bg-white/15 px-1.5 text-left hover:bg-white/25"
+              title={`Под риском: у ${k.hot} заказчиков открыто окно повторной продажи (отгрузка ≤ 22 дней назад, сделки нет); у ${k.hotClosing} закрывается в ближайшие 3 дня. Сумма — их потенциал за год.`}>
+              риск {moneyShort(k.hotPotential)} · {rub.format(k.hot)}
+            </button>
+          </div>
         </div>
         <WorkedRing k={k} />
       </div>
-      {/* Плитки — одной высоты с главной, всё по центру; подпись сверху, цифра крупно, пояснение
-          мелко — без обрезанных «Заказчиков в п…» (правка владельца 20.10). */}
-      {/* Восемь в ряд — только на широком экране: на ноутбуке 1280 px плитка выходила ~78 px и
-          «20 575» обрезалось (замечено 21.10 при съёмке презентации) — там два ряда по четыре. */}
-      <div className="grid min-w-0 flex-1 auto-rows-fr grid-cols-2 gap-2 sm:grid-cols-4 min-[1600px]:grid-cols-8">
+      {/* Восемь в ряд — от 1440 px; уже — два ряда по четыре (на 1280 плитка выходила бы ~72 px). */}
+      <div className="grid min-w-0 flex-1 auto-rows-fr grid-cols-2 gap-1.5 sm:grid-cols-4 min-[1440px]:grid-cols-8">
         {tiles.map(t => (
-          // Жёсткая сетка из трёх строк фиксированной высоты — подпись / цифра / пояснение:
-          // цифры всех плиток на одной линии, сколько бы строк ни занял текст (правка 20.10:
-          // «все цифры прыгают»). Пояснение — одна строка с многоточием, полный текст в title.
-          <button type="button" key={t.label} title={`${t.hint}${t.sub ? `\n${t.sub}` : ''}\n${t.task ? (activeTask === t.task ? 'Нажмите, чтобы снять фильтр' : 'Нажмите — показать только их') : 'Нажмите — перейти к колонкам'}`}
+          // Жёсткая сетка из трёх строк — цифры всех плиток на одной линии (правка 20.10: «все цифры
+          // прыгают»). Подпись и пояснение — в одну строку с многоточием, полный текст в title.
+          <button type="button" key={t.label} title={`${t.label}: ${t.hint}${t.sub ? `\n${t.sub}` : ''}\n${t.task ? (activeTask === t.task ? 'Нажмите, чтобы снять фильтр' : 'Нажмите — показать только их') : 'Нажмите — перейти к колонкам'}`}
             onClick={() => (t.task ? onTask(t.task) : t.jump && onJump(t.jump))}
-            className={`grid min-w-0 grid-rows-[15px_28px_15px] content-center items-center justify-items-center gap-0.5 rounded-xl border px-2 py-1.5 text-center transition-colors hover:bg-[var(--color-bg-hover)] ${t.task && activeTask === t.task ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
-            <div className="w-full truncate text-[11.5px] font-medium leading-4 text-[var(--color-text-muted)]">{t.label}</div>
-            <div className="text-[22px] font-bold leading-[28px] tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
-            <div className="w-full truncate text-[11px] leading-4 text-[var(--color-text-muted)]">{t.sub ?? '\u00a0'}</div>
+            className={`grid min-w-0 grid-rows-[14px_22px_13px] content-center items-center justify-items-center rounded-xl border px-1.5 py-1 text-center transition-colors hover:bg-[var(--color-bg-hover)] ${t.task && activeTask === t.task ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
+            <div className="w-full truncate text-[11px] font-medium leading-[14px] text-[var(--color-text-muted)]">{t.label}</div>
+            <div className="text-[18px] font-bold leading-[22px] tabular-nums" style={t.tone === 'neg' ? { color: 'var(--color-negative)' } : t.tone === 'warn' ? { color: '#b45f06' } : undefined}>{t.value}</div>
+            <div className="w-full truncate text-[10.5px] leading-[13px] text-[var(--color-text-muted)]">{t.sub ?? '\u00a0'}</div>
           </button>
         ))}
       </div>
