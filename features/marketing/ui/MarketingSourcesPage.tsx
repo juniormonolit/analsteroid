@@ -324,12 +324,13 @@ export function MarketingSourcesPage() {
             )}
 
             {grouping && (
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-                {/* Группы: на десктопе — липкая колонка слева, на телефоне/планшете — выбор + окно управления. */}
-                <aside className="hidden w-80 shrink-0 lg:sticky lg:top-3 lg:block">{groupsPanel}</aside>
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+                {/* Группы: от 1280px — липкая колонка слева, уже — выбор + окно управления (иначе таблице
+                    при боковом меню приложения оставалось ~330px). */}
+                <aside className="hidden w-80 shrink-0 xl:sticky xl:top-3 xl:block">{groupsPanel}</aside>
 
-                <section className="flex min-w-0 flex-1 flex-col gap-2">
-                  <div className="flex items-center gap-2 lg:hidden">
+                <section className="@container flex min-w-0 flex-1 flex-col gap-2">
+                  <div className="flex items-center gap-2 xl:hidden">
                     <SearchSelect
                       ariaLabel="Группа"
                       value={groupFilter}
@@ -365,11 +366,12 @@ export function MarketingSourcesPage() {
                     </div>
                   </div>
 
-                  {/* Таблица (md+): своя прокрутка по высоте — шапка остаётся видна при скролле. */}
-                  <div className="scroll-x hidden max-h-[calc(100dvh-230px)] min-h-[320px] overflow-y-auto rounded-xl border border-[var(--color-border)] md:block">
-                    <table className="w-full min-w-[760px] table-fixed text-sm">
+                  {/* Таблица — когда самой области ≥ 896px (container query, не ширина окна: боковое меню
+                      приложения съедает до 300px); своя прокрутка по высоте — шапка остаётся видна. */}
+                  <div className="scroll-x hidden max-h-[calc(100dvh-230px)] min-h-[320px] overflow-y-auto rounded-xl border border-[var(--color-border)] @4xl:block">
+                    <table className="w-full min-w-[720px] table-fixed text-sm">
                       <colgroup>
-                        <col className="w-11" /><col /><col className="w-[260px]" /><col className="w-[150px]" /><col className="w-[100px]" /><col className="w-[110px]" /><col className="w-12" />
+                        <col className="w-11" /><col /><col className="w-[220px]" /><col className="w-[124px]" /><col className="w-[84px]" /><col className="w-[96px]" /><col className="w-12" />
                       </colgroup>
                       <thead>
                         <tr>
@@ -429,8 +431,8 @@ export function MarketingSourcesPage() {
                     </table>
                   </div>
 
-                  {/* Карточки (телефон): таблица в 375px уносила название при свайпе. */}
-                  <div className="flex flex-col gap-2 md:hidden">
+                  {/* Карточки (узкая область): таблица в 375px уносила название при свайпе. */}
+                  <div className="flex flex-col gap-2 @4xl:hidden">
                     {visible.map(s => {
                       const gid = liveGroupOf(s);
                       const g = gid !== undefined ? groupById.get(gid) : undefined;
@@ -461,7 +463,7 @@ export function MarketingSourcesPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--color-text-muted)]">
-                    <span>Показано {fmtInt(visible.length)} из {fmtInt(filtered.length)}<span className="hidden md:inline"> · Shift+клик — выбрать диапазон, Esc — снять выбор</span></span>
+                    <span>Показано {fmtInt(visible.length)} из {fmtInt(filtered.length)}<span className="hidden @4xl:inline"> · Shift+клик — выбрать диапазон, Esc — снять выбор</span></span>
                     {filtered.length > limit && (
                       <button type="button" className={btn} onClick={() => setLimit(l => l + PAGE)}>Показать ещё {fmtInt(Math.min(PAGE, filtered.length - limit))}</button>
                     )}
