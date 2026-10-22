@@ -73,9 +73,9 @@ WORKLOG). Осталось пройти мобильным взглядом по
 ---
 
 ### MCP-сервер Монолитики — запуск и v2 (построен 22.10, `ai_docs/fresh_docs/MCP.md`)
-- **Запуск (владелец):** накатить `migrations/246_mcp.sql` в system, выкатить, выдать роли «Директор» право
-  «Claude (MCP)», добавить коннектор в Claude (Owner → Organization settings → Connectors → Custom →
-  `https://monolitika.mlt-it.com/api/mcp`). После — живая проверка с настоящим Claude Desktop.
+- **Запуск:** миграция 246, право «Директору» и выкатка — СДЕЛАНО 22.10. Осталось владельцу: добавить коннектор в
+  Claude (Owner → Organization settings → Connectors → Custom → `https://monolitika.mlt-it.com/api/mcp`, Register
+  automatically), подключиться и проверить живым вопросом; затем посмотреть `mcp_tool_calls`.
 - Экран словаря сленга в «Настройках» (сейчас `mcp_glossary` пополняется SQL) + список подключений в ЛК с отзывом (`revokeGrant` уже есть).
 - Инструменты v2 по журналу `mcp_tool_calls`: карточка менеджера (`buildManagerCard`), динамика по
   периодам (`fetchByPeriods`), воронка/стадии, канбан повторных. Планы по менеджеру внутри `get_metrics`.
