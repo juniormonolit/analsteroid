@@ -41,7 +41,7 @@ export async function GET() {
 
   const db = systemDb();
   const [gs, groups, assign, sources, stats] = await Promise.all([
-    db.query('SELECT id, name, sort FROM marketing_groupings ORDER BY sort, id'),
+    db.query('SELECT id, name, sort, builtin_key AS "builtinKey" FROM marketing_groupings ORDER BY sort, id'),
     db.query('SELECT id, grouping_id AS "groupingId", name, color, sort FROM marketing_groups ORDER BY sort, name'),
     db.query<{ grouping_id: number; source_id: string; group_id: number }>(
       'SELECT grouping_id, source_id, group_id FROM marketing_source_groups'),

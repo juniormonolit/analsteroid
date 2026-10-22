@@ -16,7 +16,7 @@ import { SearchSelect } from '@/components/ui/SearchSelect';
 import { SortableTh } from '@/components/ui/SortableTh';
 import { GsColorPickerButton } from '@/components/ui/GsColorPicker';
 
-interface Grouping { id: number; name: string; sort: number }
+interface Grouping { id: number; name: string; sort: number; builtinKey: string | null }
 interface Group { id: number; groupingId: number; name: string; color: string | null; sort: number }
 interface Source {
   sourceId: string; name: string; category: string; note: string | null; inDirectory: boolean;
@@ -230,8 +230,13 @@ export function MarketingSourcesPage() {
                   <button type="button" aria-label="Переименовать группировку" className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                     onClick={() => setNameDialog({ kind: 'grouping.update', id: grouping.id, name: grouping.name })}><Pencil size={14} /></button>
                   <button type="button" aria-label="Удалить группировку" className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-danger,#cc0000)]"
-                    onClick={() => setConfirm({ title: 'Удалить группировку?', text: `«${grouping.name}» и все её группы будут удалены, раскладка источников по ним пропадёт. Сами источники и сделки не трогаются.`, body: { op: 'grouping.delete', id: grouping.id } })}><Trash2 size={14} /></button>
+                    onClick={() => setConfirm({ title: 'Удалить группировку?', text: `«${grouping.name}» и все её группы будут удалены, раскладка источников по ним пропадёт. Сами источники и сделки не трогаются.${grouping.builtinKey ? '\n\nГотовые отчёты «Маркетинга» с этим разрезом вернутся на старый справочник.' : ''}`, body: { op: 'grouping.delete', id: grouping.id } })}><Trash2 size={14} /></button>
                 </div>
+                {grouping.builtinKey && (
+                  <p className="text-[11px] text-[var(--color-text-muted)]">
+                    По этой группировке считаются и готовые отчёты «Маркетинга» с этим разрезом.
+                  </p>
+                )}
                 <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto lg:max-h-[calc(100dvh-280px)]">
                   <GroupRow label="Все источники" n={counts.get(ALL)?.n ?? 0} d90={counts.get(ALL)?.d90 ?? 0}
                     active={groupFilter === ALL} onClick={() => setGroupFilter(ALL)} />

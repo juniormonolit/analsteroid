@@ -1104,12 +1104,14 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   const { data: srcCatalog } = useMarketingCatalog(dimensionType === 'source' && dim !== 'manager');
   const srcMap = useMemo(() => new Map((srcCatalog?.sources ?? []).map(s => [s.source_id, s])), [srcCatalog]);
   const mgrBranches = useMemo(() => srcCatalog?.managerBranches ?? {}, [srcCatalog]);
-  // Группировка «Ещё → Источники» (`g:<id>`): source_id → название группы.
+  // Группировка «Ещё → Источники» (`g:<id>`): source_id → название группы. Старый разрез,
+  // заменённый группировкой (миграция 242), раскладывается по ней же — как на сервере.
+  const { labelOf: dimLabelOf, canonicalOf } = useSourceDimensionOptions(true);
+  const dimC = canonicalOf(dim);
   const customAssign = useMemo(
-    () => (isCustomDimension(dim) ? srcCatalog?.groupings?.find(g => g.key === dim)?.assign : undefined) ?? null,
-    [srcCatalog, dim],
+    () => (isCustomDimension(dimC) ? srcCatalog?.groupings?.find(g => g.key === dimC)?.assign : undefined) ?? null,
+    [srcCatalog, dimC],
   );
-  const { labelOf: dimLabelOf } = useSourceDimensionOptions(true);
 
   const metrics: Metric[] = runData?.metrics ?? [];
   const rawRows: MiniGroupRow[] = runData?.rows ?? [];
@@ -1135,16 +1137,16 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
       else if (dim === 'branch') key = mgrBranches[d.manager_id] ?? UNDEFINED_LABEL; // филиал = по менеджеру сделки
       else if (dim === 'source') key = d.source_id ?? '__null__';
       else if (!d.source_id) key = NO_SOURCE_LABEL;
-      else if (isCustomDimension(dim)) key = customAssign?.[d.source_id] ?? UNASSIGNED_LABEL;
+      else if (isCustomDimension(dimC)) key = customAssign?.[d.source_id] ?? UNASSIGNED_LABEL;
       else {
         const info = srcMap.get(d.source_id);
-        key = info ? (info[dim] ?? UNDEFINED_LABEL) : UNDEFINED_LABEL;
+        key = info && !isCustomDimension(dim) ? (info[dim] ?? UNDEFINED_LABEL) : UNDEFINED_LABEL;
       }
       if (!m.has(key)) m.set(key, []);
       m.get(key)!.push(d);
     }
     return m;
-  }, [deals, dimensionType, periodRowsAreManagers, dim, srcMap, mgrBranches, customAssign]);
+  }, [deals, dimensionType, periodRowsAreManagers, dim, dimC, srcMap, mgrBranches, customAssign]);
 
   // Счётчик сделок строки — в подзаголовок измерения
   const rows = useMemo(() => rawRows.map(r => {
@@ -1255,7 +1257,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
 
 export function DrilldownDrawer(props: Props) {
   const { target, dimensionType, grouped, onGroupedChange, toolbarExtras, drilldownDimension, onDrilldownDimensionChange, onClose, metricIds } = props;
-  const { options: drillDimOptions, labelOf: dimLabelOf } = useSourceDimensionOptions(true);
+  const { options: drillDimOptions, labelOf: dimLabelOf, canonicalOf } = useSourceDimensionOptions(true);
   // Карточка сделки (клик по строке в любом списке сделок)
   const [openDealId, setOpenDealId] = useState<number | null>(null);
   // Суб-дрилл из мини-отчёта (клик по цифре)
@@ -1368,7 +1370,7 @@ export function DrilldownDrawer(props: Props) {
                 <span className="text-xs text-[var(--color-text-muted)]">Разбивка</span>
                 <SearchSelect
                   ariaLabel="Разбивка"
-                  value={drilldownDimension ?? 'contact_type'}
+                  value={canonicalOf(drilldownDimension ?? 'contact_type')}
                   onChange={v => { setSub(null); onDrilldownDimensionChange(v as DrilldownDimension); }}
                   options={drillDimOptions.map(d => ({ value: d.key, label: d.label, hint: d.custom ? 'группировка' : null }))}
                   className="text-xs"

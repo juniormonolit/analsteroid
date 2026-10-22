@@ -3,7 +3,7 @@ import {
   UNDEFINED_LABEL, NO_SOURCE_LABEL, UNASSIGNED_LABEL, isCustomDimension, customDimensionId,
   type SourceDimension, type BuiltinSourceDimension,
 } from './dimensions';
-import { loadGroupings } from './groupings';
+import { loadGroupings, canonicalDimension } from './groupings';
 
 export { UNDEFINED_LABEL, NO_SOURCE_LABEL, UNASSIGNED_LABEL };
 export type { SourceDimension, DrilldownDimension } from './dimensions';
@@ -50,7 +50,8 @@ export function dimensionValue(info: SourceInfo | undefined, dim: BuiltinSourceD
  * source_id → label группы для любого измерения, включая пользовательские группировки
  * (`g:<id>`). Источник, не разложенный в группировке, — «Не распределено».
  */
-export async function loadDimensionResolver(dim: Exclude<SourceDimension, 'branch'>): Promise<(sourceId: string) => string> {
+export async function loadDimensionResolver(rawDim: Exclude<SourceDimension, 'branch'>): Promise<(sourceId: string) => string> {
+  const dim = await canonicalDimension(rawDim);
   if (isCustomDimension(dim)) {
     const g = (await loadGroupings()).get(customDimensionId(dim));
     if (!g) return () => UNASSIGNED_LABEL;
@@ -72,8 +73,9 @@ export async function loadDimensionResolver(dim: Exclude<SourceDimension, 'branc
 export type SourceIdSet = string[] | 'null' | { exclude: string[] };
 
 /** source_id'ы, попадающие в значение измерения (для фильтров WHERE/дрилл-даунов). */
-export async function resolveSourceIds(dim: SourceDimension, value: string): Promise<SourceIdSet> {
+export async function resolveSourceIds(rawDim: SourceDimension, value: string): Promise<SourceIdSet> {
   if (value === NO_SOURCE_LABEL || value === '__null__') return 'null'; // сделки без source_id
+  const dim = await canonicalDimension(rawDim);
   if (isCustomDimension(dim)) {
     const g = (await loadGroupings()).get(customDimensionId(dim));
     if (!g) return value === UNASSIGNED_LABEL ? { exclude: [] } : [];

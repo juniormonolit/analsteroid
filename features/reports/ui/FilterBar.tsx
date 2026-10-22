@@ -514,11 +514,11 @@ export function SourceDimensionSelector({ sourceDimension, onSourceDimensionChan
 }) {
   // Группировки «Ещё → Источники» + встроенные разрезы: их может быть сколько угодно,
   // поэтому выбор из списка с поиском, а не полоса сегментов.
-  const { options } = useSourceDimensionOptions();
+  const { options, canonicalOf } = useSourceDimensionOptions();
   const segs = (
     <SearchSelect
       ariaLabel="Сущность"
-      value={sourceDimension}
+      value={canonicalOf(sourceDimension)}
       onChange={v => onSourceDimensionChange(v as SourceDimension)}
       options={options.map(d => ({ value: d.key, label: d.label, hint: d.custom ? 'группировка' : null }))}
       className={stacked ? 'w-full' : 'min-w-[160px]'}

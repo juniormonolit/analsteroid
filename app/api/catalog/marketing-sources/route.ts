@@ -28,6 +28,7 @@ export async function GET() {
       return {
         key: `g:${g.id}`,
         label: g.name,
+        builtinKey: g.builtinKey,
         assign: Object.fromEntries([...g.assign].flatMap(([sid, gid]) => names.has(gid) ? [[sid, names.get(gid)!]] : [])),
       };
     }),

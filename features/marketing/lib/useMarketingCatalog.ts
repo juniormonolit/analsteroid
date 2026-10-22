@@ -12,7 +12,7 @@ export interface SourceInfoLite {
   contact_type: string | null; branch: string | null; platform: string | null;
   brand: string | null; ad_channel: string | null; channel_group: string | null;
 }
-export interface GroupingLite { key: `g:${number}`; label: string; assign: Record<string, string> }
+export interface GroupingLite { key: `g:${number}`; label: string; builtinKey?: string | null; assign: Record<string, string> }
 export interface MarketingCatalog {
   sources: SourceInfoLite[];
   managerBranches: Record<string, string>;
@@ -35,16 +35,29 @@ export interface DimensionOption<K extends string> { key: K; label: string; cust
  * Измерения отчёта «по источникам»: сначала группировки маркетолога, затем встроенные
  * разрезы справочника. withManager — для разбивки дрилл-дауна («Менеджеры»).
  */
-export function useSourceDimensionOptions(withManager: true): { options: DimensionOption<DrilldownDimension>[]; labelOf: (k: string | undefined) => string };
-export function useSourceDimensionOptions(withManager?: false): { options: DimensionOption<SourceDimension>[]; labelOf: (k: string | undefined) => string };
+interface DimensionOptions<K extends string> {
+  options: DimensionOption<K>[];
+  labelOf: (k: string | undefined) => string;
+  /** Встроенный разрез → связанная группировка (`g:<id>`), как canonicalDimension на сервере. */
+  canonicalOf: <T extends string | undefined>(k: T) => T | `g:${number}`;
+}
+export function useSourceDimensionOptions(withManager: true): DimensionOptions<DrilldownDimension>;
+export function useSourceDimensionOptions(withManager?: false): DimensionOptions<SourceDimension>;
 export function useSourceDimensionOptions(withManager = false) {
   const { data } = useMarketingCatalog();
   return useMemo(() => {
-    const custom = (data?.groupings ?? []).map(g => ({ key: g.key, label: g.label, custom: true }));
-    const builtin = (withManager ? DRILLDOWN_DIMENSIONS : SOURCE_DIMENSIONS).map(d => ({ ...d, custom: false }));
+    const groupings = data?.groupings ?? [];
+    // Старые разрезы, заменённые группировкой маркетолога (миграция 242), в списке не дублируем.
+    const linked = new Map(groupings.filter(g => g.builtinKey).map(g => [g.builtinKey as string, g.key]));
+    const canonicalOf = <T extends string | undefined>(k: T): T | `g:${number}` => (k && linked.get(k)) || k;
+    const custom = groupings.map(g => ({ key: g.key, label: g.label, custom: true }));
+    const builtin = (withManager ? DRILLDOWN_DIMENSIONS : SOURCE_DIMENSIONS)
+      .filter(d => !linked.has(d.key)).map(d => ({ ...d, custom: false }));
     const options = [...custom, ...builtin];
-    const labelOf = (k: string | undefined) =>
-      options.find(o => o.key === k)?.label ?? (isCustomDimension(k) ? 'Группа' : 'Бренд');
-    return { options, labelOf };
+    const labelOf = (k: string | undefined) => {
+      const c = canonicalOf(k);
+      return options.find(o => o.key === c)?.label ?? (isCustomDimension(c) ? 'Группа' : 'Бренд');
+    };
+    return { options, labelOf, canonicalOf };
   }, [data, withManager]);
 }
