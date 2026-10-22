@@ -49,6 +49,7 @@ export async function register() {
     if (allow.has('dailyReport')) scheduleMoscowReport();
     if (allow.has('repeatKanbanSnapshot')) scheduleRepeatKanbanSnapshot();
     if (allow.has('repeatQueueIssue')) scheduleRepeatQueueIssue();
+    if (allow.has('repeatMorning')) scheduleRepeatMorning();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -77,6 +78,7 @@ export async function register() {
   scheduleWeeklyWeather();
   scheduleSupplyPanelSync();
   scheduleRepeatQueueIssue();
+  scheduleRepeatMorning();
   scheduleReportSchedules();
   scheduleScenarios();
   scheduleDiagnostics();
@@ -761,6 +763,36 @@ function scheduleRepeatQueueIssue() {
     }
   };
   setInterval(() => { void tick(); }, 2 * 60 * 1000);
+}
+
+// Утро менеджера по повторным (миграция 238): будни, час из «Настройки → Боты → Аналитик» (по умолчанию 9).
+// Функция repeat_morning выключена — прогон всё равно идёт и пишет сообщения в журнал (сухой прогон).
+function scheduleRepeatMorning() {
+  let lastDate = '';
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    const msk = new Date().toLocaleString('sv-SE', { timeZone: 'Europe/Moscow' });
+    const [date, time] = msk.split(' ');
+    const hour = parseInt(time.slice(0, 2), 10);
+    const dow = new Date(`${date}T12:00:00Z`).getUTCDay();
+    if (dow === 0 || dow === 6 || lastDate === date) return;
+    running = true;
+    try {
+      const { getBotFunctionConfig } = await import('./lib/bitrix/notify');
+      const at = (await getBotFunctionConfig('repeat_morning')).hour ?? 9;
+      if (hour < at || hour > at + 2) return;
+      const outcome = await runOnceADayMsk('repeat-morning', date, async () => {
+        const { runRepeatMorning } = await import('./features/repeat-kanban/engine/morning');
+        const r = await runRepeatMorning(date);
+        console.log(`[repeatMorning] ${date}: сообщений ${r.built}, в журнал ${r.logged}, отправлено ${r.sent}, ошибок ${r.failed}${r.dryRun ? ' (сухой прогон — функция выключена)' : ''}`);
+      });
+      if (outcome !== 'busy' && outcome !== 'lock-error') lastDate = date;
+    } catch (err) {
+      console.error('[repeatMorning] тик не удался:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setInterval(() => { void tick(); }, 60 * 1000);
 }
 
 function scheduleSupplyPanelSync() {
