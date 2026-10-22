@@ -1886,10 +1886,15 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           onSearchChange: setSearch,
           onGroupingChange: sourceMode || periodMode || clientMode ? undefined : setGrouping,
           // Сводка логистов: отделы оргструктуры к логистам не относятся (#8126).
-          showDepartments: !sourceMode && !REALIZATION_SLUGS.includes(reportSlug),
+          // «Ответы на запросы»: строки — снабженцы/проекты, отделы оргструктуры к ним не применяются.
+          showDepartments: !sourceMode && !REALIZATION_SLUGS.includes(reportSlug) && !responseMode,
           // Сводка логистов: группа строки = регион; «Регионы» — строки и есть регионы (#8126).
-          groupingOptions: reportSlug === REGIONS_SLUG
+          // «Ответы на запросы»: у снабженцев группа = регион или департамент снабженца (подытоги —
+          // срезы панели); у категорий подытогов нет (регион/департамент там — проекта).
+          groupingOptions: reportSlug === REGIONS_SLUG || reportSlug === RESPONSE_CATEGORIES_SLUG
             ? [{ value: 'none' as Grouping, label: 'Без групп.' }, { value: 'total' as Grouping, label: 'Итого' }]
+            : reportSlug === RESPONSE_SLUG
+              ? [{ value: 'none' as Grouping, label: 'Без групп.' }, { value: 'branch' as Grouping, label: 'По региону' }, { value: 'team' as Grouping, label: 'По департаменту' }, { value: 'total' as Grouping, label: 'Итого' }]
             : REALIZATION_SLUGS.includes(reportSlug)
               ? [{ value: 'none' as Grouping, label: 'Без групп.' }, { value: 'team' as Grouping, label: 'По региону' }, { value: 'total' as Grouping, label: 'Итого' }]
               : undefined,
