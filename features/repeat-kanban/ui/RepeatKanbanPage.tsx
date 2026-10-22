@@ -651,7 +651,7 @@ function KpiStrip({ k, activeTask, onTask, onJump }: {
   return (
     <div className="flex min-w-0 flex-col gap-2 lg:flex-row lg:items-stretch">
       {/* Главная цифра — сколько денег лежит в пуле, если вернуть заказчиков. */}
-      <div className="flex shrink-0 items-center gap-3 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-[340px]">
+      <div className="brand-chevrons flex shrink-0 items-center gap-3 rounded-xl bg-[var(--color-accent)] px-4 py-2.5 text-white lg:w-[340px]">
         {/* Потенциал ВСЕЙ базы (кроме брака) — не тает от работы (владелец 20.10: «при проработанном
             канбане потенциал будет 0?»); под ним — сколько из него ещё лежит нетронутым в пуле. */}
         <div className="min-w-0 flex-1"
