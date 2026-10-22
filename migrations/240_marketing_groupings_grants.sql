@@ -22,13 +22,18 @@ BEGIN
      WHERE grantee <> current_user AND grantee <> 'PUBLIC'
      GROUP BY grantee
   LOOP
-    FOREACH t IN ARRAY ARRAY['marketing_groupings', 'marketing_groups', 'marketing_source_groups'] LOOP
-      -- Приложение пишет в эти таблицы из «Ещё → Источники»: права на запись нужны всегда.
-      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO %I', t, r.grantee);
-    END LOOP;
-    EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE marketing_groupings_id_seq, marketing_groups_id_seq TO %I', r.grantee);
-    -- note в marketing_sources + вставка новых источников («Названия из Битрикса»).
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE ON marketing_sources TO %I', r.grantee);
+    -- Запись — только ролям, которые уже писали в marketing_sources (приложение); read-only
+    -- роли (sanya_ro) получают только чтение. Первая версия выдавала запись всем — см. 241.
+    IF r.privs LIKE '%INSERT%' OR r.privs LIKE '%OWNER%' THEN
+      FOREACH t IN ARRAY ARRAY['marketing_groupings', 'marketing_groups', 'marketing_source_groups'] LOOP
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO %I', t, r.grantee);
+      END LOOP;
+      EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE marketing_groupings_id_seq, marketing_groups_id_seq TO %I', r.grantee);
+    ELSE
+      FOREACH t IN ARRAY ARRAY['marketing_groupings', 'marketing_groups', 'marketing_source_groups'] LOOP
+        EXECUTE format('GRANT SELECT ON %I TO %I', t, r.grantee);
+      END LOOP;
+    END IF;
     RAISE NOTICE 'grants → % (было на marketing_sources: %)', r.grantee, r.privs;
   END LOOP;
 END $$;
