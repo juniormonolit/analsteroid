@@ -3,7 +3,7 @@ import { getSession } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
 import { parseClientRef } from '@/features/client-module/engine/clientModule';
 import { activeForClient, countToday, enqueue, MAX_PER_DAY } from '@/features/ai-analysis/engine/store';
-import { PROMPT_VERSION } from '@/features/ai-analysis/engine/prompt';
+import { getActivePrompt } from '@/features/ai-analysis/engine/promptStore';
 import { kickAiWorker } from '@/features/ai-analysis/engine/worker';
 
 // «Запустить анализ» во вкладке «ИИ-анализ». Ставит в очередь (ai_analyses), воркер подхватывает
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     if (!session.isSuperadmin && (await countToday(session.login)) >= MAX_PER_DAY) {
       return NextResponse.json({ error: `Лимит — ${MAX_PER_DAY} анализов в день. Завтра снова можно.` }, { status: 429 });
     }
-    const id = await enqueue({ clientRef: ref, promptVersion: PROMPT_VERSION, by: { login: session.login, name: session.displayName } });
+    const id = await enqueue({ clientRef: ref, promptVersion: (await getActivePrompt()).version, by: { login: session.login, name: session.displayName } });
     kickAiWorker();
     return NextResponse.json({ id });
   } catch (e) {

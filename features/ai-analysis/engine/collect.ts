@@ -10,6 +10,9 @@
 //
 // «Факты из CRM» считает код, не модель: проверка 22.10 показала, что модель принимает отказную
 // стадию за правду («Больше ничего не нужно» при нуле звонков по сделке), а кодом это однозначно.
+//
+// Имя менеджера — из оргструктуры (как карточка клиента, history.ts): в sa.employees.full_name у части
+// сотрудников должность вместо имени («Стажер», найдено 23.10).
 import { analyticsDb } from '@/lib/db/clients';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
@@ -63,11 +66,12 @@ export async function collectClientData(ref: ClientRef): Promise<ClientCallData>
     created_at: Date | null; delivered_at: Date | null; amount: string | null; grp: string | null; manager: string | null; products: unknown;
   }>(
     `SELECT d.deal_id, d.deal_name, f.name AS funnel, d.stage_id, s.name AS stage, d.created_at, d.delivered_at,
-            d.amount, d.head_group_name AS grp, e.full_name AS manager, d.products
+            d.amount, d.head_group_name AS grp, coalesce(org.manager_name, e.full_name) AS manager, d.products
        FROM sa.deals d
        LEFT JOIN sa.funnels f ON f.id = d.funnel_id
        LEFT JOIN sa.stages s ON s.id = d.stage_id
        LEFT JOIN sa.employees e ON e.bitrix_id = d.current_manager_id
+       LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = d.current_manager_id::text
       WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) = ANY($1::text[])
       ORDER BY d.created_at, d.deal_id`,
     [keys],
@@ -77,10 +81,11 @@ export async function collectClientData(ref: ClientRef): Promise<ClientCallData>
   const [calls, totals, profile] = await Promise.all([
     db.query<{ id: string; called_at: Date; deal_id: number; direction: string | null; dur: number | null; stage: string | null; manager: string | null; txt: string | null; roles: boolean }>(
       `SELECT c.id::text, c.called_at, c.deal_id, c.direction::text, c.duration_seconds AS dur, c.stage_at_call_time AS stage,
-              e.full_name AS manager, coalesce(t.formatted_dialogue, t.raw_text) AS txt, (t.formatted_dialogue IS NOT NULL) AS roles
+              coalesce(org.manager_name, e.full_name) AS manager, coalesce(t.formatted_dialogue, t.raw_text) AS txt, (t.formatted_dialogue IS NOT NULL) AS roles
          FROM va.calls c
          JOIN va.transcriptions t ON t.call_id = c.id
          LEFT JOIN sa.employees e ON e.bitrix_id = c.manager_id
+       LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = c.manager_id::text
         WHERE c.deal_id = ANY($1::bigint[]) AND c.called_at >= now() - make_interval(months => $2)
         ORDER BY c.called_at`,
       [dealIds, HISTORY_MONTHS],
@@ -136,13 +141,14 @@ export async function listClientCalls(ref: ClientRef, withText: boolean): Promis
   const db = analyticsDb();
   const keys = await clientKeys(ref);
   const r = await db.query<{ id: string; called_at: Date; deal_id: number; direction: string | null; result: string | null; dur: number | null; manager: string | null; txt: string | null; len: number | null; roles: boolean | null }>(
-    `SELECT c.id::text, c.called_at, c.deal_id, c.direction::text, c.result::text, c.duration_seconds AS dur, e.full_name AS manager,
+    `SELECT c.id::text, c.called_at, c.deal_id, c.direction::text, c.result::text, c.duration_seconds AS dur, coalesce(org.manager_name, e.full_name) AS manager,
             ${withText ? 'coalesce(t.formatted_dialogue, t.raw_text)' : 'NULL::text'} AS txt,
             length(coalesce(t.formatted_dialogue, t.raw_text))::int AS len,
             (t.formatted_dialogue IS NOT NULL) AS roles
        FROM va.calls c
        LEFT JOIN va.transcriptions t ON t.call_id = c.id
        LEFT JOIN sa.employees e ON e.bitrix_id = c.manager_id
+       LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = c.manager_id::text
       WHERE c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) = ANY($1::text[]))
       ORDER BY c.called_at DESC`,
     [keys],

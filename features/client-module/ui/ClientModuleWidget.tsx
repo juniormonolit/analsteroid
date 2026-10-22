@@ -101,7 +101,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
       {tab === 'objects' && <ObjectsTab data={data} params={params} focus={focusObject} onOpenDeals={k => { setDealsFilter(prev => ({ object: k, n: prev.n + 1 })); setTab('deals'); }} />}
       {tab === 'purchases' && <PurchasesTab qs={qs} />}
       {tab === 'calls' && <CallsTab qs={qs} />}
-      {tab === 'ai' && ai.allowed && <AiAnalysisTab qs={qs} params={params} />}
+      {tab === 'ai' && ai.allowed && <AiAnalysisTab qs={qs} params={params} cardClientType={data.profile.clientType} />}
       {tab === 'overview' && <ManagersBlock qs={qs} />}
     </div>
     </DealOpenerContext.Provider>

@@ -1,11 +1,11 @@
 import { getSession } from '@/lib/auth/session';
 import { AccessDenied } from '@/components/ui/AccessDenied';
-import { systemPrompt, PROMPT_VERSION } from '@/features/ai-analysis/engine/prompt';
 import { DEFAULT_MODEL, DEFAULT_REASONING_EFFORT, PRICE_RUB_PER_M } from '@/features/ai-analysis/engine/llm';
 import { journal, MAX_PER_DAY } from '@/features/ai-analysis/engine/store';
+import { PromptEditor } from '@/features/ai-analysis/ui/PromptEditor';
 
-// ИИ-анализ звонков: промпт (только просмотр — решение владельца 22.10, редактор с тест-прогоном —
-// этап 2) и журнал запусков с расходом. Только супер-администраторы («промпт правят только админы»).
+// ИИ-анализ звонков: редактор промпта с тест-прогоном (этап 2), журнал запусков с расходом.
+// Только супер-администраторы («промпт правят только админы», владелец 22.10).
 export const metadata = { title: 'ИИ-анализ звонков — Монолитика' };
 export const dynamic = 'force-dynamic';
 
@@ -42,18 +42,19 @@ export default async function Page() {
           <section className="min-w-0 rounded-xl border border-[var(--color-border)] p-3">
             <h2 className="mb-2 text-[15px] font-bold">Журнал запусков</h2>
             <div className="scroll-x">
-              <table className="w-full min-w-[640px] text-[12.5px]">
+              <table className="w-full min-w-[720px] text-[12.5px]">
                 <thead className="text-left text-[var(--color-text-muted)]">
-                  <tr><th className="py-1 pr-3">Когда</th><th className="pr-3">Кто</th><th className="pr-3">Заказчик</th><th className="pr-3">Статус</th><th className="pr-3">Звонков</th><th className="pr-3">₽</th><th className="pr-3">Отзыв</th></tr>
+                  <tr><th className="py-1 pr-3">Когда</th><th className="pr-3">Кто</th><th className="pr-3">Заказчик</th><th className="pr-3">Статус</th><th className="pr-3">Звонков</th><th className="pr-3">Промпт</th><th className="pr-3">₽</th><th className="pr-3">Отзыв</th></tr>
                 </thead>
                 <tbody>
                   {j.rows.map(r => (
                     <tr key={r.id} className="border-t border-[var(--color-border)] align-top">
                       <td className="py-1 pr-3 tabular-nums">{fmtDT(r.createdAt)}</td>
                       <td className="pr-3">{r.createdByName ?? r.createdBy}</td>
-                      <td className="pr-3">{r.clientRef}</td>
+                      <td className="pr-3">{r.clientRef}{r.isTest ? ' · тест' : ''}</td>
                       <td className="pr-3">{STATUS[r.status] ?? r.status}{r.error ? ` — ${r.error.slice(0, 80)}` : ''}</td>
                       <td className="pr-3 tabular-nums">{r.callsCount ?? '—'}</td>
+                      <td className="pr-3">{r.promptVersion}</td>
                       <td className="pr-3 tabular-nums">{r.costRub ?? '—'}</td>
                       <td className="pr-3">{r.feedback === 'useful' ? '👍' : r.feedback === 'inaccurate' ? `👎 ${r.feedbackNote ?? ''}` : '—'}</td>
                     </tr>
@@ -65,13 +66,8 @@ export default async function Page() {
         )}
 
         <section className="min-w-0 rounded-xl border border-[var(--color-border)] p-3">
-          <h2 className="mb-1 text-[15px] font-bold">Промпт · версия {PROMPT_VERSION}</h2>
-          <p className="mb-2 text-[12px] text-[var(--color-text-muted)]">
-            Только просмотр. Меняется в коде (features/ai-analysis/engine/prompt.ts) с повышением версии — каждый отчёт помнит,
-            по какой версии сделан. Перед системной частью модель получает данные заказчика: сделки, «Факты из CRM» (считает код)
-            и обезличенные расшифровки.
-          </p>
-          <pre className="max-h-[70dvh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[var(--color-surface-2,var(--color-bg))] p-3 text-[12px] leading-relaxed">{systemPrompt()}</pre>
+          <h2 className="mb-2 text-[15px] font-bold">Промпт</h2>
+          <PromptEditor />
         </section>
       </div>
     </div>

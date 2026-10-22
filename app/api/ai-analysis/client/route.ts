@@ -4,7 +4,7 @@ import { hasPerm } from '@/lib/auth/perms';
 import { parseClientRef } from '@/features/client-module/engine/clientModule';
 import { listClientCalls } from '@/features/ai-analysis/engine/collect';
 import { countToday, listForClient, MAX_PER_DAY } from '@/features/ai-analysis/engine/store';
-import { PROMPT_VERSION } from '@/features/ai-analysis/engine/prompt';
+import { getActivePrompt } from '@/features/ai-analysis/engine/promptStore';
 import { openRepeatTask } from '@/features/ai-analysis/engine/memoStore';
 
 // Вкладка «ИИ-анализ» карточки клиента: звонки заказчика (без текстов, ?texts=1 — с текстами) +
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
       withText ? Promise.resolve(null) : openRepeatTask(ref).catch(() => null),
     ]);
     const openTask = task ? { id: task.id, responsibleName: task.responsibleName } : null;
-    return NextResponse.json({ ref, calls, analyses, openTask, promptVersion: PROMPT_VERSION, quota: { used: usedToday, max: MAX_PER_DAY } });
+    return NextResponse.json({ ref, calls, analyses, openTask, promptVersion: (await getActivePrompt()).version, quota: { used: usedToday, max: MAX_PER_DAY } });
   } catch (e) {
     console.error('[ai-analysis/client]', e);
     return NextResponse.json({ error: 'Не удалось загрузить звонки заказчика' }, { status: 500 });

@@ -8,7 +8,17 @@ import type { ClientRef } from '@/features/client-module/engine/types';
 import { collectClientData } from './collect';
 import { analyzeClient, callsHashOf } from './analyze';
 import { DEFAULT_REASONING_EFFORT, LlmError } from './llm';
-import { claimNext, findDone, heartbeat, requeueStale, saveDone, saveDuplicate, saveError } from './store';
+import { backfillParsed, claimNext, findDone, heartbeat, requeueStale, saveDone, saveDuplicate, saveError } from './store';
+import { getActivePrompt } from './promptStore';
+import { parseReport } from './parse';
+import type { CollectedCall } from './collect';
+
+/** Основной менеджер анализа — тот, кто вёл больше всего расшифрованных разговоров. */
+function mainManagerOf(calls: CollectedCall[]): string | null {
+  const n = new Map<string, number>();
+  for (const c of calls) if (c.manager) n.set(c.manager, (n.get(c.manager) ?? 0) + 1);
+  return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+}
 
 const TICK_MS = 15_000;
 
@@ -22,11 +32,15 @@ async function processOne(): Promise<boolean> {
   const ref = job.clientRef as ClientRef;
   try {
     const data = await collectClientData(ref);
-    const dup = await findDone(ref, callsHashOf(data));
-    if (dup) { await saveDuplicate(job.id, dup.id); return true; }
+    // Тест-прогон — черновик из редактора; иначе активная версия (или встроенная из кода).
+    const prompt = job.isTest && job.promptBody ? { version: 'draft', body: job.promptBody } : await getActivePrompt();
+    if (!job.isTest) {
+      const dup = await findDone(ref, callsHashOf(data, prompt.version));
+      if (dup) { await saveDuplicate(job.id, dup.id); return true; }
+    }
     let lastPhase = 'collecting';
     const out = await analyzeClient(ref, {
-      data,
+      data, prompt,
       onProgress: p => { if (p.phase !== lastPhase) { lastPhase = p.phase; void heartbeat(job.id, p.phase); } },
     });
     await saveDone(job.id, {
@@ -35,6 +49,7 @@ async function processOne(): Promise<boolean> {
       maskHits: out.maskHits, inputTokens: out.llm.usage.promptTokens, cachedTokens: out.llm.usage.cachedTokens,
       outputTokens: out.llm.usage.completionTokens, reasoningTokens: out.llm.usage.reasoningTokens,
       costRub: out.llm.costRub, seconds: out.llm.seconds,
+      promptVersion: out.promptVersion, parsed: parseReport(out.llm.content), mainManager: mainManagerOf(data.calls),
     });
     console.log(`[aiAnalysis] #${job.id} ${ref}: ${out.llm.seconds} с, ${out.llm.costRub} ₽`);
   } catch (e) {
@@ -67,6 +82,9 @@ export function startAiWorker(): void {
   void requeueStale(true)
     .then(n => { if (n) console.log(`[aiAnalysis] после рестарта возвращено в очередь: ${n}`); })
     .catch(e => console.error('[aiAnalysis] requeue:', e instanceof Error ? e.message : e))
+    .then(() => backfillParsed(parseReport))
+    .then(n => { if (n) console.log(`[aiAnalysis] разобрано старых отчётов: ${n}`); })
+    .catch(e => console.error('[aiAnalysis] requeue/backfill:', e instanceof Error ? e.message : e))
     .finally(() => { void drain(); });
   state.timer = setInterval(() => { void drain(); }, TICK_MS);
 }

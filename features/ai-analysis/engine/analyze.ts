@@ -18,9 +18,9 @@ export interface AnalysisOutput {
 }
 
 /** Отпечаток входа: те же звонки + та же версия промпта = тот же отчёт (дедуп повторных запусков). */
-export function callsHashOf(data: ClientCallData): string {
+export function callsHashOf(data: ClientCallData, promptVersion: string = PROMPT_VERSION): string {
   const h = createHash('sha256');
-  h.update(PROMPT_VERSION);
+  h.update(promptVersion);
   for (const c of data.calls) h.update(`${c.id}|`);
   for (const f of data.facts) h.update(f);
   return h.digest('hex').slice(0, 32);
@@ -41,16 +41,19 @@ export async function analyzeClient(ref: ClientRef, opts: {
   model?: string; reasoningEffort?: 'low' | 'high' | 'max';
   /** Уже собранные данные (воркер собирает сам, чтобы сначала проверить дубль по callsHash). */
   data?: ClientCallData;
+  /** Промпт: активная версия из редактора или черновик тест-прогона; нет — встроенный из кода. */
+  prompt?: { version: string; body: string };
   onProgress?: (p: LlmProgress | { phase: 'collecting' }) => void;
 } = {}): Promise<AnalysisOutput> {
   opts.onProgress?.({ phase: 'collecting' });
   const data = opts.data ?? await collectClientData(ref);
   if (!data.calls.length) throw new Error('У заказчика нет расшифрованных звонков — анализировать нечего');
   const { text, maskHits } = userContent(data);
-  const llm = await chat({ model: opts.model, reasoningEffort: opts.reasoningEffort ?? DEFAULT_REASONING_EFFORT, system: systemPrompt(), user: text, onProgress: opts.onProgress });
+  const prompt = opts.prompt ?? { version: PROMPT_VERSION, body: systemPrompt() };
+  const llm = await chat({ model: opts.model, reasoningEffort: opts.reasoningEffort ?? DEFAULT_REASONING_EFFORT, system: prompt.body, user: text, onProgress: opts.onProgress });
   return {
-    promptVersion: PROMPT_VERSION,
-    callsHash: callsHashOf(data),
+    promptVersion: prompt.version,
+    callsHash: callsHashOf(data, prompt.version),
     data, maskHits, llm,
     sections: splitSections(llm.content),
     quotes: verifyQuotes(llm.content, data.calls, data.deals),

@@ -16,6 +16,8 @@ import type { CallListItem } from '../engine/collect';
 import type { AnalysisRow } from '../engine/store';
 import type { QuoteCheck } from '../engine/verify';
 import { memoPlain } from '../engine/memo';
+import { CLIENT_TYPES } from '@/features/client-module/engine/types';
+import Link from 'next/link';
 
 interface ClientPayload {
   ref: string;
@@ -201,7 +203,11 @@ function CallsList({ qs, calls, openId, highlights }: { qs: string; calls: CallL
   );
 }
 
-export function AiAnalysisTab({ qs, params }: { qs: string; params: Record<string, string> }) {
+export function AiAnalysisTab({ qs, params, cardClientType }: {
+  qs: string; params: Record<string, string>;
+  /** Тип заказчика, который показывает карточка (зеркало или Битрикс) — для «Записать в карточку». */
+  cardClientType: string | null;
+}) {
   const qc = useQueryClient();
   const client = useQuery<ClientPayload>({
     queryKey: ['ai-analysis-client', qs],
@@ -240,6 +246,17 @@ export function AiAnalysisTab({ qs, params }: { qs: string; params: Record<strin
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error ?? 'Не удалось отправить памятку');
       return j as { taskId: number; responsibleName: string | null };
+    },
+  });
+  const saveType = useMutation({
+    mutationFn: async (v: { id: number; clientType: string }) => {
+      const r = await apiFetch(`/api/ai-analysis/${v.id}/client-type`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientType: v.clientType }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error ?? 'Не удалось записать тип');
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['ai-analysis-client', qs] });
+      void qc.invalidateQueries({ queryKey: ['client-module'] });
     },
   });
   const feedback = useMutation({
@@ -332,6 +349,23 @@ export function AiAnalysisTab({ qs, params }: { qs: string; params: Record<strin
       {/* Отчёт */}
       {lastDone && (
         <div className="flex flex-col gap-2.5">
+          {(() => {
+            const aiType = lastDone.parsed?.clientType ?? null;
+            if (!aiType || aiType === cardClientType) return null;
+            const label = (v: string | null) => CLIENT_TYPES.find(t => t.value === v)?.label ?? 'не заполнен';
+            return (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-border)] p-3 text-[13px]">
+                <span className="min-w-0 flex-1">
+                  ИИ считает тип заказчика: <b>{label(aiType)}</b>. В карточке: {label(cardClientType)}.
+                </span>
+                <button type="button" disabled={saveType.isPending || saveType.isSuccess} onClick={() => saveType.mutate({ id: lastDone.id, clientType: aiType })}
+                  className="min-h-11 rounded-lg border border-[var(--color-accent)] px-3 text-[13px] font-semibold text-[var(--color-accent)] disabled:opacity-60">
+                  {saveType.isSuccess ? 'Записано' : saveType.isPending ? 'Записываю…' : 'Записать в карточку'}
+                </button>
+                {saveType.error && <span className="basis-full text-[var(--color-negative)]">{saveType.error.message}</span>}
+              </div>
+            );
+          })()}
           {SECTIONS.map(s => {
             const md = sections.get(s.n);
             if (!md) return null;
@@ -360,6 +394,9 @@ export function AiAnalysisTab({ qs, params }: { qs: string; params: Record<strin
               className="min-h-11 min-w-0 flex-1 basis-56 rounded-lg border border-[var(--color-border)] bg-transparent px-3 text-base sm:text-sm" />
           </div>
           {lastDone.feedbackNote && <div className="text-[12px] text-[var(--color-text-muted)]">Отзыв: {lastDone.feedbackNote}</div>}
+          <Link href="/ai-analysis/managers" className="inline-flex min-h-11 items-center text-[13px] text-[var(--color-accent)] hover:underline">
+            Сводка по менеджерам из всех отчётов →
+          </Link>
         </div>
       )}
 
