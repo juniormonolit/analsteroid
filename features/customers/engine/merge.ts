@@ -45,9 +45,14 @@ best AS (
   WHERE s.n_contacts <= $1
   ORDER BY p.contact_id, p.deals DESC, p.last_at DESC
 )
+-- Только ключи, которые реально есть у контакта (розничные сделки → c, юр-сделки без компании → x).
+own AS (
+  SELECT contact_id, bool_or(funnel_id IN (0,2)) AS has_c, bool_or(funnel_id IN (1,3) AND coalesce(company_id, 0) = 0) AS has_x
+  FROM d WHERE coalesce(contact_id, 0) <> 0 GROUP BY 1
+)
 SELECT member_key, primary_key, 'auto_contact' AS source FROM cx
-UNION ALL SELECT 'c'||contact_id, 'k'||company_id, 'auto_company' FROM best
-UNION ALL SELECT 'x'||contact_id, 'k'||company_id, 'auto_company' FROM best`;
+UNION ALL SELECT 'c'||b.contact_id, 'k'||b.company_id, 'auto_company' FROM best b JOIN own o USING (contact_id) WHERE o.has_c
+UNION ALL SELECT 'x'||b.contact_id, 'k'||b.company_id, 'auto_company' FROM best b JOIN own o USING (contact_id) WHERE o.has_x`;
 
 export async function fetchAutoAliases(): Promise<{ member: string; primary: string; source: MergeSource }[]> {
   const r = await analyticsDb().query<{ member_key: string; primary_key: string; source: MergeSource }>(AUTO_SQL, [MERGE_MAX_COMPANY_CONTACTS]);
