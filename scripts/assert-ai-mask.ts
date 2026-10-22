@@ -1,7 +1,7 @@
 // Проверки обезличивания расшифровок перед отправкой в LLM (features/ai-analysis/engine/mask.ts).
 // Все примеры синтетические. Запуск: npm run test:ai-mask
 import assert from 'node:assert/strict';
-import { maskPii } from '../features/ai-analysis/engine/mask.ts';
+import { maskCompany, maskPii } from '../features/ai-analysis/engine/mask.ts';
 
 const masked = (s: string) => maskPii(s).text;
 const gone = (s: string, needle: string, msg: string) => assert.ok(!masked(s).includes(needle), `${msg}: «${masked(s)}»`);
@@ -38,5 +38,18 @@ kept('Станислав, добрый день, это Елизавета из 
 // ── Счётчик ──
 const r = maskPii('Звоните +7 921 123-45-67 или 8 911 765 43 21');
 assert.equal(r.hits['ТЕЛЕФОН'], 2, `два телефона: ${JSON.stringify(r.hits)}`);
+
+// ── Наша сторона: бренды и то, чем менеджер представляется (имена остаются) ──
+const co = (s: string) => maskCompany(s);
+for (const s of ['Здравствуйте, компания «Монолит», Елизавета', 'ТД Монолит, менеджер', 'это ТСК по теплоизоляции', 'Монолита склад', 'MLT доставка']) {
+  assert.ok(!/монолит|mlt|тск/i.test(co(s)), `бренд: «${co(s)}»`);
+}
+assert.ok(!/Эконом/.test(co('Добрый день, это Александр из Эконом-Строя, по заявке')), co('это Александр из Эконом-Строя'));
+assert.ok(!/Стройресурс/.test(co('Компания «Стройресурс», Анастасия, здравствуйте')), co('Компания «Стройресурс», Анастасия'));
+assert.ok(co('это Александр из Эконом-Строя').includes('Александр'), 'имя менеджера остаётся');
+assert.ok(co('Монолитик проверяет').includes('Монолитик'), 'персонаж — не бренд');
+for (const s of ['для монолитной плиты М350', 'Монолитное перекрытие?', 'монолитный каркас']) assert.ok(/монолитн/i.test(co(s)), `стройтермин: «${co(s)}»`);
+assert.ok(!/Монолит/.test(co('приезжайте в Монолит, оплатите Монолиту, работаем с Монолитом')), 'падежи бренда');
+assert.ok(co('я сам из Петербурга, привезите в Парголово').includes('Петербурга'), 'город — не компания');
 
 console.log('ai-mask: ok');
