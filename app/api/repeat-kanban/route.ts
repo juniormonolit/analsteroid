@@ -22,6 +22,7 @@ import { memberKeysOf, saveMerge, saveUnmerge } from '@/features/customers/engin
 import { refreshCompanyCustomers } from '@/features/customers/engine/customers';
 import { enqueue, fetchQueueItem, issueNow, removeByClient, removeFromQueue, setBoost, type DeadlineRule } from '@/features/repeat-kanban/engine/queue';
 import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
+import { resolvePeriod } from '@/features/repeat-kanban/engine/shippedGroups';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
 // Гейт — section.repeat_kanban (ролям продаж, миграция 230). Зона — ropScope() сессии,
@@ -105,6 +106,8 @@ export async function GET(req: NextRequest) {
       managers, selectedManagers: selected, typeFilter: type && /^[a-z_]{2,30}$/.test(type) ? type : null, limits, canManage,
       // ?pg=Газобетон|Кровля — группы через «|» (в названиях групп бывают запятые).
       poolGroups: (sp.get('pg') ?? '').split('|').map(x => x.trim()).filter(x => x.length > 0 && x.length < 120).slice(0, 50),
+      // ?pgm=ever&pgp=1y (или pgp=custom&pgf=…&pgt=…) — «отгружали когда-либо за период», на всю доску.
+      groupsEver: sp.get('pgm') === 'ever' ? resolvePeriod(sp.get('pgp'), sp.get('pgf'), sp.get('pgt')) : null,
       taskFilter: (sp.get('tasks') ?? '').split(',').filter((x): x is TaskBucket => (TASK_BUCKETS as readonly string[]).includes(x)),
       outcome: sp.get('outcome') === 'won' || sp.get('outcome') === 'lost' ? sp.get('outcome') as 'won' | 'lost' : null,
       search: (sp.get('q') ?? '').trim().slice(0, 80) || null,

@@ -21,7 +21,7 @@ import dynamic from 'next/dynamic';
 // Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 import {
-  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil,
+  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS,
   type ColumnDef, type ColumnGroup, type ColumnKey,
 } from '../engine/config';
 import type { BoardKpi, KanbanCard, KanbanColumn, RepeatBoard, TodaySection } from '../engine/board';
@@ -92,6 +92,12 @@ export function RepeatKanbanPage() {
   const [type, setType] = useUrlState('type', stringParam(''));
   const [depts, setDepts] = useUrlState('dept', listParam([]));
   const [pg, setPg] = useUrlState('pg', stringParam(''));
+  // Товарная группа: last — последняя отгрузка (пул), ever — отгружали когда-либо за период (вся доска).
+  const [pgm, setPgm] = useUrlState('pgm', stringParam('last'));
+  const [pgp, setPgp] = useUrlState('pgp', stringParam('1y'));
+  const [pgf, setPgf] = useUrlState('pgf', stringParam(''));
+  const [pgt, setPgt] = useUrlState('pgt', stringParam(''));
+  const ever = pgm === 'ever';
   const [taskF, setTaskF] = useUrlState('tasks', listParam([]));
   const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const [outcome, setOutcome] = useUrlState('outcome', stringParam(''));
@@ -116,13 +122,17 @@ export function RepeatKanbanPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, taskF, sort, outcome, q, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, sort, outcome, q, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (mgrs.length) qs.set('managers', mgrs.join(','));
       if (type) qs.set('type', type);
       if (depts.length) qs.set('dept', depts.join(','));
       if (pg) qs.set('pg', pg);
+      if (ever) {
+        qs.set('pgm', 'ever'); qs.set('pgp', pgp);
+        if (pgp === 'custom') { if (pgf) qs.set('pgf', pgf); if (pgt) qs.set('pgt', pgt); }
+      }
       if (taskF.length) qs.set('tasks', taskF.join(','));
       if (sort !== 'default') qs.set('sort', sort);
       if (outcome) qs.set('outcome', outcome);
@@ -251,8 +261,9 @@ export function RepeatKanbanPage() {
     { key: 'none', label: 'Тип не указан' },
   ];
   const totalAll = Object.values(data?.typeCounts ?? {}).reduce((s, n) => s + n, 0);
-  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(!!outcome) + Number(poolGroups.length > 0) + Number(sort !== 'default');
-  const resetFilters = () => { setType(''); setTaskF([]); setOutcome(''); setPg(''); setSort('default'); setLimits({}); };
+  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(!!outcome) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
+  const resetFilters = () => { setType(''); setTaskF([]); setOutcome(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
+  const groupCounts = (ever ? data?.everGroupCounts : data?.poolGroupCounts) ?? {};
 
   return (
     // Экран: шапка сверху, конвейер — на всю оставшуюся высоту, колонки скроллятся внутри
@@ -330,13 +341,37 @@ export function RepeatKanbanPage() {
                 options={OUTCOME_OPTIONS.map(o => ({ value: o.value, label: o.value ? `${o.label} · ${rub.format(data?.outcomeCounts?.[o.value] ?? 0)}` : o.label, hint: 'hint' in o ? `${o.hint} (в пуле)` : undefined }))}
                 className={`${outcome ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
             </FilterField>
-            {/* Фильтр пула (владелец 20.10): «отгружали газобетон, а после ничего». Только пул. */}
-            <FilterField label="Пул: последняя отгрузка">
-              <SearchMultiSelect ariaLabel="Пул: последняя отгрузка" allLabel="Любая товарная группа"
-                unitLabel="групп в пуле" searchPlaceholder="Поиск товарной группы"
-                options={Object.entries(data?.poolGroupCounts ?? {}).sort((x, y) => y[1] - x[1])
-                  .map(([g, n]) => ({ value: g, label: g, hint: `${rub.format(n)} в пуле — последняя отгрузка` }))
-                  .concat(poolGroups.filter(g => !(data?.poolGroupCounts ?? {})[g]).map(g => ({ value: g, label: g, hint: 'сейчас 0 в пуле' })))}
+            {/* Товарная группа (владелец 20.10 и 22.10): «отгружали газобетон, а после ничего» — группа
+                ПОСЛЕДНЕЙ отгрузки, только пул; или «отгружали когда-либо за период» — на всю доску. */}
+            <FilterField label="Товарная группа">
+              <SearchSelect ariaLabel="Как искать товарную группу" value={pgm} onChange={v => { setPgm(v); setLimits({}); }}
+                options={[
+                  { value: 'last', label: 'Последняя отгрузка', hint: 'группа последней отгрузки — только пул' },
+                  { value: 'ever', label: 'Отгружали когда-либо', hint: 'в любой отгрузке за период — вся доска' },
+                ]}
+                className={`${ever ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+              {ever && (
+                <SearchSelect ariaLabel="Период отгрузок" value={pgp} onChange={v => { setPgp(v); setLimits({}); }}
+                  options={GROUP_PERIODS.map(p => ({ value: p.value, label: `За период: ${p.label.toLowerCase()}` }))}
+                  className={`${BTN_IDLE} w-full justify-start`} />
+              )}
+              {ever && pgp === 'custom' && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+                    <span className="w-6 shrink-0">с</span>
+                    <input type="date" value={pgf} max={pgt || undefined} onChange={e => { setPgf(e.target.value); setLimits({}); }} className={`${fieldCls} min-h-11 min-w-0 flex-1`} />
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+                    <span className="w-6 shrink-0">по</span>
+                    <input type="date" value={pgt} min={pgf || undefined} onChange={e => { setPgt(e.target.value); setLimits({}); }} className={`${fieldCls} min-h-11 min-w-0 flex-1`} />
+                  </label>
+                </div>
+              )}
+              <SearchMultiSelect ariaLabel="Товарные группы" allLabel="Любая товарная группа"
+                unitLabel="групп" searchPlaceholder="Поиск товарной группы"
+                options={Object.entries(groupCounts).sort((x, y) => y[1] - x[1])
+                  .map(([g, n]) => ({ value: g, label: g, hint: ever ? `${rub.format(n)} заказчиков отгружали за период` : `${rub.format(n)} в пуле — последняя отгрузка` }))
+                  .concat(poolGroups.filter(g => !groupCounts[g]).map(g => ({ value: g, label: g, hint: ever ? 'за период не отгружали' : 'сейчас 0 в пуле' })))}
                 value={poolGroups} onChange={v => { setPg(v.join('|')); setLimits({}); }}
                 className={`${poolGroups.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
             </FilterField>

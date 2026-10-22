@@ -23,6 +23,7 @@ import { fetchHideRequests, type HideRequest } from './reviews';
 import { fetchKanbanSettings } from './settings';
 import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
 import { fetchQueuedByClient } from './queueRead';
+import { fetchShippedGroups } from './shippedGroups';
 
 const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
@@ -190,6 +191,8 @@ export interface RepeatBoard {
   typeCounts: Record<string, number>;
   /** Пул: товарная группа ПОСЛЕДНЕЙ отгрузки («по наибольшему», head_group_name) → заказчиков. */
   poolGroupCounts: Record<string, number>;
+  /** Режим «отгружали когда-либо за период»: группа → заказчиков на всей доске (до фильтра групп). */
+  everGroupCounts?: Record<string, number>;
   /** Сколько заказчиков в каждом состоянии задачи (до фильтра по задачам). */
   taskCounts: Record<string, number>;
   kpi: BoardKpi | null;
@@ -420,6 +423,9 @@ export async function buildRepeatBoard(opts: {
   /** Фильтр пула (владелец 20.10): только заказчики, чья ПОСЛЕДНЯЯ отгрузка — в этих группах
    *  («отгружали газобетон, а после ничего»). Колонки окна/воронки/разбора не трогает. */
   poolGroups?: string[];
+  /** «Отгружали когда-либо за период» (владелец 22.10, правка №5): группы из poolGroups ищутся в
+   *  ЛЮБОЙ отгрузке периода [from, to) и фильтр действует на всю доску, а не только на пул. */
+  groupsEver?: { from: string; to: string } | null;
   /** Фильтр по задаче заказчика (владелец 20.10: «РОП разбирает задачи на канбане»). */
   taskFilter?: TaskBucket[];
   /** Пул: последняя сделка успешная / проигранная (владелец 21.10). */
@@ -540,6 +546,8 @@ export async function buildRepeatBoard(opts: {
   const aliasMap = allKeys.length === keys.length ? new Map<string, AliasInfo>() : await fetchAliasMap().catch(() => new Map<string, AliasInfo>());
   if (!opts.skipNames) warmClientNames(keys);
   const poolGroups = new Set(opts.poolGroups ?? []);
+  const shipped = opts.groupsEver ? await fetchShippedGroups(opts.groupsEver.from, opts.groupsEver.to) : null;
+  const everGroupCounts: Record<string, number> = {};
   const buckets = new Map<ColumnKey, KanbanCard[]>(COLUMNS.map(c => [c.key, []]));
 
   for (const r of rows) {
@@ -639,11 +647,17 @@ export async function buildRepeatBoard(opts: {
       const nm = membersOf(r).map(k => norm(searchNames?.get(k) ?? '')).join(' | ');
       if (!nm || !qWords.every(w => nm.includes(w))) continue;
     }
+    if (shipped) {
+      // Склеенный заказчик — группы всех его исходных карточек.
+      const gs = new Set(membersOf(r).flatMap(k => shipped.get(k) ?? []));
+      for (const g of gs) everGroupCounts[g] = (everGroupCounts[g] ?? 0) + 1;
+      if (poolGroups.size && ![...gs].some(g => poolGroups.has(g))) continue;
+    }
     if (col.startsWith('pool')) {
       const g = r.lastDeliveredGroup ?? 'Без группы';
       poolGroupCounts[g] = (poolGroupCounts[g] ?? 0) + 1;
       outcomeCounts[lastOutcome] = (outcomeCounts[lastOutcome] ?? 0) + 1;
-      if (poolGroups.size && !poolGroups.has(g)) continue;
+      if (!shipped && poolGroups.size && !poolGroups.has(g)) continue;
       if (opts.outcome && opts.outcome !== lastOutcome) continue;
     }
 
@@ -806,6 +820,6 @@ export async function buildRepeatBoard(opts: {
   const notice = q && found === 0
     ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию (все слова) и по номерам контакта, компании, сделки, задачи; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
     : null;
-  return { ...base, columns, typeCounts, poolGroupCounts, taskCounts, kpi, notice, dataAt,
+  return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, taskCounts, kpi, notice, dataAt,
     taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, today };
 }

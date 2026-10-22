@@ -117,3 +117,16 @@ export const CLIENT_TYPE_STYLE: Record<string, { bg: string; fg: string; border:
   own_needs_org: { bg: 'transparent', fg: '#741b47', border: '#a64d79' },
   none: { bg: 'transparent', fg: '#999999', border: '#b7b7b7', dashed: true },
 };
+
+/** Фильтр товарной группы (владелец 22.10): last — группа ПОСЛЕДНЕЙ отгрузки (только пул), ever —
+ *  отгружали когда-либо за период (вся доска, engine/shippedGroups.ts). */
+export type GroupMode = 'last' | 'ever';
+export const GROUP_PERIODS = [
+  { value: '3m', label: '3 месяца', months: 3 },
+  { value: '6m', label: 'Полгода', months: 6 },
+  { value: '1y', label: 'Год', months: 12 },
+  { value: '2y', label: '2 года', months: 24 },
+  { value: 'all', label: 'Всё время', months: null },
+  { value: 'custom', label: 'Свои даты', months: null },
+] as const;
+export type GroupPeriod = (typeof GROUP_PERIODS)[number]['value'];
