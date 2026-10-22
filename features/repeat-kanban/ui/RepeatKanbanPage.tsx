@@ -21,7 +21,7 @@ import dynamic from 'next/dynamic';
 // Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 import {
-  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS,
+  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil,
   type ColumnDef, type ColumnGroup, type ColumnKey,
 } from '../engine/config';
 import type { BoardKpi, KanbanCard, KanbanColumn, RepeatBoard, TodaySection } from '../engine/board';
@@ -212,7 +212,7 @@ export function RepeatKanbanPage() {
       else if (a === 'merge') setMergeFor(c);
       else if (a === 'accept_hide' || a === 'decline_hide') {
         const ok = a === 'accept_hide'
-          ? confirm(`Скрыть «${cardName(c)}» до ${c.hideRequest?.until.split('-').reverse().join('.')}, как предлагает менеджер?`)
+          ? confirm(`Скрыть «${cardName(c)}» ${fmtHideUntil(c.hideRequest?.until ?? '')}, как предлагает менеджер?`)
           : confirm(`Отклонить предложение скрыть «${cardName(c)}»? Заказчик останется в пуле.`);
         if (ok) { await post({ action: 'decide_hide', accept: a === 'accept_hide', clientKey: c.clientKey, managerId: c.managerId, column: c.column }).catch(e => alert(e.message)); refresh(); }
       }
@@ -940,7 +940,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
       {c.brak && <div className="text-[11px] text-[var(--color-negative)]">{c.brak.comment ?? 'Брак'} · {c.brak.by}, {fmtDay(c.brak.at)}</div>}
       {c.hidden && (
         <div className="rounded-md bg-[var(--color-bg-surface)] px-2 py-1 text-[11.5px]">
-          <div className="font-semibold text-[var(--color-text)]">Скрыт до {c.hidden.until.split('-').reverse().join('.')}</div>
+          <div className="font-semibold text-[var(--color-text)]">Скрыт {fmtHideUntil(c.hidden.until)}</div>
           {c.hidden.comment && <div className="text-[var(--color-text-secondary)]">«{c.hidden.comment}»</div>}
           <div className="text-[var(--color-text-muted)]">{c.hidden.by}, {fmtDay(c.hidden.at)}</div>
         </div>
@@ -948,7 +948,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
 
       {c.hideRequest && (
         <div className="rounded-md bg-[#fff2cc] px-2 py-1 text-[11.5px] text-[#7f6000]">
-          <div className="font-semibold">Предлагает скрыть до {c.hideRequest.until.split('-').reverse().join('.')}</div>
+          <div className="font-semibold">Предлагает скрыть {fmtHideUntil(c.hideRequest.until)}</div>
           <div>«{c.hideRequest.comment}»</div>
           <div className="opacity-80">{c.hideRequest.by}, {fmtDay(c.hideRequest.at)}</div>
           {canManage && (
@@ -1314,7 +1314,7 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
         </label>
         <div className="flex flex-col gap-1.5">
           <span className="text-[var(--color-text-secondary)]">Срок задач</span>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             {([['today', 'Сегодня'], ['window', 'До конца окна — у каждого свой'], ['3', '+3 дня'], ['7', '+7 дней']] as const).map(([v, l]) => (
               <button key={v} type="button" onClick={() => setDeadlineMode(v)} className={deadlineMode === v ? BTN_ACTIVE : BTN_IDLE}>{l}</button>
             ))}
@@ -1377,6 +1377,8 @@ function HideModal({ card, request = false, onClose, onSaved }: { card: KanbanCa
   const presets = [
     { label: '1 месяц', v: plus(1) }, { label: '3 месяца', v: plus(3) },
     { label: 'До марта', v: nextMarch() }, { label: 'Полгода', v: plus(6) },
+    // Навсегда (владелец 22.10): без срока — вернётся только кнопкой «Вернуть в пул».
+    { label: 'Навсегда', v: HIDE_FOREVER },
   ];
   const [until, setUntil] = useState(presets[1].v);
   const [comment, setComment] = useState('');
@@ -1392,17 +1394,19 @@ function HideModal({ card, request = false, onClose, onSaved }: { card: KanbanCa
     <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`${request ? 'Предложить скрыть' : 'Скрыть из пула'} · ${cardName(card)}`} desktopWidth="sm:max-w-md">
       <div className="flex flex-col gap-3 text-sm">
         <div className="text-[var(--color-text-secondary)]">{request
-          ? 'Предложение уйдёт РОПу: если он согласится, заказчик уйдёт в «Скрытые» и сам вернётся в пул в выбранный день.'
-          : 'Заказчик уйдёт в колонку «Скрытые» и сам вернётся в пул в выбранный день.'}</div>
+          ? 'Предложение уйдёт РОПу: если он согласится, заказчик уйдёт в «Скрытые» и сам вернётся в пул в выбранный день (или останется там навсегда).'
+          : 'Заказчик уйдёт в колонку «Скрытые» и сам вернётся в пул в выбранный день (или останется там навсегда).'}</div>
         <div className="flex flex-col gap-1.5">
           <span className="text-[var(--color-text-secondary)]">До какого числа</span>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             {presets.map(p => (
               <button key={p.label} type="button" onClick={() => setUntil(p.v)}
                 className={until === p.v ? BTN_ACTIVE : BTN_IDLE}>{p.label}</button>
             ))}
           </div>
-          <input type="date" value={until} min={plus(0)} onChange={e => setUntil(e.target.value)} className={`${fieldCls} min-h-11`} />
+          {until === HIDE_FOREVER
+            ? <p className="text-[var(--color-text-secondary)]">Без срока: сам в пул не вернётся — только кнопкой «Вернуть в пул» на карточке в «Скрытых».</p>
+            : <input type="date" value={until} min={plus(0)} onChange={e => setUntil(e.target.value)} className={`${fieldCls} min-h-11`} />}
         </div>
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
           Почему скрываем (обязательно)

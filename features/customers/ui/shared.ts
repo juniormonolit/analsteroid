@@ -77,6 +77,8 @@ export function fmtMoney(v: number): string {
 }
 export function fmtDate(iso: string | null): string {
   if (!iso) return '—';
+  // «Скрыть навсегда» в канбане повторных — срок 9999-12-31 (HIDE_FOREVER).
+  if (iso.startsWith('9999-')) return 'навсегда';
   return iso.slice(0, 10).split('-').reverse().join('.');
 }
 export function daysAgo(iso: string | null): string {

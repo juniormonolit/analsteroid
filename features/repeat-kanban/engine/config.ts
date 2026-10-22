@@ -17,6 +17,11 @@ export const NEW_DEAL_STAGE: Record<2 | 3, string> = { 2: 'C2:NEW', 3: 'C3:NEW' 
 export const WINDOW_DAYS = 22;
 export const WEEK_DAYS = 7;
 export const TOUCHES = 3;
+/** «Скрыть навсегда» (владелец 22.10): срок-заглушка вместо отдельной колонки в БД — все проверки
+ *  «snooze_until >= сегодня» работают как есть; вернуть можно только кнопкой «Вернуть в пул». */
+export const HIDE_FOREVER = '9999-12-31';
+/** Срок скрытия для подписи: «навсегда» или дд.мм.гггг. */
+export const fmtHideUntil = (until: string) => (until >= HIDE_FOREVER ? 'навсегда' : `до ${until.split('-').reverse().join('.')}`);
 
 /** С этой даты отказы попадают на разбор РОПу. Старые отказы (до запуска раздела) на
  *  разбор не идут — иначе колонка с первого дня была бы на тысячи карточек. */

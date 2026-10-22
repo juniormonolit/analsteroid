@@ -112,7 +112,7 @@ export function CustomerTile({ r, onOpen, actions }: { r: ApiRow; onOpen: () => 
           </span>
         ))}
         {r.pendingExclusion && <Chip title={`Запрос на исключение: «${r.pendingExclusion.reason}»`}>⏳ ждёт РОПа</Chip>}
-        {r.snoozedActive && r.mark && <Chip title={`Отложен до ${fmtDate(r.mark.snoozeUntil)}`}>⏸ до {fmtDate(r.mark.snoozeUntil)}</Chip>}
+        {r.snoozedActive && r.mark && <Chip title={`Отложен ${r.mark.snoozeUntil?.startsWith('9999-') ? '' : 'до '}${fmtDate(r.mark.snoozeUntil)}`}>⏸ {r.mark.snoozeUntil?.startsWith('9999-') ? '' : 'до '}{fmtDate(r.mark.snoozeUntil)}</Chip>}
         {r.managerName && <Chip title="Менеджер заказчика" color="var(--color-accent)" bg="var(--color-accent-soft, #e7f1fb)">{r.managerName}</Chip>}
         {r.prevManagerNames.length > 0 && <Chip title={`Ранее вёл(а): ${r.prevManagerNames.join(', ')}`}>ранее: {r.prevManagerNames[0]}{r.prevManagerNames.length > 1 ? ` +${r.prevManagerNames.length - 1}` : ''}</Chip>}
       </div>

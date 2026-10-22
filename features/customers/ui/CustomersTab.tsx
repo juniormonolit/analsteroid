@@ -322,7 +322,7 @@ function StatusChips({ r }: { r: ApiRow }) {
   });
   if (r.atRisk) chips.push({ label: '⚠', title: `Постоянник под угрозой: активных сделок нет, с последней покупки прошло больше 2× его цикла повторки (${r.cycleDays} дн.)`, neg: true });
   if (r.refusedNoCall) chips.push({ label: '🚫', title: 'Есть сделка, закрытая в отказ без единого звонка', neg: true });
-  if (r.snoozedActive && r.mark) chips.push({ label: `⏸ ${fmtDate(r.mark.snoozeUntil)}`, title: `Отложен до ${fmtDate(r.mark.snoozeUntil)} · ${r.mark.createdBy}` });
+  if (r.snoozedActive && r.mark) chips.push({ label: `⏸ ${fmtDate(r.mark.snoozeUntil)}`, title: `Отложен ${r.mark.snoozeUntil?.startsWith('9999-') ? '' : 'до '}${fmtDate(r.mark.snoozeUntil)} · ${r.mark.createdBy}` });
   if (r.pendingExclusion) chips.push({ label: '⏳ ждёт РОПа', title: `Запрос на исключение из канбана: «${r.pendingExclusion.reason}» — ${r.pendingExclusion.requestedBy}, ${fmtDate(r.pendingExclusion.createdAt)}` });
   if (r.mark?.kind === 'no_call') chips.push({ label: `🚫 ${r.mark.reason ? REASON_LABELS[r.mark.reason] : 'не звонить'}`, title: `${r.mark.createdBy}, ${fmtDate(r.mark.createdAt)}${r.mark.comment ? ` — «${r.mark.comment}»` : ''}`, neg: true });
   return (
