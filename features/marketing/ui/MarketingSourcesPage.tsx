@@ -11,8 +11,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, RefreshCw, BarChart3, Search, X, Layers } from 'lucide-react';
+import { Plus, Pencil, Trash2, RefreshCw, BarChart3, Search, X, Layers, MoreHorizontal, Download } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
+import { Drawer } from '@/components/ui/Drawer';
+import { Popover } from '@/components/ui/Popover';
+import { exportStructureToExcel } from '@/features/marketing/lib/exportStructure';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { SortableTh } from '@/components/ui/SortableTh';
@@ -71,6 +74,7 @@ export function MarketingSourcesPage() {
 
   const [opError, setOpError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const mut = useMutation({
     mutationFn: async (body: Op) => {
       const r = await fetch('/api/marketing/structure', {
@@ -280,6 +284,16 @@ export function MarketingSourcesPage() {
             <button className={btn} disabled={mut.isPending} title="Добавить новые источники из Битрикса (ваши названия не затираются)"
               onClick={() => mut.mutate({ op: 'bitrix.sync' }, { onSuccess: r => setNotice(`Битрикс: ${fmtInt(r.total ?? 0)} источников, новых — ${fmtInt(r.added ?? 0)}`) })}>
               <RefreshCw size={14} className={mut.isPending && mut.variables?.op === 'bitrix.sync' ? 'animate-spin' : ''} /> Обновить из Битрикса
+            </button>
+            <button className={btn} disabled={!data || exporting} title="Все источники с раскладкой по всем группировкам + сводка по группам"
+              onClick={async () => {
+                if (!data) return;
+                setExporting(true);
+                try { await exportStructureToExcel(data.groupings, data.groups, data.sources); }
+                catch (e) { setOpError(`Не удалось выгрузить: ${(e as Error).message}`); }
+                finally { setExporting(false); }
+              }}>
+              <Download size={14} /> {exporting ? 'Готовлю…' : 'Excel'}
             </button>
             <Link href={reportHref} className={btnPrimary}>
               <BarChart3 size={14} /> <span className="max-w-[260px] truncate">Отчёт{grouping ? ` по «${grouping.name}»` : ''}</span>
@@ -510,9 +524,10 @@ export function MarketingSourcesPage() {
         </div>
       )}
 
-      <Modal open={groupsModal} onOpenChange={setGroupsModal} title="Группы">
+      {/* Уже 1280px панель групп — выдвижная: таблице самой не хватает ширины. */}
+      <Drawer open={groupsModal} onOpenChange={setGroupsModal} title="Группы" desktopWidth="sm:max-w-sm">
         {groupsPanel}
-      </Modal>
+      </Drawer>
 
       <Modal open={!!nameDialog} onOpenChange={o => { if (!o) setNameDialog(null); }}
         title={nameDialog?.kind === 'grouping.create' ? 'Новая группировка'
@@ -635,12 +650,13 @@ function GroupsPanel({
   reportHref: string;
 }) {
   const c = (k: string) => counts.get(k) ?? { n: 0, d90: 0 };
+  const tile = (active: boolean) =>
+    `flex min-h-11 min-w-0 flex-col items-start justify-center rounded-lg border px-2.5 py-1.5 text-left ${active ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'}`;
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
       <div className="flex items-center gap-1">
-        <div className="min-w-0 flex-1 truncate font-semibold text-[var(--color-text)]">{grouping.name}</div>
-        <button type="button" aria-label="Переименовать группировку" className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-text)]" onClick={onRenameGrouping}><Pencil size={14} /></button>
-        <button type="button" aria-label="Удалить группировку" className="tap-target text-[var(--color-text-muted)] hover:text-[var(--color-danger,#cc0000)]" onClick={onDeleteGrouping}><Trash2 size={14} /></button>
+        <div className="min-w-0 flex-1 font-semibold text-[var(--color-text)]">{grouping.name}</div>
+        <ItemMenu label={`группировки «${grouping.name}»`} onEdit={onRenameGrouping} onDelete={onDeleteGrouping} always />
       </div>
       {grouping.builtinKey && (
         <Link href={reportHref} className="text-[11px] text-[var(--color-accent)] hover:underline">
@@ -648,15 +664,22 @@ function GroupsPanel({
         </Link>
       )}
 
-      <div className="grid grid-cols-[1fr_auto_auto] gap-x-3 pl-2 pr-[72px] text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
-        <span>Группа</span><span className="w-10 text-right">ист.</span><span className="w-16 text-right">сд. 90 дн.</span>
+      {/* «Все» и «Не распределено» — плашками: это не группы, а режимы просмотра. */}
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => onFilter(ALL)} className={tile(groupFilter === ALL)}>
+          <span className="text-sm font-medium text-[var(--color-text)]">Все</span>
+          <span className="text-[11px] tabular-nums text-[var(--color-text-muted)]">{fmtInt(c(ALL).n)} ист. · {fmtInt(c(ALL).d90)} сд.</span>
+        </button>
+        <button type="button" onClick={() => onFilter(UNASSIGNED)} className={tile(groupFilter === UNASSIGNED)}
+          style={c(UNASSIGNED).n > 0 ? { borderColor: WARN } : undefined}>
+          <span className="text-sm font-medium" style={{ color: c(UNASSIGNED).n > 0 ? WARN : 'var(--color-text)' }}>Не распределено</span>
+          <span className="text-[11px] tabular-nums text-[var(--color-text-muted)]">
+            {unassignedActive > 0 ? `${unassignedActive} разобрать · ` : ''}{fmtInt(c(UNASSIGNED).n)} ист.
+          </span>
+        </button>
       </div>
-      <div className="flex max-h-[60dvh] flex-col gap-0.5 overflow-y-auto lg:max-h-[calc(100dvh-300px)]">
-        <GroupRow label="Все источники" n={c(ALL).n} d90={c(ALL).d90} active={groupFilter === ALL} onClick={() => onFilter(ALL)} />
-        <GroupRow label="Не распределено" warn n={c(UNASSIGNED).n} d90={c(UNASSIGNED).d90} share={c(UNASSIGNED).d90 / maxD90}
-          active={groupFilter === UNASSIGNED} onClick={() => onFilter(UNASSIGNED)}
-          sub={unassignedActive > 0 ? `${unassignedActive} со сделками за 90 дн. — разобрать` : undefined} />
-        <div className="my-1 border-t border-[var(--color-border)]" />
+
+      <div className="flex max-h-[60dvh] flex-col gap-0.5 overflow-y-auto xl:max-h-[calc(100dvh-330px)]">
         {groups.map(g => (
           <GroupRow key={g.id} label={g.name} color={g.shown} n={c(String(g.id)).n} d90={c(String(g.id)).d90} share={c(String(g.id)).d90 / maxD90}
             active={groupFilter === String(g.id)} onClick={() => onFilter(String(g.id))}
@@ -671,37 +694,45 @@ function GroupsPanel({
   );
 }
 
-function GroupRow({ label, n, d90, share, active, onClick, color, warn, sub, onEdit, onDelete }: {
-  label: string; n: number; d90: number; share?: number; active: boolean; onClick: () => void;
-  color?: string; warn?: boolean; sub?: string; onEdit?: () => void; onDelete?: () => void;
+/** «⋯» — правка и удаление. Одна кнопка вместо двух иконок: не съедает ширину у названия. */
+function ItemMenu({ label, onEdit, onDelete, always }: { label: string; onEdit: () => void; onDelete: () => void; always?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const item = 'flex min-h-11 w-full items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-[var(--color-bg-hover)]';
+  return (
+    <Popover open={open} onOpenChange={setOpen} align="end" className="w-48 p-1"
+      trigger={
+        <button type="button" aria-label={`Действия ${label}`}
+          className={`${always ? '' : 'hover-reveal'} tap-target shrink-0 rounded-md p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]`}>
+          <MoreHorizontal size={16} />
+        </button>
+      }>
+      <button type="button" className={`${item} text-[var(--color-text)]`} onClick={() => { setOpen(false); onEdit(); }}><Pencil size={14} /> Изменить</button>
+      <button type="button" className={`${item} text-[var(--color-danger,#cc0000)]`} onClick={() => { setOpen(false); onDelete(); }}><Trash2 size={14} /> Удалить</button>
+    </Popover>
+  );
+}
+
+function GroupRow({ label, n, d90, share, active, onClick, color, onEdit, onDelete }: {
+  label: string; n: number; d90: number; share: number; active: boolean; onClick: () => void;
+  color: string; onEdit: () => void; onDelete: () => void;
 }) {
   return (
-    <div className={`group flex items-center gap-1 rounded-lg pl-2 ${active ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
-      <button type="button" onClick={onClick} className="flex min-h-11 min-w-0 flex-1 flex-col justify-center py-1 text-left">
-        <span className="grid w-full grid-cols-[1fr_auto_auto] items-center gap-x-3">
-          <span className="flex min-w-0 items-center gap-2">
-            {color && <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />}
-            <span className={`truncate text-sm ${active ? 'font-semibold' : ''}`} style={{ color: warn && n > 0 ? WARN : 'var(--color-text)' }}>{label}</span>
-          </span>
-          <span className="w-10 text-right text-[12px] tabular-nums text-[var(--color-text-muted)]">{n}</span>
-          <span className="w-16 text-right text-[12px] tabular-nums text-[var(--color-text)]">{d90.toLocaleString('ru-RU')}</span>
+    <div className={`group flex items-start gap-1 rounded-lg pl-2 pr-1 ${active ? 'bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]' : 'hover:bg-[var(--color-bg-hover)]'}`}>
+      <button type="button" onClick={onClick} className="flex min-h-11 min-w-0 flex-1 flex-col justify-center gap-1 py-1.5 text-left">
+        <span className="flex min-w-0 items-start gap-2">
+          <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
+          <span className={`min-w-0 break-words text-sm leading-snug text-[var(--color-text)] ${active ? 'font-semibold' : ''}`}>{label}</span>
         </span>
-        {share !== undefined && (
-          <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
-            <span className="block h-full rounded-full" style={{ width: `${Math.max(share * 100, d90 > 0 ? 2 : 0)}%`, background: warn ? WARN : (color ?? 'var(--color-accent)') }} />
+        <span className="flex items-center gap-2 pl-[18px]">
+          <span className="block h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--color-bg-hover)]">
+            <span className="block h-full rounded-full" style={{ width: `${Math.max(share * 100, d90 > 0 ? 2 : 0)}%`, background: color }} />
           </span>
-        )}
-        {sub && <span className="mt-0.5 text-[11px]" style={{ color: WARN }}>{sub}</span>}
+          <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-muted)]">
+            {fmtInt(n)} ист. · <b className="font-medium text-[var(--color-text)]">{fmtInt(d90)}</b> сд.
+          </span>
+        </span>
       </button>
-      {/* Место под правку/удаление держим и у «Все»/«Не распределено», чтобы числа стояли в колонку. */}
-      {onEdit ? (
-        <button type="button" aria-label={`Изменить «${label}»`} onClick={onEdit}
-          className="hover-reveal tap-target w-8 shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><Pencil size={13} className="mx-auto" /></button>
-      ) : <span className="w-8 shrink-0" />}
-      {onDelete ? (
-        <button type="button" aria-label={`Удалить «${label}»`} onClick={onDelete}
-          className="hover-reveal tap-target w-8 shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-danger,#cc0000)]"><Trash2 size={13} className="mx-auto" /></button>
-      ) : <span className="w-8 shrink-0" />}
+      <div className="pt-1.5"><ItemMenu label={`группы «${label}»`} onEdit={onEdit} onDelete={onDelete} /></div>
     </div>
   );
 }
