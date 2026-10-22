@@ -132,7 +132,12 @@ export function RepeatKanbanPage() {
       return j as RepeatBoard;
     },
     // Общий список заказчиков компании ещё считается (первый запуск) — спрашиваем чаще.
-    refetchInterval: q => (q.state.data?.warming ? 5_000 : 120_000),
+    // Тестировщик 22.10: «закрываю сделки в Битриксе — карточка остаётся, пока не обновлю». Копия
+    // Битрикса отстаёт на секунды, а доска брала свежие данные раз в 2 минуты и при возврате на
+    // вкладку — только если им больше минуты. Теперь — сразу при возврате и раз в минуту.
+    refetchInterval: q => (q.state.data?.warming ? 5_000 : 60_000),
+    staleTime: 0,
+    refetchOnWindowFocus: 'always',
     // Сразу после перезапуска сервера (выкатка) Redis ещё подключается, а пул SA занят —
     // первый запрос может упасть по таймауту соединения. Повторяем 5xx до трёх раз с паузой,
     // вместо красного «Не удалось собрать канбан» (живой случай 20.10).
@@ -742,6 +747,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   if (t && open && t.deadlineAt && new Date(t.deadlineAt).getTime() < Date.now()) a.push({ text: 'Задача просрочена', red: true });
   if (col === 'review' && c.lostEarly) a.push({ text: `Отказ после ${c.attempts?.count ?? 0} из ${TOUCHES} попыток`, red: true });
   if (col === 'review' && c.dozvonFail) a.push({ text: `${TOUCHES} попытки без дозвона`, red: true });
+  if (c.openDealInBrak) a.unshift({ text: `Сделка #${c.openDealInBrak} открыта в Битриксе — закройте`, red: true });
   if (c.wrongFunnel) a.unshift({ text: `Сделка в «${c.wrongFunnel.funnelName ?? 'первичной'}» — не в повторной`, red: true });
   if (col === 'touch_3' && !c.attempts?.reached) a.push({ text: '3 попытки без дозвона', red: true });
   if (t?.state === 'unread') a.push({ text: 'Задача не просмотрена', red: true });

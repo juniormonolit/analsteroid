@@ -112,6 +112,10 @@ export interface KanbanCard {
   /** Открытая сделка в ПЕРВИЧНОЙ воронке у повторного заказчика — ошибка менеджера при создании
    *  (владелец 21.10: «кроме самой первой сделки все должны быть в повторной воронке»). */
   wrongFunnel: WrongFunnelDeal | null;
+  /** «Брак», а повторная сделка в Битриксе осталась открытой (тестировщик 22.10: «отправляю сразу в
+   *  брак, но не закрываю сделку — будет светиться?»): в канбане заказчик в «Браке», но сделка висит
+   *  у менеджера — номер, чтобы её закрыли. */
+  openDealInBrak: number | null;
 }
 
 export interface KanbanColumn {
@@ -600,6 +604,7 @@ export async function buildRepeatBoard(opts: {
       freshDays,
       lastOutcome, dozvonFail,
       hideRequest: hideReqs.get(r.clientKey) ?? null,
+      openDealInBrak: col === 'brak' && hasOpenDeal && current ? current.dealId : null,
       // Только если в повторной воронке открытой сделки нет — иначе это история, не ошибка сейчас.
       wrongFunnel: hasOpenDeal ? null : wrongFunnel.get(r.clientKey.startsWith('k') ? r.clientKey : `p${r.clientKey.slice(1)}`) ?? null,
     });
