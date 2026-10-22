@@ -331,9 +331,9 @@ export function RepeatKanbanPage() {
           )}
           <label className={`${q ? BTN_ACTIVE : BTN_IDLE} w-[60vw] max-w-xs cursor-text sm:w-40 min-[112.5rem]:w-56`}>
             <Search size={16} className="shrink-0 opacity-70" />
-            <input type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder="Заказчик, тег, № сделки"
-              aria-label="Поиск заказчика: имя, название, номер контакта, компании, сделки или задачи"
-              title="Имя, название или тег (все слова), либо номер: контакт/компания, сделка, задача"
+            <input type="search" value={qInput} onChange={e => setQInput(e.target.value)} placeholder="Заказчик, ID, группа, тег"
+              aria-label="Поиск заказчика: имя, название, тег, товарная группа, номер контакта, компании, сделки или задачи"
+              title="Имя, название, тег или товарная группа (все слова), либо номер: ID заказчика (контакт/компания), сделка, задача"
               className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-current placeholder:opacity-60 sm:text-sm" />
             {qInput && (
               <button type="button" onClick={() => { setQInput(''); setQ(''); setLimits({}); }} aria-label="Очистить поиск" className="tap-target shrink-0 opacity-70 hover:opacity-100"><X size={14} /></button>
@@ -914,7 +914,16 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           ]} onAct={onAct} />
         </div>
       </div>
-      <div className="truncate text-[11.5px] text-[var(--color-text-muted)]">{c.managerName}</div>
+      {/* Номер заказчика (владелец 22.10: «на карточках нет уникального айди — не по чему искать»):
+          id контакта/компании Битрикса — ссылка в Битрикс; этот же номер ищется в строке поиска. */}
+      <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11.5px] text-[var(--color-text-muted)]">
+        <span className="min-w-0 truncate">{c.managerName}</span>
+        <a href={c.clientType === 'company' ? `https://td.monolit-crm.ru/crm/company/details/${c.clientId}/` : `https://td.monolit-crm.ru/crm/contact/details/${c.clientId}/`}
+          target="_blank" rel="noreferrer" className="shrink-0 tabular-nums hover:text-[var(--color-accent)] hover:underline"
+          title={`${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId} в Битриксе${c.members.length ? ` (склеен с ${c.members.map(m => `#${m.key.slice(1)}`).join(', ')})` : ''} — по этому номеру заказчик ищется в канбане`}>
+          ID {c.clientId}
+        </a>
+      </div>
       {c.tags?.length > 0 && <CardTags ids={c.tags} />}
       {c.members.length > 0 && <MembersBadge c={c} canMerge={canMerge} onUnmerge={onUnmerge} />}
       {c.queued && (

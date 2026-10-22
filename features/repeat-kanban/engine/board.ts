@@ -23,7 +23,7 @@ import { fetchHideRequests, type HideRequest } from './reviews';
 import { fetchKanbanSettings } from './settings';
 import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
 import { fetchQueuedByClient } from './queueRead';
-import { fetchShippedGroups } from './shippedGroups';
+import { fetchShippedGroups, resolvePeriod } from './shippedGroups';
 import { fetchCustomerTags } from './tags';
 import { NO_TAG, type TagDef } from './tagColors';
 
@@ -553,6 +553,10 @@ export async function buildRepeatBoard(opts: {
   const qNum = /^#?\d{2,12}$/.test(q) ? Number(q.replace('#', '')) : null;
   const qWords = q && qNum === null ? q.split(' ').filter(Boolean) : [];
   const searchNames = qWords.length ? await getCachedClientNames(allKeys).catch(() => new Map<string, string | null>()) : null;
+  // Поиск по товарной группе (владелец 22.10: «нельзя ввести „газобетон“»): группы ВСЕХ отгрузок заказчика
+  // за всю историю (shippedGroups, кэш 10 мин) — «газобетон» находит всех, кто его когда-либо брал.
+  const { from: allFrom, to: allTo } = resolvePeriod('all', null, null);
+  const searchGroups = qWords.length ? await fetchShippedGroups(allFrom, allTo).catch(() => new Map<string, string[]>()) : null;
   // Источник склейки — для плашки «N карточек» (кэш 5 мин; флаг выключен — пустая карта).
   const aliasMap = allKeys.length === keys.length ? new Map<string, AliasInfo>() : await fetchAliasMap().catch(() => new Map<string, AliasInfo>());
   if (!opts.skipNames) warmClientNames(keys);
@@ -664,7 +668,8 @@ export async function buildRepeatBoard(opts: {
     const cardTags = tagsOf(r);
     if (qWords.length) {
       // Имя/название и названия тегов (владелец 22.10: «сортировку (и поиск) по ним»).
-      const nm = [...membersOf(r).map(k => norm(searchNames?.get(k) ?? '')), ...cardTags.map(t => norm(tagName.get(t) ?? ''))].filter(Boolean).join(' | ');
+      const nm = [...membersOf(r).map(k => norm(searchNames?.get(k) ?? '')), ...cardTags.map(t => norm(tagName.get(t) ?? '')),
+        ...membersOf(r).flatMap(k => searchGroups?.get(k) ?? []).map(norm), norm(r.lastDeliveredGroup ?? '')].filter(Boolean).join(' | ');
       if (!nm || !qWords.every(w => nm.includes(w))) continue;
     }
     if (tagData) {
@@ -849,7 +854,7 @@ export async function buildRepeatBoard(opts: {
   };
   const found = columns.reduce((s, c) => s + c.total, 0);
   const notice = q && found === 0
-    ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию и тегам (все слова) и по номерам контакта, компании, сделки, задачи; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
+    ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию, тегам и товарным группам отгрузок (все слова) и по номерам: ID заказчика (контакт/компания), сделка, задача; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
     : null;
   return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, tagDefs: tagData?.defs, tagCounts: tagData ? tagCounts : undefined, taskCounts, kpi, notice, dataAt,
     taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, today };
