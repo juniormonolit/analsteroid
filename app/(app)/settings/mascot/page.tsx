@@ -5,8 +5,8 @@ import { MonolitikHelper, type MonolitikHelperProps } from '@/components/mascot/
 
 /**
  * Витрина талисмана «Монолитик» — проверить позы, размеры и помощника-«скрепку»
- * до встраивания во вкладку «ИИ-анализ звонков» карточки клиента. В меню
- * настроек не выведена: открывается по прямой ссылке /settings/mascot.
+ * до встраивания во вкладку «ИИ-анализ звонков» карточки клиента.
+ * Меню настроек → «Справочники» → «Монолитик».
  */
 
 type Stage = Omit<MonolitikHelperProps, 'placement'> & { key: string; label: string };

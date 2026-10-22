@@ -87,6 +87,8 @@ export function SettingsSidebar({
         { href: '/settings/metrics', label: 'Метрики', visible: canViewSettings },
         { href: '/settings/metric-colors', label: 'Цвета метрик', visible: canViewSettings },
         { href: '/settings/working-calendar', label: 'Календарь', visible: canViewSettings },
+        // Витрина талисмана (22.10): позы и помощник-«скрепка» для вкладки «ИИ-анализ звонков».
+        { href: '/settings/mascot', label: 'Монолитик', visible: canViewSettings },
       ],
     },
   ]
