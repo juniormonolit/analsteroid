@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { permError } from '@/lib/auth/perms';
+import { hasPerm } from '@/lib/auth/perms';
+import { hasFullManagerAccess } from '@/lib/org/managerAccess';
+import type { SessionUser } from '@/lib/auth/session';
 import { systemDb } from '@/lib/db/clients';
 import {
   MANUAL_MAX, fetchCrossSellMatrix, fetchCrossSellPriorities, recommendFor,
@@ -14,14 +16,20 @@ import {
 // Словарь групп берём из САМОЙ матрицы переходов (Redis 24 ч) — это ровно то
 // множество head-групп, которым оперирует рекомендация; отдельный справочник
 // разошёлся бы с ней (услуги/доставка/«Разное» из матрицы исключены).
-// Правит админ (section.settings) — правка владельца 22.10, раньше только супер-админ.
+// Доступ — как у пункта «Ещё» «Что предложить»: админ ИЛИ право section.cross_sell
+// (правка владельца 22.10; до этого — section.settings, ещё раньше — только супер-админ).
+function crossSellDenied(session: SessionUser | null): Response | null {
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!hasFullManagerAccess(session) && !hasPerm(session, 'section.cross_sell')) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  return null;
+}
 
 /** Сколько статистических групп показывать в подсказке строки (владелец 21.09). */
 const STAT_SHOWN = 6;
 
 export async function GET() {
   const session = await getSession();
-  const denied = permError(session, 'section.settings');
+  const denied = crossSellDenied(session);
   if (denied) return denied;
 
   const [matrix, priorities] = await Promise.all([fetchCrossSellMatrix(), fetchCrossSellPriorities()]);
@@ -48,7 +56,7 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   const session = await getSession();
-  const denied = permError(session, 'section.settings');
+  const denied = crossSellDenied(session);
   if (denied) return denied;
 
   const body = await req.json().catch(() => null) as { fromGroup?: unknown; groups?: unknown } | null;

@@ -60,6 +60,9 @@ export const PERM_SECTIONS = [
   // «Вход и хвост» (задача владельца 19.10): сделки по фильтрам отчёта слева →
   // вся последующая выручка их клиентов справа + «что будет, если убрать».
   { key: 'section.client_tail', label: 'Вход и хвост' },
+  // «Что предложить» (правка владельца 22.10): ручные приоритеты кросс-селла — переехали
+  // из «Настроек» в «Ещё». Админ ИЛИ явное право роли.
+  { key: 'section.cross_sell', label: 'Что предложить (кросс-селл)' },
   // «Канбан повторных продаж» (решения владельца 20.10): заказчики по ступеням +
   // задачи РОПа менеджеру + разбор отказов. Ролям продаж выдаётся миграцией 230.
   { key: 'section.repeat_kanban', label: 'Канбан повторных продаж' },
@@ -157,6 +160,7 @@ export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
   { key: 'section.product_matrix', label: 'Товарная матрица' },
   { key: 'section.transition_matrix', label: 'Матрица переходов' },
   { key: 'section.client_tail', label: 'Вход и хвост' },
+  { key: 'section.cross_sell', label: 'Что предложить' },
   { key: 'section.repeat_kanban', label: 'Канбан повторных продаж' },
   { key: 'action.deal_chats', label: 'Чаты' },
   { key: 'section.rating', label: 'Рейтинг' },

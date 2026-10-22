@@ -478,6 +478,9 @@ function SidebarBody({
     // «Вход и хвост» (задача владельца 19.10) — с каких сделок клиенты заходят и
     // какую выручку приносят потом; «что будет, если такие сделки убрать».
     { href: '/sales/client-tail', label: 'Вход и хвост', icon: <Waypoints size={18} />, ok: canMore('section.client_tail') },
+    // «Что предложить» (правка владельца 22.10) — ручные приоритеты кросс-селла,
+    // переехали сюда из «Настроек»; право section.cross_sell в «Матрице прав».
+    { href: '/cross-sell', label: 'Что предложить', icon: <Lightbulb size={18} />, ok: canMore('section.cross_sell') },
     // «Канбан повторных продаж» (решения владельца 20.10) — пул заказчиков по ступеням,
     // окно 22 дня, стадии повторной воронки, разбор отказов (REPEAT_KANBAN_SPEC.md).
     { href: '/repeat-kanban', label: 'Канбан повторных', icon: <Columns3 size={18} />, ok: canMore('section.repeat_kanban') },
