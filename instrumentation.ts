@@ -5,6 +5,16 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
 
+  // Очередь ИИ-анализа звонков (features/ai-analysis/engine/worker.ts): запускается по кнопке РОПа,
+  // пишет только в свою ai_analyses и рассылок не делает — поэтому ДО рубильника
+  // DISABLE_BACKGROUND_JOBS. Локально по умолчанию выключен (стоит денег на Cloud.ru):
+  // AI_ANALYSIS_WORKER=1 — включить в `npm run dev`, AI_ANALYSIS_WORKER=0 — выключить на стенде.
+  const aiWorker = process.env.AI_ANALYSIS_WORKER ?? (process.env.NODE_ENV === 'production' ? '1' : '0');
+  if (aiWorker === '1') {
+    const { startAiWorker } = await import('./features/ai-analysis/engine/worker');
+    startAiWorker();
+  }
+
   // Фоновые джобы НЕ поднимаются при локальной разработке (задача 3045, найдено
   // при подготовке к работе). Почему это важно: `.env.local` в рабочих копиях
   // смотрит в БОЕВЫЕ базы (`YC_SYSTEM_DB=system`, `sa` на Supabase — те же, что

@@ -24,8 +24,9 @@ import { DealsTab } from './DealsTab';
 import { ObjectsTab } from './ObjectsTab';
 import { CallsTab, ManagersBlock, PurchasesTab } from './HistoryTabs';
 import { DealOpenerContext } from './dealLink';
+import { AiAnalysisTab, useAiAnalysisAccess } from '@/features/ai-analysis/ui/AiAnalysisTab';
 
-type Tab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls';
+type Tab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls' | 'ai';
 
 export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
   contactId?: string; companyId?: string;
@@ -45,6 +46,9 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
     },
   });
   const [tab, setTab] = useState<Tab>('overview');
+  // «ИИ-анализ» — только у кого есть право (решение владельца 22.10: «видят ТОЛЬКО РОПЫ»):
+  // без права API отдаёт 403 и вкладки нет. Во вкладке Битрикса сессии Монолитики нет — тоже нет.
+  const ai = useAiAnalysisAccess(qs);
   const [focusObject, setFocusObject] = useState<string | null>(null);
   const [editClient, setEditClient] = useState(0);
   const [dealsFilter, setDealsFilter] = useState<{ object?: string; n: number }>({ n: 0 });
@@ -62,6 +66,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
     { key: 'purchases', label: `Покупки · ${data.deals.filter(d => d.deliveredAt).length}` },
     { key: 'objects', label: `Объекты · ${data.objects.length}` },
     { key: 'calls', label: 'Звонки' },
+    ...(ai.allowed ? [{ key: 'ai' as const, label: 'ИИ-анализ' }] : []),
   ];
 
   return (
@@ -96,6 +101,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
       {tab === 'objects' && <ObjectsTab data={data} params={params} focus={focusObject} onOpenDeals={k => { setDealsFilter(prev => ({ object: k, n: prev.n + 1 })); setTab('deals'); }} />}
       {tab === 'purchases' && <PurchasesTab qs={qs} />}
       {tab === 'calls' && <CallsTab qs={qs} />}
+      {tab === 'ai' && ai.allowed && <AiAnalysisTab qs={qs} params={params} />}
       {tab === 'overview' && <ManagersBlock qs={qs} />}
     </div>
     </DealOpenerContext.Provider>

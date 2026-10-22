@@ -126,6 +126,38 @@ export async function collectClientData(ref: ClientRef): Promise<ClientCallData>
   };
 }
 
+export interface CallListItem {
+  id: string; calledAt: string; dealId: number; direction: string | null; result: string | null;
+  durationSec: number | null; manager: string | null; hasText: boolean; textChars: number; text?: string; hasRoles?: boolean;
+}
+
+/** Все звонки склеенного заказчика для вкладки: без текста — список, с текстом — для просмотра. */
+export async function listClientCalls(ref: ClientRef, withText: boolean): Promise<CallListItem[]> {
+  const db = analyticsDb();
+  const keys = await clientKeys(ref);
+  const r = await db.query<{ id: string; called_at: Date; deal_id: number; direction: string | null; result: string | null; dur: number | null; manager: string | null; txt: string | null; len: number | null; roles: boolean | null }>(
+    `SELECT c.id::text, c.called_at, c.deal_id, c.direction::text, c.result::text, c.duration_seconds AS dur, e.full_name AS manager,
+            ${withText ? 'coalesce(t.formatted_dialogue, t.raw_text)' : 'NULL::text'} AS txt,
+            length(coalesce(t.formatted_dialogue, t.raw_text))::int AS len,
+            (t.formatted_dialogue IS NOT NULL) AS roles
+       FROM va.calls c
+       LEFT JOIN va.transcriptions t ON t.call_id = c.id
+       LEFT JOIN sa.employees e ON e.bitrix_id = c.manager_id
+      WHERE c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) = ANY($1::text[]))
+      ORDER BY c.called_at DESC`,
+    [keys],
+  );
+  return r.rows.map(x => {
+    // «null» строкой — битая расшифровка (встречается в va.transcriptions), за текст не считаем.
+    const has = (x.len ?? 0) > 10;
+    return {
+      id: x.id, calledAt: new Date(x.called_at).toISOString(), dealId: Number(x.deal_id), direction: x.direction, result: x.result,
+      durationSec: x.dur, manager: x.manager, hasText: has, textChars: has ? x.len! : 0,
+      ...(withText && has ? { text: x.txt!, hasRoles: !!x.roles } : {}),
+    };
+  });
+}
+
 function productsLine(products: unknown): string {
   if (!Array.isArray(products)) return '';
   return products.map((p: Record<string, unknown>) => {

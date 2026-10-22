@@ -89,6 +89,8 @@ export function SettingsSidebar({
         { href: '/settings/working-calendar', label: 'Календарь', visible: canViewSettings },
         // Витрина талисмана (22.10): позы и помощник-«скрепка» для вкладки «ИИ-анализ звонков».
         { href: '/settings/mascot', label: 'Монолитик', visible: canViewSettings },
+        // ИИ-анализ звонков (22.10): промпт (просмотр) и журнал запусков — только супер-админ.
+        { href: '/settings/ai-analysis', label: 'ИИ-анализ звонков', visible: isSuperadmin },
       ],
     },
   ]

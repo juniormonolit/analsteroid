@@ -37,9 +37,14 @@ export function splitSections(md: string): Record<string, string> {
   return out;
 }
 
-export async function analyzeClient(ref: ClientRef, opts: { model?: string; reasoningEffort?: 'low' | 'high' | 'max'; onProgress?: (p: LlmProgress | { phase: 'collecting' }) => void } = {}): Promise<AnalysisOutput> {
+export async function analyzeClient(ref: ClientRef, opts: {
+  model?: string; reasoningEffort?: 'low' | 'high' | 'max';
+  /** Уже собранные данные (воркер собирает сам, чтобы сначала проверить дубль по callsHash). */
+  data?: ClientCallData;
+  onProgress?: (p: LlmProgress | { phase: 'collecting' }) => void;
+} = {}): Promise<AnalysisOutput> {
   opts.onProgress?.({ phase: 'collecting' });
-  const data = await collectClientData(ref);
+  const data = opts.data ?? await collectClientData(ref);
   if (!data.calls.length) throw new Error('У заказчика нет расшифрованных звонков — анализировать нечего');
   const { text, maskHits } = userContent(data);
   const llm = await chat({ model: opts.model, reasoningEffort: opts.reasoningEffort ?? DEFAULT_REASONING_EFFORT, system: systemPrompt(), user: text, onProgress: opts.onProgress });
