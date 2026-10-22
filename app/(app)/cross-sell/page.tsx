@@ -12,12 +12,16 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { SearchSelect } from '@/components/ui/SearchSelect';
+import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
+import { QuestionnairesTab } from '@/features/questionnaires/ui/QuestionnairesTab';
 
 interface StatItem { group: string; pct: number }
 interface Row { name: string; transitions: number; stat: StatItem[]; priorities: (string | null)[] }
 
 export default function CrossSellPrioritiesPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
+  // Вкладки (владелец 22.10): приоритеты кросс-селла и анкеты по товарным группам (миграция 244).
+  const [tab, setTab] = useUrlState('tab', stringParam('priorities'));
   const [allGroups, setAllGroups] = useState<string[]>([]);
   const [max, setMax] = useState(3);
   const [q, setQ] = useState('');
@@ -79,9 +83,22 @@ export default function CrossSellPrioritiesPage() {
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">
     <div className="max-w-5xl p-4 sm:p-6 flex flex-col gap-4">
+      <div className="flex min-w-0 flex-col gap-3">
+        <h1 className="text-lg font-bold text-[var(--color-text)]">Что предложить</h1>
+        {/* Две вкладки — перенос строкой вместо горизонтальной ленты (CLAUDE.md, правило 12). */}
+        <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Раздел">
+          {[{ key: 'priorities', label: 'Ручные приоритеты' }, { key: 'forms', label: 'Анкеты по группам' }].map(t => (
+            <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
+              className={`min-h-11 rounded-lg px-3 text-sm ${tab === t.key ? 'bg-[var(--color-accent)] text-white' : 'border border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {tab === 'forms' ? <QuestionnairesTab groups={allGroups} /> : (<>
       <div>
-        <h1 className="text-lg font-bold text-[var(--color-text)]">Что предложить: ручные приоритеты</h1>
-        <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-muted)]">
+        <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
           Что предложить клиенту — <b>в первую очередь отсюда</b>: в карточке клиента (общий блок и каждый
           объект), в «Моих заказчиках» и в подсказках бота эти группы идут первыми. Свободные места
           занимают майндкарта стройки и статистика — что клиенты покупали СЛЕДУЮЩЕЙ покупкой (она шумит на
@@ -146,6 +163,7 @@ export default function CrossSellPrioritiesPage() {
         })}
         {filtered.length === 0 && <div className="text-sm text-[var(--color-text-muted)]">Ничего не найдено.</div>}
       </div>
+      </>)}
     </div>
     </div>
   );
