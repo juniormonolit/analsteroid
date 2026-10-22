@@ -52,20 +52,20 @@ function crmWebhook(): string {
   if (!w) throw new DealCreateError('Не задан вебхук Битрикса');
   return w.replace(/\/+$/, '');
 }
-function taskWebhook(): string {
+export function taskWebhook(): string {
   // Задачи — основной вебхук: у него scope task/tasks (у _2 только crm).
   const w = process.env.BITRIX_WEBHOOK_URL || '';
   if (!w) throw new DealCreateError('Не задан BITRIX_WEBHOOK_URL');
   return w.replace(/\/+$/, '');
 }
 
-async function read<T>(method: string, params: Record<string, unknown>): Promise<T> {
+export async function read<T>(method: string, params: Record<string, unknown>): Promise<T> {
   const body = await bx(taskWebhook(), method, params) as { result: T };
   return body.result;
 }
 
 /** Запись без автоповтора: повтор после таймаута мог бы задвоить сделку/задачу. */
-async function writeOnce<T>(base: string, method: string, params: Record<string, unknown>): Promise<T> {
+export async function writeOnce<T>(base: string, method: string, params: Record<string, unknown>): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${base}/${method}.json`, {
@@ -329,7 +329,7 @@ export async function ropOfManager(managerBitrixId: string): Promise<string | nu
  * «Аналитик» — Битрикс отказал: «Вы не можете отправлять сообщения в указанный чат» (бот не
  * участник задачи); от вебхука нельзя — автором был бы его владелец (Сергей Афанасьев).
  */
-async function postToTaskChat(taskId: number, authorId: string, comment: string): Promise<boolean> {
+export async function postToTaskChat(taskId: number, authorId: string, comment: string): Promise<boolean> {
   const res = await bx(taskWebhook(), 'task.commentitem.add', {
     TASKID: taskId, FIELDS: { AUTHOR_ID: Number(authorId), POST_MESSAGE: comment },
   }) as { result?: number };

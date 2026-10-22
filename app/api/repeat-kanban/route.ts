@@ -11,7 +11,7 @@ const TASK_BUCKETS = ['none', 'unread', 'work', 'overdue', 'control', 'done'] as
 const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task', 'ev', 'tag'] as const;
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
-import { COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
+import { BRAK_REASONS, COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager, closeDealAsLost } from '@/features/repeat-kanban/engine/createDeal';
 import { logEvent, newRequestId, type KanbanEventType } from '@/features/repeat-kanban/engine/log';
 import { decideHideRequest, decideReview, hideFromPool, markBrakNow, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
@@ -24,6 +24,7 @@ import { enqueue, fetchQueueItem, issueNow, removeByClient, removeFromQueue, set
 import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
 import { resolvePeriod } from '@/features/repeat-kanban/engine/shippedGroups';
 import { setCustomerTags, TagError } from '@/features/repeat-kanban/engine/tags';
+import { acceptTask, returnTask, TaskReviewError } from '@/features/repeat-kanban/engine/taskReview';
 import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
@@ -296,6 +297,35 @@ export async function POST(req: NextRequest) {
       return res;
     };
 
+    // Приёмка задачи из канбана (владелец 22.10): принять / принять и закрыть сделку в брак / на доработку.
+    if (body.action === 'task_accept' || body.action === 'task_return') {
+      const taskId = Number(body.taskId), dealId = Number(body.dealId);
+      if (!Number.isInteger(taskId) || taskId <= 0 || !Number.isInteger(dealId) || dealId <= 0) return NextResponse.json({ error: 'Нет задачи или сделки' }, { status: 400 });
+      const comment = typeof body.comment === 'string' ? body.comment.trim().slice(0, 3000) : '';
+      if (body.action === 'task_return') {
+        const d = typeof body.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.deadline) ? body.deadline : null;
+        const t = typeof body.deadlineTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.deadlineTime) ? body.deadlineTime : '19:00';
+        const res = await returnTask({ taskId, dealId, comment, authorId: session.bitrixUserId, deadline: d ? `${d}T${t}:00+03:00` : null });
+        await logEvent(session, { type: 'task_returned', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId, payload: { comment, deadline: d ? `${d} ${t}` : null, commented: res.commented } });
+        return NextResponse.json({ ok: true, ...res });
+      }
+      // «Принять и закрыть сделку»: причина = отказная стадия (те же, что у брака). Сначала проверяем
+      // причину, потом принимаем задачу, потом брак + закрытие сделки (как «Сразу в брак»).
+      const reason = typeof body.closeReason === 'string' && body.closeReason ? body.closeReason : null;
+      const reasonLabel = reason ? BRAK_REASONS.find(r => r.value === reason)?.label ?? null : null;
+      if (reason && !reasonLabel) return NextResponse.json({ error: 'Выберите стадию закрытия' }, { status: 400 });
+      const res = await acceptTask({ taskId, dealId, comment: comment || null, authorId: session.bitrixUserId, closing: reasonLabel });
+      let dealClosed: string | null = null;
+      if (reason) {
+        await markBrakNow({ clientKey, reason, comment: comment || null, session });
+        dealClosed = await closeDealAsLost({ dealId, clientKey, reason, comment: comment || null, authorId: session.bitrixUserId })
+          .catch(e => { console.warn('[repeat-kanban] закрытие сделки при приёмке:', e instanceof Error ? e.message : e); return 'error'; });
+      }
+      await logEvent(session, { type: reason ? 'task_accepted_deal_closed' : 'task_accepted', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId,
+        payload: { comment: comment || null, reason, dealClosed, commented: res.commented } });
+      return NextResponse.json({ ok: true, dealClosed, ...res });
+    }
+
     if (body.action === 'create_task') {
       let comment = typeof body.text === 'string' ? body.text.trim() : '';
       // Массовая постановка (владелец 21.10): текста нет, есть шаблон — заполняем по заказчику.
@@ -362,7 +392,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ error: 'Неизвестное действие' }, { status: 400 });
   } catch (e) {
-    if (e instanceof DealCreateError || e instanceof ReviewError || e instanceof TagError) return NextResponse.json({ error: e.message }, { status: 400 });
+    if (e instanceof DealCreateError || e instanceof ReviewError || e instanceof TagError || e instanceof TaskReviewError) return NextResponse.json({ error: e.message }, { status: 400 });
     console.error('[repeat-kanban POST]', e instanceof Error ? e.message : e);
     return NextResponse.json({ error: 'Не удалось выполнить действие' }, { status: 500 });
   }

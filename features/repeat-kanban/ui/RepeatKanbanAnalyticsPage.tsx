@@ -149,6 +149,8 @@ const EVENT_LABEL: Record<string, string> = {
   deal_task_created: 'Сделка + задача', deal_returned_from_reject: 'Сделка из отказа + задача', task_created: 'Задача в сделку',
   task_comment_posted: 'Комментарий в чат', reject_reviewed: 'Разобран отказ', rejected_direct: 'Сразу в брак',
   hidden: 'Скрыт из пула', unhidden: 'Возвращён в пул', reject_cleared: 'Снят брак',
+  task_accepted: 'Задача принята', task_accepted_deal_closed: 'Задача принята, сделка в брак', task_returned: 'Задача на доработку',
+  tags_set: 'Теги',
   // События Битрикса (source = 'bitrix').
   bx_task_created: 'Задача в Битриксе', bx_task_submitted: 'Сдал на проверку', bx_task_closed: 'Задача завершена',
   bx_stage: 'Стадия сделки', bx_call_reached: 'Дозвон', bx_call_attempt: 'Попытка звонка',
@@ -156,6 +158,7 @@ const EVENT_LABEL: Record<string, string> = {
 const KIND_OF: Record<string, 'work' | 'leak' | 'undo' | 'aux' | 'bitrix'> = {
   deal_task_created: 'work', deal_returned_from_reject: 'work', task_created: 'work', reject_reviewed: 'work',
   rejected_direct: 'leak', hidden: 'leak', unhidden: 'undo', reject_cleared: 'undo', task_comment_posted: 'aux',
+  task_accepted: 'work', task_returned: 'work', task_accepted_deal_closed: 'leak', tags_set: 'aux',
   // Задача, поставленная прямо в Битриксе, — та же работа, что «Задача в сделку» кликом.
   bx_task_created: 'work', bx_task_submitted: 'bitrix', bx_task_closed: 'bitrix', bx_stage: 'bitrix', bx_call_reached: 'bitrix', bx_call_attempt: 'bitrix',
 };
@@ -163,7 +166,7 @@ const KIND_LABEL = { work: 'Работа', leak: 'Утечка (скрыто, б
 /** Действие человека в счётчиках «Действий» (рейтинг, KPI): клики канбана без комментариев и
  *  задачи, поставленные в Битриксе (их канбан не видел). Стадии, звонки, сдача/приёмка —
  *  отдельными колонками «В Битриксе», чтобы десятки звонков не топили клики РОПа. */
-const isAction = (j: JournalRow) => j.type !== 'task_comment_posted' && (j.source === 'kanban' || j.type === 'bx_task_created');
+const isAction = (j: JournalRow) => j.type !== 'task_comment_posted' && j.type !== 'tags_set' && (j.source === 'kanban' || j.type === 'bx_task_created');
 const fmtSec = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 function labelOf(j: JournalRow): string {
   if (j.type === 'bx_stage') return `Стадия: ${String(j.payload.stageName ?? j.payload.stageId ?? '')}`;
@@ -178,7 +181,7 @@ function labelOf(j: JournalRow): string {
 function sinkOf(j: JournalRow): 'deal' | 'return' | 'noanswer' | 'hidden' | 'brak' | null {
   if (j.type === 'deal_task_created' || j.type === 'deal_returned_from_reject' || j.type === 'task_created' || j.type === 'bx_task_created') return 'deal';
   if (j.type === 'hidden') return 'hidden';
-  if (j.type === 'rejected_direct') return 'brak';
+  if (j.type === 'rejected_direct' || j.type === 'task_accepted_deal_closed') return 'brak';
   if (j.type === 'reject_reviewed') return j.payload.decision === 'brak' ? 'brak' : j.payload.decision === 'no_answer' ? 'noanswer' : 'return';
   return null;
 }

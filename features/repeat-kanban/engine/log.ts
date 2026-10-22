@@ -19,7 +19,8 @@ export type KanbanEventType =
   | 'hide_request_accepted' | 'hide_request_declined' // решение РОПа по предложению
   | 'manager_reassigned'       // «И сменить менеджера» — запущен БП «Сменить ответственного» (21.10)
   | 'customers_merged' | 'customers_unmerged' | 'customers_split' // склейка заказчиков (миграция 243)
-  | 'tags_set';                // теги заказчика заменены (миграция 245)
+  | 'tags_set'                 // теги заказчика заменены (миграция 245)
+  | 'task_accepted' | 'task_accepted_deal_closed' | 'task_returned'; // приёмка задачи из канбана (22.10)
 
 export const newRequestId = () => randomUUID();
 

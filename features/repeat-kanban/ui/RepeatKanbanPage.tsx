@@ -29,6 +29,7 @@ import type { TaskNote } from '../engine/taskNotes';
 import type { RepeatTask } from '../engine/tasks';
 import { QueueView } from './QueueView';
 import { TagChip, TagsModal } from './TagsModal';
+import { AcceptTaskModal } from './AcceptTaskModal';
 import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
@@ -122,6 +123,7 @@ export function RepeatKanbanPage() {
   const [brakFor, setBrakFor] = useState<KanbanCard | null>(null);
   const [mergeFor, setMergeFor] = useState<KanbanCard | null>(null);
   const [tagsFor, setTagsFor] = useState<KanbanCard | null>(null);
+  const [acceptFor, setAcceptFor] = useState<KanbanCard | null>(null);
   const [hideReqFor, setHideReqFor] = useState<KanbanCard | null>(null);
   // Массовая постановка задач (аудит 21.10: «в работе без задачи» — разом): режим выбора.
   const [selectMode, setSelectMode] = useState(false);
@@ -229,6 +231,7 @@ export function RepeatKanbanPage() {
       else if (a === 'brak_now') setBrakFor(c);
       else if (a === 'merge') setMergeFor(c);
       else if (a === 'tags') setTagsFor(c);
+      else if (a === 'accept_task') setAcceptFor(c);
       else if (a === 'accept_hide' || a === 'decline_hide') {
         const ok = a === 'accept_hide'
           ? confirm(`Скрыть «${cardName(c)}» ${fmtHideUntil(c.hideRequest?.until ?? '')}, как предлагает менеджер?`)
@@ -508,6 +511,8 @@ export function RepeatKanbanPage() {
       {hideReqFor && <HideModal card={hideReqFor} request onClose={() => setHideReqFor(null)} onSaved={refresh} />}
       {brakFor && <BrakNowModal card={brakFor} onClose={() => setBrakFor(null)} onSaved={refresh} />}
       {mergeFor && <MergeModal card={mergeFor} onClose={() => setMergeFor(null)} onSaved={refresh} />}
+      {acceptFor?.task && <AcceptTaskModal card={acceptFor} name={cardName(acceptFor)} note={notes?.[String(acceptFor.task.id)] ?? null}
+        onClose={() => setAcceptFor(null)} onSaved={refresh} />}
       {tagsFor && <TagsModal title={cardName(tagsFor)} clientKey={tagsFor.clientKey} managerId={tagsFor.managerId} column={tagsFor.column}
         current={tagsFor.tags ?? []} defs={data?.tagDefs ?? []} onClose={() => setTagsFor(null)} onSaved={refresh} onDefsChanged={refresh} />}
     </div>
@@ -833,7 +838,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   return a;
 }
 
-type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags';
+type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task';
 
 /** Редкие действия карточки — в меню «⋯» (владелец 20.10: «глупо, когда висят прямо на лице»). */
 function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; danger?: boolean }[]; onAct: (a: CardAction) => void }) {
@@ -1036,6 +1041,13 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           <button type="button" onClick={onTask}
             className={`inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium hover:opacity-90 ${c.task && c.task.state !== 'done' ? 'bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>
             <Plus size={13} /> {dealLabel}
+          </button>
+        )}
+        {/* Приёмка из канбана (владелец 22.10): принять / принять и закрыть сделку / на доработку. */}
+        {canManage && c.task?.state === 'control' && (
+          <button type="button" onClick={() => onAct('accept_task')}
+            className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[#38761d] px-2.5 text-xs font-medium text-white hover:opacity-90">
+            <CheckSquare size={13} /> Принять задачу…
           </button>
         )}
         {canManage && col === 'review' && (
