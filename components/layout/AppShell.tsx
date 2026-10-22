@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, LogOut, Settings,
   BarChart2, ClipboardList, Network, Gauge, X, Bell, LayoutGrid, Smartphone,
   MessageCircle, LineChart, Trophy, PackageOpen, Users, CalendarRange, Presentation, Tv,
-  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3,
+  Lightbulb, Repeat2, Grid3x3, RotateCcw, Map, Truck, LayoutDashboard, Target, Puzzle, Waypoints, Columns3, Megaphone,
 } from 'lucide-react';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import type { SessionUser } from '@/lib/auth/session';
@@ -28,6 +28,7 @@ import { IdeasPanel } from '@/features/ideas/ui/IdeasPanel';
 import { useTheme } from '@/lib/hooks/useTheme';
 import { CreateReportButton } from '@/features/reports/ui/CreateReportButton';
 import { canViewRealizations } from '@/lib/realizations/access';
+import { MARKETING_PRESETS } from '@/lib/marketing/presets';
 import { BottomTabBar } from '@/components/layout/BottomTabBar';
 
 // Ширина развёрнутого сайдбара (задача 1575, полировка шапки/меню): было 260 —
@@ -382,7 +383,7 @@ interface NavItem {
 }
 
 // «Реализация» вернулась 29.09 (#8034), с #8089 — отдельный раздел первого уровня под
-// «Продажи», только «Администратор». Исходно «Реализация»/«Маркетинг»/«Найм» спрятаны (правка Иосифа
+// «Продажи», только «Администратор». Исходно «Реализация»/«Маркетинг»/«Найм» спрятаны (Маркетинг вернулся 22.10) (правка Иосифа
 // 16.07, оптимизация меню): Реализация и Найм были заглушками «Скоро», маркетинг-
 // пресеты живут по прямым URL (/marketing/*) и вернутся в меню, когда попросят.
 // Пункт подменю активен и на вложенных страницах (Ответы на запросы → Категории/Товары/…).
@@ -403,6 +404,16 @@ const NAV: NavItem[] = [
       { label: 'Сводка по логистам', href: '/realizations/logists' },
       { label: 'Регионы', href: '/realizations/regions' },
     ],
+  },
+  // «Маркетинг» вернулся в меню 22.10 (правка владельца «куда пропал? верни»; скрыт
+  // 16.07 при оптимизации меню). Пункты — пресеты /marketing/*, гейт тот же, что в
+  // layout раздела (section.marketing).
+  {
+    label: 'Маркетинг', icon: <Megaphone size={18} />, perm: 'section.marketing',
+    children: Object.entries(MARKETING_PRESETS).map(([key, p]) => ({
+      label: p.title,
+      href: `/marketing/${key}`,
+    })),
   },
   // «Графики» (задача владельца 28.07): конструктор графиков по метрикам отчётов +
   // дефолтные кривые «вероятность продажи от дней в стадии». Раздел первого уровня,
