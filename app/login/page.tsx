@@ -23,7 +23,11 @@ export default function LoginPage() {
       // На «/», а не на «/home»: стартовый адрес считает сервер (landingFor) —
       // у рядового без прав это ЛК, иначе Главная. Клиенту знать правило незачем,
       // и дублировать его тут нельзя: разъедется (задача 3045, §5).
-      router.push('/');
+      // ?next= — возврат туда, откуда отправили на вход (страница согласия MCP-коннектора
+      // Claude, /oauth/authorize). Только относительный путь этого же сайта: «//host» и
+      // абсолютные адреса отбрасываем, иначе форма входа стала бы открытым редиректом.
+      const next = new URLSearchParams(window.location.search).get('next');
+      router.push(next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') ? next : '/');
     } else {
       const data = await res.json().catch(() => ({}));
       setError(data.error ?? 'Неверный логин или пароль');

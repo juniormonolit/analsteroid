@@ -105,7 +105,7 @@ const MANAGER_METRICS = [
 // Руководский: те же суммы плюс конверсии — на отделе они уже осмысленны.
 // Набор совпадает с ежедневным отчётом владельца, чтобы РОП видел ту же картину,
 // по которой его и спрашивают.
-const LEAD_METRICS = [
+export const LEAD_METRICS = [
   'primary_sales_amount',
   'repeat_sales_amount',
   'primary_sales_count',

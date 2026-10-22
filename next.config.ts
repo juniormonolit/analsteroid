@@ -23,6 +23,15 @@ const nextConfig: NextConfig = {
       { source: '/sales/realizations/:path*', destination: '/realizations/:path*', permanent: false },
     ];
   },
+  // MCP-коннектор Claude (задача 22.10, lib/mcp): метаданные OAuth обязаны жить по адресам
+  // RFC 8414/9728 (/.well-known/…, в т.ч. с путём ресурса в хвосте — /…/api/mcp). Отдаём их
+  // обычными API-роутами, чтобы не заводить dot-папку в app/.
+  async rewrites() {
+    return [
+      { source: '/.well-known/oauth-protected-resource/:path*', destination: '/api/oauth/metadata/protected-resource' },
+      { source: '/.well-known/oauth-authorization-server/:path*', destination: '/api/oauth/metadata/authorization-server' },
+    ];
+  },
   async headers() {
     return [
       {

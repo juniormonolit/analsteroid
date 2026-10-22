@@ -91,6 +91,28 @@ export async function loadSessionUserByLogin(login: string): Promise<SessionUser
   return res.rows[0] ?? null;
 }
 
+/** SessionUser по users.id — для MCP-токенов (lib/mcp/oauth.ts): Claude приходит не с cookie,
+ *  а с Bearer-токеном, выданным конкретному человеку. Тот же SELECT, что у loadSessionUserByLogin. */
+export async function loadSessionUserById(userId: string): Promise<SessionUser | null> {
+  const res = await systemDb().query<SessionUser>(
+    `SELECT u.id, u.login, u.display_name AS "displayName",
+            u.is_superadmin AS "isSuperadmin",
+            (SELECT COALESCE(array_agg(DISTINCT perm), '{}')
+               FROM unnest(COALESCE(r.permissions, '{}') || COALESCE(u.section_overrides, '{}')) AS perm
+            ) AS "permissions",
+            COALESCE(u.section_overrides, '{}') AS "sectionOverrides",
+            r.name AS "roleName",
+            u.avatar_url AS "avatarUrl",
+            u.bitrix_user_id AS "bitrixUserId",
+            u.ui_mode AS "uiMode"
+     FROM users u
+     LEFT JOIN roles r ON r.id = u.role_id
+     WHERE u.id = $1 AND u.is_active = true`,
+    [userId],
+  );
+  return res.rows[0] ?? null;
+}
+
 export async function createSession(userId: string): Promise<string> {
   const token = crypto.randomUUID() + crypto.randomUUID();
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
