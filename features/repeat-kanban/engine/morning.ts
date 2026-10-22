@@ -22,7 +22,7 @@ const plural = (n: number, one: string, few: string, many: string) => {
 };
 const ddmm = (iso: string) => new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' });
 const mskYmd = (ms = Date.now()) => new Date(ms + 3 * 3600_000).toISOString().slice(0, 10);
-const nameOf = (c: KanbanCard) => c.name ?? `${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId}`;
+const nameOf = (c: KanbanCard) => (c.name ?? `${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId}`).replace(/\s+/g, ' ').trim();
 const firstName = (full: string) => full.trim().split(/\s+/)[0] || full;
 const daysAgo = (iso: string) => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000));
 
@@ -39,7 +39,7 @@ export function composeMorning(managerId: string, managerName: string, cards: Ka
   const openTask = (c: KanbanCard) => c.task && c.task.state !== 'done' && c.task.state !== 'control';
   const returned = cards.filter(c => c.returned && c.column.startsWith('pool') && !openTask(c));
   const fresh = cards
-    .filter(c => c.column === 'pool_hot' && !c.returned && !openTask(c) && !c.queued && c.lastDeliveredAt)
+    .filter(c => c.column === 'pool_hot' && !c.returned && !openTask(c) && !c.queued && c.lastDeliveredAt && daysAgo(c.lastDeliveredAt) >= 1) // в день отгрузки звонить рано
     .sort((a, b) => queueScore(b, 0) - queueScore(a, 0));
   const tasks = cards.filter(c => openTask(c) && c.task!.responsibleId === managerId && c.task!.deadlineAt && new Date(c.task!.deadlineAt).getTime() <= todayEnd);
   const overdue = tasks.filter(c => new Date(c.task!.deadlineAt!).getTime() < Date.now()).length;
@@ -53,7 +53,7 @@ export function composeMorning(managerId: string, managerName: string, cards: Ka
     lines.push('', `[B]Кому позвонить:[/B] ${opener}`);
     fresh.slice(0, TOP).forEach((c, i) => {
       const d = daysAgo(c.lastDeliveredAt!);
-      lines.push(`${i + 1}. ${nameOf(c)} — отгрузка ${d === 0 ? 'сегодня' : `${d} ${plural(d, 'день', 'дня', 'дней')} назад`}${c.lastDeliveredGroup ? `, ${c.lastDeliveredGroup.toLowerCase()}` : ''}`);
+      lines.push(`${i + 1}. ${nameOf(c)} — отгрузка ${d} ${plural(d, 'день', 'дня', 'дней')} назад${c.lastDeliveredGroup ? `, ${c.lastDeliveredGroup.toLowerCase()}` : ''}`);
       items.push({ key: c.clientKey, name: nameOf(c), kind: 'fresh', lastDeliveredAt: c.lastDeliveredAt });
     });
     if (fresh.length > TOP) lines.push(`И ещё ${fresh.length - TOP} — в канбане повторных, колонка «Срочно».`);
