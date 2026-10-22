@@ -97,6 +97,8 @@ export function parseReport(md: string): ParsedReport {
   const violations = new Set<ViolationKind>();
   for (const line of section(md, 6).split('\n')) {
     if (!/НАЙДЕНО|НЕ ПОДТВЕРЖД/i.test(line) || /НЕ НАЙДЕНО/i.test(line)) continue;
+    // «СЛАБО/ЧАСТИЧНО НАЙДЕНО» — сигнал для РОПа во вкладке, но не нарушение в сводке (аудит 23.10).
+    if (/(СЛАБО|ЧАСТИЧНО)\s*НАЙДЕНО/i.test(line)) continue;
     for (const [kind, re] of VIOLATION_MATCH) if (re.test(line)) { violations.add(kind); break; }
   }
 

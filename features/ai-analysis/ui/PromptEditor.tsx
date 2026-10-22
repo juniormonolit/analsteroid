@@ -35,11 +35,13 @@ export function PromptEditor() {
   const [kind, setKind] = useState<'company' | 'contact'>('company');
   const [clientId, setClientId] = useState('');
   const [testId, setTestId] = useState<number | null>(null);
+  /** Какой текст черновика тестировали — включить можно только проверенный (аудит 23.10). */
+  const [testedBody, setTestedBody] = useState<string | null>(null);
   useEffect(() => { if (q.data && draft === null) setDraft(q.data.active.body); }, [q.data, draft]);
 
   const test = useMutation({
     mutationFn: () => post({ action: 'test', body: draft, [kind === 'company' ? 'companyId' : 'contactId']: clientId.trim() }),
-    onSuccess: (j: { id: number }) => setTestId(j.id),
+    onSuccess: (j: { id: number }) => { setTestId(j.id); setTestedBody(draft); },
   });
   const save = useMutation({
     mutationFn: (activate: boolean) => post({ action: 'save', body: draft, note, activate }),
@@ -62,6 +64,10 @@ export function PromptEditor() {
   const dirty = draft !== active.body;
   const r = result.data;
   const running = r && (r.status === 'queued' || r.status === 'running');
+  const missing = [1, 2, 3, 4, 5, 6, 7].filter(n => !new RegExp(`^###\\s*${n}\\.`, 'm').test(draft));
+  const noMemo = !/^###\s*8\./m.test(draft);
+  const testedOk = r?.status === 'done' && testedBody === draft;
+  const canActivate = dirty && testedOk && missing.length === 0 && note.trim().length > 0;
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -72,9 +78,13 @@ export function PromptEditor() {
       <textarea value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false}
         className="min-h-[50dvh] w-full max-w-full rounded-lg border border-[var(--color-border)] bg-transparent p-3 font-mono text-base leading-relaxed sm:text-[12.5px]" />
       <div className="text-[11.5px] text-[var(--color-text-muted)]">
-        Заголовки формата «### 1. …» — «### 7. …» обязательны: по ним вкладка разбирает отчёт, сводка — критерии и нарушения.
+        Заголовки «### 1. …» — «### 7. …» обязательны: по ним вкладка разбирает отчёт, сводка — критерии и нарушения;
+        «### 8. Памятка менеджеру» — короткая памятка в задачу (без неё в задачу уйдут разделы 3 и 4 целиком).
         Перед промптом модель получает данные заказчика (сделки, факты из CRM, обезличенные звонки) — их здесь нет.
       </div>
+
+      {missing.length > 0 && <div className="text-[13px] font-semibold text-[var(--color-negative)]">Нет заголовков: {missing.map(n => `«### ${n}.»`).join(', ')} — сохранить не получится.</div>}
+      {missing.length === 0 && noMemo && <div className="text-[13px] text-[var(--color-warning,#b7791f)]">Нет «### 8. Памятка менеджеру» — в задачу уйдёт длинный текст.</div>}
 
       {/* Тест-прогон */}
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--color-border)] p-3">
@@ -113,14 +123,19 @@ export function PromptEditor() {
 
       {/* Сохранение */}
       <div className="flex flex-wrap items-center gap-2">
-        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Что поменяли (для истории)"
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Что поменяли — обязательно для включения"
           className="min-h-11 min-w-0 flex-1 basis-56 rounded-lg border border-[var(--color-border)] bg-transparent px-3 text-base sm:text-sm" />
-        <button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate(true)}
+        <button type="button" disabled={!canActivate || save.isPending} onClick={() => save.mutate(true)}
           className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-[13.5px] font-semibold text-white disabled:opacity-50">Сохранить и включить</button>
-        <button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate(false)}
+        <button type="button" disabled={!dirty || missing.length > 0 || save.isPending} onClick={() => save.mutate(false)}
           className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-[13px] disabled:opacity-50">Сохранить черновиком</button>
         <button type="button" onClick={() => setDraft(active.body)} disabled={!dirty}
           className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-[13px] disabled:opacity-50">Сбросить правки</button>
+        {dirty && !canActivate && (
+          <span className="basis-full text-[12px] text-[var(--color-text-muted)]">
+            Включить можно после успешного теста именно этого черновика{testedBody !== null && testedBody !== draft ? ' (после теста текст менялся — запустите тест заново)' : ''} и с описанием, что поменяли.
+          </span>
+        )}
         {save.error && <span className="basis-full text-[13px] text-[var(--color-negative)]">{save.error.message}</span>}
       </div>
 

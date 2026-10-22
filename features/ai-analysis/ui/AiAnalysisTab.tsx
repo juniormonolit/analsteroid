@@ -16,6 +16,7 @@ import type { CallListItem } from '../engine/collect';
 import type { AnalysisRow } from '../engine/store';
 import type { QuoteCheck } from '../engine/verify';
 import { memoLines, memoPlain } from '../engine/memo';
+import { CRITERIA_LABELS, VIOLATION_LABELS, type CriterionVerdict } from '../engine/parse';
 import { CLIENT_TYPES } from '@/features/client-module/engine/types';
 import Link from 'next/link';
 
@@ -29,15 +30,28 @@ interface ClientPayload {
   quota: { used: number; max: number };
 }
 
-const SECTIONS: { n: number; title: string; tone?: 'danger' }[] = [
-  { n: 1, title: 'Кто заказчик' },
-  { n: 2, title: 'Объекты' },
+// Порядок — по задаче РОПа перед постановкой (аудит 23.10): памятка (отдельно) → что предложить → риски →
+// оценка → нарушения; справочные разделы (кто заказчик, объекты, качество данных) — свёрнуты.
+const SECTIONS: { n: number; title: string; tone?: 'danger'; collapsed?: boolean }[] = [
   { n: 3, title: 'Что предложить дальше' },
   { n: 4, title: 'Риски и обещания' },
   { n: 5, title: 'Оценка работы менеджера' },
   { n: 6, title: 'Нарушения и тревожные сигналы', tone: 'danger' },
-  { n: 7, title: 'Качество данных' },
+  { n: 1, title: 'Кто заказчик', collapsed: true },
+  { n: 2, title: 'Объекты', collapsed: true },
+  { n: 7, title: 'Качество данных', collapsed: true },
 ];
+
+const VERDICT_CHIP: Record<CriterionVerdict, { mark: string; label: string; cls: string }> = {
+  yes: { mark: '✓', label: 'да', cls: 'text-[var(--color-positive)] border-[color-mix(in_srgb,var(--color-positive)_40%,transparent)]' },
+  partial: { mark: '◐', label: 'частично', cls: 'text-[var(--color-warning,#b7791f)] border-[color-mix(in_srgb,var(--color-warning,#e8a317)_45%,transparent)]' },
+  no: { mark: '✗', label: 'нет', cls: 'text-[var(--color-negative)] border-[color-mix(in_srgb,var(--color-negative)_40%,transparent)]' },
+  na: { mark: '—', label: 'неприменимо', cls: 'text-[var(--color-text-muted)] border-[var(--color-border)]' },
+};
+const SHORT_CRIT = ['Тип заказчика', 'Что строит', 'Стадия', 'По цепочке', 'Ассортимент', 'Сроки', 'След. шаг', 'Причина отказа'];
+const pctTone = (v: number | null) => (v === null ? 'text-[var(--color-text-muted)]' : v < 0.4 ? 'text-[var(--color-negative)]' : v < 0.7 ? 'text-[var(--color-warning,#b7791f)]' : 'text-[var(--color-positive)]');
+// Проверки, убранные владельцем 23.10 (ложные срабатывания) — в старых отчётах их строки не показываем.
+const REMOVED_CHECKS = /оплата мимо компании|не от «?монолит|представился не от/i;
 
 const PHASE_TEXT: Record<string, string> = {
   queued: 'Анализ в очереди — сейчас начну.',
@@ -93,15 +107,15 @@ function Inline({ text, quotes, onQuote }: { text: string; quotes: Map<string, Q
         <span key={k++}>
           {tok}
           {q?.found && q.calledAt && (
-            <button type="button" onClick={() => onQuote(q)} title="Найдено в звонке — открыть"
+            <button type="button" onClick={() => onQuote(q)}
               className="tap-target ml-1 inline-flex items-center gap-0.5 rounded bg-[color-mix(in_srgb,var(--color-positive)_14%,transparent)] px-1 align-baseline text-[11px] text-[var(--color-positive)]">
-              <Check size={11} />{fmtD(q.calledAt)}
+              <Check size={11} />в звонке {fmtD(q.calledAt)} ›
             </button>
           )}
           {q && !q.found && q.kind === 'call' && (
-            <span title="Цитата не найдена в расшифровках — проверьте по записи звонка"
+            <span
               className="ml-1 inline-flex items-center gap-0.5 rounded bg-[color-mix(in_srgb,var(--color-warning,#e8a317)_16%,transparent)] px-1 align-baseline text-[11px] text-[var(--color-warning,#b7791f)]">
-              <TriangleAlert size={11} />не найдено
+              <TriangleAlert size={11} />нет в расшифровке
             </span>
           )}
         </span>,
@@ -113,26 +127,43 @@ function Inline({ text, quotes, onQuote }: { text: string; quotes: Map<string, Q
   return <>{nodes}</>;
 }
 
-function SectionBody({ md, quotes, onQuote, danger }: { md: string; quotes: Map<string, QuoteCheck>; onQuote: (q: QuoteCheck) => void; danger?: boolean }) {
-  const lines = md.split('\n');
+function Line({ raw, quotes, onQuote, cls = '' }: { raw: string; quotes: Map<string, QuoteCheck>; onQuote: (q: QuoteCheck) => void; cls?: string }) {
+  const line = raw.trim();
+  const bullet = /^[-*•—]\s+/.test(line), num = /^\d+[.)]\s+/.test(line);
+  const body = line.replace(/^[-*•—]\s+|^\d+[.)]\s+/, '');
   return (
-    <div className="flex flex-col gap-1.5 text-[13.5px] leading-relaxed">
-      {lines.map((raw, i) => {
-        const line = raw.trim();
-        if (!line) return null;
-        const bullet = /^[-*•]\s+/.test(line), num = /^\d+[.)]\s+/.test(line);
-        const body = line.replace(/^[-*•]\s+|^\d+[.)]\s+/, '');
-        const found = danger && /НАЙДЕНО|НЕ ПОДТВЕРЖД/i.test(body) && !/НЕ НАЙДЕНО/i.test(body);
-        const cls = found
-          ? 'rounded-lg border border-[color-mix(in_srgb,var(--color-negative)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-negative)_8%,transparent)] px-2.5 py-1.5'
-          : danger && /НЕ НАЙДЕНО/i.test(body) ? 'text-[var(--color-text-muted)]' : '';
-        return (
-          <div key={i} className={`flex min-w-0 gap-2 ${cls}`}>
-            {(bullet || num) && <span className="shrink-0 text-[var(--color-text-muted)]">{num ? line.match(/^\d+/)![0] + '.' : '•'}</span>}
-            <div className="min-w-0 break-words"><Inline text={body} quotes={quotes} onQuote={onQuote} /></div>
-          </div>
-        );
-      })}
+    <div className={`flex min-w-0 gap-2 ${cls}`}>
+      {(bullet || num) && <span className="shrink-0 text-[var(--color-text-muted)]">{num ? line.match(/^\d+/)![0] + '.' : '•'}</span>}
+      <div className="min-w-0 break-words"><Inline text={body} quotes={quotes} onQuote={onQuote} /></div>
+    </div>
+  );
+}
+
+const BODY = 'flex flex-col gap-1.5 text-[14px] leading-relaxed sm:text-[13.5px]';
+
+function SectionBody({ md, quotes, onQuote }: { md: string; quotes: Map<string, QuoteCheck>; onQuote: (q: QuoteCheck) => void }) {
+  return <div className={BODY}>{md.split('\n').filter(l => l.trim()).map((l, i) => <Line key={i} raw={l} quotes={quotes} onQuote={onQuote} />)}</div>;
+}
+
+/** Нарушения: найденные — наверх красным, «слабо/частично» — жёлтым, «не найдено» — одной серой строкой. */
+function ViolationsBody({ md, quotes, onQuote }: { md: string; quotes: Map<string, QuoteCheck>; onQuote: (q: QuoteCheck) => void }) {
+  const lines = md.split('\n').map(l => l.trim()).filter(l => l && !REMOVED_CHECKS.test(l) && !/^ОБЯЗАТЕЛЬНО/i.test(l));
+  const isNot = (l: string) => /НЕ НАЙДЕНО/i.test(l);
+  const weak = (l: string) => /(СЛАБО|ЧАСТИЧНО)\s*(НАЙДЕНО)?/i.test(l) && !/НЕ НАЙДЕНО/i.test(l);
+  const found = lines.filter(l => !isNot(l) && !weak(l) && /НАЙДЕНО|НЕ ПОДТВЕРЖД/i.test(l));
+  const weakL = lines.filter(weak);
+  const notL = lines.filter(isNot);
+  const other = lines.filter(l => !found.includes(l) && !weakL.includes(l) && !notL.includes(l));
+  const title = (l: string) => l.replace(/^[-*•—]\s+/, '').replace(/\*\*/g, '').split(/\s+[—–-]\s+|:/)[0].trim();
+  return (
+    <div className={BODY}>
+      {found.length === 0 && weakL.length === 0 && <div className="font-semibold text-[var(--color-positive)]">Нарушений не найдено</div>}
+      {found.map((l, i) => <Line key={`f${i}`} raw={l} quotes={quotes} onQuote={onQuote}
+        cls="rounded-lg border border-[color-mix(in_srgb,var(--color-negative)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-negative)_8%,transparent)] px-2.5 py-1.5" />)}
+      {weakL.map((l, i) => <Line key={`w${i}`} raw={l} quotes={quotes} onQuote={onQuote}
+        cls="rounded-lg border border-[color-mix(in_srgb,var(--color-warning,#e8a317)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warning,#e8a317)_8%,transparent)] px-2.5 py-1.5" />)}
+      {other.map((l, i) => <Line key={`o${i}`} raw={l} quotes={quotes} onQuote={onQuote} />)}
+      {notL.length > 0 && <div className="text-[12.5px] text-[var(--color-text-muted)]">Не найдено: {notL.map(title).join('; ')}.</div>}
     </div>
   );
 }
@@ -294,22 +325,24 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
     <div className="flex min-w-0 flex-col gap-3">
       {/* Сводка и запуск */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-[var(--color-border)] p-3">
-        <div className="min-w-0 flex-1 text-[13px]">
+        <div className="min-w-0 flex-1 basis-48 text-[13px]">
           <div className="font-semibold">Звонков с заказчиком: {calls.length}</div>
           <div className="text-[var(--color-text-muted)]">
             Состоялось {completed}, расшифровано {withText}
-            {lastDone && <> · анализ от {fmtDT(lastDone.createdAt)}{newSince > 0 && <b className="text-[var(--color-text)]"> · с тех пор +{newSince} звонков</b>}</>}
+            {lastDone && <> · анализ от {fmtDT(lastDone.createdAt)}, прочитано {lastDone.callsCount ?? withText}</>}
+            {lastDone && newSince > 0 && <b className="text-[var(--color-text)]"> · с тех пор +{newSince} звонков</b>}
           </div>
         </div>
         {withText > 0 && !active && (
           <button type="button" disabled={run.isPending || quotaLeft === 0} onClick={() => run.mutate()}
-            className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-[13.5px] font-semibold text-white disabled:opacity-50">
+            className="min-h-11 w-full rounded-lg bg-[var(--color-accent)] px-4 text-[13.5px] font-semibold text-white disabled:opacity-50 sm:w-auto">
             {run.isPending ? 'Запускаю…' : lastDone ? 'Обновить анализ' : 'Запустить анализ'}
           </button>
         )}
         <div className="basis-full text-[11.5px] text-[var(--color-text-muted)]">
-          Анализ займёт около минуты, вкладку можно закрыть — отчёт сохранится. Осталось запусков сегодня: {quotaLeft} из {quota.max}.
-          Телефоны и адреса перед отправкой модели вырезаются.
+          {!lastDone || active
+            ? <>Анализ займёт около минуты, вкладку можно закрыть — отчёт сохранится. Телефоны, адреса и название компании перед отправкой модели вырезаются. Осталось запусков сегодня: {quotaLeft} из {quota.max}.</>
+            : <>Осталось запусков сегодня: {quotaLeft} из {quota.max}.</>}
         </div>
       </div>
       {run.error && <div className="text-sm text-[var(--color-negative)]">{run.error.message}</div>}
@@ -327,10 +360,6 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
       {failed && !active && (
         <MonolitikHelper pose="alert" title="Анализ не получился" text={failed.error ?? 'Неизвестная ошибка'} closable={false} />
       )}
-      {lastDone && !active && !failed && (
-        <MonolitikHelper pose="done" title="Отчёт готов"
-          text={`Прочитал ${lastDone.callsCount ?? withText} разговоров. Ниже — памятка менеджеру и полный отчёт; цитаты с ✓ найдены в звонках.`} />
-      )}
       {lastDone && (() => {
         const lines = memoLines(lastDone.reportMd ?? '');
         return (
@@ -340,13 +369,20 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
               <span className="text-[11.5px] text-[var(--color-text-muted)]">уходит в задачу при постановке из канбана (отчёт не старше 14 дней)</span>
             </div>
             {lines ? (
-              <div className="flex flex-col gap-1 text-[14px] leading-relaxed">
-                {lines.map((l, i) => <div key={i} className="break-words">{l}</div>)}
-              </div>
+              <ul className="flex flex-col gap-1.5 text-[14.5px] leading-relaxed sm:text-[14px]">
+                {lines.map((l, i) => (
+                  <li key={i} className="flex min-w-0 gap-2"><span className="shrink-0 text-[var(--color-accent)]">•</span><span className="min-w-0 break-words">{l.replace(/^—\s*/, '')}</span></li>
+                ))}
+              </ul>
             ) : (
-              <div className="text-[13px] text-[var(--color-text-muted)]">
-                Этот отчёт сделан старой версией — короткой памятки в нём нет, в задачу уйдут разделы «Что предложить» и «Риски» целиком.
-                Нажмите «Обновить анализ», чтобы получить короткую.
+              <div className="flex flex-wrap items-center gap-2 text-[13px] text-[var(--color-text-muted)]">
+                <span className="min-w-0 flex-1 basis-48">Короткой памятки нет — отчёт старой версии.</span>
+                {!active && (
+                  <button type="button" disabled={run.isPending || quotaLeft === 0} onClick={() => run.mutate()}
+                    className="min-h-11 rounded-lg border border-[var(--color-accent)] px-3 font-semibold text-[var(--color-accent)] disabled:opacity-50">
+                    {run.isPending ? 'Запускаю…' : 'Обновить анализ'}
+                  </button>
+                )}
               </div>
             )}
             <div className="mt-2 flex flex-wrap gap-2">
@@ -385,13 +421,59 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
               </div>
             );
           })()}
-          {SECTIONS.map(s => {
-            const md = sections.get(s.n);
+          <div className="text-[12px] text-[var(--color-text-muted)]">
+            <span className="text-[var(--color-positive)]">✓ в звонке</span> — цитата найдена в расшифровке, нажмите, чтобы открыть место;{' '}
+            <span className="text-[var(--color-warning,#b7791f)]">⚠ нет в расшифровке</span> — модель могла ошибиться, проверьте по записи.
+          </div>
+          {SECTIONS.map(sec => {
+            const md = sections.get(sec.n);
             if (!md) return null;
+            const parsed = lastDone.parsed;
+            const violCount = (parsed?.violations ?? []).filter(k => k in VIOLATION_LABELS).length;
+            const hint = sec.n === 5 && parsed?.score != null ? `${Math.round(parsed.score * 100)}%`
+              : sec.n === 6 ? (violCount ? `найдено: ${violCount}` : 'не найдено') : null;
+            const boxCls = `min-w-0 rounded-xl border p-3 ${sec.tone === 'danger' && violCount ? 'border-[color-mix(in_srgb,var(--color-negative)_30%,var(--color-border))]' : 'border-[var(--color-border)]'}`;
+            const body = sec.n === 6 ? <ViolationsBody md={md} quotes={quotes} onQuote={goQuote} />
+              : sec.n === 5 ? (
+                <div className="flex flex-col gap-2">
+                  {parsed && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                      {parsed.score != null && <div className={`text-[28px] font-bold leading-none tabular-nums ${pctTone(parsed.score)}`}>{Math.round(parsed.score * 100)}%</div>}
+                      <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                        {parsed.criteria.map((v, i) => {
+                          const c = v ? VERDICT_CHIP[v] : null;
+                          return (
+                            <span key={i} title={CRITERIA_LABELS[i]} className={`inline-flex min-h-8 items-center gap-1 rounded-full border px-2 text-[12px] ${c?.cls ?? 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`}>
+                              <b>{c?.mark ?? '?'}</b>{SHORT_CRIT[i]}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  <div className="text-[11.5px] text-[var(--color-text-muted)]">✓ сделал сам · ◐ частично (клиент рассказал сам) · ✗ не сделал · — не было повода</div>
+                  <details>
+                    <summary className="flex min-h-11 cursor-pointer items-center text-[13px] text-[var(--color-accent)]">Подробно, с цитатами</summary>
+                    <SectionBody md={md} quotes={quotes} onQuote={goQuote} />
+                  </details>
+                </div>
+              ) : <SectionBody md={md} quotes={quotes} onQuote={goQuote} />;
+            if (sec.collapsed) {
+              return (
+                <details key={sec.n} className={boxCls}>
+                  <summary className="flex min-h-11 cursor-pointer items-center gap-2 text-[14px] font-bold">
+                    <ChevronDown size={14} className="shrink-0" />{sec.title}
+                  </summary>
+                  <div className="mt-1">{body}</div>
+                </details>
+              );
+            }
             return (
-              <section key={s.n} className={`min-w-0 rounded-xl border p-3 ${s.tone === 'danger' ? 'border-[color-mix(in_srgb,var(--color-negative)_30%,var(--color-border))]' : 'border-[var(--color-border)]'}`}>
-                <h3 className="mb-2 text-[14px] font-bold">{s.title}</h3>
-                <SectionBody md={md} quotes={quotes} onQuote={goQuote} danger={s.tone === 'danger'} />
+              <section key={sec.n} className={boxCls}>
+                <h3 className="mb-2 flex flex-wrap items-baseline gap-x-2 text-[14px] font-bold">
+                  {sec.title}{hint && <span className={`text-[12.5px] font-semibold ${sec.n === 6 && violCount ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`}>{hint}</span>}
+                </h3>
+                {body}
               </section>
             );
           })}

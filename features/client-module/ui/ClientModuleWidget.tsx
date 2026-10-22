@@ -35,7 +35,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
 }) {
   const params: Record<string, string> = companyId ? { companyId } : contactId ? { contactId } : {};
   const qs = new URLSearchParams(params).toString();
-  const { data, isLoading, error } = useQuery<ClientModuleData>({
+  const { data, isLoading, error, refetch } = useQuery<ClientModuleData>({
     queryKey: ['client-module', qs],
     enabled: qs.length > 0,
     queryFn: async () => {
@@ -55,7 +55,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
   useEffect(() => { setTab('overview'); setFocusObject(null); setDealsFilter({ n: 0 }); }, [qs]);
 
   if (!qs) return null;
-  if (isLoading) return <div className="p-4 text-sm text-[var(--color-text-muted)]">Загружаем клиента…</div>;
+  if (isLoading) return <SlowLoading onRetry={() => void refetch()} />;
   if (error || !data) return <div className="p-4 text-sm" style={{ color: 'var(--color-negative, #e03131)' }}>{error instanceof Error ? error.message : 'Ошибка загрузки'}</div>;
 
   const bitrixUrl = `https://td.monolit-crm.ru/crm/${data.clientType}/details/${data.clientId}/`;
@@ -105,5 +105,25 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
       {tab === 'overview' && <ManagersBlock qs={qs} />}
     </div>
     </DealOpenerContext.Provider>
+  );
+}
+
+/** Холодная загрузка карточки после выкатки доходит до ~30 с (Битрикс + сверки): без пояснения кажется,
+ *  что всё зависло (аудит ИИ-анализа 23.10). Через 3 с — объяснение, через 20 с — «Повторить». */
+function SlowLoading({ onRetry }: { onRetry: () => void }) {
+  const [sec, setSec] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setSec(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <div className="flex flex-col gap-2 p-4 text-sm text-[var(--color-text-muted)]">
+      <div>Загружаем клиента…</div>
+      {sec >= 3 && <div className="text-[12.5px]">Собираем сделки, объекты и звонки из Битрикса — иногда это занимает до минуты.</div>}
+      {sec >= 20 && (
+        <button type="button" onClick={() => { setSec(0); onRetry(); }}
+          className="min-h-11 self-start rounded-lg border border-[var(--color-border)] px-3 text-[13px] text-[var(--color-text)]">Повторить</button>
+      )}
+    </div>
   );
 }
