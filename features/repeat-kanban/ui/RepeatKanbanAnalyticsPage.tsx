@@ -13,6 +13,8 @@ import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink, Info } from 'lucide
 import { taskUrl } from '../engine/config';
 import { RepeatResultsSection } from './RepeatResultsSection';
 import type { KanbanAnalytics, MgrDay, OrgNode, JournalRow } from '../engine/analytics';
+import type { ManagerSummary } from '@/features/ai-analysis/engine/summary';
+import { VIOLATION_LABELS } from '@/features/ai-analysis/engine/parse';
 
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 // От миллиарда — «млрд» (владелец 21.10: «5057,1 млн» → «5,1 млрд»).
@@ -275,6 +277,18 @@ export function RepeatKanbanAnalyticsPage() {
     }
     return [...m.values()].sort((a, b) => b.total - a.total || (b.bxStages + b.bxCalls + b.bxTasks) - (a.bxStages + a.bxCalls + a.bxTasks));
   }, [data]);
+  // ИИ-оценка проработки звонков (владелец 23.10: «в рейтинге менеджеров не вижу оценок проработки повторных
+  // сделок по ИИ-анализу»): средний балл по последним отчётам заказчиков за 90 дней (features/ai-analysis).
+  // Только у кого право на ИИ-анализ: без него API отвечает 403 — колонок нет. Сопоставление — по имени
+  // (и рейтинг, и main_manager отчётов берут имя из оргструктуры).
+  const ai = useQuery<{ managers: ManagerSummary[] }>({
+    queryKey: ['ai-analysis-summary', 90],
+    retry: false,
+    staleTime: 5 * 60_000,
+    queryFn: async () => { const r = await fetch('/api/ai-analysis/summary?days=90'); if (!r.ok) throw new Error(String(r.status)); return r.json(); },
+  });
+  const aiByName = useMemo(() => new Map((ai.data?.managers ?? []).map(m => [m.manager.trim().toLowerCase(), m])), [ai.data]);
+  const aiOf = (name: string | null | undefined) => (name ? aiByName.get(name.trim().toLowerCase()) : undefined);
   const mgrRating = useMemo(() => {
     if (!data?.snapDate) return [];
     const acts = new Map<string, { total: number; leak: number }>();
@@ -493,6 +507,10 @@ export function RepeatKanbanAnalyticsPage() {
                   <th className={`${head} text-left`}>Менеджер</th><th className={head}>Проработано</th><th className={head}>В пуле</th>
                   <th className={head} title="Действий в канбане по его заказчикам на 100 заказчиков в пуле — интенсивность, без эффекта размера отдела">На 100 в пуле</th>
                   <th className={head}>Задач принято / просрочено</th><th className={head} title="Доля «скрыто + брак» среди действий по его заказчикам">Утечка</th>
+                  {ai.isSuccess && <>
+                    <th className={head} title="ИИ-анализ звонков: средний балл по 8 критериям (последний отчёт каждого заказчика за 90 дней) / заказчиков с отчётом">ИИ-оценка</th>
+                    <th className={head} title="ИИ-анализ: найденные нарушения за 90 дней">ИИ: нарушения</th>
+                  </>}
                 </tr></thead>
                 <tbody>{mgrRating.map((r, i) => (
                   <tr key={r.m.managerId} className="border-b border-[var(--color-border)] last:border-0">
@@ -500,12 +518,34 @@ export function RepeatKanbanAnalyticsPage() {
                     <td className={cell}><Light v={r.strict} /></td><td className={cell}>{rub.format(r.m.pool)}</td><td className={cell}>{r.per100}</td>
                     <td className={cell}>{r.m.tasksAccepted} / <span style={r.m.tasksOverdue ? { color: '#990000', fontWeight: 700 } : undefined}>{r.m.tasksOverdue}</span></td>
                     <td className={cell} style={r.leakPct > 25 ? { color: '#990000', fontWeight: 700 } : { color: 'var(--color-text-muted)' }}>{r.acts ? `${r.leakPct}%` : '—'}</td>
+                    {ai.isSuccess && (() => {
+                      const x = aiOf(r.m.name);
+                      const v = x?.avgScore ?? null;
+                      const few = !x || x.analyses < 3;
+                      const viol = x ? Object.entries(x.violations) as [keyof typeof VIOLATION_LABELS, number][] : [];
+                      return <>
+                        <td className={cell} style={v === null || few ? { color: 'var(--color-text-muted)' } : v < 0.4 ? { color: '#990000', fontWeight: 700 } : v < 0.7 ? { color: '#b45f06' } : { color: '#38761d' }}
+                          title={few && x ? 'Меньше 3 заказчиков с отчётом — мало данных' : undefined}>
+                          {v === null ? '—' : `${Math.round(v * 100)}%`}{x && <span className="ml-1 text-[11px] text-[var(--color-text-muted)]">/ {x.analyses}</span>}
+                        </td>
+                        <td className={cell} title={viol.map(([k, n]) => `${VIOLATION_LABELS[k]}: ${n}`).join('\n') || undefined}
+                          style={viol.length ? { color: '#990000', fontWeight: 700 } : { color: 'var(--color-text-muted)' }}>
+                          {viol.length ? viol.reduce((a, [, n]) => a + n, 0) : '—'}
+                        </td>
+                      </>;
+                    })()}
                   </tr>
                 ))}</tbody>
               </table>
             )}
           </div>
           {peopleTab === 'mgr' && <div className="text-[11.5px] text-[var(--color-text-muted)]">В рейтинге — менеджеры с 20+ заказчиками в работе и пуле, чтобы три клиента не давали 100%.</div>}
+          {peopleTab === 'mgr' && ai.isSuccess && (
+            <div className="text-[11.5px] text-[var(--color-text-muted)]">
+              «ИИ-оценка» — средний балл проработки звонков по ИИ-анализу (последний отчёт каждого заказчика за 90 дней) / заказчиков с отчётом; серым — меньше 3 отчётов.
+              {' '}<Link href="/ai-analysis/managers" className="text-[var(--color-accent)] hover:underline">Подробно по 8 критериям и нарушениям →</Link>
+            </div>
+          )}
         </section>
 
         {/* Куда ушёл пул. */}
