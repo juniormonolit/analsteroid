@@ -462,6 +462,9 @@ export async function buildRepeatBoard(opts: {
   /** Значок разбора звонков на карточках (РОП): грузить ли разборы; фильтр yes — есть, new — есть и новые звонки, no — нет. */
   withAi?: boolean;
   aiFilter?: 'yes' | 'new' | 'no' | 'candidate' | null;
+  /** Дата последней отгрузки, МСК, включительно (YYYY-MM-DD); нет отгрузок — не проходит. */
+  shipFrom?: string | null;
+  shipTo?: string | null;
   /** Фильтр по тегам: id тегов (любой из) и/или NO_TAG — «без тегов». */
   tags?: string[];
   /** Сортировка карточек во всех колонках: default — тип клиента → потенциал. */
@@ -725,6 +728,10 @@ export async function buildRepeatBoard(opts: {
     for (const o of offer) offerCounts[o.group] = (offerCounts[o.group] ?? 0) + 1;
     if (offerPick.size && !offer.some(o => offerPick.has(o.group))) continue;
     const aiMark = aiMarks.get(r.clientKey) ?? null;
+    if (opts.shipFrom || opts.shipTo) {
+      const d = r.lastDeliveredAt ? new Date(new Date(r.lastDeliveredAt).getTime() + 3 * 3600_000).toISOString().slice(0, 10) : null;
+      if (!d || (opts.shipFrom && d < opts.shipFrom) || (opts.shipTo && d > opts.shipTo)) continue;
+    }
     let aiCalls: number | undefined;
     if (opts.withAi) {
       const k = aiMark ? (aiMark.newCalls > 0 ? 'new' : 'yes') : 'no';

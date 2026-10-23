@@ -121,6 +121,9 @@ export async function GET(req: NextRequest) {
       // Значок разбора звонков — тем, кто может разбирать (право ИИ-анализа; владелец: «видят только РОПы»).
       withAi: hasPerm(session, 'action.ai_call_analysis'),
       aiFilter: (['yes', 'new', 'no', 'candidate'] as const).find(x => x === sp.get('ai')) ?? null,
+      // ?shf=&sht= — дата последней отгрузки (YYYY-MM-DD, МСК, включительно).
+      shipFrom: /^\d{4}-\d{2}-\d{2}$/.test(sp.get('shf') ?? '') ? sp.get('shf') : null,
+      shipTo: /^\d{4}-\d{2}-\d{2}$/.test(sp.get('sht') ?? '') ? sp.get('sht') : null,
       // ?offer=Окна и двери|Кровля — «что можно предложить» (группы через «|»).
       offerGroups: (sp.get('offer') ?? '').split('|').map(x => x.trim()).filter(x => x.length > 0 && x.length < 120).slice(0, 30),
       tags: (sp.get('tags') ?? '').split(',').filter(x => /^\d{1,9}$/.test(x) || x === NO_TAG).slice(0, 50),

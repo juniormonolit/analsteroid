@@ -6,12 +6,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart3, CheckSquare, PhoneCall, Moon, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BarChart3, CheckSquare, PhoneCall, Moon, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X, CalendarDays } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
 import { Modal } from '@/components/ui/Modal';
 import { Popover } from '@/components/ui/Popover';
+import { DateRangePicker } from '@/features/reports/ui/DateRangePicker';
+import { endOfDay, format, parseISO, startOfMonth } from 'date-fns';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
@@ -123,6 +125,9 @@ export function RepeatKanbanPage() {
   const offerGroups = useMemo(() => offerF.split('|').filter(Boolean), [offerF]);
   const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const [outcome, setOutcome] = useUrlState('outcome', stringParam(''));
+  // Дата последней отгрузки (владелец 23.10): диапазон YYYY-MM-DD, пикер с пресетами из отчётов.
+  const [shf, setShf] = useUrlState('shf', stringParam(''));
+  const [sht, setSht] = useUrlState('sht', stringParam(''));
   const [view, setView] = useUrlState('view', stringParam('board'));
   // Поиск заказчика (владелец 21.10): ввод — сразу, запрос — через 400 мс после паузы.
   const [q, setQ] = useUrlState('q', stringParam(''));
@@ -155,7 +160,7 @@ export function RepeatKanbanPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, q, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shf, sht, q, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (mgrs.length) qs.set('managers', mgrs.join(','));
@@ -172,6 +177,7 @@ export function RepeatKanbanPage() {
       if (offerF) qs.set('offer', offerF);
       if (sort !== 'default') qs.set('sort', sort);
       if (outcome) qs.set('outcome', outcome);
+      if (shf && sht) { qs.set('shf', shf); qs.set('sht', sht); }
       if (q) qs.set('q', q);
       for (const [k, v] of Object.entries(limits)) qs.set(`n_${k}`, String(v));
       const r = await fetch(`/api/repeat-kanban?${qs}`);
@@ -307,8 +313,8 @@ export function RepeatKanbanPage() {
     { key: 'none', label: 'Тип не указан' },
   ];
   const totalAll = Object.values(data?.typeCounts ?? {}).reduce((s, n) => s + n, 0);
-  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!aiF) + Number(offerGroups.length > 0) + Number(!!outcome) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
-  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setAiF(''); setOfferF(''); setOutcome(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
+  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!aiF) + Number(offerGroups.length > 0) + Number(!!outcome) + Number(!!shf) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
+  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setAiF(''); setOfferF(''); setOutcome(''); setShf(''); setSht(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
   const groupCounts = (ever ? data?.everGroupCounts : data?.poolGroupCounts) ?? {};
   const tagDefMap = new Map((data?.tagDefs ?? []).map(t => [t.id, t]));
 
@@ -412,6 +418,10 @@ export function RepeatKanbanPage() {
               <SearchSelect ariaLabel="Последняя сделка" value={outcome} onChange={v => { setOutcome(v); setLimits({}); }}
                 options={OUTCOME_OPTIONS.map(o => ({ value: o.value, label: o.value ? `${o.label} · ${rub.format(data?.outcomeCounts?.[o.value] ?? 0)}` : o.label, hint: 'hint' in o ? `${o.hint} (в пуле)` : undefined }))}
                 className={`${outcome ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            {/* Дата последней отгрузки (владелец 23.10: «пикер с пресетами, как в типовом отчёте»). */}
+            <FilterField label="Последняя отгрузка">
+              <ShipDateFilter from={shf} to={sht} onChange={(f, t) => { setShf(f); setSht(t); setLimits({}); }} />
             </FilterField>
             {/* Товарная группа (владелец 20.10 и 22.10): «отгружали газобетон, а после ничего» — группа
                 ПОСЛЕДНЕЙ отгрузки, только пул; или «отгружали когда-либо за период» — на всю доску. */}
@@ -639,6 +649,34 @@ function FiltersButton({ active, onReset, children }: { active: number; onReset:
     </Popover>
   );
 }
+const ymd = (d: Date) => format(d, 'yyyy-MM-dd');
+const ruShort = (s: string) => s.split('-').reverse().join('.').replace(/\.20(\d\d)$/, '.$1');
+/** Диапазон даты последней отгрузки: тот же DateRangePicker с пресетами, что в отчётах; пусто — любая. */
+function ShipDateFilter({ from, to, onChange }: { from: string; to: string; onChange: (from: string, to: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const set = !!from && !!to;
+  const value = set ? { from: parseISO(from), to: endOfDay(parseISO(to)) } : { from: startOfMonth(new Date()), to: endOfDay(new Date()) };
+  return (
+    <div className="flex min-w-0 items-stretch gap-1">
+      <Popover open={open} onOpenChange={setOpen} className="p-2" trigger={
+        <button type="button" className={`${set ? BTN_ACTIVE : BTN_IDLE} w-full min-w-0 justify-start`}>
+          <CalendarDays size={14} className="shrink-0" />
+          <span className="truncate">{set ? (from === to ? ruShort(from) : `${ruShort(from)} — ${ruShort(to)}`) : 'Последняя отгрузка: любая'}</span>
+        </button>
+      }>
+        <DateRangePicker value={value} title="Дата последней отгрузки"
+          onChange={r => { onChange(ymd(r.from), ymd(r.to)); setOpen(false); }} onClose={() => setOpen(false)} />
+      </Popover>
+      {set && (
+        <button type="button" onClick={() => onChange('', '')} aria-label="Сбросить дату отгрузки" title="Сбросить"
+          className="min-h-11 shrink-0 rounded-lg border border-[var(--color-border)] px-2 text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
+          <X size={14} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex min-w-0 flex-col gap-1">
