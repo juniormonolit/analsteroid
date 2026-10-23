@@ -41,10 +41,11 @@ function Shot({ id, caption, what }: { id: string; caption: string; what: string
         </div>
       ) : (
         <button type="button" onClick={() => setZoom(z => !z)} title={zoom ? 'Уменьшить' : 'Увеличить'}
-          className={`block min-w-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-sm ${zoom ? 'cursor-zoom-out' : 'cursor-zoom-in'}`}>
+          className={`block min-w-0 max-w-full self-start overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-sm ${zoom ? 'cursor-zoom-out' : 'cursor-zoom-in'}`}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={src} alt={caption} loading="lazy" onError={() => setMissing(true)}
-            className={`block h-auto w-full ${zoom ? '' : 'max-h-[460px] object-contain object-top'}`} />
+            className={`block h-auto max-w-full ${zoom ? '' : 'max-h-[460px] object-contain object-top'}`} />
+          {/* Без w-full: снимок не растягивается шире своего размера (крупные планы карточек — 300 px) и не мылится. */}
         </button>
       )}
       <figcaption className="text-xs text-[var(--color-text-muted)]">{caption}</figcaption>
