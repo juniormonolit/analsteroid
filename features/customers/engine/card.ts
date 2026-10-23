@@ -1,6 +1,6 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import type { MarkKind, NoCallReason } from './customers';
-import { CLIENT_KEY_CASE_SQL } from './clientKey';
+import { CLIENT_KEY_SQL } from './clientKey';
 
 // ── Карточка клиента (фича Серёги 01.08, вместе с редизайном «Моих заказчиков») ─
 // Дополнительные данные к строке списка: таймлайн покупок, звонки, отказы,
@@ -67,7 +67,7 @@ WITH cdeals AS (
   SELECT d.*
   FROM sa.deals d
   WHERE d.funnel_id IN (0,1,2,3)
-    AND (${CLIENT_KEY_CASE_SQL}) = $1
+    AND (${CLIENT_KEY_SQL}) = $1
 )`;
 
 export async function fetchCustomerCard(clientKey: string): Promise<CustomerCardData> {

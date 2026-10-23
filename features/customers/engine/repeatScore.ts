@@ -1,6 +1,6 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
-import { CLIENT_KEY_CASE_SQL } from './clientKey';
+import { CLIENT_KEY_SQL } from './clientKey';
 import { isNewPurchaseSql } from '@/lib/metrics/repeatRule';
 
 // ── «Шанс на повтор»: эмпирическая вероятность следующей отгрузки ────────────
@@ -80,7 +80,7 @@ export async function fetchRepeatScoreTable(): Promise<RepeatScoreTable> {
     // до второй покупки падает с 21,1 % до 18,8 %.
     const seq = `
       WITH raw AS (
-        SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, d.deal_id, d.delivered_at AS at,
+        SELECT (${CLIENT_KEY_SQL}) AS client_key, d.deal_id, d.delivered_at AS at,
                d.amount, d.head_group_name AS grp, d.funnel_id
           FROM sa.deals d
          WHERE d.delivered_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)

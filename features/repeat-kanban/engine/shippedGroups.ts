@@ -5,7 +5,7 @@
 // Ключ — сырой client_key сделки; склейку заказчиков сворачивает board.ts по memberKeys.
 // ~22 тыс. заказчиков за всю историю — ~1,2 с, поэтому кэш в памяти процесса на 10 минут.
 import { analyticsDb } from '@/lib/db/clients';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { GROUP_PERIODS } from './config';
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
@@ -35,7 +35,7 @@ export async function fetchShippedGroups(from: string, to: string): Promise<Map<
   if (hit && Date.now() - hit.at < TTL) return hit.map;
   const r = await analyticsDb().query<{ client_key: string; groups: string[] }>(
     `SELECT client_key, array_agg(DISTINCT g) AS groups FROM (
-       SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, x.g
+       SELECT (${CLIENT_KEY_SQL}) AS client_key, x.g
          FROM sa.deals d
          CROSS JOIN LATERAL (
            SELECT d.head_group_name AS g

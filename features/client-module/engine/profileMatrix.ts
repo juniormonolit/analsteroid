@@ -1,6 +1,6 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import type { CrossSellMatrix } from '@/features/customers/engine/crossSell';
 import type { ClientProfileKind } from './recommend';
 
@@ -8,7 +8,7 @@ import type { ClientProfileKind } from './recommend';
 // клиентов (аудит 14.10, Fable: «данные частников давят подрядчиков» — в общей
 // матрице после «Сухих смесей» идёт «Газобетон», что подрядчику, возящему ЖБИ и
 // щебень, бессмысленно). Та же механика, что у общей матрицы «Моих заказчиков»
-// (crossSell.ts, MATRIX_SQL: клиент — CLIENT_KEY_CASE_SQL, LEAD по продажам,
+// (crossSell.ts, MATRIX_SQL: клиент — CLIENT_KEY_SQL, LEAD по продажам,
 // услуги/доставка/«Разное» исключены), плюс деление клиентов на профили по
 // составу ИХ покупок: > 50% суммы — ЖБИ/нерудка/бетон и т.п. → подрядчик.
 // Список групп «подрядчика» — тот же, что в recommend.ts (CONTRACTOR_GROUPS).
@@ -20,7 +20,7 @@ const NUM = `CASE WHEN (p->>'sum') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (p->>'sum')::
 const SQL = `
 WITH dg AS (
   SELECT * FROM (
-    SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, d.sold_at, d.deal_id,
+    SELECT (${CLIENT_KEY_SQL}) AS client_key, d.sold_at, d.deal_id,
            array(SELECT DISTINCT (p->>'head_group_name') FROM jsonb_array_elements(d.products) p
                  WHERE coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL
                    AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps,

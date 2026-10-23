@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { analyticsDb } from '@/lib/db/clients';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessionScope';
 
 // Резолвер «сырой id из сделки → (clientKey, менеджер-владелец)» для сквозной
@@ -12,7 +12,7 @@ import { canSeeManager, getSessionScope, scopeForbidden } from '@/lib/org/sessio
 //      а навигация слала 'c<contact_id>' всегда;
 //   2) владелец: клиент принадлежит менеджеру своей ПОСЛЕДНЕЙ сделки (attr в
 //      customers.ts), а не менеджеру кликнутой.
-// Оба правила здесь зеркалят движок: ключ — CLIENT_KEY_CASE_SQL (единая формула,
+// Оба правила здесь зеркалят движок: ключ — CLIENT_KEY_SQL (единая формула,
 // clientKey.ts), владелец — DISTINCT ON (key) ORDER BY created_at DESC.
 export async function GET(req: NextRequest) {
   const session = await getSession();
@@ -36,10 +36,10 @@ export async function GET(req: NextRequest) {
     // проде), и если ПОСЛЕДНЯЯ сделка контакта именно такая — резолв возвращал
     // «ключа нет», хотя у клиента есть нормально ключуемые сделки (c/x/k) раньше.
     const r = await db.query<{ card_key: string | null }>(
-      `SELECT (${CLIENT_KEY_CASE_SQL}) AS card_key
+      `SELECT (${CLIENT_KEY_SQL}) AS card_key
          FROM sa.deals d
         WHERE d.contact_id = $1 AND d.funnel_id IN (0,1,2,3)
-          AND (${CLIENT_KEY_CASE_SQL}) IS NOT NULL
+          AND (${CLIENT_KEY_SQL}) IS NOT NULL
         ORDER BY d.created_at DESC, d.deal_id DESC
         LIMIT 1`,
       [Number(contactId)],
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
   const owner = await db.query<{ mgr: string | null }>(
     `SELECT d.current_manager_id::text AS mgr
        FROM sa.deals d
-      WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) = $1
+      WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_SQL}) = $1
       ORDER BY d.created_at DESC, d.deal_id DESC
       LIMIT 1`,
     [cardKey],

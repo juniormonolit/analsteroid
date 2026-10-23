@@ -1,6 +1,6 @@
 import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
-import { CLIENT_KEY_CASE_SQL } from './clientKey';
+import { CLIENT_KEY_SQL } from './clientKey';
 import { REPEAT_WINDOW_DAYS, GOOD_CALL_MIN_SEC, AUTO_REPEAT_DEAL_WINDOW_MIN } from './customers';
 import { fetchLastContactsInRange } from './contactsRange';
 
@@ -53,7 +53,7 @@ async function monthMetrics(managerId: number, from: string, to: string): Promis
   const [del, auto, contacts] = await Promise.all([
     db.query<DelRow>(`
 WITH d AS (
-  SELECT d.deal_id, d.delivered_at, (${CLIENT_KEY_CASE_SQL}) AS client_key
+  SELECT d.deal_id, d.delivered_at, (${CLIENT_KEY_SQL}) AS client_key
     FROM sa.deals d
    WHERE d.current_manager_id = $1 AND d.funnel_id IN (0,1,2,3)
      AND d.delivered_at >= $2::timestamptz AND d.delivered_at < $3::timestamptz
@@ -61,14 +61,14 @@ WITH d AS (
 SELECT d.deal_id::text, d.client_key, d.delivered_at,
        (SELECT min(c.called_at) FROM va.calls c
           JOIN sa.deals x ON x.deal_id = c.deal_id
-         WHERE (${CLIENT_KEY_CASE_SQL.replace(/\bd\./g, 'x.')}) = d.client_key
+         WHERE (${CLIENT_KEY_SQL.replace(/\bd\./g, 'x.')}) = d.client_key
            AND c.duration_seconds > ${GOOD_CALL_MIN_SEC}
            AND c.called_at > d.delivered_at
            AND c.called_at < d.delivered_at + interval '${REPEAT_WINDOW_DAYS} days') AS first_call_at
   FROM d WHERE d.client_key IS NOT NULL`, [managerId, mskTs(from), mskTs(to)]),
     db.query<AutoRow>(`
 WITH rep AS (
-  SELECT r.deal_id, r.created_at, r.lost_at, r.sold_at, (${CLIENT_KEY_CASE_SQL.replace(/\bd\./g, 'r.')}) AS client_key
+  SELECT r.deal_id, r.created_at, r.lost_at, r.sold_at, (${CLIENT_KEY_SQL.replace(/\bd\./g, 'r.')}) AS client_key
     FROM sa.deals r
    WHERE r.current_manager_id = $1 AND r.funnel_id IN (2,3)
      AND r.created_at >= $2::timestamptz AND r.created_at < $3::timestamptz
@@ -77,7 +77,7 @@ auto AS (
   SELECT DISTINCT r.* FROM rep r
    WHERE EXISTS (SELECT 1 FROM sa.deals p
                   WHERE p.deal_id <> r.deal_id AND p.delivered_at IS NOT NULL AND p.funnel_id IN (0,1,2,3)
-                    AND (${CLIENT_KEY_CASE_SQL.replace(/\bd\./g, 'p.')}) = r.client_key
+                    AND (${CLIENT_KEY_SQL.replace(/\bd\./g, 'p.')}) = r.client_key
                     AND r.created_at BETWEEN p.delivered_at - interval '1 minute' AND p.delivered_at + interval '${AUTO_REPEAT_DEAL_WINDOW_MIN} minutes')
 ),
 gc AS (SELECT a.deal_id, bool_or(c.duration_seconds > ${GOOD_CALL_MIN_SEC}) AS good FROM auto a JOIN va.calls c ON c.deal_id = a.deal_id GROUP BY 1),

@@ -12,7 +12,7 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { freshMemoPlainForClientKey } from '@/features/ai-analysis/engine/memoStore';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities, recommendFor } from '@/features/customers/engine/crossSell';
 import { REPEAT_SPLIT_GAP_DAYS } from '@/lib/metrics/repeatRule';
@@ -255,7 +255,7 @@ async function fetchShipments(clientKey: string): Promise<Shipment[]> {
               array(SELECT DISTINCT (p->>'head_group_name') FROM jsonb_array_elements(d.products) p
                      WHERE coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL
                        AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps,
-              (${CLIENT_KEY_CASE_SQL}) AS client_key
+              (${CLIENT_KEY_SQL}) AS client_key
          FROM sa.deals d
         WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
           AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
@@ -409,7 +409,7 @@ export async function renderTemplate(body: string, ctx: { clientKey: string; man
 /** Любой заказчик с последней отгрузкой (для предпросмотра в редакторе шаблонов). */
 export async function sampleClient(): Promise<{ clientKey: string; managerId: string } | null> {
   const r = await analyticsDb().query<{ client_key: string | null; mgr: string | null }>(
-    `SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, d.current_manager_id::text AS mgr
+    `SELECT (${CLIENT_KEY_SQL}) AS client_key, d.current_manager_id::text AS mgr
        FROM sa.deals d
       WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL AND d.delivered_at <= now()
         AND d.current_manager_id IS NOT NULL
@@ -425,7 +425,7 @@ export async function clientManagerId(clientKey: string): Promise<string | null>
   const members = await memberKeysOf(clientKey);
   const r = await analyticsDb().query<{ mgr: string | null }>(
     `SELECT mgr FROM (
-       SELECT d.current_manager_id::text AS mgr, d.created_at, d.deal_id, (${CLIENT_KEY_CASE_SQL}) AS client_key
+       SELECT d.current_manager_id::text AS mgr, d.created_at, d.deal_id, (${CLIENT_KEY_SQL}) AS client_key
          FROM sa.deals d
         WHERE d.funnel_id IN (0,1,2,3) AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
      ) t WHERE client_key = ANY($1::text[]) ORDER BY created_at DESC NULLS LAST, deal_id DESC LIMIT 1`,

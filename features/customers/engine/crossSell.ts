@@ -1,6 +1,6 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
-import { CLIENT_KEY_CASE_SQL } from './clientKey';
+import { CLIENT_KEY_SQL } from './clientKey';
 
 // ── Кросс-селл рекомендации «что предложить» (дополнение Серёги 01.08) ──────
 // Матрица переходов «head-группа X → следующая покупка группы Y» по клиенту —
@@ -112,7 +112,7 @@ function manualFor(priorities: CrossSellPriorities | undefined, lastGroups: stri
 const MATRIX_SQL = `
 WITH dg AS (
   SELECT * FROM (
-    SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key,
+    SELECT (${CLIENT_KEY_SQL}) AS client_key,
            d.sold_at, d.deal_id,
            array(SELECT DISTINCT (p->>'head_group_name') FROM jsonb_array_elements(d.products) p
                  WHERE coalesce(p->>'type','') <> 'услуга' AND (p->>'head_group_name') IS NOT NULL

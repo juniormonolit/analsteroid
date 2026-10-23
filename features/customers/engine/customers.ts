@@ -6,7 +6,7 @@ import { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER, type Cu
 export { REPEAT_WINDOW_DAYS, TOUCH_TARGET, TOUCH_WEEK_DAYS, QUEUE_ORDER };
 export type { CustomerQueue };
 import { fetchRepeatScoreTable, repeatChance, expectedNextAmount, expectedRepeatValue } from './repeatScore';
-import { CLIENT_KEY_CASE_SQL, deriveClientType } from './clientKey';
+import { CLIENT_KEY_SQL, deriveClientType } from './clientKey';
 import { aliasArrays, fetchAliasMap, type AliasInfo } from './merge';
 
 // ── «Мои заказчики» (фича Серёги 01.08) ──────────────────────────────────────
@@ -352,7 +352,7 @@ WITH cd AS (
   FROM (
     SELECT d.deal_id, d.deal_name, d.amount, d.created_at, d.sold_at, d.lost_at,
            d.delivered_at, d.head_group_name, d.stage_id, d.current_manager_id,
-           (${CLIENT_KEY_CASE_SQL}) AS raw_key
+           (${CLIENT_KEY_SQL}) AS raw_key
     FROM sa.deals d
     WHERE d.funnel_id IN (0,1,2,3)
   ) t

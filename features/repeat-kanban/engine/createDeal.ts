@@ -26,7 +26,7 @@
 import { bx } from '@/lib/bitrix/notify';
 import { cached } from '@/lib/cache/redis';
 import { analyticsDb } from '@/lib/db/clients';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID } from './config';
 import { freshMemoForClientKey, markMemoInserted } from '@/features/ai-analysis/engine/memoStore';
@@ -135,7 +135,7 @@ export async function buildDescription(clientKey: string, comment: string, memoB
     `SELECT deal_id, head_group_name, deal_name, amount, delivered_at,
             count(*) OVER ()::int AS n, sum(amount) OVER ()::text AS total
        FROM (
-       SELECT d.*, (${CLIENT_KEY_CASE_SQL}) AS client_key FROM sa.deals d
+       SELECT d.*, (${CLIENT_KEY_SQL}) AS client_key FROM sa.deals d
         WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
           AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
      ) t WHERE client_key = ANY($1::text[]) ORDER BY delivered_at DESC, deal_id DESC LIMIT 30`,

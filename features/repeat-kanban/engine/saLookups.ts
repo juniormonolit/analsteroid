@@ -44,7 +44,7 @@ export async function fetchDealsById(ids: number[]): Promise<Map<number, DealRef
  * Заказчик сделки — так же, как доска привязывает повторную сделку (board.ts,
  * fetchLatestRepeatDeals): юр-сделка (воронки 1/3) с компанией → компания 'k<id>', иначе —
  * контакт 'p<id>' (у доски ключи c<id> и x<id> — один и тот же контакт). Общая формула
- * CLIENT_KEY_CASE_SQL выбросила бы юр-сделки с company_id IS NULL — а задачи на них ставят.
+ * CLIENT_KEY_SQL выбросила бы юр-сделки с company_id IS NULL — а задачи на них ставят.
  */
 export function refOfDeal(d: Pick<DealRef, 'funnelId' | 'companyId' | 'contactId'>): string | null {
   if ((d.funnelId === 1 || d.funnelId === 3) && d.companyId) return `k${d.companyId}`;
@@ -52,7 +52,7 @@ export function refOfDeal(d: Pick<DealRef, 'funnelId' | 'companyId' | 'contactId
   return null;
 }
 
-/** Ключ заказчика в формате доски/журнала (c/x/k — CLIENT_KEY_CASE_SQL) — для имён и поиска.
+/** Ключ заказчика в формате доски/журнала (c/x/k — CLIENT_KEY_SQL) — для имён и поиска.
  *  Юр-сделка без компании (и NULL, и 0) — 'x'<контакт>, как в формуле для company_id = 0. */
 export function clientKeyOfDeal(d: Pick<DealRef, 'funnelId' | 'companyId' | 'contactId'>): string | null {
   if (d.funnelId === 0 || d.funnelId === 2) return d.contactId ? `c${d.contactId}` : null;

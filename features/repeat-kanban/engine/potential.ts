@@ -10,7 +10,7 @@
 // Покупки — склеенные по правилу повторной продажи (lib/metrics/repeatRule.ts).
 import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { deliveriesBucket } from '@/features/customers/engine/repeatScore';
 import { isNewPurchaseSql } from '@/lib/metrics/repeatRule';
 
@@ -25,7 +25,7 @@ export async function fetchTailTable(): Promise<TailTable> {
   return cached('repeat-kanban:tail365:v1', 24 * 3600, async () => {
     const res = await analyticsDb().query<{ bucket: string; kind: string; mean: string; conv: string; n: string }>(`
       WITH raw AS (
-        SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, d.deal_id, d.delivered_at AS at, d.amount, d.head_group_name AS grp, d.funnel_id
+        SELECT (${CLIENT_KEY_SQL}) AS client_key, d.deal_id, d.delivered_at AS at, d.amount, d.head_group_name AS grp, d.funnel_id
           FROM sa.deals d WHERE d.delivered_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)
       ),
       flagged AS (

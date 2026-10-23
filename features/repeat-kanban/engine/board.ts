@@ -8,7 +8,7 @@
 //   * ручные контакты, задачи, решения по отказам, отметки «брак» (системная БД);
 //   * тип клиента: карточка клиента, иначе поле Битрикса (clientTypes.ts).
 import { analyticsDb, systemDb } from '@/lib/db/clients';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { fetchManagerCustomers, fetchCustomersOfManagers, fetchCustomerMarks, type CustomerRow } from '@/features/customers/engine/customers';
 import { getCachedClientNames, resolveClientNames, warmClientNames } from '@/lib/bitrix/clientNames';
 import { fetchAliasMap, type AliasInfo, type MergeSource } from '@/features/customers/engine/merge';
@@ -240,7 +240,7 @@ async function fetchLastDeliveredDeals(keys: string[]): Promise<Map<string, numb
   if (!keys.length) return new Map();
   const res = await analyticsDb().query<{ client_key: string; deal_id: number }>(
     `SELECT DISTINCT ON (client_key) client_key, deal_id FROM (
-       SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key, d.deal_id, d.delivered_at
+       SELECT (${CLIENT_KEY_SQL}) AS client_key, d.deal_id, d.delivered_at
          FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
      ) t WHERE client_key = ANY($1::text[])
      ORDER BY client_key, delivered_at DESC, deal_id DESC`,
