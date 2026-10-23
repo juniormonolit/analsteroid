@@ -181,6 +181,13 @@
 
 * { box-sizing: border-box; }
 
+/* Рука на кликабельном (23.10, правка владельца по канбану повторных: «ховеры, чтобы было очевидно, что
+   нажимается»): preflight Tailwind v4 ставит <button> cursor: default. В @layer base — утилиты
+   (cursor-not-allowed и т.п.) по-прежнему перебивают. */
+@layer base {
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { cursor: pointer; }
+}
+
 /* Фон приложения — «liquid glass» (задача 2999): градиент --bg-app (тёмно-синий TDM
    в тёмной/моно теме, воздушный голубой в светлой) + мягкие амбиент-пятна радиальными
    градиентами (1:1 из ui_kits/monolitika/index.html пакета). background-attachment:fixed —

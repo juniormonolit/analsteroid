@@ -25,6 +25,9 @@ import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } f
 import { fetchQueuedByClient } from './queueRead';
 import { fetchShippedGroups, resolvePeriod } from './shippedGroups';
 import { fetchCustomerTags } from './tags';
+import { fetchAiMarks, type AiMark } from './aiMarks';
+import { fetchDismissedByRef, potentialGroups, type PotentialGroup } from './potentialGroups';
+import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
 import { NO_TAG, type TagDef } from './tagColors';
 
 const DAY_MS = 86_400_000;
@@ -127,6 +130,10 @@ export interface KanbanCard {
   members: { key: string; source: MergeSource; name: string | null }[];
   /** Теги (миграция 245): id видимых смотрящему тегов — базовые и его личные. */
   tags: number[];
+  /** «Что можно предложить» — до 5 групп: запросы заказчика → приоритеты /cross-sell → майндкарта → статистика. */
+  offer: PotentialGroup[];
+  /** Последний разбор звонков (только РОПу): когда, свежий ли (≤ 14 дн.), сколько расшифрованных звонков после него. */
+  ai: AiMark | null;
   /** Заказчик в очереди задач (миграция 237): кому выдастся, кто поставил. */
   queued: { id: number; managerId: string; by: string | null; at: string } | null;
 }
@@ -200,6 +207,10 @@ export interface RepeatBoard {
   /** Теги, видимые смотрящему (базовые + личные), и сколько заказчиков с каждым (до фильтра тегов). */
   tagDefs?: TagDef[];
   tagCounts?: Record<string, number>;
+  /** «Что можно предложить»: группа → заказчиков на доске (до фильтра по ней). */
+  offerCounts?: Record<string, number>;
+  /** Разборы звонков: yes — есть без новых звонков, new — есть новые звонки, no — нет (до фильтра). */
+  aiCounts?: Record<string, number>;
   /** Сколько заказчиков в каждом состоянии задачи (до фильтра по задачам). */
   taskCounts: Record<string, number>;
   kpi: BoardKpi | null;
@@ -442,6 +453,11 @@ export async function buildRepeatBoard(opts: {
   search?: string | null;
   /** Пользователь (users.id) — его личные теги видны и ищутся. Нет — только базовые не грузим вовсе. */
   viewerUserId?: string | null;
+  /** Фильтр «что можно предложить» (владелец 23.10): заказчики, у которых группа — в топ-5 потенциальных. */
+  offerGroups?: string[];
+  /** Значок разбора звонков на карточках (РОП): грузить ли разборы; фильтр yes — есть, new — есть и новые звонки, no — нет. */
+  withAi?: boolean;
+  aiFilter?: 'yes' | 'new' | 'no' | null;
   /** Фильтр по тегам: id тегов (любой из) и/или NO_TAG — «без тегов». */
   tags?: string[];
   /** Сортировка карточек во всех колонках: default — тип клиента → потенциал. */
@@ -503,6 +519,10 @@ export async function buildRepeatBoard(opts: {
   const isOpen = (d: RepeatDealInfo) => !WON_STAGES.has(d.stageId) && !LOST_STAGES.has(d.stageId);
   const MARK_RANK: Record<string, number> = { no_call: 3, snooze: 2, wake: 1 };
 
+  // Разборы звонков (только РОПу): запрос в system и счёт новых звонков (~1 с, кэш 3 мин) — параллельно с остальным.
+  const aiMarksP = opts.withAi
+    ? fetchAiMarks(new Map(rows.map(r => [r.clientKey, membersOf(r)]))).catch(() => new Map<string, AiMark>())
+    : Promise.resolve(new Map<string, AiMark>());
   // 2. Свежие данные поверх кэша.
   const refOfKey = (k: string) => (k.startsWith('k') ? k : `p${k.slice(1)}`);
   const [dealsRaw, marksRaw, profileTypesRaw, tailTable, lastDelivered, wrongFunnel, inbound] = await Promise.all([
@@ -542,6 +562,8 @@ export async function buildRepeatBoard(opts: {
     fetchKanbanSettings(),
     opts.skipNames ? Promise.resolve({} as Record<string, number>) : fetchManagerLoad(roster.map(m => m.id)),
   ]);
+  const aiMarks = await aiMarksP;
+  const aiCounts: Record<string, number> = {};
 
   const typeCounts: Record<string, number> = {};
   const poolGroupCounts: Record<string, number> = {};
@@ -556,7 +578,19 @@ export async function buildRepeatBoard(opts: {
   // Поиск по товарной группе (владелец 22.10: «нельзя ввести „газобетон“»): группы ВСЕХ отгрузок заказчика
   // за всю историю (shippedGroups, кэш 10 мин) — «газобетон» находит всех, кто его когда-либо брал.
   const { from: allFrom, to: allTo } = resolvePeriod('all', null, null);
-  const searchGroups = qWords.length ? await fetchShippedGroups(allFrom, allTo).catch(() => new Map<string, string[]>()) : null;
+  // Вся история отгрузок (кэш 10 мин) — для поиска и для «что можно предложить» (минус уже купленное).
+  const [allShipped, offerPriorities, offerMatrix, dismissed] = opts.skipNames
+    ? [null, null, null, new Map<string, Set<string>>()]
+    : await Promise.all([
+      fetchShippedGroups(allFrom, allTo).catch(() => null),
+      fetchCrossSellPriorities().catch(() => null),
+      fetchCrossSellMatrix().catch(() => null),
+      fetchDismissedByRef([...new Set(allKeys.map(k => (k.startsWith('x') ? `c${k.slice(1)}` : k)))]),
+    ]);
+  const searchGroups = qWords.length ? allShipped : null;
+  const offerPick = new Set(opts.offerGroups ?? []);
+  const offerCounts: Record<string, number> = {};
+  const CONTRACTOR_TYPES = new Set(['construction_org', 'own_needs_org']);
   // Источник склейки — для плашки «N карточек» (кэш 5 мин; флаг выключен — пустая карта).
   const aliasMap = allKeys.length === keys.length ? new Map<string, AliasInfo>() : await fetchAliasMap().catch(() => new Map<string, AliasInfo>());
   if (!opts.skipNames) warmClientNames(keys);
@@ -672,6 +706,21 @@ export async function buildRepeatBoard(opts: {
         ...membersOf(r).flatMap(k => searchGroups?.get(k) ?? []).map(norm), norm(r.lastDeliveredGroup ?? '')].filter(Boolean).join(' | ');
       if (!nm || !qWords.every(w => nm.includes(w))) continue;
     }
+    const offer = opts.skipNames ? [] : potentialGroups({
+      recent: r.lastGroups?.length ? r.lastGroups : r.lastDeliveredGroup ? [r.lastDeliveredGroup] : [],
+      taken: new Set([...membersOf(r).flatMap(k => allShipped?.get(k) ?? []), ...(r.lastGroups ?? [])]),
+      dismissed: new Set(membersOf(r).flatMap(k => [...(dismissed.get(k.startsWith('x') ? `c${k.slice(1)}` : k) ?? [])])),
+      contractor: CONTRACTOR_TYPES.has(profileType ?? ''),
+      priorities: offerPriorities, matrix: offerMatrix,
+    });
+    for (const o of offer) offerCounts[o.group] = (offerCounts[o.group] ?? 0) + 1;
+    if (offerPick.size && !offer.some(o => offerPick.has(o.group))) continue;
+    const aiMark = aiMarks.get(r.clientKey) ?? null;
+    if (opts.withAi) {
+      const k = aiMark ? (aiMark.newCalls > 0 ? 'new' : 'yes') : 'no';
+      aiCounts[k] = (aiCounts[k] ?? 0) + 1;
+      if (opts.aiFilter && !(opts.aiFilter === k || (opts.aiFilter === 'yes' && k === 'new'))) continue;
+    }
     if (tagData) {
       for (const t of cardTags) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
       if (!cardTags.length) tagCounts[NO_TAG] = (tagCounts[NO_TAG] ?? 0) + 1;
@@ -719,6 +768,8 @@ export async function buildRepeatBoard(opts: {
       members: membersOf(r).filter(k => k !== r.clientKey).map(k => ({ key: k, source: aliasMap.get(k)?.source ?? 'auto_company', name: null })),
       openDealInBrak: col === 'brak' && hasOpenDeal && current ? current.dealId : null,
       returned: col === 'pool_hot' ? returned ?? null : null,
+      ai: aiMark,
+      offer,
       tags: [...cardTags].sort((a, b) => (tagRank.get(a) ?? 99) - (tagRank.get(b) ?? 99)),
       queued: (() => { const q = queuedMap.get(r.clientKey); return q ? { id: q.id, managerId: q.managerId, by: q.queuedByName, at: q.createdAt } : null; })(),
       // Только если в повторной воронке открытой сделки нет — иначе это история, не ошибка сейчас.
@@ -856,6 +907,6 @@ export async function buildRepeatBoard(opts: {
   const notice = q && found === 0
     ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию, тегам и товарным группам отгрузок (все слова) и по номерам: ID заказчика (контакт/компания), сделка, задача; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
     : null;
-  return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, tagDefs: tagData?.defs, tagCounts: tagData ? tagCounts : undefined, taskCounts, kpi, notice, dataAt,
+  return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, tagDefs: tagData?.defs, tagCounts: tagData ? tagCounts : undefined, aiCounts: opts.withAi ? aiCounts : undefined, offerCounts: opts.skipNames ? undefined : offerCounts, taskCounts, kpi, notice, dataAt,
     taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, today };
 }

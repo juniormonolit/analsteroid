@@ -33,6 +33,12 @@ import { NO_TAG, type TagDef } from '../engine/tagColors';
 const PAGE = 40;
 // Все кнопки шапки — одного вида (правка владельца 20.10: «кнопочки приведи к одному виду»).
 const BTN = 'inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg border px-3 text-sm transition-colors';
+/** Визуал карточки (владелец 23.10: «ховеры, чтобы было очевидно, что нажимается, а что нет»).
+ *  Единое правило: в Битрикс — акцентный цвет + «↗»; внутри Монолитики — жирный текст, подчёркивание точками;
+ *  у всего кликабельного — кольцо фокуса для клавиатуры и отклик на нажатие. */
+const FOCUS = 'rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] focus-visible:ring-offset-1';
+const BX_LINK = `${FOCUS} text-[var(--color-accent)] hover:underline underline-offset-2`;
+const CARD_BTN = `${FOCUS} transition active:scale-[0.98]`;
 const BTN_IDLE = `${BTN} border-[var(--color-border)] bg-[var(--color-bg-surface)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]`;
 const BTN_ACTIVE = `${BTN} border-[var(--color-accent)] bg-[var(--color-accent)] text-white`;
 const rub = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
@@ -104,6 +110,9 @@ export function RepeatKanbanPage() {
   const ever = pgm === 'ever';
   const [taskF, setTaskF] = useUrlState('tasks', listParam([]));
   const [tagF, setTagF] = useUrlState('tags', listParam([]));
+  const [aiF, setAiF] = useUrlState('ai', stringParam(''));
+  const [offerF, setOfferF] = useUrlState('offer', stringParam(''));
+  const offerGroups = useMemo(() => offerF.split('|').filter(Boolean), [offerF]);
   const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const [outcome, setOutcome] = useUrlState('outcome', stringParam(''));
   const [view, setView] = useUrlState('view', stringParam('board'));
@@ -121,6 +130,8 @@ export function RepeatKanbanPage() {
   const [mergeFor, setMergeFor] = useState<KanbanCard | null>(null);
   const [tagsFor, setTagsFor] = useState<KanbanCard | null>(null);
   const [acceptFor, setAcceptFor] = useState<KanbanCard | null>(null);
+  // С какой вкладки открыть карточку клиента: значок разбора → сразу «ИИ-анализ».
+  const [openTab, setOpenTab] = useState<'overview' | 'ai'>('overview');
   const [hideReqFor, setHideReqFor] = useState<KanbanCard | null>(null);
   // Массовая постановка задач (аудит 21.10: «в работе без задачи» — разом): режим выбора.
   const [selectMode, setSelectMode] = useState(false);
@@ -132,7 +143,7 @@ export function RepeatKanbanPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, sort, outcome, q, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, q, limits],
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (mgrs.length) qs.set('managers', mgrs.join(','));
@@ -145,6 +156,8 @@ export function RepeatKanbanPage() {
       }
       if (taskF.length) qs.set('tasks', taskF.join(','));
       if (tagF.length) qs.set('tags', tagF.join(','));
+      if (aiF) qs.set('ai', aiF);
+      if (offerF) qs.set('offer', offerF);
       if (sort !== 'default') qs.set('sort', sort);
       if (outcome) qs.set('outcome', outcome);
       if (q) qs.set('q', q);
@@ -225,7 +238,7 @@ export function RepeatKanbanPage() {
   const handlers: CardHandlers = {
     canManage, viewerId,
     select: selectMode ? { has: k => selected.has(k), toggle: toggleSel, addAll: cs => setSelected(m => { const n = new Map(m); for (const c of cs) if (canTaskCol(c.column)) n.set(c.clientKey, c); return n; }) } : null,
-    onOpen: setOpenCard, onTask: setTaskFor, onReview: setReviewFor,
+    onOpen: c => { setOpenTab('overview'); setOpenCard(c); }, onTask: setTaskFor, onReview: setReviewFor,
     onAct: async (a, c) => {
       if (a === 'hide') setHideFor(c);
       else if (a === 'request_hide') setHideReqFor(c);
@@ -233,6 +246,7 @@ export function RepeatKanbanPage() {
       else if (a === 'merge') setMergeFor(c);
       else if (a === 'tags') setTagsFor(c);
       else if (a === 'accept_task') setAcceptFor(c);
+      else if (a === 'open_ai') { setOpenTab('ai'); setOpenCard(c); }
       else if (a === 'accept_hide' || a === 'decline_hide') {
         const ok = a === 'accept_hide'
           ? confirm(`Скрыть «${cardName(c)}» ${fmtHideUntil(c.hideRequest?.until ?? '')}, как предлагает менеджер?`)
@@ -274,8 +288,8 @@ export function RepeatKanbanPage() {
     { key: 'none', label: 'Тип не указан' },
   ];
   const totalAll = Object.values(data?.typeCounts ?? {}).reduce((s, n) => s + n, 0);
-  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!outcome) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
-  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setOutcome(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
+  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!aiF) + Number(offerGroups.length > 0) + Number(!!outcome) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
+  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setAiF(''); setOfferF(''); setOutcome(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
   const groupCounts = (ever ? data?.everGroupCounts : data?.poolGroupCounts) ?? {};
   const tagDefMap = new Map((data?.tagDefs ?? []).map(t => [t.id, t]));
 
@@ -352,6 +366,19 @@ export function RepeatKanbanPage() {
                   className={`${tagF.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
               </FilterField>
             )}
+            {/* Разбор звонков (владелец 23.10): у кого есть, у кого появились новые звонки, у кого нет — кого разобрать. */}
+            {data?.aiCounts && (
+              <FilterField label="Разбор звонков">
+                <SearchSelect ariaLabel="Разбор звонков" value={aiF} onChange={v => { setAiF(v); setLimits({}); }}
+                  options={[
+                    { value: '', label: 'Разбор звонков: любой' },
+                    { value: 'yes', label: `Есть разбор · ${rub.format((data.aiCounts.yes ?? 0) + (data.aiCounts.new ?? 0))}` },
+                    { value: 'new', label: `Есть, и после него новые звонки · ${rub.format(data.aiCounts.new ?? 0)}`, hint: 'можно запустить разбор заново' },
+                    { value: 'no', label: `Нет разбора · ${rub.format(data.aiCounts.no ?? 0)}` },
+                  ]}
+                  className={`${aiF ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+              </FilterField>
+            )}
             {/* Фильтр по задачам (владелец 20.10): РОП разбирает задачи прямо на канбане. */}
             <FilterField label="Задачи">
               <SearchMultiSelect ariaLabel="Задачи" allLabel="Задачи: все" unitLabel="состояния задач" searchPlaceholder="Поиск"
@@ -398,6 +425,16 @@ export function RepeatKanbanPage() {
                   .concat(poolGroups.filter(g => !groupCounts[g]).map(g => ({ value: g, label: g, hint: ever ? 'за период не отгружали' : 'сейчас 0 в пуле' })))}
                 value={poolGroups} onChange={v => { setPg(v.join('|')); setLimits({}); }}
                 className={`${poolGroups.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            {/* «Что можно предложить» (владелец 23.10): топ-5 потенциальных групп заказчика, вся доска. */}
+            <FilterField label="Что можно предложить">
+              <SearchMultiSelect ariaLabel="Что можно предложить" allLabel="Любая потенциальная группа"
+                unitLabel="групп" searchPlaceholder="Поиск товарной группы"
+                options={Object.entries(data?.offerCounts ?? {}).sort((x, y) => y[1] - x[1])
+                  .map(([g, n]) => ({ value: g, label: g, hint: `${rub.format(n)} заказчиков — в топ-5 «предложить»` }))
+                  .concat(offerGroups.filter(g => !(data?.offerCounts ?? {})[g]).map(g => ({ value: g, label: g, hint: 'сейчас ни у кого в топ-5' })))}
+                value={offerGroups} onChange={v => { setOfferF(v.join('|')); setLimits({}); }}
+                className={`${offerGroups.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
             </FilterField>
             <FilterField label="Сортировка">
               <SearchSelect ariaLabel="Сортировка" value={sort} onChange={v => { setSort(v); setLimits({}); }}
@@ -504,7 +541,7 @@ export function RepeatKanbanPage() {
       {bulkOpen && <BulkTaskModal cards={[...selected.values()]} loadOf={loadOf} limit={taskLimit} reassign={reassignOpts}
         onClose={() => setBulkOpen(false)} onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
       {openCard && (
-        <CustomerCardLoader
+        <CustomerCardLoader initialTab={openTab}
           contactId={openCard.clientType === 'contact' ? openCard.clientId : null}
           companyId={openCard.clientType === 'company' ? openCard.clientId : null}
           onClose={() => setOpenCard(null)}
@@ -836,7 +873,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   return a;
 }
 
-type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task';
+type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task' | 'open_ai';
 
 /** Редкие действия карточки — в меню «⋯» (владелец 20.10: «глупо, когда висят прямо на лице»). */
 function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; danger?: boolean }[]; onAct: (a: CardAction) => void }) {
@@ -846,7 +883,7 @@ function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; d
     <Popover open={open} onOpenChange={setOpen} align="end" className="w-48 p-1"
       trigger={
         <button type="button" aria-label="Ещё действия" title="Ещё действия"
-          className="tap-target inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
+          className={`hover-reveal tap-target inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] data-[state=open]:opacity-100 ${FOCUS}`}>
           <MoreHorizontal size={16} />
         </button>
       }>
@@ -868,6 +905,81 @@ function CardTags({ ids }: { ids: number[] }) {
   return <div className="flex min-w-0 flex-wrap gap-1">{tags.map(t => <TagChip key={t.id} tag={t} />)}</div>;
 }
 
+/** Значок разбора звонков (владелец 23.10): Монолитик, как на вкладке браузера; бледный — разбору больше
+ *  14 дней; красный кружок — расшифрованные звонки после разбора (есть что доразобрать). Клик — карточка
+ *  клиента сразу на вкладке «ИИ-анализ». Видят только РОПы (право ИИ-анализа). */
+function AiBadge({ ai, onClick }: { ai: NonNullable<KanbanCard['ai']>; onClick: () => void }) {
+  const title = `Разбор звонков от ${fmtDay(ai.at)}${ai.fresh ? '' : ' — старше 14 дней, памятка в задачу уже не подставится'}`
+    + (ai.newCalls ? `\nПосле него ${ai.newCalls} ${plural(ai.newCalls, 'новый звонок', 'новых звонка', 'новых звонков')} с расшифровкой — можно запустить разбор заново` : '')
+    + '\nНажмите — открыть разбор';
+  return (
+    <button type="button" onClick={onClick} title={title} aria-label={title}
+      className={`${FOCUS} tap-target relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded transition hover:scale-110`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- фавикон 32px, оптимизация не нужна */}
+      <img src="/icon.png" alt="" width={18} height={18} className={`h-[18px] w-[18px] rounded-[4px] ${ai.fresh ? '' : 'opacity-45 grayscale'}`} />
+      {ai.newCalls > 0 && (
+        <span className="absolute -right-1.5 -top-1.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-[#cc0000] px-[3px] text-[9.5px] font-bold leading-none text-white ring-2 ring-[var(--color-bg)]">
+          {ai.newCalls > 99 ? '99+' : ai.newCalls}
+        </span>
+      )}
+    </button>
+  );
+}
+
+const OFFER_SOURCE: Record<string, string> = { request: 'просил сам', priority: 'приоритет «Что предложить»', chain: 'по ходу стройки', history: 'статистика: следующей покупкой' };
+/** «Предложить: Окна и двери · Кровля +3» — топ-5 потенциальных групп, полный список с источником — по наведению/тапу. */
+function OfferLine({ offer }: { offer: NonNullable<KanbanCard['offer']> }) {
+  const text = offer.map((o, i) => `${i + 1}. ${o.group} — ${OFFER_SOURCE[o.source] ?? o.source}${o.after ? ` (после «${o.after}»)` : ''}`).join('\n');
+  return (
+    <div className="flex min-w-0 items-baseline gap-1 text-[11.5px]">
+      <span className="shrink-0 text-[var(--color-text-muted)]">Предложить:</span>
+      <TapTip label="Что можно предложить" text={text}>
+        <span className="min-w-0 truncate text-left font-medium text-[var(--color-text)] decoration-dotted underline-offset-2 hover:underline">
+          {offer.slice(0, 2).map(o => o.group).join(' · ')}
+        </span>
+        {offer.length > 2 && <span className="shrink-0 text-[var(--color-text-muted)]">+{offer.length - 2}</span>}
+      </TapTip>
+    </div>
+  );
+}
+
+/** Подсказка, которая работает и на таче (владелец 23.10: hover-only title на телефоне не увидеть):
+ *  на компьютере — по наведению, на телефоне — по нажатию (как «потенциал»). */
+function TapTip({ label, text, children }: { label: string; text: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen} side="top" align="start" className="w-max max-w-[min(280px,calc(100vw-16px))] whitespace-pre-line p-2 text-[12px] leading-snug text-[var(--color-text)]"
+      trigger={
+        <button type="button" aria-label={label} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}
+          onClick={e => { e.preventDefault(); setOpen(true); }}
+          className={`${FOCUS} inline-flex min-w-0 max-w-full cursor-help items-center gap-1`}>
+          {children}
+        </button>
+      }>
+      {text}
+    </Popover>
+  );
+}
+
+/** Последний комментарий по задаче: 3 строки, длинный — «ещё» раскрывает целиком (было: только title). */
+function NoteBlock({ note }: { note: TaskNote }) {
+  const [full, setFull] = useState(false);
+  const long = note.text.length > 140 || note.text.split('\n').length > 3;
+  return (
+    <div className="rounded-md border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-2 py-1 text-[11.5px] leading-snug">
+      <div className="text-[var(--color-text-muted)]">
+        {note.isResult ? 'Результат' : 'Комментарий'} · {shortName(note.author)} · {fmtDT(note.at)}
+      </div>
+      <div className={`${full ? '' : 'line-clamp-3'} whitespace-pre-line text-[var(--color-text)]`}>{note.text}</div>
+      {long && (
+        <button type="button" onClick={() => setFull(v => !v)} className={`${FOCUS} mt-0.5 text-[11px] text-[var(--color-accent)] hover:underline`}>
+          {full ? 'Свернуть' : 'Показать целиком'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelect, onOpen, onTask, onReview, onUnbrak, onAct }: {
   c: KanbanCard; col: ColumnKey; canManage: boolean;
   canMerge: boolean; onUnmerge: (m: KanbanCard['members'][number]) => void;
@@ -887,7 +999,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
   const note = useContext(TaskNotesCtx)[String(c.task?.id ?? '')];
 
   return (
-    <article className={`flex shrink-0 flex-col gap-1 rounded-lg border bg-[var(--color-bg)] p-2.5 text-[12.5px] ${selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)]'}`}>
+    <article className={`group flex shrink-0 flex-col gap-1 rounded-lg border bg-[var(--color-bg)] p-2.5 text-[12.5px] transition-[border-color,box-shadow] ${selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:shadow-md'}`}>
       {/* 1. Шапка: имя + тип; менеджер. */}
       <div className="flex items-start justify-between gap-2">
         {selected !== null && (
@@ -895,10 +1007,12 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
             <input type="checkbox" checked={selected} onChange={onSelect} className="h-4 w-4 accent-[var(--color-accent)]" />
           </label>
         )}
-        <button type="button" onClick={onOpen} className="min-w-0 text-left text-sm font-semibold text-[var(--color-text)] hover:text-[var(--color-accent)]">
+        <button type="button" onClick={onOpen} title="Открыть карточку клиента"
+          className={`${FOCUS} min-w-0 text-left text-sm font-semibold text-[var(--color-text)] decoration-dotted underline-offset-2 hover:text-[var(--color-accent)] hover:underline`}>
           <span className="line-clamp-2">{cardName(c)}</span>
         </button>
         <div className="flex shrink-0 items-center gap-1">
+          {c.ai && <AiBadge ai={c.ai} onClick={() => onAct('open_ai')} />}
           <TypeChip type={c.profileType} />
           <CardMenu items={[
             ...(col.startsWith('pool') && canManage ? [{ label: 'Скрыть из пула', act: 'hide' as const }] : []),
@@ -914,9 +1028,9 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
       <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11.5px] text-[var(--color-text-muted)]">
         <span className="min-w-0 truncate">{c.managerName}</span>
         <a href={c.clientType === 'company' ? `https://td.monolit-crm.ru/crm/company/details/${c.clientId}/` : `https://td.monolit-crm.ru/crm/contact/details/${c.clientId}/`}
-          target="_blank" rel="noreferrer" className="shrink-0 tabular-nums hover:text-[var(--color-accent)] hover:underline"
+          target="_blank" rel="noreferrer" className={`${BX_LINK} inline-flex shrink-0 items-center gap-0.5 tabular-nums`}
           title={`${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId} в Битриксе${c.members.length ? ` (склеен с ${c.members.map(m => `#${m.key.slice(1)}`).join(', ')})` : ''} — по этому номеру заказчик ищется в канбане`}>
-          ID {c.clientId}
+          ID {c.clientId}<ExternalLink size={10} className="shrink-0 opacity-70" />
         </a>
       </div>
       {c.tags?.length > 0 && <CardTags ids={c.tags} />}
@@ -939,8 +1053,8 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           <div className="whitespace-nowrap">
             {c.lastDeliveredDealId ? (
               // Сразу в Битрикс (владелец 23.10: «такие ссылки должны сразу вести в Битрикс»; было — карточка сделки Монолитики).
-              <a href={dealUrl(c.lastDeliveredDealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline" title={`Сделка последней отгрузки #${c.lastDeliveredDealId} в Битриксе`}>
-                Отгрузка {fmtDayYear(c.lastDeliveredAt)}
+              <a href={dealUrl(c.lastDeliveredDealId)} target="_blank" rel="noreferrer" className={`${BX_LINK} inline-flex items-center gap-0.5`} title={`Сделка последней отгрузки #${c.lastDeliveredDealId} в Битриксе`}>
+                Отгрузка {fmtDayYear(c.lastDeliveredAt)}<ExternalLink size={10} className="shrink-0 opacity-70" />
               </a>
             ) : <>Отгрузка {fmtDayYear(c.lastDeliveredAt)}</>}
             {' · '}<span style={old !== null && old > 120 ? { color: '#b45f06', fontWeight: 600 } : undefined}>{old}{'\u00a0'}дн. назад</span>
@@ -948,20 +1062,21 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           <div className="truncate" title={c.lastDeliveredGroup ?? undefined}>{c.lastDeliveredGroup ?? 'без товарной группы'}</div>
         </div>
       ) : <div className="text-[var(--color-text-muted)]">Отгрузок не было</div>}
+      {c.offer?.length > 0 && <OfferLine offer={c.offer} />}
 
       {/* 4. Сделка — строка есть всегда. */}
       <div className="truncate">
         {c.deal ? (
-          <a href={dealUrl(c.deal.dealId)} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 text-[var(--color-accent)] hover:underline">
+          <a href={dealUrl(c.deal.dealId)} target="_blank" rel="noreferrer" title="Сделка в Битриксе" className={`${BX_LINK} inline-flex max-w-full items-center gap-1`}>
             <ExternalLink size={12} className="shrink-0" /><span className="truncate">#{c.deal.dealId} · {c.deal.stageName ?? c.deal.stageId}</span>
           </a>
         ) : c.wrongFunnel ? (
           <a href={dealUrl(c.wrongFunnel.dealId)} target="_blank" rel="noreferrer" title="Повторная сделка заведена в первичной воронке — перенесите её в «Повторные» в Битриксе, тогда канбан её увидит"
-            className="inline-flex max-w-full items-center gap-1 font-semibold text-[#990000] hover:underline">
+            className={`${FOCUS} inline-flex max-w-full items-center gap-1 font-semibold text-[#990000] underline-offset-2 hover:underline`}>
             <ExternalLink size={12} className="shrink-0" /><span className="truncate">#{c.wrongFunnel.dealId} · {c.wrongFunnel.stageName ?? ''} · {c.wrongFunnel.funnelName ?? 'первичная воронка'}</span>
           </a>
         ) : c.lastLost ? (
-          <a href={dealUrl(c.lastLost.dealId)} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 text-[var(--color-text-muted)] hover:underline">
+          <a href={dealUrl(c.lastLost.dealId)} target="_blank" rel="noreferrer" title="Последняя отказная сделка в Битриксе" className={`${FOCUS} inline-flex max-w-full items-center gap-1 text-[var(--color-text-muted)] underline-offset-2 hover:text-[var(--color-accent)] hover:underline`}>
             <ExternalLink size={12} className="shrink-0" /><span className="truncate">Нет активной сделки · отказ {fmtDay(c.lastLost.lostAt)} · {c.lastLost.stageName}</span>
           </a>
         ) : <span className="text-[var(--color-text-muted)]">Нет активной сделки</span>}
@@ -971,13 +1086,13 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
       {!isPool && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-[var(--color-text-secondary)]">
           {c.attempts && (
-            <span className="inline-flex items-center gap-1" title={c.attempts.days.map((d, i) => `${i + 1}-я попытка: ${d.split('-').reverse().slice(0, 2).join('.')}`).join('\n') || 'Попыток ещё не было'}>
+            <TapTip label="Попытки связаться" text={c.attempts.days.map((d, i) => `${i + 1}-я попытка: ${d.split('-').reverse().slice(0, 2).join('.')}`).join('\n') || 'Попыток ещё не было'}>
               {[0, 1, 2].map(i => (
                 <span key={i} className={`inline-block h-2.5 w-2.5 rounded-full ${i < Math.min(c.attempts!.count, TOUCHES) ? (c.attempts!.reached ? 'bg-[#6aa84f]' : 'bg-[var(--color-accent)]') : 'border border-[var(--color-border-strong)]'}`} />
               ))}
               <span className="tabular-nums">{Math.min(c.attempts.count, TOUCHES)}/{TOUCHES}</span>
               {c.attempts.reached && <span className="font-semibold text-[#38761d]">дозвон</span>}
-            </span>
+            </TapTip>
           )}
           {good[0] && <span className="inline-flex items-center gap-0.5"><Phone size={11} /> {fmtDT(good[0].at)} ({fmtSec(good[0].sec)})</span>}
           {c.missedCalls > 0 && <span className="inline-flex items-center gap-0.5 text-[var(--color-text-muted)]"><PhoneMissed size={11} /> {c.missedCalls}</span>}
@@ -986,24 +1101,18 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
 
       {/* 6. Задача + тревоги (одна зона, максимум два чипа). */}
       {c.task && (
-        <a href={taskUrl(c.task.id)} target="_blank" rel="noreferrer" className="flex flex-wrap items-center gap-1.5 text-[11.5px] hover:opacity-90"
-          title={`Задача от ${fmtDT(c.task.createdAt)}${c.task.deadlineAt ? `, срок ${fmtDay(c.task.deadlineAt)}` : ''}`}>
+        <a href={taskUrl(c.task.id)} target="_blank" rel="noreferrer" className={`${FOCUS} group/task flex min-w-0 items-center gap-1.5 text-[11.5px]`}
+          title={`Задача #${c.task.id} в Битриксе — от ${fmtDT(c.task.createdAt)}${c.task.deadlineAt ? `, срок ${fmtDay(c.task.deadlineAt)}` : ''}`}>
           <span className="rounded px-1.5 py-0.5 font-semibold" style={{ background: TASK_STATE[c.task.state].bg, color: TASK_STATE[c.task.state].fg }}>
             <ClipboardList size={11} className="mr-0.5 inline" />{TASK_STATE[c.task.state].label}
           </span>
-          <span className="min-w-0 truncate text-[var(--color-text-muted)]">{shortName(c.task.createdByName)} → {shortName(c.task.responsibleName)}</span>
+          <span className="min-w-0 truncate text-[var(--color-text-muted)] underline-offset-2 group-hover/task:text-[var(--color-accent)] group-hover/task:underline">{shortName(c.task.createdByName)} → {shortName(c.task.responsibleName)}</span>
+          <ExternalLink size={10} className="shrink-0 text-[var(--color-text-muted)] opacity-70 group-hover/task:text-[var(--color-accent)]" />
         </a>
       )}
       {/* Последний комментарий по задаче (владелец 21.10): что ответил менеджер — видно сразу,
           принимать задачу РОП ходит в Битрикс. */}
-      {note && (
-        <div className="rounded-md border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-2 py-1 text-[11.5px] leading-snug" title={note.text}>
-          <div className="text-[var(--color-text-muted)]">
-            {note.isResult ? 'Результат' : 'Комментарий'} · {shortName(note.author)} · {fmtDT(note.at)}
-          </div>
-          <div className="line-clamp-3 whitespace-pre-line text-[var(--color-text)]">{note.text}</div>
-        </div>
-      )}
+      {note && <NoteBlock note={note} />}
       {shownAlerts.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {shownAlerts.map(a => (
@@ -1012,7 +1121,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
               {a.red && <AlertTriangle size={10} className="mr-0.5 inline" />}{a.text}
             </span>
           ))}
-          {alerts.length > 2 && <span className="text-[11px] text-[var(--color-text-muted)]" title={alerts.slice(2).map(a => a.text).join('\n')}>+{alerts.length - 2}</span>}
+          {alerts.length > 2 && <TapTip label="Ещё тревоги" text={alerts.slice(2).map(a => a.text).join('\n')}><span className="text-[11px] font-semibold text-[var(--color-text-muted)]">+{alerts.length - 2}</span></TapTip>}
         </div>
       )}
       {c.review?.decision === 'return' && col === 'review' && (
@@ -1046,32 +1155,32 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
       <div className="flex flex-col gap-2 pt-0.5">
         {canManage && col !== 'review' && col !== 'brak' && col !== 'st_sold' && (
           <button type="button" onClick={onTask}
-            className={`inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium hover:opacity-90 ${c.task && c.task.state !== 'done' ? 'bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>
+            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium hover:opacity-90 ${c.task && c.task.state !== 'done' ? 'bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>
             <Plus size={13} /> {dealLabel}
           </button>
         )}
         {/* Приёмка из канбана (владелец 22.10): принять / принять и закрыть сделку / на доработку. */}
         {canManage && c.task?.state === 'control' && (
           <button type="button" onClick={() => onAct('accept_task')}
-            className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[#38761d] px-2.5 text-xs font-medium text-white hover:opacity-90">
+            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[#38761d] px-2.5 text-xs font-medium text-white hover:opacity-90`}>
             <CheckSquare size={13} /> Принять задачу…
           </button>
         )}
         {canManage && col === 'review' && (
           <button type="button" onClick={onReview}
-            className="inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[var(--color-accent)] px-2.5 text-xs font-medium text-white hover:opacity-90">
+            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[var(--color-accent)] px-2.5 text-xs font-medium text-white hover:opacity-90`}>
             {c.dozvonFail ? 'Разобрать: 3 попытки без дозвона' : 'Разобрать отказ'}
           </button>
         )}
         {col === 'hidden' && canManage && (
           <button type="button" onClick={() => onAct('unhide')}
-            className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">
+            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]`}>
             Вернуть в пул
           </button>
         )}
         {canManage && col === 'brak' && (
           <button type="button" onClick={onUnbrak}
-            className="inline-flex min-h-11 w-full items-center justify-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
+            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]`}>
             Снять брак
           </button>
         )}

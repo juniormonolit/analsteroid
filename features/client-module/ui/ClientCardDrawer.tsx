@@ -7,12 +7,13 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
 import { X } from 'lucide-react';
-import { ClientModuleWidget } from './ClientModuleWidget';
+import { ClientModuleWidget, type ClientCardTab } from './ClientModuleWidget';
 
 // DealCard сам открывает карточку клиента — статический импорт дал бы цикл модулей.
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 
-export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideActions }: {
+export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideActions, initialTab }: {
+  initialTab?: ClientCardTab;
   contactId?: string | number | null;
   companyId?: string | number | null;
   onClose: () => void;
@@ -56,6 +57,7 @@ export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideAc
             contactId={companyId ? undefined : contactId != null ? String(contactId) : undefined}
             companyId={companyId != null ? String(companyId) : undefined}
             onDealOpen={setOpenDealId}
+            initialTab={initialTab}
           />
         </div>
         {sideActions && <div className="shrink-0 border-t border-[var(--color-border)] p-2 sm:hidden">{sideActions}</div>}

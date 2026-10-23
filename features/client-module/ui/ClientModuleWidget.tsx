@@ -26,10 +26,13 @@ import { CallsTab, ManagersBlock, PurchasesTab } from './HistoryTabs';
 import { DealOpenerContext } from './dealLink';
 import { AiAnalysisTab, useAiAnalysisAccess } from '@/features/ai-analysis/ui/AiAnalysisTab';
 
-type Tab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls' | 'ai';
+export type ClientCardTab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls' | 'ai';
+type Tab = ClientCardTab;
 
-export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
+export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTab }: {
   contactId?: string; companyId?: string;
+  /** С какой вкладки открыть (канбан повторных: значок разбора → сразу «ИИ-анализ»). */
+  initialTab?: ClientCardTab;
   /** В приложении: открыть сделку карточкой Монолитики. Нет — ссылки ведут в Битрикс. */
   onDealOpen?: (dealId: number) => void;
 }) {
@@ -45,14 +48,14 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen }: {
       return j;
     },
   });
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'overview');
   // «ИИ-анализ» — только у кого есть право (решение владельца 22.10: «видят ТОЛЬКО РОПЫ»):
   // без права API отдаёт 403 и вкладки нет. Во вкладке Битрикса сессии Монолитики нет — тоже нет.
   const ai = useAiAnalysisAccess(qs);
   const [focusObject, setFocusObject] = useState<string | null>(null);
   const [editClient, setEditClient] = useState(0);
   const [dealsFilter, setDealsFilter] = useState<{ object?: string; n: number }>({ n: 0 });
-  useEffect(() => { setTab('overview'); setFocusObject(null); setDealsFilter({ n: 0 }); }, [qs]);
+  useEffect(() => { setTab(initialTab ?? 'overview'); setFocusObject(null); setDealsFilter({ n: 0 }); }, [qs, initialTab]);
 
   if (!qs) return null;
   if (isLoading) return <SlowLoading onRetry={() => void refetch()} />;

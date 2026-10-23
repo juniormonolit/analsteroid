@@ -116,6 +116,11 @@ export async function GET(req: NextRequest) {
       search: (sp.get('q') ?? '').trim().slice(0, 80) || null,
       // ?tags=12,15,none — теги (любой из), none — без тегов (миграция 245).
       viewerUserId: session.id,
+      // Значок разбора звонков — тем, кто может разбирать (право ИИ-анализа; владелец: «видят только РОПы»).
+      withAi: hasPerm(session, 'action.ai_call_analysis'),
+      aiFilter: (['yes', 'new', 'no'] as const).find(x => x === sp.get('ai')) ?? null,
+      // ?offer=Окна и двери|Кровля — «что можно предложить» (группы через «|»).
+      offerGroups: (sp.get('offer') ?? '').split('|').map(x => x.trim()).filter(x => x.length > 0 && x.length < 120).slice(0, 30),
       tags: (sp.get('tags') ?? '').split(',').filter(x => /^\d{1,9}$/.test(x) || x === NO_TAG).slice(0, 50),
       sort: (SORTS as readonly string[]).includes(sp.get('sort') ?? '') ? sp.get('sort') as BoardSort : 'default',
     });
