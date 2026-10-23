@@ -27,6 +27,10 @@ export interface CollectedDeal {
   dealId: number; name: string | null; funnel: string | null; stageId: string | null; stage: string | null;
   createdAt: string | null; deliveredAt: string | null; amount: number; group: string | null; manager: string | null;
   products: string;
+  /** Товарные группы сделки: head-группа сделки и head-группы позиций (без услуг/доставки) — для связок. */
+  groups: string[];
+  /** shipped — отгружена; lost — закрыта в отказ (стадия LOSE/APOLOGY/отказные); open — в работе. */
+  state: 'shipped' | 'lost' | 'open';
 }
 export interface CollectedCall {
   id: string; calledAt: string; dealId: number; direction: string | null; durationSec: number | null;
@@ -64,8 +68,9 @@ export async function collectClientData(ref: ClientRef): Promise<ClientCallData>
   const deals = (await db.query<{
     deal_id: number; deal_name: string | null; funnel: string | null; stage_id: string | null; stage: string | null;
     created_at: Date | null; delivered_at: Date | null; amount: string | null; grp: string | null; manager: string | null; products: unknown;
+    stage_type: string | null; lost_at: Date | null;
   }>(
-    `SELECT d.deal_id, d.deal_name, f.name AS funnel, d.stage_id, s.name AS stage, d.created_at, d.delivered_at,
+    `SELECT d.deal_id, d.deal_name, f.name AS funnel, d.stage_id, s.name AS stage, s.stage_type, d.lost_at, d.created_at, d.delivered_at,
             d.amount, d.head_group_name AS grp, coalesce(org.manager_name, e.full_name) AS manager, d.products
        FROM sa.deals d
        LEFT JOIN sa.funnels f ON f.id = d.funnel_id
@@ -119,6 +124,9 @@ export async function collectClientData(ref: ClientRef): Promise<ClientCallData>
       dealId: Number(d.deal_id), name: d.deal_name, funnel: d.funnel, stageId: d.stage_id, stage: d.stage,
       createdAt: mskDate(d.created_at), deliveredAt: mskDate(d.delivered_at), amount: Math.round(Number(d.amount ?? 0)),
       group: d.grp, manager: d.manager, products: productsLine(d.products),
+      groups: dealGroups(d.grp, d.products),
+      state: d.delivered_at ? 'shipped' as const
+        : (d.stage_id && LOST_STAGES.includes(d.stage_id)) || /LOSE|APOLOGY/i.test(d.stage_type ?? '') ? 'lost' as const : 'open' as const,
     })),
     calls: rows.map(r => ({
       id: r.id, calledAt: new Date(r.called_at).toISOString(), dealId: Number(r.deal_id), direction: r.direction,
@@ -162,6 +170,19 @@ export async function listClientCalls(ref: ClientRef, withText: boolean): Promis
       ...(withText && has ? { text: x.txt!, hasRoles: !!x.roles } : {}),
     };
   });
+}
+
+/** Не товарные группы — в связки не идут (тот же список, что у «Что предложить», potentialGroups.ts). */
+export const NON_GOODS = /^(разное|перевозка|доставка|услуг|для логистов|аренда спецтехники|вывоз грунта)/i;
+
+function dealGroups(head: string | null, products: unknown): string[] {
+  const out = new Set<string>();
+  if (head && !NON_GOODS.test(head)) out.add(head);
+  if (Array.isArray(products)) for (const p of products as Record<string, unknown>[]) {
+    const g = typeof p.head_group_name === 'string' ? p.head_group_name.trim() : '';
+    if (g && !NON_GOODS.test(g)) out.add(g);
+  }
+  return [...out];
 }
 
 function productsLine(products: unknown): string {

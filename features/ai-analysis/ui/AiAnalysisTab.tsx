@@ -15,7 +15,7 @@ import { MonolitikHelper } from '@/components/mascot/MonolitikHelper';
 import type { CallListItem } from '../engine/collect';
 import type { AnalysisRow } from '../engine/store';
 import type { QuoteCheck } from '../engine/verify';
-import { memoLines, memoPlain } from '../engine/memo';
+import { memoLines, taskTextPlain } from '../engine/memo';
 import { CRITERIA_LABELS, VIOLATION_LABELS, type CriterionVerdict } from '../engine/parse';
 import { CLIENT_TYPES } from '@/features/client-module/engine/types';
 import Link from 'next/link';
@@ -35,6 +35,7 @@ interface ClientPayload {
 const SECTIONS: { n: number; title: string; tone?: 'danger'; collapsed?: boolean }[] = [
   { n: 3, title: 'Что предложить дальше' },
   { n: 4, title: 'Риски и обещания' },
+  { n: 9, title: 'Связки и запросы' },
   { n: 5, title: 'Оценка работы менеджера' },
   { n: 6, title: 'Нарушения и тревожные сигналы', tone: 'danger' },
   { n: 1, title: 'Кто заказчик', collapsed: true },
@@ -86,7 +87,7 @@ export function useAiAnalysisAccess(qs: string) {
 /** Разделы «### N.» отчёта. */
 function splitSections(md: string): Map<number, string> {
   const out = new Map<number, string>();
-  const parts = md.split(/^#{2,4}\s*(\d)\.\s*[^\n]*$/m);
+  const parts = md.split(/^#{2,4}\s*(\d{1,2})\.\s*[^\n]*$/m);
   for (let i = 1; i < parts.length; i += 2) out.set(Number(parts[i]), parts[i + 1].trim());
   return out;
 }
@@ -318,7 +319,7 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
   };
   const copyMemo = async () => {
     if (!lastDone) return;
-    try { await navigator.clipboard.writeText(memoPlain(lastDone.reportMd ?? '', lastDone.createdAt)); setCopied(true); setTimeout(() => setCopied(false), 2500); } catch { /* нет доступа к буферу */ }
+    try { await navigator.clipboard.writeText(taskTextPlain(lastDone.reportMd ?? '', lastDone.createdAt, lastDone.parsed?.links?.propose ?? [], lastDone.parsed?.links?.clarify ?? [])); setCopied(true); setTimeout(() => setCopied(false), 2500); } catch { /* нет доступа к буферу */ }
   };
 
   return (
@@ -374,7 +375,21 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
                   <li key={i} className="flex min-w-0 gap-2"><span className="shrink-0 text-[var(--color-accent)]">•</span><span className="min-w-0 break-words">{l.replace(/^—\s*/, '')}</span></li>
                 ))}
               </ul>
-            ) : (
+            ) : null}
+            {/* С v8 в задачу уходят ещё «Предложить» и «Выяснить» (связки, просьбы заказчика, вопросы анкет). */}
+            {(['propose', 'clarify'] as const).map(k => {
+              const items = lastDone.parsed?.links?.[k] ?? [];
+              if (!items.length) return null;
+              return (
+                <div key={k} className="mt-2.5">
+                  <div className="text-[13px] font-bold">{k === 'propose' ? 'Предложить' : 'Выяснить'}</div>
+                  <ul className="mt-1 flex flex-col gap-1 text-[14px] leading-relaxed sm:text-[13.5px]">
+                    {items.map((l, i) => <li key={i} className="flex min-w-0 gap-2"><span className="shrink-0 text-[var(--color-text-muted)]">•</span><span className="min-w-0 break-words">{l.replace(/^—\s*/, '')}</span></li>)}
+                  </ul>
+                </div>
+              );
+            })}
+            {lines ? null : (
               <div className="flex flex-wrap items-center gap-2 text-[13px] text-[var(--color-text-muted)]">
                 <span className="min-w-0 flex-1 basis-48">Короткой памятки нет — отчёт старой версии.</span>
                 {!active && (

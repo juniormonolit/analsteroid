@@ -49,7 +49,7 @@ async function processOne(): Promise<boolean> {
       maskHits: out.maskHits, inputTokens: out.llm.usage.promptTokens, cachedTokens: out.llm.usage.cachedTokens,
       outputTokens: out.llm.usage.completionTokens, reasoningTokens: out.llm.usage.reasoningTokens,
       costRub: out.llm.costRub, seconds: out.llm.seconds,
-      promptVersion: out.promptVersion, parsed: parseReport(out.llm.content), mainManager: mainManagerOf(data.calls),
+      promptVersion: out.promptVersion, parsed: { ...parseReport(out.llm.content), links: out.links }, mainManager: mainManagerOf(data.calls),
     });
     console.log(`[aiAnalysis] #${job.id} ${ref}: ${out.llm.seconds} с, ${out.llm.costRub} ₽`);
   } catch (e) {

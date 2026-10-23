@@ -6,6 +6,7 @@ import { collectClientData, type ClientCallData } from './collect';
 import { chat, DEFAULT_REASONING_EFFORT, type LlmProgress, type LlmResult } from './llm';
 import { PROMPT_VERSION, REPORT_SECTIONS, systemPrompt, userContent } from './prompt';
 import { verifyQuotes, type QuoteCheck } from './verify';
+import { buildLinksFacts, checkLinks, clarifyLines, proposeLines, type LinksResult } from './links';
 
 export interface AnalysisOutput {
   promptVersion: string;
@@ -15,6 +16,8 @@ export interface AnalysisOutput {
   llm: LlmResult;
   sections: Record<string, string>;
   quotes: QuoteCheck[];
+  /** Связки, просьбы, анкета — проверено кодом (links.ts); null — сбор фактов упал. */
+  links: LinksResult | null;
 }
 
 /** Отпечаток входа: те же звонки + та же версия промпта = тот же отчёт (дедуп повторных запусков). */
@@ -29,7 +32,7 @@ export function callsHashOf(data: ClientCallData, promptVersion: string = PROMPT
 /** Режет markdown по заголовкам «### N.» в разделы REPORT_SECTIONS. */
 export function splitSections(md: string): Record<string, string> {
   const out: Record<string, string> = {};
-  const parts = md.split(/^#{2,4}\s*(\d)\.\s*[^\n]*$/m);
+  const parts = md.split(/^#{2,4}\s*(\d{1,2})\.\s*[^\n]*$/m);
   for (let i = 1; i < parts.length; i += 2) {
     const sec = REPORT_SECTIONS.find(s => s.n === Number(parts[i]));
     if (sec) out[sec.key] = parts[i + 1].trim();
@@ -48,7 +51,8 @@ export async function analyzeClient(ref: ClientRef, opts: {
   opts.onProgress?.({ phase: 'collecting' });
   const data = opts.data ?? await collectClientData(ref);
   if (!data.calls.length) throw new Error('У заказчика нет расшифрованных звонков — анализировать нечего');
-  const { text, maskHits } = userContent(data);
+  const facts = await buildLinksFacts(data).catch(e => { console.warn('[aiAnalysis] связки:', e instanceof Error ? e.message : e); return null; });
+  const { text, maskHits } = userContent(data, facts ?? undefined);
   const prompt = opts.prompt ?? { version: PROMPT_VERSION, body: systemPrompt() };
   const llm = await chat({ model: opts.model, reasoningEffort: opts.reasoningEffort ?? DEFAULT_REASONING_EFFORT, system: prompt.body, user: text, onProgress: opts.onProgress });
   return {
@@ -57,5 +61,6 @@ export async function analyzeClient(ref: ClientRef, opts: {
     data, maskHits, llm,
     sections: splitSections(llm.content),
     quotes: verifyQuotes(llm.content, data.calls, data.deals),
+    links: facts ? (() => { const l = checkLinks(llm.content, facts, data); return { ...l, propose: proposeLines(l, facts.shipped12), clarify: clarifyLines(l, facts) }; })() : null,
   };
 }

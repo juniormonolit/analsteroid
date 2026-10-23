@@ -399,10 +399,11 @@ export async function renderTemplate(body: string, ctx: { clientKey: string; man
     const k = placeholderKey(raw);
     return k && resolved.has(k) ? resolved.get(k)! : m;
   });
-  // Памятка «Перед звонком» по разговорам с заказчиком (владелец 23.10: «должна подсасываться в
-  // комментарий при постановке задачи вместе с шаблоном») — свежий разбор звонков, не старше 14 дней.
-  // Обычным текстом: РОП видит и правит; при постановке createDeal оформит её BB-блоком.
+  // Свежий разбор звонков (≤ 14 дней): с v8 текст задачи ЦЕЛИКОМ из разбора — «Перед звонком» → «Предложить»
+  // → «Выяснить», шаблон не нужен (владелец 23.10, план повторки; шаблон — фолбэк, если разбора нет). Старый
+  // разбор без связок — памятка под шаблоном, как раньше. Обычным текстом: РОП правит; createDeal оформит BB.
   const memo = await freshMemoPlainForClientKey(ctx.clientKey);
+  if (memo?.full) return memo.text;
   return memo ? `${text.trimEnd()}\n\n${memo.text}` : text;
 }
 

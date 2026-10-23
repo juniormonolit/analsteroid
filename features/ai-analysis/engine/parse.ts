@@ -15,6 +15,8 @@ export interface ParsedReport {
   criteria: (CriterionVerdict | null)[];
   score: number | null;
   violations: ViolationKind[];
+  /** Связки/просьбы/анкета (links.ts:checkLinks), с v8. */
+  links?: import('./links').LinksResult | null;
 }
 
 export const CRITERIA_LABELS = [
@@ -48,7 +50,7 @@ const TYPE_MATCH: [string, RegExp][] = [
 ];
 
 function section(md: string, n: number): string {
-  const parts = md.split(/^#{2,4}\s*(\d)\.\s*[^\n]*$/m);
+  const parts = md.split(/^#{2,4}\s*(\d{1,2})\.\s*[^\n]*$/m);
   for (let i = 1; i < parts.length; i += 2) if (Number(parts[i]) === n) return parts[i + 1];
   return '';
 }

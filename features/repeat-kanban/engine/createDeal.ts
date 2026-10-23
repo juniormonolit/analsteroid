@@ -31,7 +31,7 @@ import { memberKeysOf } from '@/features/customers/engine/merge';
 import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID } from './config';
 import { logRecommendations } from './recommendations';
 import { freshMemoForClientKey, markMemoInserted } from '@/features/ai-analysis/engine/memoStore';
-import { memoLinesBb, splitComment } from '@/features/ai-analysis/engine/memo';
+import { blockBb, memoLinesBb, splitComment } from '@/features/ai-analysis/engine/memo';
 
 export class DealCreateError extends Error {}
 
@@ -311,8 +311,12 @@ export async function createRepeatTask(input: {
   // дописывает её обычным текстом, РОП может править или стереть). Здесь вынимаем её из текста и оформляем
   // BB-блоком — в описании первым, в чате задачи тоже. Стёрли — памятки нет: сами не добавляем.
   const parts = splitComment(input.comment);
-  const memoBb = parts.memo ? memoLinesBb(parts.memo.date, parts.memo.lines) : null;
-  const memo = parts.memo ? await freshMemoForClientKey(input.clientKey) : null; // только чтобы отметить, что памятка ушла
+  // Блоки разбора в порядке владельца: «Перед звонком» → «Предложить» → «Выяснить» (дальше «От РОПа», отгрузки).
+  const memoBb = [
+    parts.memo ? memoLinesBb(parts.memo.date, parts.memo.lines) : null,
+    blockBb('Предложить', parts.propose), blockBb('Выяснить', parts.clarify),
+  ].filter(Boolean).join('\n\n') || null;
+  const memo = memoBb ? await freshMemoForClientKey(input.clientKey) : null; // только чтобы отметить, что памятка ушла
   const description = await buildDescription(input.clientKey, parts.rop, memoBb);
   const task = await writeOnce<{ task?: { id?: string | number } }>(taskWebhook(), 'tasks.task.add', {
     fields: {

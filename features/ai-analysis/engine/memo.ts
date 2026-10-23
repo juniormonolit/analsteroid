@@ -9,7 +9,7 @@
 export const MEMO_FRESH_DAYS = 14;
 
 function section(md: string, n: number): string | null {
-  const parts = md.split(/^#{2,4}\s*(\d)\.\s*[^\n]*$/m);
+  const parts = md.split(/^#{2,4}\s*(\d{1,2})\.\s*[^\n]*$/m);
   for (let i = 1; i < parts.length; i += 2) if (Number(parts[i]) === n) return parts[i + 1].trim() || null;
   return null;
 }
@@ -66,6 +66,18 @@ function bbLine(line: string): string {
 const DAY = 86_400_000;
 /** Шапка памятки в обычном тексте — по ней памятку находят в сообщении РОПа (splitComment). */
 export const MEMO_PLAIN_MARK = 'Перед звонком (по разговорам на ';
+/** Блоки текста задачи из разбора (владелец 23.10, план повторки): «Перед звонком» → «Предложить» → «Выяснить». */
+export const PROPOSE_MARK = 'Предложить:';
+export const CLARIFY_MARK = 'Выяснить:';
+
+/** Текст задачи из свежего разбора — БЕЗ шаблона (шаблон — фолбэк, если разбора нет). Обычным текстом:
+ *  РОП видит и правит в окне; при постановке createDeal оформит блоки BB-кодами. Без слов про ИИ. */
+export function taskTextPlain(reportMd: string, createdAt: string, propose: string[] = [], clarify: string[] = []): string {
+  const parts = [memoPlain(reportMd, createdAt)];
+  if (propose.length) parts.push([PROPOSE_MARK, ...propose].join('\n'));
+  if (clarify.length) parts.push([CLARIFY_MARK, ...clarify].join('\n'));
+  return parts.join('\n\n');
+}
 
 /**
  * Памятка внутри сообщения менеджеру (владелец 23.10: «памятка должна подсасываться в комментарий при
@@ -73,16 +85,30 @@ export const MEMO_PLAIN_MARK = 'Перед звонком (по разговор
  * блок памятки вынимаем обратно и оформляем BB («📞 Перед звонком»), остальное — текст РОПа.
  * Памятка — от строки-шапки до первой пустой строки. Нет шапки (РОП стёр) — памятки нет.
  */
-export function splitComment(comment: string): { rop: string; memo: { date: string; lines: string[] } | null } {
+export function splitComment(comment: string): { rop: string; memo: { date: string; lines: string[] } | null; propose: string[]; clarify: string[] } {
   const lines = comment.split('\n');
-  const i = lines.findIndex(l => l.trim().startsWith(MEMO_PLAIN_MARK));
-  if (i < 0) return { rop: comment.trim(), memo: null };
-  let j = i + 1;
-  while (j < lines.length && lines[j].trim()) j++;
-  const date = lines[i].trim().slice(MEMO_PLAIN_MARK.length).match(/^[\d.]+/)?.[0] ?? '';
-  const memoLines = lines.slice(i + 1, j).map(l => l.trim()).filter(Boolean);
-  const rop = [...lines.slice(0, i), ...lines.slice(j)].join('\n').replace(/\n{3,}/g, '\n\n').trim();
-  return { rop, memo: memoLines.length ? { date, lines: memoLines } : null };
+  const used = new Set<number>();
+  /** Блок «шапка + строки до пустой строки»; шапка не найдена — null. */
+  const take = (match: (l: string) => boolean): { head: string; body: string[] } | null => {
+    const i = lines.findIndex((l, k) => !used.has(k) && match(l.trim()));
+    if (i < 0) return null;
+    let j = i + 1;
+    while (j < lines.length && lines[j].trim()) j++;
+    for (let k = i; k < j; k++) used.add(k);
+    return { head: lines[i].trim(), body: lines.slice(i + 1, j).map(l => l.trim()).filter(Boolean) };
+  };
+  const m = take(l => l.startsWith(MEMO_PLAIN_MARK));
+  const p = take(l => l === PROPOSE_MARK);
+  const c = take(l => l === CLARIFY_MARK);
+  const rop = lines.filter((_, k) => !used.has(k)).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const date = m ? m.head.slice(MEMO_PLAIN_MARK.length).match(/^[\d.]+/)?.[0] ?? '' : '';
+  return { rop, memo: m && m.body.length ? { date, lines: m.body } : null, propose: p?.body ?? [], clarify: c?.body ?? [] };
+}
+
+/** Блоки «Предложить» / «Выяснить» → BB: заголовок жирным, строки с «•» (LIST Битрикс не рисует). */
+export function blockBb(title: string, lines: string[]): string | null {
+  if (!lines.length) return null;
+  return [`[B]${title}[/B]`, ...lines.map(l => `• ${safe(l.replace(/^—\s*/, ''))}`)].join('\n');
 }
 
 /** Строки памятки из сообщения (как РОП их оставил) → BB-блок «Перед звонком». */

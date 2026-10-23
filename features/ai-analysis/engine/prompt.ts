@@ -18,8 +18,9 @@
 import { MATERIAL_CHAIN } from '@/features/client-module/engine/chain';
 import type { ClientCallData } from './collect';
 import { maskCompany, maskPii } from './mask';
+import { linksText, type LinksFacts } from './links';
 
-export const PROMPT_VERSION = 'v7';
+export const PROMPT_VERSION = 'v8';
 
 /** Разделы отчёта в порядке промпта — по ним UI режет markdown. */
 export const REPORT_SECTIONS = [
@@ -31,6 +32,8 @@ export const REPORT_SECTIONS = [
   { n: 6, key: 'violations', title: 'Нарушения и тревожные сигналы' },
   { n: 7, key: 'data', title: 'Качество данных' },
   { n: 8, key: 'memo', title: 'Памятка менеджеру' },
+  { n: 9, key: 'links', title: 'Связки и запросы' },
+  { n: 10, key: 'data', title: 'Данные' },
 ] as const;
 /** Разделы, без которых вкладка не разберёт отчёт (8 — памятка — желательна, но старые промпты без неё). */
 export const REQUIRED_SECTIONS = REPORT_SECTIONS.filter(s => s.n <= 7);
@@ -109,7 +112,17 @@ ${chainText()}
 — Уточнить: <что> — <почему>   (0–1)
 — Когда: <стадия или срок у клиента>; <ограничение по доставке>   (0–1)
 — Не забыть: <невыполненное обещание или главный риск>   (0–1, последней строкой)
-До 90 символов на строку, до 60 слов всего, один глагол-действие на строку, предмет не повторять. Без других префиксов, подзаголовков, цитат, дат звонков, имён менеджеров, оценок и нарушений. Без разметки: никаких **, [B] и других тегов.`;
+До 90 символов на строку, до 60 слов всего, один глагол-действие на строку, предмет не повторять. Без других префиксов, подзаголовков, цитат, дат звонков, имён менеджеров, оценок и нарушений. Без разметки: никаких **, [B] и других тегов.
+
+### 9. Связки и запросы
+Опирайся на блок «Связки (посчитано кодом)» — пары «отгружали X → приоритетно предлагать Y». По каждой паре одной строкой: было ли Y предложено заказчику (дословная цитата и дата звонка) и что ответил клиент (согласился / отказался / сказал «позже» / уже купил в другом месте / ответа нет). Если не предлагали — пиши обезличенно: «не было предложено». Затем — что заказчик САМ просил или говорил, что ему нужно (группа материала, дословная цитата, дата); если по такой группе в сделках есть закрытая — приведи его слова о причине (например, цена у других ниже). Без «ты», без оценок менеджера.
+
+### 10. Данные
+Только JSON в блоке \`\`\`json … \`\`\`, без пояснений. Группы — ТОЧНО как в блоке «Связки»; вопросы — по id из блока «Анкета» (число без «Q»). Цитаты — дословно из звонков, даты — ДД.ММ.ГГГГ. Схема:
+{"pairs":[{"from":"<X>","to":"<Y>","offered":"yes|no|unclear","quote":"<цитата или пусто>","date":"<дата>","answer":"yes|no|later|bought_elsewhere|none","answer_quote":"<слова клиента>"}],
+ "requests":[{"group":"<группа>","quote":"<что сказал клиент>","date":"<дата>","reason_quote":"<если не купил — почему, его словами>"}],
+ "questions":[{"id":0,"asked":"yes|no|unclear","answer":"<ответ, для свободных вопросов>","options":["<только варианты из анкеты>"],"quote":"<цитата>","date":"<дата>"}]}
+pairs — по КАЖДОЙ паре из блока «Связки»; questions — по каждому вопросу из блока «Анкета» (не нашёл — asked: "no"); нет пар/вопросов — пустые массивы. Группу в requests называй как в связках или в сделках заказчика.`;
 }
 
 const fmtDt = (iso: string) => {
@@ -118,7 +131,7 @@ const fmtDt = (iso: string) => {
 };
 
 /** Пользовательская часть: данные заказчика — без телефонов/адресов/номеров и без названия компании. */
-export function userContent(data: ClientCallData): { text: string; maskHits: Record<string, number> } {
+export function userContent(data: ClientCallData, links?: LinksFacts): { text: string; maskHits: Record<string, number> } {
   const lines: string[] = [`# Заказчик`, `Тип в карточке клиента: ${data.clientType ?? 'не заполнен'}`,
     `Звонков по сделкам всего: ${data.callsTotal}, состоявшихся: ${data.callsCompleted}, расшифровок в анализе: ${data.calls.length}${data.callsTrimmed ? ` (ещё ${data.callsTrimmed} старых не включены)` : ''}`, '', '## Сделки'];
   for (const d of data.deals) {
@@ -129,6 +142,7 @@ export function userContent(data: ClientCallData): { text: string; maskHits: Rec
   for (const c of data.calls) {
     lines.push('', `### ${fmtDt(c.calledAt)} | сделка ${c.dealId} | ${c.direction === 'inbound' ? 'входящий' : c.direction === 'outbound' ? 'исходящий' : c.direction ?? ''} | ${c.durationSec ?? '?'} с | стадия ${c.stage ?? '—'} | ${c.manager ?? '—'}${c.hasRoles ? '' : ' | без ролей'}`, c.text);
   }
+  if (links) lines.push(linksText(links));
   const m = maskPii(lines.join('\n'));
   return { text: maskCompany(m.text, m.hits), maskHits: m.hits };
 }
