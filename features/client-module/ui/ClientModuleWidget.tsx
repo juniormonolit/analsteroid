@@ -15,7 +15,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ExternalLink, Building2, User } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
 import { type ClientModuleData } from '../engine/types';
 import { ClientBar } from './parts';
@@ -26,11 +25,13 @@ import { CallsTab, ManagersBlock, PurchasesTab } from './HistoryTabs';
 import { DealOpenerContext } from './dealLink';
 import { AiAnalysisTab, useAiAnalysisAccess } from '@/features/ai-analysis/ui/AiAnalysisTab';
 import { ClientQuestionnaire } from '@/features/questionnaires/ui/ClientQuestionnaire';
+import { useAppMode } from '@/lib/hooks/useAppMode';
+import { BitrixLink, CardHeader, TabsRibbon } from './CardHeader';
 
 export type ClientCardTab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls' | 'questionnaire' | 'ai';
 type Tab = ClientCardTab;
 
-export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTab, onTabChange }: {
+export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTab, onTabChange, stickyHeader = false, headerExtra }: {
   contactId?: string; companyId?: string;
   /** С какой вкладки открыть (канбан повторных: значок разбора → сразу «ИИ-анализ»). */
   initialTab?: ClientCardTab;
@@ -38,7 +39,12 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
   onDealOpen?: (dealId: number) => void;
   /** Смена вкладки — наружу (канбан пишет её в адрес: ссылка на карточку с открытой вкладкой, владелец 23.10). */
   onTabChange?: (tab: ClientCardTab) => void;
+  /** Закреплённая шапка (выдвижная панель: прокрутка внутри неё, data-card-scroll). */
+  stickyHeader?: boolean;
+  /** Главное действие раздела, откуда открыли (канбан) — в строке статуса шапки. */
+  headerExtra?: React.ReactNode;
 }) {
+  const { isBitrixIframe } = useAppMode();
   const params: Record<string, string> = companyId ? { companyId } : contactId ? { contactId } : {};
   const qs = new URLSearchParams(params).toString();
   const { data, isLoading, error, refetch } = useQuery<ClientModuleData>({
@@ -57,7 +63,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
   initialTabRef.current = initialTab;
   // «ИИ-анализ» — только у кого есть право (решение владельца 22.10: «видят ТОЛЬКО РОПЫ»):
   // без права API отдаёт 403 и вкладки нет. Во вкладке Битрикса сессии Монолитики нет — тоже нет.
-  const ai = useAiAnalysisAccess(qs);
+  const ai = useAiAnalysisAccess(qs, !isBitrixIframe);
   const [focusObject, setFocusObject] = useState<string | null>(null);
   const [editClient, setEditClient] = useState(0);
   const [dealsFilter, setDealsFilter] = useState<{ object?: string; n: number }>({ n: 0 });
@@ -69,13 +75,12 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
   if (isLoading) return <SlowLoading onRetry={() => void refetch()} />;
   if (error || !data) return <div className="p-4 text-sm" style={{ color: 'var(--color-negative, #e03131)' }}>{error instanceof Error ? error.message : 'Ошибка загрузки'}</div>;
 
-  const bitrixUrl = `https://td.monolit-crm.ru/crm/${data.clientType}/details/${data.clientId}/`;
-  const title = data.name ?? (data.clientType === 'contact' ? `Контакт #${data.clientId}` : `Компания #${data.clientId}`);
-  const tabs: { key: Tab; label: string }[] = [
+  // Счётчики — отдельно от названия (лента вкладок, аудит 23.10).
+  const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'overview', label: 'Обзор' },
-    { key: 'deals', label: `Сделки · ${data.deals.length}` },
-    { key: 'purchases', label: `Покупки · ${data.deals.filter(d => d.deliveredAt).length}` },
-    { key: 'objects', label: `Объекты · ${data.objects.length}` },
+    { key: 'deals', label: 'Сделки и задачи', count: data.deals.length },
+    { key: 'purchases', label: 'Покупки', count: data.deals.filter(d => d.deliveredAt).length },
+    { key: 'objects', label: 'Объекты', count: data.objects.length },
     { key: 'calls', label: 'Звонки' },
     // Анкета по товарным группам (миграция 249, владелец 23.10): ответы менеджера и «по разговорам».
     { key: 'questionnaire', label: 'Анкета' },
@@ -85,34 +90,20 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
   return (
     <DealOpenerContext.Provider value={onDealOpen ?? null}>
     <div className="flex min-w-0 flex-col gap-3">
-      <div className="flex flex-col gap-1">
-        <div className="flex flex-wrap items-center gap-2">
-          {data.clientType === 'company' ? <Building2 size={18} className="shrink-0 text-[var(--color-text-muted)]" /> : <User size={18} className="shrink-0 text-[var(--color-text-muted)]" />}
-          <h2 className="min-w-0 break-words text-[17px] font-bold">{title}</h2>
-          <a href={bitrixUrl} target="_blank" rel="noreferrer" className="ml-auto inline-flex min-h-9 items-center gap-1 text-[12px] text-[var(--color-accent)] hover:underline">
-            Битрикс <ExternalLink size={12} />
-          </a>
-        </div>
-        <ClientBar data={data} params={params} openSignal={editClient} />
-      </div>
-
-      {/* Вкладки — переносом, без горизонтальной ленты (правило 12 CLAUDE.md). */}
-      <div role="tablist" className="flex flex-wrap gap-1 border-b border-[var(--color-border)]">
-        {tabs.map(t => (
-          <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)}
-            className={`-mb-px min-h-11 border-b-2 px-3 text-[13.5px] outline-none focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${tab === t.key ? 'border-[var(--color-accent)] font-semibold text-[var(--color-text)]' : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-
+      {/* Шапка (аудит 23.10): имя · тип · менеджер · статус и вкладки закреплены; блок клиента (тип, заметка) —
+          под ней и уезжает при прокрутке. Во вкладке Битрикса — без закрепления и без «Битрикс ↗». */}
+      <CardHeader data={data} sticky={stickyHeader && !isBitrixIframe} extra={headerExtra}
+        actions={isBitrixIframe ? undefined : <BitrixLink data={data} />}
+        tabs={<TabsRibbon tabs={tabs} active={tab} onChange={setTab} />}>
+        {tab === 'overview' && <ClientBar data={data} params={params} openSignal={editClient} />}
+      </CardHeader>
 
       {tab === 'overview' && <OverviewTab data={data} params={params} onEditClient={() => setEditClient(n => n + 1)}
         onOpenObject={k => { setFocusObject(k || null); setTab('objects'); }}
         onOpenDeals={f => { setDealsFilter(prev => ({ object: f.object, n: prev.n + 1 })); setTab('deals'); }} />}
-      {tab === 'deals' && <DealsTab key={dealsFilter.n} data={data} params={params} initialObject={dealsFilter.object ?? null} />}
+      {tab === 'deals' && <DealsTab key={dealsFilter.n} data={data} params={params} qs={qs} initialObject={dealsFilter.object ?? null} />}
       {tab === 'objects' && <ObjectsTab data={data} params={params} focus={focusObject} onOpenDeals={k => { setDealsFilter(prev => ({ object: k, n: prev.n + 1 })); setTab('deals'); }} />}
-      {tab === 'purchases' && <PurchasesTab qs={qs} />}
+      {tab === 'purchases' && <PurchasesTab qs={qs} card={data} />}
       {tab === 'calls' && <CallsTab qs={qs} />}
       {tab === 'questionnaire' && (
         <ClientQuestionnaire params={params}

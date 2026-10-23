@@ -14,7 +14,7 @@ import {
   HOUSE_TYPES, isSelfBuilder, EMPTY_OBJECT_PROFILE, NEW_OBJECT_KEY, ADDRESS_SOURCE_LABEL,
   computeStats, objectStatus,
 } from '../engine/types';
-import { Section, Chip, StatusChip, StatusDot, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup, fmtD, dealTitle, useDismiss } from './parts';
+import { Section, Chip, StatusChip, StatusDot, OptionRow, SaveBar, useSave, savedLine, inputCls, shortGroup, fmtD, dealTitle, useDismiss, AutoTextarea } from './parts';
 import { TzMetrics, Purchases } from './TzBlocks';
 import { shortAddress } from '../engine/objectClusters';
 import { DealLink } from './dealLink';
@@ -147,7 +147,7 @@ function ObjectEditor({ data, object, params, onCreated, onCancel }: {
       )}
       <label className="block">
         <span className="mb-1 block text-[12px] text-[var(--color-text-muted)]">Заметка по объекту</span>
-        <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} maxLength={2000} className={inputCls} />
+        <AutoTextarea value={note} onChange={setNote} minRows={2} maxLength={2000} />
       </label>
       <div className="flex flex-wrap items-center gap-2">
         <SaveBar dirty={dirty && (!!object || !!geo)} saving={saving}
@@ -178,7 +178,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
   const dis = useDismiss(data, params, object.key);
 
   return (
-    <section id={`obj-${object.key}`} className="min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+    <section id={`obj-${object.key}`} className={`min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] ${!open && (status === 'done' || deals.length === 0) ? 'opacity-70' : ''}`}>
       <button type="button" onClick={() => setOpen(v => !v)} aria-expanded={open} className="flex w-full items-start gap-2.5 px-3.5 py-2.5 text-left">
         <StatusDot s={status} />
         <span className="min-w-0 flex-1">
@@ -192,6 +192,10 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
             {s.shipped} отгр.{s.lastShippedAt ? ` · посл. ${fmtD(s.lastShippedAt)}` : ''}{s.open > 0 ? ` · в работе ${s.open}` : ''}
             {s.groups.length > 0 ? ` · ${s.groups.slice(0, 3).map(g => shortGroup(g.group)).join(', ')}${s.groups.length > 3 ? ` +${s.groups.length - 3}` : ''}` : ''}
           </span>
+          {/* Что предложить на объект — видно и в свёрнутой карточке, как на «Обзоре» (аудит 23.10). */}
+          {!open && status !== 'done' && data.recommendations.byObject[object.key]?.next[0] && (
+            <span className="mt-0.5 block truncate text-[12px] text-[var(--color-warning,#e8590c)]">→ предложить: {shortGroup(data.recommendations.byObject[object.key].next[0].group)}</span>
+          )}
         </span>
         {open ? <ChevronDown size={18} className="mt-0.5 shrink-0" /> : <ChevronRight size={18} className="mt-0.5 shrink-0" />}
       </button>
@@ -206,8 +210,8 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
               </div>
               <div className="mt-1.5 flex flex-wrap gap-2 pl-5">
                 <button type="button" disabled={saving || !data.v2Available} onClick={() => void save({ object: { key: object.key, confirmAddress: true } })}
-                  className="min-h-9 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-[12px] font-semibold disabled:opacity-40">Адрес верный</button>
-                <button type="button" onClick={() => setEditing(true)} className="min-h-9 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-[12px]">Поправить</button>
+                  className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-[12px] font-semibold disabled:opacity-40">Адрес верный</button>
+                <button type="button" onClick={() => setEditing(true)} className="min-h-11 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-[12px]">Поправить</button>
                 {!data.v2Available && <span className="self-center text-[11.5px] text-[var(--color-text-muted)]">«Адрес верный» — после миграции 006</span>}
               </div>
             </div>
@@ -223,7 +227,7 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
               {/* Список сделок по объекту «как на скрине» ТЗ: дата, группы, ↓ интервал, сумма, стрелка → товары. */}
               <Purchases deals={deals} title="Покупки по объекту" />
               {s.open > 0 && <div className="mt-1 text-[12px] text-[var(--color-text-muted)]">ещё в работе: {s.open} на {fmtMoney(s.openSum)}</div>}
-              {onOpenDeals && deals.length > 0 && <button type="button" onClick={() => onOpenDeals(object.key)} className="mt-1 min-h-9 text-[12px] text-[var(--color-accent)]">все сделки объекта (с отказами) в «Сделках» →</button>}
+              {onOpenDeals && deals.length > 0 && <button type="button" onClick={() => onOpenDeals(object.key)} className="mt-1 min-h-11 text-[12px] text-[var(--color-accent)]">все сделки объекта (с отказами) в «Сделках» →</button>}
             </div>
           </div>
 
@@ -231,17 +235,17 @@ function ObjectCard({ data, object, params, defaultOpen, onOpenDeals }: { data: 
             <span className="text-[12px] text-[var(--color-text-muted)]">Статус: <StatusChip s={status} />{prof.doneManual ? ' (вручную)' : ' (автоматически)'}</span>
             {prof.doneManual ? (
               <button type="button" disabled={saving || !data.v2Available} onClick={() => void save({ object: { key: object.key, done: false } })}
-                className="min-h-9 rounded-lg border border-[var(--color-border)] px-3 text-[12px] disabled:opacity-40">Вернуть автоматический статус</button>
+                className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-[12px] disabled:opacity-40">Вернуть автоматический статус</button>
             ) : status !== 'done' ? (
               <button type="button" disabled={saving || !data.v2Available} onClick={() => void save({ object: { key: object.key, done: true } })}
-                className="min-h-9 rounded-lg border border-[var(--color-border)] px-3 text-[12px] disabled:opacity-40">Завершить объект</button>
+                className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-[12px] disabled:opacity-40">Завершить объект</button>
             ) : null}
-            {!editing && <button type="button" onClick={() => setEditing(true)} className="min-h-9 rounded-lg border border-[var(--color-border)] px-3 text-[12px]">Адрес, стадия, заметка</button>}
+            {!editing && <button type="button" onClick={() => setEditing(true)} className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-[12px]">Адрес, стадия, заметка</button>}
             {error && <span className="text-[12px]" style={{ color: 'var(--color-negative, #e03131)' }}>{error}</span>}
           </div>
           {prof.note && !editing && <div className="whitespace-pre-wrap rounded-lg bg-[var(--color-bg)] px-2.5 py-2 text-[12.5px]">{prof.note}</div>}
           <details className="text-[12px] text-[var(--color-text-muted)]">
-            <summary className="min-h-9 cursor-pointer select-none py-1.5">Данные объекта</summary>
+            <summary className="flex min-h-11 cursor-pointer select-none items-center">Данные объекта</summary>
             <div className="flex flex-col gap-1 pb-1 pl-3">
               <div><span className="text-[var(--color-text)]">Адрес:</span> {address} <span>({prof.idealAddress ? 'указан менеджером' : ADDRESS_SOURCE_LABEL[object.source]})</span></div>
               {object.variants > 1 && <div>Склеено {object.variants} написания адреса из заявок и сделок.</div>}
@@ -279,7 +283,7 @@ export function ObjectsTab({ data, params, focus, onOpenDeals }: { data: ClientM
           {noObject > 0 && <> · сделок без объекта: {noObject}</>}
         </span>
         {data.profilesAvailable && !creating && (
-          <button type="button" onClick={() => setCreating(true)} className="ml-auto inline-flex min-h-10 items-center gap-1 rounded-lg border border-dashed border-[var(--color-border)] px-3 text-[12.5px]">
+          <button type="button" onClick={() => setCreating(true)} className="ml-auto inline-flex min-h-11 items-center gap-1 rounded-lg border border-dashed border-[var(--color-border)] px-3 text-[12.5px]">
             <Plus size={14} /> Новый объект
           </button>
         )}

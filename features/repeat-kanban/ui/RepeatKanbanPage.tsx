@@ -569,6 +569,7 @@ export function RepeatKanbanPage() {
           // Свежая версия карточки после действий (доска перезапросилась) — по ключу заказчика.
           // Комментарии задач — тот же контекст, что у доски (панель рисуется вне её дерева).
           // Карточки нет на доске (ссылка из чата, фильтры другие) — открывается только карточка клиента, без канбан-панели.
+          sidePrimary={openCard ? <KanbanPrimary c={openCard} h={handlers} /> : undefined}
           sideActions={openCard ? <TagDefsCtx.Provider value={tagDefMap}><TaskChecksCtx.Provider value={taskChecks ?? {}}><TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={openCard} h={handlers} /></TaskNotesCtx.Provider></TaskChecksCtx.Provider></TagDefsCtx.Provider> : undefined} />
       )}
       {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} reassign={reassignOpts} onClose={() => setTaskFor(null)} onSaved={refresh} />}
@@ -593,11 +594,25 @@ export function RepeatKanbanPage() {
 function KanbanSideActions({ c, h }: { c: KanbanCard; h: CardHandlers }) {
   const def = COLUMNS.find(x => x.key === c.column);
   return (
-    <div className="flex max-h-[40dvh] flex-col gap-1.5 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2 shadow-2xl sm:max-h-[calc(100dvh-24px)]">
+    <div className="flex max-h-[calc(100dvh-24px)] flex-col gap-1.5 overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2 shadow-2xl">
       <div className="px-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-accent)]">Канбан повторных · {def?.title ?? c.column}</div>
       <CardFor c={c} h={h} />
     </div>
   );
+}
+
+/** Главное действие карточки канбана — в строке статуса шапки карточки клиента (аудит 23.10): то же, что
+ *  главная кнопка на доске; остальное (меню, задача, комментарий) — по «Канбан ▾». */
+function KanbanPrimary({ c, h }: { c: KanbanCard; h: CardHandlers }) {
+  if (!h.canManage) return null;
+  const btn = 'inline-flex min-h-9 items-center gap-1 rounded-md px-2.5 text-[12.5px] font-medium hover:opacity-90 active:scale-[0.98]';
+  if (c.task?.state === 'control') return <button type="button" onClick={() => h.onAct('accept_task', c)} className={`${btn} bg-[#38761d] text-white`}><CheckSquare size={13} /> Принять задачу…</button>;
+  if (c.column === 'review') return <button type="button" onClick={() => h.onReview(c)} className={`${btn} bg-[var(--color-accent)] text-white`}>{c.dozvonFail ? 'Разобрать: 3 попытки' : 'Разобрать отказ'}</button>;
+  if (c.column === 'hidden') return <button type="button" onClick={() => h.onAct('unhide', c)} className={`${btn} border border-[var(--color-border)] text-[var(--color-text-secondary)]`}>Вернуть в пул</button>;
+  if (c.column === 'brak') return <button type="button" onClick={() => h.onUnbrak(c)} className={`${btn} border border-[var(--color-border)] text-[var(--color-text-muted)]`}>Снять брак</button>;
+  if (!canTaskCol(c.column)) return null;
+  const label = c.deal ? 'Задача' : c.lastLost ? 'Вернуть сделку + задача' : 'Сделка + задача';
+  return <button type="button" onClick={() => h.onTask(c)} className={`${btn} bg-[var(--color-accent-soft)] text-[var(--color-accent)]`}><Plus size={13} /> {label}</button>;
 }
 
 /** «Фильтры» — панель с редкими фильтрами (владелец 21.10: всё управление — в одну строку). */

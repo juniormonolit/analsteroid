@@ -73,10 +73,11 @@ async function getJson<T>(url: string): Promise<T> {
 }
 
 /** Есть ли у пользователя вкладка: тот же запрос, что у самой вкладки (кэш общий). */
-export function useAiAnalysisAccess(qs: string) {
+/** enabled=false — во вкладке Битрикса (менеджеры): запрос не шлём вовсе (аудит 23.10: слово «ai-analysis» в сети). */
+export function useAiAnalysisAccess(qs: string, enabled = true) {
   const q = useQuery<ClientPayload>({
     queryKey: ['ai-analysis-client', qs],
-    enabled: qs.length > 0,
+    enabled: enabled && qs.length > 0,
     retry: false,
     staleTime: 60_000,
     queryFn: () => getJson(`/api/ai-analysis/client?${qs}`),
@@ -512,7 +513,7 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
           })}
           <div className="text-[11.5px] text-[var(--color-text-muted)]">
             Это мнение модели по автоматическим расшифровкам — в них бывают ошибки распознавания и перепутанные роли. Нарушения перед разбором с менеджером проверьте по записи звонка.
-            {' '}Модель {lastDone.model ?? '—'}, промпт {lastDone.promptVersion}{lastDone.costRub !== null ? `, ${lastDone.costRub} ₽` : ''}. Запустил(а): {lastDone.createdByName ?? lastDone.createdBy}.
+            {' '}Модель {lastDone.model ?? '—'}, промпт {lastDone.promptVersion}. Запустил(а): {lastDone.createdByName ?? lastDone.createdBy}.
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[13px]">Отчёт полезен?</span>

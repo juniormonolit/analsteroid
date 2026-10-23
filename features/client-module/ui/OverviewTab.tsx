@@ -6,10 +6,10 @@
 // шапке виджета (ClientBar), а не радиокнопками на треть экрана.
 
 import { useState } from 'react';
-import { ArrowRight, MapPin, HelpCircle, Lightbulb } from 'lucide-react';
+import { ArrowRight, MapPin, Lightbulb } from 'lucide-react';
 import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, computeStats, objectStatus, EMPTY_OBJECT_PROFILE } from '../engine/types';
-import { Section, RecList, StatusDot, shortGroup, fmtD, useDismiss } from './parts';
+import { Section, RecList, StatusDot, shortGroup, fmtD, useDismiss, HintButton } from './parts';
 import { TzMetrics } from './TzBlocks';
 import { ClientHintCard, LegalLine } from './ClientHintCard';
 import { LastDealLine } from './LastDealLine';
@@ -48,24 +48,25 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
       {/* Порядок экрана (аудит 15.10): почему звонить сейчас → что сказать →
           куда везём / что предложить → цифры ТЗ → справочное. */}
       <ClientHintCard data={data} params={params} onEditClient={onEditClient} />
-      <div className="flex flex-col gap-2">
-        <CallTimingLine deals={data.deals} />
-        <LastDealLine data={data} />
-      </div>
-      {/* «Совет» (владелец 15.10) — правила в engine/advice.ts. */}
-      {advice.length > 0 && (
-        <section className="rounded-xl border border-[color-mix(in_srgb,var(--color-warning,#e8590c)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-warning,#e8590c)_6%,transparent)] px-3.5 py-3">
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-warning,#e8590c)]"><Lightbulb size={14} /> Совет</div>
-          <ul className="flex flex-col gap-2">
+      {/* «Сейчас» (аудит 23.10): когда звонить, чем кончилась последняя сделка и совет — одним блоком, а не тремя
+          рамками трёх цветов. Что предложить — в «Предложить клиенту» ниже (и в шапке), здесь не дублируем. */}
+      <section className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3.5 pt-2.5">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">Сейчас</div>
+        <div className="flex flex-col divide-y divide-[var(--color-border)] [&>*]:py-2.5">
+        <CallTimingLine deals={data.deals} bare />
+        <LastDealLine data={data} bare />
+        {advice.length > 0 && (
+          <ul className="flex flex-col gap-1.5">
             {advice.map(a => (
               <li key={a.id} className="flex gap-2 text-[13.5px] leading-snug" style={a.alarm ? { color: 'var(--color-negative, #e03131)' } : undefined}>
-                {advice.length > 1 && <span aria-hidden className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />}
+                <Lightbulb size={15} className="mt-0.5 shrink-0 text-[var(--color-warning,#e8590c)]" />
                 <span className="min-w-0">{a.text}</span>
               </li>
             ))}
           </ul>
-        </section>
-      )}
+        )}
+        </div>
+      </section>
 
       {noObj.length > 0 && (
         <button type="button" onClick={() => onOpenDeals({ object: '__none' })}
@@ -99,14 +100,13 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
                   </span>
                 </button>
               ))}
-              {ordered.length > 6 && <button type="button" onClick={() => onOpenObject('')} className="min-h-10 text-left text-[12px] text-[var(--color-accent)]">ещё {ordered.length - 6} — во вкладке «Объекты»</button>}
+              {ordered.length > 6 && <button type="button" onClick={() => onOpenObject('')} className="min-h-11 text-left text-[12px] text-[var(--color-accent)]">ещё {ordered.length - 6} — во вкладке «Объекты»</button>}
             </div>
           )}
         </Section>
 
         <Section title="Предложить клиенту" right={
-          <span title="По цепочке стройки (майндкарта), истории переходов по базе и приоритетам «Что предложить». Подрядчикам — только общие этапы и частые переходы."
-            className="cursor-help text-[var(--color-text-muted)]"><HelpCircle size={14} /></span>
+          <HintButton text="Сначала ручные приоритеты «Что предложить», затем цепочка стройки (майндкарта) и история переходов по базе. Подрядчикам — только общие этапы и частые переходы." />
         }>
           <RecList recs={data.recommendations.client} empty="Предложить по истории нечего." onDismiss={dis.onDismiss} onRestore={dis.onRestore} hidden={data.dismissed.client} />
           {dis.error && <div className="mt-1 text-[11.5px]" style={{ color: 'var(--color-negative, #e03131)' }}>{dis.error}</div>}
@@ -133,7 +133,7 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
               </div>
             ))}
             {stats.groups.length > 5 && (
-              <button type="button" onClick={() => setAllGroups(v => !v)} className="mt-0.5 min-h-9 self-start text-[12px] text-[var(--color-accent)]">
+              <button type="button" onClick={() => setAllGroups(v => !v)} className="mt-0.5 min-h-11 self-start text-[12px] text-[var(--color-accent)]">
                 {allGroups ? 'свернуть' : `ещё ${stats.groups.length - 5}`}
               </button>
             )}

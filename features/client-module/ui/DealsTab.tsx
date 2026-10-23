@@ -9,10 +9,12 @@ import { Fragment, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { fmtMoney } from '@/features/customers/ui/shared';
 import { type ClientModuleData, type ModuleDeal, type DealStage, DEAL_STAGE_LABEL, dealSortDate } from '../engine/types';
-import { StageChip, selectCls, useSave, shortGroup, fmtD, dealTitle } from './parts';
+import { StageChip, useSave, shortGroup, fmtD, dealTitle } from './parts';
 import { shortAddress } from '../engine/objectClusters';
-import { Purchases } from './TzBlocks';
+import { DealsTimeline } from './DealsTimeline';
+import { useClientHistory } from './HistoryTabs';
 import { DealLink } from './dealLink';
+import { SearchSelect } from '@/components/ui/SearchSelect';
 
 const STAGES: DealStage[] = ['shipped', 'sold', 'active', 'lost'];
 
@@ -56,12 +58,13 @@ function DealRowExpanded({ d, data, params }: { d: ModuleDeal; data: ClientModul
       {data.objects.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
           <span className="text-[var(--color-text-muted)]">Объект сделки{d.objectManual ? ' (указан вручную)' : ' (по адресу)'}:</span>
-          <select className={`${selectCls} w-full sm:w-auto sm:max-w-[360px]`} disabled={saving || !data.v2Available}
+          {/* Без нативных <select> (CLAUDE.md, правило 14; аудит карточки 23.10). */}
+          <SearchSelect ariaLabel="Объект сделки" disabled={saving || !data.v2Available}
             value={d.objectManual ? d.objectKey ?? '' : ''}
-            onChange={e => void save({ deal: { dealId: d.dealId, objectKey: e.target.value } })}>
-            <option value="">{`Автоматически — ${objectLabel(data, d.objectManual ? null : d.objectKey)}`}</option>
-            {data.objects.map(o => <option key={o.key} value={o.key}>{objectLabel(data, o.key)}</option>)}
-          </select>
+            onChange={v => void save({ deal: { dealId: d.dealId, objectKey: v } })}
+            options={[{ value: '', label: `Автоматически — ${objectLabel(data, d.objectManual ? null : d.objectKey)}` },
+              ...data.objects.map(o => ({ value: o.key, label: objectLabel(data, o.key) }))]}
+            className="w-full justify-start sm:w-auto sm:max-w-[360px]" />
           {!data.v2Available && <span className="text-[var(--color-text-muted)]">перепривязка — после миграции 006</span>}
           {error && <span style={{ color: 'var(--color-negative, #e03131)' }}>{error}</span>}
         </div>
@@ -70,14 +73,15 @@ function DealRowExpanded({ d, data, params }: { d: ModuleDeal; data: ClientModul
   );
 }
 
-export function DealsTab({ data, params, initialObject }: { data: ClientModuleData; params: Record<string, string>; initialObject?: string | null }) {
+export function DealsTab({ data, params, qs, initialObject }: { data: ClientModuleData; params: Record<string, string>; qs: string; initialObject?: string | null }) {
   const [obj, setObj] = useState<string>(initialObject ?? '');
   const [group, setGroup] = useState('');
   const [stages, setStages] = useState<Set<DealStage>>(new Set());
   const [open, setOpen] = useState<Set<number>>(new Set());
-  // Вид: таблица всех сделок с фильтрами (правка владельца 13.10) или «Покупки» —
-  // список отгрузок ровно как на скрине ТЗ (дата, группы, ↓ интервал, сумма, товары).
-  const [mode, setMode] = useState<'table' | 'purchases'>('table');
+  // Вид (владелец 23.10): «Хронология» — сделки и их задачи по датам (по умолчанию) или таблица сделок с фильтрами
+  // и привязкой к объектам (13.10). Режим «Покупки (отгрузки)» убран — это вкладка «Покупки» (аудит 23.10).
+  const [mode, setMode] = useState<'timeline' | 'table'>('timeline');
+  const history = useClientHistory(qs, mode === 'timeline');
   // Массовая привязка к объекту (аудит 14.10: «78 сделок без объекта — разложить»).
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [target, setTarget] = useState('');
@@ -94,27 +98,24 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
 
   const noObj = data.deals.filter(d => !d.objectKey).length;
   const stageCount = (st: DealStage) => data.deals.filter(d => d.stage === st && (!obj || (obj === '__none' ? !d.objectKey : d.objectKey === obj))).length;
-  const chip = (on: boolean) => `min-h-9 rounded-lg border px-2.5 text-[12px] ${on ? 'border-[var(--color-accent)] font-semibold text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`;
+  const chip = (on: boolean) => `min-h-11 rounded-lg border px-2.5 text-[12px] ${on ? 'border-[var(--color-accent)] font-semibold text-[var(--color-accent)]' : 'border-[var(--color-border)] text-[var(--color-text-muted)]'}`;
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex w-fit rounded-lg border border-[var(--color-border)] p-0.5 text-[12.5px]">
-        {([['table', 'Все сделки'], ['purchases', 'Покупки (отгрузки)']] as const).map(([v, l]) => (
+        {([['timeline', 'Хронология: сделки и задачи'], ['table', 'Таблица сделок']] as const).map(([v, l]) => (
           <button key={v} type="button" onClick={() => setMode(v)} aria-pressed={mode === v}
-            className={`min-h-9 rounded-md px-3 ${mode === v ? 'bg-[var(--color-bg-hover)] font-semibold' : 'text-[var(--color-text-muted)]'}`}>{l}</button>
+            className={`min-h-11 rounded-md px-3 ${mode === v ? 'bg-[var(--color-bg-hover)] font-semibold' : 'text-[var(--color-text-muted)]'}`}>{l}</button>
         ))}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <select className={`${selectCls} w-full sm:w-auto sm:max-w-[220px]`} value={obj} onChange={e => setObj(e.target.value)} aria-label="Объект">
-          <option value="">Все объекты</option>
-          {data.objects.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-          <option value="__none">Без объекта</option>
-        </select>
-        <select className={`${selectCls} w-full sm:w-auto sm:max-w-[220px]`} value={group} onChange={e => setGroup(e.target.value)} aria-label="Товарная группа">
-          <option value="">Все товарные группы</option>
-          {groups.map(g => <option key={g} value={g}>{g}</option>)}
-        </select>
-        {mode === 'table' && <div className="flex flex-wrap gap-1">
+        <SearchSelect ariaLabel="Объект" value={obj} onChange={setObj}
+          options={[{ value: '', label: 'Все объекты' }, ...data.objects.map(o => ({ value: o.key, label: o.label })), { value: '__none', label: 'Без объекта' }]}
+          className="w-full justify-start sm:w-auto sm:max-w-[220px]" />
+        <SearchSelect ariaLabel="Товарная группа" value={group} onChange={setGroup} searchPlaceholder="Поиск группы"
+          options={[{ value: '', label: 'Все товарные группы' }, ...groups.map(g => ({ value: g, label: g }))]}
+          className="w-full justify-start sm:w-auto sm:max-w-[220px]" />
+        {<div className="flex flex-wrap gap-1">
           {STAGES.map(st => (
             <button key={st} type="button" onClick={() => setStages(toggle(stages, st))} aria-pressed={stages.has(st)} className={chip(stages.has(st))}>
               {DEAL_STAGE_LABEL[st]} <span className="tabular-nums opacity-70">{stageCount(st)}</span>
@@ -126,21 +127,18 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
             </button>
           )}
         </div>}
-        {mode === 'table' && <span className="ml-auto text-[12px] text-[var(--color-text-muted)]">{rows.length} на <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(sum)}</b></span>}
+        {<span className="ml-auto text-[12px] text-[var(--color-text-muted)]">{rows.length} на <b className="tabular-nums text-[var(--color-text)]">{fmtMoney(sum)}</b></span>}
       </div>
       {/* Привязка к объекту — здесь же, над списком (правка владельца 14.10): во
           вкладке Битрикса фрейм растягивается под весь список, и панель «внизу»
           оказывалась под сотней сделок. Отметил → выбрал объект → «Привязать». */}
-      {mode === 'purchases' && (
-        <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2.5">
-          <Purchases deals={data.deals.filter(d => (!obj || (obj === '__none' ? !d.objectKey : d.objectKey === obj)) && (!group || d.groups.includes(group)))}
-            title={obj ? (obj === '__none' ? 'Покупки без объекта' : `Покупки · ${objectLabel(data, obj)}`) : 'Покупки клиента'} />
-        </div>
+      {mode === 'timeline' && (
+        <DealsTimeline data={data} deals={rows} tasks={history.data?.tasks ?? []} loading={history.isLoading} />
       )}
       {mode === 'table' && <>
       {data.v2Available && data.objects.length > 0 && rows.length > 0 && (
         <div className={`flex flex-wrap items-center gap-2 rounded-xl px-2 py-1.5 text-[12px] ${picked.size > 0 ? 'border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_6%,transparent)]' : 'text-[var(--color-text-muted)]'}`}>
-          <label className="inline-flex min-h-9 cursor-pointer items-center gap-1.5">
+          <label className="inline-flex min-h-11 cursor-pointer items-center gap-1.5">
             <input type="checkbox" className="h-4 w-4 accent-[var(--color-accent)]"
               checked={rows.every(d => picked.has(d.dealId))}
               onChange={e => setPicked(e.target.checked ? new Set([...picked, ...rows.map(d => d.dealId)]) : new Set([...picked].filter(id => !rows.some(d => d.dealId === id))))} />
@@ -151,11 +149,9 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
           ) : (
             <>
               <span className="text-[var(--color-text-muted)]">→ привязать к</span>
-              <select className={`${selectCls} min-w-0 flex-1 sm:max-w-[240px]`} value={target} onChange={e => setTarget(e.target.value)} aria-label="Объект для выбранных сделок">
-                <option value="">выберите объект…</option>
-                {data.objects.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-                <option value="__auto">вернуть автоматически (по адресу)</option>
-              </select>
+              <SearchSelect ariaLabel="Объект для выбранных сделок" value={target} onChange={setTarget} placeholder="выберите объект…"
+                options={[{ value: '', label: 'выберите объект…' }, ...data.objects.map(o => ({ value: o.key, label: o.label })), { value: '__auto', label: 'вернуть автоматически (по адресу)' }]}
+                className="min-w-0 flex-1 justify-start sm:max-w-[240px]" />
               <button type="button" disabled={!target || bulk.saving}
                 onClick={async () => {
                   const r = await bulk.save({ deals: { dealIds: [...picked], objectKey: target === '__auto' ? '' : target } });
@@ -239,7 +235,14 @@ export function DealsTab({ data, params, initialObject }: { data: ClientModuleDa
                           <input type="checkbox" aria-label="Выбрать сделку" className="h-4 w-4 cursor-pointer accent-[var(--color-accent)]" checked={picked.has(d.dealId)} onChange={() => setPicked(toggle(picked, d.dealId))} />
                         </td>
                       )}
-                      <td className="px-1 py-1.5 align-top text-[var(--color-text-muted)]">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</td>
+                      {/* Раскрытие — и с клавиатуры (аудит 23.10: onClick на <tr> не достать Tab'ом). */}
+                      <td className="px-1 py-0.5 align-top text-[var(--color-text-muted)]">
+                        <button type="button" aria-expanded={isOpen} aria-label={isOpen ? 'Свернуть товары сделки' : 'Показать товары сделки'}
+                          onClick={e => { e.stopPropagation(); setOpen(toggle(open, d.dealId)); }}
+                          className="tap-target inline-flex h-7 w-7 items-center justify-center rounded hover:bg-[var(--color-bg-hover)] focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]">
+                          {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                        </button>
+                      </td>
                       <td className="whitespace-nowrap px-2 py-1.5 align-top tabular-nums text-[var(--color-text-muted)]">{fmtD(d.createdAt)}</td>
                       <td className="max-w-[240px] px-2 py-1.5 align-top">
                         <DealLink dealId={d.dealId} stop

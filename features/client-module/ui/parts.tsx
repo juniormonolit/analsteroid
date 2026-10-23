@@ -57,6 +57,41 @@ export function daysAgoShort(iso: string): string {
 }
 export const StageChip = ({ s }: { s: DealStage }) => <Chip tone={STAGE_TONE[s]}>{DEAL_STAGE_LABEL[s]}</Chip>;
 
+/** «?» с пояснением, работающим и на таче (правило 5 CLAUDE.md; аудит 23.10 — раньше только title). */
+export function HintButton({ text, label = 'Пояснение' }: { text: string; label?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex">
+      <button type="button" onClick={() => setOpen(v => !v)} title={text} aria-label={label} aria-expanded={open}
+        className="tap-target inline-flex text-[var(--color-text-muted)] hover:text-[var(--color-text)]"><HelpCircle size={14} /></button>
+      {open && (
+        <span role="note" className="absolute right-0 top-6 z-20 w-64 max-w-[calc(100vw-32px)] rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-[12px] font-normal normal-case leading-snug tracking-normal text-[var(--color-text)] shadow-lg">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Загрузка вкладки (аудит 23.10: была голая строка, контент потом «прыгал»). */
+export function TabLoading({ text = 'Загрузка…' }: { text?: string }) {
+  return (
+    <div className="flex min-h-[160px] flex-col gap-2 py-2" aria-busy="true">
+      <div className="text-[13px] text-[var(--color-text-muted)]">{text}</div>
+      {[0, 1, 2].map(i => <div key={i} className="h-10 animate-pulse rounded-xl bg-[var(--color-bg-hover)]" style={{ opacity: 1 - i * 0.25 }} />)}
+    </div>
+  );
+}
+/** Ошибка вкладки с «Повторить». */
+export function TabError({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[color-mix(in_srgb,var(--color-negative,#e03131)_35%,transparent)] px-3 py-2.5 text-[13px]" style={{ color: 'var(--color-negative, #e03131)' }}>
+      <span className="min-w-0 flex-1">{error instanceof Error ? error.message : 'Не удалось загрузить'}</span>
+      {onRetry && <button type="button" onClick={onRetry} className="min-h-11 rounded-lg border border-[var(--color-border)] px-3 text-[var(--color-text)]">Повторить</button>}
+    </div>
+  );
+}
+
 export function Section({ title, right, children, className = '' }: { title: React.ReactNode; right?: React.ReactNode; children: React.ReactNode; className?: string }) {
   return (
     <section className={`min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3.5 py-3 ${className}`}>
@@ -185,7 +220,7 @@ export function RecList({ recs, empty, onDismiss, hidden, onRestore }: {
       ))}
       {hidden && hidden.length > 0 && (
         <div className="text-[11.5px] text-[var(--color-text-muted)]">
-          <button type="button" onClick={() => setShowHidden(v => !v)} className="min-h-8 hover:text-[var(--color-text)]">скрыто {hidden.length} · {showHidden ? 'свернуть' : 'показать'}</button>
+          <button type="button" onClick={() => setShowHidden(v => !v)} className="min-h-11 hover:text-[var(--color-text)]">скрыто {hidden.length} · {showHidden ? 'свернуть' : 'показать'}</button>
           {showHidden && (
             <div className="flex flex-wrap gap-1.5">
               {hidden.map(g => (
@@ -288,13 +323,15 @@ export function ClientBar({ data, params, openSignal = 0 }: { data: ClientModule
             {/* Тип не указан — подсказка «Похоже, это …» прямо здесь (аудит 15.10:
                 раньше тип спрашивали дважды — в шапке и отдельной карточкой). */}
             {!typeLabel && hint ? (
-              <span className="inline-flex flex-wrap items-center gap-1.5 rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] py-1 pl-2.5 pr-1 text-[13px]">
+              // Сначала статус, потом догадка (аудит 23.10: «Похоже, Прораб» читали как факт, а в канбане — «Тип?»).
+              <span className="inline-flex flex-wrap items-center gap-1.5 rounded-lg border border-dashed border-[var(--color-border-strong)] py-1 pl-2.5 pr-1 text-[13px]">
+                <span className="font-semibold text-[var(--color-text-muted)]">Тип не указан</span>
                 <Sparkles size={13} className="text-[var(--color-accent)]" />
-                <span>Похоже, <b>{CLIENT_TYPES.find(t => t.value === hint.type)?.label}</b>{hint.confidence === 'high' ? '' : '?'}</span>
+                <span>похоже <b>{CLIENT_TYPES.find(t => t.value === hint.type)?.label}</b>?</span>
                 <button type="button" disabled={saving} title={hint.reasons.join('\n')}
                   onClick={() => void save({ client: { clientType: hint.type, occupation: TYPES_WITH_OCCUPATION.has(hint.type) ? hint.occupation : '', note: p.note } })}
-                  className="min-h-8 rounded-md bg-[var(--color-accent)] px-2.5 text-[12.5px] font-semibold text-white disabled:opacity-60">{saving ? '…' : 'Да'}</button>
-                <button type="button" onClick={() => setEdit('type')} className="min-h-8 rounded-md px-2 text-[12.5px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Другой</button>
+                  className="min-h-9 rounded-md bg-[var(--color-accent)] px-2.5 text-[12.5px] font-semibold text-white disabled:opacity-60">{saving ? '…' : 'Да'}</button>
+                <button type="button" onClick={() => setEdit('type')} className="min-h-9 rounded-md px-2 text-[12.5px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Другой</button>
               </span>
             ) : (
               <button type="button" onClick={() => setEdit('type')}
@@ -307,7 +344,7 @@ export function ClientBar({ data, params, openSignal = 0 }: { data: ClientModule
           {/* Заметка — заметным блоком целиком, а не обрезанной строкой. */}
           {p.note ? (
             <button type="button" onClick={() => setEdit('note')} title="Изменить заметку"
-              className="group w-full rounded-xl border border-[color-mix(in_srgb,#f2c94c_55%,transparent)] bg-[color-mix(in_srgb,#f2c94c_14%,transparent)] px-3 py-2.5 text-left">
+              className="group w-full rounded-xl border border-[color-mix(in_srgb,var(--color-warning,#e8590c)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-warning,#e8590c)_6%,transparent)] px-3 py-2.5 text-left">
               <span className="mb-0.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
                 Заметка о клиенте <Pencil size={11} className="opacity-60 group-hover:opacity-100" />
               </span>

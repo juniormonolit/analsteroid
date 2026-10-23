@@ -15,7 +15,7 @@ import { DealLink } from './dealLink';
 const plural = (n: number, one: string, few: string, many: string) =>
   n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
 
-export function LastDealLine({ data }: { data: ClientModuleData }) {
+export function LastDealLine({ data, bare = false }: { data: ClientModuleData; bare?: boolean }) {
   const d = data.deals[0];
   if (!d) return null;
   const c = data.lastDealCalls;
@@ -31,13 +31,13 @@ export function LastDealLine({ data }: { data: ClientModuleData }) {
   const lostTone = /не дозвон/i.test(reason) ? 'warn' : /больше ничего|объектов больше нет/i.test(reason) ? 'muted' : 'neg';
   const lostHint = /не дозвон/i.test(reason) ? ' — перезвони' : /больше ничего|объектов больше нет/i.test(reason) ? ' — стройка закончена? уточни, нет ли новой' : '';
   const outcome =
-    d.stage === 'lost' ? <Chip tone={lostTone}>Отказ{reason ? `: ${reason}` : ''}{d.lostAt ? ` · ${fmtD(d.lostAt)}` : ''}{lostHint}</Chip>
+    d.stage === 'lost' ? <Chip tone={lostTone}>Отказ{reason ? `: ${reason}` : ''}{d.lostAt ? ` · ${fmtD(d.lostAt)}` : ''}</Chip>
     : d.stage === 'shipped' ? <Chip tone="ok">Отгружена {fmtD(d.deliveredAt)}</Chip>
     : d.stage === 'sold' ? <Chip tone="accent">Продана {fmtD(d.soldAt)}{d.stageName ? ` · ${d.stageName}` : ''}</Chip>
     : <Chip tone="accent">В работе{d.stageName ? ` · ${d.stageName}` : ''}</Chip>;
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2 text-[12.5px]">
+    <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] ${bare ? '' : 'rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-2'}`}>
       <DealLink dealId={d.dealId} className="font-semibold hover:underline">
         Последняя сделка {fmtD(d.createdAt)}
       </DealLink>
@@ -47,6 +47,8 @@ export function LastDealLine({ data }: { data: ClientModuleData }) {
       </span>
       {/* Длинная причина отказа переносится, а не обрезается. */}
       <span className="min-w-0 max-w-full [&>span]:whitespace-normal">{outcome}</span>
+      {/* Совет к причине — обычным текстом, не в чипе (аудит 23.10: длинный текст в чипе не читается). */}
+      {lostHint && <span className="text-[var(--color-text-muted)]">{lostHint.replace(/^ — /, '— ')}</span>}
       {flag && <Chip tone="neg">⚠ {flag}</Chip>}
       {openMore > 0 && <span className="text-[var(--color-text-muted)]">· ещё {openMore} в работе</span>}
       {c && !flag && (c.total === 0
