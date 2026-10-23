@@ -22,7 +22,9 @@ export interface PairFact {
   /** Сделки с группой «to» (любые, по дате создания). */
   deals: { dealId: number; createdAt: string | null; state: CollectedDeal['state']; stage: string | null }[];
 }
-export interface QuestionFact { id: number; group: string; question: string; kind: GroupQuestion['kind']; options: string[] }
+/** audience (migrations/251): 'client' — вопрос клиенту («спрошено? ответ?» → анкета карточки); 'manager_check' —
+ *  проверка менеджера («Менеджер предложил бесплатного замерщика»): сделал ли в разговоре — только отчёт РОПу. */
+export interface QuestionFact { id: number; group: string; question: string; kind: GroupQuestion['kind']; options: string[]; audience: 'client' | 'manager_check' }
 export interface LinksFacts {
   shipped12: string[];
   pairs: PairFact[];
@@ -62,10 +64,10 @@ export async function buildLinksFacts(data: ClientCallData): Promise<LinksFacts>
   const qs = await fetchQuestionnaires([...shipped12, COMMON_GROUP, ...proposed]).catch(() => new Map<string, GroupQuestion[]>());
   const questions: QuestionFact[] = [];
   for (const g of [...shipped12, COMMON_GROUP]) for (const q of qs.get(g) ?? []) {
-    if (q.id !== null) questions.push({ id: q.id, group: g, question: q.question, kind: q.kind, options: q.options });
+    if (q.id !== null) questions.push({ id: q.id, group: g, question: q.question, kind: q.kind, options: q.options, audience: q.audience === 'manager_check' ? 'manager_check' : 'client' });
   }
   const askForProposed = proposed
-    .map(g => ({ group: g, questions: (qs.get(g) ?? []).map(q => q.question) }))
+    .map(g => ({ group: g, questions: (qs.get(g) ?? []).filter(q => q.audience !== 'manager_check').map(q => q.question) }))
     .filter(x => x.questions.length);
   return { shipped12: [...shipped12], pairs, questions, askForProposed };
 }
@@ -81,8 +83,12 @@ export function linksText(f: LinksFacts): string {
   out.push('', '## Анкета (вопросы по отгруженным группам и общие)');
   if (!f.questions.length) out.push('- Анкет по этим группам нет — раздел пропусти (questions: []).');
   for (const q of f.questions) {
+    if (q.audience === 'manager_check') {
+      out.push(`- Q${q.id} [${q.group === COMMON_GROUP ? 'общий' : q.group}; ПРОВЕРКА МЕНЕДЖЕРА — asked: сделал ли это менеджер в разговоре, quote — цитата] ${q.question}`);
+      continue;
+    }
     const opts = q.kind === 'text' ? 'свободный ответ' : `${q.kind === 'single' ? 'один вариант' : 'несколько вариантов'} из: ${q.options.join(' | ')}`;
-    out.push(`- Q${q.id} [${q.group === COMMON_GROUP ? 'общий' : q.group}; ${opts}] ${q.question}`);
+    out.push(`- Q${q.id} [${q.group === COMMON_GROUP ? 'общий' : q.group}; вопрос клиенту; ${opts}] ${q.question}`);
   }
   return out.join('\n');
 }
@@ -97,7 +103,7 @@ export interface RequestResult {
   check: 'shipped' | 'in_work' | 'closed' | 'no_deal';
   dealId: number | null; stage: string | null; reasonQuote: string | null;
 }
-export interface QuestionResult { id: number; asked: 'yes' | 'no' | 'unclear'; answerText: string | null; answerOptions: string[]; quote: string | null; date: string | null; quoteFound: boolean; callId: string | null; calledAt: string | null }
+export interface QuestionResult { id: number; question: string; audience: 'client' | 'manager_check'; asked: 'yes' | 'no' | 'unclear'; answerText: string | null; answerOptions: string[]; quote: string | null; date: string | null; quoteFound: boolean; callId: string | null; calledAt: string | null }
 export interface LinksResult {
   pairs: PairResult[]; requests: RequestResult[]; questions: QuestionResult[]; askForProposed: LinksFacts['askForProposed']; parseError: string | null;
   /** Готовые строки для текста задачи — считаются при анализе (analyze.ts), вопросам нужны тексты анкет. */
@@ -187,11 +193,11 @@ export function checkLinks(md: string, facts: LinksFacts, data: ClientCallData):
     // single/multi — только варианты анкеты (без учёта регистра); остальное отбрасываем.
     const opts = Array.isArray(x.options) ? (x.options as unknown[]).map(o => String(o).trim()) : [];
     const answerOptions = q.kind === 'text' ? [] : opts.map(o => q.options.find(v => v.toLowerCase() === o.toLowerCase())).filter((o): o is string => !!o);
-    const answerOptionsCut = q.kind === 'single' ? answerOptions.slice(0, 1) : answerOptions;
+    const answerOptionsCut = q.audience === 'manager_check' ? [] : q.kind === 'single' ? answerOptions.slice(0, 1) : answerOptions;
     const quote = str(x.quote);
     const v = quoteOf(quote);
     base.questions.push({
-      id, asked, answerText: q.kind === 'text' ? str(x.answer) : null, answerOptions: answerOptionsCut,
+      id, question: q.question, audience: q.audience, asked, answerText: q.audience === 'client' && q.kind === 'text' ? str(x.answer) : null, answerOptions: answerOptionsCut,
       quote, date: str(x.date), quoteFound: v.found, callId: v.callId, calledAt: v.calledAt,
     });
   }
@@ -221,6 +227,7 @@ export function clarifyLines(r: LinksResult, facts: Pick<LinksFacts, 'questions'
   const seen = new Set<string>();
   const push = (line: string, key: string) => { const k = key.toLowerCase().replace(/[^a-zа-яё0-9]+/g, ' ').trim(); if (!seen.has(k)) { seen.add(k); out.push(line); } };
   for (const q of facts.questions) {
+    if (q.audience === 'manager_check') continue; // проверка менеджера — не поручение «выяснить»
     const a = asked.get(q.id);
     // Ответ уже есть (спросил менеджер или клиент сказал сам) — выяснять нечего.
     if (a && (a.answerText || a.answerOptions.length)) continue;

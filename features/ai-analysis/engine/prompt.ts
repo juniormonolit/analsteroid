@@ -20,7 +20,7 @@ import type { ClientCallData } from './collect';
 import { maskCompany, maskPii } from './mask';
 import { linksText, type LinksFacts } from './links';
 
-export const PROMPT_VERSION = 'v8';
+export const PROMPT_VERSION = 'v9';
 
 /** Разделы отчёта в порядке промпта — по ним UI режет markdown. */
 export const REPORT_SECTIONS = [
@@ -122,7 +122,7 @@ ${chainText()}
 {"pairs":[{"from":"<X>","to":"<Y>","offered":"yes|no|unclear","quote":"<цитата или пусто>","date":"<дата>","answer":"yes|no|later|bought_elsewhere|none","answer_quote":"<слова клиента>"}],
  "requests":[{"group":"<группа>","quote":"<что сказал клиент>","date":"<дата>","reason_quote":"<если не купил — почему, его словами>"}],
  "questions":[{"id":0,"asked":"yes|no|unclear","answer":"<ответ, для свободных вопросов>","options":["<только варианты из анкеты>"],"quote":"<цитата>","date":"<дата>"}]}
-pairs — по КАЖДОЙ паре из блока «Связки»; questions — по каждому вопросу из блока «Анкета» (не нашёл — asked: "no"); нет пар/вопросов — пустые массивы. Группу в requests называй как в связках или в сделках заказчика.`;
+pairs — по КАЖДОЙ паре из блока «Связки»; questions — по каждому вопросу из блока «Анкета» (не нашёл — asked: "no"); для «ПРОВЕРКА МЕНЕДЖЕРА» asked — сделал ли это менеджер в разговоре, quote — его слова, answer/options пустые; нет пар/вопросов — пустые массивы. Группу в requests называй как в связках или в сделках заказчика.`;
 }
 
 const fmtDt = (iso: string) => {

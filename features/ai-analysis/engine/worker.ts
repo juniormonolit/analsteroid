@@ -57,7 +57,7 @@ async function processOne(): Promise<boolean> {
     });
     // Ответы анкеты «по разговорам» (контракт сессии «бриф/теги», questionnaire_answers): только найденные ответы —
     // пустой ответ снял бы прежний; ответы менеджера функция не трогает. Тест-прогон черновика — не пишем.
-    const answers = (out.links?.questions ?? []).filter(q => q.answerText || q.answerOptions.length);
+    const answers = (out.links?.questions ?? []).filter(q => q.audience === 'client' && (q.answerText || q.answerOptions.length));
     if (!job.isTest && answers.length) {
       await saveAiAnswers(ref, job.id, answers.map(q => ({
         questionId: q.id, text: q.answerText, options: q.answerOptions.length ? q.answerOptions : null,

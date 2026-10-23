@@ -467,6 +467,22 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
                     </div>
                   )}
                   <div className="text-[11.5px] text-[var(--color-text-muted)]">✓ сделал сам · ◐ частично (клиент рассказал сам) · ✗ не сделал · — не было повода</div>
+                  {/* Проверки менеджера из анкет (group_questions.audience = manager_check, migrations/251). */}
+                  {(() => {
+                    const checks = (parsed?.links?.questions ?? []).filter(q => q.audience === 'manager_check');
+                    if (!checks.length) return null;
+                    return (
+                      <div className="flex flex-col gap-1">
+                        <div className="text-[13px] font-semibold">По анкетам</div>
+                        {checks.map(q => (
+                          <div key={q.id} className="flex min-w-0 gap-2 text-[13px]">
+                            <b className={`shrink-0 ${q.asked === 'yes' ? 'text-[var(--color-positive)]' : q.asked === 'no' ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`}>{q.asked === 'yes' ? '✓' : q.asked === 'no' ? '✗' : '?'}</b>
+                            <span className="min-w-0 break-words">{q.question}{q.quote ? <span className="text-[var(--color-text-muted)]"> — «{q.quote}»{q.quoteFound ? '' : ' (нет в расшифровке)'}</span> : null}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                   <details>
                     <summary className="flex min-h-11 cursor-pointer items-center text-[13px] text-[var(--color-accent)]">Подробно, с цитатами</summary>
                     <SectionBody md={md} quotes={quotes} onQuote={goQuote} />
