@@ -89,6 +89,8 @@ export function BitrixDiagPage() {
 
       {showSettings && data && <SettingsBlock settings={data.settings} />}
 
+      <OurCalls />
+
       {/* График load1 по снимкам */}
       {data && data.snapshots.length > 0 && <LoadChart snaps={data.snapshots} days={days} />}
 
@@ -293,6 +295,49 @@ function SettingsBlock({ settings }: { settings: Setting[] }) {
           </div>
         </div>
       ))}
+    </section>
+  );
+}
+
+/** Наши запросы к Битриксу (счётчик в bx(), 23.10): сколько дёргаем — по методам за сутки и по часам. */
+function OurCalls() {
+  const { data } = useQuery<{ byHour: { hour: string; calls: number; cmds: number; errs: number }[]; methods24h: { method: string; calls: number; cmds: number; errs: number }[]; error?: string }>({
+    queryKey: ['b24diag-our-calls'], queryFn: () => fetch('/api/settings/bitrix-diag/our-calls').then(r => r.json()), refetchInterval: 60_000,
+  });
+  if (!data) return null;
+  if (data.error) return <section className={`${cardCls} text-sm text-[var(--color-text-muted)]`}>{data.error}</section>;
+  const day = data.byHour.slice(0, 24);
+  const sum = (k: 'calls' | 'cmds' | 'errs') => day.reduce((s, h) => s + h[k], 0);
+  const max = Math.max(1, ...data.byHour.map(h => h.cmds));
+  return (
+    <section className={cardCls}>
+      <h2 className="text-base font-bold text-[var(--color-text)]">Наши запросы к Битриксу</h2>
+      <p className="mb-2 text-[12px] text-[var(--color-text-muted)]">
+        За 24 ч: {sum('calls').toLocaleString('ru-RU')} запросов, {sum('cmds').toLocaleString('ru-RU')} операций (batch считается по числу команд внутри), ошибок {sum('errs')}.
+        Учитываются вызовы через общий клиент; редкие прямые записи (закрытие брони, токены приложения) — нет.
+      </p>
+      <div className="mb-3 flex h-16 items-end gap-px" aria-label="Операций по часам, 48 ч">
+        {[...data.byHour].reverse().map(h => (
+          <div key={h.hour} title={`${h.hour}:00 — ${h.calls} запросов, ${h.cmds} операций${h.errs ? `, ошибок ${h.errs}` : ''}`}
+            className={`min-w-0 flex-1 rounded-t-sm ${h.errs ? 'bg-[var(--color-negative)]' : 'bg-[var(--color-accent)]'}`} style={{ height: `${Math.max(2, (h.cmds / max) * 100)}%` }} />
+        ))}
+      </div>
+      <div className="scroll-x rounded-xl border border-[var(--color-border)]">
+        <table className="w-full text-[12px]">
+          <thead><tr className="text-left text-[var(--color-text-muted)]"><th className="px-2 py-1.5">Метод (24 ч)</th><th className="px-2 py-1.5 text-right">Запросов</th><th className="px-2 py-1.5 text-right">Операций</th><th className="px-2 py-1.5 text-right">Ошибок</th></tr></thead>
+          <tbody>
+            {data.methods24h.map(m => (
+              <tr key={m.method} className="border-t border-[var(--color-border)]">
+                <td className="px-2 py-1 font-mono">{m.method}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{m.calls.toLocaleString('ru-RU')}</td>
+                <td className="px-2 py-1 text-right tabular-nums">{m.cmds.toLocaleString('ru-RU')}</td>
+                <td className={`px-2 py-1 text-right tabular-nums ${m.errs ? 'text-[var(--color-negative)]' : ''}`}>{m.errs}</td>
+              </tr>
+            ))}
+            {data.methods24h.length === 0 && <tr><td colSpan={4} className="px-2 py-2 text-[var(--color-text-muted)]">Пока ничего не посчитано — счётчик начал работу после выкатки 23.10.</td></tr>}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

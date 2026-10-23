@@ -3,6 +3,29 @@
 // и BITRIX_BOT_WEBHOOK_URL (создан отдельно под "Информировать сотрудников в чате",
 // права "Создание и управление Чат-ботами (imbot)").
 
+// Счётчик запросов к Битриксу (владелец 23.10: «дёргать как можно меньше» — сначала измерить).
+// Redis-хэш на час МСК: поле `<метод>` — HTTP-вызовов, `<метод>#cmd` — команд внутри batch,
+// `<метод>#err` — ошибок. Живёт 14 дней, переживает деплои; смотреть — «Настройки → Битрикс-диагностика».
+// Ошибки самого счётчика глотаются: он не должен ронять вызов.
+export const BX_STATS_PREFIX = 'bx:calls:';
+export function bxStatsHour(ms = Date.now()): string {
+  return new Date(ms + 3 * 3600_000).toISOString().slice(0, 13).replace('T', ' ');
+}
+function countBx(method: string, params: Record<string, unknown>, failed: boolean): void {
+  void (async () => {
+    try {
+      const { getRedis } = await import('@/lib/cache/redis');
+      const r = getRedis();
+      if (!r) return;
+      const key = `${BX_STATS_PREFIX}${bxStatsHour()}`;
+      const cmds = method === 'batch' && params.cmd && typeof params.cmd === 'object' ? Object.keys(params.cmd as object).length : 1;
+      const m = r.multi().hincrby(key, method, 1).hincrby(key, `${method}#cmd`, cmds);
+      if (failed) m.hincrby(key, `${method}#err`, 1);
+      await m.expire(key, 14 * 86400).exec();
+    } catch { /* счётчик не важнее вызова */ }
+  })();
+}
+
 export async function bx(webhookUrl: string, method: string, params: Record<string, unknown>) {
   const webhook = webhookUrl.replace(/\/+$/, '');
   if (!webhook) throw new Error('Bitrix webhook URL не задан');
@@ -20,6 +43,7 @@ export async function bx(webhookUrl: string, method: string, params: Record<stri
         signal: AbortSignal.timeout(60_000),
       });
       const body = await res.json().catch(() => null);
+      countBx(method, params, !(res.ok && body && !body.error));
       if (res.ok && body && !body.error) return body;
 
       // HTTP 200, но тело не распарсилось — оборванный/битый ответ (Битрикс режет
@@ -38,6 +62,7 @@ export async function bx(webhookUrl: string, method: string, params: Record<stri
       lastError = new Error(`Bitrix ${method}: ${code} после ${MAX} попыток`);
     } catch (e) {
       if (e instanceof Error && e.message.startsWith('Bitrix')) throw e;
+      countBx(method, params, true); // сеть/таймаут — ответа не было, но запрос ушёл
       lastError = e instanceof Error ? e : new Error(String(e));
     }
     if (attempt < MAX) await new Promise((r) => setTimeout(r, 1500));

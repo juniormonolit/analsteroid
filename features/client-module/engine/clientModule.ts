@@ -1,5 +1,4 @@
 import { analyticsDb } from '@/lib/db/clients';
-import { bx } from '@/lib/bitrix/notify';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
 import { fetchDealAddresses } from '@/lib/bitrix/dealAddress';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
@@ -15,6 +14,7 @@ import { fetchProfileMatrices } from './profileMatrix';
 import { clusterAddresses, settlementLabel, placeDetail, isUsableAddress, isCoarseAddress } from './objectClusters';
 import { addressFromComment } from './commentAddress';
 import { fetchLegalEntity } from './legalEntity';
+import { orphanDealIdsOf } from '@/features/repeat-kanban/engine/dealFixes';
 import { clientHint } from './clientHint';
 import { validLatLon } from '@/lib/geo/parse';
 import { reverseGeocode, type GeoCandidate } from '@/lib/geo/resolve';
@@ -99,24 +99,6 @@ export async function setActiveDays(days: number, by: string): Promise<void> {
   );
 }
 
-/** ID сделок клиента по Битриксу (до 500, вебхук только на чтение). */
-async function bitrixClientDealIds(entity: 'contact' | 'company', id: number): Promise<number[]> {
-  const w = process.env.BITRIX_WEBHOOK_URL ?? '';
-  if (!w) return [];
-  const ids: number[] = [];
-  try {
-    for (let start = 0; start < 500; start += 50) {
-      const r = await bx(w, 'crm.deal.list', {
-        filter: { [entity === 'company' ? 'COMPANY_ID' : 'CONTACT_ID']: id }, select: ['ID'], order: { ID: 'DESC' }, start,
-      }) as { result?: { ID: string }[]; next?: number };
-      for (const d of r.result ?? []) ids.push(Number(d.ID));
-      if (!r.next) break;
-    }
-  } catch (e) {
-    console.warn('[clientModule] сделки клиента из Битрикса:', e instanceof Error ? e.message : e);
-  }
-  return ids;
-}
 
 // ── Чтение ────────────────────────────────────────────────────────────────
 
@@ -145,7 +127,8 @@ export async function fetchClientModule(ref: ClientRef, opts: { light?: boolean 
   // пусты, а в Битриксе клиент есть; разбор 15.10, контакт 240321: ~350 сделок
   // с июля). Страховка: ID сделок клиента берём ещё и из Битрикса (параллельно)
   // и дочитываем из sa те, что не нашлись по клиенту.
-  const bxIdsP = light ? Promise.resolve([] as number[]) : withTimeout(bitrixClientDealIds(isCompany ? 'company' : 'contact', id), 5000, [] as number[]);
+  // Сделки, у которых синк sa потерял клиента, — из таблицы deal_client_fixes (23.10: без crm.deal.list при каждом открытии).
+  const bxIdsP = light ? Promise.resolve([] as number[]) : withTimeout(orphanDealIdsOf(isCompany ? 'company' : 'contact', id), 3000, [] as number[]);
   const byClient = await db.query<DealRow>(
     `${DEAL_SELECT}
       WHERE d.funnel_id IN (0,1,2,3) AND ${isCompany ? 'd.company_id' : 'd.contact_id'} = $1
@@ -289,10 +272,15 @@ export async function fetchClientModule(ref: ClientRef, opts: { light?: boolean 
       const bxp = light ? null : await withTimeout(readClientFromBitrix(ref), 5000, null);
       if (bxp && (bxp.clientType || bxp.occupation || bxp.note)) {
         profile = { clientType: bxp.clientType, occupation: bxp.occupation, note: bxp.note, updatedBy: null, updatedAt: null };
+      }
+      // Копию кладём и когда в Битриксе пусто (аудит 23.10 «дёргать Битрикс меньше»): раньше пустой
+      // ответ не запоминался, и у каждого клиента без «Типа» crm.*.get уходил при КАЖДОМ открытии
+      // карточки. null (ошибка/таймаут) не штампуем — спросим при следующем открытии.
+      if (bxp) {
         await db.query(
           `INSERT INTO sa.client_module_profiles (client_ref, client_type, client_type_enum_id, occupation, note, bitrix_synced_at)
            VALUES ($1, $2, $3, $4, $5, now()) ON CONFLICT (client_ref) DO NOTHING`,
-          [ref, bxp.clientType, bxp.enumId, bxp.occupation, bxp.note],
+          [ref, bxp.clientType, bxp.enumId, bxp.occupation ?? '', bxp.note ?? ''],
         ).catch(() => {});
       }
     }
