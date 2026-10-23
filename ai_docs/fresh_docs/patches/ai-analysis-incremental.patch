@@ -1,0 +1,185 @@
+diff --git a/features/ai-analysis/engine/analyze.ts b/features/ai-analysis/engine/analyze.ts
+index c87fc04..d241e47 100644
+--- a/features/ai-analysis/engine/analyze.ts
++++ b/features/ai-analysis/engine/analyze.ts
+@@ -7,6 +7,23 @@ import { chat, DEFAULT_REASONING_EFFORT, type LlmProgress, type LlmResult } from
+ import { PROMPT_VERSION, REPORT_SECTIONS, systemPrompt, userContent } from './prompt';
+ import { verifyQuotes, type QuoteCheck } from './verify';
+ import { buildLinksFacts, checkLinks, clarifyLines, proposeLines, type LinksResult } from './links';
++import type { CollectedCall } from './collect';
++import type { PreviousReport } from './store';
++
++/** Дообновление (владелец 23.10: «платить только за свежие звонки»): прошлый отчёт + только новые звонки,
++ *  модель переписывает отчёт целиком. Полный разбор — если прошлый отчёт другой версии промпта, старше
++ *  INCREMENTAL_MAX_DAYS или новых звонков больше INCREMENTAL_MAX_SHARE (тогда экономии почти нет, а ошибки копятся). */
++export const INCREMENTAL_MAX_DAYS = 90;
++const INCREMENTAL_MAX_SHARE = 0.6;
++export function planIncremental(data: ClientCallData, prev: PreviousReport | null, promptVersion: string): { prev: PreviousReport; newCalls: CollectedCall[] } | null {
++  if (!prev || prev.promptVersion !== promptVersion) return null;
++  if (Date.now() - new Date(prev.createdAt).getTime() > INCREMENTAL_MAX_DAYS * 86_400_000) return null;
++  // Прочитанные звонки — по списку id (с этой версии); у старых отчётов его нет — по дате отчёта.
++  const seen = prev.callIds ? new Set(prev.callIds) : null;
++  const newCalls = data.calls.filter(c => (seen ? !seen.has(c.id) : c.calledAt > prev.createdAt));
++  if (!newCalls.length || newCalls.length > data.calls.length * INCREMENTAL_MAX_SHARE) return null;
++  return { prev, newCalls };
++}
+ 
+ export interface AnalysisOutput {
+   promptVersion: string;
+@@ -18,6 +35,7 @@ export interface AnalysisOutput {
+   quotes: QuoteCheck[];
+   /** Связки, просьбы, анкета — проверено кодом (links.ts); null — сбор фактов упал. */
+   links: LinksResult | null;
++  incremental: { fromId: number; fromAt: string; newCalls: number } | null;
+ }
+ 
+ /** Отпечаток входа: те же звонки + та же версия промпта = тот же отчёт (дедуп повторных запусков). */
+@@ -46,16 +64,20 @@ export async function analyzeClient(ref: ClientRef, opts: {
+   data?: ClientCallData;
+   /** Промпт: активная версия из редактора или черновик тест-прогона; нет — встроенный из кода. */
+   prompt?: { version: string; body: string };
++  /** Прошлый отчёт — дообновление, если подходит (planIncremental); иначе полный разбор. */
++  previous?: PreviousReport | null;
+   onProgress?: (p: LlmProgress | { phase: 'collecting' }) => void;
+ } = {}): Promise<AnalysisOutput> {
+   opts.onProgress?.({ phase: 'collecting' });
+   const data = opts.data ?? await collectClientData(ref);
+   if (!data.calls.length) throw new Error('У заказчика нет расшифрованных звонков — анализировать нечего');
+   const facts = await buildLinksFacts(data).catch(e => { console.warn('[aiAnalysis] связки:', e instanceof Error ? e.message : e); return null; });
+-  const { text, maskHits } = userContent(data, facts ?? undefined);
+   const prompt = opts.prompt ?? { version: PROMPT_VERSION, body: systemPrompt() };
++  const inc = planIncremental(data, opts.previous ?? null, prompt.version);
++  const { text, maskHits } = userContent(data, facts ?? undefined, inc ? { reportMd: inc.prev.reportMd, createdAt: inc.prev.createdAt, newCalls: inc.newCalls } : undefined);
+   const llm = await chat({ model: opts.model, reasoningEffort: opts.reasoningEffort ?? DEFAULT_REASONING_EFFORT, system: prompt.body, user: text, onProgress: opts.onProgress });
+   return {
++    incremental: inc ? { fromId: inc.prev.id, fromAt: inc.prev.createdAt, newCalls: inc.newCalls.length } : null,
+     promptVersion: prompt.version,
+     callsHash: callsHashOf(data, prompt.version),
+     data, maskHits, llm,
+diff --git a/features/ai-analysis/engine/parse.ts b/features/ai-analysis/engine/parse.ts
+index f886447..e7a048b 100644
+--- a/features/ai-analysis/engine/parse.ts
++++ b/features/ai-analysis/engine/parse.ts
+@@ -17,6 +17,10 @@ export interface ParsedReport {
+   violations: ViolationKind[];
+   /** Связки/просьбы/анкета (links.ts:checkLinks), с v8. */
+   links?: import('./links').LinksResult | null;
++  /** Какие звонки прочитаны (id va.calls) — чтобы дообновление брало только новые. */
++  callIds?: string[];
++  /** Дообновление: прошлый отчёт #fromId + newCalls новых звонков (analyze.ts planIncremental); null — полный разбор. */
++  incremental?: { fromId: number; fromAt: string; newCalls: number } | null;
+ }
+ 
+ export const CRITERIA_LABELS = [
+diff --git a/features/ai-analysis/engine/prompt.ts b/features/ai-analysis/engine/prompt.ts
+index c67c134..6c92602 100644
+--- a/features/ai-analysis/engine/prompt.ts
++++ b/features/ai-analysis/engine/prompt.ts
+@@ -16,7 +16,7 @@
+ // v7 (23.10, разбор Fable, владелец: «делай всё целиком») — памятка с фиксированными префиксами («Зайти с:» первой,
+ // «Не забыть:» последней), до 90 символов на строку: код выделяет префикс жирным в задаче Битрикса (memo.ts).
+ import { MATERIAL_CHAIN } from '@/features/client-module/engine/chain';
+-import type { ClientCallData } from './collect';
++import type { ClientCallData, CollectedCall } from './collect';
+ import { maskCompany, maskPii } from './mask';
+ import { linksText, type LinksFacts } from './links';
+ 
+@@ -131,15 +131,27 @@ const fmtDt = (iso: string) => {
+ };
+ 
+ /** Пользовательская часть: данные заказчика — без телефонов/адресов/номеров и без названия компании. */
+-export function userContent(data: ClientCallData, links?: LinksFacts): { text: string; maskHits: Record<string, number> } {
++export function userContent(data: ClientCallData, links?: LinksFacts, update?: { reportMd: string; createdAt: string; newCalls: CollectedCall[] }): { text: string; maskHits: Record<string, number> } {
+   const lines: string[] = [`# Заказчик`, `Тип в карточке клиента: ${data.clientType ?? 'не заполнен'}`,
+-    `Звонков по сделкам всего: ${data.callsTotal}, состоявшихся: ${data.callsCompleted}, расшифровок в анализе: ${data.calls.length}${data.callsTrimmed ? ` (ещё ${data.callsTrimmed} старых не включены)` : ''}`, '', '## Сделки'];
++    `Звонков по сделкам всего: ${data.callsTotal}, состоявшихся: ${data.callsCompleted}, расшифровок в анализе: ${data.calls.length}${data.callsTrimmed ? ` (ещё ${data.callsTrimmed} старых не включены)` : ''}${update ? `; в этом запросе приложены только ${update.newCalls.length} новых` : ''}`, '', '## Сделки'];
+   for (const d of data.deals) {
+     lines.push(`- #${d.dealId} «${d.name ?? ''}» | ${d.funnel ?? ''} | ${d.stage ?? d.stageId ?? ''} | создана ${d.createdAt ?? '—'} | отгружена ${d.deliveredAt ?? '—'} | ${d.amount} ₽ | ${d.group ?? '—'} | ${d.manager ?? '—'}`);
+     if (d.products) lines.push(`  товары: ${d.products}`);
+   }
+-  lines.push('', '## Факты из CRM (посчитано кодом)', ...data.facts.map(f => `- ${f}`), '', '## Звонки с расшифровкой');
+-  for (const c of data.calls) {
++  lines.push('', '## Факты из CRM (посчитано кодом)', ...data.facts.map(f => `- ${f}`));
++  if (update) {
++    // Дообновление (analyze.ts planIncremental): старые расшифровки не шлём — их заменяет прошлый отчёт.
++    const d = fmtDt(update.createdAt).slice(0, 10);
++    lines.push('', '## РЕЖИМ ОБНОВЛЕНИЯ',
++      `Это обновление прошлого отчёта. Ниже — прошлый отчёт (по разговорам до ${d}) и ТОЛЬКО новые звонки после него; старые расшифровки не приложены — о них суди по прошлому отчёту.`,
++      'Выдай ПОЛНЫЙ отчёт заново, ровно в том же формате и со всеми разделами (включая «### 10. Данные»):',
++      '- что не изменилось — перенеси из прошлого отчёта; цитаты из старых звонков переноси ДОСЛОВНО, с их датами;',
++      '- новое из свежих звонков — добавь; устаревшее (договорённость выполнена, планы сменились, отказ) — исправь;',
++      '- оценку менеджера (раздел 5) и нарушения (раздел 6) ставь по ВСЕМ разговорам — старым по прошлому отчёту и новым;',
++      '- в «### 10. Данные» — все пары и вопросы, как в прошлом отчёте, с поправками по новым звонкам.',
++      '', `## Прошлый отчёт (по разговорам до ${d})`, update.reportMd.trim(), '', '## Новые звонки с расшифровкой (после прошлого отчёта)');
++  } else lines.push('', '## Звонки с расшифровкой');
++  for (const c of update ? update.newCalls : data.calls) {
+     lines.push('', `### ${fmtDt(c.calledAt)} | сделка ${c.dealId} | ${c.direction === 'inbound' ? 'входящий' : c.direction === 'outbound' ? 'исходящий' : c.direction ?? ''} | ${c.durationSec ?? '?'} с | стадия ${c.stage ?? '—'} | ${c.manager ?? '—'}${c.hasRoles ? '' : ' | без ролей'}`, c.text);
+   }
+   if (links) lines.push(linksText(links));
+diff --git a/features/ai-analysis/engine/store.ts b/features/ai-analysis/engine/store.ts
+index 979ab82..bce4545 100644
+--- a/features/ai-analysis/engine/store.ts
++++ b/features/ai-analysis/engine/store.ts
+@@ -119,6 +119,18 @@ export async function heartbeat(id: number, phase: string): Promise<void> {
+ }
+ 
+ /** Готовый отчёт с тем же входом и версией промпта — отдаём его, а не платим заново. */
++/** Последний готовый разбор заказчика — основа для дообновления по новым звонкам. */
++export async function findLastDone(clientRef: string): Promise<PreviousReport | null> {
++  const r = await systemDb().query<{ id: string; created_at: Date; prompt_version: string; report_md: string; call_ids: string[] | null }>(
++    `SELECT id, created_at, prompt_version, report_md, parsed->'callIds' AS call_ids FROM ai_analyses
++      WHERE client_ref = $1 AND status = 'done' AND NOT is_test AND kind = 'client' AND report_md IS NOT NULL ORDER BY id DESC LIMIT 1`,
++    [clientRef],
++  );
++  const x = r.rows[0];
++  return x ? { id: Number(x.id), createdAt: new Date(x.created_at).toISOString(), promptVersion: x.prompt_version, reportMd: x.report_md, callIds: Array.isArray(x.call_ids) ? x.call_ids : null } : null;
++}
++export interface PreviousReport { id: number; createdAt: string; promptVersion: string; reportMd: string; callIds: string[] | null }
++
+ export async function findDone(clientRef: string, callsHash: string): Promise<{ id: number } | null> {
+   const r = await systemDb().query<{ id: string }>(
+     `SELECT id FROM ai_analyses WHERE client_ref = $1 AND calls_hash = $2 AND status = 'done' AND NOT is_test AND kind = 'client' ORDER BY id DESC LIMIT 1`,
+diff --git a/features/ai-analysis/engine/worker.ts b/features/ai-analysis/engine/worker.ts
+index 67f83b8..2f69a51 100644
+--- a/features/ai-analysis/engine/worker.ts
++++ b/features/ai-analysis/engine/worker.ts
+@@ -8,7 +8,7 @@ import type { ClientRef } from '@/features/client-module/engine/types';
+ import { collectClientData } from './collect';
+ import { analyzeClient, callsHashOf } from './analyze';
+ import { DEFAULT_REASONING_EFFORT, LlmError } from './llm';
+-import { backfillParsed, claimNext, findDone, heartbeat, refreshLinksLines, requeueStale, saveDone, saveDuplicate, saveError, saveTaskCheckDone } from './store';
++import { backfillParsed, claimNext, findDone, findLastDone, heartbeat, refreshLinksLines, requeueStale, saveDone, saveDuplicate, saveError, saveTaskCheckDone } from './store';
+ import { buildLinksFacts, clarifyLines, proposeLines, type LinksResult } from './links';
+ import { callsAfterTask, fetchTaskInfo, parseTaskCheck, taskCheckSystem, taskCheckUser, TASK_CHECK_VERSION } from './taskCheck';
+ import { chat } from './llm';
+@@ -55,7 +55,7 @@ async function processOne(): Promise<boolean> {
+     }
+     let lastPhase = 'collecting';
+     const out = await analyzeClient(ref, {
+-      data, prompt,
++      data, prompt, previous: job.isTest ? null : await findLastDone(ref).catch(() => null),
+       onProgress: p => { if (p.phase !== lastPhase) { lastPhase = p.phase; void heartbeat(job.id, p.phase); } },
+     });
+     await saveDone(job.id, {
+@@ -64,7 +64,8 @@ async function processOne(): Promise<boolean> {
+       maskHits: out.maskHits, inputTokens: out.llm.usage.promptTokens, cachedTokens: out.llm.usage.cachedTokens,
+       outputTokens: out.llm.usage.completionTokens, reasoningTokens: out.llm.usage.reasoningTokens,
+       costRub: out.llm.costRub, seconds: out.llm.seconds,
+-      promptVersion: out.promptVersion, parsed: { ...parseReport(out.llm.content), links: out.links }, mainManager: mainManagerOf(data.calls),
++      promptVersion: out.promptVersion, mainManager: mainManagerOf(data.calls),
++      parsed: { ...parseReport(out.llm.content), links: out.links, callIds: data.calls.map(c => c.id), incremental: out.incremental },
+     });
+     // Ответы анкеты «по разговорам» (контракт сессии «бриф/теги», questionnaire_answers): только найденные ответы —
+     // пустой ответ снял бы прежний; ответы менеджера функция не трогает. Тест-прогон черновика — не пишем.
+diff --git a/features/ai-analysis/ui/AiAnalysisTab.tsx b/features/ai-analysis/ui/AiAnalysisTab.tsx
+index 6c8a3bb..58a3a9d 100644
+--- a/features/ai-analysis/ui/AiAnalysisTab.tsx
++++ b/features/ai-analysis/ui/AiAnalysisTab.tsx
+@@ -532,6 +532,7 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
+             <summary className="flex min-h-11 cursor-pointer items-center">Как сделан отчёт</summary>
+             Это мнение модели по автоматическим расшифровкам — в них бывают ошибки распознавания и перепутанные роли. Нарушения перед разбором с менеджером проверьте по записи звонка.
+             {' '}Модель {lastDone.model ?? '—'}, промпт {lastDone.promptVersion}. Запустил(а): {lastDone.createdByName ?? lastDone.createdBy}.
++            {lastDone.parsed?.incremental && <> Обновлён по {lastDone.parsed.incremental.newCalls} новым звонкам к отчёту от {fmtD(lastDone.parsed.incremental.fromAt)} — старые разговоры модель брала из того отчёта, не из расшифровок.</>}
+           </details>
+           <div className="flex flex-wrap items-center gap-2">
+             <span className="text-[13px]">Отчёт полезен?</span>
