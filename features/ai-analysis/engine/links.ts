@@ -9,7 +9,7 @@
 // Формулировки обезличенные: «не было предложено», «заказчику не предложили».
 import { fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
 import { PROPOSE_ASK_MARK } from './memo';
-import { fetchQuestionnaires, COMMON_GROUP, type GroupQuestion } from '@/features/questionnaires/engine/questions';
+import { fetchQuestionnaires, looksLikeCheckText, COMMON_GROUP, type GroupQuestion } from '@/features/questionnaires/engine/questions';
 import { systemDb } from '@/lib/db/clients';
 import type { ClientCallData, CollectedDeal } from './collect';
 import { verifyQuotes } from './verify';
@@ -41,9 +41,9 @@ export interface LinksFacts {
 const PROPOSED_QUESTIONS = 3;
 
 /** «Уточнил, что строится?», «Предложил бетон?» — по смыслу проверка менеджера, даже если в анкете стоит
- *  audience = 'client' (данные на проде поправят не сразу). В задачу такие не берём никогда. */
-const CHECK_VERB = /^(менеджер\s+)?(уточнил|предложил|спросил|рассказал|выяснил|озвучил|сообщил|узнал|проговорил|обсудил|показал|отправил|назвал|напомнил|объяснил|пояснил|выслал|дал)(а|и)?(?![а-яё])/i;
-export const looksLikeManagerCheck = (q: string) => CHECK_VERB.test(q.trim());
+ *  audience = 'client' (данные на проде поправят не сразу). В задачу такие не берём никогда. Признак — единый
+ *  с подсказкой редактора анкет (questionnaires/engine/types.ts). */
+const looksLikeManagerCheck = looksLikeCheckText;
 
 /** Почти одинаковые вопросы разных групп: нормализация + пересечение слов (по основе 5 букв) ≥ 0,6. */
 const STOP = new Set(['или', 'для', 'что', 'как', 'вам', 'вас', 'нужно', 'нужен', 'нужна', 'нужны', 'ли', 'это', 'там', 'уже', 'ещё', 'еще', 'под']);
