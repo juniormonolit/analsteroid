@@ -1,7 +1,7 @@
 // Памятка ИИ в задаче менеджера (этап 1.5): свежий отчёт заказчика → блок в описании новой задачи
 // канбана повторных; открытая задача заказчика → кнопка «В открытую задачу» во вкладке.
 import { analyticsDb, systemDb } from '@/lib/db/clients';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { fetchTasksForDeals, type RepeatTask } from '@/features/repeat-kanban/engine/tasks';
 import type { ClientRef } from '@/features/client-module/engine/types';
@@ -70,7 +70,7 @@ const OPEN_STATES = new Set<RepeatTask['state']>(['unread', 'pending', 'in_progr
 export async function openRepeatTask(ref: ClientRef): Promise<RepeatTask | null> {
   const keys = await clientKeys(ref);
   const deals = await analyticsDb().query<{ deal_id: number }>(
-    `SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) = ANY($1::text[])`,
+    `SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_SQL}) = ANY($1::text[])`,
     [keys],
   );
   const tasks = await fetchTasksForDeals(deals.rows.map(d => Number(d.deal_id)));

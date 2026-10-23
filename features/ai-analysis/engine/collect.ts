@@ -14,7 +14,7 @@
 // Имя менеджера — из оргструктуры (как карточка клиента, history.ts): в sa.employees.full_name у части
 // сотрудников должность вместо имени («Стажер», найдено 23.10).
 import { analyticsDb } from '@/lib/db/clients';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import type { ClientRef } from '@/features/client-module/engine/types';
 
@@ -48,7 +48,7 @@ export interface ClientCallData {
 const LOST_STAGES = ['C2:LOSE', 'C2:APOLOGY', 'C2:1', 'C2:2', 'C3:LOSE', 'C3:APOLOGY', 'C3:2'];
 const mskDate = (d: Date | string | null) => (d ? new Date(new Date(d).getTime() + 3 * 3600_000).toISOString().slice(0, 10) : null);
 
-/** Ключи заказчика в терминах CLIENT_KEY_CASE_SQL (c/x — контакт, k — компания) со склейкой. */
+/** Ключи заказчика в терминах CLIENT_KEY_SQL (c/x — контакт, k — компания) со склейкой. */
 export async function clientKeys(ref: ClientRef): Promise<string[]> {
   const id = ref.slice(1);
   const seeds = ref.startsWith('k') ? [`k${id}`] : [`c${id}`, `x${id}`];
@@ -72,7 +72,7 @@ export async function collectClientData(ref: ClientRef): Promise<ClientCallData>
        LEFT JOIN sa.stages s ON s.id = d.stage_id
        LEFT JOIN sa.employees e ON e.bitrix_id = d.current_manager_id
        LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = d.current_manager_id::text
-      WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) = ANY($1::text[])
+      WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_SQL}) = ANY($1::text[])
       ORDER BY d.created_at, d.deal_id`,
     [keys],
   )).rows;
@@ -149,7 +149,7 @@ export async function listClientCalls(ref: ClientRef, withText: boolean): Promis
        LEFT JOIN va.transcriptions t ON t.call_id = c.id
        LEFT JOIN sa.employees e ON e.bitrix_id = c.manager_id
        LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = c.manager_id::text
-      WHERE c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_CASE_SQL}) = ANY($1::text[]))
+      WHERE c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_SQL}) = ANY($1::text[]))
       ORDER BY c.called_at DESC`,
     [keys],
   );
