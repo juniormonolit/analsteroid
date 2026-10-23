@@ -5,7 +5,7 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Circle, Pencil } from 'lucide-react';
-import { COMMON_GROUP, type GroupQuestion } from '../engine/types';
+import { COMMON_GROUP, looksLikeCheck, type GroupQuestion } from '../engine/types';
 import { QuestionnaireEditor } from './QuestionnaireEditor';
 
 const COMMON_LABEL = 'Общие вопросы — для любого заказчика';
@@ -83,7 +83,7 @@ export function QuestionnairesTab({ groups }: { groups: string[] }) {
             const qs = all[g] ?? [];
             return (
               <button key={g} type="button" onClick={() => setOpen(g)}
-                className={`flex min-h-11 min-w-0 items-center gap-3 rounded-xl border px-3 py-2.5 text-left hover:bg-[var(--color-bg-hover)] ${g === COMMON_GROUP ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
+                className={`flex min-h-11 min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-3 py-2.5 sm:flex-nowrap text-left hover:bg-[var(--color-bg-hover)] ${g === COMMON_GROUP ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]' : 'border-[var(--color-border)] bg-[var(--color-bg-surface)]'}`}>
                 {qs.length
                   ? <CheckCircle2 size={18} className="shrink-0 text-[#38761d]" aria-label="Анкета готова" />
                   : <Circle size={18} className="shrink-0 text-[var(--color-text-muted)]" aria-label="Анкеты нет" />}
@@ -93,6 +93,11 @@ export function QuestionnairesTab({ groups }: { groups: string[] }) {
                     {qs.length ? qs.map(x => x.question).join(' · ') : 'анкеты нет — нажмите, чтобы создать'}
                   </div>
                 </div>
+                {qs.some(looksLikeCheck) && (
+                  <span className="shrink-0 whitespace-nowrap rounded-full bg-[#fff2cc] px-2 py-0.5 text-[11px] font-semibold text-[#7f6000]" title="Вопросы, похожие на проверку менеджера («Уточнил…», «Предложил…»), отмечены как вопросы клиенту — откройте и переключите">
+                    {qs.filter(looksLikeCheck).length} похожи на проверки
+                  </span>
+                )}
                 <span className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${qs.length ? 'bg-[#d9ead3] text-[#274e13]' : 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]'}`}>
                   {qs.length ? (() => {
                     // Вопросы клиенту и проверки менеджера — раздельно (миграция 251).

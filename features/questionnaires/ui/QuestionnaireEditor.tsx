@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2, X } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { SearchSelect } from '@/components/ui/SearchSelect';
-import { QUESTION_AUDIENCES, QUESTION_KINDS, type GroupQuestion, type QuestionAudience, type QuestionKind } from '../engine/types';
+import { QUESTION_AUDIENCES, QUESTION_KINDS, looksLikeCheck, type GroupQuestion, type QuestionAudience, type QuestionKind } from '../engine/types';
 import { QuestionnaireForm, type Answers } from './QuestionnaireForm';
 
 type Draft = GroupQuestion & { uid: string };
@@ -114,6 +114,13 @@ export function QuestionnaireEditor({ group, title, initial, copySources, onClos
                   </div>
                 </div>
                 <div className="flex min-w-0 flex-col gap-2 pl-7">
+                  {looksLikeCheck(q) && (
+                    <div className="flex flex-wrap items-center gap-2 rounded-md bg-[#fff2cc] px-2 py-1.5 text-[12.5px] text-[#7f6000]">
+                      <span className="min-w-0 flex-1">Похоже на проверку менеджера («сделал ли это менеджер»), а не на вопрос клиенту — вопросы клиенту уходят менеджеру в задачу.</span>
+                      <button type="button" onClick={() => patch(q.uid, { audience: 'manager_check' })}
+                        className="min-h-9 shrink-0 rounded-md bg-[#7f6000] px-2.5 text-xs font-medium text-white hover:opacity-90">Сделать проверкой</button>
+                    </div>
+                  )}
                   <input value={q.hint ?? ''} onChange={e => patch(q.uid, { hint: e.target.value || null })} maxLength={300}
                     placeholder={q.audience === 'manager_check' ? 'Как понять, что сделано (необязательно)' : 'Подсказка менеджеру (необязательно)'} aria-label="Подсказка" className={field} />
                   <div className="flex flex-wrap items-center gap-2">

@@ -19,6 +19,11 @@ export const QUESTION_AUDIENCES: { value: QuestionAudience; label: string; hint:
   { value: 'manager_check', label: 'Проверка менеджера', hint: 'сделал ли менеджер это в разговоре — только для разбора звонков и РОПа' },
 ];
 
+/** Похоже на проверку менеджера, а не вопрос клиенту: «Уточнил, что строится?», «Предложил бетон?», «Менеджер…»
+ *  (живой случай 23.10 — анкета «Арматура»: такие ушли менеджеру в «Выяснить»). Только подсказка в редакторе. */
+export const LOOKS_LIKE_CHECK = /^\s*(менеджер|уточнил|предложил|спросил|рассказал|выяснил|озвучил|назвал|договорил|объяснил|сообщил|узнал)/i;
+export const looksLikeCheck = (q: Pick<GroupQuestion, 'question' | 'audience'>) => q.audience === 'client' && LOOKS_LIKE_CHECK.test(q.question);
+
 export interface GroupQuestion {
   /** null — новый, ещё не сохранён. */
   id: number | null;
