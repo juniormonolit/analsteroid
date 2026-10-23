@@ -36,7 +36,7 @@ export function useTaskChecks(taskIds: number[], enabled: boolean) {
   });
 }
 
-/** Блок проверки: результат, если есть; кнопка «Проверить звонок» (~0,5 ₽); пока идёт — опрос раз в 4 с. */
+/** Блок проверки: результат, если есть; кнопка «Проверить звонок» (стоимость не показываем — владелец 23.10); пока идёт — опрос раз в 4 с. */
 export function TaskCheckPanel({ taskId, state }: { taskId: number; state: TaskCheckState | undefined }) {
   const qc = useQueryClient();
   const [runId, setRunId] = useState<number | null>(null);
@@ -87,7 +87,7 @@ export function TaskCheckPanel({ taskId, state }: { taskId: number; state: TaskC
       {state?.hasCall && !running && (
         <button type="button" onClick={run}
           className="inline-flex min-h-11 items-center gap-1 self-start rounded-md border border-[var(--color-border)] px-3 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] active:scale-[0.98]">
-          <PhoneCall size={13} /> {res || row?.status === 'error' ? 'Проверить заново' : 'Проверить звонок'} <span className="text-[var(--color-text-muted)]">· ~0,5 ₽</span>
+          <PhoneCall size={13} /> {res || row?.status === 'error' ? 'Проверить заново' : 'Проверить звонок'}
         </button>
       )}
     </div>
