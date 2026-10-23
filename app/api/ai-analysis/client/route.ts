@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
       // Звонки без текста, которые расшифруем перед разбором (transcribe.ts); выключено — 0.
       withText || !transcribeEnabled() ? Promise.resolve(null) : transcribeCandidates(ref).catch(() => null),
     ]);
-    const toTranscribe = tr ? { count: tr.send.length + tr.inWork.length, total: tr.total, max: TRANSCRIBE_MAX_CALLS } : null;
+    const toTranscribe = tr ? { count: tr.send.length + tr.inWork.length, total: tr.total, max: TRANSCRIBE_MAX_CALLS, older: tr.older } : null;
     const openTask = task ? { id: task.id, responsibleName: task.responsibleName } : null;
     return NextResponse.json({ ref, calls, analyses, openTask, toTranscribe, promptVersion: (await getActivePrompt()).version, quota: { used: usedToday, max: MAX_PER_DAY } });
   } catch (e) {

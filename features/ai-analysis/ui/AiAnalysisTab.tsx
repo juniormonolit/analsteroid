@@ -27,7 +27,7 @@ interface ClientPayload {
   /** Открытая задача канбана по заказчику — для «В открытую задачу». */
   openTask: { id: number; responsibleName: string | null } | null;
   /** Звонки без текста, которые расшифруем перед разбором (engine/transcribe.ts); null — функция выключена. */
-  toTranscribe: { count: number; total: number; max: number } | null;
+  toTranscribe: { count: number; total: number; max: number; older: number } | null;
   promptVersion: string;
   quota: { used: number; max: number };
 }
@@ -387,7 +387,11 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
 
       {/* Монолитик */}
       {withText === 0 && trCount === 0 && (
-        <MonolitikHelper pose="sleep" title="Анализировать пока нечего" text="У заказчика нет расшифрованных звонков: короткие разговоры и недозвоны не расшифровываются." closable={false} />
+        <MonolitikHelper pose="sleep" title="Анализировать пока нечего"
+          text={(tr?.older ?? 0) > 0
+            ? `Все разговоры с заказчиком старше года (${callsWord(tr!.older)} без текста). Разбор берёт последние 12 месяцев, а записей таких старых звонков уже нет — расшифровать их не получится. Появится свежий разговор — можно будет запустить.`
+            : 'У заказчика нет разговоров с текстом и нечего отправить на расшифровку: короткие разговоры, недозвоны и звонки без записи не расшифровываются.'}
+          closable={false} />
       )}
       {shownJob && (shownJob.status === 'queued' || shownJob.status === 'running') && (
         <MonolitikHelper pose={shownJob.phase === 'collecting' || shownJob.status === 'queued' ? 'think' : 'work'}

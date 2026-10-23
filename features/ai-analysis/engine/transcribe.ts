@@ -37,8 +37,18 @@ export interface TranscribeState {
 
 /** Звонки заказчика без текста, которые стоит расшифровать (за HISTORY_MONTHS, свежие первыми, ≤ 50):
  *  send — отправить, inWork — уже расшифровываются (не слать, только ждать). */
-export async function transcribeCandidates(ref: ClientRef): Promise<{ send: string[]; inWork: string[]; total: number }> {
+export async function transcribeCandidates(ref: ClientRef): Promise<{ send: string[]; inWork: string[]; total: number; older: number }> {
   const keys = await clientKeys(ref);
+  // Разговоры без текста старше окна разбора: их не шлём (у старых звонков записи, как правило, уже нет —
+  // сервис отвечает no_recording, проверено 23.10), но вкладка объясняет, почему кнопки нет.
+  const older = analyticsDb().query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM va.calls c
+      WHERE c.failed_at_stage IS NULL AND c.result = 'completed' AND coalesce(c.duration_seconds, 0) > $3
+        AND c.called_at < now() - make_interval(months => $2)
+        AND NOT EXISTS (SELECT 1 FROM va.transcriptions t WHERE t.call_id = c.id)
+        AND c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_SQL}) = ANY($1::text[]))`,
+    [keys, HISTORY_MONTHS, MIN_SEC],
+  ).then(x => x.rows[0]?.n ?? 0).catch(() => 0);
   const r = await analyticsDb().query<{ id: string; in_work: boolean; total: number }>(
     `SELECT c.id::text, (c.status::text = 'transcribing' AND c.updated_at >= now() - interval '30 minutes') AS in_work, count(*) OVER ()::int AS total
        FROM va.calls c
@@ -50,7 +60,7 @@ export async function transcribeCandidates(ref: ClientRef): Promise<{ send: stri
       ORDER BY c.called_at DESC LIMIT $4`,
     [keys, HISTORY_MONTHS, MIN_SEC, TRANSCRIBE_MAX_CALLS],
   );
-  return { send: r.rows.filter(x => !x.in_work).map(x => x.id), inWork: r.rows.filter(x => x.in_work).map(x => x.id), total: r.rows[0]?.total ?? 0 };
+  return { send: r.rows.filter(x => !x.in_work).map(x => x.id), inWork: r.rows.filter(x => x.in_work).map(x => x.id), total: r.rows[0]?.total ?? 0, older: await older };
 }
 
 export type SendResult =
