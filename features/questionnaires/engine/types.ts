@@ -21,8 +21,10 @@ export const QUESTION_AUDIENCES: { value: QuestionAudience; label: string; hint:
 
 /** Похоже на проверку менеджера, а не вопрос клиенту: «Уточнил, что строится?», «Предложил бетон?», «Менеджер…»
  *  (живой случай 23.10 — анкета «Арматура»: такие ушли менеджеру в «Выяснить»). Только подсказка в редакторе. */
-export const LOOKS_LIKE_CHECK = /^\s*(менеджер|уточнил|предложил|спросил|рассказал|выяснил|озвучил|назвал|договорил|объяснил|сообщил|узнал)/i;
-export const looksLikeCheck = (q: Pick<GroupQuestion, 'question' | 'audience'>) => q.audience === 'client' && LOOKS_LIKE_CHECK.test(q.question);
+export const LOOKS_LIKE_CHECK = /^\s*(менеджер(?![а-яё])|(менеджер\s+)?(уточнил|предложил|спросил|рассказал|выяснил|озвучил|сообщил|узнал|проговорил|обсудил|показал|отправил|назвал|напомнил|объяснил|пояснил|выслал|дал|договорил)(а|и|ся)?(?![а-яё]))/i;
+/** Текст похож на проверку менеджера — единый признак для редактора анкет и сборки задачи (links.ts). */
+export const looksLikeCheckText = (question: string) => LOOKS_LIKE_CHECK.test(question);
+export const looksLikeCheck = (q: Pick<GroupQuestion, 'question' | 'audience'>) => q.audience === 'client' && looksLikeCheckText(q.question);
 
 export interface GroupQuestion {
   /** null — новый, ещё не сохранён. */
