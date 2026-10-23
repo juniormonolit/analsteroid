@@ -9,6 +9,7 @@ import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/custo
 import { fetchShippedGroups, resolvePeriod } from './shippedGroups';
 import { fetchClientTypesBulk } from './clientTypes';
 import { fetchDismissedByRef, potentialGroups } from './potentialGroups';
+import { fetchRequestedGroups } from '@/features/ai-analysis/engine/links';
 
 const CONTRACTOR_TYPES = new Set(['construction_org', 'own_needs_org']);
 const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
@@ -28,9 +29,10 @@ export async function logRecommendations(input: {
     const row = (await fetchManagerCustomers(Number(input.managerId))).find(r => r.clientKey === input.clientKey);
     const members = await memberKeysOf(input.clientKey).catch(() => [input.clientKey]);
     const all = resolvePeriod('all', null, null);
-    const [shipped, priorities, matrix, dismissed, types] = await Promise.all([
+    const [shipped, priorities, matrix, dismissed, types, requested] = await Promise.all([
       fetchShippedGroups(all.from, all.to), fetchCrossSellPriorities().catch(() => null), fetchCrossSellMatrix().catch(() => null),
       fetchDismissedByRef(), fetchClientTypesBulk([input.clientKey]).catch(() => new Map<string, string>()),
+      fetchRequestedGroups().catch(() => new Map<string, string[]>()),
     ]);
     const recent = row?.lastGroups?.length ? row.lastGroups : row?.lastDeliveredGroup ? [row.lastDeliveredGroup] : [];
     const offer = potentialGroups({
@@ -39,6 +41,7 @@ export async function logRecommendations(input: {
       dismissed: new Set(members.flatMap(k => [...(dismissed.get(k.startsWith('x') ? `c${k.slice(1)}` : k) ?? [])])),
       contractor: CONTRACTOR_TYPES.has(types.get(input.clientKey) ?? ''),
       priorities, matrix,
+      requests: [...new Set(members.flatMap(k => requested.get(k.startsWith('x') ? `c${k.slice(1)}` : k) ?? []))],
     });
     if (!offer.length) return;
     await systemDb().query(

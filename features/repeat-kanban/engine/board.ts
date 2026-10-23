@@ -28,6 +28,7 @@ import { fetchCustomerTags } from './tags';
 import { fetchAiMarks, type AiMark } from './aiMarks';
 import { fetchDismissedByRef, potentialGroups, type PotentialGroup } from './potentialGroups';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
+import { fetchRequestedGroups } from '@/features/ai-analysis/engine/links';
 import { NO_TAG, type TagDef } from './tagColors';
 
 const DAY_MS = 86_400_000;
@@ -579,13 +580,15 @@ export async function buildRepeatBoard(opts: {
   // за всю историю (shippedGroups, кэш 10 мин) — «газобетон» находит всех, кто его когда-либо брал.
   const { from: allFrom, to: allTo } = resolvePeriod('all', null, null);
   // Вся история отгрузок (кэш 10 мин) — для поиска и для «что можно предложить» (минус уже купленное).
-  const [allShipped, offerPriorities, offerMatrix, dismissed] = opts.skipNames
-    ? [null, null, null, new Map<string, Set<string>>()]
+  const [allShipped, offerPriorities, offerMatrix, dismissed, requested] = opts.skipNames
+    ? [null, null, null, new Map<string, Set<string>>(), new Map<string, string[]>()]
     : await Promise.all([
       fetchShippedGroups(allFrom, allTo).catch(() => null),
       fetchCrossSellPriorities().catch(() => null),
       fetchCrossSellMatrix().catch(() => null),
       fetchDismissedByRef(),
+      // «Просил сам» — из последнего разбора звонков за 90 дн., без последующей отгрузки (сессия ИИ-анализа, links.ts).
+      fetchRequestedGroups().catch(() => new Map<string, string[]>()),
     ]);
   const searchGroups = qWords.length ? allShipped : null;
   const offerPick = new Set(opts.offerGroups ?? []);
@@ -712,6 +715,7 @@ export async function buildRepeatBoard(opts: {
       dismissed: new Set(membersOf(r).flatMap(k => [...(dismissed.get(k.startsWith('x') ? `c${k.slice(1)}` : k) ?? [])])),
       contractor: CONTRACTOR_TYPES.has(profileType ?? ''),
       priorities: offerPriorities, matrix: offerMatrix,
+      requests: [...new Set(membersOf(r).flatMap(k => requested.get(k.startsWith('x') ? `c${k.slice(1)}` : k) ?? []))],
     });
     for (const o of offer) offerCounts[o.group] = (offerCounts[o.group] ?? 0) + 1;
     if (offerPick.size && !offer.some(o => offerPick.has(o.group))) continue;

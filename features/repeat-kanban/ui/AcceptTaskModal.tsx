@@ -9,6 +9,7 @@ import { SearchSelect } from '@/components/ui/SearchSelect';
 import { BRAK_REASONS, taskUrl } from '../engine/config';
 import type { KanbanCard } from '../engine/board';
 import type { TaskNote } from '../engine/taskNotes';
+import { TaskCheckPanel, type TaskCheckState } from './TaskCheck';
 
 type Mode = 'close' | 'accept' | 'return';
 const MODES: { key: Mode; title: string; hint: string; Icon: typeof CheckCircle2; color: string }[] = [
@@ -20,8 +21,11 @@ const MODES: { key: Mode; title: string; hint: string; Icon: typeof CheckCircle2
 const field = 'w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base text-[var(--color-text)] sm:text-sm';
 const mskYmd = (plusDays: number) => new Date(Date.now() + 3 * 3600_000 + plusDays * 86_400_000).toISOString().slice(0, 10);
 
-export function AcceptTaskModal({ card, name, note, onClose, onSaved }: {
-  card: KanbanCard; name: string; note: TaskNote | null; onClose: () => void; onSaved: () => void;
+export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved }: {
+  card: KanbanCard; name: string; note: TaskNote | null;
+  /** Проверка звонка по задаче (только РОПу с правом разбора; null — блока нет). Решение принимается, видя проверку. */
+  checkState?: TaskCheckState | null;
+  onClose: () => void; onSaved: () => void;
 }) {
   const task = card.task!;
   const [mode, setMode] = useState<Mode>('accept');
@@ -67,6 +71,7 @@ export function AcceptTaskModal({ card, name, note, onClose, onSaved }: {
             <div className="max-h-40 overflow-y-auto whitespace-pre-line text-[var(--color-text)]">{note.text}</div>
           </div>
         )}
+        {checkState && <TaskCheckPanel taskId={task.id} state={checkState} />}
         <div className="flex flex-col gap-1.5" role="radiogroup" aria-label="Решение по задаче">
           {MODES.map(m => (
             <button key={m.key} type="button" role="radio" aria-checked={mode === m.key} onClick={() => setMode(m.key)}

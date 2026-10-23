@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart3, CheckSquare, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BarChart3, CheckSquare, PhoneCall, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -28,6 +28,7 @@ import type { RepeatTask } from '../engine/tasks';
 import { QueueView } from './QueueView';
 import { TagChip, TagsModal } from './TagsModal';
 import { AcceptTaskModal } from './AcceptTaskModal';
+import { TaskCheckModal, useTaskChecks, VERDICT, type TaskCheckState } from './TaskCheck';
 import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
@@ -78,6 +79,8 @@ const OUTCOME_OPTIONS = [
 const TaskNotesCtx = createContext<Record<string, TaskNote>>({});
 /** Словарь тегов смотрящего (базовые + личные) — для плашек на карточках. */
 const TagDefsCtx = createContext<Map<number, TagDef>>(new Map());
+/** Проверки звонков по задачам (только РОПу): taskId → есть ли звонок после постановки и результат проверки. */
+const TaskChecksCtx = createContext<Record<string, TaskCheckState>>({});
 
 const GROUPS: { key: ColumnGroup; title: string; hint: string }[] = [
   { key: 'pool', title: 'Пул', hint: 'Нет открытой повторной сделки' },
@@ -130,6 +133,7 @@ export function RepeatKanbanPage() {
   const [mergeFor, setMergeFor] = useState<KanbanCard | null>(null);
   const [tagsFor, setTagsFor] = useState<KanbanCard | null>(null);
   const [acceptFor, setAcceptFor] = useState<KanbanCard | null>(null);
+  const [checkFor, setCheckFor] = useState<KanbanCard | null>(null);
   // С какой вкладки открыть карточку клиента: значок разбора → сразу «ИИ-анализ».
   const [openTab, setOpenTab] = useState<'overview' | 'ai'>('overview');
   const [hideReqFor, setHideReqFor] = useState<KanbanCard | null>(null);
@@ -229,6 +233,12 @@ export function RepeatKanbanPage() {
     staleTime: 60_000,
     placeholderData: prev => prev,
   });
+  // Проверки звонков по сданным/принятым задачам — только тем, кто видит разборы (data.aiCounts есть только у них).
+  const checkTaskIds = useMemo(() => {
+    const cards = [...(data?.columns ?? []).flatMap(c => c.cards), ...(data?.today ?? []).flatMap(t => t.cards)];
+    return [...new Set(cards.filter(c => c.task && (c.task.state === 'control' || c.task.state === 'done')).map(c => c.task!.id))].sort((a, b) => a - b);
+  }, [data]);
+  const { data: taskChecks } = useTaskChecks(checkTaskIds, !!data?.aiCounts);
   const todayTotal = (data?.today ?? []).reduce((s, t) => s + t.total, 0);
   const liveCard = (c: KanbanCard): KanbanCard =>
     [...(data?.columns ?? []).flatMap(x => x.cards), ...(data?.today ?? []).flatMap(t => t.cards)].find(x => x.clientKey === c.clientKey) ?? c;
@@ -247,6 +257,7 @@ export function RepeatKanbanPage() {
       else if (a === 'tags') setTagsFor(c);
       else if (a === 'accept_task') setAcceptFor(c);
       else if (a === 'open_ai') { setOpenTab('ai'); setOpenCard(c); }
+      else if (a === 'task_check') setCheckFor(c);
       else if (a === 'accept_hide' || a === 'decline_hide') {
         const ok = a === 'accept_hide'
           ? confirm(`Скрыть «${cardName(c)}» ${fmtHideUntil(c.hideRequest?.until ?? '')}, как предлагает менеджер?`)
@@ -485,6 +496,7 @@ export function RepeatKanbanPage() {
       </div>
 
       <TagDefsCtx.Provider value={tagDefMap}>
+      <TaskChecksCtx.Provider value={taskChecks ?? {}}>
       <TaskNotesCtx.Provider value={notes ?? {}}>
       {view === 'queue' && data?.canManage ? (
         <QueueView onChanged={() => refetch()} />
@@ -527,6 +539,7 @@ export function RepeatKanbanPage() {
         </div>
       )}
       </TaskNotesCtx.Provider>
+      </TaskChecksCtx.Provider>
       </TagDefsCtx.Provider>
 
       {selectMode && selected.size > 0 && (
@@ -547,7 +560,7 @@ export function RepeatKanbanPage() {
           onClose={() => setOpenCard(null)}
           // Свежая версия карточки после действий (доска перезапросилась) — по ключу заказчика.
           // Комментарии задач — тот же контекст, что у доски (панель рисуется вне её дерева).
-          sideActions={<TagDefsCtx.Provider value={tagDefMap}><TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={liveCard(openCard)} h={handlers} /></TaskNotesCtx.Provider></TagDefsCtx.Provider>} />
+          sideActions={<TagDefsCtx.Provider value={tagDefMap}><TaskChecksCtx.Provider value={taskChecks ?? {}}><TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={liveCard(openCard)} h={handlers} /></TaskNotesCtx.Provider></TaskChecksCtx.Provider></TagDefsCtx.Provider>} />
       )}
       {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} reassign={reassignOpts} onClose={() => setTaskFor(null)} onSaved={refresh} />}
       {reviewFor && <ReviewModal card={reviewFor} onClose={() => setReviewFor(null)} onSaved={refresh} />}
@@ -555,7 +568,9 @@ export function RepeatKanbanPage() {
       {hideReqFor && <HideModal card={hideReqFor} request onClose={() => setHideReqFor(null)} onSaved={refresh} />}
       {brakFor && <BrakNowModal card={brakFor} onClose={() => setBrakFor(null)} onSaved={refresh} />}
       {mergeFor && <MergeModal card={mergeFor} onClose={() => setMergeFor(null)} onSaved={refresh} />}
+      {checkFor?.task && <TaskCheckModal taskId={checkFor.task.id} title={cardName(checkFor)} state={taskChecks?.[String(checkFor.task.id)]} onClose={() => setCheckFor(null)} />}
       {acceptFor?.task && <AcceptTaskModal card={acceptFor} name={cardName(acceptFor)} note={notes?.[String(acceptFor.task.id)] ?? null}
+        checkState={data?.aiCounts ? taskChecks?.[String(acceptFor.task.id)] ?? { hasCall: false, check: null } : null}
         onClose={() => setAcceptFor(null)} onSaved={refresh} />}
       {tagsFor && <TagsModal title={cardName(tagsFor)} clientKey={tagsFor.clientKey} managerId={tagsFor.managerId} column={tagsFor.column}
         current={tagsFor.tags ?? []} defs={data?.tagDefs ?? []} onClose={() => setTagsFor(null)} onSaved={refresh} onDefsChanged={refresh} />}
@@ -873,7 +888,7 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   return a;
 }
 
-type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task' | 'open_ai';
+type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task' | 'open_ai' | 'task_check';
 
 /** Редкие действия карточки — в меню «⋯» (владелец 20.10: «глупо, когда висят прямо на лице»). */
 function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; danger?: boolean }[]; onAct: (a: CardAction) => void }) {
@@ -940,6 +955,23 @@ function OfferLine({ offer }: { offer: NonNullable<KanbanCard['offer']> }) {
         {offer.length > 2 && <span className="shrink-0 text-[var(--color-text-muted)]">+{offer.length - 2}</span>}
       </TapTip>
     </div>
+  );
+}
+
+/** Пометка «есть звонок — проверить» / итог проверки (владелец 23.10: «есть уведомление»). Только РОПу. */
+function TaskCheckChip({ taskId, onOpen }: { taskId: number; onOpen: () => void }) {
+  const st = useContext(TaskChecksCtx)[String(taskId)];
+  if (!st || (!st.hasCall && !st.check)) return null;
+  const v = st.check?.status === 'done' && st.check.verdict ? VERDICT[st.check.verdict] : null;
+  const pending = st.check && (st.check.status === 'queued' || st.check.status === 'running');
+  return (
+    <button type="button" onClick={onOpen}
+      title={v ? 'Звонок проверен на соответствие задаче — нажмите, чтобы посмотреть' : 'После задачи был звонок с расшифровкой — проверьте, выполнил ли менеджер задачу'}
+      className={`${FOCUS} inline-flex min-h-7 items-center gap-1 self-start rounded px-1.5 text-[11px] font-semibold transition hover:opacity-85 active:scale-[0.98]`}
+      style={v ? { background: v.bg, color: v.fg } : { background: '#fce5cd', color: '#b45f06' }}>
+      <PhoneCall size={11} />
+      {v ? `Звонок: ${v.label}` : pending ? 'Звонок проверяется…' : (<><span className="relative mr-0.5 inline-flex h-1.5 w-1.5 rounded-full bg-[#cc0000]" />Есть звонок — проверить</>)}
+    </button>
   );
 }
 
@@ -1110,6 +1142,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           <ExternalLink size={10} className="shrink-0 text-[var(--color-text-muted)] opacity-70 group-hover/task:text-[var(--color-accent)]" />
         </a>
       )}
+      {c.task && <TaskCheckChip taskId={c.task.id} onOpen={() => onAct('task_check')} />}
       {/* Последний комментарий по задаче (владелец 21.10): что ответил менеджер — видно сразу,
           принимать задачу РОП ходит в Битрикс. */}
       {note && <NoteBlock note={note} />}
