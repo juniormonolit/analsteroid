@@ -15,6 +15,9 @@ import { Popover } from '@/components/ui/Popover';
 import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
+import type { ClientCardTab } from '@/features/client-module/ui/ClientModuleWidget';
+
+const CARD_TABS = ['overview', 'deals', 'purchases', 'objects', 'calls', 'questionnaire', 'ai'] as const;
 import { RepeatKanbanSettingsButton, TemplatePicker } from './RepeatKanbanSettings';
 
 // Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
@@ -125,7 +128,11 @@ export function RepeatKanbanPage() {
   useEffect(() => { const t = setTimeout(() => { if (qInput.trim() !== q) { setQ(qInput.trim()); setLimits({}); } }, 400); return () => clearTimeout(t); }, [qInput, q, setQ]);
   const poolGroups = useMemo(() => pg.split('|').filter(Boolean), [pg]);
   const [limits, setLimits] = useState<Partial<Record<ColumnKey, number>>>({});
-  const [openCard, setOpenCard] = useState<KanbanCard | null>(null);
+  // Открытая карточка клиента и её вкладка — в адресе (владелец 23.10: «скопировать ссылку на карточку заказчика в
+  // канбане и её состояние — конкретную открытую вкладку»): ?card=<ключ заказчика>&ctab=<вкладка>.
+  const [cardKey, setCardKey] = useUrlState('card', stringParam(''));
+  const [ctab, setCtab] = useUrlState('ctab', stringParam(''));
+  const setOpenCard = (c: KanbanCard | null, tab = '') => { setCardKey(c?.clientKey ?? ''); setCtab(c ? tab : ''); };
   const [taskFor, setTaskFor] = useState<KanbanCard | null>(null);
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
   const [hideFor, setHideFor] = useState<KanbanCard | null>(null);
@@ -135,7 +142,6 @@ export function RepeatKanbanPage() {
   const [acceptFor, setAcceptFor] = useState<KanbanCard | null>(null);
   const [checkFor, setCheckFor] = useState<KanbanCard | null>(null);
   // С какой вкладки открыть карточку клиента: значок разбора → сразу «ИИ-анализ».
-  const [openTab, setOpenTab] = useState<'overview' | 'ai'>('overview');
   const [hideReqFor, setHideReqFor] = useState<KanbanCard | null>(null);
   // Массовая постановка задач (аудит 21.10: «в работе без задачи» — разом): режим выбора.
   const [selectMode, setSelectMode] = useState(false);
@@ -240,15 +246,15 @@ export function RepeatKanbanPage() {
   }, [data]);
   const { data: taskChecks } = useTaskChecks(checkTaskIds, !!data?.aiCounts);
   const todayTotal = (data?.today ?? []).reduce((s, t) => s + t.total, 0);
-  const liveCard = (c: KanbanCard): KanbanCard =>
-    [...(data?.columns ?? []).flatMap(x => x.cards), ...(data?.today ?? []).flatMap(t => t.cards)].find(x => x.clientKey === c.clientKey) ?? c;
   const canManage = !!data?.canManage;
+  const openCard = cardKey ? [...(data?.columns ?? []).flatMap(x => x.cards), ...(data?.today ?? []).flatMap(t => t.cards)]
+    .find(x => x.clientKey === cardKey || x.members.some(m => m.key === cardKey)) ?? null : null;
   const viewerId = data?.viewerBitrixId ?? null;
   const toggleSel = (c: KanbanCard) => setSelected(m => { const n = new Map(m); if (n.has(c.clientKey)) n.delete(c.clientKey); else n.set(c.clientKey, c); return n; });
   const handlers: CardHandlers = {
     canManage, viewerId,
     select: selectMode ? { has: k => selected.has(k), toggle: toggleSel, addAll: cs => setSelected(m => { const n = new Map(m); for (const c of cs) if (canTaskCol(c.column)) n.set(c.clientKey, c); return n; }) } : null,
-    onOpen: c => { setOpenTab('overview'); setOpenCard(c); }, onTask: setTaskFor, onReview: setReviewFor,
+    onOpen: c => setOpenCard(c), onTask: setTaskFor, onReview: setReviewFor,
     onAct: async (a, c) => {
       if (a === 'hide') setHideFor(c);
       else if (a === 'request_hide') setHideReqFor(c);
@@ -256,7 +262,7 @@ export function RepeatKanbanPage() {
       else if (a === 'merge') setMergeFor(c);
       else if (a === 'tags') setTagsFor(c);
       else if (a === 'accept_task') setAcceptFor(c);
-      else if (a === 'open_ai') { setOpenTab('ai'); setOpenCard(c); }
+      else if (a === 'open_ai') setOpenCard(c, 'ai');
       else if (a === 'task_check') setCheckFor(c);
       else if (a === 'accept_hide' || a === 'decline_hide') {
         const ok = a === 'accept_hide'
@@ -553,14 +559,17 @@ export function RepeatKanbanPage() {
       )}
       {bulkOpen && <BulkTaskModal cards={[...selected.values()]} loadOf={loadOf} limit={taskLimit} reassign={reassignOpts}
         onClose={() => setBulkOpen(false)} onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
-      {openCard && (
-        <CustomerCardLoader initialTab={openTab}
-          contactId={openCard.clientType === 'contact' ? openCard.clientId : null}
-          companyId={openCard.clientType === 'company' ? openCard.clientId : null}
+      {/^[ckx]\d{1,12}$/.test(cardKey) && (
+        <CustomerCardLoader initialTab={(CARD_TABS as readonly string[]).includes(ctab) ? ctab as ClientCardTab : undefined}
+          onTabChange={t => setCtab(t === 'overview' ? '' : t)}
+          shareUrl={() => window.location.href}
+          contactId={cardKey.startsWith('k') ? null : cardKey.slice(1)}
+          companyId={cardKey.startsWith('k') ? cardKey.slice(1) : null}
           onClose={() => setOpenCard(null)}
           // Свежая версия карточки после действий (доска перезапросилась) — по ключу заказчика.
           // Комментарии задач — тот же контекст, что у доски (панель рисуется вне её дерева).
-          sideActions={<TagDefsCtx.Provider value={tagDefMap}><TaskChecksCtx.Provider value={taskChecks ?? {}}><TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={liveCard(openCard)} h={handlers} /></TaskNotesCtx.Provider></TaskChecksCtx.Provider></TagDefsCtx.Provider>} />
+          // Карточки нет на доске (ссылка из чата, фильтры другие) — открывается только карточка клиента, без канбан-панели.
+          sideActions={openCard ? <TagDefsCtx.Provider value={tagDefMap}><TaskChecksCtx.Provider value={taskChecks ?? {}}><TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={openCard} h={handlers} /></TaskNotesCtx.Provider></TaskChecksCtx.Provider></TagDefsCtx.Provider> : undefined} />
       )}
       {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} reassign={reassignOpts} onClose={() => setTaskFor(null)} onSaved={refresh} />}
       {reviewFor && <ReviewModal card={reviewFor} onClose={() => setReviewFor(null)} onSaved={refresh} />}

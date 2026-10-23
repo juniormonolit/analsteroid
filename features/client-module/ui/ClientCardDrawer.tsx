@@ -6,14 +6,17 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import dynamic from 'next/dynamic';
-import { X } from 'lucide-react';
+import { Check, Link2, X } from 'lucide-react';
 import { ClientModuleWidget, type ClientCardTab } from './ClientModuleWidget';
 
 // DealCard сам открывает карточку клиента — статический импорт дал бы цикл модулей.
 const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 
-export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideActions, initialTab }: {
+export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideActions, initialTab, onTabChange, shareUrl }: {
   initialTab?: ClientCardTab;
+  onTabChange?: (tab: ClientCardTab) => void;
+  /** Ссылка на эту карточку с открытой вкладкой (канбан: адрес страницы) — кнопка «Скопировать ссылку». */
+  shareUrl?: () => string;
   contactId?: string | number | null;
   companyId?: string | number | null;
   onClose: () => void;
@@ -26,6 +29,13 @@ export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideAc
 }) {
   const [mounted, setMounted] = useState(false);
   const [openDealId, setOpenDealId] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    if (!shareUrl) return;
+    const url = shareUrl();
+    try { await navigator.clipboard.writeText(url); } catch { window.prompt('Скопируйте ссылку', url); return; }
+    setCopied(true); setTimeout(() => setCopied(false), 1800);
+  };
   useEffect(() => { setMounted(true); }, []);
   useEffect(() => {
     // Открыто модальное окно поверх (окно задачи канбана из sideActions) — Esc закрывает только его.
@@ -46,7 +56,13 @@ export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideAc
         )}
       </div>
       <div className="flex h-dvh w-full max-w-full shrink-0 flex-col overflow-hidden bg-[var(--color-bg)] shadow-2xl sm:w-[1100px] sm:max-w-[96vw]">
-        <div className="flex shrink-0 justify-end px-2 pt-2">
+        <div className="flex shrink-0 justify-end gap-1 px-2 pt-2">
+          {shareUrl && (
+            <button type="button" onClick={copy} title="Скопировать ссылку на эту карточку с открытой вкладкой"
+              className="tap-target inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-[12.5px] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]">
+              {copied ? <Check size={15} className="text-[#38761d]" /> : <Link2 size={15} />} {copied ? 'Скопировано' : 'Ссылка'}
+            </button>
+          )}
           <button type="button" onClick={onClose} aria-label="Закрыть"
             className="tap-target flex min-h-9 min-w-9 items-center justify-center rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]">
             <X size={18} />
@@ -58,6 +74,7 @@ export function ClientCardDrawer({ contactId, companyId, onClose, zIndex, sideAc
             companyId={companyId != null ? String(companyId) : undefined}
             onDealOpen={setOpenDealId}
             initialTab={initialTab}
+            onTabChange={onTabChange}
           />
         </div>
         {sideActions && <div className="shrink-0 border-t border-[var(--color-border)] p-2 sm:hidden">{sideActions}</div>}

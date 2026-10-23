@@ -11,7 +11,9 @@ import type { ClientCardTab } from '@/features/client-module/ui/ClientModuleWidg
 // раздел «Мои заказчики» упраздняется, отметки «Отложить/Не звонить» не нужны.
 // Доступ проверяет сервер модуля: владелец клиента (менеджер последней сделки) должен
 // быть в срезе сессии (lib/auth/modulesAccess.ts canSessionSeeClientRef).
-export function CustomerCardLoader({ contactId, companyId, onClose, zIndex, sideActions, initialTab }: {
+export function CustomerCardLoader({ contactId, companyId, onClose, zIndex, sideActions, initialTab, onTabChange, shareUrl }: {
+  onTabChange?: (tab: ClientCardTab) => void;
+  shareUrl?: () => string;
   /** С какой вкладки открыть карточку клиента. */
   initialTab?: ClientCardTab;
   contactId?: string | number | null;
@@ -22,5 +24,5 @@ export function CustomerCardLoader({ contactId, companyId, onClose, zIndex, side
   /** Действия раздела, откуда открыли (канбан повторных) — рядом с карточкой, не внутри. */
   sideActions?: React.ReactNode;
 }) {
-  return <ClientCardDrawer contactId={contactId} companyId={companyId} onClose={onClose} zIndex={zIndex} sideActions={sideActions} initialTab={initialTab} />;
+  return <ClientCardDrawer contactId={contactId} companyId={companyId} onClose={onClose} zIndex={zIndex} sideActions={sideActions} initialTab={initialTab} onTabChange={onTabChange} shareUrl={shareUrl} />;
 }

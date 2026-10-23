@@ -13,7 +13,7 @@
 // лестница стадий, цепочка сделок). Юзкейс: менеджер зашёл и понял, что и когда
 // заказчику отгружалось и что и куда хорошо бы предложить.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ExternalLink, Building2, User } from 'lucide-react';
 import { apiFetch } from '@/lib/client/apiFetch';
@@ -30,12 +30,14 @@ import { ClientQuestionnaire } from '@/features/questionnaires/ui/ClientQuestion
 export type ClientCardTab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls' | 'questionnaire' | 'ai';
 type Tab = ClientCardTab;
 
-export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTab }: {
+export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTab, onTabChange }: {
   contactId?: string; companyId?: string;
   /** С какой вкладки открыть (канбан повторных: значок разбора → сразу «ИИ-анализ»). */
   initialTab?: ClientCardTab;
   /** В приложении: открыть сделку карточкой Монолитики. Нет — ссылки ведут в Битрикс. */
   onDealOpen?: (dealId: number) => void;
+  /** Смена вкладки — наружу (канбан пишет её в адрес: ссылка на карточку с открытой вкладкой, владелец 23.10). */
+  onTabChange?: (tab: ClientCardTab) => void;
 }) {
   const params: Record<string, string> = companyId ? { companyId } : contactId ? { contactId } : {};
   const qs = new URLSearchParams(params).toString();
@@ -49,14 +51,19 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
       return j;
     },
   });
-  const [tab, setTab] = useState<Tab>(initialTab ?? 'overview');
+  const [tab, setTabState] = useState<Tab>(initialTab ?? 'overview');
+  const setTab = (t: Tab) => { setTabState(t); onTabChange?.(t); };
+  const initialTabRef = useRef(initialTab);
+  initialTabRef.current = initialTab;
   // «ИИ-анализ» — только у кого есть право (решение владельца 22.10: «видят ТОЛЬКО РОПЫ»):
   // без права API отдаёт 403 и вкладки нет. Во вкладке Битрикса сессии Монолитики нет — тоже нет.
   const ai = useAiAnalysisAccess(qs);
   const [focusObject, setFocusObject] = useState<string | null>(null);
   const [editClient, setEditClient] = useState(0);
   const [dealsFilter, setDealsFilter] = useState<{ object?: string; n: number }>({ n: 0 });
-  useEffect(() => { setTab(initialTab ?? 'overview'); setFocusObject(null); setDealsFilter({ n: 0 }); }, [qs, initialTab]);
+  // Другой клиент — сброс; вкладка снаружи (адрес) поменялась — только вкладка, без сброса фильтров объекта/сделок.
+  useEffect(() => { setTabState(initialTabRef.current ?? 'overview'); setFocusObject(null); setDealsFilter({ n: 0 }); }, [qs]);
+  useEffect(() => { if (initialTab) setTabState(initialTab); }, [initialTab]);
 
   if (!qs) return null;
   if (isLoading) return <SlowLoading onRetry={() => void refetch()} />;
