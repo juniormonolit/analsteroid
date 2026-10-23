@@ -68,7 +68,7 @@ export async function getAnalysis(id: number): Promise<AnalysisRow | null> {
 }
 
 export async function listForClient(clientRef: string, limit = 10): Promise<AnalysisRow[]> {
-  const r = await systemDb().query<Raw>(`SELECT ${COLS} FROM ai_analyses WHERE client_ref = $1 AND NOT is_test ORDER BY created_at DESC LIMIT $2`, [clientRef, limit]);
+  const r = await systemDb().query<Raw>(`SELECT ${COLS} FROM ai_analyses WHERE client_ref = $1 AND NOT is_test AND kind = 'client' ORDER BY created_at DESC LIMIT $2`, [clientRef, limit]);
   return r.rows.map(map);
 }
 
@@ -83,7 +83,7 @@ export async function countToday(login: string): Promise<number> {
 
 /** Активный (в очереди / в работе) анализ заказчика — второй не ставим. */
 export async function activeForClient(clientRef: string): Promise<AnalysisRow | null> {
-  const r = await systemDb().query<Raw>(`SELECT ${COLS} FROM ai_analyses WHERE client_ref = $1 AND status IN ('queued','running') AND NOT is_test ORDER BY id DESC LIMIT 1`, [clientRef]);
+  const r = await systemDb().query<Raw>(`SELECT ${COLS} FROM ai_analyses WHERE client_ref = $1 AND status IN ('queued','running') AND NOT is_test AND kind = 'client' ORDER BY id DESC LIMIT 1`, [clientRef]);
   return r.rows[0] ? map(r.rows[0]) : null;
 }
 
@@ -91,23 +91,27 @@ export async function enqueue(input: {
   clientRef: string; promptVersion: string; by: { login: string; name: string | null };
   /** Тест-прогон черновика промпта: не попадает во вкладку, сводку и дедуп. */
   test?: { body: string };
+  /** Проверка звонка по закрытой задаче (migrations/252, taskCheck.ts) — вместо разбора заказчика. */
+  checkTaskId?: number;
 }): Promise<number> {
   const r = await systemDb().query<{ id: string }>(
-    `INSERT INTO ai_analyses (client_ref, prompt_version, created_by, created_by_name, is_test, prompt_body) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [input.clientRef, input.test ? 'draft' : input.promptVersion, input.by.login, input.by.name, !!input.test, input.test?.body ?? null],
+    `INSERT INTO ai_analyses (client_ref, prompt_version, created_by, created_by_name, is_test, prompt_body, kind, check_task_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [input.clientRef, input.test ? 'draft' : input.promptVersion, input.by.login, input.by.name, !!input.test, input.test?.body ?? null,
+      input.checkTaskId ? 'task_check' : 'client', input.checkTaskId ?? null],
   );
   return Number(r.rows[0].id);
 }
 
 /** Взять следующий из очереди (SKIP LOCKED — на случай двух процессов в момент деплоя). */
-export async function claimNext(): Promise<{ id: number; clientRef: string; isTest: boolean; promptBody: string | null } | null> {
-  const r = await systemDb().query<{ id: string; client_ref: string; is_test: boolean; prompt_body: string | null }>(
+export async function claimNext(): Promise<{ id: number; clientRef: string; isTest: boolean; promptBody: string | null; checkTaskId: number | null } | null> {
+  const r = await systemDb().query<{ id: string; client_ref: string; is_test: boolean; prompt_body: string | null; check_task_id: string | null }>(
     `UPDATE ai_analyses SET status = 'running', phase = 'collecting', attempts = attempts + 1, heartbeat_at = now(), started_at = now()
       WHERE id = (SELECT id FROM ai_analyses WHERE status = 'queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-      RETURNING id, client_ref, is_test, prompt_body`,
+      RETURNING id, client_ref, is_test, prompt_body, check_task_id`,
   );
   const x = r.rows[0];
-  return x ? { id: Number(x.id), clientRef: x.client_ref, isTest: !!x.is_test, promptBody: x.prompt_body } : null;
+  return x ? { id: Number(x.id), clientRef: x.client_ref, isTest: !!x.is_test, promptBody: x.prompt_body, checkTaskId: x.check_task_id ? Number(x.check_task_id) : null } : null;
 }
 
 export async function heartbeat(id: number, phase: string): Promise<void> {
@@ -117,7 +121,7 @@ export async function heartbeat(id: number, phase: string): Promise<void> {
 /** Готовый отчёт с тем же входом и версией промпта — отдаём его, а не платим заново. */
 export async function findDone(clientRef: string, callsHash: string): Promise<{ id: number } | null> {
   const r = await systemDb().query<{ id: string }>(
-    `SELECT id FROM ai_analyses WHERE client_ref = $1 AND calls_hash = $2 AND status = 'done' AND NOT is_test ORDER BY id DESC LIMIT 1`,
+    `SELECT id FROM ai_analyses WHERE client_ref = $1 AND calls_hash = $2 AND status = 'done' AND NOT is_test AND kind = 'client' ORDER BY id DESC LIMIT 1`,
     [clientRef, callsHash],
   );
   return r.rows[0] ? { id: Number(r.rows[0].id) } : null;
@@ -138,6 +142,16 @@ export async function saveDone(id: number, v: {
     [id, v.model, v.reasoningEffort, v.callsHash, v.callsCount, v.callsTotal, v.reportMd, JSON.stringify(v.quotes), JSON.stringify(v.maskHits),
       v.inputTokens, v.cachedTokens, v.outputTokens, v.reasoningTokens, v.costRub, v.seconds,
       v.promptVersion, JSON.stringify(v.parsed), v.mainManager, v.parsed.score],
+  );
+}
+
+/** Готовая проверка звонка по задаче (kind task_check). */
+export async function saveTaskCheckDone(id: number, v: { model: string; reportMd: string; quotes: unknown; parsed: unknown; callsCount: number; inputTokens: number; cachedTokens: number; outputTokens: number; reasoningTokens: number; costRub: number; seconds: number; promptVersion: string }): Promise<void> {
+  await systemDb().query(
+    `UPDATE ai_analyses SET status = 'done', phase = NULL, finished_at = now(), error = NULL, model = $2, report_md = $3, quotes = $4, parsed = $5,
+       calls_count = $6, input_tokens = $7, cached_tokens = $8, output_tokens = $9, reasoning_tokens = $10, cost_rub = $11, seconds = $12, prompt_version = $13
+     WHERE id = $1`,
+    [id, v.model, v.reportMd, JSON.stringify(v.quotes), JSON.stringify(v.parsed), v.callsCount, v.inputTokens, v.cachedTokens, v.outputTokens, v.reasoningTokens, v.costRub, v.seconds, v.promptVersion],
   );
 }
 

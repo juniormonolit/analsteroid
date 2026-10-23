@@ -8,9 +8,12 @@ import type { ClientRef } from '@/features/client-module/engine/types';
 import { collectClientData } from './collect';
 import { analyzeClient, callsHashOf } from './analyze';
 import { DEFAULT_REASONING_EFFORT, LlmError } from './llm';
-import { backfillParsed, claimNext, findDone, heartbeat, requeueStale, saveDone, saveDuplicate, saveError } from './store';
+import { backfillParsed, claimNext, findDone, heartbeat, requeueStale, saveDone, saveDuplicate, saveError, saveTaskCheckDone } from './store';
+import { callsAfterTask, fetchTaskInfo, parseTaskCheck, taskCheckSystem, taskCheckUser, TASK_CHECK_VERSION } from './taskCheck';
+import { chat } from './llm';
 import { getActivePrompt } from './promptStore';
 import { parseReport } from './parse';
+import { saveAiAnswers } from '@/features/questionnaires/engine/answers';
 import type { CollectedCall } from './collect';
 
 /** Основной менеджер анализа — тот, кто вёл больше всего расшифрованных разговоров. */
@@ -31,6 +34,7 @@ async function processOne(): Promise<boolean> {
   if (!job) return false;
   const ref = job.clientRef as ClientRef;
   try {
+    if (job.checkTaskId) { await runTaskCheck(job.id, job.checkTaskId); return true; }
     const data = await collectClientData(ref);
     // Тест-прогон — черновик из редактора; иначе активная версия (или встроенная из кода).
     const prompt = job.isTest && job.promptBody ? { version: 'draft', body: job.promptBody } : await getActivePrompt();
@@ -51,6 +55,15 @@ async function processOne(): Promise<boolean> {
       costRub: out.llm.costRub, seconds: out.llm.seconds,
       promptVersion: out.promptVersion, parsed: { ...parseReport(out.llm.content), links: out.links }, mainManager: mainManagerOf(data.calls),
     });
+    // Ответы анкеты «по разговорам» (контракт сессии «бриф/теги», questionnaire_answers): только найденные ответы —
+    // пустой ответ снял бы прежний; ответы менеджера функция не трогает. Тест-прогон черновика — не пишем.
+    const answers = (out.links?.questions ?? []).filter(q => q.answerText || q.answerOptions.length);
+    if (!job.isTest && answers.length) {
+      await saveAiAnswers(ref, job.id, answers.map(q => ({
+        questionId: q.id, text: q.answerText, options: q.answerOptions.length ? q.answerOptions : null,
+        quote: q.quoteFound ? q.quote : null, callId: q.callId, calledAt: q.calledAt, confidence: q.quoteFound ? 0.9 : 0.5,
+      }))).catch(e => console.warn(`[aiAnalysis] #${job.id} ответы анкеты не сохранились:`, e instanceof Error ? e.message : e));
+    }
     console.log(`[aiAnalysis] #${job.id} ${ref}: ${out.llm.seconds} с, ${out.llm.costRub} ₽`);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -60,6 +73,24 @@ async function processOne(): Promise<boolean> {
     await saveError(job.id, msg, retry).catch(() => {});
   }
   return true;
+}
+
+/** Проверка звонка по закрытой задаче (вручную, taskCheck.ts). */
+async function runTaskCheck(id: number, taskId: number): Promise<void> {
+  const t = await fetchTaskInfo(taskId);
+  if (!t) throw new Error(`Задача #${taskId} не найдена в копии Битрикса`);
+  const calls = await callsAfterTask(t);
+  if (!calls.length) throw new Error('После постановки задачи нет расшифрованных разговоров дольше 20 секунд — проверять нечего');
+  void heartbeat(id, 'thinking');
+  const { text } = taskCheckUser(t, calls);
+  const llm = await chat({ system: taskCheckSystem(), user: text, reasoningEffort: DEFAULT_REASONING_EFFORT });
+  const { result, quotes } = parseTaskCheck(llm.content, calls);
+  await saveTaskCheckDone(id, {
+    model: llm.model, reportMd: llm.content, quotes, parsed: { taskCheck: result }, callsCount: calls.length,
+    inputTokens: llm.usage.promptTokens, cachedTokens: llm.usage.cachedTokens, outputTokens: llm.usage.completionTokens,
+    reasoningTokens: llm.usage.reasoningTokens, costRub: llm.costRub, seconds: llm.seconds, promptVersion: TASK_CHECK_VERSION,
+  });
+  console.log(`[aiAnalysis] #${id} проверка задачи ${taskId}: ${result.verdict ?? '?'}, ${llm.seconds} с, ${llm.costRub} ₽`);
 }
 
 async function drain(): Promise<void> {

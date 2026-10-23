@@ -25,7 +25,7 @@ export async function managerSummary(days: number): Promise<{ managers: ManagerS
   const r = await systemDb().query<{ id: string; client_ref: string; main_manager: string | null; parsed: ParsedReport; score: string | null; created_at: Date }>(
     `SELECT DISTINCT ON (client_ref) id, client_ref, main_manager, parsed, score::text AS score, created_at
        FROM ai_analyses
-      WHERE status = 'done' AND NOT is_test AND parsed IS NOT NULL AND created_at >= now() - make_interval(days => $1)
+      WHERE status = 'done' AND NOT is_test AND kind = 'client' AND parsed IS NOT NULL AND created_at >= now() - make_interval(days => $1)
       ORDER BY client_ref, created_at DESC`,
     [days],
   );

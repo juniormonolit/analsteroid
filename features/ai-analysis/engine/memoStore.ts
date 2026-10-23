@@ -20,7 +20,7 @@ export async function freshMemoForClientKey(clientKey: string): Promise<{ analys
     const refs = await refsOfClientKey(clientKey);
     const r = await systemDb().query<{ id: string; report_md: string; created_at: Date }>(
       `SELECT id, report_md, created_at FROM ai_analyses
-        WHERE client_ref = ANY($1::text[]) AND status = 'done' AND NOT is_test AND report_md IS NOT NULL
+        WHERE client_ref = ANY($1::text[]) AND status = 'done' AND NOT is_test AND kind = 'client' AND report_md IS NOT NULL
           AND created_at >= now() - make_interval(days => $2)
         ORDER BY created_at DESC LIMIT 1`,
       [refs, MEMO_FRESH_DAYS],
@@ -42,7 +42,7 @@ export async function freshMemoPlainForClientKey(clientKey: string): Promise<{ a
     const r = await systemDb().query<{ id: string; report_md: string; created_at: Date; propose: string[] | null; clarify: string[] | null }>(
       `SELECT id, report_md, created_at, parsed->'links'->'propose' AS propose, parsed->'links'->'clarify' AS clarify
          FROM ai_analyses
-        WHERE client_ref = ANY($1::text[]) AND status = 'done' AND NOT is_test AND report_md IS NOT NULL
+        WHERE client_ref = ANY($1::text[]) AND status = 'done' AND NOT is_test AND kind = 'client' AND report_md IS NOT NULL
           AND created_at >= now() - make_interval(days => $2)
         ORDER BY created_at DESC LIMIT 1`,
       [refs, MEMO_FRESH_DAYS],

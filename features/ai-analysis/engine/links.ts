@@ -236,7 +236,7 @@ export async function fetchRequestedGroups(): Promise<Map<string, string[]>> {
   const r = await systemDb().query<{ client_ref: string; reqs: { group: string; check: string }[] | null }>(
     `SELECT DISTINCT ON (client_ref) client_ref, parsed->'links'->'requests' AS reqs
        FROM ai_analyses
-      WHERE status = 'done' AND NOT is_test AND created_at >= now() - interval '90 days'
+      WHERE status = 'done' AND NOT is_test AND kind = 'client' AND created_at >= now() - interval '90 days'
       ORDER BY client_ref, created_at DESC`,
   ).catch(() => ({ rows: [] as { client_ref: string; reqs: { group: string; check: string }[] | null }[] }));
   const out = new Map<string, string[]>();
