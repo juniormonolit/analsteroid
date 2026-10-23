@@ -25,14 +25,17 @@ const EXCLUDED = /^(разное|перевозка|доставка|услуг|
 const MIN_HISTORY = 30;
 const MIN_PCT = 0.10;
 
-/** «Не предлагать» по клиенту целиком: client_ref (c<контакт>/k<компания>) → группы. */
-export async function fetchDismissedByRef(refs: string[]): Promise<Map<string, Set<string>>> {
+/** «Не предлагать» по клиенту целиком: client_ref (c<контакт>/k<компания>) → группы. Таблица крошечная (единицы
+ *  строк на 23.10) — читаем целиком, кэш 2 мин, вместо фильтра по 25 тыс. ключей доски. */
+let dismissedCache: { at: number; map: Map<string, Set<string>> } | null = null;
+export async function fetchDismissedByRef(): Promise<Map<string, Set<string>>> {
+  if (dismissedCache && Date.now() - dismissedCache.at < 120_000) return dismissedCache.map;
   const out = new Map<string, Set<string>>();
-  if (!refs.length) return out;
   const r = await analyticsDb().query<{ client_ref: string; group_name: string }>(
-    `SELECT client_ref, group_name FROM sa.client_module_dismissed WHERE active AND object_key = '' AND client_ref = ANY($1::text[])`, [refs],
+    `SELECT client_ref, group_name FROM sa.client_module_dismissed WHERE active AND object_key = ''`,
   ).catch(() => ({ rows: [] as { client_ref: string; group_name: string }[] }));
   for (const x of r.rows) { const s = out.get(x.client_ref) ?? new Set<string>(); s.add(x.group_name); out.set(x.client_ref, s); }
+  dismissedCache = { at: Date.now(), map: out };
   return out;
 }
 

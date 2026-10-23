@@ -585,7 +585,7 @@ export async function buildRepeatBoard(opts: {
       fetchShippedGroups(allFrom, allTo).catch(() => null),
       fetchCrossSellPriorities().catch(() => null),
       fetchCrossSellMatrix().catch(() => null),
-      fetchDismissedByRef([...new Set(allKeys.map(k => (k.startsWith('x') ? `c${k.slice(1)}` : k)))]),
+      fetchDismissedByRef(),
     ]);
   const searchGroups = qWords.length ? allShipped : null;
   const offerPick = new Set(opts.offerGroups ?? []);
