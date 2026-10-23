@@ -6,7 +6,7 @@ import { memberKeysOf } from '@/features/customers/engine/merge';
 import { fetchTasksForDeals, type RepeatTask } from '@/features/repeat-kanban/engine/tasks';
 import type { ClientRef } from '@/features/client-module/engine/types';
 import { clientKeys } from './collect';
-import { MEMO_FRESH_DAYS, memoBbcode } from './memo';
+import { MEMO_FRESH_DAYS, memoBbcode, memoPlain } from './memo';
 
 /** Ключ канбана (c/x/k + склейка) → ClientRef карточки клиента (x — юр без компании — это контакт). */
 async function refsOfClientKey(clientKey: string): Promise<string[]> {
@@ -20,7 +20,7 @@ export async function freshMemoForClientKey(clientKey: string): Promise<{ analys
     const refs = await refsOfClientKey(clientKey);
     const r = await systemDb().query<{ id: string; report_md: string; created_at: Date }>(
       `SELECT id, report_md, created_at FROM ai_analyses
-        WHERE client_ref = ANY($1::text[]) AND status = 'done' AND report_md IS NOT NULL
+        WHERE client_ref = ANY($1::text[]) AND status = 'done' AND NOT is_test AND report_md IS NOT NULL
           AND created_at >= now() - make_interval(days => $2)
         ORDER BY created_at DESC LIMIT 1`,
       [refs, MEMO_FRESH_DAYS],
@@ -30,6 +30,25 @@ export async function freshMemoForClientKey(clientKey: string): Promise<{ analys
     return { analysisId: Number(row.id), bbcode: memoBbcode(row.report_md, new Date(row.created_at).toISOString()) };
   } catch (e) {
     console.warn('[aiAnalysis] памятка для задачи не собралась:', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/** Свежая памятка обычным текстом — дописывается к сообщению по шаблону (окно, очередь, массовая постановка). */
+export async function freshMemoPlainForClientKey(clientKey: string): Promise<{ analysisId: number; text: string } | null> {
+  try {
+    const refs = await refsOfClientKey(clientKey);
+    const r = await systemDb().query<{ id: string; report_md: string; created_at: Date }>(
+      `SELECT id, report_md, created_at FROM ai_analyses
+        WHERE client_ref = ANY($1::text[]) AND status = 'done' AND NOT is_test AND report_md IS NOT NULL
+          AND created_at >= now() - make_interval(days => $2)
+        ORDER BY created_at DESC LIMIT 1`,
+      [refs, MEMO_FRESH_DAYS],
+    );
+    const row = r.rows[0];
+    return row ? { analysisId: Number(row.id), text: memoPlain(row.report_md, new Date(row.created_at).toISOString()) } : null;
+  } catch (e) {
+    console.warn('[aiAnalysis] памятка для сообщения не собралась:', e instanceof Error ? e.message : e);
     return null;
   }
 }

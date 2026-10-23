@@ -11,6 +11,7 @@
 // плейсхолдер есть в тексте (рекомендации — это полная сборка карточки клиента, секунды).
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { getCachedClientNames, resolveClientNames } from '@/lib/bitrix/clientNames';
+import { freshMemoPlainForClientKey } from '@/features/ai-analysis/engine/memoStore';
 import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities, recommendFor } from '@/features/customers/engine/crossSell';
@@ -394,10 +395,15 @@ export async function renderTemplate(body: string, ctx: { clientKey: string; man
       resolved.set(k, FALLBACK[k] ?? '—');
     }
   }));
-  return body.replace(PLACEHOLDER_RE, (m, raw: string) => {
+  const text = body.replace(PLACEHOLDER_RE, (m, raw: string) => {
     const k = placeholderKey(raw);
     return k && resolved.has(k) ? resolved.get(k)! : m;
   });
+  // Памятка «Перед звонком» по разговорам с заказчиком (владелец 23.10: «должна подсасываться в
+  // комментарий при постановке задачи вместе с шаблоном») — свежий разбор звонков, не старше 14 дней.
+  // Обычным текстом: РОП видит и правит; при постановке createDeal оформит её BB-блоком.
+  const memo = await freshMemoPlainForClientKey(ctx.clientKey);
+  return memo ? `${text.trimEnd()}\n\n${memo.text}` : text;
 }
 
 /** Любой заказчик с последней отгрузкой (для предпросмотра в редакторе шаблонов). */

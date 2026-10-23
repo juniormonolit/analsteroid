@@ -30,6 +30,7 @@ import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID } from './config';
 import { freshMemoForClientKey, markMemoInserted } from '@/features/ai-analysis/engine/memoStore';
+import { memoLinesBb, splitComment } from '@/features/ai-analysis/engine/memo';
 
 export class DealCreateError extends Error {}
 
@@ -305,10 +306,13 @@ export async function createRepeatTask(input: {
     responsibleId = input.newResponsibleId;
   }
 
-  // Памятка ИИ (этап 1.5 «ИИ-анализа звонков»): есть свежий отчёт по заказчику — «что предложить» и
-  // «риски» дописываются в описание задачи (без оценки менеджера). Не нашлась или упала — без неё.
-  const memo = await freshMemoForClientKey(input.clientKey);
-  const description = await buildDescription(input.clientKey, input.comment, memo?.bbcode ?? null);
+  // Памятка «Перед звонком» (владелец 23.10): приходит внутри сообщения по шаблону (settings.renderTemplate
+  // дописывает её обычным текстом, РОП может править или стереть). Здесь вынимаем её из текста и оформляем
+  // BB-блоком — в описании первым, в чате задачи тоже. Стёрли — памятки нет: сами не добавляем.
+  const parts = splitComment(input.comment);
+  const memoBb = parts.memo ? memoLinesBb(parts.memo.date, parts.memo.lines) : null;
+  const memo = parts.memo ? await freshMemoForClientKey(input.clientKey) : null; // только чтобы отметить, что памятка ушла
+  const description = await buildDescription(input.clientKey, parts.rop, memoBb);
   const task = await writeOnce<{ task?: { id?: string | number } }>(taskWebhook(), 'tasks.task.add', {
     fields: {
       TITLE: title,
@@ -329,8 +333,9 @@ export async function createRepeatTask(input: {
   // Комментарий РОПа — ещё и первым сообщением в чате задачи (владелец 20.10). Не роняет
   // постановку: задача уже есть, комментарий в любом случае лежит в её описании.
   let chatPosted = false;
-  if (input.comment.trim()) {
-    chatPosted = await postToTaskChat(taskId, input.commentAuthorId ?? input.creatorBitrixId, input.comment.trim()).catch(e => {
+  const chatText = [memoBb, parts.rop].filter(Boolean).join('\n\n');
+  if (chatText.trim()) {
+    chatPosted = await postToTaskChat(taskId, input.commentAuthorId ?? input.creatorBitrixId, chatText).catch(e => {
       console.warn(`[repeat-kanban] комментарий в чат задачи ${taskId} не ушёл:`, e instanceof Error ? e.message : e);
       return false;
     });

@@ -1253,7 +1253,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
   };
 
   return (
-    <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Задача · ${cardName(card)}`} desktopWidth="sm:max-w-2xl">
+    <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Задача · ${cardName(card)}`} desktopWidth="sm:max-w-4xl">
       {queued ? (
         <div className="flex flex-col gap-3 text-sm">
           <p className="text-[var(--color-text)]">
@@ -1291,8 +1291,10 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
               <TemplatePicker clientKey={card.clientKey} managerId={card.managerId} value={text} onChange={setText} />
               <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
                 Сообщение менеджеру
-                <textarea value={text} onChange={e => setText(e.target.value)} rows={10}
-                  placeholder="У тебя дом без крыши — будет капать дождь — предложи металлочерепицу!" className={`${fieldCls} min-h-[30dvh] resize-y sm:min-h-[240px]`} />
+                {/* Крупно (владелец 23.10: «сделай окно крупно, чтобы сообщение было видно целиком»):
+                    шаблон + памятка «Перед звонком» — 15–25 строк. */}
+                <textarea value={text} onChange={e => setText(e.target.value)} rows={20}
+                  placeholder="У тебя дом без крыши — будет капать дождь — предложи металлочерепицу!" className={`${fieldCls} min-h-[45dvh] resize-y leading-relaxed sm:min-h-[420px]`} />
               </label>
               <DeadlinePicker card={card} value={deadline} onChange={setDeadline} time={deadlineTime} onTime={setDeadlineTime} />
             </>

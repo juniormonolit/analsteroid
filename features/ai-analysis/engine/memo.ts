@@ -32,9 +32,10 @@ export function memoLines(reportMd: string): string[] | null {
 export function memoPlain(reportMd: string, createdAt: string): string {
   const short = memoLines(reportMd);
   if (short) return [`Перед звонком (по разговорам на ${fmtD(createdAt)}):`, ...short].join('\n');
+  // Без пустых строк: памятка в тексте сообщения — один сплошной блок, его потом находит splitComment.
   return [
-    `Перед звонком (по разговорам на ${fmtD(createdAt)}):`, '',
-    'Что предложить:', ...plainLines(section(reportMd, 3)), '',
+    `Перед звонком (по разговорам на ${fmtD(createdAt)}):`,
+    'Что предложить:', ...plainLines(section(reportMd, 3)),
     'Риски и обещания:', ...plainLines(section(reportMd, 4)),
   ].join('\n');
 }
@@ -63,6 +64,34 @@ function bbLine(line: string): string {
 }
 
 const DAY = 86_400_000;
+/** Шапка памятки в обычном тексте — по ней памятку находят в сообщении РОПа (splitComment). */
+export const MEMO_PLAIN_MARK = 'Перед звонком (по разговорам на ';
+
+/**
+ * Памятка внутри сообщения менеджеру (владелец 23.10: «памятка должна подсасываться в комментарий при
+ * постановке задачи вместе с шаблоном»): шаблон + памятка обычным текстом, РОП может править. При постановке
+ * блок памятки вынимаем обратно и оформляем BB («📞 Перед звонком»), остальное — текст РОПа.
+ * Памятка — от строки-шапки до первой пустой строки. Нет шапки (РОП стёр) — памятки нет.
+ */
+export function splitComment(comment: string): { rop: string; memo: { date: string; lines: string[] } | null } {
+  const lines = comment.split('\n');
+  const i = lines.findIndex(l => l.trim().startsWith(MEMO_PLAIN_MARK));
+  if (i < 0) return { rop: comment.trim(), memo: null };
+  let j = i + 1;
+  while (j < lines.length && lines[j].trim()) j++;
+  const date = lines[i].trim().slice(MEMO_PLAIN_MARK.length).match(/^[\d.]+/)?.[0] ?? '';
+  const memoLines = lines.slice(i + 1, j).map(l => l.trim()).filter(Boolean);
+  const rop = [...lines.slice(0, i), ...lines.slice(j)].join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { rop, memo: memoLines.length ? { date, lines: memoLines } : null };
+}
+
+/** Строки памятки из сообщения (как РОП их оставил) → BB-блок «Перед звонком». */
+export function memoLinesBb(date: string, lines: string[], opts: { updated?: boolean } = {}): string {
+  const [d, m, y] = date.split('.').map(Number);
+  const iso = d && m && y ? new Date(Date.UTC(y, m - 1, d, 9)).toISOString() : new Date().toISOString();
+  return [bbHeader(iso, opts.updated), ...lines.map(l => (/^(Что предложить|Риски и обещания):$/i.test(l) ? `[B]${l}[/B]` : bbLine(l)))].join('\n');
+}
+
 function bbHeader(createdAt: string, updated?: boolean): string {
   const old = Date.now() - new Date(createdAt).getTime() > MEMO_FRESH_DAYS * DAY;
   const when = old ? `[COLOR=${RED}]по разговорам на ${fmtD(createdAt)} — проверь актуальность[/COLOR]` : `[COLOR=${GRAY}]· по разговорам на ${fmtD(createdAt)}${updated ? ' · обновлено' : ''}[/COLOR]`;
