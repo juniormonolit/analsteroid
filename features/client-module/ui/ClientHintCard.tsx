@@ -4,6 +4,7 @@
 // подтверждает одним нажатием или выбирает другой. Когда тип уже указан и с
 // подсказкой согласен — карточки нет, остаётся строка ЕГРЮЛ.
 
+import { useState } from 'react';
 import { Sparkles, Landmark } from 'lucide-react';
 import { type ClientModuleData, CLIENT_TYPES, TYPES_WITH_OCCUPATION } from '../engine/types';
 import { Chip, useSave } from './parts';
@@ -34,6 +35,7 @@ export function ClientHintCard({ data, params, onEditClient }: {
   onEditClient: () => void;
 }) {
   const { save, saving, error } = useSave(params);
+  const [why, setWhy] = useState(false);
   const h = data.hint;
   // «Строит себе» любой стадии подсказка не оспаривает — стадию знает менеджер.
   const current = data.profile.clientType === 'self_builder_late' && h?.type === 'self_builder' ? 'self_builder' : data.profile.clientType;
@@ -48,37 +50,34 @@ export function ClientHintCard({ data, params, onEditClient }: {
   const occupation = TYPES_WITH_OCCUPATION.has(h.type) ? (data.profile.occupation || h.occupation) : '';
   const accept = () => save({ client: { clientType: h.type, occupation, note: data.profile.note } });
 
-  // Аудит 15.10: подсказка — одна строка с кнопками, причины — по «почему?»
-  // (раньше занимала первый экран целиком, а нужна один раз на клиента).
+  // Одна строка (владелец 23.10: «одинокое „почему?“ на плашке — умора»): текст · [Сменить] [Оставить] · почему?;
+  // причины раскрываются под строкой. Тот же вид в приложении и во вкладке Битрикса.
   return (
-    <div className="rounded-xl border border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_5%,transparent)] px-3 py-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-        <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
-        <span className="min-w-0 flex-1 text-[13.5px]">
-          {current === null ? 'Похоже, это' : current === h.type ? 'Тип клиента' : `Указано «${typeLabel(current)}», но похоже на`}
+    <div className="rounded-xl border border-dashed border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] px-3 py-1.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Sparkles size={14} className="shrink-0 text-[var(--color-accent)]" />
+        <span className="min-w-0 text-[13px]">
+          {current === null ? 'Похоже, это' : `Указано «${typeLabel(current)}», похоже на`}
           {' '}<b>{typeLabel(h.type)}</b>
           {occupation && <span className="text-[var(--color-text-muted)]"> · {occupation}</span>}
           {h.confidence !== 'high' && <span className="text-[var(--color-text-muted)]"> · {h.confidence === 'medium' ? 'вероятно' : 'не уверены'}</span>}
         </span>
+        <button type="button" onClick={() => setWhy(v => !v)} aria-expanded={why}
+          className="min-h-9 text-[12.5px] text-[var(--color-text-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--color-text)]">почему?</button>
         {current !== null && current !== h.type && (
-          <span className="flex shrink-0 gap-1.5">
+          <span className="ml-auto flex shrink-0 gap-1.5">
             <button type="button" onClick={accept} disabled={saving}
-              className="min-h-10 rounded-lg bg-[var(--color-accent)] px-3.5 text-[13px] font-semibold text-white disabled:opacity-60">
-              {saving ? 'Сохраняем…' : current === null ? 'Да' : 'Сменить'}
+              className="min-h-9 rounded-lg bg-[var(--color-accent)] px-3 text-[12.5px] font-semibold text-white disabled:opacity-60">
+              {saving ? 'Сохраняем…' : 'Сменить'}
             </button>
-            <button type="button" onClick={onEditClient} className="min-h-10 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-[13px]">
-              {current === null ? 'Другой' : 'Оставить'}
-            </button>
+            <button type="button" onClick={onEditClient} className="min-h-9 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-[12.5px]">Оставить</button>
           </span>
         )}
       </div>
+      {why && <ul className="flex list-disc flex-col gap-0.5 pb-1 pl-8 pt-1 text-[12.5px] text-[var(--color-text-muted)]">{h.reasons.map((r, k) => <li key={k}>{r}</li>)}</ul>}
       {h.warnings.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">{h.warnings.map((w, i) => <Chip key={i} tone="neg">{w}</Chip>)}</div>
+        <div className="mt-1 flex flex-wrap gap-1 pb-0.5">{h.warnings.map((w, k) => <Chip key={k} tone="neg">{w}</Chip>)}</div>
       )}
-      <details className="mt-0.5 text-[12.5px] text-[var(--color-text-muted)]">
-        <summary className="inline-flex min-h-8 cursor-pointer select-none items-center">почему?</summary>
-        <ul className="flex list-disc flex-col gap-0.5 pb-1 pl-5">{h.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
-      </details>
       {error && <div className="text-[12px]" style={{ color: 'var(--color-negative, #e03131)' }}>{error}</div>}
     </div>
   );

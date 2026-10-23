@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart3, CheckSquare, PhoneCall, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BarChart3, CheckSquare, PhoneCall, Moon, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -682,7 +682,7 @@ function TodayView({ sections, h }: { sections: TodaySection[]; h: CardHandlers 
         <div className="scroll-x h-full">
           <div className="flex h-full items-stretch gap-3">
             {filled.map(sec => (
-              <section key={sec.key} className="flex h-full w-72 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
+              <section key={sec.key} className="flex h-full w-80 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
                 <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${TONE[sec.key] ?? 'var(--color-accent)'}` }} title={sec.hint}>
                   <div className="flex items-baseline justify-between gap-2">
                     <h2 className="text-sm font-semibold text-[var(--color-text)]">{sec.title}</h2>
@@ -711,7 +711,7 @@ function Column({ def, col, h, onMore }: { def: ColumnDef; col: KanbanColumn | u
   const moneyLine = def.group === 'stage' ? (col && col.sum > 0 ? `сделки ${money(col.sum)}` : null)
     : col && col.potential > 0 ? `потенциал ${moneyShort(col.potential)}` : null;
   return (
-    <div className="flex h-full w-72 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
+    <div className="flex h-full w-80 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
       <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${tone}` }} title={def.hint}>
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-sm font-semibold text-[var(--color-text)]">{def.title}</span>
@@ -889,12 +889,12 @@ function TypeChip({ type }: { type: string | null }) {
   );
 }
 
-/** Тревоги карточки — одна зона, максимум два чипа по приоритету (аудит Fable 20.10). */
+/** Тревоги карточки — одна зона, максимум два чипа (аудит Fable 20.10). С 23.10 (Fable, «наведите красоту и порядок»)
+ *  здесь только то, что требует действия и не видно в других зонах: просрочка и приёмка — в блоке задачи, окно — в строке
+ *  отгрузки, «спит» — иконкой, «сделка без задачи» — самой кнопкой «+ Задача» (стояла на 80 % карточек — шум). */
 function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }[] {
   const a: { text: string; red: boolean }[] = [];
   const t = c.task;
-  const open = t && t.state !== 'done' && t.state !== 'control';
-  if (t && open && t.deadlineAt && new Date(t.deadlineAt).getTime() < Date.now()) a.push({ text: 'Задача просрочена', red: true });
   if (col === 'review' && c.lostEarly) a.push({ text: `Отказ после ${c.attempts?.count ?? 0} из ${TOUCHES} попыток`, red: true });
   if (col === 'review' && c.dozvonFail) a.push({ text: `${TOUCHES} попытки без дозвона`, red: true });
   if (c.returned) a.unshift({ text: `Вернулся сам: ${c.returned.missed ? 'пропущенный' : 'звонил'} ${fmtDT(c.returned.at)} — перезвоните`, red: true });
@@ -904,15 +904,14 @@ function alertsOf(c: KanbanCard, col: ColumnKey): { text: string; red: boolean }
   if (t?.state === 'unread') a.push({ text: 'Задача не просмотрена', red: true });
   const callAfter = t && c.calls.some(x => !x.missed && x.sec > 20 && x.at > t.createdAt);
   if (t && (t.state === 'control' || t.state === 'done') && !callAfter) a.push({ text: 'Выполнено без звонка', red: true });
-  if (c.deal && !t && (col.startsWith('touch') || col.startsWith('st_'))) a.push({ text: 'Сделка без задачи', red: false });
-  if (t?.state === 'control' && t.changedAt && daysAgo(t.changedAt) >= 1) a.push({ text: `Ждёт приёмки ${daysAgo(t.changedAt)} дн.`, red: false });
   if (c.attempts?.reached && col.startsWith('touch')) a.push({ text: 'Дозвонились — переведите стадию', red: false });
-  if (c.freshDays !== null && col === 'pool_hot') a.push({ text: `Окно: осталось ${Math.max(0, 22 - c.freshDays)} дн.`, red: 22 - c.freshDays <= 3 });
-  if (c.sleeping && col.startsWith('pool')) a.push({ text: 'Спит', red: false });
   return a;
 }
 
-type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task' | 'open_ai' | 'task_check';
+/** «433 дн.» → «1 г. 2 мес.» (Fable 23.10: в «Золотых рыбках» трёхзначные дни — шум). */
+const ageLabel = (d: number) => (d > 365 ? `${Math.floor(d / 365)} г.${Math.floor((d % 365) / 30.4) ? ` ${Math.floor((d % 365) / 30.4)} мес.` : ''}` : `${d} дн.`);
+
+type CardAction = 'hide' | 'request_hide' | 'accept_hide' | 'decline_hide' | 'brak_now' | 'unhide' | 'merge' | 'tags' | 'accept_task' | 'open_ai' | 'task_check' | 'new_task';
 
 /** Редкие действия карточки — в меню «⋯» (владелец 20.10: «глупо, когда висят прямо на лице»). */
 function CardMenu({ items, onAct }: { items: { label: string; act: CardAction; danger?: boolean }[]; onAct: (a: CardAction) => void }) {
@@ -1017,15 +1016,13 @@ function TapTip({ label, text, children }: { label: string; text: string; childr
   );
 }
 
-/** Последний комментарий по задаче: 3 строки, длинный — «ещё» раскрывает целиком (было: только title). */
+/** Последний комментарий по задаче — внутри блока задачи: 3 строки, длинный — «Показать целиком». */
 function NoteBlock({ note }: { note: TaskNote }) {
   const [full, setFull] = useState(false);
   const long = note.text.length > 140 || note.text.split('\n').length > 3;
   return (
-    <div className="rounded-md border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-surface)] px-2 py-1 text-[11.5px] leading-snug">
-      <div className="text-[var(--color-text-muted)]">
-        {note.isResult ? 'Результат' : 'Комментарий'} · {shortName(note.author)} · {fmtDT(note.at)}
-      </div>
+    <div className="border-l-2 border-[var(--color-accent)] pl-2 text-[11.5px] leading-snug">
+      <div className="text-[var(--color-text-muted)]">{note.isResult ? 'Результат · ' : ''}{shortName(note.author)} · {fmtDT(note.at)}</div>
       <div className={`${full ? '' : 'line-clamp-3'} whitespace-pre-line text-[var(--color-text)]`}>{note.text}</div>
       {long && (
         <button type="button" onClick={() => setFull(v => !v)} className={`${FOCUS} mt-0.5 text-[11px] text-[var(--color-accent)] hover:underline`}>
@@ -1046,145 +1043,189 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
   onAct: (a: CardAction) => void;
   onOpen: () => void; onTask: () => void; onReview: () => void; onUnbrak: () => void;
 }) {
-  const isPool = col.startsWith('pool') || col === 'brak';
+  // Раскладка по зонам — спецификация Fable 23.10 (владелец: «наведите красоту и порядок»): шапка → признаки → факты
+  // → сделка → контакт → задача → тревоги → ОДНА кнопка. Повторы и сигналы «есть у всех» убраны.
+  const isPool = col.startsWith('pool') || col === 'brak' || col === 'hidden';
+  const isStage = col.startsWith('st_');
   const good = c.calls.filter(x => !x.missed && x.sec > 20);
   const alerts = alertsOf(c, col);
   const shownAlerts = alerts.slice(0, 2);
   const old = c.lastDeliveredAt ? daysAgo(c.lastDeliveredAt) : null;
+  const t = c.task;
+  const openTask = !!t && t.state !== 'done' && t.state !== 'deferred';
   const dealLabel = c.deal ? 'Задача' : c.lastLost ? 'Вернуть сделку + задача' : 'Сделка + задача';
-  const note = useContext(TaskNotesCtx)[String(c.task?.id ?? '')];
+  const note = useContext(TaskNotesCtx)[String(t?.id ?? '')];
+  const now = Date.now();
+  const taskLate = openTask && t!.state !== 'control' && t!.deadlineAt && new Date(t!.deadlineAt).getTime() < now;
+  // Полоса слева (Fable): красная тревога — красная, задача ждёт приёмки — жёлтая; иначе прозрачная (ширина не прыгает).
+  const stripe = alerts.some(a => a.red) || taskLate ? 'border-l-[var(--color-negative)]' : t?.state === 'control' ? 'border-l-[var(--color-warning)]' : 'border-l-transparent';
+  const windowLeft = col === 'pool_hot' && c.freshDays !== null ? Math.max(0, 22 - c.freshDays) : null;
+  const act = (a: CardAction) => (a === 'new_task' ? onTask() : onAct(a));
 
   return (
-    <article className={`group flex shrink-0 flex-col gap-1 rounded-lg border bg-[var(--color-bg)] p-2.5 text-[12.5px] transition-[border-color,box-shadow] ${selected ? 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:shadow-md'}`}>
-      {/* 1. Шапка: имя + тип; менеджер. */}
-      <div className="flex items-start justify-between gap-2">
-        {selected !== null && (
-          <label className="tap-target -ml-0.5 mt-0.5 inline-flex shrink-0 cursor-pointer items-center" aria-label="Выбрать заказчика">
-            <input type="checkbox" checked={selected} onChange={onSelect} className="h-4 w-4 accent-[var(--color-accent)]" />
-          </label>
-        )}
-        <button type="button" onClick={onOpen} title="Открыть карточку клиента"
-          className={`${FOCUS} min-w-0 text-left text-sm font-semibold text-[var(--color-text)] decoration-dotted underline-offset-2 hover:text-[var(--color-accent)] hover:underline`}>
-          <span className="line-clamp-2">{cardName(c)}</span>
-        </button>
-        <div className="flex shrink-0 items-center gap-1">
-          {c.ai && <AiBadge ai={c.ai} onClick={() => onAct('open_ai')} />}
-          <TypeChip type={c.profileType} />
-          <CardMenu items={[
-            ...(col.startsWith('pool') && canManage ? [{ label: 'Скрыть из пула', act: 'hide' as const }] : []),
-            ...(col.startsWith('pool') && !canManage && isOwn && !c.hideRequest ? [{ label: 'Предложить скрыть', act: 'request_hide' as const }] : []),
-            ...(canManage || isOwn ? [{ label: 'Теги…', act: 'tags' as const }] : []),
-            ...(canMerge ? [{ label: 'Объединить с…', act: 'merge' as const }] : []),
-            ...(canManage && (col.startsWith('pool') || col.startsWith('touch') || (col.startsWith('st_') && col !== 'st_sold')) ? [{ label: 'Сразу в брак', act: 'brak_now' as const, danger: true }] : []),
-          ]} onAct={onAct} />
+    <article className={`group relative flex shrink-0 flex-col gap-1.5 rounded-lg border border-l-[3px] bg-[var(--color-bg)] p-3 text-[12px] leading-snug tabular-nums transition-[border-color,box-shadow] ${stripe} ${selected ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] ring-2 ring-[var(--color-accent)]' : 'border-[var(--color-border)] hover:border-[var(--color-border-strong)] hover:shadow-sm'}`}>
+      {/* A. Шапка: имя · значок разбора · тип · спит · меню; менеджер и номер заказчика. */}
+      <div>
+        <div className="flex items-start gap-2">
+          {selected !== null && (
+            <label className="tap-target -ml-0.5 mt-0.5 inline-flex shrink-0 cursor-pointer items-center" aria-label="Выбрать заказчика">
+              <input type="checkbox" checked={selected} onChange={onSelect} className="h-4 w-4 accent-[var(--color-accent)]" />
+            </label>
+          )}
+          <button type="button" onClick={onOpen} title="Открыть карточку клиента"
+            className={`${FOCUS} min-w-0 flex-1 text-left text-[13.5px] font-semibold leading-tight text-[var(--color-text)] decoration-dotted underline-offset-2 hover:text-[var(--color-accent)] hover:underline`}>
+            <span className="line-clamp-2">{cardName(c)}</span>
+          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            {c.ai && <AiBadge ai={c.ai} onClick={() => onAct('open_ai')} />}
+            {c.sleeping && col.startsWith('pool') && <TapTip label="Спит" text="Спит: давно нет движений по заказчику"><Moon size={12} className="text-[var(--color-text-muted)]" /></TapTip>}
+            {c.profileType ? <TypeChip type={c.profileType} /> : (
+              <span className="shrink-0 rounded border border-dashed border-[var(--color-border-strong)] px-1 text-[10.5px] text-[var(--color-text-muted)]" title="Тип клиента не указан — заполните в карточке клиента">Тип?</span>
+            )}
+            <CardMenu items={[
+              ...(canManage && openTask && canTaskCol(col) ? [{ label: 'Ещё задача…', act: 'new_task' as const }] : []),
+              ...(col.startsWith('pool') && canManage ? [{ label: 'Скрыть из пула', act: 'hide' as const }] : []),
+              ...(col.startsWith('pool') && !canManage && isOwn && !c.hideRequest ? [{ label: 'Предложить скрыть', act: 'request_hide' as const }] : []),
+              ...(canManage || isOwn ? [{ label: 'Теги…', act: 'tags' as const }] : []),
+              ...(canMerge ? [{ label: 'Объединить с…', act: 'merge' as const }] : []),
+              ...(canManage && (col.startsWith('pool') || col.startsWith('touch') || (isStage && col !== 'st_sold')) ? [{ label: 'Сразу в брак', act: 'brak_now' as const, danger: true }] : []),
+            ]} onAct={act} />
+          </div>
+        </div>
+        {/* Номер заказчика — идентификатор, не действие: цветом текста, ↗ по наведению (на таче виден всегда). */}
+        <div className="mt-0.5 flex min-w-0 items-baseline justify-between gap-2 text-[11.5px] text-[var(--color-text-muted)]">
+          <span className="min-w-0 truncate">{c.managerName}</span>
+          <a href={c.clientType === 'company' ? `https://td.monolit-crm.ru/crm/company/details/${c.clientId}/` : `https://td.monolit-crm.ru/crm/contact/details/${c.clientId}/`}
+            target="_blank" rel="noreferrer" className={`${FOCUS} inline-flex shrink-0 items-center gap-0.5 hover:text-[var(--color-text)] hover:underline`}
+            title={`${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId} в Битриксе${c.members.length ? ` (склеен с ${c.members.map(m => `#${m.key.slice(1)}`).join(', ')})` : ''} — по этому номеру заказчик ищется в канбане`}>
+            #{c.clientId}<ExternalLink size={10} className="hover-reveal shrink-0" />
+          </a>
         </div>
       </div>
-      {/* Номер заказчика (владелец 22.10: «на карточках нет уникального айди — не по чему искать»):
-          id контакта/компании Битрикса — ссылка в Битрикс; этот же номер ищется в строке поиска. */}
-      <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11.5px] text-[var(--color-text-muted)]">
-        <span className="min-w-0 truncate">{c.managerName}</span>
-        <a href={c.clientType === 'company' ? `https://td.monolit-crm.ru/crm/company/details/${c.clientId}/` : `https://td.monolit-crm.ru/crm/contact/details/${c.clientId}/`}
-          target="_blank" rel="noreferrer" className={`${BX_LINK} inline-flex shrink-0 items-center gap-0.5 tabular-nums`}
-          title={`${c.clientType === 'company' ? 'Компания' : 'Контакт'} #${c.clientId} в Битриксе${c.members.length ? ` (склеен с ${c.members.map(m => `#${m.key.slice(1)}`).join(', ')})` : ''} — по этому номеру заказчик ищется в канбане`}>
-          ID {c.clientId}<ExternalLink size={10} className="shrink-0 opacity-70" />
-        </a>
-      </div>
-      {c.tags?.length > 0 && <CardTags ids={c.tags} />}
-      {c.members.length > 0 && <MembersBadge c={c} canMerge={canMerge} onUnmerge={onUnmerge} />}
-      {c.queued && (
-        <div className="truncate rounded bg-[var(--color-bg-surface)] px-1.5 py-0.5 text-[11.5px] text-[var(--color-text-secondary)]" title="Задача выдастся автоматически, когда у менеджера освободится место (вкладка «Очередь»)">
-          В очереди{c.queued.by ? ` · поставил ${shortName(c.queued.by)}` : ''} · {fmtDay(c.queued.at)}
+
+      {/* B. Признаки — только если есть. */}
+      {(c.tags?.length > 0 || c.members.length > 0 || c.queued) && (
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          {c.tags?.length > 0 && <CardTags ids={c.tags} />}
+          {c.members.length > 0 && <MembersBadge c={c} canMerge={canMerge} onUnmerge={onUnmerge} />}
+          {c.queued && (
+            <span className="rounded bg-[var(--color-bg-surface)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-secondary)]"
+              title={`Задача выдастся автоматически, когда у менеджера освободится место (вкладка «Очередь»)${c.queued.by ? `. Поставил ${c.queued.by}` : ''}`}>
+              В очереди · {fmtDay(c.queued.at)}
+            </span>
+          )}
         </div>
       )}
 
-      {/* 2. Деньги. */}
-      <div className="min-w-0 tabular-nums">
-        <div className="whitespace-nowrap">{c.purchases}{'\u00a0'}{plural(c.purchases, 'отгрузка', 'отгрузки', 'отгрузок')} на {moneyShort(c.sumDelivered)}</div>
-      </div>
-
-      {/* 3. Последняя отгрузка — две строки: «Отгрузка дд.мм.гг · N дн. назад» (без переноса,
-          дата открывает сделку) и товарная группа (обрезается многоточием). */}
-      {c.lastDeliveredAt ? (
-        <div className="min-w-0 text-[var(--color-text-secondary)]">
-          <div className="whitespace-nowrap">
-            {c.lastDeliveredDealId ? (
-              // Сразу в Битрикс (владелец 23.10: «такие ссылки должны сразу вести в Битрикс»; было — карточка сделки Монолитики).
-              <a href={dealUrl(c.lastDeliveredDealId)} target="_blank" rel="noreferrer" className={`${BX_LINK} inline-flex items-center gap-0.5`} title={`Сделка последней отгрузки #${c.lastDeliveredDealId} в Битриксе`}>
-                Отгрузка {fmtDayYear(c.lastDeliveredAt)}<ExternalLink size={10} className="shrink-0 opacity-70" />
-              </a>
-            ) : <>Отгрузка {fmtDayYear(c.lastDeliveredAt)}</>}
-            {' · '}<span style={old !== null && old > 120 ? { color: '#b45f06', fontWeight: 600 } : undefined}>{old}{'\u00a0'}дн. назад</span>
-          </div>
-          <div className="truncate" title={c.lastDeliveredGroup ?? undefined}>{c.lastDeliveredGroup ?? 'без товарной группы'}</div>
+      {/* C. Факты: деньги — главное число; последняя отгрузка; группа; что предложить. */}
+      <div className="min-w-0">
+        <div className="text-[13px] text-[var(--color-text)]">
+          <b className="font-semibold">{c.purchases}</b> {plural(c.purchases, 'отгрузка', 'отгрузки', 'отгрузок')} · <b className="font-semibold">{moneyShort(c.sumDelivered)}</b>
         </div>
-      ) : <div className="text-[var(--color-text-muted)]">Отгрузок не было</div>}
-      {c.offer?.length > 0 && <OfferLine offer={c.offer} />}
-
-      {/* 4. Сделка — строка есть всегда. */}
-      <div className="truncate">
-        {c.deal ? (
-          <a href={dealUrl(c.deal.dealId)} target="_blank" rel="noreferrer" title="Сделка в Битриксе" className={`${BX_LINK} inline-flex max-w-full items-center gap-1`}>
-            <ExternalLink size={12} className="shrink-0" /><span className="truncate">#{c.deal.dealId} · {c.deal.stageName ?? c.deal.stageId}</span>
-          </a>
-        ) : c.wrongFunnel ? (
-          <a href={dealUrl(c.wrongFunnel.dealId)} target="_blank" rel="noreferrer" title="Повторная сделка заведена в первичной воронке — перенесите её в «Повторные» в Битриксе, тогда канбан её увидит"
-            className={`${FOCUS} inline-flex max-w-full items-center gap-1 font-semibold text-[#990000] underline-offset-2 hover:underline`}>
-            <ExternalLink size={12} className="shrink-0" /><span className="truncate">#{c.wrongFunnel.dealId} · {c.wrongFunnel.stageName ?? ''} · {c.wrongFunnel.funnelName ?? 'первичная воронка'}</span>
-          </a>
-        ) : c.lastLost ? (
-          <a href={dealUrl(c.lastLost.dealId)} target="_blank" rel="noreferrer" title="Последняя отказная сделка в Битриксе" className={`${FOCUS} inline-flex max-w-full items-center gap-1 text-[var(--color-text-muted)] underline-offset-2 hover:text-[var(--color-accent)] hover:underline`}>
-            <ExternalLink size={12} className="shrink-0" /><span className="truncate">Нет активной сделки · отказ {fmtDay(c.lastLost.lostAt)} · {c.lastLost.stageName}</span>
-          </a>
-        ) : <span className="text-[var(--color-text-muted)]">Нет активной сделки</span>}
+        {c.lastDeliveredAt ? (
+          <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-1 text-[11.5px] text-[var(--color-text-secondary)]">
+            {c.lastDeliveredDealId ? (
+              <a href={dealUrl(c.lastDeliveredDealId)} target="_blank" rel="noreferrer" className={`${FOCUS} hover:text-[var(--color-accent)] hover:underline`} title={`Сделка последней отгрузки #${c.lastDeliveredDealId} в Битриксе`}>
+                Отгрузка {fmtDayYear(c.lastDeliveredAt)}
+              </a>
+            ) : <span>Отгрузка {fmtDayYear(c.lastDeliveredAt)}</span>}
+            {/* Старая отгрузка подсвечивается там, где это сигнал (пул «Срочно» и «1 отгрузка»), а не у всех «рыбок». */}
+            <span style={old !== null && old > 120 && (col === 'pool_1' || col === 'pool_hot') ? { color: 'var(--color-warning)' } : undefined}>· {old !== null ? ageLabel(old) : ''}</span>
+            {windowLeft !== null && (
+              <span className={windowLeft <= 3 ? 'font-semibold text-[var(--color-negative)]' : 'text-[var(--color-warning)]'}>· окно {windowLeft} дн.</span>
+            )}
+          </div>
+        ) : <div className="text-[11.5px] text-[var(--color-text-muted)]">Отгрузок не было</div>}
+        {c.lastDeliveredGroup && <div className="truncate text-[11.5px] text-[var(--color-text-muted)]" title={c.lastDeliveredGroup}>{c.lastDeliveredGroup}</div>}
+        {(isPool || col.startsWith('touch')) && c.offer?.length > 0 && <div className="mt-0.5"><OfferLine offer={c.offer} /></div>}
       </div>
 
-      {/* 5. Контакт: попытки по порядку (●●○), последний звонок, недозвоны. */}
-      {!isPool && (
+      {/* D. Сделка: в пуле «нет активной» — норма, не пишем; в стадиях стадия = колонка, не повторяем. */}
+      {c.wrongFunnel && !c.deal ? (
+        <a href={dealUrl(c.wrongFunnel.dealId)} target="_blank" rel="noreferrer" title="Повторная сделка заведена в первичной воронке — перенесите её в «Повторные» в Битриксе, тогда канбан её увидит"
+          className={`${FOCUS} inline-flex max-w-full items-center gap-1 text-[11.5px] font-semibold text-[var(--color-negative)] hover:underline`}>
+          <span className="truncate">#{c.wrongFunnel.dealId} · {c.wrongFunnel.stageName ?? ''} · {c.wrongFunnel.funnelName ?? 'первичная воронка'}</span><ExternalLink size={10} className="shrink-0" />
+        </a>
+      ) : c.deal ? (
+        <a href={dealUrl(c.deal.dealId)} target="_blank" rel="noreferrer" title="Сделка в Битриксе"
+          className={`${FOCUS} inline-flex max-w-full items-center gap-1 text-[11.5px] text-[var(--color-accent)] hover:underline`}>
+          <span className="truncate">
+            {col === 'review' && c.deal.lostAt ? `Отказ ${fmtDay(c.deal.lostAt)} · ${c.deal.stageName ?? ''}`
+              : isStage ? `Сделка #${c.deal.dealId}${c.deal.amount ? ` · ${moneyShort(c.deal.amount)}` : ''}`
+              : `#${c.deal.dealId} · ${c.deal.stageName ?? c.deal.stageId}`}
+          </span>
+          <ExternalLink size={10} className="hover-reveal shrink-0" />
+        </a>
+      ) : c.lastLost ? (
+        <a href={dealUrl(c.lastLost.dealId)} target="_blank" rel="noreferrer" title="Последняя отказная повторная сделка в Битриксе"
+          className={`${FOCUS} inline-flex max-w-full items-center gap-1 text-[11.5px] text-[var(--color-text-muted)] hover:text-[var(--color-accent)] hover:underline`}>
+          <span className="truncate">Отказ {fmtDay(c.lastLost.lostAt)} · {c.lastLost.stageName}</span><ExternalLink size={10} className="hover-reveal shrink-0" />
+        </a>
+      ) : null}
+
+      {/* E. Контакт (дозвон, воронка, разбор): попытки ●●○, последний разговор, недозвоны. */}
+      {!isPool && (c.attempts || good[0] || c.missedCalls > 0) && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-[var(--color-text-secondary)]">
           {c.attempts && (
             <TapTip label="Попытки связаться" text={c.attempts.days.map((d, i) => `${i + 1}-я попытка: ${d.split('-').reverse().slice(0, 2).join('.')}`).join('\n') || 'Попыток ещё не было'}>
-              {[0, 1, 2].map(i => (
-                <span key={i} className={`inline-block h-2.5 w-2.5 rounded-full ${i < Math.min(c.attempts!.count, TOUCHES) ? (c.attempts!.reached ? 'bg-[#6aa84f]' : 'bg-[var(--color-accent)]') : 'border border-[var(--color-border-strong)]'}`} />
-              ))}
-              <span className="tabular-nums">{Math.min(c.attempts.count, TOUCHES)}/{TOUCHES}</span>
-              {c.attempts.reached && <span className="font-semibold text-[#38761d]">дозвон</span>}
+              <span className="inline-flex gap-0.5">
+                {[0, 1, 2].map(i => (
+                  <span key={i} className={`inline-block h-2 w-2 rounded-full ${i < Math.min(c.attempts!.count, TOUCHES) ? (c.attempts!.reached ? 'bg-[var(--color-positive)]' : 'bg-[var(--color-accent)]') : 'border border-[var(--color-border-strong)]'}`} />
+                ))}
+              </span>
+              <span>{Math.min(c.attempts.count, TOUCHES)}/{TOUCHES}</span>
+              {c.attempts.reached && <span className="font-semibold text-[var(--color-positive)]">дозвон</span>}
             </TapTip>
           )}
-          {good[0] && <span className="inline-flex items-center gap-0.5"><Phone size={11} /> {fmtDT(good[0].at)} ({fmtSec(good[0].sec)})</span>}
-          {c.missedCalls > 0 && <span className="inline-flex items-center gap-0.5 text-[var(--color-text-muted)]"><PhoneMissed size={11} /> {c.missedCalls}</span>}
+          {good[0] && <span className="inline-flex items-center gap-0.5" title="Последний разговор"><Phone size={11} /> {fmtDT(good[0].at)} · {fmtSec(good[0].sec)}</span>}
+          {c.missedCalls > 0 && <span className="inline-flex items-center gap-0.5 text-[var(--color-text-muted)]" title={`${c.missedCalls} недозвонов`}><PhoneMissed size={11} /> {c.missedCalls}</span>}
         </div>
       )}
 
-      {/* 6. Задача + тревоги (одна зона, максимум два чипа). */}
-      {c.task && (
-        <a href={taskUrl(c.task.id)} target="_blank" rel="noreferrer" className={`${FOCUS} group/task flex min-w-0 items-center gap-1.5 text-[11.5px]`}
-          title={`Задача #${c.task.id} в Битриксе — от ${fmtDT(c.task.createdAt)}${c.task.deadlineAt ? `, срок ${fmtDay(c.task.deadlineAt)}` : ''}`}>
-          <span className="rounded px-1.5 py-0.5 font-semibold" style={{ background: TASK_STATE[c.task.state].bg, color: TASK_STATE[c.task.state].fg }}>
-            <ClipboardList size={11} className="mr-0.5 inline" />{TASK_STATE[c.task.state].label}
-          </span>
-          <span className="min-w-0 truncate text-[var(--color-text-muted)] underline-offset-2 group-hover/task:text-[var(--color-accent)] group-hover/task:underline">{shortName(c.task.createdByName)} → {shortName(c.task.responsibleName)}</span>
-          <ExternalLink size={10} className="shrink-0 text-[var(--color-text-muted)] opacity-70 group-hover/task:text-[var(--color-accent)]" />
-        </a>
+      {/* F. Задача — свой блок: статус и срок, кто → кому (целиком, без обрезки чипа), проверка звонка, комментарий. */}
+      {t && (
+        <div className="flex min-w-0 flex-col gap-1 rounded-md bg-[var(--color-bg-surface)] px-2 py-1.5">
+          <div className="flex items-center gap-2">
+            <span className="whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-semibold" style={{ background: TASK_STATE[t.state].bg, color: TASK_STATE[t.state].fg }}>{TASK_STATE[t.state].label}</span>
+            <span className="ml-auto shrink-0 text-[11px]">
+              {taskLate ? <span className="font-semibold text-[var(--color-negative)]">просрочена {daysAgo(t.deadlineAt!)} дн.</span>
+                : t.state === 'control' ? <span className="text-[var(--color-warning)]">ждёт приёмки{t.changedAt && daysAgo(t.changedAt) >= 1 ? ` ${daysAgo(t.changedAt)} дн.` : ''}</span>
+                : openTask && t.deadlineAt ? <span className="text-[var(--color-text-muted)]">до {fmtDay(t.deadlineAt)}</span> : null}
+            </span>
+          </div>
+          <a href={taskUrl(t.id)} target="_blank" rel="noreferrer" className={`${FOCUS} group/task flex min-w-0 items-center gap-1 text-[11.5px] text-[var(--color-text-muted)]`}
+            title={`Задача #${t.id} в Битриксе — от ${fmtDT(t.createdAt)}${t.deadlineAt ? `, срок ${fmtDay(t.deadlineAt)}` : ''}`}>
+            <span className="min-w-0 truncate group-hover/task:text-[var(--color-accent)] group-hover/task:underline">{shortName(t.createdByName)} → {shortName(t.responsibleName)}</span>
+            <ExternalLink size={10} className="hover-reveal shrink-0" />
+          </a>
+          <TaskCheckChip taskId={t.id} onOpen={() => onAct('task_check')} />
+          {note && <NoteBlock note={note} />}
+        </div>
       )}
-      {c.task && <TaskCheckChip taskId={c.task.id} onOpen={() => onAct('task_check')} />}
-      {/* Последний комментарий по задаче (владелец 21.10): что ответил менеджер — видно сразу,
-          принимать задачу РОП ходит в Битрикс. */}
-      {note && <NoteBlock note={note} />}
+
+      {/* G. Тревоги — только требующие действия. */}
       {shownAlerts.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {shownAlerts.map(a => (
             <span key={a.text} className="rounded px-1.5 py-0.5 text-[11px] font-semibold"
-              style={a.red ? { background: '#f4cccc', color: '#990000' } : { background: '#fff2cc', color: '#7f6000' }}>
+              style={a.red ? { background: 'var(--color-negative-soft)', color: 'var(--color-negative)' } : { background: 'color-mix(in srgb, var(--color-warning) 18%, transparent)', color: 'var(--color-warning)' }}>
               {a.red && <AlertTriangle size={10} className="mr-0.5 inline" />}{a.text}
             </span>
           ))}
           {alerts.length > 2 && <TapTip label="Ещё тревоги" text={alerts.slice(2).map(a => a.text).join('\n')}><span className="text-[11px] font-semibold text-[var(--color-text-muted)]">+{alerts.length - 2}</span></TapTip>}
         </div>
       )}
+
+      {/* H. Служебные состояния: разбор, брак, скрыт, предложение скрыть. */}
       {c.review?.decision === 'return' && col === 'review' && (
-        <div className="text-[11px] text-[#b45f06]">Возвращено менеджеру {fmtDay(c.review.decidedAt)} · {c.review.decidedBy}</div>
+        <div className="text-[11px] text-[var(--color-text-muted)]">Возвращено менеджеру {fmtDay(c.review.decidedAt)} · {c.review.decidedBy}</div>
       )}
-      {c.brak && <div className="text-[11px] text-[var(--color-negative)]">{c.brak.comment ?? 'Брак'} · {c.brak.by}, {fmtDay(c.brak.at)}</div>}
+      {c.brak && (
+        <div className="text-[11px] text-[var(--color-text-muted)]">
+          <span className="font-semibold text-[var(--color-negative)]">Брак</span> · {c.brak.by}, {fmtDay(c.brak.at)}
+          {c.brak.comment && <span className="line-clamp-2 text-[var(--color-text-secondary)]">{c.brak.comment}</span>}
+        </div>
+      )}
       {c.hidden && (
         <div className="rounded-md bg-[var(--color-bg-surface)] px-2 py-1 text-[11.5px]">
           <div className="font-semibold text-[var(--color-text)]">Скрыт {fmtHideUntil(c.hidden.until)}</div>
@@ -1192,56 +1233,30 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           <div className="text-[var(--color-text-muted)]">{c.hidden.by}, {fmtDay(c.hidden.at)}</div>
         </div>
       )}
-
       {c.hideRequest && (
-        <div className="rounded-md bg-[#fff2cc] px-2 py-1 text-[11.5px] text-[#7f6000]">
-          <div className="font-semibold">Предлагает скрыть {fmtHideUntil(c.hideRequest.until)}</div>
-          <div>«{c.hideRequest.comment}»</div>
-          <div className="opacity-80">{c.hideRequest.by}, {fmtDay(c.hideRequest.at)}</div>
+        <div className="rounded-md px-2 py-1 text-[11.5px]" style={{ background: 'color-mix(in srgb, var(--color-warning) 14%, transparent)' }}>
+          <div className="font-semibold text-[var(--color-text)]">Предлагает скрыть {fmtHideUntil(c.hideRequest.until)}</div>
+          <div className="text-[var(--color-text-secondary)]">«{c.hideRequest.comment}»</div>
+          <div className="text-[var(--color-text-muted)]">{c.hideRequest.by}, {fmtDay(c.hideRequest.at)}</div>
           {canManage && (
             <div className="mt-1 grid grid-cols-2 gap-1.5">
-              <button type="button" onClick={() => onAct('accept_hide')} className="min-h-11 rounded-md bg-[#7f6000] px-2 text-xs font-medium text-white hover:opacity-90">Скрыть</button>
-              <button type="button" onClick={() => onAct('decline_hide')} className="min-h-11 rounded-md border border-[#bf9000] px-2 text-xs font-medium hover:bg-[#ffe599]">Отклонить</button>
+              <button type="button" onClick={() => onAct('accept_hide')} className={`${CARD_BTN} min-h-10 rounded-md bg-[var(--color-warning)] px-2 text-xs font-medium text-white hover:opacity-90`}>Скрыть</button>
+              <button type="button" onClick={() => onAct('decline_hide')} className={`${CARD_BTN} min-h-10 rounded-md border border-[var(--color-border)] px-2 text-xs font-medium hover:bg-[var(--color-bg-hover)]`}>Отклонить</button>
             </div>
           )}
         </div>
       )}
 
-      {/* Действие. */}
-      {/* Кнопки — на всю ширину карточки (правка владельца 20.10). */}
-      <div className="flex flex-col gap-2 pt-0.5">
-        {canManage && col !== 'review' && col !== 'brak' && col !== 'st_sold' && (
-          <button type="button" onClick={onTask}
-            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium hover:opacity-90 ${c.task && c.task.state !== 'done' ? 'bg-[var(--color-bg-surface)] text-[var(--color-text-muted)]' : 'bg-[var(--color-accent-soft)] text-[var(--color-accent)]'}`}>
-            <Plus size={13} /> {dealLabel}
-          </button>
-        )}
-        {/* Приёмка из канбана (владелец 22.10): принять / принять и закрыть сделку / на доработку. */}
-        {canManage && c.task?.state === 'control' && (
-          <button type="button" onClick={() => onAct('accept_task')}
-            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[#38761d] px-2.5 text-xs font-medium text-white hover:opacity-90`}>
-            <CheckSquare size={13} /> Принять задачу…
-          </button>
-        )}
-        {canManage && col === 'review' && (
-          <button type="button" onClick={onReview}
-            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md bg-[var(--color-accent)] px-2.5 text-xs font-medium text-white hover:opacity-90`}>
-            {c.dozvonFail ? 'Разобрать: 3 попытки без дозвона' : 'Разобрать отказ'}
-          </button>
-        )}
-        {col === 'hidden' && canManage && (
-          <button type="button" onClick={() => onAct('unhide')}
-            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]`}>
-            Вернуть в пул
-          </button>
-        )}
-        {canManage && col === 'brak' && (
-          <button type="button" onClick={onUnbrak}
-            className={`${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center rounded-md border border-[var(--color-border)] px-2.5 text-xs text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]`}>
-            Снять брак
-          </button>
-        )}
-      </div>
+      {/* I. ОДНО действие (Fable): «Принять задачу…» важнее «+ Задача»; при открытой задаче кнопки нет («Ещё задача…» — в ⋯). */}
+      {canManage && (() => {
+        const btn = `${CARD_BTN} inline-flex min-h-11 w-full items-center justify-center gap-1 rounded-md px-2.5 text-xs font-medium hover:opacity-90`;
+        if (t?.state === 'control') return <button type="button" onClick={() => onAct('accept_task')} className={`${btn} bg-[var(--color-positive)] text-white`}><CheckSquare size={13} /> Принять задачу…</button>;
+        if (col === 'review') return <button type="button" onClick={onReview} className={`${btn} bg-[var(--color-accent)] text-white`}>{c.dozvonFail ? 'Разобрать: 3 попытки без дозвона' : 'Разобрать отказ'}</button>;
+        if (col === 'hidden') return <button type="button" onClick={() => onAct('unhide')} className={`${btn} border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]`}>Вернуть в пул</button>;
+        if (col === 'brak') return <button type="button" onClick={onUnbrak} className={`${btn} border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]`}>Снять брак</button>;
+        if (canTaskCol(col) && !openTask) return <button type="button" onClick={onTask} className={`${btn} bg-[var(--color-accent-soft)] text-[var(--color-accent)]`}><Plus size={13} /> {dealLabel}</button>;
+        return null;
+      })()}
     </article>
   );
 }

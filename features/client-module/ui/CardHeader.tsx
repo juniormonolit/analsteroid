@@ -79,7 +79,9 @@ export function CardHeader({ data, sticky, tabs, actions, extra, children }: {
           {data.clientType === 'company' ? <Building2 size={18} className="shrink-0 text-[var(--color-text-muted)]" /> : <User size={18} className="shrink-0 text-[var(--color-text-muted)]" />}
           <h2 className={`min-w-0 font-bold leading-tight ${collapsed ? 'truncate text-[15px]' : 'line-clamp-2 text-[18px]'}`} title={title}>{title}</h2>
           {/* «Битрикс ↗» на телефоне — во второй строке: в первой место нужно имени (кнопки панели справа). */}
-          {actions && <span className="ml-auto hidden shrink-0 sm:inline-flex">{actions}</span>}
+          {/* Справа в первой строке — «Битрикс ↗» и главная кнопка канбана (скрин владельца 23.10: кнопка уезжала
+              отдельной строкой под статус). На телефоне — во второй строке. */}
+          {(actions || extra) && <span className="ml-auto hidden shrink-0 items-center gap-2 sm:inline-flex">{actions}{extra}</span>}
         </div>
         <div className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-[var(--color-text-muted)] ${collapsed ? 'pb-1' : 'pb-1.5'}`}>
           <span className={typeLabel ? 'font-semibold text-[var(--color-accent)]' : 'rounded border border-dashed border-[var(--color-border-strong)] px-1.5'}>{typeLabel ?? 'Тип не указан'}</span>
@@ -87,7 +89,7 @@ export function CardHeader({ data, sticky, tabs, actions, extra, children }: {
           {actions && <span className="sm:hidden">{actions}</span>}
           {/* Деньги на телефоне не показываем — они на «Обзоре»; здесь только то, что нужно для звонка. */}
           {shown.map(c => <span key={c.key} className={`max-w-full [&>span]:max-w-full [&>span]:truncate ${c.key === 'money' ? 'hidden sm:inline' : ''}`}><Chip tone={c.tone} title={c.title}>{c.text}</Chip></span>)}
-          {extra && <span className="ml-auto">{extra}</span>}
+          {extra && <span className="w-full sm:hidden">{extra}</span>}
         </div>
         {tabs}
       </div>

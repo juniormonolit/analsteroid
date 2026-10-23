@@ -77,7 +77,8 @@ export function OverviewTab({ data, params, onOpenObject, onOpenDeals, onEditCli
         </button>
       )}
 
-      <div className="grid gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      {/* items-start: один объект — блок по содержимому, а не пустая рамка на высоту соседа (скрин владельца 23.10). */}
+      <div className="grid items-start gap-3 md:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
         <Section title={`Что везём и куда · ${objects.length}`} right={objects.length > 0 ? <span className="text-[11.5px] text-[var(--color-text-muted)]">в работе {working.length}</span> : undefined}>
           {objects.length === 0 ? <div className="text-[12.5px] text-[var(--color-text-muted)]">Объектов нет — адресов в заявках и сделках не нашлось.</div> : (
             <div className="flex flex-col divide-y divide-[var(--color-border)]">
