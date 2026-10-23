@@ -16,10 +16,8 @@ import { SearchMultiSelect } from '@/components/ui/SearchMultiSelect';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { CustomerCardLoader } from '@/features/customers/ui/CustomerCardLoader';
 import { RepeatKanbanSettingsButton, TemplatePicker } from './RepeatKanbanSettings';
-import dynamic from 'next/dynamic';
 
 // Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
-const DealCard = dynamic(() => import('@/features/reports/ui/DealCard').then(m => m.DealCard), { ssr: false });
 import {
   BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS,
   type ColumnDef, type ColumnGroup, type ColumnKey,
@@ -116,7 +114,6 @@ export function RepeatKanbanPage() {
   const poolGroups = useMemo(() => pg.split('|').filter(Boolean), [pg]);
   const [limits, setLimits] = useState<Partial<Record<ColumnKey, number>>>({});
   const [openCard, setOpenCard] = useState<KanbanCard | null>(null);
-  const [openDeal, setOpenDeal] = useState<number | null>(null);
   const [taskFor, setTaskFor] = useState<KanbanCard | null>(null);
   const [reviewFor, setReviewFor] = useState<KanbanCard | null>(null);
   const [hideFor, setHideFor] = useState<KanbanCard | null>(null);
@@ -228,7 +225,7 @@ export function RepeatKanbanPage() {
   const handlers: CardHandlers = {
     canManage, viewerId,
     select: selectMode ? { has: k => selected.has(k), toggle: toggleSel, addAll: cs => setSelected(m => { const n = new Map(m); for (const c of cs) if (canTaskCol(c.column)) n.set(c.clientKey, c); return n; }) } : null,
-    onOpen: setOpenCard, onTask: setTaskFor, onReview: setReviewFor, onDeal: setOpenDeal,
+    onOpen: setOpenCard, onTask: setTaskFor, onReview: setReviewFor,
     onAct: async (a, c) => {
       if (a === 'hide') setHideFor(c);
       else if (a === 'request_hide') setHideReqFor(c);
@@ -515,7 +512,6 @@ export function RepeatKanbanPage() {
           // Комментарии задач — тот же контекст, что у доски (панель рисуется вне её дерева).
           sideActions={<TagDefsCtx.Provider value={tagDefMap}><TaskNotesCtx.Provider value={notes ?? {}}><KanbanSideActions c={liveCard(openCard)} h={handlers} /></TaskNotesCtx.Provider></TagDefsCtx.Provider>} />
       )}
-      {openDeal !== null && <DealCard dealId={openDeal} onClose={() => setOpenDeal(null)} />}
       {taskFor && <TaskModal card={taskFor} load={loadOf(taskFor.managerId)} limit={taskLimit} reassign={reassignOpts} onClose={() => setTaskFor(null)} onSaved={refresh} />}
       {reviewFor && <ReviewModal card={reviewFor} onClose={() => setReviewFor(null)} onSaved={refresh} />}
       {hideFor && <HideModal card={hideFor} onClose={() => setHideFor(null)} onSaved={refresh} />}
@@ -583,7 +579,7 @@ interface CardHandlers {
   /** Склейка заказчиков: РОП и старше, флаг customer_merge. */
   canMerge: boolean; onUnmerge: (c: KanbanCard, m: KanbanCard['members'][number]) => void;
   onOpen: (c: KanbanCard) => void; onTask: (c: KanbanCard) => void;
-  onReview: (c: KanbanCard) => void; onUnbrak: (c: KanbanCard) => void; onDeal: (dealId: number) => void;
+  onReview: (c: KanbanCard) => void; onUnbrak: (c: KanbanCard) => void;
 }
 
 function CardFor({ c, h }: { c: KanbanCard; h: CardHandlers }) {
@@ -591,7 +587,7 @@ function CardFor({ c, h }: { c: KanbanCard; h: CardHandlers }) {
   return (
     <Card c={c} col={c.column} canManage={h.canManage} canMerge={h.canMerge} onUnmerge={m => h.onUnmerge(c, m)}
       selected={sel ? sel.has(c.clientKey) : null} onSelect={sel ? () => sel.toggle(c) : undefined}
-      onOpen={() => h.onOpen(c)} onTask={() => h.onTask(c)} onReview={() => h.onReview(c)} onUnbrak={() => h.onUnbrak(c)} onDeal={h.onDeal}
+      onOpen={() => h.onOpen(c)} onTask={() => h.onTask(c)} onReview={() => h.onReview(c)} onUnbrak={() => h.onUnbrak(c)}
       isOwn={!!h.viewerId && c.managerId === h.viewerId} onAct={a => h.onAct(a, c)} />
   );
 }
@@ -872,7 +868,7 @@ function CardTags({ ids }: { ids: number[] }) {
   return <div className="flex min-w-0 flex-wrap gap-1">{tags.map(t => <TagChip key={t.id} tag={t} />)}</div>;
 }
 
-function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelect, onOpen, onTask, onReview, onUnbrak, onDeal, onAct }: {
+function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelect, onOpen, onTask, onReview, onUnbrak, onAct }: {
   c: KanbanCard; col: ColumnKey; canManage: boolean;
   canMerge: boolean; onUnmerge: (m: KanbanCard['members'][number]) => void;
   /** null — не в режиме выбора (или карточку нельзя выбрать). */
@@ -881,7 +877,6 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
   isOwn: boolean;
   onAct: (a: CardAction) => void;
   onOpen: () => void; onTask: () => void; onReview: () => void; onUnbrak: () => void;
-  onDeal: (dealId: number) => void;
 }) {
   const isPool = col.startsWith('pool') || col === 'brak';
   const good = c.calls.filter(x => !x.missed && x.sec > 20);
@@ -943,9 +938,10 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
         <div className="min-w-0 text-[var(--color-text-secondary)]">
           <div className="whitespace-nowrap">
             {c.lastDeliveredDealId ? (
-              <button type="button" onClick={() => onDeal(c.lastDeliveredDealId!)} className="text-[var(--color-accent)] hover:underline" title="Открыть сделку последней отгрузки">
+              // Сразу в Битрикс (владелец 23.10: «такие ссылки должны сразу вести в Битрикс»; было — карточка сделки Монолитики).
+              <a href={dealUrl(c.lastDeliveredDealId)} target="_blank" rel="noreferrer" className="text-[var(--color-accent)] hover:underline" title={`Сделка последней отгрузки #${c.lastDeliveredDealId} в Битриксе`}>
                 Отгрузка {fmtDayYear(c.lastDeliveredAt)}
-              </button>
+              </a>
             ) : <>Отгрузка {fmtDayYear(c.lastDeliveredAt)}</>}
             {' · '}<span style={old !== null && old > 120 ? { color: '#b45f06', fontWeight: 600 } : undefined}>{old}{'\u00a0'}дн. назад</span>
           </div>
