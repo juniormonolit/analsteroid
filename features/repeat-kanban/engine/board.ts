@@ -25,7 +25,7 @@ import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } f
 import { fetchQueuedByClient } from './queueRead';
 import { fetchShippedGroups, resolvePeriod } from './shippedGroups';
 import { fetchCustomerTags } from './tags';
-import { fetchAiMarks, type AiMark } from './aiMarks';
+import { AI_CANDIDATE_MIN, fetchAiMarks, fetchTranscribedCounts, type AiMark } from './aiMarks';
 import { fetchDismissedByRef, potentialGroups, type PotentialGroup } from './potentialGroups';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
 import { fetchRequestedGroups } from '@/features/ai-analysis/engine/links';
@@ -135,6 +135,8 @@ export interface KanbanCard {
   offer: PotentialGroup[];
   /** Последний разбор звонков (только РОПу): когда, свежий ли (≤ 14 дн.), сколько расшифрованных звонков после него. */
   ai: AiMark | null;
+  /** Разбора нет — сколько у заказчика звонков с расшифровкой (только РОПу; «кандидат на разбор» — от AI_CANDIDATE_MIN). */
+  aiCalls?: number;
   /** Заказчик в очереди задач (миграция 237): кому выдастся, кто поставил. */
   queued: { id: number; managerId: string; by: string | null; at: string } | null;
 }
@@ -459,7 +461,7 @@ export async function buildRepeatBoard(opts: {
   offerGroups?: string[];
   /** Значок разбора звонков на карточках (РОП): грузить ли разборы; фильтр yes — есть, new — есть и новые звонки, no — нет. */
   withAi?: boolean;
-  aiFilter?: 'yes' | 'new' | 'no' | null;
+  aiFilter?: 'yes' | 'new' | 'no' | 'candidate' | null;
   /** Фильтр по тегам: id тегов (любой из) и/или NO_TAG — «без тегов». */
   tags?: string[];
   /** Сортировка карточек во всех колонках: default — тип клиента → потенциал. */
@@ -525,6 +527,7 @@ export async function buildRepeatBoard(opts: {
   const aiMarksP = opts.withAi
     ? fetchAiMarks(new Map(rows.map(r => [r.clientKey, membersOf(r)]))).catch(() => new Map<string, AiMark>())
     : Promise.resolve(new Map<string, AiMark>());
+  const aiCallsP = opts.withAi ? fetchTranscribedCounts().catch(() => new Map<string, number>()) : Promise.resolve(new Map<string, number>());
   // 2. Свежие данные поверх кэша.
   const refOfKey = (k: string) => (k.startsWith('k') ? k : `p${k.slice(1)}`);
   const [dealsRaw, marksRaw, profileTypesRaw, tailTable, lastDelivered, wrongFunnel, inbound] = await Promise.all([
@@ -565,6 +568,7 @@ export async function buildRepeatBoard(opts: {
     opts.skipNames ? Promise.resolve({} as Record<string, number>) : fetchManagerLoad(roster.map(m => m.id)),
   ]);
   const aiMarks = await aiMarksP;
+  const aiCallsByKey = await aiCallsP;
   const aiCounts: Record<string, number> = {};
 
   const typeCounts: Record<string, number> = {};
@@ -721,10 +725,15 @@ export async function buildRepeatBoard(opts: {
     for (const o of offer) offerCounts[o.group] = (offerCounts[o.group] ?? 0) + 1;
     if (offerPick.size && !offer.some(o => offerPick.has(o.group))) continue;
     const aiMark = aiMarks.get(r.clientKey) ?? null;
+    let aiCalls: number | undefined;
     if (opts.withAi) {
       const k = aiMark ? (aiMark.newCalls > 0 ? 'new' : 'yes') : 'no';
       aiCounts[k] = (aiCounts[k] ?? 0) + 1;
-      if (opts.aiFilter && !(opts.aiFilter === k || (opts.aiFilter === 'yes' && k === 'new'))) continue;
+      // Кандидат на разбор: разбора нет, а звонков с расшифровкой много (склейка — сумма по исходным ключам).
+      if (!aiMark) aiCalls = membersOf(r).reduce((n, m) => n + (aiCallsByKey.get(m) ?? 0), 0);
+      const candidate = (aiCalls ?? 0) >= AI_CANDIDATE_MIN;
+      if (candidate) aiCounts.candidate = (aiCounts.candidate ?? 0) + 1;
+      if (opts.aiFilter && !(opts.aiFilter === k || (opts.aiFilter === 'yes' && k === 'new') || (opts.aiFilter === 'candidate' && candidate))) continue;
     }
     if (tagData) {
       for (const t of cardTags) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
@@ -773,7 +782,7 @@ export async function buildRepeatBoard(opts: {
       members: membersOf(r).filter(k => k !== r.clientKey).map(k => ({ key: k, source: aliasMap.get(k)?.source ?? 'auto_company', name: null })),
       openDealInBrak: col === 'brak' && hasOpenDeal && current ? current.dealId : null,
       returned: col === 'pool_hot' ? returned ?? null : null,
-      ai: aiMark,
+      ai: aiMark, aiCalls,
       offer,
       tags: [...cardTags].sort((a, b) => (tagRank.get(a) ?? 99) - (tagRank.get(b) ?? 99)),
       queued: (() => { const q = queuedMap.get(r.clientKey); return q ? { id: q.id, managerId: q.managerId, by: q.queuedByName, at: q.createdAt } : null; })(),

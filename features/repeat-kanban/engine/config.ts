@@ -130,3 +130,6 @@ export const GROUP_PERIODS = [
   { value: 'custom', label: 'Свои даты', months: null },
 ] as const;
 export type GroupPeriod = (typeof GROUP_PERIODS)[number]['value'];
+
+/** «Кандидат на ИИ-разбор» (владелец 23.10): разбора нет, а звонков с расшифровкой не меньше стольких. */
+export const AI_CANDIDATE_MIN = 5;

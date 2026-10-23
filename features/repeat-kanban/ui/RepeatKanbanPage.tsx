@@ -22,7 +22,7 @@ import { RepeatKanbanSettingsButton, TemplatePicker } from './RepeatKanbanSettin
 
 // Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
 import {
-  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS, LOST_STAGES, WON_STAGES,
+  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS, LOST_STAGES, WON_STAGES, AI_CANDIDATE_MIN,
   type ColumnDef, type ColumnGroup, type ColumnKey,
 } from '../engine/config';
 import type { BoardKpi, KanbanCard, KanbanColumn, RepeatBoard, TodaySection } from '../engine/board';
@@ -394,6 +394,8 @@ export function RepeatKanbanPage() {
                     { value: 'yes', label: `Есть разбор · ${rub.format((data.aiCounts.yes ?? 0) + (data.aiCounts.new ?? 0))}` },
                     { value: 'new', label: `Есть, и после него новые звонки · ${rub.format(data.aiCounts.new ?? 0)}`, hint: 'можно запустить разбор заново' },
                     { value: 'no', label: `Нет разбора · ${rub.format(data.aiCounts.no ?? 0)}` },
+                    // Владелец 23.10: «там, где много расшифрованных звонков, но не было ни одного ИИ-разбора».
+                    { value: 'candidate', label: `Кандидаты на разбор · ${rub.format(data.aiCounts.candidate ?? 0)}`, hint: `разбора нет, звонков с расшифровкой ${AI_CANDIDATE_MIN} и больше` },
                   ]}
                   className={`${aiF ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
               </FilterField>
@@ -966,6 +968,19 @@ function AiBadge({ ai, onClick }: { ai: NonNullable<KanbanCard['ai']>; onClick: 
   );
 }
 
+/** Кандидат на разбор: разбора нет, а звонков с расшифровкой много — бледный Монолитик с пунктиром и числом звонков. */
+function AiCandidate({ calls, onClick }: { calls: number; onClick: () => void }) {
+  const title = `Разбора звонков ещё не было, а звонков с расшифровкой — ${calls}. Кандидат на ИИ-разбор.\nНажмите — открыть вкладку «ИИ-анализ»`;
+  return (
+    <button type="button" onClick={onClick} title={title} aria-label={title}
+      className={`${FOCUS} tap-target inline-flex h-5 shrink-0 items-center gap-0.5 rounded border border-dashed border-[var(--color-border-strong)] pl-0.5 pr-1 text-[10px] font-semibold tabular-nums text-[var(--color-text-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- фавикон 32px */}
+      <img src="/icon.png" alt="" width={14} height={14} className="h-[14px] w-[14px] rounded-[3px] opacity-45 grayscale" />
+      {calls > 99 ? '99+' : calls}
+    </button>
+  );
+}
+
 const OFFER_SOURCE: Record<string, string> = { request: 'просил сам', priority: 'приоритет «Что предложить»', chain: 'по ходу стройки', history: 'статистика: следующей покупкой' };
 /** «Предложить: Окна и двери · Кровля +3» — топ-5 потенциальных групп, полный список с источником — по наведению/тапу. */
 function OfferLine({ offer }: { offer: NonNullable<KanbanCard['offer']> }) {
@@ -1080,6 +1095,7 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           </button>
           <div className="flex shrink-0 items-center gap-1">
             {c.ai && <AiBadge ai={c.ai} onClick={() => onAct('open_ai')} />}
+            {!c.ai && (c.aiCalls ?? 0) >= AI_CANDIDATE_MIN && <AiCandidate calls={c.aiCalls!} onClick={() => onAct('open_ai')} />}
             {c.sleeping && col.startsWith('pool') && <TapTip label="Спит" text="Спит: давно нет движений по заказчику"><Moon size={12} className="text-[var(--color-text-muted)]" /></TapTip>}
             {c.profileType ? <TypeChip type={c.profileType} /> : (
               <span className="shrink-0 rounded border border-dashed border-[var(--color-border-strong)] px-1 text-[10.5px] text-[var(--color-text-muted)]" title="Тип клиента не указан — заполните в карточке клиента">Тип?</span>

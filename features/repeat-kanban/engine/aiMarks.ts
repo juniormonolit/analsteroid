@@ -9,6 +9,7 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { MEMO_FRESH_DAYS } from '@/features/ai-analysis/engine/memo';
+export { AI_CANDIDATE_MIN } from './config';
 
 export interface AiMark { id: number; at: string; fresh: boolean; newCalls: number }
 
@@ -65,4 +66,34 @@ export async function fetchAiMarks(members: Map<string, string[]>): Promise<Map<
     out.set(s.primary, { id: s.id, at: s.at.toISOString(), fresh: s.at.getTime() >= freshMs, newCalls: counts?.get(s.primary) ?? 0 });
   }
   return out;
+}
+
+// ── Кандидаты на разбор (владелец 23.10: «там, где много расшифрованных звонков, но не было ни одного ИИ разбора»).
+// Всего звонков с расшифровкой по ключу заказчика (c/x/k), по всем его сделкам. Скан всех сделок ~4 с — держим 10 мин
+// и обновляем в фоне (доска не ждёт; первый раз после рестарта — ждёт).
+const CALLS_TTL = 10 * 60_000;
+let callsCache: { at: number; counts: Map<string, number> } | null = null;
+let callsLoading: Promise<Map<string, number>> | null = null;
+
+function loadTranscribed(): Promise<Map<string, number>> {
+  callsLoading ??= analyticsDb().query<{ k: string; n: string }>(
+    `SELECT d.k, count(DISTINCT c.id)::text AS n
+       FROM (SELECT d.deal_id, (${CLIENT_KEY_SQL}) AS k FROM sa.deals d WHERE d.funnel_id IN (0, 1, 2, 3)) d
+       JOIN va.calls c ON c.deal_id = d.deal_id AND c.failed_at_stage IS NULL
+       JOIN va.transcriptions t ON t.call_id = c.id
+      WHERE d.k IS NOT NULL AND coalesce(nullif(trim(coalesce(t.formatted_dialogue::text, t.raw_text)), ''), 'null') <> 'null'
+      GROUP BY 1`,
+  ).then(r => {
+    const counts = new Map(r.rows.map(x => [x.k, Number(x.n)]));
+    callsCache = { at: Date.now(), counts };
+    return counts;
+  }).finally(() => { callsLoading = null; });
+  return callsLoading;
+}
+
+/** Ключ заказчика → звонков с расшифровкой (всего). Сбой — пустая карта (фильтр просто ничего не найдёт). */
+export async function fetchTranscribedCounts(): Promise<Map<string, number>> {
+  if (callsCache && Date.now() - callsCache.at < CALLS_TTL) return callsCache.counts;
+  const p = loadTranscribed().catch(e => { console.warn('[repeat-kanban] звонки с расшифровкой:', e instanceof Error ? e.message : e); return callsCache?.counts ?? new Map<string, number>(); });
+  return callsCache ? callsCache.counts : p;
 }
