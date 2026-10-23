@@ -168,6 +168,20 @@ export async function saveDuplicate(id: number, fromId: number): Promise<void> {
   );
 }
 
+/** Пересобрать «Предложить / Выяснить» по сохранённым связкам (дубль разбора: звонки те же, а сборка блоков
+ *  или анкеты могли поменяться — пересчёт бесплатный, без модели). */
+export async function refreshLinksLines(id: number, rebuild: (links: Record<string, unknown>) => Promise<{ propose: string[]; clarify: string[] } | null>): Promise<void> {
+  const r = await systemDb().query<{ links: Record<string, unknown> | null }>(`SELECT parsed->'links' AS links FROM ai_analyses WHERE id = $1`, [id]);
+  const links = r.rows[0]?.links;
+  if (!links || !Array.isArray(links.pairs)) return;
+  const next = await rebuild(links);
+  if (!next) return;
+  await systemDb().query(
+    `UPDATE ai_analyses SET parsed = jsonb_set(parsed, '{links}', (parsed->'links') || $2::jsonb) WHERE id = $1`,
+    [id, JSON.stringify(next)],
+  );
+}
+
 export async function saveError(id: number, message: string, retry: boolean): Promise<void> {
   await systemDb().query(
     `UPDATE ai_analyses SET status = CASE WHEN $3 AND attempts < $4 THEN 'queued' ELSE 'error' END,

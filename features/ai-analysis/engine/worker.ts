@@ -8,7 +8,8 @@ import type { ClientRef } from '@/features/client-module/engine/types';
 import { collectClientData } from './collect';
 import { analyzeClient, callsHashOf } from './analyze';
 import { DEFAULT_REASONING_EFFORT, LlmError } from './llm';
-import { backfillParsed, claimNext, findDone, heartbeat, requeueStale, saveDone, saveDuplicate, saveError, saveTaskCheckDone } from './store';
+import { backfillParsed, claimNext, findDone, heartbeat, refreshLinksLines, requeueStale, saveDone, saveDuplicate, saveError, saveTaskCheckDone } from './store';
+import { buildLinksFacts, clarifyLines, proposeLines, type LinksResult } from './links';
 import { callsAfterTask, fetchTaskInfo, parseTaskCheck, taskCheckSystem, taskCheckUser, TASK_CHECK_VERSION } from './taskCheck';
 import { chat } from './llm';
 import { getActivePrompt } from './promptStore';
@@ -40,7 +41,17 @@ async function processOne(): Promise<boolean> {
     const prompt = job.isTest && job.promptBody ? { version: 'draft', body: job.promptBody } : await getActivePrompt();
     if (!job.isTest) {
       const dup = await findDone(ref, callsHashOf(data, prompt.version));
-      if (dup) { await saveDuplicate(job.id, dup.id); return true; }
+      if (dup) {
+        await saveDuplicate(job.id, dup.id);
+        // Блоки задачи — по текущим анкетам и правилам сборки (анкеты предлагаемых групп в r не хранятся — берём свежие).
+        await refreshLinksLines(job.id, async l => {
+          const facts = await buildLinksFacts(data);
+          const r = { ...(l as unknown as LinksResult), askForProposed: facts.askForProposed };
+          const clarify = clarifyLines(r, facts);
+          return { askForProposed: facts.askForProposed, propose: proposeLines(r, facts.shipped12, clarify), clarify } as { propose: string[]; clarify: string[] };
+        }).catch(e => console.error('[aiAnalysis] пересборка блоков задачи:', e instanceof Error ? e.message : e));
+        return true;
+      }
     }
     let lastPhase = 'collecting';
     const out = await analyzeClient(ref, {

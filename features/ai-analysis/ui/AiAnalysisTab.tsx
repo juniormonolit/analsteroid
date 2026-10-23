@@ -15,7 +15,7 @@ import { MonolitikHelper } from '@/components/mascot/MonolitikHelper';
 import type { CallListItem } from '../engine/collect';
 import type { AnalysisRow } from '../engine/store';
 import type { QuoteCheck } from '../engine/verify';
-import { memoLines, taskTextPlain } from '../engine/memo';
+import { memoLines, PROPOSE_ASK_MARK, taskTextPlain } from '../engine/memo';
 import { CRITERIA_LABELS, VIOLATION_LABELS, type CriterionVerdict } from '../engine/parse';
 import { CLIENT_TYPES } from '@/features/client-module/engine/types';
 import Link from 'next/link';
@@ -384,7 +384,9 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
                 <div key={k} className="mt-2.5">
                   <div className="text-[13px] font-bold">{k === 'propose' ? 'Предложить' : 'Выяснить'}</div>
                   <ul className="mt-1 flex flex-col gap-1 text-[14px] leading-relaxed sm:text-[13.5px]">
-                    {items.map((l, i) => <li key={i} className="flex min-w-0 gap-2"><span className="shrink-0 text-[var(--color-text-muted)]">•</span><span className="min-w-0 break-words">{l.replace(/^—\s*/, '')}</span></li>)}
+                    {items.map((l, i) => l.startsWith(PROPOSE_ASK_MARK)
+                      ? <li key={i} className="-mt-0.5 min-w-0 break-words pl-4 text-[13px] text-[var(--color-text-muted)]"><i>{PROPOSE_ASK_MARK}</i> {l.slice(PROPOSE_ASK_MARK.length).trim()}</li>
+                      : <li key={i} className="flex min-w-0 gap-2"><span className="shrink-0 text-[var(--color-text-muted)]">•</span><span className="min-w-0 break-words">{l.replace(/^—\s*/, '')}</span></li>)}
                   </ul>
                 </div>
               );

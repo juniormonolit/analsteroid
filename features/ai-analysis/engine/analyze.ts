@@ -61,6 +61,6 @@ export async function analyzeClient(ref: ClientRef, opts: {
     data, maskHits, llm,
     sections: splitSections(llm.content),
     quotes: verifyQuotes(llm.content, data.calls, data.deals),
-    links: facts ? (() => { const l = checkLinks(llm.content, facts, data); return { ...l, propose: proposeLines(l, facts.shipped12), clarify: clarifyLines(l, facts) }; })() : null,
+    links: facts ? (() => { const l = checkLinks(llm.content, facts, data); const clarify = clarifyLines(l, facts); return { ...l, propose: proposeLines(l, facts.shipped12, clarify), clarify }; })() : null,
   };
 }

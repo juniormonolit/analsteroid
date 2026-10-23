@@ -69,6 +69,8 @@ export const MEMO_PLAIN_MARK = 'Перед звонком (по разговор
 /** Блоки текста задачи из разбора (владелец 23.10, план повторки): «Перед звонком» → «Предложить» → «Выяснить». */
 export const PROPOSE_MARK = 'Предложить:';
 export const CLARIFY_MARK = 'Выяснить:';
+/** Подстрока под строкой «Предложить» — вопросы анкеты группы (links.ts proposeLines); оформляется без маркера. */
+export const PROPOSE_ASK_MARK = 'если нужна — уточнить:';
 
 /** Текст задачи из свежего разбора — БЕЗ шаблона (шаблон — фолбэк, если разбора нет). Обычным текстом:
  *  РОП видит и правит в окне; при постановке createDeal оформит блоки BB-кодами. Без слов про ИИ. */
@@ -108,7 +110,10 @@ export function splitComment(comment: string): { rop: string; memo: { date: stri
 /** Блоки «Предложить» / «Выяснить» → BB: заголовок жирным, строки с «•» (LIST Битрикс не рисует). */
 export function blockBb(title: string, lines: string[]): string | null {
   if (!lines.length) return null;
-  return [`[B]${title}[/B]`, ...lines.map(l => `• ${safe(l.replace(/^—\s*/, ''))}`)].join('\n');
+  // «если нужна — уточнить: …» — подстрока к группе выше (proposeLines), без своего маркера.
+  return [`[B]${title}[/B]`, ...lines.map(l => (l.startsWith(PROPOSE_ASK_MARK)
+    ? `      [COLOR=${GRAY}][I]${PROPOSE_ASK_MARK}[/I][/COLOR] ${safe(l.slice(PROPOSE_ASK_MARK.length).trim())}`
+    : `• ${safe(l.replace(/^—\s*/, ''))}`))].join('\n');
 }
 
 /** Строки памятки из сообщения (как РОП их оставил) → BB-блок «Перед звонком». */

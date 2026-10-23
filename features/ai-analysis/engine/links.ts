@@ -8,6 +8,7 @@
 // в работе — ок, закрыта — стадия и цитата клиента. Видно, недоработка менеджера или не прошли по цене.
 // Формулировки обезличенные: «не было предложено», «заказчику не предложили».
 import { fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
+import { PROPOSE_ASK_MARK } from './memo';
 import { fetchQuestionnaires, COMMON_GROUP, type GroupQuestion } from '@/features/questionnaires/engine/questions';
 import { systemDb } from '@/lib/db/clients';
 import type { ClientCallData, CollectedDeal } from './collect';
@@ -30,8 +31,31 @@ export interface LinksFacts {
   pairs: PairFact[];
   /** Вопросы анкет отгруженных групп + общие — их проверяет модель. */
   questions: QuestionFact[];
-  /** Анкеты групп, которые предлагаем (не отгружали) — сразу в «Выяснить», модели не даём. */
+  /** Анкеты групп, которые предлагаем (не отгружали): 2–3 вопроса клиенту под строкой «Предложить»
+   *  («если нужна — уточнить:»), модели не даём. В «Выяснить» не идут (владелец 23.10, кейс 39547). */
   askForProposed: { group: string; questions: string[] }[];
+}
+
+/** Вопросов под строкой «Предложить» — не больше (по предложениям: в анкете один пункт бывает «Объём? Плотность?
+ *  Толщина?»); обязательные пункты первыми, повторы «Выяснить» и других групп отброшены до лимита. */
+const PROPOSED_QUESTIONS = 3;
+
+/** «Уточнил, что строится?», «Предложил бетон?» — по смыслу проверка менеджера, даже если в анкете стоит
+ *  audience = 'client' (данные на проде поправят не сразу). В задачу такие не берём никогда. */
+const CHECK_VERB = /^(менеджер\s+)?(уточнил|предложил|спросил|рассказал|выяснил|озвучил|сообщил|узнал|проговорил|обсудил|показал|отправил|назвал|напомнил|объяснил|пояснил|выслал|дал)(а|и)?(?![а-яё])/i;
+export const looksLikeManagerCheck = (q: string) => CHECK_VERB.test(q.trim());
+
+/** Почти одинаковые вопросы разных групп: нормализация + пересечение слов (по основе 5 букв) ≥ 0,6. */
+const STOP = new Set(['или', 'для', 'что', 'как', 'вам', 'вас', 'нужно', 'нужен', 'нужна', 'нужны', 'ли', 'это', 'там', 'уже', 'ещё', 'еще', 'под']);
+function wordSet(q: string): Set<string> {
+  return new Set(q.toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/).filter(w => w.length > 2 && !STOP.has(w)).map(w => w.slice(0, 5)));
+}
+export function similarQuestion(a: string, b: string): boolean {
+  const A = wordSet(a), B = wordSet(b);
+  if (!A.size || !B.size) return a.trim().toLowerCase() === b.trim().toLowerCase();
+  let n = 0;
+  for (const w of A) if (B.has(w)) n++;
+  return n / Math.min(A.size, B.size) >= 0.6;
 }
 
 const ddmm = (iso: string | null) => (iso ? iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4) : '—');
@@ -67,7 +91,12 @@ export async function buildLinksFacts(data: ClientCallData): Promise<LinksFacts>
     if (q.id !== null) questions.push({ id: q.id, group: g, question: q.question, kind: q.kind, options: q.options, audience: q.audience === 'manager_check' ? 'manager_check' : 'client' });
   }
   const askForProposed = proposed
-    .map(g => ({ group: g, questions: (qs.get(g) ?? []).filter(q => q.audience !== 'manager_check').map(q => q.question) }))
+    .map(g => ({
+      group: g,
+      questions: (qs.get(g) ?? []).filter(q => q.audience !== 'manager_check' && !looksLikeManagerCheck(q.question))
+        .map((q, i) => ({ q, i })).sort((a, b) => Number(b.q.required) - Number(a.q.required) || a.i - b.i)
+        .map(x => x.q.question),
+    }))
     .filter(x => x.questions.length);
   return { shipped12: [...shipped12], pairs, questions, askForProposed };
 }
@@ -205,35 +234,58 @@ export function checkLinks(md: string, facts: LinksFacts, data: ClientCallData):
 }
 
 // ── Текст задачи: «Предложить» и «Выяснить» (обезличенно, без слов про ИИ) ─────────────────────────
-export function proposeLines(r: LinksResult, shipped12: string[] = []): string[] {
+export function proposeLines(r: LinksResult, shipped12: string[] = [], clarify: string[] = []): string[] {
   const out: string[] = [];
   const taken = new Set(shipped12.map(g => g.toLowerCase()));
+  const used = clarify.map(l => l.replace(/^—\s*/, ''));
+  /** Под строкой группы — 2–3 вопроса её анкеты (без повторов «Выяснить» и других групп). */
+  const ask = (group: string) => {
+    const qs = (r.askForProposed.find(x => x.group === group)?.questions ?? [])
+      .filter(q => !looksLikeManagerCheck(q) && !used.some(u => similarQuestion(u, q)));
+    const parts: string[] = [];
+    for (const q of qs) {
+      if (parts.length >= PROPOSED_QUESTIONS) break;
+      used.push(q);
+      for (const one of q.split(/(?<=[?.!])\s+/).map(x => x.trim().replace(/[.!]+$/, '')).filter(Boolean)) {
+        if (parts.length >= PROPOSED_QUESTIONS) break;
+        const low = /^[А-ЯЁA-Z][а-яёa-z]/.test(one) ? one[0].toLowerCase() + one.slice(1) : one;
+        parts.push(/\?$/.test(low) ? low : low + '?');
+      }
+    }
+    if (parts.length) out.push(`${PROPOSE_ASK_MARK} ${parts.join(' ')}`);
+  };
   for (const q of r.requests) {
     if (q.check === 'no_deal') out.push(`— ${q.group}: заказчик сам говорил, что нужно (${q.date ? ddmm(q.date).slice(0, 5) : 'в разговоре'}) — сделки после этого не было`);
     else if (q.check === 'closed') out.push(`— ${q.group}: просил, сделка #${q.dealId} закрыта (${q.stage ?? 'отказ'})${q.reasonQuote ? ` — «${q.reasonQuote}»` : ''}; предложить ещё раз`);
+    else continue;
+    ask(q.group);
   }
   for (const p of r.pairs) {
     // Уже брал эту группу за 12 мес — не «предложить», это шум (замечание к прогону v8 23.10).
     if (out.some(l => l.startsWith(`— ${p.to}:`)) || taken.has(p.to.toLowerCase())) continue;
     if (p.offered === 'no' || p.offered === 'unclear') out.push(`— ${p.to}: по «${p.from}» заказчику не предложили`);
     else if (p.answer === 'later') out.push(`— ${p.to}: предлагали${p.date ? ` ${p.date}` : ''}, ответил «позже» — вернуться`);
+    else continue;
+    ask(p.to);
   }
   return out;
 }
 
+/** «Выяснить» — только вопросы КЛИЕНТУ анкет отгруженных групп + общих, на которые в разговорах нет ответа.
+ *  Анкеты предлагаемых групп — под их строкой «Предложить» (proposeLines), не здесь. */
 export function clarifyLines(r: LinksResult, facts: Pick<LinksFacts, 'questions'>): string[] {
   const asked = new Map(r.questions.map(q => [q.id, q]));
   const out: string[] = [];
-  const seen = new Set<string>();
-  const push = (line: string, key: string) => { const k = key.toLowerCase().replace(/[^a-zа-яё0-9]+/g, ' ').trim(); if (!seen.has(k)) { seen.add(k); out.push(line); } };
+  const seen: string[] = [];
+  const push = (line: string, key: string) => { if (!seen.some(s => similarQuestion(s, key))) { seen.push(key); out.push(line); } };
   for (const q of facts.questions) {
-    if (q.audience === 'manager_check') continue; // проверка менеджера — не поручение «выяснить»
+    // Проверка менеджера (по полю или по смыслу) — не поручение «выяснить».
+    if (q.audience === 'manager_check' || looksLikeManagerCheck(q.question)) continue;
     const a = asked.get(q.id);
     // Ответ уже есть (спросил менеджер или клиент сказал сам) — выяснять нечего.
     if (a && (a.answerText || a.answerOptions.length)) continue;
     push(`— ${q.question}`, q.question);
   }
-  for (const g of r.askForProposed) for (const q of g.questions) push(`— (${g.group}) ${q}`, q);
   return out;
 }
 
