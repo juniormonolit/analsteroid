@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
     `SELECT id::text, called_at, direction, result, duration_seconds,
             manager_id::text AS manager_id, recording_file_id
        FROM va.calls
-      WHERE deal_id = $1
+      WHERE deal_id = $1 AND failed_at_stage IS NULL
       ORDER BY called_at DESC`,
     [Number(id)],
   );

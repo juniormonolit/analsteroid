@@ -154,6 +154,7 @@ WITH call_deals AS (
   LEFT JOIN deals d ON d.deal_id = c.deal_id
   LEFT JOIN funnels f ON f.id = d.funnel_id
   WHERE c.called_at >= $1 AND c.called_at < $2 ${scopeWhere}
+    AND c.failed_at_stage IS NULL
     -- Правка владельца 31.07: ВСЕ звонковые метрики считают ТОЛЬКО звонки со
     -- связью со сделкой (deal_id находится в sa.deals) — как в метриках 111.
     -- Звонки без сделки (deal_id NULL/висячий) из метрик 1-5, 9 исключены.
@@ -279,11 +280,12 @@ calls_before_reservation AS (
   SELECT pd.deal_id, count(*) AS n
   FROM period_deals pd
   JOIN va.calls c ON c.deal_id = pd.deal_id AND c.result = 'completed'
+    AND c.failed_at_stage IS NULL
     AND c.called_at >= pd.created_at AND c.called_at <= pd.reserved_at
   WHERE pd.reserved_at IS NOT NULL
   GROUP BY pd.deal_id
 ),
-any_calls AS (SELECT DISTINCT deal_id FROM va.calls)
+any_calls AS (SELECT DISTINCT deal_id FROM va.calls WHERE failed_at_stage IS NULL)
 SELECT
   pd.manager_id::text AS manager_id,
   pd.is_repeat,
@@ -374,7 +376,7 @@ WITH period_deals AS (
 ),
 first_completed AS (
   SELECT deal_id, MIN(called_at) AS first_call_at
-  FROM va.calls WHERE result = 'completed'
+  FROM va.calls WHERE result = 'completed' AND failed_at_stage IS NULL
   GROUP BY deal_id
 ),
 joined AS (
@@ -385,7 +387,7 @@ joined AS (
   JOIN first_completed fc ON fc.deal_id = pd.deal_id AND fc.first_call_at >= pd.created_at
   LEFT JOIN LATERAL (
     SELECT c.duration_seconds FROM va.calls c
-    WHERE c.deal_id = pd.deal_id AND c.result = 'completed'
+    WHERE c.deal_id = pd.deal_id AND c.result = 'completed' AND c.failed_at_stage IS NULL
     ORDER BY c.called_at ASC LIMIT 1
   ) fcd ON true
 )
@@ -486,6 +488,7 @@ WHERE d.current_manager_id IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM va.calls c
     WHERE c.deal_id = d.deal_id AND c.called_at >= $1 AND c.called_at < $2
+      AND c.failed_at_stage IS NULL
   )
 GROUP BY GROUPING SETS ((d.current_manager_id, f.is_repeat), (d.current_manager_id))
   `.trim();
@@ -513,7 +516,7 @@ export async function fetchOrphanCallsShare(period: DateRange): Promise<{ total:
               count(*) FILTER (WHERE d.deal_id IS NULL) AS orphan
        FROM va.calls c
        LEFT JOIN deals d ON d.deal_id = c.deal_id
-       WHERE c.called_at >= $1 AND c.called_at < $2`,
+       WHERE c.called_at >= $1 AND c.called_at < $2 AND c.failed_at_stage IS NULL`,
       [from, toExcl],
     );
     const row = res.rows[0];

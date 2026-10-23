@@ -376,7 +376,7 @@ mcd AS (
 ),
 deal_calls AS (
   SELECT c.deal_id, max(c.called_at) AS last_call_at
-  FROM va.calls c WHERE c.deal_id IN (SELECT deal_id FROM mcd)
+  FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id IN (SELECT deal_id FROM mcd)
   GROUP BY 1
 ),
 ev AS (
@@ -389,7 +389,7 @@ ev AS (
 good_calls AS (
   SELECT m.client_key, max(c.called_at) AS last_good_call_at
   FROM va.calls c JOIN mcd m ON m.deal_id = c.deal_id
-  WHERE c.duration_seconds > 20
+  WHERE c.duration_seconds > 20 AND c.failed_at_stage IS NULL
   GROUP BY 1
 ),
 lastdel AS (
@@ -428,7 +428,7 @@ touches AS (
   FROM lastdel ld
   JOIN mcd m ON m.client_key = ld.client_key
   JOIN va.calls c ON c.deal_id = m.deal_id
-  WHERE c.duration_seconds > 20 AND c.called_at > ld.last_delivered_at
+  WHERE c.duration_seconds > 20 AND c.failed_at_stage IS NULL AND c.called_at > ld.last_delivered_at
   GROUP BY 1
 ),
 auto_lost AS (
@@ -437,7 +437,7 @@ auto_lost AS (
   JOIN mcd r ON r.client_key = ld.client_key AND r.deal_id <> ld.last_delivered_deal
    AND r.created_at BETWEEN ld.last_delivered_at - interval '1 minute' AND ld.last_delivered_at + interval '15 minutes'
    AND r.lost_at IS NOT NULL
-  LEFT JOIN LATERAL (SELECT 1 FROM va.calls c WHERE c.deal_id = r.deal_id AND c.duration_seconds > 20 LIMIT 1) gc ON true
+  LEFT JOIN LATERAL (SELECT 1 FROM va.calls c WHERE c.deal_id = r.deal_id AND c.duration_seconds > 20 AND c.failed_at_stage IS NULL LIMIT 1) gc ON true
   WHERE gc IS NULL
   GROUP BY 1
 ),

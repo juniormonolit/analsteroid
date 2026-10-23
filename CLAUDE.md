@@ -138,3 +138,10 @@ BI-дашборд продаж (Next.js 16 App Router, React 19, Tailwind v4, Ta
 - `npm run dev` — dev-сервер на :3004
 - `npm run typecheck` — обязательно перед завершением задачи
 - `npm run lint:responsive` — проверка правил адаптивности (baseline в `scripts/responsive-baseline.json`)
+
+## Звонки: va.calls
+
+Любое чтение `va.calls` (код, отчёты, боты, сгенерированный ИИ SQL) по умолчанию содержит
+`failed_at_stage IS NULL` (с алиасом таблицы). n8n-обработчик размечает там служебные строки
+(`not_cached`, `not_owner`, `contact`, `company`); в метрики, отчёты и бот «Контроль звонков» они
+не входят. Новый запрос к `va.calls` без этого условия — только осознанно и с пометкой в коде. (#10823)

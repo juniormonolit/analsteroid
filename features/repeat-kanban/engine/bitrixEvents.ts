@@ -105,7 +105,8 @@ export async function fetchBitrixEvents(opts: {
   }
   const calls = taskStartByDeal.size ? await analyticsDb().query<{ deal_id: string; called_at: Date; manager_id: string | null; duration_seconds: number | null; result: string | null; direction: string | null }>(
     `SELECT deal_id, called_at, manager_id::text AS manager_id, duration_seconds, result, direction FROM va.calls
-      WHERE deal_id = ANY($1::bigint[]) AND called_at BETWEEN $2::timestamptz AND $3::timestamptz`,
+      WHERE deal_id = ANY($1::bigint[]) AND called_at BETWEEN $2::timestamptz AND $3::timestamptz
+        AND failed_at_stage IS NULL`,
     [[...taskStartByDeal.keys()], opts.from, opts.to],
   ).then(r => r.rows).catch(() => []) : [];
 

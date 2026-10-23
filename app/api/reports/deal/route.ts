@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
   // «Звонки N». Сам список звонков карточка догружает лениво при открытии таба
   // (features/reports/ui/DealCard.tsx, отдельный эндпоинт /api/reports/deal/calls) —
   // не тащим va.calls целиком на каждое открытие карточки.
-  const callsCountPromise = analyticsDb().query<{ count: string }>('SELECT count(*) FROM va.calls WHERE deal_id = $1', [Number(id)]);
+  const callsCountPromise = analyticsDb().query<{ count: string }>('SELECT count(*) FROM va.calls WHERE deal_id = $1 AND failed_at_stage IS NULL', [Number(id)]);
 
   // Полная история переходов по стадиям (deal_events ведётся с 2026-04-03; для более
   // старых сделок список будет пустым — UI показывает подсказку).

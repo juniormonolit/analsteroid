@@ -816,6 +816,7 @@ calls_in AS (
     FROM va.calls c
     JOIN sa.deals cd ON cd.deal_id = c.deal_id
    WHERE c.direction = 'outbound' AND c.result = 'completed'
+     AND c.failed_at_stage IS NULL
      AND c.called_at >= $1::timestamptz - interval '${days} days'
      AND c.called_at <  $2::timestamptz
      AND cd.contact_id IS NOT NULL

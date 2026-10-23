@@ -53,7 +53,7 @@ export async function fetchAiMarks(members: Map<string, string[]>): Promise<Map<
        SELECT a.primary_key, count(DISTINCT c.id)::text AS n
          FROM sa.deals d
          JOIN a ON a.key = (${CLIENT_KEY_SQL})
-         JOIN va.calls c ON c.deal_id = d.deal_id AND c.called_at > a.since
+         JOIN va.calls c ON c.deal_id = d.deal_id AND c.called_at > a.since AND c.failed_at_stage IS NULL
          JOIN va.transcriptions t ON t.call_id = c.id
         WHERE d.funnel_id IN (0, 1, 2, 3) AND coalesce(nullif(trim(coalesce(t.formatted_dialogue::text, t.raw_text)), ''), 'null') <> 'null'
         GROUP BY a.primary_key`, [flatKeys, flatSince, flatPrimary],

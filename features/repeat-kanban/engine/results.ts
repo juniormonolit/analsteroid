@@ -115,6 +115,7 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
     taskDealIds.length ? db.query<{ deal_id: string; called_at: Date }>(
       `SELECT deal_id, called_at FROM va.calls
         WHERE deal_id = ANY($1::bigint[]) AND called_at >= $2::timestamptz
+          AND failed_at_stage IS NULL
           AND duration_seconds > ${GOOD_CALL_SEC} AND result IS DISTINCT FROM 'missed'`,
       [taskDealIds, from],
     ).then(r => r.rows).catch(() => []) : Promise.resolve([]),

@@ -98,13 +98,13 @@ export async function fetchClientHistory(ref: ClientRef): Promise<ClientHistory>
       `SELECT c.called_at, c.duration_seconds, c.direction, c.result, c.deal_id, org.manager_name
          FROM va.calls c
          LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = c.manager_id::text
-        WHERE c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE ${where})
+        WHERE c.failed_at_stage IS NULL AND c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE ${where})
         ORDER BY c.called_at DESC LIMIT ${CALLS_LIMIT}`,
       [id],
     ),
     db.query<{ total: string; good: string }>(
       `SELECT count(*)::text AS total, count(*) FILTER (WHERE c.duration_seconds > 20)::text AS good
-         FROM va.calls c WHERE c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE ${where})`,
+         FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE ${where})`,
       [id],
     ),
     db.query<{ mgr: string; name: string | null; deals: number; sold: number; first_at: Date; last_at: Date }>(

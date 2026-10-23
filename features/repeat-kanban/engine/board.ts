@@ -339,7 +339,7 @@ async function fetchDealCalls(dealIds: number[], sinceIso: string): Promise<Map<
   if (!dealIds.length) return new Map();
   const res = await analyticsDb().query<{ deal_id: number; called_at: Date; duration_seconds: number | null; result: string | null; direction: string | null }>(
     `SELECT deal_id, called_at, duration_seconds, result, direction FROM va.calls
-      WHERE deal_id = ANY($1::bigint[]) AND called_at >= $2::timestamptz
+      WHERE deal_id = ANY($1::bigint[]) AND called_at >= $2::timestamptz AND failed_at_stage IS NULL
       ORDER BY called_at DESC`,
     [dealIds, sinceIso],
   );
@@ -392,6 +392,7 @@ async function fetchInboundCalls(refs: string[]): Promise<Map<string, { at: stri
          CASE WHEN coalesce(c.contact_id, 0) <> 0 THEN 'p'||c.contact_id END,
          CASE WHEN coalesce(c.company_id, 0) <> 0 THEN 'k'||c.company_id END]) AS r(ref)
       WHERE c.direction = 'inbound' AND c.called_at > now() - interval '30 days' AND r.ref = ANY($1::text[])
+        AND c.failed_at_stage IS NULL
       ORDER BY r.ref, c.called_at DESC`, [refs],
   ).catch(e => { console.warn('[repeat-kanban] входящие звонки:', e instanceof Error ? e.message : e); return { rows: [] }; });
   return new Map(r.rows.map(x => [x.ref, { at: new Date(x.called_at).toISOString(), missed: x.result === 'missed' }]));

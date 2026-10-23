@@ -91,7 +91,7 @@ export async function collectClientData(ref: ClientRef): Promise<ClientCallData>
          JOIN va.transcriptions t ON t.call_id = c.id
          LEFT JOIN sa.employees e ON e.bitrix_id = c.manager_id
        LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = c.manager_id::text
-        WHERE c.deal_id = ANY($1::bigint[]) AND c.called_at >= now() - make_interval(months => $2)
+        WHERE c.failed_at_stage IS NULL AND c.deal_id = ANY($1::bigint[]) AND c.called_at >= now() - make_interval(months => $2)
         ORDER BY c.called_at`,
       [dealIds, HISTORY_MONTHS],
     ),
@@ -99,7 +99,7 @@ export async function collectClientData(ref: ClientRef): Promise<ClientCallData>
       `SELECT count(*)::int AS total, count(*) FILTER (WHERE c.result = 'completed')::int AS completed,
               count(t.id) FILTER (WHERE c.called_at < now() - make_interval(months => $2))::int AS texts_old
          FROM va.calls c LEFT JOIN va.transcriptions t ON t.call_id = c.id
-        WHERE c.deal_id = ANY($1::bigint[])`,
+        WHERE c.failed_at_stage IS NULL AND c.deal_id = ANY($1::bigint[])`,
       [dealIds, HISTORY_MONTHS],
     ),
     db.query<{ client_type: string | null }>(`SELECT client_type FROM sa.client_module_profiles WHERE client_ref = $1`, [ref]),
@@ -157,7 +157,7 @@ export async function listClientCalls(ref: ClientRef, withText: boolean): Promis
        LEFT JOIN va.transcriptions t ON t.call_id = c.id
        LEFT JOIN sa.employees e ON e.bitrix_id = c.manager_id
        LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = c.manager_id::text
-      WHERE c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_SQL}) = ANY($1::text[]))
+      WHERE c.failed_at_stage IS NULL AND c.deal_id IN (SELECT d.deal_id FROM sa.deals d WHERE d.funnel_id IN (0,1,2,3) AND (${CLIENT_KEY_SQL}) = ANY($1::text[]))
       ORDER BY c.called_at DESC`,
     [keys],
   );
@@ -201,10 +201,10 @@ async function crmFacts(deals: { deal_id: number; stage_id: string | null; creat
   if (!lost.length) return ['Закрытых в отказ повторных сделок нет.'];
   const res = await analyticsDb().query<{ deal_id: number; on_deal: number; talks_on_deal: number; talks_after: number; last_talk: Date | null }>(
     `SELECT d.deal_id,
-            (SELECT count(*)::int FROM va.calls x WHERE x.deal_id = d.deal_id) AS on_deal,
-            (SELECT count(*)::int FROM va.calls x WHERE x.deal_id = d.deal_id AND x.result = 'completed') AS talks_on_deal,
-            (SELECT count(*)::int FROM va.calls x WHERE x.deal_id = ANY($2::bigint[]) AND x.result = 'completed' AND x.called_at >= d.created_at) AS talks_after,
-            (SELECT max(x.called_at) FROM va.calls x WHERE x.deal_id = ANY($2::bigint[]) AND x.result = 'completed') AS last_talk
+            (SELECT count(*)::int FROM va.calls x WHERE x.failed_at_stage IS NULL AND x.deal_id = d.deal_id) AS on_deal,
+            (SELECT count(*)::int FROM va.calls x WHERE x.failed_at_stage IS NULL AND x.deal_id = d.deal_id AND x.result = 'completed') AS talks_on_deal,
+            (SELECT count(*)::int FROM va.calls x WHERE x.failed_at_stage IS NULL AND x.deal_id = ANY($2::bigint[]) AND x.result = 'completed' AND x.called_at >= d.created_at) AS talks_after,
+            (SELECT max(x.called_at) FROM va.calls x WHERE x.failed_at_stage IS NULL AND x.deal_id = ANY($2::bigint[]) AND x.result = 'completed') AS last_talk
        FROM sa.deals d WHERE d.deal_id = ANY($1::bigint[])`,
     [lost.map(d => d.deal_id), dealIds],
   );

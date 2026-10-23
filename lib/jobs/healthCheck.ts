@@ -90,7 +90,7 @@ export async function runHealthChecks(): Promise<HealthCheck[]> {
     check('calls', 'Звонки', false, async () => {
       const r = await analyticsDb().query<{ last: string | null; today: string }>(
         `SELECT max(called_at)::text AS last,
-                count(*) FILTER (WHERE called_at >= date_trunc('day', now() AT TIME ZONE 'Europe/Moscow'))::text AS today
+                count(*) FILTER (WHERE failed_at_stage IS NULL AND called_at >= date_trunc('day', now() AT TIME ZONE 'Europe/Moscow'))::text AS today
            FROM va.calls`);
       const age = hoursAgo(r.rows[0]?.last ?? null);
       return {

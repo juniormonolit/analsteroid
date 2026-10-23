@@ -59,7 +59,7 @@ export async function firstCallSince(clientKey: string, sinceIso: string): Promi
   const res = await analyticsDb().query<{ first_call: string | Date | null }>(
     `SELECT min(c.called_at) AS first_call
        FROM va.calls c JOIN sa.deals d ON d.deal_id = c.deal_id
-      WHERE c.called_at > $2 AND d.funnel_id IN (0,1,2,3)
+      WHERE c.failed_at_stage IS NULL AND c.called_at > $2 AND d.funnel_id IN (0,1,2,3)
         AND (${CLIENT_KEY_SQL}) = $1`,
     [clientKey, sinceIso],
   );

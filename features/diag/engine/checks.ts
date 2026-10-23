@@ -62,7 +62,7 @@ const CHECKS: Check[] = [
       const rows = await sa<Record<string, string>>(`
         SELECT to_char(date_trunc('month', called_at), 'YYYY-MM') AS m, count(*)::text AS calls,
                count(*) FILTER (WHERE deal_id IS NOT NULL)::text AS with_deal, count(DISTINCT manager_id)::text AS managers
-          FROM va.calls GROUP BY 1 ORDER BY 1`);
+          FROM va.calls WHERE failed_at_stage IS NULL GROUP BY 1 ORDER BY 1`);
       const before = rows.filter(r => r.m < '2026-03');
       const linkedBefore = before.reduce((s, r) => s + n(r.with_deal), 0), allBefore = before.reduce((s, r) => s + n(r.calls), 0);
       return {
@@ -206,6 +206,7 @@ const CHECKS: Check[] = [
         SELECT to_char(date_trunc('month', c.called_at), 'YYYY-MM') AS m, count(*)::text AS calls,
                count(d.deal_id)::text AS linked_to_existing_deal, round(100.0 * count(d.deal_id) / count(*), 1)::text AS linked_pct
           FROM va.calls c LEFT JOIN sa.deals d ON d.deal_id = c.deal_id
+         WHERE c.failed_at_stage IS NULL
          GROUP BY 1 ORDER BY 1`);
       return { status: 'ok', note: 'Если доля привязанных к реальным сделкам до 03.2026 не хуже поздней — CALLS_DATA_START можно сдвинуть на 01.2025.', rows };
     },

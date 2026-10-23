@@ -77,7 +77,7 @@ function callsRule(base: string, id: string, dir: 'in' | 'out' | null): DrillRul
     join: `JOIN (
       SELECT c.deal_id, array_agg(DISTINCT c.manager_id::bigint) AS mgrs
       FROM va.calls c
-      WHERE c.called_at >= $1 AND c.called_at < $2${dirSql} AND c.deal_id IS NOT NULL
+      WHERE c.called_at >= $1 AND c.called_at < $2${dirSql} AND c.deal_id IS NOT NULL AND c.failed_at_stage IS NULL
       GROUP BY c.deal_id
     ) _dc ON _dc.deal_id = d.deal_id`,
     where: funnelWhereForMetricId(id),
@@ -98,7 +98,7 @@ function noCallRule(id: string): DrillRule {
   return {
     join: '',
     where: `d.created_at >= $1 AND d.created_at < $2
-      AND NOT EXISTS (SELECT 1 FROM va.calls c WHERE c.deal_id = d.deal_id)
+      AND NOT EXISTS (SELECT 1 FROM va.calls c WHERE c.deal_id = d.deal_id AND c.failed_at_stage IS NULL)
       AND ${funnelWhereForMetricId(id)}`,
     label: 'созданные в периоде сделки без единого звонка',
   };
@@ -119,6 +119,7 @@ function silenceRule(id: string): DrillRule {
       AND NOT EXISTS (
         SELECT 1 FROM va.calls c
         WHERE c.deal_id = d.deal_id
+          AND c.failed_at_stage IS NULL
           AND c.called_at >= $2::timestamptz - interval '${SILENCE_DAYS} days'
           AND c.called_at < $2
       )

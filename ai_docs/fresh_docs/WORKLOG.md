@@ -24,6 +24,35 @@
   первая постановка = проверка ACCOMPLICES/AUDITORS в Битриксе. Леониду Коваленко (1923) ушло сообщение бота «Аналитик»
   (imbot id 14582353): правка на проде, протестировать.
 
+## 2026-10-23 — Фильтр `failed_at_stage IS NULL` на все чтения va.calls (#10823)
+
+**Что было.** n8n-обработчик звонков скоро начнёт писать в `va.calls` служебные строки с меткой в
+`failed_at_stage`: `not_cached`, `not_owner` (звонил не ответственный: manager_id = звонивший),
+`contact`/`company` (deal_id NULL, заполнен contact_id/company_id). Сейчас у всех ~1,18 млн строк метка NULL.
+**Причина.** Без фильтра эти строки попали бы в звонковые метрики, карточки менеджеров/клиентов, диагностику,
+дайджесты и бота «Контроль звонков» (искажение счётчиков, ложные «сироты», ложные пропущенные). Решение Сергея
+Афанасьева (#10823): сначала фильтры, чтобы текущая картина не поменялась после включения разметки.
+**Починено.** Во все запросы к `va.calls` добавлено `failed_at_stage IS NULL` (с алиасом): reports
+(`callsMetrics`, `clientMetrics`, `bookingCallRate`, `drillRules`, `DealCard` через `/api/reports/deal*`),
+manager-card (`activityCalendar`, `teamCard`, `planFact`, `managerCard`), `planningBadges`, `planyorka`,
+diag (`evidence`, `windows`, `checks`), customers (`customers`, `card`, `repeatHeader`), client-module
+(`history`, `clientModule`), repeat-kanban (`board`, `results`, `bitrixEvents`, `aiMarks`), ai-analysis
+(`collect`, `taskCheck`), jobs (`adviceFeedback`, `ropDigest`, `managerDigest`, `healthCheck` — счётчик «сегодня»),
+`sqlGen` (`_has_call` + правило в комментарии), бот `lib/bots/callControl.ts` (синк va.calls → call_events,
+`max(created_at)` для возврата после простоя и сторожка, обогащение сделкой по телефону). В `CLAUDE.md` —
+правило «любой новый SQL по va.calls содержит фильтр». Не тронуто: `va.calls_logist` (звонки логистов, другая
+таблица), миграции (только комментарии).
+Осознанное следствие: «входящие по контакту/компании» (`fetchInboundCalls` доски) не увидят новые строки с
+меткой `contact`/`company`, пока их не включат отдельным решением.
+**Проверено.** `tsc --noEmit` — 0 ошибок; `assert-*` (report-engine 98, dashboard-drilldown 10, rop-scope 16,
+realizations 112, unsell-deal 14, security 76, rop-kanban 30, ai-mask) — зелёные. Все 59 SQL с фильтром
+прошли `PREPARE` на реальной SA-БД (фрагменты — отдельно). Сверка до/после на реальных данных
+(период 01.09–20.10, read-only роль): `callsBase`, `dealCallAdditive`, `touchFirstCall`, `touchSpeedAll`,
+`callSilence`, `orphanShare`, `clientFollowup`, `activityCalendar` — побайтно идентичны; `customersMgr` отличается
+только полями, зависящими от текущего времени (`urgency`, `daysSilent` — тот же разброс между двумя прогонами
+БЕЗ изменений). Выкат на dev-стенд — см. отчёт задачи: автодеплой стоит на гарде миграций 59 дней.
+
+
 ## 2026-10-23 — «Битрикс дёргать как можно меньше»: счётчик, комментарии задач и сироты — у нас
 
 Владелец: «много ли канбан дрочит Битрикс? … Делай всё. Битрикс надо дёргать как можно меньше». Аудит:

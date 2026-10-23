@@ -141,7 +141,7 @@ async function fetchDeptPeriodMetrics(managerIds: number[], curFrom: Date, curTo
          count(*) FILTER (WHERE c.called_at >= $2 AND c.called_at < $3)::text AS calls,
          count(*) FILTER (WHERE c.called_at >= $4 AND c.called_at < $5)::text AS calls_prev
        FROM va.calls c JOIN sa.deals d ON d.deal_id = c.deal_id
-       WHERE d.current_manager_id = ANY($1)`,
+       WHERE d.current_manager_id = ANY($1) AND c.failed_at_stage IS NULL`,
       [managerIds, curFrom.toISOString(), curTo.toISOString(), prevFrom.toISOString(), prevTo.toISOString()],
     ),
   ]);
@@ -218,7 +218,7 @@ export async function fetchDeptBookingCallbackStat(managerIds: number[], from: D
   const res = await analyticsDb().query<{ total: string; called: string; risk_sum: string }>(
     `WITH y AS (
        SELECT d.deal_id, d.amount,
-              EXISTS (SELECT 1 FROM va.calls c WHERE c.deal_id = d.deal_id AND c.called_at >= d.reserved_at) AS was_called
+              EXISTS (SELECT 1 FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id AND c.called_at >= d.reserved_at) AS was_called
          FROM sa.deals d
         WHERE d.current_manager_id = ANY($1) AND d.reserved_at >= $2 AND d.reserved_at < $3
      )

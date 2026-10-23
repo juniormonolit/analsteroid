@@ -223,7 +223,7 @@ async function computeMissed(managerIdNum: number, fromIso: string, toExclIso: s
   if (bookingsRes.rows.length > 0) {
     const ids = bookingsRes.rows.map(r => r.deal_id);
     const calls = await analyticsDb().query<{ deal_id: string }>(
-      `SELECT DISTINCT deal_id FROM va.calls WHERE deal_id = ANY($1)`, [ids],
+      `SELECT DISTINCT deal_id FROM va.calls WHERE deal_id = ANY($1) AND failed_at_stage IS NULL`, [ids],
     );
     const called = new Set(calls.rows.map(r => String(r.deal_id)));
     for (const b of bookingsRes.rows) {
@@ -251,7 +251,7 @@ async function computeBookingCallStat(managerIdNum: number): Promise<BookingCall
   if (total === 0) return { total: 0, withCall: 0, withoutCall: 0, withCallPct: null };
   const ids = res.rows.map(r => r.deal_id);
   const calls = await analyticsDb().query<{ deal_id: string }>(
-    `SELECT DISTINCT deal_id FROM va.calls WHERE deal_id = ANY($1)`, [ids],
+    `SELECT DISTINCT deal_id FROM va.calls WHERE deal_id = ANY($1) AND failed_at_stage IS NULL`, [ids],
   );
   const withCall = new Set(calls.rows.map(r => String(r.deal_id))).size;
   return { total, withCall, withoutCall: total - withCall, withCallPct: (withCall / total) * 100 };

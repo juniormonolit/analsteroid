@@ -442,9 +442,10 @@ export async function fetchClientModule(ref: ClientRef, opts: { light?: boolean 
                 max(called_at) FILTER (WHERE deal_id = $1) AS last_at,
                 count(*) FILTER (WHERE deal_id IS DISTINCT FROM $1)::text AS client_calls
            FROM va.calls
-          WHERE deal_id = $1
+          WHERE failed_at_stage IS NULL
+            AND (deal_id = $1
              OR (${isCompany ? 'company_id' : 'contact_id'} = $2
-                 AND called_at >= $3::timestamptz AND called_at <= coalesce($4::timestamptz, now()) + interval '1 day')`,
+                 AND called_at >= $3::timestamptz AND called_at <= coalesce($4::timestamptz, now()) + interval '1 day'))`,
         [ld.dealId, id, ld.createdAt ?? new Date().toISOString(), ld.lostAt ?? ld.deliveredAt],
       );
       const r = c.rows[0];

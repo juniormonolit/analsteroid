@@ -145,7 +145,7 @@ async function resumeAfterDowntime(
   an: ReturnType<typeof analyticsDb>,
   cursor: Date
 ): Promise<Date> {
-  const res = await an.query(`SELECT max(created_at) AS last FROM va.calls`);
+  const res = await an.query(`SELECT max(created_at) AS last FROM va.calls WHERE failed_at_stage IS NULL`);
   const last: Date | null = res.rows[0]?.last ?? null;
   if (!last || last.getTime() - cursor.getTime() <= VA_RESUME_GAP_MS) return cursor;
 
@@ -188,6 +188,7 @@ async function syncFromVaCalls(db: ReturnType<typeof systemDb>): Promise<Date | 
             result::text AS result, phone_number, duration_seconds, called_at, created_at
      FROM va.calls
      WHERE created_at > $1
+       AND failed_at_stage IS NULL -- #10823: размеченные n8n-строки (not_cached/not_owner/contact/company) бот не видит
      ORDER BY created_at
      LIMIT 2000`,
     [new Date(cursor.getTime() - VA_SYNC_OVERLAP_MS)]
@@ -229,7 +230,7 @@ async function warnIfVaStale(mirrorBitrixUserId: string | null): Promise<void> {
   if (Date.now() - lastStaleWarnAt < 60 * 60 * 1000) return;
   try {
     const an = analyticsDb();
-    const res = await an.query(`SELECT max(created_at) AS last FROM va.calls`);
+    const res = await an.query(`SELECT max(created_at) AS last FROM va.calls WHERE failed_at_stage IS NULL`);
     const last: Date | null = res.rows[0]?.last ?? null;
     const staleMin = last ? Math.round((Date.now() - last.getTime()) / 60_000) : Infinity;
     if (staleMin <= VA_STALE_MINUTES) return;
@@ -418,7 +419,7 @@ export async function runCallControlCycle(): Promise<string> {
       const found = await an.query(
         `SELECT DISTINCT ON (phone_number) phone_number, deal_id
          FROM va.calls
-         WHERE phone_number = ANY($1) AND deal_id IS NOT NULL
+         WHERE phone_number = ANY($1) AND deal_id IS NOT NULL AND failed_at_stage IS NULL
          ORDER BY phone_number, called_at DESC`,
         [needDeal.map((c) => c.phone_normalized)]
       );

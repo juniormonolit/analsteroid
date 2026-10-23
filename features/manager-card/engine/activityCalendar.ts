@@ -72,6 +72,7 @@ export async function buildManagerActivity(managerId: string, windowDays: number
               direction::text AS direction, count(*) AS n, sum(duration_seconds) AS dur
        FROM va.calls
        WHERE manager_id = $1 AND called_at >= $2::timestamptz AND called_at < $3::timestamptz
+         AND failed_at_stage IS NULL
        GROUP BY 1, 2, 3`,
       [managerIdNum, fromTs, toTs],
     ),
@@ -88,6 +89,7 @@ export async function buildManagerActivity(managerId: string, windowDays: number
     sa.query<{ manager_id: string; n: string }>(
       `SELECT manager_id::text AS manager_id, count(*) AS n
        FROM va.calls WHERE called_at >= $1::timestamptz AND called_at < $2::timestamptz AND manager_id IS NOT NULL
+         AND failed_at_stage IS NULL
        GROUP BY 1`,
       [fromTs, toTs],
     ),

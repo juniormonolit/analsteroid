@@ -93,6 +93,7 @@ async function fetchCalls(managerIdsNum: number[], fromIso: string, toExclIso: s
               sum(duration_seconds) FILTER (WHERE result = 'completed') AS talk_seconds
          FROM va.calls c
         WHERE manager_id = ANY($1::int[]) AND called_at >= $2 AND called_at < $3
+          AND c.failed_at_stage IS NULL
           -- Правка владельца 31.07: только звонки со связью со сделкой (как в callsMetrics.ts)
           AND EXISTS (SELECT 1 FROM deals d WHERE d.deal_id = c.deal_id)`,
       [managerIdsNum, fromIso, toExclIso],

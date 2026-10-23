@@ -40,8 +40,8 @@ export async function loadEvidence(nodeId: string, managerId: number): Promise<E
     const rows = await sa<{ deal_id: string; deal_name: string | null; head_group_name: string | null; amount: string | null; created_at: Date; zdays: number; last_call: Date | null; calls: string }>(
       `WITH z AS (SELECT * FROM unnest($2::text[], $3::int[]) AS t(head_group_name, days))
        SELECT d.deal_id::text, d.deal_name, d.head_group_name, d.amount::text, d.created_at, coalesce(z.days, $4::int) AS zdays,
-              (SELECT max(c.called_at) FROM va.calls c WHERE c.deal_id = d.deal_id) AS last_call,
-              (SELECT count(*)::text FROM va.calls c WHERE c.deal_id = d.deal_id) AS calls
+              (SELECT max(c.called_at) FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id) AS last_call,
+              (SELECT count(*)::text FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id) AS calls
          FROM sa.deals d LEFT JOIN z ON z.head_group_name = d.head_group_name
         WHERE d.current_manager_id = $1 AND d.funnel_id IN (0,1,2,3) AND d.sold_at IS NULL AND d.lost_at IS NULL
           AND d.reserved_at IS NULL AND d.created_at + make_interval(days => coalesce(z.days, $4::int)) < now()
@@ -59,11 +59,11 @@ export async function loadEvidence(nodeId: string, managerId: number): Promise<E
   if (nodeId === 'calls_silence_deals') {
     const rows = await sa<{ deal_id: string; deal_name: string | null; head_group_name: string | null; amount: string | null; created_at: Date; last_call: Date | null; stage_id: string | null }>(
       `SELECT d.deal_id::text, d.deal_name, d.head_group_name, d.amount::text, d.created_at, d.stage_id,
-              (SELECT max(c.called_at) FROM va.calls c WHERE c.deal_id = d.deal_id) AS last_call
+              (SELECT max(c.called_at) FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id) AS last_call
          FROM sa.deals d
         WHERE d.current_manager_id = $1 AND d.funnel_id IN (0,1,2,3) AND d.sold_at IS NULL AND d.lost_at IS NULL
           AND d.created_at < now() - interval '7 days'
-          AND coalesce((SELECT max(c.called_at) FROM va.calls c WHERE c.deal_id = d.deal_id), d.created_at) < now() - interval '7 days'
+          AND coalesce((SELECT max(c.called_at) FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id), d.created_at) < now() - interval '7 days'
         ORDER BY d.amount DESC NULLS LAST LIMIT ${LIMIT}`, [managerId]);
     return {
       kind: 'deals', title: 'Сделки в тишине: ни одного звонка 7+ дней',
@@ -81,7 +81,7 @@ export async function loadEvidence(nodeId: string, managerId: number): Promise<E
          FROM sa.deals d
         WHERE d.current_manager_id = $1 AND d.funnel_id IN (0,1,2,3) AND d.reserved_at IS NOT NULL
           AND d.reserved_at >= now() - interval '90 days'
-          AND NOT EXISTS (SELECT 1 FROM va.calls c WHERE c.deal_id = d.deal_id AND c.direction::text = 'outbound'
+          AND NOT EXISTS (SELECT 1 FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id AND c.direction::text = 'outbound'
                             AND c.called_at > d.reserved_at AND c.called_at < d.reserved_at + interval '3 days')
         ORDER BY d.reserved_at DESC LIMIT ${LIMIT}`, [managerId]);
     return {
@@ -99,7 +99,7 @@ export async function loadEvidence(nodeId: string, managerId: number): Promise<E
       `SELECT d.deal_id::text, d.deal_name, d.head_group_name, d.amount::text, d.created_at, d.sold_at, d.lost_at,
               fc.first_call, (EXTRACT(epoch FROM (fc.first_call - d.created_at)) / 60)::text AS minutes
          FROM sa.deals d
-         LEFT JOIN LATERAL (SELECT min(c.called_at) AS first_call FROM va.calls c WHERE c.deal_id = d.deal_id AND c.result = 'completed' AND c.called_at >= d.created_at) fc ON true
+         LEFT JOIN LATERAL (SELECT min(c.called_at) AS first_call FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id AND c.result = 'completed' AND c.called_at >= d.created_at) fc ON true
         WHERE d.current_manager_id = $1 AND d.funnel_id IN (0,1,2,3) AND d.created_at >= now() - interval '60 days'
           AND (fc.first_call IS NULL OR fc.first_call - d.created_at > interval '60 minutes')
         ORDER BY (fc.first_call IS NULL) DESC, fc.first_call - d.created_at DESC NULLS FIRST LIMIT ${LIMIT}`, [managerId]);
@@ -146,7 +146,7 @@ export async function loadEvidence(nodeId: string, managerId: number): Promise<E
       `SELECT d.deal_id::text, d.deal_name, d.head_group_name, d.amount::text, d.created_at, d.sold_at, d.lost_at, d.stage_id
          FROM sa.deals d
         WHERE d.current_manager_id = $1 AND d.funnel_id IN (0,1,2,3) AND d.created_at >= now() - interval '90 days'
-          AND NOT EXISTS (SELECT 1 FROM va.calls c WHERE c.deal_id = d.deal_id)
+          AND NOT EXISTS (SELECT 1 FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id)
         ORDER BY d.amount DESC NULLS LAST LIMIT ${LIMIT}`, [managerId]);
     return {
       kind: 'deals', title: 'Сделки, по которым не было ни одного звонка',
@@ -209,7 +209,7 @@ export async function loadEvidence(nodeId: string, managerId: number): Promise<E
     const { hasPrice } = await loadPriceStageSets();
     const rows = await sa<{ deal_id: string; deal_name: string | null; head_group_name: string | null; amount: string | null; created_at: Date; lost_at: Date | null; stage_name: string | null; calls: string }>(
       `SELECT d.deal_id::text, d.deal_name, d.head_group_name, d.amount::text, d.created_at, d.lost_at,
-              st.name AS stage_name, (SELECT count(*)::text FROM va.calls c WHERE c.deal_id = d.deal_id) AS calls
+              st.name AS stage_name, (SELECT count(*)::text FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id) AS calls
          FROM sa.deals d
          LEFT JOIN stages st ON st.id = d.stage_id
          LEFT JOIN LATERAL (SELECT min(e.event_at) AS priced_at FROM sa.deal_events e WHERE e.deal_id = d.deal_id AND e.stage_id = ANY($2::text[])) pe ON true
@@ -245,10 +245,10 @@ export async function loadEvidence(nodeId: string, managerId: number): Promise<E
   if (nodeId === 'calls_to_reservation_avg') {
     const rows = await sa<{ deal_id: string; deal_name: string | null; head_group_name: string | null; amount: string | null; created_at: Date; calls: string; reserved_at: Date | null }>(
       `SELECT d.deal_id::text, d.deal_name, d.head_group_name, d.amount::text, d.created_at, d.reserved_at,
-              (SELECT count(*)::text FROM va.calls c WHERE c.deal_id = d.deal_id AND c.called_at <= coalesce(d.reserved_at, now())) AS calls
+              (SELECT count(*)::text FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id AND c.called_at <= coalesce(d.reserved_at, now())) AS calls
          FROM sa.deals d
         WHERE d.current_manager_id = $1 AND d.funnel_id IN (0,1,2,3) AND d.reserved_at IS NOT NULL AND d.reserved_at >= now() - interval '90 days'
-        ORDER BY (SELECT count(*) FROM va.calls c WHERE c.deal_id = d.deal_id AND c.called_at <= d.reserved_at) ASC LIMIT ${LIMIT}`, [managerId]);
+        ORDER BY (SELECT count(*) FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id = d.deal_id AND c.called_at <= d.reserved_at) ASC LIMIT ${LIMIT}`, [managerId]);
     return {
       kind: 'deals', title: 'Брони и сколько звонков до них было',
       hint: 'Мало звонков до брони — либо клиент горячий, либо бронь поставлена «на всякий случай» и развалится.',

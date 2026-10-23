@@ -80,7 +80,7 @@ export async function computeDisciplineAwards(todayYmd: string): Promise<Plannin
 
     const dealIds = [...new Set(res.rows.map(r => r.deal_id))];
     const calls = await analyticsDb().query<{ deal_id: string; called_at: Date }>(
-      `SELECT deal_id, called_at FROM va.calls WHERE deal_id = ANY($1) AND direction::text = 'outbound'`,
+      `SELECT deal_id, called_at FROM va.calls WHERE deal_id = ANY($1) AND direction::text = 'outbound' AND failed_at_stage IS NULL`,
       [dealIds],
     );
     const callsByDeal = new Map<string, Date[]>();

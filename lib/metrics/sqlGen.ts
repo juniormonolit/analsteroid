@@ -168,12 +168,15 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   if (f.field === '_has_goods') return dealHasGoodsWhere('d');
   // «Доля прозвона повторных продаж» (задача владельца 24.08, миграция 184):
   // _has_call — по сделке есть хотя бы один звонок (va.calls, та же SA-БД).
+  // ПРАВИЛО (#10823): любое чтение va.calls по умолчанию фильтруется `failed_at_stage IS NULL` —
+  // n8n размечает там not_cached/not_owner/contact/company; в метрики и отчёты они не входят.
+  // Тот же фильтр добавляйте во всякий SQL по va.calls (в т.ч. сгенерированный ИИ).
   // Определение владельца дословно («есть хотя бы 1 звонок») — направление и
   // результат сознательно не фильтруются; захочет «исходящий состоявшийся» —
   // добавить сюда direction/result (замеры июля: любой 47,3 %, исходящий
   // 44,2 %, исходящий состоявшийся 39,5 %).
   if (f.field === '_has_call') {
-    return `EXISTS (SELECT 1 FROM va.calls _hc WHERE _hc.deal_id = ${a}.deal_id)`;
+    return `EXISTS (SELECT 1 FROM va.calls _hc WHERE _hc.failed_at_stage IS NULL AND _hc.deal_id = ${a}.deal_id)`;
   }
   // _lost_within_1h — сделка забракована в течение часа после создания
   // (автобраковка повторки: июль — 290 из 1 369 отказов, 210 из них в первые

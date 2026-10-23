@@ -87,20 +87,20 @@ export async function fetchCustomerCard(clientKey: string): Promise<CustomerCard
     db.query<{ total: string; last_at: string | Date | null }>(
       `${CLIENT_DEALS_CTE}
        SELECT count(*)::text AS total, max(c.called_at) AS last_at
-       FROM va.calls c WHERE c.deal_id IN (SELECT deal_id FROM cdeals)`,
+       FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id IN (SELECT deal_id FROM cdeals)`,
       [clientKey],
     ),
     db.query<{ y: string; cnt: string }>(
       `${CLIENT_DEALS_CTE}
        SELECT extract(year FROM c.called_at)::int::text AS y, count(*)::text AS cnt
-       FROM va.calls c WHERE c.deal_id IN (SELECT deal_id FROM cdeals)
+       FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id IN (SELECT deal_id FROM cdeals)
        GROUP BY 1 ORDER BY 1`,
       [clientKey],
     ),
     db.query<{ deal_id: number; deal_name: string | null; amount: string | null; lost_at: string | Date; has_call: boolean }>(
       `${CLIENT_DEALS_CTE}
        SELECT d2.deal_id, d2.deal_name, d2.amount::text, d2.lost_at,
-              EXISTS (SELECT 1 FROM va.calls c WHERE c.deal_id = d2.deal_id) AS has_call
+              EXISTS (SELECT 1 FROM va.calls c WHERE c.deal_id = d2.deal_id AND c.failed_at_stage IS NULL) AS has_call
        FROM cdeals d2 WHERE d2.lost_at IS NOT NULL
        ORDER BY d2.lost_at DESC LIMIT 50`,
       [clientKey],
@@ -108,7 +108,7 @@ export async function fetchCustomerCard(clientKey: string): Promise<CustomerCard
     db.query<{ called_at: string | Date; direction: string | null; duration_seconds: number | null; deal_id: number | null; manager_id: number | null; result: string | null }>(
       `${CLIENT_DEALS_CTE}
        SELECT c.called_at, c.direction::text AS direction, c.duration_seconds, c.deal_id, c.manager_id, c.result::text AS result
-       FROM va.calls c WHERE c.deal_id IN (SELECT deal_id FROM cdeals)
+       FROM va.calls c WHERE c.failed_at_stage IS NULL AND c.deal_id IN (SELECT deal_id FROM cdeals)
        ORDER BY c.called_at DESC LIMIT 60`,
       [clientKey],
     ),

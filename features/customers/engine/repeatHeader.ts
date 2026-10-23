@@ -62,6 +62,7 @@ SELECT d.deal_id::text, d.client_key, d.delivered_at,
        (SELECT min(c.called_at) FROM va.calls c
           JOIN sa.deals x ON x.deal_id = c.deal_id
          WHERE (${CLIENT_KEY_SQL.replace(/\bd\./g, 'x.')}) = d.client_key
+           AND c.failed_at_stage IS NULL
            AND c.duration_seconds > ${GOOD_CALL_MIN_SEC}
            AND c.called_at > d.delivered_at
            AND c.called_at < d.delivered_at + interval '${REPEAT_WINDOW_DAYS} days') AS first_call_at
@@ -80,7 +81,7 @@ auto AS (
                     AND (${CLIENT_KEY_SQL.replace(/\bd\./g, 'p.')}) = r.client_key
                     AND r.created_at BETWEEN p.delivered_at - interval '1 minute' AND p.delivered_at + interval '${AUTO_REPEAT_DEAL_WINDOW_MIN} minutes')
 ),
-gc AS (SELECT a.deal_id, bool_or(c.duration_seconds > ${GOOD_CALL_MIN_SEC}) AS good FROM auto a JOIN va.calls c ON c.deal_id = a.deal_id GROUP BY 1),
+gc AS (SELECT a.deal_id, bool_or(c.duration_seconds > ${GOOD_CALL_MIN_SEC}) AS good FROM auto a JOIN va.calls c ON c.deal_id = a.deal_id AND c.failed_at_stage IS NULL GROUP BY 1),
 sold AS (
   SELECT coalesce(sum(amount::numeric), 0) AS sold_sum,
          coalesce(sum(amount::numeric) FILTER (WHERE funnel_id IN (2,3)), 0) AS repeat_sold_sum

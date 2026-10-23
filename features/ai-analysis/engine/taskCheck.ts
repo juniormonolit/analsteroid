@@ -49,7 +49,7 @@ export async function callsAfterTask(t: TaskInfo): Promise<CollectedCall[]> {
        JOIN va.transcriptions tr ON tr.call_id = c.id
        LEFT JOIN sa.employees e ON e.bitrix_id = c.manager_id
        LEFT JOIN sa.org_resolved_hierarchy org ON org.manager_bitrix_user_id = c.manager_id::text
-      WHERE c.deal_id = $1 AND c.called_at >= $2 AND coalesce(c.duration_seconds, 0) >= $3
+      WHERE c.failed_at_stage IS NULL AND c.deal_id = $1 AND c.called_at >= $2 AND coalesce(c.duration_seconds, 0) >= $3
       ORDER BY c.called_at`,
     [t.dealId, t.createdAt, MIN_TALK_SEC],
   );
@@ -68,7 +68,7 @@ export async function fetchTaskCheckState(taskIds: number[]): Promise<Map<number
     analyticsDb().query<{ task_id: string; n: number }>(
       `SELECT t.task_id, count(c.id)::int AS n
          FROM sa.bitrix_task_current t
-         JOIN va.calls c ON c.deal_id = t.deal_id AND c.called_at >= t.created_at AND c.result = 'completed' AND coalesce(c.duration_seconds, 0) >= $2
+         JOIN va.calls c ON c.failed_at_stage IS NULL AND c.deal_id = t.deal_id AND c.called_at >= t.created_at AND c.result = 'completed' AND coalesce(c.duration_seconds, 0) >= $2
         WHERE t.task_id = ANY($1::bigint[]) GROUP BY 1`,
       [taskIds, MIN_TALK_SEC],
     ),

@@ -93,7 +93,7 @@ export async function fetchBookingCallRate(period: DateRange, filters: CommonDea
     // node-pg отдаёт строкой; ключуем Map строкой (иначе не сматчится с sa.deals).
     const calls = await sa.query<{ deal_id: string; called_at: Date }>(
       `SELECT deal_id, called_at FROM va.calls
-       WHERE deal_id = ANY($1) AND direction::text = 'outbound'`,
+       WHERE deal_id = ANY($1) AND direction::text = 'outbound' AND failed_at_stage IS NULL`,
       [dealIds],
     );
     const callsByDeal = new Map<string, Date[]>();
@@ -180,7 +180,7 @@ export async function fetchBookingCallRateSeries(opts: {
   if (rows.length > 0) {
     const calls = await sa.query<{ deal_id: string; called_at: Date }>(
       `SELECT deal_id, called_at FROM va.calls
-       WHERE deal_id = ANY($1) AND direction::text = 'outbound'`,
+       WHERE deal_id = ANY($1) AND direction::text = 'outbound' AND failed_at_stage IS NULL`,
       [rows.map(r => Number(r.deal_id))],
     );
     for (const c of calls.rows) {

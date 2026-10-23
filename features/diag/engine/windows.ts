@@ -105,7 +105,7 @@ export async function loadManagerWindows(managerIds: number[]): Promise<Map<numb
 
   const dealIds = deals.rows.map(r => r.deal_id);
   const calls = dealIds.length ? await saQuery<{ deal_id: string; called_at: Date; result: string | null; direction: string | null }>(
-    `SELECT deal_id::text, called_at, result::text, direction::text FROM va.calls WHERE deal_id = ANY($1::bigint[]) AND called_at >= $2::date`,
+    `SELECT deal_id::text, called_at, result::text, direction::text FROM va.calls WHERE deal_id = ANY($1::bigint[]) AND called_at >= $2::date AND failed_at_stage IS NULL`,
     [dealIds, s.callsDataStart]) : { rows: [] as { deal_id: string; called_at: Date; result: string | null; direction: string | null }[], ms: 0 };
   timings.calls = calls.ms;
   const callsByDeal = new Map<string, { at: Date; completed: boolean; outbound: boolean }[]>();
@@ -119,7 +119,7 @@ export async function loadManagerWindows(managerIds: number[]): Promise<Map<numb
          FROM sa.deals d LEFT JOIN z ON z.head_group_name = d.head_group_name
         WHERE d.current_manager_id = ANY($1::bigint[]) AND d.funnel_id IN (0, 1, 2, 3) AND d.sold_at IS NULL AND d.lost_at IS NULL
      ),
-     lc AS (SELECT c.deal_id, max(c.called_at) AS last_call FROM va.calls c JOIN o ON o.deal_id = c.deal_id GROUP BY c.deal_id)
+     lc AS (SELECT c.deal_id, max(c.called_at) AS last_call FROM va.calls c JOIN o ON o.deal_id = c.deal_id WHERE c.failed_at_stage IS NULL GROUP BY c.deal_id)
      SELECT o.manager_id::text AS manager_id, count(*)::text AS total, count(*) FILTER (WHERE o.is_zombie)::text AS zombie,
             count(*) FILTER (WHERE o.created_at < now() - interval '7 days' AND coalesce(lc.last_call, o.created_at) < now() - interval '7 days')::text AS silence7
        FROM o LEFT JOIN lc ON lc.deal_id = o.deal_id GROUP BY 1`, [managerIds, z.groups, z.days, z.fallback]);
