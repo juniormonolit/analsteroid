@@ -64,6 +64,8 @@ const PHASE_TEXT: Record<string, string> = {
   writing: 'Пишу отчёт…',
 };
 
+/** 1 звонок, 2 звонка, 5 звонков. */
+const callsWord = (n: number) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? 'звонок' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'звонка' : 'звонков'}`;
 const fmtDT = (iso: string) => new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' });
 const fmtD = (iso: string) => new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Moscow' });
 const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/g, ' ').trim();
@@ -352,7 +354,7 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
         {confirmTr && trCount > 0 && !active && (
           <div className="basis-full rounded-lg border border-[color-mix(in_srgb,var(--color-warning, #e8590c)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-warning, #e8590c)_8%,transparent)] p-2.5 text-[13px]">
             <div>
-              Без текста {tr!.total > trCount ? `${tr!.total} звонков — расшифруем ${trCount} самых свежих` : `${trCount} ${trCount === 1 ? 'звонок' : 'звонков'}`}.
+              Без текста {tr!.total > trCount ? `${callsWord(tr!.total)} — расшифруем ${trCount} самых свежих` : callsWord(trCount)}.
               Сначала расшифровка — примерно {Math.max(1, Math.ceil(trCount * 15 / 60 / 2))}–{Math.max(2, Math.ceil(trCount * 20 / 60))} мин, потом анализ. Вкладку можно закрыть — отчёт сохранится.
               {' '}Что не расшифруется за 10 минут, в анализ не войдёт.
             </div>
