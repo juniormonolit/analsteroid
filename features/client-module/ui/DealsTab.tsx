@@ -103,7 +103,7 @@ export function DealsTab({ data, params, qs, initialObject }: { data: ClientModu
   return (
     <div className="flex flex-col gap-2">
       <div className="flex w-fit rounded-lg border border-[var(--color-border)] p-0.5 text-[12.5px]">
-        {([['timeline', 'Хронология: сделки и задачи'], ['table', 'Таблица сделок']] as const).map(([v, l]) => (
+        {([['timeline', 'Хронология'], ['table', 'Таблица']] as const).map(([v, l]) => (
           <button key={v} type="button" onClick={() => setMode(v)} aria-pressed={mode === v}
             className={`min-h-11 rounded-md px-3 ${mode === v ? 'bg-[var(--color-bg-hover)] font-semibold' : 'text-[var(--color-text-muted)]'}`}>{l}</button>
         ))}
