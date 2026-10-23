@@ -24,6 +24,7 @@ import { enqueue, fetchQueueItem, issueNow, removeByClient, removeFromQueue, set
 import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/repeat-kanban/engine/settings';
 import { resolvePeriod } from '@/features/repeat-kanban/engine/shippedGroups';
 import { setCustomerTags, TagError } from '@/features/repeat-kanban/engine/tags';
+import { normalizeParticipants } from '@/features/repeat-kanban/engine/participants';
 import { acceptTask, returnTask, TaskReviewError } from '@/features/repeat-kanban/engine/taskReview';
 import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 
@@ -249,6 +250,7 @@ export async function POST(req: NextRequest) {
           templateId: typeof body.templateId === 'number' ? body.templateId : null,
           comment: typeof body.comment === 'string' && body.comment.trim() ? body.comment.trim().slice(0, 3000) : null,
           deadlineRule: rule, deadlineTime: time, newResponsibleId,
+          participants: normalizeParticipants(body.participants),
         });
         return NextResponse.json({ ...r, skipped });
       }
@@ -287,7 +289,8 @@ export async function POST(req: NextRequest) {
         if (!managers.some(m => m.id === body.newManagerId)) throw new DealCreateError('Новый менеджер не из вашей зоны');
         newResponsibleId = body.newManagerId;
       }
-      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime, newResponsibleId });
+      const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime, newResponsibleId,
+        participants: normalizeParticipants(body.participants) });
       // Поставили «Сразу» — позиция этого заказчика в очереди больше не нужна.
       await removeByClient(clientKey, 'manual', session.bitrixUserId).catch(() => {});
       // Синк может не донести клиента новой сделки (21.10: так карточки оставались в пуле).
@@ -295,7 +298,7 @@ export async function POST(req: NextRequest) {
       const type = logType ?? (res.dealMode === 'created' ? 'deal_task_created' : res.dealMode === 'reopened' ? 'deal_returned_from_reject' : 'task_created');
       await logEvent(session, { type, requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
         payload: { comment, creator, responsible: res.responsibleId, deadline: deadlineDate, deadlineTime, templateId: typeof body.templateId === 'number' ? body.templateId : null,
-          dealMode: res.dealMode, reassignedTo: newResponsibleId, reassignWorkflowId: res.reassignWorkflowId ?? null } });
+          dealMode: res.dealMode, reassignedTo: newResponsibleId, reassignWorkflowId: res.reassignWorkflowId ?? null, accomplices: res.accomplices ?? [], auditors: res.auditors ?? [] } });
       if (res.chatPosted) await logEvent(session, { type: 'task_comment_posted', requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId });
       if (newResponsibleId) await logEvent(session, { type: 'manager_reassigned', requestId: rid, clientKey, managerId, columnBefore, dealId: res.dealId, taskId: res.taskId,
         payload: { from: managerId, to: newResponsibleId, workflowId: res.reassignWorkflowId ?? null } });

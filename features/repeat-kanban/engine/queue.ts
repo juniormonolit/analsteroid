@@ -18,6 +18,7 @@ import { fetchKanbanSettings, getTemplate, renderTemplate } from './settings';
 import { newRequestId } from './log';
 import { WINDOW_DAYS } from './config';
 import { rememberDealClient } from './dealFixes';
+import { normalizeParticipants, type TaskParticipants } from './participants';
 
 export type QueueStatus = 'queued' | 'issuing' | 'issued' | 'removed' | 'failed';
 export type DeadlineRule = 'window' | 'today' | '3' | '7';
@@ -29,6 +30,8 @@ export interface QueueItem {
   score: number | null; scoreAt: string | null; lastError: string | null;
   issuedTaskId: number | null; issuedDealId: number | null; issuedAt: string | null;
   removedReason: string | null; removedAt: string | null; createdAt: string;
+  /** Соисполнители/наблюдатели (миграция 254) — применяются при выдаче. */
+  participants: TaskParticipants | null;
 }
 
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
@@ -46,6 +49,7 @@ function rowToItem(x: Record<string, unknown>): QueueItem {
     issuedTaskId: x.issued_task_id ? Number(x.issued_task_id) : null, issuedDealId: x.issued_deal_id ? Number(x.issued_deal_id) : null,
     issuedAt: iso(x.issued_at), removedReason: (x.removed_reason as string | null) ?? null, removedAt: iso(x.removed_at),
     createdAt: iso(x.created_at)!,
+    participants: normalizeParticipants(x.participants),
   };
 }
 
@@ -67,6 +71,7 @@ export interface EnqueueInput {
   queuedBy: string; queuedByName: string | null;
   templateId: number | null; comment: string | null;
   deadlineRule: DeadlineRule; deadlineTime: string; newResponsibleId: string | null; boost?: number;
+  participants?: TaskParticipants | null;
 }
 
 /** Поставить в очередь. Живая позиция заказчика уже есть — обновляется (менеджер, шаблон, срок,
@@ -78,17 +83,18 @@ export async function enqueue(input: EnqueueInput): Promise<{ added: number; upd
     const target = input.newResponsibleId ?? it.managerId;
     const r = await db.query(
       `UPDATE repeat_task_queue SET manager_id = $2, new_responsible_id = $3, template_id = $4, comment = $5,
-              deadline_rule = $6, deadline_time = $7, boost = coalesce($8, boost), updated_at = now()
+              deadline_rule = $6, deadline_time = $7, boost = coalesce($8, boost), participants = $9, updated_at = now()
         WHERE client_key = $1 AND status = 'queued' RETURNING id`,
-      [it.clientKey, target, input.newResponsibleId, input.templateId, input.comment, input.deadlineRule, input.deadlineTime, input.boost ?? null],
+      [it.clientKey, target, input.newResponsibleId, input.templateId, input.comment, input.deadlineRule, input.deadlineTime, input.boost ?? null,
+       input.participants ? JSON.stringify(input.participants) : null],
     );
     if (r.rowCount) { updated++; continue; }
     const ins = await db.query(
       `INSERT INTO repeat_task_queue (client_key, manager_id, new_responsible_id, queued_by, queued_by_name, template_id, comment,
-                                      deadline_rule, deadline_time, boost)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING RETURNING id`,
+                                      deadline_rule, deadline_time, boost, participants)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING RETURNING id`,
       [it.clientKey, target, input.newResponsibleId, input.queuedBy, input.queuedByName, input.templateId, input.comment,
-       input.deadlineRule, input.deadlineTime, input.boost ?? 0],
+       input.deadlineRule, input.deadlineTime, input.boost ?? 0, input.participants ? JSON.stringify(input.participants) : null],
     );
     if (ins.rowCount) {
       added++;
@@ -199,6 +205,7 @@ export async function issueItem(item: QueueItem, card: KanbanCard | null, opts: 
       creatorBitrixId: opts.creatorOverride ?? item.queuedBy, comment, commentAuthorId: opts.creatorOverride ?? item.queuedBy,
       deadlineDate: deadlineFor(item.deadlineRule, card), deadlineTime: item.deadlineTime,
       newResponsibleId: item.newResponsibleId,
+      participants: item.participants,
     });
     rememberDealClient(res.dealId, ck);
     await db.query(

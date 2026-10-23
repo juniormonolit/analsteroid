@@ -30,6 +30,7 @@ import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID } from './config';
 import { logRecommendations } from './recommendations';
+import { ROP_TOKEN, type TaskParticipants } from './participants';
 import { freshMemoForClientKey, markMemoInserted } from '@/features/ai-analysis/engine/memoStore';
 import { blockBb, memoLinesBb, splitComment } from '@/features/ai-analysis/engine/memo';
 
@@ -189,6 +190,8 @@ export interface RepeatTaskResult {
   dealId: number; dealMode: RepeatDealMode; taskId: number; responsibleId: string; createdById: string; chatPosted: boolean;
   /** Запущен бизнес-процесс «Сменить ответственного» (id процесса). */
   reassignWorkflowId?: string | null;
+  /** Кого добавили соисполнителями и наблюдателями (Битрикс-id, после разворота «РОП менеджера»). */
+  accomplices?: number[]; auditors?: number[];
 }
 
 /** Шаблон бизнес-процесса Битрикса «Сменить ответственного» (сделка). Менять ответственного —
@@ -223,6 +226,8 @@ export async function createRepeatTask(input: {
   deadlineTime?: string | null;
   /** «И сменить менеджера на …»: Битрикс-id нового ответственного (БП 171), задача — ему. */
   newResponsibleId?: string | null;
+  /** Соисполнители и наблюдатели задачи (ROP_TOKEN — РОП ответственного менеджера). */
+  participants?: TaskParticipants | null;
 }): Promise<RepeatTaskResult> {
   const t = dealTargetOf(input.clientKey);
   if (!Number.isInteger(t.id) || t.id <= 0) throw new DealCreateError('Некорректный заказчик');
@@ -318,6 +323,17 @@ export async function createRepeatTask(input: {
   ].filter(Boolean).join('\n\n') || null;
   const memo = memoBb ? await freshMemoForClientKey(input.clientKey) : null; // только чтобы отметить, что памятка ушла
   const description = await buildDescription(input.clientKey, parts.rop, memoBb);
+  // Участники (владелец 23.10): «РОП менеджера» — по оргструктуре ответственного; сам ответственный — не участник.
+  const resolve = async (ids: string[]) => {
+    const out = new Set<string>();
+    for (const x of ids) {
+      const id = x === ROP_TOKEN ? await ropOfManager(String(responsibleId)).catch(() => null) : x;
+      if (id && id !== String(responsibleId)) out.add(id);
+    }
+    return [...out].map(Number);
+  };
+  const accomplices = input.participants ? await resolve(input.participants.accomplices) : [];
+  const auditors = input.participants ? (await resolve(input.participants.auditors)).filter(id => !accomplices.includes(id)) : [];
   const task = await writeOnce<{ task?: { id?: string | number } }>(taskWebhook(), 'tasks.task.add', {
     fields: {
       TITLE: title,
@@ -330,6 +346,8 @@ export async function createRepeatTask(input: {
       DEADLINE: input.deadlineDate && /^\d{4}-\d{2}-\d{2}$/.test(input.deadlineDate)
         ? `${input.deadlineDate}T${input.deadlineTime && /^\d{2}:\d{2}$/.test(input.deadlineTime) ? input.deadlineTime : '19:00'}:00+03:00` : deadlineIso(),
       UF_CRM_TASK: [`D_${dealId}`],
+      ...(accomplices.length ? { ACCOMPLICES: accomplices } : {}),
+      ...(auditors.length ? { AUDITORS: auditors } : {}),
     },
   });
   const taskId = Number(task?.task?.id ?? 0);
@@ -347,7 +365,7 @@ export async function createRepeatTask(input: {
   }
   // Журнал рекомендаций (миграция 250, самообучение): что советовали предложить и есть ли это в тексте задачи. Фоном.
   void logRecommendations({ clientKey: input.clientKey, managerId: input.fallbackManagerId, taskId, dealId, text: input.comment, createdBy: input.commentAuthorId ?? input.creatorBitrixId });
-  return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted, reassignWorkflowId };
+  return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted, reassignWorkflowId, accomplices, auditors };
 }
 
 /** Постановщик по структуре: РОП менеджера (sa.org_resolved_hierarchy, ближайший предок с

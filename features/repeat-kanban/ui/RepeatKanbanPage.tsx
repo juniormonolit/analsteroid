@@ -32,6 +32,7 @@ import { QueueView } from './QueueView';
 import { TagChip, TagsModal } from './TagsModal';
 import { AcceptTaskModal } from './AcceptTaskModal';
 import { TaskCheckModal, useTaskChecks, VERDICT, type TaskCheckState } from './TaskCheck';
+import { ParticipantsPicker, initialParticipants, participantsPayload } from './ParticipantsPicker';
 import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
@@ -1397,7 +1398,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
   const [deadlineTime, setDeadlineTime] = useState('19:00');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<{ taskId: number; dealId: number; dealMode: string; chatPosted?: boolean } | null>(null);
+  const [result, setResult] = useState<{ taskId: number; dealId: number; dealMode: string; chatPosted?: boolean; accomplices?: number[]; auditors?: number[] } | null>(null);
   const [mode, setMode] = useState<TaskMode>('now');
   const { templates, dailyLimit } = useTemplates();
   const [qTemplate, setQTemplate] = useState('');
@@ -1405,11 +1406,13 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
   const [qComment, setQComment] = useState('');
   const [qRule, setQRule] = useState<'today' | 'window' | '3' | '7'>('window');
   const [queued, setQueued] = useState<{ added: number; updated: number } | null>(null);
+  // Участники (владелец 23.10): по умолчанию соисполнитель — РОП менеджера.
+  const [parts, setParts] = useState(initialParticipants);
   const submitQueue = async () => {
     setBusy(true); setErr(null);
     try {
       const j = await post({ action: 'queue_add', items: [{ clientKey: card.clientKey, managerId: card.managerId }], templateId: qTid ? Number(qTid) : undefined,
-        comment: qComment, deadlineRule: qRule, deadlineTime, newManagerId: newManager || undefined });
+        comment: qComment, deadlineRule: qRule, deadlineTime, newManagerId: newManager || undefined, participants: participantsPayload(parts) });
       if (!j.added && !j.updated) throw new Error('Не удалось поставить в очередь');
       setQueued(j); onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
@@ -1423,7 +1426,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text, deadline, deadlineTime, newManagerId: newManager || undefined });
+      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text, deadline, deadlineTime, newManagerId: newManager || undefined, participants: participantsPayload(parts) });
       setResult(j); onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
@@ -1444,6 +1447,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
           <p className="text-[var(--color-text)]">
             {result.dealMode === 'created' ? `Создана сделка #${result.dealId}` : result.dealMode === 'reopened' ? `Сделка #${result.dealId} возвращена из отказа` : `Сделка #${result.dealId}`}
             {' '}и задача в проекте «Повторные продажи», срок {fmtYmd(deadline)} {deadlineTime}.{text.trim() ? (result.chatPosted ? ' Сообщение — в описании и первым сообщением в чате задачи.' : ' Сообщение — в описании задачи (в чат задачи отправить не удалось).') : ''}
+            {(result.accomplices?.length || result.auditors?.length) ? ` Участники: соисполнителей ${result.accomplices?.length ?? 0}, наблюдателей ${result.auditors?.length ?? 0}.` : ''}
           </p>
           <div className="flex flex-wrap gap-3">
             <a href={taskUrl(result.taskId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline"><ExternalLink size={13} /> Задача #{result.taskId}</a>
@@ -1461,6 +1465,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
             load={newManager && reassign ? reassign.loadOf(newManager) : load} limit={limit} />
           <ModeToggle mode={mode} onChange={setMode} />
           {reassign && <ReassignPicker opts={reassign} currentId={card.managerId} value={newManager} onChange={setNewManager} />}
+          <ParticipantsPicker value={parts} onChange={setParts} managerIds={[newManager || card.managerId]} />
           {mode === 'now' ? (
             <>
               {/* Шаблон (настройки канбана): по умолчанию подставляется отмеченный «по умолчанию»,
@@ -1523,6 +1528,7 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
   const [deadlineTime, setDeadlineTime] = useState('19:00');
   const [results, setResults] = useState<Map<string, { ok: boolean; text: string }>>(new Map());
   const [running, setRunning] = useState(false);
+  const [parts, setParts] = useState(initialParticipants);
   const stop = useRef(false);
 
   // Перегрузка: сколько задач у менеджера станет после постановки.
@@ -1535,7 +1541,8 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
     setRunning(true);
     try {
       const j = await post({ action: 'queue_add', items: cards.map(c => ({ clientKey: c.clientKey, managerId: c.managerId })),
-        templateId: tid ? Number(tid) : undefined, comment: qComment, deadlineRule: deadlineMode, deadlineTime, newManagerId: newManager || undefined });
+        templateId: tid ? Number(tid) : undefined, comment: qComment, deadlineRule: deadlineMode, deadlineTime, newManagerId: newManager || undefined,
+        participants: participantsPayload(parts) });
       setQueued(j);
     } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
     setRunning(false);
@@ -1548,7 +1555,7 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
       if (results.get(c.clientKey)?.ok) continue;
       const deadline = deadlineMode === 'window' ? windowEnd(c) : deadlineMode === 'today' ? mskYmd(Date.now()) : mskYmd(Date.now(), Number(deadlineMode));
       try {
-        const j = await post({ action: 'create_task', clientKey: c.clientKey, managerId: c.managerId, column: c.column, text: '', templateId: tid ? Number(tid) : undefined, deadline, deadlineTime, newManagerId: newManager && newManager !== c.managerId ? newManager : undefined });
+        const j = await post({ action: 'create_task', clientKey: c.clientKey, managerId: c.managerId, column: c.column, text: '', templateId: tid ? Number(tid) : undefined, deadline, deadlineTime, newManagerId: newManager && newManager !== c.managerId ? newManager : undefined, participants: participantsPayload(parts) });
         setResults(m => new Map(m).set(c.clientKey, { ok: true, text: `задача #${j.taskId}` }));
       } catch (e) {
         setResults(m => new Map(m).set(c.clientKey, { ok: false, text: e instanceof Error ? e.message : String(e) }));
@@ -1596,6 +1603,7 @@ function BulkTaskModal({ cards, loadOf, limit, reassign, onClose, onDone }: {
           </label>
         </div>
         {reassign && <ReassignPicker opts={reassign} currentId={null} value={newManager} onChange={setNewManager} />}
+        <ParticipantsPicker value={parts} onChange={setParts} managerIds={newManager ? [newManager] : [...new Set(cards.map(c => c.managerId))]} />
         {mode === 'queue' && (
           <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
             Добавка от РОПа ко всем (необязательно)
