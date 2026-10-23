@@ -20,7 +20,8 @@ export type KanbanEventType =
   | 'manager_reassigned'       // «И сменить менеджера» — запущен БП «Сменить ответственного» (21.10)
   | 'customers_merged' | 'customers_unmerged' | 'customers_split' // склейка заказчиков (миграция 243)
   | 'tags_set'                 // теги заказчика заменены (миграция 245)
-  | 'task_accepted' | 'task_accepted_deal_closed' | 'task_returned'; // приёмка задачи из канбана (22.10)
+  | 'task_accepted' | 'task_accepted_deal_closed' | 'task_returned' // приёмка задачи из канбана (22.10)
+  | 'task_replaced';           // «Откатить и создать задачу»: сделка задачи закрыта, поставлена новая, старая принята (23.10)
 
 export const newRequestId = () => randomUUID();
 

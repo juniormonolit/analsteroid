@@ -228,6 +228,8 @@ export async function createRepeatTask(input: {
   newResponsibleId?: string | null;
   /** Соисполнители и наблюдатели задачи (ROP_TOKEN — РОП ответственного менеджера). */
   participants?: TaskParticipants | null;
+  /** Файлы Диска к первому сообщению в чате задачи (attachments.ts). */
+  attachments?: number[];
 }): Promise<RepeatTaskResult> {
   const t = dealTargetOf(input.clientKey);
   if (!Number.isInteger(t.id) || t.id <= 0) throw new DealCreateError('Некорректный заказчик');
@@ -357,8 +359,8 @@ export async function createRepeatTask(input: {
   // постановку: задача уже есть, комментарий в любом случае лежит в её описании.
   let chatPosted = false;
   const chatText = [memoBb, parts.rop].filter(Boolean).join('\n\n');
-  if (chatText.trim()) {
-    chatPosted = await postToTaskChat(taskId, input.commentAuthorId ?? input.creatorBitrixId, chatText).catch(e => {
+  if (chatText.trim() || input.attachments?.length) {
+    chatPosted = await postToTaskChat(taskId, input.commentAuthorId ?? input.creatorBitrixId, chatText, input.attachments ?? []).catch(e => {
       console.warn(`[repeat-kanban] комментарий в чат задачи ${taskId} не ушёл:`, e instanceof Error ? e.message : e);
       return false;
     });
@@ -384,9 +386,10 @@ export async function ropOfManager(managerBitrixId: string): Promise<string | nu
  * «Аналитик» — Битрикс отказал: «Вы не можете отправлять сообщения в указанный чат» (бот не
  * участник задачи); от вебхука нельзя — автором был бы его владелец (Сергей Афанасьев).
  */
-export async function postToTaskChat(taskId: number, authorId: string, comment: string): Promise<boolean> {
+export async function postToTaskChat(taskId: number, authorId: string, comment: string, files: number[] = []): Promise<boolean> {
+  // files — id файлов Диска (attachments.ts), прикрепляются к сообщению.
   const res = await bx(taskWebhook(), 'task.commentitem.add', {
-    TASKID: taskId, FIELDS: { AUTHOR_ID: Number(authorId), POST_MESSAGE: comment },
+    TASKID: taskId, FIELDS: { AUTHOR_ID: Number(authorId), POST_MESSAGE: comment || 'Файлы', ...(files.length ? { UF_FORUM_MESSAGE_DOC: files.map(id => `n${id}`) } : {}) },
   }) as { result?: number };
   return Number(res?.result) > 0;
 }

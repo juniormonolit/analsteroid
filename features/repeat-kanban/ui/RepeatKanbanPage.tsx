@@ -22,7 +22,7 @@ import { RepeatKanbanSettingsButton, TemplatePicker } from './RepeatKanbanSettin
 
 // Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
 import {
-  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS,
+  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS, LOST_STAGES, WON_STAGES,
   type ColumnDef, type ColumnGroup, type ColumnKey,
 } from '../engine/config';
 import type { BoardKpi, KanbanCard, KanbanColumn, RepeatBoard, TodaySection } from '../engine/board';
@@ -33,6 +33,7 @@ import { TagChip, TagsModal } from './TagsModal';
 import { AcceptTaskModal } from './AcceptTaskModal';
 import { TaskCheckModal, useTaskChecks, VERDICT, type TaskCheckState } from './TaskCheck';
 import { ParticipantsPicker, initialParticipants, participantsPayload } from './ParticipantsPicker';
+import { AttachmentsRow, useAttachments } from './Attachments';
 import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
@@ -1408,6 +1409,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
   const [queued, setQueued] = useState<{ added: number; updated: number } | null>(null);
   // Участники (владелец 23.10): по умолчанию соисполнитель — РОП менеджера.
   const [parts, setParts] = useState(initialParticipants);
+  const att = useAttachments();
   const submitQueue = async () => {
     setBusy(true); setErr(null);
     try {
@@ -1419,14 +1421,19 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
     setBusy(false);
   };
   // Что произойдёт со сделкой — по правилам ТЗ (engine/createDeal.ts), заранее и честно.
-  const what = card.deal ? `Задача в сделку #${card.deal.dealId}, в название — «ПОСМОТРИ ЗАДАЧУ».`
+  // Последняя сделка отгружена — новая сделка (а не «задача в отгруженную»: владелец 23.10 увидел именно это).
+  const cur = card.deal;
+  const what = cur && WON_STAGES.has(cur.stageId) ? `Сделка #${cur.dealId} отгружена — будет создана новая повторная сделка «ПОСМОТРИ ЗАДАЧУ …».`
+    : cur && LOST_STAGES.has(cur.stageId) ? `Сделка #${cur.dealId} вернётся из отказа в первую стадию, в название — «ПОСМОТРИ ЗАДАЧУ».`
+    : cur ? `Задача в сделку #${cur.dealId}, в название — «ПОСМОТРИ ЗАДАЧУ».`
     : card.lastLost ? `Сделка #${card.lastLost.dealId} вернётся из отказа в первую стадию, в название — «ПОСМОТРИ ЗАДАЧУ».`
     : 'Будет создана новая повторная сделка «ПОСМОТРИ ЗАДАЧУ …» (как из контакта).';
 
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
-      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text, deadline, deadlineTime, newManagerId: newManager || undefined, participants: participantsPayload(parts) });
+      const attachments = await att.upload();
+      const j = await post({ action: 'create_task', clientKey: card.clientKey, managerId: card.managerId, column: card.column, text, deadline, deadlineTime, newManagerId: newManager || undefined, participants: participantsPayload(parts), attachments });
       setResult(j); onSaved();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
@@ -1475,9 +1482,11 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
                 Сообщение менеджеру
                 {/* Крупно (владелец 23.10: «сделай окно крупно, чтобы сообщение было видно целиком»):
                     шаблон + памятка «Перед звонком» — 15–25 строк. */}
-                <textarea value={text} onChange={e => setText(e.target.value)} rows={20}
-                  placeholder="У тебя дом без крыши — будет капать дождь — предложи металлочерепицу!" className={`${fieldCls} min-h-[45dvh] resize-y leading-relaxed sm:min-h-[420px]`} />
+                <textarea value={text} onChange={e => setText(e.target.value)} onPaste={att.onPaste} rows={20} {...att.dropZone}
+                  placeholder="У тебя дом без крыши — будет капать дождь — предложи металлочерепицу!" className={`${fieldCls} min-h-[45dvh] resize-y leading-relaxed sm:min-h-[420px] ${att.dragOver ? 'outline outline-2 outline-[var(--color-accent)]' : ''}`} />
               </label>
+              {/* Файлы и картинки — к первому сообщению в чате задачи (владелец 23.10). */}
+              <AttachmentsRow a={att} />
               <DeadlinePicker card={card} value={deadline} onChange={setDeadline} time={deadlineTime} onTime={setDeadlineTime} />
             </>
           ) : (

@@ -25,7 +25,8 @@ import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/r
 import { resolvePeriod } from '@/features/repeat-kanban/engine/shippedGroups';
 import { setCustomerTags, TagError } from '@/features/repeat-kanban/engine/tags';
 import { normalizeParticipants } from '@/features/repeat-kanban/engine/participants';
-import { acceptTask, returnTask, TaskReviewError } from '@/features/repeat-kanban/engine/taskReview';
+import { acceptTask, checkTask, closeReplacedTask, returnTask, taskDealState, TaskReviewError } from '@/features/repeat-kanban/engine/taskReview';
+import { takeAttachments } from '@/features/repeat-kanban/engine/attachments';
 import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 
 // Канбан повторных продаж (решения владельца 20.10, REPEAT_KANBAN_SPEC.md).
@@ -271,6 +272,8 @@ export async function POST(req: NextRequest) {
     if (!(await ownsClient(managerId, clientKey))) return NextResponse.json({ error: 'Заказчик не в списке менеджера' }, { status: 403 });
 
     // Постановка задачи (кнопка и «Вернуть менеджеру» на разборе) — один путь (createDeal.ts).
+    // Вложения (attachments.ts): токены загруженных перед действием файлов → id Диска.
+    const files = takeAttachments(session.login, body.attachments);
     const runTask = async (comment: string, logType?: KanbanEventType) => {
       // Постановщик — тот, кто нажал (владелец 21.10, Коваленко: «от того, кто ставит»; раньше у
       // полного доступа подставлялся РОП менеджера по структуре — все задачи шли от Осипова).
@@ -290,7 +293,7 @@ export async function POST(req: NextRequest) {
         newResponsibleId = body.newManagerId;
       }
       const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime, newResponsibleId,
-        participants: normalizeParticipants(body.participants) });
+        participants: normalizeParticipants(body.participants), attachments: files });
       // Поставили «Сразу» — позиция этого заказчика в очереди больше не нужна.
       await removeByClient(clientKey, 'manual', session.bitrixUserId).catch(() => {});
       // Синк может не донести клиента новой сделки (21.10: так карточки оставались в пуле).
@@ -313,7 +316,24 @@ export async function POST(req: NextRequest) {
       if (body.action === 'task_return') {
         const d = typeof body.deadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.deadline) ? body.deadline : null;
         const t = typeof body.deadlineTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.deadlineTime) ? body.deadlineTime : '19:00';
-        const res = await returnTask({ taskId, dealId, comment, authorId: session.bitrixUserId, deadline: d ? `${d}T${t}:00+03:00` : null });
+        // Сделка задачи закрыта (отказ / отгружена) — вернуть задачу нельзя, только «Откатить и создать задачу»
+        // (владелец 23.10). Кнопку выбирает клиент по доске, стадию сверяем по Битриксу: доска могла отстать.
+        const state = await taskDealState(dealId);
+        const wantRollback = body.rollback === true;
+        if (wantRollback !== (state !== 'open')) {
+          return NextResponse.json({ error: state === 'open' ? 'Сделка уже снова в работе — обновите доску' : `Сделка #${dealId} уже ${state === 'lost' ? 'закрыта в отказ' : 'отгружена'} — обновите доску` }, { status: 409 });
+        }
+        if (state !== 'open') {
+          if (comment.length < 3) return NextResponse.json({ error: 'Напишите, что сделать' }, { status: 400 });
+          await checkTask(taskId, dealId);
+          const why = state === 'lost' ? `сделка #${dealId} была закрыта в отказ` : `сделка #${dealId} уже отгружена`;
+          const res = await runTask(`Повторно вместо задачи #${taskId} (${why}):\n${comment}`);
+          const closed = await closeReplacedTask({ taskId, authorId: session.bitrixUserId, newTaskId: res.taskId, newDealId: res.dealId, reopened: res.dealMode !== 'created' });
+          await logEvent(session, { type: 'task_replaced', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId,
+            payload: { state, newTaskId: res.taskId, newDealId: res.dealId, dealMode: res.dealMode, oldClosed: closed } });
+          return NextResponse.json({ ok: true, rolledBack: true, ...res, oldClosed: closed });
+        }
+        const res = await returnTask({ taskId, dealId, comment, authorId: session.bitrixUserId, deadline: d ? `${d}T${t}:00+03:00` : null, files });
         await logEvent(session, { type: 'task_returned', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId, payload: { comment, deadline: d ? `${d} ${t}` : null, commented: res.commented } });
         return NextResponse.json({ ok: true, ...res });
       }
@@ -322,7 +342,7 @@ export async function POST(req: NextRequest) {
       const reason = typeof body.closeReason === 'string' && body.closeReason ? body.closeReason : null;
       const reasonLabel = reason ? BRAK_REASONS.find(r => r.value === reason)?.label ?? null : null;
       if (reason && !reasonLabel) return NextResponse.json({ error: 'Выберите стадию закрытия' }, { status: 400 });
-      const res = await acceptTask({ taskId, dealId, comment: comment || null, authorId: session.bitrixUserId, closing: reasonLabel });
+      const res = await acceptTask({ taskId, dealId, comment: comment || null, authorId: session.bitrixUserId, closing: reasonLabel, files });
       let dealClosed: string | null = null;
       if (reason) {
         await markBrakNow({ clientKey, reason, comment: comment || null, session });
