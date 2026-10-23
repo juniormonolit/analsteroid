@@ -6,13 +6,13 @@ import { useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2, X } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { SearchSelect } from '@/components/ui/SearchSelect';
-import { QUESTION_KINDS, type GroupQuestion, type QuestionKind } from '../engine/types';
+import { QUESTION_AUDIENCES, QUESTION_KINDS, type GroupQuestion, type QuestionAudience, type QuestionKind } from '../engine/types';
 import { QuestionnaireForm, type Answers } from './QuestionnaireForm';
 
 type Draft = GroupQuestion & { uid: string };
 let seq = 0;
 const uid = () => `q${++seq}`;
-const blank = (): Draft => ({ uid: uid(), id: null, question: '', hint: null, kind: 'text', options: [], required: false });
+const blank = (): Draft => ({ uid: uid(), id: null, question: '', hint: null, kind: 'text', options: [], required: false, audience: 'client' });
 
 const field = 'w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base sm:text-sm text-[var(--color-text)]';
 const btnIdle = 'inline-flex min-h-11 items-center justify-center gap-1 rounded-lg border border-[var(--color-border)] px-3 text-sm text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-40';
@@ -88,7 +88,14 @@ export function QuestionnaireEditor({ group, title, initial, copySources, onClos
 
         {mode === 'preview' ? (
           <div className="rounded-lg border border-[var(--color-border)] p-3">
-            <QuestionnaireForm questions={strip(items).filter(q => q.question.trim())} value={preview} onChange={setPreview} />
+            {/* Менеджер видит только вопросы клиенту; проверки — для разбора звонков и РОПа (миграция 251). */}
+            <QuestionnaireForm questions={strip(items).filter(q => q.question.trim() && q.audience === 'client')} value={preview} onChange={setPreview} />
+            {items.some(q => q.audience === 'manager_check' && q.question.trim()) && (
+              <div className="mt-4 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-text-muted)]">
+                <div className="mb-1 font-semibold">Проверки менеджера — менеджер их не видит, по ним разбор звонков оценивает разговор:</div>
+                <ul className="list-disc pl-5">{items.filter(q => q.audience === 'manager_check' && q.question.trim()).map(q => <li key={q.uid}>{q.question}</li>)}</ul>
+              </div>
+            )}
           </div>
         ) : (
           <>
@@ -108,8 +115,11 @@ export function QuestionnaireEditor({ group, title, initial, copySources, onClos
                 </div>
                 <div className="flex min-w-0 flex-col gap-2 pl-7">
                   <input value={q.hint ?? ''} onChange={e => patch(q.uid, { hint: e.target.value || null })} maxLength={300}
-                    placeholder="Подсказка менеджеру (необязательно)" aria-label="Подсказка" className={field} />
+                    placeholder={q.audience === 'manager_check' ? 'Как понять, что сделано (необязательно)' : 'Подсказка менеджеру (необязательно)'} aria-label="Подсказка" className={field} />
                   <div className="flex flex-wrap items-center gap-2">
+                    <SearchSelect ariaLabel="Кому вопрос" value={q.audience} onChange={v => patch(q.uid, { audience: v as QuestionAudience })}
+                      options={QUESTION_AUDIENCES.map(a => ({ value: a.value, label: a.label, hint: a.hint }))}
+                      className={`w-full sm:w-56 ${q.audience === 'manager_check' ? 'border-[#e69138]' : ''}`} />
                     <SearchSelect ariaLabel="Тип ответа" value={q.kind} onChange={v => setKind(q, v as QuestionKind)}
                       options={QUESTION_KINDS.map(k => ({ value: k.value, label: k.label }))} className="w-full sm:w-56" />
                     <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 text-[var(--color-text)]">

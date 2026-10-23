@@ -4,15 +4,15 @@
 // поэтому вопрос не удаляется, а архивируется: на его id будут ссылаться ответы.
 import { systemDb } from '@/lib/db/clients';
 
-import { QUESTION_KINDS, MAX_OPTIONS, MAX_QUESTIONS, type GroupQuestion, type QuestionKind } from './types';
+import { QUESTION_AUDIENCES, QUESTION_KINDS, MAX_OPTIONS, MAX_QUESTIONS, type GroupQuestion, type QuestionAudience, type QuestionKind } from './types';
 export * from './types';
 
 export class QuestionnaireError extends Error {}
 
 /** Активные вопросы: группа → по порядку. */
 export async function fetchQuestionnaires(groups?: string[]): Promise<Map<string, GroupQuestion[]>> {
-  const r = await systemDb().query<{ id: number; group_name: string; question: string; hint: string | null; kind: QuestionKind; options: string[]; required: boolean }>(
-    `SELECT id, group_name, question, hint, kind, options, required FROM group_questions
+  const r = await systemDb().query<{ id: number; group_name: string; question: string; hint: string | null; kind: QuestionKind; options: string[]; required: boolean; audience: QuestionAudience }>(
+    `SELECT id, group_name, question, hint, kind, options, required, audience FROM group_questions
       WHERE archived_at IS NULL ${groups ? 'AND group_name = ANY($1::text[])' : ''}
       ORDER BY group_name, position, id`,
     groups ? [groups] : [],
@@ -20,7 +20,7 @@ export async function fetchQuestionnaires(groups?: string[]): Promise<Map<string
   const out = new Map<string, GroupQuestion[]>();
   for (const x of r.rows) {
     const l = out.get(x.group_name) ?? [];
-    l.push({ id: x.id, question: x.question, hint: x.hint, kind: x.kind, options: x.options ?? [], required: x.required });
+    l.push({ id: x.id, question: x.question, hint: x.hint, kind: x.kind, options: x.options ?? [], required: x.required, audience: x.audience ?? 'client' });
     out.set(x.group_name, l);
   }
   return out;
@@ -50,7 +50,8 @@ export function normalizeQuestions(raw: unknown): GroupQuestion[] {
       if (options.length > MAX_OPTIONS) throw new QuestionnaireError(`Вопрос ${n}: не больше ${MAX_OPTIONS} вариантов`);
     }
     const id = Number.isInteger(q?.id) && (q.id as number) > 0 ? q.id as number : null;
-    return { id, question, hint: clean(q?.hint, 300) || null, kind, options, required: q?.required === true };
+    const audience: QuestionAudience = QUESTION_AUDIENCES.some(a => a.value === q?.audience) ? q.audience as QuestionAudience : 'client';
+    return { id, question, hint: clean(q?.hint, 300) || null, kind, options, required: q?.required === true, audience };
   });
 }
 
@@ -68,14 +69,14 @@ export async function saveQuestionnaire(group: string, questions: GroupQuestion[
         kept.add(q.id);
         await client.query(
           `UPDATE group_questions SET position = $2, question = $3, hint = $4, kind = $5, options = $6, required = $7,
-                  updated_by = $8, updated_at = now()
+                  updated_by = $8, updated_at = now(), audience = $9
             WHERE id = $1`,
-          [q.id, pos, q.question, q.hint, q.kind, q.options, q.required, by]);
+          [q.id, pos, q.question, q.hint, q.kind, q.options, q.required, by, q.audience]);
       } else {
         const r = await client.query<{ id: number }>(
-          `INSERT INTO group_questions (group_name, position, question, hint, kind, options, required, created_by, updated_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8) RETURNING id`,
-          [group, pos, q.question, q.hint, q.kind, q.options, q.required, by]);
+          `INSERT INTO group_questions (group_name, position, question, hint, kind, options, required, created_by, updated_by, audience)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9) RETURNING id`,
+          [group, pos, q.question, q.hint, q.kind, q.options, q.required, by, q.audience]);
         q.id = r.rows[0].id;
       }
     }

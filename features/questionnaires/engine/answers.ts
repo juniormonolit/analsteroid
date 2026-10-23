@@ -30,9 +30,10 @@ export async function fetchClientQuestionnaire(clientRef: string, groups: string
   if (!REF_RE.test(clientRef)) throw new AnswerError('Некорректный заказчик');
   const want = [COMMON_GROUP, ...new Set(groups.filter(g => g && g !== COMMON_GROUP))].slice(0, 60);
   const db = systemDb();
+  // Только вопросы КЛИЕНТУ (миграция 251): проверки менеджера — для разбора звонков и РОПа, не в карточку.
   const q = await db.query<{ id: number; group_name: string; question: string; hint: string | null; kind: GroupQuestion['kind']; options: string[]; required: boolean }>(
     `SELECT id, group_name, question, hint, kind, options, required FROM group_questions
-      WHERE archived_at IS NULL AND group_name = ANY($1::text[])
+      WHERE archived_at IS NULL AND audience = 'client' AND group_name = ANY($1::text[])
       ORDER BY array_position($1::text[], group_name), position, id`, [want],
   );
   if (!q.rows.length) return [];
@@ -48,7 +49,7 @@ export async function fetchClientQuestionnaire(clientRef: string, groups: string
     confidence: r.confidence !== null ? Number(r.confidence) : null,
   } satisfies StoredAnswer]));
   return q.rows.map(r => ({
-    id: r.id, group: r.group_name, question: r.question, hint: r.hint, kind: r.kind, options: r.options ?? [], required: r.required,
+    id: r.id, group: r.group_name, question: r.question, hint: r.hint, kind: r.kind, options: r.options ?? [], required: r.required, audience: 'client' as const,
     manager: ans.get(`${r.id}:manager`) ?? null, ai: ans.get(`${r.id}:ai`) ?? null,
   }));
 }
@@ -85,7 +86,7 @@ async function save(clientRef: string, source: 'ai' | 'manager', items: { questi
   try {
     await client.query('BEGIN');
     const qs = await client.query<{ id: number; question: string; kind: GroupQuestion['kind']; options: string[] }>(
-      `SELECT id, question, kind, options FROM group_questions WHERE id = ANY($1::int[])`, [ids]);
+      `SELECT id, question, kind, options FROM group_questions WHERE id = ANY($1::int[]) AND audience = 'client'`, [ids]);
     const byId = new Map(qs.rows.map(r => [r.id, r]));
     const cur = await client.query<{ question_id: number; answer_text: string | null; answer_options: string[] | null }>(
       `SELECT question_id, answer_text, answer_options FROM questionnaire_answers

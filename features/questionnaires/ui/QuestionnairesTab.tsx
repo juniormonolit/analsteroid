@@ -46,7 +46,7 @@ export function QuestionnairesTab({ groups }: { groups: string[] }) {
       <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
         Анкета — вопросы, которые менеджер задаёт заказчику по товарной группе: по ним он заполнит бриф
         в карточке клиента. Для каждого вопроса — тип ответа: <b>текст</b>, <b>один вариант</b> или <b>несколько
-        вариантов</b>. «Общие вопросы» задаются любому заказчику, независимо от группы. Удалённый вопрос
+        вариантов</b>, и кому он: <b>вопрос клиенту</b> (менеджер видит его в анкете карточки клиента и в задаче) или <b>проверка менеджера</b> (сделал ли менеджер это в разговоре — только для разбора звонков и РОПа). «Общие вопросы» задаются любому заказчику, независимо от группы. Удалённый вопрос
         не стирается — уходит в архив вместе с уже данными на него ответами.
       </p>
       <div className="flex flex-wrap items-center gap-2">
@@ -94,7 +94,11 @@ export function QuestionnairesTab({ groups }: { groups: string[] }) {
                   </div>
                 </div>
                 <span className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${qs.length ? 'bg-[#d9ead3] text-[#274e13]' : 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]'}`}>
-                  {qs.length ? `${qs.length} ${vopros(qs.length)}` : 'нет'}
+                  {qs.length ? (() => {
+                    // Вопросы клиенту и проверки менеджера — раздельно (миграция 251).
+                    const checks = qs.filter(x => x.audience === 'manager_check').length, ask = qs.length - checks;
+                    return [ask ? `${ask} ${vopros(ask)}` : null, checks ? `${checks} ${checks === 1 ? 'проверка' : checks < 5 ? 'проверки' : 'проверок'}` : null].filter(Boolean).join(' · ');
+                  })() : 'нет'}
                 </span>
                 <Pencil size={13} className="hidden shrink-0 text-[var(--color-accent)] sm:block" aria-hidden />
               </button>
