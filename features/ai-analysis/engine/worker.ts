@@ -8,6 +8,8 @@ import type { ClientRef } from '@/features/client-module/engine/types';
 import { collectClientData } from './collect';
 import { analyzeClient, callsHashOf } from './analyze';
 import { DEFAULT_REASONING_EFFORT, LlmError } from './llm';
+import { bitrixIdOfLogin, saveTranscribeDone, saveTranscribeWait } from './store';
+import { requestTranscription, transcribeCandidates, transcribeEnabled, transcriptionState, TRANSCRIBE_POLL_MS, TRANSCRIBE_TIMEOUT_MS, type TranscribeState } from './transcribe';
 import { backfillParsed, claimNext, findDone, heartbeat, refreshLinksLines, requeueStale, saveDone, saveDuplicate, saveError, saveTaskCheckDone } from './store';
 import { buildLinksFacts, clarifyLines, proposeLines, type LinksResult } from './links';
 import { callsAfterTask, fetchTaskInfo, parseTaskCheck, taskCheckSystem, taskCheckUser, TASK_CHECK_VERSION } from './taskCheck';
@@ -36,6 +38,11 @@ async function processOne(): Promise<boolean> {
   const ref = job.clientRef as ClientRef;
   try {
     if (job.checkTaskId) { await runTaskCheck(job.id, job.checkTaskId); return true; }
+    // Звонки без текста — сначала на расшифровку (вкладка предупреждает); ждём, не занимая воркер.
+    if (!job.isTest && transcribeEnabled() && !job.transcribe?.done) {
+      const step = await transcribeStep(job.id, ref, job.createdBy, job.transcribe);
+      if (step === 'wait') return true;
+    }
     const data = await collectClientData(ref);
     // Тест-прогон — черновик из редактора; иначе активная версия (или встроенная из кода).
     const prompt = job.isTest && job.promptBody ? { version: 'draft', body: job.promptBody } : await getActivePrompt();
@@ -84,6 +91,53 @@ async function processOne(): Promise<boolean> {
     await saveError(job.id, msg, retry).catch(() => {});
   }
   return true;
+}
+
+/** Шаг расшифровки перед разбором (transcribe.ts): 'wait' — строка вернулась в очередь, 'go' — разбирать. */
+async function transcribeStep(id: number, ref: ClientRef, login: string, prev: TranscribeState | null): Promise<'wait' | 'go'> {
+  const now = Date.now();
+  let st: TranscribeState;
+  if (!prev) {
+    const c = await transcribeCandidates(ref);
+    if (!c.send.length && !c.inWork.length) return 'go';
+    st = { startedAt: new Date(now).toISOString(), until: new Date(now + TRANSCRIBE_TIMEOUT_MS).toISOString(), wait: [...c.inWork], ready: 0, failed: 0, skipped: 0, pendingSend: c.send };
+  } else st = { ...prev };
+  // Отправка (первый раз или после 429).
+  if (st.pendingSend?.length && (!st.retryAt || now >= new Date(st.retryAt).getTime())) {
+    const res = await requestTranscription(st.pendingSend, (await bitrixIdOfLogin(login)) ?? login, `monolitika:customer-card:${ref}`);
+    if (res.kind === 'accepted') {
+      st.wait = [...new Set([...st.wait, ...res.accepted, ...res.inProgress, ...res.done])];
+      st.skipped += res.dropped; st.pendingSend = []; st.retryAt = null;
+    } else if (res.kind === 'rate_limited') {
+      st.retryAt = new Date(now + res.retryAfterSec * 1000).toISOString();
+      console.log(`[aiAnalysis] #${id} расшифровка: лимит сервиса, ждём ${res.retryAfterSec} с`);
+    } else {
+      st.serviceError = res.code; st.skipped += st.pendingSend.length; st.pendingSend = [];
+      console.warn(`[aiAnalysis] #${id} расшифровка недоступна (${res.code}) — разбор по тем звонкам, что с текстом`);
+    }
+  }
+  // Опрос готовности; три ошибки подряд — разбор не запускаем (ТЗ, раздел 9).
+  try {
+    const s = await transcriptionState(st.wait);
+    st.ready = s.ready.length; st.failed = s.failed.length; st.pollErrors = 0;
+    const waiting = s.pending.length > 0 || (st.pendingSend?.length ?? 0) > 0;
+    if (waiting && now < new Date(st.until).getTime()) {
+      const waitMs = st.retryAt ? Math.max(TRANSCRIBE_POLL_MS, new Date(st.retryAt).getTime() - now) : TRANSCRIBE_POLL_MS;
+      await saveTranscribeWait(id, st, waitMs);
+      setTimeout(kickAiWorker, waitMs + 500); // опрос раз в 10 с, а не по тику очереди (15 с)
+      return 'wait';
+    }
+    // Готово или таймаут: что не успело — «не удалось расшифровать».
+    st.failed += s.pending.length + (st.pendingSend?.length ?? 0);
+  } catch (e) {
+    st.pollErrors = (st.pollErrors ?? 0) + 1;
+    console.warn(`[aiAnalysis] #${id} опрос расшифровки (${st.pollErrors}):`, e instanceof Error ? e.message : e);
+    if (st.pollErrors < 3) { await saveTranscribeWait(id, st, TRANSCRIBE_POLL_MS); return 'wait'; }
+    throw new Error('Не удалось проверить, расшифрованы ли звонки — разбор не запущен, попробуйте позже');
+  }
+  await saveTranscribeDone(id, st);
+  console.log(`[aiAnalysis] #${id} расшифровка: готово ${st.ready}, не удалось ${st.failed + st.skipped}`);
+  return 'go';
 }
 
 /** Проверка звонка по закрытой задаче (вручную, taskCheck.ts). */

@@ -26,6 +26,8 @@ interface ClientPayload {
   analyses: AnalysisRow[];
   /** Открытая задача канбана по заказчику — для «В открытую задачу». */
   openTask: { id: number; responsibleName: string | null } | null;
+  /** Звонки без текста, которые расшифруем перед разбором (engine/transcribe.ts); null — функция выключена. */
+  toTranscribe: { count: number; total: number; max: number } | null;
   promptVersion: string;
   quota: { used: number; max: number };
 }
@@ -56,6 +58,7 @@ const REMOVED_CHECKS = /оплата мимо компании|не от «?мо
 
 const PHASE_TEXT: Record<string, string> = {
   queued: 'Анализ в очереди — сейчас начну.',
+  transcribing: 'Расшифровываю звонки без текста, потом сразу анализ…',
   collecting: 'Собираю сделки и звонки заказчика, убираю телефоны и адреса…',
   thinking: 'Читаю разговоры…',
   writing: 'Пишу отчёт…',
@@ -256,6 +259,7 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
   const [copied, setCopied] = useState(false);
   const [note, setNote] = useState('');
   const [legend, setLegend] = useState(false);
+  const [confirmTr, setConfirmTr] = useState(false);
 
   const job = useQuery<AnalysisRow>({
     queryKey: ['ai-analysis', active?.id],
@@ -314,6 +318,8 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
   const newSince = lastDone ? calls.filter(c => c.hasText && c.calledAt > lastDone.createdAt).length : 0;
   const quotaLeft = Math.max(0, quota.max - quota.used);
   const shownJob = job.data ?? active;
+  const tr = client.data.toTranscribe;
+  const trCount = tr?.count ?? 0;
   const failed = latest?.status === 'error' ? latest : null;
   const goQuote = (q: QuoteCheck) => {
     if (!q.callId) return;
@@ -336,11 +342,32 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
             {lastDone && newSince > 0 && <b className="text-[var(--color-text)]"> · с тех пор +{newSince} звонков</b>}
           </div>
         </div>
-        {withText > 0 && !active && (
-          <button type="button" disabled={run.isPending || quotaLeft === 0} onClick={() => run.mutate()}
+        {(withText > 0 || trCount > 0) && !active && (
+          <button type="button" disabled={run.isPending || quotaLeft === 0} onClick={() => (trCount > 0 && !confirmTr ? setConfirmTr(true) : (setConfirmTr(false), run.mutate()))}
             className="min-h-11 w-full rounded-lg bg-[var(--color-accent)] px-4 text-[13.5px] font-semibold text-white disabled:opacity-50 sm:w-auto">
-            {run.isPending ? 'Запускаю…' : lastDone ? 'Обновить анализ' : 'Запустить анализ'}
+            {run.isPending ? 'Запускаю…' : trCount > 0 ? `Расшифровать ${trCount} и ${lastDone ? 'обновить' : 'запустить'} анализ` : lastDone ? 'Обновить анализ' : 'Запустить анализ'}
           </button>
+        )}
+        {/* Предупреждение перед расшифровкой (владелец 23.10: «предупредив пользователя»). */}
+        {confirmTr && trCount > 0 && !active && (
+          <div className="basis-full rounded-lg border border-[color-mix(in_srgb,var(--color-warning, #e8590c)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-warning, #e8590c)_8%,transparent)] p-2.5 text-[13px]">
+            <div>
+              Без текста {tr!.total > trCount ? `${tr!.total} звонков — расшифруем ${trCount} самых свежих` : `${trCount} ${trCount === 1 ? 'звонок' : 'звонков'}`}.
+              Сначала расшифровка — примерно {Math.max(1, Math.ceil(trCount * 15 / 60 / 2))}–{Math.max(2, Math.ceil(trCount * 20 / 60))} мин, потом анализ. Вкладку можно закрыть — отчёт сохранится.
+              {' '}Что не расшифруется за 10 минут, в анализ не войдёт.
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" onClick={() => { setConfirmTr(false); run.mutate(); }}
+                className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-[13px] font-semibold text-white">Да, расшифровать и запустить</button>
+              <button type="button" onClick={() => setConfirmTr(false)}
+                className="min-h-11 rounded-lg border border-[var(--color-border)] px-4 text-[13px]">Отмена</button>
+            </div>
+          </div>
+        )}
+        {lastDone?.transcribe?.done && !active && (lastDone.transcribe.failed + lastDone.transcribe.skipped) > 0 && (
+          <div className="basis-full text-[12px] text-[var(--color-warning, #e8590c)]">
+            Перед анализом не удалось расшифровать: {lastDone.transcribe.failed + lastDone.transcribe.skipped}{lastDone.transcribe.serviceError ? ' (сервис расшифровки был недоступен)' : ''}.
+          </div>
         )}
         <div className="basis-full text-[11.5px] text-[var(--color-text-muted)]">
           {!lastDone || active
@@ -357,12 +384,15 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
       {toTask.error && <div className="text-sm text-[var(--color-negative)]">{toTask.error.message}</div>}
 
       {/* Монолитик */}
-      {withText === 0 && (
+      {withText === 0 && trCount === 0 && (
         <MonolitikHelper pose="sleep" title="Анализировать пока нечего" text="У заказчика нет расшифрованных звонков: короткие разговоры и недозвоны не расшифровываются." closable={false} />
       )}
       {shownJob && (shownJob.status === 'queued' || shownJob.status === 'running') && (
         <MonolitikHelper pose={shownJob.phase === 'collecting' || shownJob.status === 'queued' ? 'think' : 'work'}
-          title="Проверяю звонки…" text={PHASE_TEXT[shownJob.phase ?? shownJob.status] ?? PHASE_TEXT.thinking}
+          title={shownJob.phase === 'transcribing' ? 'Расшифровываю звонки…' : 'Проверяю звонки…'}
+          text={shownJob.phase === 'transcribing' && shownJob.transcribe
+            ? `Готово ${shownJob.transcribe.ready} из ${shownJob.transcribe.wait.length + (shownJob.transcribe.pendingSend?.length ?? 0)}${shownJob.transcribe.retryAt ? ' — сервис расшифровки занят, жду очереди' : ''}. Потом сразу анализ; вкладку можно закрыть.`
+            : PHASE_TEXT[shownJob.phase ?? shownJob.status] ?? PHASE_TEXT.thinking}
           progress="indeterminate" closable={false} />
       )}
       {failed && !active && (

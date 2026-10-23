@@ -30,6 +30,8 @@ export interface AnalysisRow {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  /** Расшифровка звонков перед разбором (transcribe.ts, migrations/255). */
+  transcribe: import('./transcribe').TranscribeState | null;
 }
 
 /** Анализов в день на одного запускающего — защита бюджета (~5 ₽ за анализ). */
@@ -41,7 +43,7 @@ export const STALE_MINUTES = 15;
 
 const COLS = `id, client_ref, status, phase, prompt_version, model, calls_count, calls_total, report_md, quotes,
   cost_rub, seconds, error, feedback, feedback_note, is_test, parsed, main_manager, score::text AS score,
-  created_by, created_by_name, created_at, started_at, finished_at`;
+  created_by, created_by_name, created_at, started_at, finished_at, transcribe`;
 
 type Raw = {
   id: string; client_ref: string; status: AnalysisStatus; phase: string | null; prompt_version: string; model: string | null;
@@ -49,6 +51,7 @@ type Raw = {
   cost_rub: string | null; seconds: number | null; error: string | null; feedback: 'useful' | 'inaccurate' | null; feedback_note: string | null;
   is_test: boolean; parsed: ParsedReport | null; main_manager: string | null; score: string | null;
   created_by: string; created_by_name: string | null; created_at: Date; started_at: Date | null; finished_at: Date | null;
+  transcribe: import('./transcribe').TranscribeState | null;
 };
 const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
 function map(r: Raw): AnalysisRow {
@@ -59,6 +62,7 @@ function map(r: Raw): AnalysisRow {
     feedback: r.feedback, feedbackNote: r.feedback_note, isTest: !!r.is_test, parsed: r.parsed, mainManager: r.main_manager,
     score: r.score === null ? null : Number(r.score), createdBy: r.created_by, createdByName: r.created_by_name,
     createdAt: iso(r.created_at)!, startedAt: iso(r.started_at), finishedAt: iso(r.finished_at),
+    transcribe: r.transcribe ?? null,
   };
 }
 
@@ -104,14 +108,35 @@ export async function enqueue(input: {
 }
 
 /** Взять следующий из очереди (SKIP LOCKED — на случай двух процессов в момент деплоя). */
-export async function claimNext(): Promise<{ id: number; clientRef: string; isTest: boolean; promptBody: string | null; checkTaskId: number | null } | null> {
-  const r = await systemDb().query<{ id: string; client_ref: string; is_test: boolean; prompt_body: string | null; check_task_id: string | null }>(
-    `UPDATE ai_analyses SET status = 'running', phase = 'collecting', attempts = attempts + 1, heartbeat_at = now(), started_at = now()
-      WHERE id = (SELECT id FROM ai_analyses WHERE status = 'queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-      RETURNING id, client_ref, is_test, prompt_body, check_task_id`,
+export async function claimNext(): Promise<{ id: number; clientRef: string; isTest: boolean; promptBody: string | null; checkTaskId: number | null; createdBy: string; transcribe: import('./transcribe').TranscribeState | null } | null> {
+  // Ждущие расшифровку (wait_until в будущем) пропускаем; их повторный захват — не новая попытка.
+  const r = await systemDb().query<{ id: string; client_ref: string; is_test: boolean; prompt_body: string | null; check_task_id: string | null; created_by: string; transcribe: import('./transcribe').TranscribeState | null }>(
+    `UPDATE ai_analyses SET status = 'running', phase = CASE WHEN transcribe IS NULL OR (transcribe->>'done')::boolean THEN 'collecting' ELSE 'transcribing' END,
+       attempts = attempts + CASE WHEN wait_until IS NULL THEN 1 ELSE 0 END, heartbeat_at = now(), started_at = coalesce(started_at, now())
+      WHERE id = (SELECT id FROM ai_analyses WHERE status = 'queued' AND (wait_until IS NULL OR wait_until <= now()) ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+      RETURNING id, client_ref, is_test, prompt_body, check_task_id, created_by, transcribe`,
   );
   const x = r.rows[0];
-  return x ? { id: Number(x.id), clientRef: x.client_ref, isTest: !!x.is_test, promptBody: x.prompt_body, checkTaskId: x.check_task_id ? Number(x.check_task_id) : null } : null;
+  return x ? { id: Number(x.id), clientRef: x.client_ref, isTest: !!x.is_test, promptBody: x.prompt_body, checkTaskId: x.check_task_id ? Number(x.check_task_id) : null, createdBy: x.created_by, transcribe: x.transcribe } : null;
+}
+
+/** Ждём расшифровку: вернуть в очередь до waitMs, не занимая воркер (строка остаётся «активной» для вкладки). */
+export async function saveTranscribeWait(id: number, state: import('./transcribe').TranscribeState, waitMs: number): Promise<void> {
+  await systemDb().query(
+    `UPDATE ai_analyses SET status = 'queued', phase = 'transcribing', transcribe = $2, wait_until = now() + make_interval(secs => $3), heartbeat_at = now() WHERE id = $1`,
+    [id, JSON.stringify(state), Math.round(waitMs / 1000)],
+  );
+}
+
+/** Расшифровка закончена (готово / таймаут / ошибка сервиса) — дальше обычный разбор. */
+export async function saveTranscribeDone(id: number, state: import('./transcribe').TranscribeState): Promise<void> {
+  await systemDb().query(`UPDATE ai_analyses SET transcribe = $2, wait_until = NULL, phase = 'collecting' WHERE id = $1`, [id, JSON.stringify({ ...state, done: true })]);
+}
+
+/** Bitrix-id запустившего — для журнала сервиса расшифровки (requested_by). */
+export async function bitrixIdOfLogin(login: string): Promise<string | null> {
+  const r = await systemDb().query<{ b: string | null }>(`SELECT bitrix_user_id::text AS b FROM users WHERE login = $1`, [login]).catch(() => ({ rows: [] as { b: string | null }[] }));
+  return r.rows[0]?.b ?? null;
 }
 
 export async function heartbeat(id: number, phase: string): Promise<void> {
