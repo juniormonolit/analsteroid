@@ -25,8 +25,9 @@ import { ObjectsTab } from './ObjectsTab';
 import { CallsTab, ManagersBlock, PurchasesTab } from './HistoryTabs';
 import { DealOpenerContext } from './dealLink';
 import { AiAnalysisTab, useAiAnalysisAccess } from '@/features/ai-analysis/ui/AiAnalysisTab';
+import { ClientQuestionnaire } from '@/features/questionnaires/ui/ClientQuestionnaire';
 
-export type ClientCardTab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls' | 'ai';
+export type ClientCardTab = 'overview' | 'deals' | 'purchases' | 'objects' | 'calls' | 'questionnaire' | 'ai';
 type Tab = ClientCardTab;
 
 export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTab }: {
@@ -69,6 +70,8 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
     { key: 'purchases', label: `Покупки · ${data.deals.filter(d => d.deliveredAt).length}` },
     { key: 'objects', label: `Объекты · ${data.objects.length}` },
     { key: 'calls', label: 'Звонки' },
+    // Анкета по товарным группам (миграция 249, владелец 23.10): ответы менеджера и «по разговорам».
+    { key: 'questionnaire', label: 'Анкета' },
     ...(ai.allowed ? [{ key: 'ai' as const, label: 'ИИ-анализ' }] : []),
   ];
 
@@ -104,6 +107,11 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
       {tab === 'objects' && <ObjectsTab data={data} params={params} focus={focusObject} onOpenDeals={k => { setDealsFilter(prev => ({ object: k, n: prev.n + 1 })); setTab('deals'); }} />}
       {tab === 'purchases' && <PurchasesTab qs={qs} />}
       {tab === 'calls' && <CallsTab qs={qs} />}
+      {tab === 'questionnaire' && (
+        <ClientQuestionnaire params={params}
+          shippedGroups={[...new Set(data.deals.filter(d => d.deliveredAt).sort((a, b) => b.deliveredAt!.localeCompare(a.deliveredAt!)).flatMap(d => d.groups))]}
+          offeredGroups={data.recommendations.client.map(r => r.group)} />
+      )}
       {tab === 'ai' && ai.allowed && <AiAnalysisTab qs={qs} params={params} cardClientType={data.profile.clientType} />}
       {tab === 'overview' && <ManagersBlock qs={qs} />}
     </div>

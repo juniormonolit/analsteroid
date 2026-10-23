@@ -29,6 +29,7 @@ import { analyticsDb } from '@/lib/db/clients';
 import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID } from './config';
+import { logRecommendations } from './recommendations';
 import { freshMemoForClientKey, markMemoInserted } from '@/features/ai-analysis/engine/memoStore';
 import { memoLinesBb, splitComment } from '@/features/ai-analysis/engine/memo';
 
@@ -340,6 +341,8 @@ export async function createRepeatTask(input: {
       return false;
     });
   }
+  // Журнал рекомендаций (миграция 250, самообучение): что советовали предложить и есть ли это в тексте задачи. Фоном.
+  void logRecommendations({ clientKey: input.clientKey, managerId: input.fallbackManagerId, taskId, dealId, text: input.comment, createdBy: input.commentAuthorId ?? input.creatorBitrixId });
   return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted, reassignWorkflowId };
 }
 
