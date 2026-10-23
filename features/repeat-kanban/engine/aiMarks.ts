@@ -7,7 +7,7 @@
 // «Новые звонки» — расшифрованные звонки по сделкам заказчика, сделанные ПОСЛЕ запуска последнего разбора
 // (то, чего модель ещё не видела; звонки без расшифровки анализу всё равно не нужны).
 import { analyticsDb, systemDb } from '@/lib/db/clients';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { MEMO_FRESH_DAYS } from '@/features/ai-analysis/engine/memo';
 
 export interface AiMark { id: number; at: string; fresh: boolean; newCalls: number }
@@ -52,7 +52,7 @@ export async function fetchAiMarks(members: Map<string, string[]>): Promise<Map<
       `WITH a AS (SELECT * FROM unnest($1::text[], $2::timestamptz[], $3::text[]) AS a(key, since, primary_key))
        SELECT a.primary_key, count(DISTINCT c.id)::text AS n
          FROM sa.deals d
-         JOIN a ON a.key = (${CLIENT_KEY_CASE_SQL})
+         JOIN a ON a.key = (${CLIENT_KEY_SQL})
          JOIN va.calls c ON c.deal_id = d.deal_id AND c.called_at > a.since
          JOIN va.transcriptions t ON t.call_id = c.id
         WHERE d.funnel_id IN (0, 1, 2, 3) AND coalesce(nullif(trim(coalesce(t.formatted_dialogue::text, t.raw_text)), ''), 'null') <> 'null'
