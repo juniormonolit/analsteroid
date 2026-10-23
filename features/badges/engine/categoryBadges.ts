@@ -38,7 +38,7 @@ import {
   fetchCategorySettings, GLOBAL_REPEAT_CYCLE_DAYS, MIN_CYCLE_DAYS,
   AT_RISK_CYCLE_MULTIPLIER,
 } from '@/features/customers/engine/customers';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import type { BadgeTier } from './catalog';
 
 export interface CategoryAwardRow {
@@ -76,13 +76,13 @@ export async function computeCategoryBadgeAwards(todayYmd: string): Promise<Cate
   const res = await analyticsDb().query<DealRow>(`
     WITH cd AS (
       SELECT * FROM (
-        SELECT (${CLIENT_KEY_CASE_SQL}) AS client_key,
+        SELECT (${CLIENT_KEY_SQL}) AS client_key,
                d.deal_id, d.created_at, d.sold_at, d.delivered_at, d.amount, d.current_manager_id
         FROM sa.deals d
         WHERE d.funnel_id IN (0,1,2,3)
       ) t
       -- client_key IS NULL — уже гасит company_id IS NULL и «0,3% без contact_id»
-      -- (см. CLIENT_KEY_CASE_SQL). 'c0' — своя, более старая защита этого файла
+      -- (см. CLIENT_KEY_SQL). 'c0' — своя, более старая защита этого файла
       -- (contact_id=0 у физлиц, отчёт п.1.3) — общая формула её не покрывает.
       WHERE client_key IS NOT NULL AND client_key <> 'c0'
     ),

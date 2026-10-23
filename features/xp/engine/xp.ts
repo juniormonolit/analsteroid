@@ -35,7 +35,7 @@ import {
   loadActiveBoosts, loadConsumptions, applyBoosts,
   type BoostApplication, type BoostDealFacts,
 } from '@/features/badges/engine/boosts';
-import { CLIENT_KEY_CASE_SQL } from '@/features/customers/engine/clientKey';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 
 const MSK = 'Europe/Moscow';
 /** Ретро-старт XP-леджера (решение Серёги: вся история продаж с 2025). */
@@ -223,9 +223,9 @@ WITH sold_seq AS (
                    AND (p->>'head_group_name') !~* '^(доставка|перевозка|услуг|разное)') AS grps
   ) dg
   WHERE d.sold_at IS NOT NULL AND d.funnel_id IN (0,1,2,3)
-    AND (${CLIENT_KEY_CASE_SQL}) IS NOT NULL
+    AND (${CLIENT_KEY_SQL}) IS NOT NULL
   WINDOW w AS (
-    PARTITION BY (${CLIENT_KEY_CASE_SQL})
+    PARTITION BY (${CLIENT_KEY_SQL})
     ORDER BY d.sold_at, d.deal_id
   )
 ),
