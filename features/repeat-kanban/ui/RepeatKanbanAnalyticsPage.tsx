@@ -177,13 +177,13 @@ function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[
 }
 
 // ── Карта «Активность × Результат» ────────────────────────────────────────────
-interface MapPoint { id: string; label: string; x: number; y: number; size: number; agg: MAgg }
+interface MapPoint { id: string; label: string; short: string; x: number; y: number; size: number; agg: MAgg }
 function ActivityResultMap({ points }: { points: MapPoint[] }) {
   const [hover, setHover] = useState<string | null>(null);
   if (points.length < 2) return <Note>Для карты нужно хотя бы два подразделения с пулом и задачами за период.</Note>;
-  const W = 640, H = 360, P = 36;
+  const W = 640, H = 380, P = 40, PT = 30;
   const maxX = Math.max(...points.map(p => p.x)) * 1.1 || 1, maxY = Math.max(...points.map(p => p.y)) * 1.1 || 1;
-  const sx = (x: number) => P + (x / maxX) * (W - P * 2), sy = (y: number) => H - P - (y / maxY) * (H - P * 2);
+  const sx = (x: number) => P + (x / maxX) * (W - P * 2), sy = (y: number) => H - P - (y / maxY) * (H - P - PT);
   const mx = median(points.map(p => p.x)) ?? 0, my = median(points.map(p => p.y)) ?? 0;
   const maxSize = Math.max(...points.map(p => p.size)) || 1;
   const cur = points.find(p => p.id === hover);
@@ -191,20 +191,21 @@ function ActivityResultMap({ points }: { points: MapPoint[] }) {
     <div className="relative min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2">
       <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Карта активность и результат по подразделениям">
         {/* Квадранты по медианам. */}
-        <rect x={sx(mx)} y={P} width={W - P - sx(mx)} height={sy(my) - P} fill="#d9ead3" opacity={0.45} />
+        <rect x={sx(mx)} y={PT} width={W - P - sx(mx)} height={sy(my) - PT} fill="#d9ead3" opacity={0.45} />
         <rect x={P} y={sy(my)} width={sx(mx) - P} height={H - P - sy(my)} fill="#f4cccc" opacity={0.45} />
-        <line x1={sx(mx)} x2={sx(mx)} y1={P} y2={H - P} stroke="var(--color-border-strong)" strokeDasharray="4 4" />
+        <line x1={sx(mx)} x2={sx(mx)} y1={PT} y2={H - P} stroke="var(--color-border-strong)" strokeDasharray="4 4" />
         <line x1={P} x2={W - P} y1={sy(my)} y2={sy(my)} stroke="var(--color-border-strong)" strokeDasharray="4 4" />
-        <text x={W - P - 4} y={P + 14} textAnchor="end" fontSize="12" fill="#38761d" fontWeight="700">Активно и эффективно</text>
-        <text x={P + 4} y={P + 14} fontSize="12" fill="#7f6000">Результат без системы</text>
-        <text x={W - P - 4} y={H - P - 6} textAnchor="end" fontSize="12" fill="#7f6000">Активно, но без результата</text>
-        <text x={P + 4} y={H - P - 6} fontSize="12" fill="#990000" fontWeight="700">Не работают</text>
-        <text x={W / 2} y={H - 8} textAnchor="middle" fontSize="11" fill="var(--color-text-muted)">Активность: действий на 100 заказчиков в пуле →</text>
+        {/* Названия зон — над и под полем, чтобы не наезжали на точки. */}
+        <text x={W - P} y={PT - 10} textAnchor="end" fontSize="11.5" fill="#38761d" fontWeight="700">↗ Активно и эффективно</text>
+        <text x={P} y={PT - 10} fontSize="11.5" fill="#7f6000">↖ Результат без системы</text>
+        <text x={W - P} y={H - P + 26} textAnchor="end" fontSize="11.5" fill="#7f6000">Активно, но без результата ↘</text>
+        <text x={P} y={H - P + 26} fontSize="11.5" fill="#990000" fontWeight="700">↙ Не работают</text>
+        <text x={W / 2} y={H - P + 14} textAnchor="middle" fontSize="11" fill="var(--color-text-muted)">действий на 100 в пуле →</text>
         <text x={12} y={H / 2} textAnchor="middle" fontSize="11" fill="var(--color-text-muted)" transform={`rotate(-90 12 ${H / 2})`}>CR Взят → Продажа, % →</text>
         {points.map(p => (
           <g key={p.id} onMouseEnter={() => setHover(p.id)} onMouseLeave={() => setHover(null)} onClick={() => setHover(h => (h === p.id ? null : p.id))} className="cursor-pointer">
             <circle cx={sx(p.x)} cy={sy(p.y)} r={6 + 14 * Math.sqrt(p.size / maxSize)} fill="var(--color-accent)" fillOpacity={hover === p.id ? 0.85 : 0.45} stroke="var(--color-accent)" />
-            <text x={sx(p.x)} y={sy(p.y) - 10 - 14 * Math.sqrt(p.size / maxSize)} textAnchor="middle" fontSize="11" fill="var(--color-text)">{p.label.length > 26 ? `${p.label.slice(0, 25)}…` : p.label}</text>
+            <text x={sx(p.x)} y={sy(p.y) - 10 - 14 * Math.sqrt(p.size / maxSize)} textAnchor="middle" fontSize="11" fill="var(--color-text)">{p.short.length > 20 ? `${p.short.slice(0, 19)}…` : p.short}</text>
           </g>
         ))}
       </svg>
@@ -302,10 +303,10 @@ export function RepeatKanbanAnalyticsPage() {
             <h1 className="text-xl font-semibold">Аналитика канбана повторных</h1>
             <p className="mt-1 text-sm text-[var(--color-text-muted)]">Действия и результат {periodText}. Пул и «ждут приёмки» — текущее состояние.</p>
           </div>
-          <div className="flex flex-wrap gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1" role="tablist" aria-label="Период">
+          <div className="grid w-full grid-cols-4 gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-1 sm:flex sm:w-auto" role="tablist" aria-label="Период">
             {PERIODS.map(([k, l]) => (
               <button key={k} type="button" role="tab" aria-selected={p === k} onClick={() => setPeriod(k)}
-                className={`min-h-9 rounded-md px-3 text-sm ${p === k ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>{l}</button>
+                className={`min-h-9 whitespace-nowrap rounded-md px-2 text-sm sm:px-3 ${p === k ? 'bg-[var(--color-accent)] text-white' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}>{l}</button>
             ))}
           </div>
         </header>
@@ -334,7 +335,7 @@ function Overview({ model }: { model: { roots: TreeNode[]; total: TreeNode } }) 
   const T = model.total.agg;
   const nodes = nodesAtLevel(model.roots, level).filter(({ node }) => node.agg.pool + node.agg.base > 0);
   const pts: MapPoint[] = nodes.filter(({ node }) => per100(node.agg) !== null && crSold(node.agg) !== null && node.agg.base >= 5)
-    .map(({ node, path }) => ({ id: node.id, label: level ? path : node.name, x: per100(node.agg)!, y: crSold(node.agg)!, size: node.agg.pool, agg: node.agg }));
+    .map(({ node, path }) => ({ id: node.id, label: level ? path : node.name, short: node.name.replace(/^(Департамент|Отдел|Команда)\s+/i, ''), x: per100(node.agg)!, y: crSold(node.agg)!, size: node.agg.pool, agg: node.agg }));
   const act = tercile(nodes.map(n => per100(n.node.agg))), resT = tercile(nodes.map(n => crSold(n.node.agg)));
   const rank = (k: keyof typeof LIGHT | null) => (k === 'good' ? 2 : k === 'mid' ? 1 : 0);
   const list = nodes.map(n => ({ ...n, a: act(per100(n.node.agg)), r: resT(crSold(n.node.agg)) }))
