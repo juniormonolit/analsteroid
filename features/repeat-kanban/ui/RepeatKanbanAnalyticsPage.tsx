@@ -7,7 +7,7 @@
 // Данные: /analytics (снимки + журнал кликов и событий Битрикса), /analytics/results (задача → продажа → отгрузка,
 // engine/results.ts), /analytics/speed (ждут приёмки, зависло, разбор, очередь — engine/speed.ts). Дерево — analyticsTree.ts.
 import Link from 'next/link';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink, Info } from 'lucide-react';
 import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
@@ -15,6 +15,7 @@ import { taskUrl } from '../engine/config';
 import type { KanbanAnalytics, MgrDay, JournalRow } from '../engine/analytics';
 import type { KanbanResults } from '../engine/results';
 import type { KanbanSpeed } from '../engine/speed';
+import type { AiStats } from '../engine/aiStats';
 import type { ManagerSummary } from '@/features/ai-analysis/engine/summary';
 import { VIOLATION_LABELS } from '@/features/ai-analysis/engine/parse';
 import { buildTree, crShipped, crSold, median, nodesAtLevel, pct, per100, worked, ZERO, type MAgg, type TreeNode } from './analyticsTree';
@@ -31,8 +32,8 @@ const DAY_MS = 86_400_000;
 
 type Period = 'all' | 'day' | 'week' | 'month';
 const PERIODS: [Period, string][] = [['all', 'Всё время'], ['day', 'Сегодня'], ['week', 'Неделя'], ['month', 'Месяц']];
-type Tab = 'overview' | 'activity' | 'results' | 'pool' | 'journal';
-const TABS: [Tab, string][] = [['overview', 'Обзор'], ['activity', 'Активность'], ['results', 'Результат'], ['pool', 'Пул и скорость'], ['journal', 'Журнал']];
+type Tab = 'overview' | 'activity' | 'results' | 'pool' | 'ai' | 'journal';
+const TABS: [Tab, string][] = [['overview', 'Обзор'], ['activity', 'Активность'], ['results', 'Результат'], ['pool', 'Пул и скорость'], ['ai', 'ИИ-разборы'], ['journal', 'Журнал']];
 
 // ── Журнал: виды действий ─────────────────────────────────────────────────────
 const EVENT_LABEL: Record<string, string> = {
@@ -182,14 +183,15 @@ function ActivityResultMap({ points }: { points: MapPoint[] }) {
   const [hover, setHover] = useState<string | null>(null);
   // Рисуем в реальных пикселях контейнера (владелец 26.10: на широком экране viewBox растягивал шрифты и круги
   // в разы — «распидорасило»): ширина — по контейнеру, высота фиксированная, подписи всегда 11–12 px.
-  const box = useRef<HTMLDivElement>(null);
-  const [W, setW] = useState(640);
-  useEffect(() => {
-    const el = box.current;
+  // Callback-ref: блок появляется не сразу (данные, «мало точек»), эффект с [] его не видел — ширина застревала на 640.
+  const ro = useRef<ResizeObserver | null>(null);
+  const [W, setW] = useState(0);
+  const box = useCallback((el: HTMLDivElement | null) => {
+    ro.current?.disconnect();
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setW(Math.max(320, Math.round(e.contentRect.width))));
-    ro.observe(el);
-    return () => ro.disconnect();
+    setW(Math.round(el.clientWidth));
+    ro.current = new ResizeObserver(([e]) => setW(Math.round(e.contentRect.width)));
+    ro.current.observe(el);
   }, []);
   if (points.length < 2) return <Note>Для карты нужно хотя бы два подразделения с пулом и задачами за период.</Note>;
   const H = 400, P = 44, PT = 30;
@@ -199,8 +201,8 @@ function ActivityResultMap({ points }: { points: MapPoint[] }) {
   const maxSize = Math.max(...points.map(p => p.size)) || 1;
   const cur = points.find(p => p.id === hover);
   return (
-    <div ref={box} className="relative min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label="Карта активность и результат по подразделениям">
+    <div ref={box} className="relative w-full min-w-0 overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]" style={{ height: H }}>
+      {W >= 320 && <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label="Карта активность и результат по подразделениям">
         {/* Квадранты по медианам. */}
         <rect x={sx(mx)} y={PT} width={W - P - sx(mx)} height={sy(my) - PT} fill="#d9ead3" opacity={0.45} />
         <rect x={P} y={sy(my)} width={sx(mx) - P} height={H - P - sy(my)} fill="#f4cccc" opacity={0.45} />
@@ -219,7 +221,7 @@ function ActivityResultMap({ points }: { points: MapPoint[] }) {
             <text x={sx(p.x)} y={sy(p.y) - 9 - 12 * Math.sqrt(p.size / maxSize)} textAnchor="middle" fontSize="11" fill="var(--color-text)">{p.short.length > 20 ? `${p.short.slice(0, 19)}…` : p.short}</text>
           </g>
         ))}
-      </svg>
+      </svg>}
       {cur && (
         <div className="absolute left-2 right-2 top-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-[12.5px] shadow sm:left-auto sm:w-72">
           <div className="font-semibold">{cur.label}</div>
@@ -252,6 +254,7 @@ export function RepeatKanbanAnalyticsPage() {
   const an = useQuery<KanbanAnalytics>({ queryKey: ['rk-analytics', p], queryFn: () => get(`/api/repeat-kanban/analytics?date=${date}&period=${p}`) });
   const res = useQuery<KanbanResults>({ queryKey: ['rk-results', p], queryFn: () => get(`/api/repeat-kanban/analytics/results?date=${date}&period=${p}`) });
   const sp = useQuery<KanbanSpeed>({ queryKey: ['rk-speed', p], queryFn: () => get(`/api/repeat-kanban/analytics/speed?date=${date}&period=${p}`) });
+  const ais = useQuery<AiStats>({ queryKey: ['rk-ai', p], queryFn: () => get(`/api/repeat-kanban/analytics/ai?date=${date}&period=${p}`) });
   const ai = useQuery<{ managers: ManagerSummary[] }>({
     queryKey: ['ai-analysis-summary', 90], retry: false, staleTime: 5 * 60_000,
     queryFn: async () => { const r = await fetch('/api/ai-analysis/summary?days=90'); if (!r.ok) throw new Error(String(r.status)); return r.json(); },
@@ -298,9 +301,10 @@ export function RepeatKanbanAnalyticsPage() {
       Object.assign(A(m.managerId), { control: m.control, controlWaitH: m.controlWaitH, overdue: m.overdue, overdue7: m.overdue7, openTasks: m.open, closed: m.accepted, reviewH: m.reviewH, queued: m.queued });
       if (!dir.has(m.managerId)) dir.set(m.managerId, sp.data!.managers[m.managerId] ?? { name: `#${m.managerId}`, deptId: null });
     }
+    for (const m of ais.data?.mgr ?? []) Object.assign(A(m.managerId), { aiAnalyses: m.analyses, aiScoreSum: m.scoreSum, aiScoreN: m.scoreN, aiViolations: m.violations, aiRequests: m.requests });
     const list = [...by.entries()].map(([managerId, agg]) => ({ managerId, name: dir.get(managerId)?.name ?? `#${managerId}`, deptId: dir.get(managerId)?.deptId ?? null, agg }));
     return buildTree(org, list);
-  }, [an.data, res.data, sp.data]);
+  }, [an.data, res.data, sp.data, ais.data]);
 
   const loading = an.isLoading || res.isLoading || sp.isLoading;
   const err = an.error ?? res.error ?? sp.error;
@@ -336,6 +340,8 @@ export function RepeatKanbanAnalyticsPage() {
         {model && T && tab === 'activity' && <Activity model={model} data={an.data} ai={ai.data} aiOk={ai.isSuccess} />}
         {model && T && tab === 'results' && <Results model={model} matureDays={res.data?.matureDays ?? 30} />}
         {model && T && tab === 'pool' && <PoolSpeed model={model} data={an.data} />}
+        {model && tab === 'ai' && ais.data && <AiTab model={model} s={ais.data} />}
+        {tab === 'ai' && ais.isLoading && <Note>Считаю ИИ-разборы…</Note>}
         {tab === 'journal' && an.data && <Journal data={an.data} />}
       </div>
     </div>
@@ -632,6 +638,81 @@ function PoolSpeed({ model, data }: { model: { roots: TreeNode[]; total: TreeNod
         )}
       </section>
       <Note>Пул, проработано, ждут приёмки, зависло и очередь — текущее состояние (снимок {data?.snapDate ? fmtD(data.snapDate) : '—'} и Битрикс сейчас), от периода не зависят. Разбор отказа и «куда ушёл пул» — за период. Возвраты на доработку прямо в Битриксе не видны (нет истории статусов).</Note>
+    </div>
+  );
+}
+
+// ── ИИ-разборы ────────────────────────────────────────────────────────────────
+const VERDICT_LABEL: Record<string, { t: string; c: string }> = {
+  done: { t: 'выполнено', c: '#38761d' }, partial: { t: 'частично', c: '#b45f06' }, not_done: { t: 'не выполнено', c: '#990000' }, no_talk: { t: 'разговора нет', c: '#666666' },
+};
+function AiTab({ model, s }: { model: { roots: TreeNode[]; total: TreeNode }; s: AiStats }) {
+  const score = (a: MAgg) => (a.aiScoreN ? Math.round((a.aiScoreSum / a.aiScoreN) * 100) : null);
+  const cols: Col[] = [
+    { key: 'aiAnalyses', label: 'Разборов', hint: 'Разборы заказчиков этого менеджера (основной менеджер разбора — у кого больше разговоров)', sort: a => a.aiAnalyses, render: a => a.aiAnalyses || '—' },
+    { key: 'aiScore', label: 'Балл проработки', hint: 'Средний балл по 8 критериям разбора', sort: score, render: a => <Light v={score(a)} lo={40} hi={70} /> },
+    { key: 'aiViol', label: 'Нарушений', sort: a => a.aiViolations, render: a => (a.aiViolations ? <span style={{ color: '#990000', fontWeight: 700 }}>{a.aiViolations}</span> : '—') },
+    { key: 'aiReq', label: 'Запросов', hint: 'Менеджер нажал «Запросить разбор»', sort: a => a.aiRequests, render: a => a.aiRequests || '—' },
+    { key: 'pool', label: 'В пуле', sort: a => a.pool, render: a => rub.format(a.pool) },
+    { key: 'cover', label: 'Разобрано на 100 в пуле', hint: 'Сколько разборов на 100 заказчиков пула — охват', sort: a => (a.pool ? a.aiAnalyses / a.pool : null), render: a => (a.pool ? String(Math.round((a.aiAnalyses / a.pool) * 1000) / 10).replace('.', ',') : '—') },
+  ];
+  const maxDay = Math.max(1, ...s.days.map(d => d.analyses + d.checks));
+  const verdicts = Object.entries(s.verdicts).sort((a, b) => b[1] - a[1]);
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <KpiRow>
+        <Kpi label="Разборов" value={rub.format(s.analyses)} sub={`заказчиков ${s.clients} · всего разобрано ${s.analysedEver}`} />
+        <Kpi label="Балл проработки" value={s.avgScore === null ? '—' : `${Math.round(s.avgScore * 100)}%`} sub={`нарушений ${s.violations}`} hint="Средний балл менеджеров по 8 критериям разбора" />
+        <Kpi label="Отзывы" value={`${s.useful} / ${s.inaccurate}`} sub="полезно / неточно" />
+        <Kpi label="Памятка в задаче" value={rub.format(s.memoInTask)} sub={s.analyses ? `${pctRu(pct(s.memoInTask, s.analyses))} разборов` : undefined} hint="Разбор ушёл памяткой в задачу менеджеру" />
+        <Kpi label="Запросы менеджеров" value={rub.format(s.requests)} sub={`ждут ${s.requestsPending} · выполнены за ${hours(median(s.requestHours))}`} />
+        <Kpi label="Кандидаты" value={rub.format(s.candidates)} sub="разбора не было, 5+ звонков" hint="Сейчас: заказчики с 5 и больше звонками с расшифровкой, по которым разбора ещё не было" />
+      </KpiRow>
+      <section className="flex min-w-0 flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
+        <div className="flex flex-wrap items-center gap-3 text-[12px] text-[var(--color-text-muted)]">
+          <span className="font-semibold text-[var(--color-text)]">По дням</span>
+          <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-[#3d85c6]" />разборы</span>
+          <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-[#93c47d]" />проверки звонка</span>
+        </div>
+        {s.days.length === 0 ? <Note>За период разборов не было.</Note> : (
+          <div className="scroll-x"><div className="flex h-32 min-w-full items-end gap-1" style={{ width: Math.max(s.days.length * 22, 100) }}>
+            {s.days.map(d => (
+              <div key={d.date} className="flex h-full min-w-[18px] flex-1 flex-col items-center justify-end gap-0.5" title={`${fmtD(d.date)}: разборов ${d.analyses}, проверок ${d.checks}`}>
+                <div className="w-full rounded-t bg-[#93c47d]" style={{ height: `${(d.checks / maxDay) * 100}%` }} />
+                <div className="w-full bg-[#3d85c6]" style={{ height: `${(d.analyses / maxDay) * 100}%` }} />
+                <span className="text-[9.5px] tabular-nums text-[var(--color-text-muted)]">{fmtD(d.date)}</span>
+              </div>
+            ))}
+          </div></div>
+        )}
+      </section>
+      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+        <section className="flex min-w-0 flex-col gap-2">
+          <h2 className="text-base font-semibold">Кто запускает</h2>
+          <div className="scroll-x rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+            <table className="w-full min-w-[420px] text-sm">
+              <thead><tr className="border-b border-[var(--color-border)]"><th className={`${head} text-left`}>Кто</th><th className={head}>Разборов</th><th className={head}>Заказчиков</th><th className={head}>Проверок звонка</th></tr></thead>
+              <tbody>{s.runners.map(r => (
+                <tr key={r.name} className="border-b border-[var(--color-border)] last:border-0"><td className="px-2 py-1.5"><b>{r.name}</b></td><td className={cell}>{r.analyses || '—'}</td><td className={cell}>{r.clients || '—'}</td><td className={cell}>{r.checks || '—'}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </section>
+        <section className="flex min-w-0 flex-col gap-2">
+          <h2 className="text-base font-semibold">Проверки звонка по задаче · {s.checks}</h2>
+          <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
+            {verdicts.length === 0 ? <Note>Проверок за период не было.</Note> : verdicts.map(([k, n]) => (
+              <div key={k} className="grid grid-cols-[120px_1fr_40px] items-center gap-2 text-sm">
+                <span style={{ color: VERDICT_LABEL[k]?.c }}>{VERDICT_LABEL[k]?.t ?? k}</span>
+                <div className="h-4 overflow-hidden rounded bg-[var(--color-bg-hover)]"><div className="h-full rounded" style={{ width: `${(n / s.checks) * 100}%`, background: VERDICT_LABEL[k]?.c ?? '#999' }} /></div>
+                <span className="text-right tabular-nums">{n}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+      <TreeTable roots={model.roots} total={model.total} cols={cols} defaultSort="aiAnalyses" minW={860} />
+      <Note>Менеджер разбора — у кого больше всего разговоров с заказчиком в разобранных звонках.{s.noManager ? ` Без менеджера в оргструктуре — ${s.noManager}.` : ''} Ошибок разбора за период: {s.errors}. Стоимость не показываем.</Note>
     </div>
   );
 }
