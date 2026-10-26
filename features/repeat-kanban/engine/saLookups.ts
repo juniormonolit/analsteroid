@@ -60,11 +60,16 @@ export function clientKeyOfDeal(d: Pick<DealRef, 'funnelId' | 'companyId' | 'con
   return d.contactId ? `x${d.contactId}` : null;
 }
 
-export type Period = 'day' | 'week' | 'month';
-export const PERIOD_LEN: Record<Period, number> = { day: 1, week: 7, month: 30 };
+export type Period = 'day' | 'week' | 'month' | 'all';
+/** «За всё время» (владелец 26.10 — по умолчанию): с первой задачи проекта «Повторные продажи» (сентябрь 2026);
+ *  журнал кликов канбана — с 20.10, снимки — с 20.10 (раньше их просто нет). */
+export const ANALYTICS_EPOCH = '2026-09-01';
+export const PERIOD_LEN: Record<Exclude<Period, 'all'>, number> = { day: 1, week: 7, month: 30 };
+export const parsePeriod = (p: string | null): Period => (p === 'day' || p === 'week' || p === 'month' ? p : 'all');
 
 /** Границы периода по Москве: [начало первого дня, конец дня date]. */
 export function periodBounds(date: string, period: Period): { fromDate: string; from: string; to: string } {
+  if (period === 'all') return { fromDate: ANALYTICS_EPOCH, from: `${ANALYTICS_EPOCH}T00:00:00+03:00`, to: `${date}T23:59:59.999+03:00` };
   const days = PERIOD_LEN[period];
   const fromDate = new Date(new Date(`${date}T12:00:00+03:00`).getTime() - (days - 1) * 86_400_000).toISOString().slice(0, 10);
   return { fromDate, from: `${fromDate}T00:00:00+03:00`, to: `${date}T23:59:59.999+03:00` };

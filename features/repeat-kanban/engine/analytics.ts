@@ -44,8 +44,8 @@ export interface KanbanAnalytics {
   bitrixTruncated: boolean;
 }
 
-export type AnalyticsPeriod = 'day' | 'week' | 'month';
-export const PERIOD_DAYS: Record<AnalyticsPeriod, number> = PERIOD_LEN;
+export type AnalyticsPeriod = 'day' | 'week' | 'month' | 'all';
+export const PERIOD_DAYS = PERIOD_LEN;
 
 export async function fetchKanbanAnalytics(opts: { date: string; period?: AnalyticsPeriod; managerIds: string[] | null }): Promise<KanbanAnalytics> {
   const db = systemDb();

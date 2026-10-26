@@ -5,6 +5,7 @@ import { canSeeRepeatKanbanAnalytics } from '@/lib/auth/modulesAccess';
 import { ropScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { fetchKanbanResults } from '@/features/repeat-kanban/engine/results';
+import { parsePeriod } from '@/features/repeat-kanban/engine/saLookups';
 
 // «Аналитика канбана повторных» → вкладка «Результат»: задачи проекта 118 за период → дозвон →
 // продажа → следующая отгрузка заказчика (engine/results.ts). Доступ и зона — как у аналитики.
@@ -16,8 +17,7 @@ export async function GET(req: NextRequest) {
   if (!hasPerm(session, 'section.repeat_kanban') || !canSeeRepeatKanbanAnalytics(session)) return NextResponse.json({ error: 'Аналитика — директорам и выше' }, { status: 403 });
   const raw = req.nextUrl.searchParams.get('date') ?? '';
   const date = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
-  const p = req.nextUrl.searchParams.get('period');
-  const period = p === 'week' || p === 'month' ? p : 'day';
+  const period = parsePeriod(req.nextUrl.searchParams.get('period'));
   try {
     const scope = await ropScope(session);
     const managerIds = scope.full ? null : (await scopeManagers(scope)).map(m => m.id);

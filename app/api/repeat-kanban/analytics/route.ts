@@ -5,6 +5,7 @@ import { canSeeRepeatKanbanAnalytics } from '@/lib/auth/modulesAccess';
 import { ropScope } from '@/features/tv/engine/access';
 import { scopeManagers } from '@/features/rop-kanban/engine/kanban';
 import { fetchKanbanAnalytics } from '@/features/repeat-kanban/engine/analytics';
+import { parsePeriod } from '@/features/repeat-kanban/engine/saLookups';
 
 // «Аналитика канбана повторных» v1: кто что делал за день, проработанность по отделам по
 // ежедневным снимкам, журнал. Зона — как у доски: руководство видит всех, РОП — свою зону.
@@ -19,8 +20,8 @@ export async function GET(req: NextRequest) {
   try {
     const scope = await ropScope(session);
     const managerIds = scope.full ? null : (await scopeManagers(scope)).map(m => m.id);
-    const p = req.nextUrl.searchParams.get('period');
-    const period = p === 'week' || p === 'month' ? p : 'day';
+    // Период (26.10): по умолчанию «за всё время».
+    const period = parsePeriod(req.nextUrl.searchParams.get('period'));
     return NextResponse.json(await fetchKanbanAnalytics({ date, period, managerIds }), { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[repeat-kanban analytics]', e instanceof Error ? e.message : e);

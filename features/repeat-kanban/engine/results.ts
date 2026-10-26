@@ -50,6 +50,8 @@ export interface ResultTask {
   clientRef: string | null;
   reachedAt: string | null;
   soldAt: string | null;
+  /** Сумма проданной сделки (первая продажа после задачи; 26.10 — «конверсия в суммах»). */
+  soldAmount: number | null;
   shippedAt: string | null;
   shippedAmount: number | null;
   shippedDealId: number | null;
@@ -121,7 +123,7 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
     ).then(r => r.rows).catch(() => []) : Promise.resolve([]),
   ]);
 
-  const ships = new Map<string, ShipRow[]>(), sales = new Map<string, number[]>();
+  const ships = new Map<string, ShipRow[]>(), sales = new Map<string, { at: number; amount: number }[]>();
   for (const d of custDeals) {
     const ref = refOfDeal({ funnelId: Number(d.funnel_id), companyId: d.company_id !== null ? Number(d.company_id) : null, contactId: d.contact_id !== null ? Number(d.contact_id) : null });
     if (!ref) continue;
@@ -131,10 +133,10 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
       l.push({ at: new Date(d.delivered_at).getTime(), amount: Math.round(Number(d.amount ?? 0)), dealId: Number(d.deal_id), soldAt: soldMs });
       ships.set(ref, l);
     }
-    if (soldMs !== null) { const l = sales.get(ref) ?? []; l.push(soldMs); sales.set(ref, l); }
+    if (soldMs !== null) { const l = sales.get(ref) ?? []; l.push({ at: soldMs, amount: Math.round(Number(d.amount ?? 0)) }); sales.set(ref, l); }
   }
   for (const l of ships.values()) l.sort((a, b) => a.at - b.at || a.dealId - b.dealId);
-  for (const l of sales.values()) l.sort((a, b) => a - b);
+  for (const l of sales.values()) l.sort((a, b) => a.at - b.at);
   const callsByDeal = new Map<number, number[]>();
   for (const c of calls) { const l = callsByDeal.get(Number(c.deal_id)) ?? []; l.push(new Date(c.called_at).getTime()); callsByDeal.set(Number(c.deal_id), l); }
   for (const l of callsByDeal.values()) l.sort((a, b) => a - b);
@@ -158,13 +160,14 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
     const dealId = t.deal_id !== null ? Number(t.deal_id) : null;
     const ref = refOfTask.get(id) ?? null;
     const ship = ref ? (ships.get(ref) ?? []).find(s => s.at > at) ?? null : null;
-    const soldMs = ref ? (sales.get(ref) ?? []).find(s => s > at && (!ship || s <= ship.at)) ?? null : null;
+    const sale = ref ? (sales.get(ref) ?? []).find(s => s.at > at && (!ship || s.at <= ship.at)) ?? null : null;
+    const soldMs = sale?.at ?? null;
     const reachedMs = dealId ? (callsByDeal.get(dealId) ?? []).find(c => c >= at) ?? null : null;
     const superseded = !!ref && (tasksOfRef.get(ref) ?? []).some(o => o.id !== id
       && (o.at > at || (o.at === at && o.id > id)) && (!ship || o.at < ship.at));
     tasks.push({
       taskId: id, dealId, managerId: t.responsible_id, createdAt: iso(at)!, clientRef: ref,
-      reachedAt: iso(reachedMs), soldAt: iso(soldMs),
+      reachedAt: iso(reachedMs), soldAt: iso(soldMs), soldAmount: sale?.amount ?? null,
       shippedAt: iso(ship?.at), shippedAmount: ship?.amount ?? null, shippedDealId: ship?.dealId ?? null,
       preSold: !!ship && ship.soldAt !== null && ship.soldAt <= at,
       superseded, mature: now - at >= MATURE_DAYS * DAY_MS,
