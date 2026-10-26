@@ -7,7 +7,7 @@
 // Данные: /analytics (снимки + журнал кликов и событий Битрикса), /analytics/results (задача → продажа → отгрузка,
 // engine/results.ts), /analytics/speed (ждут приёмки, зависло, разбор, очередь — engine/speed.ts). Дерево — analyticsTree.ts.
 import Link from 'next/link';
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink, Info } from 'lucide-react';
 import { stringParam, useUrlState } from '@/lib/hooks/useUrlState';
@@ -180,16 +180,27 @@ function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[
 interface MapPoint { id: string; label: string; short: string; x: number; y: number; size: number; agg: MAgg }
 function ActivityResultMap({ points }: { points: MapPoint[] }) {
   const [hover, setHover] = useState<string | null>(null);
+  // Рисуем в реальных пикселях контейнера (владелец 26.10: на широком экране viewBox растягивал шрифты и круги
+  // в разы — «распидорасило»): ширина — по контейнеру, высота фиксированная, подписи всегда 11–12 px.
+  const box = useRef<HTMLDivElement>(null);
+  const [W, setW] = useState(640);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setW(Math.max(320, Math.round(e.contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   if (points.length < 2) return <Note>Для карты нужно хотя бы два подразделения с пулом и задачами за период.</Note>;
-  const W = 640, H = 380, P = 40, PT = 30;
+  const H = 400, P = 44, PT = 30;
   const maxX = Math.max(...points.map(p => p.x)) * 1.1 || 1, maxY = Math.max(...points.map(p => p.y)) * 1.1 || 1;
   const sx = (x: number) => P + (x / maxX) * (W - P * 2), sy = (y: number) => H - P - (y / maxY) * (H - P - PT);
   const mx = median(points.map(p => p.x)) ?? 0, my = median(points.map(p => p.y)) ?? 0;
   const maxSize = Math.max(...points.map(p => p.size)) || 1;
   const cur = points.find(p => p.id === hover);
   return (
-    <div className="relative min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-2">
-      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Карта активность и результат по подразделениям">
+    <div ref={box} className="relative min-w-0 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label="Карта активность и результат по подразделениям">
         {/* Квадранты по медианам. */}
         <rect x={sx(mx)} y={PT} width={W - P - sx(mx)} height={sy(my) - PT} fill="#d9ead3" opacity={0.45} />
         <rect x={P} y={sy(my)} width={sx(mx) - P} height={H - P - sy(my)} fill="#f4cccc" opacity={0.45} />
@@ -204,8 +215,8 @@ function ActivityResultMap({ points }: { points: MapPoint[] }) {
         <text x={12} y={H / 2} textAnchor="middle" fontSize="11" fill="var(--color-text-muted)" transform={`rotate(-90 12 ${H / 2})`}>CR Взят → Продажа, % →</text>
         {points.map(p => (
           <g key={p.id} onMouseEnter={() => setHover(p.id)} onMouseLeave={() => setHover(null)} onClick={() => setHover(h => (h === p.id ? null : p.id))} className="cursor-pointer">
-            <circle cx={sx(p.x)} cy={sy(p.y)} r={6 + 14 * Math.sqrt(p.size / maxSize)} fill="var(--color-accent)" fillOpacity={hover === p.id ? 0.85 : 0.45} stroke="var(--color-accent)" />
-            <text x={sx(p.x)} y={sy(p.y) - 10 - 14 * Math.sqrt(p.size / maxSize)} textAnchor="middle" fontSize="11" fill="var(--color-text)">{p.short.length > 20 ? `${p.short.slice(0, 19)}…` : p.short}</text>
+            <circle cx={sx(p.x)} cy={sy(p.y)} r={6 + 12 * Math.sqrt(p.size / maxSize)} fill="var(--color-accent)" fillOpacity={hover === p.id ? 0.85 : 0.45} stroke="var(--color-accent)" />
+            <text x={sx(p.x)} y={sy(p.y) - 9 - 12 * Math.sqrt(p.size / maxSize)} textAnchor="middle" fontSize="11" fill="var(--color-text)">{p.short.length > 20 ? `${p.short.slice(0, 19)}…` : p.short}</text>
           </g>
         ))}
       </svg>
