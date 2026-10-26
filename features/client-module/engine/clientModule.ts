@@ -462,9 +462,12 @@ export async function fetchClientModule(ref: ClientRef, opts: { light?: boolean 
            FROM va.calls
           WHERE failed_at_stage IS NULL
             AND (deal_id = $1
-             OR (${isCompany ? 'company_id' : 'contact_id'} = $2
+             OR ((company_id = ANY($2::bigint[]) OR contact_id = ANY($5::bigint[]))
                  AND called_at >= $3::timestamptz AND called_at <= coalesce($4::timestamptz, now()) + interval '1 day'))`,
-        [ld.dealId, id, ld.createdAt ?? new Date().toISOString(), ld.lostAt ?? ld.deliveredAt],
+        // Склеенный заказчик: звонки и по его компаниям, и по контактам всех карточек (26.10).
+        [ld.dealId, [...(isCompany ? [id] : []), ...others.filter(k => k.startsWith('k')).map(k => Number(k.slice(1)))],
+         ld.createdAt ?? new Date().toISOString(), ld.lostAt ?? ld.deliveredAt,
+         [...(isCompany ? [] : [id]), ...others.filter(k => !k.startsWith('k')).map(k => Number(k.slice(1)))]],
       );
       const r = c.rows[0];
       lastDealCalls = { total: Number(r.total), talked: Number(r.talked), talkSec: Number(r.talk_sec ?? 0), lastAt: iso(r.last_at), clientCalls: Number(r.client_calls) };
