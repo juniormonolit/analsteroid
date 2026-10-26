@@ -24,7 +24,7 @@ import { RepeatKanbanSettingsButton, TemplatePicker } from './RepeatKanbanSettin
 
 // Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
 import {
-  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS, LOST_STAGES, WON_STAGES, AI_CANDIDATE_MIN,
+  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS, LOST_STAGES, WON_STAGES, AI_CANDIDATE_MIN, postponePresets,
   type ColumnDef, type ColumnGroup, type ColumnKey,
 } from '../engine/config';
 import type { BoardKpi, KanbanCard, KanbanColumn, RepeatBoard, TodaySection } from '../engine/board';
@@ -36,6 +36,7 @@ import { AcceptTaskModal } from './AcceptTaskModal';
 import { TaskCheckModal, useTaskChecks, VERDICT, type TaskCheckState } from './TaskCheck';
 import { ParticipantsPicker, initialParticipants, participantsPayload } from './ParticipantsPicker';
 import { AttachmentsRow, useAttachments } from './Attachments';
+import { PostponePicker } from './PostponePicker';
 import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
@@ -274,9 +275,11 @@ export function RepeatKanbanPage() {
       else if (a === 'task_check') setCheckFor(c);
       else if (a === 'accept_hide' || a === 'decline_hide') {
         const ok = a === 'accept_hide'
-          ? confirm(`Скрыть «${cardName(c)}» ${fmtHideUntil(c.hideRequest?.until ?? '')}, как предлагает менеджер?`)
+          ? confirm(`Скрыть «${cardName(c)}» ${fmtHideUntil(c.hideRequest?.until ?? '')}, как предлагает менеджер?${c.deal && !LOST_STAGES.has(c.deal.stageId) && !WON_STAGES.has(c.deal.stageId) ? ` Сделка #${c.deal!.dealId} закроется в «Больше ничего не нужно».` : ''}`)
           : confirm(`Отклонить предложение скрыть «${cardName(c)}»? Заказчик останется в пуле.`);
-        if (ok) { await post({ action: 'decide_hide', accept: a === 'accept_hide', clientKey: c.clientKey, managerId: c.managerId, column: c.column }).catch(e => alert(e.message)); refresh(); }
+        // Сделка открыта или в отказе — «Отложить до…» (26.10): открытая закроется, после даты — в пул, не на разбор.
+        const hideDeal = c.deal && !WON_STAGES.has(c.deal.stageId) ? c.deal.dealId : undefined;
+        if (ok) { await post({ action: 'decide_hide', accept: a === 'accept_hide', clientKey: c.clientKey, managerId: c.managerId, column: c.column, dealId: hideDeal }).catch(e => alert(e.message)); refresh(); }
       }
       else if (confirm(`Вернуть «${cardName(c)}» в пул раньше срока?`)) { await post({ action: 'unhide', clientKey: c.clientKey, managerId: c.managerId, column: c.column }).catch(e => alert(e.message)); refresh(); }
     },
@@ -1141,7 +1144,8 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
             <CardMenu items={[
               ...(canManage && openTask && canTaskCol(col) ? [{ label: 'Ещё задача…', act: 'new_task' as const }] : []),
               ...(col.startsWith('pool') && canManage ? [{ label: 'Скрыть из пула', act: 'hide' as const }] : []),
-              ...(col.startsWith('pool') && !canManage && isOwn && !c.hideRequest ? [{ label: 'Предложить скрыть', act: 'request_hide' as const }] : []),
+              // Менеджер — из любой колонки (26.10: «буду строиться весной» при открытой сделке), кроме скрытых/брака/«Продано».
+              ...(!canManage && isOwn && !c.hideRequest && col !== 'hidden' && col !== 'brak' && col !== 'st_sold' ? [{ label: 'Предложить скрыть', act: 'request_hide' as const }] : []),
               ...(canManage || isOwn ? [{ label: 'Теги…', act: 'tags' as const }] : []),
               ...(canMerge ? [{ label: 'Объединить с…', act: 'merge' as const }] : []),
               ...(canManage && (col.startsWith('pool') || col.startsWith('touch') || (isStage && col !== 'st_sold')) ? [{ label: 'Сразу в брак', act: 'brak_now' as const, danger: true }] : []),
@@ -1287,6 +1291,13 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
           <div className="font-semibold text-[var(--color-text)]">Скрыт {fmtHideUntil(c.hidden.until)}</div>
           {c.hidden.comment && <div className="text-[var(--color-text-secondary)]">«{c.hidden.comment}»</div>}
           <div className="text-[var(--color-text-muted)]">{c.hidden.by}, {fmtDay(c.hidden.at)}</div>
+        </div>
+      )}
+      {c.woke && (
+        <div className="rounded-md bg-[var(--color-bg-surface)] px-2 py-1 text-[11.5px]">
+          <div className="font-semibold text-[var(--color-text)]">Вернулся из скрытых · был скрыт до {c.woke.until.split('-').reverse().join('.')}</div>
+          {c.woke.comment && <div className="text-[var(--color-text-secondary)]">«{c.woke.comment}»</div>}
+          <div className="text-[var(--color-text-muted)]">{c.woke.by}</div>
         </div>
       )}
       {c.hideRequest && (
@@ -1927,9 +1938,12 @@ function BrakNowModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: (
 }
 
 function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () => void; onSaved: () => void }) {
-  const [decision, setDecision] = useState<'brak' | 'no_answer' | 'return'>('brak');
+  // Менеджер просил скрыть (26.10) — по умолчанию согласиться с ним: «Отложить до» его даты; брак — переключением.
+  const hr = card.hideRequest;
+  const [decision, setDecision] = useState<'brak' | 'no_answer' | 'return' | 'postpone'>(hr ? 'postpone' : 'brak');
   const [reason, setReason] = useState<string>('nothing_needed');
-  const [comment, setComment] = useState('');
+  const [comment, setComment] = useState(hr ? `${hr.comment} (предложил ${hr.by})` : '');
+  const [until, setUntil] = useState(hr?.until ?? postponePresets()[0].value);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Правило: брак без дозвона и до трёх попыток — только с комментарием РОПа.
@@ -1940,22 +1954,27 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
     setBusy(true); setErr(null);
     try {
       await post({ action: 'review', clientKey: card.clientKey, managerId: card.managerId, column: card.column, dealId: card.deal?.dealId,
-        decision, reason: decision === 'brak' ? reason : null, comment, touchesDone: done });
+        decision, reason: decision === 'brak' ? reason : null, comment, touchesDone: done, until: decision === 'postpone' ? until : undefined });
       onSaved(); onClose();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
   };
 
+  const POSTPONE = { v: 'postpone' as const, label: hr ? `Отложить до ${fmtHideUntil(hr.until).replace(/^до /, '')}, как просит менеджер` : 'Отложить до…',
+    hint: 'Не брак: «позже», «весной». Сделка — «Больше ничего не нужно», заказчик в «Скрытых» до даты, потом вернётся в пул' };
   const options = card.dozvonFail ? [
     // Выход из дозвона: сделка ещё открыта — «недозвон» оставляет её в дозвоне (ещё попытки).
     { v: 'brak' as const, label: 'Брак', hint: 'Не дозвониться — заказчик уходит из пула, сделка закроется в Битриксе по причине' },
     { v: 'no_answer' as const, label: 'Ещё попытки', hint: 'Оставить в дозвоне — менеджер звонит дальше' },
     { v: 'return' as const, label: 'Вернуть менеджеру', hint: 'Попытки формальные — менеджеру уйдёт задача с вашим сообщением' },
+    POSTPONE,
   ] : [
     { v: 'brak' as const, label: 'Брак', hint: 'Отказ подтверждён — заказчик уходит из пула' },
     { v: 'no_answer' as const, label: 'Недозвон', hint: 'Не брак — вернуть в пул' },
     { v: 'return' as const, label: 'Вернуть менеджеру', hint: 'Отработано плохо — сделка вернётся в первую стадию, менеджеру — задача с вашим сообщением' },
+    POSTPONE,
   ];
+  if (hr) options.sort((a, b) => Number(b.v === 'postpone') - Number(a.v === 'postpone'));
 
   return (
     <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`${card.dozvonFail ? 'Разбор дозвона' : 'Разбор отказа'} · ${cardName(card)}`} desktopWidth="sm:max-w-lg">
@@ -1987,6 +2006,7 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
             </label>
           ))}
         </div>
+        {decision === 'postpone' && <PostponePicker value={until} onChange={setUntil} />}
         {decision === 'brak' && (
           <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
             Причина
@@ -1996,13 +2016,13 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
           </label>
         )}
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
-          {decision === 'return' ? 'Сообщение менеджеру — уйдёт в задачу (обязательно)' : needComment ? `Комментарий (обязательно: попыток ${done} из ${TOUCHES}, без дозвона)` : 'Комментарий'}
+          {decision === 'return' ? 'Сообщение менеджеру — уйдёт в задачу (обязательно)' : decision === 'postpone' ? 'Почему откладываем (обязательно)' : needComment ? `Комментарий (обязательно: попыток ${done} из ${TOUCHES}, без дозвона)` : 'Комментарий'}
           <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} className={fieldCls} />
         </label>
         {err && <p className="text-[var(--color-negative)]">{err}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]">Отмена</button>
-          <button type="button" disabled={busy || ((needComment || decision === 'return') && comment.trim().length < 3)} onClick={submit}
+          <button type="button" disabled={busy || ((needComment || decision === 'return' || decision === 'postpone') && comment.trim().length < 3) || (decision === 'postpone' && !until)} onClick={submit}
             className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white disabled:opacity-50">
             {busy ? 'Сохраняю…' : 'Сохранить решение'}
           </button>

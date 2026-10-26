@@ -5,28 +5,32 @@
 // Сделка задачи уже закрыта (отказ или отгружена) — «На доработку» заменяет «Откатить и создать задачу»
 // (владелец 23.10: вернули задачу — сделка осталась в отказе; вернули — работа пошла в отгруженной сделке).
 import { useState } from 'react';
-import { CheckCircle2, ExternalLink, History, RotateCcw, XCircle } from 'lucide-react';
+import { CheckCircle2, ExternalLink, History, Moon, RotateCcw, XCircle } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { SearchSelect } from '@/components/ui/SearchSelect';
-import { BRAK_REASONS, LOST_STAGES, WON_STAGES, taskUrl } from '../engine/config';
+import { BRAK_REASONS, LOST_STAGES, WON_STAGES, guessPostpone, postponePresets, taskUrl } from '../engine/config';
+import { PostponePicker } from './PostponePicker';
 import type { KanbanCard } from '../engine/board';
 import type { TaskNote } from '../engine/taskNotes';
 import { TaskCheckPanel, type TaskCheckState } from './TaskCheck';
 import { AttachmentsRow, useAttachments } from './Attachments';
 import { ParticipantsPicker, initialParticipants, participantsPayload } from './ParticipantsPicker';
 
-type Mode = 'close' | 'accept' | 'return' | 'rollback';
+type Mode = 'close' | 'accept' | 'return' | 'rollback' | 'postpone';
 type DealState = 'open' | 'lost' | 'won';
 function modesFor(state: DealState, dealId: number): { key: Mode; title: string; hint: string; Icon: typeof CheckCircle2; color: string }[] {
   const close = { key: 'close' as const, title: state === 'lost' ? 'Принять, заказчика в брак' : 'Принять и закрыть сделку', hint: state === 'lost' ? `Задача завершится, сделка #${dealId} уже в отказе, заказчик — в «Брак»` : 'Задача завершится, сделка закроется в отказ, заказчик — в «Брак»', Icon: XCircle, color: '#990000' };
   const accept = { key: 'accept' as const, title: 'Принять задачу', hint: 'Задача завершится, сделка остаётся как есть', Icon: CheckCircle2, color: '#38761d' };
-  if (state === 'open') return [close, accept, { key: 'return', title: 'На доработку', hint: 'Задача вернётся менеджеру в работу с вашим комментарием', Icon: RotateCcw, color: '#b45f06' }];
+  // «Буду строиться весной» (владелец 26.10): не брак, а скрыть до даты; потом заказчик вернётся в пул с пометкой.
+  const postpone = { key: 'postpone' as const, title: 'Принять и отложить до…', Icon: Moon, color: '#3d85c6',
+    hint: state === 'open' ? 'Сделка → «Больше ничего не нужно», заказчик в «Скрытые» до даты, потом вернётся в пул' : 'Заказчик в «Скрытые» до даты, потом вернётся в пул' };
+  if (state === 'open') return [close, accept, postpone, { key: 'return', title: 'На доработку', hint: 'Задача вернётся менеджеру в работу с вашим комментарием', Icon: RotateCcw, color: '#b45f06' }];
   const rollback = { key: 'rollback' as const, title: 'Откатить и создать задачу', Icon: History, color: '#b45f06',
     hint: state === 'lost'
       ? `Сделка #${dealId} закрыта в отказ: вернём её на первую стадию и поставим новую задачу, эта закроется`
       : `Сделка #${dealId} уже отгружена: заведём новую сделку с задачей, эта закроется` };
   // Отгруженную сделку в отказ не закрываем.
-  return state === 'lost' ? [close, accept, rollback] : [accept, rollback];
+  return state === 'lost' ? [close, accept, postpone, rollback] : [accept, postpone, rollback];
 }
 
 const field = 'w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base text-[var(--color-text)] sm:text-sm';
@@ -42,11 +46,14 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
   const d = card.deal && card.deal.dealId === task.dealId ? card.deal : null;
   const dealState: DealState = d && LOST_STAGES.has(d.stageId) ? 'lost' : d && WON_STAGES.has(d.stageId) ? 'won' : 'open';
   const MODES = modesFor(dealState, task.dealId);
-  const [mode, setMode] = useState<Mode>('accept');
+  // Менеджер написал «весной», «осенью», «через 3 месяца» — по умолчанию согласиться: «Отложить» с этой датой.
+  const guessed = guessPostpone(note?.text);
+  const [mode, setMode] = useState<Mode>(guessed ? 'postpone' : 'accept');
+  const [until, setUntil] = useState(guessed ?? postponePresets()[0].value);
   const att = useAttachments();
   const [parts, setParts] = useState(initialParticipants);
   const [reason, setReason] = useState('');
-  const [comment, setComment] = useState('');
+  const [comment, setComment] = useState(guessed && note ? note.text.slice(0, 500) : '');
   // Новый срок при возврате: старый уже прошёл — по умолчанию завтра 19:00.
   const overdue = !!task.deadlineAt && new Date(task.deadlineAt).getTime() < Date.now() + 3600_000;
   const [deadline, setDeadline] = useState(overdue ? mskYmd(1) : '');
@@ -55,7 +62,7 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
   const [err, setErr] = useState<string | null>(null);
 
   const returning = mode === 'return' || mode === 'rollback';
-  const ready = mode === 'close' ? !!reason : returning ? comment.trim().length >= 3 : true;
+  const ready = mode === 'close' ? !!reason : returning || mode === 'postpone' ? comment.trim().length >= 3 && (mode !== 'postpone' || !!until) : true;
   const submit = async () => {
     setBusy(true); setErr(null);
     try {
@@ -64,7 +71,9 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
         ? { action: 'task_return', comment, deadline: deadline || null, deadlineTime: time, attachments }
         : mode === 'rollback'
           ? { action: 'task_return', rollback: true, comment, deadline: deadline || null, deadlineTime: time, attachments, participants: participantsPayload(parts) }
-          : { action: 'task_accept', comment, closeReason: mode === 'close' ? reason : null, attachments };
+          : mode === 'postpone'
+            ? { action: 'task_accept', comment, postponeUntil: until, attachments }
+            : { action: 'task_accept', comment, closeReason: mode === 'close' ? reason : null, attachments };
       const r = await fetch('/api/repeat-kanban', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body, taskId: task.id, dealId: task.dealId, clientKey: card.clientKey, managerId: card.managerId, column: card.column }),
@@ -121,9 +130,10 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
             </div>
           </div>
         )}
+        {mode === 'postpone' && <PostponePicker value={until} onChange={setUntil} />}
         {mode === 'rollback' && <ParticipantsPicker value={parts} onChange={setParts} managerIds={[card.managerId]} />}
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]" {...att.dropZone}>
-          {mode === 'rollback' ? 'Что сделать в новой задаче (обязательно)' : mode === 'return' ? 'Что доделать (обязательно)' : 'Комментарий в задачу (необязательно)'}
+          {mode === 'rollback' ? 'Что сделать в новой задаче (обязательно)' : mode === 'postpone' ? 'Почему откладываем (обязательно) — уйдёт в задачу и в сделку' : mode === 'return' ? 'Что доделать (обязательно)' : 'Комментарий в задачу (необязательно)'}
           <textarea value={comment} onChange={e => setComment(e.target.value)} onPaste={att.onPaste} rows={3}
             className={`${field} ${att.dragOver ? 'outline outline-2 outline-[var(--color-accent)]' : ''}`}
             placeholder={returning ? 'Переведи сделку в стадию и поставь дату следующего звонка' : mode === 'close' ? 'Почему закрываем' : 'Молодец, всё по делу'} />

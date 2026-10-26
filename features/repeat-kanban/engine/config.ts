@@ -92,7 +92,36 @@ export const CLIENT_TYPE_SHORT: Record<string, string> = {
 };
 
 /** Решения РОПа по отказу. */
-export type ReviewDecision = 'brak' | 'no_answer' | 'return';
+export type ReviewDecision = 'brak' | 'no_answer' | 'return' | 'postpone';
+
+/** «Отложить до…» (владелец 26.10: «буду строиться весной» — не брак, а скрыть до даты). Пресеты дат. */
+export function postponePresets(now = new Date()): { value: string; label: string }[] {
+  const msk = new Date(now.getTime() + 3 * 3600_000);
+  const y = msk.getUTCFullYear(), today = msk.toISOString().slice(0, 10);
+  const next = (m: number, d = 1) => { const s = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`; return s > today ? s : `${y + 1}${s.slice(4)}`; };
+  const plus3 = new Date(Date.UTC(y, msk.getUTCMonth() + 3, msk.getUTCDate())).toISOString().slice(0, 10);
+  return [{ value: next(3), label: '1 марта' }, { value: next(4), label: '1 апреля' }, { value: plus3, label: '+3 месяца' }];
+}
+
+/** Похоже, что менеджер принёс «позже» (весной, осенью, после НГ, через N месяцев) — дата по смыслу или null. */
+export function guessPostpone(text: string | null | undefined, now = new Date()): string | null {
+  const t = (text ?? '').toLowerCase();
+  if (!t) return null;
+  const p = postponePresets(now);
+  if (/весн|в марте|к марту/.test(t)) return p[0].value;
+  if (/в апреле|к апрелю/.test(t)) return p[1].value;
+  const msk = new Date(now.getTime() + 3 * 3600_000), y = msk.getUTCFullYear();
+  const fut = (m: number) => { const s = `${y}-${String(m).padStart(2, '0')}-01`; return s > msk.toISOString().slice(0, 10) ? s : `${y + 1}-${String(m).padStart(2, '0')}-01`; };
+  if (/лет[оа]м|к лету|в мае/.test(t)) return fut(5);
+  if (/осен/.test(t)) return fut(9);
+  if (/после нов\w* год|в январе|в следующем году|в новом году/.test(t)) return `${fut(1).slice(0, 8)}15`;
+  const m = t.match(/через\s+(\d+|пару|два|три|полгода)\s*(мес|месяц)?/);
+  if (m) {
+    const n = m[1] === 'пару' || m[1] === 'два' ? 2 : m[1] === 'три' ? 3 : m[1] === 'полгода' ? 6 : Number(m[1]);
+    if (m[1] === 'полгода' || m[2]) return new Date(Date.UTC(y, msk.getUTCMonth() + Math.min(n, 12), msk.getUTCDate())).toISOString().slice(0, 10);
+  }
+  return null;
+}
 /** Причины брака — как отказные стадии повторных воронок Битрикса (владелец 21.10: «такие же, как в
  *  Битриксе»). C3:2 «Объектов больше нет», C2:APOLOGY «Больше ничего не нужно», C2/C3:LOSE «Дорого…»,
  *  C2:1/C3:APOLOGY «Подвели клиента…». Старые значения (competitor/negative/other) — только для истории

@@ -104,6 +104,8 @@ export interface KanbanCard {
   brak: { reason: string | null; comment: string | null; by: string; at: string } | null;
   /** Скрыт из пула до даты (отметка snooze): комментарий обязателен. */
   hidden: { until: string; comment: string | null; by: string; at: string } | null;
+  /** Срок «Скрыть»/«Отложить до…» вышел (≤ 60 дн. назад), заказчик снова в пуле: почему откладывали (владелец 26.10). */
+  woke: { until: string; comment: string | null; by: string } | null;
   /** Отказ до трёх недель контакта — красная плашка на разборе. */
   lostEarly: boolean;
   sleeping: boolean;
@@ -780,6 +782,9 @@ export async function buildRepeatBoard(opts: {
       task, review,
       brak: mark?.kind === 'no_call' ? { reason: mark.reason, comment: mark.comment, by: mark.createdBy, at: mark.createdAt } : null,
       hidden: hiddenNow && mark ? { until: mark.snoozeUntil!, comment: mark.comment, by: mark.createdBy, at: mark.createdAt } : null,
+      woke: !hiddenNow && mark?.kind === 'snooze' && mark.snoozeUntil && mark.snoozeUntil < todayMsk && col.startsWith('pool')
+        && (now - new Date(`${mark.snoozeUntil}T00:00:00+03:00`).getTime()) / DAY_MS <= 60
+        ? { until: mark.snoozeUntil, comment: mark.comment, by: mark.createdBy } : null,
       // Закрыли в отказ, не дозвонившись и не сделав трёх попыток — нарушение правила.
       lostEarly: col === 'review' && !dozvonFail && !(win?.reached) && (win?.count ?? 0) < TOUCHES,
       sleeping: r.sleeping, atRisk: r.atRisk,

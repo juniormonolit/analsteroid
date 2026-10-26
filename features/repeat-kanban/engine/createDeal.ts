@@ -407,7 +407,7 @@ export type CloseResult = 'closed' | 'already_closed' | 'not_repeat' | 'sold' | 
 /** Закрыть открытую повторную сделку заказчика в отказную стадию по причине брака + комментарий
  *  РОПа в ленту сделки. Сделка проверяется по Битриксу: повторная воронка, открыта, не «Продано»,
  *  клиент — этот заказчик (контакт, компания или контакт этой компании). */
-export async function closeDealAsLost(input: { dealId: number; clientKey: string; reason: string; comment: string | null; authorId: string | null }): Promise<CloseResult> {
+export async function closeDealAsLost(input: { dealId: number; clientKey: string; reason: string; comment: string | null; authorId: string | null; label?: string }): Promise<CloseResult> {
   const deal = await read<BxDeal & { CONTACT_ID?: string | null; COMPANY_ID?: string | null }>('crm.deal.get', { id: input.dealId });
   const cat = Number(deal?.CATEGORY_ID);
   if (cat !== 2 && cat !== 3) return 'not_repeat';
@@ -422,7 +422,7 @@ export async function closeDealAsLost(input: { dealId: number; clientKey: string
   if (!mine) return 'not_client';
   const stage = LOST_STAGE_BY_REASON[cat][input.reason] ?? (cat === 2 ? 'C2:APOLOGY' : 'C3:2');
   await writeOnce(crmWebhook(), 'crm.deal.update', { id: input.dealId, fields: { STAGE_ID: stage }, params: { REGISTER_SONET_EVENT: 'Y' } });
-  const text = `Брак из канбана повторных (Монолитика)${input.comment?.trim() ? `: ${input.comment.trim()}` : ''}`;
+  const text = `${input.label ?? 'Брак из канбана повторных (Монолитика)'}${input.comment?.trim() ? `: ${input.comment.trim()}` : ''}`;
   await writeOnce(crmWebhook(), 'crm.timeline.comment.add', {
     fields: { ENTITY_ID: input.dealId, ENTITY_TYPE: 'deal', COMMENT: text, ...(input.authorId ? { AUTHOR_ID: Number(input.authorId) } : {}) },
   }).catch(e => console.warn('[repeat-kanban] комментарий к сделке при браке:', e instanceof Error ? e.message : e));

@@ -14,7 +14,7 @@ import { analyticsDb } from '@/lib/db/clients';
 import { BRAK_REASONS, COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager, closeDealAsLost } from '@/features/repeat-kanban/engine/createDeal';
 import { logEvent, newRequestId, type KanbanEventType } from '@/features/repeat-kanban/engine/log';
-import { decideHideRequest, decideReview, hideFromPool, markBrakNow, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
+import { decideHideRequest, decideReview, hideFromPool, markBrakNow, postponeCustomer, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
 import { rememberDealClient } from '@/features/repeat-kanban/engine/dealFixes';
 import { isFeatureEnabled } from '@/lib/featureFlags';
@@ -342,6 +342,18 @@ export async function POST(req: NextRequest) {
       }
       // «Принять и закрыть сделку»: причина = отказная стадия (те же, что у брака). Сначала проверяем
       // причину, потом принимаем задачу, потом брак + закрытие сделки (как «Сразу в брак»).
+      // «Принять и отложить до…» (26.10): задача принята, сделка → «Больше ничего не нужно», заказчик скрыт до даты.
+      const postponeUntil = typeof body.postponeUntil === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.postponeUntil) ? body.postponeUntil : null;
+      if (postponeUntil) {
+        if (comment.length < 3) return NextResponse.json({ error: 'Напишите, почему откладываем' }, { status: 400 });
+        const today = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
+        if (postponeUntil <= today) return NextResponse.json({ error: 'Дата должна быть в будущем' }, { status: 400 });
+        const res = await acceptTask({ taskId, dealId, comment, authorId: session.bitrixUserId, closing: `заказчик отложен до ${postponeUntil.split('-').reverse().join('.')}`, files });
+        const dealClosed = await postponeCustomer({ clientKey, dealId, until: postponeUntil, comment, session });
+        await logEvent(session, { type: 'task_accepted_postponed', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId,
+          payload: { comment, until: postponeUntil, dealClosed, commented: res.commented } });
+        return NextResponse.json({ ok: true, dealClosed, ...res });
+      }
       const reason = typeof body.closeReason === 'string' && body.closeReason ? body.closeReason : null;
       const reasonLabel = reason ? BRAK_REASONS.find(r => r.value === reason)?.label ?? null : null;
       if (reason && !reasonLabel) return NextResponse.json({ error: 'Выберите стадию закрытия' }, { status: 400 });
@@ -369,9 +381,17 @@ export async function POST(req: NextRequest) {
 
     if (body.action === 'review') {
       const decision = body.decision as ReviewDecision;
-      if (!['brak', 'no_answer', 'return'].includes(decision)) return NextResponse.json({ error: 'Некорректное решение' }, { status: 400 });
+      if (!['brak', 'no_answer', 'return', 'postpone'].includes(decision)) return NextResponse.json({ error: 'Некорректное решение' }, { status: 400 });
       const dealId = Number(body.dealId);
       if (!Number.isInteger(dealId) || dealId <= 0) return NextResponse.json({ error: 'Нет сделки' }, { status: 400 });
+      // «Отложить до…» (26.10): скрыть до даты, решение 'postpone' — после даты в пул, не на разбор.
+      if (decision === 'postpone') {
+        const until = String(body.until ?? '');
+        const comment = typeof body.comment === 'string' ? body.comment : '';
+        const dealClosed = await postponeCustomer({ clientKey, dealId, until, comment, session });
+        await logEvent(session, { type: 'reject_reviewed', requestId: rid, clientKey, managerId, columnBefore, dealId, payload: { decision, until, comment, dealClosed } });
+        return NextResponse.json({ ok: true, dealClosed });
+      }
       await decideReview({
         clientKey, dealId, decision,
         reason: typeof body.reason === 'string' ? body.reason : null,
@@ -410,7 +430,8 @@ export async function POST(req: NextRequest) {
 
     if (body.action === 'decide_hide') {
       const accept = body.accept === true;
-      const req = await decideHideRequest({ clientKey, accept, comment: typeof body.comment === 'string' ? body.comment : null, session });
+      const hideDeal = Number(body.dealId);
+      const req = await decideHideRequest({ clientKey, accept, comment: typeof body.comment === 'string' ? body.comment : null, session, dealId: Number.isInteger(hideDeal) && hideDeal > 0 ? hideDeal : null });
       await logEvent(session, { type: accept ? 'hide_request_accepted' : 'hide_request_declined', requestId: rid, clientKey, managerId, columnBefore,
         payload: { until: req?.until, comment: req?.comment, by: req?.by } });
       return NextResponse.json({ ok: true });

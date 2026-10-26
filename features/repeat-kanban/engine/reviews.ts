@@ -10,6 +10,7 @@ import { systemDb } from '@/lib/db/clients';
 import type { SessionUser } from '@/lib/auth/session';
 import { BRAK_REASONS, TOUCHES, type BrakReason, type ReviewDecision } from './config';
 import { NO_CALL_REASON_LABELS } from '@/features/customers/engine/customers';
+import { closeDealAsLost } from './createDeal';
 
 export class ReviewError extends Error {}
 
@@ -138,7 +139,7 @@ export async function requestHide(input: { clientKey: string; managerId: string;
 }
 
 /** Решение РОПа: accept — скрыть с датой и комментарием менеджера, decline — отклонить. */
-export async function decideHideRequest(input: { clientKey: string; accept: boolean; comment: string | null; session: SessionUser }): Promise<HideRequest | null> {
+export async function decideHideRequest(input: { clientKey: string; accept: boolean; comment: string | null; session: SessionUser; dealId?: number | null }): Promise<HideRequest | null> {
   const db = systemDb();
   const r = await db.query<{ id: string; until: string; comment: string; requested_by: string; requested_at: Date }>(
     `UPDATE repeat_kanban_hide_requests SET status = $2, decided_by = $3, decided_at = now(), decision_comment = $4
@@ -149,7 +150,8 @@ export async function decideHideRequest(input: { clientKey: string; accept: bool
   const row = r.rows[0];
   if (!row) throw new ReviewError('Предложение уже рассмотрено');
   if (input.accept) {
-    await hideFromPool({ clientKey: input.clientKey, until: row.until, comment: `${row.comment} (предложил ${row.requested_by})`, session: input.session });
+    // Сделка открыта или в отказе (26.10: менеджер просит скрыть из любой колонки) — как «Отложить до…».
+    await postponeCustomer({ clientKey: input.clientKey, dealId: input.dealId ?? null, until: row.until, comment: `${row.comment} (предложил ${row.requested_by})`, session: input.session });
   }
   return { id: Number(row.id), until: row.until, comment: row.comment, by: row.requested_by, at: new Date(row.requested_at).toISOString() };
 }
@@ -161,4 +163,27 @@ export async function fetchHideRequests(keys: string[]): Promise<Map<string, Hid
        FROM repeat_kanban_hide_requests WHERE status = 'pending' AND client_key = ANY($1::text[])`, [keys],
   ).catch(() => ({ rows: [] as never[] }));
   return new Map(r.rows.map(x => [x.client_key, { id: Number(x.id), until: x.until, comment: x.comment, by: x.requested_by, at: new Date(x.requested_at).toISOString() }]));
+}
+
+// ── «Отложить до…» (владелец 26.10). Менеджер принёс «буду строиться весной»: не брак, а скрыть до даты.
+// Одно действие для приёмки задачи, разбора отказа и предложения менеджера:
+//   сделка (открытая повторная) → «Больше ничего не нужно» с комментарием «Отложено до …» (closeDealAsLost);
+//   заказчик → «Скрытые» до даты (snooze);
+//   решение по сделке 'postpone' — после даты заказчик вернётся в пул (с пометкой), а не на разбор отказа.
+export async function postponeCustomer(input: { clientKey: string; dealId: number | null; until: string; comment: string; session: SessionUser }): Promise<string | null> {
+  const comment = input.comment.trim().slice(0, 1000);
+  await hideFromPool({ clientKey: input.clientKey, until: input.until, comment, session: input.session });
+  if (!input.dealId) return null;
+  const until = input.until.split('-').reverse().join('.');
+  const closed = await closeDealAsLost({ dealId: input.dealId, clientKey: input.clientKey, reason: 'nothing_needed', comment, authorId: input.session.bitrixUserId,
+    label: `Отложено до ${until} из канбана повторных (Монолитика)` })
+    .catch(e => { console.warn('[repeat-kanban] закрытие сделки при «отложить»:', e instanceof Error ? e.message : e); return 'error'; });
+  await systemDb().query(
+    `INSERT INTO repeat_kanban_reviews (client_key, deal_id, decision, reason, comment, touches_done, decided_by, decided_by_user_id)
+     VALUES ($1, $2, 'postpone', NULL, $3, 0, $4, $5)
+     ON CONFLICT (deal_id) DO UPDATE SET decision = 'postpone', reason = NULL, comment = EXCLUDED.comment,
+       decided_by = EXCLUDED.decided_by, decided_by_user_id = EXCLUDED.decided_by_user_id, decided_at = now()`,
+    [input.clientKey, input.dealId, `до ${until}: ${comment}`.slice(0, 1000), input.session.displayName, input.session.id],
+  );
+  return closed;
 }
