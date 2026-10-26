@@ -24,7 +24,7 @@ import { ObjectsTab } from './ObjectsTab';
 import { CallsTab, ManagersBlock, PurchasesTab } from './HistoryTabs';
 import { DealOpenerContext } from './dealLink';
 import { AiAnalysisTab, useAiAnalysisAccess } from '@/features/ai-analysis/ui/AiAnalysisTab';
-import { ManagerAiBrief, useManagerBrief } from '@/features/ai-analysis/ui/ManagerAiBrief';
+import { briefTabVisible, ManagerAiBrief, useManagerBrief } from '@/features/ai-analysis/ui/ManagerAiBrief';
 import { ClientQuestionnaire } from '@/features/questionnaires/ui/ClientQuestionnaire';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import { BitrixLink, CardHeader, TabsRibbon } from './CardHeader';
@@ -87,7 +87,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
     { key: 'calls', label: 'Звонки' },
     // Анкета по товарным группам (миграция 249, владелец 23.10): ответы менеджера и «по разговорам».
     { key: 'questionnaire', label: 'Анкета' },
-    ...(ai.allowed || brief.data ? [{ key: 'ai' as const, label: 'ИИ-анализ' }] : []),
+    ...(ai.allowed || briefTabVisible(brief.data) ? [{ key: 'ai' as const, label: 'ИИ-анализ' }] : []),
   ];
 
   return (
@@ -114,7 +114,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
           offeredGroups={data.recommendations.client.map(r => r.group)} />
       )}
       {tab === 'ai' && ai.allowed && <AiAnalysisTab qs={qs} params={params} cardClientType={data.profile.clientType} />}
-      {tab === 'ai' && !ai.allowed && brief.data && <ManagerAiBrief brief={brief.data} />}
+      {tab === 'ai' && !ai.allowed && brief.data && <ManagerAiBrief data={brief.data} qs={qs} params={params} />}
       {tab === 'overview' && <ManagersBlock qs={qs} />}
     </div>
     </DealOpenerContext.Provider>

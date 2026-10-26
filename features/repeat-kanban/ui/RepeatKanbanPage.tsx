@@ -404,6 +404,8 @@ export function RepeatKanbanPage() {
                     { value: 'new', label: `Есть, и после него новые звонки · ${rub.format(data.aiCounts.new ?? 0)}`, hint: 'можно запустить разбор заново' },
                     { value: 'no', label: `Нет разбора · ${rub.format(data.aiCounts.no ?? 0)}` },
                     // Владелец 23.10: «там, где много расшифрованных звонков, но не было ни одного ИИ-разбора».
+                    // Владелец 26.10: менеджер нажал «Запросить разбор» в карточке клиента.
+                    { value: 'requested', label: `Просят разбор · ${rub.format(data.aiCounts.requested ?? 0)}`, hint: 'менеджер запросил разбор, готового разбора после запроса нет' },
                     { value: 'candidate', label: `Кандидаты на разбор · ${rub.format(data.aiCounts.candidate ?? 0)}`, hint: `разбора нет, звонков с расшифровкой ${AI_CANDIDATE_MIN} и больше` },
                   ]}
                   className={`${aiF ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
@@ -991,9 +993,16 @@ function CardTags({ ids }: { ids: number[] }) {
 /** Значок разбора звонков (владелец 23.10): Монолитик, как на вкладке браузера; бледный — разбору больше
  *  14 дней; красный кружок — расшифрованные звонки после разбора (есть что доразобрать). Клик — карточка
  *  клиента сразу на вкладке «ИИ-анализ». Видят только РОПы (право ИИ-анализа). */
-function AiBadge({ ai, onClick }: { ai: NonNullable<KanbanCard['ai']>; onClick: () => void }) {
+/** Запрос менеджера (26.10): синий «?» в углу значка + строка в подсказке. */
+const requestTitle = (r: NonNullable<KanbanCard['aiRequest']>) => `\nЗапросил разбор: ${r.by}, ${fmtDay(r.at)}${r.comment ? ` — «${r.comment}»` : ''}`;
+function RequestDot() {
+  return <span className="absolute -bottom-1.5 -right-1.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-[#1155cc] px-[3px] text-[9.5px] font-bold leading-none text-white ring-2 ring-[var(--color-bg)]">?</span>;
+}
+
+function AiBadge({ ai, request, onClick }: { ai: NonNullable<KanbanCard['ai']>; request: KanbanCard['aiRequest'] | null; onClick: () => void }) {
   const title = `Разбор звонков от ${fmtDay(ai.at)}${ai.fresh ? '' : ' — старше 14 дней, памятка в задачу уже не подставится'}`
     + (ai.newCalls ? `\nПосле него ${ai.newCalls} ${plural(ai.newCalls, 'новый звонок', 'новых звонка', 'новых звонков')} с расшифровкой — можно запустить разбор заново` : '')
+    + (request ? requestTitle(request) : '')
     + '\nНажмите — открыть разбор';
   return (
     <button type="button" onClick={onClick} title={title} aria-label={title}
@@ -1005,19 +1014,21 @@ function AiBadge({ ai, onClick }: { ai: NonNullable<KanbanCard['ai']>; onClick: 
           {ai.newCalls > 99 ? '99+' : ai.newCalls}
         </span>
       )}
+      {request && <RequestDot />}
     </button>
   );
 }
 
 /** Кандидат на разбор: разбора нет, а звонков с расшифровкой много — бледный Монолитик с пунктиром и числом звонков. */
-function AiCandidate({ calls, onClick }: { calls: number; onClick: () => void }) {
-  const title = `Разбора звонков ещё не было, а звонков с расшифровкой — ${calls}. Кандидат на ИИ-разбор.\nНажмите — открыть вкладку «ИИ-анализ»`;
+function AiCandidate({ calls, request, onClick }: { calls: number; request: KanbanCard['aiRequest'] | null; onClick: () => void }) {
+  const title = `Разбора звонков ещё не было${calls ? `, а звонков с расшифровкой — ${calls}. Кандидат на ИИ-разбор.` : '.'}${request ? requestTitle(request) : ''}\nНажмите — открыть вкладку «ИИ-анализ»`;
   return (
     <button type="button" onClick={onClick} title={title} aria-label={title}
-      className={`${FOCUS} tap-target inline-flex h-5 shrink-0 items-center gap-0.5 rounded border border-dashed border-[var(--color-border-strong)] pl-0.5 pr-1 text-[10px] font-semibold tabular-nums text-[var(--color-text-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]`}>
+      className={`${FOCUS} tap-target relative inline-flex h-5 shrink-0 items-center gap-0.5 rounded border border-dashed pl-0.5 pr-1 text-[10px] font-semibold tabular-nums transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] ${request ? 'border-[#1155cc] text-[#1155cc]' : 'border-[var(--color-border-strong)] text-[var(--color-text-muted)]'}`}>
       {/* eslint-disable-next-line @next/next/no-img-element -- фавикон 32px */}
-      <img src="/icon.png" alt="" width={14} height={14} className="h-[14px] w-[14px] rounded-[3px] opacity-45 grayscale" />
-      {calls > 99 ? '99+' : calls}
+      <img src="/icon.png" alt="" width={14} height={14} className={`h-[14px] w-[14px] rounded-[3px] ${request ? '' : 'opacity-45 grayscale'}`} />
+      {calls ? (calls > 99 ? '99+' : calls) : ''}
+      {request && <RequestDot />}
     </button>
   );
 }
@@ -1135,8 +1146,8 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
             <span className="line-clamp-2">{cardName(c)}</span>
           </button>
           <div className="flex shrink-0 items-center gap-1">
-            {c.ai && <AiBadge ai={c.ai} onClick={() => onAct('open_ai')} />}
-            {!c.ai && (c.aiCalls ?? 0) >= AI_CANDIDATE_MIN && <AiCandidate calls={c.aiCalls!} onClick={() => onAct('open_ai')} />}
+            {c.ai && <AiBadge ai={c.ai} request={c.aiRequest ?? null} onClick={() => onAct('open_ai')} />}
+            {!c.ai && (c.aiRequest || (c.aiCalls ?? 0) >= AI_CANDIDATE_MIN) && <AiCandidate calls={c.aiCalls ?? 0} request={c.aiRequest ?? null} onClick={() => onAct('open_ai')} />}
             {c.sleeping && col.startsWith('pool') && <TapTip label="Спит" text="Спит: давно нет движений по заказчику"><Moon size={12} className="text-[var(--color-text-muted)]" /></TapTip>}
             {c.profileType ? <TypeChip type={c.profileType} /> : (
               <span className="shrink-0 rounded border border-dashed border-[var(--color-border-strong)] px-1 text-[10.5px] text-[var(--color-text-muted)]" title="Тип клиента не указан — заполните в карточке клиента">Тип?</span>

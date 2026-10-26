@@ -26,6 +26,7 @@ import { fetchQueuedByClient } from './queueRead';
 import { fetchShippedGroups, resolvePeriod } from './shippedGroups';
 import { fetchCustomerTags } from './tags';
 import { AI_CANDIDATE_MIN, fetchAiMarks, fetchTranscribedCounts, type AiMark } from './aiMarks';
+import { fetchPendingRequests, type AiRequest } from '@/features/ai-analysis/engine/requests';
 import { fetchDismissedByRef, potentialGroups, type PotentialGroup } from './potentialGroups';
 import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
 import { fetchRequestedGroups } from '@/features/ai-analysis/engine/links';
@@ -139,6 +140,8 @@ export interface KanbanCard {
   ai: AiMark | null;
   /** Разбора нет — сколько у заказчика звонков с расшифровкой (только РОПу; «кандидат на разбор» — от AI_CANDIDATE_MIN). */
   aiCalls?: number;
+  /** Менеджер запросил ИИ-разбор (миграция 257, 26.10), готового разбора новее запроса нет. Только РОПу. */
+  aiRequest?: AiRequest | null;
   /** Заказчик в очереди задач (миграция 237): кому выдастся, кто поставил. */
   queued: { id: number; managerId: string; by: string | null; at: string } | null;
 }
@@ -193,7 +196,7 @@ export interface BoardKpi {
 }
 
 /** Режим «Сегодня» (аудит 21.10): одна лента того, что РОПу решить сегодня. */
-export type TodayKey = 'control' | 'overdue' | 'hide_request' | 'wrong_funnel' | 'review' | 'closing';
+export type TodayKey = 'control' | 'overdue' | 'hide_request' | 'wrong_funnel' | 'review' | 'closing' | 'ai_request';
 export interface TodaySection { key: TodayKey; title: string; hint: string; total: number; cards: KanbanCard[] }
 
 export interface RepeatBoard {
@@ -463,7 +466,7 @@ export async function buildRepeatBoard(opts: {
   offerGroups?: string[];
   /** Значок разбора звонков на карточках (РОП): грузить ли разборы; фильтр yes — есть, new — есть и новые звонки, no — нет. */
   withAi?: boolean;
-  aiFilter?: 'yes' | 'new' | 'no' | 'candidate' | null;
+  aiFilter?: 'yes' | 'new' | 'no' | 'candidate' | 'requested' | null;
   /** Дата последней отгрузки, МСК, включительно (YYYY-MM-DD); нет отгрузок — не проходит. */
   shipFrom?: string | null;
   shipTo?: string | null;
@@ -532,6 +535,9 @@ export async function buildRepeatBoard(opts: {
   const aiMarksP = opts.withAi
     ? fetchAiMarks(new Map(rows.map(r => [r.clientKey, membersOf(r)]))).catch(() => new Map<string, AiMark>())
     : Promise.resolve(new Map<string, AiMark>());
+  const aiReqP = opts.withAi
+    ? fetchPendingRequests([...new Set(rows.flatMap(r => membersOf(r)).map(k => (k.startsWith('x') ? `c${k.slice(1)}` : k)))])
+    : Promise.resolve(new Map<string, AiRequest>());
   const aiCallsP = opts.withAi ? fetchTranscribedCounts().catch(() => new Map<string, number>()) : Promise.resolve(new Map<string, number>());
   // 2. Свежие данные поверх кэша.
   const refOfKey = (k: string) => (k.startsWith('k') ? k : `p${k.slice(1)}`);
@@ -574,6 +580,7 @@ export async function buildRepeatBoard(opts: {
   ]);
   const aiMarks = await aiMarksP;
   const aiCallsByKey = await aiCallsP;
+  const aiReqByRef = await aiReqP;
   const aiCounts: Record<string, number> = {};
 
   const typeCounts: Record<string, number> = {};
@@ -735,6 +742,7 @@ export async function buildRepeatBoard(opts: {
       if (!d || (opts.shipFrom && d < opts.shipFrom) || (opts.shipTo && d > opts.shipTo)) continue;
     }
     let aiCalls: number | undefined;
+    let aiRequest: AiRequest | null = null;
     if (opts.withAi) {
       const k = aiMark ? (aiMark.newCalls > 0 ? 'new' : 'yes') : 'no';
       aiCounts[k] = (aiCounts[k] ?? 0) + 1;
@@ -742,7 +750,10 @@ export async function buildRepeatBoard(opts: {
       if (!aiMark) aiCalls = membersOf(r).reduce((n, m) => n + (aiCallsByKey.get(m) ?? 0), 0);
       const candidate = (aiCalls ?? 0) >= AI_CANDIDATE_MIN;
       if (candidate) aiCounts.candidate = (aiCounts.candidate ?? 0) + 1;
-      if (opts.aiFilter && !(opts.aiFilter === k || (opts.aiFilter === 'yes' && k === 'new') || (opts.aiFilter === 'candidate' && candidate))) continue;
+      // Запрос менеджера «Запросить разбор» — по любому исходному ключу заказчика.
+      aiRequest = membersOf(r).map(m => aiReqByRef.get(m.startsWith('x') ? `c${m.slice(1)}` : m)).filter(Boolean).sort((a, b) => b!.at.localeCompare(a!.at))[0] ?? null;
+      if (aiRequest) aiCounts.requested = (aiCounts.requested ?? 0) + 1;
+      if (opts.aiFilter && !(opts.aiFilter === k || (opts.aiFilter === 'yes' && k === 'new') || (opts.aiFilter === 'candidate' && candidate) || (opts.aiFilter === 'requested' && !!aiRequest))) continue;
     }
     if (tagData) {
       for (const t of cardTags) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
@@ -794,7 +805,7 @@ export async function buildRepeatBoard(opts: {
       members: membersOf(r).filter(k => k !== r.clientKey).map(k => ({ key: k, source: aliasMap.get(k)?.source ?? 'auto_company', name: null })),
       openDealInBrak: col === 'brak' && hasOpenDeal && current ? current.dealId : null,
       returned: col === 'pool_hot' ? returned ?? null : null,
-      ai: aiMark, aiCalls,
+      ai: aiMark, aiCalls, aiRequest,
       offer,
       tags: [...cardTags].sort((a, b) => (tagRank.get(a) ?? 99) - (tagRank.get(b) ?? 99)),
       queued: (() => { const q = queuedMap.get(r.clientKey); return q ? { id: q.id, managerId: q.managerId, by: q.queuedByName, at: q.createdAt } : null; })(),
@@ -887,6 +898,7 @@ export async function buildRepeatBoard(opts: {
     { key: 'control', title: 'Ждут приёмки', hint: 'Менеджер сдал задачу — примите или верните в Битриксе', pick: c => c.task?.state === 'control', order: (a, b) => changed(a).localeCompare(changed(b)) },
     { key: 'overdue', title: 'Просрочены', hint: 'Срок задачи прошёл, менеджер не сдал', pick: c => taskBucketOf(c, now) === 'overdue', order: (a, b) => (a.task?.deadlineAt ?? '').localeCompare(b.task?.deadlineAt ?? '') },
     { key: 'hide_request', title: 'Предлагают скрыть', hint: 'Менеджер предложил скрыть заказчика из пула', pick: c => !!c.hideRequest, order: (a, b) => a.hideRequest!.at.localeCompare(b.hideRequest!.at) },
+    ...(opts.withAi ? [{ key: 'ai_request' as const, title: 'Просят разбор', hint: 'Менеджер запросил ИИ-разбор звонков — разбора не было или есть новые разговоры', pick: (c: KanbanCard) => !!c.aiRequest, order: (a: KanbanCard, b: KanbanCard) => a.aiRequest!.at.localeCompare(b.aiRequest!.at) }] : []),
     { key: 'wrong_funnel', title: 'Не в той воронке', hint: 'Повторная сделка заведена в первичной воронке — перенесите в «Повторные» в Битриксе', pick: c => !!c.wrongFunnel, order: (a, b) => b.wrongFunnel!.createdAt.localeCompare(a.wrongFunnel!.createdAt) },
     { key: 'review', title: 'На разборе', hint: 'Отказы и три попытки без дозвона — решите: брак, ещё попытки или вернуть', pick: c => c.column === 'review', order: (a, b) => (b.deal?.lostAt ?? b.deal?.createdAt ?? '').localeCompare(a.deal?.lostAt ?? a.deal?.createdAt ?? '') },
     { key: 'closing', title: 'Окно закрывается', hint: `Отгрузили ${WINDOW_DAYS - 3}+ дней назад, сделки нет — осталось 3 дня или меньше`, pick: c => c.column === 'pool_hot' && (c.freshDays ?? 0) >= WINDOW_DAYS - 3, order: (a, b) => lostRank(a) - lostRank(b) || (b.freshDays ?? 0) - (a.freshDays ?? 0) || ev(b) - ev(a) },
