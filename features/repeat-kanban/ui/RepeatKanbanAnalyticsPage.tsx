@@ -226,7 +226,9 @@ function tercile(values: (number | null)[]): (v: number | null) => keyof typeof 
   const s = values.filter((v): v is number => v !== null).sort((a, b) => a - b);
   if (s.length < 3) return () => null;
   const lo = s[Math.floor(s.length / 3)], hi = s[Math.floor((2 * s.length) / 3)];
-  return v => (v === null ? null : v >= hi ? 'good' : v < lo ? 'bad' : 'mid');
+  // Нулей обычно много (не работают вовсе) — нижняя граница включительно, иначе «0» окажется жёлтым.
+  if (hi === lo) return v => (v === null ? null : v > hi ? 'good' : v < lo || v === 0 ? 'bad' : 'mid');
+  return v => (v === null ? null : v >= hi ? 'good' : v <= lo ? 'bad' : 'mid');
 }
 
 // ── Страница ──────────────────────────────────────────────────────────────────
