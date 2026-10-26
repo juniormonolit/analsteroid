@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-10-26 — «Снять с продажи» 500: роли приложения выдан UPDATE(sold_at) на sa.deals
+
+Жалоба владельца: у Алены Афанасьевой «Снять с продажи» отвечает 500. В app.log прода —
+`permission denied for table deals`: `performUnsell` (`lib/sales/unsellDeal.ts`) делает
+`UPDATE deals SET sold_at = NULL`, а у `junior_user` на `sa.deals` было только SELECT
+(миграция sa_org/004 выдала права лишь на `sa.manual_fixes`). Миграция
+`migrations/sa_org/008_deals_unsell_grant.sql` — `GRANT UPDATE (sold_at) ON sa.deals`
+(только эта колонка) + повтор `SELECT, INSERT ON sa.manual_fixes`; накатана 26.10 на прод
+под supabase_admin (`docker exec supabase-db`), проверено `has_column_privilege` = t.
+Само снятие с продажи после выдачи не прогонялось (реальная сделка) — проверить у Алены.
+
+Там же: «Роли»/«Матрица прав» выкидывали на вход — не воспроизвелось (во встроенном
+браузере под Admin и у владельца — норма). Вероятно, разовый сбой: в логе того времени
+`timeout exceeded when trying to connect` к БД.
+
+---
+
 ## 2026-10-23 — Канбан повторных: фильтр «Последняя отгрузка» (дата, пресеты)
 
 Владелец: «отдельным полем пикер даты последней отгрузки с пресетами — как в типовом отчёте».
