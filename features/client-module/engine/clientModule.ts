@@ -15,6 +15,8 @@ import { clusterAddresses, settlementLabel, placeDetail, isUsableAddress, isCoar
 import { addressFromComment } from './commentAddress';
 import { fetchLegalEntity } from './legalEntity';
 import { orphanDealIdsOf } from '@/features/repeat-kanban/engine/dealFixes';
+import { memberKeysOf } from '@/features/customers/engine/merge';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { clientHint } from './clientHint';
 import { validLatLon } from '@/lib/geo/parse';
 import { reverseGeocode, type GeoCandidate } from '@/lib/geo/resolve';
@@ -136,6 +138,22 @@ export async function fetchClientModule(ref: ClientRef, opts: { light?: boolean 
       LIMIT 3000`,
     [id],
   );
+  // Склейка заказчиков (merge.ts, 26.10: «в канбане последняя отгрузка 13.10.26, в карточке —
+  // 24.09.25», ООО «Прайм» k13340 + x64122): карточку, открытую по каноничному ключу, дополняем
+  // сделками остальных карточек человека — ровно теми, что канбан отнёс к этим ключам (не всеми
+  // сделками контакта: у него бывают и сделки ДРУГОЙ компании).
+  const others = (await memberKeysOf(ref).catch(() => [ref])).filter(k => k !== ref);
+  if (others.length) {
+    const more = await db.query<DealRow>(
+      `${DEAL_SELECT}
+        WHERE d.funnel_id IN (0,1,2,3) AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
+          AND (${CLIENT_KEY_SQL}) = ANY($1::text[])
+        LIMIT 3000`,
+      [others, others.map(k => Number(k.slice(1)))],
+    );
+    const have = new Set(byClient.rows.map(r => Number(r.deal_id)));
+    byClient.rows.push(...more.rows.filter(r => !have.has(Number(r.deal_id))));
+  }
   const known = new Set(byClient.rows.map(r => Number(r.deal_id)));
   const missing = (await bxIdsP).filter(d => !known.has(d));
   const extra = missing.length
@@ -605,14 +623,22 @@ export async function saveObjectProfile(ref: ClientRef, objectKeyIn: string, inp
   return objectKey;
 }
 
+/** Какие из сделок принадлежат клиенту: по самой сущности или по склеенным с ней карточкам (merge.ts). */
+async function ownDealIds(ref: ClientRef, ids: number[]): Promise<number[]> {
+  const others = (await memberKeysOf(ref).catch(() => [ref])).filter(k => k !== ref);
+  const r = await analyticsDb().query<{ deal_id: string }>(
+    `SELECT d.deal_id::text AS deal_id FROM sa.deals d
+      WHERE d.deal_id = ANY($1::bigint[])
+        AND (${ref.startsWith('k') ? 'd.company_id' : 'd.contact_id'} = $2 OR (${CLIENT_KEY_SQL}) = ANY($3::text[]))`,
+    [ids, Number(ref.slice(1)), others],
+  );
+  return r.rows.map(x => Number(x.deal_id));
+}
+
 /** Ручная привязка сделки к объекту; objectKey = '' — вернуть автоматическую. */
 export async function saveDealObject(ref: ClientRef, dealId: number, objectKey: string, by: string): Promise<void> {
   const db = analyticsDb();
-  const own = await db.query(
-    `SELECT 1 FROM sa.deals d WHERE d.deal_id = $1 AND ${ref.startsWith('k') ? 'd.company_id' : 'd.contact_id'} = $2`,
-    [dealId, Number(ref.slice(1))],
-  );
-  if (own.rowCount === 0) throw new Error('Сделка не принадлежит этому клиенту');
+  if ((await ownDealIds(ref, [dealId])).length === 0) throw new Error('Сделка не принадлежит этому клиенту');
   try {
     await db.query(
       `INSERT INTO sa.client_module_deal_objects (deal_id, client_ref, object_key, updated_by, updated_at)
@@ -647,11 +673,7 @@ export async function saveDealObjects(ref: ClientRef, dealIds: number[], objectK
   const db = analyticsDb();
   const ids = [...new Set(dealIds.filter(n => Number.isInteger(n) && n > 0))].slice(0, 1000);
   if (ids.length === 0) return 0;
-  const own = await db.query<{ deal_id: string }>(
-    `SELECT d.deal_id::text AS deal_id FROM sa.deals d WHERE d.deal_id = ANY($1::bigint[]) AND ${ref.startsWith('k') ? 'd.company_id' : 'd.contact_id'} = $2`,
-    [ids, Number(ref.slice(1))],
-  );
-  const mine = own.rows.map(r => Number(r.deal_id));
+  const mine = await ownDealIds(ref, ids);
   if (mine.length === 0) return 0;
   try {
     await db.query(
