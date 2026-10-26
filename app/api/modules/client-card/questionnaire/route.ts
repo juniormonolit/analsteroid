@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { moduleActor } from '@/lib/bitrix/widgetGrant';
+import { getSession } from '@/lib/auth/session';
+import { hasPerm } from '@/lib/auth/perms';
 import { parseClientRef } from '@/features/client-module/engine/clientModule';
 import { AnswerError, fetchClientQuestionnaire, saveManagerAnswers } from '@/features/questionnaires/engine/answers';
 
@@ -18,7 +20,13 @@ export async function GET(req: NextRequest) {
   if (!(await moduleActor(req, ref))) return NextResponse.json({ error: 'Нет доступа — откройте карточку клиента заново' }, { status: 403 });
   const groups = (sp.get('groups') ?? '').split('|').map(x => x.trim()).filter(x => x && x.length < 120).slice(0, 60);
   try {
-    return NextResponse.json({ questions: await fetchClientQuestionnaire(ref, groups) }, { headers: { 'Cache-Control': 'no-store' } });
+    const questions = await fetchClientQuestionnaire(ref, groups);
+    // Цитата из расшифровки звонка у ответа «по разговорам» — только РОПу (право ИИ-анализа; владелец 26.10:
+    // «транскрибации менеджер не видит»). Сам ответ — всем, кто видит карточку.
+    const session = await getSession().catch(() => null);
+    const full = !!session && hasPerm(session, 'action.ai_call_analysis');
+    const out = full ? questions : questions.map(q => (q.ai ? { ...q, ai: { ...q.ai, quote: null } } : q));
+    return NextResponse.json({ questions: out }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     if (e instanceof AnswerError) return NextResponse.json({ error: e.message }, { status: 400 });
     console.error('[client-card/questionnaire]', e instanceof Error ? e.message : e);

@@ -24,6 +24,7 @@ import { ObjectsTab } from './ObjectsTab';
 import { CallsTab, ManagersBlock, PurchasesTab } from './HistoryTabs';
 import { DealOpenerContext } from './dealLink';
 import { AiAnalysisTab, useAiAnalysisAccess } from '@/features/ai-analysis/ui/AiAnalysisTab';
+import { ManagerAiBrief, useManagerBrief } from '@/features/ai-analysis/ui/ManagerAiBrief';
 import { ClientQuestionnaire } from '@/features/questionnaires/ui/ClientQuestionnaire';
 import { useAppMode } from '@/lib/hooks/useAppMode';
 import { BitrixLink, CardHeader, TabsRibbon } from './CardHeader';
@@ -64,6 +65,8 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
   // «ИИ-анализ» — только у кого есть право (решение владельца 22.10: «видят ТОЛЬКО РОПЫ»):
   // без права API отдаёт 403 и вкладки нет. Во вкладке Битрикса сессии Монолитики нет — тоже нет.
   const ai = useAiAnalysisAccess(qs, !isBitrixIframe);
+  // Без права (менеджер, вкладка Битрикса) — только разделы про заказчика из последнего разбора (26.10), если он есть.
+  const brief = useManagerBrief(qs, !ai.allowed);
   const [focusObject, setFocusObject] = useState<string | null>(null);
   const [editClient, setEditClient] = useState(0);
   const [dealsFilter, setDealsFilter] = useState<{ object?: string; n: number }>({ n: 0 });
@@ -84,7 +87,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
     { key: 'calls', label: 'Звонки' },
     // Анкета по товарным группам (миграция 249, владелец 23.10): ответы менеджера и «по разговорам».
     { key: 'questionnaire', label: 'Анкета' },
-    ...(ai.allowed ? [{ key: 'ai' as const, label: 'ИИ-анализ' }] : []),
+    ...(ai.allowed || brief.data ? [{ key: 'ai' as const, label: 'ИИ-анализ' }] : []),
   ];
 
   return (
@@ -111,6 +114,7 @@ export function ClientModuleWidget({ contactId, companyId, onDealOpen, initialTa
           offeredGroups={data.recommendations.client.map(r => r.group)} />
       )}
       {tab === 'ai' && ai.allowed && <AiAnalysisTab qs={qs} params={params} cardClientType={data.profile.clientType} />}
+      {tab === 'ai' && !ai.allowed && brief.data && <ManagerAiBrief brief={brief.data} />}
       {tab === 'overview' && <ManagersBlock qs={qs} />}
     </div>
     </DealOpenerContext.Provider>
