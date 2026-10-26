@@ -24,7 +24,9 @@ export async function GET(req: NextRequest) {
   }
 
   const session = await createSession(userId);
-  const res = NextResponse.redirect(new URL('/profile', origin));
+  // Куда вести после входа — только из белого списка (никаких произвольных адресов из URL).
+  const TARGETS: Record<string, string> = { 'repeat-kanban': '/repeat-kanban' };
+  const res = NextResponse.redirect(new URL(TARGETS[req.nextUrl.searchParams.get('to') ?? ''] ?? '/profile', origin));
   res.cookies.set(SESSION_COOKIE, session, {
     httpOnly: true,
     secure: true,

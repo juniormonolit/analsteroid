@@ -543,7 +543,7 @@ export function RepeatKanbanAnalyticsPage() {
           {peopleTab === 'mgr' && ai.isSuccess && (
             <div className="text-[11.5px] text-[var(--color-text-muted)]">
               «ИИ-оценка» — средний балл проработки звонков по ИИ-анализу (последний отчёт каждого заказчика за 90 дней) / заказчиков с отчётом; серым — меньше 3 отчётов.
-              {' '}<Link href="/ai-analysis/managers" className="text-[var(--color-accent)] hover:underline">Подробно по 8 критериям и нарушениям →</Link>
+              {' '}<Link href="/ai-analysis/managers" target="_blank" rel="noopener noreferrer" className="text-[var(--color-accent)] hover:underline">Подробно по 8 критериям и нарушениям →</Link>
             </div>
           )}
         </section>
