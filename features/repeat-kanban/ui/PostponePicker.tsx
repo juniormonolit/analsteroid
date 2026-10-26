@@ -19,7 +19,7 @@ export function PostponePicker({ value, onChange }: { value: string; onChange: (
           </button>
         ))}
         <input type="date" value={value} min={mskToday()} onChange={e => onChange(e.target.value)} aria-label="Своя дата"
-          className={`${fieldCls} min-h-11 w-auto min-w-0 flex-1`} />
+          className={`${fieldCls} min-h-11 w-full min-w-0 sm:w-auto sm:flex-1`} />
       </div>
     </div>
   );
