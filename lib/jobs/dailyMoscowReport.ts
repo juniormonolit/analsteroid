@@ -38,6 +38,8 @@ interface PeriodSums { day: DeptSums; week: DeptSums; month: DeptSums }
 interface ConversionRow {
   primaryDeals: number; primaryReservations: number;
   primarySales: number; repeatSales: number; ppp: number;
+  /** Первичные отгрузки — знаменатель «Конверсия ППП» (26.10). */
+  primaryShipments: number;
 }
 type Conversions = Record<Dept | 'total', ConversionRow>;
 
@@ -177,7 +179,7 @@ function sumDbToDepts(
 
 const SALES_AMOUNT_IDS = ['primary_sales_amount', 'repeat_sales_amount'];
 const SHIPMENT_AMOUNT_IDS = ['primary_shipments_amount', 'repeat_shipments_amount'];
-const CONVERSION_IDS = ['primary_deals_count', 'primary_reservations_count', 'primary_sales_count', 'repeat_sales_count', 'ppp_count'];
+const CONVERSION_IDS = ['primary_deals_count', 'primary_reservations_count', 'primary_sales_count', 'repeat_sales_count', 'ppp_count', 'primary_shipments_count'];
 
 async function getDbConversions(
   fromIso: string,
@@ -185,7 +187,7 @@ async function getDbConversions(
   orgMap: Map<string, { branch: string; category: string | null }>,
 ): Promise<Conversions> {
   const byManager = await queryDbByManager(CONVERSION_IDS, fromIso, toExclIso);
-  const zero = (): ConversionRow => ({ primaryDeals: 0, primaryReservations: 0, primarySales: 0, repeatSales: 0, ppp: 0 });
+  const zero = (): ConversionRow => ({ primaryDeals: 0, primaryReservations: 0, primarySales: 0, repeatSales: 0, ppp: 0, primaryShipments: 0 });
   const conv: Conversions = { 'ОС': zero(), 'НЦ': zero(), 'ЖБИ': zero(), total: zero() };
   for (const [managerId, vals] of byManager) {
     const org = orgMap.get(managerId);
@@ -198,6 +200,7 @@ async function getDbConversions(
       target.primarySales += vals.primary_sales_count ?? 0;
       target.repeatSales += vals.repeat_sales_count ?? 0;
       target.ppp += vals.ppp_count ?? 0;
+      target.primaryShipments += vals.primary_shipments_count ?? 0;
     }
   }
   return conv;

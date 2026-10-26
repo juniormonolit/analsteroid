@@ -24,6 +24,8 @@ export interface ConversionRow {
   primarySales: number;
   repeatSales: number;
   ppp: number;
+  /** Первичные отгрузки месяца (по воронке) — знаменатель «Конверсия ППП» (владелец 26.10, как метрика каталога, миграция 163). */
+  primaryShipments: number;
 }
 
 export interface DailyReportNumbers {
@@ -58,7 +60,9 @@ const PERIOD_TITLES = { day: 'ДЕНЬ', week: 'НЕДЕЛЯ', month: 'МЕСЯ�
 const CONVERSIONS: { label: string; num: (r: ConversionRow) => number; den: (r: ConversionRow) => number }[] = [
   { label: 'Конверсия в бронь (месяц)', num: r => r.primaryReservations, den: r => r.primaryDeals },
   { label: 'Конверсия в продажу (месяц)', num: r => r.primarySales, den: r => r.primaryDeals },
-  { label: 'Конверсия ППП (месяц)', num: r => r.ppp, den: r => r.primarySales },
+  // Знаменатель — первичные ОТГРУЗКИ (владелец 26.10: «при расчёте ППП в знаменателе должны быть отгрузки»; так же
+  // считает «CR ППП» каталога, миграция 163). Было — первичные продажи.
+  { label: 'Конверсия ППП (месяц)', num: r => r.ppp, den: r => r.primaryShipments },
   { label: '% повторных продаж (месяц)', num: r => r.repeatSales, den: r => r.primarySales + r.repeatSales },
 ];
 
@@ -84,7 +88,7 @@ function convValues(
   num: (r: ConversionRow) => number,
   den: (r: ConversionRow) => number,
 ): Record<string, MetricValue> {
-  const zero: ConversionRow = { primaryDeals: 0, primaryReservations: 0, primarySales: 0, repeatSales: 0, ppp: 0 };
+  const zero: ConversionRow = { primaryDeals: 0, primaryReservations: 0, primarySales: 0, repeatSales: 0, ppp: 0, primaryShipments: 0 };
   const out: Record<string, MetricValue> = {};
   for (const k of keys) {
     const row = conv[k] ?? zero;
