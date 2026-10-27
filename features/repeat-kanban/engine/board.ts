@@ -23,6 +23,7 @@ import { fetchHideRequests, type HideRequest } from './reviews';
 import { fetchKanbanSettings } from './settings';
 import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
 import { fetchQueuedByClient } from './queueRead';
+import { fetchRecentReassigns, type Reassign } from './reassigns';
 import { fetchShippedGroups, resolvePeriod } from './shippedGroups';
 import { fetchCustomerTags } from './tags';
 import { AI_CANDIDATE_MIN, fetchAiMarks, fetchTranscribedCounts, type AiMark } from './aiMarks';
@@ -494,10 +495,27 @@ export async function buildRepeatBoard(opts: {
   // «150 менеджеров за раз» снят — вся компания читается так же быстро, как один менеджер).
   const rows: Row[] = [];
   let dataAt: string | null = null;
-  const snap = await fetchCustomersOfManagers(roster.map(m => Number(m.id)), roster.length > FALLBACK_MANAGERS ? 40_000 : 0);
+  // Смена менеджера из Монолитики — сразу, не дожидаясь пересчёта снимка (reassigns.ts, 27.10).
+  const moves = await fetchRecentReassigns().catch(() => new Map<string, Reassign>());
+  const rosterIds = new Set(roster.map(m => m.id));
+  const fromIds = [...new Set([...moves.values()].filter(v => rosterIds.has(v.to) && !rosterIds.has(v.from)).map(v => Number(v.from)))];
+  const snap = await fetchCustomersOfManagers([...roster.map(m => Number(m.id)), ...fromIds], roster.length > FALLBACK_MANAGERS ? 40_000 : 0);
   if (snap) {
     dataAt = new Date(snap.at).toISOString();
-    for (const m of roster) for (const r of snap.byMgr.get(Number(m.id)) ?? []) rows.push({ ...r, managerId: m.id, managerName: m.name });
+    const moveOf = (r: CustomerRow, owner: string) => {
+      for (const k of r.memberKeys ?? [r.clientKey]) { const mv = moves.get(k); if (mv && mv.from === owner) return mv; }
+      return null;
+    };
+    for (const m of roster) for (const r of snap.byMgr.get(Number(m.id)) ?? []) {
+      const mv = moveOf(r, m.id);
+      if (mv) continue; // уехал к новому менеджеру — его заберёт строка ниже (если новый в этой зоне)
+      rows.push({ ...r, managerId: m.id, managerName: m.name });
+    }
+    const nameOf = new Map(roster.map(m => [m.id, m.name]));
+    for (const [owner, list] of snap.byMgr) for (const r of list) {
+      const mv = moveOf(r, String(owner));
+      if (mv && nameOf.has(mv.to)) rows.push({ ...r, managerId: mv.to, managerName: nameOf.get(mv.to)! });
+    }
   } else if (roster.length <= FALLBACK_MANAGERS) {
     // Снимка ещё нет — старый путь на менеджера, 4 параллельно (пул SA — 8 соединений).
     const CONCURRENCY = 4;

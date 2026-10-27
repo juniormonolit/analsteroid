@@ -18,6 +18,7 @@ import { decideHideRequest, decideReview, hideFromPool, markBrakNow, postponeCus
 import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
 import { rememberDealClient } from '@/features/repeat-kanban/engine/dealFixes';
 import { isFeatureEnabled } from '@/lib/featureFlags';
+import { fetchRecentReassigns, type Reassign } from '@/features/repeat-kanban/engine/reassigns';
 import { memberKeysOf, saveMerge, saveUnmerge } from '@/features/customers/engine/merge';
 import { refreshCompanyCustomers } from '@/features/customers/engine/customers';
 import { enqueue, fetchQueueItem, issueNow, removeByClient, removeFromQueue, setBoost, type DeadlineRule } from '@/features/repeat-kanban/engine/queue';
@@ -140,6 +141,10 @@ const KEY_RE = /^[ckx]\d{1,12}$/;
 
 /** Заказчик действительно в списке этого менеджера (кэш «Моих заказчиков»). */
 async function ownsClient(managerId: string, clientKey: string): Promise<boolean> {
+  // Только что сменили менеджера из Монолитики, снимок ещё не пересчитан (reassigns.ts, 27.10):
+  // новый — уже хозяин, прежний — уже нет.
+  const mv = (await fetchRecentReassigns().catch(() => new Map<string, Reassign>())).get(clientKey);
+  if (mv) return mv.to === managerId;
   const rows = await fetchManagerCustomers(Number(managerId));
   return rows.some(r => r.clientKey === clientKey);
 }
