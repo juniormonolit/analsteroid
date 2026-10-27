@@ -5,7 +5,8 @@ import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import {
   loadSourceMap, loadDimensionResolver, resolveSourceIds, sourceIdsWhere, sourceIdMatcher,
-  loadManagerBranchMap, resolveBranchManagerIds, managerIdsWhere,
+  loadManagerBranchMap, loadManagerInfoMap, resolveBranchManagerIds, managerIdsWhere,
+  resolveDeptManagerIds, resolveTeamManagerIds, SOURCE_TEAM_SEP,
   NO_SOURCE_LABEL, UNDEFINED_LABEL, type SourceDimension,
 } from '@/lib/marketing/sources';
 import type { DateRange } from '@/lib/period';
@@ -42,7 +43,19 @@ const ROW_TTL = 10 * 60 * 1000;
 const _snapshotCache = new Map<string, { snap: Awaited<ReturnType<typeof fetchStageSnapshot>>; at: number }>();
 const SNAPSHOT_TTL = 2 * 60 * 1000;
 
-function dimForGroupBy(groupBy: 'source' | 'manager', whereExtra: string | undefined) {
+// 'source_manager' — разбивка по отделам (группировка «По отделам/филиалам» маркетинговых
+// отчётов): строка = пара «source_id | менеджер сделки», отдел берётся по менеджеру.
+type GroupBy = 'source' | 'manager' | 'source_manager';
+
+function dimForGroupBy(groupBy: GroupBy, whereExtra: string | undefined) {
+  if (groupBy === 'source_manager') {
+    return {
+      idExpr:          `COALESCE(d.source_id, '__null__') || '|' || COALESCE(d.current_manager_id::text, '__null__')`,
+      groupBy:         'GROUP BY d.source_id, d.current_manager_id, d.funnel_id',
+      notNullWhere:    whereExtra,
+      funnelBreakdown: true as const,
+    };
+  }
   return groupBy === 'source'
     ? {
         idExpr:          `COALESCE(d.source_id, '__null__')`,
@@ -59,7 +72,7 @@ function dimForGroupBy(groupBy: 'source' | 'manager', whereExtra: string | undef
 }
 
 async function getRows(
-  groupBy: 'source' | 'manager',
+  groupBy: GroupBy,
   fromIso: string,
   toExclIso: string,
   whereExtra: string | undefined,
@@ -86,7 +99,7 @@ async function getRows(
 
 // Снимок «Стадии (сейчас)» — БЕЗ периода, отдельный кэш (см. byManagers.ts).
 async function getSnapshot(
-  groupBy: 'source' | 'manager',
+  groupBy: GroupBy,
   whereExtra: string | undefined,
   cacheSuffix: string,
 ): Promise<Awaited<ReturnType<typeof fetchStageSnapshot>>> {
@@ -111,6 +124,16 @@ export interface BySourcesOptions {
   firstTouchFilter?: FirstTouchFilter;
   /** «Фильтр сделок» (задача 07.08): режет сам набор сделок отчёта. */
   dealFilters?: DealFilter[];
+  /** Фильтр «Отделы» (bitrix_department_id) — сделки менеджеров этих отделов (владелец 27.10). */
+  departmentIds?: string[];
+  /** Один отдел по uuid — дрилл строки «значение × отдел» (см. splitByTeam). */
+  teamId?: string;
+  /**
+   * Группировка «По отделам/филиалам» (владелец 27.10: «как в основных отчётах»): строка —
+   * пара «значение измерения × отдел менеджера сделки», id `${value}@@${teamId}`, с
+   * teamId/teamName/branchName — дальше клиент группирует её тем же applyClientGrouping.
+   */
+  splitByTeam?: boolean;
 }
 
 export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[]> {
@@ -119,6 +142,7 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   const dim        = opts.sourceDimension ?? 'brand';
   const filter     = opts.sourceFilter;
   const isBranchDim = dim === 'branch';
+  const split      = !!opts.splitByTeam;
   const createdTimeFilter = opts.createdTimeFilter ?? 'all';
   const firstTouchFilter  = opts.firstTouchFilter  ?? 'all';
 
@@ -152,6 +176,16 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
     }
     // source-измерение + source-фильтр → в памяти, SQL не трогаем
   }
+  // Отделы: фильтр отчёта и/или один отдел строки дрилла — по менеджеру сделки, в SQL.
+  const deptIds = [...(opts.departmentIds ?? [])].sort();
+  if (deptIds.length > 0) {
+    whereParts.push(managerIdsWhere(await resolveDeptManagerIds(deptIds)));
+    cacheSuffix += `|depts:${deptIds.join(',')}`;
+  }
+  if (opts.teamId) {
+    whereParts.push(managerIdsWhere(await resolveTeamManagerIds(opts.teamId)));
+    cacheSuffix += `|team:${opts.teamId}`;
+  }
   // Задача 1569: фильтры по нерабочему времени — не funnel-based, идут в SQL WHERE
   // (как фильтр противоположного типа выше), а не в постфактум-фильтр по funnel_id.
   // «Фильтр сделок» (задача 07.08) — той же дорогой: режет сделки, значит в
@@ -163,19 +197,22 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   cacheSuffix += `|offh:${createdTimeFilter}:${firstTouchFilter}|df:${df.key}`;
   const whereExtra = whereParts.length > 0 ? whereParts.join(' AND ') : undefined;
 
-  const rows = await getRows(isBranchDim ? 'manager' : 'source', fromIso, toExclIso, whereExtra, cacheSuffix);
+  // «Филиал» — менеджерское измерение: строки уже по менеджеру, отдел виден и так.
+  const groupBy: GroupBy = isBranchDim ? 'manager' : split ? 'source_manager' : 'source';
+  const rows = await getRows(groupBy, fromIso, toExclIso, whereExtra, cacheSuffix);
   // Снимок «Стадии (сейчас)» (задача 2059) — БЕЗ периода, отдельный кэш.
-  const snap = await getSnapshot(isBranchDim ? 'manager' : 'source', whereExtra, cacheSuffix);
+  const snap = await getSnapshot(groupBy, whereExtra, cacheSuffix);
   const { pillRows, workByDim } = snap;
   const allRows      = [...rows, ...pillRows] as FlatRow[];
   const allMetricIds = [...metricIds, ...STAGE_SNAPSHOT_METRIC_IDS];
 
-  const [funnels, sourceMap, mgrBranch, dimResolve] = await Promise.all([
+  const [funnels, sourceMap, mgrBranch, dimResolve, mgrInfo] = await Promise.all([
     loadFunnels(),
     loadSourceMap(),
     isBranchDim ? loadManagerBranchMap() : Promise.resolve(null),
     // Встроенные измерения и группировки «Ещё → Источники» (`g:<id>`) — одним резолвером.
     isBranchDim || dim === 'source' ? Promise.resolve(null) : loadDimensionResolver(dim as Exclude<SourceDimension, 'branch'>),
+    split ? loadManagerInfoMap() : Promise.resolve(null),
   ]);
 
   // Funnel-пилюли
@@ -202,49 +239,53 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
     allowed = sourceIdMatcher(await resolveSourceIds(filter.dimension, filter.value));
   }
 
-  // Резолвинг raw dimension_id → финальный groupId (та же логика, что и в основном
-  // цикле ниже) — переиспользуется отдельно для «Сделок в работе» (workByDim), у
-  // которой своя, НЕ funnel-пилюльная агрегация (см. stageSnapshot.ts).
-  function resolveGroupId(rid: string): string | null {
-    if (isBranchDim) {
-      return rid === '__null__' ? UNDEFINED_LABEL : (mgrBranch!.get(rid) ?? UNDEFINED_LABEL);
-    }
-    if (allowed !== null && !allowed(rid)) return null;
-    if (rid === '__null__') return '__null__';
-    if (dim === 'source') return rid;
-    return dimResolve!(rid);
+  // raw dimension_id → { источник/менеджер, менеджер для отдела }
+  function parseRid(rid: string): { src: string; mgr: string | null } {
+    if (isBranchDim) return { src: rid, mgr: rid };
+    if (groupBy !== 'source_manager') return { src: rid, mgr: null };
+    const i = rid.lastIndexOf('|');
+    return { src: rid.slice(0, i), mgr: rid.slice(i + 1) };
+  }
+  type Team = { id: string; name: string; branch: string | null };
+  function teamOf(mgr: string | null): Team | null {
+    if (!split) return null;
+    const info = mgr && mgr !== '__null__' ? mgrInfo!.get(mgr) : undefined;
+    return info?.departmentId
+      ? { id: info.departmentId, name: info.department ?? 'Без отдела', branch: info.branch }
+      : { id: '__no_team__', name: 'Без отдела', branch: info?.branch ?? null };
   }
 
-  // Агрегация по значению измерения
-  const agg = new Map<string, { name: string; metrics: Record<string, number> }>();
+  // Резолвинг raw dimension_id → { groupId, groupName } (одна логика для метрик и для
+  // «Сделок в работе» — workByDim, у которой своя, НЕ funnel-пилюльная агрегация).
+  function resolveGroup(rid: string): { id: string; name: string; team: Team | null } | null {
+    const { src, mgr } = parseRid(rid);
+    const team = teamOf(mgr);
+    let id: string, name: string;
+    if (isBranchDim) {
+      name = src === '__null__' ? UNDEFINED_LABEL : (mgrBranch!.get(src) ?? UNDEFINED_LABEL);
+      id = name;
+    } else {
+      if (allowed !== null && !allowed(src)) return null;
+      if (src === '__null__') { id = '__null__'; name = NO_SOURCE_LABEL; }
+      else if (dim === 'source') { id = src; name = sourceMap.get(src)?.name || `#${src}`; }
+      else { name = dimResolve!(src); id = name; }
+    }
+    return { id: team ? `${id}${SOURCE_TEAM_SEP}${team.id}` : id, name, team };
+  }
+
+  // Агрегация по значению измерения (× отдел при splitByTeam)
+  const agg = new Map<string, { name: string; team: Team | null; metrics: Record<string, number> }>();
   for (const row of allRows) {
     const passesNormal     = allowedFunnels === null || allowedFunnels.has(row.funnel_id);
     const passesScopeIndep = allowedFunnelsScopeIndep === null || allowedFunnelsScopeIndep.has(row.funnel_id);
     if (!passesNormal && !passesScopeIndep) continue;
-    const rid = row.dimension_id;
-    let groupId: string, groupName: string;
+    const g = resolveGroup(row.dimension_id);
+    if (!g) continue;
 
-    if (isBranchDim) {
-      // rid = manager_id → филиал менеджера
-      groupName = rid === '__null__' ? UNDEFINED_LABEL : (mgrBranch!.get(rid) ?? UNDEFINED_LABEL);
-      groupId = groupName;
-    } else {
-      if (allowed !== null && !allowed(rid)) continue;
-      if (rid === '__null__') {
-        groupId = '__null__'; groupName = NO_SOURCE_LABEL;
-      } else if (dim === 'source') {
-        const info = sourceMap.get(rid);
-        groupId = rid; groupName = info?.name || `#${rid}`;
-      } else {
-        groupName = dimResolve!(rid);
-        groupId = groupName;
-      }
+    if (!agg.has(g.id)) {
+      agg.set(g.id, { name: g.name, team: g.team, metrics: Object.fromEntries(allMetricIds.map(id => [id, 0])) });
     }
-
-    if (!agg.has(groupId)) {
-      agg.set(groupId, { name: groupName, metrics: Object.fromEntries(allMetricIds.map(id => [id, 0])) });
-    }
-    const e = agg.get(groupId)!;
+    const e = agg.get(g.id)!;
     for (const id of allMetricIds) {
       const passes = scopeIndependentIds.has(id) ? passesScopeIndep : passesNormal;
       if (!passes) continue;
@@ -254,23 +295,24 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   }
 
   // «Сделок в работе» (перв./повт./все) — НЕ funnel-пилюльная (см. stageSnapshot.ts),
-  // агрегируется по ТЕМ ЖЕ groupId, что и остальные метрики выше (resolveGroupId).
+  // агрегируется по ТЕМ ЖЕ groupId, что и остальные метрики выше.
   const workAgg = new Map<string, { primary: number; repeat: number; all: number }>();
   for (const [rid, w] of workByDim) {
-    const groupId = resolveGroupId(rid);
-    if (groupId === null || !agg.has(groupId)) continue;
-    let acc = workAgg.get(groupId);
-    if (!acc) { acc = { primary: 0, repeat: 0, all: 0 }; workAgg.set(groupId, acc); }
+    const g = resolveGroup(rid);
+    if (!g || !agg.has(g.id)) continue;
+    let acc = workAgg.get(g.id);
+    if (!acc) { acc = { primary: 0, repeat: 0, all: 0 }; workAgg.set(g.id, acc); }
     acc.primary += w.primary; acc.repeat += w.repeat; acc.all += w.all;
   }
 
-  return [...agg.entries()].map(([id, { name, metrics }]) => {
+  return [...agg.entries()].map(([id, { name, team, metrics }]) => {
     const work = workAgg.get(id);
     return {
       dimensionId:   id,
       dimensionName: name,
-      teamId:        null,
-      teamName:      null,
+      teamId:        team?.id ?? null,
+      teamName:      team?.name ?? null,
+      ...(team ? { branchName: team.branch } : {}),
       metrics: {
         ...Object.fromEntries(
           allMetricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null]),

@@ -44,3 +44,13 @@ export const UNDEFINED_LABEL = 'Не определён';
 // Источник не разложен ни в одну группу пользовательской группировки.
 export const UNASSIGNED_LABEL = 'Не распределено';
 export const NO_SOURCE_LABEL = 'Без источника';
+
+// Строка маркетингового отчёта при группировке «По отделам/филиалам» — пара «значение
+// измерения × отдел менеджера сделки»: id = `${value}@@${teamId}` (teamId — uuid отдела
+// или '__no_team__'). Без группировки id — само значение, как раньше.
+export const SOURCE_TEAM_SEP = '@@';
+export function splitSourceRowId(id: string): { value: string; teamId: string | null } {
+  const i = id.lastIndexOf(SOURCE_TEAM_SEP);
+  return i < 0 ? { value: id, teamId: null } : { value: id.slice(0, i), teamId: id.slice(i + SOURCE_TEAM_SEP.length) };
+}
+

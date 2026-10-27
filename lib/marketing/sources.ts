@@ -188,3 +188,37 @@ export function managerIdsWhere(ids: string[]): string {
   if (ids.length === 0) return '1=0';
   return `d.current_manager_id IN (${ids.join(',')})`;
 }
+
+/**
+ * Bitrix user id'ы менеджеров отделов отчёта (bitrix_department_id, как departmentIds в
+ * /api/reports/run) — фильтр «Отделы» маркетинговых отчётов режет сделки по менеджеру сделки.
+ */
+export async function resolveDeptManagerIds(bitrixDeptIds: string[]): Promise<string[]> {
+  if (bitrixDeptIds.length === 0) return [];
+  const res = await analyticsDb().query<{ id: string }>(
+    `SELECT DISTINCT manager_bitrix_user_id::text AS id
+       FROM sa.org_resolved_hierarchy
+      WHERE department_id IN (SELECT id FROM sa.departments WHERE bitrix_department_id::text = ANY($1::text[]))
+        AND is_active = true`,
+    [bitrixDeptIds],
+  );
+  return res.rows.map(r => r.id).filter(id => /^\d+$/.test(id));
+}
+
+/** Менеджеры одного отдела по его uuid (teamId строк отчёта, как в byManagers). */
+export async function resolveTeamManagerIds(teamId: string): Promise<string[]> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(teamId)) return [];
+  const res = await analyticsDb().query<{ id: string }>(
+    `SELECT manager_bitrix_user_id::text AS id FROM sa.org_resolved_hierarchy
+      WHERE department_id = $1::uuid AND is_active = true`,
+    [teamId],
+  );
+  return res.rows.map(r => r.id).filter(id => /^\d+$/.test(id));
+}
+
+/**
+ * Строка маркетингового отчёта в разбивке по отделам: «значение измерения @@ отдел».
+ * Дрилл и список сделок разбирают id обратно через splitSourceRowId.
+ */
+export { SOURCE_TEAM_SEP, splitSourceRowId } from './dimensions';
+

@@ -87,6 +87,10 @@ export async function POST(req: NextRequest) {
     productGroupIds, // раздел «Графики» (мультиселект, задача 29.07): пустой/undefined = все группы
     sourceDimension, // by-sources: main dimension (brand/platform/contact_type/ad_channel/branch/source)
     sourceFilter,    // drilldown: { dimension, value } — restrict deals to one dimension value
+    // Маркетинговые отчёты (владелец 27.10, «группировка по отделам как в основных»):
+    // splitByTeam — строки «значение × отдел»; teamId — дрилл такой строки (uuid отдела).
+    splitByTeam,
+    teamId: requestedTeamId,
     // Задача 1569: экспериментальные фильтры по нерабочему времени (сегментация,
     // НЕ персистится в SavedReport — см. FiltersMenu.tsx/SalesReportPage.tsx).
     createdTimeFilter = 'all' as CreatedTimeFilter,
@@ -264,6 +268,8 @@ export async function POST(req: NextRequest) {
   type MetricMap = Record<string, number | null>;
   let responseGrand: { cur: MetricMap; comp: MetricMap; groups: { cur: Record<'branch' | 'team', Record<string, MetricMap>>; comp: Record<'branch' | 'team', Record<string, MetricMap>> } } | null = null;
   let logistGrand: { cur: Record<string, number | null>; comp: Record<string, number | null> } | null = null;
+  // Отдел строки маркетингового отчёта (uuid) — режет и разбивку «Менеджеры» её дрилла.
+  const srcTeamId = typeof requestedTeamId === 'string' && requestedTeamId ? requestedTeamId : undefined;
   if (reportSlug === 'by-managers') {
     [currentRows, compRows] = await Promise.all([
       fetchByManagers({ ...opts, productGroupMode, productGroupId, productGroupIds, sourceFilter,
@@ -279,8 +285,8 @@ export async function POST(req: NextRequest) {
     ]);
   } else if (reportSlug === 'by-sources') {
     [currentRows, compRows] = await Promise.all([
-      fetchBySources({ period: opts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter, dealFilters }),
-      fetchBySources({ period: compOpts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter, dealFilters }),
+      fetchBySources({ period: opts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter, dealFilters, departmentIds, teamId: srcTeamId, splitByTeam: splitByTeam === true }),
+      fetchBySources({ period: compOpts.period, dealScope, clientType, sourceDimension, sourceFilter, createdTimeFilter, firstTouchFilter, dealFilters, departmentIds, teamId: srcTeamId, splitByTeam: splitByTeam === true }),
     ]);
   } else if (reportSlug === 'by-clients') {
     // Четвёртая стартовая сущность (задача 10.08): строка = клиент.
@@ -333,6 +339,11 @@ export async function POST(req: NextRequest) {
   }
 
 
+  // Дрилл «значение × отдел» → разбивка по менеджерам: только менеджеры этого отдела.
+  if (srcTeamId && reportSlug === 'by-managers') {
+    currentRows = currentRows.filter(r => (r.teamId ?? '__no_team__') === srcTeamId);
+    compRows = compRows.filter(r => (r.teamId ?? '__no_team__') === srcTeamId);
+  }
   currentRows = filterScopedRows(currentRows);
   compRows = filterScopedRows(compRows);
 

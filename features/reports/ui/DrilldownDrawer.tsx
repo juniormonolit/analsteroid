@@ -21,7 +21,7 @@ const CustomerCardLoader = dynamic(
   () => import('@/features/customers/ui/CustomerCardLoader').then(m => m.CustomerCardLoader),
   { ssr: false },
 );
-import { UNDEFINED_LABEL, UNASSIGNED_LABEL, NO_SOURCE_LABEL, isCustomDimension, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { UNDEFINED_LABEL, UNASSIGNED_LABEL, NO_SOURCE_LABEL, isCustomDimension, splitSourceRowId, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { useMarketingCatalog, useSourceDimensionOptions } from '@/features/marketing/lib/useMarketingCatalog';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { branchLabel } from '@/lib/org/branchLabel';
@@ -85,6 +85,17 @@ interface SubDrill {
   productGroup?: string;
   sourceDim?: SourceDimension;
   sourceVal?: string;
+  /** Отдел строки маркетингового отчёта в группировке по отделам (uuid). */
+  teamId?: string;
+}
+
+/**
+ * Параметры /api/reports/deals для строки маркетингового отчёта: при группировке по
+ * отделам id строки — «значение@@отдел» (bySources.ts), значит фильтр источника + отдел.
+ */
+function sourceRowDealParams(dim: SourceDimension, rowId: string): Record<string, string> {
+  const { value, teamId } = splitSourceRowId(rowId);
+  return { sourceDim: dim, sourceVal: value, ...(teamId ? { teamId } : {}) };
 }
 
 interface Props {
@@ -615,7 +626,8 @@ function baseDealParams(p: Pick<Props, 'period' | 'dealScope' | 'clientType' | '
     scope: p.dealScope,
     productGroupMode: p.productGroupMode,
     ...(p.clientType ? { clientType: p.clientType } : {}),
-    ...(p.dimensionType !== 'source' && p.departmentIds?.length ? { departmentIds: p.departmentIds.join(',') } : {}),
+    // Маркетинговые отчёты фильтруются по отделам с 27.10 — departmentIds и для них.
+    ...(p.departmentIds?.length ? { departmentIds: p.departmentIds.join(',') } : {}),
     // Тип аккаунтов — там, где срез отчёта менеджерский: «по менеджерам» и
     // «по периодам» в менеджерском разрезе (иначе список сделок бакета шире
     // цифры в ячейке ровно на сделки логистов).
@@ -832,7 +844,7 @@ function FlatDealsView({ target, dimensionType, periodDimension, period, dealSco
     : dimensionType === 'period' ? { all: '1' }
     : dimensionType === 'client' ? { contactId: target.id }
     : dimensionType === 'manager' ? { managerId: target.id }
-    : dimensionType === 'source' ? { sourceDim: sourceDimension ?? 'brand', sourceVal: target.id }
+    : dimensionType === 'source' ? sourceRowDealParams(sourceDimension ?? 'brand', target.id)
     : { productGroup: target.id };
   const params = new URLSearchParams({
     ...baseDealParams({ period, dealScope, clientType, productGroupMode, departmentIds, accountType, dimensionType, periodDimension, dealFilters, batch }),
@@ -850,6 +862,7 @@ function SubDealsView(props: Props & { sub: SubDrill; onBack: () => void }) {
     ...(sub.managerId ? { managerId: sub.managerId } : {}),
     ...(sub.productGroup !== undefined ? { productGroup: sub.productGroup } : {}),
     ...(sub.sourceDim && sub.sourceVal !== undefined ? { sourceDim: sub.sourceDim, sourceVal: sub.sourceVal } : {}),
+    ...(sub.teamId ? { teamId: sub.teamId } : {}),
     // «Итого» бакета: строка мини-отчёта не выбрана, сущностного фильтра нет —
     // /api/reports/deals требует хотя бы одно измерение, для этого случая all=1
     // (окно уже сужено до границ бакета в `period`).
@@ -1011,6 +1024,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
   const periodRowsAreManagers = periodDimension !== 'product-groups';
   const dealCols = dealFields ?? DEFAULT_DEAL_FIELDS;
   const mainDim = sourceDimension ?? 'brand';
+  const srcRow = splitSourceRowId(target.id);
   const dim: DrilldownDimension = drilldownDimension ?? 'contact_type';
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set()); // all collapsed by default
@@ -1061,7 +1075,10 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
     } : {
       reportSlug: dim === 'manager' ? 'by-managers' : 'by-sources',
       sourceDimension: dim === 'manager' ? undefined : dim,
-      sourceFilter: { dimension: mainDim, value: target.id },
+      sourceFilter: { dimension: mainDim, value: srcRow.value },
+      // Отдел строки (группировка по отделам) и фильтр «Отделы» отчёта режут и мини-отчёт.
+      ...(srcRow.teamId ? { teamId: srcRow.teamId } : {}),
+      departmentIds: departmentIds?.length ? departmentIds : undefined,
     };
 
   const { data: runData, isLoading } = useQuery({
@@ -1092,7 +1109,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
     ...(dimensionType === 'period' ? { all: '1' }
       : dimensionType === 'manager' ? { managerId: target.id }
       : dimensionType === 'product-group' ? { productGroup: target.id }
-      : { sourceDim: mainDim, sourceVal: target.id }),
+      : sourceRowDealParams(mainDim, target.id)),
   });
   const { data: dealData } = useQuery({
     queryKey: ['drill-mini-deals', dimensionType, periodDimension, mainDim, target.id, fromIso, toIso, dealScope, clientType, productGroupMode, departmentIds, accountType, dealFilters],
@@ -1189,7 +1206,7 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
     } else if (dimensionType === 'product-group') {
       onCellDrill({ ...base, productGroup: target.id, ...(isTotal ? {} : { managerId: dimensionId }) });
     } else {
-      onCellDrill({ ...base, sourceDim: mainDim, sourceVal: target.id, ...(isTotal ? {} : { managerId: dimensionId }) });
+      onCellDrill({ ...base, sourceDim: mainDim, sourceVal: srcRow.value, ...(srcRow.teamId ? { teamId: srcRow.teamId } : {}), ...(isTotal ? {} : { managerId: dimensionId }) });
     }
   }
 

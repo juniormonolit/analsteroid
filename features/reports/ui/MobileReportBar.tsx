@@ -147,11 +147,13 @@ export function MobileReportBar(props: Props) {
                 <SearchField search={search} onSearchChange={onSearchChange} widthClassName="w-full" />
               )}
 
-              {onSourceDimensionChange && sourceDimension !== undefined ? (
+              {onSourceDimensionChange && sourceDimension !== undefined && (
                 <SourceDimensionSelector sourceDimension={sourceDimension} onSourceDimensionChange={onSourceDimensionChange} stacked />
-              ) : onGroupingChange && grouping !== undefined ? (
+              )}
+              {/* Маркетинговые отчёты тоже группируются по отделам/филиалам (владелец 27.10) — оба контрола. */}
+              {onGroupingChange && grouping !== undefined && (
                 <GroupingSelector grouping={grouping} onGroupingChange={onGroupingChange} stacked options={groupingOptions} />
-              ) : null}
+              )}
 
               <div className="border-t border-[var(--color-border)] pt-4 flex flex-col gap-2.5 [&>button]:w-full [&>button]:justify-center [&>button]:py-2">
                 {!basic && <SettingsPanelButton {...settingsProps} />}

@@ -181,7 +181,7 @@ function applyUserGroups(rows: MergedRow[], groups: UserReportGroup[], metrics: 
   return [...groupRows, ...rest];
 }
 
-function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Metric[]): GroupedMergedRow[] {
+function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Metric[], headcountLabel: string | null = 'чел.'): GroupedMergedRow[] {
   if (grouping === 'none') return rows;
 
   if (grouping === 'total') {
@@ -225,7 +225,7 @@ function applyClientGrouping(rows: MergedRow[], grouping: Grouping, metrics: Met
         return {
           dimensionId: `__team__${tk}`,
           dimensionName: teamName,
-          dimensionSubtitle: `${headcount} чел.`,
+          ...(headcountLabel ? { dimensionSubtitle: `${headcount} ${headcountLabel}` } : {}),
           teamId: tk,
           teamName,
           branchName: branch,
@@ -986,7 +986,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const responseMode = RESPONSE_SLUGS.includes(reportSlug);
   const realizationMode = responseMode || REALIZATION_SLUGS.includes(reportSlug);
   const batchActive = batchAvailable && batchMode.on;
-  const queryKey = ['report', reportSlug, batchActive ? batchMode : null, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, createdTimeFilter, firstTouchFilter, dealFilters,
+  // Группировка маркетингового отчёта по отделам/филиалам — строки «значение × отдел» с сервера.
+  const sourceSplit = sourceMode && (grouping === 'team' || grouping === 'branch');
+  const queryKey = ['report', reportSlug, batchActive ? batchMode : null, period, comparison, dealScope, clientType, metricIdsForQuery, departmentIds, productGroupMode, accountType, sourceMode ? sourceDimension : null, sourceSplit, createdTimeFilter, firstTouchFilter, dealFilters,
     periodMode ? periodUnit : null, periodMode ? periodDimension : null, periodMode ? compareMode : null];
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
@@ -1006,6 +1008,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           productGroupMode,
           accountType,
           sourceDimension: sourceMode ? sourceDimension : undefined,
+          ...(sourceSplit ? { splitByTeam: true } : {}),
           createdTimeFilter,
           firstTouchFilter,
           dealFilters: dealFilters.length ? dealFilters : undefined,
@@ -1240,7 +1243,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
         grouped = [...hoisted, ...applyClientGrouping(inRows, grouping, groupingMetrics)];
       }
     } else {
-      grouped = applyClientGrouping(data?.rows ?? [], grouping, groupingMetrics);
+      // Строки маркетингового отчёта — не люди: «N чел.» у подытога отдела не пишем.
+      grouped = applyClientGrouping(data?.rows ?? [], grouping, groupingMetrics, sourceMode ? null : 'чел.');
     }
     if (!search.trim()) return grouped;
     const q = search.trim().toLowerCase();
@@ -1293,6 +1297,14 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     setMetricFilters({});
   }, []);
 
+  // Строка маркетингового отчёта «значение × отдел» (группировка по отделам) — в заголовке
+  // дрилла добавляем отдел, иначе «Авито» из разных отделов не различить.
+  const drillName = useCallback((id: string, name: string) => {
+    if (!sourceMode || !id.includes('@@')) return name;
+    const team = (data?.rows as MergedRow[] | undefined)?.find(r => r.dimensionId === id)?.teamName;
+    return team ? `${name} · ${team}` : name;
+  }, [sourceMode, data]);
+
   const applyRowClick = useCallback(
     (id: string, name: string) => {
       // «Ответы на запросы»: клик по имени строки — все её запросы (как ячейка «Все запросы»).
@@ -1308,10 +1320,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
       }
       if (id.startsWith('__team__')) setDrilldown({ id: id.slice('__team__'.length), name, kind: 'team' });
       else if (id.startsWith('__branch__')) setDrilldown({ id: id.slice('__branch__'.length), name, kind: 'branch' });
-      else setDrilldown({ id, name });
+      else setDrilldown({ id, name: drillName(id, name) });
     },
     // userGroups/dimensionType — дрилл пользовательских групп (задача 2653, этап 2)
-    [userGroups, dimensionType, reportSlug]
+    [userGroups, dimensionType, reportSlug, drillName]
   );
 
   // Клик по #логину менеджера (dimensionSubtitle) — только в отчёте «по менеджерам»
@@ -1386,10 +1398,10 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
       } else if (id.startsWith('__branch__')) {
         setDrilldown({ id: id.slice('__branch__'.length), name, metricId, metricName: m?.nameRu, kind: 'branch' });
       } else {
-        setDrilldown({ id, name, metricId, metricName: m?.nameRu });
+        setDrilldown({ id, name: drillName(id, name), metricId, metricName: m?.nameRu });
       }
     },
-    [catalogMetrics, availableMetrics, userGroups, userGroupFreeIds, dimensionType, reportSlug, data]
+    [catalogMetrics, availableMetrics, userGroups, userGroupFreeIds, dimensionType, reportSlug, data, drillName]
   );
 
   // «График из отчёта» (фича Серёги 01.08): открыть график динамики метрики для
@@ -1879,15 +1891,18 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           period, comparison, departmentIds, search,
           // Группировки по отделам/филиалам у строк-периодов нет: подытог «отдела»
           // внутри месяца — это уже другой отчёт (в него и ведёт дрилл бакета).
-          grouping: sourceMode || periodMode || clientMode ? undefined : grouping,
+          // Маркетинговые отчёты (by-sources) группируются по отделам/филиалам с 27.10: строки
+          // приходят парами «значение × отдел» (splitByTeam), см. bySources.ts.
+          grouping: periodMode || clientMode ? undefined : grouping,
           onPeriodChange: handlePeriodChange,
           onComparisonChange: setComparison,
           onDepartmentIdsChange: setDepartmentIds,
           onSearchChange: setSearch,
-          onGroupingChange: sourceMode || periodMode || clientMode ? undefined : setGrouping,
+          onGroupingChange: periodMode || clientMode ? undefined : setGrouping,
           // Сводка логистов: отделы оргструктуры к логистам не относятся (#8126).
           // «Ответы на запросы»: строки — снабженцы/проекты, отделы оргструктуры к ним не применяются.
-          showDepartments: !sourceMode && !REALIZATION_SLUGS.includes(reportSlug) && !responseMode,
+          // Маркетинг (27.10): фильтр отделов режет сделки по менеджеру сделки.
+          showDepartments: !REALIZATION_SLUGS.includes(reportSlug) && !responseMode,
           // Сводка логистов: группа строки = регион; «Регионы» — строки и есть регионы (#8126).
           // «Ответы на запросы»: у снабженцев группа = регион или департамент снабженца (подытоги —
           // срезы панели); у категорий подытогов нет (регион/департамент там — проекта).
