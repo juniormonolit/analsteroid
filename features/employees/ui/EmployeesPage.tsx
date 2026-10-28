@@ -5,6 +5,8 @@
 // раскрывающаяся история переименований логина (слот-модель: имя на логине меняется).
 // hire_date из sa.employees на проде не заполняется (подтверждено: пусто у всех) —
 // стаж живёт на ручной дате; пусто = честное «не заполнено», не нули.
+// Задача 11110: учётка = слот. Дата, поставленная при прежнем ФИО, — «не заполнено»
+// с подсказкой; заглушка на учётке (managerN, User N…) — вакансия, стажа нет.
 //
 // Задача 2771 (Серёга зашёл с телефона как админ, не увидел ЛК — «нужен список
 // всех менеджеров и РОПов, чтобы зайти к ним»): добавлены роль (колонка + текст
@@ -15,7 +17,7 @@
 // Читает: /manager/[id]?view=readonly — та же ManagerCardPage, что и обычный
 // ЛК, но принудительно read-only (см. ManagerCardPage.tsx, banner+forceReadOnly).
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { ChevronDown, ChevronRight, History, Search, UserCog } from 'lucide-react';
@@ -32,6 +34,8 @@ interface Row {
   isActive: boolean; hireDate: string | null; manualStartDate: string | null;
   startDate: string | null; notes: string; updatedBy: string | null; updatedAt: string | null;
   nameHistory: NameHistoryItem[]; orgRole: OrgRole;
+  // Задача 11110: стаж по человеку, а не по учётке.
+  manualStartName?: string | null; manualStale?: boolean; vacant?: boolean; personSince?: string | null;
 }
 
 type SortKey = 'name' | 'role' | 'startDate';
@@ -85,17 +89,34 @@ function StartDateCell({ row, onSave }: { row: Row; onSave: (v: string | null) =
   };
 
   if (!editing) {
+    // Задача 11110: дата от предыдущего человека на учётке — не стаж текущего.
+    // Коротко в ячейке, подробности — в подсказке по наведению.
+    const since = row.personSince ? ` с ${fmtDate(row.personSince)}` : '';
+    const hint = row.vacant
+      ? `вакансия${since}`
+      : row.manualStale ? `новый человек${since}` : null;
+    const title = row.vacant
+      ? `На учётке заглушка${since} — человека нет, стаж не считаем`
+      : row.manualStale
+        ? `Дата ${fmtDate(row.manualStartDate)} стояла у ${row.manualStartName ? `«${row.manualStartName}»` : 'прежнего человека'}. `
+          + `Учётка сменила хозяина${since} — проставьте дату начала для «${row.fullName}»`
+        : 'Изменить дату начала работы';
     return (
-      <button
-        type="button"
-        className="cursor-text rounded px-1.5 py-0.5 text-left hover:bg-[var(--color-bg-hover)]"
-        title="Изменить дату начала работы"
-        onClick={() => { setDraft(row.manualStartDate ?? row.startDate ?? ''); setError(null); setEditing(true); }}
-      >
-        {row.startDate
-          ? <span>{fmtDate(row.startDate)}{row.manualStartDate ? '' : ' (из синка)'}</span>
-          : <span className="text-[var(--color-text-muted)]">не заполнено</span>}
-      </button>
+      <span className="inline-flex flex-col items-start">
+        <button
+          type="button"
+          className="cursor-text rounded px-1.5 py-0.5 text-left hover:bg-[var(--color-bg-hover)]"
+          title={title}
+          onClick={() => { setDraft(row.startDate ?? ''); setError(null); setEditing(true); }}
+        >
+          {row.startDate
+            ? <span>{fmtDate(row.startDate)}</span>
+            : <span className="text-[var(--color-text-muted)]">{row.vacant ? '—' : 'не заполнено'}</span>}
+        </button>
+        {hint && (
+          <span className="whitespace-nowrap px-1.5 text-xs text-[var(--color-text-muted)]" title={title}>{hint}</span>
+        )}
+      </span>
     );
   }
   return (
@@ -128,6 +149,21 @@ export function EmployeesPage() {
   const [sort, setSort] = useState<SortState>(null);
   const [openHistory, setOpenHistory] = useState<Set<number>>(new Set());
   const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
+
+  // Поиск адресуем (правило «у каждого состояния есть URL»): ?q=2045 — так
+  // ведёт ссылка из пуша РОПу «учётка сменила хозяина» (задача 11110).
+  const urlReady = useRef(false);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('q');
+    if (q) setSearch(q);
+    urlReady.current = true;
+  }, []);
+  useEffect(() => {
+    if (!urlReady.current) return;
+    const url = new URL(window.location.href);
+    if (search.trim()) url.searchParams.set('q', search.trim()); else url.searchParams.delete('q');
+    window.history.replaceState(window.history.state, '', url);
+  }, [search]);
 
   const { data, isLoading, isError } = useQuery<{ rows: Row[]; canOpenCabinet: boolean }>({
     queryKey: ['employees'],
@@ -310,7 +346,9 @@ export function EmployeesPage() {
                         <StartDateCell row={r} onSave={(v) => saveDate(r.bitrixId, v)} />
                       </td>
                       <td className="px-3 py-1.5">
-                        {tenure ?? <span className="text-[var(--color-text-muted)]">не заполнено</span>}
+                        {r.vacant
+                          ? <span className="text-[var(--color-text-muted)]">—</span>
+                          : tenure ?? <span className="whitespace-nowrap text-[var(--color-text-muted)]">не заполнено</span>}
                       </td>
                       <td className="px-3 py-1.5">
                         {r.nameHistory.length > 0 ? (

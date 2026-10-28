@@ -29,6 +29,7 @@
 
 import type { PoolClient } from 'pg';
 import { analyticsDb } from '@/lib/db/clients';
+import { isOwnerChange, notifyOwnerChanges, type OwnerChange } from './tenureNotify';
 
 const OWNER_UID = '6';          // владелец — не РОП
 const DIRECTORATE_DEPT = '1';   // Дирекция — выше неё rop не поднимаем
@@ -42,6 +43,8 @@ interface BxManager {
 export interface OrgSyncResult {
   ok: true; departments: number; managers: number; backfilledHeads: number; renamed: number;
   phonesSynced: number; phonesSkipped: number; phonesErrors: number; phoneBatches: number;
+  /** Задача 11110: смен хозяина учётки (новый человек) и сколько РОПам ушло пушей. */
+  ownerChanges: number; ownerChangeNotified: number;
   ms: number;
 }
 
@@ -328,6 +331,7 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
     // 3. org_resolved_hierarchy + детект смены имени
     const now = new Date();
     let renamed = 0;
+    const ownerChanges: OwnerChange[] = []; // задача 11110 — пуш РОПу после коммита
     let phonesSynced = 0; // сколько строк sa.employees реально обновлено (значение отличалось)
     const seen: string[] = [];
     for (const m of mgr) {
@@ -357,6 +361,9 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
         await client.query('UPDATE sa.employee_name_history SET valid_to=$1 WHERE bitrix_user_id=$2 AND valid_to IS NULL', [now, uid]);
         await client.query('INSERT INTO sa.employee_name_history(bitrix_user_id,name,valid_from) VALUES($1,$2,$3)', [uid, name, now]);
         renamed++;
+        if (isActive && isOwnerChange(cur.rows[0].name, name)) {
+          ownerChanges.push({ bitrixId: uid, prevName: cur.rows[0].name, newName: name, ropId });
+        }
       }
 
       await client.query(
@@ -390,8 +397,16 @@ export async function runOrgSync(): Promise<OrgSyncResult> {
     await client.query('UPDATE sa.org_resolved_hierarchy SET is_active=false WHERE NOT (manager_bitrix_user_id = ANY($1))', [seen]);
 
     await client.query('COMMIT');
+    // Задача 11110: после коммита, best-effort — падение пуша синк не валит.
+    const ownerChangeNotified = ownerChanges.length
+      ? await notifyOwnerChanges(ownerChanges).catch((e) => {
+          console.warn('[org-sync] уведомления о смене хозяина учётки:', e instanceof Error ? e.message : e);
+          return 0;
+        })
+      : 0;
     return {
       ok: true, departments: bxdep.length, managers: mgr.length, backfilledHeads, renamed,
+      ownerChanges: ownerChanges.length, ownerChangeNotified,
       phonesSynced, phonesSkipped, phonesErrors, phoneBatches, ms: Date.now() - t0,
     };
   } catch (e) {

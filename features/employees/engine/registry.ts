@@ -25,6 +25,8 @@
 
 import { getAllRopAndDirectorIds } from '@/lib/org/callControlScope';
 import { analyticsDb } from '@/lib/db/clients';
+import { loadPersonSegments } from './segments';
+import { resolveTenure } from './personSegment';
 export { planRenameOps, normalizeName, type RenameOp } from './tenure';
 
 export interface DetectResult { seeded: number; renamed: number; skippedFlips: number; checkedAt: number }
@@ -47,8 +49,13 @@ export interface EmployeeListRow {
   isActive: boolean;
   hireDate: string | null;          // sa.employees больше не читаем (задача 2820) — всегда null,
                                      // осталось только для совместимости формы; стаж живёт на manualStartDate
-  manualStartDate: string | null;   // sa.employee_registry — правится в UI
-  startDate: string | null;         // COALESCE(manual, hire) — база стажа
+  manualStartDate: string | null;   // sa.employee_registry — правится в UI (как есть, даже устаревшая)
+  manualStartName: string | null;   // ФИО, при котором внесена ручная дата (задача 11110)
+  startDate: string | null;         // действующая дата начала: ручная, если поставлена при текущем ФИО
+  // Задача 11110: учётка = слот, стаж — по человеку.
+  manualStale: boolean;             // ручная дата есть, но от предыдущего человека
+  vacant: boolean;                  // на учётке заглушка (managerN, User N…)
+  personSince: string | null;       // начало отрезка текущего ФИО/вакансии (МСК), если известно
   notes: string;
   updatedBy: string | null;
   updatedAt: string | null;
@@ -62,7 +69,7 @@ export interface EmployeeListRow {
 
 export async function getEmployeesList(): Promise<EmployeeListRow[]> {
   const pool = analyticsDb();
-  const [rows, hist, orgRoles] = await Promise.all([
+  const [rows, segs, orgRoles] = await Promise.all([
     // Задача 2820: раньше водило sa.employees (211 строк, мёртвая заготовка
     // 13.06 — на проверке 03.08 отсутствовало 222 из 429 активных
     // сотрудников). Теперь водит sa.org_resolved_hierarchy — актуальная
@@ -72,6 +79,8 @@ export async function getEmployeesList(): Promise<EmployeeListRow[]> {
       `SELECT org.manager_bitrix_user_id::int AS bitrix_id, org.manager_name AS full_name, org.is_active,
               NULL::date AS hire_date,
               to_char(r.manual_start_date, 'YYYY-MM-DD') AS manual_start_date,
+              -- to_jsonb: не падаем, пока миграция sa_org/009 не накатана
+              to_jsonb(r) ->> 'manual_start_name' AS manual_start_name,
               coalesce(r.notes, '') AS notes, r.updated_by,
               to_char(r.updated_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD HH24:MI') AS updated_at,
               org.department_name, org.branch
@@ -79,25 +88,19 @@ export async function getEmployeesList(): Promise<EmployeeListRow[]> {
          LEFT JOIN sa.employee_registry r ON r.bitrix_id = org.manager_bitrix_user_id::int
         ORDER BY org.manager_name`,
     ),
-    pool.query(
-      `SELECT bitrix_user_id, name,
-              to_char(valid_from AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS valid_from,
-              to_char(valid_to   AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS valid_to
-         FROM sa.employee_name_history
-        ORDER BY valid_from, id`,
-    ),
+    loadPersonSegments(),
     getAllRopAndDirectorIds(),
   ]);
 
-  const histBy = new Map<string, NameHistoryItem[]>();
-  for (const r of hist.rows) {
-    const list = histBy.get(r.bitrix_user_id) ?? [];
-    list.push({ name: r.name, validFrom: r.valid_from, validTo: r.valid_to });
-    histBy.set(r.bitrix_user_id, list);
-  }
+  // История для раскрывашки — даты МСК, как раньше.
+  const toMsk = (iso: string) => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
 
   return rows.rows.map((r) => {
     const id = String(r.bitrix_id);
+    const seg = segs.byId.get(id) ?? null;
+    // Реестр: без фолбэка на начало отрезка — устаревшая/пустая дата = «не заполнено»,
+    // РОП видит подсказку и проставляет руками.
+    const t = resolveTenure(r.manual_start_date ?? null, r.manual_start_name ?? null, seg, false);
     const orgRole: EmployeeOrgRole = orgRoles.directorIds.has(id)
       ? 'director' : orgRoles.ropIds.has(id) ? 'rop' : 'manager';
     return {
@@ -108,11 +111,17 @@ export async function getEmployeesList(): Promise<EmployeeListRow[]> {
       isActive: !!r.is_active,
       hireDate: r.hire_date ?? null,
       manualStartDate: r.manual_start_date ?? null,
-      startDate: r.manual_start_date ?? r.hire_date ?? null,
+      manualStartName: r.manual_start_name ?? null,
+      startDate: t.startDate,
+      manualStale: t.manualStale,
+      vacant: t.vacant,
+      personSince: seg && (seg.knownStart || seg.vacant) ? seg.startDate : null,
       notes: r.notes,
       updatedBy: r.updated_by ?? null,
       updatedAt: r.updated_at ?? null,
-      nameHistory: histBy.get(String(r.bitrix_id)) ?? [],
+      nameHistory: (segs.historyById.get(id) ?? []).map(h => ({
+        name: h.name, validFrom: toMsk(h.validFrom), validTo: h.validTo ? toMsk(h.validTo) : null,
+      })),
       orgRole,
     };
   });
@@ -128,20 +137,44 @@ export async function upsertRegistry(
   updatedBy: string,
 ): Promise<void> {
   // DELETE junior_user сознательно не выдан — очистка даты идёт через UPDATE ... = NULL.
-  await analyticsDb().query(
-    `INSERT INTO sa.employee_registry (bitrix_id, manual_start_date, notes, updated_by, updated_at)
-     VALUES ($1, $2, coalesce($3, ''), $4, now())
-     ON CONFLICT (bitrix_id) DO UPDATE SET
-       manual_start_date = CASE WHEN $5 THEN $2 ELSE sa.employee_registry.manual_start_date END,
-       notes      = coalesce($3, sa.employee_registry.notes),
-       updated_by = $4,
-       updated_at = now()`,
-    [
-      bitrixId,
-      patch.manualStartDate ?? null,
-      patch.notes ?? null,
-      updatedBy,
-      patch.manualStartDate !== undefined, // менять дату только если поле пришло
-    ],
-  );
+  // Задача 11110: вместе с датой запоминаем ФИО, при котором её поставили
+  // (текущее открытое имя в sa.employee_name_history; нет истории — имя из оргструктуры).
+  const params = [
+    bitrixId,
+    patch.manualStartDate ?? null,
+    patch.notes ?? null,
+    updatedBy,
+    patch.manualStartDate !== undefined, // менять дату только если поле пришло
+  ];
+  try {
+    await analyticsDb().query(
+      `INSERT INTO sa.employee_registry (bitrix_id, manual_start_date, manual_start_name, notes, updated_by, updated_at)
+       VALUES ($1, $2, CASE WHEN $2::date IS NULL THEN NULL ELSE (
+                 coalesce((SELECT name FROM sa.employee_name_history WHERE bitrix_user_id = $1::text AND valid_to IS NULL
+                            ORDER BY valid_from DESC LIMIT 1),
+                          (SELECT manager_name FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id::int = $1))) END,
+               coalesce($3, ''), $4, now())
+       ON CONFLICT (bitrix_id) DO UPDATE SET
+         manual_start_date = CASE WHEN $5 THEN $2 ELSE sa.employee_registry.manual_start_date END,
+         manual_start_name = CASE WHEN $5 THEN EXCLUDED.manual_start_name ELSE sa.employee_registry.manual_start_name END,
+         notes      = coalesce($3, sa.employee_registry.notes),
+         updated_by = $4,
+         updated_at = now()`,
+      params,
+    );
+  } catch (e) {
+    // 42703 = колонки manual_start_name ещё нет (миграция sa_org/009 не накатана) —
+    // пишем по-старому, без ФИО.
+    if ((e as { code?: string }).code !== '42703') throw e;
+    await analyticsDb().query(
+      `INSERT INTO sa.employee_registry (bitrix_id, manual_start_date, notes, updated_by, updated_at)
+       VALUES ($1, $2, coalesce($3, ''), $4, now())
+       ON CONFLICT (bitrix_id) DO UPDATE SET
+         manual_start_date = CASE WHEN $5 THEN $2 ELSE sa.employee_registry.manual_start_date END,
+         notes      = coalesce($3, sa.employee_registry.notes),
+         updated_by = $4,
+         updated_at = now()`,
+      params,
+    );
+  }
 }
