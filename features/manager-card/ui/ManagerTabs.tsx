@@ -172,7 +172,7 @@ export interface LedgerRow {
   penalty_name: string | null; reversal_of: number | null; reversed: boolean;
 }
 export interface ProfileExtra {
-  tenure: { startDate: string; label: string | null } | null;
+  tenure: { startDate: string; label: string | null; source?: 'manual' | 'segment' | null } | null;
   ledger: LedgerRow[];
   rubBalance: number;
   rubToEballRate: number;
@@ -644,7 +644,10 @@ export function ProfileTab({ managerId, isSelf, card, onGoRewards, forceReadOnly
             <div className="mt-1 text-[13px] text-[var(--color-text-muted)]">
               Стаж: <b className="text-[var(--color-text)]">{extra?.tenure?.label ?? '—'}</b>
               {extra?.tenure?.startDate && (
-                <span className="ml-1">(с {extra.tenure.startDate.split('-').reverse().join('.')})</span>
+                <span className="ml-1"
+                  title={extra.tenure.source === 'segment' ? 'Дата начала не проставлена — считаем с момента, когда учётка перешла к вам' : undefined}>
+                  ({extra.tenure.source === 'segment' ? 'на учётке с' : 'с'} {extra.tenure.startDate.split('-').reverse().join('.')})
+                </span>
               )}
             </div>
           </div>
