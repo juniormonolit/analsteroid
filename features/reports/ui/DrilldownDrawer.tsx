@@ -35,6 +35,7 @@ import { PanelCloseTab } from '@/components/ui/PanelCloseTab';
 import { SLIDE_BACKDROP_BG } from '@/components/ui/SlideBackdrop';
 import { PeriodRangeControls, DepartmentPicker, GroupingSelector } from './FilterBar';
 import { FiltersMenu } from './FiltersMenu';
+import { ProductDetailView } from './ProductDetailView';
 
 export interface Deal {
   deal_id: number;
@@ -828,7 +829,7 @@ export function ClientDealsView({ target, dimensionType, period, dealScope, clie
 }
 
 // ── Flat deals view (grouping off / metric-filtered drill / group targets) ──
-function FlatDealsView({ target, dimensionType, periodDimension, period, dealScope, clientType, productGroupMode, dealFields, sourceDimension, departmentIds, accountType, onDealOpen, tableScale, dealFilters, batch }: Props) {
+function flatDealQuery({ target, dimensionType, periodDimension, period, dealScope, clientType, productGroupMode, sourceDimension, departmentIds, accountType, dealFilters, batch }: Props): URLSearchParams {
   // Групповые цели: отдел → teamId; филиал → менеджерское измерение branch;
   // «Итого» → весь срез (фильтры отчёта по отделам/типу аккаунтов — в baseDealParams)
   const dimensionParams: Record<string, string> =
@@ -851,7 +852,11 @@ function FlatDealsView({ target, dimensionType, periodDimension, period, dealSco
     ...dimensionParams,
     ...(target.metricId ? { metricFilter: target.metricId } : {}),
   });
-  return <DealsListBody query={params} dealFields={dealFields} onDealOpen={onDealOpen} tableScale={tableScale} />;
+  return params;
+}
+
+function FlatDealsView(props: Props) {
+  return <DealsListBody query={flatDealQuery(props)} dealFields={props.dealFields} onDealOpen={props.onDealOpen} tableScale={props.tableScale} />;
 }
 
 // ── Суб-дрилл: сделки по паре «цель × строка мини-отчёта» + метрика ─────────
@@ -1340,7 +1345,12 @@ export function DrilldownDrawer(props: Props) {
       setLocalGrouped(batchMode ? false : (grouped ?? true));
     }
   }, [grouped]);
+  // «По товарам: детально» (задача 28.10) — третий вид поверх тех же сделок, что
+  // и «Нет». Не сохраняется в отчёт (настройка отчёта — только Да/Нет), живёт,
+  // пока открыт дрилл.
+  const [productsView, setProductsView] = useState(false);
   function handleToggle(v: boolean) {
+    setProductsView(false);
     setLocalGrouped(v);
     setSub(null);
     // Explicit toggle is a report setting (saved with the report); the automatic
@@ -1374,10 +1384,10 @@ export function DrilldownDrawer(props: Props) {
             </h2>
             <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
               {format(localPeriod.from, 'd MMM', { locale: ru })} — {format(localPeriod.to, 'd MMM yyyy', { locale: ru })}
-              {localGrouped && (dimensionType === 'manager' ? ' · по товарным группам'
+              {productsView ? ' · по товарам: детально' : localGrouped && (dimensionType === 'manager' ? ' · по товарным группам'
                 : dimensionType === 'source' ? ` · по: ${dimLabelOf(drilldownDimension ?? 'contact_type').toLowerCase()}`
                 : ' · по менеджерам')}
-              {!localGrouped && ' · все сделки'}
+              {!productsView && !localGrouped && ' · все сделки'}
             </p>
           </div>
           <div className="flex items-center flex-wrap gap-2 sm:gap-3 shrink-0 ml-auto pl-2">
@@ -1394,22 +1404,27 @@ export function DrilldownDrawer(props: Props) {
                 />
               </>
             )}
-            {!isGroupTarget && (
-              <>
-                <span className="text-xs text-[var(--color-text-muted)]">Группировка</span>
-                <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
-                  {([true, false] as const).map(v => (
-                    <button
-                      key={String(v)}
-                      onClick={() => handleToggle(v)}
-                      className={`px-2.5 py-1 transition-colors ${localGrouped === v ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
-                    >
-                      {v ? 'Да' : 'Нет'}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
+            {/* Групповым целям «Да» недоступно (только плоский список), но разложить
+                их сделки по товарам можно — поэтому переключатель есть всегда. */}
+            <span className="text-xs text-[var(--color-text-muted)]">Группировка</span>
+            <div className="flex border border-[var(--color-border)] rounded-lg overflow-hidden text-xs">
+              {(isGroupTarget ? [false] as const : [true, false] as const).map(v => (
+                <button
+                  key={String(v)}
+                  onClick={() => handleToggle(v)}
+                  className={`px-2.5 py-1 transition-colors ${!productsView && (isGroupTarget ? !v : localGrouped === v) ?'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+                >
+                  {v ? 'Да' : 'Нет'}
+                </button>
+              ))}
+              <button
+                onClick={() => { setSub(null); setProductsView(true); }}
+                title="Все уникальные товары из сделок выборки: сколько сделок, продаж, отгрузок и отказов с каждым"
+                className={`px-2.5 py-1 whitespace-nowrap transition-colors ${productsView ? 'bg-[var(--color-accent)] text-[var(--color-text-inverse)]' : 'text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]'}`}
+              >
+                По товарам: детально
+              </button>
+            </div>
             <button onClick={requestClose} className="sm:hidden p-2 hover:bg-[var(--color-bg-hover)] rounded-lg transition-colors"><X size={18} /></button>
           </div>
         </div>
@@ -1452,7 +1467,12 @@ export function DrilldownDrawer(props: Props) {
               отчёте, где все выбранные метрики клиентские (витрина «Повторные») —
               раньше такие клики уводили в мини-отчёт по группам/менеджерам,
               бесполезный для клиентских чисел (баг-репорт владельца 17.08). */}
-          {dimensionType !== 'client'
+          {productsView
+            ? <ProductDetailView
+                query={flatDealQuery(viewProps)}
+                renderDeals={q => <DealsListBody query={q} dealFields={viewProps.dealFields} onDealOpen={setOpenDealId} tableScale={viewProps.tableScale} />}
+              />
+            : dimensionType !== 'client'
             && (
               (target.metricId && CLIENT_FAMILY_METRIC_IDS.includes(target.metricId))
               || (!target.metricId && metricIds.length > 0 && metricIds.every(id => CLIENT_FAMILY_METRIC_IDS.includes(id)))

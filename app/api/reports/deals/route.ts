@@ -13,6 +13,11 @@ import { buildDealFilterWhere, validateDealFilters, type DealFilter } from '@/li
 import { addDays, startOfDay } from 'date-fns';
 import { selectBatchDeals } from '@/features/reports/engine/dealBatches';
 import { getSessionScope, scopeDeptIdsBitrix, canSeeManager } from '@/lib/org/sessionScope';
+import { SERVICE_HEAD_GROUP_IDS } from '@/lib/metrics/serviceGroups';
+import {
+  PRODUCT_STATUSES, DEAL_PRODUCTS_ARR, productKeySql, productStatusStageWhere,
+  type ProductStatus, type ProductDetailResponse,
+} from '@/features/reports/engine/productDetail';
 
 // «Вошло в стадию: …» (метрики 107) — metricId → {stage_id группы, воронка}.
 // Дрилл обязан повторять семантику ячейки (stageEntered.ts): сделки, ВПЕРВЫЕ
@@ -477,6 +482,97 @@ export async function GET(req: NextRequest) {
     const allowed = [...access.managerIds].filter(id => /^\d+$/.test(id));
     if (allowed.length === 0) return NextResponse.json({ deals: [], total_count: 0, total_amount: 0 });
     dimensionFilter += ` AND ${managerIdsWhere(allowed)}`;
+  }
+
+  // «По товарам: детально» (задача 28.10, см. features/reports/engine/productDetail.ts):
+  // клик по цифре товара — те же сделки, суженные до «есть этот товар» + статус.
+  // Добавляется в dimensionFilter ПОСЛЕ всех веток выше (ветка managerId делает
+  // присваивание, не +=, и стёрла бы условие).
+  const productName = sp.get('productName');
+  const productStatus = sp.get('productStatus') as ProductStatus | null;
+  if (productName !== null) {
+    params.push(productName.trim() || '(без названия)');
+    dimensionFilter += ` AND EXISTS (SELECT 1 FROM jsonb_array_elements(${DEAL_PRODUCTS_ARR}) _pn
+      WHERE ${productKeySql('_pn')} = $${params.length})`;
+  }
+  if (productStatus && PRODUCT_STATUSES.includes(productStatus)) {
+    dimensionFilter += ` AND d.stage_id IN (SELECT id FROM stages WHERE ${productStatusStageWhere(productStatus, '')})`;
+  }
+
+  if (sp.get('mode') === 'products') {
+    // Тот же WHERE, что у списка и итога ниже, но без LIMIT — агрегат по всем
+    // сделкам выборки. Статусы — те же условия, что у фильтра productStatus выше.
+    const st = (s: ProductStatus) => productStatusStageWhere(s, 'l.st_');
+    const productsSql = `
+      WITH base AS (
+        SELECT d.deal_id, _ps.event_type AS st_event_type, _ps.name AS st_name, ${DEAL_PRODUCTS_ARR} AS prods
+        FROM deals d
+        ${extraJoin}
+        LEFT JOIN stages _ps ON _ps.id = d.stage_id
+        WHERE ${metricDateFilter}
+          ${dimensionFilter}
+          ${batchFilter}
+          ${funnelFilter}
+          ${clientFilter}
+          ${dealFilterWhere}
+      ),
+      lines AS (
+        SELECT b.deal_id, b.st_event_type, b.st_name,
+               ${productKeySql('pl')} AS product,
+               pl->>'head_group_name' AS grp,
+               (pl->>'head_group_id') IS NOT NULL
+                 AND (pl->>'head_group_id')::bigint IN (${SERVICE_HEAD_GROUP_IDS.join(', ')}) AS service,
+               COALESCE((pl->>'sum')::numeric, 0) AS line_sum
+        FROM base b, jsonb_array_elements(b.prods) pl
+      )
+      SELECT l.product,
+        mode() WITHIN GROUP (ORDER BY l.grp) AS grp,
+        bool_or(l.service) AS service,
+        COUNT(DISTINCT l.deal_id)::int AS deals,
+        COUNT(DISTINCT l.deal_id) FILTER (WHERE ${st('sale')})::int AS sold,
+        COUNT(DISTINCT l.deal_id) FILTER (WHERE ${st('shipment')})::int AS shipped,
+        COUNT(DISTINCT l.deal_id) FILTER (WHERE ${st('refusal')})::int AS lost,
+        COUNT(DISTINCT l.deal_id) FILTER (WHERE ${st('no_stock')})::int AS no_stock,
+        COUNT(DISTINCT l.deal_id) FILTER (WHERE ${st('expensive')})::int AS expensive,
+        SUM(l.line_sum) AS amount,
+        COALESCE(SUM(l.line_sum) FILTER (WHERE ${st('sale')}), 0) AS sold_amount,
+        COALESCE(SUM(l.line_sum) FILTER (WHERE ${st('shipment')}), 0) AS shipped_amount,
+        COALESCE(SUM(l.line_sum) FILTER (WHERE ${st('refusal')}), 0) AS lost_amount
+      FROM lines l
+      GROUP BY l.product
+      ORDER BY deals DESC, amount DESC
+      LIMIT 5000
+    `;
+    const productsTotalSql = `
+      SELECT COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE jsonb_array_length(${DEAL_PRODUCTS_ARR}) = 0)::int AS no_products
+      FROM deals d
+      ${extraJoin}
+      WHERE ${metricDateFilter}
+        ${dimensionFilter}
+        ${batchFilter}
+        ${funnelFilter}
+        ${clientFilter}
+        ${dealFilterWhere}
+    `;
+    const [pr, tr] = await Promise.all([
+      db.query<Record<string, string | number | boolean | null>>(productsSql, params),
+      db.query<{ total: number; no_products: number }>(productsTotalSql, params),
+    ]).catch(e => { console.error('[reports/deals] товары упали:', e instanceof Error ? e.message : e); throw e; });
+    const body: ProductDetailResponse = {
+      rows: pr.rows.map(r => ({
+        product: String(r.product),
+        group: (r.grp as string | null) ?? null,
+        service: !!r.service,
+        deals: Number(r.deals), sold: Number(r.sold), shipped: Number(r.shipped),
+        lost: Number(r.lost), noStock: Number(r.no_stock), expensive: Number(r.expensive),
+        amount: Number(r.amount), soldAmount: Number(r.sold_amount),
+        shippedAmount: Number(r.shipped_amount), lostAmount: Number(r.lost_amount),
+      })),
+      totalDeals: tr.rows[0]?.total ?? 0,
+      noProductDeals: tr.rows[0]?.no_products ?? 0,
+    };
+    return NextResponse.json(body);
   }
 
   const sql = `
