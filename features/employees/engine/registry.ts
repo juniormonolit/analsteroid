@@ -149,13 +149,14 @@ export async function upsertRegistry(
   try {
     await analyticsDb().query(
       `INSERT INTO sa.employee_registry (bitrix_id, manual_start_date, manual_start_name, notes, updated_by, updated_at)
-       VALUES ($1, $2, CASE WHEN $2::date IS NULL THEN NULL ELSE (
-                 coalesce((SELECT name FROM sa.employee_name_history WHERE bitrix_user_id = $1::text AND valid_to IS NULL
+       VALUES ($1::int, $2::date, CASE WHEN $2::date IS NULL THEN NULL ELSE (
+                 -- $1 явно int: иначе Postgres выводит тип параметра из ::text и падает на 42883
+                 coalesce((SELECT name FROM sa.employee_name_history WHERE bitrix_user_id = ($1::int)::text AND valid_to IS NULL
                             ORDER BY valid_from DESC LIMIT 1),
-                          (SELECT manager_name FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id::int = $1))) END,
+                          (SELECT manager_name FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = ($1::int)::text))) END,
                coalesce($3, ''), $4, now())
        ON CONFLICT (bitrix_id) DO UPDATE SET
-         manual_start_date = CASE WHEN $5 THEN $2 ELSE sa.employee_registry.manual_start_date END,
+         manual_start_date = CASE WHEN $5 THEN $2::date ELSE sa.employee_registry.manual_start_date END,
          manual_start_name = CASE WHEN $5 THEN EXCLUDED.manual_start_name ELSE sa.employee_registry.manual_start_name END,
          notes      = coalesce($3, sa.employee_registry.notes),
          updated_by = $4,

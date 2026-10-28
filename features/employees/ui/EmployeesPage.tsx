@@ -105,7 +105,7 @@ function StartDateCell({ row, onSave }: { row: Row; onSave: (v: string | null) =
       <span className="inline-flex flex-col items-start">
         <button
           type="button"
-          className="cursor-text rounded px-1.5 py-0.5 text-left hover:bg-[var(--color-bg-hover)]"
+          className="cursor-text whitespace-nowrap rounded px-1.5 py-0.5 text-left hover:bg-[var(--color-bg-hover)]"
           title={title}
           onClick={() => { setDraft(row.startDate ?? ''); setError(null); setEditing(true); }}
         >
@@ -114,7 +114,7 @@ function StartDateCell({ row, onSave }: { row: Row; onSave: (v: string | null) =
             : <span className="text-[var(--color-text-muted)]">{row.vacant ? '—' : 'не заполнено'}</span>}
         </button>
         {hint && (
-          <span className="whitespace-nowrap px-1.5 text-xs text-[var(--color-text-muted)]" title={title}>{hint}</span>
+          <span className="max-w-[150px] px-1.5 text-xs leading-snug text-[var(--color-text-muted)]" title={title}>{hint}</span>
         )}
       </span>
     );
