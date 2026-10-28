@@ -159,6 +159,7 @@ export function RepeatKanbanPage() {
   const setKpiHidden = (v: boolean) => { setKpiHiddenState(v); try { localStorage.setItem('repeatKanban.kpiHidden', v ? '1' : '0'); } catch { /* приватный режим */ } };
   const [selected, setSelected] = useState<Map<string, KanbanCard>>(new Map());
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBrakOpen, setBulkBrakOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
     queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shf, sht, q, limits],
@@ -480,7 +481,7 @@ export function RepeatKanbanPage() {
           </FiltersButton>
           {canManage && view !== 'today' && view !== 'queue' && (
             <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
-              title="Выбрать карточки: отметить галочками и поставить задачи всем разом" aria-label="Выбрать карточки"
+              title="Выбрать карточки: отметить галочками и поставить задачи или отправить в брак всем разом" aria-label="Выбрать карточки"
               className={selectMode ? BTN_ACTIVE : BTN_IDLE}>
               <CheckSquare size={16} /> <span className={selectMode ? '' : 'sm:hidden min-[112.5rem]:inline'}>{selectMode ? 'Отменить выбор' : 'Выбрать'}</span>
             </button>
@@ -572,10 +573,14 @@ export function RepeatKanbanPage() {
           <span className="text-sm text-[var(--color-text)]">Выбрано {rub.format(selected.size)}</span>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setSelected(new Map())} className={BTN_IDLE}>Снять выбор</button>
+            {/* Массовый брак (владелец 28.10): тот же путь, что «Сразу в брак», по каждой отмеченной. */}
+            <button type="button" onClick={() => setBulkBrakOpen(true)} className={`${BTN} border-[var(--color-negative)] text-[var(--color-negative)] hover:bg-[var(--color-bg-hover)]`}>В брак · {rub.format(selected.size)}</button>
             <button type="button" onClick={() => setBulkOpen(true)} className={BTN_ACTIVE}><Plus size={14} /> Поставить задачи · {rub.format(selected.size)}</button>
           </div>
         </div>
       )}
+      {bulkBrakOpen && <BulkBrakModal cards={[...selected.values()]} onClose={() => setBulkBrakOpen(false)}
+        onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
       {bulkOpen && <BulkTaskModal cards={[...selected.values()]} loadOf={loadOf} limit={taskLimit} reassign={reassignOpts}
         onClose={() => setBulkOpen(false)} onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
       {/^[ckx]\d{1,12}$/.test(cardKey) && (
@@ -1908,6 +1913,78 @@ function MergeModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: () 
         </div>
       </div>
       )}
+    </Modal>
+  );
+}
+
+/** Массовый брак (владелец 28.10): общие причина и комментарий; по каждой карточке — «Сразу в брак» (отметка брака,
+ *  открытая повторная сделка закрывается в Битриксе в стадию по причине). По одной, с прогрессом и ошибками. */
+function BulkBrakModal({ cards: initial, onClose, onDone }: { cards: KanbanCard[]; onClose: () => void; onDone: () => void }) {
+  // Список фиксируем при открытии: onDone снимает выбор, а окно с итогом ещё открыто.
+  const [cards] = useState(initial);
+  const [reason, setReason] = useState<string>('nothing_needed');
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(0);
+  const [errors, setErrors] = useState<{ name: string; error: string }[]>([]);
+  const [finished, setFinished] = useState(false);
+  const withDeal = cards.filter(c => c.deal && !LOST_STAGES.has(c.deal.stageId) && !WON_STAGES.has(c.deal.stageId)).length;
+  const submit = async () => {
+    if (!confirm(`Отправить в брак ${cards.length} ${plural(cards.length, 'заказчика', 'заказчиков', 'заказчиков')}?${withDeal ? ` Открытые сделки (${withDeal}) закроются в Битриксе.` : ''}`)) return;
+    setBusy(true); setDone(0); setErrors([]);
+    const errs: { name: string; error: string }[] = [];
+    for (const c of cards) {
+      try {
+        await post({ action: 'brak_now', clientKey: c.clientKey, managerId: c.managerId, column: c.column, reason, comment, dealId: c.deal?.dealId ?? c.openDealInBrak ?? undefined });
+      } catch (e) { errs.push({ name: cardName(c), error: e instanceof Error ? e.message : String(e) }); }
+      setDone(n => n + 1);
+    }
+    setErrors(errs); setBusy(false); setFinished(true);
+    onDone();
+  };
+  return (
+    <Modal open onOpenChange={o => { if (!o && !busy) onClose(); }} title={`В брак · ${cards.length} ${plural(cards.length, 'заказчик', 'заказчика', 'заказчиков')}`} desktopWidth="sm:max-w-md">
+      <div className="flex flex-col gap-3 text-sm">
+        {finished ? (
+          <>
+            <p className="text-[var(--color-text)]">Готово: в брак {cards.length - errors.length} из {cards.length}.</p>
+            {errors.length > 0 && (
+              <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto text-[12.5px]">
+                {errors.map((e, i) => <li key={i}><b>{e.name}</b>: <span className="text-[var(--color-negative)]">{e.error}</span></li>)}
+              </ul>
+            )}
+            <div className="flex justify-end"><button type="button" onClick={onClose} className="min-h-11 rounded-lg bg-[var(--color-accent)] px-4 text-white">Закрыть</button></div>
+          </>
+        ) : (
+          <>
+            <div className="text-[var(--color-text-secondary)]">
+              Все отмеченные заказчики уйдут в «Брак» без разбора отказа — с одной причиной и комментарием.
+              {withDeal ? ` У ${withDeal} открыта повторная сделка — она закроется в Битриксе в отказную стадию по причине, комментарий — в ленту сделки.` : ''}
+              {' '}Вернуть можно кнопкой «Снять брак».
+            </div>
+            <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+              Причина
+              <SearchSelect ariaLabel="Причина брака" value={reason} onChange={setReason}
+                options={BRAK_REASONS.map(r => ({ value: r.value, label: r.label }))} className="w-full justify-start bg-[var(--color-bg)]" />
+            </label>
+            <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
+              Комментарий (всем)
+              <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3} placeholder="Разовые покупки, повторов не будет" className={fieldCls} />
+            </label>
+            {busy && (
+              <div className="flex flex-col gap-1">
+                <div className="h-2 overflow-hidden rounded bg-[var(--color-bg-hover)]"><div className="h-full bg-[var(--color-negative)]" style={{ width: `${(done / cards.length) * 100}%` }} /></div>
+                <span className="text-[12px] text-[var(--color-text-muted)]">{done} из {cards.length}…</span>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={onClose} disabled={busy} className="min-h-11 rounded-lg px-4 text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50">Отмена</button>
+              <button type="button" disabled={busy} onClick={submit}
+                className="min-h-11 rounded-lg bg-[var(--color-negative)] px-4 text-white disabled:opacity-50">{busy ? 'Отправляю…' : `В брак · ${cards.length}`}</button>
+            </div>
+          </>
+        )}
+      </div>
     </Modal>
   );
 }
