@@ -9,7 +9,8 @@ import { ManagerPicker, Segmented } from './TransitionMatrixPage';
 import { applyPreset, calendarComparisonForPreset, type DateRange } from '@/lib/period';
 import type { ClientType, ProductGroupMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import type { DealFilter } from '@/lib/metrics/dealFilters';
-import type { ClientTailResult, GroupRow } from '@/features/reports/engine/clientTail';
+import type { ClientTailResult, GroupRow, DrillKind } from '@/features/reports/engine/clientTail';
+import { ClientTailDrillModal, type DrillStep } from './ClientTailDrillModal';
 
 // «Вход и хвост» (задача владельца 19.10). Слева — сделки по фильтрам отчёта
 // («с чего заходят»), справа — что ЭТИ ЖЕ клиенты купили после («хвост»), внизу —
@@ -46,20 +47,38 @@ async function fetchTail(body: unknown): Promise<ClientTailResult> {
   return res.json();
 }
 
-/** label — что это, how — как считаем (виден всегда), sub — доп. цифра. */
-function Kpi({ label, value, how, sub, accent = false }: { label: string; value: string; how: string; sub?: string; accent?: boolean }) {
+/** Цифра-ссылка дрилла (задача владельца 28.10): подчёркнута пунктиром, чтобы
+ *  было видно, что в неё можно провалиться; на таче — зона нажатия 44px. */
+function DrillNum({ value, onClick, title }: { value: string; onClick?: () => void; title?: string }) {
+  if (!onClick || value === '0' || value === '—') return <>{value}</>;
+  return (
+    <button type="button" onClick={onClick} title={title}
+      className="tap-target tabular-nums underline decoration-dotted underline-offset-2 hover:text-[var(--color-accent)]">
+      {value}
+    </button>
+  );
+}
+
+/** label — что это, how — как считаем (виден всегда), sub — доп. цифра;
+ *  onDrill — цифра кликабельна (дрилл в сделки/клиентов). */
+function Kpi({ label, value, how, sub, accent = false, onDrill }: {
+  label: string; value: string; how: string; sub?: string; accent?: boolean; onDrill?: () => void;
+}) {
   return (
     <div className="min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2">
       <div className="text-[11px] font-medium text-[var(--color-text)]">{label}</div>
-      <div className={`text-base sm:text-lg font-semibold tabular-nums truncate ${accent ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>{value}</div>
+      <div className={`text-base sm:text-lg font-semibold tabular-nums truncate ${accent ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>
+        <DrillNum value={value} onClick={onDrill} title="Открыть список" />
+      </div>
       {sub && <div className="text-[11px] text-[var(--color-text)] tabular-nums">{sub}</div>}
       <div className="mt-0.5 text-[10px] leading-snug text-[var(--color-text-muted)]">{how}</div>
     </div>
   );
 }
 
-function GroupTable({ rows, total, scopeLabel, showAlsoCut = false, legend }: {
+function GroupTable({ rows, total, scopeLabel, showAlsoCut = false, legend, onDrill }: {
   rows: GroupRow[]; total: number; scopeLabel: string; showAlsoCut?: boolean; legend: string;
+  onDrill: (kind: DrillKind, group: string) => void;
 }) {
   if (rows.length === 0) {
     return <div className="py-6 text-center text-xs text-[var(--color-text-muted)]">Нет сделок и отгрузок</div>;
@@ -91,10 +110,10 @@ function GroupTable({ rows, total, scopeLabel, showAlsoCut = false, legend }: {
                 </td>
                 <td className="py-1.5 px-2 whitespace-nowrap">{r.amount ? rub(r.amount) : '—'}</td>
                 <td className="py-1.5 px-2">{share.toFixed(share >= 10 ? 0 : 1)}%</td>
-                <td className="py-1.5 px-2">{num(r.created)}</td>
-                <td className="py-1.5 px-2">{num(r.shipments)}</td>
+                <td className="py-1.5 px-2"><DrillNum value={num(r.created)} onClick={() => onDrill('created', r.group)} title="Открыть сделки" /></td>
+                <td className="py-1.5 px-2"><DrillNum value={num(r.shipments)} onClick={() => onDrill('shipments', r.group)} title="Открыть отгрузки" /></td>
                 <td className="py-1.5 px-2">{cr(r.shipments, r.created)}</td>
-                <td className="py-1.5 pl-2">{num(r.clients)}</td>
+                <td className="py-1.5 pl-2"><DrillNum value={num(r.clients)} onClick={() => onDrill('clients', r.group)} title="Открыть клиентов" /></td>
                 {showAlsoCut && <td className="py-1.5 pl-2 whitespace-nowrap text-[var(--color-text-muted)]">{r.alsoCutAmount ? rub(r.alsoCutAmount) : '—'}</td>}
               </tr>
             );
@@ -102,7 +121,7 @@ function GroupTable({ rows, total, scopeLabel, showAlsoCut = false, legend }: {
         </tbody>
       </table>
     </div>
-    <p className="text-[10px] leading-snug text-[var(--color-text-muted)]">{legend}</p>
+    <p className="text-[10px] leading-snug text-[var(--color-text-muted)]">{legend} Подчёркнутые цифры открывают список сделок или клиентов.</p>
     </div>
   );
 }
@@ -131,6 +150,8 @@ export function ClientTailPage() {
   const [firstTouchFilter, setFirstTouchFilter] = useState<FirstTouchFilter>('all');
   const [dealFilters, setDealFilters] = useState<DealFilter[]>([]);
   const [win, setWin] = useState<Window>('all');
+  // Открытый дрилл (задача владельца 28.10) — что раскрыли и подпись окна.
+  const [drill, setDrill] = useState<DrillStep | null>(null);
 
   const { data: pgData, isLoading: pgLoading } = useQuery<{ groups: ProductGroupOption[] }>({
     queryKey: ['catalog-product-groups', productGroupMode],
@@ -166,6 +187,15 @@ export function ClientTailPage() {
   const t = data?.tail;
   const multiplier = e && t && e.amount > 0 ? (e.amount + t.amount) / e.amount : null;
   const scope = 'первичные';
+  const KIND_LABEL: Record<DrillKind, string> = { created: 'сделки', shipments: 'отгрузки', clients: 'клиенты' };
+  const openDrill = (side: 'entry' | 'tail', kind: DrillKind, group: string | null) => setDrill({
+    target: { side, kind, group, contactId: null },
+    title: `${side === 'entry' ? 'Вход' : 'Хвост'} · ${KIND_LABEL[kind]}${side === 'entry' && kind !== 'clients' ? ` (${scope})` : ''}${group ? ` · ${group}` : ''}`,
+  });
+  const openClient = (contactId: string, name: string | null) => setDrill({
+    target: { side: 'both', kind: 'shipments', group: null, contactId },
+    title: `${name ?? `Контакт #${contactId}`} — входные и хвостовые отгрузки`,
+  });
   const tailWindow = win === 'all' ? 'до сегодня' : `в течение ${win} мес.`;
   const scenarios = e && t ? [
     {
@@ -238,13 +268,13 @@ export function ClientTailPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Kpi label="Выручка входа" value={rub(e.amount)} sub={perMonth(e.amount)} accent
                     how="Сумма сделок по фильтрам, отгруженных в периоде" />
-                  <Kpi label={`Сделки (${scope})`} value={num(e.created)}
+                  <Kpi label={`Сделки (${scope})`} value={num(e.created)} onDrill={() => openDrill('entry', 'created', null)}
                     how="Созданы в периоде, те же фильтры" />
-                  <Kpi label={`Отгрузки (${scope})`} value={num(e.shipments)} sub={e.shipments ? `ср. чек ${rub(e.amount / e.shipments)}` : undefined}
+                  <Kpi label={`Отгрузки (${scope})`} value={num(e.shipments)} onDrill={() => openDrill('entry', 'shipments', null)} sub={e.shipments ? `ср. чек ${rub(e.amount / e.shipments)}` : undefined}
                     how="Отгружены в периоде, те же фильтры" />
                   <Kpi label={`CR Сделка → Отгрузка (${scope})`} value={cr(e.shipments, e.created)}
                     how="Отгрузки периода ÷ сделки периода (события окна, не путь одних и тех же сделок)" />
-                  <Kpi label="Клиентов во входе" value={num(e.clients)}
+                  <Kpi label="Клиентов во входе" value={num(e.clients)} onDrill={() => openDrill('entry', 'clients', null)}
                     how="Разных клиентов с входной отгрузкой — по ним считается хвост" />
                 </div>
                 {e.noClientDeals > 0 && (
@@ -253,6 +283,7 @@ export function ClientTailPage() {
                   </p>
                 )}
                 <GroupTable rows={data.entryByGroup} total={e.amount} scopeLabel={scope}
+                  onDrill={(kind, group) => openDrill('entry', kind, group)}
                   legend="Группа — по наибольшей позиции сделки. Выручка и отгрузки — по дате отгрузки в периоде, сделки — по дате создания в периоде; CR = отгрузки ÷ сделки группы. Клиентов — с отгрузкой этой группы." />
               </Card>
 
@@ -263,13 +294,13 @@ export function ClientTailPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   <Kpi label="Выручка хвоста" value={rub(t.amount)} accent
                     how="Сумма отгрузок этих клиентов после первой входной" />
-                  <Kpi label="Сделки (все воронки)" value={num(t.created)}
+                  <Kpi label="Сделки (все воронки)" value={num(t.created)} onDrill={() => openDrill('tail', 'created', null)}
                     how="Созданы этими клиентами после первой входной отгрузки" />
-                  <Kpi label="Отгрузки (все воронки)" value={num(t.shipments)} sub={t.shipments ? `ср. чек ${rub(t.amount / t.shipments)}` : undefined}
+                  <Kpi label="Отгрузки (все воронки)" value={num(t.shipments)} onDrill={() => openDrill('tail', 'shipments', null)} sub={t.shipments ? `ср. чек ${rub(t.amount / t.shipments)}` : undefined}
                     how="Отгружены после первой входной, кроме самих входных" />
                   <Kpi label="CR Сделка → Отгрузка" value={cr(t.shipments, t.created)}
                     how="Отгрузки хвоста ÷ сделки хвоста" />
-                  <Kpi label="Клиентов с хвостом" value={num(t.clients)} sub={e.clients ? `${Math.round((t.clients / e.clients) * 100)}% из ${num(e.clients)}` : undefined}
+                  <Kpi label="Клиентов с хвостом" value={num(t.clients)} onDrill={() => openDrill('tail', 'clients', null)} sub={e.clients ? `${Math.round((t.clients / e.clients) * 100)}% из ${num(e.clients)}` : undefined}
                     how="Сколько клиентов входа потом ещё что-то купили" />
                   <Kpi label="Хвост к входу" value={multiplier ? `×${multiplier.toFixed(1).replace('.', ',')}` : '—'}
                     how="(Выручка входа + хвоста) ÷ выручка входа" />
@@ -278,6 +309,7 @@ export function ClientTailPage() {
                   {t.alsoCutAmount > 0 && <>Из хвоста {rub(t.alsoCutAmount)} ({num(t.alsoCutDeals)} отгр.) сами подходят под фильтры входа (только позже периода) — их бы тоже отсекли.</>}
                 </p>
                 <GroupTable rows={data.tailByGroup} total={t.amount} scopeLabel="все воронки" showAlsoCut
+                  onDrill={(kind, group) => openDrill('tail', kind, group)}
                   legend="Группа — по наибольшей позиции сделки. Отгрузки и сделки хвоста — после первой входной отгрузки клиента; CR = отгрузки ÷ сделки группы. «Тоже под отсеч.» — выручка тех отгрузок хвоста, что сами подходят под фильтры входа." />
               </Card>
             </div>
@@ -306,7 +338,7 @@ export function ClientTailPage() {
 
             <Card
               title="Клиенты"
-              hint={`Топ-${data.clients.length} из ${num(data.clientsTotal)} клиентов входа по выручке хвоста.`}
+              hint={`Топ-${data.clients.length} из ${num(data.clientsTotal)} клиентов входа по выручке хвоста. Нажмите на имя — откроются его входные и хвостовые отгрузки.`}
             >
               <div className="scroll-x">
                 <table className="w-full text-sm">
@@ -323,14 +355,18 @@ export function ClientTailPage() {
                     {data.clients.map(c => (
                       <tr key={c.contactId} className="border-t border-[var(--color-border)] text-right tabular-nums align-top">
                         <td className="text-left py-1.5 pr-2 max-w-[220px]">
-                          <a
-                            href={`https://td.monolit-crm.ru/crm/contact/details/${c.contactId}/`}
-                            target="_blank" rel="noreferrer"
-                            className="inline-flex items-center gap-1 max-w-full hover:text-[var(--color-accent)]"
-                          >
-                            <span className="truncate">{c.name ?? `Контакт #${c.contactId}`}</span>
-                            <ExternalLink size={11} className="shrink-0 text-[var(--color-text-muted)]" />
-                          </a>
+                          <div className="flex items-center gap-1 min-w-0">
+                            <button type="button" onClick={() => openClient(c.contactId, c.name)}
+                              title="Открыть входные и хвостовые отгрузки клиента"
+                              className="min-h-11 sm:min-h-0 text-left truncate underline decoration-dotted underline-offset-2 hover:text-[var(--color-accent)]">
+                              {c.name ?? `Контакт #${c.contactId}`}
+                            </button>
+                            <a href={`https://td.monolit-crm.ru/crm/contact/details/${c.contactId}/`}
+                              target="_blank" rel="noreferrer" aria-label="Открыть в Битриксе"
+                              className="tap-target shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-accent)]">
+                              <ExternalLink size={11} />
+                            </a>
+                          </div>
                         </td>
                         <td className="py-1.5 px-2 whitespace-nowrap">{new Date(c.firstEntryAt).toLocaleDateString('ru-RU')}</td>
                         <td className="py-1.5 px-2 whitespace-nowrap">{rub(c.entryAmount)}<div className="text-[10px] text-[var(--color-text-muted)]">{c.entryShipments} отгр.</div></td>
@@ -349,6 +385,7 @@ export function ClientTailPage() {
           </>
         )}
       </div>
+      {drill && <ClientTailDrillModal filters={body} initial={drill} onClose={() => setDrill(null)} />}
     </div>
   );
 }

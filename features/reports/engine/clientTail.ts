@@ -65,7 +65,10 @@ export interface ClientTailResult {
   clientsTotal: number;
 }
 
-export async function fetchClientTail(opts: ClientTailOptions): Promise<ClientTailResult> {
+/** Общие CTE отчёта (entry / clients / hist / entry_created / tail_created / tail) —
+ *  одни и те же для сводки и для дрилла, чтобы список сделок в окне дрилла всегда
+ *  совпадал с цифрой, по которой кликнули. */
+function buildScope(opts: ClientTailOptions): { ctes: string; params: unknown[]; key: string } {
   const fromIso = opts.period.from.toISOString();
   const toExclIso = addDays(startOfDay(opts.period.to), 1).toISOString();
 
@@ -94,10 +97,8 @@ export async function fetchClientTail(opts: ClientTailOptions): Promise<ClientTa
   const windowMonths = opts.windowMonths && opts.windowMonths > 0 ? Math.min(Math.round(opts.windowMonths), 120) : null;
   params.push(windowMonths);
   const pWindow = `$${params.length}::int`;
-  params.push(TOP_CLIENTS);
-  const pTop = `$${params.length}::int`;
 
-  const sql = `
+  const ctes = `
 WITH entry AS (
   SELECT d.deal_id, d.contact_id, d.delivered_at, d.amount,
          COALESCE(d.head_group_name, 'Без группы') AS grp
@@ -123,14 +124,16 @@ hist AS (
      AND NOT EXISTS (SELECT 1 FROM entry e WHERE e.deal_id = d.deal_id)
 ),
 entry_created AS (
-  SELECT COALESCE(d.head_group_name, 'Без группы') AS grp
+  SELECT d.deal_id, d.contact_id, d.created_at, d.amount,
+         COALESCE(d.head_group_name, 'Без группы') AS grp
     FROM sa.deals d
    WHERE d.created_at >= $1 AND d.created_at < $2
      AND d.funnel_id NOT IN ${EXCLUDED_FUNNELS}
      AND ${match}
 ),
 tail_created AS (
-  SELECT COALESCE(d.head_group_name, 'Без группы') AS grp
+  SELECT d.deal_id, d.contact_id, d.created_at, d.amount,
+         COALESCE(d.head_group_name, 'Без группы') AS grp
     FROM sa.deals d
     JOIN clients c ON c.contact_id = d.contact_id
    WHERE d.created_at >= c.first_entry_at
@@ -142,7 +145,19 @@ tail AS (
   SELECT h.* FROM hist h
    WHERE h.delivered_at >= h.first_entry_at
      AND (${pWindow} IS NULL OR h.delivered_at < h.first_entry_at + make_interval(months => ${pWindow}))
-),
+)`;
+
+  const key = [fromIso, toExclIso, managerIds.join(','), [...deptIds].sort().join(','),
+    common.key, windowMonths ?? 'all'].join('|');
+  return { ctes, params, key };
+}
+
+export async function fetchClientTail(opts: ClientTailOptions): Promise<ClientTailResult> {
+  const { ctes, params: baseParams, key } = buildScope(opts);
+  const params = [...baseParams, TOP_CLIENTS];
+  const pTop = `$${params.length}::int`;
+
+  const sql = `${ctes},
 per_client AS (
   SELECT c.contact_id, c.first_entry_at, c.entry_shipments, c.entry_amount,
          COALESCE(t.shipments, 0) AS tail_shipments, COALESCE(t.amount, 0) AS tail_amount,
@@ -187,9 +202,6 @@ SELECT json_build_object(
         FROM per_client ORDER BY tail_amount DESC, entry_amount DESC LIMIT ${pTop}) r)
 ) AS result`;
 
-  const key = [fromIso, toExclIso, managerIds.join(','), [...deptIds].sort().join(','),
-    common.key, windowMonths ?? 'all'].join('|');
-
   type Raw = Omit<ClientTailResult, 'clients' | 'entryByGroup' | 'tailByGroup'> & {
     clients: Omit<ClientRow, 'name'>[];
     entryByGroup: Omit<GroupRow, 'created'>[];
@@ -219,5 +231,125 @@ SELECT json_build_object(
     entryByGroup: mergeGroups(result.entryByGroup, entryCreatedByGroup),
     tailByGroup: mergeGroups(result.tailByGroup, tailCreatedByGroup),
     clients: result.clients.map(c => ({ ...c, name: names.get(`c${c.contactId}`) ?? null })),
+  };
+}
+
+// ── Дрилл (задача владельца 28.10: «проваливаться в сделки и в клиентов») ────
+//
+// side — сторона отчёта (entry/tail; both — все отгрузки одного клиента),
+// kind — что раскрываем: created (созданные сделки), shipments (отгрузки),
+// clients (клиенты с отгрузками), group — строка таблицы групп (null — итог).
+
+export type DrillSide = 'entry' | 'tail' | 'both';
+export type DrillKind = 'created' | 'shipments' | 'clients';
+export interface DrillTarget { side: DrillSide; kind: DrillKind; group: string | null; contactId: string | null }
+
+export interface DrillDeal {
+  dealId: number;
+  name: string | null;
+  side: 'entry' | 'tail';
+  group: string;
+  amount: number;
+  createdAt: string | null;
+  deliveredAt: string | null;
+  contactId: string | null;
+  clientName: string | null;
+  managerName: string | null;
+  isRepeatFunnel: boolean;
+}
+export interface DrillClient { contactId: string; name: string | null; shipments: number; amount: number; lastAt: string }
+export interface DrillResult {
+  deals?: DrillDeal[];
+  clients?: DrillClient[];
+  total: number;
+  amount: number;
+  truncated: boolean;
+}
+
+const DRILL_LIMIT = 500;
+
+export async function fetchClientTailDrill(opts: ClientTailOptions, target: DrillTarget): Promise<DrillResult> {
+  const { ctes, params: baseParams } = buildScope(opts);
+  const params = [...baseParams];
+  const where: string[] = [];
+  if (target.group !== null) { params.push(target.group); where.push(`x.grp = $${params.length}`); }
+  if (target.contactId !== null) { params.push(target.contactId); where.push(`x.contact_id::text = $${params.length}`); }
+  const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  params.push(DRILL_LIMIT);
+  const pLim = `$${params.length}::int`;
+
+  const shipSrc = (side: DrillSide) =>
+    side === 'both'
+      ? `(SELECT deal_id, contact_id, amount, grp, 'entry' AS side FROM entry
+          UNION ALL SELECT deal_id, contact_id, amount, grp, 'tail' FROM tail)`
+      : `(SELECT deal_id, contact_id, amount, grp, '${side}' AS side FROM ${side})`;
+  const createdSrc = (side: DrillSide) =>
+    side === 'both'
+      ? `(SELECT deal_id, contact_id, amount, grp, 'entry' AS side FROM entry_created
+          UNION ALL SELECT deal_id, contact_id, amount, grp, 'tail' FROM tail_created)`
+      : `(SELECT deal_id, contact_id, amount, grp, '${side}' AS side FROM ${side}_created)`;
+
+  if (target.kind === 'clients') {
+    const sql = `${ctes}
+SELECT json_build_object(
+  'total', (SELECT count(DISTINCT contact_id) FROM ${shipSrc(target.side)} x ${w} ${w ? 'AND' : 'WHERE'} x.contact_id IS NOT NULL),
+  'amount', (SELECT COALESCE(sum(amount), 0) FROM ${shipSrc(target.side)} x ${w}),
+  'rows', (SELECT COALESCE(json_agg(r), '[]') FROM (
+     SELECT x.contact_id::text AS "contactId", count(*)::int AS shipments, COALESCE(sum(x.amount), 0)::float8 AS amount,
+            max(d.delivered_at) AS "lastAt"
+       FROM ${shipSrc(target.side)} x JOIN sa.deals d ON d.deal_id = x.deal_id
+       ${w} ${w ? 'AND' : 'WHERE'} x.contact_id IS NOT NULL
+      GROUP BY x.contact_id ORDER BY amount DESC LIMIT ${pLim}) r)
+) AS result`;
+    const res = await analyticsDb().query<{ result: { total: number; amount: number; rows: Omit<DrillClient, 'name'>[] } }>(sql, params);
+    const r = res.rows[0].result;
+    const names = await resolveClientNames(r.rows.map(c => `c${c.contactId}`)).catch(() => new Map<string, string | null>());
+    return {
+      clients: r.rows.map(c => ({ ...c, name: names.get(`c${c.contactId}`) ?? null })),
+      total: r.total, amount: r.amount, truncated: r.total > r.rows.length,
+    };
+  }
+
+  const src = target.kind === 'created' ? createdSrc(target.side) : shipSrc(target.side);
+  const order = target.kind === 'created' ? 'd.created_at' : 'd.delivered_at';
+  const sql = `${ctes}
+SELECT json_build_object(
+  'total', (SELECT count(*) FROM ${src} x ${w}),
+  'amount', (SELECT COALESCE(sum(amount), 0) FROM ${src} x ${w}),
+  'rows', (SELECT COALESCE(json_agg(r), '[]') FROM (
+     SELECT d.deal_id AS "dealId", d.deal_name AS name, x.side, x.grp AS "group",
+            COALESCE(d.amount, 0)::float8 AS amount, d.created_at AS "createdAt", d.delivered_at AS "deliveredAt",
+            d.contact_id::text AS "contactId", d.current_manager_id::text AS "managerId",
+            COALESCE(f.is_repeat, false) AS "isRepeatFunnel"
+       FROM ${src} x
+       JOIN sa.deals d ON d.deal_id = x.deal_id
+       LEFT JOIN funnels f ON f.id = d.funnel_id
+       ${w}
+      ORDER BY ${order} DESC NULLS LAST, d.deal_id DESC LIMIT ${pLim}) r)
+) AS result`;
+  type Row = Omit<DrillDeal, 'clientName' | 'managerName'> & { managerId: string | null };
+  const res = await analyticsDb().query<{ result: { total: number; amount: number; rows: Row[] } }>(sql, params);
+  const r = res.rows[0].result;
+
+  const contactKeys = [...new Set(r.rows.map(d => d.contactId).filter((v): v is string => !!v))].map(id => `c${id}`);
+  const names = await resolveClientNames(contactKeys).catch(() => new Map<string, string | null>());
+  const mgrIds = [...new Set(r.rows.map(d => d.managerId).filter((v): v is string => !!v))];
+  const mgrNames = new Map<string, string>();
+  if (mgrIds.length) {
+    const m = await analyticsDb().query<{ id: string; name: string }>(
+      `SELECT DISTINCT ON (manager_bitrix_user_id) manager_bitrix_user_id::text AS id, manager_name AS name
+         FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id::text = ANY($1)
+        ORDER BY manager_bitrix_user_id, is_active DESC`,
+      [mgrIds],
+    );
+    for (const row of m.rows) mgrNames.set(row.id, row.name);
+  }
+  return {
+    deals: r.rows.map(({ managerId, ...d }) => ({
+      ...d,
+      clientName: d.contactId ? names.get(`c${d.contactId}`) ?? null : null,
+      managerName: managerId ? mgrNames.get(managerId) ?? null : null,
+    })),
+    total: r.total, amount: r.amount, truncated: r.total > r.rows.length,
   };
 }
