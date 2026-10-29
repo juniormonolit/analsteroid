@@ -178,6 +178,30 @@ export const DEAL_FILTER_FIELDS: Record<string, FieldDef> = {
         : `d.funnel_id IN (${list})`;
     },
   },
+  // «Есть активная сделка?» (задача владельца 29.10.2026): у ЗАКАЗЧИКА сделки
+  // (contact_id) прямо сейчас есть хотя бы одна сделка в рабочей стадии — не
+  // выигранной и не проигранной. Решения владельца: уровень — контакт (сама
+  // сделка либо активна, либо нет, «хотя бы одна» имеет смысл только у клиента);
+  // «рабочая» = stage_type IN (NEW, WORK), т.е. включая необработанные и
+  // «продано, не отгружено» (у Битрикса это WORK, см. stageSnapshot.ts).
+  // Это СНИМОК на сейчас, а не на конец периода отчёта: истории «была ли у
+  // клиента активная сделка на дату» в данных нет.
+  // IN (подзапрос), а не коррелированный EXISTS: множество активных контактов
+  // считается один раз (hashed subplan), без надежды на индекс по contact_id.
+  // Сделка без контакта судится по своей же стадии. COALESCE — чтобы «Нет» не
+  // потерял сделки на NULL-логике IN.
+  client_has_active_deal: {
+    column: 'contact_id', kind: 'bool', label: 'Есть активная сделка (у заказчика)', options: 'bool',
+    customSql: (op, values) => {
+      const v = values[0];
+      if (v !== 'true' && v !== 'false') return '';
+      const active = `(SELECT id FROM stages WHERE stage_type IN ('NEW', 'WORK'))`;
+      const has = `COALESCE(d.contact_id IN (SELECT d2.contact_id FROM sa.deals d2
+          WHERE d2.contact_id IS NOT NULL AND d2.stage_id IN ${active})
+        OR (d.contact_id IS NULL AND d.stage_id IN ${active}), FALSE)`;
+      return (v === 'true') !== (op === 'neq') ? has : `NOT ${has}`;
+    },
+  },
   // ── Товар в позициях сделки (задача владельца 01.10.2026) ──────────────────
   // «Хочу сделки в работе с чеком больше 300 тысяч на роклайт». Три поля:
   // «Товар» задаёт, ЧТО ищем, «Сумма/Количество по товару» — сколько ЭТОГО
