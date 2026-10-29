@@ -8,7 +8,7 @@ import { fetchManagerCustomers } from '@/features/customers/engine/customers';
 import { buildRepeatBoard, type BoardSort, type TaskBucket } from '@/features/repeat-kanban/engine/board';
 
 const TASK_BUCKETS = ['none', 'unread', 'work', 'overdue', 'control', 'done'] as const;
-const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task', 'ev', 'tag'] as const;
+const SORTS = ['default', 'ltv', 'potential', 'fresh', 'task', 'ev', 'tag', 'psum'] as const;
 import { resolveManagersForDepartments } from '@/lib/org/teamRoster';
 import { analyticsDb } from '@/lib/db/clients';
 import { BRAK_REASONS, COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
@@ -118,6 +118,18 @@ export async function GET(req: NextRequest) {
       outcome: sp.get('outcome') === 'won' || sp.get('outcome') === 'lost' ? sp.get('outcome') as 'won' | 'lost' : null,
       // ?ships=1,4-5 — количество отгрузок заказчика (корзины SHIP_BUCKETS).
       shipCounts: (sp.get('ships') ?? '').split(',').filter(x => /^(0|1|2|3|4-5|6-9|10\+)$/.test(x)),
+      // Сумма отгрузок за период (29.10): ?ssf=&sst= (YYYY-MM-DD, по умолчанию — последние 12 мес.), ?smin=&smax= ₽.
+      // Включается фильтром суммы или сортировкой psum.
+      shipSum: (() => {
+        const num = (v: string | null) => (v && /^\d{1,12}$/.test(v) ? Number(v) : null);
+        const min = num(sp.get('smin')), max = num(sp.get('smax'));
+        if (min === null && max === null && sp.get('sort') !== 'psum') return null;
+        const ymd = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+        const today = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 10);
+        const from = ymd(sp.get('ssf')) ?? new Date(Date.parse(`${today}T00:00:00Z`) - 365 * 86_400_000).toISOString().slice(0, 10);
+        const toIncl = ymd(sp.get('sst')) ?? today;
+        return { from, to: new Date(Date.parse(`${toIncl}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10), min, max };
+      })(),
       search: (sp.get('q') ?? '').trim().slice(0, 80) || null,
       // ?tags=12,15,none — теги (любой из), none — без тегов (миграция 245).
       viewerUserId: session.id,

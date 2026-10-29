@@ -24,7 +24,7 @@ import { fetchKanbanSettings } from './settings';
 import { fetchOrphanDealClients, fetchWrongFunnelDeals, type WrongFunnelDeal } from './dealFixes';
 import { fetchQueuedByClient } from './queueRead';
 import { fetchRecentReassigns, type Reassign } from './reassigns';
-import { fetchShippedGroups, resolvePeriod } from './shippedGroups';
+import { fetchShippedGroups, fetchShippedSums, resolvePeriod } from './shippedGroups';
 import { fetchCustomerTags } from './tags';
 import { AI_CANDIDATE_MIN, fetchAiMarks, fetchTranscribedCounts, type AiMark } from './aiMarks';
 import { fetchPendingRequests, type AiRequest } from '@/features/ai-analysis/engine/requests';
@@ -139,6 +139,8 @@ export interface KanbanCard {
   offer: PotentialGroup[];
   /** Последний разбор звонков (только РОПу): когда, свежий ли (≤ 14 дн.), сколько расшифрованных звонков после него. */
   ai: AiMark | null;
+  /** Сумма отгрузок за выбранный период (фильтр/сортировка «Сумма отгрузок за период», 29.10). */
+  periodShipSum?: number;
   /** Разбора нет — сколько у заказчика звонков с расшифровкой (только РОПу; «кандидат на разбор» — от AI_CANDIDATE_MIN). */
   aiCalls?: number;
   /** Менеджер запросил ИИ-разбор (миграция 257, 26.10), готового разбора новее запроса нет. Только РОПу. */
@@ -165,7 +167,7 @@ export interface KanbanColumn {
 /** Показатели канбана для РОПа (снимок текущей доски). */
 /** Состояние задачи заказчика для фильтра: none — открытой задачи нет (не ставили или приняли). */
 export type TaskBucket = 'none' | 'unread' | 'work' | 'overdue' | 'control' | 'done';
-export type BoardSort = 'default' | 'ltv' | 'potential' | 'fresh' | 'task' | 'ev' | 'tag';
+export type BoardSort = 'default' | 'ltv' | 'potential' | 'fresh' | 'task' | 'ev' | 'tag' | 'psum';
 
 export function taskBucketOf(c: Pick<KanbanCard, 'task'>, now = Date.now()): TaskBucket {
   const t = c.task;
@@ -462,6 +464,9 @@ export async function buildRepeatBoard(opts: {
   outcome?: 'won' | 'lost' | null;
   /** Количество отгрузок заказчика (владелец 29.10): корзины SHIP_BUCKETS, любая из выбранных; вся доска. */
   shipCounts?: string[];
+  /** Сумма отгрузок за период (владелец 29.10): период [from, to) по МСК; min/max ₽ — фильтр (null — без границы).
+   *  Задан — карточка получает periodShipSum; сортировка 'psum' — по ней. */
+  shipSum?: { from: string; to: string; min: number | null; max: number | null } | null;
   /** Поиск заказчика (владелец 21.10): имя/название (все слова), или число — id контакта/
    *  компании, номер сделки (текущей, отказной, последней отгрузки) или задачи. По всем колонкам. */
   search?: string | null;
@@ -640,6 +645,7 @@ export async function buildRepeatBoard(opts: {
   if (!opts.skipNames) warmClientNames(keys);
   const poolGroups = new Set(opts.poolGroups ?? []);
   const shipped = opts.groupsEver ? await fetchShippedGroups(opts.groupsEver.from, opts.groupsEver.to) : null;
+  const shipSums = opts.shipSum ? await fetchShippedSums(opts.shipSum.from, opts.shipSum.to).catch(() => null) : null;
   const everGroupCounts: Record<string, number> = {};
   // Теги: по всем исходным ключам склейки, свёрнуты к каноничному (объединение).
   const tagData = opts.viewerUserId ? await fetchCustomerTags(allKeys, opts.viewerUserId) : null;
@@ -789,6 +795,12 @@ export async function buildRepeatBoard(opts: {
       shipCountCounts[b] = (shipCountCounts[b] ?? 0) + 1;
       if (shipPick.size && !shipPick.has(b)) continue;
     }
+    let periodShipSum: number | undefined;
+    if (shipSums) {
+      periodShipSum = membersOf(r).reduce((s, k) => s + (shipSums.get(k) ?? 0), 0);
+      if (opts.shipSum!.min !== null && periodShipSum < opts.shipSum!.min) continue;
+      if (opts.shipSum!.max !== null && periodShipSum > opts.shipSum!.max) continue;
+    }
     if (shipped) {
       // Склеенный заказчик — группы всех его исходных карточек.
       const gs = new Set(membersOf(r).flatMap(k => shipped.get(k) ?? []));
@@ -806,7 +818,7 @@ export async function buildRepeatBoard(opts: {
     buckets.get(col)!.push({
       column: col,
       clientKey: r.clientKey, clientType: r.clientType, clientId: r.clientId, name: null,
-      managerId: r.managerId, managerName: r.managerName,
+      managerId: r.managerId, managerName: r.managerName, periodShipSum,
       purchases: r.purchasesDelivered, sumDelivered: r.sumDelivered,
       lastDeliveredAt: r.lastDeliveredAt, lastDeliveredGroup: r.lastDeliveredGroup,
       lastDeliveredDealId: lastDelDealId,
@@ -890,6 +902,7 @@ export async function buildRepeatBoard(opts: {
     }
     // Явная сортировка из фильтров перекрывает колоночную по умолчанию (правка владельца 20.10).
     if (sortMode === 'ltv') list.sort((a, b) => b.sumDelivered - a.sumDelivered);
+    else if (sortMode === 'psum') list.sort((a, b) => (b.periodShipSum ?? 0) - (a.periodShipSum ?? 0) || b.sumDelivered - a.sumDelivered);
     else if (sortMode === 'potential') list.sort((a, b) => (b.potential ?? 0) - (a.potential ?? 0) || b.sumDelivered - a.sumDelivered);
     else if (sortMode === 'fresh') list.sort((a, b) => deliveredMs(b) - deliveredMs(a));
     // Ожидаемые деньги: шанс на повтор × ожидаемая сумма следующей покупки.

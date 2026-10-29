@@ -76,6 +76,7 @@ const SORT_OPTIONS = [
   { value: 'task', label: 'Сортировка: по задачам — что разобрать' },
   { value: 'ev', label: 'Сортировка: ожидаемые деньги (шанс × чек)' },
   { value: 'tag', label: 'Сортировка: по тегам — с тегами сверху' },
+  { value: 'psum', label: 'Сортировка: сумма отгрузок за период — больше сверху' },
 ] as const;
 const OUTCOME_OPTIONS = [
   { value: '', label: 'Последняя сделка: любая' },
@@ -142,6 +143,11 @@ export function RepeatKanbanPage() {
   const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const [outcome, setOutcome] = useUrlState('outcome', stringParam(''));
   const [shipsF, setShipsF] = useUrlState('ships', listParam([]));
+  // Сумма отгрузок за период (владелец 29.10): период (пусто — 12 месяцев) и границы в ₽.
+  const [ssf, setSsf] = useUrlState('ssf', stringParam(''));
+  const [sst, setSst] = useUrlState('sst', stringParam(''));
+  const [smin, setSmin] = useUrlState('smin', stringParam(''));
+  const [smax, setSmax] = useUrlState('smax', stringParam(''));
   // Дата последней отгрузки (владелец 23.10): диапазон YYYY-MM-DD, пикер с пресетами из отчётов.
   const [shf, setShf] = useUrlState('shf', stringParam(''));
   const [sht, setSht] = useUrlState('sht', stringParam(''));
@@ -178,7 +184,7 @@ export function RepeatKanbanPage() {
   const [bulkBrakOpen, setBulkBrakOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shipsF, shf, sht, q, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shipsF, shf, sht, ssf, sst, smin, smax, q, limits],
     enabled: prefsReady,
     queryFn: async () => {
       const qs = new URLSearchParams();
@@ -198,6 +204,9 @@ export function RepeatKanbanPage() {
       if (outcome) qs.set('outcome', outcome);
       if (shf && sht) { qs.set('shf', shf); qs.set('sht', sht); }
       if (shipsF.length) qs.set('ships', shipsF.join(','));
+      if (smin) qs.set('smin', smin);
+      if (smax) qs.set('smax', smax);
+      if ((smin || smax || sort === 'psum') && ssf && sst) { qs.set('ssf', ssf); qs.set('sst', sst); }
       if (q) qs.set('q', q);
       for (const [k, v] of Object.entries(limits)) qs.set(`n_${k}`, String(v));
       const r = await fetch(`/api/repeat-kanban?${qs}`);
@@ -335,8 +344,8 @@ export function RepeatKanbanPage() {
     { key: 'none', label: 'Тип не указан' },
   ];
   const totalAll = Object.values(data?.typeCounts ?? {}).reduce((s, n) => s + n, 0);
-  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!aiF) + Number(offerGroups.length > 0) + Number(!!outcome) + Number(!!shf) + Number(shipsF.length > 0) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
-  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setAiF(''); setOfferF(''); setOutcome(''); setShf(''); setSht(''); setShipsF([]); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
+  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!aiF) + Number(offerGroups.length > 0) + Number(!!outcome) + Number(!!shf) + Number(shipsF.length > 0) + Number(!!(smin || smax)) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
+  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setAiF(''); setOfferF(''); setOutcome(''); setShf(''); setSht(''); setShipsF([]); setSmin(''); setSmax(''); setSsf(''); setSst(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
   const groupCounts = (ever ? data?.everGroupCounts : data?.poolGroupCounts) ?? {};
   const tagDefMap = new Map((data?.tagDefs ?? []).map(t => [t.id, t]));
 
@@ -449,6 +458,17 @@ export function RepeatKanbanPage() {
                 options={SHIP_BUCKETS.map(b => ({ value: b.value, label: `${b.label} · ${rub.format(data?.shipCountCounts?.[b.value] ?? 0)}` }))}
                 value={shipsF} onChange={v => { setShipsF(v); setLimits({}); }}
                 className={`${shipsF.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            {/* Сумма отгрузок за период (владелец 29.10): период + «от / до» ₽; та же сумма — в сортировке. */}
+            <FilterField label="Сумма отгрузок за период">
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <ShipDateFilter from={ssf} to={sst} onChange={(f, t) => { setSsf(f); setSst(t); setLimits({}); }} anyLabel="Период: последние 12 месяцев" title="Период суммы отгрузок" />
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <MoneyInput value={smin} onChange={v => { setSmin(v); setLimits({}); }} placeholder="от, ₽" label="Сумма отгрузок от" />
+                  <span className="text-[var(--color-text-muted)]">—</span>
+                  <MoneyInput value={smax} onChange={v => { setSmax(v); setLimits({}); }} placeholder="до, ₽" label="Сумма отгрузок до" />
+                </div>
+              </div>
             </FilterField>
             {/* Дата последней отгрузки (владелец 23.10: «пикер с пресетами, как в типовом отчёте»). */}
             <FilterField label="Последняя отгрузка">
@@ -687,7 +707,9 @@ function FiltersButton({ active, onReset, children }: { active: number; onReset:
 const ymd = (d: Date) => format(d, 'yyyy-MM-dd');
 const ruShort = (s: string) => s.split('-').reverse().join('.').replace(/\.20(\d\d)$/, '.$1');
 /** Диапазон даты последней отгрузки: тот же DateRangePicker с пресетами, что в отчётах; пусто — любая. */
-function ShipDateFilter({ from, to, onChange }: { from: string; to: string; onChange: (from: string, to: string) => void }) {
+function ShipDateFilter({ from, to, onChange, anyLabel = 'Последняя отгрузка: любая', title = 'Дата последней отгрузки' }: {
+  from: string; to: string; onChange: (from: string, to: string) => void; anyLabel?: string; title?: string;
+}) {
   const [open, setOpen] = useState(false);
   const set = !!from && !!to;
   const value = set ? { from: parseISO(from), to: endOfDay(parseISO(to)) } : { from: startOfMonth(new Date()), to: endOfDay(new Date()) };
@@ -696,10 +718,10 @@ function ShipDateFilter({ from, to, onChange }: { from: string; to: string; onCh
       <Popover open={open} onOpenChange={setOpen} className="p-2" trigger={
         <button type="button" className={`${set ? BTN_ACTIVE : BTN_IDLE} w-full min-w-0 justify-start`}>
           <CalendarDays size={14} className="shrink-0" />
-          <span className="truncate">{set ? (from === to ? ruShort(from) : `${ruShort(from)} — ${ruShort(to)}`) : 'Последняя отгрузка: любая'}</span>
+          <span className="truncate">{set ? (from === to ? ruShort(from) : `${ruShort(from)} — ${ruShort(to)}`) : anyLabel}</span>
         </button>
       }>
-        <DateRangePicker value={value} title="Дата последней отгрузки"
+        <DateRangePicker value={value} title={title}
           onChange={r => { onChange(ymd(r.from), ymd(r.to)); setOpen(false); }} onClose={() => setOpen(false)} />
       </Popover>
       {set && (
@@ -709,6 +731,22 @@ function ShipDateFilter({ from, to, onChange }: { from: string; to: string; onCh
         </button>
       )}
     </div>
+  );
+}
+
+/** Сумма в ₽ с пробелами-разделителями; в URL — цифры. Ввод применяется по паузе 500 мс. */
+function MoneyInput({ value, onChange, placeholder, label }: { value: string; onChange: (v: string) => void; placeholder: string; label: string }) {
+  const [draft, setDraft] = useState(value ? rub.format(Number(value)) : '');
+  useEffect(() => { setDraft(value ? rub.format(Number(value)) : ''); }, [value]);
+  useEffect(() => {
+    const digits = draft.replace(/\D/g, '').slice(0, 12);
+    if (digits === value) return;
+    const t = setTimeout(() => onChange(digits), 500);
+    return () => clearTimeout(t);
+  }, [draft, value, onChange]);
+  return (
+    <input value={draft} onChange={e => setDraft(e.target.value)} inputMode="numeric" placeholder={placeholder} aria-label={label}
+      className={`min-h-11 w-full min-w-0 flex-1 rounded-lg border px-3 text-base tabular-nums sm:text-sm ${value ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'} bg-[var(--color-bg-surface)] text-[var(--color-text)]`} />
   );
 }
 
@@ -1223,6 +1261,10 @@ function Card({ c, col, canManage, canMerge, onUnmerge, isOwn, selected, onSelec
         <div className="text-[13px] text-[var(--color-text)]">
           <b className="font-semibold">{c.purchases}</b> {plural(c.purchases, 'отгрузка', 'отгрузки', 'отгрузок')} · <b className="font-semibold">{moneyShort(c.sumDelivered)}</b>
         </div>
+        {/* Фильтр или сортировка «Сумма отгрузок за период» включены — сумма за период. */}
+        {c.periodShipSum !== undefined && (
+          <div className="text-[11.5px] text-[var(--color-text-secondary)]">За период: <b className="font-semibold text-[var(--color-text)]">{c.periodShipSum ? moneyShort(c.periodShipSum) : '—'}</b></div>
+        )}
         {c.lastDeliveredAt ? (
           <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-1 text-[11.5px] text-[var(--color-text-secondary)]">
             {c.lastDeliveredDealId ? (

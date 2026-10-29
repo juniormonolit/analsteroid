@@ -53,3 +53,24 @@ export async function fetchShippedGroups(from: string, to: string): Promise<Map<
   cache.set(key, { at: Date.now(), map });
   return map;
 }
+
+// ── Сумма отгрузок за период (владелец 29.10: «фильтр и сортировка по сумме отгрузок за выбранный период»). ──
+// Заказчик (сырой ключ) → сумма amount отгруженных сделок в [from, to). Тот же кэш на 10 минут.
+const sumCache = new Map<string, { at: number; map: Map<string, number> }>();
+
+export async function fetchShippedSums(from: string, to: string): Promise<Map<string, number>> {
+  const key = `${from}|${to}`;
+  const hit = sumCache.get(key);
+  if (hit && Date.now() - hit.at < TTL) return hit.map;
+  const r = await analyticsDb().query<{ client_key: string; s: string }>(
+    `SELECT (${CLIENT_KEY_SQL}) AS client_key, sum(coalesce(d.amount, 0))::text AS s
+       FROM sa.deals d
+      WHERE d.funnel_id IN (0, 1, 2, 3) AND d.delivered_at >= $1::date AND d.delivered_at < $2::date
+      GROUP BY 1 HAVING (${CLIENT_KEY_SQL}) IS NOT NULL`,
+    [from, to],
+  );
+  const map = new Map(r.rows.map(x => [x.client_key, Math.round(Number(x.s))]));
+  if (sumCache.size > 20) sumCache.clear();
+  sumCache.set(key, { at: Date.now(), map });
+  return map;
+}
