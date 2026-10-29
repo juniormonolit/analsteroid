@@ -13,14 +13,14 @@ import { isNewPurchaseSql } from './repeatRule';
 // contact_id IS NOT NULL обязателен: без него все NULL-контакты падают в одну
 // партицию и ROW_NUMBER() внутри неё даёт ложные «вторые» сделки (баг №2, Маркус).
 //
-// _ppp/_ppo/_ppb/_pppb — ВТОРАЯ по счёту (rn=2) продажа/отгрузка/бронь/подтв.бронь.
+// _ppo/_ppb/_pppb — ВТОРАЯ по счёту (rn=2) отгрузка/бронь/подтв.бронь.
+// _ppp (ППП) считается иначе — см. pppSubquery ниже: вторая продажа ПОСЛЕ ОТГРУЗКИ.
 // _primary_hist/_repeat_hist — первая (rn=1) / повторная (rn>=2) ПРОДАЖА клиента
 //   по истории (sold_at), а не по воронке Bitrix (funnels.is_repeat). Повторная
 //   покупка может пройти через обычную воронку — funnel-счётчик её теряет (#1556).
 // _primary_deliv_hist/_repeat_deliv_hist — то же для ОТГРУЗОК (delivered_at):
 //   первая / повторная отгрузка клиента по истории доставок.
 const CLIENT_HISTORY_FIELDS: Record<string, { orderBy: string; rn: string }> = {
-  _ppp:                { orderBy: 'sold_at',      rn: '= 2'  },
   _ppo:                { orderBy: 'delivered_at', rn: '= 2'  },
   _ppb:                { orderBy: 'reserved_at',  rn: '= 2'  },
   _pppb:               { orderBy: 'confirmed_at', rn: '= 2'  },
@@ -108,6 +108,25 @@ function noRepeatAfterDeliverySubquery(): string {
     )`;
 }
 
+// _ppp — ППП (определение владельца 29.10.2026, дословно: «ППП — это вторая
+// ПРОДАЖА после первичной отгрузки. Не после продажи»). Сделка — ПЕРВАЯ продажа
+// заказчика (contact_id), случившаяся ПОСЛЕ его первой отгрузки (min delivered_at
+// по всей истории, любая воронка). Решения владельца там же: продажи, потом
+// ушедшие в отказ, считаются; довоз (та же группа, < 7 дней) — тоже ППП, без склейки.
+// Было до 29.10: rn=2 по sold_at — вторая продажа по истории, в т.ч. сделанная до
+// первой отгрузки (сентябрь 2026: 353 по-старому → 314 по-новому).
+function pppSubquery(): string {
+  return `d.deal_id IN (
+      SELECT DISTINCT ON (_pd.contact_id) _pd.deal_id
+        FROM sa.deals _pd
+        JOIN (SELECT contact_id, min(delivered_at) AS first_ship FROM sa.deals
+               WHERE delivered_at IS NOT NULL AND contact_id IS NOT NULL GROUP BY 1) _fs
+          ON _fs.contact_id = _pd.contact_id
+       WHERE _pd.sold_at > _fs.first_ship
+       ORDER BY _pd.contact_id, _pd.sold_at, _pd.deal_id
+    )`;
+}
+
 function complexClientSubquery(): string {
   return `d.contact_id IN (
       SELECT contact_id FROM sa.deals
@@ -163,6 +182,8 @@ export function resolveFilterClause(f: MetricFilter, tableAlias: string): string
   // «Комплексный» клиент (2+ товарных группы за историю отгрузок) — своя логика по
   // DISTINCT-категориям, тоже через подзапрос (см. complexClientSubquery).
   if (f.field === '_complex_client') return complexClientSubquery();
+  // ППП — первая продажа после первой отгрузки (см. pppSubquery).
+  if (f.field === '_ppp') return pppSubquery();
   // Раздел «Клиенты»: товарность сделки и порядок ТОВАРНЫХ отгрузок клиента
   // (см. goodsDeliverySubquery выше).
   if (f.field === '_has_goods') return dealHasGoodsWhere('d');
