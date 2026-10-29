@@ -18,6 +18,8 @@ export interface MAgg {
   control: number; controlWaitH: number[]; overdue: number; overdue7: number; openTasks: number; closed: number; reviewH: number[]; queued: number;
   // ИИ-разборы (период): по основному менеджеру разбора.
   aiAnalyses: number; aiScoreSum: number; aiScoreN: number; aiViolations: number; aiRequests: number;
+  // Задачи по статусу сейчас (вкладка «Задачи»).
+  notStarted: number; inProgressT: number; deferred: number;
 }
 
 export const ZERO = (): MAgg => ({
@@ -26,6 +28,7 @@ export const ZERO = (): MAgg => ({
   tasks: 0, base: 0, reached: 0, soldN: 0, soldSum: 0, shippedN: 0, shippedSum: 0, mature: 0, matureSold: 0, matureShipped: 0, inProgress: 0, shipDays: [],
   control: 0, controlWaitH: [], overdue: 0, overdue7: 0, openTasks: 0, closed: 0, reviewH: [], queued: 0,
   aiAnalyses: 0, aiScoreSum: 0, aiScoreN: 0, aiViolations: 0, aiRequests: 0,
+  notStarted: 0, inProgressT: 0, deferred: 0,
 });
 
 export function mergeAgg(list: MAgg[]): MAgg {

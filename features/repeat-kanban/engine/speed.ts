@@ -18,6 +18,8 @@ export interface SpeedMgr {
   managerId: string;
   control: number; controlWaitH: number[];
   overdue: number; overdue7: number; open: number;
+  /** Открытые по статусу Битрикса (вкладка «Задачи», 29.10): не начата (1–2), в работе (3), отложена (6). */
+  notStarted: number; inProgress: number; deferred: number;
   accepted: number; returned: number;
   reviews: number; reviewH: number[];
   queued: number;
@@ -56,7 +58,7 @@ export async function fetchKanbanSpeed(opts: { date: string; period: Period; man
   const get = (id: string | null) => {
     const k = id ?? '—';
     let m = by.get(k);
-    if (!m) { m = { managerId: k, control: 0, controlWaitH: [], overdue: 0, overdue7: 0, open: 0, accepted: 0, returned: 0, reviews: 0, reviewH: [], queued: 0 }; by.set(k, m); }
+    if (!m) { m = { managerId: k, control: 0, controlWaitH: [], overdue: 0, overdue7: 0, open: 0, notStarted: 0, inProgress: 0, deferred: 0, accepted: 0, returned: 0, reviews: 0, reviewH: [], queued: 0 }; by.set(k, m); }
     return m;
   };
   const H = 3_600_000;
@@ -64,6 +66,8 @@ export async function fetchKanbanSpeed(opts: { date: string; period: Period; man
     const m = get(t.rid);
     if (Number(t.status) === 4) { m.control++; if (t.changed_at) m.controlWaitH.push(Math.round((now - new Date(t.changed_at).getTime()) / H)); continue; }
     m.open++;
+    const st = Number(t.status);
+    if (st === 3) m.inProgress++; else if (st === 6) m.deferred++; else m.notStarted++;
     const dl = t.deadline_at ? new Date(t.deadline_at).getTime() : null;
     if (dl !== null && dl < now) { m.overdue++; if (dl < now - 7 * 24 * H) m.overdue7++; }
   }

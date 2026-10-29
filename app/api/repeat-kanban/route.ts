@@ -116,6 +116,8 @@ export async function GET(req: NextRequest) {
       groupsEver: sp.get('pgm') === 'ever' ? resolvePeriod(sp.get('pgp'), sp.get('pgf'), sp.get('pgt')) : null,
       taskFilter: (sp.get('tasks') ?? '').split(',').filter((x): x is TaskBucket => (TASK_BUCKETS as readonly string[]).includes(x)),
       outcome: sp.get('outcome') === 'won' || sp.get('outcome') === 'lost' ? sp.get('outcome') as 'won' | 'lost' : null,
+      // ?ships=1,4-5 — количество отгрузок заказчика (корзины SHIP_BUCKETS).
+      shipCounts: (sp.get('ships') ?? '').split(',').filter(x => /^(0|1|2|3|4-5|6-9|10\+)$/.test(x)),
       search: (sp.get('q') ?? '').trim().slice(0, 80) || null,
       // ?tags=12,15,none — теги (любой из), none — без тегов (миграция 245).
       viewerUserId: session.id,

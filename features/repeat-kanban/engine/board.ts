@@ -13,7 +13,7 @@ import { fetchManagerCustomers, fetchCustomersOfManagers, fetchCustomerMarks, ty
 import { getCachedClientNames, resolveClientNames, warmClientNames } from '@/lib/bitrix/clientNames';
 import { fetchAliasMap, type AliasInfo, type MergeSource } from '@/features/customers/engine/merge';
 import {
-  COLUMNS, CLIENT_TYPE_NONE_RANK, CLIENT_TYPE_ORDER, LOST_STAGES, NEW_STAGES, REPEAT_FUNNEL_IDS, REPEAT_PROJECT_GROUP_ID, REVIEW_SINCE,
+  COLUMNS, CLIENT_TYPE_NONE_RANK, CLIENT_TYPE_ORDER, LOST_STAGES, NEW_STAGES, REPEAT_FUNNEL_IDS, REPEAT_PROJECT_GROUP_ID, REVIEW_SINCE, shipBucket,
   STAGE_TO_COLUMN, TOUCHES, WEEK_DAYS, WINDOW_DAYS, WON_STAGES, type ColumnKey,
 } from './config';
 import { fetchTasksForDeals, type RepeatTask } from './tasks';
@@ -243,6 +243,8 @@ export interface RepeatBoard {
   managerLoad?: Record<string, number>;
   /** Последняя сделка: успешная / проигранная — счётчики по пулу (фильтр «Последняя сделка»). */
   outcomeCounts?: Record<string, number>;
+  /** Сколько заказчиков в каждой корзине «Количество отгрузок» (до этого фильтра). */
+  shipCountCounts?: Record<string, number>;
   today?: TodaySection[];
 }
 
@@ -458,6 +460,8 @@ export async function buildRepeatBoard(opts: {
   taskFilter?: TaskBucket[];
   /** Пул: последняя сделка успешная / проигранная (владелец 21.10). */
   outcome?: 'won' | 'lost' | null;
+  /** Количество отгрузок заказчика (владелец 29.10): корзины SHIP_BUCKETS, любая из выбранных; вся доска. */
+  shipCounts?: string[];
   /** Поиск заказчика (владелец 21.10): имя/название (все слова), или число — id контакта/
    *  компании, номер сделки (текущей, отказной, последней отгрузки) или задачи. По всем колонкам. */
   search?: string | null;
@@ -604,6 +608,8 @@ export async function buildRepeatBoard(opts: {
   const typeCounts: Record<string, number> = {};
   const poolGroupCounts: Record<string, number> = {};
   const outcomeCounts: Record<string, number> = {};
+  const shipCountCounts: Record<string, number> = {};
+  const shipPick = new Set(opts.shipCounts ?? []);
 
   // Поиск: имена — из кэша (без Битрикса; кэш на всю компанию докачивается прогревом ниже).
   const norm = (x: string) => x.toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
@@ -777,6 +783,11 @@ export async function buildRepeatBoard(opts: {
       for (const t of cardTags) tagCounts[t] = (tagCounts[t] ?? 0) + 1;
       if (!cardTags.length) tagCounts[NO_TAG] = (tagCounts[NO_TAG] ?? 0) + 1;
       if (tagPick.size && !(cardTags.some(t => tagPick.has(String(t))) || (!cardTags.length && tagPick.has(NO_TAG)))) continue;
+    }
+    {
+      const b = shipBucket(r.purchasesDelivered);
+      shipCountCounts[b] = (shipCountCounts[b] ?? 0) + 1;
+      if (shipPick.size && !shipPick.has(b)) continue;
     }
     if (shipped) {
       // Склеенный заказчик — группы всех его исходных карточек.
@@ -964,5 +975,5 @@ export async function buildRepeatBoard(opts: {
     ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию, тегам и товарным группам отгрузок (все слова) и по номерам: ID заказчика (контакт/компания), сделка, задача; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
     : null;
   return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, tagDefs: tagData?.defs, tagCounts: tagData ? tagCounts : undefined, aiCounts: opts.withAi ? aiCounts : undefined, offerCounts: opts.skipNames ? undefined : offerCounts, taskCounts, kpi, notice, dataAt,
-    taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, today };
+    taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, shipCountCounts, today };
 }

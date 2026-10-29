@@ -24,7 +24,7 @@ import { RepeatKanbanSettingsButton, TemplatePicker } from './RepeatKanbanSettin
 
 // Карточка сделки — динамически: она сама открывает карточку клиента (цикл модулей).
 import {
-  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS, LOST_STAGES, WON_STAGES, AI_CANDIDATE_MIN, postponePresets,
+  BRAK_REASONS, CLIENT_TYPE_ORDER, CLIENT_TYPE_STYLE, taskUrl, CLIENT_TYPE_SHORT, COLUMNS, TOUCHES, WINDOW_DAYS, HIDE_FOREVER, fmtHideUntil, GROUP_PERIODS, LOST_STAGES, WON_STAGES, AI_CANDIDATE_MIN, postponePresets, SHIP_BUCKETS,
   type ColumnDef, type ColumnGroup, type ColumnKey,
 } from '../engine/config';
 import type { BoardKpi, KanbanCard, KanbanColumn, RepeatBoard, TodaySection } from '../engine/board';
@@ -112,6 +112,21 @@ export function RepeatKanbanPage() {
   const [mgrs, setMgrs] = useUrlState('managers', listParam([]));
   const [type, setType] = useUrlState('type', stringParam(''));
   const [depts, setDepts] = useUrlState('dept', listParam([]));
+  // Отдел сохраняется на аккаунте (владелец 29.10, users.ui_prefs): нет ?dept= в ссылке — подставляем сохранённый,
+  // доску грузим после этого (иначе сначала прилетит вся зона, потом отдел).
+  const [prefsReady, setPrefsReady] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('dept')) { setPrefsReady(true); return; }
+    fetch('/api/me/ui-prefs').then(r => (r.ok ? r.json() : null)).then(j => {
+      const saved = j?.prefs?.repeatKanbanDepts;
+      if (Array.isArray(saved) && saved.length) setDepts(saved as string[]);
+    }).catch(() => {}).finally(() => setPrefsReady(true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const changeDepts = (ids: string[]) => {
+    setDepts(ids);
+    void fetch('/api/me/ui-prefs', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repeatKanbanDepts: ids.length ? ids : null }) }).catch(() => {});
+  };
   const [pg, setPg] = useUrlState('pg', stringParam(''));
   // Товарная группа: last — последняя отгрузка (пул), ever — отгружали когда-либо за период (вся доска).
   const [pgm, setPgm] = useUrlState('pgm', stringParam('last'));
@@ -126,6 +141,7 @@ export function RepeatKanbanPage() {
   const offerGroups = useMemo(() => offerF.split('|').filter(Boolean), [offerF]);
   const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const [outcome, setOutcome] = useUrlState('outcome', stringParam(''));
+  const [shipsF, setShipsF] = useUrlState('ships', listParam([]));
   // Дата последней отгрузки (владелец 23.10): диапазон YYYY-MM-DD, пикер с пресетами из отчётов.
   const [shf, setShf] = useUrlState('shf', stringParam(''));
   const [sht, setSht] = useUrlState('sht', stringParam(''));
@@ -162,7 +178,8 @@ export function RepeatKanbanPage() {
   const [bulkBrakOpen, setBulkBrakOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shf, sht, q, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shipsF, shf, sht, q, limits],
+    enabled: prefsReady,
     queryFn: async () => {
       const qs = new URLSearchParams();
       if (mgrs.length) qs.set('managers', mgrs.join(','));
@@ -180,6 +197,7 @@ export function RepeatKanbanPage() {
       if (sort !== 'default') qs.set('sort', sort);
       if (outcome) qs.set('outcome', outcome);
       if (shf && sht) { qs.set('shf', shf); qs.set('sht', sht); }
+      if (shipsF.length) qs.set('ships', shipsF.join(','));
       if (q) qs.set('q', q);
       for (const [k, v] of Object.entries(limits)) qs.set(`n_${k}`, String(v));
       const r = await fetch(`/api/repeat-kanban?${qs}`);
@@ -317,8 +335,8 @@ export function RepeatKanbanPage() {
     { key: 'none', label: 'Тип не указан' },
   ];
   const totalAll = Object.values(data?.typeCounts ?? {}).reduce((s, n) => s + n, 0);
-  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!aiF) + Number(offerGroups.length > 0) + Number(!!outcome) + Number(!!shf) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
-  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setAiF(''); setOfferF(''); setOutcome(''); setShf(''); setSht(''); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
+  const activeFilters = Number(!!type) + Number(taskF.length > 0) + Number(tagF.length > 0) + Number(!!aiF) + Number(offerGroups.length > 0) + Number(!!outcome) + Number(!!shf) + Number(shipsF.length > 0) + Number(poolGroups.length > 0 || ever) + Number(sort !== 'default');
+  const resetFilters = () => { setType(''); setTaskF([]); setTagF([]); setAiF(''); setOfferF(''); setOutcome(''); setShf(''); setSht(''); setShipsF([]); setPg(''); setPgm('last'); setPgp('1y'); setPgf(''); setPgt(''); setSort('default'); setLimits({}); };
   const groupCounts = (ever ? data?.everGroupCounts : data?.poolGroupCounts) ?? {};
   const tagDefMap = new Map((data?.tagDefs ?? []).map(t => [t.id, t]));
 
@@ -358,7 +376,7 @@ export function RepeatKanbanPage() {
           )}
           {/* Отделы и менеджеры работают вместе: отделы сужают список менеджеров, внутри
               можно отметить нескольких; не отмечен никто — все менеджеры отделов/зоны. */}
-          <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { setDepts(ids); setMgrs([]); setLimits({}); }} triggerClassName={depts.length ? BTN_ACTIVE : BTN_IDLE} />
+          <DepartmentPicker departmentIds={depts} onDepartmentIdsChange={ids => { changeDepts(ids); setMgrs([]); setLimits({}); }} triggerClassName={depts.length ? BTN_ACTIVE : BTN_IDLE} />
           {managerOptions.length > 0 && (
             <SearchMultiSelect ariaLabel="Менеджеры" allLabel={depts.length ? 'Все менеджеры отделов' : 'Все менеджеры зоны'}
               unitLabel="менеджеров" searchPlaceholder="Поиск менеджера"
@@ -424,6 +442,13 @@ export function RepeatKanbanPage() {
               <SearchSelect ariaLabel="Последняя сделка" value={outcome} onChange={v => { setOutcome(v); setLimits({}); }}
                 options={OUTCOME_OPTIONS.map(o => ({ value: o.value, label: o.value ? `${o.label} · ${rub.format(data?.outcomeCounts?.[o.value] ?? 0)}` : o.label, hint: 'hint' in o ? `${o.hint} (в пуле)` : undefined }))}
                 className={`${outcome ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
+            </FilterField>
+            {/* Количество отгрузок заказчика (владелец 29.10): вся доска, любая из отмеченных корзин. */}
+            <FilterField label="Количество отгрузок">
+              <SearchMultiSelect ariaLabel="Количество отгрузок" allLabel="Отгрузок: сколько угодно" unitLabel="вариантов" searchPlaceholder="Поиск"
+                options={SHIP_BUCKETS.map(b => ({ value: b.value, label: `${b.label} · ${rub.format(data?.shipCountCounts?.[b.value] ?? 0)}` }))}
+                value={shipsF} onChange={v => { setShipsF(v); setLimits({}); }}
+                className={`${shipsF.length ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
             </FilterField>
             {/* Дата последней отгрузки (владелец 23.10: «пикер с пресетами, как в типовом отчёте»). */}
             <FilterField label="Последняя отгрузка">

@@ -92,6 +92,13 @@ export const CLIENT_TYPE_SHORT: Record<string, string> = {
 };
 
 /** Решения РОПа по отказу. */
+/** «Количество отгрузок» (владелец 29.10): корзины фильтра доски. */
+export const SHIP_BUCKETS = [
+  { value: '0', label: 'Отгрузок не было' }, { value: '1', label: '1 отгрузка' }, { value: '2', label: '2 отгрузки' }, { value: '3', label: '3 отгрузки' },
+  { value: '4-5', label: '4–5 отгрузок' }, { value: '6-9', label: '6–9 отгрузок' }, { value: '10+', label: '10 и больше' },
+] as const;
+export const shipBucket = (n: number): string => (n <= 0 ? '0' : n <= 3 ? String(n) : n <= 5 ? '4-5' : n <= 9 ? '6-9' : '10+');
+
 export type ReviewDecision = 'brak' | 'no_answer' | 'return' | 'postpone';
 
 /** «Отложить до…» (владелец 26.10: «буду строиться весной» — не брак, а скрыть до даты). Пресеты дат. */

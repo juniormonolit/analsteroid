@@ -32,8 +32,8 @@ const DAY_MS = 86_400_000;
 
 type Period = 'all' | 'day' | 'week' | 'month';
 const PERIODS: [Period, string][] = [['all', 'Всё время'], ['day', 'Сегодня'], ['week', 'Неделя'], ['month', 'Месяц']];
-type Tab = 'overview' | 'activity' | 'results' | 'pool' | 'ai' | 'journal';
-const TABS: [Tab, string][] = [['overview', 'Обзор'], ['activity', 'Активность'], ['results', 'Результат'], ['pool', 'Пул и скорость'], ['ai', 'ИИ-разборы'], ['journal', 'Журнал']];
+type Tab = 'overview' | 'activity' | 'tasks' | 'results' | 'pool' | 'ai' | 'journal';
+const TABS: [Tab, string][] = [['overview', 'Обзор'], ['activity', 'Активность'], ['tasks', 'Задачи'], ['results', 'Результат'], ['pool', 'Пул и скорость'], ['ai', 'ИИ-разборы'], ['journal', 'Журнал']];
 
 // ── Журнал: виды действий ─────────────────────────────────────────────────────
 const EVENT_LABEL: Record<string, string> = {
@@ -298,7 +298,7 @@ export function RepeatKanbanAnalyticsPage() {
     }
     for (const [id, info] of Object.entries(res.data?.managers ?? {})) if (!dir.has(id)) dir.set(id, info);
     for (const m of sp.data?.mgr ?? []) {
-      Object.assign(A(m.managerId), { control: m.control, controlWaitH: m.controlWaitH, overdue: m.overdue, overdue7: m.overdue7, openTasks: m.open, closed: m.accepted, reviewH: m.reviewH, queued: m.queued });
+      Object.assign(A(m.managerId), { control: m.control, controlWaitH: m.controlWaitH, overdue: m.overdue, overdue7: m.overdue7, openTasks: m.open, closed: m.accepted, notStarted: m.notStarted, inProgressT: m.inProgress, deferred: m.deferred, reviewH: m.reviewH, queued: m.queued });
       if (!dir.has(m.managerId)) dir.set(m.managerId, sp.data!.managers[m.managerId] ?? { name: `#${m.managerId}`, deptId: null });
     }
     for (const m of ais.data?.mgr ?? []) Object.assign(A(m.managerId), { aiAnalyses: m.analyses, aiScoreSum: m.scoreSum, aiScoreN: m.scoreN, aiViolations: m.violations, aiRequests: m.requests });
@@ -338,6 +338,7 @@ export function RepeatKanbanAnalyticsPage() {
         {loading && <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">Собираю аналитику… за всё время это 5–15 секунд.</div>}
         {model && T && tab === 'overview' && <Overview model={model} />}
         {model && T && tab === 'activity' && <Activity model={model} data={an.data} ai={ai.data} aiOk={ai.isSuccess} />}
+        {model && T && tab === 'tasks' && <TasksTab model={model} />}
         {model && T && tab === 'results' && <Results model={model} matureDays={res.data?.matureDays ?? 30} />}
         {model && T && tab === 'pool' && <PoolSpeed model={model} data={an.data} />}
         {model && tab === 'ai' && ais.data && <AiTab model={model} s={ais.data} />}
@@ -530,6 +531,42 @@ function MgrRating({ data, ai, aiOk }: { data: KanbanAnalytics; ai: { managers: 
         </table>
       </div>
       <Note>В рейтинге — менеджеры с 20+ заказчиками в работе и пуле. {aiOk && <Link href="/ai-analysis/managers" target="_blank" rel="noopener noreferrer" className="text-[var(--color-accent)] hover:underline">ИИ-оценка подробно →</Link>}</Note>
+    </div>
+  );
+}
+
+// ── Задачи ────────────────────────────────────────────────────────────────────
+// Владелец 29.10: «информация по задачам по менеджерам, агрегированная в отделы и выше: у кого сколько активных,
+// просроченных и т. д.». Состояние — сейчас (Битрикс), потоки (поставлено, принято, вернули) — за период.
+function TasksTab({ model }: { model: { roots: TreeNode[]; total: TreeNode } }) {
+  const T = model.total.agg;
+  const active = (a: MAgg) => a.openTasks + a.control;
+  const cols: Col[] = [
+    { key: 'active', label: 'Активных', hint: 'Открытые задачи + сданные и ждущие приёмки (сейчас)', sort: active, render: a => <b>{active(a) || '—'}</b> },
+    { key: 'notStarted', label: 'Не начаты', hint: 'Статус «ждёт выполнения» — менеджер ещё не взял в работу', sort: a => a.notStarted, render: a => a.notStarted || '—' },
+    { key: 'inProgressT', label: 'В работе', sort: a => a.inProgressT, render: a => a.inProgressT || '—' },
+    { key: 'deferred', label: 'Отложены', sort: a => a.deferred, render: a => a.deferred || '—' },
+    { key: 'overdue', label: 'Просрочено', hint: 'Открытые со сроком в прошлом; красным — больше 7 дней', sort: a => a.overdue,
+      render: a => (a.overdue ? <><span style={{ color: '#990000', fontWeight: 700 }}>{a.overdue}</span>{a.overdue7 > 0 && <span className="ml-1 rounded bg-[#f4cccc] px-1 text-[11px] font-bold text-[#990000]">{a.overdue7} &gt;7 дн.</span>}</> : '—') },
+    { key: 'overduePct', label: '% просрочки', hint: 'Просрочено среди открытых', sort: a => pct(a.overdue, a.openTasks), render: a => { const v = pct(a.overdue, a.openTasks); return v === null ? '—' : <Light v={100 - v} lo={50} hi={80} />; } },
+    { key: 'control', label: 'Ждут приёмки', sort: a => a.control, render: a => (a.control ? <>{a.control}<span className="ml-1 text-[11px] text-[var(--color-text-muted)]">≈{hours(median(a.controlWaitH))}</span></> : '—') },
+    { key: 'tasks', label: 'Поставлено', hint: 'Задачи проекта за период', sort: a => a.tasks, render: a => a.tasks || '—' },
+    { key: 'closed', label: 'Принято', hint: 'Завершены за период', sort: a => a.closed, render: a => a.closed || '—' },
+    { key: 'returned', label: 'Вернули', hint: 'На доработку из канбана за период', sort: a => a.returned, render: a => a.returned || '—' },
+    { key: 'noTask', label: 'В работе без задачи', hint: 'Сделка открыта, задачи РОПа нет (снимок)', sort: a => a.noTask, render: a => a.noTask || '—' },
+  ];
+  return (
+    <div className="flex min-w-0 flex-col gap-4">
+      <KpiRow>
+        <Kpi label="Активных задач" value={rub.format(T.openTasks + T.control)} sub={`в работе ${T.inProgressT} · не начаты ${T.notStarted}`} />
+        <Kpi label="Просрочено" value={rub.format(T.overdue)} sub={`${pctRu(pct(T.overdue, T.openTasks))} открытых · >7 дн. ${T.overdue7}`} />
+        <Kpi label="Ждут приёмки" value={rub.format(T.control)} sub={`ждут ≈${hours(median(T.controlWaitH))}`} />
+        <Kpi label="Отложены" value={rub.format(T.deferred)} />
+        <Kpi label="Поставлено за период" value={rub.format(T.tasks)} sub={`принято ${T.closed} · вернули ${T.returned}`} />
+        <Kpi label="В работе без задачи" value={rub.format(T.noTask)} sub="сделка открыта, задачи нет" />
+      </KpiRow>
+      <TreeTable roots={model.roots} total={model.total} cols={cols} defaultSort="active" minW={1180} />
+      <Note>Активные, просроченные, ждут приёмки и отложенные — текущее состояние задач проекта «Повторные продажи» в Битриксе (по ответственному). Поставлено, принято и вернули — за выбранный период. «Ждут приёмки» — время ожидания приблизительное (≈): истории статусов в копии нет.</Note>
     </div>
   );
 }
