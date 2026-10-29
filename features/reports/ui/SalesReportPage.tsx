@@ -23,7 +23,7 @@ import { DrilldownDrawer } from './DrilldownDrawer';
 import { MetricChartModal, type MetricChartTarget } from './MetricChartModal';
 import type { DrilldownTarget } from './DrilldownDrawer';
 import { ComparisonPanel } from './ComparisonPanel';
-import { computeCalculated } from '@/features/reports/engine/calculated';
+import { aggregateGroupDeltas, type Deltas } from '@/features/reports/lib/aggregateDeltas';
 import type { DealScope, ClientType, Grouping, Metric, ProductGroupMode, ComparisonDisplay, BorderMode, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import type { DateRange, CalendarUnit } from '@/lib/period';
 import type { PeriodsDimension, CompareMode } from '@/features/reports/engine/byPeriods';
@@ -55,7 +55,6 @@ import { LogistCallsDrill } from '@/features/realizations/ui/LogistCallsDrill';
 import { isCallMetric } from '@/lib/realizations/callMetrics';
 import { REALIZATION_SLUGS, REGIONS_SLUG, LOGIST_DRILL_STATUS, LOGIST_METRICS, needsCallUpgrade, upgradeLogistView } from '@/lib/realizations/logistMetrics';
 
-type Deltas = Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }>;
 
 type MergedRow = {
   dimensionId: string;
@@ -72,47 +71,8 @@ type MergedRow = {
 
 type GroupedMergedRow = MergedRow & { isGroup?: boolean; children?: MergedRow[]; };
 
-// Честная агрегация группы: collected/external суммируются, calculated (конверсии,
-// средние чеки, % плана) пересчитываются по своей формуле от СУММ — отдельно для
-// текущего и сравнительного периодов. Просто складывать проценты нельзя.
-function aggregateGroupDeltas(members: MergedRow[], metrics: Metric[]): Deltas {
-  const ids = new Set<string>();
-  for (const r of members) for (const id of Object.keys(r.deltas)) ids.add(id);
-  const byId = new Map(metrics.map(m => [m.id, m]));
-
-  const sumsCur: Record<string, number | null> = {};
-  const sumsCmp: Record<string, number | null> = {};
-  for (const id of ids) {
-    const m = byId.get(id);
-    if (m?.metricType === 'calculated') continue;
-    // Несуммируемые external (медианы, клиентские значения, aggregation_fn='none')
-    // в строке группы честно пусты: сумма медиан 12 команд — не медиана филиала
-    // (инцидент 03.09: СПб показывал 164,7 «средних товарных групп на клиента»).
-    if (m?.metricType === 'external' && m.aggregationFn !== 'sum') continue;
-    let cur: number | null = null, cmp: number | null = null;
-    for (const r of members) {
-      const d = r.deltas[id];
-      if (!d) continue;
-      if (d.current !== null) cur = (cur ?? 0) + d.current;
-      if (d.comparison !== null) cmp = (cmp ?? 0) + d.comparison;
-    }
-    sumsCur[id] = cur;
-    sumsCmp[id] = cmp;
-  }
-
-  const calc = metrics.filter(m => m.metricType === 'calculated' && ids.has(m.id));
-  const cur = computeCalculated(sumsCur, calc);
-  const cmp = computeCalculated(sumsCmp, calc);
-
-  const deltas: Deltas = {};
-  for (const id of ids) {
-    const c = cur[id] ?? null, p = cmp[id] ?? null;
-    const delta = c !== null && p !== null ? c - p : null;
-    const deltaPct = delta === null || p === null || p === 0 ? null : (delta / p) * 100;
-    deltas[id] = { current: c, comparison: p, delta, deltaPct };
-  }
-  return deltas;
-}
+// Честная агрегация группы — features/reports/lib/aggregateDeltas.ts (общая с «Итого»
+// по отфильтрованным строкам в ReportTable).
 
 // Синтетическая строка «Без группы» (правка Серёги 31.07 №1): id-константа —
 // дискриминатор в обработчиках кликов и в ReportTable (свёрнута по умолчанию).
@@ -2121,6 +2081,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
             rows={displayRows}
             totals={data?.totals ?? null}
             metrics={orderedMetrics}
+            aggregationMetrics={groupingMetrics}
             comparisonDisplay={comparisonDisplay}
             metricDisplayModes={metricDisplayModes}
             comparisonThreshold={comparisonThreshold}

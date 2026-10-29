@@ -14,6 +14,7 @@ import { mixHex, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 import { matchesCondition, resolveThresholdZone, gradientZoneFromRank, type MetricFilters, type ZoneInfo } from '@/lib/reports/metricFilter';
 import { resolveHeatmapSet } from '@/lib/metrics/heatmapDefault';
 import { dimensionCountLabel } from '@/lib/format/pluralize';
+import { aggregateGroupDeltas } from '@/features/reports/lib/aggregateDeltas';
 
 // Ручной режим подсветки значений (п.9 спеки analsteroid-edits-spec-agreed-20260708.md):
 // пороги (значение+цвет, любое количество ≥1) + aboveColor — цвет «выше последнего порога»
@@ -111,6 +112,9 @@ interface Props {
   // см. app/api/reports/run/route.ts).
   totals: Record<string, { current: number | null; comparison: number | null; delta: number | null; deltaPct: number | null }> | null;
   metrics: Metric[];
+  /** Полный каталог метрик (с зависимостями calculated) — для пересчёта «Итого» и
+   *  подытогов групп по строкам, оставшимся после фильтров колонок. Без него — metrics. */
+  aggregationMetrics?: Metric[];
   comparisonDisplay: ComparisonDisplay;
   metricDisplayModes?: Record<string, ComparisonDisplay>;
   comparisonThreshold?: number;
@@ -285,7 +289,7 @@ function thresholdFor(m: Metric, metricThresholdOverrides: Record<string, number
 }
 
 export function ReportTable({
-  rows, totals, metrics, comparisonDisplay,
+  rows, totals: serverTotals, metrics, aggregationMetrics, comparisonDisplay,
   metricDisplayModes = {},
   comparisonThreshold = 5,
   isLoading,
@@ -643,8 +647,13 @@ export function ReportTable({
   // Клиентские, производные от rows/metricFilters — без похода на сервер. AND между
   // всеми активными фильтрами метрик. Групповые строки: фильтруются ДЕТИ, группа
   // остаётся видимой только если хоть один ребёнок прошёл фильтр (тот же приём, что и
-  // текстовый поиск в SalesReportPage). Итоговая строка (totals) в фильтрацию не
-  // участвует — считается по ВСЕМ строкам среза, решение владельца (проще и честнее).
+  // текстовый поиск в SalesReportPage). «Итого» и подытог группы при активном фильтре
+  // пересчитываются по ОСТАВШИМСЯ строкам (правка владельца 29.10: «накладываешь
+  // фильтры на колонки — ИТОГО не меняется, а должно»; прежнее решение «Итого по
+  // всему срезу» отменено). Агрегация — та же, что у строк отделов
+  // (aggregateGroupDeltas): суммы + calculated по формуле от сумм; несуммируемые
+  // external (медианы и т.п.) в пересчитанном «Итого» — прочерк, честного значения
+  // по подмножеству строк у фронта нет.
   const activeFilterEntries = Object.entries(metricFilters).filter(([, f]) => f?.colorZone || f?.condition);
   function rowPassesFilters(row: RowDeltas): boolean {
     for (const [metricId, f] of activeFilterEntries) {
@@ -657,15 +666,27 @@ export function ReportTable({
     }
     return true;
   }
+  const aggMetrics = aggregationMetrics ?? metrics;
   const filteredRows: RowDeltas[] = activeFilterEntries.length === 0 ? rows : rows.reduce<RowDeltas[]>((acc, r) => {
     if (r.isGroup) {
-      const children = (r.children ?? []).filter(rowPassesFilters);
-      if (children.length) acc.push({ ...r, children });
+      const all = r.children ?? [];
+      const children = all.filter(rowPassesFilters);
+      if (children.length) {
+        acc.push(children.length === all.length ? { ...r, children } : { ...r, children, deltas: aggregateGroupDeltas(children, aggMetrics) });
+      }
     } else if (rowPassesFilters(r)) {
       acc.push(r);
     }
     return acc;
   }, []);
+  // «Итого» по оставшимся строкам: листья (у группы — её дети), без самих
+  // групповых строк, иначе группа посчиталась бы дважды.
+  const totals = activeFilterEntries.length === 0 ? serverTotals : (() => {
+    const leaves: RowDeltas[] = [];
+    const walk = (list: RowDeltas[]) => { for (const r of list) { if (r.isGroup) walk(r.children ?? []); else leaves.push(r); } };
+    walk(filteredRows);
+    return aggregateGroupDeltas(leaves, aggMetrics);
+  })();
 
   // Только одна метрика может «сортировать по цвету» одновременно (см. SalesReportPage:
   // включение одной гасит флаг у остальных) — здесь просто берём первую активную.
