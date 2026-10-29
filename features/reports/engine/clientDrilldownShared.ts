@@ -17,7 +17,10 @@ const LTV_WINDOWS = [30, 60, 90, 180, 360] as const;
 // счётчик ЗАКАЗЧИКОВ, с числом сделок; client_ltv (медиана) — с суммой).
 export type ClientDrillCompare = 'customers' | 'deals' | 'amount';
 export type ClientDrillRule =
-  | { kind: 'base'; rnCond?: string; complexOnly?: boolean; compare?: ClientDrillCompare }
+  | { kind: 'base'; rnCond?: string; complexOnly?: boolean;
+      // «Золотые рыбки» (29.10): заказчики с 5+ отгрузками в срезе строки;
+      // active/sleeping — с последней отгрузкой за 30 дней / раньше.
+      goldfish?: 'all' | 'active' | 'sleeping'; compare?: ClientDrillCompare }
   | { kind: 'cohort'; windowDays?: number; firstOnly?: boolean;
       // allClients — вся когорта, не только повторные (cohort_clients, #4996);
       // returnedOnly — повторные, у кого ВТОРАЯ отгрузка уложилась в окно
@@ -35,6 +38,11 @@ export const CLIENT_DRILL_RULES: Record<string, ClientDrillRule> = {
   repeat_rate_clients:      { kind: 'base', rnCond: '>= 2' },
   first_repeat_clients:     { kind: 'base', rnCond: '= 2', compare: 'customers' },
   complex_clients:          { kind: 'base', complexOnly: true, compare: 'customers' },
+  goldfish_clients:          { kind: 'base', goldfish: 'all', compare: 'customers' },
+  goldfish_active_clients:   { kind: 'base', goldfish: 'active', compare: 'customers' },
+  goldfish_sleeping_clients: { kind: 'base', goldfish: 'sleeping', compare: 'customers' },
+  // «Доля улова» — население знаменателя: все рыбки строки.
+  goldfish_catch_pct:        { kind: 'base', goldfish: 'all' },
   cohort_repeat_clients:    { kind: 'cohort', compare: 'customers' },
   cohort_first_revenue:     { kind: 'cohort', firstOnly: true, compare: 'amount' },
   cohort_ltv_total_revenue: { kind: 'cohort', compare: 'amount' },

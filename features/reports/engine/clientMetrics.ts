@@ -69,6 +69,12 @@ export interface ClientMetricsRow {
   repeatClients: number;
   /** Клиенты, чья ВТОРАЯ товарная отгрузка (первая повторная) попала в период. */
   firstRepeatClients: number;
+  /** «Золотые рыбки»: клиенты с GOLDFISH_MIN_SHIPMENTS+ товарными отгрузками в
+   *  срезе строки за период. */
+  goldfish: number;
+  /** Из них — с последней товарной отгрузкой (по всей истории, любой менеджер)
+   *  не раньше GOLDFISH_ACTIVE_DAYS дней назад. Спящие = goldfish − goldfishActive. */
+  goldfishActive: number;
   /** Товарные отгрузки периода (заказы). */
   orders: number;
   /** Сумма первых товарных отгрузок клиентов. */
@@ -120,6 +126,9 @@ export const CLIENT_METRIC_IDS = [
   'median_cycle_time_days', 'median_client_lifetime_months',
   // Пятая пачка: первая повторная — базовым, активные 90 дн — своим запросом.
   'first_repeat_clients', 'active_clients_90d',
+  // «Золотые рыбки» (задача владельца 29.10, миграция 259); «Доля улова» —
+  // calculated из этих двух и в список не входит.
+  'goldfish_clients', 'goldfish_active_clients', 'goldfish_sleeping_clients',
   'cohort_repeat_clients', 'cohort_first_revenue',
   'cohort_repeat_revenue_30', 'cohort_repeat_revenue_60', 'cohort_repeat_revenue_90',
   'cohort_repeat_revenue_180', 'cohort_repeat_revenue_360', 'cohort_ltv_total_revenue',
@@ -144,6 +153,7 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
     return {
       new_clients_count: 0, all_clients_delivered: 0, repeat_clients_delivered: 0,
       first_repeat_clients: 0,
+      goldfish_clients: 0, goldfish_active_clients: 0, goldfish_sleeping_clients: 0,
       delivered_deals_count: 0, new_clients_amount: 0, repeat_clients_amount: 0,
       complex_clients: 0, client_groups_sum: 0, order_groups_sum: 0, order_products_sum: 0,
       median_cycle_time_days: null, median_client_lifetime_months: null,
@@ -159,6 +169,9 @@ export function clientMetricsToRecord(row: ClientMetricsRow | undefined): Record
     // если в периоде есть его непервая отгрузка; с новыми может пересекаться.
     repeat_clients_delivered: row.repeatClients,
     first_repeat_clients: row.firstRepeatClients,
+    goldfish_clients: row.goldfish,
+    goldfish_active_clients: row.goldfishActive,
+    goldfish_sleeping_clients: row.goldfish - row.goldfishActive,
     delivered_deals_count: row.orders,
     new_clients_amount: row.newAmount,
     repeat_clients_amount: row.repeatAmount,
@@ -199,6 +212,27 @@ export interface ClientMetricsOptions {
 }
 
 const MSK = 'Europe/Moscow';
+
+// ── «Золотые рыбки» (задача владельца 29.10.2026) ────────────────────────────
+// «Золотая рыбка» — заказчик с 5+ отгрузками за выбранный период. «В работе» —
+// из них те, чья последняя отгрузка была за последние 30 дней (от СЕГОДНЯ, не от
+// конца периода: смысл — видеть, кого из крупных мы сейчас держим). «Спящие» —
+// остаток. «Доля улова» = в работе ÷ все (calculated, миграция 259).
+//
+// Решения при постройке (владелец сказал «делай», не уточняли):
+//   * отгрузка = товарная отгрузка, как везде в разделе (чистая перевозка не
+//     покупка), каждая сделка — отдельная отгрузка, без склейки дробления;
+//   * 5 отгрузок считаются В СРЕЗЕ СТРОКИ: у менеджера — его отгрузки этому
+//     заказчику, у группы — отгрузки этой группы, у бакета периода — внутри
+//     бакета, в «Итого» — все отгрузки периода. Так строки и итог отвечают на
+//     один вопрос, а дрилл восстанавливает то же население;
+//   * «последняя отгрузка» — по ВСЕЙ истории заказчика у любого менеджера: если
+//     рыбка ушла к коллеге и отгружается, она в работе у компании, а не спит.
+// Дрилл (clientDrilldown.ts) импортирует пороги отсюда — правило одно.
+export const GOLDFISH_MIN_SHIPMENTS = 5;
+export const GOLDFISH_ACTIVE_DAYS = 30;
+/** Полночь МСК GOLDFISH_ACTIVE_DAYS дней назад — граница «в работе». */
+export const GOLDFISH_ACTIVE_SINCE = `((date_trunc('day', now() AT TIME ZONE '${MSK}') - interval '${GOLDFISH_ACTIVE_DAYS} days') AT TIME ZONE '${MSK}')`;
 
 // Воронки 4/7 исключены — так же, как в старой семье метрик этого раздела
 // (описания `all_clients_delivered` и др.): это служебные воронки, не продажи.
@@ -390,6 +424,7 @@ src AS (
          -- месяцы по 30.44 дн — как в исходном определении median_client_lifetime_months
          EXTRACT(EPOCH FROM (cb.last_deliv - cb.first_created)) / 86400.0 / 30.44 AS lifetime_months,
          (rk.rn = 2) AS is_first_repeat,
+         COALESCE(cb.last_deliv >= ${GOLDFISH_ACTIVE_SINCE}, false) AS is_recent,
          -- «Повторная покупка» на уровне СДЕЛКИ: отгрузка не первая в истории
          -- клиента. Баг-репорт владельца 11.08 («Менеджеры — Repeat Rate: по всем
          -- менеджерам за всё время нули»): прежнее «повторные = все клиенты − новые»
@@ -412,8 +447,8 @@ src AS (
 -- считаются ПО СДЕЛКАМ, а клиенты/комплексность/группы на клиента — сначала
 -- сворачиваются ПО КЛИЕНТУ (клиент с десятью заказами весит столько же, сколько
 -- клиент с одним), и только потом усредняются.
-pc_dim  AS (SELECT dim_id, contact_id, bool_or(is_new) AS is_new, bool_or(is_repeat_deal) AS is_repeat, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1, 2),
-pc_all  AS (SELECT contact_id, bool_or(is_new) AS is_new, bool_or(is_repeat_deal) AS is_repeat, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1),
+pc_dim  AS (SELECT dim_id, contact_id, count(*) AS n_ship, bool_or(is_recent) AS is_recent, bool_or(is_new) AS is_new, bool_or(is_repeat_deal) AS is_repeat, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1, 2),
+pc_all  AS (SELECT contact_id, count(*) AS n_ship, bool_or(is_recent) AS is_recent, bool_or(is_new) AS is_new, bool_or(is_repeat_deal) AS is_repeat, bool_or(is_first_repeat) AS is_first_repeat, max(client_groups) AS cg, max(lifetime_months) AS lifetime, max(days_since_last) AS dsl, max(order_freq_days) AS freq, max(client_ltv) AS ltv FROM src GROUP BY 1),
 deal_dim AS (
   -- Суммы «новые/повторные» — по СДЕЛКЕ (первая покупка клиента / повторная), а не
   -- по новизне клиента: прежний FILTER (WHERE is_new) на «всём времени» относил
@@ -438,6 +473,8 @@ client_dim AS (
          count(*) FILTER (WHERE is_new)  AS new_clients,
          count(*) FILTER (WHERE is_repeat) AS repeat_clients,
          count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
+         count(*) FILTER (WHERE n_ship >= ${GOLDFISH_MIN_SHIPMENTS}) AS goldfish,
+         count(*) FILTER (WHERE n_ship >= ${GOLDFISH_MIN_SHIPMENTS} AND is_recent) AS goldfish_active,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
          AVG(cg) AS groups_per_client,
          COALESCE(SUM(cg), 0) AS groups_sum_clients,
@@ -453,6 +490,8 @@ client_all AS (
          count(*) FILTER (WHERE is_new)  AS new_clients,
          count(*) FILTER (WHERE is_repeat) AS repeat_clients,
          count(*) FILTER (WHERE is_first_repeat) AS first_repeat_clients,
+         count(*) FILTER (WHERE n_ship >= ${GOLDFISH_MIN_SHIPMENTS}) AS goldfish,
+         count(*) FILTER (WHERE n_ship >= ${GOLDFISH_MIN_SHIPMENTS} AND is_recent) AS goldfish_active,
          count(*) FILTER (WHERE cg >= 2) AS complex_clients,
          AVG(cg) AS groups_per_client,
          COALESCE(SUM(cg), 0) AS groups_sum_clients,
@@ -463,14 +502,14 @@ client_all AS (
          percentile_cont(0.5) WITHIN GROUP (ORDER BY cg)   AS med_cats,
          percentile_cont(0.5) WITHIN GROUP (ORDER BY (CASE WHEN freq > 0 THEN dsl / freq * 100 END)) AS med_risk
     FROM pc_all)
-SELECT d.dim_id, c.clients_total, c.new_clients, c.repeat_clients, c.first_repeat_clients, d.orders, d.new_amount, d.repeat_amount,
+SELECT d.dim_id, c.clients_total, c.new_clients, c.repeat_clients, c.first_repeat_clients, c.goldfish, c.goldfish_active, d.orders, d.new_amount, d.repeat_amount,
        c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
        c.groups_sum_clients, d.groups_sum_orders, d.products_sum_orders,
        d.median_cycle, c.median_lifetime,
        c.med_dsl, c.med_freq, c.med_ltv, c.med_cats, c.med_risk
   FROM deal_dim d JOIN client_dim c ON c.dim_id IS NOT DISTINCT FROM d.dim_id
 UNION ALL
-SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.repeat_clients, c.first_repeat_clients, d.orders, d.new_amount,
+SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.repeat_clients, c.first_repeat_clients, c.goldfish, c.goldfish_active, d.orders, d.new_amount,
        d.repeat_amount, c.complex_clients, c.groups_per_client, d.groups_per_order, d.products_per_order,
        c.groups_sum_clients, d.groups_sum_orders, d.products_sum_orders,
        d.median_cycle, c.median_lifetime,
@@ -483,6 +522,9 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.repeat_cl
     dealScope, clientType,
     deptEmpty ? 'none' : (managerIds.length ? managerIds.join(',') : 'all'),
     `${opts.createdTimeFilter ?? 'all'}:${opts.firstTouchFilter ?? 'all'}|df:${df.key}`,
+    // «В работе» у золотых рыбок отсчитывается от сегодня — прошлый период из
+    // долгого исторического кэша иначе показывал бы позавчерашний ответ.
+    `today:${new Date().toLocaleDateString('sv-SE', { timeZone: MSK })}`,
   ].join('|');
 
   const rows = await cached(`rpt:clients:${key}`, reportTtl(toExclIso), async () => {
@@ -497,6 +539,8 @@ SELECT '${CLIENTS_GRAND_TOTAL_KEY}', c.clients_total, c.new_clients, c.repeat_cl
       newClients: num(r.new_clients),
       repeatClients: num(r.repeat_clients),
       firstRepeatClients: num(r.first_repeat_clients),
+      goldfish: num(r.goldfish),
+      goldfishActive: num(r.goldfish_active),
       orders: num(r.orders),
       newAmount: num(r.new_amount),
       repeatAmount: num(r.repeat_amount),

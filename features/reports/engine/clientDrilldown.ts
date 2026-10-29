@@ -7,6 +7,7 @@ import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, CreatedTimeFilter, FirstTouchFilter, ProductGroupMode } from '@/lib/metrics/types';
 import { CLIENT_DRILL_RULES, CLIENT_DRILL_METRIC_IDS } from './clientDrilldownShared';
 import { addDays, startOfDay } from 'date-fns';
+import { GOLDFISH_MIN_SHIPMENTS, GOLDFISH_ACTIVE_SINCE } from './clientMetrics';
 
 export { CLIENT_DRILL_METRIC_IDS };
 
@@ -166,6 +167,18 @@ export async function fetchClientMetricDeals(opts: ClientDrillOptions): Promise<
        GROUP BY 1
     ) cx WHERE cg >= 2
   ) cxf ON cxf.contact_id = pd.contact_id` : '';
+    // Золотые рыбки — то же население, что в clientMetrics: 5+ отгрузок в срезе
+    // строки (period_deals уже сужен строкой), «в работе» — по последней товарной
+    // отгрузке заказчика за всю историю.
+    const recent = `(SELECT max(h.delivered_at) FROM sa.deals h
+        WHERE h.contact_id = gfc.contact_id AND h.funnel_id NOT IN ${EXCLUDED_FUNNELS}
+          AND EXISTS (SELECT 1 FROM jsonb_array_elements(h.products) p WHERE ${goods})) >= ${GOLDFISH_ACTIVE_SINCE}`;
+    const goldfishJoin = rule.goldfish ? `
+  JOIN (
+    SELECT gfc.contact_id FROM (
+      SELECT contact_id FROM period_deals GROUP BY 1 HAVING count(*) >= ${GOLDFISH_MIN_SHIPMENTS}
+    ) gfc${rule.goldfish === 'active' ? ` WHERE ${recent}` : rule.goldfish === 'sleeping' ? ` WHERE NOT COALESCE(${recent}, false)` : ''}
+  ) gf ON gf.contact_id = pd.contact_id` : '';
     sql = `
 WITH period_deals AS (
   SELECT d.deal_id, d.contact_id, d.deal_name, d.amount, d.delivered_at,
@@ -187,7 +200,7 @@ ranked AS (
 )
 SELECT pd.*
   FROM period_deals pd
-  JOIN ranked r ON r.deal_id = pd.deal_id ${rnFilter}${complexJoin}
+  JOIN ranked r ON r.deal_id = pd.deal_id ${rnFilter}${complexJoin}${goldfishJoin}
  ORDER BY pd.contact_id, pd.delivered_at`;
   } else {
     // Когорта: первая товарная отгрузка клиента в периоде, 2+ отгрузки за историю
