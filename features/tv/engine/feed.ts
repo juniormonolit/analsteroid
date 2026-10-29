@@ -70,6 +70,36 @@ export async function fetchFactsByManager(idsNum: number[], fromIso: string, toE
   return out;
 }
 
+/**
+ * Только для телевизоров: бронь и продажа одной сделки в один день → засчитываем
+ * лишь продажу (более позднее по статусу событие). Правка владельца 29.10: цели на ТВ —
+ * 5 продаж и 5 броней с бонусом за каждую, и менеджеры, продавая сразу (со «Созвонился
+ * и озвучил цены»), ставили сначала бронь, потом продажу — набивали брони на экране.
+ * Окно [fromIso, toExclIso) у телевизора — ровно сутки МСК, поэтому «оба в окне» =
+ * «в один день». Вычитаем только сделки, которые попали в продажи (воронки перв.+повт. —
+ * как funnel_type у primary/repeat_sales_* в sqlGen), иначе сделка пропала
+ * бы с экрана совсем. /today, /rop и отчёты считают брони как есть.
+ */
+async function collapseSameDayBookings(facts: Map<string, Record<FactId, number>>, idsNum: number[], fromIso: string, toExclIso: string): Promise<void> {
+  if (idsNum.length === 0) return;
+  const res = await analyticsDb().query<{ manager_id: string; cnt: string; amount: string | null }>(
+    `SELECT current_manager_id::text AS manager_id, COUNT(DISTINCT deal_id) AS cnt, SUM(amount) AS amount
+       FROM deals
+      WHERE current_manager_id IN (${idsNum.join(',')})
+        AND reserved_at >= $1 AND reserved_at < $2
+        AND sold_at >= $1 AND sold_at < $2
+        AND funnel_id IN (SELECT id FROM funnels WHERE is_repeat IS NOT NULL)
+      GROUP BY 1`,
+    [fromIso, toExclIso],
+  );
+  for (const r of res.rows) {
+    const f = facts.get(r.manager_id);
+    if (!f) continue;
+    f.reservations_count = Math.max(0, f.reservations_count - Number(r.cnt));
+    f.reservations_amount = Math.max(0, f.reservations_amount - Number(r.amount ?? 0));
+  }
+}
+
 /** Продажи сегодня списком — для событий «мувик на продажу» (клиент сравнивает id). */
 async function fetchTodaySales(idsNum: number[], fromIso: string, toExclIso: string, names: Map<string, string>): Promise<TvFeedSale[]> {
   if (idsNum.length === 0) return [];
@@ -288,6 +318,7 @@ export async function buildScreenFeed(
       recentlyActiveIds(placeholderIds, workingDaysBackIso(today, RECENT_WORKING_DAYS), toExclIso),
     ]);
     const plans = planRes.byLogin;
+    await collapseSameDayBookings(facts, idsNum, fromIso, toExclIso);
 
     // Бегущая строка — своя у отдела (правка владельца 07.09: ЖБИ читает остаток
     // склада, ОС МСК — про скандик), иначе общая строка экрана. Мастер-выключатель —
