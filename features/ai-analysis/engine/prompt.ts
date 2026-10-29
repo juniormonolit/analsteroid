@@ -20,7 +20,8 @@ import type { ClientCallData } from './collect';
 import { maskCompany, maskPii } from './mask';
 import { linksText, type LinksFacts } from './links';
 
-export const PROMPT_VERSION = 'v9';
+// v10 (29.10) — в «Анкете» и вопросы групп, которые предлагаем (ушли в задачу «Выяснить»): спросил ли менеджер, что ответил клиент.
+export const PROMPT_VERSION = 'v10';
 
 /** Разделы отчёта в порядке промпта — по ним UI режет markdown. */
 export const REPORT_SECTIONS = [

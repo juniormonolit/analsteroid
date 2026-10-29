@@ -539,6 +539,32 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
                       </div>
                     );
                   })()}
+                  {/* Вопросы анкеты клиенту (владелец 29.10): и по отгруженным группам, и по тем, что предлагаем —
+                      они уходят в задачу «Выяснить». Задал ли менеджер и что ответил клиент. */}
+                  {(() => {
+                    const qs = (parsed?.links?.questions ?? []).filter(q => q.audience !== 'manager_check');
+                    if (!qs.length) return null;
+                    const asked = qs.filter(q => q.asked === 'yes').length;
+                    return (
+                      <div className="flex flex-col gap-1 rounded-lg bg-[color-mix(in_srgb,var(--color-text-muted)_7%,transparent)] px-2.5 py-2">
+                        <div className="text-[11.5px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">По анкете · вопросы клиенту · задано {asked} из {qs.length}</div>
+                        {qs.map(q => {
+                          const ans = q.answerText || (q.answerOptions?.length ? q.answerOptions.join(', ') : null);
+                          return (
+                            <div key={q.id} className="flex min-w-0 gap-2 text-[13px]">
+                              <b className={`shrink-0 ${q.asked === 'yes' ? 'text-[var(--color-positive)]' : q.asked === 'no' ? 'text-[var(--color-negative)]' : 'text-[var(--color-text-muted)]'}`}>{q.asked === 'yes' ? '✓' : q.asked === 'no' ? '✗' : '?'}</b>
+                              <span className="min-w-0 break-words">
+                                {q.question}
+                                {ans && <> → <b className="font-semibold">{ans}</b></>}
+                                {q.quote ? <span className="text-[var(--color-text-muted)]"> — «{q.quote}»{q.quoteFound ? '' : ' (нет в расшифровке)'}</span> : null}
+                                {q.asked === 'no' && <span className="text-[var(--color-text-muted)]"> — не спросил</span>}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                   <details className="border-t border-[var(--color-border)]">
                     <summary className="flex min-h-11 cursor-pointer items-center gap-1 text-[13px] text-[var(--color-accent)]"><ChevronDown size={13} className="shrink-0" />Подробно, с цитатами</summary>
                     <SectionBody md={md} quotes={quotes} onQuote={goQuote} />

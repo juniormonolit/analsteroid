@@ -25,7 +25,7 @@ export interface PairFact {
 }
 /** audience (migrations/251): 'client' — вопрос клиенту («спрошено? ответ?» → анкета карточки); 'manager_check' —
  *  проверка менеджера («Менеджер предложил бесплатного замерщика»): сделал ли в разговоре — только отчёт РОПу. */
-export interface QuestionFact { id: number; group: string; question: string; kind: GroupQuestion['kind']; options: string[]; audience: 'client' | 'manager_check' }
+export interface QuestionFact { id: number; group: string; question: string; kind: GroupQuestion['kind']; options: string[]; audience: 'client' | 'manager_check'; /** Группа, которую предлагаем (вопрос ушёл в задачу «Выяснить»), а не отгруженная. */ proposed?: boolean }
 export interface LinksFacts {
   shipped12: string[];
   pairs: PairFact[];
@@ -90,6 +90,15 @@ export async function buildLinksFacts(data: ClientCallData): Promise<LinksFacts>
   for (const g of [...shipped12, COMMON_GROUP]) for (const q of qs.get(g) ?? []) {
     if (q.id !== null) questions.push({ id: q.id, group: g, question: q.question, kind: q.kind, options: q.options, audience: q.audience === 'manager_check' ? 'manager_check' : 'client' });
   }
+  // Вопросы анкет групп, которые ПРЕДЛАГАЕМ, — они уходят в задачу («Выяснить»); модель проверяет и их:
+  // задал ли менеджер, что ответил клиент (владелец 29.10: «в промт надо добавлять эту анкету и проверить,
+  // заданы ли вопросы и получены ли ответы»). До этого проверялись только анкеты отгруженных групп.
+  const seenQ = new Set(questions.map(q => q.id));
+  for (const g of proposed) for (const q of qs.get(g) ?? []) {
+    if (q.id === null || seenQ.has(q.id) || q.audience === 'manager_check' || looksLikeManagerCheck(q.question)) continue;
+    seenQ.add(q.id);
+    questions.push({ id: q.id, group: g, question: q.question, kind: q.kind, options: q.options, audience: 'client', proposed: true });
+  }
   const askForProposed = proposed
     .map(g => ({
       group: g,
@@ -109,7 +118,7 @@ export function linksText(f: LinksFacts): string {
     const deals = p.deals.length ? p.deals.map(d => `#${d.dealId} от ${ddmm(d.createdAt)} — ${d.state === 'shipped' ? 'отгружена' : d.state === 'lost' ? `закрыта: ${d.stage ?? ''}` : `в работе: ${d.stage ?? ''}`}`).join('; ') : 'сделок нет';
     out.push(`- «${p.from}» → «${p.to}»: ${p.shippedEver ? `отгружали, последний раз ${ddmm(p.lastShipped)}` : 'не отгружали'}; сделки с «${p.to}»: ${deals}`);
   }
-  out.push('', '## Анкета (вопросы по отгруженным группам и общие)');
+  out.push('', '## Анкета (вопросы по отгруженным группам, по группам, которые предлагаем, и общие)');
   if (!f.questions.length) out.push('- Анкет по этим группам нет — раздел пропусти (questions: []).');
   for (const q of f.questions) {
     if (q.audience === 'manager_check') {
@@ -117,7 +126,7 @@ export function linksText(f: LinksFacts): string {
       continue;
     }
     const opts = q.kind === 'text' ? 'свободный ответ' : `${q.kind === 'single' ? 'один вариант' : 'несколько вариантов'} из: ${q.options.join(' | ')}`;
-    out.push(`- Q${q.id} [${q.group === COMMON_GROUP ? 'общий' : q.group}; вопрос клиенту; ${opts}] ${q.question}`);
+    out.push(`- Q${q.id} [${q.group === COMMON_GROUP ? 'общий' : q.group}${q.proposed ? ' — предлагаем, вопрос был в задаче' : ''}; вопрос клиенту; ${opts}] ${q.question}`);
   }
   return out.join('\n');
 }
