@@ -110,6 +110,24 @@ interface Col { key: string; label: string; hint?: string; sort: (a: MAgg) => nu
 function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[]; total: TreeNode; cols: Col[]; defaultSort: string; minW: number }) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: defaultSort, dir: -1 });
+  // Поиск менеджера или подразделения (владелец 30.10): показываем совпавших с их веткой, всё раскрыто; суммы узлов — полные.
+  const [q, setQ] = useState('');
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return null;
+    const keep = (n: TreeNode): TreeNode | null => {
+      if (n.name.toLowerCase().includes(needle)) return n;
+      const kids = n.children.map(keep).filter((x): x is TreeNode => !!x);
+      return kids.length ? { ...n, children: kids } : null;
+    };
+    const roots2 = roots.map(keep).filter((x): x is TreeNode => !!x);
+    const ids = new Set<string>();
+    const walk = (n: TreeNode) => { if (n.kind === 'org') ids.add(n.id); n.children.forEach(walk); };
+    roots2.forEach(walk);
+    return { roots: roots2, open: ids };
+  }, [q, roots]);
+  const viewRoots = shown?.roots ?? roots;
+  const isOpenId = (id: string) => (shown ? shown.open.has(id) : open.has(id));
   const sortOf = (n: TreeNode) => (sort.key === 'name' ? n.name : cols.find(c => c.key === sort.key)?.sort(n.agg) ?? -Infinity);
   const sorted = (nodes: TreeNode[]) => [...nodes].sort((a, b) => {
     const va = sortOf(a), vb = sortOf(b);
@@ -123,7 +141,7 @@ function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[
     setOpen(ids);
   };
   const rows = (nodes: TreeNode[]): React.ReactNode => sorted(nodes).map(n => {
-    const isOpen = open.has(n.id);
+    const isOpen = isOpenId(n.id);
     return (
       <Fragment key={n.id}>
         <tr className={`border-b border-[var(--color-border)] ${n.depth === 0 ? 'bg-[var(--color-bg)]' : ''} hover:bg-[var(--color-bg-hover)]`}>
@@ -147,10 +165,12 @@ function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[
   });
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <div className="flex flex-wrap gap-2 text-sm">
-        <Btn onClick={() => setOpen(new Set())}>Филиалы</Btn>
-        <Btn onClick={() => expandTo(2)}>До отделов</Btn>
-        <Btn onClick={() => expandTo('mgr')}>До менеджеров</Btn>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <Btn onClick={() => { setQ(''); setOpen(new Set()); }}>Филиалы</Btn>
+        <Btn onClick={() => { setQ(''); expandTo(2); }}>До отделов</Btn>
+        <Btn onClick={() => { setQ(''); expandTo('mgr'); }}>До менеджеров</Btn>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск: менеджер или отдел" aria-label="Поиск менеджера или отдела"
+          className="min-h-11 w-full min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 text-base sm:w-64 sm:text-sm" />
       </div>
       <div className="scroll-x rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
         <table className="w-full text-sm" style={{ minWidth: minW }}>
@@ -170,7 +190,7 @@ function TreeTable({ roots, total, cols, defaultSort, minW }: { roots: TreeNode[
               {cols.map(c => <td key={c.key} className={cell}>{c.render(total.agg)}</td>)}
             </tr>
           </thead>
-          <tbody>{rows(roots)}</tbody>
+          <tbody>{rows(viewRoots)}{shown && !shown.roots.length && <tr><td colSpan={cols.length + 1} className="px-3 py-4 text-left text-[var(--color-text-muted)]">Никого не нашли.</td></tr>}</tbody>
         </table>
       </div>
     </div>
@@ -285,11 +305,20 @@ export function RepeatKanbanAnalyticsPage() {
     const lim = (res.data?.matureDays ?? 30) * DAY_MS;
     // «Взято из пула» — разные заказчики, по которым ставили задачи (по менеджеру; вверх по дереву — сумма).
     const taken = new Map<string, Set<string>>();
+    // Потенциал разных заказчиков (по менеджеру): взятых, купивших, получивших отгрузку.
+    const pot = new Map<string, { taken: Map<string, number>; sold: Map<string, number>; shipped: Map<string, number> }>();
+    const P = (id: string) => { let x = pot.get(id); if (!x) { x = { taken: new Map(), sold: new Map(), shipped: new Map() }; pot.set(id, x); } return x; };
     for (const t of res.data?.tasks ?? []) {
       if (!t.managerId) continue;
       const a = A(t.managerId);
       a.tasks++;
-      if (t.clientRef) { const set = taken.get(t.managerId) ?? new Set<string>(); set.add(t.clientRef); taken.set(t.managerId, set); }
+      if (t.clientRef) {
+        const set = taken.get(t.managerId) ?? new Set<string>(); set.add(t.clientRef); taken.set(t.managerId, set);
+        const v = t.potential ?? 0, x = P(t.managerId);
+        x.taken.set(t.clientRef, Math.max(x.taken.get(t.clientRef) ?? 0, v));
+        if (t.soldAt && !t.superseded) x.sold.set(t.clientRef, Math.max(x.sold.get(t.clientRef) ?? 0, v));
+        if (t.shippedAt && !t.superseded) x.shipped.set(t.clientRef, Math.max(x.shipped.get(t.clientRef) ?? 0, v));
+      }
       if (t.superseded) continue;
       a.base++;
       const at = new Date(t.createdAt).getTime();
@@ -300,6 +329,8 @@ export function RepeatKanbanAnalyticsPage() {
       else if (!t.shippedAt) a.inProgress++;
     }
     for (const [id, set] of taken) A(id).clientsTaken = set.size;
+    const sumMap = (m: Map<string, number>) => [...m.values()].reduce((s, v) => s + v, 0);
+    for (const [id, x] of pot) Object.assign(A(id), { potTaken: sumMap(x.taken), potSold: sumMap(x.sold), potShipped: sumMap(x.shipped) });
     for (const [id, info] of Object.entries(res.data?.managers ?? {})) if (!dir.has(id)) dir.set(id, info);
     for (const m of sp.data?.mgr ?? []) {
       Object.assign(A(m.managerId), { control: m.control, controlWaitH: m.controlWaitH, overdue: m.overdue, overdue7: m.overdue7, openTasks: m.open, closed: m.accepted, notStarted: m.notStarted, inProgressT: m.inProgress, deferred: m.deferred, reviewH: m.reviewH, queued: m.queued });
@@ -366,23 +397,30 @@ function Overview({ model }: { model: { roots: TreeNode[]; total: TreeNode } }) 
     .sort((x, y) => rank(y.a) + rank(y.r) - (rank(x.a) + rank(x.r)) || (crSold(y.node.agg) ?? 0) - (crSold(x.node.agg) ?? 0));
   // Отчёт владельца 30.10 — первым блоком: пул → взято → задачи → продажи → отгрузки, по подразделениям.
   const crT = (n: number, a: MAgg) => pct(n, a.tasks);
+  // Под каждым числом — потенциал этих заказчиков (владелец 30.10); под конверсиями — прогноз «весь пул при таком CR и
+  // среднем чеке» = пул × (сумма / задач).
+  const two = (main: React.ReactNode, sub: string | null, title?: string) => (
+    <div className="flex flex-col items-end leading-tight" title={title}>{main}{sub && <span className="text-[10.5px] font-normal text-[var(--color-text-muted)]">{sub}</span>}</div>
+  );
+  const potLine = (v: number) => (v ? `пот. ${moneyShort(v)}` : null);
+  const forecast = (sum: number, a: MAgg) => (a.tasks && sum ? Math.round((a.pool * sum) / a.tasks) : 0);
   const reportCols: Col[] = [
-    { key: 'pool', label: 'В пуле', hint: 'Сейчас: заказчики без открытой повторной сделки', sort: a => a.pool, render: a => rub.format(a.pool) },
-    { key: 'taken', label: 'Взято из пула', hint: 'Разных заказчиков, по которым за период ставили задачи', sort: a => a.clientsTaken, render: a => rub.format(a.clientsTaken) },
-    { key: 'tasks', label: 'Задач', hint: 'Задачи проекта «Повторные продажи» за период (из канбана и из Битрикса)', sort: a => a.tasks, render: a => rub.format(a.tasks) },
-    { key: 'sold', label: 'Продаж', hint: 'Продажа заказчику после задачи (до следующей отгрузки)', sort: a => a.soldN, render: a => rub.format(a.soldN) },
-    { key: 'crSold', label: 'CR Задача → Продажа', hint: 'Продаж / задач', sort: a => crT(a.soldN, a), render: a => <Light v={crT(a.soldN, a)} lo={5} hi={15} /> },
-    { key: 'soldSum', label: 'Сумма продаж', sort: a => a.soldSum, render: a => (a.soldSum ? moneyShort(a.soldSum) : '—') },
-    { key: 'shipped', label: 'Отгрузок', hint: 'Следующая отгрузка заказчика после задачи', sort: a => a.shippedN, render: a => rub.format(a.shippedN) },
-    { key: 'crShip', label: 'CR Задача → Отгрузка', hint: 'Отгрузок / задач', sort: a => crT(a.shippedN, a), render: a => pctRu(crT(a.shippedN, a)) },
-    { key: 'shipSum', label: 'Сумма отгрузок', sort: a => a.shippedSum, render: a => (a.shippedSum ? moneyShort(a.shippedSum) : '—') },
+    { key: 'pool', label: 'В пуле', hint: 'Сейчас: заказчики без открытой повторной сделки; ниже — их потенциал (выручка за год, если вернутся)', sort: a => a.pool, render: a => two(rub.format(a.pool), potLine(a.poolPotential)) },
+    { key: 'taken', label: 'Взято из пула', hint: 'Разных заказчиков, по которым за период ставили задачи; ниже — их потенциал', sort: a => a.clientsTaken, render: a => two(rub.format(a.clientsTaken), potLine(a.potTaken)) },
+    { key: 'tasks', label: 'Задач', hint: 'Задачи проекта «Повторные продажи» за период; ниже — доля потенциала пула, взятая в работу', sort: a => a.tasks, render: a => two(rub.format(a.tasks), a.poolPotential && a.potTaken ? `${pctRu(pct(a.potTaken, a.poolPotential + a.potTaken))} пот.` : null) },
+    { key: 'sold', label: 'Продаж', hint: 'Продажа заказчику после задачи (до следующей отгрузки); ниже — потенциал купивших', sort: a => a.soldN, render: a => two(rub.format(a.soldN), potLine(a.potSold)) },
+    { key: 'crSold', label: 'CR Задача → Продажа', hint: 'Продаж / задач; ниже — прогноз: весь пул при таком CR и среднем чеке продажи', sort: a => crT(a.soldN, a), render: a => two(<Light v={crT(a.soldN, a)} lo={5} hi={15} />, forecast(a.soldSum, a) ? `пул ≈ ${moneyShort(forecast(a.soldSum, a))}` : null) },
+    { key: 'soldSum', label: 'Сумма продаж', hint: 'Ниже — какая доля потенциала купивших реализована', sort: a => a.soldSum, render: a => two(a.soldSum ? moneyShort(a.soldSum) : '—', a.potSold && a.soldSum ? `${pctRu(pct(a.soldSum, a.potSold))} пот.` : null) },
+    { key: 'shipped', label: 'Отгрузок', hint: 'Следующая отгрузка заказчика после задачи; ниже — потенциал получивших отгрузку', sort: a => a.shippedN, render: a => two(rub.format(a.shippedN), potLine(a.potShipped)) },
+    { key: 'crShip', label: 'CR Задача → Отгрузка', hint: 'Отгрузок / задач; ниже — прогноз: весь пул при таком CR и среднем чеке отгрузки', sort: a => crT(a.shippedN, a), render: a => two(pctRu(crT(a.shippedN, a)), forecast(a.shippedSum, a) ? `пул ≈ ${moneyShort(forecast(a.shippedSum, a))}` : null) },
+    { key: 'shipSum', label: 'Сумма отгрузок', hint: 'Ниже — какая доля потенциала получивших отгрузку реализована', sort: a => a.shippedSum, render: a => two(a.shippedSum ? moneyShort(a.shippedSum) : '—', a.potShipped && a.shippedSum ? `${pctRu(pct(a.shippedSum, a.potShipped))} пот.` : null) },
   ];
   return (
     <div className="flex min-w-0 flex-col gap-4">
       <section className="flex min-w-0 flex-col gap-2">
         <h2 className="text-base font-semibold">Пул → задачи → продажи → отгрузки</h2>
-        <TreeTable roots={model.roots} total={model.total} cols={reportCols} defaultSort="pool" minW={1080} />
-        <Note>В пуле — сейчас; остальное — за выбранный период. Продажа и отгрузка засчитываются задаче, если случились после неё (до следующей отгрузки заказчика); свежие задачи ещё в работе, поэтому CR растёт со временем. «Взято из пула» по подразделению — сумма по менеджерам.</Note>
+        <TreeTable roots={model.roots} total={model.total} cols={reportCols} defaultSort="pool" minW={1180} />
+        <Note>Под числами — потенциал этих заказчиков («пот.»: выручка за год, если вернутся; как на карточке доски, на момент задачи). Под конверсиями — «пул ≈»: сколько принёс бы весь пул при таком CR и среднем чеке. В пуле — сейчас; остальное — за выбранный период. Продажа и отгрузка засчитываются задаче, если случились после неё (до следующей отгрузки заказчика); свежие задачи ещё в работе, поэтому CR растёт со временем. «Взято из пула» по подразделению — сумма по менеджерам.</Note>
       </section>
       <KpiRow>
         <Kpi label="Действий" value={rub.format(T.actions)} sub={`${per100(T) === null ? '—' : String(per100(T)).replace('.', ',')} на 100 в пуле`} hint="Клики РОПов в канбане (без комментариев и тегов) + задачи проекта, поставленные прямо в Битриксе" />

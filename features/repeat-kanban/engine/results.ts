@@ -30,6 +30,7 @@
 // считаются по ЗРЕЛЫМ задачам (старше MATURE_DAYS) с исходом в пределах тех же MATURE_DAYS —
 // честная когорта; остальное — «в процессе». Счётчики «отгружено шт/₽» — по всем задачам.
 import { analyticsDb } from '@/lib/db/clients';
+import { fetchTailTable, tailPotential, type TailTable } from './potential';
 import { REPEAT_PROJECT_GROUP_ID } from './config';
 import {
   fetchDealsById, fetchManagerDirectory, fetchOrg, periodBounds, refOfDeal,
@@ -59,6 +60,9 @@ export interface ResultTask {
   preSold: boolean;
   /** Перепоставлена: позже, до следующей отгрузки, по заказчику поставили другую задачу. */
   superseded: boolean;
+  /** Потенциал заказчика на момент задачи (выручка за год, если вернётся; tailPotential по числу отгрузок ДО задачи
+   *  и B2B/B2C — как на карточке доски). «Потенциал под каждым показателем» отчёта «Обзора» (владелец 30.10). */
+  potential: number | null;
   /** Возраст задачи ≥ MATURE_DAYS — исход «продано/отгружено за 30 дн.» уже известен. */
   mature: boolean;
 }
@@ -105,7 +109,7 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
 
   // 2. Продажи и отгрузки заказчиков после начала периода — один проход по sa.deals.
   // 3. Дозвоны по сделкам задач (va.calls по deal_id, как fetchDealCalls доски).
-  const [custDeals, calls] = await Promise.all([
+  const [custDeals, calls, history, tailTable] = await Promise.all([
     companies.size || contacts.size ? db.query<{ deal_id: string; funnel_id: number; company_id: string | null; contact_id: string | null; sold_at: Date | null; delivered_at: Date | null; amount: string | null }>(
       `SELECT d.deal_id, d.funnel_id, d.company_id, d.contact_id, d.sold_at, d.delivered_at, d.amount
          FROM sa.deals d
@@ -121,7 +125,21 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
           AND duration_seconds > ${GOOD_CALL_SEC} AND result IS DISTINCT FROM 'missed'`,
       [taskDealIds, from],
     ).then(r => r.rows).catch(() => []) : Promise.resolve([]),
+    // Все отгрузки заказчиков задач (за всю историю) — сколько их было ДО задачи, для потенциала.
+    companies.size || contacts.size ? db.query<{ funnel_id: number; company_id: string | null; contact_id: string | null; delivered_at: Date }>(
+      `SELECT d.funnel_id, d.company_id, d.contact_id, d.delivered_at FROM sa.deals d
+        WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
+          AND (d.company_id = ANY($1::bigint[]) OR d.contact_id = ANY($2::bigint[]))`,
+      [[...companies], [...contacts]],
+    ).then(r => r.rows).catch(() => []) : Promise.resolve([]),
+    fetchTailTable().catch(() => ({ seg: {} }) as TailTable),
   ]);
+  const deliveredOf = new Map<string, number[]>();
+  for (const d of history) {
+    const ref = refOfDeal({ funnelId: Number(d.funnel_id), companyId: d.company_id !== null ? Number(d.company_id) : null, contactId: d.contact_id !== null ? Number(d.contact_id) : null });
+    if (!ref) continue;
+    const l = deliveredOf.get(ref) ?? []; l.push(new Date(d.delivered_at).getTime()); deliveredOf.set(ref, l);
+  }
 
   const ships = new Map<string, ShipRow[]>(), sales = new Map<string, { at: number; amount: number }[]>();
   for (const d of custDeals) {
@@ -171,6 +189,7 @@ export async function fetchKanbanResults(opts: { date: string; period: Period; m
       shippedAt: iso(ship?.at), shippedAmount: ship?.amount ?? null, shippedDealId: ship?.dealId ?? null,
       preSold: !!ship && ship.soldAt !== null && ship.soldAt <= at,
       superseded, mature: now - at >= MATURE_DAYS * DAY_MS,
+      potential: ref ? tailPotential(tailTable, (deliveredOf.get(ref) ?? []).filter(x => x < at).length, ref.startsWith('k'))?.value ?? null : null,
     });
   }
 
