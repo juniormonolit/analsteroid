@@ -14,6 +14,7 @@ import { mixHex, GS_TINT_ROWS } from '@/lib/colors/google-sheets-palette';
 import { matchesCondition, resolveThresholdZone, gradientZoneFromRank, type MetricFilters, type ZoneInfo } from '@/lib/reports/metricFilter';
 import { resolveHeatmapSet } from '@/lib/metrics/heatmapDefault';
 import { dimensionCountLabel } from '@/lib/format/pluralize';
+import { useIsMobile } from '@/lib/hooks/useMediaQuery';
 import { aggregateGroupDeltas } from '@/features/reports/lib/aggregateDeltas';
 
 // Ручной режим подсветки значений (п.9 спеки analsteroid-edits-spec-agreed-20260708.md):
@@ -83,6 +84,9 @@ function compactTooltip(comparison: number | null, delta: number | null, deltaPc
   return `пред. ${formatValue(comparison, metric.dataType, metric.decimalPlaces)} · ${formatDelta(delta, metric.dataType, metric.decimalPlaces)} / ${formatDeltaPct(deltaPct)}`;
 }
 
+/** Ключ сортировки второй колонки («Менеджер» в отчётах по клиентам, #11255). */
+const SECOND_COL_KEY = '__responsible__';
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 // Какое поле колонки сравнения используется активной сортировкой — Тек. (current,
 // прежнее единственное поведение) / Пред. (comparison) / Δ (delta) / Δ% (deltaPct).
@@ -94,6 +98,8 @@ export interface RowDeltas {
   dimensionSubtitle?: string;
   /** Полный битрикс-логин — текстовая псевдо-метрика manager_login («Логин»). */
   managerLogin?: string;
+  /** «По клиентам»: ответственный менеджер клиента — вторая колонка (#11255). */
+  responsibleName?: string | null;
   teamName: string | null;
   isGroup?: boolean;
   children?: RowDeltas[];
@@ -121,6 +127,8 @@ interface Props {
   isLoading: boolean;
   grouping?: Grouping;
   dimensionLabel?: string;
+  /** Вторая закреплённая колонка после измерения (отчёты по клиентам: «Менеджер», #11255). */
+  secondColumn?: { label: string };
   highlights?: Record<string, MetricHighlightConfig>;
   onRowClick?:  (dimensionId: string, dimensionName: string) => void;
   onCellClick?: (dimensionId: string, dimensionName: string, metricId: string) => void;
@@ -295,6 +303,7 @@ export function ReportTable({
   isLoading,
   grouping = 'none',
   dimensionLabel = 'Менеджер',
+  secondColumn,
   highlights = {},
   onRowClick, onCellClick, onSubtitleClick, onMetricChart,
   onMetricQuickCompareToggle,
@@ -463,8 +472,10 @@ export function ReportTable({
   }
 
   function handleSort(metricId: string, kind: SortKind = 'current') {
-    const nextBy = buildSortKey(metricId, kind);
-    const nextDir: 'asc' | 'desc' = sortBy === nextBy ? (sortDir === 'desc' ? 'asc' : 'desc') : 'desc';
+    const nextBy = metricId === SECOND_COL_KEY ? SECOND_COL_KEY : buildSortKey(metricId, kind);
+    // Текстовая колонка: первый клик — А→Я, дальше переключение; числа — как раньше, убыв. первым.
+    const first: 'asc' | 'desc' = metricId === SECOND_COL_KEY ? 'asc' : 'desc';
+    const nextDir: 'asc' | 'desc' = sortBy === nextBy ? (sortDir === 'desc' ? 'asc' : 'desc') : first;
     if (controlled) { onSortChange!(nextBy, nextDir); }
     else { setSortByInner(nextBy); setSortDirInner(nextDir); }
   }
@@ -723,6 +734,15 @@ export function ReportTable({
       return colorSortInverted ? (av - bv) : (bv - av);
     }
     if (!sortBy) return 0;
+    if (sortBy === SECOND_COL_KEY) {
+      // Пустой менеджер — всегда в конец, как null в числах.
+      const an = a.responsibleName ?? '', bn = b.responsibleName ?? '';
+      if (!an && !bn) return 0;
+      if (!an) return 1;
+      if (!bn) return -1;
+      const c = an.localeCompare(bn, 'ru');
+      return sortDir === 'desc' ? -c : c;
+    }
     // Составной sortBy (metricId::comparison|delta|deltaPct) — сортировка по колонкам
     // сравнения (см. buildSortKey/parseSortKey у handleSort выше). Голый metricId —
     // прежнее поведение, читает .current.
@@ -810,6 +830,14 @@ export function ReportTable({
   // на позиции left:0; колонка измерения сдвигается на NUMBER_COL_WIDTH (была
   // sticky left-0 напрямую классом — теперь left считается инлайн-стилем, см. ниже).
   const NUMBER_COL_WIDTH = 36;
+  // Вторая закреплённая колонка (ответственный менеджер клиента, #11255): стоит сразу за измерением.
+  // На телефоне колонка не закреплена и уже: иначе «Клиент + Менеджер» съедают весь экран (375px), метрик не видно.
+  const isMobileView = useIsMobile();
+  const SECOND_COL_WIDTH = secondColumn ? (isMobileView ? 140 : 170) : 0;
+  const SECOND_OFFSET = secondColumn && !isMobileView ? SECOND_COL_WIDTH : 0; // вклад в sticky-смещения метрик
+  const secondLeft = `calc(${NUMBER_COL_WIDTH}px + var(--report-dim-col))`;
+  const secondStyle = { ['--sl' as string]: secondLeft, width: SECOND_COL_WIDTH, minWidth: SECOND_COL_WIDTH, maxWidth: SECOND_COL_WIDTH } as React.CSSProperties;
+  const secondStick = 'md:sticky md:left-[var(--sl)]';
   // Итоговая строка: заметная светло-синяя непрозрачная плашка (opaque — обязательна
   // для sticky), тёмный текст, акцентная верхняя граница. Выделяется, но без инверсии.
   const TOTALS_BG = 'var(--color-totals-bg)';
@@ -835,6 +863,7 @@ export function ReportTable({
     pinnedMetricIds.join(','),
     displayMetrics.map(m => `${m.id}:${visualMode(m.id)}`).join('|'),
     rows.length,
+    SECOND_OFFSET,
   ].join('#');
 
   useLayoutEffect(() => {
@@ -843,7 +872,7 @@ export function ReportTable({
       return;
     }
     function measure() {
-      let offset = NUMBER_COL_WIDTH + (dimRef.current?.offsetWidth ?? DIMENSION_WIDTH);
+      let offset = NUMBER_COL_WIDTH + (dimRef.current?.offsetWidth ?? DIMENSION_WIDTH) + SECOND_OFFSET;
       const next: Record<string, number> = {};
       for (const pid of pinnedMetricIds) {
         for (const key of leafKeys(pid)) {
@@ -865,7 +894,7 @@ export function ReportTable({
   }, [layoutSig]);
 
   function leafLeft(metricId: string, subIndex: number): number {
-    return leafOffsets[`${metricId}:${subIndex}`] ?? DIMENSION_WIDTH;
+    return leafOffsets[`${metricId}:${subIndex}`] ?? DIMENSION_WIDTH + SECOND_OFFSET;
   }
   function isMeasured(metricId: string): boolean {
     return leafOffsets[`${metricId}:0`] !== undefined;
@@ -1113,7 +1142,7 @@ export function ReportTable({
 
   // Полная ширина строки-раскрытия: колонка «№» + колонка измерения + все листовые
   // колонки метрик (п.6: колонка «№» добавила ещё одну ведущую колонку).
-  const totalLeafCols = 2 + displayMetrics.reduce((s, m) => s + colSpanFor(m.id), 0);
+  const totalLeafCols = 2 + (secondColumn ? 1 : 0) + displayMetrics.reduce((s, m) => s + colSpanFor(m.id), 0);
 
   // «Зебра» (правка 09.07, opt-in): счётчик визуального порядка строк через ВЕСЬ рендер
   // таблицы (включая вложенные строки групп) — не локальный индекс map()'а, который
@@ -1303,6 +1332,15 @@ export function ReportTable({
               </span>
             </div>
           </td>
+          {secondColumn && (
+            <td
+              className={`${secondStick} z-20 ${stickyBg} ${rowBorderCls} px-2 py-[var(--row-py)] border-r border-r-[var(--color-border)] text-[13px]`}
+              style={secondStyle}
+              title={row.responsibleName ?? undefined}
+            >
+              <span className="block truncate">{isGroupRow ? '' : (row.responsibleName ?? '—')}</span>
+            </td>
+          )}
           {renderMetricCells(row, true, stickyBg, rowBorderCls)}
         </tr>
 
@@ -1576,6 +1614,7 @@ export function ReportTable({
             <tr>
               <th className="sticky z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)]" style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }} />
               <th className="sticky z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" style={{ left: NUMBER_COL_WIDTH }} />
+              {secondColumn && <th className={`${secondStick} z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)]`} style={secondStyle} />}
               {displayMetrics.filter(m => pinnedMetricIds.includes(m.id)).map(m => {
                 const pinned = isMeasured(m.id);
                 return (
@@ -1643,6 +1682,15 @@ export function ReportTable({
                 )}
               </div>
             </th>
+            {secondColumn && (
+              <th className={`${secondStick} z-40 bg-[var(--color-table-header)] text-left px-2 py-2.5 font-medium text-[var(--color-text)] border-b border-r border-[var(--color-border)]`}
+                style={secondStyle}>
+                <button onClick={() => handleSort(SECOND_COL_KEY)} className="flex items-center gap-1 hover:text-[var(--color-accent)] transition-colors" title="Сортировать по менеджеру">
+                  {secondColumn.label}
+                  {sortBy === SECOND_COL_KEY && <span className="text-[var(--color-accent)]">{sortDir === 'desc' ? <ArrowDown size={12} /> : <ArrowUp size={12} />}</span>}
+                </button>
+              </th>
+            )}
             {displayMetrics.map((m, metricIdx) => {
               const mode = resolveMode(m.id);
               const isPinnedCol = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
@@ -1787,6 +1835,7 @@ export function ReportTable({
             <tr className="bg-[var(--color-table-header)]">
               <th className="sticky z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)]" style={{ left: 0, width: NUMBER_COL_WIDTH, minWidth: NUMBER_COL_WIDTH, maxWidth: NUMBER_COL_WIDTH }} />
               <th className="sticky z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)] w-[var(--report-dim-col)] min-w-[var(--report-dim-col)] max-w-[var(--report-dim-col)]" style={{ left: NUMBER_COL_WIDTH }} />
+              {secondColumn && <th className={`${secondStick} z-40 bg-[var(--color-table-header)] border-b border-r border-[var(--color-border)]`} style={secondStyle} />}
               {displayMetrics.map((m, metricIdx) => {
                 const kinds = leafKinds(visualMode(m.id));
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);
@@ -1871,6 +1920,12 @@ export function ReportTable({
                   {`Итого: ${dimensionCountLabel(dimensionLabel, visibleRowCount)}`}
                 </span>
               </td>
+              {secondColumn && (
+                <td
+                  className={`sticky bottom-0 md:left-[var(--sl)] z-30 border-r border-[var(--color-border)] border-t-2 border-t-[var(--color-accent)]`}
+                  style={{ ...secondStyle, backgroundColor: TOTALS_BG }}
+                />
+              )}
               {displayMetrics.map((m, metricIdx) => {
                 const kinds = leafKinds(visualMode(m.id));
                 const isPinned = pinnedMetricIds.includes(m.id) && isMeasured(m.id);

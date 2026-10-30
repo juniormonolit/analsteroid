@@ -31,11 +31,13 @@ async function fetchDrill(body: unknown): Promise<DrillResult> {
 
 const clientUrl = (id: string) => `https://td.monolit-crm.ru/crm/contact/details/${id}/`;
 
-export function ClientTailDrillModal({ filters, initial, onClose }: {
+export function ClientTailDrillModal({ filters, initial, onClose, onOpenClientCard }: {
   /** Тело запроса отчёта (те же фильтры — список совпадает с кликнутой цифрой). */
   filters: Record<string, unknown>;
   initial: DrillStep;
   onClose: () => void;
+  /** Клик по имени клиента: карточка клиента (#11255). Панель карточки живёт вне этого окна, поэтому окно закрывает хозяин. */
+  onOpenClientCard?: (contactId: string) => void;
 }) {
   const [stack, setStack] = useState<DrillStep[]>([initial]);
   const [openDealId, setOpenDealId] = useState<number | null>(null);
@@ -85,7 +87,7 @@ export function ClientTailDrillModal({ filters, initial, onClose }: {
         {data && (
           <p className="text-xs text-[var(--color-text-muted)]">
             {step.target.kind === 'clients'
-              ? <>Клиентов: <b className="text-[var(--color-text)]">{data.total.toLocaleString('ru-RU')}</b>, их отгрузки на {rub(data.amount)}. Нажмите на клиента — откроются его входные и хвостовые отгрузки.</>
+              ? <>Клиентов: <b className="text-[var(--color-text)]">{data.total.toLocaleString('ru-RU')}</b>, их отгрузки на {rub(data.amount)}. Нажмите на клиента — откроется его карточка.</>
               : <>{isCreated ? 'Сделок' : 'Отгрузок'}: <b className="text-[var(--color-text)]">{data.total.toLocaleString('ru-RU')}</b> на {rub(data.amount)}
                 {isCreated ? ' (сумма сделок, не только отгруженных)' : ''}. Нажмите на сделку — откроется её карточка.</>}
             {data.truncated && ` Показаны первые ${(data.deals ?? data.clients ?? []).length}.`}
@@ -131,7 +133,7 @@ export function ClientTailDrillModal({ filters, initial, onClose }: {
                     <td className="py-1.5 px-2 max-w-[200px]">
                       {d.contactId ? (
                         showSide ? <span className="block truncate">{d.clientName ?? `Контакт #${d.contactId}`}</span> : (
-                          <button type="button" onClick={() => openClient(d.contactId!, d.clientName)}
+                          <button type="button" onClick={() => (onOpenClientCard ? onOpenClientCard(d.contactId!) : openClient(d.contactId!, d.clientName))}
                             className="min-h-11 sm:min-h-0 text-left hover:text-[var(--color-accent)] max-w-full">
                             <span className="block truncate">{d.clientName ?? `Контакт #${d.contactId}`}</span>
                           </button>
@@ -159,6 +161,7 @@ export function ClientTailDrillModal({ filters, initial, onClose }: {
               <thead>
                 <tr className="text-[11px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
                   <th className="text-left font-medium py-1.5 pr-2">Клиент</th>
+                  <th className="text-left font-medium py-1.5 px-2">Менеджер</th>
                   <th className="text-right font-medium py-1.5 px-2">Отгрузок</th>
                   <th className="text-right font-medium py-1.5 px-2">Сумма отгрузок</th>
                   <th className="text-right font-medium py-1.5 pl-2 whitespace-nowrap">Последняя отгрузка</th>
@@ -169,7 +172,7 @@ export function ClientTailDrillModal({ filters, initial, onClose }: {
                   <tr key={c.contactId} className="border-b border-[var(--color-border)]">
                     <td className="py-1.5 pr-2 max-w-[280px]">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <button type="button" onClick={() => openClient(c.contactId, c.name)}
+                        <button type="button" onClick={() => (onOpenClientCard ? onOpenClientCard(c.contactId) : openClient(c.contactId, c.name))}
                           className="min-h-11 sm:min-h-0 text-left truncate hover:text-[var(--color-accent)]">
                           {c.name ?? `Контакт #${c.contactId}`}
                         </button>
@@ -179,13 +182,14 @@ export function ClientTailDrillModal({ filters, initial, onClose }: {
                         </a>
                       </div>
                     </td>
+                    <td className="py-1.5 px-2 max-w-[180px]"><span className="block truncate text-xs" title={c.responsibleName ?? undefined}>{c.responsibleName ?? '—'}</span></td>
                     <td className="py-1.5 px-2 text-right tabular-nums">{c.shipments}</td>
                     <td className="py-1.5 px-2 text-right tabular-nums whitespace-nowrap">{rub(c.amount)}</td>
                     <td className="py-1.5 pl-2 text-right tabular-nums whitespace-nowrap">{dt(c.lastAt)}</td>
                   </tr>
                 ))}
                 {data.clients.length === 0 && (
-                  <tr><td colSpan={4} className="py-6 text-center text-sm text-[var(--color-text-muted)]">Пусто</td></tr>
+                  <tr><td colSpan={5} className="py-6 text-center text-sm text-[var(--color-text-muted)]">Пусто</td></tr>
                 )}
               </tbody>
             </table>

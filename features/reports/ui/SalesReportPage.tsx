@@ -20,6 +20,7 @@ import { ViewSettings, loadViewPrefs, saveViewPrefs, DEFAULT_VIEW_PREFS, type Vi
 import { HighlightEditor } from './HighlightEditor';
 import { SaveReportModal } from './SaveReportModal';
 import { DrilldownDrawer } from './DrilldownDrawer';
+import { ClientCardDrawer } from '@/features/client-module/ui/ClientCardDrawer';
 import { MetricChartModal, type MetricChartTarget } from './MetricChartModal';
 import type { DrilldownTarget } from './DrilldownDrawer';
 import { ComparisonPanel } from './ComparisonPanel';
@@ -60,6 +61,7 @@ type MergedRow = {
   dimensionId: string;
   dimensionName: string;
   dimensionSubtitle?: string;
+  responsibleName?: string | null;
   teamId: string | null;
   teamName: string | null;
   branchName?: string | null;
@@ -467,6 +469,8 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   const nullableParam = { parse: (raw: string) => raw || null, serialize: (v: string | null) => v, default: null as string | null, mode: 'push' as const };
   const [drillParam] = useUrlState<string | null>('drill', nullableParam);
   const [drillMetricParam] = useUrlState<string | null>('drillMetric', nullableParam);
+  // «По клиентам»: клик по имени клиента открывает единую карточку клиента (#11255), адрес — ?client=<contact_id>.
+  const [clientCardParam] = useUrlState<string | null>('client', nullableParam);
   const [chartParam] = useUrlState<string | null>('chart', nullableParam);
   const [chartMetricParam] = useUrlState<string | null>('chartMetric', nullableParam);
   const patchUrl = useUrlStateBatch('push');
@@ -1211,8 +1215,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
     // Поиск и по короткому логину менеджера (п.3 правок 09.07/2): dimensionSubtitle
     // хранит short_login ТОЛЬКО в отчёте по менеджерам (см. byManagers.ts) — для
     // прочих отчётов это поле либо не задано, либо содержит другой текст, не мешает.
-    const matchesSearch = (r: { dimensionName: string; dimensionSubtitle?: string }) =>
-      r.dimensionName.toLowerCase().includes(q) || (r.dimensionSubtitle ?? '').toLowerCase().includes(q);
+    const matchesSearch = (r: { dimensionName: string; dimensionSubtitle?: string; responsibleName?: string | null }) =>
+      r.dimensionName.toLowerCase().includes(q) || (r.dimensionSubtitle ?? '').toLowerCase().includes(q)
+      || (r.responsibleName ?? '').toLowerCase().includes(q);
     if (grouping === 'none') {
       return grouped.filter(matchesSearch);
     }
@@ -1453,8 +1458,11 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
   }, [period, reportSlug, router]);
   const handleRowClick = useCallback((id: string) => {
     if (REALIZATION_SLUGS.includes(reportSlug)) { openRealizationRequests(id, null); return; }
+    // «По клиентам»: имя клиента → его карточка (как в канбане повторных), а не список сделок;
+    // дрилл по показателю остаётся за кликом по числу (handleCellClick).
+    if (clientMode && /^[1-9]\d*$/.test(id)) { patchUrl({ client: id, drill: null, drillMetric: null }); return; }
     patchUrl({ drill: id, drillMetric: null });
-  }, [patchUrl, reportSlug, openRealizationRequests]);
+  }, [patchUrl, reportSlug, openRealizationRequests, clientMode]);
   const handleCellClick = useCallback((id: string, _name: string, metricId: string) => {
     // Звонки (#8314) — своя панель со своим адресом (?drill=&drillMetric=lc_…), остальное — список «Заявки».
     if (REALIZATION_SLUGS.includes(reportSlug) && !isCallMetric(metricId)) { openRealizationRequests(id, metricId); return; }
@@ -2089,6 +2097,7 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
             grouping={grouping}
             highlights={effectiveHighlights}
             dimensionLabel={dimensionColumnLabel}
+            secondColumn={clientMode ? { label: 'Менеджер' } : undefined}
             onRowClick={handleRowClick}
             onCellClick={handleCellClick}
             onMetricChart={handleMetricChart}
@@ -2167,6 +2176,9 @@ export function SalesReportPage({ reportSlug, title, preset, isNew = false, defa
           без кнопки «Подробнее»): breakdownCtx собран из среза ОСНОВНОГО отчёта,
           а дровер живёт на своих local*-фильтрах/периоде — разбор сверял бы не
           ту ячейку, рядом с которой стояла кнопка (ревью 03.09). */}
+      {clientMode && clientCardParam && /^[1-9]\d*$/.test(clientCardParam) && (
+        <ClientCardDrawer contactId={clientCardParam} onClose={() => patchUrl({ client: null })} />
+      )}
       {drilldown && (
         <MetricBreakdownContext.Provider value={null}>
         <DrilldownDrawer

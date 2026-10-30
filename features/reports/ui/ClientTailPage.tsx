@@ -11,6 +11,8 @@ import type { ClientType, ProductGroupMode, CreatedTimeFilter, FirstTouchFilter 
 import type { DealFilter } from '@/lib/metrics/dealFilters';
 import type { ClientTailResult, GroupRow, DrillKind } from '@/features/reports/engine/clientTail';
 import { ClientTailDrillModal, type DrillStep } from './ClientTailDrillModal';
+import { ClientCardDrawer } from '@/features/client-module/ui/ClientCardDrawer';
+import { useUrlState } from '@/lib/hooks/useUrlState';
 
 // «Вход и хвост» (задача владельца 19.10). Слева — сделки по фильтрам отчёта
 // («с чего заходят»), справа — что ЭТИ ЖЕ клиенты купили после («хвост»), внизу —
@@ -49,11 +51,12 @@ async function fetchTail(body: unknown): Promise<ClientTailResult> {
 
 /** Цифра-ссылка дрилла (задача владельца 28.10): подчёркнута пунктиром, чтобы
  *  было видно, что в неё можно провалиться; на таче — зона нажатия 44px. */
-function DrillNum({ value, onClick, title }: { value: string; onClick?: () => void; title?: string }) {
+function DrillNum({ value, onClick, title, plain }: { value: string; onClick?: () => void; title?: string; plain?: boolean }) {
   if (!onClick || value === '0' || value === '—') return <>{value}</>;
   return (
+    // plain — числа внутри строк клиентов (#11255): указатель и hover без подчёркивания на всю колонку.
     <button type="button" onClick={onClick} title={title}
-      className="tap-target tabular-nums underline decoration-dotted underline-offset-2 hover:text-[var(--color-accent)]">
+      className={`tap-target tabular-nums cursor-pointer hover:text-[var(--color-accent)] ${plain ? '' : 'underline decoration-dotted underline-offset-2'}`}>
       {value}
     </button>
   );
@@ -152,6 +155,8 @@ export function ClientTailPage() {
   const [win, setWin] = useState<Window>('all');
   // Открытый дрилл (задача владельца 28.10) — что раскрыли и подпись окна.
   const [drill, setDrill] = useState<DrillStep | null>(null);
+  // Карточка клиента (#11255): имя клиента открывает единую карточку, адрес — ?client=<contact_id>.
+  const [cardId, setCardId] = useUrlState<string | null>('client', { parse: raw => (/^\d+$/.test(raw) ? raw : null), serialize: v => v, default: null as string | null, mode: 'push' });
 
   const { data: pgData, isLoading: pgLoading } = useQuery<{ groups: ProductGroupOption[] }>({
     queryKey: ['catalog-product-groups', productGroupMode],
@@ -195,6 +200,11 @@ export function ClientTailPage() {
   const openClient = (contactId: string, name: string | null) => setDrill({
     target: { side: 'both', kind: 'shipments', group: null, contactId },
     title: `${name ?? `Контакт #${contactId}`} — входные и хвостовые отгрузки`,
+  });
+  // Клик по числу в строке клиента — дрилл именно по этому показателю: отгрузки входа или хвоста этого клиента.
+  const openClientSide = (side: 'entry' | 'tail', contactId: string, name: string | null) => setDrill({
+    target: { side, kind: 'shipments', group: null, contactId },
+    title: `${name ?? `Контакт #${contactId}`} — ${side === 'entry' ? 'входные' : 'хвостовые'} отгрузки`,
   });
   const tailWindow = win === 'all' ? 'до сегодня' : `в течение ${win} мес.`;
   const scenarios = e && t ? [
@@ -338,13 +348,14 @@ export function ClientTailPage() {
 
             <Card
               title="Клиенты"
-              hint={`Топ-${data.clients.length} из ${num(data.clientsTotal)} клиентов входа по выручке хвоста. Нажмите на имя — откроются его входные и хвостовые отгрузки.`}
+              hint={`Топ-${data.clients.length} из ${num(data.clientsTotal)} клиентов входа по выручке хвоста. Нажмите на имя — откроется карточка клиента, на сумму — его входные или хвостовые отгрузки.`}
             >
               <div className="scroll-x">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-[11px] text-[var(--color-text-muted)] text-right align-bottom">
                       <th className="text-left font-medium py-1.5 pr-2">Клиент</th>
+                      <th className="text-left font-medium py-1.5 px-2">Менеджер</th>
                       <th className="font-medium py-1.5 px-2">Первая входная<br />отгрузка</th>
                       <th className="font-medium py-1.5 px-2">Вход<br /><span className="font-normal">перв. отгрузки по фильтрам</span></th>
                       <th className="font-medium py-1.5 px-2">Хвост<br /><span className="font-normal">отгрузки после</span></th>
@@ -356,9 +367,9 @@ export function ClientTailPage() {
                       <tr key={c.contactId} className="border-t border-[var(--color-border)] text-right tabular-nums align-top">
                         <td className="text-left py-1.5 pr-2 max-w-[220px]">
                           <div className="flex items-center gap-1 min-w-0">
-                            <button type="button" onClick={() => openClient(c.contactId, c.name)}
-                              title="Открыть входные и хвостовые отгрузки клиента"
-                              className="min-h-11 sm:min-h-0 text-left truncate underline decoration-dotted underline-offset-2 hover:text-[var(--color-accent)]">
+                            <button type="button" onClick={() => setCardId(c.contactId)}
+                              title="Открыть карточку клиента"
+                              className="min-h-11 sm:min-h-0 text-left truncate hover:text-[var(--color-accent)]">
                               {c.name ?? `Контакт #${c.contactId}`}
                             </button>
                             <a href={`https://td.monolit-crm.ru/crm/contact/details/${c.contactId}/`}
@@ -368,9 +379,10 @@ export function ClientTailPage() {
                             </a>
                           </div>
                         </td>
+                        <td className="text-left py-1.5 px-2 max-w-[180px]"><span className="flex min-h-11 items-center truncate text-xs sm:min-h-0" title={c.responsibleName ?? undefined}>{c.responsibleName ?? '—'}</span></td>
                         <td className="py-1.5 px-2 whitespace-nowrap">{new Date(c.firstEntryAt).toLocaleDateString('ru-RU')}</td>
-                        <td className="py-1.5 px-2 whitespace-nowrap">{rub(c.entryAmount)}<div className="text-[10px] text-[var(--color-text-muted)]">{c.entryShipments} отгр.</div></td>
-                        <td className="py-1.5 px-2 whitespace-nowrap font-medium">{c.tailAmount ? rub(c.tailAmount) : '—'}{c.tailShipments > 0 && <div className="text-[10px] font-normal text-[var(--color-text-muted)]">{c.tailShipments} отгр.</div>}</td>
+                        <td className="py-1.5 px-2 whitespace-nowrap"><DrillNum plain value={rub(c.entryAmount)} onClick={() => openClientSide('entry', c.contactId, c.name)} title="Открыть входные отгрузки клиента" /><div className="text-[10px] text-[var(--color-text-muted)]">{c.entryShipments} отгр.</div></td>
+                        <td className="py-1.5 px-2 whitespace-nowrap font-medium"><DrillNum plain value={c.tailAmount ? rub(c.tailAmount) : '—'} onClick={() => openClientSide('tail', c.contactId, c.name)} title="Открыть хвостовые отгрузки клиента" />{c.tailShipments > 0 && <div className="text-[10px] font-normal text-[var(--color-text-muted)]">{c.tailShipments} отгр.</div>}</td>
                         <td className="text-left py-1.5 pl-2 text-xs text-[var(--color-text-muted)] min-w-[160px]">{c.tailGroups.join(', ') || '—'}</td>
                       </tr>
                     ))}
@@ -385,7 +397,9 @@ export function ClientTailPage() {
           </>
         )}
       </div>
-      {drill && <ClientTailDrillModal filters={body} initial={drill} onClose={() => setDrill(null)} />}
+      {drill && <ClientTailDrillModal filters={body} initial={drill} onClose={() => setDrill(null)}
+        onOpenClientCard={id => { setDrill(null); setCardId(id); }} />}
+      {cardId && <ClientCardDrawer contactId={cardId} onClose={() => setCardId(null)} />}
     </div>
   );
 }
