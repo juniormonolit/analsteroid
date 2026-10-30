@@ -283,10 +283,13 @@ export function RepeatKanbanAnalyticsPage() {
       if (isAccept(j.type)) a.acceptedKanban++;
     }
     const lim = (res.data?.matureDays ?? 30) * DAY_MS;
+    // «Взято из пула» — разные заказчики, по которым ставили задачи (по менеджеру; вверх по дереву — сумма).
+    const taken = new Map<string, Set<string>>();
     for (const t of res.data?.tasks ?? []) {
       if (!t.managerId) continue;
       const a = A(t.managerId);
       a.tasks++;
+      if (t.clientRef) { const set = taken.get(t.managerId) ?? new Set<string>(); set.add(t.clientRef); taken.set(t.managerId, set); }
       if (t.superseded) continue;
       a.base++;
       const at = new Date(t.createdAt).getTime();
@@ -296,6 +299,7 @@ export function RepeatKanbanAnalyticsPage() {
       if (t.mature) { a.mature++; if (t.soldAt && new Date(t.soldAt).getTime() - at <= lim) a.matureSold++; if (t.shippedAt && new Date(t.shippedAt).getTime() - at <= lim) a.matureShipped++; }
       else if (!t.shippedAt) a.inProgress++;
     }
+    for (const [id, set] of taken) A(id).clientsTaken = set.size;
     for (const [id, info] of Object.entries(res.data?.managers ?? {})) if (!dir.has(id)) dir.set(id, info);
     for (const m of sp.data?.mgr ?? []) {
       Object.assign(A(m.managerId), { control: m.control, controlWaitH: m.controlWaitH, overdue: m.overdue, overdue7: m.overdue7, openTasks: m.open, closed: m.accepted, notStarted: m.notStarted, inProgressT: m.inProgress, deferred: m.deferred, reviewH: m.reviewH, queued: m.queued });
@@ -360,8 +364,26 @@ function Overview({ model }: { model: { roots: TreeNode[]; total: TreeNode } }) 
   const rank = (k: keyof typeof LIGHT | null) => (k === 'good' ? 2 : k === 'mid' ? 1 : 0);
   const list = nodes.map(n => ({ ...n, a: act(per100(n.node.agg)), r: resT(crSold(n.node.agg)) }))
     .sort((x, y) => rank(y.a) + rank(y.r) - (rank(x.a) + rank(x.r)) || (crSold(y.node.agg) ?? 0) - (crSold(x.node.agg) ?? 0));
+  // Отчёт владельца 30.10 — первым блоком: пул → взято → задачи → продажи → отгрузки, по подразделениям.
+  const crT = (n: number, a: MAgg) => pct(n, a.tasks);
+  const reportCols: Col[] = [
+    { key: 'pool', label: 'В пуле', hint: 'Сейчас: заказчики без открытой повторной сделки', sort: a => a.pool, render: a => rub.format(a.pool) },
+    { key: 'taken', label: 'Взято из пула', hint: 'Разных заказчиков, по которым за период ставили задачи', sort: a => a.clientsTaken, render: a => rub.format(a.clientsTaken) },
+    { key: 'tasks', label: 'Задач', hint: 'Задачи проекта «Повторные продажи» за период (из канбана и из Битрикса)', sort: a => a.tasks, render: a => rub.format(a.tasks) },
+    { key: 'sold', label: 'Продаж', hint: 'Продажа заказчику после задачи (до следующей отгрузки)', sort: a => a.soldN, render: a => rub.format(a.soldN) },
+    { key: 'crSold', label: 'CR Задача → Продажа', hint: 'Продаж / задач', sort: a => crT(a.soldN, a), render: a => <Light v={crT(a.soldN, a)} lo={5} hi={15} /> },
+    { key: 'soldSum', label: 'Сумма продаж', sort: a => a.soldSum, render: a => (a.soldSum ? moneyShort(a.soldSum) : '—') },
+    { key: 'shipped', label: 'Отгрузок', hint: 'Следующая отгрузка заказчика после задачи', sort: a => a.shippedN, render: a => rub.format(a.shippedN) },
+    { key: 'crShip', label: 'CR Задача → Отгрузка', hint: 'Отгрузок / задач', sort: a => crT(a.shippedN, a), render: a => pctRu(crT(a.shippedN, a)) },
+    { key: 'shipSum', label: 'Сумма отгрузок', sort: a => a.shippedSum, render: a => (a.shippedSum ? moneyShort(a.shippedSum) : '—') },
+  ];
   return (
     <div className="flex min-w-0 flex-col gap-4">
+      <section className="flex min-w-0 flex-col gap-2">
+        <h2 className="text-base font-semibold">Пул → задачи → продажи → отгрузки</h2>
+        <TreeTable roots={model.roots} total={model.total} cols={reportCols} defaultSort="pool" minW={1080} />
+        <Note>В пуле — сейчас; остальное — за выбранный период. Продажа и отгрузка засчитываются задаче, если случились после неё (до следующей отгрузки заказчика); свежие задачи ещё в работе, поэтому CR растёт со временем. «Взято из пула» по подразделению — сумма по менеджерам.</Note>
+      </section>
       <KpiRow>
         <Kpi label="Действий" value={rub.format(T.actions)} sub={`${per100(T) === null ? '—' : String(per100(T)).replace('.', ',')} на 100 в пуле`} hint="Клики РОПов в канбане (без комментариев и тегов) + задачи проекта, поставленные прямо в Битриксе" />
         <Kpi label="Задач поставлено" value={rub.format(T.tasks)} sub={`перепоставлено ${T.tasks - T.base}`} hint="Задачи проекта «Повторные продажи» за период — и из канбана, и из Битрикса" />

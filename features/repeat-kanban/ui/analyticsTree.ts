@@ -12,7 +12,7 @@ export interface MAgg {
   // Журнал (период): действия людей.
   actions: number; leak: number; reviews: number; returned: number; acceptedKanban: number;
   // Результат задач (период, когортно от постановки).
-  tasks: number; base: number; reached: number; soldN: number; soldSum: number; shippedN: number; shippedSum: number;
+  tasks: number; clientsTaken: number; base: number; reached: number; soldN: number; soldSum: number; shippedN: number; shippedSum: number;
   mature: number; matureSold: number; matureShipped: number; inProgress: number; shipDays: number[];
   // Скорость (остатки — сейчас, потоки — период).
   control: number; controlWaitH: number[]; overdue: number; overdue7: number; openTasks: number; closed: number; reviewH: number[]; queued: number;
@@ -25,7 +25,7 @@ export interface MAgg {
 export const ZERO = (): MAgg => ({
   managers: 0, total: 0, pool: 0, poolHot: 0, poolPotential: 0, workedByTask: 0, inWork: 0, funnel: 0, funnelSum: 0, review: 0, hidden: 0, brak: 0, noTask: 0,
   actions: 0, leak: 0, reviews: 0, returned: 0, acceptedKanban: 0,
-  tasks: 0, base: 0, reached: 0, soldN: 0, soldSum: 0, shippedN: 0, shippedSum: 0, mature: 0, matureSold: 0, matureShipped: 0, inProgress: 0, shipDays: [],
+  tasks: 0, clientsTaken: 0, base: 0, reached: 0, soldN: 0, soldSum: 0, shippedN: 0, shippedSum: 0, mature: 0, matureSold: 0, matureShipped: 0, inProgress: 0, shipDays: [],
   control: 0, controlWaitH: [], overdue: 0, overdue7: 0, openTasks: 0, closed: 0, reviewH: [], queued: 0,
   aiAnalyses: 0, aiScoreSum: 0, aiScoreN: 0, aiViolations: 0, aiRequests: 0,
   notStarted: 0, inProgressT: 0, deferred: 0,
