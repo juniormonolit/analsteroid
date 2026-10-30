@@ -2,6 +2,7 @@ import { analyticsDb } from '@/lib/db/clients';
 import { cached } from '@/lib/cache/redis';
 import { buildCommonDealWhere, type CommonDealFilterOpts } from './commonDealWhere';
 import { resolveClientNames } from '@/lib/bitrix/clientNames';
+import { fetchClientResponsibles } from './clientResponsible';
 import type { DateRange } from '@/lib/period';
 import { addDays, startOfDay } from 'date-fns';
 
@@ -55,6 +56,8 @@ export interface ClientRow {
   tailShipments: number;
   tailAmount: number;
   tailGroups: string[];
+  /** Ответственный менеджер клиента (ФИО), #11255. */
+  responsibleName?: string | null;
 }
 export interface ClientTailResult {
   entry: TailAgg & { noClientDeals: number; noClientAmount: number };
@@ -226,11 +229,12 @@ SELECT json_build_object(
   };
 
   const names = await resolveClientNames(result.clients.map(c => `c${c.contactId}`)).catch(() => new Map<string, string | null>());
+  const resp = await fetchClientResponsibles(result.clients.map(c => c.contactId)).catch(() => new Map<string, string | null>());
   return {
     ...result,
     entryByGroup: mergeGroups(result.entryByGroup, entryCreatedByGroup),
     tailByGroup: mergeGroups(result.tailByGroup, tailCreatedByGroup),
-    clients: result.clients.map(c => ({ ...c, name: names.get(`c${c.contactId}`) ?? null })),
+    clients: result.clients.map(c => ({ ...c, name: names.get(`c${c.contactId}`) ?? null, responsibleName: resp.get(c.contactId) ?? null })),
   };
 }
 
@@ -257,7 +261,7 @@ export interface DrillDeal {
   managerName: string | null;
   isRepeatFunnel: boolean;
 }
-export interface DrillClient { contactId: string; name: string | null; shipments: number; amount: number; lastAt: string }
+export interface DrillClient { contactId: string; name: string | null; responsibleName?: string | null; shipments: number; amount: number; lastAt: string }
 export interface DrillResult {
   deals?: DrillDeal[];
   clients?: DrillClient[];
@@ -304,8 +308,9 @@ SELECT json_build_object(
     const res = await analyticsDb().query<{ result: { total: number; amount: number; rows: Omit<DrillClient, 'name'>[] } }>(sql, params);
     const r = res.rows[0].result;
     const names = await resolveClientNames(r.rows.map(c => `c${c.contactId}`)).catch(() => new Map<string, string | null>());
+    const resp = await fetchClientResponsibles(r.rows.map(c => c.contactId)).catch(() => new Map<string, string | null>());
     return {
-      clients: r.rows.map(c => ({ ...c, name: names.get(`c${c.contactId}`) ?? null })),
+      clients: r.rows.map(c => ({ ...c, name: names.get(`c${c.contactId}`) ?? null, responsibleName: resp.get(c.contactId) ?? null })),
       total: r.total, amount: r.amount, truncated: r.total > r.rows.length,
     };
   }

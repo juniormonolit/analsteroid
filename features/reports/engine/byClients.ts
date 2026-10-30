@@ -4,6 +4,7 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { buildProductGroupFilter, productGroupCacheKey } from './productGroupFilter';
 import { getCachedClientNames } from '@/lib/bitrix/clientNames';
+import { fetchClientResponsibles } from './clientResponsible';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
 import { buildDealFilterWhere, type DealFilter } from '@/lib/metrics/dealFilters';
 import type { DateRange } from '@/lib/period';
@@ -187,12 +188,16 @@ export async function fetchByClients(opts: ByClientsOptions): Promise<ReportRow[
     }
   }
 
-  const names = await getCachedClientNames([...agg.keys()].map(id => `c${id}`));
+  const [names, responsibles] = await Promise.all([
+    getCachedClientNames([...agg.keys()].map(id => `c${id}`)),
+    fetchClientResponsibles([...agg.keys()]).catch(() => new Map<string, string | null>()),
+  ]);
 
   return [...agg.entries()].map(([id, metrics]) => ({
     dimensionId: id,
     dimensionName: names.get(`c${id}`) ?? `Контакт #${id}`,
     dimensionSubtitle: `#${id}`,
+    responsibleName: responsibles.get(id) ?? null,
     teamId: null,
     teamName: null,
     metrics: Object.fromEntries(metricIds.map(mid => [mid, metrics[mid] !== undefined ? metrics[mid] : null])),

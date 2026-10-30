@@ -84,6 +84,8 @@ export interface ReportRow {
   /** Полный битрикс-логин (Manager2015) — значение текстовой псевдо-метрики
    *  manager_login («Логин», правка владельца 31.08). Только by-managers. */
   managerLogin?: string;
+  /** «По клиентам»: ответственный менеджер клиента (ФИО), #11255. */
+  responsibleName?: string | null;
   teamId: string | null;
   teamName: string | null;
   branchName?: string | null;
