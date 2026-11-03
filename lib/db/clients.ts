@@ -26,6 +26,27 @@ function attachIdleErrorHandler(pool: Pool): Pool {
   return pool;
 }
 
+// search_path ставится явно на каждом новом соединении — и у sa-пула, и у YC-пулов.
+// С 03.11 system и sa живут в одной БД monolitika под одним пользователем: это один
+// маршрут Odyssey, серверные соединения переходят между клиентами, и путь sa-пула без
+// явного SET у system мог бы утечь в запросы system (в public и в sa есть одноимённые
+// departments/org_resolved_hierarchy/user_departments). SET встаёт в очередь клиента
+// раньше первого запроса вызывающего кода.
+function withSearchPath(pool: Pool, searchPath: string): Pool {
+  pool.on('connect', (client) => {
+    client.query(`SET search_path TO ${searchPath}`).catch((err) => {
+      console.warn(`[db] SET search_path TO ${searchPath} failed:`, err.message);
+    });
+  });
+  return pool;
+}
+
+// 'disable' | 'require' (без проверки CA) | 'yc' (с CA из YC_PG_SSL_CA_PATH).
+function sslFromMode(mode: string | undefined, fallback: string): PoolConfig['ssl'] {
+  const m = (mode ?? fallback).toLowerCase();
+  return m === 'yc' ? makeYcSslConfig() : m === 'require' ? { rejectUnauthorized: false } : false;
+}
+
 // Размер пула из env: пул тенанта Supavisor (session-mode) всего 15 соединений на всё
 // приложение, поэтому по умолчанию 8 на каждый из пулов (#8968).
 function poolMax(envName: string, fallback = 8): number {
@@ -48,13 +69,12 @@ declare global {
 function ycConnection(): Pick<PoolConfig, 'host' | 'port' | 'user' | 'password' | 'ssl'> {
   const env = process.env;
   if (env.SYS_PG_HOST) {
-    const sslMode = (env.SYS_PG_SSL ?? 'disable').toLowerCase();
     return {
       host: env.SYS_PG_HOST,
       port: Number(env.SYS_PG_PORT ?? 5432),
       user: env.SYS_PG_USER ?? env.YC_PG_USER,
       password: env.SYS_PG_PASSWORD ?? env.YC_PG_PASSWORD,
-      ssl: sslMode === 'yc' ? makeYcSslConfig() : sslMode === 'require' ? { rejectUnauthorized: false } : false,
+      ssl: sslFromMode(env.SYS_PG_SSL, 'disable'),
     };
   }
   return {
@@ -77,25 +97,27 @@ function makeYcPool(database: string): Pool {
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
   };
-  const pool = attachIdleErrorHandler(new Pool(config));
+  const pool = withSearchPath(attachIdleErrorHandler(new Pool(config)), '"$user", public');
   cache.set(database, pool);
   return pool;
 }
 
-// Misha's self-hosted Supabase, schema `sa`
+// Схема `sa` (сделки). До 03.11 — Supabase Миши (БД postgres, без SSL); теперь — БД
+// monolitika в YC: SA_PG_DB=monolitika, SA_PG_SSL=yc. Неквалифицированные deals/stages/
+// funnels/… должны резолвиться в sa (как search_path роли junior_user в Supabase).
 function makeSaPool(): Pool {
   if (globalThis.__analsteroidSaPool) return globalThis.__analsteroidSaPool;
-  return (globalThis.__analsteroidSaPool = attachIdleErrorHandler(new Pool({
+  return (globalThis.__analsteroidSaPool = withSearchPath(attachIdleErrorHandler(new Pool({
     host:     process.env.SA_PG_HOST ?? '127.0.0.1',
     port:     Number(process.env.SA_PG_PORT ?? 5432),
     user:     process.env.SA_PG_USER!,
     password: process.env.SA_PG_PASSWORD!,
-    database: 'postgres',
-    ssl:      false,
+    database: process.env.SA_PG_DB ?? 'postgres',
+    ssl:      sslFromMode(process.env.SA_PG_SSL, 'disable'),
     max: poolMax('SA_PG_POOL_MAX'),
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
-  })));
+  })), 'sa, public'));
 }
 
 let _analytics: Pool | null = null;
