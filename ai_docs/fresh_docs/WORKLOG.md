@@ -132,6 +132,13 @@
   gen_random_uuid/uuid_generate_v4 работают. **Таблицы, созданные без `SET ROLE monolitik`, принадлежат
   arnold_restore** — default privileges для JanCloude/n8n_writer на них не сработают; Арнольду сказано начинать с
   `SET ROLE monolitik`.
+- 03.11: **временный адрес `https://51-250-89-98.sslip.io`** — пока A-запись monolitika.mlt-it.com смотрит на мёртвый 62.
+  Было: ERR_SSL_PROTOCOL_ERROR — имени не было в Caddyfile, сертификат не запрашивался. Добавлено в адрес сайта
+  (`monolitika.mlt-it.com, 51-250-89-98.sslip.io {`), бэкап `/etc/caddy/Caddyfile.bak-*`, validate + reload. LE выдал
+  сертификат за ~20 с (tls-alpn-01), до 01.02.2027. Снаружи: /login 200, verify ok, robots Disallow, http → 308.
+  Кука сессии без `domain` — вход работает и на этом адресе. Для monolitika.mlt-it.com Caddy продолжает ретраить
+  ACME и падает (`62.113.100.67: Network unreachable`) — сам получит, когда DNS переведут. Когда домен заработает —
+  sslip-имя из Caddyfile убрать.
 
 ## 2026-10-30 — Аналитика канбана: отчёт «пул → задачи → продажи → отгрузки» первым блоком «Обзора»
 
