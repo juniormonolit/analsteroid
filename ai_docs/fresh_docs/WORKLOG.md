@@ -120,6 +120,18 @@
   читает только `misha`. Чтобы `misha` (nologin) мог забрать по SFTP, нужен `Match User misha` →
   `ForceCommand internal-sftp -R` — сделано владельцем: `/etc/ssh/sshd_config.d/50-misha.conf` (+ PermitTTY/X11/agent no),
   `sshd -T`: у misha forcecommand internal-sftp -R и туннели yes, у junior/arnold без изменений.
+- 03.11: **временный `arnold_restore`** для восстановления `sa`/`va` из дампа (делает Арнольд, сессия n8n).
+  На Mac поставлен `yc` 1.43 (brew cask), `yc init` прошёл владелец (каталог `default` b1giue3cjnp96coema2h).
+  `yc managed-postgresql user create arnold_restore` — доступ к `monolitika`, лимит 5, `--grants monolitik` (SQL-ом
+  `GRANT monolitik TO …` нельзя — у monolitik нет ADMIN на свою роль), пароль из `/home/arnold/arnold_restore.pass`
+  через stdin. Пулер — session по умолчанию (флага в yc нет; проверено temp-таблицей). Расширения `pgcrypto`,
+  `uuid-ossp` — только через yc/консоль (`CREATE EXTENSION` → must be superuser), включены `database update
+  --extensions`. Под monolitik: `GRANT CREATE, USAGE ON SCHEMA sa, va TO arnold_restore`.
+  Ключ `arnold@`: `command="/usr/local/bin/arnold-pass"` (root, 755) — без аргумента пароль n8n_writer (как раньше),
+  `restore` — arnold_restore, иное — отказ. Проверено под arnold_restore: член monolitik, CREATE в sa/va,
+  gen_random_uuid/uuid_generate_v4 работают. **Таблицы, созданные без `SET ROLE monolitik`, принадлежат
+  arnold_restore** — default privileges для JanCloude/n8n_writer на них не сработают; Арнольду сказано начинать с
+  `SET ROLE monolitik`.
 
 ## 2026-10-30 — Аналитика канбана: отчёт «пул → задачи → продажи → отгрузки» первым блоком «Обзора»
 

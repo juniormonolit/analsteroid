@@ -22,6 +22,10 @@
 - Пул `sa` → `monolitika`: сделать БД/SSL настраиваемыми (`SA_PG_DB`, `SA_PG_SSL`) + `search_path=sa,public`
   (в `public` лежат старые deals/stages/funnels — неквалифицированные имена не должны в них попадать). Затем `SA_PG_*`
   в secrets.env и рестарт. Схема `sa` уже накатана 03.11.
+- **Удалить `arnold_restore`** после восстановления sa/va Арнольдом: сначала проверить, что в `sa`/`va` нет объектов
+  с владельцем arnold_restore (иначе `REASSIGN OWNED BY arnold_restore TO monolitik`), затем
+  `yc managed-postgresql user delete arnold_restore --cluster-id c9qbif7n00ct1h39qd43`, файл
+  `/home/arnold/arnold_restore.pass` удалить, ветку `restore` из `/usr/local/bin/arnold-pass` убрать.
 - Заливка стадий и сделок в `sa` — сессия n8n, после ок Миши (нагрузка на Битрикс + место для sa: Яндекс или app2).
 - `sa`/`va`/`sd`/`mlt` (Supabase Миши, умер с 62) → схемы в `monolitika`: нужен бэкап Миши или перезаливка его n8n;
   ручные данные (manual_fixes, employee_registry, client_module_*) без бэкапа потеряны. Код: пул `sa` жёстко ходит в
