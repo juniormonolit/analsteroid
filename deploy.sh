@@ -1,6 +1,7 @@
 #!/bin/bash
 set -e
-REMOTE="junior@62.113.100.67"
+# 03.11.2026: старый прод 62.113.100.67 умер вместе с диском — переезд на YC VM (см. WORKLOG)
+REMOTE="junior@51.250.89.98"
 KEY="$HOME/.ssh/ssh-key-1777295854643"
 REMOTE_DIR="/home/junior/analsteroid"
 

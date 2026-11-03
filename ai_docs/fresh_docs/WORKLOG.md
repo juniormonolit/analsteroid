@@ -6,6 +6,58 @@
 
 ---
 
+## 2026-11-03 — Сервер 62 умер: переезд прода на YC VM 51.250.89.98
+
+**Что случилось.** `62.113.100.67` перестал отвечать (SSH без баннера, ping 100% потерь), диск не спасти.
+На нём было всё: прод :8100, dev-стенд с автодеплоем, Caddy, Redis, Docker-контейнер `analsteroid-sys-pg`
+(system/analytics после ухода с Яндекса 08.10) с его pg_dump'ами и Supabase Миши (`sa`/`sd`/`va`).
+Бэкапов вне 62 не было — единая точка отказа и для данных, и для копий.
+
+**Сделано на новой VM** (`51.250.89.98`, Ubuntu 24.04, 2 vCPU / 3,8 ГБ, диск расширен до 20 ГБ):
+- Node 24.22, Redis 7 (systemd), Caddy 2.11 (systemd), psql 16. Docker не ставили — system теперь в YC Managed PG.
+- Caddy: `monolitika.mlt-it.com` → `127.0.0.1:8100`, `/robots.txt` → `/var/www/robots-noindex` (Disallow: /, как было).
+  Сертификат получит сам, когда A-запись домена укажет на 51.250.89.98.
+- Полная первая выкладка: `.next/standalone` целиком (BUILD `_goZ1HZxUwNcFoMXuN99B`, коммит 6b885b10) + патчи
+  ioredis/pg как в deploy.sh. sharp из сборки — под macOS arm64; на сервер доложены `@img/sharp-linux-x64` и
+  libvips той же версии (0.35.5 в `next/node_modules`). Корневой `standalone/node_modules/sharp` — заглушка
+  трассировки (и на Mac), рантаймом не используется.
+- `start.sh` новый: секреты не export'ами в самом файле, а `set -a; . ./secrets.env` (chmod 600). Значения взяты из
+  локального `.env.local`; неизвестные (прод-only, потеряны с 62) оставлены закомментированными TODO:
+  SA_PG_HOST, BITRIX_ORG_WEBHOOK, BITRIX_PORTAL_URL, CALL_CONTROL_*, DAILY_REPORT_BITRIX_USER_ID,
+  CLOUDRU_FM_BASE_URL, PIN_PEPPER, ORG_SYNC_TOKEN, TELEPHONY_WEBHOOK_SECRET, TRANSCRIBE_ONDEMAND_*,
+  DIGEST_TEST_TOKEN, SUPPLY_PANEL_*. `PIN_PEPPER` новый ≠ старый → PIN кошельков придётся сбрасывать.
+- Фоновые джобы выключены (`DISABLE_BACKGROUND_JOBS=1`, allow пуст) и **ИИ-анализ тоже** (`AI_ANALYSIS_WORKER=0`:
+  у воркера свой рубильник, общему не подчиняется; на старте делает requeue/backfill очереди — платный Cloud.ru)
+  — до сверки данных восстановленной базы.
+- Приложение запущено: /login 200, статика 200, Caddy :80 → 308 на https.
+- `deploy.sh`: REMOTE → `junior@51.250.89.98`. Доки: SECRETS_AND_STORAGE §1, PROJECT_OVERVIEW, WORKFLOW.
+
+**База.** Владелец восстановил system из бэкапа YC в кластер `c9q6s5gtrtllm5eequ4r` (PG 17, system 576 МБ /
+151 таблица, analytics 65 МБ; 104 пользователя; последняя сессия 07.10 01:23 — состояние ДО инцидента 08.10).
+Всё, что писалось в `analsteroid-sys-pg` 08.10–02.11 (канбан повторных, очереди, анкеты, ИИ-анализы, MLT…), потеряно.
+Не накатаны миграции 224–260 (system; 225/229/259/260 — analytics.metrics). Второй кластер
+`c9qbif7n00ct1h39qd43` (по внутренней сети, 10.128.0.6) — пустой, роли `JanCloude` и баз нет.
+Автозапуск после ребута (`@reboot` в crontab) не поставлен — заблокирован авто-режимом, сделать вручную.
+
+**system + analytics → одна БД `monolitika` (кластер `c9qbif7n00ct1h39qd43`), 03.11.** Решение владельца: «всё в одном месте».
+- Владелец БД — `monolitik` (так создана в консоли; с PG15 создавать объекты может только он). Приложение ходит под
+  `JanCloude`: `GRANT USAGE, CREATE ON SCHEMA public` + DML на все таблицы/последовательности + `ALTER DEFAULT PRIVILEGES
+  FOR ROLE monolitik` → новые таблицы, созданные `monolitik`, сразу доступны `JanCloude`. **Миграции — под `monolitik`**
+  (`MONO_PG_PASSWORD` в secrets.env), приложение пароль владельца не использует.
+- Перенос: `pg_dump -Fc --no-owner --no-acl` (клиент PG 17 из PGDG — 16-й не снимает с 17-го сервера) из `c9q6s5…` баз
+  system и analytics → `pg_restore` в `monolitika`, обе в `public` (имена таблиц не пересекаются). Сверка точным
+  `count(*)` по каждой таблице: 167 = 167 таблиц, 934 889 = 934 889 строк, расхождений 0. Дампы — `~/db-backups/` на VM.
+- Миграции 224–260 накатаны (39 файлов, каждая `-1 ON_ERROR_STOP`). В 9 миграциях (230–234, 237, 238, 243, 253)
+  блок `ALTER TABLE … OWNER TO "JanCloude"` падал (`must be able to SET ROLE`): в серверных копиях условие дополнено
+  `AND pg_has_role(current_user,'JanCloude','MEMBER')` — блок пропускается, доступ даёт default privileges. Файлы в
+  репозитории не менялись. Итог: 199 таблиц, все у `monolitik`, у `JanCloude` полный DML на все.
+- `secrets.env`: `SYS_PG_HOST=c-c9qbif7n00ct1h39qd43.rw…`, `SYS_PG_USER=JanCloude` (новый пароль), `YC_SYSTEM_DB` и
+  `YC_ANALYTICS_DB` = `monolitika`. Перезапуск: /login 200, `POST /api/auth/login` с неверным паролем → 401 (запрос к
+  `users` прошёл), ошибок БД в app.log нет.
+- Ловушка паролей в `.env.local`: `@next/env` режет `$` (подстановка) и `#` (комментарий) — у `YC_JanClaude_2` `$`
+  экранирован `\$`, `YC_monolitik` взят в двойные кавычки. Проверка длины после загрузки обязательна.
+- Схемы Мишиной БД (`sa` ~31 таблица, `va` 5, `sd` 11, `mlt` 4) копий нигде нет — ни в одном восстановленном кластере.
+
 ## 2026-10-30 — Аналитика канбана: отчёт «пул → задачи → продажи → отгрузки» первым блоком «Обзора»
 
 Владелец: «первым блоком на обзоре — отчёт: в пуле / взято из пула / поставлено задач / продаж / конверсия задача →

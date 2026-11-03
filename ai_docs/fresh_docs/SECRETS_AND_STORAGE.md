@@ -7,18 +7,27 @@
 
 ## 1. Сервер (прод)
 
+> 03.11.2026: старый сервер `62.113.100.67` умер вместе с диском (там же жили dev-стенд,
+> локальная копия `system` в Docker и Supabase Миши). Прод переехал на YC VM, см. WORKLOG 03.11.
+
 | Параметр | Значение |
 |----------|----------|
-| Хост | `62.113.100.67` |
-| Пользователь | `junior` (работаем только под ним; `danny` — запрещён) |
+| Хост | `51.250.89.98` (YC VM, hostname `monolitika`, Ubuntu 24.04) |
+| Пользователь | `junior` (sudo без пароля) |
 | SSH-ключ | `~/.ssh/ssh-key-1777295854643` (и `.pub` рядом) |
 | Каталог проекта | `/home/junior/analsteroid` |
-| Порт приложения | `8100` |
-| Запуск | standalone Node, `start.sh` на сервере, рестарт делает `deploy.sh` |
+| Порт приложения | `8100` на `127.0.0.1`, снаружи — Caddy (`/etc/caddy/Caddyfile`, HTTPS сам) |
+| Запуск | `start.sh` → `exec node .next/standalone/server.js`; рестарт делает `deploy.sh` |
+| Секреты | `/home/junior/analsteroid/secrets.env` (chmod 600, `set -a` в `start.sh`), НЕ в git |
+| Redis | системный `redis-server`, `127.0.0.1:6379` |
+| БД system+analytics | одна БД `monolitika`, YC Managed PG `c9qbif7n00ct1h39qd43` → `c-c9qbif7n00ct1h39qd43.rw.mdb.yandexcloud.net:6432`, SSL (`SYS_PG_SSL=yc`) |
+| Пользователи БД | приложение — `JanCloude`; владелец БД и **миграции** — `monolitik` (`MONO_PG_PASSWORD`) |
+
+Новая серверная переменная → строка в `secrets.env` + рестарт процесса (`.env.local` прод не читает).
 
 SSH:
 ```bash
-ssh -i ~/.ssh/ssh-key-1777295854643 junior@62.113.100.67
+ssh -i ~/.ssh/ssh-key-1777295854643 junior@51.250.89.98
 ```
 
 ---

@@ -13,7 +13,7 @@
 - **Next.js 16** (App Router, **standalone** output), React 19, TypeScript
 - **TailwindCSS v4**, TanStack Query, `pg` (node-postgres)
 - xlsx (импорт/экспорт планов), date-fns, zod, zustand, lucide-react
-- Прод: VM `62.113.100.67`, порт **8100**, запуск standalone-сервером
+- Прод: YC VM `51.250.89.98` (с 03.11.2026; старая `62.113.100.67` умерла), порт **8100**, запуск standalone-сервером
 
 ### Железные правила (НЕ нарушать)
 - **НИКОГДА не дёргаем Битрикс из отчётов.** Данные приходят в БД через outgoing-вебхуки Битрикса. Отчёты читают только из БД.
