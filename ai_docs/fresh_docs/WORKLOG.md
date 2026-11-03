@@ -139,6 +139,18 @@
   Кука сессии без `domain` — вход работает и на этом адресе. Для monolitika.mlt-it.com Caddy продолжает ретраить
   ACME и падает (`62.113.100.67: Network unreachable`) — сам получит, когда DNS переведут. Когда домен заработает —
   sslip-имя из Caddyfile убрать.
+- 03.11: **пул `sa` → `monolitika`, search_path без утечек.** В `public` и `sa` 8 одноимённых таблиц: `deals`,
+  `deal_events`, `stages`, `funnels`, `product_groups` (старые копии analytics, по июнь) и `departments`,
+  `org_resolved_hierarchy`, `user_departments` (живые system). Поэтому НЕ `ALTER ROLE "JanCloude" SET search_path`
+  (system-запросы к оргструктуре ушли бы в sa), а путь на уровне пула: `lib/db/clients.ts` — `SA_PG_DB`, `SA_PG_SSL`
+  (`yc|require|disable`), sa-пул `SET search_path TO sa, public`, YC-пулы `public` — через awaited `onConnect`
+  (pg-pool 3.14). Первая версия (8c373a8e, SET на 'connect') выкачена владельцем, давала DeprecationWarning —
+  заменена (014cf342). `options=-c search_path=…` не годится: Odyssey берёт значение в кавычки → схема «sa,public».
+  Проверено нодой с pg из сборки на проде, пулы параллельно: sa-пул deals/org_resolved_hierarchy → sa, users → public;
+  system-пул всё → public. `secrets.env`: `SA_PG_HOST/PORT=6432/DB=monolitika/SSL=yc/USER=JanCloude`, пароль =
+  `$SYS_PG_PASSWORD`. После деплоя в app.log было 4× `timeout exceeded when trying to connect` — совпало с заливкой
+  Маркуса (пачки с выключенными триггерами держат `sa.deals` эксклюзивно); после — нет, `/api/tv/dashboard` 0,2 с.
+  `deploy.sh`: `COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs` — без строк «Ignoring unknown extended header».
 
 ## 2026-10-30 — Аналитика канбана: отчёт «пул → задачи → продажи → отгрузки» первым блоком «Обзора»
 

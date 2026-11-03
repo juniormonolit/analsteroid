@@ -20,9 +20,8 @@
 - ~~system → `monolitika`~~ сделано 03.11 (WORKLOG). Кластер `c9q6s5…` после проверки прода можно гасить.
 - **Миша:** sa в Яндексе (`monolitika`) или на app2 — подтвердить до переключения n8n.
 - Консоль YC: группа безопасности c9qbif… (6432 только для 82.21.72.164 и 138.124.112.195). `n8n_writer`, права и `arnold` — сделано 03.11.
-- Пул `sa` → `monolitika`: сделать БД/SSL настраиваемыми (`SA_PG_DB`, `SA_PG_SSL`) + `search_path=sa,public`
-  (в `public` лежат старые deals/stages/funnels — неквалифицированные имена не должны в них попадать). Затем `SA_PG_*`
-  в secrets.env и рестарт. Схема `sa` уже накатана 03.11.
+- Перенести старые копии `public.deals/deal_events/stages/funnels/product_groups` в схему `legacy_analytics`
+  (не удалять) — после того как Маркус закончит слияние дампа (не мешать блокировками). Пул `sa` уже смотрит в `sa`.
 - **Удалить `arnold_restore`** после восстановления sa/va Арнольдом: сначала проверить, что в `sa`/`va` нет объектов
   с владельцем arnold_restore (иначе `REASSIGN OWNED BY arnold_restore TO monolitik`), затем
   `yc managed-postgresql user delete arnold_restore --cluster-id c9qbif7n00ct1h39qd43`, файл
