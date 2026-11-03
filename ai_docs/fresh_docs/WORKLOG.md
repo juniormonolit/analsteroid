@@ -83,6 +83,13 @@
   без search_path (а в `monolitika.public` лежат старые `deals/stages/funnels` из бывшей analytics — неквалифицированные
   имена попали бы в них). **Риск для сверки:** recon делает `ALTER TABLE sa.deals DISABLE/ENABLE TRIGGER`, а это право
   владельца (`monolitik`), у `n8n_writer` его нет.
+- 03.11: `migrations/sa_org/009_recon_triggers_n8n_writer.sql` накатана под `monolitik` (по ответу сессии n8n):
+  `sa.recon_set_triggers(enabled boolean)` — SECURITY DEFINER (владелец monolitik, `search_path = pg_catalog, sa`),
+  вкл/выкл ровно трёх триггеров `sa.deals` (`trg_deals_set_event_timestamps_ins/_upd`, `trg_deals_notify_tv`), возвращает
+  их состояние; EXECUTE только `n8n_writer` (PUBLIC отозван; `JanCloude` → permission denied — проверено). У
+  `n8n_writer` отозвана запись в наши таблицы (`client_module_*`, `manual_fixes`, `employee_registry`) — только SELECT.
+  Проверено вызовом под `n8n_writer`: выкл → все `f`, вкл → все `t`; итог в pg_trigger — все включены. Сверка обязана
+  звать `recon_set_triggers(true)` в finally.
 
 ## 2026-10-30 — Аналитика канбана: отчёт «пул → задачи → продажи → отгрузки» первым блоком «Обзора»
 
