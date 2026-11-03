@@ -121,7 +121,9 @@ for pkg in "${NEEDED_PKGS[@]}"; do
   [ -d ".next/standalone/node_modules/$pkg" ] && PACK_PATHS+=(".next/standalone/node_modules/$pkg/")
 done
 [ -n "$PG_DEST" ] && PACK_PATHS+=("$PG_DEST/")
-tar -czf /tmp/analsteroid-deploy.tar.gz "${PACK_PATHS[@]}"
+# macOS-tar кладёт xattr (com.apple.provenance) — GNU tar на сервере пишет по строке
+# «Ignoring unknown extended header keyword» на каждый файл. Без метаданных Mac.
+COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -czf /tmp/analsteroid-deploy.tar.gz "${PACK_PATHS[@]}"
 
 echo "==> Uploading..."
 scp -i "$KEY" -o StrictHostKeyChecking=no /tmp/analsteroid-deploy.tar.gz "$REMOTE:$REMOTE_DIR/deploy.tar.gz"

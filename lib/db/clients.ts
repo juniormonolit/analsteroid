@@ -27,18 +27,17 @@ function attachIdleErrorHandler(pool: Pool): Pool {
 }
 
 // search_path ставится явно на каждом новом соединении — и у sa-пула, и у YC-пулов.
-// С 03.11 system и sa живут в одной БД monolitika под одним пользователем: это один
-// маршрут Odyssey, серверные соединения переходят между клиентами, и путь sa-пула без
-// явного SET у system мог бы утечь в запросы system (в public и в sa есть одноимённые
-// departments/org_resolved_hierarchy/user_departments). SET встаёт в очередь клиента
-// раньше первого запроса вызывающего кода.
-function withSearchPath(pool: Pool, searchPath: string): Pool {
-  pool.on('connect', (client) => {
-    client.query(`SET search_path TO ${searchPath}`).catch((err) => {
-      console.warn(`[db] SET search_path TO ${searchPath} failed:`, err.message);
-    });
-  });
-  return pool;
+// С 03.11 system и sa живут в одной БД monolitika под одним пользователем, а в public и
+// sa есть одноимённые таблицы (deals/stages/funnels — старые копии analytics;
+// departments/org_resolved_hierarchy/user_departments — живые system). Путь каждого пула
+// должен быть явным. onConnect пул дожидается до выдачи клиента (SET на событии
+// 'connect' гонится с первым запросом), а при ошибке соединение отбрасывается, а не
+// отдаётся с чужим путём. Стартовый параметр options не годится: Odyssey берёт значение
+// целиком в кавычки, и 'sa,public' становится одной схемой (проверено 03.11).
+function setSearchPath(searchPath: string): PoolConfig['onConnect'] {
+  return async (client) => {
+    await client.query(`SET search_path TO ${searchPath}`);
+  };
 }
 
 // 'disable' | 'require' (без проверки CA) | 'yc' (с CA из YC_PG_SSL_CA_PATH).
@@ -93,11 +92,12 @@ function makeYcPool(database: string): Pool {
   const config: PoolConfig = {
     ...ycConnection(),
     database,
+    onConnect: setSearchPath('public'),
     max: poolMax('YC_PG_POOL_MAX'),
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
   };
-  const pool = withSearchPath(attachIdleErrorHandler(new Pool(config)), '"$user", public');
+  const pool = attachIdleErrorHandler(new Pool(config));
   cache.set(database, pool);
   return pool;
 }
@@ -107,17 +107,18 @@ function makeYcPool(database: string): Pool {
 // funnels/… должны резолвиться в sa (как search_path роли junior_user в Supabase).
 function makeSaPool(): Pool {
   if (globalThis.__analsteroidSaPool) return globalThis.__analsteroidSaPool;
-  return (globalThis.__analsteroidSaPool = withSearchPath(attachIdleErrorHandler(new Pool({
+  return (globalThis.__analsteroidSaPool = attachIdleErrorHandler(new Pool({
     host:     process.env.SA_PG_HOST ?? '127.0.0.1',
     port:     Number(process.env.SA_PG_PORT ?? 5432),
     user:     process.env.SA_PG_USER!,
     password: process.env.SA_PG_PASSWORD!,
     database: process.env.SA_PG_DB ?? 'postgres',
     ssl:      sslFromMode(process.env.SA_PG_SSL, 'disable'),
+    onConnect: setSearchPath('sa, public'),
     max: poolMax('SA_PG_POOL_MAX'),
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
-  })), 'sa, public'));
+  })));
 }
 
 let _analytics: Pool | null = null;
