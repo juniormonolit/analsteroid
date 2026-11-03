@@ -118,7 +118,8 @@
     похоже на локальную dev-копию; для прода не берём.
   Архив залит на VM: `/srv/db-dumps/db-dumps-2026-11-03.zip` (root:misha 640, каталог 750, sha256 сверен) —
   читает только `misha`. Чтобы `misha` (nologin) мог забрать по SFTP, нужен `Match User misha` →
-  `ForceCommand internal-sftp -R` (делает владелец).
+  `ForceCommand internal-sftp -R` — сделано владельцем: `/etc/ssh/sshd_config.d/50-misha.conf` (+ PermitTTY/X11/agent no),
+  `sshd -T`: у misha forcecommand internal-sftp -R и туннели yes, у junior/arnold без изменений.
 
 ## 2026-10-30 — Аналитика канбана: отчёт «пул → задачи → продажи → отгрузки» первым блоком «Обзора»
 
