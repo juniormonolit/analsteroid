@@ -19,7 +19,11 @@
 - ~~system → `monolitika`~~ сделано 03.11 (WORKLOG). Кластер `c9q6s5…` после проверки прода можно гасить.
 - **Миша:** sa в Яндексе (`monolitika`) или на app2 — подтвердить до переключения n8n.
 - Консоль YC: группа безопасности c9qbif… (6432 только для 82.21.72.164 и 138.124.112.195). `n8n_writer`, права и `arnold` — сделано 03.11.
-- DDL `sa.deals/stages/deal_events/bitrix_task_current/bitrix_logist_groups` — пришлёт сессия n8n, накатить под `monolitik`.
+- Пул `sa` → `monolitika`: сделать БД/SSL настраиваемыми (`SA_PG_DB`, `SA_PG_SSL`) + `search_path=sa,public`
+  (в `public` лежат старые deals/stages/funnels — неквалифицированные имена не должны в них попадать). Затем `SA_PG_*`
+  в secrets.env и рестарт. Схема `sa` уже накатана 03.11.
+- Сверка (fey) выключает триггеры `ALTER TABLE sa.deals DISABLE TRIGGER` — нужно право владельца; решить: SECURITY
+  DEFINER-функция под `monolitik` с EXECUTE для `n8n_writer` или сверка под `monolitik`.
 - `sa`/`va`/`sd`/`mlt` (Supabase Миши, умер с 62) → схемы в `monolitika`: нужен бэкап Миши или перезаливка его n8n;
   ручные данные (manual_fixes, employee_registry, client_module_*) без бэкапа потеряны. Код: пул `sa` жёстко ходит в
   БД `postgres` без SSL — сделать БД/SSL настраиваемыми (`SA_PG_DB`, `SA_PG_SSL`).

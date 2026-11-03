@@ -72,6 +72,17 @@
   (доступ к `monolitika`, лимит 50). Под `monolitik`: `GRANT USAGE ON SCHEMA sa, va`, SELECT/INSERT/UPDATE на таблицы и
   USAGE/SELECT на последовательности + default privileges на будущие. Проверено пробной таблицей `sa._grant_probe`
   (удалена): SELECT/INSERT/UPDATE есть, DELETE нет, CREATE в `sa` нет, `public.users` — permission denied.
+- 03.11: **схема `sa` накатана** в `monolitika` под `monolitik`: `sa-schema-reconstructed.sql` (Маркус, сессия n8n,
+  задача #11395 — DDL `deals`/`stages`/`deal_events`/`bitrix_task_current`/`bitrix_logist_groups` + `funnels` с сидом
+  0,1,2,3,4,7 + `product_groups` + триггеры `trg_deals_set_event_timestamps_ins/_upd`, реконструкция по коду, не оригинал),
+  затем `migrations/sa_org/001–008`. В серверных копиях sa_org `junior_user` → `"JanCloude"` (роли старого Supabase нет;
+  замысел «приложение пишет, но не удаляет свои таблицы» сохранён). Итог: 19 таблиц в `sa`, 3 триггера на `sa.deals`.
+  Проверка: пробная стадия+сделка+событие под `n8n_writer` в транзакции → FK прошли, триггер поставил reserved_at и
+  is_reserved, ROLLBACK, `sa.deals` = 0 строк. Данных пока нет — стадии и сделки зальёт сессия n8n.
+  **Не сделано:** приложение `sa` ещё не читает — пул `sa` в `lib/db/clients.ts` жёстко ходит в БД `postgres` без SSL и
+  без search_path (а в `monolitika.public` лежат старые `deals/stages/funnels` из бывшей analytics — неквалифицированные
+  имена попали бы в них). **Риск для сверки:** recon делает `ALTER TABLE sa.deals DISABLE/ENABLE TRIGGER`, а это право
+  владельца (`monolitik`), у `n8n_writer` его нет.
 
 ## 2026-10-30 — Аналитика канбана: отчёт «пул → задачи → продажи → отгрузки» первым блоком «Обзора»
 
