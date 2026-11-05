@@ -17,6 +17,8 @@
 ### Восстановление после смерти сервера 62 (03.11) — что осталось
 - DNS: A-запись `monolitika.mlt-it.com` → `51.250.89.98` (Caddy сам выпустит сертификат). Пока работает временный
   `https://51-250-89-98.sslip.io` — после переключения DNS убрать его из Caddyfile.
+- «Контроль звонков»: вписать в secrets.env `CALL_CONTROL_WEBHOOK_URL`/`CALL_CONTROL_BOT_ID=15010`/`CALL_CONTROL_CLIENT_ID`
+  (потеряны с 62) + `systemctl restart monolitika`. Воркер уже включён (WORKLOG 05.11), без ключей бот нем.
 - Переезд на `analytics.mlt-it.ru` (решение Миши 05.11, домен уже в Caddyfile): когда откроется снаружи —
   `APP_BASE_URL` в secrets.env + `systemctl restart monolitika`, `MONOLITIKA_ORIGIN` в `lib/jobs/managerDigest.ts`,
   перерегистрировать обработчики Битрикс-приложения (левое меню, вкладка карточки клиента), предупредить

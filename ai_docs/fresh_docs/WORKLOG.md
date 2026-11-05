@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-11-05 — «Контроль звонков»: воркер включён на VM, отправка ждёт ключей бота
+
+ТЗ стороны Арнольда: бот должен быть готов, когда va.calls снова пойдёт. На VM: `BACKGROUND_JOBS_ALLOW=callControl`
+(бэкап `prod-backups/secrets.env.bak-*-pre-callcontrol`), `systemctl restart monolitika`. В логе
+`[jobs] … кроме: callControl`, тики раз в минуту `events=0 opened+=0 resolved=0 cases=0`, ошибок БД нет.
+Первый тик отработал `resumeAfterDowntime`: курсор 06.10 → now−30 мин, **555 старых открытых кейсов закрыты без
+уведомлений** (так задумано). Env: SA_PG_*/SYS_PG_* → monolitika (JanCloude: SELECT va.calls, запись в call_*),
+Redis PONG, 62.113.100.67 нигде нет. Настройки: enabled=t, **dry_run=f** (пришло из дампа system), зеркало 2098.
+**Не хватает** `CALL_CONTROL_WEBHOOK_URL` / `CALL_CONTROL_BOT_ID` (15010) / `CALL_CONTROL_CLIENT_ID`: жили только в
+start.sh на 62, локально их не было. Пока их нет, любая отправка падает с ошибкой (сторожок «va.calls отстаёт»
+тоже) — фактически бот нем. **Риск при доливе va.calls:** синк идёт по `created_at > курсор`. Если Арнольд дольёт
+звонки 08.10–05.11 с `created_at = now()`, а не с исторической датой, бот примет их за свежие и при dry_run=f
+разошлёт эскалации по октябрьским пропущенным. Перед доливом: исторический created_at либо dry_run=t на время долива.
+
 ## 2026-11-05 — Домен analytics.mlt-it.ru; пакет Маркуса #11450 (sa после 62) накатан в monolitika
 
 **Домен.** По решению Миши Монолитика переезжает на `analytics.mlt-it.ru` (DNS в Beget заводит Миша). В Caddyfile
