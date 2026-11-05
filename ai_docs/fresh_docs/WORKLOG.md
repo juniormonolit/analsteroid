@@ -36,6 +36,13 @@
 Ставит владелец (классификатор не даёт агенту ставить сервисы):
 `sudo install -m644 /tmp/monolitika.service /etc/systemd/system/ && sudo install -m644 /tmp/monolitika.logrotate /etc/logrotate.d/monolitika && kill <pid :8100> && sudo systemctl daemon-reload && sudo systemctl enable --now monolitika`.
 
+**Итог (08:20 UTC):** владелец выкатил faf86dfa+3d30746b (BUILD `DF4djxKE_ledHOEdnwoJv`) и поставил юнит.
+Проверено на проде: LISTEN `sa_deals_changed` подключается с первой попытки; `pg_terminate_backend` слушающего
+коннекта → одна строка `connection lost`, одно переподключение, процесс жив. Блок tv/stream из Caddyfile убран
+(восстановлен `Caddyfile.bak-20261105-0810`), SSE снова 200. `kill -9` процесса → systemd поднял его за ~4 с
+(`NRestarts=1`), `is-enabled` = enabled, logrotate подхватывает app.log. Прод теперь только через
+`systemctl restart monolitika` — `nohup bash start.sh` руками не запускать (займёт порт, юнит будет падать в цикле).
+
 ## 2026-11-04 — Планы отгрузок на ноябрь 2026
 **Владелец:** заполнить планы на ноябрь из «2026 Декомпозиция (Основная) (3).xlsx», лист «Менеджеры»: B — логин, O — план отгрузок, строки 7–232.
 **Сделано:** сид `migrations/seed_plans_november2026.sql` применён на прод (БД `monolitika`, через psql на VM под `JanCloude`, с проверкой суммы внутри транзакции). 94 менеджера (ManagerN → `#N`, пустые ячейки пропущены, нулей нет), 333 125 000 ₽ = итог «ВСЕГО» листа (O5); plan_n = 0.8. До сида ноябрь был пуст. Все 94 логина есть в `org_resolved_hierarchy`. Способ проверили на октябре: столбец N того же листа совпадает с БД один в один (103 / 373 млн).
