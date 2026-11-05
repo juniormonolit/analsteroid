@@ -17,12 +17,9 @@
 ### Восстановление после смерти сервера 62 (03.11) — что осталось
 - DNS: A-запись `monolitika.mlt-it.com` → `51.250.89.98` (Caddy сам выпустит сертификат). Пока работает временный
   `https://51-250-89-98.sslip.io` — после переключения DNS убрать его из Caddyfile.
-- «Контроль звонков»: вписать в secrets.env `CALL_CONTROL_WEBHOOK_URL`/`CALL_CONTROL_BOT_ID=15010`/`CALL_CONTROL_CLIENT_ID`
-  (потеряны с 62) + `systemctl restart monolitika`. Воркер уже включён (WORKLOG 05.11), без ключей бот нем.
-  Значений нет ни у кого (05.11: ни у Арнольда, ни в ~/missedcalls — там копия Монолитики). Вебхук — «Разработчикам →
-  Входящие вебхуки» у 2098 (или новый со scope imbot); CLIENT_ID Битрикс не показывает → если не вспомнят,
-  перерегистрировать бота (`imbot.register`, скрипт `scripts/bitrix_register_bot.mjs`), BOT_ID сменится. Кто делает — Миша.
-  **dry_run=t держать** до сигнала Арнольда: долив va.calls (#11467, created_at = called_at) + их сверка. Потом тумблер.
+- «Контроль звонков» (бот 27458, ключи в secrets.env с 05.11): **dry_run=t держать** до сигнала Арнольда (долив
+  va.calls #11467 + сверка), потом тумблер на /settings/bots/call-control. Перевыпустить входящий вебхук 2098 (URL
+  светился в чате) → новый URL в `CALL_CONTROL_WEBHOOK_URL` + restart. Старого бота 15010 удалить в админке «Чат-боты».
 - Переезд на `analytics.mlt-it.ru` (решение Миши 05.11, домен уже в Caddyfile): когда откроется снаружи —
   `APP_BASE_URL` в secrets.env + `systemctl restart monolitika`, `MONOLITIKA_ORIGIN` в `lib/jobs/managerDigest.ts`,
   перерегистрировать обработчики Битрикс-приложения (левое меню, вкладка карточки клиента), предупредить

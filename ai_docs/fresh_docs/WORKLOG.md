@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-11-05 — «Контроль звонков»: бот перерегистрирован, BOT_ID 27458
+
+CLIENT_ID старого бота 15010 жил только в start.sh на 62: подбор не прошёл (`APP_ID_ERROR: Bot was installed by another
+rest application` — с CLIENT_ID «Аналитика», с кодом бота `xbrwvyz0zjrm7whw`, с логином `bot_rest_…`). По инструкции
+стороны Арнольда и с согласия владельца зарегистрирован новый бот: `imbot.register` через входящий вебхук 2098
+(scope crm, department, im, imbot, telephony, user), CODE `call_control_v2`, NAME «Контроль звонков», COLOR RED,
+EVENT_HANDLER = `https://51-250-89-98.sslip.io/api/telephony/webhook` (входящие бот не обрабатывает, поле нужно для формы).
+CLIENT_ID сгенерирован на VM (`openssl rand -hex 16`) и сразу записан в secrets.env, в чат не выводился.
+**Новый BOT_ID = 27458.** В secrets.env: `CALL_CONTROL_WEBHOOK_URL`, `CALL_CONTROL_CLIENT_ID`, `CALL_CONTROL_BOT_ID`
+(бэкап `prod-backups/secrets.env.bak-*-pre-ccbot`). Тест `imbot.message.add` в 2098 → message id 14901528. После
+`systemctl restart monolitika` тики идут, сторожок «va.calls отстаёт» ушёл в зеркало без ошибки. **dry_run=t** — до
+сигнала Арнольда. Старый бот 15010 висит молча (без CLIENT_ID программно не удалить; можно в админке «Чат-боты»).
+У людей уведомления пойдут в новый чат «Контроль звонков». **URL вебхука 2098 попал в чат сессии — перевыпустить.**
+
 ## 2026-11-05 — «Контроль звонков»: воркер включён на VM, отправка ждёт ключей бота
 
 ТЗ стороны Арнольда: бот должен быть готов, когда va.calls снова пойдёт. На VM: `BACKGROUND_JOBS_ALLOW=callControl`
