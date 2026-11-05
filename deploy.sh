@@ -153,8 +153,15 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$REMOTE" "
   ls -1t BUILD_ID.* 2>/dev/null | tail -n +4 | xargs -r rm -f --
   cd ..
 
-  # Stop server
-  kill \$(ss -tlnp | grep 8100 | grep -oP 'pid=\K[0-9]+') 2>/dev/null || true
+  # Stop server. С 05.11 процесс под systemd (monolitika.service, Restart=always — после OOM
+  # поднимается сам); без юнита — по-старому, kill + nohup.
+  if systemctl cat monolitika.service >/dev/null 2>&1; then
+    USE_SYSTEMD=1
+    sudo systemctl stop monolitika
+  else
+    USE_SYSTEMD=0
+    kill \$(ss -tlnp | grep 8100 | grep -oP 'pid=\K[0-9]+') 2>/dev/null || true
+  fi
   sleep 1
 
   # pg-<hash> may currently be a SYMLINK on the server (from an older deploy before this
@@ -177,7 +184,11 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$REMOTE" "
   fi
 
   # Start server
-  nohup bash start.sh >> app.log 2>&1 & disown
+  if [ \"\$USE_SYSTEMD\" = 1 ]; then
+    sudo systemctl start monolitika
+  else
+    nohup bash start.sh >> app.log 2>&1 & disown
+  fi
   sleep 4
 
   # Verify

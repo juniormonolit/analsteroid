@@ -1,0 +1,18 @@
+# Прод «Монолитики» на YC VM 51.250.89.98 (05.11.2026). Установка — ops/README в WORKLOG 05.11.
+# Restart=always: после падения (OOM 05.11 дважды) процесс поднимается сам через 3 с.
+[Unit]
+Description=Monolitika (Next.js standalone :8100)
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+User=junior
+WorkingDirectory=/home/junior/analsteroid
+ExecStart=/bin/bash /home/junior/analsteroid/start.sh
+Restart=always
+RestartSec=3
+StandardOutput=append:/home/junior/analsteroid/app.log
+StandardError=append:/home/junior/analsteroid/app.log
+
+[Install]
+WantedBy=multi-user.target
