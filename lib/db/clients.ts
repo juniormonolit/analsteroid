@@ -102,18 +102,26 @@ function makeYcPool(database: string): Pool {
   return pool;
 }
 
-// Схема `sa` (сделки). До 03.11 — Supabase Миши (БД postgres, без SSL); теперь — БД
-// monolitika в YC: SA_PG_DB=monolitika, SA_PG_SSL=yc. Неквалифицированные deals/stages/
-// funnels/… должны резолвиться в sa (как search_path роли junior_user в Supabase).
-function makeSaPool(): Pool {
-  if (globalThis.__analsteroidSaPool) return globalThis.__analsteroidSaPool;
-  return (globalThis.__analsteroidSaPool = attachIdleErrorHandler(new Pool({
+// Подключение к БД со схемой `sa`. До 03.11 — Supabase Миши (БД postgres, без SSL); теперь —
+// БД monolitika в YC: SA_PG_DB=monolitika, SA_PG_SSL=yc. Общее для пула и LISTEN-клиента
+// телевизоров (lib/tv/notifier.ts): своя копия конфига там не переехала 03.11 и уронила прод 05.11.
+export function saConnectionConfig(): Pick<PoolConfig, 'host' | 'port' | 'user' | 'password' | 'database' | 'ssl'> {
+  return {
     host:     process.env.SA_PG_HOST ?? '127.0.0.1',
     port:     Number(process.env.SA_PG_PORT ?? 5432),
     user:     process.env.SA_PG_USER!,
     password: process.env.SA_PG_PASSWORD!,
     database: process.env.SA_PG_DB ?? 'postgres',
     ssl:      sslFromMode(process.env.SA_PG_SSL, 'disable'),
+  };
+}
+
+// Неквалифицированные deals/stages/funnels/… должны резолвиться в sa (как search_path
+// роли junior_user в Supabase).
+function makeSaPool(): Pool {
+  if (globalThis.__analsteroidSaPool) return globalThis.__analsteroidSaPool;
+  return (globalThis.__analsteroidSaPool = attachIdleErrorHandler(new Pool({
+    ...saConnectionConfig(),
     onConnect: setSearchPath('sa, public'),
     max: poolMax('SA_PG_POOL_MAX'),
     idleTimeoutMillis: 10_000,
