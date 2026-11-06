@@ -6,6 +6,22 @@
 
 ---
 
+## 2026-11-06 — Синк оргструктуры не работал с переезда: нет вебхука, токена и расписания
+
+Симптом: оргструктура не обновляется. В app.log кнопка «Синхронизировать» падала с
+`[org-sync] failed: BITRIX_ORG_WEBHOOK не задан`. Причин две, обе от смерти 62:
+- `BITRIX_ORG_WEBHOOK` и `ORG_SYNC_TOKEN` жили только в start.sh на 62 (в списке TODO 03.11);
+- ночной прогон 04:00 МСК дёргал внешний крон (BACKLOG 28.09), на новой VM его нет.
+
+Сделано:
+- secrets.env на VM (бэкап `prod-backups/secrets.env.bak-*-pre-orgsync`): `BITRIX_ORG_WEBHOOK` = тот же вебхук,
+  что `BITRIX_WEBHOOK_URL` (`department.get` им читается), `ORG_SYNC_TOKEN` — `openssl rand -hex 32` на месте.
+  Значения в чат/git не попадали.
+- `ops/monolitika-org-sync.service` + `.timer`: oneshot, `curl POST 127.0.0.1:$PORT/api/admin/org-sync` с
+  Bearer-токеном из secrets.env, 04:00 Europe/Moscow, `Persistent=true`, лог в `~/analsteroid/org-sync.log`.
+  Расписание теперь на самой VM, а не внешнее.
+- Установку юнитов и рестарт запускает владелец (классификатор не пускает запись на прод).
+
 ## 2026-11-05 — «Контроль звонков»: бот перерегистрирован, BOT_ID 27458
 
 CLIENT_ID старого бота 15010 жил только в start.sh на 62: подбор не прошёл (`APP_ID_ERROR: Bot was installed by another

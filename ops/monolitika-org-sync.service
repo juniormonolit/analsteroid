@@ -1,0 +1,16 @@
+# Ночной синк оргструктуры из Битрикса (06.11.2026). На 62 его дёргал внешний крон,
+# с переездом на YC VM он пропал — оргструктура перестала обновляться.
+# Дёргает тот же роут, что кнопка в /settings/org-structure, служебным токеном.
+# Нужны в secrets.env: BITRIX_ORG_WEBHOOK (права «Пользователи» + «Структура компании»)
+# и ORG_SYNC_TOKEN. Запускается таймером monolitika-org-sync.timer.
+[Unit]
+Description=Monolitika: синк оргструктуры из Битрикса
+After=monolitika.service
+
+[Service]
+Type=oneshot
+User=junior
+WorkingDirectory=/home/junior/analsteroid
+ExecStart=/bin/bash -c 'set -a; . ./secrets.env; set +a; curl -fsS -m 900 -X POST "http://127.0.0.1:$${PORT:-8100}/api/admin/org-sync" -H "Authorization: Bearer $${ORG_SYNC_TOKEN}"; echo'
+StandardOutput=append:/home/junior/analsteroid/org-sync.log
+StandardError=append:/home/junior/analsteroid/org-sync.log

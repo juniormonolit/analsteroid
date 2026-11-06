@@ -1,0 +1,11 @@
+# 04:00 МСК каждую ночь, как было на 62. Persistent: пропущенный (VM лежала) прогон
+# выполнится при старте.
+[Unit]
+Description=Monolitika: ночной синк оргструктуры 04:00 МСК
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Europe/Moscow
+Persistent=true
+
+[Install]
+WantedBy=timers.target
