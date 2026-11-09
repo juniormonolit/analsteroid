@@ -126,9 +126,9 @@ const ddmmyyyy = (d: Date) => new Date(new Date(d).getTime() + 3 * 3600_000).toI
 /**
  * Текст задачи (BB-код Битрикса). Владелец 23.10 («делай всё целиком»), по разбору Fable:
  * сначала то, что нужно для звонка, потом контекст —
- *   памятка ИИ (если есть свежий анализ) → «От РОПа» (серой цитатой >>, отделить человека от системы)
+ *   памятка ИИ (если есть свежий анализ) → «От РОПа» (обычным текстом под заголовком; «>>» в описании не рисуется — 09.11)
  *   → последние 5 отгрузок с датами + итог → анкета последней сделки одной строкой.
- * BB-коды — только рабочие (проверено 23.10): [LIST]/[QUOTE]/[TABLE] Битрикс не рисует → «•» и «>>».
+ * BB-коды — только рабочие (проверено 23.10): [LIST]/[QUOTE]/[TABLE] Битрикс не рисует → «•». «>>» работает в чате, но не в описании.
  * Жирный — только в памятке и заголовках блоков; суммы обычным шрифтом.
  */
 export async function buildDescription(clientKey: string, comment: string, memoBb: string | null): Promise<string> {
@@ -145,7 +145,8 @@ export async function buildDescription(clientKey: string, comment: string, memoB
   );
   const lines: string[] = [];
   if (memoBb) lines.push(memoBb, '');
-  if (comment.trim()) lines.push('[B]От РОПа:[/B]', ...comment.trim().split('\n').map(l => `>>${l}`), '');
+  // Обычными строками (владелец 09.11: «эти скобочки убрать» — цитата «>>» в ОПИСАНИИ задачи Битрикс не рисует, видно «>>»).
+  if (comment.trim()) lines.push('[B]От РОПа:[/B]', ...comment.trim().split('\n'), '');
 
   const rows = shipped.rows;
   if (rows.length) {
