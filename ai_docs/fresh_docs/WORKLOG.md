@@ -19,6 +19,12 @@
   с журналом `/var/log/caddy/sslip-access.log`. Пусто несколько дней → блок удалить.
 - Выкатка ee4b65db + 31b5089b и правка Caddy — скриптом владельца.
 
+Результат: выкатка BUILD `g23nW_Y29QuLVKRkvqy3L` (deploy.sh с `SKIP_SCHEMA_CHECK=1 ALLOW_SCHEMA_DRIFT=1` — гард схем
+смотрит в старый кластер, миграций в выкатке не было). Reload Caddy сперва упал: `caddy validate` от root создал
+`sslip-access.log` с владельцем root, а Caddy работает от `caddy` → permission denied (старый конфиг продолжал работать,
+простоя не было). `chown caddy:caddy` + reload — ок. **Первые минуты журнала: на sslip ходят ≥3 телевизора
+(`/api/tv/feed`) и люди в канбане повторных** — удалять sslip нельзя, пока ТВ и закладки не переведены на .ru.
+
 ## 2026-11-09 — Домен monolitika.mlt-it.ru → Монолитика (VM 51.250.89.98)
 
 DNS `monolitika.mlt-it.ru` → 51.250.89.98 уже настроен (проверено с VM, 8.8.8.8). Порты 80/443 снаружи открыты.
