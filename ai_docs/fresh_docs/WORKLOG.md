@@ -13,6 +13,14 @@
 `createDeal.buildDescription`: текст РОПа — обычными строками под «[B]От РОПа:[/B]». Первое сообщение в чат задачи
 (postToTaskChat) и так шло без «>>». Инструкция («серой цитатой» → «как есть») поправлена.
 
+## 2026-11-09 — Отчёт «МОСКВА» снова ходит каждый вечер
+
+Владелец: «аналитик не шлёт отчёт по Москве». С переезда на VM 51.250.89.98 `dailyReport` не был в
+`BACKGROUND_JOBS_ALLOW` (весь старый список закомментирован «до сверки данных»), а `DAILY_REPORT_BITRIX_USER_ID`
+остался в start.sh мёртвого сервера 62. В прод `secrets.env`: `BACKGROUND_JOBS_ALLOW=callControl,repeatTaskStatus,dailyReport`,
+`DAILY_REPORT_BITRIX_USER_ID=2098` (бэкап `secrets.env.bak-dailyreport`), рестарт. 09.11 в 18:35 МСК отчёт отправлен
+(окно 18:00–19:59). Всё ещё выключены: `weeklyWeather`, `supplyPanelSync`, `repeatKanbanSnapshot`, `repeatQueueIssue`, `repeatMorning`.
+
 ## 2026-11-09 — Задачи канбана повторных — от имени нажавшего, а не владельца вебхука
 
 Владелец: «Хули задачи ставятся от моего имени?». CREATED_BY и так = нажавший (с 21.10), но `tasks.task.add` /
