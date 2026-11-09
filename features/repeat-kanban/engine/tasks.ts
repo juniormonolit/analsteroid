@@ -43,17 +43,36 @@ const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
  *  ONTASKADD приходит без UF_CRM_TASK, а сверка её не досыпает (23.10: за 22.10 у 42 из 53 задач
  *  проекта deal_id пустой) — карточка писала «Сделка без задачи», хотя задачу только что поставили
  *  (сделка 273512, задача 170743). Связь берём из своих записей. */
-async function linkedTasks(dealIds: number[]): Promise<Map<number, number>> {
+interface LinkedTask { dealId: number; createdAt: string; creatorId: string | null; creatorName: string | null; responsibleId: string | null; deadlineAt: string | null }
+
+async function linkedTasks(dealIds: number[]): Promise<Map<number, LinkedTask>> {
   const { systemDb } = await import('@/lib/db/clients');
-  const r = await systemDb().query<{ task_id: string; deal_id: string }>(
-    `SELECT task_id::text, deal_id::text FROM repeat_kanban_events
+  type Raw = { task_id: string; deal_id: string; at: Date; creator_id: string | null; creator_name: string | null; resp: string | null; deadline: string | null; dtime: string | null };
+  const r = await systemDb().query<Raw>(
+    `SELECT DISTINCT ON (task_id) task_id::text, deal_id::text, ts AS at, actor_bitrix_id AS creator_id, actor_name AS creator_name,
+            payload->>'responsible' AS resp, payload->>'deadline' AS deadline, payload->>'deadlineTime' AS dtime
+       FROM repeat_kanban_events
       WHERE task_id IS NOT NULL AND deal_id = ANY($1::bigint[])
-     UNION
-     SELECT issued_task_id::text, issued_deal_id::text FROM repeat_task_queue
-      WHERE issued_task_id IS NOT NULL AND issued_deal_id = ANY($1::bigint[])`,
+      ORDER BY task_id, ts
+     `,
     [dealIds],
-  ).catch(() => ({ rows: [] as { task_id: string; deal_id: string }[] }));
-  return new Map(r.rows.map(x => [Number(x.task_id), Number(x.deal_id)]));
+  ).catch(() => ({ rows: [] as Raw[] }));
+  const q = await systemDb().query<Raw>(
+    `SELECT issued_task_id::text AS task_id, issued_deal_id::text AS deal_id, issued_at AS at, queued_by AS creator_id, queued_by_name AS creator_name,
+            coalesce(new_responsible_id, manager_id) AS resp, NULL AS deadline, NULL AS dtime
+       FROM repeat_task_queue WHERE issued_task_id IS NOT NULL AND issued_deal_id = ANY($1::bigint[])`,
+    [dealIds],
+  ).catch(() => ({ rows: [] as Raw[] }));
+  const out = new Map<number, LinkedTask>();
+  for (const x of [...r.rows, ...q.rows]) {
+    const id = Number(x.task_id);
+    if (out.has(id)) continue;
+    out.set(id, {
+      dealId: Number(x.deal_id), createdAt: new Date(x.at).toISOString(), creatorId: x.creator_id, creatorName: x.creator_name, responsibleId: x.resp,
+      deadlineAt: x.deadline && /^\d{4}-\d{2}-\d{2}$/.test(x.deadline) ? new Date(`${x.deadline}T${x.dtime && /^\d{2}:\d{2}$/.test(x.dtime) ? x.dtime : '19:00'}:00+03:00`).toISOString() : null,
+    });
+  }
+  return out;
 }
 
 /** Последняя задача проекта по каждой сделке: по привязке в копии Битрикса И по нашим записям. */
@@ -77,7 +96,7 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
     for (const x of r.rows) {
       const k = known.get(Number(x.task_id));
       if (k && (!x.changed_at || new Date(k.at) > new Date(x.changed_at))) { x.status = k.status; if (k.closedAt) { x.closed_at = k.closedAt; x.changed_at = k.closedAt; } }
-      const dealId = x.deal_id !== null ? Number(x.deal_id) : links.get(Number(x.task_id));
+      const dealId = x.deal_id !== null ? Number(x.deal_id) : links.get(Number(x.task_id))?.dealId;
       if (!dealId) continue;
       const task: RepeatTask = {
         id: Number(x.task_id), dealId, title: String(x.title ?? ''),
@@ -88,6 +107,27 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
       };
       const cur = out.get(dealId);
       if (!cur || task.createdAt > cur.createdAt) out.set(dealId, task);
+    }
+    // Задачи, поставленные из Монолитики, которых в копии нет вовсе (09.11: копия задач стоит с 08.10 —
+    // с 05.11 из 62 наших задач в ней 1). Собираем по своему журналу; статус — из кэша Битрикса (taskReview.ts).
+    const inCopy = new Set(r.rows.map(x => Number(x.task_id)));
+    const missing = [...links].filter(([id]) => !inCopy.has(id));
+    if (missing.length) {
+      const st = await knownTaskStatuses(missing.map(([id]) => id)).catch(() => new Map());
+      const people = [...new Set(missing.map(([, l]) => l.responsibleId).filter((v): v is string => !!v))];
+      const names = new Map((await analyticsDb().query<{ id: string; n: string }>(
+        `SELECT DISTINCT ON (manager_bitrix_user_id) manager_bitrix_user_id AS id, manager_name AS n FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = ANY($1::text[])`, [people],
+      ).catch(() => ({ rows: [] as { id: string; n: string }[] }))).rows.map(x => [x.id, x.n]));
+      for (const [id, l] of missing) {
+        const k = st.get(id);
+        const task: RepeatTask = {
+          id, dealId: l.dealId, title: '', state: stateOf(k ? k.status : null, null),
+          createdById: l.creatorId, createdByName: l.creatorName, responsibleId: l.responsibleId, responsibleName: l.responsibleId ? names.get(l.responsibleId) ?? null : null,
+          createdAt: l.createdAt, deadlineAt: l.deadlineAt, changedAt: k?.closedAt ?? k?.at ?? null, closedAt: k?.status === 5 ? k.closedAt ?? null : null,
+        };
+        const cur = out.get(l.dealId);
+        if (!cur || task.createdAt > cur.createdAt) out.set(l.dealId, task);
+      }
     }
     return out;
   } catch (e) {
