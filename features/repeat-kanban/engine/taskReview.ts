@@ -13,17 +13,56 @@ import { REPEAT_PROJECT_GROUP_ID } from './config';
 
 export class TaskReviewError extends Error {}
 
-interface BxTask { id?: string; status?: string; groupId?: string; ufCrmTask?: string[] | null; title?: string }
+interface BxTask { id?: string; status?: string; groupId?: string; ufCrmTask?: string[] | null; title?: string; closedBy?: string | null; closedDate?: string | null }
 
-/** Задача — этого проекта, привязана к этой сделке и ждёт контроля. */
-export async function checkTask(taskId: number, dealId: number): Promise<BxTask> {
-  const r = await read<{ task?: BxTask }>('tasks.task.get', { taskId, select: ['ID', 'STATUS', 'GROUP_ID', 'UF_CRM_TASK', 'TITLE'] })
+// Состояние задачи по Битриксу, которое мы и так узнаём при приёмке (09.11: копия задач sa.bitrix_task_current
+// стоит с 08.10 после смерти сервера 62 — доска показывала «ждёт контроля» у задачи, закрытой в Битриксе).
+// Запоминаем в Redis на 30 дней; tasks.ts накладывает поверх копии. Лишних запросов в Битрикс нет.
+const STATE_TTL = 30 * 86_400;
+export async function rememberTaskStatus(taskId: number, status: number, closedAt: string | null): Promise<void> {
+  const { redisReady } = await import('@/lib/cache/redis');
+  const r = await redisReady().catch(() => null);
+  if (r) await r.set(`repeat:task-status:${taskId}`, JSON.stringify({ status, closedAt, at: new Date().toISOString() }), 'EX', STATE_TTL).catch(() => {});
+}
+export async function knownTaskStatuses(taskIds: number[]): Promise<Map<number, { status: number; closedAt: string | null; at: string }>> {
+  if (!taskIds.length) return new Map();
+  const { redisReady } = await import('@/lib/cache/redis');
+  const r = await redisReady().catch(() => null);
+  if (!r) return new Map();
+  const vals = await r.mget(...taskIds.map(id => `repeat:task-status:${id}`)).catch(() => [] as (string | null)[]);
+  const out = new Map<number, { status: number; closedAt: string | null; at: string }>();
+  vals.forEach((v, i) => { if (v) try { out.set(taskIds[i], JSON.parse(v)); } catch { /* битая запись */ } });
+  return out;
+}
+
+/** Кто и когда закрыл — для понятной ошибки («закрыла Светлана Небога 09.11 12:00»). */
+async function closedText(t: BxTask): Promise<string> {
+  const when = t.closedDate ? new Date(t.closedDate).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' }) : null;
+  let who: string | null = null;
+  if (t.closedBy) {
+    const { analyticsDb } = await import('@/lib/db/clients');
+    who = (await analyticsDb().query<{ n: string }>(`SELECT manager_name AS n FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = $1 LIMIT 1`, [String(t.closedBy)])
+      .catch(() => ({ rows: [] as { n: string }[] }))).rows[0]?.n ?? `#${t.closedBy}`;
+  }
+  return [who && `закрыл(а) ${who}`, when].filter(Boolean).join(' ');
+}
+
+/** Задача — этого проекта, привязана к этой сделке и ждёт контроля. allowDone — для отката: задачу уже
+ *  закрыли в Битриксе руками, это не мешает поставить новую (возвращает status '5'). */
+export async function checkTask(taskId: number, dealId: number, opts: { allowDone?: boolean } = {}): Promise<BxTask> {
+  const r = await read<{ task?: BxTask }>('tasks.task.get', { taskId, select: ['ID', 'STATUS', 'GROUP_ID', 'UF_CRM_TASK', 'TITLE', 'CLOSED_BY', 'CLOSED_DATE'] })
     .catch(e => { throw new TaskReviewError(`Битрикс не отдал задачу ${taskId}: ${e instanceof Error ? e.message : e}`); });
   const t = r?.task;
   if (!t?.id) throw new TaskReviewError(`Задача ${taskId} не найдена в Битриксе`);
   if (Number(t.groupId) !== REPEAT_PROJECT_GROUP_ID) throw new TaskReviewError('Задача не из проекта «Повторные продажи»');
   if (!(t.ufCrmTask ?? []).includes(`D_${dealId}`)) throw new TaskReviewError('Задача привязана к другой сделке — обновите доску');
-  if (String(t.status) !== '4') throw new TaskReviewError('Задача уже не ждёт приёмки (её приняли или вернули) — обновите доску');
+  await rememberTaskStatus(taskId, Number(t.status), t.closedDate ?? null);
+  if (String(t.status) === '5' && opts.allowDone) return t;
+  if (String(t.status) === '5') {
+    const ct = await closedText(t);
+    throw new TaskReviewError(`Задача уже закрыта в Битриксе${ct ? ` — ${ct}` : ''}. Доска об этом не знала: копия задач Битрикса не обновляется с 08.10 (после переезда сервера). Карточка обновится сама.`);
+  }
+  if (String(t.status) !== '4') throw new TaskReviewError('Задача уже не ждёт приёмки (её вернули в работу) — обновите доску');
   return t;
 }
 

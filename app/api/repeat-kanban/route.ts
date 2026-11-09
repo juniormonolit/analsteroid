@@ -347,10 +347,12 @@ export async function POST(req: NextRequest) {
         }
         if (state !== 'open') {
           if (comment.length < 3) return NextResponse.json({ error: 'Напишите, что сделать' }, { status: 400 });
-          await checkTask(taskId, dealId);
+          // Старую задачу уже могли закрыть в Битриксе руками (09.11, копия задач отстаёт) — новую ставим всё равно.
+          const old = await checkTask(taskId, dealId, { allowDone: true });
           const why = state === 'lost' ? `сделка #${dealId} была закрыта в отказ` : `сделка #${dealId} уже отгружена`;
           const res = await runTask(`Повторно вместо задачи #${taskId} (${why}):\n${comment}`);
-          const closed = await closeReplacedTask({ taskId, authorId: session.bitrixUserId, newTaskId: res.taskId, newDealId: res.dealId, reopened: res.dealMode !== 'created' });
+          const closed = String(old.status) === '5' ? true
+            : await closeReplacedTask({ taskId, authorId: session.bitrixUserId, newTaskId: res.taskId, newDealId: res.dealId, reopened: res.dealMode !== 'created' });
           await logEvent(session, { type: 'task_replaced', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId,
             payload: { state, newTaskId: res.taskId, newDealId: res.dealId, dealMode: res.dealMode, oldClosed: closed } });
           return NextResponse.json({ ok: true, rolledBack: true, ...res, oldClosed: closed });

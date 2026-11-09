@@ -71,7 +71,12 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
       [dealIds, REPEAT_PROJECT_GROUP_ID, [...links.keys()]],
     );
     const out = new Map<number, RepeatTask>();
+    // Статус из Битрикса, узнанный при приёмке, — поверх копии (taskReview.ts: копия задач стоит с 08.10).
+    const { knownTaskStatuses } = await import('./taskReview');
+    const known = await knownTaskStatuses(r.rows.map(x => Number(x.task_id))).catch(() => new Map());
     for (const x of r.rows) {
+      const k = known.get(Number(x.task_id));
+      if (k && (!x.changed_at || new Date(k.at) > new Date(x.changed_at))) { x.status = k.status; if (k.closedAt) { x.closed_at = k.closedAt; x.changed_at = k.closedAt; } }
       const dealId = x.deal_id !== null ? Number(x.deal_id) : links.get(Number(x.task_id));
       if (!dealId) continue;
       const task: RepeatTask = {
