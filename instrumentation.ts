@@ -355,12 +355,21 @@ function scheduleWeeklyWeather() {
     const [date, time] = msk.split(' ');
     const hour = parseInt(time.slice(0, 2), 10);
     const dow = new Date(`${date}T12:00:00Z`).getUTCDay(); // 1 = понедельник
-    if (dow !== 1 || hour < 9 || hour > 11 || lastDate === date) return;
+    // Пн 09–20 — все про прошлую неделю (окно шире прежнего 09–11: рестарт/выкатка утром не теряет опрос,
+    // runOnceADayMsk не даёт спросить дважды); пт 16–20 — Осипов про будни (09.11, weeklyWeather.ts).
+    const monday = dow === 1 && hour >= 9 && hour <= 20;
+    const friday = dow === 5 && hour >= 16 && hour <= 20;
+    if ((!monday && !friday) || lastDate === date) return;
     running = true;
     try {
-      const outcome = await runOnceADayMsk('weekly-weather', date, async () => {
-        const { askWeeklyWeatherAll } = await import('./lib/weather/weeklyWeather');
-        const res = await askWeeklyWeatherAll();
+      const outcome = await runOnceADayMsk(friday ? 'weekly-weather-fri' : 'weekly-weather', date, async () => {
+        const w = await import('./lib/weather/weeklyWeather');
+        if (friday) {
+          const res = await w.askWeekdaysWeather();
+          console.log(`[weekly-weather] пятница: спрошено про будни ${res.asked}`);
+          return;
+        }
+        const res = await w.askWeeklyWeatherAll();
         console.log(`[weekly-weather] спрошено ${res.asked}, автосводок ${res.autoFilled}`);
       });
       if (outcome !== 'busy' && outcome !== 'lock-error') lastDate = date;
