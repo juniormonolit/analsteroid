@@ -60,6 +60,7 @@ export async function register() {
     if (allow.has('repeatKanbanSnapshot')) scheduleRepeatKanbanSnapshot();
     if (allow.has('repeatQueueIssue')) scheduleRepeatQueueIssue();
     if (allow.has('repeatMorning')) scheduleRepeatMorning();
+    if (allow.has('repeatTaskStatus')) scheduleRepeatTaskStatus();
     console.log(`[jobs] DISABLE_BACKGROUND_JOBS=1 — фоновые джобы не запущены${allow.size ? `, кроме: ${[...allow].join(', ')}` : ''}`);
     return;
   }
@@ -777,6 +778,31 @@ function scheduleRepeatQueueIssue() {
 
 // Утро менеджера по повторным (миграция 238): будни, час из «Настройки → Боты → Аналитик» (по умолчанию 9).
 // Функция repeat_morning выключена — прогон всё равно идёт и пишет сообщения в журнал (сухой прогон).
+// Статусы задач канбана повторных из Битрикса, пока синк задач стоит (владелец 09.11: «включи», «вежливо»).
+// Каждые 30 минут, будни 8–21 МСК; только незакрытые задачи, пачки по 25 с паузой (taskReview.ts). Только по allow-list.
+function scheduleRepeatTaskStatus() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    const msk = new Date(Date.now() + 3 * 3600_000);
+    const dow = msk.getUTCDay(), hour = msk.getUTCHours();
+    if (dow === 0 || dow === 6 || hour < 8 || hour >= 21) return;
+    running = true;
+    try {
+      const { redisReady } = await import('./lib/cache/redis');
+      const redis = await redisReady();
+      if (redis && !(await redis.set('repeat-task-status:lock', String(process.pid), 'EX', 25 * 60, 'NX'))) return;
+      const { refreshOpenTaskStatuses } = await import('./features/repeat-kanban/engine/taskReview');
+      const r = await refreshOpenTaskStatuses();
+      console.log(`[repeatTaskStatus] спросили ${r.asked}, получили ${r.got}, закрыто ${r.closed}`);
+    } catch (err) {
+      console.error('[repeatTaskStatus] прогон не удался:', err instanceof Error ? err.message : err);
+    } finally { running = false; }
+  };
+  setTimeout(() => { void tick(); }, 2 * 60 * 1000);
+  setInterval(() => { void tick(); }, 30 * 60 * 1000);
+}
+
 function scheduleRepeatMorning() {
   let lastDate = '';
   let running = false;

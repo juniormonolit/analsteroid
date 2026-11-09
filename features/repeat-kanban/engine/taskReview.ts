@@ -131,3 +131,40 @@ export async function closeReplacedTask(input: { taskId: number; authorId: strin
   await note(input.taskId, input.authorId, `Закрыта в канбане повторных (Монолитика): сделка уже была закрыта, вместо этой задачи поставлена новая #${input.newTaskId} в ${input.reopened ? 'сделке' : 'новой сделке'} #${input.newDealId}.`);
   return true;
 }
+
+// ── Фоновое обновление статусов (владелец 09.11: «включи», «батчами и максимально вежливо — не дай бог
+// Битрикс затроит»). Пока синк задач Битрикса стоит (копия sa.bitrix_task_current — с 08.10), раз в 30 минут
+// в рабочее время спрашиваем Битрикс только про НЕЗАКРЫТЫЕ задачи проекта: из копии и поставленные из
+// Монолитики. Пачки по 25 (tasks.task.list), пауза 3 с между пачками, ошибка — пропускаем прогон.
+// Выключить — убрать repeatTaskStatus из BACKGROUND_JOBS_ALLOW (secrets.env) и перезапустить; удалить
+// целиком — когда синк задач восстановят.
+const REFRESH_BATCH = 25;
+const REFRESH_PAUSE_MS = 3000;
+
+export async function refreshOpenTaskStatuses(): Promise<{ asked: number; got: number; closed: number }> {
+  const { analyticsDb, systemDb } = await import('@/lib/db/clients');
+  const copy = await analyticsDb().query<{ id: string }>(
+    `SELECT task_id::text AS id FROM sa.bitrix_task_current WHERE group_id = $1 AND NOT is_deleted AND coalesce(status, 0) <> 5`,
+    [REPEAT_PROJECT_GROUP_ID],
+  );
+  const ours = await systemDb().query<{ id: string }>(
+    `SELECT DISTINCT task_id::text AS id FROM repeat_kanban_events WHERE task_id IS NOT NULL AND ts > now() - interval '60 days'
+     UNION SELECT issued_task_id::text FROM repeat_task_queue WHERE issued_task_id IS NOT NULL AND issued_at > now() - interval '60 days'`,
+  ).catch(() => ({ rows: [] as { id: string }[] }));
+  const all = [...new Set([...copy.rows, ...ours.rows].map(x => Number(x.id)).filter(n => n > 0))];
+  const known = await knownTaskStatuses(all);
+  const ids = all.filter(id => known.get(id)?.status !== 5); // закрытые уже не спрашиваем
+  let got = 0, closed = 0;
+  for (let i = 0; i < ids.length; i += REFRESH_BATCH) {
+    if (i) await new Promise(r => setTimeout(r, REFRESH_PAUSE_MS));
+    const chunk = ids.slice(i, i + REFRESH_BATCH);
+    const r = await read<{ tasks?: { id: string; status: string; closedDate?: string | null }[] }>(
+      'tasks.task.list', { filter: { ID: chunk }, select: ['ID', 'STATUS', 'CLOSED_DATE'] });
+    for (const t of r?.tasks ?? []) {
+      got++;
+      if (Number(t.status) === 5) closed++;
+      await rememberTaskStatus(Number(t.id), Number(t.status), t.closedDate ?? null);
+    }
+  }
+  return { asked: ids.length, got, closed };
+}
