@@ -40,3 +40,24 @@ export async function bxApp<T = unknown>(authId: string, method: string, params:
     return { ok: false, error: 'NETWORK', description: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/**
+ * Снять привязки placement с тем же путём обработчика, но другим доменом — хвосты
+ * прошлых адресов (переезд .com → .ru 09.11: без этого в меню Битрикса висел бы
+ * второй пункт на мёртвый домен). Возвращает снятые обработчики.
+ */
+export async function unbindStaleHandlers(authId: string, placements: readonly string[], currentHandler: string): Promise<string[]> {
+  const cur = new URL(currentHandler);
+  const r = await bxApp<{ placement: string; handler: string }[]>(authId, 'placement.get');
+  if (!r.ok) return [];
+  const removed: string[] = [];
+  for (const b of r.result ?? []) {
+    if (!placements.includes(b.placement)) continue;
+    let h: URL;
+    try { h = new URL(b.handler); } catch { continue; }
+    if (h.origin === cur.origin || h.pathname.replace(/\/$/, '') !== cur.pathname.replace(/\/$/, '')) continue;
+    const u = await bxApp(authId, 'placement.unbind', { PLACEMENT: b.placement, HANDLER: b.handler });
+    if (u.ok) removed.push(`${b.placement} ${b.handler}`);
+  }
+  return removed;
+}

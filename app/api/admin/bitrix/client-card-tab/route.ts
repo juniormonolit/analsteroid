@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { superadminError } from '@/lib/auth/perms';
-import { getAppToken, bxApp } from '@/lib/bitrix/appToken';
+import { getAppToken, bxApp, unbindStaleHandlers } from '@/lib/bitrix/appToken';
 
 // Вкладка «Карточка клиента» в карточках контакта и компании Битрикса (задача
 // владельца 13.10). Тот же механизм, что у пункта в левом меню
@@ -45,7 +45,9 @@ export async function POST() {
     if (!r.ok && !/already|HANDLER_ALREADY_BINDED/i.test(`${r.error} ${r.description}`)) errors.push(`${placement}: ${r.error} ${r.description}`.trim());
   }
   if (errors.length) return NextResponse.json({ error: errors.join('; ') }, { status: 502 });
-  return NextResponse.json({ ok: true });
+  // Вкладки на прошлом домене (.com до 09.11) — снять, иначе в карточке две одинаковые.
+  const removed = await unbindStaleHandlers(token, PLACEMENTS, HANDLER());
+  return NextResponse.json({ ok: true, removed });
 }
 
 export async function DELETE() {

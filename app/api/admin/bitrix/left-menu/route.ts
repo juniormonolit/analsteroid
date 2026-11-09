@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { superadminError } from '@/lib/auth/perms';
-import { getAppToken, bxApp } from '@/lib/bitrix/appToken';
+import { getAppToken, bxApp, unbindStaleHandlers } from '@/lib/bitrix/appToken';
 
 // «Монолитика» в левом меню Битрикса для всех сотрудников (задача владельца 17.09).
 // placement.* доступны только в контексте приложения, поэтому нужен токен из
@@ -49,7 +49,9 @@ export async function POST(req: NextRequest) {
     LANG_ALL: { ru: { TITLE: t.title, DESCRIPTION: t.description } },
   });
   if (!r.ok) return NextResponse.json({ error: `${r.error}: ${r.description}` }, { status: 502 });
-  return NextResponse.json({ ok: true });
+  // Тот же пункт на прошлом домене (.com до 09.11) — снять, иначе в меню два пункта.
+  const removed = await unbindStaleHandlers(token, ['LEFT_MENU'], HANDLER(targetOf(req)));
+  return NextResponse.json({ ok: true, removed });
 }
 
 export async function DELETE(req: NextRequest) {
