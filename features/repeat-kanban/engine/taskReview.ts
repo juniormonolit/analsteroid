@@ -10,6 +10,13 @@
 // (route.ts: markBrakNow + closeDealAsLost).
 import { DealCreateError, postToTaskChat, read, taskWebhook, writeOnce } from './createDeal';
 import { REPEAT_PROJECT_GROUP_ID } from './config';
+import { callAsUser } from '@/lib/bitrix/userTokens';
+
+/** Действие с задачей от имени нажавшего (его токен приложения), иначе вебхуком (09.11, userTokens.ts). */
+async function taskAction(userId: string | null, method: string, params: Record<string, unknown>): Promise<void> {
+  const r = await callAsUser(userId, method, params).catch(e => { throw new TaskReviewError(e instanceof Error ? e.message : String(e)); });
+  if (r === undefined) await writeOnce(taskWebhook(), method, params);
+}
 
 export class TaskReviewError extends Error {}
 
@@ -99,7 +106,7 @@ export async function acceptTask(input: { taskId: number; dealId: number; commen
   // остальное (закрыть сделку, брак, отложить) делаем как обычно. Комментарий второй раз не пишем.
   const t = await checkTask(input.taskId, input.dealId, { allowDone: true });
   if (String(t.status) === '5') return { commented: false };
-  await wrap(() => writeOnce(taskWebhook(), 'tasks.task.approve', { taskId: input.taskId }));
+  await wrap(() => taskAction(input.authorId, 'tasks.task.approve', { taskId: input.taskId }));
   await rememberTaskStatus(input.taskId, 5, new Date().toISOString());
   const parts = ['Задача принята в канбане повторных (Монолитика)'];
   if (input.closing) parts.push(`сделка закрыта: ${input.closing}`);
@@ -113,10 +120,10 @@ export async function returnTask(input: { taskId: number; dealId: number; commen
   if (comment.length < 3) throw new TaskReviewError('Напишите, что доделать');
   if (input.deadline && new Date(input.deadline).getTime() < Date.now()) throw new TaskReviewError('Новый срок уже прошёл — выберите позже');
   await checkTask(input.taskId, input.dealId);
-  await wrap(() => writeOnce(taskWebhook(), 'tasks.task.disapprove', { taskId: input.taskId }));
+  await wrap(() => taskAction(input.authorId, 'tasks.task.disapprove', { taskId: input.taskId }));
   await rememberTaskStatus(input.taskId, 3, null, input.deadline ?? undefined); // доска сразу видит «в работе» и новый срок
   if (input.deadline) {
-    await wrap(() => writeOnce(taskWebhook(), 'tasks.task.update', { taskId: input.taskId, fields: { DEADLINE: input.deadline } }))
+    await wrap(() => taskAction(input.authorId, 'tasks.task.update', { taskId: input.taskId, fields: { DEADLINE: input.deadline } }))
       .catch(e => console.warn(`[repeat-kanban] новый срок задачи ${input.taskId}:`, e instanceof Error ? e.message : e));
   }
   return { commented: await note(input.taskId, input.authorId, `Возвращено на доработку из канбана повторных (Монолитика):\n${comment}`, input.files) };
@@ -140,7 +147,7 @@ export async function taskDealState(dealId: number): Promise<TaskDealState> {
 /** Старая задача после отката: принять, в чат — куда ушла работа. Не роняет действие — новая уже стоит. */
 export async function closeReplacedTask(input: { taskId: number; authorId: string | null; newTaskId: number; newDealId: number; reopened: boolean }): Promise<boolean> {
   try {
-    await writeOnce(taskWebhook(), 'tasks.task.approve', { taskId: input.taskId });
+    await taskAction(input.authorId, 'tasks.task.approve', { taskId: input.taskId });
     await rememberTaskStatus(input.taskId, 5, new Date().toISOString());
   } catch (e) {
     console.warn(`[repeat-kanban] старая задача ${input.taskId} при откате не закрылась:`, e instanceof Error ? e.message : e);
@@ -216,8 +223,8 @@ export async function closeTasksOnBrak(input: { clientKey: string; authorId: str
     for (const t of r?.tasks ?? []) {
       const taskId = Number(t.id);
       try {
-        if (String(t.status) !== '4') await writeOnce(taskWebhook(), 'tasks.task.complete', { taskId });
-        await writeOnce(taskWebhook(), 'tasks.task.approve', { taskId })
+        if (String(t.status) !== '4') await taskAction(input.authorId, 'tasks.task.complete', { taskId });
+        await taskAction(input.authorId, 'tasks.task.approve', { taskId })
           .catch(() => { /* без контроля постановщика complete уже закрыл задачу — approve не нужен */ });
         await rememberTaskStatus(taskId, 5, new Date().toISOString(), t.deadline ?? null);
         const text = `Заказчик отправлен в брак из канбана повторных (Монолитика)${input.reason ? `: ${input.reason}` : ''} — задача закрыта${input.comment?.trim() ? `.\n${input.comment.trim()}` : ''}`;

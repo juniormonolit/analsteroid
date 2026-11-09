@@ -25,6 +25,7 @@
 // шаблону: отгрузки со ссылками и суммами, комментарий РОПа, анкета последней отгрузки.
 import { bx } from '@/lib/bitrix/notify';
 import { cached } from '@/lib/cache/redis';
+import { callAsUser } from '@/lib/bitrix/userTokens';
 import { analyticsDb } from '@/lib/db/clients';
 import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
@@ -337,7 +338,8 @@ export async function createRepeatTask(input: {
   };
   const accomplices = input.participants ? await resolve(input.participants.accomplices) : [];
   const auditors = input.participants ? (await resolve(input.participants.auditors)).filter(id => !accomplices.includes(id)) : [];
-  const task = await writeOnce<{ task?: { id?: string | number } }>(taskWebhook(), 'tasks.task.add', {
+  // От имени постановщика, если есть его токен (09.11, lib/bitrix/userTokens.ts), иначе — вебхуком, как раньше.
+  const taskParams = {
     fields: {
       TITLE: title,
       DESCRIPTION: description,
@@ -352,7 +354,10 @@ export async function createRepeatTask(input: {
       ...(accomplices.length ? { ACCOMPLICES: accomplices } : {}),
       ...(auditors.length ? { AUDITORS: auditors } : {}),
     },
-  });
+  };
+  const asUser = await callAsUser<{ task?: { id?: string | number } }>(input.creatorBitrixId, 'tasks.task.add', taskParams)
+    .catch(e => { throw new DealCreateError(`${e instanceof Error ? e.message : e} — проверьте задачу в Битриксе, прежде чем ставить ещё раз`); });
+  const task = asUser ?? await writeOnce<{ task?: { id?: string | number } }>(taskWebhook(), 'tasks.task.add', taskParams);
   const taskId = Number(task?.task?.id ?? 0);
   if (!taskId) throw new DealCreateError(`Сделка #${dealId} подготовлена, но задача в Битриксе не создалась`);
   if (memo) await markMemoInserted(memo.analysisId, taskId);

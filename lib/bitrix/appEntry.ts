@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createSession, SESSION_COOKIE, SESSION_TTL_DAYS } from '@/lib/auth/session';
 import { identifyByAuthId, resolveOrCreateAppUser, bitrixPortalOrigin } from '@/lib/bitrix/appAuth';
 import { rememberAppToken } from '@/lib/bitrix/appToken';
+import { saveUserTokens } from '@/lib/bitrix/userTokens';
 import { mintHandoff } from '@/lib/bitrix/handoff';
 
 // Общий вход из локального приложения Битрикса (вынесено из /api/bitrix/app 26.10, когда появился
@@ -34,16 +35,22 @@ export async function bitrixAppEntry(req: NextRequest, page: string, loading: st
 
   // Битрикс шлёт form-encoded; на всякий случай понимаем и JSON.
   let authId = '';
+  let refreshId = '';
+  let authExpires = 3600;
   let placement = '';
   const ctype = req.headers.get('content-type') ?? '';
   try {
     if (ctype.includes('application/json')) {
       const j = await req.json();
       authId = String(j.AUTH_ID ?? j.auth_id ?? '');
+      refreshId = String(j.REFRESH_ID ?? '');
+      authExpires = Number(j.AUTH_EXPIRES) || 3600;
       placement = String(j.PLACEMENT ?? '');
     } else {
       const form = await req.formData();
       authId = String(form.get('AUTH_ID') ?? '');
+      refreshId = String(form.get('REFRESH_ID') ?? '');
+      authExpires = Number(form.get('AUTH_EXPIRES')) || 3600;
       placement = String(form.get('PLACEMENT') ?? '');
     }
   } catch {
@@ -76,6 +83,8 @@ export async function bitrixAppEntry(req: NextRequest, page: string, loading: st
   // приложения, вебхуку они недоступны. Запоминаем AUTH_ID на его срок жизни —
   // супер-админ из «Настроек» сможет привязать «Монолитику» в левое меню портала.
   await rememberAppToken(resolved.userId, authId);
+  // Токены сотрудника — чтобы задачи из канбана ставились и принимались от ЕГО имени (09.11, userTokens.ts).
+  await saveUserTokens(identity.bitrixUserId, authId, refreshId || null, authExpires);
 
   // Одноразовый ключ на случай, когда браузер зарежет cookie внутри iframe
   // (инцидент 21.09: Яндекс.Браузер/Safari/встроенный webview). Страница
