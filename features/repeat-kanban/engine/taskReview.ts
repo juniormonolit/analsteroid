@@ -83,8 +83,13 @@ const wrap = async <T,>(fn: () => Promise<T>) => {
 
 /** Принять задачу. Комментарий РОПа (если есть) — в задачу от его имени. */
 export async function acceptTask(input: { taskId: number; dealId: number; comment: string | null; authorId: string | null; closing?: string | null; files?: number[] }): Promise<{ commented: boolean }> {
-  await checkTask(input.taskId, input.dealId);
+  // Уже закрыта (09.11, Леонид: первое нажатие прошло, доска не узнала — копия задач стоит с 08.10 —
+  // и повторная приёмка падала «задача уже закрыта»). Цель «принять» достигнута: approve пропускаем,
+  // остальное (закрыть сделку, брак, отложить) делаем как обычно. Комментарий второй раз не пишем.
+  const t = await checkTask(input.taskId, input.dealId, { allowDone: true });
+  if (String(t.status) === '5') return { commented: false };
   await wrap(() => writeOnce(taskWebhook(), 'tasks.task.approve', { taskId: input.taskId }));
+  await rememberTaskStatus(input.taskId, 5, new Date().toISOString());
   const parts = ['Задача принята в канбане повторных (Монолитика)'];
   if (input.closing) parts.push(`сделка закрыта: ${input.closing}`);
   const text = `${parts.join('; ')}${input.comment?.trim() ? `.\n${input.comment.trim()}` : ''}`;
@@ -98,6 +103,7 @@ export async function returnTask(input: { taskId: number; dealId: number; commen
   if (input.deadline && new Date(input.deadline).getTime() < Date.now()) throw new TaskReviewError('Новый срок уже прошёл — выберите позже');
   await checkTask(input.taskId, input.dealId);
   await wrap(() => writeOnce(taskWebhook(), 'tasks.task.disapprove', { taskId: input.taskId }));
+  await rememberTaskStatus(input.taskId, 3, null); // доска сразу видит «в работе», не ждёт копию
   if (input.deadline) {
     await wrap(() => writeOnce(taskWebhook(), 'tasks.task.update', { taskId: input.taskId, fields: { DEADLINE: input.deadline } }))
       .catch(e => console.warn(`[repeat-kanban] новый срок задачи ${input.taskId}:`, e instanceof Error ? e.message : e));
@@ -124,6 +130,7 @@ export async function taskDealState(dealId: number): Promise<TaskDealState> {
 export async function closeReplacedTask(input: { taskId: number; authorId: string | null; newTaskId: number; newDealId: number; reopened: boolean }): Promise<boolean> {
   try {
     await writeOnce(taskWebhook(), 'tasks.task.approve', { taskId: input.taskId });
+    await rememberTaskStatus(input.taskId, 5, new Date().toISOString());
   } catch (e) {
     console.warn(`[repeat-kanban] старая задача ${input.taskId} при откате не закрылась:`, e instanceof Error ? e.message : e);
     return false;
