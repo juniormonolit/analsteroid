@@ -57,6 +57,17 @@ export async function loadRequestCard(id: string) {
   return { head: head.rows[0], lines: lines.rows, purchases: purchases.rows, history: history.rows };
 }
 
+/** Карточка + деньги без НДС (продажа, закупка, маржа) — общая для «Реализации» и «Канбана логиста». */
+export async function loadRequestCardWithMoney(id: string) {
+  const card = await loadRequestCard(id);
+  if (!card) return null;
+  const n = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
+  const salesNv = card.lines.reduce((a, l) => a + n(l.amount) - n(l.vat_amount), 0);
+  const purchNv = card.purchases.reduce((a, p) => a + n(p.amount) - (p.include_vat ? n(p.amount_vat) : 0), 0);
+  const broken = card.purchases.some(p => p.integrity_ok === false);
+  return { ...card, money: { salesNv, purchNv, broken, marginNv: card.purchases.length && !broken ? salesNv - purchNv : null } };
+}
+
 // ── Звонки логистов (#8314, карта #8357): va.calls_logist + мост va.logist_bitrix_map ──
 
 export async function loadCallLogistMap(): Promise<CallMapRow[]> {

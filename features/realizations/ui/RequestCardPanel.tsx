@@ -40,11 +40,20 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function RequestCardPanel({ id, onClose, onPickLogist }: { id: string; onClose: () => void; onPickLogist?: (logistId: string) => void }) {
+export function RequestCardPanel({ id, onClose, onPickLogist, src, section = 'Реализация · Заявки', actions }: {
+  id: string; onClose: () => void; onPickLogist?: (logistId: string) => void;
+  /** Эндпоинт карточки (по умолчанию — «Реализация»; «Канбан логиста» ходит в свой, под своим правом). */
+  src?: string;
+  /** Подпись раздела в подзаголовке. */
+  section?: string;
+  /** Блок действий над шапкой (кнопки колонок канбана). */
+  actions?: React.ReactNode;
+}) {
+  const url = src ?? `/api/realizations/requests/${id}`;
   const q = useQuery<Card>({
-    queryKey: ['realizations', 'card', id],
+    queryKey: ['realizations', 'card', url],
     queryFn: async () => {
-      const res = await fetch(`/api/realizations/requests/${id}`);
+      const res = await fetch(url);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body?.error || `Ошибка ${res.status}`);
       return body;
@@ -57,12 +66,13 @@ export function RequestCardPanel({ id, onClose, onPickLogist }: { id: string; on
   return (
     <SidePanelShell ariaLabel="Карточка заявки" onClose={onClose}
       title={h ? `Заявка ${h.number}` : 'Заявка'}
-      subtitle={h ? <>Реализация · Заявки · {String(h.status)}</> : 'Реализация · Заявки'}>
+      subtitle={h ? <>{section} · {String(h.status)}</> : section}>
       <div className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4">
       {q.isLoading && <div className="flex items-center gap-2 py-8 justify-center text-sm text-[var(--color-text-muted)]"><Loader2 size={16} className="animate-spin" />Загружаем карточку…</div>}
       {q.error && <div className="rounded-lg border border-[var(--color-negative)]/40 bg-[var(--color-negative)]/10 px-3 py-2 text-sm text-[var(--color-negative)]">{(q.error as Error).message}</div>}
       {q.data && h && m && (
         <div className="flex flex-col gap-4">
+          {actions}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Статус" value={String(h.status)} />
             <Field label="Дата заявки" value={fmtDate(h.doc_date as string)} />

@@ -484,6 +484,9 @@ function SidebarBody({
     // «Канбан повторных продаж» (решения владельца 20.10) — пул заказчиков по ступеням,
     // окно 22 дня, стадии повторной воронки, разбор отказов (REPEAT_KANBAN_SPEC.md).
     { href: '/repeat-kanban', label: 'Канбан повторных', icon: <Columns3 size={18} />, ok: canMore('section.repeat_kanban') },
+    // «Канбан логиста» (владелец 09.11) — заявки 1С по фильтрам: логист берёт в проработку
+    // и ставит итог «Успешно / Не вышло» (прототип; migrations/261_logist_kanban.sql).
+    { href: '/logist-kanban', label: 'Канбан логиста', icon: <Columns3 size={18} />, ok: canMore('section.logist_kanban') },
     // Чаты по сделкам (задача владельца 20.07) — переписки РОПа с менеджерами через
     // бота «Аналитик»; гейт по действию, не по section.* (право включается ролям).
     { href: '/chats', label: 'Чаты', icon: <MessageCircle size={18} />, ok: canMore('action.deal_chats') },

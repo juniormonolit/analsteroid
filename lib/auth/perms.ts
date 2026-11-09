@@ -66,6 +66,9 @@ export const PERM_SECTIONS = [
   // «Канбан повторных продаж» (решения владельца 20.10): заказчики по ступеням +
   // задачи РОПа менеджеру + разбор отказов. Ролям продаж выдаётся миграцией 230.
   { key: 'section.repeat_kanban', label: 'Канбан повторных продаж' },
+  // «Канбан логиста» (владелец 09.11): заявки 1С по фильтрам → проработка «дешевле» →
+  // итог. Роли «Логист» выдаётся миграцией 261.
+  { key: 'section.logist_kanban', label: 'Канбан логиста' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.widget_constructor', label: 'Виджеты' },
   // «Дашборд тест» (задача владельца 08.10) — черновик дашборда директора по
@@ -177,6 +180,7 @@ export const MORE_MENU_PERMS: ReadonlyArray<{ key: PermKey; label: string }> = [
   { key: 'section.client_tail', label: 'Вход и хвост' },
   { key: 'section.cross_sell', label: 'Что предложить' },
   { key: 'section.repeat_kanban', label: 'Канбан повторных продаж' },
+  { key: 'section.logist_kanban', label: 'Канбан логиста' },
   { key: 'action.deal_chats', label: 'Чаты' },
   { key: 'section.rating', label: 'Рейтинг' },
   { key: 'section.offload', label: 'Разгрузка отделов' },
