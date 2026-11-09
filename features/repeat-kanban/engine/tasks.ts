@@ -95,7 +95,10 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
     const known = await knownTaskStatuses(r.rows.map(x => Number(x.task_id))).catch(() => new Map());
     for (const x of r.rows) {
       const k = known.get(Number(x.task_id));
-      if (k && (!x.changed_at || new Date(k.at) > new Date(x.changed_at))) { x.status = k.status; if (k.closedAt) { x.closed_at = k.closedAt; x.changed_at = k.closedAt; } }
+      if (k && (!x.changed_at || new Date(k.at) > new Date(x.changed_at))) {
+        x.status = k.status; if (k.closedAt) { x.closed_at = k.closedAt; x.changed_at = k.closedAt; }
+        if (k.deadline !== undefined) x.deadline_at = k.deadline; // срок перенесли в Битриксе после 08.10
+      }
       const dealId = x.deal_id !== null ? Number(x.deal_id) : links.get(Number(x.task_id))?.dealId;
       if (!dealId) continue;
       const task: RepeatTask = {
@@ -123,7 +126,7 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
         const task: RepeatTask = {
           id, dealId: l.dealId, title: '', state: stateOf(k ? k.status : null, null),
           createdById: l.creatorId, createdByName: l.creatorName, responsibleId: l.responsibleId, responsibleName: l.responsibleId ? names.get(l.responsibleId) ?? null : null,
-          createdAt: l.createdAt, deadlineAt: l.deadlineAt, changedAt: k?.closedAt ?? k?.at ?? null, closedAt: k?.status === 5 ? k.closedAt ?? null : null,
+          createdAt: l.createdAt, deadlineAt: k && k.deadline !== undefined ? k.deadline : l.deadlineAt, changedAt: k?.closedAt ?? k?.at ?? null, closedAt: k?.status === 5 ? k.closedAt ?? null : null,
         };
         const cur = out.get(l.dealId);
         if (!cur || task.createdAt > cur.createdAt) out.set(l.dealId, task);

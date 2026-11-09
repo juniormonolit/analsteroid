@@ -13,24 +13,35 @@ import { REPEAT_PROJECT_GROUP_ID } from './config';
 
 export class TaskReviewError extends Error {}
 
-interface BxTask { id?: string; status?: string; groupId?: string; ufCrmTask?: string[] | null; title?: string; closedBy?: string | null; closedDate?: string | null }
+interface BxTask { id?: string; status?: string; groupId?: string; ufCrmTask?: string[] | null; title?: string; closedBy?: string | null; closedDate?: string | null; deadline?: string | null }
 
 // Состояние задачи по Битриксу, которое мы и так узнаём при приёмке (09.11: копия задач sa.bitrix_task_current
 // стоит с 08.10 после смерти сервера 62 — доска показывала «ждёт контроля» у задачи, закрытой в Битриксе).
 // Запоминаем в Redis на 30 дней; tasks.ts накладывает поверх копии. Лишних запросов в Битрикс нет.
 const STATE_TTL = 30 * 86_400;
-export async function rememberTaskStatus(taskId: number, status: number, closedAt: string | null): Promise<void> {
+// deadline (09.11, жалоба Леонида: в «Просрочены» висели задачи, которым срок перенесли в Битриксе после
+// 08.10): undefined — срок не узнавали, прежний не трогаем; null — срока нет.
+export interface KnownTaskState { status: number; closedAt: string | null; at: string; deadline?: string | null }
+export async function rememberTaskStatus(taskId: number, status: number, closedAt: string | null, deadline?: string | null): Promise<void> {
   const { redisReady } = await import('@/lib/cache/redis');
   const r = await redisReady().catch(() => null);
-  if (r) await r.set(`repeat:task-status:${taskId}`, JSON.stringify({ status, closedAt, at: new Date().toISOString() }), 'EX', STATE_TTL).catch(() => {});
+  if (!r) return;
+  const key = `repeat:task-status:${taskId}`;
+  let dl = deadline;
+  if (dl === undefined) {
+    const prev = await r.get(key).catch(() => null);
+    if (prev) try { dl = (JSON.parse(prev) as KnownTaskState).deadline; } catch { /* битая запись */ }
+  }
+  const v: KnownTaskState = { status, closedAt, at: new Date().toISOString(), ...(dl !== undefined ? { deadline: dl ? new Date(dl).toISOString() : null } : {}) };
+  await r.set(key, JSON.stringify(v), 'EX', STATE_TTL).catch(() => {});
 }
-export async function knownTaskStatuses(taskIds: number[]): Promise<Map<number, { status: number; closedAt: string | null; at: string }>> {
+export async function knownTaskStatuses(taskIds: number[]): Promise<Map<number, KnownTaskState>> {
   if (!taskIds.length) return new Map();
   const { redisReady } = await import('@/lib/cache/redis');
   const r = await redisReady().catch(() => null);
   if (!r) return new Map();
   const vals = await r.mget(...taskIds.map(id => `repeat:task-status:${id}`)).catch(() => [] as (string | null)[]);
-  const out = new Map<number, { status: number; closedAt: string | null; at: string }>();
+  const out = new Map<number, KnownTaskState>();
   vals.forEach((v, i) => { if (v) try { out.set(taskIds[i], JSON.parse(v)); } catch { /* битая запись */ } });
   return out;
 }
@@ -50,13 +61,13 @@ async function closedText(t: BxTask): Promise<string> {
 /** Задача — этого проекта, привязана к этой сделке и ждёт контроля. allowDone — для отката: задачу уже
  *  закрыли в Битриксе руками, это не мешает поставить новую (возвращает status '5'). */
 export async function checkTask(taskId: number, dealId: number, opts: { allowDone?: boolean } = {}): Promise<BxTask> {
-  const r = await read<{ task?: BxTask }>('tasks.task.get', { taskId, select: ['ID', 'STATUS', 'GROUP_ID', 'UF_CRM_TASK', 'TITLE', 'CLOSED_BY', 'CLOSED_DATE'] })
+  const r = await read<{ task?: BxTask }>('tasks.task.get', { taskId, select: ['ID', 'STATUS', 'GROUP_ID', 'UF_CRM_TASK', 'TITLE', 'CLOSED_BY', 'CLOSED_DATE', 'DEADLINE'] })
     .catch(e => { throw new TaskReviewError(`Битрикс не отдал задачу ${taskId}: ${e instanceof Error ? e.message : e}`); });
   const t = r?.task;
   if (!t?.id) throw new TaskReviewError(`Задача ${taskId} не найдена в Битриксе`);
   if (Number(t.groupId) !== REPEAT_PROJECT_GROUP_ID) throw new TaskReviewError('Задача не из проекта «Повторные продажи»');
   if (!(t.ufCrmTask ?? []).includes(`D_${dealId}`)) throw new TaskReviewError('Задача привязана к другой сделке — обновите доску');
-  await rememberTaskStatus(taskId, Number(t.status), t.closedDate ?? null);
+  await rememberTaskStatus(taskId, Number(t.status), t.closedDate ?? null, t.deadline ?? null);
   if (String(t.status) === '5' && opts.allowDone) return t;
   if (String(t.status) === '5') {
     const ct = await closedText(t);
@@ -103,7 +114,7 @@ export async function returnTask(input: { taskId: number; dealId: number; commen
   if (input.deadline && new Date(input.deadline).getTime() < Date.now()) throw new TaskReviewError('Новый срок уже прошёл — выберите позже');
   await checkTask(input.taskId, input.dealId);
   await wrap(() => writeOnce(taskWebhook(), 'tasks.task.disapprove', { taskId: input.taskId }));
-  await rememberTaskStatus(input.taskId, 3, null); // доска сразу видит «в работе», не ждёт копию
+  await rememberTaskStatus(input.taskId, 3, null, input.deadline ?? undefined); // доска сразу видит «в работе» и новый срок
   if (input.deadline) {
     await wrap(() => writeOnce(taskWebhook(), 'tasks.task.update', { taskId: input.taskId, fields: { DEADLINE: input.deadline } }))
       .catch(e => console.warn(`[repeat-kanban] новый срок задачи ${input.taskId}:`, e instanceof Error ? e.message : e));
@@ -165,12 +176,12 @@ export async function refreshOpenTaskStatuses(): Promise<{ asked: number; got: n
   for (let i = 0; i < ids.length; i += REFRESH_BATCH) {
     if (i) await new Promise(r => setTimeout(r, REFRESH_PAUSE_MS));
     const chunk = ids.slice(i, i + REFRESH_BATCH);
-    const r = await read<{ tasks?: { id: string; status: string; closedDate?: string | null }[] }>(
-      'tasks.task.list', { filter: { ID: chunk }, select: ['ID', 'STATUS', 'CLOSED_DATE'] });
+    const r = await read<{ tasks?: { id: string; status: string; closedDate?: string | null; deadline?: string | null }[] }>(
+      'tasks.task.list', { filter: { ID: chunk }, select: ['ID', 'STATUS', 'CLOSED_DATE', 'DEADLINE'] });
     for (const t of r?.tasks ?? []) {
       got++;
       if (Number(t.status) === 5) closed++;
-      await rememberTaskStatus(Number(t.id), Number(t.status), t.closedDate ?? null);
+      await rememberTaskStatus(Number(t.id), Number(t.status), t.closedDate ?? null, t.deadline ?? null);
     }
   }
   return { asked: ids.length, got, closed };
