@@ -10,7 +10,7 @@ import { getAppToken, bxApp } from '@/lib/bitrix/appToken';
 // POST — привязать LEFT_MENU, DELETE — отвязать. 26.10 — второй пункт «Канбан повторных» (?target=repeat-kanban):
 // свой обработчик /api/bitrix/app/repeat-kanban, вход тот же (lib/bitrix/appEntry.ts).
 
-const BASE = () => (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.com').replace(/\/$/, '');
+const BASE = () => (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.ru').replace(/\/$/, '');
 const TARGETS = {
   profile: { path: '/api/bitrix/app', title: 'Монолитика', description: 'Личный кабинет: мои заказчики, статистика, отчёт' },
   'repeat-kanban': { path: '/api/bitrix/app/repeat-kanban', title: 'Канбан повторных', description: 'Канбан повторных продаж: заказчики, задачи, приёмка' },

@@ -547,10 +547,9 @@ async function buildWeeklyHamburger(managerBitrixId: number, mondayStr: string, 
 // ссылка работает одинаково и для самого менеджера (получателя дайджеста), и
 // для админа/директора, открывшего превью чужого дайджеста (canViewManager
 // уже гейтит доступ на уровне страницы, ничего дополнительно проверять не
-// нужно). Домен захардкожен по тому же принципу, что td.monolit-crm.ru в
-// features/customers/ui/shared.ts::clientBitrixUrl — своего getPublicOrigin()
-// у фонового job'а (без NextRequest) нет и не будет.
-const MONOLITIKA_ORIGIN = 'https://monolitika.mlt-it.com';
+// нужно). У фонового job'а нет NextRequest/getPublicOrigin() — домен берём из
+// APP_BASE_URL, как остальные фоновые ссылки (переезд на monolitika.mlt-it.ru 09.11).
+const MONOLITIKA_ORIGIN = (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.ru').replace(/\/$/, '');
 export function buildCustomerLink(managerBitrixId: number, clientKey: string): string {
   return `${MONOLITIKA_ORIGIN}/manager/${managerBitrixId}?tab=customers&customer=${encodeURIComponent(clientKey)}`;
 }

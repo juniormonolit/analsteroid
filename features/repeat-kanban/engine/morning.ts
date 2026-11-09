@@ -10,7 +10,7 @@ import { buildRepeatBoard, type KanbanCard } from './board';
 import { COLUMNS, type ColumnKey } from './config';
 import { queueScore } from './queue';
 
-const ORIGIN = (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.com').replace(/\/$/, '');
+const ORIGIN = (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.ru').replace(/\/$/, '');
 const TOP = 5;
 
 export interface MorningItem { key: string; name: string; kind: 'fresh' | 'returned' | 'task'; lastDeliveredAt?: string | null; taskId?: number }

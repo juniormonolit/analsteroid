@@ -35,7 +35,7 @@ export async function fetchHowAreWeSettings(): Promise<HowAreWeSettings> {
 }
 
 export function baseUrl(): string {
-  return (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.com').replace(/\/$/, '');
+  return (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.ru').replace(/\/$/, '');
 }
 
 export function mskNowParts(now = new Date()): { date: string; hour: number; minute: number } {

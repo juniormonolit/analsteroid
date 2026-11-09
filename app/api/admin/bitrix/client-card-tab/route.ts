@@ -9,7 +9,7 @@ import { getAppToken, bxApp } from '@/lib/bitrix/appToken';
 // нужен токен из открытия «Монолитики» внутри Битрикса (живёт ~час).
 // GET — что привязано, POST — привязать все вкладки, DELETE — отвязать.
 
-const HANDLER = () => `${(process.env.APP_BASE_URL || 'https://monolitika.mlt-it.com').replace(/\/$/, '')}/api/bitrix/app/client-card`;
+const HANDLER = () => `${(process.env.APP_BASE_URL || 'https://monolitika.mlt-it.ru').replace(/\/$/, '')}/api/bitrix/app/client-card`;
 // Сделка (владелец 15.10) — карточка клиента этой сделки.
 const PLACEMENTS = ['CRM_CONTACT_DETAIL_TAB', 'CRM_COMPANY_DETAIL_TAB', 'CRM_DEAL_DETAIL_TAB'] as const;
 const TITLE = 'Карточка клиента';

@@ -23,7 +23,7 @@ const REQUEST_TTL_S = 15 * 60;
 /** Публичный адрес Монолитики. resource в метаданных обязан СТРОГО совпадать с URL,
  *  который человек вставил в коннектор, поэтому берём из env, а не из заголовков прокси. */
 export function publicBaseUrl(): string {
-  return (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.com').replace(/\/$/, '');
+  return (process.env.APP_BASE_URL || 'https://monolitika.mlt-it.ru').replace(/\/$/, '');
 }
 export const mcpResourceUrl = () => `${publicBaseUrl()}/api/mcp`;
 
