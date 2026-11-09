@@ -26,7 +26,7 @@ import { fetchKanbanSettings, listTemplates, renderTemplate } from '@/features/r
 import { resolvePeriod } from '@/features/repeat-kanban/engine/shippedGroups';
 import { setCustomerTags, TagError } from '@/features/repeat-kanban/engine/tags';
 import { normalizeParticipants } from '@/features/repeat-kanban/engine/participants';
-import { acceptTask, checkTask, closeReplacedTask, returnTask, taskDealState, TaskReviewError } from '@/features/repeat-kanban/engine/taskReview';
+import { acceptTask, checkTask, closeReplacedTask, closeTasksOnBrak, returnTask, taskDealState, TaskReviewError } from '@/features/repeat-kanban/engine/taskReview';
 import { takeAttachments } from '@/features/repeat-kanban/engine/attachments';
 import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 
@@ -400,6 +400,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(await runTask(comment));
     }
 
+    // Брак закрывает и открытые задачи заказчика в Битриксе (09.11, taskReview.ts: closeTasksOnBrak).
+    const brakTask = () => closeTasksOnBrak({
+      clientKey, authorId: session.bitrixUserId,
+      reason: BRAK_REASONS.find(r => r.value === body.reason)?.label ?? null,
+      comment: typeof body.comment === 'string' ? body.comment : null,
+    });
+
     if (body.action === 'review') {
       const decision = body.decision as ReviewDecision;
       if (!['brak', 'no_answer', 'return', 'postpone'].includes(decision)) return NextResponse.json({ error: 'Некорректное решение' }, { status: 400 });
@@ -424,8 +431,9 @@ export async function POST(req: NextRequest) {
         ? await closeDealAsLost({ dealId, clientKey, reason: String(body.reason ?? ''), comment: typeof body.comment === 'string' ? body.comment : null, authorId: session.bitrixUserId })
             .catch(e => { console.warn('[repeat-kanban] закрытие сделки при браке:', e instanceof Error ? e.message : e); return 'error' as const; })
         : null;
+      const taskClosed = decision === 'brak' ? await brakTask() : null;
       await logEvent(session, { type: 'reject_reviewed', requestId: rid, clientKey, managerId, columnBefore, dealId,
-        payload: { decision, reason: body.reason ?? null, comment: body.comment ?? null, attempts: Number(body.touchesDone) || 0, dealClosed } });
+        payload: { decision, reason: body.reason ?? null, comment: body.comment ?? null, attempts: Number(body.touchesDone) || 0, dealClosed, taskClosed } });
       // «Вернуть менеджеру» (21.10, сделка 263762: решение записалось, а сделка осталась в отказе и
       // задачи не было — менеджер ничего не видел): отказная сделка возвращается в первую стадию,
       // менеджеру — задача с комментарием РОПа; сделка открыта (3 попытки без дозвона) — только задача.
@@ -444,9 +452,10 @@ export async function POST(req: NextRequest) {
         ? await closeDealAsLost({ dealId: brakDealId, clientKey, reason: String(body.reason ?? ''), comment: typeof body.comment === 'string' ? body.comment : null, authorId: session.bitrixUserId })
             .catch(e => { console.warn('[repeat-kanban] закрытие сделки при браке:', e instanceof Error ? e.message : e); return 'error' as const; })
         : null;
+      const taskClosed = await brakTask();
       await logEvent(session, { type: 'rejected_direct', requestId: rid, clientKey, managerId, columnBefore, dealId: brakDealId > 0 ? brakDealId : null,
-        payload: { reason: body.reason, comment: body.comment ?? null, dealClosed } });
-      return NextResponse.json({ ok: true, dealClosed });
+        payload: { reason: body.reason, comment: body.comment ?? null, dealClosed, taskClosed } });
+      return NextResponse.json({ ok: true, dealClosed, taskClosed });
     }
 
     if (body.action === 'decide_hide') {

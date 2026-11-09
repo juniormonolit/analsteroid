@@ -186,3 +186,50 @@ export async function refreshOpenTaskStatuses(): Promise<{ asked: number; got: n
   }
   return { asked: ids.length, got, closed };
 }
+
+// ── Брак закрывает и задачи (09.11, Леонид: РОП отправил Бурова «Сразу в брак», сделка 244055 уже была в
+// отказе, а задача 173401 так и висела «ждёт контроля» — пришлось принимать руками в Битриксе). Задачу
+// ставили в Битриксе руками после 08.10 — доска о ней не знала (копия задач стоит), поэтому открытые
+// задачи проекта 118 ищем в самом Битриксе: один tasks.task.list по повторным сделкам заказчика (с
+// учётом склейки). Ждёт контроля → принять; в работе / ждёт / отложена → завершить (с контролем
+// постановщика после завершения она встанет в «ждёт контроля» — тогда ещё и принять). Комментарий —
+// от имени РОПа. Не роняет брак: заказчик уже в браке, задачи — сопутствующее.
+export interface BrakTasksResult { closed: number[]; failed: number[] }
+export async function closeTasksOnBrak(input: { clientKey: string; authorId: string | null; reason: string | null; comment: string | null }): Promise<BrakTasksResult> {
+  const out: BrakTasksResult = { closed: [], failed: [] };
+  try {
+    const { analyticsDb } = await import('@/lib/db/clients');
+    const { CLIENT_KEY_SQL } = await import('@/features/customers/engine/clientKey');
+    const { memberKeysOf } = await import('@/features/customers/engine/merge');
+    const members = await memberKeysOf(input.clientKey);
+    const deals = (await analyticsDb().query<{ id: string }>(
+      `SELECT deal_id::text AS id FROM (
+         SELECT d.deal_id, d.created_at, (${CLIENT_KEY_SQL}) AS client_key FROM sa.deals d
+          WHERE d.funnel_id IN (2,3) AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
+       ) t WHERE client_key = ANY($1::text[]) ORDER BY created_at DESC LIMIT 50`,
+      [members, members.map(k => Number(k.slice(1)))],
+    )).rows.map(x => `D_${x.id}`);
+    if (!deals.length) return out;
+    const r = await read<{ tasks?: { id: string; status: string; deadline?: string | null }[] }>('tasks.task.list', {
+      filter: { GROUP_ID: REPEAT_PROJECT_GROUP_ID, UF_CRM_TASK: deals, '!STATUS': 5 }, select: ['ID', 'STATUS', 'DEADLINE'],
+    });
+    for (const t of r?.tasks ?? []) {
+      const taskId = Number(t.id);
+      try {
+        if (String(t.status) !== '4') await writeOnce(taskWebhook(), 'tasks.task.complete', { taskId });
+        await writeOnce(taskWebhook(), 'tasks.task.approve', { taskId })
+          .catch(() => { /* без контроля постановщика complete уже закрыл задачу — approve не нужен */ });
+        await rememberTaskStatus(taskId, 5, new Date().toISOString(), t.deadline ?? null);
+        const text = `Заказчик отправлен в брак из канбана повторных (Монолитика)${input.reason ? `: ${input.reason}` : ''} — задача закрыта${input.comment?.trim() ? `.\n${input.comment.trim()}` : ''}`;
+        await note(taskId, input.authorId, text);
+        out.closed.push(taskId);
+      } catch (e) {
+        console.warn(`[repeat-kanban] задача ${taskId} при браке не закрылась:`, e instanceof Error ? e.message : e);
+        out.failed.push(taskId);
+      }
+    }
+  } catch (e) {
+    console.warn('[repeat-kanban] задачи при браке не нашлись:', e instanceof Error ? e.message : e);
+  }
+  return out;
+}
