@@ -21,6 +21,10 @@ DNS `monolitika.mlt-it.ru` → 51.250.89.98 уже настроен (прове�
   EVENT_HANDLER бота «Контроль звонков» 27458 остаётся на sslip (работает, sslip не убираем).
 - Серверную часть (Caddy + env + restart) запускает владелец скриптом — классификатор не пускает запись на прод.
 
+Результат (владелец запустил скрипт 09.11): `Valid configuration`, caddy reloaded, `certificate obtained successfully`
+(Let's Encrypt YE1, CN=monolitika.mlt-it.ru, до 07.02.2027); `curl -sI https://monolitika.mlt-it.ru/login` → HTTP/2 200;
+http → 308 на https; OAuth issuer = `https://monolitika.mlt-it.ru`; sslip → 200. Вход в браузере — проверяет владелец.
+
 ## 2026-11-06 — Синк оргструктуры не работал с переезда: нет вебхука, токена и расписания
 
 Симптом: оргструктура не обновляется. В app.log кнопка «Синхронизировать» падала с
