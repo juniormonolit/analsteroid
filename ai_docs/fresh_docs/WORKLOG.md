@@ -19,7 +19,10 @@
 `BACKGROUND_JOBS_ALLOW` (весь старый список закомментирован «до сверки данных»), а `DAILY_REPORT_BITRIX_USER_ID`
 остался в start.sh мёртвого сервера 62. В прод `secrets.env`: `BACKGROUND_JOBS_ALLOW=callControl,repeatTaskStatus,dailyReport`,
 `DAILY_REPORT_BITRIX_USER_ID=2098` (бэкап `secrets.env.bak-dailyreport`), рестарт. 09.11 в 18:35 МСК отчёт отправлен
-(окно 18:00–19:59). Всё ещё выключены: `weeklyWeather`, `supplyPanelSync`, `repeatKanbanSnapshot`, `repeatQueueIssue`, `repeatMorning`.
+(окно 18:00–19:59) — **но не дошёл**: функция бота `daily_moscow_report` в `bot_channels` тоже была выключена, `sendBitrixBotMessage` молча
+пропускает выключенный канал, а джоба считает это успехом. Включил (`UPDATE bot_channels SET enabled = true`), сбросил
+`daily-report:sent:<дата>` в Redis, рестарт — в 18:42 отчёт реально ушёл (без «канал выключен» в логе). Выключены и
+`daily_os_teams_report`, `how_are_we`, дайджесты менеджеров/РОПов, геймификация — не трогал. Всё ещё выключены джобы: `weeklyWeather`, `supplyPanelSync`, `repeatKanbanSnapshot`, `repeatQueueIssue`, `repeatMorning`.
 
 ## 2026-11-09 — Задачи канбана повторных — от имени нажавшего, а не владельца вебхука
 
