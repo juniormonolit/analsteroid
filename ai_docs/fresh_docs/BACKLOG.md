@@ -41,6 +41,9 @@
   ручные данные (manual_fixes, employee_registry, client_module_*) без бэкапа потеряны. Код: пул `sa` жёстко ходит в
   БД `postgres` без SSL — сделать БД/SSL настраиваемыми (`SA_PG_DB`, `SA_PG_SSL`).
 - Прод-only секреты (список TODO в `secrets.env`, WORKLOG 03.11) — перевыпустить/найти.
+- Гард схем в deploy.sh (`scripts/check_schema_drift.mjs`) смотрит в старый YC-кластер (`YC_PG_HOST` из .env.local,
+  база `system`) и падает на подключении — с 09.11 выкатки идут с `SKIP_SCHEMA_CHECK=1 ALLOW_SCHEMA_DRIFT=1`.
+  Перенастроить на прод = `monolitika` в c9qbif… (и решить, с чем сравнивать — dev-базы на новом кластере нет).
 - Автозапуск приложения после ребута VM (`@reboot` в crontab junior или systemd-юнит + правка deploy.sh).
 - Включить фоновые джобы и `AI_ANALYSIS_WORKER` после сверки данных.
 - Бэкапы вне сервера: автобэкапы YC-кластера (срок > 7 дней) + копия `secrets.env` в Lockbox.
