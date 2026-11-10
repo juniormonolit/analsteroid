@@ -51,7 +51,9 @@ interface PeriodSums { day: Sums; week: Sums; month: Sums }
 
 interface ConversionRow {
   primaryDeals: number; primaryReservations: number;
-  primarySales: number; repeatSales: number; ppp: number;
+  primarySales: number; ppp: number;
+  /** Суммы продаж месяца (перв./повт., по воронке) — «% повторных» по СУММЕ, как в Монолитике (10.11). */
+  primarySalesAmount: number; repeatSalesAmount: number;
   /** Первичные отгрузки — знаменатель «Конверсия ППП» (26.10). */
   primaryShipments: number;
 }
@@ -191,14 +193,14 @@ function sumDbToGroups(
 
 const SALES_AMOUNT_IDS = ['primary_sales_amount', 'repeat_sales_amount'];
 const SHIPMENT_AMOUNT_IDS = ['primary_shipments_amount', 'repeat_shipments_amount'];
-const CONVERSION_IDS = ['primary_deals_count', 'primary_reservations_count', 'primary_sales_count', 'repeat_sales_count', 'ppp_count', 'primary_shipments_count'];
+const CONVERSION_IDS = ['primary_deals_count', 'primary_reservations_count', 'primary_sales_count', 'ppp_count', 'primary_shipments_count', 'primary_sales_amount', 'repeat_sales_amount'];
 
 async function getDbConversions(
   fromIso: string, toExclIso: string,
   groupIndex: Map<string, string>, groups: ReportGroup[],
 ): Promise<Record<string, ConversionRow>> {
   const byManager = await queryDbByManager(CONVERSION_IDS, fromIso, toExclIso);
-  const zero = (): ConversionRow => ({ primaryDeals: 0, primaryReservations: 0, primarySales: 0, repeatSales: 0, ppp: 0, primaryShipments: 0 });
+  const zero = (): ConversionRow => ({ primaryDeals: 0, primaryReservations: 0, primarySales: 0, ppp: 0, primaryShipments: 0, primarySalesAmount: 0, repeatSalesAmount: 0 });
   const conv: Record<string, ConversionRow> = { [TOTAL_KEY]: zero() };
   for (const g of groups) conv[g.key] = zero();
   for (const [managerId, vals] of byManager) {
@@ -208,7 +210,8 @@ async function getDbConversions(
       target.primaryDeals += vals.primary_deals_count ?? 0;
       target.primaryReservations += vals.primary_reservations_count ?? 0;
       target.primarySales += vals.primary_sales_count ?? 0;
-      target.repeatSales += vals.repeat_sales_count ?? 0;
+      target.primarySalesAmount += vals.primary_sales_amount ?? 0;
+      target.repeatSalesAmount += vals.repeat_sales_amount ?? 0;
       target.ppp += vals.ppp_count ?? 0;
       target.primaryShipments += vals.primary_shipments_count ?? 0;
     }

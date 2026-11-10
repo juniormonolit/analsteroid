@@ -82,7 +82,8 @@ const DEPT_TITLES: Record<Dept, string> = { 'ОС': 'Общестрой', 'НЦ'
 type DeptSums = Record<Dept | 'total', number>;
 interface ConversionRow {
   primaryDeals: number; primaryReservations: number;
-  primarySales: number; repeatSales: number; ppp: number; primaryShipments: number;
+  primarySales: number; ppp: number; primaryShipments: number;
+  primarySalesAmount: number; repeatSalesAmount: number;
 }
 type Conversions = Record<Dept | 'total', ConversionRow>;
 
@@ -130,7 +131,7 @@ function legacyMoscow(i: MoscowInput): string {
       mskConversionSection('Конверсия в бронь (месяц)', i.conv, r => r.primaryReservations, r => r.primaryDeals),
       mskConversionSection('Конверсия в продажу (месяц)', i.conv, r => r.primarySales, r => r.primaryDeals),
       mskConversionSection('Конверсия ППП (месяц)', i.conv, r => r.ppp, r => r.primaryShipments),
-      mskConversionSection('% повторных продаж (месяц)', i.conv, r => r.repeatSales, r => r.primarySales + r.repeatSales),
+      mskConversionSection('% повторных продаж (месяц)', i.conv, r => r.repeatSalesAmount, r => r.primarySalesAmount + r.repeatSalesAmount),
     ].join('\n\n'),
     DEPTS.map(cat => mskDeptBlock(
       DEPT_TITLES[cat].toUpperCase(),
@@ -215,7 +216,7 @@ function legacyGroup(i: GroupInput): string {
       grpConversionSection('Конверсия в бронь (месяц)', i.conv, i.groups, r => r.primaryReservations, r => r.primaryDeals),
       grpConversionSection('Конверсия в продажу (месяц)', i.conv, i.groups, r => r.primarySales, r => r.primaryDeals),
       grpConversionSection('Конверсия ППП (месяц)', i.conv, i.groups, r => r.ppp, r => r.primaryShipments),
-      grpConversionSection('% повторных продаж (месяц)', i.conv, i.groups, r => r.repeatSales, r => r.primarySales + r.repeatSales),
+      grpConversionSection('% повторных продаж (месяц)', i.conv, i.groups, r => r.repeatSalesAmount, r => r.primarySalesAmount + r.repeatSalesAmount),
     ].join('\n\n'),
     grpTotalsBlock(
       i.totalTitle,
@@ -337,14 +338,16 @@ const deptSums = (os: number, nc: number, gbi: number): DeptSums =>
 
 // ship — первичные отгрузки (знаменатель «Конверсия ППП» с 26.10); в фикстурах по умолчанию отличается от продаж.
 const convRow = (deals: number, res: number, sales: number, repeat: number, ppp: number, ship = sales + 2): ConversionRow =>
-  ({ primaryDeals: deals, primaryReservations: res, primarySales: sales, repeatSales: repeat, ppp, primaryShipments: ship });
+  ({ primaryDeals: deals, primaryReservations: res, primarySales: sales, ppp, primaryShipments: ship,
+     primarySalesAmount: sales * 410_000, repeatSalesAmount: repeat * 730_000 });
 
 function convTotal(rows: ConversionRow[]): ConversionRow {
   return rows.reduce((a, r) => ({
     primaryDeals: a.primaryDeals + r.primaryDeals,
     primaryReservations: a.primaryReservations + r.primaryReservations,
     primarySales: a.primarySales + r.primarySales,
-    repeatSales: a.repeatSales + r.repeatSales,
+    primarySalesAmount: a.primarySalesAmount + r.primarySalesAmount,
+    repeatSalesAmount: a.repeatSalesAmount + r.repeatSalesAmount,
     ppp: a.ppp + r.ppp,
     primaryShipments: a.primaryShipments + r.primaryShipments,
   }), convRow(0, 0, 0, 0, 0, 0));

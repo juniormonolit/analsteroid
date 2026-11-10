@@ -22,7 +22,9 @@ export interface ConversionRow {
   primaryDeals: number;
   primaryReservations: number;
   primarySales: number;
-  repeatSales: number;
+  /** Суммы продаж месяца, перв./повт. по воронке — база «% повторных» (по сумме, как везде в Монолитике). */
+  primarySalesAmount: number;
+  repeatSalesAmount: number;
   ppp: number;
   /** Первичные отгрузки месяца (по воронке) — знаменатель «Конверсия ППП» (владелец 26.10, как метрика каталога, миграция 163). */
   primaryShipments: number;
@@ -63,7 +65,10 @@ const CONVERSIONS: { label: string; num: (r: ConversionRow) => number; den: (r: 
   // Знаменатель — первичные ОТГРУЗКИ (владелец 26.10: «при расчёте ППП в знаменателе должны быть отгрузки»; так же
   // считает «CR ППП» каталога, миграция 163). Было — первичные продажи.
   { label: 'Конверсия ППП (месяц)', num: r => r.ppp, den: r => r.primaryShipments },
-  { label: '% повторных продаж (месяц)', num: r => r.repeatSales, den: r => r.primarySales + r.repeatSales },
+  // По СУММЕ (владелец 10.11: «цифры в Монолитике и в отчёте должны сходиться идеально»). Так «% повторных»
+  // считают карточка менеджера, «Мои заказчики», личный отчёт и метрика каталога repeat_sales_amount_pct;
+  // до 10.11 отчёт брал КОЛИЧЕСТВО сделок и расходился с приложением.
+  { label: '% повторных продаж (месяц)', num: r => r.repeatSalesAmount, den: r => r.primarySalesAmount + r.repeatSalesAmount },
 ];
 
 function keysOf(n: DailyReportNumbers): string[] {
@@ -88,7 +93,7 @@ function convValues(
   num: (r: ConversionRow) => number,
   den: (r: ConversionRow) => number,
 ): Record<string, MetricValue> {
-  const zero: ConversionRow = { primaryDeals: 0, primaryReservations: 0, primarySales: 0, repeatSales: 0, ppp: 0, primaryShipments: 0 };
+  const zero: ConversionRow = { primaryDeals: 0, primaryReservations: 0, primarySales: 0, ppp: 0, primaryShipments: 0, primarySalesAmount: 0, repeatSalesAmount: 0 };
   const out: Record<string, MetricValue> = {};
   for (const k of keys) {
     const row = conv[k] ?? zero;
