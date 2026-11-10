@@ -199,7 +199,7 @@ export interface BoardKpi {
 }
 
 /** Режим «Сегодня» (аудит 21.10): одна лента того, что РОПу решить сегодня. */
-export type TodayKey = 'control' | 'overdue' | 'hide_request' | 'wrong_funnel' | 'review' | 'closing' | 'ai_request';
+export type TodayKey = 'control' | 'overdue' | 'hide_request' | 'wrong_funnel' | 'review' | 'closing' | 'ai_request' | 'fresh_sales';
 export interface TodaySection { key: TodayKey; title: string; hint: string; total: number; cards: KanbanCard[] }
 
 export interface RepeatBoard {
@@ -934,6 +934,7 @@ export async function buildRepeatBoard(opts: {
 
   // «Сегодня» — из колонок до фильтра по задачам (как показатели): что РОПу решить сегодня.
   const TODAY_LIMIT = 60;
+  const SOLD_STAGE_IDS = new Set(COLUMNS.find(c => c.key === 'st_sold')?.stages ?? []);
   const everyCard = [...kpiBuckets.values()].flat();
   const changed = (c: KanbanCard) => c.task?.changedAt ?? c.task?.createdAt ?? '';
   const todayDefs: { key: TodayKey; title: string; hint: string; pick: (c: KanbanCard) => boolean; order: (a: KanbanCard, b: KanbanCard) => number }[] = [
@@ -943,6 +944,11 @@ export async function buildRepeatBoard(opts: {
     ...(opts.withAi ? [{ key: 'ai_request' as const, title: 'Просят разбор', hint: 'Менеджер запросил ИИ-разбор звонков — разбора не было или есть новые разговоры', pick: (c: KanbanCard) => !!c.aiRequest, order: (a: KanbanCard, b: KanbanCard) => a.aiRequest!.at.localeCompare(b.aiRequest!.at) }] : []),
     { key: 'wrong_funnel', title: 'Не в той воронке', hint: 'Повторная сделка заведена в первичной воронке — перенесите в «Повторные» в Битриксе', pick: c => !!c.wrongFunnel, order: (a, b) => b.wrongFunnel!.createdAt.localeCompare(a.wrongFunnel!.createdAt) },
     { key: 'review', title: 'На разборе', hint: 'Отказы и три попытки без дозвона — решите: брак, ещё попытки или вернуть', pick: c => c.column === 'review', order: (a, b) => (b.deal?.lostAt ?? b.deal?.createdAt ?? '').localeCompare(a.deal?.lostAt ?? a.deal?.createdAt ?? '') },
+    // Владелец 10.11: «Свежие продажи» — продано, не отгружено; РОП ставит задачу на следующую покупку «на горячую».
+    // Только открытая повторная сделка в стадии «Продано»; самые свежие продажи сверху, без ограничения по сроку.
+    { key: 'fresh_sales', title: 'Свежие продажи', hint: 'Продано, ещё не отгружено — поставьте задачу на следующую покупку, пока заказчик горячий',
+      pick: c => c.column === 'st_sold' && !!c.deal && SOLD_STAGE_IDS.has(c.deal.stageId),
+      order: (a, b) => (b.deal?.soldAt ?? b.deal?.createdAt ?? '').localeCompare(a.deal?.soldAt ?? a.deal?.createdAt ?? '') },
     { key: 'closing', title: 'Окно закрывается', hint: `Отгрузили ${WINDOW_DAYS - 3}+ дней назад, сделки нет — осталось 3 дня или меньше`, pick: c => c.column === 'pool_hot' && (c.freshDays ?? 0) >= WINDOW_DAYS - 3, order: (a, b) => lostRank(a) - lostRank(b) || (b.freshDays ?? 0) - (a.freshDays ?? 0) || ev(b) - ev(a) },
   ];
   const today: TodaySection[] = todayDefs.map(d => {

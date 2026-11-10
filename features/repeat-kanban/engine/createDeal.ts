@@ -262,16 +262,19 @@ export async function createRepeatTask(input: {
   if (last?.STAGE_ID && DO_NOT_TOUCH_STAGES.has(last.STAGE_ID)) {
     throw new DealCreateError(`Сделка #${last.ID} в стадии «НЕ ТРОГАТЬ — ЗАПРЕЩЕНО»: заказчика не трогаем`);
   }
-  if (last?.STAGE_ID && SOLD_STAGES.has(last.STAGE_ID)) {
-    throw new DealCreateError(`Сделка #${last.ID} продана и ждёт отгрузки — задачу поставим после отгрузки`);
-  }
-
   let dealId: number;
   let dealMode: RepeatDealMode;
   let title: string;
   let responsibleId: string;
 
-  if (last && (last.STAGE_SEMANTIC_ID === 'F' || last.STAGE_SEMANTIC_ID === 'P')) {
+  // «Свежие продажи» (владелец 10.11: «ставить задачи на повторную продажу на горячую»): сделка продана и ждёт
+  // отгрузки — задача в неё же, название сделки НЕ меняем (раньше — отказ «поставим после отгрузки»).
+  if (last?.STAGE_ID && SOLD_STAGES.has(last.STAGE_ID)) {
+    dealId = Number(last.ID);
+    title = last.TITLE ?? `Сделка #${last.ID}`;
+    responsibleId = String(last.ASSIGNED_BY_ID ?? input.fallbackManagerId);
+    dealMode = 'existing';
+  } else if (last && (last.STAGE_SEMANTIC_ID === 'F' || last.STAGE_SEMANTIC_ID === 'P')) {
     dealId = Number(last.ID);
     title = withPrefix(last.TITLE ?? `Сделка #${last.ID}`);
     responsibleId = String(last.ASSIGNED_BY_ID ?? input.fallbackManagerId);

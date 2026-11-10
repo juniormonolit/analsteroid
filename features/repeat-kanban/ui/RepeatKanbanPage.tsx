@@ -760,7 +760,8 @@ function FilterField({ label, children }: { label: string; children: React.React
 }
 
 /** Колонки, где у карточки есть кнопка задачи (и куда можно поставить массово). */
-const canTaskCol = (col: ColumnKey) => col !== 'review' && col !== 'brak' && col !== 'st_sold' && col !== 'hidden';
+// «Продано» — можно (10.11, «Свежие продажи»: задача на повторную продажу в проданную сделку, «на горячую»).
+const canTaskCol = (col: ColumnKey) => col !== 'review' && col !== 'brak' && col !== 'hidden';
 
 interface CardHandlers {
   canManage: boolean; viewerId: string | null;
@@ -1573,6 +1574,7 @@ function TaskModal({ card, load, limit, reassign, onClose, onSaved }: { card: Ka
   const cur = card.deal;
   const what = cur && WON_STAGES.has(cur.stageId) ? `Сделка #${cur.dealId} отгружена — будет создана новая повторная сделка «ПОСМОТРИ ЗАДАЧУ …».`
     : cur && LOST_STAGES.has(cur.stageId) ? `Сделка #${cur.dealId} вернётся из отказа в первую стадию, в название — «ПОСМОТРИ ЗАДАЧУ».`
+    : cur && (cur.stageId === 'C2:FINAL_INVOICE' || cur.stageId === 'C3:1') ? `Сделка #${cur.dealId} продана и ждёт отгрузки — задача на следующую покупку в неё же, название не меняем.`
     : cur ? `Задача в сделку #${cur.dealId}, в название — «ПОСМОТРИ ЗАДАЧУ».`
     : card.lastLost ? `Сделка #${card.lastLost.dealId} вернётся из отказа в первую стадию, в название — «ПОСМОТРИ ЗАДАЧУ».`
     : 'Будет создана новая повторная сделка «ПОСМОТРИ ЗАДАЧУ …» (как из контакта).';
