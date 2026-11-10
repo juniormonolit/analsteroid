@@ -470,6 +470,9 @@ export async function buildRepeatBoard(opts: {
   groupsEver?: { from: string; to: string } | null;
   /** Фильтр по задаче заказчика (владелец 20.10: «РОП разбирает задачи на канбане»). */
   taskFilter?: TaskBucket[];
+  /** «Мои задачи» (10.11, Будковский): Битрикс-id смотрящего — только карточки, где он постановщик, соисполнитель
+   *  или наблюдатель задачи. Действует и на доску, и на «Сегодня». */
+  mineOf?: string | null;
   /** Пул: последняя сделка успешная / проигранная (владелец 21.10). */
   outcome?: 'won' | 'lost' | null;
   /** Количество отгрузок заказчика (владелец 29.10): корзины SHIP_BUCKETS, любая из выбранных; вся доска. */
@@ -878,6 +881,10 @@ export async function buildRepeatBoard(opts: {
   const columns: KanbanColumn[] = [];
   // Показатели доски — до фильтра по задачам: фильтр «ждёт приёмки» не должен обнулять
   // «Потенциал пула» (у заказчиков пула задач нет). Снимок списков колонок.
+  if (opts.mineOf) {
+    const me = opts.mineOf;
+    for (const [k, list] of buckets) buckets.set(k, list.filter(c => !!c.task && (c.task.createdById === me || c.task.participants.includes(me))));
+  }
   const kpiBuckets = new Map([...buckets].map(([k, l]) => [k, [...l]]));
   // Фильтр по задачам — после сборки карточек (нужны статус и срок задачи).
   const taskCounts: Record<string, number> = {};

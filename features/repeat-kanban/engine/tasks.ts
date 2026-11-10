@@ -25,7 +25,20 @@ export interface RepeatTask {
   /** Последнее изменение (для «ждёт контроля N дней»). */
   changedAt: string | null;
   closedAt: string | null;
+  /** Соисполнители и наблюдатели (Битрикс-id) — фильтр «Мои задачи» (10.11): копия Битрикса + наш журнал постановки. */
+  participants: string[];
 }
+
+/** Список id из копии (массив, jsonb или строка «1,2,3») и из журнала (числа). */
+const idsOf = (...vals: unknown[]): string[] => {
+  const out = new Set<string>();
+  for (const v of vals) {
+    if (Array.isArray(v)) v.forEach(x => { if (/^\d+$/.test(String(x))) out.add(String(x)); });
+    else if (typeof v === 'string') (v.match(/\d+/g) ?? []).forEach(x => out.add(x));
+    else if (typeof v === 'number') out.add(String(v));
+  }
+  return [...out];
+};
 
 function stateOf(status: number | null, view: number | null): RepeatTaskState {
   if (status === 5) return 'done';
@@ -43,14 +56,15 @@ const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
  *  ONTASKADD приходит без UF_CRM_TASK, а сверка её не досыпает (23.10: за 22.10 у 42 из 53 задач
  *  проекта deal_id пустой) — карточка писала «Сделка без задачи», хотя задачу только что поставили
  *  (сделка 273512, задача 170743). Связь берём из своих записей. */
-interface LinkedTask { dealId: number; createdAt: string; creatorId: string | null; creatorName: string | null; responsibleId: string | null; deadlineAt: string | null }
+interface LinkedTask { dealId: number; createdAt: string; creatorId: string | null; creatorName: string | null; responsibleId: string | null; deadlineAt: string | null; participants: string[] }
 
 async function linkedTasks(dealIds: number[]): Promise<Map<number, LinkedTask>> {
   const { systemDb } = await import('@/lib/db/clients');
-  type Raw = { task_id: string; deal_id: string; at: Date; creator_id: string | null; creator_name: string | null; resp: string | null; deadline: string | null; dtime: string | null };
+  type Raw = { task_id: string; deal_id: string; at: Date; creator_id: string | null; creator_name: string | null; resp: string | null; deadline: string | null; dtime: string | null; acc?: unknown; aud?: unknown };
   const r = await systemDb().query<Raw>(
     `SELECT DISTINCT ON (task_id) task_id::text, deal_id::text, ts AS at, actor_bitrix_id AS creator_id, actor_name AS creator_name,
-            payload->>'responsible' AS resp, payload->>'deadline' AS deadline, payload->>'deadlineTime' AS dtime
+            payload->>'responsible' AS resp, payload->>'deadline' AS deadline, payload->>'deadlineTime' AS dtime,
+            payload->'accomplices' AS acc, payload->'auditors' AS aud
        FROM repeat_kanban_events
       WHERE task_id IS NOT NULL AND deal_id = ANY($1::bigint[])
       ORDER BY task_id, ts
@@ -70,6 +84,7 @@ async function linkedTasks(dealIds: number[]): Promise<Map<number, LinkedTask>> 
     out.set(id, {
       dealId: Number(x.deal_id), createdAt: new Date(x.at).toISOString(), creatorId: x.creator_id, creatorName: x.creator_name, responsibleId: x.resp,
       deadlineAt: x.deadline && /^\d{4}-\d{2}-\d{2}$/.test(x.deadline) ? new Date(`${x.deadline}T${x.dtime && /^\d{2}:\d{2}$/.test(x.dtime) ? x.dtime : '19:00'}:00+03:00`).toISOString() : null,
+      participants: idsOf(x.acc, x.aud),
     });
   }
   return out;
@@ -84,11 +99,11 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
     const { knownBxTasks } = await import('./taskReview');
     const bxExtra = new Map((await knownBxTasks(dealIds).catch(() => [])).map(t => [t.id, t]));
     for (const t of bxExtra.values()) {
-      if (!links.has(t.id)) links.set(t.id, { dealId: t.dealId, createdAt: t.createdAt, creatorId: t.createdBy, creatorName: null, responsibleId: t.responsibleId, deadlineAt: t.deadline });
+      if (!links.has(t.id)) links.set(t.id, { dealId: t.dealId, createdAt: t.createdAt, creatorId: t.createdBy, creatorName: null, responsibleId: t.responsibleId, deadlineAt: t.deadline, participants: [] });
     }
     const r = await analyticsDb().query(
       `SELECT t.task_id, t.deal_id, t.title, t.status, t.status_view, t.created_by, t.responsible_id,
-              t.responsible_name, t.created_at, t.deadline_at, t.changed_at, t.closed_at, org.manager_name AS created_by_name
+              t.responsible_name, t.created_at, t.deadline_at, t.changed_at, t.closed_at, t.accomplices, t.auditors, org.manager_name AS created_by_name
          FROM sa.bitrix_task_current t
          LEFT JOIN LATERAL (SELECT manager_name FROM sa.org_resolved_hierarchy o
                              WHERE o.manager_bitrix_user_id = t.created_by::text LIMIT 1) org ON true
@@ -113,6 +128,7 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
         createdById: x.created_by !== null ? String(x.created_by) : null, createdByName: x.created_by_name ?? null,
         responsibleId: x.responsible_id !== null ? String(x.responsible_id) : null, responsibleName: x.responsible_name ?? null,
         createdAt: iso(x.created_at)!, deadlineAt: iso(x.deadline_at), changedAt: iso(x.changed_at), closedAt: iso(x.closed_at),
+        participants: idsOf(x.accomplices, x.auditors, links.get(Number(x.task_id))?.participants),
       };
       const cur = out.get(dealId);
       if (!cur || task.createdAt > cur.createdAt) out.set(dealId, task);
@@ -133,6 +149,7 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
           id, dealId: l.dealId, title: bxExtra.get(id)?.title ?? '', state: stateOf(k ? k.status : bxExtra.get(id)?.status ?? null, null),
           createdById: l.creatorId, createdByName: l.creatorName ?? (l.creatorId ? names.get(l.creatorId) ?? null : null), responsibleId: l.responsibleId, responsibleName: l.responsibleId ? names.get(l.responsibleId) ?? null : null,
           createdAt: l.createdAt, deadlineAt: k && k.deadline !== undefined ? k.deadline : l.deadlineAt, changedAt: k?.closedAt ?? k?.at ?? null, closedAt: k?.status === 5 ? k.closedAt ?? null : null,
+          participants: l.participants,
         };
         const cur = out.get(l.dealId);
         if (!cur || task.createdAt > cur.createdAt) out.set(l.dealId, task);

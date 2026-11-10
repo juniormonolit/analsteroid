@@ -16,7 +16,7 @@ import { TaskCheckPanel, type TaskCheckState } from './TaskCheck';
 import { AttachmentsRow, useAttachments } from './Attachments';
 import { ParticipantsPicker, initialParticipants, participantsPayload } from './ParticipantsPicker';
 
-type Mode = 'close' | 'accept' | 'return' | 'rollback' | 'postpone';
+type Mode = 'close' | 'accept' | 'return' | 'rollback' | 'postpone' | 'pool';
 type DealState = 'open' | 'lost' | 'won';
 function modesFor(state: DealState, dealId: number): { key: Mode; title: string; hint: string; Icon: typeof CheckCircle2; color: string }[] {
   const close = { key: 'close' as const, title: state === 'lost' ? 'Принять, заказчика в брак' : 'Принять и закрыть сделку', hint: state === 'lost' ? `Задача завершится, сделка #${dealId} уже в отказе, заказчик — в «Брак»` : 'Задача завершится, сделка закроется в отказ, заказчик — в «Брак»', Icon: XCircle, color: '#990000' };
@@ -30,7 +30,14 @@ function modesFor(state: DealState, dealId: number): { key: Mode; title: string;
       ? `Сделка #${dealId} закрыта в отказ: вернём её на первую стадию и поставим новую задачу, эта закроется`
       : `Сделка #${dealId} уже отгружена: заведём новую сделку с задачей, эта закроется` };
   // Отгруженную сделку в отказ не закрываем.
-  return state === 'lost' ? [close, accept, postpone, rollback] : [accept, postpone, rollback];
+  if (state !== 'lost') return [accept, postpone, rollback];
+  // Сделка в отказе + сданная задача (10.11, тестировщики: «чем отличается „Разобрать отказ“ и „Принять задачу“?»): одно
+  // окно — приёмка задачи вместе с решением по отказу, те же исходы, что у разбора: брак / в пул / отложить / вернуть.
+  // Простого «Принять задачу» нет: после него карточка висела на разборе без решения.
+  const pool = { key: 'pool' as const, title: 'Принять задачу, вернуть в пул', Icon: CheckCircle2, color: '#38761d',
+    hint: 'Не брак (не дозвонились, «не сейчас»): задача завершится, заказчик вернётся в пул — как «Недозвон» на разборе' };
+  return [{ ...close, title: 'Принять задачу и в брак' }, pool, postpone,
+    { ...rollback, title: 'Вернуть менеджеру', hint: `Отработано плохо: сделка #${dealId} вернётся на первую стадию, менеджеру — новая задача, эта закроется` }];
 }
 
 const field = 'w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base text-[var(--color-text)] sm:text-sm';
@@ -48,7 +55,7 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
   const MODES = modesFor(dealState, task.dealId);
   // Менеджер написал «весной», «осенью», «через 3 месяца» — по умолчанию согласиться: «Отложить» с этой датой.
   const guessed = guessPostpone(note?.text);
-  const [mode, setMode] = useState<Mode>(guessed ? 'postpone' : 'accept');
+  const [mode, setMode] = useState<Mode>(guessed ? 'postpone' : dealState === 'lost' ? 'pool' : 'accept');
   const [until, setUntil] = useState(guessed ?? postponePresets()[0].value);
   const att = useAttachments();
   const [parts, setParts] = useState(initialParticipants);
@@ -73,7 +80,7 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
           ? { action: 'task_return', rollback: true, comment, deadline: deadline || null, deadlineTime: time, attachments, participants: participantsPayload(parts) }
           : mode === 'postpone'
             ? { action: 'task_accept', comment, postponeUntil: until, attachments }
-            : { action: 'task_accept', comment, closeReason: mode === 'close' ? reason : null, attachments };
+            : { action: 'task_accept', comment, closeReason: mode === 'close' ? reason : null, attachments, reviewDecision: mode === 'pool' ? 'no_answer' : undefined };
       const r = await fetch('/api/repeat-kanban', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body, taskId: task.id, dealId: task.dealId, clientKey: card.clientKey, managerId: card.managerId, column: card.column }),
@@ -92,6 +99,11 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
   return (
     <Modal open onOpenChange={o => { if (!o) onClose(); }} title={`Приёмка задачи · ${name}`} desktopWidth="sm:max-w-lg">
       <div className="flex min-w-0 flex-col gap-3 text-sm">
+        {dealState === 'lost' && (
+          <p className="rounded-md bg-[var(--color-bg-surface)] px-2 py-1.5 text-[12.5px] text-[var(--color-text-secondary)]">
+            Сделка закрыта в отказ, а менеджер сдал задачу — решение по отказу принимается здесь же, вместе с приёмкой задачи (отдельный «Разобрать отказ» не нужен).
+          </p>
+        )}
         <a href={taskUrl(task.id)} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 text-[var(--color-accent)] hover:underline">
           <ExternalLink size={13} className="shrink-0" /><span className="truncate">Задача #{task.id} · {task.responsibleName ?? 'менеджер'} · сделка #{task.dealId}</span>
         </a>

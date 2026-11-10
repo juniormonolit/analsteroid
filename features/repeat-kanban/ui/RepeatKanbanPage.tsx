@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { BarChart3, CheckSquare, PhoneCall, Moon, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X, CalendarDays } from 'lucide-react';
+import { BarChart3, CheckSquare, PhoneCall, Moon, ChevronsDown, ChevronsUp, HelpCircle, ChevronLeft, ChevronRight, ExternalLink, MoreHorizontal, RefreshCw, Phone, PhoneMissed, ClipboardList, AlertTriangle, Plus, Search, SlidersHorizontal, X, CalendarDays, UserCheck } from 'lucide-react';
 import { listParam, stringParam, useUrlState } from '@/lib/hooks/useUrlState';
 import { DepartmentPicker } from '@/features/reports/ui/FilterBar';
 import { AccessDenied } from '@/components/ui/AccessDenied';
@@ -152,6 +152,8 @@ export function RepeatKanbanPage() {
   const [sort, setSort] = useUrlState('sort', stringParam('default'));
   const [outcome, setOutcome] = useUrlState('outcome', stringParam(''));
   const [shipsF, setShipsF] = useUrlState('ships', listParam([]));
+  // «Мои задачи» (10.11, Будковский: «можно, чтобы были видны только мои задачи?»): постановщик, соисполнитель, наблюдатель.
+  const [mine, setMine] = useUrlState('mine', stringParam(''));
   // Сумма отгрузок за период (владелец 29.10): период (пусто — 12 месяцев) и границы в ₽.
   const [ssf, setSsf] = useUrlState('ssf', stringParam(''));
   const [sst, setSst] = useUrlState('sst', stringParam(''));
@@ -193,7 +195,7 @@ export function RepeatKanbanPage() {
   const [bulkBrakOpen, setBulkBrakOpen] = useState(false);
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<RepeatBoard, ApiError>({
-    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shipsF, shf, sht, ssf, sst, smin, smax, q, limits],
+    queryKey: ['repeat-kanban', mgrs, type, depts, pg, pgm, pgp, pgf, pgt, taskF, tagF, aiF, offerF, sort, outcome, shipsF, mine, shf, sht, ssf, sst, smin, smax, q, limits],
     enabled: prefsReady,
     queryFn: async () => {
       const qs = new URLSearchParams();
@@ -213,6 +215,7 @@ export function RepeatKanbanPage() {
       if (outcome) qs.set('outcome', outcome);
       if (shf && sht) { qs.set('shf', shf); qs.set('sht', sht); }
       if (shipsF.length) qs.set('ships', shipsF.join(','));
+      if (mine === '1') qs.set('mine', '1');
       if (smin) qs.set('smin', smin);
       if (smax) qs.set('smax', smax);
       if ((smin || smax || sort === 'psum') && ssf && sst) { qs.set('ssf', ssf); qs.set('sst', sst); }
@@ -534,6 +537,11 @@ export function RepeatKanbanPage() {
                 className={`${sort !== 'default' ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
             </FilterField>
           </FiltersButton>
+          {/* Быстрая кнопка рядом с «Фильтрами»: только задачи, где я постановщик, соисполнитель или наблюдатель. */}
+          <button type="button" aria-pressed={mine === '1'} onClick={() => { setMine(mine === '1' ? '' : '1'); setLimits({}); }}
+            title="Только заказчики с задачами, где вы постановщик, соисполнитель или наблюдатель" className={mine === '1' ? BTN_ACTIVE : BTN_IDLE}>
+            <UserCheck size={16} /> <span className="hidden sm:inline">Мои задачи</span><span className="sm:hidden">Мои</span>
+          </button>
           {canManage && view !== 'today' && view !== 'queue' && (
             <button type="button" onClick={() => { setSelectMode(v => !v); setSelected(new Map()); }}
               title="Выбрать карточки: отметить галочками и поставить задачи или отправить в брак всем разом" aria-label="Выбрать карточки"
@@ -2153,6 +2161,8 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
   const [reason, setReason] = useState<string>('nothing_needed');
   const [comment, setComment] = useState(hr ? `${hr.comment} (предложил ${hr.by})` : '');
   const [until, setUntil] = useState(hr?.until ?? postponePresets()[0].value);
+  // «Вернуть менеджеру» ставит задачу — участники, как в окне задачи (10.11: «сразу добавить РОПа менеджера»).
+  const [parts, setParts] = useState(initialParticipants);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Правило: брак без дозвона и до трёх попыток — только с комментарием РОПа.
@@ -2163,7 +2173,8 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
     setBusy(true); setErr(null);
     try {
       await post({ action: 'review', clientKey: card.clientKey, managerId: card.managerId, column: card.column, dealId: card.deal?.dealId,
-        decision, reason: decision === 'brak' ? reason : null, comment, touchesDone: done, until: decision === 'postpone' ? until : undefined });
+        decision, reason: decision === 'brak' ? reason : null, comment, touchesDone: done, until: decision === 'postpone' ? until : undefined,
+        participants: decision === 'return' ? participantsPayload(parts) : undefined });
       onSaved(); onClose();
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setBusy(false);
@@ -2216,6 +2227,7 @@ function ReviewModal({ card, onClose, onSaved }: { card: KanbanCard; onClose: ()
           ))}
         </div>
         {decision === 'postpone' && <PostponePicker value={until} onChange={setUntil} />}
+        {decision === 'return' && <ParticipantsPicker value={parts} onChange={setParts} managerIds={[card.managerId]} />}
         {decision === 'brak' && (
           <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]">
             Причина

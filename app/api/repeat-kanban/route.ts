@@ -129,6 +129,8 @@ export async function GET(req: NextRequest) {
       // ?pgm=ever&pgp=1y (или pgp=custom&pgf=…&pgt=…) — «отгружали когда-либо за период», на всю доску.
       groupsEver: sp.get('pgm') === 'ever' ? resolvePeriod(sp.get('pgp'), sp.get('pgf'), sp.get('pgt')) : null,
       taskFilter: (sp.get('tasks') ?? '').split(',').filter((x): x is TaskBucket => (TASK_BUCKETS as readonly string[]).includes(x)),
+      // ?mine=1 — «Мои задачи»: я постановщик, соисполнитель или наблюдатель (10.11).
+      mineOf: sp.get('mine') === '1' ? session.bitrixUserId : null,
       outcome: sp.get('outcome') === 'won' || sp.get('outcome') === 'lost' ? sp.get('outcome') as 'won' | 'lost' : null,
       // ?ships=1,4-5 — количество отгрузок заказчика (корзины SHIP_BUCKETS).
       shipCounts: (sp.get('ships') ?? '').split(',').filter(x => /^(0|1|2|3|4-5|6-9|10\+)$/.test(x)),
@@ -402,6 +404,11 @@ export async function POST(req: NextRequest) {
         await markBrakNow({ clientKey, reason, comment: comment || null, session });
         dealClosed = await closeDealAsLost({ dealId, clientKey, reason, comment: comment || null, authorId: session.bitrixUserId })
           .catch(e => { console.warn('[repeat-kanban] закрытие сделки при приёмке:', e instanceof Error ? e.message : e); return 'error'; });
+      }
+      // Сделка в отказе + сданная задача (10.11): «Принять задачу, вернуть в пул» — решение по отказу «недозвон», как на разборе.
+      if (!reason && body.reviewDecision === 'no_answer') {
+        await decideReview({ clientKey, dealId, decision: 'no_answer', reason: null, comment: comment || null, touchesDone: 0, session });
+        await logEvent(session, { type: 'reject_reviewed', requestId: rid, clientKey, managerId, columnBefore, dealId, payload: { decision: 'no_answer', comment: comment || null, viaTaskAccept: taskId } });
       }
       await logEvent(session, { type: reason ? 'task_accepted_deal_closed' : 'task_accepted', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId,
         payload: { comment: comment || null, reason, dealClosed, commented: res.commented } });
