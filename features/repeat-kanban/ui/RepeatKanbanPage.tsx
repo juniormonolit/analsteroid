@@ -807,14 +807,11 @@ function TodayView({ sections, h, custom }: { sections: TodaySection[]; h: CardH
   const filled = sections.filter(s => s.total > 0 || s.custom);
   const ownCount = sections.filter(s => s.custom?.own).length;
   const TONE: Record<string, string> = { control: '#e69138', overdue: 'var(--color-negative)', hide_request: '#bf9000', wrong_funnel: 'var(--color-negative)', review: '#e69138', closing: 'var(--color-accent)' };
-  return (
-    <div className="relative min-h-[75dvh] min-w-0 flex-1 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
-      {filled.length === 0 && !custom ? (
-        <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">На сегодня решать нечего — всё разобрано.</div>
-      ) : (
-        <div className="scroll-x h-full">
-          <div className="flex h-full items-stretch gap-3">
-            {filled.map(sec => (
+  // Стандартные — слева; свои (пример первым, дальше свои и общие) — отдельной группой справа.
+  const std = filled.filter(s => !s.custom);
+  const mine = custom ? filled.filter(s => s.custom) : [];
+  const cust = !!custom;
+  const renderSec = (sec: TodaySection) => (
               <section key={sec.key} className="flex h-full w-80 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
                 {sec.custom && custom ? <CustomHeader sec={sec} hidden={custom.hidden} onEdit={() => custom.onEdit(sec)} onChanged={custom.onChanged} /> : (
                 <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${TONE[sec.key] ?? 'var(--color-accent)'}` }} title={sec.hint}>
@@ -842,8 +839,33 @@ function TodayView({ sections, h, custom }: { sections: TodaySection[]; h: CardH
                   )}
                 </div>
               </section>
-            ))}
-            {custom && <AddColumnTile disabled={ownCount >= 5} onClick={custom.onAdd} />}
+  );
+  return (
+    <div className="relative min-h-[75dvh] min-w-0 flex-1 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
+      {filled.length === 0 && !custom ? (
+        <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">На сегодня решать нечего — всё разобрано.</div>
+      ) : (
+        <div className="scroll-x h-full">
+          <div className="flex h-full items-stretch gap-3">
+            {std.length > 0 && (
+              <div className="flex h-full shrink-0 flex-col gap-2">
+                {cust && <div className="sticky left-0 w-max px-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">Стандартные</div>}
+                <div className="flex min-h-0 flex-1 items-stretch gap-3">{std.map(renderSec)}</div>
+              </div>
+            )}
+            {/* Свои колонки — отдельной группой (владелец 10.11: «выдели визуально, чуть на расстоянии»; Fable: пунктир слева +
+                подпись над группой, как группы этапов на доске; вертикальную подпись не делаем — на 375 px съедает ширину). */}
+            {cust && (
+              <div className="ml-1 flex h-full shrink-0 flex-col gap-2 border-l border-dashed border-[var(--color-border)] pl-4 sm:ml-2 sm:pl-5">
+                <div className="sticky left-0 w-max px-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                  Свои колонки <span className="font-normal normal-case tracking-normal">· по вашим условиям</span>
+                </div>
+                <div className="flex min-h-0 flex-1 items-stretch gap-3">
+                  {mine.map(renderSec)}
+                  <AddColumnTile disabled={ownCount >= 5} onClick={custom!.onAdd} />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

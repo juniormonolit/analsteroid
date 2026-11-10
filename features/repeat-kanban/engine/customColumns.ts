@@ -27,6 +27,8 @@ export interface CustomAlert { noCallDays?: number; overdue?: boolean; noTask?: 
 export interface CustomColumn {
   id: number; ownerUserId: string; ownerName: string | null; name: string; shared: boolean;
   filters: CustomFilters; alert: CustomAlert | null; createdAt: string; own: boolean;
+  /** Общая колонка-пример (миграция 262, is_example): правит РОП и выше, удалить нельзя. */
+  example: boolean;
 }
 
 const TASKS: CustomTask[] = ['none', 'unread', 'work', 'overdue', 'control', 'done'];
@@ -100,19 +102,20 @@ export function alertOf(c: MatchCard, a: CustomAlert | null, task: CustomTask, n
   return null;
 }
 
-interface Row { id: string; owner_user_id: string; owner_name: string | null; name: string; shared: boolean; filters: CustomFilters; alert: CustomAlert | null; created_at: Date }
+interface Row { id: string; owner_user_id: string; owner_name: string | null; name: string; shared: boolean; filters: CustomFilters; alert: CustomAlert | null; created_at: Date; is_example: boolean }
 const toCol = (r: Row, userId: string): CustomColumn => ({
   id: Number(r.id), ownerUserId: r.owner_user_id, ownerName: r.owner_name, name: r.name, shared: r.shared,
   filters: r.filters ?? {}, alert: r.alert, createdAt: new Date(r.created_at).toISOString(), own: r.owner_user_id === userId,
+  example: !!r.is_example,
 });
 
 /** Свои + общие чужие (кроме скрытых у себя). До миграции — пусто. */
 export async function fetchVisibleColumns(userId: string, hidden: number[] = []): Promise<CustomColumn[]> {
   try {
     const r = await systemDb().query<Row>(
-      `SELECT id::text, owner_user_id, owner_name, name, shared, filters, alert, created_at FROM repeat_today_columns
-        WHERE archived_at IS NULL AND (owner_user_id = $1 OR (shared AND NOT (id = ANY($2::bigint[]))))
-        ORDER BY (owner_user_id <> $1), position, id`, [userId, hidden]);
+      `SELECT id::text, owner_user_id, owner_name, name, shared, filters, alert, created_at, is_example FROM repeat_today_columns
+        WHERE archived_at IS NULL AND (owner_user_id = $1 OR ((shared OR is_example) AND NOT (id = ANY($2::bigint[]))))
+        ORDER BY NOT is_example, (owner_user_id <> $1), position, id`, [userId, hidden]);
     return r.rows.map(x => toCol(x, userId));
   } catch (e) {
     console.warn('[repeat-kanban custom columns]', e instanceof Error ? e.message : e);
@@ -128,7 +131,7 @@ const cleanName = (v: unknown) => {
 
 export async function createColumn(session: SessionUser, body: Record<string, unknown>): Promise<CustomColumn> {
   const db = systemDb();
-  const cnt = await db.query<{ n: string }>(`SELECT count(*)::text AS n FROM repeat_today_columns WHERE owner_user_id = $1 AND archived_at IS NULL`, [session.id]);
+  const cnt = await db.query<{ n: string }>(`SELECT count(*)::text AS n FROM repeat_today_columns WHERE owner_user_id = $1 AND archived_at IS NULL AND NOT is_example`, [session.id]);
   if (Number(cnt.rows[0]?.n ?? 0) >= MAX_OWN_COLUMNS) throw new CustomColumnError(`Не больше ${MAX_OWN_COLUMNS} своих колонок — удалите ненужную`);
   const r = await db.query<Row>(
     `INSERT INTO repeat_today_columns (owner_user_id, owner_name, name, shared, filters, alert, position)
@@ -138,11 +141,15 @@ export async function createColumn(session: SessionUser, body: Record<string, un
   return toCol(r.rows[0], session.id);
 }
 
-/** Изменить — только владелец. Условия поменялись — история членства обнуляется (метрика считается заново). */
-export async function updateColumn(session: SessionUser, id: number, body: Record<string, unknown>): Promise<void> {
+/** Изменить — владелец; колонку-пример — РОП и выше (canManage), без смены «общая/личная». Условия поменялись —
+ *  история членства обнуляется (метрика считается заново). */
+export async function updateColumn(session: SessionUser, id: number, body: Record<string, unknown>, canManage = false): Promise<void> {
   const db = systemDb();
-  const cur = await db.query<{ filters: CustomFilters }>(`SELECT filters FROM repeat_today_columns WHERE id = $1 AND owner_user_id = $2 AND archived_at IS NULL`, [id, session.id]);
+  const cur = await db.query<{ filters: CustomFilters; is_example: boolean }>(
+    `SELECT filters, is_example FROM repeat_today_columns WHERE id = $1 AND archived_at IS NULL AND (owner_user_id = $2 OR (is_example AND $3))`,
+    [id, session.id, canManage]);
   if (!cur.rows[0]) throw new CustomColumnError('Колонка не найдена или не ваша');
+  if (cur.rows[0].is_example) delete body.shared;
   const sets: string[] = [], vals: unknown[] = [id];
   const add = (sql: string, v: unknown) => { vals.push(v); sets.push(`${sql} = $${vals.length}`); };
   if (body.name !== undefined) add('name', cleanName(body.name));
@@ -160,7 +167,7 @@ export async function updateColumn(session: SessionUser, id: number, body: Recor
 }
 
 export async function deleteColumn(session: SessionUser, id: number): Promise<void> {
-  const r = await systemDb().query(`UPDATE repeat_today_columns SET archived_at = now() WHERE id = $1 AND owner_user_id = $2 AND archived_at IS NULL`, [id, session.id]);
+  const r = await systemDb().query(`UPDATE repeat_today_columns SET archived_at = now() WHERE id = $1 AND owner_user_id = $2 AND archived_at IS NULL AND NOT is_example`, [id, session.id]);
   if (!r.rowCount) throw new CustomColumnError('Колонка не найдена или не ваша');
 }
 

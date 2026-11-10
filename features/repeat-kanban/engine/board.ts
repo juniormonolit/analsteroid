@@ -205,7 +205,7 @@ export interface TodaySection {
   key: TodayKey | `custom:${number}`; title: string; hint: string; total: number; cards: KanbanCard[];
   /** Своя колонка (10.11, миграция 262): деньги в заголовке, тревога, метрика гипотезы. */
   custom?: {
-    id: number; own: boolean; shared: boolean; ownerName: string | null; filters: CustomFilters; alert: CustomAlert | null;
+    id: number; own: boolean; shared: boolean; example: boolean; ownerName: string | null; filters: CustomFilters; alert: CustomAlert | null;
     ltv: number; dealSum: number; alerts: Record<string, string>; alertCount: number; metric: HypothesisMetric | null;
   };
 }
@@ -983,8 +983,8 @@ export async function buildRepeatBoard(opts: {
     void recordMembers(col.id, list.map(c => c.clientKey));
     const dealSum = list.reduce((s, c) => s + (c.deal && !LOST_STAGES.has(c.deal.stageId) && !WON_STAGES.has(c.deal.stageId) ? c.deal.amount ?? 0 : 0), 0);
     today.push({
-      key: `custom:${col.id}`, title: col.name, hint: col.own ? 'Своя колонка' : `Общая колонка · ${col.ownerName ?? 'РОП'}`, total: list.length, cards: list.slice(0, TODAY_LIMIT),
-      custom: { id: col.id, own: col.own, shared: col.shared, ownerName: col.ownerName, filters: col.filters, alert: col.alert,
+      key: `custom:${col.id}`, title: col.name, hint: col.example ? 'Колонка-пример: видят все, условия меняет РОП и выше' : col.own ? 'Своя колонка' : `Общая колонка · ${col.ownerName ?? 'РОП'}`, total: list.length, cards: list.slice(0, TODAY_LIMIT),
+      custom: { id: col.id, own: col.own, shared: col.shared, example: col.example, ownerName: col.ownerName, filters: col.filters, alert: col.alert,
         ltv: list.reduce((s, c) => s + c.sumDelivered, 0), dealSum, alerts, alertCount: Object.keys(alerts).length,
         metric: await hypothesisMetric(col, everyCard) },
     });

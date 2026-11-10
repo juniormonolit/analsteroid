@@ -4,7 +4,7 @@
 // «дошли до отгрузки за 30 дней: колонка против остальных». Условия — из тех же фильтров, что на доске, плюс LTV и
 // «где заказчик сейчас». Личная по умолчанию, «Показать всем РОПам» — общая. Не больше 5 своих.
 import { useEffect, useState } from 'react';
-import { MoreHorizontal, Plus, Users } from 'lucide-react';
+import { MoreHorizontal, Plus, SlidersHorizontal, Users } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Popover } from '@/components/ui/Popover';
 import { SearchSelect } from '@/components/ui/SearchSelect';
@@ -190,17 +190,23 @@ export function CustomHeader({ sec, onEdit, onChanged, hidden }: { sec: TodaySec
     }
     onChanged();
   };
-  const items = c.own
-    ? [{ k: 'edit', l: 'Изменить условия' }, { k: 'share', l: c.shared ? 'Сделать личной' : 'Показать всем РОПам' }, { k: 'delete', l: 'Удалить', danger: true }]
-    : [{ k: 'copy', l: 'Скопировать себе' }, { k: 'hide', l: 'Скрыть у себя' }];
+  // Пример: править может РОП и выше (свои колонки видит только РОП), удалить нельзя; можно скопировать или скрыть.
+  const items = c.example
+    ? [{ k: 'edit', l: 'Изменить условия примера' }, { k: 'copy', l: 'Скопировать себе' }, { k: 'hide', l: 'Скрыть у себя' }]
+    : c.own
+      ? [{ k: 'edit', l: 'Изменить условия' }, { k: 'share', l: c.shared ? 'Сделать личной' : 'Показать всем РОПам' }, { k: 'delete', l: 'Удалить', danger: true }]
+      : [{ k: 'copy', l: 'Скопировать себе' }, { k: 'hide', l: 'Скрыть у себя' }];
   const metricText = !m ? null : !m.ready ? `копим данные · ${m.days} дн., ${m.inN} в колонке` : `отгрузка за 30 дн.: ${pct(m.inShipped, m.inN)} против ${pct(m.restShipped, m.restN)}`;
   const metricTitle = m ? `Дошли до отгрузки за 30 дней: в колонке ${m.inShipped} из ${m.inN}, остальные заказчики доски ${m.restShipped} из ${m.restN}. Сравнение, не доказательство. Колонке ${m.days} дн.${!m.ready ? ' Считаем, когда ей 7+ дней и в ней 20+ заказчиков.' : ''}` : undefined;
   return (
-    <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: '3px solid var(--color-accent)' }} title={sec.hint}>
+    // Пунктир вместо сплошной полосы (Fable): рифмуется с плиткой «+ Своя колонка», не путается со стандартными.
+    <div className="rounded-lg border border-dashed border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-bg)] px-2 py-1.5" title={sec.hint}>
       <div className="flex items-center justify-between gap-2">
         <h2 className="flex min-w-0 items-center gap-1 text-sm font-semibold text-[var(--color-text)]">
+          <SlidersHorizontal size={13} className="shrink-0 text-[var(--color-accent)]" />
           <span className="truncate">{sec.title}</span>
-          {c.shared && <span title={c.own ? 'Общая: видят все РОПы' : `Общая колонка · ${c.ownerName ?? 'РОП'}`}><Users size={13} className="shrink-0 text-[var(--color-text-muted)]" /></span>}
+          {c.example && <span title="Колонка-пример: видят все, условия меняет РОП и выше" className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">пример</span>}
+          {c.shared && !c.example && <span title={c.own ? 'Общая: видят все РОПы' : `Общая колонка · ${c.ownerName ?? 'РОП'}`}><Users size={13} className="shrink-0 text-[var(--color-text-muted)]" /></span>}
         </h2>
         <span className="flex shrink-0 items-center gap-1">
           <span className="text-sm tabular-nums text-[var(--color-text-muted)]">{rub.format(sec.total)}</span>
@@ -214,7 +220,7 @@ export function CustomHeader({ sec, onEdit, onChanged, hidden }: { sec: TodaySec
           </Popover>
         </span>
       </div>
-      <div className="text-xs text-[var(--color-text-muted)]">LTV {money(c.ltv)}{c.dealSum ? ` · в сделках ${money(c.dealSum)}` : ''}{c.own ? '' : ` · ${c.ownerName ?? 'РОП'}`}</div>
+      <div className="text-xs text-[var(--color-text-muted)]">LTV {money(c.ltv)}{c.dealSum ? ` · в сделках ${money(c.dealSum)}` : ''}{c.own || c.example ? '' : ` · ${c.ownerName ?? 'РОП'}`}</div>
       <div className="mt-1 flex flex-wrap gap-1">
         {c.alertCount > 0 && <span className="rounded bg-[#f4cccc] px-1.5 text-[11px] font-bold text-[#990000]">тревога: {c.alertCount}</span>}
         {metricText && <span className="rounded bg-[var(--color-bg)] px-1.5 text-[11px] text-[var(--color-text-secondary)]" title={metricTitle}>{metricText}</span>}

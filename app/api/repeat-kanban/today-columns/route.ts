@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { hasPerm } from '@/lib/auth/perms';
 import { createColumn, CustomColumnError, deleteColumn, updateColumn } from '@/features/repeat-kanban/engine/customColumns';
+import { canSeeKanbanAnalytics } from '@/features/repeat-kanban/engine/analyticsAccess';
 
 // «Свои колонки» во вкладке «Сегодня» (10.11, миграция 262). Список и колонки приходят с доской (GET /api/repeat-kanban),
 // здесь — изменения: POST { name, filters, alert?, shared? } — создать (не больше 5 своих); PATCH { id, … } — изменить
@@ -34,7 +35,8 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json().catch(() => null) as Record<string, unknown> | null;
   const id = Number(body?.id);
   if (!body || !Number.isInteger(id) || id <= 0) return NextResponse.json({ error: 'Не указана колонка' }, { status: 400 });
-  try { await updateColumn(g.session, id, body); return NextResponse.json({ ok: true }); } catch (e) { return fail(e, 'PATCH'); }
+  // Колонку-пример правит РОП и выше (то же условие, что у аналитики: роль РОП или зона подчинённых, директор, админ).
+  try { await updateColumn(g.session, id, body, await canSeeKanbanAnalytics(g.session)); return NextResponse.json({ ok: true }); } catch (e) { return fail(e, 'PATCH'); }
 }
 
 export async function DELETE(req: NextRequest) {
