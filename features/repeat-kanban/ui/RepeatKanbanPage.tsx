@@ -37,6 +37,7 @@ import { TaskCheckModal, useTaskChecks, VERDICT, type TaskCheckState } from './T
 import { ParticipantsPicker, initialParticipants, participantsPayload } from './ParticipantsPicker';
 import { AttachmentsRow, useAttachments } from './Attachments';
 import { PostponePicker } from './PostponePicker';
+import { AddColumnTile, CustomColumnModal, CustomHeader, type ColumnDraft } from './CustomColumns';
 import { NO_TAG, type TagDef } from '../engine/tagColors';
 
 const PAGE = 40;
@@ -116,9 +117,17 @@ export function RepeatKanbanPage() {
   // Отдел сохраняется на аккаунте (владелец 29.10, users.ui_prefs): нет ?dept= в ссылке — подставляем сохранённый,
   // доску грузим после этого (иначе сначала прилетит вся зона, потом отдел).
   const [prefsReady, setPrefsReady] = useState(false);
+  // Свои колонки «Сегодня» (10.11): чужие общие, скрытые у себя; окно колонки (null — закрыто, {} — новая).
+  const [hiddenCols, setHiddenCols] = useState<number[]>([]);
+  const [colEdit, setColEdit] = useState<ColumnDraft | 'new' | null>(null);
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).has('dept')) { setPrefsReady(true); return; }
+    if (new URLSearchParams(window.location.search).has('dept')) {
+      setPrefsReady(true);
+      fetch('/api/me/ui-prefs').then(r => (r.ok ? r.json() : null)).then(j => { if (Array.isArray(j?.prefs?.hiddenTodayColumns)) setHiddenCols(j.prefs.hiddenTodayColumns as number[]); }).catch(() => {});
+      return;
+    }
     fetch('/api/me/ui-prefs').then(r => (r.ok ? r.json() : null)).then(j => {
+      if (Array.isArray(j?.prefs?.hiddenTodayColumns)) setHiddenCols(j.prefs.hiddenTodayColumns as number[]);
       const saved = j?.prefs?.repeatKanbanDepts;
       if (Array.isArray(saved) && saved.length) setDepts(saved as string[]);
     }).catch(() => {}).finally(() => setPrefsReady(true));
@@ -282,7 +291,8 @@ export function RepeatKanbanPage() {
     return [...new Set(cards.filter(c => c.task && (c.task.state === 'control' || c.task.state === 'done')).map(c => c.task!.id))].sort((a, b) => a - b);
   }, [data]);
   const { data: taskChecks } = useTaskChecks(checkTaskIds, !!data?.aiCounts);
-  const todayTotal = (data?.today ?? []).reduce((s, t) => s + t.total, 0);
+  // Свои колонки в счётчик вкладки не входят (Fable: иначе «Сегодня» раздувается гипотезами РОПа).
+  const todayTotal = (data?.today ?? []).filter(t => !t.custom).reduce((s, t) => s + t.total, 0);
   const canManage = !!data?.canManage;
   const openCard = cardKey ? [...(data?.columns ?? []).flatMap(x => x.cards), ...(data?.today ?? []).flatMap(t => t.cards)]
     .find(x => x.clientKey === cardKey || x.members.some(m => m.key === cardKey)) ?? null : null;
@@ -572,7 +582,9 @@ export function RepeatKanbanPage() {
       {view === 'queue' && data?.canManage ? (
         <QueueView onChanged={() => refetch()} />
       ) : view === 'today' && data?.canManage ? (
-        <TodayView sections={data?.today ?? []} h={handlers} />
+        <TodayView sections={data?.today ?? []} h={handlers}
+          custom={canManage ? { hidden: hiddenCols, onAdd: () => setColEdit('new'), onEdit: sec => setColEdit({ id: sec.custom!.id, name: sec.title, shared: sec.custom!.shared, filters: sec.custom!.filters, alert: sec.custom!.alert }),
+            onChanged: () => { fetch('/api/me/ui-prefs').then(r => r.json()).then(j => { if (Array.isArray(j?.prefs?.hiddenTodayColumns)) setHiddenCols(j.prefs.hiddenTodayColumns); }).catch(() => {}); refresh(); } } : null} />
       ) : (
       <div className="relative min-h-[75dvh] min-w-0 flex-1 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
           <div ref={boardRef} onScroll={measure} className="scroll-x h-full">
@@ -624,6 +636,9 @@ export function RepeatKanbanPage() {
           </div>
         </div>
       )}
+      {colEdit && <CustomColumnModal initial={colEdit === 'new' ? null : colEdit} tagDefs={data?.tagDefs ?? []}
+        scopeQs={new URLSearchParams({ ...(mgrs.length ? { managers: mgrs.join(',') } : {}), ...(depts.length ? { dept: depts.join(',') } : {}) }).toString()}
+        onClose={() => setColEdit(null)} onSaved={refresh} />}
       {bulkBrakOpen && <BulkBrakModal cards={[...selected.values()]} onClose={() => setBulkBrakOpen(false)}
         onDone={() => { setSelected(new Map()); setSelectMode(false); refresh(); }} />}
       {bulkOpen && <BulkTaskModal cards={[...selected.values()]} loadOf={loadOf} limit={taskLimit} reassign={reassignOpts}
@@ -785,20 +800,23 @@ function CardFor({ c, h }: { c: KanbanCard; h: CardHandlers }) {
 }
 
 /** «Сегодня» (аудит 21.10): одна лента того, что РОПу решить сегодня, вместо 20 тыс. карточек. */
-function TodayView({ sections, h }: { sections: TodaySection[]; h: CardHandlers }) {
+function TodayView({ sections, h, custom }: { sections: TodaySection[]; h: CardHandlers;
+  custom: { hidden: number[]; onAdd: () => void; onEdit: (s: TodaySection) => void; onChanged: () => void } | null }) {
   // Горизонтально, как доска (владелец 21.10: «"Сегодня" стал вертикальным — сделай как доску»):
-  // секция = колонка на всю высоту, карточки листаются внутри; пустые секции не показываем.
-  const filled = sections.filter(s => s.total > 0);
+  // секция = колонка на всю высоту, карточки листаются внутри; пустые секции не показываем — кроме своих колонок.
+  const filled = sections.filter(s => s.total > 0 || s.custom);
+  const ownCount = sections.filter(s => s.custom?.own).length;
   const TONE: Record<string, string> = { control: '#e69138', overdue: 'var(--color-negative)', hide_request: '#bf9000', wrong_funnel: 'var(--color-negative)', review: '#e69138', closing: 'var(--color-accent)' };
   return (
     <div className="relative min-h-[75dvh] min-w-0 flex-1 px-4 pb-4 pt-3 sm:min-h-0 sm:px-6">
-      {filled.length === 0 ? (
+      {filled.length === 0 && !custom ? (
         <div className="rounded-lg bg-[var(--color-bg-surface)] p-4 text-sm text-[var(--color-text-muted)]">На сегодня решать нечего — всё разобрано.</div>
       ) : (
         <div className="scroll-x h-full">
           <div className="flex h-full items-stretch gap-3">
             {filled.map(sec => (
               <section key={sec.key} className="flex h-full w-80 max-w-[85vw] shrink-0 flex-col gap-2 rounded-xl bg-[var(--color-bg-surface)] p-2">
+                {sec.custom && custom ? <CustomHeader sec={sec} hidden={custom.hidden} onEdit={() => custom.onEdit(sec)} onChanged={custom.onChanged} /> : (
                 <div className="rounded-lg px-2 py-1.5" style={{ borderLeft: `3px solid ${TONE[sec.key] ?? 'var(--color-accent)'}` }} title={sec.hint}>
                   <div className="flex items-baseline justify-between gap-2">
                     <h2 className="text-sm font-semibold text-[var(--color-text)]">{sec.title}</h2>
@@ -806,14 +824,26 @@ function TodayView({ sections, h }: { sections: TodaySection[]; h: CardHandlers 
                   </div>
                   <div className="text-xs text-[var(--color-text-muted)]">{sec.hint}</div>
                 </div>
+                )}
                 <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-                  {sec.cards.map(c => <CardFor key={`${sec.key}:${c.clientKey}`} c={c} h={h} />)}
+                  {sec.custom && sec.total === 0 && <div className="px-2 py-3 text-xs text-[var(--color-text-muted)]">Сейчас никто не подходит.</div>}
+                  {sec.cards.map(c => {
+                    const why = sec.custom?.alerts[c.clientKey];
+                    // Тревога своей колонки (Fable): флаг — у секции, не у карточки (карточка бывает в нескольких секциях).
+                    return why ? (
+                      <div key={`${sec.key}:${c.clientKey}`} className="flex flex-col gap-1 rounded-lg ring-2 ring-[#cc0000]">
+                        <span className="rounded-t-lg bg-[#f4cccc] px-2 py-0.5 text-[11px] font-bold text-[#990000]">{why}</span>
+                        <CardFor c={c} h={h} />
+                      </div>
+                    ) : <CardFor key={`${sec.key}:${c.clientKey}`} c={c} h={h} />;
+                  })}
                   {sec.total > sec.cards.length && (
                     <div className="px-2 py-2 text-xs text-[var(--color-text-muted)]">Показаны первые {sec.cards.length} из {rub.format(sec.total)} — остальные на доске через «Фильтры»</div>
                   )}
                 </div>
               </section>
             ))}
+            {custom && <AddColumnTile disabled={ownCount >= 5} onClick={custom.onAdd} />}
           </div>
         </div>
       )}

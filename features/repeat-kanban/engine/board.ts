@@ -32,6 +32,7 @@ import { fetchDismissedByRef, potentialGroups, type PotentialGroup } from './pot
 import { fetchCrossSellMatrix, fetchCrossSellPriorities } from '@/features/customers/engine/crossSell';
 import { fetchRequestedGroups } from '@/features/ai-analysis/engine/links';
 import { NO_TAG, type TagDef } from './tagColors';
+import { alertOf, hypothesisMetric, matchCustom, recordMembers, type CustomAlert, type CustomColumn, type CustomFilters, type HypothesisMetric } from './customColumns';
 
 const DAY_MS = 86_400_000;
 /** Карточек в колонке за один ответ (остальные — счётчиком и «показать ещё»). */
@@ -200,10 +201,19 @@ export interface BoardKpi {
 
 /** Режим «Сегодня» (аудит 21.10): одна лента того, что РОПу решить сегодня. */
 export type TodayKey = 'control' | 'overdue' | 'hide_request' | 'wrong_funnel' | 'review' | 'closing' | 'ai_request' | 'fresh_sales';
-export interface TodaySection { key: TodayKey; title: string; hint: string; total: number; cards: KanbanCard[] }
+export interface TodaySection {
+  key: TodayKey | `custom:${number}`; title: string; hint: string; total: number; cards: KanbanCard[];
+  /** Своя колонка (10.11, миграция 262): деньги в заголовке, тревога, метрика гипотезы. */
+  custom?: {
+    id: number; own: boolean; shared: boolean; ownerName: string | null; filters: CustomFilters; alert: CustomAlert | null;
+    ltv: number; dealSum: number; alerts: Record<string, string>; alertCount: number; metric: HypothesisMetric | null;
+  };
+}
 
 export interface RepeatBoard {
   generatedAt: string;
+  /** Предпросмотр своей колонки (opts.previewColumn): сколько заказчиков подходит и их LTV. */
+  preview?: { total: number; ltv: number };
   /** Склейка заказчиков включена (флаг customer_merge) — показывать «Объединить с…» РОПу. */
   mergeEnabled?: boolean;
   managers: { id: string; name: string }[];
@@ -467,6 +477,10 @@ export async function buildRepeatBoard(opts: {
   /** Сумма отгрузок за период (владелец 29.10): период [from, to) по МСК; min/max ₽ — фильтр (null — без границы).
    *  Задан — карточка получает periodShipSum; сортировка 'psum' — по ней. */
   shipSum?: { from: string; to: string; min: number | null; max: number | null } | null;
+  /** Свои колонки «Сегодня» смотрящего (свои + общие). */
+  customColumns?: CustomColumn[];
+  /** Предпросмотр формы своей колонки: сколько подходит сейчас (доска не собирается целиком в ответ). */
+  previewColumn?: { filters: CustomFilters } | null;
   /** Поиск заказчика (владелец 21.10): имя/название (все слова), или число — id контакта/
    *  компании, номер сделки (текущей, отказной, последней отгрузки) или задачи. По всем колонкам. */
   search?: string | null;
@@ -934,6 +948,7 @@ export async function buildRepeatBoard(opts: {
 
   // «Сегодня» — из колонок до фильтра по задачам (как показатели): что РОПу решить сегодня.
   const TODAY_LIMIT = 60;
+  let previewOut: { total: number; ltv: number } | undefined;
   const SOLD_STAGE_IDS = new Set(COLUMNS.find(c => c.key === 'st_sold')?.stages ?? []);
   const everyCard = [...kpiBuckets.values()].flat();
   const changed = (c: KanbanCard) => c.task?.changedAt ?? c.task?.createdAt ?? '';
@@ -955,6 +970,25 @@ export async function buildRepeatBoard(opts: {
     const list = everyCard.filter(d.pick).sort(d.order);
     return { key: d.key, title: d.title, hint: d.hint, total: list.length, cards: list.slice(0, TODAY_LIMIT) };
   });
+  // Свои колонки (10.11): условия ∩ фильтры доски; тревожные сверху, дальше по LTV. Членство — для метрики гипотезы.
+  if (opts.previewColumn) {
+    const list = everyCard.filter(c => matchCustom(c, opts.previewColumn!.filters, taskBucketOf(c, now)));
+    previewOut = { total: list.length, ltv: list.reduce((s, c) => s + c.sumDelivered, 0) };
+  }
+  for (const col of opts.customColumns ?? []) {
+    const list = everyCard.filter(c => matchCustom(c, col.filters, taskBucketOf(c, now)));
+    const alerts: Record<string, string> = {};
+    for (const c of list) { const a = alertOf(c, col.alert, taskBucketOf(c, now), now); if (a) alerts[c.clientKey] = a; }
+    list.sort((a, b) => Number(!!alerts[b.clientKey]) - Number(!!alerts[a.clientKey]) || b.sumDelivered - a.sumDelivered);
+    void recordMembers(col.id, list.map(c => c.clientKey));
+    const dealSum = list.reduce((s, c) => s + (c.deal && !LOST_STAGES.has(c.deal.stageId) && !WON_STAGES.has(c.deal.stageId) ? c.deal.amount ?? 0 : 0), 0);
+    today.push({
+      key: `custom:${col.id}`, title: col.name, hint: col.own ? 'Своя колонка' : `Общая колонка · ${col.ownerName ?? 'РОП'}`, total: list.length, cards: list.slice(0, TODAY_LIMIT),
+      custom: { id: col.id, own: col.own, shared: col.shared, ownerName: col.ownerName, filters: col.filters, alert: col.alert,
+        ltv: list.reduce((s, c) => s + c.sumDelivered, 0), dealSum, alerts, alertCount: Object.keys(alerts).length,
+        metric: await hypothesisMetric(col, everyCard) },
+    });
+  }
 
   // Имена: кэш для всех видимых, ленивый добор из Битрикса — только для видимых.
   if (!opts.skipNames) {
@@ -994,5 +1028,5 @@ export async function buildRepeatBoard(opts: {
     ? `По запросу «${opts.search}» никого не нашли. Ищется по имени или названию, тегам и товарным группам отгрузок (все слова) и по номерам: ID заказчика (контакт/компания), сделка, задача; имена из Битрикса ещё докачиваются — попробуйте через пару минут.`
     : null;
   return { ...base, columns, typeCounts, poolGroupCounts, everGroupCounts: shipped ? everGroupCounts : undefined, tagDefs: tagData?.defs, tagCounts: tagData ? tagCounts : undefined, aiCounts: opts.withAi ? aiCounts : undefined, offerCounts: opts.skipNames ? undefined : offerCounts, taskCounts, kpi, notice, dataAt,
-    taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, shipCountCounts, today };
+    taskLimit: settings.managerTaskLimit, reassignEnabled: settings.reassignEnabled, managerLoad, outcomeCounts, shipCountCounts, today, preview: previewOut };
 }

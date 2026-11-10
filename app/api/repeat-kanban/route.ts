@@ -35,6 +35,15 @@ import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 // как у «Канбана РОПа»: РОП — свои отделы с поддеревом, менеджер — только себя.
 // Действия РОПа (задача, сделка, разбор) — только над менеджерами своей зоны и только
 // по заказчикам этого менеджера. Задачи — в Битриксе (проект 118), закрывает их постановщик.
+import { cleanFilters, CustomColumnError, fetchVisibleColumns, type CustomFilters } from '@/features/repeat-kanban/engine/customColumns';
+import { systemDb } from '@/lib/db/clients';
+
+/** «Скрыть у себя» чужие общие колонки — users.ui_prefs.hiddenTodayColumns (миграция 258). */
+async function hiddenColumnsOf(userId: string): Promise<number[]> {
+  const r = await systemDb().query<{ h: unknown }>(`SELECT ui_prefs->'hiddenTodayColumns' AS h FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as { h: unknown }[] }));
+  const h = r.rows[0]?.h;
+  return Array.isArray(h) ? h.filter((x): x is number => Number.isInteger(x)) : [];
+}
 export const dynamic = 'force-dynamic';
 
 const COLUMN_KEYS = new Set<string>(COLUMNS.map(c => c.key));
@@ -102,6 +111,11 @@ export async function GET(req: NextRequest) {
       const load = await fetchManagerLoad(managers.map(m => m.id));
       return NextResponse.json({ managers: managers.map(m => ({ ...m, load: load[m.id] ?? 0 })) }, { headers: { 'Cache-Control': 'no-store' } });
     }
+    let preview: { filters: CustomFilters } | null = null;
+    if (sp.get('colPreview')) {
+      try { preview = { filters: cleanFilters(JSON.parse(sp.get('colPreview')!)) }; }
+      catch (e) { return NextResponse.json({ preview: { total: 0, ltv: 0 }, error: e instanceof CustomColumnError ? e.message : 'Некорректные условия' }); }
+    }
     const inList = new Set(managers.map(m => m.id));
     const selected = rawMgrs.filter(id => inList.has(id));
     if (inDepts && managers.length === 0) {
@@ -135,7 +149,7 @@ export async function GET(req: NextRequest) {
       viewerUserId: session.id,
       // Значок разбора звонков — тем, кто может разбирать (право ИИ-анализа; владелец: «видят только РОПы»).
       withAi: hasPerm(session, 'action.ai_call_analysis'),
-      aiFilter: (['yes', 'new', 'no', 'candidate'] as const).find(x => x === sp.get('ai')) ?? null,
+      aiFilter: (['yes', 'new', 'no', 'candidate', 'requested'] as const).find(x => x === sp.get('ai')) ?? null,
       // ?shf=&sht= — дата последней отгрузки (YYYY-MM-DD, МСК, включительно).
       shipFrom: /^\d{4}-\d{2}-\d{2}$/.test(sp.get('shf') ?? '') ? sp.get('shf') : null,
       shipTo: /^\d{4}-\d{2}-\d{2}$/.test(sp.get('sht') ?? '') ? sp.get('sht') : null,
@@ -143,7 +157,11 @@ export async function GET(req: NextRequest) {
       offerGroups: (sp.get('offer') ?? '').split('|').map(x => x.trim()).filter(x => x.length > 0 && x.length < 120).slice(0, 30),
       tags: (sp.get('tags') ?? '').split(',').filter(x => /^\d{1,9}$/.test(x) || x === NO_TAG).slice(0, 50),
       sort: (SORTS as readonly string[]).includes(sp.get('sort') ?? '') ? sp.get('sort') as BoardSort : 'default',
+      // Свои колонки «Сегодня» (10.11) — только РОПу; ?colPreview={фильтры} — предпросмотр формы (ответ — только preview).
+      customColumns: canManage && !preview ? await fetchVisibleColumns(session.id, await hiddenColumnsOf(session.id)) : [],
+      previewColumn: preview,
     });
+    if (preview) return NextResponse.json({ preview: board.preview ?? { total: 0, ltv: 0 } }, { headers: { 'Cache-Control': 'no-store' } });
     return NextResponse.json({ ...board, mergeEnabled: await isFeatureEnabled('customer_merge'), viewerBitrixId: session.bitrixUserId, canSeeAnalytics: canSeeRepeatKanbanAnalytics(session) || session.roleName === 'РОП' || canManage, canManageSettings: canManageRepeatKanbanSettings(session) }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     console.error('[repeat-kanban]', e instanceof Error ? e.message : e);

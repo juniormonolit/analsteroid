@@ -8,6 +8,8 @@ import { systemDb } from '@/lib/db/clients';
 const KEYS: Record<string, (v: unknown) => boolean> = {
   // Отделы канбана повторных: id подразделений (как в ?dept=), до 50.
   repeatKanbanDepts: v => Array.isArray(v) && v.length <= 50 && v.every(x => typeof x === 'string' && x.length > 0 && x.length < 80),
+  // Чужие общие «свои колонки» «Сегодня», скрытые у себя (миграция 262): id колонок.
+  hiddenTodayColumns: v => Array.isArray(v) && v.length <= 100 && v.every(x => Number.isInteger(x) && (x as number) > 0),
 };
 
 export async function GET() {
