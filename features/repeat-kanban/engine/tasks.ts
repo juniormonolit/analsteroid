@@ -80,6 +80,12 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
   if (!dealIds.length) return new Map();
   try {
     const links = await linkedTasks(dealIds);
+    // Задачи, поставленные в Битриксе руками после 08.10 (taskReview.ts: syncChangedProjectTasks) — как свои.
+    const { knownBxTasks } = await import('./taskReview');
+    const bxExtra = new Map((await knownBxTasks(dealIds).catch(() => [])).map(t => [t.id, t]));
+    for (const t of bxExtra.values()) {
+      if (!links.has(t.id)) links.set(t.id, { dealId: t.dealId, createdAt: t.createdAt, creatorId: t.createdBy, creatorName: null, responsibleId: t.responsibleId, deadlineAt: t.deadline });
+    }
     const r = await analyticsDb().query(
       `SELECT t.task_id, t.deal_id, t.title, t.status, t.status_view, t.created_by, t.responsible_id,
               t.responsible_name, t.created_at, t.deadline_at, t.changed_at, t.closed_at, org.manager_name AS created_by_name
@@ -117,15 +123,15 @@ export async function fetchTasksForDeals(dealIds: number[]): Promise<Map<number,
     const missing = [...links].filter(([id]) => !inCopy.has(id));
     if (missing.length) {
       const st = await knownTaskStatuses(missing.map(([id]) => id)).catch(() => new Map());
-      const people = [...new Set(missing.map(([, l]) => l.responsibleId).filter((v): v is string => !!v))];
+      const people = [...new Set(missing.flatMap(([, l]) => [l.responsibleId, l.creatorName ? null : l.creatorId]).filter((v): v is string => !!v))];
       const names = new Map((await analyticsDb().query<{ id: string; n: string }>(
         `SELECT DISTINCT ON (manager_bitrix_user_id) manager_bitrix_user_id AS id, manager_name AS n FROM sa.org_resolved_hierarchy WHERE manager_bitrix_user_id = ANY($1::text[])`, [people],
       ).catch(() => ({ rows: [] as { id: string; n: string }[] }))).rows.map(x => [x.id, x.n]));
       for (const [id, l] of missing) {
         const k = st.get(id);
         const task: RepeatTask = {
-          id, dealId: l.dealId, title: '', state: stateOf(k ? k.status : null, null),
-          createdById: l.creatorId, createdByName: l.creatorName, responsibleId: l.responsibleId, responsibleName: l.responsibleId ? names.get(l.responsibleId) ?? null : null,
+          id, dealId: l.dealId, title: bxExtra.get(id)?.title ?? '', state: stateOf(k ? k.status : bxExtra.get(id)?.status ?? null, null),
+          createdById: l.creatorId, createdByName: l.creatorName ?? (l.creatorId ? names.get(l.creatorId) ?? null : null), responsibleId: l.responsibleId, responsibleName: l.responsibleId ? names.get(l.responsibleId) ?? null : null,
           createdAt: l.createdAt, deadlineAt: k && k.deadline !== undefined ? k.deadline : l.deadlineAt, changedAt: k?.closedAt ?? k?.at ?? null, closedAt: k?.status === 5 ? k.closedAt ?? null : null,
         };
         const cur = out.get(l.dealId);

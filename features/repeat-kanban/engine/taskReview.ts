@@ -240,3 +240,69 @@ export async function closeTasksOnBrak(input: { clientKey: string; authorId: str
   }
   return out;
 }
+
+// ── Задачи проекта, которых доска не знает (10.11, Ирина Борисова: задача 173624 сдана, а в «Ждут приёмки»
+// её нет). Её поставили в Битриксе руками 30.10 — после того как копия задач застыла (08.10), и не из
+// Монолитики, так что ни копии, ни нашего журнала. Поэтому сверка ещё и забирает из Битрикса задачи
+// группы 118, изменённые с прошлого прогона (первый раз — с 08.10, дальше — только свежие правки:
+// обычно одна страница). Хранится в Redis-хеше repeat:bx-tasks; tasks.ts достраивает из него карточки.
+export interface BxTaskInfo {
+  id: number; dealId: number; status: number; title: string; createdBy: string | null; responsibleId: string | null;
+  createdAt: string; deadline: string | null; closedAt: string | null; changedAt: string | null;
+}
+const BX_TASKS_KEY = 'repeat:bx-tasks';
+const BX_SINCE_KEY = 'repeat:bx-tasks:since';
+const BX_SINCE_START = '2026-10-08T00:00:00+03:00'; // копия задач стоит с 08.10
+const PAGE = 50;
+
+export async function knownBxTasks(dealIds: number[]): Promise<BxTaskInfo[]> {
+  if (!dealIds.length) return [];
+  const { redisReady } = await import('@/lib/cache/redis');
+  const r = await redisReady().catch(() => null);
+  if (!r) return [];
+  const all = await r.hgetall(BX_TASKS_KEY).catch(() => ({} as Record<string, string>));
+  const want = new Set(dealIds);
+  const out: BxTaskInfo[] = [];
+  for (const v of Object.values(all ?? {})) {
+    try { const t = JSON.parse(v) as BxTaskInfo; if (want.has(t.dealId)) out.push(t); } catch { /* битая запись */ }
+  }
+  return out;
+}
+
+export async function syncChangedProjectTasks(): Promise<{ pages: number; got: number }> {
+  const { redisReady } = await import('@/lib/cache/redis');
+  const r = await redisReady().catch(() => null);
+  if (!r) return { pages: 0, got: 0 };
+  const startedAt = new Date();
+  const sinceRaw = (await r.get(BX_SINCE_KEY).catch(() => null)) ?? BX_SINCE_START;
+  const since = new Date(new Date(sinceRaw).getTime() - 5 * 60_000).toISOString(); // нахлёст 5 мин
+  let pages = 0, got = 0;
+  for (let start = 0; ; start += PAGE) {
+    if (pages) await new Promise(res => setTimeout(res, REFRESH_PAUSE_MS));
+    const page = await read<{ tasks?: { id: string; status: string; title?: string; createdBy?: string; responsibleId?: string; createdDate?: string; deadline?: string | null; closedDate?: string | null; changedDate?: string | null; ufCrmTask?: string[] | null }[] }>(
+      'tasks.task.list', {
+        filter: { GROUP_ID: REPEAT_PROJECT_GROUP_ID, '>CHANGED_DATE': since },
+        select: ['ID', 'STATUS', 'TITLE', 'CREATED_BY', 'RESPONSIBLE_ID', 'CREATED_DATE', 'DEADLINE', 'CLOSED_DATE', 'CHANGED_DATE', 'UF_CRM_TASK'],
+        order: { ID: 'asc' }, start,
+      });
+    pages++;
+    const tasks = page?.tasks ?? [];
+    for (const t of tasks) {
+      got++;
+      await rememberTaskStatus(Number(t.id), Number(t.status), t.closedDate ?? null, t.deadline ?? null);
+      const dealId = Number((t.ufCrmTask ?? []).find(x => x.startsWith('D_'))?.slice(2));
+      if (!dealId) continue;
+      const info: BxTaskInfo = {
+        id: Number(t.id), dealId, status: Number(t.status), title: t.title ?? '', createdBy: t.createdBy ?? null, responsibleId: t.responsibleId ?? null,
+        createdAt: t.createdDate ? new Date(t.createdDate).toISOString() : new Date().toISOString(),
+        deadline: t.deadline ? new Date(t.deadline).toISOString() : null, closedAt: t.closedDate ? new Date(t.closedDate).toISOString() : null,
+        changedAt: t.changedDate ? new Date(t.changedDate).toISOString() : null,
+      };
+      await r.hset(BX_TASKS_KEY, String(info.id), JSON.stringify(info)).catch(() => {});
+    }
+    if (tasks.length < PAGE || pages >= 60) break; // 60 страниц = 3000 задач — предохранитель
+  }
+  await r.expire(BX_TASKS_KEY, 60 * 86_400).catch(() => {});
+  await r.set(BX_SINCE_KEY, startedAt.toISOString()).catch(() => {});
+  return { pages, got };
+}

@@ -804,6 +804,10 @@ function scheduleRepeatTaskStatus() {
       const { refreshOpenTaskStatuses } = await import('./features/repeat-kanban/engine/taskReview');
       const r = await refreshOpenTaskStatuses();
       console.log(`[repeatTaskStatus] спросили ${r.asked}, получили ${r.got}, закрыто ${r.closed}`);
+      // Задачи группы 118, изменённые с прошлого прогона, — в т.ч. поставленные в Битриксе руками (10.11).
+      const { syncChangedProjectTasks } = await import('./features/repeat-kanban/engine/taskReview');
+      const s = await syncChangedProjectTasks();
+      console.log(`[repeatTaskStatus] изменённых задач проекта: ${s.got} (страниц ${s.pages})`);
     } catch (err) {
       console.error('[repeatTaskStatus] прогон не удался:', err instanceof Error ? err.message : err);
     } finally { running = false; }
