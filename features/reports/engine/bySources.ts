@@ -4,11 +4,12 @@ import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import {
-  loadSourceMap, loadDimensionResolver, resolveSourceIds, sourceIdsWhere, sourceIdMatcher,
-  loadManagerBranchMap, loadManagerInfoMap, resolveBranchManagerIds, managerIdsWhere,
-  resolveDeptManagerIds, resolveTeamManagerIds, SOURCE_TEAM_SEP,
+  loadSourceMap, loadDimensionResolver, resolveSourceIds, sourceIdMatcher,
+  loadManagerBranchMap, loadManagerInfoMap, managerIdsWhere,
+  resolveDeptManagerIds, resolveTeamManagerIds, SOURCE_TEAM_SEP, dimensionWhere,
   NO_SOURCE_LABEL, UNDEFINED_LABEL, type SourceDimension,
 } from '@/lib/marketing/sources';
+import { isNonSourceDimension, NO_PRODUCT_GROUP_LABEL, NO_TEAM_LABEL } from '@/lib/marketing/dimensions';
 import type { DateRange } from '@/lib/period';
 import type { DealScope, ClientType, ReportRow, CreatedTimeFilter, FirstTouchFilter } from '@/lib/metrics/types';
 import { createdTimeWhere, firstTouchWhere } from '@/lib/metrics/offHoursFilters';
@@ -43,32 +44,23 @@ const ROW_TTL = 10 * 60 * 1000;
 const _snapshotCache = new Map<string, { snap: Awaited<ReturnType<typeof fetchStageSnapshot>>; at: number }>();
 const SNAPSHOT_TTL = 2 * 60 * 1000;
 
-// 'source_manager' — разбивка по отделам (группировка «По отделам/филиалам» маркетинговых
-// отчётов): строка = пара «source_id | менеджер сделки», отдел берётся по менеджеру.
-type GroupBy = 'source' | 'manager' | 'source_manager';
+// Ключ строки SQL: источник / менеджер / товарная группа (головная, как «по наибольшей»), а при
+// группировке «По отделам/филиалам» (владелец 27.10) — ещё и «| менеджер сделки» (отдел — по нему).
+type GroupBy = 'source' | 'manager' | 'source_manager' | 'product' | 'product_manager';
 
 function dimForGroupBy(groupBy: GroupBy, whereExtra: string | undefined) {
-  if (groupBy === 'source_manager') {
-    return {
-      idExpr:          `COALESCE(d.source_id, '__null__') || '|' || COALESCE(d.current_manager_id::text, '__null__')`,
-      groupBy:         'GROUP BY d.source_id, d.current_manager_id, d.funnel_id',
-      notNullWhere:    whereExtra,
-      funnelBreakdown: true as const,
-    };
-  }
-  return groupBy === 'source'
-    ? {
-        idExpr:          `COALESCE(d.source_id, '__null__')`,
-        groupBy:         'GROUP BY d.source_id, d.funnel_id',
-        notNullWhere:    whereExtra,
-        funnelBreakdown: true as const,
-      }
-    : {
-        idExpr:          `COALESCE(d.current_manager_id::text, '__null__')`,
-        groupBy:         'GROUP BY d.current_manager_id, d.funnel_id',
-        notNullWhere:    whereExtra,
-        funnelBreakdown: true as const,
-      };
+  const base = groupBy.startsWith('source')
+    ? { expr: `COALESCE(d.source_id, '__null__')`, cols: 'd.source_id' }
+    : groupBy.startsWith('product')
+    ? { expr: `COALESCE(d.head_group_name, '${NO_PRODUCT_GROUP_LABEL}')`, cols: 'd.head_group_name' }
+    : { expr: `COALESCE(d.current_manager_id::text, '__null__')`, cols: 'd.current_manager_id' };
+  const withMgr = groupBy.endsWith('_manager');
+  return {
+    idExpr:          withMgr ? `${base.expr} || '|' || COALESCE(d.current_manager_id::text, '__null__')` : base.expr,
+    groupBy:         `GROUP BY ${base.cols}${withMgr ? ', d.current_manager_id' : ''}, d.funnel_id`,
+    notNullWhere:    whereExtra,
+    funnelBreakdown: true as const,
+  };
 }
 
 async function getRows(
@@ -142,6 +134,9 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   const dim        = opts.sourceDimension ?? 'brand';
   const filter     = opts.sourceFilter;
   const isBranchDim = dim === 'branch';
+  // «Филиал»/«Отдел» — по менеджеру сделки; «Товарная группа» — по головной группе сделки.
+  const isManagerDim = isBranchDim || dim === 'department';
+  const isProductDim = dim === 'product_group';
   const split      = !!opts.splitByTeam;
   const createdTimeFilter = opts.createdTimeFilter ?? 'all';
   const firstTouchFilter  = opts.firstTouchFilter  ?? 'all';
@@ -163,18 +158,12 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   // Фильтр противоположного типа → SQL WHERE (+ ключ кэша)
   const whereParts: string[] = [];
   let cacheSuffix = '';
-  if (filter) {
-    if (filter.dimension === 'branch') {
-      // дрилл из филиала: режем по менеджерам филиала
-      whereParts.push(managerIdsWhere(await resolveBranchManagerIds(filter.value)));
-      cacheSuffix = `|mgr:${filter.value}`;
-    } else if (isBranchDim) {
-      // дрилл в филиалы из source-сущности: режем по source_id
-      const ids = await resolveSourceIds(filter.dimension, filter.value);
-      whereParts.push(sourceIdsWhere(ids));
-      cacheSuffix = `|src:${filter.dimension}=${filter.value}`;
-    }
-    // source-измерение + source-фильтр → в памяти, SQL не трогаем
+  // Фильтр дрилла уходит в SQL, если хоть одна сторона — не источник (менеджер/товарная
+  // группа): строки тогда не по source_id. Источник × источник — в памяти, SQL не трогаем.
+  const sqlFilter = !!filter && (isNonSourceDimension(filter.dimension) || isManagerDim || isProductDim);
+  if (filter && sqlFilter) {
+    whereParts.push(await dimensionWhere(filter.dimension, filter.value));
+    cacheSuffix = `|f:${filter.dimension}=${filter.value}`;
   }
   // Отделы: фильтр отчёта и/или один отдел строки дрилла — по менеджеру сделки, в SQL.
   const deptIds = [...(opts.departmentIds ?? [])].sort();
@@ -198,7 +187,9 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
   const whereExtra = whereParts.length > 0 ? whereParts.join(' AND ') : undefined;
 
   // «Филиал» — менеджерское измерение: строки уже по менеджеру, отдел виден и так.
-  const groupBy: GroupBy = isBranchDim ? 'manager' : split ? 'source_manager' : 'source';
+  const groupBy: GroupBy = isManagerDim ? 'manager'
+    : isProductDim ? (split ? 'product_manager' : 'product')
+    : split ? 'source_manager' : 'source';
   const rows = await getRows(groupBy, fromIso, toExclIso, whereExtra, cacheSuffix);
   // Снимок «Стадии (сейчас)» (задача 2059) — БЕЗ периода, отдельный кэш.
   const snap = await getSnapshot(groupBy, whereExtra, cacheSuffix);
@@ -211,8 +202,8 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
     loadSourceMap(),
     isBranchDim ? loadManagerBranchMap() : Promise.resolve(null),
     // Встроенные измерения и группировки «Ещё → Источники» (`g:<id>`) — одним резолвером.
-    isBranchDim || dim === 'source' ? Promise.resolve(null) : loadDimensionResolver(dim as Exclude<SourceDimension, 'branch'>),
-    split ? loadManagerInfoMap() : Promise.resolve(null),
+    isManagerDim || isProductDim || dim === 'source' ? Promise.resolve(null) : loadDimensionResolver(dim as Exclude<SourceDimension, 'branch'>),
+    split || dim === 'department' ? loadManagerInfoMap() : Promise.resolve(null),
   ]);
 
   // Funnel-пилюли
@@ -235,14 +226,14 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
 
   // In-memory фильтр по source_id (source-измерение + source-фильтр)
   let allowed: ((rid: string) => boolean) | null = null;
-  if (filter && !isBranchDim && filter.dimension !== 'branch') {
+  if (filter && !sqlFilter) {
     allowed = sourceIdMatcher(await resolveSourceIds(filter.dimension, filter.value));
   }
 
   // raw dimension_id → { источник/менеджер, менеджер для отдела }
   function parseRid(rid: string): { src: string; mgr: string | null } {
-    if (isBranchDim) return { src: rid, mgr: rid };
-    if (groupBy !== 'source_manager') return { src: rid, mgr: null };
+    if (isManagerDim) return { src: rid, mgr: rid };
+    if (!groupBy.endsWith('_manager')) return { src: rid, mgr: null };
     const i = rid.lastIndexOf('|');
     return { src: rid.slice(0, i), mgr: rid.slice(i + 1) };
   }
@@ -251,8 +242,8 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
     if (!split) return null;
     const info = mgr && mgr !== '__null__' ? mgrInfo!.get(mgr) : undefined;
     return info?.departmentId
-      ? { id: info.departmentId, name: info.department ?? 'Без отдела', branch: info.branch }
-      : { id: '__no_team__', name: 'Без отдела', branch: info?.branch ?? null };
+      ? { id: info.departmentId, name: info.department ?? NO_TEAM_LABEL, branch: info.branch }
+      : { id: '__no_team__', name: NO_TEAM_LABEL, branch: info?.branch ?? null };
   }
 
   // Резолвинг raw dimension_id → { groupId, groupName } (одна логика для метрик и для
@@ -264,6 +255,12 @@ export async function fetchBySources(opts: BySourcesOptions): Promise<ReportRow[
     if (isBranchDim) {
       name = src === '__null__' ? UNDEFINED_LABEL : (mgrBranch!.get(src) ?? UNDEFINED_LABEL);
       id = name;
+    } else if (dim === 'department') {
+      const info = src !== '__null__' ? mgrInfo!.get(src) : undefined;
+      id = info?.departmentId ?? '__no_team__';
+      name = info?.departmentId ? (info.department ?? NO_TEAM_LABEL) : NO_TEAM_LABEL;
+    } else if (isProductDim) {
+      id = src; name = src;
     } else {
       if (allowed !== null && !allowed(src)) return null;
       if (src === '__null__') { id = '__null__'; name = NO_SOURCE_LABEL; }

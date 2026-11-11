@@ -4,7 +4,7 @@ import { getCallControlManagedDepts } from '@/lib/org/callControlScope';
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { resolveFilterClause } from '@/lib/metrics/sqlGen';
-import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
+import { dimensionWhere, resolveBranchManagerIds, managerIdsWhere, loadManagerInfoMap, loadSourceMap, type SourceDimension } from '@/lib/marketing/sources';
 import { STAGE_SNAPSHOT_GROUPS, DEALS_IN_WORK_METRIC_IDS } from '@/features/reports/engine/stageSnapshot';
 import { STAGE_ENTERED_GROUP_KEYS, stageEnteredMetricIds } from '@/features/reports/engine/stageEntered';
 import { DRILL_RULES, NO_DEAL_LIST_METRIC_IDS } from '@/features/reports/engine/drillRules';
@@ -462,11 +462,8 @@ export async function GET(req: NextRequest) {
   // остальные — список source_id из system.marketing_sources.
   // Composes with managerId (drilldown «источник → менеджеры → сделки»).
   if (sourceDim && sourceVal !== null) {
-    if (sourceDim === 'branch') {
-      dimensionFilter += ` AND ${managerIdsWhere(await resolveBranchManagerIds(sourceVal))}`;
-    } else {
-      dimensionFilter += ` AND ${sourceIdsWhere(await resolveSourceIds(sourceDim, sourceVal))}`;
-    }
+    // Источник, «Филиал»/«Отдел» (менеджеры сделки), «Товарная группа» — одна точка с движками.
+    dimensionFilter += ` AND ${await dimensionWhere(sourceDim, sourceVal)}`;
   }
 
   const db = analyticsDb();

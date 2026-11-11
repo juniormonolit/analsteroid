@@ -1,6 +1,6 @@
 import { analyticsDb, systemDb } from '@/lib/db/clients';
 import {
-  UNDEFINED_LABEL, NO_SOURCE_LABEL, UNASSIGNED_LABEL, isCustomDimension, customDimensionId,
+  UNDEFINED_LABEL, NO_SOURCE_LABEL, UNASSIGNED_LABEL, NO_PRODUCT_GROUP_LABEL, isCustomDimension, customDimensionId,
   type SourceDimension, type BuiltinSourceDimension,
 } from './dimensions';
 import { loadGroupings, canonicalDimension } from './groupings';
@@ -39,10 +39,14 @@ export async function loadSourceMap(): Promise<Map<string, SourceInfo>> {
   return _cache;
 }
 
+/** Колонки справочника источников, по которым есть встроенный разрез. */
+type SourceColumnDimension = 'brand' | 'platform' | 'contact_type' | 'ad_channel' | 'channel_group' | 'branch';
+
 /** Значение встроенного измерения для источника (label группы в отчёте). */
 export function dimensionValue(info: SourceInfo | undefined, dim: BuiltinSourceDimension): string {
   if (!info) return UNDEFINED_LABEL; // source_id есть в deals, но нет в справочнике
   if (dim === 'source') return info.name || info.source_id;
+  if (dim === 'department' || dim === 'product_group') return UNDEFINED_LABEL; // не из справочника
   return info[dim] ?? UNDEFINED_LABEL;
 }
 
@@ -95,7 +99,7 @@ export async function resolveSourceIds(rawDim: SourceDimension, value: string): 
   }
   const ids: string[] = [];
   for (const info of map.values()) {
-    if ((info[dim as Exclude<BuiltinSourceDimension, 'source'>] ?? UNDEFINED_LABEL) === value) ids.push(info.source_id);
+    if ((info[dim as SourceColumnDimension] ?? UNDEFINED_LABEL) === value) ids.push(info.source_id);
   }
   return ids;
 }
@@ -221,4 +225,24 @@ export async function resolveTeamManagerIds(teamId: string): Promise<string[]> {
  * Дрилл и список сделок разбирают id обратно через splitSourceRowId.
  */
 export { SOURCE_TEAM_SEP, splitSourceRowId } from './dimensions';
+
+/**
+ * SQL-условие «сделка относится к значению разреза» для ЛЮБОГО измерения маркетингового
+ * отчёта: источниковые (встроенные и `g:<id>`) — по source_id; «Филиал»/«Отдел» — по
+ * менеджеру сделки; «Товарная группа» — по головной группе сделки. Одна точка для движков
+ * (bySources/byManagers) и списка сделок, чтобы дрилл сходился с ячейкой.
+ */
+export async function dimensionWhere(dim: SourceDimension, value: string): Promise<string> {
+  if (dim === 'branch') return managerIdsWhere(await resolveBranchManagerIds(value));
+  if (dim === 'department') {
+    if (value === '__no_team__') return '1=0'; // «Без отдела»: менеджеров без отдела не адресуем
+    return managerIdsWhere(await resolveTeamManagerIds(value));
+  }
+  if (dim === 'product_group') {
+    return value === NO_PRODUCT_GROUP_LABEL
+      ? 'd.head_group_name IS NULL'
+      : `d.head_group_name = '${value.replace(/'/g, "''")}'`;
+  }
+  return sourceIdsWhere(await resolveSourceIds(dim, value));
+}
 

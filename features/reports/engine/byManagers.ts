@@ -3,7 +3,7 @@ import { cached, reportTtl } from '@/lib/cache/redis';
 import { loadMetrics } from '@/lib/metrics/catalog';
 import { buildCollectedSQL } from '@/lib/metrics/sqlGen';
 import { selectBatchDeals, type BatchSelection } from './dealBatches';
-import { resolveSourceIds, sourceIdsWhere, resolveBranchManagerIds, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
+import { dimensionWhere, managerIdsWhere, type SourceDimension } from '@/lib/marketing/sources';
 import { fetchStageSnapshot, STAGE_SNAPSHOT_METRIC_IDS, DEALS_IN_WORK_METRIC_IDS } from './stageSnapshot';
 import { fetchDealsActivitiesSnapshot } from './dealsActivities';
 import { DELA_ZADACHI_METRIC_IDS } from './delaZadachiIds';
@@ -161,9 +161,8 @@ export async function fetchByManagers(opts: ByManagersOptions): Promise<ReportRo
   let srcWhere: string | undefined;
   let srcKey: string | undefined;
   if (opts.sourceFilter) {
-    srcWhere = opts.sourceFilter.dimension === 'branch'
-      ? managerIdsWhere(await resolveBranchManagerIds(opts.sourceFilter.value))
-      : sourceIdsWhere(await resolveSourceIds(opts.sourceFilter.dimension, opts.sourceFilter.value));
+    // Любой разрез маркетинга: источник, «Филиал»/«Отдел» (менеджеры), «Товарная группа».
+    srcWhere = await dimensionWhere(opts.sourceFilter.dimension, opts.sourceFilter.value);
     srcKey = `${opts.sourceFilter.dimension}=${opts.sourceFilter.value}`;
   }
 

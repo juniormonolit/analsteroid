@@ -21,7 +21,7 @@ const CustomerCardLoader = dynamic(
   () => import('@/features/customers/ui/CustomerCardLoader').then(m => m.CustomerCardLoader),
   { ssr: false },
 );
-import { UNDEFINED_LABEL, UNASSIGNED_LABEL, NO_SOURCE_LABEL, isCustomDimension, splitSourceRowId, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
+import { UNDEFINED_LABEL, UNASSIGNED_LABEL, NO_SOURCE_LABEL, NO_PRODUCT_GROUP_LABEL, isCustomDimension, splitSourceRowId, type SourceDimension, type DrilldownDimension } from '@/lib/marketing/dimensions';
 import { useMarketingCatalog, useSourceDimensionOptions } from '@/features/marketing/lib/useMarketingCatalog';
 import { SearchSelect } from '@/components/ui/SearchSelect';
 import { branchLabel } from '@/lib/org/branchLabel';
@@ -62,6 +62,8 @@ export interface Deal {
   // же поля, что и в byManagers.ts (ReportRow.teamId/teamName/branchName), только
   // резолвятся сервером по менеджеру КАЖДОЙ сделки (см. app/api/reports/deals/route.ts).
   team_id: string | null;
+  /** Головная товарная группа сделки (поле есть в ответе /api/reports/deals). */
+  head_group_name?: string | null;
   team_name: string | null;
   branch_name: string | null;
 }
@@ -1157,12 +1159,16 @@ function MiniReport(props: Props & { onCellDrill: (s: SubDrill) => void; sort: M
       else if (dimensionType === 'product-group') key = d.manager_id;          // строки = менеджеры
       else if (dim === 'manager') key = d.manager_id;
       else if (dim === 'branch') key = mgrBranches[d.manager_id] ?? UNDEFINED_LABEL; // филиал = по менеджеру сделки
+      // «Отдел» — по менеджеру сделки (id отдела, как dimensionId строк bySources);
+      // «Товарная группа» — головная группа сделки (bySources считает так же, «по наибольшей»).
+      else if (dim === 'department') key = d.team_id ?? '__no_team__';
+      else if (dim === 'product_group') key = d.head_group_name ?? NO_PRODUCT_GROUP_LABEL;
       else if (dim === 'source') key = d.source_id ?? '__null__';
       else if (!d.source_id) key = NO_SOURCE_LABEL;
       else if (isCustomDimension(dimC)) key = customAssign?.[d.source_id] ?? UNASSIGNED_LABEL;
       else {
         const info = srcMap.get(d.source_id);
-        key = info && !isCustomDimension(dim) ? (info[dim] ?? UNDEFINED_LABEL) : UNDEFINED_LABEL;
+        key = info && !isCustomDimension(dim) ? (info[dim as keyof typeof info] as string | null ?? UNDEFINED_LABEL) : UNDEFINED_LABEL;
       }
       if (!m.has(key)) m.set(key, []);
       m.get(key)!.push(d);

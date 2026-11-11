@@ -1,7 +1,18 @@
 // Клиентски-безопасный модуль: типы и лейблы маркетинговых измерений.
 // Серверная часть (загрузка справочника, SQL) — в lib/marketing/sources.ts.
 
-export type BuiltinSourceDimension = 'brand' | 'platform' | 'contact_type' | 'ad_channel' | 'channel_group' | 'branch' | 'source';
+// 'department' и 'product_group' (владелец/маркетолог 11.11: «отдел», «сколько сделок по газобетону
+// пришло с авито») — не про источник, а про менеджера сделки и её товарную группу (головная группа,
+// как «по наибольшей» в основном отчёте); в маркетинговых отчётах они такие же разрезы, как «Филиал».
+export type BuiltinSourceDimension = 'brand' | 'platform' | 'contact_type' | 'ad_channel' | 'channel_group' | 'branch' | 'source' | 'department' | 'product_group';
+/** Разрезы, которые считаются по менеджеру сделки, а не по source_id. */
+export const MANAGER_DIMENSIONS: readonly string[] = ['branch', 'department'];
+/** Разрезы не по источнику (менеджер / товарная группа): фильтр по ним — всегда SQL. */
+export function isNonSourceDimension(d: string | null | undefined): boolean {
+  return d === 'branch' || d === 'department' || d === 'product_group';
+}
+export const NO_PRODUCT_GROUP_LABEL = 'Без группы';
+export const NO_TEAM_LABEL = 'Без отдела';
 // Группировка из «Ещё → Источники» (миграция 239): ключ `g:<id marketing_groupings>`.
 export type CustomSourceDimension = `g:${number}`;
 export type SourceDimension = BuiltinSourceDimension | CustomSourceDimension;
@@ -13,7 +24,7 @@ export function isCustomDimension(d: string | null | undefined): d is CustomSour
 export function customDimensionId(d: CustomSourceDimension): number {
   return Number(d.slice(2));
 }
-export const BUILTIN_SOURCE_DIMENSION_KEYS: BuiltinSourceDimension[] = ['brand', 'platform', 'contact_type', 'ad_channel', 'channel_group', 'branch', 'source'];
+export const BUILTIN_SOURCE_DIMENSION_KEYS: BuiltinSourceDimension[] = ['brand', 'platform', 'contact_type', 'ad_channel', 'channel_group', 'branch', 'source', 'department', 'product_group'];
 /** Ключ измерения из URL/тела запроса: встроенный или `g:<id>`; иначе null. */
 export function parseSourceDimension(raw: unknown): SourceDimension | null {
   if (typeof raw !== 'string') return null;
@@ -28,6 +39,8 @@ export const SOURCE_DIMENSIONS: { key: BuiltinSourceDimension; label: string }[]
   { key: 'channel_group', label: 'Канал (крупно)' },
   { key: 'ad_channel',    label: 'Канал' },
   { key: 'branch',        label: 'Филиал' },
+  { key: 'department',    label: 'Отдел' },
+  { key: 'product_group', label: 'Товарная группа' },
   { key: 'source',        label: 'Источник' },
 ];
 
