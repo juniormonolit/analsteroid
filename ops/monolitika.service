@@ -11,6 +11,9 @@ WorkingDirectory=/home/junior/analsteroid
 ExecStart=/bin/bash /home/junior/analsteroid/start.sh
 Restart=always
 RestartSec=3
+# 11.11: остановка висела 90 с (дефолт) до SIGKILL → ~100 с 502 на каждой выкатке. Приложение само выходит
+# через 3 с после SIGTERM (instrumentation.ts); это — страховка.
+TimeoutStopSec=15
 StandardOutput=append:/home/junior/analsteroid/app.log
 StandardError=append:/home/junior/analsteroid/app.log
 

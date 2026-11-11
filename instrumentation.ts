@@ -5,6 +5,16 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
 
+  // Быстрая остановка (11.11: каждая выкатка давала ~100 с 502 — systemd слал SIGTERM, процесс не выходил:
+  // event loop держат setInterval фоновых джоб, пулы pg и Redis; через 90 с приходил SIGKILL). Даём 3 с
+  // на дописать начатые ответы и выходим сами. Страховка — TimeoutStopSec в ops/monolitika.service.
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+    process.once(sig, () => {
+      console.log(`[shutdown] ${sig} — выходим через 3 с`);
+      setTimeout(() => process.exit(0), 3000).unref();
+    });
+  }
+
   // Очередь ИИ-анализа звонков (features/ai-analysis/engine/worker.ts): запускается по кнопке РОПа,
   // пишет только в свою ai_analyses и рассылок не делает — поэтому ДО рубильника
   // DISABLE_BACKGROUND_JOBS. Локально по умолчанию выключен (стоит денег на Cloud.ru):
