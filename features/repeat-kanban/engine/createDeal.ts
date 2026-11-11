@@ -344,6 +344,8 @@ export async function createRepeatTask(input: {
   const accomplices = input.participants ? await resolve(input.participants.accomplices) : [];
   const auditors = input.participants ? (await resolve(input.participants.auditors)).filter(id => !accomplices.includes(id)) : [];
   // От имени постановщика, если есть его токен (09.11, lib/bitrix/userTokens.ts), иначе — вебхуком, как раньше.
+  const taskDeadline = input.deadlineDate && /^\d{4}-\d{2}-\d{2}$/.test(input.deadlineDate)
+    ? `${input.deadlineDate}T${input.deadlineTime && /^\d{2}:\d{2}$/.test(input.deadlineTime) ? input.deadlineTime : '19:00'}:00+03:00` : deadlineIso();
   const taskParams = {
     fields: {
       TITLE: title,
@@ -353,8 +355,7 @@ export async function createRepeatTask(input: {
       CREATED_BY: Number(input.creatorBitrixId),
       TASK_CONTROL: 'Y',
       ALLOW_CHANGE_DEADLINE: 'N',
-      DEADLINE: input.deadlineDate && /^\d{4}-\d{2}-\d{2}$/.test(input.deadlineDate)
-        ? `${input.deadlineDate}T${input.deadlineTime && /^\d{2}:\d{2}$/.test(input.deadlineTime) ? input.deadlineTime : '19:00'}:00+03:00` : deadlineIso(),
+      DEADLINE: taskDeadline,
       UF_CRM_TASK: [`D_${dealId}`],
       ...(accomplices.length ? { ACCOMPLICES: accomplices } : {}),
       ...(auditors.length ? { AUDITORS: auditors } : {}),
@@ -366,10 +367,10 @@ export async function createRepeatTask(input: {
   const taskId = Number(task?.task?.id ?? 0);
   if (!taskId) throw new DealCreateError(`Сделка #${dealId} подготовлена, но задача в Битриксе не создалась`);
   if (memo) await markMemoInserted(memo.analysisId, taskId);
-  // Дело на сегодня в сделке (11.11, Коваленко: задачи канбана попадали менеджерам в 3-й цикл «Необработанные
+  // Дело в сделке на срок задачи (11.11, Коваленко: задачи канбана попадали менеджерам в 3-й цикл «Необработанные
   // повторные», куда плохо добираются; нужен 2-й — «Выйти на повторную продажу»; владелец выбрал «дело на сегодня»).
   // Колонки канбана менеджера в Битриксе смотрят на дела по сделке. Не роняет постановку: задача уже есть.
-  const todoAdded = await addTodayTodo(dealId, Number(responsibleId), taskId).catch(e => {
+  const todoAdded = await addTaskTodo(dealId, Number(responsibleId), taskId, taskDeadline).catch(e => {
     console.warn(`[repeat-kanban] дело на сегодня в сделке ${dealId} не создалось:`, e instanceof Error ? e.message : e);
     return false;
   });
@@ -388,13 +389,13 @@ export async function createRepeatTask(input: {
   return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted, reassignWorkflowId, accomplices, auditors, todoAdded };
 }
 
-/** Дело «Позвонить по задаче» на сегодня в сделке (crm.activity.todo.add): срок — сегодня 19:00 МСК, если уже позже —
- *  через час. Ответственный — менеджер задачи. */
-async function addTodayTodo(dealId: number, responsibleId: number, taskId: number): Promise<boolean> {
+/** Дело «Позвонить по задаче» в сделке (crm.activity.todo.add) — на срок задачи (11.11, Коваленко: «чтобы вместе
+ *  с задачей он дело ставил на то число, на какое стоит задача»; раньше — всегда сегодня 19:00). Срок задачи уже
+ *  прошёл или ближе получаса — через час. Ответственный — менеджер задачи. */
+async function addTaskTodo(dealId: number, responsibleId: number, taskId: number, taskDeadline: string): Promise<boolean> {
   const now = Date.now();
-  const today = new Date(now + 3 * 3600_000).toISOString().slice(0, 10);
-  let at = new Date(`${today}T19:00:00+03:00`).getTime();
-  if (at < now + 30 * 60_000) at = now + 60 * 60_000;
+  let at = new Date(taskDeadline).getTime();
+  if (!Number.isFinite(at) || at < now + 30 * 60_000) at = now + 60 * 60_000;
   const deadline = new Date(at).toISOString().replace(/\.\d{3}Z$/, '+00:00');
   const id = await writeOnce<number | { id?: number }>(crmWebhook(), 'crm.activity.todo.add', {
     ownerTypeId: 2, ownerId: dealId, deadline, responsibleId,
