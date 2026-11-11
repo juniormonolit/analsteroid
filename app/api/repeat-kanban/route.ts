@@ -38,6 +38,14 @@ import { NO_TAG } from '@/features/repeat-kanban/engine/tagColors';
 import { cleanFilters, CustomColumnError, fetchVisibleColumns, type CustomFilters } from '@/features/repeat-kanban/engine/customColumns';
 import { systemDb } from '@/lib/db/clients';
 
+/** «И сменить менеджера на…» — любой действующий менеджер компании (11.11, Коваленко: «список даёт только менеджеров
+ *  того же отдела, нужны ВСЕ»; раньше — только зона РОПа). Проверка — по оргструктуре. */
+async function isActiveManager(id: string): Promise<boolean> {
+  const { analyticsDb } = await import('@/lib/db/clients');
+  const r = await analyticsDb().query(`SELECT 1 FROM sa.org_resolved_hierarchy WHERE is_active AND manager_bitrix_user_id = $1 LIMIT 1`, [id]).catch(() => ({ rows: [] }));
+  return r.rows.length > 0;
+}
+
 /** «Скрыть у себя» чужие общие колонки — users.ui_prefs.hiddenTodayColumns (миграция 258). */
 async function hiddenColumnsOf(userId: string): Promise<number[]> {
   const r = await systemDb().query<{ h: unknown }>(`SELECT ui_prefs->'hiddenTodayColumns' AS h FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as { h: unknown }[] }));
@@ -283,7 +291,7 @@ export async function POST(req: NextRequest) {
         let newResponsibleId: string | null = null;
         if (typeof body.newManagerId === 'string' && /^\d{1,10}$/.test(body.newManagerId)) {
           if (!(await fetchKanbanSettings()).reassignEnabled) return NextResponse.json({ error: 'Смена менеджера выключена в настройках канбана' }, { status: 400 });
-          if (!zone.has(body.newManagerId)) return NextResponse.json({ error: 'Новый менеджер не из вашей зоны' }, { status: 403 });
+          if (!(await isActiveManager(body.newManagerId))) return NextResponse.json({ error: 'Новый менеджер не найден среди действующих менеджеров' }, { status: 400 });
           newResponsibleId = body.newManagerId;
         }
         const rule = (['window', 'today', '3', '7'] as const).includes(body.deadlineRule as DeadlineRule) ? body.deadlineRule as DeadlineRule : 'window';
@@ -331,7 +339,7 @@ export async function POST(req: NextRequest) {
       let newResponsibleId: string | null = null;
       if (typeof body.newManagerId === 'string' && /^\d{1,10}$/.test(body.newManagerId) && body.newManagerId !== managerId) {
         if (!(await fetchKanbanSettings()).reassignEnabled) throw new DealCreateError('Смена менеджера выключена в настройках канбана');
-        if (!managers.some(m => m.id === body.newManagerId)) throw new DealCreateError('Новый менеджер не из вашей зоны');
+        if (!(await isActiveManager(body.newManagerId))) throw new DealCreateError('Новый менеджер не найден среди действующих менеджеров');
         newResponsibleId = body.newManagerId;
       }
       const res = await createRepeatTask({ clientKey, fallbackManagerId: managerId, creatorBitrixId: creator, comment, commentAuthorId: session.bitrixUserId, deadlineDate, deadlineTime, newResponsibleId,

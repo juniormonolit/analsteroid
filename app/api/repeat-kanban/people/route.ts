@@ -9,7 +9,7 @@ import { getEmployeeDirectory } from '@/lib/org/employeeDirectory';
 // оргструктуры (sa.org_resolved_hierarchy — имена людей, а не должности, как бывает в sa.employees), с отделом. Кэш 10 мин.
 export const dynamic = 'force-dynamic';
 
-interface Person { id: string; name: string; dept: string | null }
+interface Person { id: string; name: string; dept: string | null; /** manager — есть в оргструктуре как менеджер (для «И сменить менеджера на…»). */ manager?: boolean }
 interface Payload { people: Person[]; ropOf: Record<string, string> }
 
 export async function GET() {
@@ -17,9 +17,9 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!hasPerm(session, 'section.repeat_kanban')) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   try {
-    const payload = await cached<Payload>('repeat-kanban:people:v3', 600, async () => {
-      const r = await analyticsDb().query<{ id: string; name: string; dept: string | null }>(
-        `SELECT DISTINCT ON (id) id, name, dept FROM (
+    const payload = await cached<Payload>('repeat-kanban:people:v4', 600, async () => {
+      const r = await analyticsDb().query<{ id: string; name: string; dept: string | null; pr: number }>(
+        `SELECT DISTINCT ON (id) id, name, dept, pr FROM (
            SELECT manager_bitrix_user_id::text AS id, manager_name AS name, department_name AS dept, 0 AS pr FROM sa.org_resolved_hierarchy WHERE is_active AND manager_name IS NOT NULL
            UNION ALL SELECT rop_bitrix_user_id::text, rop_name, department_name, 1 FROM sa.org_resolved_hierarchy WHERE is_active AND rop_name IS NOT NULL
            UNION ALL SELECT department_director_bitrix_user_id::text, department_director_name, NULL, 2 FROM sa.org_resolved_hierarchy WHERE is_active AND department_director_name IS NOT NULL
@@ -40,7 +40,7 @@ export async function GET() {
          ) h ORDER BY id`,
       ).catch(() => ({ rows: [] as { id: string; dept: string }[] }));
       const dir = heads.rows.length ? await getEmployeeDirectory().catch(() => null) : null;
-      const byId = new Map(r.rows.map(x => [x.id, { id: x.id, name: x.name, dept: x.dept }]));
+      const byId = new Map<string, Person>(r.rows.map(x => [x.id, { id: x.id, name: x.name, dept: x.dept, manager: Number(x.pr) === 0 }]));
       for (const h of heads.rows) {
         const name = dir?.get(Number(h.id))?.name;
         if (!byId.has(h.id) && name && !/^User \d+$/.test(name)) byId.set(h.id, { id: h.id, name, dept: `руководитель · ${h.dept}` });

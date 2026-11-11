@@ -13,29 +13,34 @@ export const initialParticipants = (): ParticipantsState => ({ on: true, ...DEFA
 export const participantsPayload = (p: ParticipantsState): TaskParticipants | undefined =>
   p.on && (p.accomplices.length || p.auditors.length) ? { accomplices: p.accomplices, auditors: p.auditors } : undefined;
 
-interface PeoplePayload { people: { id: string; name: string; dept: string | null }[]; ropOf: Record<string, string> }
-const short = (n: string) => { const p = n.trim().split(/\s+/); return p.length >= 2 ? `${p[0]} ${p[1][0]}.` : n; };
+export interface PeoplePayload { people: { id: string; name: string; dept: string | null; manager?: boolean }[]; ropOf: Record<string, string> }
+
+/** Сотрудники оргструктуры (кэш 10 мин) — участники задач и «И сменить менеджера на…». */
+export function usePeople() {
+  return useQuery<PeoplePayload>({
+    queryKey: ['repeat-kanban-people'],
+    queryFn: async () => { const r = await fetch('/api/repeat-kanban/people'); return r.ok ? r.json() : { people: [], ropOf: {} }; },
+    staleTime: 10 * 60_000,
+  });
+}
 
 export function ParticipantsPicker({ value, onChange, managerIds }: {
   value: ParticipantsState; onChange: (v: ParticipantsState) => void;
   /** Ответственные менеджеры задач: один — подпись «РОП менеджера — Имя»; несколько (массово) — «у каждой задачи свой». */
   managerIds: string[];
 }) {
-  const { data } = useQuery<PeoplePayload>({
-    queryKey: ['repeat-kanban-people'],
-    queryFn: async () => { const r = await fetch('/api/repeat-kanban/people'); return r.ok ? r.json() : { people: [], ropOf: {} }; },
-    staleTime: 10 * 60_000,
-  });
+  const { data } = usePeople();
   const people = data?.people ?? [];
   const nameOf = (id: string) => people.find(p => p.id === id)?.name ?? null;
   const rops = [...new Set(managerIds.map(m => data?.ropOf[m]).filter((x): x is string => !!x))];
   const ropLabel = managerIds.length > 1 && rops.length !== 1 ? 'РОП менеджера — у каждой задачи свой'
-    : rops[0] && nameOf(rops[0]) ? `РОП менеджера — ${short(nameOf(rops[0])!)}` : 'РОП менеджера';
-  // Сам РОП не дублируется отдельной строкой, если он уже выбран как «РОП менеджера».
+    : rops[0] && nameOf(rops[0]) ? `РОП менеджера — ${nameOf(rops[0])}` : 'РОП менеджера';
+  // Раньше сам РОП прятался, когда выбран «РОП менеджера» (11.11, Коваленко: поиск «Осип» его не находил — в подписи
+  // было «Сергей О.»). Теперь человек всегда в списке, у «РОП менеджера» — полное имя; дубль сервер свернёт сам.
   const ropSelf = rops.length === 1 ? rops[0] : null;
   const options = [
     { value: ROP_TOKEN, label: ropLabel, hint: 'по оргструктуре ответственного менеджера' },
-    ...people.filter(p => p.id !== ropSelf || !value.accomplices.includes(ROP_TOKEN)).map(p => ({ value: p.id, label: p.name, hint: p.dept ?? undefined })),
+    ...people.map(p => ({ value: p.id, label: p.name, hint: [p.dept, p.id === ropSelf ? 'он же РОП менеджера' : null].filter(Boolean).join(' · ') || undefined })),
   ];
   const set = (patch: Partial<ParticipantsState>) => onChange({ ...value, ...patch });
   return (

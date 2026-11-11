@@ -29,7 +29,7 @@ import { callAsUser } from '@/lib/bitrix/userTokens';
 import { analyticsDb } from '@/lib/db/clients';
 import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
-import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID } from './config';
+import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID, taskUrl } from './config';
 import { logRecommendations } from './recommendations';
 import { ROP_TOKEN, type TaskParticipants } from './participants';
 import { freshMemoForClientKey, markMemoInserted } from '@/features/ai-analysis/engine/memoStore';
@@ -194,6 +194,8 @@ export interface RepeatTaskResult {
   reassignWorkflowId?: string | null;
   /** Кого добавили соисполнителями и наблюдателями (Битрикс-id, после разворота «РОП менеджера»). */
   accomplices?: number[]; auditors?: number[];
+  /** Дело на сегодня в сделке создано (11.11 — чтобы сделка попала менеджеру во 2-й цикл). */
+  todoAdded?: boolean;
 }
 
 /** Шаблон бизнес-процесса Битрикса «Сменить ответственного» (сделка). Менять ответственного —
@@ -364,6 +366,13 @@ export async function createRepeatTask(input: {
   const taskId = Number(task?.task?.id ?? 0);
   if (!taskId) throw new DealCreateError(`Сделка #${dealId} подготовлена, но задача в Битриксе не создалась`);
   if (memo) await markMemoInserted(memo.analysisId, taskId);
+  // Дело на сегодня в сделке (11.11, Коваленко: задачи канбана попадали менеджерам в 3-й цикл «Необработанные
+  // повторные», куда плохо добираются; нужен 2-й — «Выйти на повторную продажу»; владелец выбрал «дело на сегодня»).
+  // Колонки канбана менеджера в Битриксе смотрят на дела по сделке. Не роняет постановку: задача уже есть.
+  const todoAdded = await addTodayTodo(dealId, Number(responsibleId), taskId).catch(e => {
+    console.warn(`[repeat-kanban] дело на сегодня в сделке ${dealId} не создалось:`, e instanceof Error ? e.message : e);
+    return false;
+  });
   // Комментарий РОПа — ещё и первым сообщением в чате задачи (владелец 20.10). Не роняет
   // постановку: задача уже есть, комментарий в любом случае лежит в её описании.
   let chatPosted = false;
@@ -376,7 +385,22 @@ export async function createRepeatTask(input: {
   }
   // Журнал рекомендаций (миграция 250, самообучение): что советовали предложить и есть ли это в тексте задачи. Фоном.
   void logRecommendations({ clientKey: input.clientKey, managerId: input.fallbackManagerId, taskId, dealId, text: input.comment, createdBy: input.commentAuthorId ?? input.creatorBitrixId });
-  return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted, reassignWorkflowId, accomplices, auditors };
+  return { dealId, dealMode, taskId, responsibleId, createdById: input.creatorBitrixId, chatPosted, reassignWorkflowId, accomplices, auditors, todoAdded };
+}
+
+/** Дело «Позвонить по задаче» на сегодня в сделке (crm.activity.todo.add): срок — сегодня 19:00 МСК, если уже позже —
+ *  через час. Ответственный — менеджер задачи. */
+async function addTodayTodo(dealId: number, responsibleId: number, taskId: number): Promise<boolean> {
+  const now = Date.now();
+  const today = new Date(now + 3 * 3600_000).toISOString().slice(0, 10);
+  let at = new Date(`${today}T19:00:00+03:00`).getTime();
+  if (at < now + 30 * 60_000) at = now + 60 * 60_000;
+  const deadline = new Date(at).toISOString().replace(/\.\d{3}Z$/, '+00:00');
+  const id = await writeOnce<number | { id?: number }>(crmWebhook(), 'crm.activity.todo.add', {
+    ownerTypeId: 2, ownerId: dealId, deadline, responsibleId,
+    title: 'Позвонить по задаче РОПа', description: `Задача из канбана повторных: ${taskUrl(taskId)}`,
+  });
+  return !!id;
 }
 
 /** Постановщик по структуре: РОП менеджера (sa.org_resolved_hierarchy, ближайший предок с

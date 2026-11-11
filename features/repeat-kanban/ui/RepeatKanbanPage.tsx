@@ -34,7 +34,7 @@ import { QueueView } from './QueueView';
 import { TagChip, TagsModal } from './TagsModal';
 import { AcceptTaskModal } from './AcceptTaskModal';
 import { TaskCheckModal, useTaskChecks, VERDICT, type TaskCheckState } from './TaskCheck';
-import { ParticipantsPicker, initialParticipants, participantsPayload } from './ParticipantsPicker';
+import { ParticipantsPicker, initialParticipants, participantsPayload, usePeople } from './ParticipantsPicker';
 import { AttachmentsRow, useAttachments } from './Attachments';
 import { PostponePicker } from './PostponePicker';
 import { AddColumnTile, CustomColumnModal, CustomHeader, type ColumnDraft } from './CustomColumns';
@@ -1541,6 +1541,10 @@ interface ReassignOpts { managers: { id: string; name: string }[]; loadOf: (id: 
  *  ответственного» (он перепривязывает сделку, контакт, почту); задача — уже новому менеджеру. */
 function ReassignPicker({ opts, currentId, value, onChange }: { opts: ReassignOpts; currentId: string | null; value: string; onChange: (v: string) => void }) {
   const [on, setOn] = useState(!!value);
+  // Все действующие менеджеры компании с отделом (11.11, Коваленко: «список даёт только менеджеров того же отдела»).
+  const people = usePeople().data?.people ?? [];
+  const all = people.filter(p => p.manager);
+  const list = all.length ? all.map(p => ({ id: p.id, name: p.name, dept: p.dept })) : opts.managers.map(m => ({ ...m, dept: null as string | null }));
   return (
     <div className="flex flex-col gap-1.5">
       <label className="flex min-h-11 cursor-pointer items-center gap-2 text-[var(--color-text-secondary)]">
@@ -1550,8 +1554,8 @@ function ReassignPicker({ opts, currentId, value, onChange }: { opts: ReassignOp
       {on && (
         <>
           <SearchSelect ariaLabel="Новый менеджер" value={value} onChange={onChange} searchable
-            options={[{ value: '', label: 'Выберите менеджера' }, ...opts.managers.filter(m => m.id !== currentId)
-              .map(m => ({ value: m.id, label: m.name, hint: `${opts.loadOf(m.id)} активных задач` }))]}
+            options={[{ value: '', label: 'Выберите менеджера' }, ...list.filter(m => m.id !== currentId)
+              .map(m => ({ value: m.id, label: m.name, hint: [m.dept, opts.managers.some(x => x.id === m.id) ? `${opts.loadOf(m.id)} активных задач` : null].filter(Boolean).join(' · ') || undefined }))]}
             className={`${value ? BTN_ACTIVE : BTN_IDLE} w-full justify-start`} />
           <p className="text-xs text-[var(--color-text-muted)]">
             Ответственный сменится бизнес-процессом Битрикса «Сменить ответственного» (сделка, контакт, почта), задача уйдёт новому менеджеру.
