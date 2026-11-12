@@ -673,6 +673,7 @@ export function RepeatKanbanPage() {
       {checkFor?.task && <TaskCheckModal taskId={checkFor.task.id} title={cardName(checkFor)} state={taskChecks?.[String(checkFor.task.id)]} onClose={() => setCheckFor(null)} />}
       {acceptFor?.task && <AcceptTaskModal card={acceptFor} name={cardName(acceptFor)} note={notes?.[String(acceptFor.task.id)] ?? null}
         checkState={data?.aiCounts ? taskChecks?.[String(acceptFor.task.id)] ?? { hasCall: false, check: null } : null}
+        renderReassign={reassignOpts ? (v, set) => <ReassignPicker opts={reassignOpts} currentId={acceptFor.managerId} value={v} onChange={set} /> : null}
         onClose={() => setAcceptFor(null)} onSaved={refresh} />}
       {tagsFor && <TagsModal title={cardName(tagsFor)} clientKey={tagsFor.clientKey} managerId={tagsFor.managerId} column={tagsFor.column}
         current={tagsFor.tags ?? []} defs={data?.tagDefs ?? []} onClose={() => setTagsFor(null)} onSaved={refresh} onDefsChanged={refresh} />}

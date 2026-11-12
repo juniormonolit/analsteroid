@@ -4,7 +4,7 @@
 // Задача в «ждёт контроля» (менеджер сдал); решение и комментарий уходят в задачу от имени РОПа.
 // Сделка задачи уже закрыта (отказ или отгружена) — «На доработку» заменяет «Откатить и создать задачу»
 // (владелец 23.10: вернули задачу — сделка осталась в отказе; вернули — работа пошла в отгруженной сделке).
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { CheckCircle2, ExternalLink, History, Moon, RotateCcw, XCircle } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { SearchSelect } from '@/components/ui/SearchSelect';
@@ -43,8 +43,11 @@ function modesFor(state: DealState, dealId: number): { key: Mode; title: string;
 const field = 'w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base text-[var(--color-text)] sm:text-sm';
 const mskYmd = (plusDays: number) => new Date(Date.now() + 3 * 3600_000 + plusDays * 86_400_000).toISOString().slice(0, 10);
 
-export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved }: {
+export function AcceptTaskModal({ card, name, note, checkState, renderReassign, onClose, onSaved }: {
   card: KanbanCard; name: string; note: TaskNote | null;
+  /** «И сменить менеджера на…» для «Вернуть менеджеру» / «Откатить и создать задачу» (12.11, владелец: «так и нет
+   *  возможности сменить менеджера при приёмке»). Нет — РОП без права или смена выключена в настройках. */
+  renderReassign?: ((value: string, onChange: (v: string) => void) => ReactNode) | null;
   /** Проверка звонка по задаче (только РОПу с правом разбора; null — блока нет). Решение принимается, видя проверку. */
   checkState?: TaskCheckState | null;
   onClose: () => void; onSaved: () => void;
@@ -59,6 +62,7 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
   const [until, setUntil] = useState(guessed ?? postponePresets()[0].value);
   const att = useAttachments();
   const [parts, setParts] = useState(initialParticipants);
+  const [newManager, setNewManager] = useState('');
   const [reason, setReason] = useState('');
   const [comment, setComment] = useState(guessed && note ? note.text.slice(0, 500) : '');
   // Новый срок при возврате: старый уже прошёл — по умолчанию завтра 19:00.
@@ -77,7 +81,7 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
       const body = mode === 'return'
         ? { action: 'task_return', comment, deadline: deadline || null, deadlineTime: time, attachments }
         : mode === 'rollback'
-          ? { action: 'task_return', rollback: true, comment, deadline: deadline || null, deadlineTime: time, attachments, participants: participantsPayload(parts) }
+          ? { action: 'task_return', rollback: true, comment, deadline: deadline || null, deadlineTime: time, attachments, participants: participantsPayload(parts), newManagerId: newManager || undefined }
           : mode === 'postpone'
             ? { action: 'task_accept', comment, postponeUntil: until, attachments }
             : { action: 'task_accept', comment, closeReason: mode === 'close' ? reason : null, attachments, reviewDecision: mode === 'pool' ? 'no_answer' : undefined };
@@ -143,7 +147,8 @@ export function AcceptTaskModal({ card, name, note, checkState, onClose, onSaved
           </div>
         )}
         {mode === 'postpone' && <PostponePicker value={until} onChange={setUntil} />}
-        {mode === 'rollback' && <ParticipantsPicker value={parts} onChange={setParts} managerIds={[card.managerId]} />}
+        {mode === 'rollback' && renderReassign?.(newManager, setNewManager)}
+        {mode === 'rollback' && <ParticipantsPicker value={parts} onChange={setParts} managerIds={[newManager || card.managerId]} />}
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]" {...att.dropZone}>
           {mode === 'rollback' ? 'Что сделать в новой задаче (обязательно)' : mode === 'postpone' ? 'Почему откладываем (обязательно) — уйдёт в задачу и в сделку' : mode === 'return' ? 'Что доделать (обязательно)' : 'Комментарий в задачу (необязательно)'}
           <textarea value={comment} onChange={e => setComment(e.target.value)} onPaste={att.onPaste} rows={3}
