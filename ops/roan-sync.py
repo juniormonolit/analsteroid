@@ -11,11 +11,15 @@ sa.deals/departments/stages НЕ копируем: на Roan они заморо
 Схему не трогаем (условие Арнольда по va.calls): берём только общие колонки. Ключи (id) на
 Roan и у нас совпадают (проверено 12.11), поэтому догрузка идемпотентна — ON CONFLICT.
 
+Формат — JSON, не CSV: CSV PostgREST удваивает обратную косую черту, и `\"` внутри jsonb/массивов
+ломал загрузку (а в тексте молча удваивался) — проба 12.11. JSON грузим одной строкой через \copy
+в CSV-режиме с непечатными QUOTE/DELIMITER (так \copy не трогает «\»), дальше jsonb_populate_recordset.
+
 Пагинация — по (колонка_времени, ключ) от максимума этой колонки в НАШЕЙ таблице: перезапуск
 продолжает с места, повторная строка просто перезапишется. Запуск: monolitika-roan-sync.timer.
 Env (из ~/analsteroid/secrets.env): ROAN_REST_URL, ROAN_REST_KEY, SA_PG_*.
 """
-import os, subprocess, sys, tempfile, time, urllib.parse, urllib.request
+import json, os, subprocess, sys, tempfile, time, urllib.parse, urllib.request
 
 PAGE = 1000            # Roan больше не отдаёт
 PAUSE = 0.25           # ≤ 240 запросов/мин при лимите 300
@@ -64,7 +68,7 @@ def psql(*cmds):
 
 def fetch(endpoint, params):
     url = f'{BASE}/{endpoint}?{urllib.parse.urlencode(params, safe=",()")}'
-    req = urllib.request.Request(url, headers={'apikey': KEY, 'Accept': 'text/csv'})
+    req = urllib.request.Request(url, headers={'apikey': KEY, 'Accept': 'application/json'})
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
@@ -75,14 +79,12 @@ def fetch(endpoint, params):
             print(f'[roan-sync] {endpoint}: {e} — повтор', file=sys.stderr)
             time.sleep(5 * (attempt + 1))
 
-def last_row(body, cols, tcol, kcol):
-    """Значения (время, ключ) последней строки CSV — через psql не надо, хватит csv-модуля."""
-    import csv, io
-    rows = list(csv.reader(io.StringIO(body.decode('utf-8'))))
-    if len(rows) < 2:
+def last_row(rows, tcol, kcol):
+    """Значения (время, ключ) последней строки — для следующей страницы."""
+    if not rows:
         return 0, None, None
-    last = dict(zip(rows[0], rows[-1]))
-    return len(rows) - 1, last[tcol], (last[kcol] if kcol else None)
+    last = rows[-1]
+    return len(rows), str(last[tcol]), (str(last[kcol]) if kcol else None)
 
 def q(v):
     return '"' + v.replace('"', '\\"') + '"'
@@ -100,17 +102,18 @@ def sync(name, endpoint, table, cols, tcol, kcol, tail):
         elif wm is not None:
             # первый шаг — с максимума у нас включительно (дубли — ON CONFLICT); без ключа дальше строго «больше»
             params[tcol] = f'{"gt" if pages and not kcol else "gte"}.{wm}'
-        body = fetch(endpoint, params)
-        n, new_wm, new_key = last_row(body, cols, tcol, kcol)
+        rows = json.loads(fetch(endpoint, params))
+        n, new_wm, new_key = last_row(rows, tcol, kcol)
         if n == 0:
             break
-        with tempfile.NamedTemporaryFile(suffix='.csv') as f:
-            f.write(body); f.flush()
+        with tempfile.NamedTemporaryFile('w', suffix='.json', encoding='utf-8') as f:
+            f.write(json.dumps(rows, ensure_ascii=False)); f.flush()   # одна строка: переводы строк экранированы
             collist = ', '.join(cols)
             psql('BEGIN',
-                 f'CREATE TEMP TABLE s ON COMMIT DROP AS SELECT {collist} FROM {table} WITH NO DATA',
-                 f"\\copy s ({collist}) FROM '{f.name}' WITH (FORMAT csv, HEADER true)",
-                 f'INSERT INTO {table} ({collist}) SELECT {collist} FROM s {tail}',
+                 'CREATE TEMP TABLE j (doc jsonb) ON COMMIT DROP',
+                 f"\\copy j (doc) FROM '{f.name}' WITH (FORMAT csv, QUOTE e'\\x01', DELIMITER e'\\x02')",
+                 f'INSERT INTO {table} ({collist}) SELECT {collist} '
+                 f'FROM jsonb_populate_recordset(NULL::{table}, (SELECT doc FROM j)) s {tail}',
                  'COMMIT')
         total += n; pages += 1
         if not kcol and new_wm == wm:
