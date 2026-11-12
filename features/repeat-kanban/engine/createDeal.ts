@@ -11,7 +11,7 @@
 //   * отгружена / нет её  → новая сделка + «ПОСМОТРИ ЗАДАЧУ» в начале названия;
 //   * в работе            → задача в эту сделку + «ПОСМОТРИ ЗАДАЧУ» в начало названия;
 //   * «Продано»           → задачу не ставим: заказ в работе, ждём отгрузки (решение 20.10);
-//   * «НЕ ТРОГАТЬ»        → не трогаем.
+//   * «НЕ ТРОГАТЬ»        → эту сделку не трогаем, задача — в новую сделку (12.11; раньше — отказ).
 // «ПОСМОТРИ ЗАДАЧУ» ставится один раз (не «ПОСМОТРИ ЗАДАЧУ ПОСМОТРИ ЗАДАЧУ»).
 //
 // Новая сделка — НЕ копией прошлой, как делает старый канбан («… (1)»): копия тащит
@@ -27,7 +27,6 @@ import { bx } from '@/lib/bitrix/notify';
 import { cached } from '@/lib/cache/redis';
 import { callAsUser } from '@/lib/bitrix/userTokens';
 import { analyticsDb } from '@/lib/db/clients';
-import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import { memberKeysOf } from '@/features/customers/engine/merge';
 import { NEW_DEAL_STAGE, REPEAT_PROJECT_GROUP_ID, taskUrl } from './config';
 import { logRecommendations } from './recommendations';
@@ -134,15 +133,21 @@ const ddmmyyyy = (d: Date) => new Date(new Date(d).getTime() + 3 * 3600_000).toI
  */
 export async function buildDescription(clientKey: string, comment: string, memoBb: string | null): Promise<string> {
   const members = await memberKeysOf(clientKey); // склейка: отгрузки всех карточек человека
+  // Все отгрузки людей и компаний заказчика — не только сделки, которые ключ заказчика (CLIENT_KEY_SQL) приписал
+  // ему же (12.11, живой случай контакта 232342: две ранние отгрузки оформлены на компанию 34952 → ключ k34952,
+  // свежие — без компании; в задачу попадали 2 из 4, карточка клиента показывала 4; новый менеджер другого отдела
+  // и его РОП прошлые сделки не видят — описание задачи у них единственный источник). id контактов и компаний —
+  // разные пространства, сверяем каждое со своим полем.
+  const contactIds = members.filter(k => !k.startsWith('k')).map(k => Number(k.slice(1)));
+  const companyIds = members.filter(k => k.startsWith('k')).map(k => Number(k.slice(1)));
   const shipped = await analyticsDb().query<{ deal_id: number; head_group_name: string | null; deal_name: string | null; amount: string | null; delivered_at: Date; n: number; total: string }>(
     `SELECT deal_id, head_group_name, deal_name, amount, delivered_at,
             count(*) OVER ()::int AS n, sum(amount) OVER ()::text AS total
-       FROM (
-       SELECT d.*, (${CLIENT_KEY_SQL}) AS client_key FROM sa.deals d
-        WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
-          AND (d.contact_id = ANY($2::bigint[]) OR d.company_id = ANY($2::bigint[]))
-     ) t WHERE client_key = ANY($1::text[]) ORDER BY delivered_at DESC, deal_id DESC LIMIT 30`,
-    [members, members.map(k => Number(k.slice(1)))],
+       FROM sa.deals d
+      WHERE d.funnel_id IN (0,1,2,3) AND d.delivered_at IS NOT NULL
+        AND (d.contact_id = ANY($1::bigint[]) OR d.company_id = ANY($2::bigint[]))
+      ORDER BY delivered_at DESC, deal_id DESC LIMIT 30`,
+    [contactIds, companyIds],
   );
   const lines: string[] = [];
   if (memoBb) lines.push(memoBb, '');
@@ -261,9 +266,9 @@ export async function createRepeatTask(input: {
   const open = all.find(d => d.STAGE_SEMANTIC_ID === 'P');
   const last = open ?? all[0];
 
-  if (last?.STAGE_ID && DO_NOT_TOUCH_STAGES.has(last.STAGE_ID)) {
-    throw new DealCreateError(`Сделка #${last.ID} в стадии «НЕ ТРОГАТЬ — ЗАПРЕЩЕНО»: заказчика не трогаем`);
-  }
+  // «НЕ ТРОГАТЬ — ЗАПРЕЩЕНО» — запрет на САМУ сделку, не на заказчика (владелец 12.11: «не надо запрещать создавать
+  // задачи»; раньше постановка отказывала). Эту сделку не меняем — ни стадию, ни название; задача — в новую сделку.
+  const untouchable = !!(last?.STAGE_ID && DO_NOT_TOUCH_STAGES.has(last.STAGE_ID));
   let dealId: number;
   let dealMode: RepeatDealMode;
   let title: string;
@@ -276,7 +281,7 @@ export async function createRepeatTask(input: {
     title = last.TITLE ?? `Сделка #${last.ID}`;
     responsibleId = String(last.ASSIGNED_BY_ID ?? input.fallbackManagerId);
     dealMode = 'existing';
-  } else if (last && (last.STAGE_SEMANTIC_ID === 'F' || last.STAGE_SEMANTIC_ID === 'P')) {
+  } else if (last && !untouchable && (last.STAGE_SEMANTIC_ID === 'F' || last.STAGE_SEMANTIC_ID === 'P')) {
     dealId = Number(last.ID);
     title = withPrefix(last.TITLE ?? `Сделка #${last.ID}`);
     responsibleId = String(last.ASSIGNED_BY_ID ?? input.fallbackManagerId);
@@ -290,13 +295,16 @@ export async function createRepeatTask(input: {
     }
     await writeOnce(crm, 'crm.deal.update', { id: dealId, fields, params: { REGISTER_SONET_EVENT: 'Y' } });
   } else {
-    // Отгружена последняя повторная или повторных не было — новая сделка «как из контакта».
+    // Отгружена последняя повторная, она «НЕ ТРОГАТЬ» или повторных не было — новая сделка «как из контакта».
     const entity = await read<BxEntity>(t.entity === 'contact' ? 'crm.contact.get' : 'crm.company.get', { id: t.id });
     if (!entity?.ID) throw new DealCreateError(`${t.entity === 'contact' ? 'Контакт' : 'Компания'} #${t.id} не найден(а) в Битриксе`);
     const prev = await read<BxDeal[]>('crm.deal.list', { filter: { [owner]: t.id }, select: ['ID', 'MYCOMPANY_ID'], order: { ID: 'DESC' } });
     const funnel: 2 | 3 = last ? (Number(last.CATEGORY_ID) === 3 ? 3 : 2) : t.funnel;
     responsibleId = String(entity.ASSIGNED_BY_ID ?? input.fallbackManagerId);
-    title = last?.TITLE ? withPrefix(last.TITLE.replace(/(\s*\(\d+\))+\s*$/, '')) : PREFIX;
+    // Название — от прошлой сделки, но без чужого номера: «Сделка #274590» / «ЗАДАЧАСделка #274590» (ручная правка
+    // в Битриксе) в новой сделке вводит в заблуждение (12.11) — тогда просто «ПОСМОТРИ ЗАДАЧУ».
+    const base = (last?.TITLE ?? '').replace(/(\s*\(\d+\))+\s*$/, '').replace(/^\s*ЗАДАЧА\s*(?=Сделка)/i, '').trim();
+    title = base && !/^Сделка\s*#\d+$/i.test(base) ? withPrefix(base) : PREFIX;
     const fields: Record<string, unknown> = {
       TITLE: title, CATEGORY_ID: funnel, STAGE_ID: NEW_DEAL_STAGE[funnel], [owner]: t.id,
       ASSIGNED_BY_ID: Number(responsibleId), OPENED: 'Y', TYPE_ID: 'SALE', CURRENCY_ID: 'RUB',
