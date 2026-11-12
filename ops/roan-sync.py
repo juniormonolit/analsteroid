@@ -38,8 +38,10 @@ def upd(cols, key):
 TABLES = [
     # (имя, endpoint Roan, наша таблица, колонки, колонка времени, ключ, SQL-хвост вставки)
     ('calls', 'calls', 'va.calls', CALL_COLS, 'updated_at', 'id',
-     # уникален и bitrix_call_id: строку с тем же звонком под другим id не трогаем, а не роняем прогон
-     'WHERE NOT EXISTS (SELECT 1 FROM va.calls c WHERE c.bitrix_call_id = s.bitrix_call_id AND c.id <> s.id) '
+     # уникален и bitrix_call_id: строку с тем же звонком под другим id не трогаем, а не роняем прогон.
+     # deal_id у нас NOT NULL, на Roan — нет: без сделки там только служебные строки (failed_at_stage
+     # contact/company…, 1373 шт. на 12.11), в метрики и бот они не входят — пропускаем.
+     'WHERE s.deal_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM va.calls c WHERE c.bitrix_call_id = s.bitrix_call_id AND c.id <> s.id) '
      f'ON CONFLICT (id) DO UPDATE SET {upd(CALL_COLS, "id")}'),
     ('transcriptions', 'transcriptions', 'va.transcriptions',
      'id call_id provider raw_text formatted_dialogue created_at'.split(), 'created_at', 'id',

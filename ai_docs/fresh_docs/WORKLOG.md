@@ -27,6 +27,9 @@ bitrix_task_v 168k, payload_raw 171k. Roan — только REST, SQL-прило
   становился `\\"`. Загрузка переведена на JSON (`\copy` одной строкой в CSV-режиме с QUOTE/DELIMITER \x01/\x02 →
   `jsonb_populate_recordset`). Из пробы осталось 2000 звонков (без «\», чистые) и 2000 расшифровок (4 с удвоенной «\») —
   расшифровки удаляются перед повтором (до пробы таблица была пустой).
+- Первый полный прогон: transcriptions +190 598, evaluations +131 005, task_payload +167 687, tasks — сходится с Roan
+  (167 792 у нас / 167 795 там; bitrix_task_current уже была наполнена из бэкапа). **calls упал**: на Roan у 1373 звонков
+  `deal_id` NULL (у нас NOT NULL) — все со заполненным failed_at_stage (служебные), фильтр `s.deal_id IS NOT NULL`.
 
 ## 2026-11-12 — Доступ на чтение к Roan (восстановленная база, Supabase REST)
 
