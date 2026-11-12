@@ -14,7 +14,7 @@ import { analyticsDb } from '@/lib/db/clients';
 import { BRAK_REASONS, COLUMNS, type ColumnKey, type ReviewDecision } from '@/features/repeat-kanban/engine/config';
 import { createRepeatTask, DealCreateError, ropOfManager, closeDealAsLost } from '@/features/repeat-kanban/engine/createDeal';
 import { logEvent, newRequestId, type KanbanEventType } from '@/features/repeat-kanban/engine/log';
-import { decideHideRequest, decideReview, hideFromPool, markBrakNow, postponeCustomer, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
+import { dealClientKey, decideHideRequest, decideReview, hideFromPool, markBrakNow, postponeCustomer, requestHide, restoreFromBrak, ReviewError, unhide } from '@/features/repeat-kanban/engine/reviews';
 import { fetchManagerLoad } from '@/features/repeat-kanban/engine/board';
 import { rememberDealClient } from '@/features/repeat-kanban/engine/dealFixes';
 import { isFeatureEnabled } from '@/lib/featureFlags';
@@ -373,14 +373,18 @@ export async function POST(req: NextRequest) {
         if (wantRollback !== (state !== 'open')) {
           return NextResponse.json({ error: state === 'open' ? 'Сделка уже снова в работе — обновите доску' : `Сделка #${dealId} уже ${state === 'lost' ? 'закрыта в отказ' : 'отгружена'} — обновите доску` }, { status: 409 });
         }
-        if (state !== 'open') {
+        // «На доработку» со сменой менеджера (12.11, Коваленко: «одну хотел перевести на другого менеджера» — сделка
+        // открыта, а смены не было): задачу не возвращаем, а ставим новую уже новому менеджеру (БП «Сменить
+        // ответственного» в runTask), старую закрываем — тот же путь, что «Откатить и создать задачу».
+        const reassignOpen = state === 'open' && typeof body.newManagerId === 'string' && /^\d{1,10}$/.test(body.newManagerId) && body.newManagerId !== managerId;
+        if (state !== 'open' || reassignOpen) {
           if (comment.length < 3) return NextResponse.json({ error: 'Напишите, что сделать' }, { status: 400 });
           // Старую задачу уже могли закрыть в Битриксе руками (09.11, копия задач отстаёт) — новую ставим всё равно.
           const old = await checkTask(taskId, dealId, { allowDone: true });
-          const why = state === 'lost' ? `сделка #${dealId} была закрыта в отказ` : `сделка #${dealId} уже отгружена`;
+          const why = reassignOpen ? 'передано другому менеджеру' : state === 'lost' ? `сделка #${dealId} была закрыта в отказ` : `сделка #${dealId} уже отгружена`;
           const res = await runTask(`Повторно вместо задачи #${taskId} (${why}):\n${comment}`);
           const closed = String(old.status) === '5' ? true
-            : await closeReplacedTask({ taskId, authorId: session.bitrixUserId, newTaskId: res.taskId, newDealId: res.dealId, reopened: res.dealMode !== 'created' });
+            : await closeReplacedTask({ taskId, authorId: session.bitrixUserId, newTaskId: res.taskId, newDealId: res.dealId, reopened: res.dealMode !== 'created', reason: reassignOpen ? 'заказчик передан другому менеджеру' : undefined });
           await logEvent(session, { type: 'task_replaced', requestId: rid, clientKey, managerId, columnBefore, dealId, taskId,
             payload: { state, newTaskId: res.taskId, newDealId: res.dealId, dealMode: res.dealMode, oldClosed: closed } });
           return NextResponse.json({ ok: true, rolledBack: true, ...res, oldClosed: closed });
@@ -410,6 +414,9 @@ export async function POST(req: NextRequest) {
       let dealClosed: string | null = null;
       if (reason) {
         await markBrakNow({ clientKey, reason, comment: comment || null, session });
+        // Брак — и на ключ самой сделки, если карточка другого ключа того же человека (см. dealClientKey).
+        const dk = await dealClientKey(dealId);
+        if (dk && dk !== clientKey) await markBrakNow({ clientKey: dk, reason, comment: comment || null, session });
         dealClosed = await closeDealAsLost({ dealId, clientKey, reason, comment: comment || null, authorId: session.bitrixUserId })
           .catch(e => { console.warn('[repeat-kanban] закрытие сделки при приёмке:', e instanceof Error ? e.message : e); return 'error'; });
       }

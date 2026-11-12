@@ -145,7 +145,7 @@ export async function taskDealState(dealId: number): Promise<TaskDealState> {
 }
 
 /** Старая задача после отката: принять, в чат — куда ушла работа. Не роняет действие — новая уже стоит. */
-export async function closeReplacedTask(input: { taskId: number; authorId: string | null; newTaskId: number; newDealId: number; reopened: boolean }): Promise<boolean> {
+export async function closeReplacedTask(input: { taskId: number; authorId: string | null; newTaskId: number; newDealId: number; reopened: boolean; reason?: string }): Promise<boolean> {
   try {
     await taskAction(input.authorId, 'tasks.task.approve', { taskId: input.taskId });
     await rememberTaskStatus(input.taskId, 5, new Date().toISOString());
@@ -153,7 +153,7 @@ export async function closeReplacedTask(input: { taskId: number; authorId: strin
     console.warn(`[repeat-kanban] старая задача ${input.taskId} при откате не закрылась:`, e instanceof Error ? e.message : e);
     return false;
   }
-  await note(input.taskId, input.authorId, `Закрыта в канбане повторных (Монолитика): сделка уже была закрыта, вместо этой задачи поставлена новая #${input.newTaskId} в ${input.reopened ? 'сделке' : 'новой сделке'} #${input.newDealId}.`);
+  await note(input.taskId, input.authorId, `Закрыта в канбане повторных (Монолитика): ${input.reason ?? 'сделка уже была закрыта'}, вместо этой задачи поставлена новая #${input.newTaskId} в ${input.reopened ? 'сделке' : 'новой сделке'} #${input.newDealId}.`);
   return true;
 }
 

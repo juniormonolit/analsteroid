@@ -6,13 +6,24 @@
 //   return    — вернуть менеджеру: карточка остаётся на разборе с пометкой, пока менеджер
 //               не переоткроет сделку (стадия сменится — карточка уедет сама).
 // Правило трёх касаний: брак при отказе до 3/3 — только с явным комментарием РОПа.
-import { systemDb } from '@/lib/db/clients';
+import { analyticsDb, systemDb } from '@/lib/db/clients';
+import { CLIENT_KEY_SQL } from '@/features/customers/engine/clientKey';
 import type { SessionUser } from '@/lib/auth/session';
 import { BRAK_REASONS, TOUCHES, type BrakReason, type ReviewDecision } from './config';
 import { NO_CALL_REASON_LABELS } from '@/features/customers/engine/customers';
 import { closeDealAsLost } from './createDeal';
 
 export class ReviewError extends Error {}
+
+/** Ключ заказчика самой сделки (как его видит канбан). Нужен, когда решение принимают из карточки ДРУГОГО ключа
+ *  того же человека (12.11, Магомед, контакт 100726: карточки c… и x… не склеены; задачу по сделке воронки 2 приняли
+ *  с браком из карточки x… — брак лёг на x…, а c… с закрытой сделкой ушла «На разбор»). null — сделки нет в копии. */
+export async function dealClientKey(dealId: number): Promise<string | null> {
+  const r = await analyticsDb().query<{ k: string | null }>(
+    `SELECT (${CLIENT_KEY_SQL}) AS k FROM sa.deals d WHERE d.deal_id = $1 LIMIT 1`, [dealId],
+  ).catch(() => ({ rows: [] as { k: string | null }[] }));
+  return r.rows[0]?.k ?? null;
+}
 
 export async function decideReview(input: {
   clientKey: string; dealId: number; decision: ReviewDecision; reason: string | null; comment: string | null;
@@ -174,6 +185,8 @@ export async function postponeCustomer(input: { clientKey: string; dealId: numbe
   const comment = input.comment.trim().slice(0, 1000);
   await hideFromPool({ clientKey: input.clientKey, until: input.until, comment, session: input.session });
   if (!input.dealId) return null;
+  const dk = await dealClientKey(input.dealId);
+  if (dk && dk !== input.clientKey) await hideFromPool({ clientKey: dk, until: input.until, comment, session: input.session }).catch(() => {});
   const until = input.until.split('-').reverse().join('.');
   const closed = await closeDealAsLost({ dealId: input.dealId, clientKey: input.clientKey, reason: 'nothing_needed', comment, authorId: input.session.bitrixUserId,
     label: `Отложено до ${until} из канбана повторных (Монолитика)` })

@@ -79,7 +79,7 @@ export function AcceptTaskModal({ card, name, note, checkState, renderReassign, 
     try {
       const attachments = await att.upload();
       const body = mode === 'return'
-        ? { action: 'task_return', comment, deadline: deadline || null, deadlineTime: time, attachments }
+        ? { action: 'task_return', comment, deadline: deadline || null, deadlineTime: time, attachments, newManagerId: newManager || undefined }
         : mode === 'rollback'
           ? { action: 'task_return', rollback: true, comment, deadline: deadline || null, deadlineTime: time, attachments, participants: participantsPayload(parts), newManagerId: newManager || undefined }
           : mode === 'postpone'
@@ -147,7 +147,10 @@ export function AcceptTaskModal({ card, name, note, checkState, renderReassign, 
           </div>
         )}
         {mode === 'postpone' && <PostponePicker value={until} onChange={setUntil} />}
-        {mode === 'rollback' && renderReassign?.(newManager, setNewManager)}
+        {returning && renderReassign?.(newManager, setNewManager)}
+        {mode === 'return' && newManager && (
+          <p className="text-xs text-[var(--color-text-muted)]">Эта задача закроется, новому менеджеру уйдёт новая задача по той же сделке.</p>
+        )}
         {mode === 'rollback' && <ParticipantsPicker value={parts} onChange={setParts} managerIds={[newManager || card.managerId]} />}
         <label className="flex flex-col gap-1 text-[var(--color-text-secondary)]" {...att.dropZone}>
           {mode === 'rollback' ? 'Что сделать в новой задаче (обязательно)' : mode === 'postpone' ? 'Почему откладываем (обязательно) — уйдёт в задачу и в сделку' : mode === 'return' ? 'Что доделать (обязательно)' : 'Комментарий в задачу (необязательно)'}
