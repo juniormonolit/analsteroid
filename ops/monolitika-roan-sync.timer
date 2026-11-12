@@ -1,0 +1,10 @@
+# Каждые 5 минут. Пока идёт прогон (первый — долгий, ~3 ГБ), следующий не стартует: oneshot активен.
+[Unit]
+Description=Monolitika: долив из Roan каждые 5 минут
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target

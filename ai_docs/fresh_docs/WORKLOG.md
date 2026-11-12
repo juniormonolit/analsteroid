@@ -5,6 +5,25 @@
 > изменение кода/конфига/инфраструктуры или принятое решение → запись сюда.
 
 ---
+## 2026-11-12 — Звонки и задачи Битрикса: долив из Roan в нашу БД по таймеру
+
+Владелец: «переводи всё на свежеподнятое». Сверка 12.11: у нас `sa.deals` живые (n8n, до сегодня), на Roan — заморожены
+на 31.10 → сделки/отделы/стадии НЕ переводим. У нас `va.calls` оборван на 08.10 (1,154 млн), `va.transcriptions`,
+`va.evaluations`, `sa.bitrix_task_*` пусты; на Roan — calls 1,203 млн до сейчас, transcriptions 193k, evaluations 133k,
+bitrix_task_v 168k, payload_raw 171k. Roan — только REST, SQL-приложение на него не переключить → копируем к себе.
+- `ops/roan-sync.py` (python3 stdlib + psql): PostgREST CSV (`Accept: text/csv`, ≤1000 строк/ответ, пауза 0,25 с при
+  лимите 300/мин) → `\copy` во временную таблицу → `INSERT … ON CONFLICT`. Пагинация по (время, ключ) от максимума в
+  НАШЕЙ таблице — перезапуск продолжает с места. До 400 страниц на таблицу за прогон.
+- Таблицы: va.calls (по updated_at, upsert общих колонок — схему не трогаем, условие Арнольда; строку с тем же
+  bitrix_call_id под другим id пропускаем), va.transcriptions / va.evaluations (по created_at, DO NOTHING),
+  sa.bitrix_task_payload_raw (по id, без token_ok — Roan его не отдаёт), sa.bitrix_task_current ← Roan `bitrix_task_v`
+  (по updated_at; наши results/results_checked_at/last_reconcile_at/src_event не перезаписываются).
+- Проверено до запуска: id звонков на Roan и у нас совпадают; FK и триггеров на этих таблицах нет; NULL в колонках
+  времени на Roan нет; массивы/jsonb в CSV — родной текстовый формат PG. Объём ≈3 ГБ, кластер 50 ГБ (автороcт до 200).
+- `ops/monolitika-roan-sync.{service,timer}`: oneshot каждые 5 мин после окончания прогона, лог `~/analsteroid/roan-sync.log`.
+- «Контроль звонков» в dry_run: новые звонки с 11.11 пойдут в обработку без отправки (курсор бота не трогали).
+- Установку и пробный прогон запускает владелец (классификатор не пускает запись в прод-БД).
+
 ## 2026-11-12 — Доступ на чтение к Roan (восстановленная база, Supabase REST)
 
 Сергей с разрешения Михаила выдал ключ файлом. На VM в secrets.env (бэкап `prod-backups/secrets.env.bak-*-pre-roan`)

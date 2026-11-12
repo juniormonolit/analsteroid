@@ -1,0 +1,15 @@
+# Долив звонков (va.calls/transcriptions/evaluations) и задач Битрикса из Roan в нашу БД (12.11.2026).
+# Скрипт и почему так — ops/roan-sync.py. Лежит на VM как ~/analsteroid/roan-sync.py.
+# Нужны в secrets.env: ROAN_REST_URL, ROAN_REST_KEY, SA_PG_*. Таймер — monolitika-roan-sync.timer.
+[Unit]
+Description=Monolitika: долив звонков и задач из Roan
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=junior
+WorkingDirectory=/home/junior/analsteroid
+ExecStart=/bin/bash -c 'set -a; . ./secrets.env; set +a; exec python3 -I roan-sync.py'
+TimeoutStartSec=3600
+StandardOutput=append:/home/junior/analsteroid/roan-sync.log
+StandardError=append:/home/junior/analsteroid/roan-sync.log
