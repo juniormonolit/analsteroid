@@ -20,7 +20,7 @@ async function taskAction(userId: string | null, method: string, params: Record<
 
 export class TaskReviewError extends Error {}
 
-interface BxTask { id?: string; status?: string; groupId?: string; ufCrmTask?: string[] | null; title?: string; closedBy?: string | null; closedDate?: string | null; deadline?: string | null }
+interface BxTask { id?: string; status?: string; /** Задачу удалили в Битриксе (checkTask с allowDone). */ deleted?: boolean; groupId?: string; ufCrmTask?: string[] | null; title?: string; closedBy?: string | null; closedDate?: string | null; deadline?: string | null }
 
 // Состояние задачи по Битриксу, которое мы и так узнаём при приёмке (09.11: копия задач sa.bitrix_task_current
 // стоит с 08.10 после смерти сервера 62 — доска показывала «ждёт контроля» у задачи, закрытой в Битриксе).
@@ -67,11 +67,23 @@ async function closedText(t: BxTask): Promise<string> {
 
 /** Задача — этого проекта, привязана к этой сделке и ждёт контроля. allowDone — для отката: задачу уже
  *  закрыли в Битриксе руками, это не мешает поставить новую (возвращает status '5'). */
+/** Задачи больше нет в Битриксе (удалили). */
+export class TaskMissingError extends TaskReviewError {}
+
 export async function checkTask(taskId: number, dealId: number, opts: { allowDone?: boolean } = {}): Promise<BxTask> {
   const r = await read<{ task?: BxTask }>('tasks.task.get', { taskId, select: ['ID', 'STATUS', 'GROUP_ID', 'UF_CRM_TASK', 'TITLE', 'CLOSED_BY', 'CLOSED_DATE', 'DEADLINE'] })
     .catch(e => { throw new TaskReviewError(`Битрикс не отдал задачу ${taskId}: ${e instanceof Error ? e.message : e}`); });
   const t = r?.task;
-  if (!t?.id) throw new TaskReviewError(`Задача ${taskId} не найдена в Битриксе`);
+  if (!t?.id) {
+    // Задачу удалили в Битриксе (13.11, Коваленко: РОП удалил задачи, «чтобы менеджеры не видели перепалку» —
+    // приёмка падала «не найдена», ни принять, ни поставить новую другому менеджеру). Для решений, где задача
+    // всё равно закрывается (allowDone), удалённая = закрытая: доска узнаёт об этом, решение по заказчику идёт дальше.
+    if (opts.allowDone) {
+      await rememberTaskStatus(taskId, 5, new Date().toISOString());
+      return { id: String(taskId), status: '5', deleted: true } as BxTask;
+    }
+    throw new TaskMissingError(`Задача ${taskId} удалена в Битриксе`);
+  }
   if (Number(t.groupId) !== REPEAT_PROJECT_GROUP_ID) throw new TaskReviewError('Задача не из проекта «Повторные продажи»');
   if (!(t.ufCrmTask ?? []).includes(`D_${dealId}`)) throw new TaskReviewError('Задача привязана к другой сделке — обновите доску');
   await rememberTaskStatus(taskId, Number(t.status), t.closedDate ?? null, t.deadline ?? null);

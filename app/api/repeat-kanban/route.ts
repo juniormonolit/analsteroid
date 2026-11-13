@@ -377,11 +377,13 @@ export async function POST(req: NextRequest) {
         // открыта, а смены не было): задачу не возвращаем, а ставим новую уже новому менеджеру (БП «Сменить
         // ответственного» в runTask), старую закрываем — тот же путь, что «Откатить и создать задачу».
         const reassignOpen = state === 'open' && typeof body.newManagerId === 'string' && /^\d{1,10}$/.test(body.newManagerId) && body.newManagerId !== managerId;
-        if (state !== 'open' || reassignOpen) {
+        // «На доработку» по задаче, удалённой в Битриксе (13.11): вернуть её нельзя — ставим новую, как при замене.
+        const taskGone = state === 'open' && !reassignOpen && (await checkTask(taskId, dealId, { allowDone: true })).deleted === true;
+        if (state !== 'open' || reassignOpen || taskGone) {
           if (comment.length < 3) return NextResponse.json({ error: 'Напишите, что сделать' }, { status: 400 });
           // Старую задачу уже могли закрыть в Битриксе руками (09.11, копия задач отстаёт) — новую ставим всё равно.
           const old = await checkTask(taskId, dealId, { allowDone: true });
-          const why = reassignOpen ? 'передано другому менеджеру' : state === 'lost' ? `сделка #${dealId} была закрыта в отказ` : `сделка #${dealId} уже отгружена`;
+          const why = reassignOpen ? 'передано другому менеджеру' : taskGone ? 'старую задачу удалили в Битриксе' : state === 'lost' ? `сделка #${dealId} была закрыта в отказ` : `сделка #${dealId} уже отгружена`;
           const res = await runTask(`Повторно вместо задачи #${taskId} (${why}):\n${comment}`);
           const closed = String(old.status) === '5' ? true
             : await closeReplacedTask({ taskId, authorId: session.bitrixUserId, newTaskId: res.taskId, newDealId: res.dealId, reopened: res.dealMode !== 'created', reason: reassignOpen ? 'заказчик передан другому менеджеру' : undefined });
