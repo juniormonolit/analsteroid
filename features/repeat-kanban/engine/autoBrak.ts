@@ -16,6 +16,8 @@ import type { BrakCandidate, BrakRuleCore } from './autoBrakTypes';
 
 export class AutoBrakError extends Error {}
 const PAUSE_MS = 400;
+/** Предохранитель ежедневного автобрака: больше кандидатов за прогон правила — пропуск (13.11). */
+const AUTO_CAP = 200;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const COLUMN_KEYS = new Set<string>(COLUMNS.filter(c => c.key !== 'brak' && c.key !== 'hidden').map(c => c.key));
 
@@ -33,6 +35,9 @@ export function cleanRule(body: Record<string, unknown>): BrakRuleCore & { reaso
   const mode = body.mode === 'keep' ? 'keep' : 'brak';
   let filters: CustomFilters;
   try { filters = cleanFilters(body.filters); } catch (e) { throw new AutoBrakError(e instanceof CustomColumnError ? e.message : 'Некорректные условия'); }
+  // Пустой фильтр = вся колонка в брак (с закрытием сделок в Битриксе) — такого правила не бывает (основная сессия, 13.11).
+  const empty = Object.values(filters as Record<string, unknown>).every(v => v === null || v === undefined || v === '' || v === false || (Array.isArray(v) && v.length === 0));
+  if (empty) throw new AutoBrakError('Задайте хотя бы одно условие фильтра — без условий в брак ушла бы вся колонка');
   const reason = String(body.reason ?? '');
   if (!BRAK_REASONS.some(r => r.value === reason)) throw new AutoBrakError('Выберите причину брака');
   const comment = typeof body.comment === 'string' && body.comment.trim() ? body.comment.trim().slice(0, 500) : null;
@@ -202,6 +207,11 @@ export async function runAutoBrakDaily(): Promise<{ rules: number; batches: numb
       if (!session || !(await canAutoBrak(session))) continue;
       const cands = await collectCandidates(session, rule);
       if (!cands.length) continue;
+      // Предохранитель авто: за утро по правилу — не больше AUTO_CAP; больше — не трогаем, РОП применит руками, глядя на список.
+      if (cands.length > AUTO_CAP) {
+        console.warn(`[auto-brak] правило ${rule.id} (${rule.column}): ${cands.length} кандидатов > ${AUTO_CAP} — автобрак пропущен, нужен ручной «Применить»`);
+        continue;
+      }
       const id = await startBatch(session, rule, rule.id, true, cands);
       batches++; customers += cands.length;
       // Партии по очереди: следующая — когда эта закончится (Битрикс вежливо).
