@@ -45,8 +45,13 @@ async function processOne(): Promise<boolean> {
     }
     const data = await collectClientData(ref);
     // Тест-прогон — черновик из редактора; иначе активная версия (или встроенная из кода).
-    const prompt = job.isTest && job.promptBody ? { version: 'draft', body: job.promptBody } : await getActivePrompt();
-    if (!job.isTest) {
+    const base = job.isTest && job.promptBody ? { version: 'draft', body: job.promptBody } : await getActivePrompt();
+    // Уточнения РОПа (migrations/264) — в конец системного промпта этого запуска; формат отчёта не трогают.
+    const prompt = job.extra
+      ? { version: base.version, body: `${base.body}\n\n## Уточнения от запустившего анализ (учти их, формат отчёта не меняй)\n${job.extra}` }
+      : base;
+    // С уточнениями — всегда новый прогон: готовый отчёт по тем же звонкам их не учитывал.
+    if (!job.isTest && !job.extra) {
       const dup = await findDone(ref, callsHashOf(data, prompt.version));
       if (dup) {
         await saveDuplicate(job.id, dup.id);

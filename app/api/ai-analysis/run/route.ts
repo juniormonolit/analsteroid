@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
   const session = await getSession().catch(() => null);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!hasPerm(session, 'action.ai_call_analysis')) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  const body = await req.json().catch(() => ({})) as { contactId?: string; companyId?: string };
+  const body = await req.json().catch(() => ({})) as { contactId?: string; companyId?: string; extra?: string };
   const ref = parseClientRef(body.contactId ?? null, body.companyId ?? null);
   if (!ref) return NextResponse.json({ error: 'Укажите ID контакта или компании' }, { status: 400 });
   try {
@@ -21,7 +21,8 @@ export async function POST(req: NextRequest) {
     if (!session.isSuperadmin && (await countToday(session.login)) >= MAX_PER_DAY) {
       return NextResponse.json({ error: `Лимит — ${MAX_PER_DAY} анализов в день. Завтра снова можно.` }, { status: 429 });
     }
-    const id = await enqueue({ clientRef: ref, promptVersion: (await getActivePrompt()).version, by: { login: session.login, name: session.displayName } });
+    const extra = typeof body.extra === 'string' ? body.extra.trim().slice(0, 2000) : '';
+    const id = await enqueue({ clientRef: ref, promptVersion: (await getActivePrompt()).version, by: { login: session.login, name: session.displayName }, extra: extra || null });
     kickAiWorker();
     return NextResponse.json({ id });
   } catch (e) {

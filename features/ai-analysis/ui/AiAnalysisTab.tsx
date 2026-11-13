@@ -262,6 +262,11 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
   const [note, setNote] = useState('');
   const [legend, setLegend] = useState(false);
   const [confirmTr, setConfirmTr] = useState(false);
+  // Уточнения к главному промпту на этот запуск (собрание 12.11, п.3; migrations/264). Последний текст помним в браузере.
+  const EXTRA_KEY = 'ai-analysis:extra';
+  const [extra, setExtraState] = useState(() => { try { return localStorage.getItem(EXTRA_KEY) ?? ''; } catch { return ''; } });
+  const [extraOpen, setExtraOpen] = useState(() => extra.trim().length > 0);
+  const setExtra = (v: string) => { setExtraState(v); try { localStorage.setItem(EXTRA_KEY, v); } catch { /* приватный режим */ } };
 
   const job = useQuery<AnalysisRow>({
     queryKey: ['ai-analysis', active?.id],
@@ -274,7 +279,7 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
 
   const run = useMutation({
     mutationFn: async () => {
-      const r = await apiFetch('/api/ai-analysis/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params) });
+      const r = await apiFetch('/api/ai-analysis/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...params, extra: extra.trim() || undefined }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error ?? 'Не удалось запустить анализ');
       return j as { id: number };
@@ -369,6 +374,27 @@ export function AiAnalysisTab({ qs, params, cardClientType }: {
         {lastDone?.transcribe?.done && !active && (lastDone.transcribe.failed + lastDone.transcribe.skipped) > 0 && (
           <div className="basis-full text-[12px] text-[var(--color-warning, #e8590c)]">
             Перед анализом не удалось расшифровать: {lastDone.transcribe.failed + lastDone.transcribe.skipped}{lastDone.transcribe.serviceError ? ' (сервис расшифровки был недоступен)' : ''}.
+          </div>
+        )}
+        {!active && (
+          <div className="basis-full">
+            <button type="button" onClick={() => setExtraOpen(v => !v)} aria-expanded={extraOpen}
+              className="inline-flex min-h-11 items-center gap-1 text-[12.5px] text-[var(--color-accent)] hover:underline">
+              <ChevronDown size={13} className={extraOpen ? 'rotate-180' : ''} /> Уточнения к анализу{extra.trim() && !extraOpen ? ' · заданы' : ''}
+            </button>
+            {extraOpen && (
+              <label className="mt-1 flex flex-col gap-1 text-[12px] text-[var(--color-text-muted)]">
+                На что ещё смотреть в разговорах. Допишется к основному заданию для ИИ только в этом запуске, а в отчёте будет видно, с какими уточнениями его делали.
+                <textarea value={extra} onChange={e => setExtra(e.target.value.slice(0, 2000))} rows={3} maxLength={2000}
+                  placeholder="Например: обрати внимание, обсуждали ли сроки доставки и предлагал ли менеджер монтаж"
+                  className="w-full rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 text-base text-[var(--color-text)] sm:text-sm" />
+              </label>
+            )}
+          </div>
+        )}
+        {lastDone?.extraInstructions && !active && (
+          <div className="basis-full rounded-lg bg-[var(--color-bg-surface)] px-2.5 py-1.5 text-[12px] text-[var(--color-text-secondary)]">
+            <b>Последний анализ — с уточнениями{lastDone.createdByName ? ` (${lastDone.createdByName})` : ''}:</b> <span className="whitespace-pre-line">{lastDone.extraInstructions}</span>
           </div>
         )}
         <div className="basis-full text-[11.5px] text-[var(--color-text-muted)]">

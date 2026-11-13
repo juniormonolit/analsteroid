@@ -32,6 +32,8 @@ export interface AnalysisRow {
   finishedAt: string | null;
   /** Расшифровка звонков перед разбором (transcribe.ts, migrations/255). */
   transcribe: import('./transcribe').TranscribeState | null;
+  /** Уточнения запустившего к главному промпту (migrations/264). */
+  extraInstructions: string | null;
 }
 
 /** Анализов в день на одного запускающего — защита бюджета (~5 ₽ за анализ). */
@@ -43,7 +45,7 @@ export const STALE_MINUTES = 15;
 
 const COLS = `id, client_ref, status, phase, prompt_version, model, calls_count, calls_total, report_md, quotes,
   cost_rub, seconds, error, feedback, feedback_note, is_test, parsed, main_manager, score::text AS score,
-  created_by, created_by_name, created_at, started_at, finished_at, transcribe`;
+  created_by, created_by_name, created_at, started_at, finished_at, transcribe, extra_instructions`;
 
 type Raw = {
   id: string; client_ref: string; status: AnalysisStatus; phase: string | null; prompt_version: string; model: string | null;
@@ -52,6 +54,7 @@ type Raw = {
   is_test: boolean; parsed: ParsedReport | null; main_manager: string | null; score: string | null;
   created_by: string; created_by_name: string | null; created_at: Date; started_at: Date | null; finished_at: Date | null;
   transcribe: import('./transcribe').TranscribeState | null;
+  extra_instructions: string | null;
 };
 const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
 function map(r: Raw): AnalysisRow {
@@ -63,6 +66,7 @@ function map(r: Raw): AnalysisRow {
     score: r.score === null ? null : Number(r.score), createdBy: r.created_by, createdByName: r.created_by_name,
     createdAt: iso(r.created_at)!, startedAt: iso(r.started_at), finishedAt: iso(r.finished_at),
     transcribe: r.transcribe ?? null,
+    extraInstructions: r.extra_instructions ?? null,
   };
 }
 
@@ -97,27 +101,29 @@ export async function enqueue(input: {
   test?: { body: string };
   /** Проверка звонка по закрытой задаче (migrations/252, taskCheck.ts) — вместо разбора заказчика. */
   checkTaskId?: number;
+  /** Уточнения к главному промпту на этот запуск (migrations/264). */
+  extra?: string | null;
 }): Promise<number> {
   const r = await systemDb().query<{ id: string }>(
-    `INSERT INTO ai_analyses (client_ref, prompt_version, created_by, created_by_name, is_test, prompt_body, kind, check_task_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    `INSERT INTO ai_analyses (client_ref, prompt_version, created_by, created_by_name, is_test, prompt_body, kind, check_task_id, extra_instructions)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
     [input.clientRef, input.test ? 'draft' : input.promptVersion, input.by.login, input.by.name, !!input.test, input.test?.body ?? null,
-      input.checkTaskId ? 'task_check' : 'client', input.checkTaskId ?? null],
+      input.checkTaskId ? 'task_check' : 'client', input.checkTaskId ?? null, input.extra?.trim() || null],
   );
   return Number(r.rows[0].id);
 }
 
 /** Взять следующий из очереди (SKIP LOCKED — на случай двух процессов в момент деплоя). */
-export async function claimNext(): Promise<{ id: number; clientRef: string; isTest: boolean; promptBody: string | null; checkTaskId: number | null; createdBy: string; transcribe: import('./transcribe').TranscribeState | null } | null> {
+export async function claimNext(): Promise<{ id: number; clientRef: string; isTest: boolean; promptBody: string | null; checkTaskId: number | null; createdBy: string; transcribe: import('./transcribe').TranscribeState | null; extra: string | null } | null> {
   // Ждущие расшифровку (wait_until в будущем) пропускаем; их повторный захват — не новая попытка.
-  const r = await systemDb().query<{ id: string; client_ref: string; is_test: boolean; prompt_body: string | null; check_task_id: string | null; created_by: string; transcribe: import('./transcribe').TranscribeState | null }>(
+  const r = await systemDb().query<{ id: string; client_ref: string; is_test: boolean; prompt_body: string | null; check_task_id: string | null; created_by: string; transcribe: import('./transcribe').TranscribeState | null; extra_instructions: string | null }>(
     `UPDATE ai_analyses SET status = 'running', phase = CASE WHEN transcribe IS NULL OR (transcribe->>'done')::boolean THEN 'collecting' ELSE 'transcribing' END,
        attempts = attempts + CASE WHEN wait_until IS NULL THEN 1 ELSE 0 END, heartbeat_at = now(), started_at = coalesce(started_at, now())
       WHERE id = (SELECT id FROM ai_analyses WHERE status = 'queued' AND (wait_until IS NULL OR wait_until <= now()) ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
-      RETURNING id, client_ref, is_test, prompt_body, check_task_id, created_by, transcribe`,
+      RETURNING id, client_ref, is_test, prompt_body, check_task_id, created_by, transcribe, extra_instructions`,
   );
   const x = r.rows[0];
-  return x ? { id: Number(x.id), clientRef: x.client_ref, isTest: !!x.is_test, promptBody: x.prompt_body, checkTaskId: x.check_task_id ? Number(x.check_task_id) : null, createdBy: x.created_by, transcribe: x.transcribe } : null;
+  return x ? { id: Number(x.id), clientRef: x.client_ref, isTest: !!x.is_test, promptBody: x.prompt_body, checkTaskId: x.check_task_id ? Number(x.check_task_id) : null, createdBy: x.created_by, transcribe: x.transcribe, extra: x.extra_instructions ?? null } : null;
 }
 
 /** Ждём расшифровку: вернуть в очередь до waitMs, не занимая воркер (строка остаётся «активной» для вкладки). */
